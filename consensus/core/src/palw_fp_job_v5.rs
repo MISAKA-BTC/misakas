@@ -174,6 +174,81 @@ pub enum PalwFpV5Error {
     SourceLength { tokens: u32, max: u32 },
     #[error("the prompt does not start with the class's forced prefix (RFC-0003 §II.2.2)")]
     PromptPrefix,
+    /// **RFC-0001 P3: a version-8 commitment whose output root, schedule root or data-availability trio is not the pipeline claim
+    /// convention** ([`palw_fp_v5_check_commitment_conventions_v1`]), by field.
+    #[error(
+        "a V5 commitment's {0} is not the pipeline claim convention (RFC-0001 P3: output_root 0, schedule_root 0, trace_manifest_root 0, trace_chunk_count 1, trace_retention_daa 0)"
+    )]
+    CommitmentNotCanonical(&'static str),
+}
+
+/// **RFC-0001 P3 — the data-availability trio and the output root of a version-8 claim, decided before the V5 fold exists.**
+///
+/// `vlm::commitment_of` set `output_root = 0`, one trace chunk, no manifest and a caller-chosen retention, and recorded the lane's
+/// retention for V5 as unspecified. It is now the convention every pipeline claim already follows (RFC-0003 §I.4.2 for the tensor
+/// claim, line "`trace_manifest_root`, `trace_chunk_count`, `trace_retention_daa` | zero, `1`, zero (as Phase F's pipeline claims)"):
+///
+/// | field | value | why |
+/// |---|---|---|
+/// | `output_root` | zero | a text pipeline's canonical output IS its committed generated ids, which the execution root hashes (RFC-0003 §I.3.3: "a text claim commits no `output_root`") |
+/// | `schedule_root` | zero | a V2 call schedule describes a text decoder's calls; a pipeline claim's work is the step space under `trace_root` |
+/// | `trace_manifest_root` | zero | no retained-event manifest: the units open step leaves and nodes under `trace_root` (PALW-GEN) |
+/// | `trace_chunk_count` | one | the lane's stateless rule requires non-zero; a pipeline's retention is one object |
+/// | `trace_retention_daa` | zero | the chain derives it as `accepted_daa` + the minimum retention, as it does for a tensor claim; a stated deadline would be a promise nothing reads, and one encoding per behaviour refuses it |
+///
+/// Everything else in the commitment (`trace_root` the step root, `execution_root` the binding's, `work_leaves` the price, the
+/// executed count and stop reason the V4 job's decoder derives) is unchanged.
+pub const PALW_FP_V5_TRACE_CHUNK_COUNT_V1: u32 = 1;
+
+/// **Check a version-8 commitment against the convention** ([`PALW_FP_V5_TRACE_CHUNK_COUNT_V1`]'s table). Total over the fields it
+/// names; asks nothing about the rest.
+pub fn palw_fp_v5_check_commitment_conventions_v1(
+    c: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+) -> Result<(), PalwFpV5Error> {
+    let zero = Hash64::default();
+    if c.output_root != zero {
+        return Err(PalwFpV5Error::CommitmentNotCanonical("output_root"));
+    }
+    if c.schedule_root != zero {
+        return Err(PalwFpV5Error::CommitmentNotCanonical("schedule_root"));
+    }
+    if c.trace_manifest_root != zero {
+        return Err(PalwFpV5Error::CommitmentNotCanonical("trace_manifest_root"));
+    }
+    if c.trace_chunk_count != PALW_FP_V5_TRACE_CHUNK_COUNT_V1 {
+        return Err(PalwFpV5Error::CommitmentNotCanonical("trace_chunk_count"));
+    }
+    if c.trace_retention_daa != 0 {
+        return Err(PalwFpV5Error::CommitmentNotCanonical("trace_retention_daa"));
+    }
+    Ok(())
+}
+
+/// **The version-8 commitment a producer builds**, canonical by construction: the V5 job as the lane carries it, the binding's step
+/// root and execution root and leaf count, the executed count and stop reason the job's decoder derives, and the convention's output
+/// root and DA trio. A producer that builds it this way cannot fail [`palw_fp_v5_check_commitment_conventions_v1`].
+pub fn palw_fp_v5_canonical_commitment_v1(
+    job: &PalwFreePromptJobV5,
+    trace_root: Hash64,
+    execution_root: Hash64,
+    work_leaves: u64,
+    generated_tokens: u32,
+) -> crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 {
+    let carried = job.into_carried();
+    let facts = crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&carried, generated_tokens);
+    crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 {
+        job: carried,
+        trace_root,
+        output_root: Hash64::default(),
+        schedule_root: Hash64::default(),
+        execution_root,
+        decode_tokens_executed: facts.decode_tokens_executed,
+        stop_reason: facts.stop_reason,
+        work_leaves,
+        trace_manifest_root: Hash64::default(),
+        trace_chunk_count: PALW_FP_V5_TRACE_CHUNK_COUNT_V1,
+        trace_retention_daa: 0,
+    }
 }
 
 impl PalwFreePromptJobV5 {
@@ -459,4 +534,30 @@ pub fn palw_fp_v5_validate_payload_v1(
     )
     .map_err(PalwFpV5Error::V4)?;
     Ok(v5)
+}
+
+/// **[`palw_fp_v5_validate_payload_v1`] and the pipeline claim convention** (RFC-0001 P3): the door the V5 fold calls. A separate
+/// door, not an edit of the first, so FP Job V4's validators and the existing door stay byte for byte what they were; wiring it into
+/// the fold is the fold's own step and waits for the lane that builds it (and its fence).
+#[allow(clippy::too_many_arguments)]
+pub fn palw_fp_v5_validate_payload_canonical_v1(
+    payload: &crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3,
+    network_domain: Hash64,
+    panel_da_armed: bool,
+    max_step_leaf_count: u64,
+    ruleset_caps: Option<(u32, u32)>,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    armed: bool,
+) -> Result<PalwFreePromptJobV5, PalwFpV5Error> {
+    let job = palw_fp_v5_validate_payload_v1(
+        payload,
+        network_domain,
+        panel_da_armed,
+        max_step_leaf_count,
+        ruleset_caps,
+        prompt_ids_form,
+        armed,
+    )?;
+    palw_fp_v5_check_commitment_conventions_v1(&payload.commitment)?;
+    Ok(job)
 }

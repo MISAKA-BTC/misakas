@@ -389,6 +389,16 @@ fn the_reporter_award_journals_a_reporter_awarded_note() {
 /// R-1's reporter share `r`, in basis points — ADR-0152 §3.6 (1,000 bps), written here from the ADR
 /// and never read from the fold, so the oracle's reward bound is not the fold's own.
 const R_BPS: u128 = 1_000;
+/// R-1's share past `palw_reporter_share_v2` — ADR-0032's 2026-10-10 amendment (4,900 bps), written
+/// here from the ADR likewise (lane INTF).
+const R_BPS_V2: u128 = 4_900;
+
+/// The share the oracle bounds a conviction closed at `daa` by: [`R_BPS`] below the chain's
+/// `palw_reporter_share_v2` height (every shipped preset: no height), [`R_BPS_V2`] at or past it. Only
+/// the HEIGHT is read from the bundle's mirror; the shares are the oracle's own.
+fn r_bps(c: &Chain, daa: u64) -> u128 {
+    if c.sp.reporter_share_v2_from_daa().is_some_and(|from| daa >= from) { R_BPS_V2 } else { R_BPS }
+}
 
 /// What one Final claim's vesting row was when the chain wrote it — the oracle's own copy, kept after
 /// the row moves or burns, so a row that leaves early is still counted against its producer.
@@ -598,7 +608,7 @@ impl T07Oracle {
             match entry {
                 PalwDeltaEntryV2::RewardPending { key, old: None, new: Some(pending) } => {
                     let record = s.consumed_offence(key).unwrap_or_else(|| panic!("DAA {now}: a reward {key} with no conviction"));
-                    let bound = u128::from(record.collected) * R_BPS / 10_000;
+                    let bound = u128::from(record.collected) * r_bps(c, now) / 10_000;
                     assert!(
                         u128::from(pending.amount) <= bound,
                         "DAA {now}: R-1: reward {} > r × collected {bound} on {key}",
@@ -665,7 +675,7 @@ impl T07Oracle {
                     let x = lock.amount.min(seen.g_res / u128::from(seen.basis_k.max(1)));
                     let slot = locks.entry((seen.producer, seat)).or_default();
                     slot.0 += lock.amount;
-                    slot.1 += (lock.amount - x) * R_BPS / 10_000;
+                    slot.1 += (lock.amount - x) * r_bps(c, now) / 10_000;
                 }
             }
             // R-5 / R-6 (the lock side, alone): while the row's own clocks hold it (not only a halt),
@@ -732,7 +742,7 @@ impl T07Oracle {
 /// A planned equivocation: `(accused, nonce, offence key, reporters still to reveal, filed)`.
 type EqPlan = (PalwBondKeyV2, u64, Hash64, Vec<PalwBondKeyV2>, bool);
 
-/// One step of the fuzz: an action drawn from the state (see [`t07_run`]), its attempts carried by
+/// One step of the fuzz: an action drawn from the state (see [`t07_run_at_share`]), its attempts carried by
 /// blocks of coinbase subsidy `subsidy`. `false` when there was nothing to do or the block was
 /// refused; a refused step undoes exactly the plan bookkeeping it did itself.
 #[allow(clippy::too_many_arguments)]
@@ -973,8 +983,12 @@ struct T07Report {
 }
 
 /// One seed of the fuzz, its attempts on blocks of coinbase `subsidy`; returns what it drove and saw.
-fn t07_run(seed: u64, steps: usize, subsidy: u64) -> T07Report {
+///
+/// With `palw_reporter_share_v2` test-armed on the fold's mirror at `share_fence` (lane INTF; `None` = int-12's 10% everywhere).
+/// The IBD twin folds with the same mirror (the tape's chain params).
+fn t07_run_at_share(seed: u64, steps: usize, subsidy: u64, share_fence: Option<u64>) -> T07Report {
     let mut t = armed_tape();
+    t.c.sp = t.c.sp.clone().with_reporter_share_v2_from_daa(share_fence);
     t.step(vec![bond_obj(11, 60_000 * MSK), bond_obj(12, 60_000 * MSK), bond_obj(13, 400_000 * MSK), bond_obj(14, 400_000 * MSK)]);
     let mut rng = Rng(seed);
     let mut seq = seed << 12;
@@ -1180,6 +1194,18 @@ fn t07_small_e_twin_the_locks_must_cover_g_res() {
     assert_eq!(carried, checks, "the premise: at every check the rows alone fall short, so the locks carried every one");
 }
 
+/// **T07's small-`E` twin at ADR-0032's 49% (lane INTF)** — the same fuzz with `palw_reporter_share_v2` test-armed from
+/// genesis on the fold's mirror, so every reward is 49% of its collected debit and the aggregate counts the locks net of a 49%
+/// R-1: **Σ recoverable ≥ Σ extractable** must still hold on the locks alone (Σ_k `lock − 0.49·(lock − X)` = `0.51·Σ lock +
+/// 0.49·G_res` ≥ `1.051·G_res` at R-5's `1.1·G_res`), and every reward stays at most `0.49 × collected`.
+#[test]
+fn t07_small_e_twin_at_the_49_percent_share_the_locks_still_cover_g_res() {
+    let reports = t07_fuzz_at_share(&T07_SEEDS, T07_STEPS, T07_SMALL_E_SUBSIDY, Some(0));
+    let (checks, carried): (usize, usize) = reports.iter().fold((0, 0), |(a, b), r| (a + r.checks, b + r.lock_carried));
+    assert_eq!(carried, checks, "the premise: at every check the rows alone fall short, so the locks carried every one");
+    assert!(checks > 0, "the aggregate was checked");
+}
+
 /// **T07, heavy**: sixteen seeds of six hundred random blocks each (the default run is the four-seed
 /// twin above, the same property on fewer blocks).
 #[test]
@@ -1193,13 +1219,19 @@ fn t07_reorg_fuzz_heavy() {
 /// The fuzz over `seeds`, `steps` random blocks each on blocks of coinbase `subsidy`, the seeds folded
 /// side by side; the coverage asserted over all of them together.
 fn t07_fuzz(seeds: &[u64], steps: usize, subsidy: u64) -> Vec<T07Report> {
+    t07_fuzz_at_share(seeds, steps, subsidy, None)
+}
+
+/// [`t07_fuzz`] at a test-armed `palw_reporter_share_v2` (lane INTF).
+fn t07_fuzz_at_share(seeds: &[u64], steps: usize, subsidy: u64, share_fence: Option<u64>) -> Vec<T07Report> {
     let mut total = T07Coverage::default();
     // The seeds are independent chains: folded four side by side, each deterministic on its own.
     let runs: Vec<T07Report> = seeds
         .chunks(4)
         .flat_map(|chunk| {
             std::thread::scope(|scope| {
-                let handles: Vec<_> = chunk.iter().map(|seed| scope.spawn(move || t07_run(*seed, steps, subsidy))).collect();
+                let handles: Vec<_> =
+                    chunk.iter().map(|seed| scope.spawn(move || t07_run_at_share(*seed, steps, subsidy, share_fence))).collect();
                 handles.into_iter().map(|h| h.join().expect("a seed's run")).collect::<Vec<_>>()
             })
         })

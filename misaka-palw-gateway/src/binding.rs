@@ -61,8 +61,8 @@ pub const AUDIT: &[BindingRow] = &[
     BindingRow { fact: "model name, user, metadata, store, stream, stream_options, identity-valued sampling knobs", enters: "NOT in the claim: presentation or delivery only (reported in misaka.ignored_fields)", test: "link_1_presentation_fields_are_not_bound_and_say_so", bound: Bound::NotBound },
     // ---- link 2: request -> job (the worker is never trusted about what it was asked) ----
     BindingRow { fact: "every request field", enters: "validate_against_request refuses a result whose job differs from the request, field by field", test: "link_2_a_result_that_changes_any_requested_field_is_refused", bound: Bound::CheckedNotCommitted },
-    BindingRow { fact: "tokenizer_id", enters: "job.tokenizer_id (worker-supplied, in the claim) — the gateway now holds it to the worker's manifest", test: "link_2_the_jobs_tokenizer_is_the_manifests", bound: Bound::CheckedNotCommitted },
-    BindingRow { fact: "stop strings (spelled by the worker into job.decode.stop_sequences)", enters: "the worker's spelling; validate_against_request only caps the count, the gateway now requires at least one", test: "link_2_a_worker_that_drops_the_requested_stop_strings_is_caught_by_the_gateway", bound: Bound::CheckedNotCommitted },
+    BindingRow { fact: "tokenizer_id", enters: "job.tokenizer_id (worker-supplied, in the claim) — held to the worker's manifest by the shared validate_against_manifest (P2)", test: "link_2_the_jobs_tokenizer_is_the_manifests", bound: Bound::CheckedNotCommitted },
+    BindingRow { fact: "stop strings (spelled by the worker into job.decode.stop_sequences)", enters: "the worker's spelling; validate_against_request caps the count and, since P2, requires at least one", test: "link_2_a_worker_that_drops_the_requested_stop_strings_is_caught_by_the_gateway", bound: Bound::CheckedNotCommitted },
     BindingRow { fact: "prompt ids <-> job.prompt_token_ids_hash", enters: "validate_against_request re-hashes the returned ids under the network's form", test: "link_2_a_result_that_changes_any_requested_field_is_refused", bound: Bound::CheckedNotCommitted },
     // ---- link 3: job -> claim id ----
     BindingRow { fact: "every FP job field", enters: "fp_job_id_v3 hashes the whole canonical job; the claim id hashes the commitment, which contains the job", test: "link_3_every_job_field_changes_the_job_id_and_the_claim_id", bound: Bound::InClaim },
@@ -102,47 +102,23 @@ pub fn audit_markdown() -> String {
 /// registration carries no tokenizer identity, module doc of `palw_freeprompt_v3`), so a worker that stamped another tokenizer would
 /// produce a perfectly well-formed claim whose ids were read under a tokenizer the class does not name. The gateway holds the
 /// result to the manifest the worker announced at boot before it builds a commitment on it.
+///
+/// **RFC-0001 P2:** the check is `PalwFpWorkerResultV3::validate_against_manifest` in consensus-core, shared by every caller that holds
+/// a manifest (`validate_against_request_and_manifest` is the whole of it); this is its `String` form for the entrance.
 pub fn check_result_against_manifest(result: &PalwFpWorkerResultV3, manifest: &PalwFpWorkerManifestV1) -> Result<(), String> {
-    let job = &result.job;
-    if job.tokenizer_id != manifest.tokenizer_id {
-        return Err(format!(
-            "the worker's result names tokenizer {} where its own manifest names {}: the prompt ids were not read under the class's tokenizer",
-            job.tokenizer_id, manifest.tokenizer_id
-        ));
-    }
-    if job.class_id != manifest.class_id {
-        return Err("the worker's result is for a different class than its own manifest".to_string());
-    }
-    if job.max_context_tokens > manifest.n_ctx {
-        return Err(format!(
-            "the worker's result claims a context of {} where its manifest registers {}",
-            job.max_context_tokens, manifest.n_ctx
-        ));
-    }
-    Ok(())
+    result.validate_against_manifest(manifest).map_err(|e| e.to_string())
 }
 
-/// **The stop strings a request asked for must have been spelled into the job.** `validate_against_request` lets the worker ADD
-/// stop sequences (it spells each requested string with the class's tokenizer, which the gateway does not hold) and checks only
-/// that it added no more than it was asked to — so a worker that silently DROPPED every spelled stop sequence returns a result that
-/// binds its request, with a job under which the user's `stop` does nothing, while the response tells the user it applied. The
-/// strings cannot be re-spelled here; what can be checked is the floor of the count.
+/// **The stop strings a request asked for must have been spelled into the job.** `validate_against_request` used to let the worker ADD
+/// stop sequences (it spells each requested string with the class's tokenizer, which the gateway does not hold) and check only that it
+/// added no more than it was asked to — so a worker that silently DROPPED every spelled stop sequence returned a result that bound its
+/// request, with a job under which the user's `stop` does nothing, while the response told the user it applied.
+///
+/// **RFC-0001 P2:** the floor is now `validate_against_request`'s own (`PalwFpWorkerResultV3::check_stop_texts_were_spelled`, called
+/// inside it), so the rail's sign gate and a drill client get it too; this is its `String` form, kept for the audit's mutation test.
+#[cfg(test)]
 pub fn check_stop_texts_were_spelled(request: &PalwFpWorkerRequestV3, result: &PalwFpWorkerResultV3) -> Result<(), String> {
-    if request.stop_texts.is_empty() {
-        return Ok(());
-    }
-    let asked = request.decode.as_ref().map_or(0, |d| d.stop_sequences.len());
-    let have = result.job.decode.as_ref().map_or(0, |d| d.stop_sequences.len());
-    // At least one spelled sequence beyond the ones the request already carried (two strings may spell one sequence, and a string may
-    // spell one the request already named, so the floor is one new sequence only when none of the strings coincided with an old one —
-    // the gateway sends no ids of its own, so `asked` is zero and the floor is exactly one).
-    if have < asked.max(1) {
-        return Err(format!(
-            "the request asked for {} stop string(s) and the worker's job carries {have} stop sequence(s): the strings were not spelled into the job",
-            request.stop_texts.len()
-        ));
-    }
-    Ok(())
+    result.check_stop_texts_were_spelled(request).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -500,9 +476,14 @@ mod tests {
         check_stop_texts_were_spelled(&request, &result).expect("the honest worker spelled the string into the job");
         let mut dropped = result.clone();
         dropped.job.decode.as_mut().unwrap().stop_sequences.clear();
-        // THE FINDING: the request binding accepts it (the worker may add up to len(stop_texts) sequences, and zero is "up to"),
-        assert!(dropped.validate_against_request(&request, hash_of(&request), FORM).is_ok(), "the gap: the cap is an upper bound only");
-        // ... under a job where the user's `stop` does nothing. The gateway's floor catches it.
+        // THE FINDING (RFC-0001 F2, closed by P2): the request binding used to accept it — the worker may add up to len(stop_texts)
+        // sequences, and zero is "up to" — under a job where the user's `stop` does nothing. The floor is now the shared validator's own,
+        // so every caller of `validate_against_request` (this gateway, the rail's sign gate, a drill client) refuses it.
+        assert_eq!(
+            dropped.validate_against_request(&request, hash_of(&request), FORM),
+            Err(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::StopStringsNotSpelled { asked: request.stop_texts.len(), have: 0 }),
+            "the floor is in the shared validator"
+        );
         assert!(check_stop_texts_were_spelled(&request, &dropped).unwrap_err().contains("not spelled"));
         // A request with no stop strings is unaffected.
         let (_w2, _d2, plain, plain_result) = run_pair(false);

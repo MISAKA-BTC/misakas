@@ -1,5 +1,12 @@
 # ADR-0069 — End-to-end adjudicability is the price of weight
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -386,26 +393,7 @@ wrapper. The predicate implemented is the class's **granted share**, which admis
 proxy for certification in the one direction that matters — `verify_class_admission_v3` refuses
 `share > 0` to a family that is not certified end to end, so `share > 0 ⇒ certified`.
 
-The third site, the **V1 resolver's search order, is a ceiling nobody reaches, and saying so is
-better than implying a wall that is not there.** `palw_facts::resolve_block_weight_v1` does hold the
-guard, but its only production producer of `weight_bearing` is
-`VirtualStateProcessor::palw_class_facts_for_block`, and there the predicate cannot be false: a
-V1-credit fence carries exactly ONE registration, the function refuses any other class outright
-(`None` = `ClassUnresolved`, a stronger answer than weightless), the share it reads comes from
-`PalwClassDaaParamsV1::single_class_domain`, which builds `{that_class: 1000‰}` from its own
-argument, and `PalwDifficultyDomainSetV1::validate` refuses a zero share for ANY domain set
-(`ZeroShare`). So a share-0 entrant is not representable on that path at all. The mitigation there
-is structural, not a check; the code now answers through
-`palw_facts::palw_v1_weight_bearing_or_refuse`, which yields `Some(true)` for a share and `None` —
-the same `ClassUnresolved` refusal the line above it gives an unregistered class — for the zero a
-domain set cannot hold. A first draft wrote `debug_assert!(share > 0, ..)` there instead: an assert
-inside block validation is a wrong assumption turned into every node aborting at one height, and
-this path already has a refusal for questions it cannot answer. Making the V1 half bind needs a
-chain-point-resolved share table on the resolver path — which it does not have, and must not take
-from `load_tip` for the reason its own `class_target` doc gives — so it is a redesign, not a fenced
-edit. A fourth site, the court's
-D3-3 opening-rung exemption in `sweep_court_deadlines`, asks the same predicate deliberately
-unfenced and now calls the helper too, so "one helper" is at least true where it is claimed.
+The V1 class resolver is removed: its credit overlay is not used on V2. V2 admission and certification checks above remain in force.
 
 Two consequences are residuals rather than choices, and are pinned by tests rather than left to be
 discovered. **(i)** The safe half is priced at the finalizing block, so a claim accepted while its

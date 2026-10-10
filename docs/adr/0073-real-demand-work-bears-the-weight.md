@@ -1,5 +1,12 @@
 # ADR-0073: Real-demand work bears the weight
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -130,13 +137,9 @@ less — its prompt is on chain, its capture is served, its leaves adjudicate in
 its ticket is drawn by a beacon that does not exist when the claim is fixed (nothing to grind,
 cf. the ADR-0072 review).
 
-What "self-dealing" means here, stated so it stops being an objection: an executor who submits
-prompts to itself has run an inference the chain can convict, priced by the leaves it executed.
-That is a canonical job by another name, and it is exactly as good as one. The only self-dealing
-that matters is *shape-crafting* — choosing prompts that price above their cost — and Decision 3
-removes the surface by pricing the leaves themselves.
+自己生成 prompt を canonical job と同じ PALW-reward 対象とする旧主張は撤回した。誰も必要としない出力の計算は、ユーザーの有用なローカル推論という目的を満たさないため。[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P1–P3 に従う。
 
-Activation is gated, not dated: a class's FP lane bears weight when (i) Decision 1 has landed and
+Activation also requires ADR-0144 §6 items 2–3; the following technical conditions alone are insufficient. A class's FP lane bears weight when (i) Decision 1 has landed and
 the class is FP-certified (1f), and (ii) Decision 3 has landed so the weight is in the unit the
 retarget and the share table already read. Until both hold, a spent quantum keeps adding exactly
 what it adds today.
@@ -152,7 +155,7 @@ the claim is refused structurally.
 3b. A quantum is a leaf count, not a CU count. *As landed (ADR-0074 Decision 5):* not a
 network-wide `QUANTUM_LEAVES` but a fraction of the class's own canonical job —
 `max(1, canonical_leaves / 8)` — so every class's job is eight draws and `pwu` stays in leaves. `PalwFpCuWeightsV3`, `QUANTUM_CU`, `PWU_PER_QUANTUM` are withdrawn
-from the bundle (their text stays in ADR-0044 as the record). The "no shape prices above the
+from the bundle (ADR-0044 retains the withdrawal reason). The "no shape prices above the
 pure-decode reference" invariant becomes a theorem instead of a calibration: leaves are the work.
 
 3c. The lottery discipline, stated once for both lanes: **a draw is a paid execution, drawn from a
@@ -243,7 +246,7 @@ the `UnadjudicableCommitment` refusal) and `palw_fp_devnet_v3.rs` ("court 2400";
 | Decision | Status after this ADR |
 |---|---|
 | ADR-0044 Decision 4 — receipts are weightless, `algo_id_carries_no_chain_position(7)` | stands through Phases ①–③; flips at Phase ④ activation (Decision 4a) |
-| ADR-0044 Decision 7 — CU weights price the lane | withdrawn at Phase ③ (Decision 3b); the text stays as the record |
+| ADR-0044 Decision 7 — CU weights price the lane | withdrawn at Phase ③ (Decision 3b); ADR-0044 retains the reason |
 | ADR-0066 — a lane has weight iff its blocks are priced | honoured: receipt blocks become priced before they weigh |
 | ADR-0068 — the LLM-primary economy, the floor's minimum | refined: real demand is the primary lane; the attempt lane is the floor doctrine's fallback |
 | ADR-0069 — a certified family may bear weight | extended: certification names the lane; the FP bit gates Decision 2 |

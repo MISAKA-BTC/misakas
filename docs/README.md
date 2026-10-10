@@ -2,6 +2,13 @@
 
 > **設計前提(全文書の上位)— [MISAKAの不可侵原則](PRINCIPLES.md):** 確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。すべての ADR・RFC・Spec・設計文書はこの前提の下にあり、衝突する場合は前提が優先する(2026-10-09)。
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 The code, current `main` CLI `--help` and ADR decisions are authoritative. This index separates live operator instructions from dated engineering evidence.
@@ -33,9 +40,16 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 
 ## Governing design
 
+- [モデル入手への不介入・model-bond coinbase配分 — ADR-0177](adr/0177-model-bond-allocation-without-availability-consensus.md) — MISAKA Torrent・専用Seeder/Seeder報酬を廃止。固定identityと個別bond上限を維持し、公開参加の経済優位を評価する。配分式/実装/activationは未完了。
+- [今回のdocs検証](adr/evidence/0177-model-distribution-policy-alignment-2026-10-10.md) — 旧可用性規範の撤回と新方針への整合。経済・runtime試験のPASSではない。
+
+- [PALW bond/time production and reward premise — ADR-0176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md) — claim capacity may grow while bond-attributed blocks, rewards and Final weight stay bounded; probabilistic checks, public prosecution and collectible liability remain necessary. Design accepted; implementation/activation pending.
+- [RFC-0015 §8](rfc/0015-panel-free-permissionless-verification.md) — shared reservation, common DAA hold, claim-right subdivision and Final-weight accounting for the new design.
+- [Round / EXEC additional acceptance conditions (2026-10-10)](palw-round-exec-additional-acceptance-2026-10-10.md) — adopted design gates for compute-proportional tickets, bond budgets, shared-window neutrality and economics; implementation and activation pending
 - [ADR index](adr/README.md)
 - [PQ specification](kaspa-pq-spec.md)
 - [ML-DSA-87 design](kaspa-pq-design-mldsa87.md)
+- [PALW versioned Kernel design](design/palw/versioned-kernels.md)
 - [PALW registry map](palw-registry-map.md)
 - [PALW extension envelope](palw-extension-envelope.md)
 

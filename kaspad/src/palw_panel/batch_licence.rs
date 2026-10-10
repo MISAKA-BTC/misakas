@@ -63,7 +63,9 @@ impl PalwReceiptWindowSignerV1 {
         sealed
             .into_iter()
             .filter_map(|(daa, leaves)| {
-                PalwSeatWindowV1::sign(network_domain, seat, daa, daa, leaves, |message| sign(message, PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT))
+                PalwSeatWindowV1::sign(network_domain, seat, daa, daa, leaves, |message| {
+                    sign(message, PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT)
+                })
             })
             .collect()
     }
@@ -124,7 +126,9 @@ pub(crate) fn palw_batch_licence_offer_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::palw_batch_licence_v1::{palw_receipt_window_fold_v1, palw_receipt_window_message_v1, palw_receipt_window_path_v1};
+    use kaspa_consensus_core::palw_batch_licence_v1::{
+        palw_receipt_window_fold_v1, palw_receipt_window_message_v1, palw_receipt_window_path_v1,
+    };
     use kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2;
     use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
     use kaspa_consensus_core::tx::TransactionOutpoint;
@@ -134,7 +138,13 @@ mod tests {
     }
 
     fn leaf(claim: u64, daa: u64) -> PalwWindowLeafV1 {
-        PalwWindowLeafV1 { claim: h(claim), anchor_hash: h(0xA0 + claim), verdict: PalwReceiptVerdictV2::Valid, signed_daa: daa, mask: PalwSegmentMaskV2(1) }
+        PalwWindowLeafV1 {
+            claim: h(claim),
+            anchor_hash: h(0xA0 + claim),
+            verdict: PalwReceiptVerdictV2::Valid,
+            signed_daa: daa,
+            mask: PalwSegmentMaskV2(1),
+        }
     }
 
     /// A seat's receipts become one signed root a DAA; the open DAA stays open; the "signature" (the
@@ -158,7 +168,10 @@ mod tests {
         for window in &sealed {
             let r = &window.root;
             assert_eq!((r.from_daa, r.to_daa), (window.leaves[0].signed_daa, window.leaves[0].signed_daa));
-            assert_eq!(r.signature, palw_receipt_window_message_v1(domain, &seat, r.from_daa, r.to_daa, r.root, r.count).as_byte_slice());
+            assert_eq!(
+                r.signature,
+                palw_receipt_window_message_v1(domain, &seat, r.from_daa, r.to_daa, r.root, r.count).as_byte_slice()
+            );
             let hashes: Vec<Hash64> = window.leaves.iter().map(|l| l.leaf(domain)).collect();
             for (i, l) in hashes.iter().enumerate() {
                 let path = palw_receipt_window_path_v1(&hashes, i).unwrap();

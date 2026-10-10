@@ -207,21 +207,7 @@ pub const VALIDATOR_SET_COMMITMENT_KEY: &[u8] = b"kaspa-pq-validator-set-v1";
 /// - `HOST_ID_KEY` — keys the BLAKE2b-256 over `hostname ||
 ///   host_boot_nonce` that produces a stable, rebuild-resistant
 ///   `HostId` for each validator host.
-/// - `TAKEOVER_TOKEN_MESSAGE_DOMAIN` — keys the BLAKE2b-256 over
-///   the takeover-token signing material (see
-///   [`takeover_token_message`]).
-/// - `TAKEOVER_TOKEN_CONTEXT` — ML-DSA-87 `ctx` parameter for the
-///   `sign_ctx` call that produces the
-///   [`TakeoverToken::signature`]. Distinct from both the
-///   transaction context (`b"kaspa-pq-v2/tx/mldsa87"`) and the
-///   attestation context (`b"kaspa-pq-v1/att/mldsa87"`,
-///   ADR-0009 §"Attestation target") so a takeover-token
-///   signature can never be replayed as a transaction or
-///   attestation signature, and vice versa.
-///
-/// These three are consensus-irrelevant (the entire coordinated-
-/// failover protocol is node-local; no on-chain surface), but
-/// the `-v1` suffix is the contract — renaming auditable.
+/// The takeover domain and context below remain reserved after ADR-0014's withdrawal.
 pub const HOST_ID_KEY: &[u8] = b"kaspa-pq-validator-host-id-v1";
 pub const TAKEOVER_TOKEN_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-takeover-token-v1";
 pub const TAKEOVER_TOKEN_CONTEXT: &[u8] = b"kaspa-pq-v1/takeover/mldsa87";
@@ -2127,11 +2113,7 @@ pub enum ValidatorStatus {
     /// `--dry-run` set; per-epoch computation runs, signing is
     /// skipped.
     DryRun = 8,
-    /// ADR-0014: standby host has booted with `--enable-validator`
-    /// and `--stake-bond …` but has not yet received a valid
-    /// `TakeoverToken` for any future epoch. Variant **appended**
-    /// per ADR-0014 §"`ValidatorStatus` extension" so existing RPC
-    /// clients parsing variants 0..8 are unaffected.
+    /// Retired HA status, reserved so existing RPC discriminants remain stable.
     AwaitingTakeoverToken = 9,
 }
 
@@ -2266,14 +2248,7 @@ pub fn check_palw_attempt_sign_record_v1(
 }
 
 // ---------------------------------------------------------------------
-// Coordinated-failover protocol (ADR-0014).
-//
-// Node-local artefacts only — no on-chain surface, no consensus
-// input. The TakeoverToken transfers signing authority between
-// two same-host validator processes at a specific future epoch
-// so an honest operator cannot accidentally double-sign across
-// a planned handoff. ADR-0009 SlashingEvidencePayload remains
-// the consensus-side safety net for malicious operators.
+// Host identity shared by signer IPC and local audit attribution.
 // ---------------------------------------------------------------------
 
 /// Per-host stable identifier (ADR-0014 §"`host_id` derivation").
@@ -2287,114 +2262,11 @@ pub fn check_palw_attempt_sign_record_v1(
 /// node-local and the few call sites are concentrated).
 pub type HostId = Hash;
 
-/// Coordinated-failover takeover token (ADR-0014
-/// §"`TakeoverToken`"). Carries an ML-DSA-87 signature by the
-/// validator key transferring signing authority from
-/// `yielding_host_id` to `taking_over_host_id` at
-/// `valid_from_epoch`. Stored locally on both hosts in
-/// `~/.kaspa-pq/takeover-tokens/`; never on-chain.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct TakeoverToken {
-    pub version: u16,
-
-    /// `host_id` of the validator currently signing (the yielding
-    /// side). Must match the host that generated the token.
-    pub yielding_host_id: HostId,
-
-    /// `host_id` of the validator about to start signing. The
-    /// receiving host MUST refuse to honor a token whose
-    /// `taking_over_host_id ≠ its own host_id` (ADR-0014
-    /// §"Handoff protocol" step 3.b).
-    pub taking_over_host_id: HostId,
-
-    /// Validator identity both hosts share. Must match the
-    /// receiving host's `--stake-bond → validator_id`.
-    pub validator_id: Hash64,
-
-    /// First epoch at which the taking-over host may sign. The
-    /// yielding host MUST NOT sign any epoch
-    /// `≥ valid_from_epoch` after issuing this token.
-    pub valid_from_epoch: u64,
-
-    /// Number of epochs of grace overlap during which neither
-    /// host signs (defensive against in-flight gossip). Typically
-    /// 1; max 8 (one epoch ≈ minutes, anything longer is a
-    /// configuration error). The taking-over host starts signing
-    /// at `valid_from_epoch + grace_epochs`.
-    pub grace_epochs: u8,
-
-    /// Wall-clock issuance timestamp (informational; **not** part
-    /// of the signed material — clocks drift, so the protocol
-    /// does not rely on it).
-    pub issued_at_unix_secs: u64,
-
-    /// 4627-byte ML-DSA-87 signature by the validator key over
-    /// [`takeover_token_message`] with `TAKEOVER_TOKEN_CONTEXT`
-    /// as the libcrux `ctx` parameter.
-    pub signature: Vec<u8>,
-}
-
-/// Compute the per-host `HostId` (ADR-0014 §"`host_id`
-/// derivation"):
-///
-/// ```text
-/// host_id = BLAKE2b-256(
-///     key   = HOST_ID_KEY,
-///     input = hostname || host_boot_nonce (32 B),
-/// )
-/// ```
-///
-/// `host_boot_nonce` is a fresh 32-byte random generated by
-/// `kaspa-pq-cli validator host-id init` and persisted at
-/// `/etc/kaspa-pq/host-nonce`. The nonce makes `HostId`
-/// rebuild-stable but resistant to spoofing — an operator who
-/// rebuilds the secondary host gets a new `HostId` unless they
-/// explicitly re-use the nonce file.
+/// Stable host identity for signer IPC and audit attribution.
 pub fn compute_host_id(hostname: &[u8], boot_nonce: &[u8; 32]) -> HostId {
     let mut hasher = Blake2bParams::new().hash_length(32).key(HOST_ID_KEY).to_state();
     hasher.update(hostname);
     hasher.update(boot_nonce);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(hasher.finalize().as_bytes());
-    Hash::from_bytes(out)
-}
-
-/// Compute the BLAKE2b-256 message that the validator key signs
-/// to produce [`TakeoverToken::signature`] (ADR-0014
-/// §"`TakeoverToken`"):
-///
-/// ```text
-/// takeover_token_message = BLAKE2b-256(
-///     key   = TAKEOVER_TOKEN_MESSAGE_DOMAIN,
-///     input = yielding_host_id.as_bytes()       (32 B)
-///          || taking_over_host_id.as_bytes()    (32 B)
-///          || validator_id.as_bytes()           (64 B)
-///          || valid_from_epoch.to_le_bytes()
-///          || [grace_epochs],
-/// )
-/// ```
-///
-/// The 32-byte digest is returned as the upstream [`Hash`] so it
-/// composes directly with the libcrux ML-DSA-87 `sign_ctx` /
-/// `verify_ctx` APIs. The ML-DSA-87 signing context
-/// (`TAKEOVER_TOKEN_CONTEXT`) is applied at the ML-DSA-87 layer,
-/// not inside this hasher — keeping the two domain separators
-/// independent and distinct from every other ML-DSA-87 use site
-/// in the protocol (ADR-0014 §"Public-claim discipline" replay
-/// safety claim).
-pub fn takeover_token_message(
-    yielding_host_id: HostId,
-    taking_over_host_id: HostId,
-    validator_id: Hash64,
-    valid_from_epoch: u64,
-    grace_epochs: u8,
-) -> Hash {
-    let mut hasher = Blake2bParams::new().hash_length(32).key(TAKEOVER_TOKEN_MESSAGE_DOMAIN).to_state();
-    hasher.update(&yielding_host_id.as_bytes());
-    hasher.update(&taking_over_host_id.as_bytes());
-    hasher.update(validator_id.as_byte_slice());
-    hasher.update(&valid_from_epoch.to_le_bytes());
-    hasher.update(&[grace_epochs]);
     let mut out = [0u8; 32];
     out.copy_from_slice(hasher.finalize().as_bytes());
     Hash::from_bytes(out)
@@ -2425,9 +2297,7 @@ pub enum SigningPurpose {
     /// [`stake_attestation_message`]; context is
     /// `ATTESTATION_MLDSA87_CONTEXT`.
     Attestation = 1,
-    /// Coordinated-failover takeover token — message digest is
-    /// from [`takeover_token_message`]; context is
-    /// `TAKEOVER_TOKEN_CONTEXT`.
+    /// Retired wire tag. The signer refuses this purpose (ADR-0014).
     TakeoverToken = 2,
     /// DNS overlay unbond request — message digest is from
     /// [`unbond_request_message`]; context is `UNBOND_REQUEST_CONTEXT`
@@ -2462,12 +2332,34 @@ pub enum SigningPurpose {
     /// total over its fields and the chain refuses a duplicate `(claim, transformer)`
     /// idempotently, so a re-signed derivation records nothing twice. (Appended; 0-6 unchanged.)
     PalwDerivedArtifactV1 = 7,
+    /// **RFC-0009 stage C: the executor's V4 redemption authorization (`RDA4`)** — message digest is
+    /// [`crate::palw_receipt_v4::redeem_auth_id_v4`] (total over the authorization, so signing the id signs every
+    /// field); context is [`crate::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT`], which no other purpose may
+    /// carry. **Visible only under `palw_receipt_spend_v4`** ([`SigningPurpose::offered_by`]): the fence is a bare height
+    /// that is `None` on every preset, and a signer offers this purpose only where its operator has said the network
+    /// arms it (`SignerState::set_receipt_spend_v4_offered` in `kaspa-pq-signer`, off by default). No journal, by
+    /// decision: the authorization is position-free and non-revocable except by its expiry, the chain's branch-scoped
+    /// spent-quantum set is the double-spend guard, and a re-signed authorization for the same claim authorizes the
+    /// same quanta (RFC-0009 §6). (Appended; 0-7 unchanged — never renumber.)
+    PalwReceiptAuthV4 = 8,
+}
+
+impl SigningPurpose {
+    /// **Whether a network offers this purpose at `daa_score`.** Every purpose that predates the V4 receipt lane is offered
+    /// everywhere, as it always was; [`SigningPurpose::PalwReceiptAuthV4`] only where `Params::palw_receipt_spend_v4` is in
+    /// force (it is `None` on every preset, so the purpose is dormant until a flag-day list arms the fence).
+    pub fn offered_by(self, params: &crate::config::params::Params, daa_score: u64) -> bool {
+        match self {
+            SigningPurpose::PalwReceiptAuthV4 => params.palw_receipt_spend_v4_active_at(daa_score),
+            _ => true,
+        }
+    }
 }
 
 /// The digest the signer will ML-DSA-87-sign, **typed by purpose** (audit H-03). This makes the
 /// digest size a compile-time property of the request: a [`SigningPurpose::Transaction`] carries a
-/// 64-byte [`Hash64`] transaction sighash, while the overlay digests (attestation / unbond /
-/// takeover) are the 32-byte BLAKE2b-256 [`Hash`] their `*_message` helpers produce. The previous
+/// 64-byte [`Hash64`] transaction sighash, while attestation and unbond digests are the 32-byte
+/// BLAKE2b-256 [`Hash`] their `*_message` helpers produce. The previous
 /// fixed `message_digest: Hash` (32 bytes) could not represent a transaction sighash at all — so
 /// passing a 32-byte value for a tx-signing request was a silent protocol break; it is now
 /// unrepresentable.
@@ -2479,7 +2371,7 @@ pub enum SignerMessageDigest {
     Attestation(Hash),
     /// 32-byte unbond-request message digest ([`unbond_request_message`]).
     Unbond(Hash),
-    /// 32-byte takeover-token message digest ([`takeover_token_message`]).
+    /// Retired digest variant; kept to decode the existing signer protocol.
     TakeoverToken(Hash),
     /// 64-byte PALW V2 attempt id ([`crate::palw_attempt_v2::attempt_id_v2`]) — signing the
     /// identity signs the claim, and nothing outside the identity can ride on the signature.
@@ -2491,6 +2383,10 @@ pub enum SignerMessageDigest {
     PalwFpSpendV3(Hash64),
     /// 64-byte derived-artifact message ([`crate::palw_derived_v1::palw_derived_message_v1`]).
     PalwDerivedArtifactV1(Hash64),
+    /// 64-byte V4 redemption-authorization id ([`crate::palw_receipt_v4::redeem_auth_id_v4`]) — the identity is total over the
+    /// authorization, so signing it signs the claim, the executor bond, the quantum range, the beacon rule, the builder fee
+    /// and the expiry. (Appended; the earlier variants keep their positions.)
+    PalwReceiptAuthV4(Hash64),
 }
 
 impl SignerMessageDigest {
@@ -2506,6 +2402,7 @@ impl SignerMessageDigest {
             SignerMessageDigest::PalwFpCommitmentV3(_) => SigningPurpose::PalwFpCommitmentV3,
             SignerMessageDigest::PalwFpSpendV3(_) => SigningPurpose::PalwFpSpendV3,
             SignerMessageDigest::PalwDerivedArtifactV1(_) => SigningPurpose::PalwDerivedArtifactV1,
+            SignerMessageDigest::PalwReceiptAuthV4(_) => SigningPurpose::PalwReceiptAuthV4,
         }
     }
 }
@@ -2524,6 +2421,7 @@ pub enum SignerMetadata {
         target_hash: Hash64,
         target_daa_score: u64,
     },
+    /// Retired metadata shape, reserved for wire compatibility.
     TakeoverToken {
         yielding_host_id: Hash,
         taking_over_host_id: Hash,
@@ -10777,19 +10675,6 @@ mod tests {
         Hash::from_bytes([byte; 32])
     }
 
-    fn fixture_takeover_token() -> TakeoverToken {
-        TakeoverToken {
-            version: DNS_PAYLOAD_VERSION_V1,
-            yielding_host_id: fixture_host_id(0xa1),
-            taking_over_host_id: fixture_host_id(0xa2),
-            validator_id: Hash64::from_bytes([0x42u8; 64]),
-            valid_from_epoch: 12345,
-            grace_epochs: 1,
-            issued_at_unix_secs: 1_700_000_000,
-            signature: vec![0xccu8; STAKE_ATTESTATION_SIG_LEN],
-        }
-    }
-
     #[test]
     fn host_id_is_deterministic() {
         let nonce = [0x11u8; 32];
@@ -10833,79 +10718,6 @@ mod tests {
         assert_ne!(with_key.as_bytes(), undomained.as_bytes());
     }
 
-    #[test]
-    fn takeover_token_borsh_roundtrip() {
-        let t = fixture_takeover_token();
-        let bytes = borsh::to_vec(&t).unwrap();
-        let back: TakeoverToken = borsh::from_slice(&bytes).unwrap();
-        assert_eq!(back, t);
-        // Sanity: the dominant size component is the 4627-byte
-        // ML-DSA-87 signature.
-        assert!(bytes.len() >= STAKE_ATTESTATION_SIG_LEN);
-    }
-
-    #[test]
-    fn takeover_token_message_is_deterministic() {
-        let m1 = takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1);
-        let m2 = takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1);
-        assert_eq!(m1, m2);
-    }
-
-    #[test]
-    fn takeover_token_message_changes_with_each_field() {
-        let base = takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1);
-        // yielding_host_id differs
-        assert_ne!(
-            base,
-            takeover_token_message(fixture_host_id(0xa3), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1)
-        );
-        // taking_over_host_id differs
-        assert_ne!(
-            base,
-            takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa3), Hash64::from_bytes([0x42u8; 64]), 100, 1)
-        );
-        // validator_id differs
-        assert_ne!(
-            base,
-            takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x43u8; 64]), 100, 1)
-        );
-        // valid_from_epoch differs
-        assert_ne!(
-            base,
-            takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 101, 1)
-        );
-        // grace_epochs differs
-        assert_ne!(
-            base,
-            takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 2)
-        );
-    }
-
-    #[test]
-    fn takeover_token_message_uses_distinct_domain_key() {
-        // Hashing the same bytes with the attestation domain key
-        // yields a different value — the takeover-token signing
-        // surface must be cryptographically distinct from the
-        // attestation surface (ADR-0014 §"Public-claim discipline":
-        // takeover signatures can never be replayed as
-        // attestations and vice versa).
-        let inputs = |key: &[u8]| {
-            let mut h = Blake2bParams::new().hash_length(32).key(key).to_state();
-            h.update(&[0xa1u8; 32]);
-            h.update(&[0xa2u8; 32]);
-            h.update(&[0x42u8; 64]);
-            h.update(&100u64.to_le_bytes());
-            h.update(&[1u8]);
-            h.finalize()
-        };
-        let with_takeover = inputs(TAKEOVER_TOKEN_MESSAGE_DOMAIN);
-        let with_attestation = inputs(ATTESTATION_MESSAGE_DOMAIN);
-        assert_ne!(with_takeover.as_bytes(), with_attestation.as_bytes());
-
-        let actual = takeover_token_message(fixture_host_id(0xa1), fixture_host_id(0xa2), Hash64::from_bytes([0x42u8; 64]), 100, 1);
-        assert_eq!(actual.as_bytes(), with_takeover.as_bytes());
-    }
-
     // ---- Remote-signer protocol (ADR-0015) ------------------------
 
     #[test]
@@ -10916,6 +10728,48 @@ mod tests {
         assert_eq!(SigningPurpose::Attestation as u8, 1);
         assert_eq!(SigningPurpose::TakeoverToken as u8, 2);
         assert_eq!(SigningPurpose::Unbond as u8, 3);
+        // The PALW purposes were appended one by one; none was ever renumbered.
+        assert_eq!(SigningPurpose::PalwAttemptV2 as u8, 4);
+        assert_eq!(SigningPurpose::PalwFpCommitmentV3 as u8, 5);
+        assert_eq!(SigningPurpose::PalwFpSpendV3 as u8, 6);
+        assert_eq!(SigningPurpose::PalwDerivedArtifactV1 as u8, 7);
+        // RFC-0009 stage C: the next explicit discriminant.
+        assert_eq!(SigningPurpose::PalwReceiptAuthV4 as u8, 8);
+    }
+
+    /// The V4 authorization's digest variant carries its own purpose, and the wire bytes of every older variant are the ones they were:
+    /// the new digest is appended (borsh enum index 8) and a request for it round-trips.
+    #[test]
+    fn the_receipt_authorization_purpose_is_appended_and_its_digest_agrees_with_it() {
+        let digest = SignerMessageDigest::PalwReceiptAuthV4(Hash64::from_bytes([0x44; 64]));
+        assert_eq!(digest.purpose(), SigningPurpose::PalwReceiptAuthV4);
+        let wire = borsh::to_vec(&digest).unwrap();
+        assert_eq!(wire[0], 8, "an appended variant: the 9th, index 8");
+        assert_eq!(borsh::from_slice::<SignerMessageDigest>(&wire).unwrap(), digest);
+        // Older variants keep their indices.
+        assert_eq!(borsh::to_vec(&SignerMessageDigest::Transaction(Hash64::from_bytes([1; 64]))).unwrap()[0], 0);
+        assert_eq!(borsh::to_vec(&SignerMessageDigest::PalwDerivedArtifactV1(Hash64::from_bytes([1; 64]))).unwrap()[0], 7);
+        let request = SignerRequest {
+            request_id: 1,
+            validator_id: Hash64::from_bytes([2; 64]),
+            purpose: SigningPurpose::PalwReceiptAuthV4,
+            context: crate::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT.to_vec(),
+            message_digest: digest,
+            metadata: SignerMetadata::None,
+        };
+        assert!(request.purpose_matches_digest());
+        let mismatched = SignerRequest { purpose: SigningPurpose::PalwFpSpendV3, ..request.clone() };
+        assert!(!mismatched.purpose_matches_digest(), "a tag that disagrees with the typed digest is malformed");
+        assert_eq!(borsh::from_slice::<SignerRequest>(&borsh::to_vec(&request).unwrap()).unwrap(), request);
+        // The context is the authorization's own: distinct from every other signing context of the lane.
+        assert_ne!(
+            crate::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT,
+            crate::palw_receipt_v4::PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT
+        );
+        assert_ne!(
+            crate::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT,
+            crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT
+        );
     }
 
     #[test]
@@ -10927,7 +10781,13 @@ mod tests {
 
     #[test]
     fn signing_purpose_borsh_roundtrip() {
-        for p in [SigningPurpose::Transaction, SigningPurpose::Attestation, SigningPurpose::TakeoverToken, SigningPurpose::Unbond] {
+        for p in [
+            SigningPurpose::Transaction,
+            SigningPurpose::Attestation,
+            SigningPurpose::TakeoverToken,
+            SigningPurpose::Unbond,
+            SigningPurpose::PalwReceiptAuthV4,
+        ] {
             let bytes = borsh::to_vec(&p).unwrap();
             let back: SigningPurpose = borsh::from_slice(&bytes).unwrap();
             assert_eq!(back, p);

@@ -1,5 +1,12 @@
 # ADR-0165 - Useful work carries the clock: BASE-0 remains the idle-only bonded floor (A″), REAL attempts can carry slot ticks (B), and heartbeat remains an independent emergency lane
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **RFC8 scope correction — 2026-10-08:** [Revised RFC-0008](../rfc/0008-palw-claim-backed-consensus-blocks.md) preserves current main's active REAL/heartbeat/BASE-0/clock/anchor-duty structure. The earlier handoff to RF8 for class-aware floor colouring/merge exclusion (§10.3) is historical and is not part of the EXEC-slice design. EXEC slices never tick the clock or suppress heartbeat/BASE-0. This correction neither activates nor removes this ADR's existing rules or other independent proposals.
 
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
@@ -336,35 +343,17 @@ BASE-0 and heartbeat remain different lanes with different admission, collateral
 
 ## 3. How the rule got here (and A′, superseded)
 
-Revision 1's hysteresis ledger (dormant at ≥ 12 Final real claims in 60 DAA) was withdrawn for a single number, the DAA of the last
-accepted REAL attempt. Revision 2's A′ retired the floor outright — not safe alone: with few REAL producers a stretch would be
-heartbeat-only (unbonded, ~0 weight, cheap to rewrite). Revision 3 kept the floor as the fallback behind that single number with
-K = 20. Its two flaws, found on P2's replay: it could not tell a BLUE attempt from a RED one, so a RED attempt (which verifies
-nothing about the chain being free of floors) held the floor off as long as a BLUE one; and it had no answer for the first REAL
-attempt after an idle stretch, which met the resumed floors and went RED. Revision 4's machine fixes both: BLUE is verified success
-and holds the floor off (Normal); a RED attempt in Idle opens a bounded Probe for the next one to land clean and never extends
-anything; and a RED-only stream is bounded by the cooldown.
+旧 hysteresis ledger は last accepted REAL attempt の記録で足りるため撤回した。A′ の floor 全廃は、REAL producer が少ない期間を安価に書き換えられる unbonded heartbeat だけにしてしまうため不採用。現在の A″ は BLUE による成功確認と bounded Probe・cooldown で bonded floor の停止と復帰を制御する。
 
 ## 4. B — see 00.6
 
 ## 5. FALLBACK-V1 integration - WITHDRAWN 2026-10-07
 
-The earlier proposal combined the heartbeat lane (algo 8) with a bond requirement, an idle-only economic gate and floor-equivalent fallback credit, retiring the independent heartbeat. **That direction is withdrawn.** It is neither a new block kind to build nor the next fence.
-
-The algo-8 lane remains the independent heartbeat of ADR-0066/0140: bondless, claimless, no panel, fee-only, no useful-work subsidy, epsilon weight. This ADR adds no fallback envelope or bond signature requirement and does not make an existing unsigned heartbeat invalid. Its fixed header/slot validity rules remain independent of the floor's state. Local miner policy may yield to attempts under B; it does not make consensus heartbeat validity conditional on Idle or on useful-work production.
-
-BASE-0 remains the bonded minimum useful-work model class under A″, with its existing claim, panel/court, weight and reward. Its floor claim is admitted while Idle. It does not become an algo-8 heartbeat substitute.
+heartbeat と bonded floor を FALLBACK-V1 に統合する案は採用しない。claim・collateral・有用計算報酬を持つ floor と emergency clock を混同し、独立した heartbeat の役割を失わせるため。BASE-0 と bondless・fee-only・epsilon-weight の heartbeat は別 lane として維持する。
 
 ## 6. Fallback accounting - WITHDRAWN 2026-10-07
 
-Withdraw all accounting introduced solely for the former FALLBACK-V1 proposal:
-
-* `fallback_weight` and floor-equivalent `w_fb` credit on heartbeat blocks;
-* the `safe_weight + fallback_weight` fork-choice key;
-* one fallback credit per bond per slot and its rooted per-bond ledger;
-* the `REAL >= 2*w_fb` requirement, including `max(pwu-derived weight, 2*w_fb)`.
-
-Existing BASE-0 useful-work weight/reward, REAL pwu-derived weight/reward and heartbeat epsilon/fee-only accounting remain separate. No replacement credit, reward carve or minimum REAL weight is chosen here.
+統合専用の fallback credit・fork-choice key・ledger は実装しない。FALLBACK-V1 自体を撤回したため。既存 REAL・BASE-0 の work/reward と heartbeat の会計は維持する。
 
 ## 7. Security consequence of keeping the lanes separate
 
@@ -372,7 +361,7 @@ The bonded floor continues to provide its existing useful-work collateral and cl
 
 ## 8. Implementation boundary
 
-The former FALLBACK-V1 envelope, heartbeat retirement, rooted fallback weight, per-bond slot map and REAL weight floor are not implementation work authorized by this ADR. No migration, fingerprint, fence or activation is introduced for them. `rcore/consensus-accounting-v2` remains excluded. Retain A″ and B with their existing validation and release record; any further consensus change needs a separate decision.
+本 ADR が扱う実装は A″ と B の既存検証・release record に限る。撤回した FALLBACK-V1 用の fence・migration は追加しない。
 
 ## 9. Prerequisites and the release
 

@@ -55,18 +55,23 @@ mod unix_daemon {
         #[arg(long = "allowed-uid")]
         allowed_uids: Vec<u32>,
         /// Refuse to sign for these purposes (repeatable): `transaction`, `attestation`, `unbond`,
-        /// `takeover`, `palw-attempt`, `palw-fp-commitment`, `palw-fp-spend`, `palw-derived`.
+        /// `palw-attempt`, `palw-fp-commitment`, `palw-fp-spend`, `palw-derived`, `palw-receipt-auth`.
         /// E.g. a validator-only signer can pass `--deny-purpose transaction` so it never signs
         /// arbitrary transactions, and a signer that must never spend a free-prompt quantum can
         /// pass `--deny-purpose palw-fp-spend`. Default: none denied.
         #[arg(long = "deny-purpose")]
         deny_purposes: Vec<String>,
+        /// RFC-0009 stage C: offer the `palw-receipt-auth` purpose — the executor's V4 redemption authorization (`RDA4`), valid only under
+        /// the dormant `palw_receipt_spend_v4` fence. OFF by default: pass this once the network this signer's keys act on arms the fence.
+        /// Without it the purpose is refused by name and the signer is exactly what it was.
+        #[arg(long = "palw-receipt-spend-v4")]
+        palw_receipt_spend_v4: bool,
     }
 
     /// **The name `--deny-purpose` accepts for a purpose, matched exhaustively** (mainnet audit,
     /// 2026-09-05).
     ///
-    /// `SigningPurpose` has grown to eight variants and the parser named four of them, so the four
+    /// `SigningPurpose` has grown to nine variants (it was eight, and the parser named four of them), so the four
     /// PALW purposes — the block-production attempt, the free-prompt commitment, the free-prompt
     /// QUANTUM SPEND and the derived artifact — could not be denied on any signer or HSM. An
     /// operator who wanted a signer that attests and never spends had no way to say it. The match
@@ -76,25 +81,26 @@ mod unix_daemon {
             SigningPurpose::Transaction => "transaction",
             SigningPurpose::Attestation => "attestation",
             SigningPurpose::Unbond => "unbond",
-            SigningPurpose::TakeoverToken => "takeover",
+            SigningPurpose::TakeoverToken => "retired-purpose-2",
             SigningPurpose::PalwAttemptV2 => "palw-attempt",
             SigningPurpose::PalwFpCommitmentV3 => "palw-fp-commitment",
             SigningPurpose::PalwFpSpendV3 => "palw-fp-spend",
             SigningPurpose::PalwDerivedArtifactV1 => "palw-derived",
+            SigningPurpose::PalwReceiptAuthV4 => "palw-receipt-auth",
         }
     }
 
-    /// Every purpose a signer can be asked for. The array length is the only hand-kept fact, and
+    /// Every active purpose a signer accepts. Tag 2 remains reserved on the wire. The array length is the only hand-kept fact, and
     /// `every_signing_purpose_can_be_denied` checks it against the discriminants.
     const ALL_SIGNING_PURPOSES: [SigningPurpose; 8] = [
         SigningPurpose::Transaction,
         SigningPurpose::Attestation,
         SigningPurpose::Unbond,
-        SigningPurpose::TakeoverToken,
         SigningPurpose::PalwAttemptV2,
         SigningPurpose::PalwFpCommitmentV3,
         SigningPurpose::PalwFpSpendV3,
         SigningPurpose::PalwDerivedArtifactV1,
+        SigningPurpose::PalwReceiptAuthV4,
     ];
 
     fn parse_purpose(s: &str) -> Result<SigningPurpose, String> {
@@ -103,7 +109,6 @@ mod unix_daemon {
         match want.as_str() {
             "tx" => return Ok(SigningPurpose::Transaction),
             "attest" => return Ok(SigningPurpose::Attestation),
-            "takeover-token" => return Ok(SigningPurpose::TakeoverToken),
             _ => {}
         }
         ALL_SIGNING_PURPOSES.into_iter().find(|p| purpose_cli_name(*p) == want).ok_or_else(|| {
@@ -197,6 +202,12 @@ mod unix_daemon {
                     log::info!("[signer] denying purposes: {denied_purposes:?}");
                     s.set_denied_purposes(denied_purposes);
                 }
+                if args.palw_receipt_spend_v4 {
+                    log::info!(
+                        "[signer] offering PalwReceiptAuthV4 (palw_receipt_spend_v4 is armed on the network these keys act on)"
+                    );
+                    s.set_receipt_spend_v4_offered(true);
+                }
                 Arc::new(Mutex::new(s))
             }
             Err(e) => {
@@ -289,22 +300,20 @@ mod unix_daemon {
                 assert_eq!(parse_purpose(name), Ok(purpose), "--deny-purpose {name} must name {purpose:?}");
                 assert_eq!(parse_purpose(&name.to_ascii_uppercase()), Ok(purpose), "and case must not matter");
             }
-            // The array is the whole enum: discriminants 0..8, each mapped to a distinct name.
+            // Purpose 2 (takeover) is retired; active wire tags remain unchanged.
             let names: std::collections::BTreeSet<&str> = ALL_SIGNING_PURPOSES.into_iter().map(purpose_cli_name).collect();
             assert_eq!(names.len(), ALL_SIGNING_PURPOSES.len(), "no two purposes share a name");
             let mut discriminants: Vec<u8> = ALL_SIGNING_PURPOSES.iter().map(|p| *p as u8).collect();
             discriminants.sort_unstable();
-            assert_eq!(
-                discriminants,
-                (0u8..8).collect::<Vec<_>>(),
-                "the array is the whole enum: every discriminant present, none twice"
-            );
+            assert_eq!(discriminants, vec![0, 1, 3, 4, 5, 6, 7, 8], "all active purpose tags are present, with the retired tag reserved");
             // The four the audit found, named individually.
-            for name in ["palw-attempt", "palw-fp-commitment", "palw-fp-spend", "palw-derived"] {
+            for name in ["palw-attempt", "palw-fp-commitment", "palw-fp-spend", "palw-derived", "palw-receipt-auth"] {
                 assert!(parse_purpose(name).is_ok(), "{name} must be deniable");
             }
             // The shipped aliases still work, and an unknown name still fails with the full list.
             assert_eq!(parse_purpose("tx"), Ok(SigningPurpose::Transaction));
+            assert!(parse_purpose("takeover").is_err());
+            assert!(parse_purpose("takeover-token").is_err());
             let e = parse_purpose("nonsense").expect_err("unknown purposes are refused");
             assert!(e.contains("palw-fp-spend"), "the error lists what is available: {e}");
         }

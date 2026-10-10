@@ -8,7 +8,20 @@
 //!   palw-evidence repair  --claim <hex> --roots <claim.json> --providers <list>
 //!   palw-evidence redemption-publish --file <RDA4 bundle> --providers <list> [--min-verified N]       (the miner, once, before switching off)
 //!   palw-evidence redemption-sync    --providers <list> --into <dir> [--network-domain <hex>] [--now-daa N]   (a builder: fills --palw-redemption-auth-dir)
+//!
+//!   (DA16, the public artifact — every leaf checked against the CHAIN's roots: the class id and artifact root you pass. NON-CONSENSUS,
+//!   optional off-chain tooling since ADR-0177: no court or lease backs it, and the chain never reads its result)
+//!   palw-evidence artifact-fetch  --network-domain <hex> --class <hex> --artifact-root <hex> [--kernel-root <hex>] --providers <list> --into <dir>
+//!   palw-evidence artifact-verify --network-domain <hex> --class <hex> --artifact-root <hex> --kernel-root <hex> --providers <list>
+//!   palw-evidence artifact-status --network-domain <hex> --class <hex> --artifact-root <hex> --providers <list>
+//!   palw-evidence artifact-repair --network-domain <hex> --class <hex> --artifact-root <hex> --providers <list>
+//!   palw-evidence artifact-hook   --network-domain <hex> --providers <list> <class> <root> [btv2_infohash=…] [bundle_commitment=…] drop_dir=<dir>
+//!                                 (kaspad --palw-root-fetch-cmd "palw-evidence artifact-hook --network-domain … --providers …")
 //! ```
+//!
+//! `artifact-verify` prints CONFIRMED when the bytes root to both the class's artifact root and the binding's kernel root, and
+//! KERNEL_ROOT_DIFFERS with the differing instances otherwise (then force the bound side's units out of the pair's provider with a
+//! provider-court challenge, tag 151, and refute with tag 105).
 //!
 //! `--providers` is a file (one provider per line) or a comma-separated list: a directory, `dir:<path>`, `http://host:port[/prefix]`, `https://…`
 //! (through `curl`). There is no on-chain provider discovery: you choose where to place evidence and where to look.
@@ -82,12 +95,121 @@ fn admissible_manifest(providers: &[&dyn EvidenceProvider], claim_hex: &str, roo
     die(format!("no provider holds a manifest for this claim that agrees with the claim's roots ({why:?})"))
 }
 
+fn material_refs(
+    opened: &[Box<dyn misaka_palw_remote::public_material::MaterialProvider>],
+) -> Vec<&dyn misaka_palw_remote::public_material::MaterialProvider> {
+    opened.iter().map(|b| b.as_ref()).collect()
+}
+
+/// `artifact-*`: the public artifact (DA16).
+#[allow(clippy::too_many_arguments)]
+fn artifact_command(
+    command: &str,
+    network_domain: Hash64,
+    class: Hash64,
+    artifact_root: Hash64,
+    kernel_root: Option<Hash64>,
+    providers: &str,
+    into: Option<PathBuf>,
+) {
+    use misaka_palw_remote::public_material::*;
+    let opened = open_material_providers_v1(&providers_of(providers));
+    let refs = material_refs(&opened);
+    let seed = class;
+    match command {
+        "artifact-fetch" | "artifact-verify" | "artifact-hook" => {
+            let fetched = fetch_artifact_v1(&refs, network_domain, class, artifact_root, kernel_root, seed).unwrap_or_else(|e| die(e));
+            let mut out = serde_json::json!({
+                "schema": "misaka.palw.artifact-fetch.v1",
+                "class": class.to_string(),
+                "artifact_root": artifact_root.to_string(),
+                "leaves": fetched.leaves.len(),
+                "served_by": fetched.report.served_by.iter().collect::<std::collections::BTreeSet<_>>(),
+                "note": "every leaf checked against the class's artifact root at the coordinates its program fixes; LOCAL_OBSERVATION",
+            });
+            if let Some(kr) = kernel_root {
+                out["binding"] = match check_binding_v1(&fetched, kr).unwrap_or_else(|e| die(e)) {
+                    kaspa_consensus_core::palw_public_material_v1::BindingCheckV1::Confirmed => {
+                        serde_json::json!({ "verdict": "CONFIRMED", "kernel_root": kr.to_string() })
+                    }
+                    kaspa_consensus_core::palw_public_material_v1::BindingCheckV1::KernelRootDiffers { true_commitments } => {
+                        serde_json::json!({
+                            "verdict": "KERNEL_ROOT_DIFFERS",
+                            "kernel_root": kr.to_string(),
+                            "true_kernel_root": Hash64::from_bytes(true_commitments.root()).to_string(),
+                            "next": "fetch or force (tag 151) the bound commitments and a differing row from the pair's provider, then file tag 105",
+                        })
+                    }
+                };
+            }
+            if let Some(dir) = into {
+                std::fs::create_dir_all(&dir).unwrap_or_else(|e| die(format!("{}: {e}", dir.display())));
+                let path = dir.join(format!("{artifact_root}.palwtir"));
+                write_container_v1(&path, &fetched).unwrap_or_else(|e| die(e));
+                out["container"] = serde_json::json!(path.display().to_string());
+            }
+            println!("{out}");
+        }
+        "artifact-status" => {
+            let (manifest, program) =
+                fetch_artifact_manifest_v1(&refs, network_domain, class, artifact_root, kernel_root).unwrap_or_else(|e| die(e));
+            let av = artifact_availability_v1(&refs, &manifest, &program);
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "misaka.palw.artifact-status.v1",
+                    "leaves": manifest.leaf_hashes.len(),
+                    "retain_until_daa": manifest.retain_until_daa,
+                    "per_provider": av.iter().map(|a| serde_json::json!({ "provider": a.provider, "manifest": a.manifest_ok, "verified": a.verified, "missing": a.missing.len(), "corrupt": a.corrupt.len(), "unreachable": a.unreachable })).collect::<Vec<_>>(),
+                    "observation": misaka_palw_remote::transport::LOCAL_OBSERVATION,
+                })
+            );
+        }
+        "artifact-repair" => {
+            let (manifest, _) =
+                fetch_artifact_manifest_v1(&refs, network_domain, class, artifact_root, kernel_root).unwrap_or_else(|e| die(e));
+            let copies = repair_artifact_v1(&refs, &manifest, seed).unwrap_or_else(|e| die(e));
+            println!("{}", serde_json::json!({ "schema": "misaka.palw.artifact-repair.v1", "complete_copies": copies }));
+        }
+        other => die(format!("unknown command {other:?}")),
+    }
+}
+
+fn hex_arg(what: &str, v: &str) -> Hash64 {
+    v.parse::<Hash64>().unwrap_or_else(|_| die(format!("{what} is not a 128-hex hash")))
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
-    let command = args.next().unwrap_or_else(|| die("usage: palw-evidence <serve|publish|status|fetch|repair> …"));
+    let command = args.next().unwrap_or_else(|| die("usage: palw-evidence <serve|publish|status|fetch|repair|artifact-…> …"));
+    // `artifact-hook` is called by kaspad's root-fetch hook: flags, then `<class> <root> [key=value…] drop_dir=<dir>`.
+    if command == "artifact-hook" {
+        let (mut network_domain, mut providers, mut positional, mut drop_dir) = (None, None, Vec::new(), None);
+        while let Some(a) = args.next() {
+            match a.as_str() {
+                "--network-domain" => network_domain = args.next(),
+                "--providers" => providers = args.next(),
+                kv if kv.starts_with("drop_dir=") => drop_dir = Some(PathBuf::from(&kv["drop_dir=".len()..])),
+                kv if kv.contains('=') => {}
+                other => positional.push(other.to_string()),
+            }
+        }
+        let [class, root] = positional.as_slice() else { die("artifact-hook needs <class> <root>") };
+        artifact_command(
+            "artifact-hook",
+            hex_arg("--network-domain", &network_domain.unwrap_or_else(|| die("--network-domain is required"))),
+            hex_arg("class", class),
+            hex_arg("root", root),
+            None,
+            &providers.unwrap_or_else(|| die("--providers is required")),
+            Some(drop_dir.unwrap_or_else(|| die("drop_dir= is required"))),
+        );
+        return;
+    }
     let (mut claim, mut roots, mut providers, mut out, mut from, mut root, mut listen) = (None, None, None, None, None, None, None);
     let (mut min_verified, mut min_copies, mut now_daa, mut max_store_gb) = (1usize, 2usize, None::<u64>, 64u64);
     let (mut file, mut into, mut network_domain) = (None::<PathBuf>, None::<PathBuf>, None::<String>);
+    let (mut class, mut artifact_root, mut kernel_root) = (None::<String>, None::<String>, None::<String>);
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().unwrap_or_else(|| die(format!("{name} needs a value")));
         match flag.as_str() {
@@ -106,6 +228,9 @@ fn main() {
             "--file" => file = Some(PathBuf::from(value("--file"))),
             "--into" => into = Some(PathBuf::from(value("--into"))),
             "--network-domain" => network_domain = Some(value("--network-domain")),
+            "--class" => class = Some(value("--class")),
+            "--artifact-root" => artifact_root = Some(value("--artifact-root")),
+            "--kernel-root" => kernel_root = Some(value("--kernel-root")),
             "--max-store-gb" => {
                 max_store_gb = value("--max-store-gb").parse().unwrap_or_else(|_| die("--max-store-gb is not a number"))
             }
@@ -113,6 +238,21 @@ fn main() {
         }
     }
     let need = |v: &Option<String>, name: &str| v.clone().unwrap_or_else(|| die(format!("{name} is required")));
+    if command.starts_with("artifact-") {
+        if command == "artifact-verify" && kernel_root.is_none() {
+            die("artifact-verify needs --kernel-root (the binding's)");
+        }
+        artifact_command(
+            &command,
+            hex_arg("--network-domain", &need(&network_domain, "--network-domain")),
+            hex_arg("--class", &need(&class, "--class")),
+            hex_arg("--artifact-root", &need(&artifact_root, "--artifact-root")),
+            kernel_root.as_deref().map(|k| hex_arg("--kernel-root", k)),
+            &need(&providers, "--providers"),
+            into,
+        );
+        return;
+    }
     match command.as_str() {
         "serve" => {
             let root = root.unwrap_or_else(|| die("--root is required"));

@@ -1,5 +1,12 @@
 # ADR-0172 — Model extensibility uses versioned kernels, not a universal VM
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -38,8 +45,7 @@ spML型BFT運営者委員会・trusted PKI・committee beaconは、この経路�
 
 An existing production ISA still needs MISAKA-specific deterministic arithmetic, syscall bindings,
 state commitments, metering, proof localization, replay and adversarial tests. Borrowing a VM does
-not remove those costs. The previous RFC05 estimates are historical planning estimates, not measured
-savings achieved by this decision. Kernel extensions also require reference implementations,
+not remove those costs. No measured implementation-cost saving is asserted here. Kernel extensions also require reference implementations,
 independent review, court/resource tests and safe upgrades; their costs are not zero.
 
 The deliberate trade-off is a narrower accepted language today in exchange for a smaller consensus
@@ -119,7 +125,7 @@ challenged faults, not a mechanism that retroactively removes undetected-error p
 
 | Document / component | Decision |
 | --- | --- |
-| RFC05 old Parts I/II, ladder TIR → BVM/GVM, Linux/ISA fallback and EXEC VM programme | Withdrawn implementation directions; retained only as historical rationale. RFC05's new current section defines kernel-only extension. Do not implement or arm the old VM proposals. |
+| RFC05 old Parts I/II, ladder TIR → BVM/GVM, Linux/ISA fallback and EXEC VM programme | Withdrawn; RFC05 retains only the reason. The [Kernel design](../design/palw/versioned-kernels.md) specifies the selected extension route. |
 | RFC04 improvement, candidate/evaluation/promotion rules | Keep. Off-chain automation is unrestricted. Code-by-tests/EXEC is not promised via a future VM; a distinct reviewed non-VM checker extension would need its own specification. |
 | RFC11 model registration and broad coverage | Replace all proposed VM fallback with active-kernel plan composition or an explicitly required future kernel. Preserve the real 9B/2M blockers and the all-HF denominator. |
 | ADR0171 / RFC07 probabilistic verification | Unchanged security direction; reusable kernel-primitive templates replace references to VM templates. Full replay remains a conformance baseline or exact small-class option, not the required ordinary large-model path. |

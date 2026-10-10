@@ -16839,8 +16839,13 @@ mod t12_tir_registration_cap;
 mod g14_registration_e2e;
 // G14 lane D phase 2: the kernel route folded into PalwChainStateV2 -- a covered lie convicted by a fresh outsider through the real node path.
 mod g14_kernel_route_e2e;
+// RFC-0004 Part II: computation specifications with typed roots on the real node -- Weights byte for byte, Memory, Retrieval,
+// Composite, each lie convicted by an outsider and each withholding a default.
+mod r4x_typed_roots_e2e;
 // RFC-0002 Phase F's second IR fence: the IR step-leaf DA demand at the gate.
 mod t12_tir_da_step_gate;
+// LG14-B (RFC-0014 §4–§5 on the legacy V2 route): tags 157–159 dropped by name below `palw_legacy_held_da_v2`, signed past it.
+mod t12_legacy_held_da_gate;
 // RFC-0004 A4/A5: the material objects' and the candidate's signatures at the gate, and a licence
 // through the walk and the fold, with real card and rights-holder signatures.
 mod t12_improve_material_gate;
@@ -16892,6 +16897,9 @@ mod t12_operator_anchor_fence;
 // RFC-0010 (the permissionless Panel's production fold): a testnet-12 chain crossing a bypassed (never armable) fence — the V3 claim bound
 // on a heartbeat, lane A draining the legacy claim, IBD and reorg of the engine state.
 mod t12_permissionless_panel_e2e;
+// Lane BUDGET (ADR-0176): the bond budget through the real pipeline on testnet-12 (a bypassed, never armable fence) — equal ceilings for
+// a fast and a slow producer, ρ ×1/×100/×1000, no recovery before accepted + W, IBD, reorg and restart.
+mod budget_e2e;
 // Lane V02 (post-launch, 2026-09-26): `palw_final_lock_full_collateral` crossed on a real chain — lock-heavy
 // seats bind from the height and void their anchor below it.
 mod t12_final_lock_full_collateral_fence;
@@ -16930,11 +16938,17 @@ mod t12_f2_lock_redate_crossing;
 // ADR-0152 §8.2 / T53 (P2-12): what a testnet-12 drill chain produces — a registration and its
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;
+// A-2 uniformity (the A2U review): every lifecycle kind and header form the live testnet-12 build cannot decode is, below its owning
+// fence, judged as that build judges it — the same verdicts, skips, refusals, roots and UTXO set on an unarmed and an armed-far node.
+mod t12_a2u_new_kinds_uniform;
 
 // RFC-0012: the private zero-DNS acceptance matrix (lane X12). It drives the EVM lane (deposits, sells, withdrawals), so it builds
 // with the `evm` feature only, like `p2_evm_twin`.
 #[cfg(feature = "evm")]
 mod rfc12_zero_dns_matrix;
+// RFC-0012 wave 2 (C1 a real claim to `Final` with the lane on, C2 a pruned join with EVM state): `evm` feature only, like the matrix.
+#[cfg(feature = "evm")]
+mod rfc12_c_items;
 
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
 /// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`
@@ -17369,7 +17383,9 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     };
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle(&catalog);
-    let config = ConfigBuilder::new(MAINNET_PARAMS)
+    // Validated WITHOUT the retirement, which is set afterwards: the release's validation requires `palw_fork_choice_rule_e_v1` armed
+    // at or below it (ADR-0175), a fence this fixture does not arm; the test is about the retirement's own behaviour.
+    let mut config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
@@ -17381,18 +17397,18 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
                 reentry_final_depth_daa: 10,
                 min_retained_validators: 4,
             });
-            p.palw_dns_retirement = Some(PalwDnsRetirementV1 {
-                activation: ForkActivation::new(5),
-                settlement: PalwSettlementPolicyV1 {
-                    settled_anchor_depth: 2,
-                    unique_mature_work: 20,
-                    max_operator_permille: 1000,
-                    max_class_permille: 1000,
-                },
-                legacy_evidence_horizon_daa: 10,
-            });
         })
         .build();
+    config.params.palw_dns_retirement = Some(PalwDnsRetirementV1 {
+        activation: ForkActivation::new(5),
+        settlement: PalwSettlementPolicyV1 {
+            settled_anchor_depth: 2,
+            unique_mature_work: 20,
+            max_operator_permille: 1000,
+            max_class_permille: 1000,
+        },
+        legacy_evidence_horizon_daa: 10,
+    });
     let mut ctx = TestContext::new(TestConsensus::new(&config));
     for _ in 0..16 {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();

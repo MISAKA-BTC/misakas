@@ -1,5 +1,12 @@
 # ADR-0044: Free-prompt PALW — the user's own inference becomes the consensus work, certified before it mines
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **New verification-challenge scope — 2026-10-08:** [RFC07 Part VI](../rfc/0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol) is the sole proposed post-commit policy for Kernel/model conformance and claim/slice/public checks. This ADR's existing receipt-ticket/Panel beacon rules retain their historical/versioned meaning; they do not qualify a cheap BASE-0 floor or an unadmitted attempt as entropy for the new protocol. Source validity must be independent of the consuming challenge, with reviewed paid-work/unpredictability/bias bounds. No free-header hash, committee/DNS/BFT signature or timeout entropy fallback is allowed. No live rule is changed by this note.
 
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
@@ -339,38 +346,8 @@ blocks completely.
 
 ## Decision 7 — Pricing: CU from the executed shape, conservative by construction
 
-The VLT lane's `cu = prefill + 8·decode` (v2, frozen) is a fairness heuristic, not a security
-bound. The receipt lane gets its own rule:
-
-```
-fp_cu_v3 = prompt_tokens · cu_prefill_weight  +  decode_tokens_executed · cu_decode_weight
-```
-
-with weights in the bundle (hence in the ruleset id), chosen from the class calibration harness
-under one invariant:
-
-> **No workload shape may yield more CU per real second than the pure-decode reference shape on
-> the registered hardware class.** Mispricing must only ever under-pay.
-
-Prefill is batched and an order of magnitude cheaper per token than decode, so its weight starts
-heavily discounted (initial: `cu_prefill_weight = 1`, `cu_decode_weight = 64`). The honest
-consequence, stated rather than hidden: a prompt-heavy job earns somewhat less CU per second of
-real compute than a decode-heavy one, and a dedicated miner running decode-heavy garbage prompts
-earns CU at the reference rate. **Usefulness is not adjudicable and this ADR does not pretend to
-adjudicate it** — the guarantee is the draft's own honest one: real usage mines at (nearly) the
-dedicated-mining rate, so the useful and the mercenary pay the same protocol costs, instead of
-useful work being worthless. Chat-shaped usage is decode-dominant, so the discount is small in
-practice.
-
-Variable length is real: `decode_token_limit` is a ceiling, `EndOfGeneration` is a legitimate
-stop (a chat answer that ends, ends), `decode_tokens_executed` is what the trace commits and what
-CU counts, and a replay must reproduce the same EOG step or the trace is refuted. This is a new
-wire version and a new shape/class identity (`…/early-eog-allowed/…`) — the V2 exact-decode
-profile is not edited in place (a second meaning under one id is the fork-bug shape).
-
-Spam floor: tiny jobs are bounded by the commitment transaction's fee and by quantization itself
-(`cu < quantum_cu` certifies but never draws). No minimum-prompt rule pretends to filter "real"
-usage.
+**Withdrawn by [ADR-0074](0074-the-attempt-is-a-claim-drawn-by-the-chain.md) Decision 5.**
+旧 prefill/decode の CU 係数表は実装しない。恣意的な係数で class 間の価格を決めず、step leaves と class の canonical job を基準にするため。
 
 ## Decision 8 — Data availability and privacy, v1
 

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """PALW economic parameter simulation — the B15 gate for ADR-0028 §4 / ADR-0032.
 
-Every number ADR-0028 and ADR-0032 marked "economic-simulation-gated" is derived here from
-measured facts, with the inequality each one has to satisfy stated next to it. Nothing is
-tuned to taste: each parameter is the tightest value satisfying its constraint, and where a
-constraint cannot be satisfied the script says so instead of picking a number.
+Economic-simulation-gated amounts are checked against measured inputs and their constraints.
+ADR-0032's 2026-10-10 amendment fixes the PALW bounty share at 49% as a policy choice and
+retains the historical 2,000-coin B_cap candidate. The bounty check is arithmetic under those
+inputs, not a new measurement or a complete economic-safety gate for the amended share.
+This script models the FUTURE ruleset at 49%. On chain the 49% share sits behind the dormant
+fence `palw_reporter_share_v2` (lane INTF, 2026-10-10): every shipped network, testnet-12's live
+history included, still pays the historical 10% (1,000 bps) until the full-activation release.
+Where a constraint cannot be satisfied the script says so instead of picking a number.
 
 Measured inputs (all cited, none invented):
   * per-block subsidy, 120 s network — `SUBSIDY_BY_MONTH_TABLE[0]` rescaled by the
@@ -31,6 +35,8 @@ BASE_SUBSIDY_120_SOMPI = GENESIS_SUBSIDY_10BPS_SOMPI * BLOCKS_PER_SEC_10BPS * SE
 BASE_SUBSIDY_120_MSK = BASE_SUBSIDY_120_SOMPI / SOMPI
 
 BOND_MSK = 20_000                       # live bonded amount per validator
+PALW_REPORTER_REWARD_BPS = 4_900        # ADR-0032 amendment, 2026-10-10 (past palw_reporter_share_v2; 10% below it)
+B_CAP_MSK = 2_000                      # retained 2026-08-16 candidate, not recomputed from 49%
 Q = 2                                   # funded panel size (ADR-0028 §4, Stage 1-2)
 RHO_V = 1.0                             # measured replay/primary cost ratio (≈1.0, registered)
 LAMBDA = 2.0                            # §4e economic safety factor (λ ≥ 2.0)
@@ -65,11 +71,16 @@ def msk(sompi: float) -> str:
     return f"{sompi / SOMPI:,.4f} MSK"
 
 
+def challenger_bounty(collected_sompi: int, cap_sompi: int) -> int:
+    """ADR-0032 E1: integer-sompi reward on collected slash, capped at the retained B_cap."""
+    return min(collected_sompi * PALW_REPORTER_REWARD_BPS // 10_000, cap_sompi)
+
+
 results: list[Result] = []
 
 
 def main() -> None:
-    print("PALW economic parameters — derived, not chosen\n" + "=" * 78)
+    print("PALW economic parameters — measured inputs, with the 2026-10-10 bounty amendment\n" + "=" * 78)
     print(f"base(C) per credited block  : {BASE_SUBSIDY_120_MSK:,.2f} MSK  "
           f"({BASE_SUBSIDY_120_SOMPI:,} sompi, rate-preserved from the 10 BPS genesis rate)")
     print(f"cross-check vs the docs' 4 445.62 MSK/blk: "
@@ -137,16 +148,20 @@ def main() -> None:
                           "2·floor > orphan-equivalent AND ≤ bond", "OK" if noshow_floor/SOMPI <= BOND_MSK else "CAP AT BOND"))
 
     # --- 5. B_cap, the challenger bounty (ADR-0027 §4 / ADR-0032) ------------------------
-    # Constraint: ≤10% of slash, and small enough that manufacturing offenses is unprofitable
-    # (a self-slash costs 100% to gain ≤10%).
-    bounty_pct = 0.10
+    # The share is amended to 49%; B_cap keeps its historical 2,000-coin candidate.
+    # A self-slash costs 100% and returns at most 49%, with rounding and the cap reducing it.
+    bounty_pct = PALW_REPORTER_REWARD_BPS / 10_000
     max_slash = BOND_MSK * SOMPI
-    b_cap = bounty_pct * max_slash
-    print("\n5. Challenger bounty   constraint: ≤ 10% of slash; self-slash must be unprofitable")
-    print(f"   B_cap = {msk(b_cap)} (10% of a full {BOND_MSK:,} MSK bond)")
-    print(f"   self-slash ROI = {bounty_pct:.2f} (must be < 1) OK")
-    print(f"   remainder burned: {msk(max_slash - b_cap)}")
-    results.append(Result("B_cap", msk(b_cap), "≤ 10% slash; self-slash ROI < 1", "derived"))
+    b_cap = B_CAP_MSK * SOMPI
+    full_bounty = challenger_bounty(max_slash, b_cap)
+    print("\n5. Challenger bounty   min(floor(49% of collected slash), B_cap)")
+    print(f"   share = {PALW_REPORTER_REWARD_BPS:,} bps ({bounty_pct:.0%}); B_cap = {msk(b_cap)} (retained candidate)")
+    print(f"   full-bond bounty = {msk(full_bounty)}; self-slash return ratio = {full_bounty / max_slash:.2f}")
+    print(f"   maximum self-slash return ratio ≤ {bounty_pct:.2f} (must be < 1) "
+          f"{'OK' if bounty_pct < 1 else 'FAIL'}")
+    print(f"   remainder burned: {msk(max_slash - full_bounty)}")
+    results.append(Result("bounty share", f"{bounty_pct:.0%}", "self-slash return ratio < 1", "policy amendment; arithmetic only"))
+    results.append(Result("B_cap", msk(b_cap), "reward ≤ min(49% collected slash, B_cap)", "historical candidate retained"))
 
     # --- 6. §4e admission caps -----------------------------------------------------------
     print("\n6. Admission caps (both registration-time)")

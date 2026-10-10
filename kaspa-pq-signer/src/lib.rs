@@ -25,8 +25,8 @@ use kaspa_consensus_core::{
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, AUDIT_CHECKPOINT_MLDSA87_CONTEXT, HostId, PalwAttemptSignRecordV1, SignedEpochCheckOutcome,
         SignedEpochRecord, SignerAuditCheckpoint, SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata, SignerOutcome,
-        SignerPolicy, SignerRequest, SignerResponse, SigningPurpose, TAKEOVER_TOKEN_CONTEXT, UNBOND_REQUEST_CONTEXT,
-        compute_signer_audit_chain_entry, signature_fingerprint,
+        SignerPolicy, SignerRequest, SignerResponse, SigningPurpose, UNBOND_REQUEST_CONTEXT, compute_signer_audit_chain_entry,
+        signature_fingerprint,
     },
     palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
     palw_freeprompt_v3::{PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_MLDSA87_SPEND_CONTEXT},
@@ -260,9 +260,14 @@ pub struct SignerState {
     appends_since_checkpoint: u64,
     server_identity: HostId,
     /// Optional policy hook: purposes this signer refuses to sign (e.g. a validator-only signer can
-    /// deny `Transaction` so it only ever produces attestation/unbond/takeover signatures). Empty by
+    /// deny `Transaction` so it only ever produces attestation/unbond signatures). Empty by
     /// default — no behavior change unless the operator opts in.
     denied_purposes: Vec<SigningPurpose>,
+    /// RFC-0009 stage C: whether this signer offers `SigningPurpose::PalwReceiptAuthV4` — the executor's V4 redemption authorization,
+    /// visible only under `palw_receipt_spend_v4` (dormant on every preset). **Off by default**: a signer started without the operator
+    /// saying the network arms the fence refuses the purpose by name before any signature exists, so a deployment that never opts in is
+    /// exactly the signer it was.
+    receipt_spend_v4_offered: bool,
 }
 
 impl SignerState {
@@ -319,7 +324,16 @@ impl SignerState {
             appends_since_checkpoint: 0,
             server_identity,
             denied_purposes: Vec::new(),
+            receipt_spend_v4_offered: false,
         })
+    }
+
+    /// Offer (or withdraw) `SigningPurpose::PalwReceiptAuthV4` — the operator's statement that the network this signer's keys act on arms
+    /// `palw_receipt_spend_v4`. Off by default, so the purpose is invisible (refused by name) until the fence is armed and the operator
+    /// opts in (`--palw-receipt-spend-v4`). The chain's own header stage refuses a V4 receipt below the fence whatever is signed; this gate
+    /// keeps a key from minting authorizations nobody can use yet. An explicit `--deny-purpose palw-receipt-auth` still wins.
+    pub fn set_receipt_spend_v4_offered(&mut self, offered: bool) {
+        self.receipt_spend_v4_offered = offered;
     }
 
     /// Set the optional purpose denylist (see [`SignerState::denied_purposes`]). A request whose
@@ -449,6 +463,14 @@ impl SignerState {
         if !req.purpose_matches_digest() {
             return Err(SignerError::PolicyViolation("purpose tag does not match message_digest variant".into()));
         }
+        // (1-V4) RFC-0009 stage C: the V4 redemption authorization is visible only under `palw_receipt_spend_v4`. A signer whose operator has not
+        //        said the network arms it refuses the purpose here, by name, before the context or any key is looked at.
+        if req.purpose == SigningPurpose::PalwReceiptAuthV4 && !self.receipt_spend_v4_offered {
+            return Err(SignerError::PolicyViolation(
+                "purpose PalwReceiptAuthV4 is not offered: palw_receipt_spend_v4 is dormant (start the signer with --palw-receipt-spend-v4 once the network arms it)"
+                    .into(),
+            ));
+        }
         // (1a) The ML-DSA-87 signing context is bounded to 255 bytes (FIPS 204). Reject an over-long
         //      context in-band here rather than letting it reach the `assert!` in
         //      `ValidatorKey::sign_with_context`, which would panic — and, under the shared state
@@ -492,7 +514,9 @@ impl SignerState {
         let required_ctx: Option<&[u8]> = match req.purpose {
             SigningPurpose::Attestation => Some(ATTESTATION_MLDSA87_CONTEXT),
             SigningPurpose::Unbond => Some(UNBOND_REQUEST_CONTEXT),
-            SigningPurpose::TakeoverToken => Some(TAKEOVER_TOKEN_CONTEXT),
+            SigningPurpose::TakeoverToken => {
+                return Err(SignerError::PolicyViolation("takeover-token signing was removed (ADR-0014)".into()));
+            }
             // The PALW attempt context is reserved exactly like the overlay three: a purpose that
             // could borrow it would mint block-production signatures past the journal below.
             SigningPurpose::PalwAttemptV2 => Some(PALW_ATTEMPT_V2_MLDSA87_CONTEXT),
@@ -507,6 +531,9 @@ impl SignerState {
             SigningPurpose::PalwFpSpendV3 => Some(PALW_FP_V3_MLDSA87_SPEND_CONTEXT),
             // ADR-0078: a derivation's context is reserved the same way and for the same reason.
             SigningPurpose::PalwDerivedArtifactV1 => Some(kaspa_consensus_core::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT),
+            // RFC-0009 stage C: the V4 authorization's context is reserved the same way — a purpose that could borrow it would mint
+            // redemption authorizations past the fence gate above, and a `Transaction` request cannot (the allowlist below).
+            SigningPurpose::PalwReceiptAuthV4 => Some(kaspa_consensus_core::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT),
             SigningPurpose::Transaction => None,
         };
         match required_ctx {
@@ -595,13 +622,15 @@ impl SignerState {
         let key = self.keys.get(&req.validator_id).expect("checked above");
         let digest: Vec<u8> = match &req.message_digest {
             SignerMessageDigest::Transaction(h) => h.as_bytes().to_vec(),
-            SignerMessageDigest::Attestation(h) | SignerMessageDigest::Unbond(h) | SignerMessageDigest::TakeoverToken(h) => {
-                h.as_bytes().to_vec()
+            SignerMessageDigest::Attestation(h) | SignerMessageDigest::Unbond(h) => h.as_bytes().to_vec(),
+            SignerMessageDigest::TakeoverToken(_) => {
+                return Err(SignerError::PolicyViolation("takeover-token signing was removed (ADR-0014)".into()));
             }
             SignerMessageDigest::PalwAttemptV2(h)
             | SignerMessageDigest::PalwFpCommitmentV3(h)
             | SignerMessageDigest::PalwFpSpendV3(h)
-            | SignerMessageDigest::PalwDerivedArtifactV1(h) => h.as_bytes().to_vec(),
+            | SignerMessageDigest::PalwDerivedArtifactV1(h)
+            | SignerMessageDigest::PalwReceiptAuthV4(h) => h.as_bytes().to_vec(),
         };
         let sig = key.sign_with_context(&digest, &req.context);
 
@@ -844,6 +873,7 @@ pub mod sidecar {
     use super::transport::SignerClient;
     use kaspa_consensus_core::dns_finality::{HostId, SignerMessageDigest, SignerMetadata, SignerRequest, SigningPurpose, validator_id_from_pubkey};
     use kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT;
+    use kaspa_consensus_core::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT;
     use kaspa_hashes::Hash64;
     use kaspa_pq_validator_core::MessageSigner;
     use kaspa_txscript::MLDSA87_TX_CONTEXT;
@@ -882,8 +912,14 @@ pub mod sidecar {
                 (SigningPurpose::PalwFpCommitmentV3, SignerMessageDigest::PalwFpCommitmentV3(digest))
             } else if context == MLDSA87_TX_CONTEXT {
                 (SigningPurpose::Transaction, SignerMessageDigest::Transaction(digest))
+            } else if context == PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT {
+                // The daemon decides whether this purpose is offered at all (`SignerState::set_receipt_spend_v4_offered`).
+                (SigningPurpose::PalwReceiptAuthV4, SignerMessageDigest::PalwReceiptAuthV4(digest))
             } else {
-                return Err("this sidecar adapter signs the free-prompt claim id and a transaction input's sighash only".to_string());
+                return Err(
+                    "this sidecar adapter signs the free-prompt claim id, a V4 redemption authorization and a transaction input's sighash only"
+                        .to_string(),
+                );
             };
             let request_id = self.next_request.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let request = SignerRequest {
@@ -940,6 +976,24 @@ mod tests {
             context: ATTESTATION_MLDSA87_CONTEXT.to_vec(),
             message_digest: SignerMessageDigest::Attestation(msg),
             metadata: SignerMetadata::Attestation { epoch, target_hash: target, target_daa_score: daa },
+        }
+    }
+
+    #[test]
+    fn retired_takeover_purpose_is_refused_under_every_policy() {
+        for (n, policy) in [SignerPolicy::Permissive, SignerPolicy::AuditOnly, SignerPolicy::Strict].into_iter().enumerate() {
+            let k = key(0x22);
+            let vid = k.validator_id;
+            let mut s = SignerState::new(vec![k], policy, tmp_dir(&format!("retired-takeover-{n}")), Hash::default()).unwrap();
+            let req = SignerRequest {
+                request_id: 1,
+                validator_id: vid,
+                purpose: SigningPurpose::TakeoverToken,
+                context: kaspa_consensus_core::dns_finality::TAKEOVER_TOKEN_CONTEXT.to_vec(),
+                message_digest: SignerMessageDigest::TakeoverToken(Hash::default()),
+                metadata: SignerMetadata::None,
+            };
+            assert!(matches!(s.handle_request(&req, Hash::default(), 1000).result, Err(SignerError::PolicyViolation(_))));
         }
     }
 
@@ -1673,6 +1727,141 @@ mod tests {
         // The adapter is not a "sign these bytes" door: another context is refused before the wire, and a wrongly sized message too.
         assert!(sidecar.sign_message(&[0u8; 64], b"misaka-palw/some-other-context").is_err());
         assert!(sidecar.sign_message(&[0u8; 63], MLDSA87_TX_CONTEXT).is_err());
+        drop(sidecar);
+        server.join().unwrap();
+        let _ = fs::remove_file(&sock);
+    }
+
+    // ---- RFC-0009 stage C: the V4 redemption authorization through the signer, visible only under `palw_receipt_spend_v4` ----
+
+    fn receipt_auth_request(vid: Hash64, digest: Hash64) -> SignerRequest {
+        SignerRequest {
+            request_id: 1,
+            validator_id: vid,
+            purpose: SigningPurpose::PalwReceiptAuthV4,
+            context: kaspa_consensus_core::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::PalwReceiptAuthV4(digest),
+            metadata: SignerMetadata::None,
+        }
+    }
+
+    /// **The purpose is invisible until the operator says the network arms the fence.** A default signer refuses it by name (and the audit
+    /// log records the refusal); once offered it signs, under the authorization's own context and no other; a denylist entry still wins.
+    #[test]
+    fn the_receipt_authorization_purpose_is_refused_until_the_fence_is_offered() {
+        use kaspa_consensus_core::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT as AUTH_CTX;
+        let k = key(0x81);
+        let vid = k.validator_id;
+        let in_process = key(0x81);
+        let mut s = SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("receipt-auth"), Hash::default()).unwrap();
+        let digest = Hash64::from_bytes([0xA7; 64]);
+        let req = receipt_auth_request(vid, digest);
+
+        // Default: dormant.
+        let refused = s.handle_request(&req, Hash::default(), 1).result.expect_err("dormant: no signature exists");
+        let SignerError::PolicyViolation(why) = refused else { panic!("{refused:?}") };
+        assert!(why.contains("PalwReceiptAuthV4") && why.contains("palw_receipt_spend_v4"), "{why}");
+        assert_eq!(s.audit_chain_head() != Hash64::default(), true, "the refusal was audited");
+
+        // Offered: it signs, and the signature verifies under the authorization's context only.
+        s.set_receipt_spend_v4_offered(true);
+        let sig = s.handle_request(&req, Hash::default(), 2).result.expect("offered: signs");
+        assert!(in_process.verify_with_context(digest.as_bytes().as_slice(), &sig, AUTH_CTX));
+        assert!(!in_process.verify_with_context(
+            digest.as_bytes().as_slice(),
+            &sig,
+            kaspa_consensus_core::palw_receipt_v4::PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT
+        ));
+        assert!(!in_process.verify_with_context(digest.as_bytes().as_slice(), &sig, MLDSA87_TX_CONTEXT));
+        // Re-signing is not an equivocation (no journal, by decision): the same digest signs again.
+        assert!(s.handle_request(&req, Hash::default(), 3).result.is_ok());
+
+        // The context is reserved: no other purpose may carry it, and this purpose may carry no other.
+        let mut as_tx = req.clone();
+        as_tx.purpose = SigningPurpose::Transaction;
+        as_tx.message_digest = SignerMessageDigest::Transaction(digest);
+        let e = s
+            .handle_request(&as_tx, Hash::default(), 4)
+            .result
+            .expect_err("a Transaction request cannot borrow the authorization context");
+        assert!(matches!(e, SignerError::PolicyViolation(_)), "{e:?}");
+        let mut as_spend = req.clone();
+        as_spend.purpose = SigningPurpose::PalwFpSpendV3;
+        as_spend.message_digest = SignerMessageDigest::PalwFpSpendV3(digest);
+        assert!(s.handle_request(&as_spend, Hash::default(), 5).result.is_err(), "nor can the free-prompt spend purpose");
+        let mut wrong_ctx = req.clone();
+        wrong_ctx.context = kaspa_consensus_core::palw_receipt_v4::PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT.to_vec();
+        assert!(
+            s.handle_request(&wrong_ctx, Hash::default(), 6).result.is_err(),
+            "the authorization purpose signs under its own context only"
+        );
+        let mut mismatched = req.clone();
+        mismatched.message_digest = SignerMessageDigest::PalwFpSpendV3(digest);
+        assert!(s.handle_request(&mismatched, Hash::default(), 7).result.is_err(), "the tag must agree with the typed digest");
+
+        // An explicit denylist entry wins over the offer.
+        s.set_denied_purposes(vec![SigningPurpose::PalwReceiptAuthV4]);
+        let denied = s.handle_request(&req, Hash::default(), 8).result.expect_err("denied");
+        assert!(matches!(denied, SignerError::PolicyViolation(ref m) if m.contains("denied")), "{denied:?}");
+        // Withdrawing the offer closes it again.
+        s.set_denied_purposes(vec![]);
+        s.set_receipt_spend_v4_offered(false);
+        assert!(s.handle_request(&req, Hash::default(), 9).result.is_err());
+    }
+
+    /// **The sidecar signs the executor's authorization: the `RDA4` bundle a miner hands to builders is built THROUGH the daemon and
+    /// verifies with the chain's own checks, the seed never entering the rail's process** — and a daemon that has not been told the network
+    /// arms the fence refuses the same request by name.
+    #[cfg(unix)]
+    #[test]
+    fn the_redemption_bundle_is_built_through_the_sidecar_and_a_dormant_daemon_refuses() {
+        use super::sidecar::SidecarSigner;
+        use super::transport::serve_connection;
+        use kaspa_consensus_core::tx::TransactionOutpoint;
+        use kaspa_pq_validator_core::build_redemption_bundle_v4_with;
+        use std::os::unix::net::UnixListener;
+        use std::sync::{Arc, Mutex};
+
+        let k = key(0x82);
+        let pubkey = k.public_key().to_vec();
+        let in_process = ValidatorKey::from_seed([0x82; VALIDATOR_SEED_LEN]);
+        let server_id = Hash::from_bytes([0x5e; 32]);
+        let state = Arc::new(Mutex::new(SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("sidecar-rda4"), server_id).unwrap()));
+        let sock = std::env::temp_dir().join("kpq-sidecar-rda4-82.sock");
+        let _ = fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        let srv_state = Arc::clone(&state);
+        // Two connections: the dormant daemon's refusal, then the offering daemon's bundle.
+        let server = std::thread::spawn(move || {
+            for stream in listener.incoming().take(2).flatten() {
+                serve_connection(stream, &srv_state, server_id, &[]);
+            }
+        });
+
+        let domain = Hash64::from_bytes([0x4E; 64]);
+        let claim = Hash64::from_bytes([0xC1; 64]);
+        let bond = TransactionOutpoint::new(Hash64::from_bytes([7; 64]), 0);
+        let verify = |k: &[u8], m: &[u8], s: &[u8], c: &[u8]| kaspa_txscript::verify_mldsa87_with_context(k, m, s, c).unwrap_or(false);
+
+        // 1. Dormant daemon: refused, by name, and nothing is signed.
+        let sidecar = SidecarSigner::connect(&sock, pubkey.clone(), Hash::from_bytes([0xc1; 32])).unwrap();
+        let refused = build_redemption_bundle_v4_with(&sidecar, domain, claim, bond, 0, 4, 500, u64::MAX).expect_err("dormant daemon");
+        assert!(refused.contains("PalwReceiptAuthV4") && refused.contains("palw_receipt_spend_v4"), "{refused}");
+        drop(sidecar);
+
+        // 2. The operator opts in: the bundle is built through the daemon.
+        state.lock().unwrap().set_receipt_spend_v4_offered(true);
+        let sidecar = SidecarSigner::connect(&sock, pubkey.clone(), Hash::from_bytes([0xc2; 32])).unwrap();
+        let bundle = build_redemption_bundle_v4_with(&sidecar, domain, claim, bond, 0, 4, 500, u64::MAX).expect("the daemon signs it");
+        bundle.validate_v4(domain, verify).expect("self-checking with the chain's own verifier");
+        assert_eq!(bundle.executor_pubkey, pubkey);
+        // The same authorization the in-process key makes (the signature is hedged, so the bytes of the signature differ).
+        let local = in_process.build_redemption_bundle_v4(domain, claim, bond, 0, 4, 500, u64::MAX).unwrap();
+        assert_eq!(bundle.authorization, local.authorization);
+        assert_eq!(bundle.signature.len(), local.signature.len());
+        // The adapter's other locks: the cap and the range are refused BEFORE the wire, as the chain would refuse them after.
+        assert!(build_redemption_bundle_v4_with(&sidecar, domain, claim, bond, 0, 4, 1_001, u64::MAX).is_err());
+        assert!(build_redemption_bundle_v4_with(&sidecar, domain, claim, bond, 3, 3, 500, u64::MAX).is_err());
         drop(sidecar);
         server.join().unwrap();
         let _ = fs::remove_file(&sock);

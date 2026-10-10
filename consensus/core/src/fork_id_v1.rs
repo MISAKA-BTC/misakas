@@ -706,7 +706,8 @@ mod tests {
             // refused without R-core+ and the attribution fence at or below it by `validate_palw_v2`, which
             // the probe does not run — it asks only the hashers and the schedule.
             "palw_capacity_aggregate_liability" => {
-                params.palw_capacity_aggregate_liability = Some(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at))
+                params.palw_capacity_aggregate_liability =
+                    Some(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at))
             }
             // A later step's slot: the value (armed at 1,000 where absent, as a widening's lane is) grows to
             // `slot` steps, the missing ones one DAA apart above the last, and step `slot` sits at `at`.
@@ -774,8 +775,27 @@ mod tests {
             "palw_gen_range_twin_v1" => params.palw_gen_range_twin_v1 = Some(at),
             // RFC-0011 §15.7's dormant kernel-route fence: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_probabilistic_constraints_v1" => params.palw_probabilistic_constraints_v1 = Some(at),
+            // RFC-0004 Part II's dormant typed-roots fence: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_typed_roots_v1" => params.palw_typed_roots_v1 = Some(at),
+            "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
             "palw_panel_free_v1" => params.palw_panel_free_v1 = Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(at)),
             "palw_signed_registration_v1" => params.palw_signed_registration_v1 = Some(at),
+            // RFC-0006 per-segment pricing (SHARD): refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
+            // DA16's provider court: a bare height, refused when armed by `validate_palw_v2` (which the probe does not run).
+            "palw_provider_court_v1" => params.palw_provider_court_v1 = Some(at),
+            "palw_legacy_held_da_v2" => params.palw_legacy_held_da_v2 = Some(at),
+            // ADR-0176 / ADR-0177 (lane BUDGET): a height with the unapproved probe policy (its value only rides along; the probe asks the
+            // hashers and the schedule, never `validate_palw_v2`, which refuses both armed).
+            "palw_bond_budget_v1" => {
+                params.palw_bond_budget_v1 = Some(crate::palw_bond_budget_v1::PalwBondBudgetFenceV1::at(at));
+            }
+            "palw_model_bond_allocation_v1" => {
+                params.palw_model_bond_allocation_v1 = Some(crate::palw_bond_budget_v1::PalwModelBondAllocationFenceV1::at(at));
+            }
+            // ADR-0032's amended reporter share (lane INTF): a bare height, refused when armed by `validate_palw_v2` (which the probe
+            // does not run).
+            "palw_reporter_share_v2" => params.palw_reporter_share_v2 = Some(at),
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {
@@ -874,6 +894,7 @@ mod tests {
             "palw_fp_ruleset_caps" => params.palw_fp_ruleset_caps = Some(at),
             "palw_model_market" => params.palw_model_market = Some(at),
             "palw_model_lines" => params.palw_model_lines = Some(at),
+            "palw_model_immutable_v1" => params.palw_model_immutable_v1 = Some(at),
             "palw_model_benefits" => params.palw_model_benefits = Some(at),
             "palw_model_leg_v2" => params.palw_model_leg_v2 = Some(at),
             "palw_model_seed_v2" => params.palw_model_seed_v2 = Some(at),

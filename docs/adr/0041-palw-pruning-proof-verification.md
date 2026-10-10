@@ -1,5 +1,12 @@
 # ADR-0041: PALW pruning-proof verification — exhaustive and amortised, not sampled
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 Status: **Landed.** Activates nothing on a shipped preset. Decision 1′ (the resident verification
 agent, opt-in behind `MISAKA_PALW_AGENT=1`) and Decision 2 (bounded concurrency, `MISAKA_PALW_CONCURRENCY`,
 default 1) are landed and measured; Decision 3 (the header cap) and Decision 4 (cheap checks before
@@ -77,45 +84,7 @@ withdrawn as unsound (below). Four decisions, in order of how much each changes 
 
 ### Decision 1 — WITHDRAWN: sampling the PoW checks is UNSOUND in this proof structure
 
-The first draft of this ADR proposed sampling the per-header PoW check, on the argument that a
-prover must corrupt a large fraction `f` of headers to move the decision, so a sample of 64 detects
-it with probability `1 − (1 − f)^64`. **Settling the scheme's constants disproved the argument.**
-Recorded here rather than deleted, because the reasoning is the kind a reader would re-derive.
-
-A proof's weight is not a header count. `compare_proofs_inner` compares `blue_work_diff`, read from
-the RECOMPUTED ghostdag (`validate.rs:84-89`), and ghostdag accumulates
-
-```
-blue_work = Σ over mergeset blues of  max( calc_work(header.bits), level_work(level) )
-```
-
-(`ghostdag/protocol.rs:155-161`). Both terms are prover-chosen and both are validated by the PoW and
-by nothing else:
-
-* `header.bits` is peer-supplied. Its only validator is `pow_passes` at `validate.rs:250` — the PoW
-  value must meet the declared target. Skip that check and a header may declare an arbitrarily hard
-  `bits`, hence arbitrary `calc_work`.
-* the LEVEL a header sits at is the prover's choice of which array it appears in.
-  `level_work(level, max_block_level) = 1 << (level + 256 − max_block_level)`
-  (`difficulty.rs:273-281`) is a function of that position, not of the header. Its only validator is
-  `header_level < level → reject` at `validate.rs:247`, and `header_level` comes from the PoW.
-
-So **one** unverified header can claim unbounded work. The detection probability is not
-`1 − (1 − f)^s` with a large `f`; it is `s/N` for a single planted header — 64/9,000 ≈ **0.7 %**. The
-draft's table was answering a question the attacker does not have to ask.
-
-The two obvious repairs both fail:
-
-* *Credit an unsampled header only `level_work`* — no: the level is exactly what is unvalidated, so
-  the prover places the garbage header at level 250 and collects `level_work(250)`.
-* *Credit an unsampled header zero* — no: the DEFENDER's proof is the node's own and is trusted in
-  full (`ProofContext::from_proof(self, &defender_proof, false).expect("local")`), so measuring only
-  the challenger at `s/N` of its work means an honest heavier chain can never win. That is not a
-  weakened security bound, it is a broken IBD.
-
-Sampling would become available only if the proof carried a commitment binding each header's claimed
-work to its level independently of the PoW — a change to the proof format and to the MLS argument,
-which is not this ADR's scope. **Verification stays exhaustive.**
+PoW header 検証の sampling は実装しない。一つの未検証 header だけで任意に大きい work を主張でき、少数 sampling では重い偽 chain を十分に排除できないため。検証は全件のままとする。
 
 ### Decision 1′ — Amortise the per-header cost (this is the real lever)
 

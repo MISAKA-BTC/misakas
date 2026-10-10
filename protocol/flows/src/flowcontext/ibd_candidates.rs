@@ -525,6 +525,17 @@ impl IbdCandidateRegistry {
         self.candidates.get(id)
     }
 
+    /// The tip work `id`'s sources claimed, if — and only if — its pruning proof has validated: the
+    /// post-IBD switch's trigger, answered under ONE guard (LIVE-R1, 2026-10-08). The flow used to ask
+    /// the phase and the claim with two `read()`s, the second taken while the first was still held, and
+    /// that recursive read of a parking_lot `RwLock` deadlocked every tokio worker behind a queued
+    /// writer. A caller holds whatever guard it already has and asks once.
+    pub fn proof_validated_claimed_tip_work(&self, id: &CandidateId) -> Option<BlueWorkType> {
+        self.get(id)
+            .filter(|c| matches!(c.validation, CandidateValidation::ProofValidated { .. }))
+            .and_then(|c| c.claimed_tip_blue_work())
+    }
+
     /// Candidates worth checking, most promising first. Rejected ones are omitted.
     pub fn by_verification_priority(&self) -> Vec<&IbdCandidate> {
         let mut out: Vec<_> = self.candidates.values().filter(|c| c.verification_priority().is_some()).collect();
@@ -1878,5 +1889,533 @@ mod switch_persistence_tests {
         assert_eq!(r.switches(), 2, "resuming an older count must not lower the current one");
         r.resume_switches(7);
         assert_eq!(r.switches(), 7, "but a larger carried-over count must win");
+    }
+}
+
+/// **LIVE-R1 (2026-10-08): the D6 deadlock, and the one-guard accessor that replaces it.**
+///
+/// Devnet r1's D6 stopped for good at 19:34:38 with every tokio worker parked on `FlowContext::
+/// ibd_candidates` (two `sample`s, symbolized against a `-Cstrip=none` rebuild of the shipped commit):
+/// one worker in `consider_post_ibd_switch` asking for a second read while holding a first, two relay
+/// flows in `expire_stale_verifications` (one holding the writer bit in `wait_for_readers`), seven
+/// readers queued behind them. parking_lot's `RwLock` is not reentrant: once a writer has set its bit,
+/// a new `read()` parks — including a second read by a thread that already holds one, which the writer
+/// is waiting on. These tests drive exactly that interleaving deterministically: the writer is queued
+/// (its bit observed) between the two reads.
+#[cfg(test)]
+mod live_r1_reentrant_read_tests {
+    use super::{tests::*, *};
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// A registry holding one candidate whose proof validated, behind the lock the flow context uses.
+    fn proof_validated_registry() -> (Arc<RwLock<IbdCandidateRegistry>>, CandidateId) {
+        let mut r = IbdCandidateRegistry::default();
+        let id = r.observe_summary(peer(1), &header(7, 500), pp(1), Instant::now());
+        r.set_validated(id, BlueWorkType::from_u64(100), Hash::from_u64_word(9));
+        (Arc::new(RwLock::new(r)), id)
+    }
+
+    /// Queue a writer on `lock` — the relay flows' `expire_stale_verifications` — and return once its bit
+    /// is set, i.e. once it is waiting for the readers already inside.
+    fn queue_writer(lock: &Arc<RwLock<IbdCandidateRegistry>>) -> std::thread::JoinHandle<()> {
+        let writer_lock = Arc::clone(lock);
+        let writer = std::thread::spawn(move || {
+            writer_lock.write().expire_proof_requests(Instant::now(), CHALLENGER_VERIFICATION_LEASE);
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !lock.is_locked_exclusive() {
+            assert!(Instant::now() < deadline, "the writer never queued");
+            std::thread::yield_now();
+        }
+        writer
+    }
+
+    /// **The defect.** The old trigger read the phase under one guard and, still holding it (a match
+    /// scrutinee's temporary), took a second read for the claim. With a writer queued in between, that
+    /// second read cannot be granted: the writer waits for the first guard, the second read waits behind
+    /// the writer. `try_read_for` stands in for the blocking `read()` so the test can say so and end.
+    #[test]
+    fn a_second_read_under_a_held_guard_deadlocks_behind_a_queued_writer() {
+        let (lock, id) = proof_validated_registry();
+        let first = lock.read();
+        assert!(matches!(first.get(&id).map(|c| c.validation), Some(CandidateValidation::ProofValidated { .. })));
+        let writer = queue_writer(&lock);
+        assert!(
+            lock.try_read_for(Duration::from_millis(300)).is_none(),
+            "the arm's read parks behind the writer that waits on the scrutinee's read: a deadlock"
+        );
+        drop(first);
+        writer.join().expect("released by the first guard, the writer completes");
+    }
+
+    /// **The fix.** The trigger is one question answered under the one guard the flow holds; no second
+    /// acquisition exists for a queued writer to stand in front of. The writer completes as soon as the
+    /// guard drops, and the answer is the candidate's claim.
+    #[test]
+    fn the_trigger_is_answered_under_the_guard_a_queued_writer_waits_on() {
+        let (lock, id) = proof_validated_registry();
+        let guard = lock.read();
+        let writer = queue_writer(&lock);
+        let claimed = guard.proof_validated_claimed_tip_work(&id);
+        drop(guard);
+        writer.join().expect("the writer completes once the one guard drops");
+        assert_eq!(claimed, Some(BlueWorkType::from_u64(500)), "the claimed tip work of a proof-validated candidate");
+        // And the flow's own statement form, `lock.read().proof_validated_claimed_tip_work(..)`, drops
+        // its guard at the end of the statement: a writer that queued before it is served first.
+        let writer = {
+            let held = lock.read();
+            let writer = queue_writer(&lock);
+            drop(held);
+            writer
+        };
+        assert_eq!(lock.read().proof_validated_claimed_tip_work(&id), Some(BlueWorkType::from_u64(500)));
+        writer.join().unwrap();
+    }
+
+    /// Only a validated proof triggers: a summary, a requested proof and a rejection all answer `None`.
+    #[test]
+    fn only_a_validated_proof_answers() {
+        let mut r = IbdCandidateRegistry::default();
+        let id = r.observe_summary(peer(1), &header(7, 500), pp(1), Instant::now());
+        assert_eq!(r.proof_validated_claimed_tip_work(&id), None, "a summary is not a validated proof");
+        r.set_validation(id, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
+        assert_eq!(r.proof_validated_claimed_tip_work(&id), None, "nor is a rejection");
+        r.set_validated(id, BlueWorkType::from_u64(100), Hash::from_u64_word(9));
+        assert_eq!(r.proof_validated_claimed_tip_work(&id), Some(BlueWorkType::from_u64(500)));
+        let unknown = CandidateId { pruning_point: pp(9), virtual_selected_parent: BlockHash::from_u64_word(99) };
+        assert_eq!(r.proof_validated_claimed_tip_work(&unknown), None, "an unknown candidate answers nothing");
+    }
+}
+
+/// **HFV — independent verification of the LIVE-R1 hotfix (2026-10-08).** Not part of the hotfix.
+///
+/// Builds on BOTH `0b1c11b87` (the live int-12) and `57235a5b3` (the hotfix): it does not use the new
+/// accessor. Three things:
+///
+/// 1. `consider_post_ibd_switch_takes_the_registry_once_per_statement` reads `ibd/flow.rs` itself and
+///    refuses a lock guard on `ibd_candidates` that is alive (match / if-let / while-let / for
+///    scrutinee, or a temporary of the same statement) while the same lock is taken again. It FAILS on
+///    `0b1c11b87` (naming the statement) and passes on `57235a5b3` — the regression guard that is bound
+///    to the production source, which no unit test of the registry alone can be.
+/// 2. The two stress tests run the trigger exactly as shipped (verbatim but for the receiver) and as
+///    fixed, on the real registry behind the real `parking_lot::RwLock`, against the real writer
+///    (`expire_proof_requests`, `observe_peer`, `claim_summary_request` — the relay poll's writes).
+///    The shipped form deadlocks; the fixed form does not, under the same load. A watchdog turns the
+///    hang into a verdict: the deadlocked threads are leaked, never joined.
+/// 3. `burst_model_*` (ignored; a measurement) replays the production timing shape — every peer's IBD
+///    flow and relay flow waking in the same instant, as they do once their 3 s and 5 s timers line up
+///    every 15 s — and counts how many such bursts the shipped form survives.
+#[cfg(test)]
+mod hfv_ibd_lock_verification {
+    use super::{tests::*, *};
+    use parking_lot::RwLock;
+    use std::sync::{
+        Arc, Barrier,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    };
+    use std::time::{Duration, Instant};
+
+    type Registry = Arc<RwLock<IbdCandidateRegistry>>;
+
+    /// `0b1c11b87` `protocol/flows/src/ibd/flow.rs:886`, verbatim except `self.ctx.ibd_candidates()` → `lock`.
+    fn trigger_as_shipped(lock: &Registry, id: &CandidateId) -> Option<BlueWorkType> {
+        match lock.read().get(id).map(|c| c.validation) {
+            Some(CandidateValidation::ProofValidated { .. }) => lock.read().get(id).and_then(|c| c.claimed_tip_blue_work()),
+            _ => None,
+        }
+    }
+
+    /// `57235a5b3`: `lock.read().proof_validated_claimed_tip_work(id)` with the accessor's body inlined,
+    /// so this module also builds on the commit that does not have the accessor. One acquisition, one
+    /// statement.
+    fn trigger_as_fixed(lock: &Registry, id: &CandidateId) -> Option<BlueWorkType> {
+        lock.read()
+            .get(id)
+            .filter(|c| matches!(c.validation, CandidateValidation::ProofValidated { .. }))
+            .and_then(|c| c.claimed_tip_blue_work())
+    }
+
+    /// The registry a node in CandidateReview holds after its peers answered: two candidates on its own
+    /// chain (the D6 log: `challenger_work=… defender_work=… comparison=Equal`), both proof-validated,
+    /// so every peer's IBD flow re-runs the trigger for both every 3 s.
+    fn reviewing_registry(peers: u8) -> (Registry, Vec<CandidateId>) {
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let a = r.observe_summary(peer(1), &header(7, 500), pp(1), now);
+        let b = r.observe_summary(peer(2), &header(8, 501), pp(1), now);
+        for p in 3..=peers.max(3) {
+            r.observe_summary(peer(p), &header(7, 500), pp(1), now);
+        }
+        r.set_validated(a, BlueWorkType::from_u64(100), Hash::from_u64_word(9));
+        r.set_validated(b, BlueWorkType::from_u64(100), Hash::from_u64_word(10));
+        (Arc::new(RwLock::new(r)), vec![a, b])
+    }
+
+    /// The relay poll's writes, in its order (`expire_stale_verifications`, `observe_ibd_candidate_peer`,
+    /// `claim_ibd_summary_request`), plus `nominate_challenger`'s read.
+    fn relay_poll_writes(lock: &Registry, p: u8) {
+        lock.write().expire_proof_requests(Instant::now(), CHALLENGER_VERIFICATION_LEASE);
+        let _ = lock.read().strongest_unverified().map(|c| c.id);
+        lock.write().observe_peer(peer(p), Instant::now());
+        lock.write().claim_summary_request(peer(p), Instant::now());
+    }
+
+    #[derive(Debug)]
+    enum Outcome {
+        /// No completed operation for `stall` while workers were still running.
+        Deadlocked { after: Duration, trigger_calls: u64, writer_bit_set: bool },
+        /// Ran to the budget with progress throughout.
+        Survived { trigger_calls: u64 },
+    }
+
+    /// `readers` threads loop on `trigger`, `writers` threads loop on the relay poll's writes, until
+    /// `budget` elapses or nothing completes for `stall`. Deadlocked threads are leaked.
+    fn stress(trigger: fn(&Registry, &CandidateId) -> Option<BlueWorkType>, readers: usize, writers: usize, budget: Duration) -> Outcome {
+        let stall = Duration::from_secs(3);
+        let (lock, ids) = reviewing_registry(8);
+        let progress = Arc::new(AtomicU64::new(0));
+        let calls = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        for r in 0..readers {
+            let (lock, ids, progress, calls, stop) = (lock.clone(), ids.clone(), progress.clone(), calls.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let id = &ids[r % ids.len()];
+                    assert_eq!(trigger(&lock, id), Some(BlueWorkType::from_u64(if r % 2 == 0 { 500 } else { 501 })));
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    progress.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+        }
+        for w in 0..writers {
+            let (lock, progress, stop) = (lock.clone(), progress.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    relay_poll_writes(&lock, 3 + (w % 6) as u8);
+                    progress.fetch_add(1, Ordering::Relaxed);
+                    std::thread::yield_now();
+                }
+            });
+        }
+        let start = Instant::now();
+        let (mut last, mut last_change) = (0u64, Instant::now());
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            let now_progress = progress.load(Ordering::Relaxed);
+            if now_progress != last {
+                last = now_progress;
+                last_change = Instant::now();
+            } else if last_change.elapsed() >= stall {
+                // A loaded machine can starve threads for a moment; a deadlock is forever. Confirm.
+                std::thread::sleep(Duration::from_secs(7));
+                if progress.load(Ordering::Relaxed) != last {
+                    last = progress.load(Ordering::Relaxed);
+                    last_change = Instant::now();
+                    continue;
+                }
+                // The picture the D6 samples show: the writer bit is set (a writer waits for readers)
+                // and nobody moves.
+                return Outcome::Deadlocked {
+                    after: last_change.duration_since(start),
+                    trigger_calls: calls.load(Ordering::Relaxed),
+                    writer_bit_set: lock.is_locked_exclusive(),
+                };
+            }
+            if start.elapsed() >= budget {
+                stop.store(true, Ordering::Relaxed);
+                return Outcome::Survived { trigger_calls: calls.load(Ordering::Relaxed) };
+            }
+        }
+    }
+
+    /// Both forms answer the same thing, in every validation state, when nothing interleaves.
+    #[test]
+    fn hfv_the_fixed_trigger_answers_what_the_shipped_one_did() {
+        let (lock, ids) = reviewing_registry(3);
+        let unknown = CandidateId { pruning_point: pp(9), virtual_selected_parent: BlockHash::from_u64_word(99) };
+        for id in ids.iter().chain(std::iter::once(&unknown)) {
+            assert_eq!(trigger_as_fixed(&lock, id), trigger_as_shipped(&lock, id));
+        }
+        let id = ids[0];
+        for v in [
+            CandidateValidation::Observed,
+            CandidateValidation::SummaryReceived { claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(500)) },
+            CandidateValidation::ProofRequested { since: Instant::now(), claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(500)) },
+            CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof },
+            CandidateValidation::ProofValidated { verified_blue_work: BlueWorkType::from_u64(1) },
+        ] {
+            lock.write().set_validation(id, v);
+            assert_eq!(trigger_as_fixed(&lock, &id), trigger_as_shipped(&lock, &id), "{v:?}");
+        }
+    }
+
+    /// **Reproduction.** The shipped trigger under the relay poll's writes: a deadlock, every run.
+    #[test]
+    fn hfv_stress_the_shipped_trigger_deadlocks_behind_the_relay_writer() {
+        match stress(trigger_as_shipped, 6, 2, Duration::from_secs(60)) {
+            Outcome::Deadlocked { after, trigger_calls, writer_bit_set } => {
+                eprintln!("HFV shipped trigger: DEADLOCK after {after:?} and {trigger_calls} trigger calls; writer bit set: {writer_bit_set}");
+                assert!(writer_bit_set, "the D6 shape: a writer holds the writer bit, waiting on a reader that waits on it");
+            }
+            other => panic!("expected the shipped trigger to deadlock within 60 s, got {other:?}"),
+        }
+    }
+
+    /// **The fix.** The same load, the fixed trigger: progress for the whole budget.
+    #[test]
+    fn hfv_stress_the_fixed_trigger_survives_the_same_load() {
+        match stress(trigger_as_fixed, 6, 2, Duration::from_secs(20)) {
+            Outcome::Survived { trigger_calls } => {
+                eprintln!("HFV fixed trigger: survived 20 s, {trigger_calls} trigger calls");
+                assert!(trigger_calls > 10_000, "the readers made progress");
+            }
+            other => panic!("the fixed trigger must not deadlock: {other:?}"),
+        }
+    }
+
+    /// One aligned burst of a node in review with `peers` peers: each peer's IBD flow runs the trigger
+    /// for each validated candidate, each peer's relay flow does its poll writes, all released at once.
+    /// Returns the number of bursts survived before a deadlock, or `None` if all `bursts` survived.
+    fn burst_model(trigger: fn(&Registry, &CandidateId) -> Option<BlueWorkType>, peers: usize, bursts: usize) -> Option<usize> {
+        let (lock, ids) = reviewing_registry(peers as u8);
+        let barrier = Arc::new(Barrier::new(2 * peers + 1));
+        let done = Arc::new(AtomicU64::new(0));
+        for p in 0..peers {
+            let (ibd_lock, ibd_ids, ibd_barrier, ibd_done) = (lock.clone(), ids.clone(), barrier.clone(), done.clone());
+            std::thread::spawn(move || {
+                for _ in 0..bursts {
+                    ibd_barrier.wait();
+                    for id in &ibd_ids {
+                        trigger(&ibd_lock, id);
+                    }
+                    ibd_done.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+            let (relay_lock, relay_barrier, relay_done) = (lock.clone(), barrier.clone(), done.clone());
+            std::thread::spawn(move || {
+                for _ in 0..bursts {
+                    relay_barrier.wait();
+                    relay_poll_writes(&relay_lock, 3 + p as u8);
+                    relay_done.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+        }
+        for b in 0..bursts {
+            barrier.wait();
+            let target = ((b + 1) * 2 * peers) as u64;
+            let mut deadline = Instant::now() + Duration::from_secs(5);
+            while done.load(Ordering::SeqCst) < target {
+                if Instant::now() > deadline {
+                    // Starved or stuck? A deadlock does not move in the next 5 s either.
+                    let before = done.load(Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_secs(5));
+                    if done.load(Ordering::SeqCst) == before {
+                        return Some(b);
+                    }
+                    deadline = Instant::now() + Duration::from_secs(5);
+                }
+                std::thread::sleep(Duration::from_micros(200));
+            }
+        }
+        None
+    }
+
+    /// Measurement, not a gate: `cargo test -p kaspa-p2p-flows --lib hfv_burst -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn hfv_burst_model_shipped_vs_fixed() {
+        const PEERS: usize = 8;
+        const BURSTS: usize = 2000;
+        const TRIALS: usize = 10;
+        let mut survived = Vec::new();
+        for _ in 0..TRIALS {
+            survived.push(burst_model(trigger_as_shipped, PEERS, BURSTS));
+        }
+        let deadlocks = survived.iter().filter(|s| s.is_some()).count();
+        let total_bursts: usize = survived.iter().map(|s| s.map(|b| b + 1).unwrap_or(BURSTS)).sum();
+        eprintln!(
+            "HFV burst model, shipped, {PEERS} peers: {deadlocks} deadlocks in {total_bursts} aligned bursts over {TRIALS} trials \
+             (bursts survived per trial: {survived:?})"
+        );
+        let fixed = burst_model(trigger_as_fixed, PEERS, BURSTS * TRIALS / 2);
+        eprintln!("HFV burst model, fixed, {PEERS} peers: {:?} (None = all {} bursts survived)", fixed, BURSTS * TRIALS / 2);
+        assert_eq!(fixed, None);
+    }
+
+    // ---- the source guard ----------------------------------------------------------------------------
+
+    /// `src` with comments, string and char literal contents blanked (same length, newlines kept), so
+    /// brace matching and pattern search see only code.
+    fn code_only(src: &str) -> Vec<u8> {
+        let b = src.as_bytes();
+        let mut out = b.to_vec();
+        let mut i = 0;
+        while i < b.len() {
+            match b[i] {
+                b'/' if b.get(i + 1) == Some(&b'/') => {
+                    while i < b.len() && b[i] != b'\n' {
+                        out[i] = b' ';
+                        i += 1;
+                    }
+                }
+                b'/' if b.get(i + 1) == Some(&b'*') => {
+                    while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                        if b[i] != b'\n' {
+                            out[i] = b' ';
+                        }
+                        i += 1;
+                    }
+                    out[i] = b' ';
+                    out[(i + 1).min(b.len() - 1)] = b' ';
+                    i += 2;
+                }
+                b'"' => {
+                    i += 1;
+                    while i < b.len() && b[i] != b'"' {
+                        if b[i] == b'\\' {
+                            out[i] = b' ';
+                            i += 1;
+                        }
+                        if b[i] != b'\n' {
+                            out[i] = b' ';
+                        }
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                b'\'' if b.get(i + 2) == Some(&b'\'') || (b.get(i + 1) == Some(&b'\\') && b.get(i + 3) == Some(&b'\'')) => {
+                    let end = if b[i + 1] == b'\\' { i + 3 } else { i + 2 };
+                    for o in out.iter_mut().take(end).skip(i + 1) {
+                        *o = b' ';
+                    }
+                    i = end + 1;
+                }
+                _ => i += 1,
+            }
+        }
+        out
+    }
+
+    fn matching_brace(code: &[u8], open: usize) -> usize {
+        let mut depth = 0i32;
+        for (k, &c) in code.iter().enumerate().skip(open) {
+            match c {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return k;
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unbalanced braces")
+    }
+
+    /// Acquisitions of `ibd_candidates` in `code[from..to]`: `ibd_candidates().read()`, `.write()`, …
+    fn acquisitions(code: &[u8], from: usize, to: usize) -> Vec<usize> {
+        let s = std::str::from_utf8(&code[from..to]).unwrap();
+        let mut out = Vec::new();
+        for (k, _) in s.match_indices("ibd_candidates") {
+            let rest = s[k + "ibd_candidates".len()..].trim_start_matches("()").trim_start();
+            if [".read()", ".write()", ".upgradable_read()", ".try_read()", ".try_write()"].iter().any(|op| rest.starts_with(op)) {
+                out.push(from + k);
+            }
+        }
+        out
+    }
+
+    fn line_of(code: &[u8], at: usize) -> usize {
+        code[..at].iter().filter(|&&c| c == b'\n').count() + 1
+    }
+
+    /// Every place in `src` where a guard on `ibd_candidates` is alive while the same lock is taken
+    /// again: a match / if-let / while-let / for whose head acquires it and whose body acquires it, or a
+    /// brace-free statement that acquires it twice (its temporaries all live to the `;`).
+    fn reentrant_sites(src: &str) -> Vec<String> {
+        let code = code_only(src);
+        let text = std::str::from_utf8(&code).unwrap();
+        let mut found = Vec::new();
+        for kw in ["match ", "if let ", "while let ", "for "] {
+            for (k, _) in text.match_indices(kw) {
+                if k > 0 && (code[k - 1].is_ascii_alphanumeric() || code[k - 1] == b'_') {
+                    continue;
+                }
+                // The head runs to the first `{` outside parentheses/brackets.
+                let (mut depth, mut open) = (0i32, None);
+                for (j, &c) in code.iter().enumerate().skip(k) {
+                    match c {
+                        b'(' | b'[' => depth += 1,
+                        b')' | b']' => depth -= 1,
+                        b'{' if depth == 0 => {
+                            open = Some(j);
+                            break;
+                        }
+                        b';' if depth == 0 => break,
+                        _ => {}
+                    }
+                }
+                let Some(open) = open else { continue };
+                let head = acquisitions(&code, k, open);
+                if head.is_empty() {
+                    continue;
+                }
+                let close = matching_brace(&code, open);
+                let body = acquisitions(&code, open, close);
+                if !body.is_empty() {
+                    found.push(format!(
+                        "line {}: `{}` holds a guard on ibd_candidates in its head; its body takes it again at line(s) {:?}",
+                        line_of(&code, k),
+                        kw.trim(),
+                        body.iter().map(|&a| line_of(&code, a)).collect::<Vec<_>>()
+                    ));
+                }
+            }
+        }
+        // Brace-free statements: split on `;`, `{`, `}`.
+        let mut start = 0;
+        for (j, &c) in code.iter().enumerate() {
+            if matches!(c, b';' | b'{' | b'}') {
+                if c == b';' {
+                    let acq = acquisitions(&code, start, j);
+                    if acq.len() >= 2 {
+                        found.push(format!("line {}: one statement takes ibd_candidates {} times", line_of(&code, acq[0]), acq.len()));
+                    }
+                }
+                start = j + 1;
+            }
+        }
+        found
+    }
+
+    /// **The regression guard bound to the production source.** FAILS on `0b1c11b87`:
+    /// "line 886: `match` holds a guard on ibd_candidates in its head; its body takes it again at line(s) [888]".
+    #[test]
+    fn hfv_consider_post_ibd_switch_takes_the_registry_once_per_statement() {
+        let mut all = Vec::new();
+        for (name, src) in [
+            ("ibd/flow.rs", include_str!("../ibd/flow.rs")),
+            ("flow_context.rs", include_str!("../flow_context.rs")),
+            ("v7/blockrelay/flow.rs", include_str!("../v7/blockrelay/flow.rs")),
+        ] {
+            all.extend(reentrant_sites(src).into_iter().map(|s| format!("{name} {s}")));
+        }
+        assert!(all.is_empty(), "a guard on ibd_candidates is alive while the lock is taken again:\n{}", all.join("\n"));
+    }
+
+    /// The guard's own teeth: it finds the shipped shape and passes the fixed one.
+    #[test]
+    fn hfv_the_source_guard_finds_the_shipped_shape() {
+        let shipped = "fn f() {\n let claimed = match self.ctx.ibd_candidates().read().get(&id).map(|c| c.validation) {\n Some(V::ProofValidated { .. }) => {\n self.ctx.ibd_candidates().read().get(&id).and_then(|c| c.claimed_tip_blue_work())\n }\n _ => None,\n };\n}\n";
+        assert_eq!(reentrant_sites(shipped).len(), 1, "{:?}", reentrant_sites(shipped));
+        let fixed = "fn f() {\n let claimed = self.ctx.ibd_candidates().read().proof_validated_claimed_tip_work(&id);\n let s = { let r = self.ctx.ibd_candidates().write(); r.switches() };\n}\n";
+        assert!(reentrant_sites(fixed).is_empty(), "{:?}", reentrant_sites(fixed));
+        let twice = "fn f() { let x = (a.ibd_candidates.read().x(), a.ibd_candidates.read().y()); }";
+        assert_eq!(reentrant_sites(twice).len(), 1);
+        let commented = "fn f() { // match x.ibd_candidates().read() { y.ibd_candidates().read() }\n let s = \"match ibd_candidates.read() {\"; }";
+        assert!(reentrant_sites(commented).is_empty());
     }
 }

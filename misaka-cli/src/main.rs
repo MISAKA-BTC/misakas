@@ -19,6 +19,7 @@
 //! `exit`) so systemd / shell / monitors can branch on them.
 
 mod ask;
+mod ollama;
 mod bond;
 mod bootstrap;
 mod config;
@@ -1879,7 +1880,7 @@ enum PalwCmd {
         #[arg(long)]
         json: bool,
     },
-    /// **ADR-0088: found a further line on a class.** `--bond` becomes its owner, developer and
+    /// **ADR-0175: register an independent model on a class.** `--bond` becomes its owner, developer and
     /// maintainer and signs; V1 is `--root`. Rent-priced (1 BILI of the fee is burned).
     LineFound {
         #[command(flatten)]
@@ -1900,7 +1901,7 @@ enum PalwCmd {
         #[arg(long)]
         yes: bool,
     },
-    /// **ADR-0088: publish a version.** Signed by the line's developer bond; the version number is
+    /// **Historical ADR-0088: publish a version (refused past the immutable-model fence).** Signed by the line's developer bond; the version number is
     /// read off the chain (`versions_published + 1`). Without `--preview` it becomes current at
     /// once and the previous current keeps its root in force for the grace. Re-publishing an
     /// older root is a rollback; the current root again is refused.
@@ -1935,7 +1936,7 @@ enum PalwCmd {
         #[arg(long)]
         yes: bool,
     },
-    /// **ADR-0088: promote a preview to current** (developer).
+    /// **Historical ADR-0088: promote a preview (refused past the immutable-model fence).**
     VersionPromote {
         #[command(flatten)]
         key: KeyArgs,
@@ -1948,7 +1949,7 @@ enum PalwCmd {
         #[arg(long)]
         yes: bool,
     },
-    /// **ADR-0088: withdraw a preview, or a superseded version before its grace ends**
+    /// **Historical ADR-0088: withdraw a version (refused past the immutable-model fence).**
     /// (developer). A current version is succeeded, never withdrawn.
     VersionWithdraw {
         #[command(flatten)]

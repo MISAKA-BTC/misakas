@@ -1,26 +1,20 @@
 # ADR-0036: PALW mainnet activation — lineage reconciliation and the model that governs
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
 Status: **Proposed (governance decision), with Decision 4's hash floor SUPERSEDED.**
 Activates nothing, changes no code, moves no fence.
 
-> **Decision 4's "mainnet MUST ship the permanent hash floor" is superseded, 2026-08-17, by
-> ADR-0039 Decisions 1/2 (W6′).** Mainnet does NOT ship a hash floor. Block production is PALW work
-> on every network including mainnet, and the liveness floor is a portable integer-only PALW class
-> (`PALW-BASE-0`) held permanently Active — a class whose kernel catalog closes, so it can be
-> audited and convicted on any CPU. Total PALW unavailability therefore HALTS the network loudly
-> rather than degrading it to hash ordering.
->
-> That is a deliberate trade of one failure mode for another: D4 chose "never halt, degrade to
-> hashes"; ADR-0039 chose "never produce blocks by hashing, halt visibly instead". The reason is the
-> one D4 itself records — a mixed-algo difficulty relation is a large new consensus surface — plus
-> the one D4 did not weigh: a hash lane that can always produce blocks is a permanent incentive to
-> mine the lane instead of the work, which makes the compute chain a hash chain with extra steps.
-> Everything else in this ADR (the lineage decision, the new network identity, the land→accept→mint
-> separation) still holds. Read D4 below as the record of a decision that was reversed, not as a
-> current requirement.
+> **Decision 4 の恒久 hash floor は撤回済み。** 混合 difficulty の consensus 負担と、有用計算を hash mining で迂回する誘因があるため。[ADR-0039](0039-palw-only-block-production.md) が置き換える。
+
 This ADR settles a *documentation* conflict the 2026-08-16/17 mainnet-readiness audit surfaced:
 two Accepted, non-ancestral ADRs each describe "mainnet PALW", with different mechanisms, a
 colliding "PALW / algo-4" name, and overlapping ADR-number spaces. It decides which lineage
@@ -54,31 +48,7 @@ from this *mainnet* one, and the reason this ADR is 0036),
 
 ## Relationship to ADR-0037 and ADR-0038 (added 2026-08-17)
 
-ADR-0038 re-asserts PALW as the primary consensus work and introduces a hash **anti-stall floor**
-on the value network. Read carelessly, that looks like it overturns Decision 4 below, which
-decided the hash floor binds the *mainnet identity* while TN11/devnet stay deliberately
-single-algo. It does not — the two are about different questions, and both still hold:
-
-* **Decision 4 answers "must mainnet be able to survive a PALW runtime failure?"** — yes, and that
-  requirement is a hard gate on the new identity. ADR-0038's anti-stall floor is one *shape* of
-  that survival, arrived at independently. The requirement and the mechanism agree.
-* **Decision 4's other half — TN11/devnet stay single-algo — is unaffected** by ADR-0038, which
-  legislates for the value network. A soak net that halts loudly is still the right failure mode
-  there, and ADR-0038 does not claim otherwise.
-* **What ADR-0038 *does* change is the meaning of Decision 2's "land → accept → mint" separation.**
-  Under the credit-gate model, *land* meant "the lane exists with credit off". Under ADR-0038 a
-  landed PALW block already carries consensus weight, so the separation is now
-  *admit → license (receipts) → mature*. The principle — presence of the lane is not licence to
-  mint — survives; the stages it names are ADR-0038 Decision B's, not the old ladder's.
-* **Decision 2's new-network-identity requirement is strengthened, not weakened.** ADR-0038 makes
-  PALW the block-production path, so the audit's finding that the current `MAINNET_PARAMS`
-  identity cannot carry PALW (both window presets fail `finality_depth < W_challenge` at 10 BPS)
-  becomes structural rather than parametric.
-
-Nothing here reopens Decision 1 (the live `palw_credit` lineage governs) or Decision 2's
-supersession of ADR-0041's mechanism. Where ADR-0038 and this ADR genuinely conflict in future,
-ADR-0038 governs on *what the consensus work is*, and this ADR governs on *which lineage and
-which network identity mainnet ships as* — they are orthogonal axes and should stay so.
+[ADR-0038](0038-palw-is-the-consensus-work.md) は PALW を block production に昇格し、[ADR-0039](0039-palw-only-block-production.md) は hash floor を撤回した。本 ADR の lineage・network identity・activation の分離は維持する。旧 hash floor を正当化する比較は現行の要件ではない。
 
 ## Context — two lineages, one name
 
@@ -141,44 +111,7 @@ the mainnet identity. Left unresolved, no one can write a coherent release plan,
    added to it — the ledger's through-line ("every unmet item is a fleet measurement, not a
    design gap") was false and is retracted.
 
-4. **The hash floor (audit B7) — DECIDED 2026-08-17: the principle stands, and it binds the
-   mainnet identity, not the testnets.** The v2 design's principle 1 ("永久 hash floor を残す") and
-   principle 2 ("PALW 障害時は credit = 0 とし liveness を継続") are **retained, not retracted.**
-   They are, today, contradicted by the code: `required_algo_id` returns one mandatory id,
-   `check_algo_id` rejects every other, `pow_layer0.rs` states there is no mixed-`algo_id`
-   difficulty arithmetic, and `calc_block_level_check_pow_layer0` `panic!`s on
-   `PalwUnavailable | PalwWorkerFailed`. The resolution splits by network, because the two have
-   genuinely different requirements:
-
-   * **TN11 / devnet keep single-algo PALW, deliberately.** These are soak networks whose entire
-     purpose is to run PALW as the real PoW and observe it. For them, **a loud halt is the correct
-     failure mode** — strictly better than a silent fork, which is the failure a hash floor would
-     be trading it for. Retrofitting a mixed-algo difficulty relation onto a running chain would
-     itself require a re-genesis or fork, and would add a large new consensus surface to the very
-     system under audit. No hash floor is added here, and this is now a recorded choice rather
-     than an unexamined state.
-   * **~~Mainnet MUST ship the permanent hash floor.~~** SUPERSEDED by ADR-0039 W6′ — see the banner
-     at the top of this ADR. Retained verbatim below as the record of the reversed decision.
-     It is a hard gate on the new network identity
-     Decision 2 already requires: `Valid block = valid permanent hash PoW AND (PALW certificate
-     absent OR valid under its activation stage)` (v2 design §2.2, verbatim). A single inference
-     runtime failure must degrade mainnet to `credit = 0` with hash ordering and liveness intact —
-     never to a halt. The floor is therefore **designed as part of that identity**, where the
-     difficulty relation between the two work functions can be specified from genesis instead of
-     grafted on, and it may not be deferred past it.
-   * **Failure-mode hardening lands now, on both.** `PalwUnavailable` (a missing worker/model — a
-     permanent configuration fault) keeps failing loud, and the ADR-0035 boot calibration already
-     turns it into a *startup* refusal on class-pinned nets, which is where it belongs.
-     `PalwWorkerFailed` must **not** panic a node on a transient fault (a spawn failure or timeout
-     under load is not a configuration error), and is given bounded retry before it is treated as
-     permanent — see Consequences.
-
-   ~~The result: no safety principle is given up, mainnet cannot launch without the floor, and the
-   testnets are not destabilized to buy a property they do not need.~~ **SUPERSEDED** with the rest
-   of D4's mainnet half — see the banner at the top. What survives verbatim is the *testnet* half
-   (no hash floor on TN11/devnet; a loud halt beats a silent fork) and the failure-mode hardening;
-   ADR-0039 W6′ extends the same choice to mainnet, so "mainnet cannot launch without the floor" is
-   read only as the record of a reversed requirement.
+4. **恒久 hash floor — 不採用。** 混合 difficulty の consensus 負担と、有用計算を hash mining で迂回する誘因があるため。[ADR-0039](0039-palw-only-block-production.md) に置き換えた。worker 不在の startup 拒否と transient failure の bounded retry は別の有効な hardening として維持する。
 
 5. **Namespace.** Because the snapshot is non-ancestral and historical, the live lineage owns the
    name "PALW / algo-4"; no rename is required on the live tree. This ADR is the record that the

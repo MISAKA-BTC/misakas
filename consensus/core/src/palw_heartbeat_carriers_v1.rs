@@ -198,6 +198,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         // G14 lane D (tags 110, 111): kernel route traffic is in the fee market; no halt waits on it.
         | O::KernelRouteV1 { .. }
         | O::KernelConstraintReceiptV1 { .. }
+        | O::KernelRouteChunkV1 { .. }
         // G14 phase 3 (tags 104-108): onboarding traffic is registry traffic like a candidate's.
         | O::ArtifactBoundV1 { .. }
         | O::ArtifactBindingChallengedV1 { .. }
@@ -206,6 +207,18 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::SignedRegistrationV1 { .. }
         // Onboarding P0 (tag 109): conformance evidence is registry traffic too; a refutation decides an attempt, never a halt.
         | O::ConformanceEvidenceV1 { .. }
+        // DA16 (tags 150–153): provider-court traffic is in the fee market; a provider's default is swept by the tick, never a halt.
+        | O::ProviderLeaseV1 { .. }
+        | O::ProviderChallengeV1 { .. }
+        | O::ProviderAnswerV1 { .. }
+        | O::DaTransferV1 { .. }
+        // LG14-B (tags 157–159, dormant): fee-market traffic, never an H-1 carrier — below their fence they ride unjudged (A-2), and
+        // an H-1 carrier is asked of the gate at the template.
+        | O::LegacyHeldDemandedV2 { .. }
+        | O::LegacyHeldAnsweredV2 { .. }
+        | O::LegacyLeafRecomputedV2 { .. }
+        // Lane BUDGET (tag 140): a capital assignment is registry traffic in the fee market; no halt waits on it.
+        | O::BondCapitalAssignedV1 { .. }
         | O::LineageHeadRolledBack { .. }
         | O::ImprovementPoolFunded { .. }
         // RFC-0007 Part I (tags 91, 92): a vertex is verification traffic, in the fee market beside the licence it replaces; the

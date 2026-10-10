@@ -172,20 +172,20 @@ mod improve;
 /// RFC-0002 Phase F (F6, node half): an IR class's court close.
 mod tir_court;
 // RFC-0006: layer-sharded panels, the node's half.
-mod tir_shard;
-#[cfg(test)]
-mod tir_shard_e2e;
-/// RFC-0002 F7's node side: an IR class's history dissection, played.
-mod tir_dissect;
 /// RFC-0003 (carriage node half): a tensor claim's seat replay and its one-move court.
 mod gen_court;
 /// RFC-0003 decision 22: the held leaf challenge filed from a node — a close past one carrier, declared and delivered in chunks.
 mod held_chunks;
-#[cfg(test)]
-mod tir_court_e2e;
 /// ADR-0152 §4-ter T-A9 and T-A10: the held route against the fold, and N4 live on a node.
 #[cfg(test)]
 mod held_court_e2e;
+#[cfg(test)]
+mod tir_court_e2e;
+/// RFC-0002 F7's node side: an IR class's history dissection, played.
+mod tir_dissect;
+mod tir_shard;
+#[cfg(test)]
+mod tir_shard_e2e;
 
 /// **The `event` lines for this bond's own claims** (ADR-0122 Decision 8): one per claim whose
 /// phase differs from the one `seen` last recorded, in the operator's stage names. A claim seen for
@@ -1177,8 +1177,11 @@ impl Drop for PalwTickGuardV1 {
         if total.as_secs_f64() >= PALW_PANEL_TICK_SLOW_SECS_V1 {
             let phases = self.phases.clone();
             crate::palw_backends::note_throttled_v1("panel-tick-slow", move || {
-                let mut listed: Vec<String> =
-                    phases.iter().filter(|(_, d)| d.as_secs_f64() >= 1.0).map(|(name, d)| format!("{name} {:.1} s", d.as_secs_f64())).collect();
+                let mut listed: Vec<String> = phases
+                    .iter()
+                    .filter(|(_, d)| d.as_secs_f64() >= 1.0)
+                    .map(|(name, d)| format!("{name} {:.1} s", d.as_secs_f64()))
+                    .collect();
                 if listed.is_empty() {
                     listed.push("no phase over a second".to_string());
                 }
@@ -1285,12 +1288,10 @@ impl PalwSeatReplaysV1 {
             None => PalwSeatSegmentPollV1::Absent,
             Some(None) => PalwSeatSegmentPollV1::Running,
             Some(Some((PalwSeatTaskOutV1::Segment(result), fresh))) => PalwSeatSegmentPollV1::Done { result, fresh },
-            Some(Some((PalwSeatTaskOutV1::Replay(_), fresh))) => {
-                PalwSeatSegmentPollV1::Done {
-                    result: Err(PalwSeatSegmentRefusalV1::Local("a replay under a segment task's key".into())),
-                    fresh,
-                }
-            }
+            Some(Some((PalwSeatTaskOutV1::Replay(_), fresh))) => PalwSeatSegmentPollV1::Done {
+                result: Err(PalwSeatSegmentRefusalV1::Local("a replay under a segment task's key".into())),
+                fresh,
+            },
         }
     }
 
@@ -2220,7 +2221,14 @@ impl PalwDaClaimFactsV1 {
             PalwDaLaneV1::FreePrompt { .. } => self.job_pin,
             PalwDaLaneV1::Attempt { .. } => None,
         };
-        PalwClaimRootsV1 { execution_root: self.execution_root, trace_root: self.trace_root, anchor, attempt_draw, output_root: None, job_pin }
+        PalwClaimRootsV1 {
+            execution_root: self.execution_root,
+            trace_root: self.trace_root,
+            anchor,
+            attempt_draw,
+            output_root: None,
+            job_pin,
+        }
     }
 }
 
@@ -2444,6 +2452,12 @@ pub(crate) fn palw_da_unit_answer_v1(
                 "pipeline step node ({stage}, {level}, {index}): answered by the pipeline responder, not the capture path (RFC-0004 Phase F)"
             ));
         }
+        // LG14-B (dormant): a legacy held unit is answered by tag 158, built by `palw_legacy_held_responder`, never by tag 55.
+        PalwDaUnitV1::LegacyHeldV2(unit) => {
+            return Err(format!(
+                "{unit:?}: a legacy held unit is answered by tag 158 (LG14-B's responder), not by MaterialDisclosedV2"
+            ));
+        }
     };
     let (binding, disclosure) = match (material, &facts.lane) {
         (PalwDaCaptureV1::FreePrompt(payload), _) => palw_fp_held_disclosure_v1(
@@ -2597,7 +2611,10 @@ fn fp_verify_capture_under_job_v1(
 ) -> kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1 {
     let committed = misaka_palw_base0::fp_interval::base0_fp_capture_committed_ids_v1(capture).unwrap_or_default();
     // ADR-0096 Decision 8: a constrained claim is judged through its mask; a host without the class's table abstains.
-    let mask = match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(job, backend.token_table_for_job_v1(job)) {
+    let mask = match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(
+        job,
+        backend.token_table_for_job_v1(job),
+    ) {
         Ok(mask) => mask,
         Err(_) => return kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Unverifiable,
     };
@@ -3785,6 +3802,9 @@ pub struct PalwPanelConfig {
     pub tir_shard_shadow: bool,
     /// **RFC-0006: demand the runs a cell reads on chain** when no capture reaches the seat (`--palw-tir-shard-demand-runs`).
     pub tir_shard_demand_runs: bool,
+    /// **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`, `tir_shard::watch`): verify the shards this bond does
+    /// not seat from public material, accuse as a non-seat bond, demand runs on chain. Never a receipt.
+    pub tir_shard_watch: bool,
     /// **RFC-0006: where an outsider fetches a class it does not hold** (`--palw-tir-shard-mirror=<class container path>`): loaded
     /// on the first sharded duty of a class this node holds no artifact of, and used only if it derives exactly the class and the
     /// inventory root the chain registered.
@@ -3959,7 +3979,12 @@ pub struct PalwPanelService {
     /// witness it concludes on). Bounded by [`refetch::REFETCH_PURSUITS_CAP_V1`].
     /// **RFC-0007 §II.7: the served witnesses being fetched**, by claim ([`refetch::WitnessFetchV1`]); bounded by [`refetch::REFETCH_PURSUITS_CAP_V1`].
     witness_fetches: std::sync::Mutex<HashMap<Hash64, refetch::WitnessFetchV1>>,
-    weight_refetch: std::sync::Mutex<HashMap<Hash64, (refetch::WeightRefetchV1, misaka_palw_sdk::lineage::PalwTirClassEntryV1, std::sync::Arc<sketch::RefusedServedV1>)>>,
+    weight_refetch: std::sync::Mutex<
+        HashMap<
+            Hash64,
+            (refetch::WeightRefetchV1, misaka_palw_sdk::lineage::PalwTirClassEntryV1, std::sync::Arc<sketch::RefusedServedV1>),
+        >,
+    >,
     /// **The multiproof built for a (class, span), kept until the span moves.** The duty is "due"
     /// again on every tick until a submission succeeds, and a node with no peers cannot submit —
     /// so without this a seat rebuilt the whole proof per tick. Measured on the item 6 acceptance
@@ -4443,7 +4468,7 @@ impl PalwPanelService {
         read: &kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryReadV1,
         synced: bool,
     ) {
-        use kaspa_consensus_core::palw_panel_view_v1::{palw_bond_seat_id_v1, palw_class_model_name_v1, PalwPanelHoldReasonV1};
+        use kaspa_consensus_core::palw_panel_view_v1::{PalwPanelHoldReasonV1, palw_bond_seat_id_v1, palw_class_model_name_v1};
         let Some(bond) = self.bond else { return };
         let seat_id = palw_bond_seat_id_v1(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond));
         let backends = self.backends();
@@ -4523,7 +4548,8 @@ impl PalwPanelService {
                     )
                 })
                 .flatten();
-            let admits = |need: &crate::palw_backends::PalwRoleMemoryNeedV1| crate::palw_backends::ledger_admits_v1(need.total_bytes()).is_ok();
+            let admits =
+                |need: &crate::palw_backends::PalwRoleMemoryNeedV1| crate::palw_backends::ledger_admits_v1(need.total_bytes()).is_ok();
             let (runtime_profile, artifact_resident_bytes, producer_ws, full_ws, producer_capable, full_capable) = match &by_role {
                 Some((producer, full)) => (
                     full.runtime.map(|r| r.name().to_string()).unwrap_or_default(),
@@ -4708,7 +4734,10 @@ impl PalwPanelService {
                     continue;
                 }
                 Some(PalwSeatConformanceV1::Running) => {
-                    self.readiness_note(class.class_id, "no proof yet — EXECUTOR_CONFORMANCE_PENDING: the executor self-test is running".to_string());
+                    self.readiness_note(
+                        class.class_id,
+                        "no proof yet — EXECUTOR_CONFORMANCE_PENDING: the executor self-test is running".to_string(),
+                    );
                     continue;
                 }
                 Some(PalwSeatConformanceV1::Passed(_)) | Some(PalwSeatConformanceV1::NotApplicable) | None => {}
@@ -4817,7 +4846,11 @@ impl PalwPanelService {
             let backend = match self.resolve_backend(session, class.class_id, class.artifact_root) {
                 Ok(backend) => backend,
                 Err(e) => {
-                    if extra_root || class.row.as_ref().is_some_and(|l| matches!(l.state, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Candidate)) {
+                    if extra_root
+                        || class.row.as_ref().is_some_and(|l| {
+                            matches!(l.state, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Candidate)
+                        })
+                    {
                         missing.push(crate::palw_root_fetch::PalwRootWantV1 {
                             class_id: class.class_id,
                             root: class.artifact_root,
@@ -4843,7 +4876,11 @@ impl PalwPanelService {
                         class.class_id,
                         format!(
                             "no proof — this node holds no artifact for it ({e}){}; not a seat for it",
-                            if self.config.chain_classes { "" } else { " (a class the chain registered is served only with --palw-chain-classes)" }
+                            if self.config.chain_classes {
+                                ""
+                            } else {
+                                " (a class the chain registered is served only with --palw-chain-classes)"
+                            }
                         ),
                     );
                     continue;
@@ -4921,7 +4958,8 @@ impl PalwPanelService {
                 };
                 // Built once per (class, span): the draw is a function of (class, bond, span), so the
                 // proof is too, and a tick that could not submit it must not pay for it again.
-                let cached = self.readiness_built.lock().unwrap().get(&slot).filter(|(span, _)| *span == span_now).map(|(_, p)| p.clone());
+                let cached =
+                    self.readiness_built.lock().unwrap().get(&slot).filter(|(span, _)| *span == span_now).map(|(_, p)| p.clone());
                 let proof = match cached {
                     Some(proof) => proof,
                     None => {
@@ -5025,7 +5063,10 @@ impl PalwPanelService {
                         drop(leaves);
                         drop(proof_bytes);
                         if let Err(e) = kaspa_consensus_core::palw_artifact::verify_artifact_multiproof_v1(&proof, possession_root) {
-                            self.readiness_note(class.class_id, format!("no proof — the multiproof does not open the registered root ({e})"));
+                            self.readiness_note(
+                                class.class_id,
+                                format!("no proof — the multiproof does not open the registered root ({e})"),
+                            );
                             continue;
                         }
                         info!(
@@ -5138,7 +5179,12 @@ impl PalwPanelService {
     fn root_fetch_hook_v1(&self, missing: &[crate::palw_root_fetch::PalwRootWantV1]) {
         use crate::palw_root_fetch::PalwRootFetchEventV1 as Ev;
         let mut state = self.root_fetch.lock().unwrap();
-        let events = state.tick(self.config.root_fetch_cmd.as_deref(), self.config.root_drop_dir.as_deref(), missing, std::time::Instant::now());
+        let events = state.tick(
+            self.config.root_fetch_cmd.as_deref(),
+            self.config.root_drop_dir.as_deref(),
+            missing,
+            std::time::Instant::now(),
+        );
         let mut scan = false;
         for event in events {
             match event {
@@ -5161,7 +5207,13 @@ impl PalwPanelService {
         let backends = self.backends();
         let sdk = backends.sdk();
         let taken = state.ingest(dir, missing, &mut |path| {
-            let loaded = crate::palw_backends::load_class_holdings_v1("root-fetch", sdk, std::slice::from_ref(&path.to_path_buf()), 0, misaka_palw_sdk::PalwWeightResidencyV1::PageCache);
+            let loaded = crate::palw_backends::load_class_holdings_v1(
+                "root-fetch",
+                sdk,
+                std::slice::from_ref(&path.to_path_buf()),
+                0,
+                misaka_palw_sdk::PalwWeightResidencyV1::PageCache,
+            );
             loaded
                 .into_iter()
                 .flat_map(|holding| {
@@ -5641,7 +5693,8 @@ impl PalwPanelService {
         // width the ledger grants when it starts, so a duty is deferred only when not even one position
         // at a time fits — the question the 3.37 GiB line on 5.104 asked at 64 and answered "no".
         let need = self.replay_memory_need_at_run_v1(session, class, Some(PALW_PREFILL_RUN_NARROWEST_V1));
-        crate::palw_backends::ledger_admits_v1(need.total_bytes()).map_err(|why| format!("a replay needs {} and {why}", need.describe()))
+        crate::palw_backends::ledger_admits_v1(need.total_bytes())
+            .map_err(|why| format!("a replay needs {} and {why}", need.describe()))
     }
 
     /// **Could a full-seat replay of this class EVER be reserved on this host?** The ledger's capacity
@@ -6366,7 +6419,9 @@ impl PalwPanelService {
         terms: &kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2,
         bond_key: PalwBondKeyV2,
     ) -> Result<PalwConsensusObjectV2, String> {
-        use misaka_palw_sdk::tir_registration::{build_tir_registration_v1, tir_registration_candidate_v1, tir_registration_message_v1};
+        use misaka_palw_sdk::tir_registration::{
+            build_tir_registration_v1, tir_registration_candidate_v1, tir_registration_message_v1,
+        };
         let registry = self.backends();
         let entry = tir_registration_candidate_v1(registry.holdings(), terms, self.config.register_class.as_deref())?;
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
@@ -6424,7 +6479,17 @@ impl PalwPanelService {
             entry.artifact_root
         );
         let build = |signature: Vec<u8>| {
-            build_gen_registration_v1(params, bundle, entry.row.class.as_ref(), entry.artifact_root, terms, 0, bond_key, signature, daa)
+            build_gen_registration_v1(
+                params,
+                bundle,
+                entry.row.class.as_ref(),
+                entry.artifact_root,
+                terms,
+                0,
+                bond_key,
+                signature,
+                daa,
+            )
         };
         let unsigned = build(Vec::new())?;
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
@@ -6620,7 +6685,10 @@ impl PalwPanelService {
         if let Some(answer) = session.palw_object_rehearsal_v1(&object)
             && !matches!(answer, kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::Accepted)
         {
-            trace!("[{PALW_PANEL}] a vertex equivocation (seat {:?}, round {}) is not offered a carrier now: {answer:?}", key.1, key.0);
+            trace!(
+                "[{PALW_PANEL}] a vertex equivocation (seat {:?}, round {}) is not offered a carrier now: {answer:?}",
+                key.1, key.0
+            );
             self.vertex_equivocations_sent.lock().unwrap().insert(key, current_daa);
             return;
         }
@@ -6630,7 +6698,10 @@ impl PalwPanelService {
                 let change = tx.outputs[0].clone();
                 match self.submit_carrier_v1(session, tx).await {
                     Ok(()) => {
-                        info!("[{PALW_PANEL}] filed a vertex equivocation (seat {:?}, round {}) in tx {txid} (RFC-0007)", key.1, key.0);
+                        info!(
+                            "[{PALW_PANEL}] filed a vertex equivocation (seat {:?}, round {}) in tx {txid} (RFC-0007)",
+                            key.1, key.0
+                        );
                         let next = TransactionOutpoint::new(txid, 0);
                         self.persist_fee_outpoint(next);
                         *funding = Some((
@@ -8184,8 +8255,9 @@ impl PalwPanelService {
         // P2-8b / P2-8d: the claims this seat's replay refuted, pursued to a proof (`palw_filer_replay`).
         let mut replay_filer = palw_filer_replay::PalwReplayFilerV1::default();
         // Lane B (panel-seed stopgap (B)): the operator's non-seat accusations; armed by identity alone.
-        let mut operator_da =
-            palw_operator_da::PalwOperatorDaBookV1::new(palw_operator_da::palw_operator_registrations_v1(&self.consensus_config.params));
+        let mut operator_da = palw_operator_da::PalwOperatorDaBookV1::new(palw_operator_da::palw_operator_registrations_v1(
+            &self.consensus_config.params,
+        ));
         // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
         let mut audit_duty = palw_audit_duty::PalwAuditDutyV1::new();
         audit_duty.replays.configure_slots(self.config.seat_replay_slots);
@@ -8795,7 +8867,15 @@ impl PalwPanelService {
             // the passes that file their declarations (the generative pass above; an IR pass hands its close to the
             // same module).
             if !held_chunks.is_empty() {
-                self.held_chunks_tick_v1(&session, bond_key, current_daa, &mut held_chunks, &mut court_pending, &mut court_due, &court_moved);
+                self.held_chunks_tick_v1(
+                    &session,
+                    bond_key,
+                    current_daa,
+                    &mut held_chunks,
+                    &mut court_pending,
+                    &mut court_due,
+                    &court_moved,
+                );
             }
             // **RFC-0004 (A10): the evaluation court's pass.** An evaluation claim a challenger's audit disputed was
             // built its accusation off the improvement loop; it is signed and queued here, on the court's own carrier
@@ -9700,9 +9780,8 @@ impl PalwPanelService {
                                 }
                             };
                             let Some(accused) = accused_capture.as_deref().map(|c| c.to_vec()) else {
-                                *court_stalls
-                                    .entry("the IR close needs the ACCUSED capture and this node holds none")
-                                    .or_default() += 1;
+                                *court_stalls.entry("the IR close needs the ACCUSED capture and this node holds none").or_default() +=
+                                    1;
                                 continue;
                             };
                             let own = own_executions.get(&duty.claim_id).cloned();
@@ -10370,7 +10449,8 @@ impl PalwPanelService {
             // the flat loop (whose replay would run the whole class) and are answered by the cell pass below.
             let (shard_duties, duties): (Vec<_>, Vec<_>) = duties.into_iter().partition(|d| d.tir_shard.is_some());
             {
-                let keep: HashSet<Hash64> = shard_duties.iter().map(|d| d.claim_id).chain(shard_books.filed.keys().map(|k| k.0)).collect();
+                let keep: HashSet<Hash64> =
+                    shard_duties.iter().map(|d| d.claim_id).chain(shard_books.filed.keys().map(|k| k.0)).collect();
                 let admitted = shard_books.admit_arrivals(&session, network_domain, &keep);
                 let refused = admitted.iter().filter(|a| matches!(a, tir_shard::PalwTirShardAdmitV1::BadSignature)).count();
                 if refused > 0 {
@@ -10379,11 +10459,41 @@ impl PalwPanelService {
                     });
                 }
                 if !shard_duties.is_empty() {
-                    self.tir_shard_seat_pass_v1(&session, bond_key, network_domain, current_daa, &shard_duties, &materials, &mut interval_openings, &mut shard_books)
-                        .await;
+                    self.tir_shard_seat_pass_v1(
+                        &session,
+                        bond_key,
+                        network_domain,
+                        current_daa,
+                        &shard_duties,
+                        &materials,
+                        &mut interval_openings,
+                        &mut shard_books,
+                    )
+                    .await;
                 }
                 if !shard_books.filed.is_empty() {
                     self.tir_shard_resend_v1(bond_key, network_domain, &shard_duties, &mut shard_books).await;
+                }
+                // **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`): the shards of live sharded claims this bond
+                // does not seat, verified from public material; a finding rides the seats' carrier path with this bond as accuser.
+                if self.config.tir_shard_watch
+                    && !self.config.tir_shard_shadow
+                    && self.consensus_config.params.palw_tir_shard_active_at(current_daa)
+                {
+                    let watch = session.palw_tir_shard_watch_duties_v1(bond_key);
+                    if !watch.is_empty() {
+                        self.tir_shard_watch_pass_v1(
+                            &session,
+                            bond_key,
+                            network_domain,
+                            current_daa,
+                            &watch,
+                            &materials,
+                            &mut interval_openings,
+                            &mut shard_books,
+                        )
+                        .await;
+                    }
                 }
             }
             // **RFC-0006's pre-fence shadow** (`--palw-tir-shard-shadow`, fence dormant): the cell verifier beside the whole replay.
@@ -10828,7 +10938,15 @@ impl PalwPanelService {
                             }
                             let pooled = materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
                             let pass = self
-                                .gen_tensor_seat_pass_v1(&session, std::sync::Arc::new(tensor), duty, seat_r_duty, current_daa, pooled, &mut seat_replays)
+                                .gen_tensor_seat_pass_v1(
+                                    &session,
+                                    std::sync::Arc::new(tensor),
+                                    duty,
+                                    seat_r_duty,
+                                    current_daa,
+                                    pooled,
+                                    &mut seat_replays,
+                                )
                                 .await;
                             if pass.served {
                                 service.note_served(duty.claim_id);
@@ -12259,7 +12377,11 @@ impl PalwPanelService {
                     }
                     self.config.telemetry.panel_receipt(duty.class_id, verdict_name(&verdict));
                     receipts_filed_at.push_back(std::time::Instant::now());
-                    info!("[{PALW_PANEL}] recorded a {:?} leaf for claim {} in this round's vertex (RFC-0007)", verdict_name(&verdict), duty.claim_id);
+                    info!(
+                        "[{PALW_PANEL}] recorded a {:?} leaf for claim {} in this round's vertex (RFC-0007)",
+                        verdict_name(&verdict),
+                        duty.claim_id
+                    );
                     if valid {
                         service.note_served(duty.claim_id);
                     }
@@ -12794,7 +12916,10 @@ impl PalwPanelService {
                     let spent_in_pool = confirmed && pool.outpoint_is_spent_in_mempool(&lane_tip);
                     let kept = confirmed
                         || pool
-                            .has_transaction(lane_tip.transaction_id, kaspa_mining::model::tx_query::TransactionQuery::TransactionsOnly)
+                            .has_transaction(
+                                lane_tip.transaction_id,
+                                kaspa_mining::model::tx_query::TransactionQuery::TransactionsOnly,
+                            )
                             .await;
                     readiness_lane.settle(confirmed, spent_in_pool, kept);
                 } else {
@@ -13055,10 +13180,7 @@ impl PalwPanelService {
                 // **RFC-0004 (A10): an evaluation claim the executor finished**, carried beside the
                 // canonical claim at the same site and funded the same way. Nothing here runs below the
                 // fence: no run is ever ready.
-                if slots.offers(PalwCarrierSiteV1::Own, inflight)
-                    && !stuck_opened
-                    && funding.is_some()
-                {
+                if slots.offers(PalwCarrierSiteV1::Own, inflight) && !stuck_opened && funding.is_some() {
                     let _ = self
                         .improve_carry_v1(&mut improve, &session, network_domain, bond, current_daa, &mut funding, &mut inflight)
                         .await;
@@ -13539,39 +13661,41 @@ impl PalwPanelService {
                         trace!("[{PALW_PANEL}] this seat's vertex of round {} is not offered a carrier now: {answer:?}", vertex.round);
                         vertex_book.mark_sent(vertex.round, current_daa);
                     } else {
-                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                        Ok(tx) => {
-                            let txid = tx.id();
-                            let change = tx.outputs[0].clone();
-                            match self.submit_carrier_v1(&session, tx).await {
-                                Ok(()) => {
-                                    info!(
-                                        "[{PALW_PANEL}] submitted this seat's vertex of round {} ({} leaves) in tx {txid} (RFC-0007)",
-                                        vertex.round,
-                                        vertex.leaves.len()
-                                    );
-                                    let next = TransactionOutpoint::new(txid, 0);
-                                    self.persist_fee_outpoint(next);
-                                    funding = Some((
-                                        next,
-                                        UtxoEntry {
-                                            amount: change.value,
-                                            script_public_key: change.script_public_key,
-                                            block_daa_score: current_daa,
-                                            is_coinbase: false,
-                                        },
-                                    ));
-                                    inflight += 1;
-                                    vertex_book.mark_sent(vertex.round, current_daa);
-                                }
-                                Err(e) => {
-                                    warn!("[{PALW_PANEL}] the mempool refused this seat's vertex of round {}: {e}", vertex.round);
-                                    funding = None;
+                        match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                            Ok(tx) => {
+                                let txid = tx.id();
+                                let change = tx.outputs[0].clone();
+                                match self.submit_carrier_v1(&session, tx).await {
+                                    Ok(()) => {
+                                        info!(
+                                            "[{PALW_PANEL}] submitted this seat's vertex of round {} ({} leaves) in tx {txid} (RFC-0007)",
+                                            vertex.round,
+                                            vertex.leaves.len()
+                                        );
+                                        let next = TransactionOutpoint::new(txid, 0);
+                                        self.persist_fee_outpoint(next);
+                                        funding = Some((
+                                            next,
+                                            UtxoEntry {
+                                                amount: change.value,
+                                                script_public_key: change.script_public_key,
+                                                block_daa_score: current_daa,
+                                                is_coinbase: false,
+                                            },
+                                        ));
+                                        inflight += 1;
+                                        vertex_book.mark_sent(vertex.round, current_daa);
+                                    }
+                                    Err(e) => {
+                                        warn!("[{PALW_PANEL}] the mempool refused this seat's vertex of round {}: {e}", vertex.round);
+                                        funding = None;
+                                    }
                                 }
                             }
+                            Err(e) => {
+                                warn!("[{PALW_PANEL}] cannot build the carrier for this seat's vertex of round {}: {e}", vertex.round)
+                            }
                         }
-                        Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for this seat's vertex of round {}: {e}", vertex.round),
-                    }
                     }
                 }
                 // **RFC-0007 Part IV.1: a trap move** — the commitment (when this bond is drawn by the slot lottery) or the reveal (once the
@@ -14134,8 +14258,7 @@ fn bond_registration_signature_v1(
             .map(|sig| sig.as_ref().to_vec())
             .map_err(|e| format!("ML-DSA-87 sign failed: {e:?}"))
     };
-    let mut signature =
-        sign(registration_message, kaspa_consensus_core::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT)?;
+    let mut signature = sign(registration_message, kaspa_consensus_core::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT)?;
     if operator_possession {
         let possession =
             kaspa_consensus_core::palw_state_v2::palw_operator_possession_message_v1(network_domain, signed_bond, pubkey, pubkey);
@@ -14240,12 +14363,24 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         // G14 lane D (tags 110, 111): the kernel route.
         PalwConsensusObjectV2::KernelRouteV1 { .. } => "KernelRouteV1",
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. } => "KernelConstraintReceiptV1",
+        PalwConsensusObjectV2::KernelRouteChunkV1 { .. } => "KernelRouteChunkV1",
         PalwConsensusObjectV2::ArtifactBoundV1 { .. } => "ArtifactBoundV1",
         PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. } => "ArtifactBindingChallengedV1",
         PalwConsensusObjectV2::KernelBoundV1 { .. } => "KernelBoundV1",
         PalwConsensusObjectV2::ConformanceCommittedV1 { .. } => "ConformanceCommittedV1",
         PalwConsensusObjectV2::SignedRegistrationV1 { .. } => "SignedRegistrationV1",
         PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => "ConformanceEvidenceV1",
+        // DA16 (tags 150–153): the provider court.
+        PalwConsensusObjectV2::ProviderLeaseV1 { .. } => "ProviderLeaseV1",
+        PalwConsensusObjectV2::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
+        PalwConsensusObjectV2::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
+        PalwConsensusObjectV2::DaTransferV1 { .. } => "DaTransferV1",
+        // LG14-B (tags 157–159): the legacy route's public descent and held DA units, dormant.
+        PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. } => "LegacyHeldDemandedV2",
+        PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
+        PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
+        // Lane BUDGET (tag 140): a bond's capital assignment.
+        PalwConsensusObjectV2::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",
@@ -14829,7 +14964,10 @@ impl PalwPanelService {
             count,
             kaspa_p2p_flows::palw_gossip::PALW_INTERVAL_OPENING_MAX_BYTES - (64 << 10),
         )?;
-        info!("[{PALW_PANEL}] claim {claim}: served {count} inventory row(s) of class {class_id} from leaf {first} ({} bytes) — RFC-0006 D-S6", reply.len());
+        info!(
+            "[{PALW_PANEL}] claim {claim}: served {count} inventory row(s) of class {class_id} from leaf {first} ({} bytes) — RFC-0006 D-S6",
+            reply.len()
+        );
         Some(reply)
     }
 
@@ -14849,7 +14987,8 @@ impl PalwPanelService {
         let binding = &decoded.binding;
         let class_id = binding.class.class_id(&binding.artifact_root);
         let tir = self.backends().resolve_tir_v1(class_id, binding.artifact_root)?.ok()?;
-        let PalwDaAnswerV1::TirStepRun(disclosure) = tir.step_unit_answer(&capture, PalwDaUnitV1::TirStepRun { first, count }).ok()? else {
+        let PalwDaAnswerV1::TirStepRun(disclosure) = tir.step_unit_answer(&capture, PalwDaUnitV1::TirStepRun { first, count }).ok()?
+        else {
             return None;
         };
         let bytes = borsh::to_vec(&*disclosure).ok()?;
@@ -14869,7 +15008,9 @@ impl PalwPanelService {
         if let Some(chunk) = kaspa_consensus_core::palw_weight_block_v1::palw_witness_chunk_request_decode_v1(interval_index) {
             let served = sketch::palw_witness_chunk_v1(&self.config.retention_dir, &claim, chunk);
             match &served {
-                Some(bytes) => info!("[{PALW_PANEL}] claim {claim}: served witness chunk {chunk} ({} bytes) — RFC-0007 §II.7", bytes.len()),
+                Some(bytes) => {
+                    info!("[{PALW_PANEL}] claim {claim}: served witness chunk {chunk} ({} bytes) — RFC-0007 §II.7", bytes.len())
+                }
                 None => info!("[{PALW_PANEL}] claim {claim}: witness chunk {chunk} is not kept here"),
             }
             return served;
@@ -16136,10 +16277,23 @@ impl PalwPanelService {
             // `job_pin: None`: this builder proves a leaf against the execution root; the capture's job is
             // pinned where it is verified (R-core's answer, `PalwDaClaimFactsV1::roots_v1`), and the v1
             // court below the fence records no identity to pin.
-            (PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: None, output_root: None, job_pin: None }, work_leaves)
+            (
+                PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: None, output_root: None, job_pin: None },
+                work_leaves,
+            )
         } else {
             let none = Hash64::default();
-            (PalwClaimRootsV1 { execution_root: none, trace_root: none, anchor: none, attempt_draw: None, output_root: None, job_pin: None }, 0)
+            (
+                PalwClaimRootsV1 {
+                    execution_root: none,
+                    trace_root: none,
+                    anchor: none,
+                    attempt_draw: None,
+                    output_root: None,
+                    job_pin: None,
+                },
+                0,
+            )
         };
         palw_fp_held_disclosure_v1(backend, payload, roots, work_leaves, missing, self.class_prompt_ids_form(job.class_id))
     }
@@ -16547,7 +16701,14 @@ impl PalwPanelService {
             };
             self.flow_context.palw_gossip().note_interval_pull_request(claim, *index);
             self.flow_context
-                .request_palw_interval_opening(claim, *index, kp.verification_key.as_ref().to_vec(), signature, requested_daa, Some(tag))
+                .request_palw_interval_opening(
+                    claim,
+                    *index,
+                    kp.verification_key.as_ref().to_vec(),
+                    signature,
+                    requested_daa,
+                    Some(tag),
+                )
                 .await;
             asked += 1;
         }
@@ -16577,7 +16738,8 @@ impl PalwPanelService {
                 ),
                 refetch::WitnessStepV1::Ready(image) => {
                     let Some(entry) = self.backends().tir_entry_v1(fetch.class_id, fetch.artifact_root) else { continue };
-                    let (sketch, prompt, decode, reproduces) = (sketch.clone(), fetch.prompt.clone(), fetch.decode, fetch.replay_reproduces);
+                    let (sketch, prompt, decode, reproduces) =
+                        (sketch.clone(), fetch.prompt.clone(), fetch.decode, fetch.replay_reproduces);
                     tokio::task::spawn_blocking(move || {
                         match misaka_palw_tir_sketch::codec::decode(&image) {
                             Ok(witness) => {
@@ -16614,13 +16776,18 @@ impl PalwPanelService {
         for claim in claims {
             let Some((mut pursuit, entry, refused)) = self.weight_refetch.lock().unwrap().remove(&claim) else { continue };
             let root = pursuit.artifact_root;
-            let (sketch_for_step, refused_for_step, entry_for_step, pool) = (sketch.clone(), refused.clone(), entry.clone(), openings.clone());
+            let (sketch_for_step, refused_for_step, entry_for_step, pool) =
+                (sketch.clone(), refused.clone(), entry.clone(), openings.clone());
             let stepped = tokio::task::spawn_blocking(move || {
-                let step = pursuit.step(&entry_for_step, &pool, daa, &|transport, failure| {
-                    match sketch_for_step.escalate_v1(&entry_for_step, &refused_for_step, failure, transport, daa) {
-                        Ok(outcome) => outcome,
-                        Err(why) => misaka_palw_tir_sketch::TirEscalationV1::Inconclusive(why),
-                    }
+                let step = pursuit.step(&entry_for_step, &pool, daa, &|transport, failure| match sketch_for_step.escalate_v1(
+                    &entry_for_step,
+                    &refused_for_step,
+                    failure,
+                    transport,
+                    daa,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(why) => misaka_palw_tir_sketch::TirEscalationV1::Inconclusive(why),
                 });
                 (pursuit, step)
             })
@@ -16644,7 +16811,9 @@ impl PalwPanelService {
                         self.note_seat_fault_v1(claim, u64::from(slot), 1);
                     }
                     misaka_palw_tir_sketch::TirEscalationV1::Cleared(why) => {
-                        info!("[{PALW_PANEL}] claim {claim}: the failed check is cleared by the refetch ({why:?}); nothing accused (RFC-0007 §II.8)")
+                        info!(
+                            "[{PALW_PANEL}] claim {claim}: the failed check is cleared by the refetch ({why:?}); nothing accused (RFC-0007 §II.8)"
+                        )
                     }
                     misaka_palw_tir_sketch::TirEscalationV1::Unavailable { occurrence, node, block, param } => warn!(
                         "[{PALW_PANEL}] claim {claim}: UNAVAILABLE — weight block {block:?} (param {param:?}) of node {node} in occurrence {occurrence} \
@@ -17518,7 +17687,10 @@ impl PalwPanelService {
                 duty.class_id,
                 duty.artifact_root,
                 Some(job),
-                kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: index },
+                kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::PartialSeat {
+                    seat_count: seats,
+                    segment_index: index,
+                },
                 |id| self.chain_carriage_v1(&session, id),
             );
             let _held_for_the_segment = match self.reserve_replay_v1("partial-seat", &need, duty.class_id, duty.claim_id) {
@@ -17604,7 +17776,14 @@ impl PalwPanelService {
 
     /// **A signed request for `count` inventory rows** under the row-request index (RFC-0006 D-S6): the leaf-request signature scheme
     /// carries the count where a leaf evidence request carries its leaf, so one signature is one run, not a standing right.
-    pub async fn request_tir_rows_v1(&self, network_domain: Hash64, claim: Hash64, index: u32, count: u32, requested_daa: u64) -> bool {
+    pub async fn request_tir_rows_v1(
+        &self,
+        network_domain: Hash64,
+        claim: Hash64,
+        index: u32,
+        count: u32,
+        requested_daa: u64,
+    ) -> bool {
         self.request_tir_rows_v1_at(network_domain, claim, index, count, requested_daa).await
     }
 
@@ -18189,7 +18368,9 @@ mod tests {
             assert!(!production.contains(table_only), "`{table_only}` skips the chain's registrations — use `resolve_backend`");
         }
         // The route-matrix re-audit's #5: the memory figures beside a resolve go through the same door.
-        for table_only in ["role_memory_need_v1(", "holding_bytes_for_v1(", "role_memory_need_for_backend_v1(", "incremental_replay_bytes_for_v1("] {
+        for table_only in
+            ["role_memory_need_v1(", "holding_bytes_for_v1(", "role_memory_need_for_backend_v1(", "incremental_replay_bytes_for_v1("]
+        {
             assert!(
                 !production.contains(table_only),
                 "`{table_only}` prices a chain-registered class off the tables alone — use the `_or_chain_v1` figure"
@@ -20303,12 +20484,18 @@ mod seat_r_tests {
         let class = floor_class();
         let (now, far, near) = (1_000u64, 1_000 + 500, 1_000 + 100);
         replays.set_big_gate(true);
-        assert!(!replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, far, now), "a class this seat has not timed is started: its first run is the measurement");
+        assert!(
+            !replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, far, now),
+            "a class this seat has not timed is started: its first run is the measurement"
+        );
         replays.timed.insert(class, 5);
         assert!(!replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, far, now), "5 DAA (13 minutes) is not slow");
         replays.timed.insert(class, 14); // the 05:00 replay: 37 minutes
         assert!(replays.is_slow_class(&class));
-        assert!(replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, far, now), "slow, big, lighter work waits, far from the deadline: held");
+        assert!(
+            replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, far, now),
+            "slow, big, lighter work waits, far from the deadline: held"
+        );
         assert!(!replays.big_replay_deferred(&class, GIB / 2, far, now), "a small replay is never held");
         // int-10.3: the caller passes the unpinned weight — a pinned 8k (1.70 GiB reserved + 1.68 GiB pinned) is still big.
         let pinned_8k_total = GIB + GIB * 7 / 10;
@@ -20867,13 +21054,13 @@ mod seat_s_tests {
     use super::{
         MARKER_SEAT_S, PALW_SEAT_MATERIAL_WAIT_CAP_DAA_V1, PALW_SEAT_RETENTION_LIABILITIES_MAX_V1,
         PALW_SEAT_S4_AUTHENTICATION_REFUSALS_V1, PALW_SEAT_S4_CANDIDATES_PER_SEGMENT_V1, PalwReplayAnswerV1, PalwSeatArmV1,
-        PalwSeatClassReadV1, PalwSeatRRoleV1, PalwSeatReceiptFormsV1, PalwSeatReplayPollV1, PalwSeatReplayStepV1,
-        PalwSeatReplaysV1, PalwSeatResumeClaimV1, PalwSeatResumeStepV1, PalwSeatResumesV1, PalwSeatSegmentPollV1,
-        PalwSeatSegmentRefusalV1, PalwSeatTailV1, palw_replay_answer_v1, palw_seat_arm_licenses_v1,
-        palw_seat_material_wait_ends_v1, palw_seat_material_wait_until_v1, palw_seat_note_duty_liability_v1,
-        palw_seat_note_liability_v1, palw_seat_r_role_v1, palw_seat_receipt_forms_v1, palw_seat_replay_step_v1,
-        palw_seat_retention_horizon_v1, palw_seat_retention_pins_v1, palw_seat_s4_candidate_key_v1, palw_seat_s4_refusal_v1,
-        palw_seat_tail_v1, palw_seat_unserved_licence_v1, prune_foreign_retention_v1,
+        PalwSeatClassReadV1, PalwSeatRRoleV1, PalwSeatReceiptFormsV1, PalwSeatReplayPollV1, PalwSeatReplayStepV1, PalwSeatReplaysV1,
+        PalwSeatResumeClaimV1, PalwSeatResumeStepV1, PalwSeatResumesV1, PalwSeatSegmentPollV1, PalwSeatSegmentRefusalV1,
+        PalwSeatTailV1, palw_replay_answer_v1, palw_seat_arm_licenses_v1, palw_seat_material_wait_ends_v1,
+        palw_seat_material_wait_until_v1, palw_seat_note_duty_liability_v1, palw_seat_note_liability_v1, palw_seat_r_role_v1,
+        palw_seat_receipt_forms_v1, palw_seat_replay_step_v1, palw_seat_retention_horizon_v1, palw_seat_retention_pins_v1,
+        palw_seat_s4_candidate_key_v1, palw_seat_s4_refusal_v1, palw_seat_tail_v1, palw_seat_unserved_licence_v1,
+        prune_foreign_retention_v1,
     };
     use kaspa_consensus_core::palw_backend::{PalwExecutionBackendV1, PalwReplayRootsV1};
     use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
@@ -21423,8 +21610,10 @@ mod seat_s_tests {
             "H-2: a context whose pin is not the claim's resumes nothing"
         );
         let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
-        let unanswered = block.find("// No job the answer authenticated, so no context to authenticate an").expect("the route's None arm");
-        let arm = &block[unanswered..unanswered + block[unanswered..].find("PalwSeatResumeStepV1::Starved { missing: Vec::new(), served }").unwrap()];
+        let unanswered =
+            block.find("// No job the answer authenticated, so no context to authenticate an").expect("the route's None arm");
+        let arm = &block[unanswered
+            ..unanswered + block[unanswered..].find("PalwSeatResumeStepV1::Starved { missing: Vec::new(), served }").unwrap()];
         assert!(arm.contains("self.request_material_signed(network_domain, duty.claim_id, current_daa).await;"), "it asks");
     }
 
@@ -21445,8 +21634,8 @@ mod seat_s_tests {
         let executed = run.facts.decode_tokens_executed;
         let ctx = backend.fp_job_context_for_executed_v1(&job, executed).expect("the executed context");
         let price = backend.fp_context_work_leaves_v1(&ctx).expect("a price");
-        let committed = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &ctx, &run, 0)
-            .expect("the claim");
+        let committed =
+            kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &ctx, &run, 0).expect("the claim");
         assert_eq!(committed.work_leaves, price, "the claim's work_leaves is the priced context's");
         let (seats, segment) = (5u16, 1u16);
         let opening = backend.open_segment_checkpoint_v1(&run.outcome.material, seats, segment).expect("the producer opens");
@@ -21475,7 +21664,9 @@ mod seat_s_tests {
             .expect_err("the honest opening under a stranger's job");
         assert_eq!(
             palw_seat_s4_refusal_v1(refused),
-            PalwSeatSegmentRefusalV1::NotTheClaims(misaka_palw_base0::segment_opening::Base0SegmentRefusalV1::NotTheSeatsJob.to_string()),
+            PalwSeatSegmentRefusalV1::NotTheClaims(
+                misaka_palw_base0::segment_opening::Base0SegmentRefusalV1::NotTheSeatsJob.to_string()
+            ),
             "a refusal that drops the honest bytes — which is why no unauthenticated job is resumed under"
         );
     }
@@ -21578,7 +21769,9 @@ mod seat_s_tests {
             let failures = failures.clone();
             replays.start_segment(key, h(0x2E), true, 0, None, Box::new(floor_backend()), move |_| {
                 failures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Err(palw_seat_s4_refusal_v1(misaka_palw_base0::segment_opening::Base0SegmentRefusalV1::Replay("oom".into()).to_string()))
+                Err(palw_seat_s4_refusal_v1(
+                    misaka_palw_base0::segment_opening::Base0SegmentRefusalV1::Replay("oom".into()).to_string(),
+                ))
             });
             true
         };
@@ -21649,7 +21842,10 @@ mod seat_s_tests {
         assert!(gate < wait && block[gate..wait].contains(silent), "Silent: served, and nothing filed");
         let note = "PalwSeatTailV1::Waits { unserved: true } => service.note_unserved(duty.claim_id, current_daa),";
         assert!(block[gate..wait].contains(note), "noted only when served no job");
-        assert!(!block.contains("if seat_r && !refuted {\n                        unserved.entry("), "the old unconditional note is gone");
+        assert!(
+            !block.contains("if seat_r && !refuted {\n                        unserved.entry("),
+            "the old unconditional note is gone"
+        );
     }
 
     /// **F4: a resuming partial seat is not held to a whole replay's memory.** The duty loop's
@@ -21659,7 +21855,8 @@ mod seat_s_tests {
     fn f4_the_pre_check_does_not_price_a_resuming_partial_seat_as_a_full_seat() {
         let source = source();
         let block = &source[source.find("for index in order {").expect("the duty loop")..];
-        let check = block.find("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("the check");
+        let check =
+            block.find("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("the check");
         let guard = &block[..check];
         let guard = &guard[guard.rfind("if !(seat_r").expect("its guard")..];
         let squeezed: String = guard.chars().filter(|c| !c.is_whitespace()).collect();
@@ -21710,7 +21907,9 @@ mod seat_s_tests {
     #[test]
     fn f6_requested_intervals_is_swept_past_seat_r() {
         let source = source();
-        let sweep = source.find("if seat_r {\n                interval_openings.retain(|(claim, _), _| live.contains(claim));").expect("H1's sweep");
+        let sweep = source
+            .find("if seat_r {\n                interval_openings.retain(|(claim, _), _| live.contains(claim));")
+            .expect("H1's sweep");
         let rest = &source[sweep..];
         let rest = &rest[..rest.find("\n            }\n").expect("its end")];
         assert!(rest.contains("requested_intervals.retain(|(claim, _), _| live.contains(claim));"));
@@ -21757,7 +21956,8 @@ mod seat_s_tests {
         // a job of the claim's held — never reaches a wait: it abstains.
         assert_eq!(block.matches("PalwSeatResumeStepV1::Starved { served: true, .. } => break 'verdict None,").count(), 2);
         for at in block.match_indices("PalwSeatResumeStepV1::Starved { served: false, .. } => {").map(|(i, _)| i) {
-            let served = block[..at].rfind("PalwSeatResumeStepV1::Starved { served: true, .. } => break 'verdict None,").expect("before");
+            let served =
+                block[..at].rfind("PalwSeatResumeStepV1::Starved { served: true, .. } => break 'verdict None,").expect("before");
             assert!(at - served < 200, "the served arm is the unserved one's neighbour");
         }
         assert_eq!(block.matches("(PalwSeatReplayStepV1::Waiting, _) => break 'verdict None,").count(), 2);
@@ -22665,7 +22865,10 @@ mod p2_6_da_accusation_policy {
         assert!(COLLECTOR_ASSEMBLE_BUDGET <= std::time::Duration::from_secs(30), "a tick's assembler work is bounded");
         // The fingerprint the loop keys on moves with the candidates (and is the supplementary collector's own).
         let none: (Vec<PalwSeatReceiptV3>, Vec<PalwSeatReceiptV2>) = (Vec::new(), Vec::new());
-        assert_eq!(palw_supplementary_candidates_fingerprint_v1(&none.0, &none.1), palw_supplementary_candidates_fingerprint_v1(&none.0, &none.1));
+        assert_eq!(
+            palw_supplementary_candidates_fingerprint_v1(&none.0, &none.1),
+            palw_supplementary_candidates_fingerprint_v1(&none.0, &none.1)
+        );
     }
 
     /// The loop's stopwatch (the 2026-10-03 panel starvation): an iteration is recorded however it ends, the status line
@@ -22697,7 +22900,6 @@ mod p2_6_da_accusation_policy {
         }
         assert!(PALW_PANEL_TICKS_V1.lock().unwrap().0.len() <= PALW_PANEL_TICK_HISTORY_V1);
     }
-
 
     /// **The tick is that scheduler**: the submitter builds one `PalwCarrierSlotsV1` from the last
     /// lane, marks each site in `TICK_ORDER`, asks the one gate at every site — the priority lane at
@@ -22735,7 +22937,8 @@ mod p2_6_da_accusation_policy {
         );
         let supplementary = sites.find("session.palw_v2_supplementary_assemble(claim, v3, v2)").expect("the supplementary collector");
         let licences_at = sites.find("slots.at(PalwCarrierSiteV1::Licences, inflight);").expect("the Licences site");
-        let priority_after = sites.find("slots.at(PalwCarrierSiteV1::PriorityAfterLicences, inflight);").expect("the priority lane after");
+        let priority_after =
+            sites.find("slots.at(PalwCarrierSiteV1::PriorityAfterLicences, inflight);").expect("the priority lane after");
         assert!(
             licences_at < supplementary && supplementary < priority_after,
             "the supplementary collector rides the Licences site: after the licences, before the priority lane's turn after them"
@@ -23445,7 +23648,10 @@ mod readiness_memory_and_stuck_carrier_tests {
             duties.contains("record.adapter_root == section_root && record.artifact_root() == class.artifact_root"),
             "the record names this section and this class"
         );
-        assert!(duties.contains("verify_artifact_multiproof_v1(&proof, possession_root)"), "the proof is checked against the section's root");
+        assert!(
+            duties.contains("verify_artifact_multiproof_v1(&proof, possession_root)"),
+            "the proof is checked against the section's root"
+        );
         assert!(
             !duties.contains("verify_artifact_multiproof_v1(&proof, class.artifact_root)"),
             "never against a composite's registered root"
@@ -23942,7 +24148,10 @@ mod readiness_memory_and_stuck_carrier_tests {
         assert!(funder.contains("scan.offer(outpoint, entry, &usable, &is_free);"), "the largest output that pays");
         assert!(!funder.contains("persist_fee_outpoint"), "nothing remembered");
         let carry = body("    async fn carry_readiness_proof_on_v1(");
-        assert!(carry.contains("if !lane {\n                            self.persist_fee_outpoint(next);"), "the main chain's memory is its own");
+        assert!(
+            carry.contains("if !lane {\n                            self.persist_fee_outpoint(next);"),
+            "the main chain's memory is its own"
+        );
         assert!(body("    async fn carry_on_readiness_lane_v1(").contains("lane.unfunded_at == Some(current_daa)"), "one scan a DAA");
     }
 
@@ -23966,10 +24175,14 @@ mod readiness_memory_and_stuck_carrier_tests {
         let escalated = tick.find("palw_readiness_replaces_carrier_v1(true, *late)").expect("the escalated site");
         assert!(stuck < open && open < escalated, "measured, opened, then the escalated site");
         let opened = &tick[open..escalated];
-        for line in ["self.open_stuck_carrier_v1(&session, stuck, late)", "funding = Some(opened);", "inflight = 0;", "held = false;"] {
+        for line in ["self.open_stuck_carrier_v1(&session, stuck, late)", "funding = Some(opened);", "inflight = 0;", "held = false;"]
+        {
             assert!(opened.contains(line), "the opening: {line}");
         }
-        assert!(tick[..escalated].trim_end().ends_with("!stuck_opened\n                        &&"), "the escalated site defers to it");
+        assert!(
+            tick[..escalated].trim_end().ends_with("!stuck_opened\n                        &&"),
+            "the escalated site defers to it"
+        );
         let tail_at = tick.find("last_lane = slots.finish(inflight);").expect("the tail");
         let (sites, tail) = tick.split_at(tail_at);
         assert_eq!(
@@ -23983,7 +24196,10 @@ mod readiness_memory_and_stuck_carrier_tests {
         let priority = body("    async fn carry_priority_v1(");
         assert_eq!(priority.matches("self.submit_carrier_v1(session, tx)").count(), 2, "court moves and evidence");
         assert!(!priority.contains("flow_context.submit_rpc_transaction("));
-        assert!(priority.contains("Some((funding_outpoint, _)) if self.stuck_carrier_open_on_v1(&funding_outpoint) =>"), "evidence waits");
+        assert!(
+            priority.contains("Some((funding_outpoint, _)) if self.stuck_carrier_open_on_v1(&funding_outpoint) =>"),
+            "evidence waits"
+        );
         assert!(body("    async fn carry_readiness_proof_on_v1(").contains("self.submit_carrier_v1(session, tx)"));
         let door = body("    async fn submit_carrier_v1(");
         assert!(door.contains("opening.is_replaced_by(&tx)") && door.contains("submit_rpc_transaction_replacement(session, tx)"));

@@ -1,5 +1,12 @@
 # ADR-0066 — The heartbeat lane out of `header.bits`, and the inactivity leak out of node memory
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 Status: **Decisions 1, 2 and 4's fence LANDED (2026-08-31), both dormant. Decision 3 LANDED through ADR-0068 Phase 1 (`Params::palw_attempt_work_fence`: an attempt block's blue work is the constant `1 << PALW_ATTEMPT_BLUE_WORK_LOG2`, a heartbeat's is ε — ghostdag/protocol.rs names this ADR's Decision 3 as closed). Decision 4's committed per-validator table is NOT pursued: it belongs to the validator lineage, which is retired (recorded 2026-09-05).** Supersedes the *implementation* of ADR-0060 Decisions 1–2
 and Decision 4; the doctrine those decisions state is unaffected. Both features still ship OFF —
 but they ship off behind **fences that can be armed**, which is the difference this ADR was written
@@ -13,12 +20,12 @@ to make. See "What landed" at the foot of this document for exactly what is and 
 > Decision 3 (attempt blue work leaves `calc_work(bits)` — `Params::palw_attempt_work`, a 2²⁰
 > constant against ε = 1) and closes F3a (width bound: at most four heartbeats per mergeset, or any
 > number forming one chain — its F5 amendment). Decision 4's fence `Params::palw_inactivity_leak`
-> is still `None` everywhere and the committed table is still unbuilt. The sentence "a V2 network's
+> is still `None`; the committed-table expansion is withdrawn under RFC-0012. The sentence "a V2 network's
 > doctrine is to re-mint rather than schedule" is the testnet practice, not the doctrine: consensus
 > changes ship by activation (mainnet), and [ADR-0072](0072-the-ticket-is-the-execution.md) §3 records
 > the activation shape. Map: [`README.md`](README.md).
 
-> **Security amendment appended (2026-09-02)** — see the last section: Decision 4's table must be verified from the pruning-point snapshot or no leak is computed; the leak is monotone with hysteresis; it never lowers the denominator below `min_active_validators`; `t_leak_daa` enters the identity raw before arming.
+> **Decision 4 の DNS table 拡張は不採用。** PALW liveness に別の validator 専用 state を追加する必要がないため。移行境界は RFC-0012 に従う。
 
 > **The two-step ramp met a producer slower than its recovery step (2026-09-10) — see
 > [ADR-0105](0105-a-heartbeat-never-turns-a-bonded-block-red.md).** "One block deep admits two
@@ -100,37 +107,11 @@ separable from Decisions 1–2 and should be staged after them.
 
 ## Decision 4 — the inactivity leak needs committed per-validator state
 
-The leak must know how long EACH validator has been inactive. Today that lives in node memory
-(`last_attestation_daa_by_validator`), which cannot be right: a value that decides block validity
-and is not committed is a value two nodes can disagree about with no way to notice.
-
-It becomes a per-validator table inside the DNS overlay's committed state, rooted into
-`overlay_commitment_root` and riding `PruningPointOverlaySnapshot` so a pruned IBD imports it under
-the existing trustless gate. Below the fence, and with an empty table, the root is byte-identical —
-**no genesis hash moves on any preset**. `component_digests` gains a third digest, or the triage
-line loses the ability to localise a divergence to the new half.
-
-Two constraints that are easy to get wrong:
-
-* **Entries for validators with no surviving bond must be dropped at capture**, or the table grows
-  without bound and a from-genesis node disagrees with an importing one.
-* **The branch-comparison prohibition stays structural.** `dns_reorg_outcome` must keep passing an
-  empty leak view: a committed table does not fix the quorum-intersection problem, because a
-  candidate branch commits its *own* table.
+committed per-validator liveness table は実装しない。廃止対象の DNS validator lineage 専用であり、PALW の liveness に不要なため。DNS の移行境界は [RFC-0012](../rfc/0012-palw-only-consensus-and-native-evm-settlement.md) に従う。
 
 ## The trap in the constant, and why both fences must be top level
 
-`inactivity_leak_daa` lives inside `DnsParams`, which `consensus_params_id` hashes as one raw borsh
-blob while `for_each_fence` deliberately does not visit it. Both halves are individually correct.
-Together they mean **changing that constant from `u64::MAX` to a live value moves
-`consensus_identity_id` and disconnects the first upgrading operator from every un-upgraded peer
-immediately** — the deploy-day partition the identity split exists to prevent.
-
-So the leak cannot be armed by editing that constant. It needs a top-level
-`Option<PalwInactivityLeakV1 { activation, t_leak_daa }>` — ADR-0065 D1's exact shape, for its exact
-reason: `for_each_fence` visits only the activation, the collapse takes the whole `Option`, and the
-duration reaches `consensus_params_id` raw. `DnsParams.inactivity_leak_daa` is then retired at
-`u64::MAX` permanently rather than reused.
+旧 DNS inactivity-leak 専用 fence・table の追加計画は継続しない。DNS validator 拡張を採用しないため。既存 fence の履歴は以下の実装記録に残す。
 
 The same applies to the heartbeat lane. Its current shape — a `const bool` that changes block
 validity and moves no fingerprint — is **code-only masquerading as a rule**, which is a silent fork.
@@ -140,20 +121,7 @@ slot rule may not go into the V2 bundle, because the bundle's fences live under
 
 ## What this costs, honestly
 
-**Contained (days):** deleting `heartbeat_evidence` and reshaping the slot rule (~120 lines out, ~30
-in, two call sites); forcing heartbeat blocks to carry no chain position; relocating the leak fence
-out of `DnsParams`; retiring `PALW_HEARTBEAT_LANE_ENABLED` for a params predicate (7 call sites).
-
-**Multi-week:** the new algo id (finalizer arm, `check_algo_id_known` and its pruning-proof
-implications, `accepts_algo_id`, `required_algo_id_for_mode`, the miner, the template adapter, and
-the fingerprint fixtures for all five presets); Decision 3's blue-work change; and Decision 4's
-fourth snapshot component with its apply/revert pair, reorg-symmetry tests, pruning-point capture
-filter and pruned-IBD import tests.
-
-Nothing here should be landed as a switch flip. ADR-0060 §12 already listed "what a correct
-heartbeat lane needs" and "correct activation needs PERSISTED per-validator last-attestation state";
-landing either without recording which of the four findings it closes, and how, would repeat exactly
-the failure that produced them.
+heartbeat の既存実装・activation は以下の記録に従う。撤回した DNS table の snapshot・apply/revert・IBD 用実装見積もりは継続しない。
 
 ## Consequences
 
@@ -255,37 +223,7 @@ source and therefore no such lock.
 
 ## Security amendment (2026-09-02) — Decision 4's committed table, before it is built
 
-**SA-1 — The table is part of the pruning-point's authenticated snapshot, and a node that cannot
-verify it computes no leak.** A pruned-IBD node derives quorum denominators from a table it did not
-compute; if that table is not committed and verified, archival and pruned nodes exclude different
-validators and the finality overlay partitions along the `--archival` flag — the F4 shape this ADR
-deleted from the heartbeat lane. Fail closed: no verified table ⇒ full denominator ⇒ no leak.
-
-*As built (2026-09-03).* The self-computed half is in
-`VirtualStateProcessor::palw_leak_table_provenance`, and it asks the WALK: it iterates the same
-backward chain the table is built from and answers `SelfComputed` only if every header from the tip
-to past the far edge of `stake_score_window_blue_score` is one this node holds. The decision itself
-is the pure `dns_finality::leak_table_provenance_from_walk_v1`, unit-tested.
-
-Two corrections to what an earlier draft of this amendment said, because both were wrong in the
-dangerous direction. First, the check must not be "is the consensus pruning point a window below the
-tip": that value is derived from the chain, so it is identical on an archival node and a pruned one
-and cannot see the node-local divergence SA-1 exists to close. Second, **arming the leak on a pruned
-fleet is not a no-op.** A pruned node in steady state holds every header above a pruning point far
-below its tip, so it covers the window, answers `SelfComputed`, and leaks — correctly, and exactly
-as its archival peers do. `Unverified` is for a node that genuinely cannot reach the far edge
-(mid-IBD, or a store truncated above the window). The verified-IMPORT half remains unbuilt: the
-fourth `PruningPointOverlaySnapshot` component this decision budgets for does not exist, so such a
-node stays on the full denominator rather than guessing.
-
-**SA-2 — The leak is monotone with hysteresis.** Exclusion after `t_leak_daa` of silence;
-re-inclusion only when the validator's fresh attestation is itself final. A validator flapping
-around the threshold must not swing the quorum on a block of its choosing.
-
-**SA-3 — The leak never lowers the denominator below `min_active_validators`.** If it would,
-finality halts (no certificates) rather than continuing as a small-quorum overlay. ADR-0060
-Decision 4 accepted double-finality risk under a long partition; it did not accept a two-validator
-quorum, and the floor must be a rule.
+Decision 4 の新規 snapshot・leak-table 拡張は行わない。対象の DNS validator lineage を廃止するため。旧ネットワークで有効な leak 規則は RFC-0012 の移行まで維持する。
 
 **SA-4 — A value that rides a fence must be VISIBLE to the operator comparing two builds.** Two
 builds that peer with different `t_leak_daa` and then diverge on finality is the

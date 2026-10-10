@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use misaka_palw::host_security::{
-    ALLOW_PUBLIC_GATEWAY_ENV, PALW_WORKER_ENV_ALLOWLIST, PALW_WORKER_ENV_PINNED, confinement_backend_available, establish_confinement,
+    PALW_WORKER_ENV_ALLOWLIST, PALW_WORKER_ENV_PINNED, confinement_backend_available, establish_confinement,
     harden_worker_command, resident_bytes, worker_max_resident_bytes, worker_working_dir,
 };
 
@@ -430,7 +430,6 @@ pub fn security_report(ctx: &Ctx, worker: Option<&PathBuf>, verify_artifacts: bo
         list.retain(|l| seen.insert((l.bind.clone(), l.pid)));
         list
     });
-    let ack_given = std::env::var(ALLOW_PUBLIC_GATEWAY_ENV).map(|v| v == "1").unwrap_or(false);
     let mut public_gateway = false;
     match &listeners {
         None => rows.push(row("listeners", "socket table", "unavailable on this host (install lsof or iproute2)", Level::Info)),
@@ -445,10 +444,8 @@ pub fn security_report(ctx: &Ctx, worker: Option<&PathBuf>, verify_artifacts: bo
                     "listeners",
                     format!("{} ({}{})", l.bind, l.process, l.pid.map(|p| format!(" pid {p}")).unwrap_or_default()),
                     match (public, gateway) {
-                        // The one row where the acknowledgement variable is the rule: a PALW
-                        // gateway on a public bind. Everything else on this host is somebody
-                        // else's listener, reported because an operator asked what is open.
-                        (true, true) => format!("PUBLIC PALW ENTRANCE — {ALLOW_PUBLIC_GATEWAY_ENV} required, given: {ack_given}"),
+                        // PALW gateways are loopback-only; report old public processes as unsupported.
+                        (true, true) => "public PALW gateway is unsupported; bind loopback (ADR-0144)".to_string(),
                         (true, false) => "public (not a PALW entrance)".to_string(),
                         (false, _) => "loopback".to_string(),
                     },
@@ -473,9 +470,7 @@ pub fn security_report(ctx: &Ctx, worker: Option<&PathBuf>, verify_artifacts: bo
                         "process": s.process,
                         "pid": s.pid,
                         "public": s.is_public(),
-                        "acknowledgement_variable": ALLOW_PUBLIC_GATEWAY_ENV,
-                        "acknowledgement_required": s.is_public() && s.process.contains("gateway"),
-                        "acknowledgement_given": ack_given,
+                        "unsupported_public_gateway": s.is_public() && s.process.contains("gateway"),
                     }))
                     .collect::<Vec<_>>())
                 .unwrap_or_default()

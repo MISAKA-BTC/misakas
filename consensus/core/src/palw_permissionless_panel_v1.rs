@@ -2,7 +2,8 @@
 //! Historical lane A remains unchanged. The production fold (`palw_panel_v3_fold_v1`, a child of `palw_state_v2`) wires the
 //! engine into `PalwChainStateV2` — Some-only root block, deltas 170–173, carriage tail `0xED` — and hands every binding to the
 //! V2 receipt/court machinery as an ordinary panel record. **No certified entropy source is approved**
-//! ([`crate::palw_panel_beacon_v1`]), so this binary refuses EVERY attempted activation, including custom params.
+//! ([`crate::palw_panel_beacon_v1`]), so this binary refuses EVERY attempted activation, including custom params and orphaned
+//! state mirrors. OPV source plumbing is present but does not approve a beacon policy.
 
 use crate::{
     Hash64,
@@ -72,18 +73,42 @@ impl Params {
         let network = crate::palw_attempt_v2::palw_network_domain_v2_for(self.net.to_string().as_bytes(), Some(self.genesis.hash));
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             let ruleset = palw_ruleset_id_v2(bundle);
-            let mirror = fence.map(|fence| PalwPanelV3ParamsV1 { from_daa: fence.activation.daa_score(), policy: fence.policy, network, ruleset });
+            let mirror = fence.map(|fence| PalwPanelV3ParamsV1 {
+                from_daa: fence.activation.daa_score(),
+                policy: fence.policy,
+                network,
+                ruleset,
+            });
             bundle.state = bundle.state.clone().with_panel_v3(mirror);
         }
     }
 
     pub fn validate_palw_permissionless_panel_v1(&self) -> Result<(), PalwModeV2Error> {
+        // The processor reads the bundle's mirror, while fingerprints and the fork schedule read
+        // the top-level fence. A mirror without that fence would silently run an uncommitted rule.
+        if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
+            let expected =
+                self.palw_permissionless_panel_v1.filter(|fence| fence.activation != ForkActivation::never()).map(|fence| {
+                    PalwPanelV3ParamsV1 {
+                        from_daa: fence.activation.daa_score(),
+                        policy: fence.policy,
+                        network: crate::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.net.to_string().as_bytes(),
+                            Some(self.genesis.hash),
+                        ),
+                        ruleset: palw_ruleset_id_v2(bundle),
+                    }
+                });
+            if bundle.state.panel_v3().copied() != expected {
+                return Err(PalwModeV2Error::Invalid("palw_permissionless_panel_v1 state mirror differs from its committed fence"));
+            }
+        }
         if let Some(rule) = self.palw_permissionless_panel_v1.filter(|r| r.activation != ForkActivation::never()) {
             rule.policy.validate().map_err(|_| {
                 PalwModeV2Error::Invalid("palw_permissionless_panel_v1 has invalid timing, capacity or beacon parameters")
             })?;
             return Err(PalwModeV2Error::Invalid(
-                "palw_permissionless_panel_v1 cannot be armed: RFC-0010 approves no certified Panel beacon (BEACON_UNAVAILABLE: no Panel-independent Final exists, `approved_panel_beacon_policies_v1` is empty) and its bias/withholding/P0-10 review is external; R-core+, the panel economy and audit_2026_09_23 must also be in force before it, and RFC-0014's gates must pass first",
+                "palw_permissionless_panel_v1 cannot be armed: RFC-0010 approves no certified Panel beacon (`approved_panel_beacon_policies_v1` is empty) and its bias/withholding/P0-10 review is external; R-core+, the panel economy and audit_2026_09_23 must also be in force before it, and RFC-0014's gates must pass first",
             ));
         }
         Ok(())
@@ -221,6 +246,80 @@ pub fn panel_snapshot_candidates_v1(
     Ok(seats.into_values().collect())
 }
 
+/// **The population of a claim drawn per shard** (RFC-0006 × RFC-0010, agent SHARD): the stratified twin of
+/// [`panel_snapshot_candidates_v1`], under the same structural rules at the same checkpoint. Stratum `s` (shard `s` of the class's
+/// plan of `strata.count` shards) is the bonds that may judge the shard's readiness class
+/// ([`crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1`] — the population lane A's per-shard draw reads): each carries
+/// the CLASS role and bit `s`. For an outsider-judged claim, the base class's population carries the OUTSIDER role (no bit). A
+/// bond in several populations is one candidate with every role and bit it earned. In bond order, each with its bits.
+#[allow(clippy::too_many_arguments)]
+pub fn panel_stratified_candidates_v1(
+    state: &PalwChainStateV2,
+    claim_id: Hash64,
+    floor_class: Hash64,
+    checkpoint_daa: u64,
+    policy: PanelPolicyV1,
+    draw: PalwPanelDrawPolicyV1,
+    capability_proof: bool,
+    strata: &PanelStrataV1,
+) -> Result<Vec<(SeatCandidateV1, u64)>, PanelErrorV1> {
+    policy.validate()?;
+    strata.validate()?;
+    let claim = state.claim(&claim_id).ok_or(PanelErrorV1::InvalidSnapshot)?;
+    let Some(registered_by) = checkpoint_daa.checked_sub(policy.bond_maturity_daa) else { return Ok(Vec::new()) };
+    let mut populations: Vec<(Hash64, u8, u64)> = (0..strata.count)
+        .map(|stratum| {
+            (
+                crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1(&claim.class_id, strata.count, stratum),
+                CLASS_ROLE_V1,
+                1u64 << stratum,
+            )
+        })
+        .collect();
+    if strata.outsider {
+        populations.push((floor_class, OUTSIDER_ROLE_V1, 0));
+    }
+    let readiness_root = commitment(b"misaka-palw/panel-v3/readiness", &(state.state_root(), claim.class_id));
+    let mut seats = std::collections::BTreeMap::<BondIdV1, (SeatCandidateV1, u64)>::new();
+    for (class, role, bit) in populations {
+        let eligible = palw_panel_stake_base_bonds_judging_v1(
+            state,
+            &claim_id,
+            &class,
+            policy.min_collateral,
+            Some(registered_by),
+            capability_proof,
+            draw.readiness,
+            draw.economy,
+            strata.stride(),
+        )
+        .map_err(|_| PanelErrorV1::InvalidSnapshot)?;
+        for (bond, row) in eligible {
+            let entry = seats.entry((*bond).into()).or_insert_with(|| {
+                (
+                    SeatCandidateV1 {
+                        bond: (*bond).into(),
+                        operator: row.operator_id,
+                        key: commitment(b"misaka-palw/panel-v3/key", &row.pubkey),
+                        collateral: row.collateral,
+                        registered_daa: row.registered_daa,
+                        capability_root: commitment(b"misaka-palw/panel-v3/capability", &row.capable_classes),
+                        readiness_root,
+                        roles: 0,
+                    },
+                    0,
+                )
+            });
+            entry.0.roles |= role;
+            entry.1 |= bit;
+        }
+    }
+    if seats.len() > policy.max_candidates as usize {
+        return Err(PanelErrorV1::ResourceLimit);
+    }
+    Ok(seats.into_values().collect())
+}
+
 /// Headroom from the existing one-ledger filter, excluding this engine's own reservations.
 /// Callers must pass the same pre-object state for every due claim in the fold.
 pub fn panel_live_headroom_v1(state: &PalwChainStateV2, bond: BondIdV1, filter: &crate::palw_panel_v2::PalwPanelValidLockV1) -> u128 {
@@ -260,7 +359,7 @@ impl ConsensusViewV1 for PalwPanelChainViewV1<'_> {
     }
 
     /// The production adapter ([`crate::palw_panel_beacon_v1`]): a proof is a borsh `WorkBeaconV1` verified against THIS chain's
-    /// settlements. The shipped scheme registry is empty and no Final on this chain is Panel-independent, so it refuses everything.
+    /// settlements. The shipped scheme registry is empty, so it refuses everything. This shadow view carries no OPV extras.
     fn verify_beacon(&self, request: &BeaconRequestV1, proof: &BeaconProofV1) -> Result<(), PanelErrorV1> {
         let history = crate::palw_state_v2::ChainPanelBeaconHistoryV1::new(
             self.state,
@@ -551,6 +650,25 @@ pub fn panel_v3_overview_v1(state: &PalwChainStateV2) -> PanelV3OverviewV1 {
 pub const PANEL_V3_OBSERVATION_MAX_CLAIMS_V1: usize = 64;
 pub const PANEL_V3_OBSERVATION_DEFAULT_CLAIMS_V1: usize = 16;
 
+/// Release support is distinct from an engine observed in a fixture or imported branch state.
+/// This release's validator refuses every armed height; its approved beacon registry is empty.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelV3ReleaseStatusV1 {
+    pub activation_supported: bool,
+    pub approved_beacon_schemes: Vec<Hash64>,
+}
+
+pub fn panel_v3_release_status_v1() -> PanelV3ReleaseStatusV1 {
+    PanelV3ReleaseStatusV1 {
+        activation_supported: false,
+        approved_beacon_schemes: crate::palw_panel_beacon_v1::approved_panel_beacon_policies_v1()
+            .iter()
+            .map(crate::palw_panel_beacon_v1::panel_beacon_scheme_of_v1)
+            .collect(),
+    }
+}
+
 /// **What `getPalwPanelV3Status` (RPC op 220) answers**: the engine at a glance and the status of the claims asked for (or, when none
 /// is named, the first tracked claims in id order). A pure read of the tip state; no verdict reads it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -561,6 +679,8 @@ pub struct PanelV3ObservationV1 {
     pub claims: Vec<PanelV3ClaimStatusV1>,
     /// Named claims the state does not hold (never a silent absence).
     pub unknown: Vec<Hash64>,
+    /// Appended read-only metadata: an active engine alone does not establish release readiness.
+    pub release: PanelV3ReleaseStatusV1,
 }
 
 impl PanelV3ObservationV1 {
@@ -595,5 +715,11 @@ pub fn panel_v3_observation_v1(
             None => unknown.push(id),
         }
     }
-    PanelV3ObservationV1 { version: PANEL_V3_OBSERVATION_VERSION_V1, overview: panel_v3_overview_v1(state), claims, unknown }
+    PanelV3ObservationV1 {
+        version: PANEL_V3_OBSERVATION_VERSION_V1,
+        overview: panel_v3_overview_v1(state),
+        claims,
+        unknown,
+        release: panel_v3_release_status_v1(),
+    }
 }

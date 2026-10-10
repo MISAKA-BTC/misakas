@@ -1,4 +1,4 @@
-//! **Public prosecution of pipeline claims** (K2-TIR-v3, RFC-0005 §K.3, RFC-0003 pipelines; ADR-0173) — the pipeline analogue of
+//! **Public prosecution of pipeline claims** (K2-TIR-v3, Kernel design §K.3, RFC-0003 pipelines; ADR-0173) — the pipeline analogue of
 //! [`crate::public::FreshVerifierV1`]: a party that holds only canonical public bytes rebuilds a pipeline claim's context, checks
 //! every stage, every edge and the text stream's decode, and files a proof any node adjudicates from the same bytes.
 //!

@@ -27,15 +27,14 @@ use crate::consensus::test_consensus::TestConsensus;
 use crate::model::stores::dns_state::DnsStateStore;
 use crate::model::stores::dns_state::DnsStateStoreReader;
 use crate::model::stores::ghostdag::GhostdagStoreReader;
-use crate::model::stores::headers::HeaderStoreReader;
 use crate::model::stores::pruning::PruningStore;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::{Block, MutableBlock, TemplateBuildMode};
 use kaspa_consensus_core::blockstatus::BlockStatus;
 use kaspa_consensus_core::coinbase::MinerData;
+use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::config::params::ForkActivation;
-use kaspa_consensus_core::config::{Config, ConfigBuilder};
 use kaspa_consensus_core::evm::model_market::{
     MISAKA_MODEL_WRITER, PALW_EVM_ACTION_SELL, PalwEvmSettlementOutcomeV1, refusal, send_action_sell_calldata,
 };
@@ -50,7 +49,7 @@ use kaspa_consensus_core::palw_native_settlement_v1::{
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
 use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_hashes::Hash64;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// The first DAA at which the retirement is in force in these tests. A TEST value: the harness clock reaches DAA 1 and stops.
 const FENCE: u64 = 1;
@@ -128,6 +127,12 @@ pub(super) fn parts_with(fence: Option<u64>, bft: bool) -> Parts {
 }
 
 /// [`parts_with`] and then `edit` on the params copy (a test value, never a preset).
+///
+/// **Built as a `Config` directly, never through `ConfigBuilder::build`.** The copy (the harness cards, the EVM lane as shipped,
+/// the BFT gate when `bft`, then `edit`) is validated by `validate_palw_v2` WITHOUT the retirement, so everything else in it is
+/// still a validated ruleset; the retirement is set afterwards. The release's validation requires `palw_fork_choice_rule_e_v1`
+/// armed at or below the retirement (ADR-0175), a fence this harness does not arm: these tests exercise the retirement's own
+/// behaviour and must not depend on it.
 pub(super) fn parts_custom(
     fence: Option<u64>,
     bft: bool,
@@ -135,9 +140,6 @@ pub(super) fn parts_custom(
 ) -> Parts {
     let (config, bundle, premine, floats) = t12_with_harness_cards_and_evm(true);
     let mut params = config.params.clone();
-    if let Some(at) = fence {
-        params.palw_dns_retirement = Some(test_retirement(at));
-    }
     if bft {
         params.dns_bft_gate = Some(kaspa_consensus_core::config::params::DnsBftGateV1 {
             activation: ForkActivation::new(0),
@@ -147,8 +149,14 @@ pub(super) fn parts_custom(
         });
     }
     edit(&mut params);
-    params.validate_palw_v2().expect("a test retirement validates on testnet-12");
-    (ConfigBuilder::new(params).skip_proof_of_work().build(), bundle, premine, floats)
+    params.validate_palw_v2().expect("testnet-12 with the harness cards and the test edits validates");
+    if let Some(at) = fence {
+        let retirement = test_retirement(at);
+        assert!(retirement.settlement.valid() && retirement.legacy_evidence_horizon_daa > 0, "a complete test retirement");
+        params.palw_dns_retirement = Some(retirement);
+    }
+    params.skip_proof_of_work = true;
+    (Config::new(params), bundle, premine, floats)
 }
 
 /// The combined ledger in wei: the virtual UTXO set, the EVM state, the wei burned by base fees.
@@ -425,16 +433,21 @@ impl Rig {
 
     /// A deposit-lock transaction to [`ACCOUNT`] from card `card`'s fee float.
     pub fn lock_tx(&mut self, card: usize) -> Transaction {
+        self.lock_tx_of(card, DEPOSIT)
+    }
+
+    /// [`Self::lock_tx`] locking `deposit` sompi (it must leave the float its carrier fee).
+    pub fn lock_tx_of(&mut self, card: usize, deposit: u64) -> Transaction {
         let (lock, lock_entry) = self.wallets.remove(&card).expect("the card's float");
         let mut tx = Transaction::new(
             crate::constants::TX_VERSION,
             vec![TransactionInput::new(lock, vec![], 0, 1)],
             vec![
                 TransactionOutput::new(
-                    DEPOSIT,
+                    deposit,
                     kaspa_txscript::script_class::evm_deposit_lock_script(ACCOUNT, 1_000_000, 0, card_payout_spk(card).script()),
                 ),
-                TransactionOutput::new(lock_entry.amount - DEPOSIT - CARRIER_FEE, card_payout_spk(card)),
+                TransactionOutput::new(lock_entry.amount - deposit - CARRIER_FEE, card_payout_spk(card)),
             ],
             0,
             SUBNETWORK_ID_NATIVE,
@@ -1861,6 +1874,8 @@ async fn rfc12_r5_a_late_private_branch_withdraws_a_published_safe_and_finalized
     assert_ne!(after.stop, Some(SettlementStopV1::FinalizedConflict));
     assert_eq!(readiness.stop, after.stop);
     assert_eq!(readiness.finalized.wait, Some(kaspa_consensus_core::palw_native_readiness_v1::FinalizedWaitV1::NoSafePrefix));
+    // C11: the withdrawal is NAMED - the head this node published and no longer certifies - not a silent null.
+    assert_eq!(readiness.finalized.withdrawn_from, before.finalized, "the withdrawn head is the one that had been published");
 
     let (before, after, readiness) = reorg_across_the_would_be_safe_point(0x12_a600_0000, false).await;
     eprintln!("[r5 immature] before {before:?}\n[r5 immature] after  {after:?}");
@@ -1868,4 +1883,384 @@ async fn rfc12_r5_a_late_private_branch_withdraws_a_published_safe_and_finalized
     assert_eq!((after.safe, after.finalized), (None, None));
     assert_eq!(after.stop, Some(SettlementStopV1::InsufficientDepth));
     assert_eq!(readiness.generation, after.generation);
+    assert_eq!(readiness.finalized.withdrawn_from, None, "never published, so nothing was withdrawn");
+}
+
+// =====================================================================================================================
+// MATRIX 11 — RFC-0012 C10: the DNS "all validators equivocate" case past the fence
+// =====================================================================================================================
+
+/// **EXPECTED (C10).** Every DNS validator signs BOTH of two conflicting branches, so each branch is DNS-final on a node that saw it
+/// first: node P holds a DNS-final anchor on branch X, node Q one on branch Y, node C none, the BFT gate armed from DAA 0. A heavier
+/// PALW branch (Y) reaches all three in different orders. Past the fence:
+/// * all three choose the same sink (the heavier PALW branch), publish the same native snapshot and the same heads;
+/// * for EVERY (rollout stage x health) a planted anchor on the abandoned incumbent leaves `dns_reorg_outcome` equal to the anchorless
+///   outcome and the BFT gate silent: the DNS row is not an input to selection in any state it can be in;
+/// * and the equivocation itself is not evidence the chain acts on: a block carrying a slashing-evidence transaction whose cited
+///   targets are at or past the fence is refused by name (`DnsLegacyEvidenceOutsideWindow`), while a twin citing a target below the
+///   fence is not refused for that reason.
+#[tokio::test]
+async fn rfc12_x16_conflicting_dns_finality_on_both_branches_changes_neither_the_sink_nor_the_labels() {
+    use kaspa_consensus_core::dns_finality::{ActiveBondView, DnsHealth, DnsRolloutStage};
+    let p = parts_with(Some(FENCE), true);
+    let mut a = Rig::new(&p, 0x12_1600_0000);
+    let pre = prefix(&mut a).await;
+    let mut b = follower(&p, 0x12_1610_0000, &pre).await;
+    let xs = extend(&mut a, &[2]).await;
+    let ys = extend(&mut b, &[3, 4, 5]).await;
+
+    // ---- the three nodes -------------------------------------------------------------------------------------------------
+    let mut node_p = follower(&p, 0x12_1620_0000, &pre).await;
+    node_p.arrive(xs[0].clone(), "X").await;
+    plant_dns(&node_p, xs[0].header.hash, xs[0].header.daa_score, xs[0].header.hash, xs[0].header.daa_score);
+    let mut node_q = follower(&p, 0x12_1630_0000, &pre).await;
+    node_q.arrive(ys[0].clone(), "Y1").await;
+    plant_dns(&node_q, ys[0].header.hash, ys[0].header.daa_score, ys[0].header.hash, ys[0].header.daa_score);
+    let mut node_c = follower(&p, 0x12_1640_0000, &pre).await;
+    for blk in xs.iter().chain(&ys) {
+        node_c.arrive(blk.clone(), "clean: X then Y").await;
+    }
+    for y in &ys {
+        node_p.arrive(y.clone(), "P: a block abandoning its DNS-final anchor").await;
+    }
+    node_q.arrive(xs[0].clone(), "Q: the lighter sibling").await;
+    for y in &ys[1..] {
+        node_q.arrive(y.clone(), "Q: its own branch continues").await;
+    }
+    let tip = ys.last().unwrap().header.hash;
+    let sinks = [node_p.chain.sink(), node_q.chain.sink(), node_c.chain.sink()];
+    eprintln!("[x16] sinks P {} Q {} C {}", sinks[0], sinks[1], sinks[2]);
+    assert!(sinks.iter().all(|s| *s == tip), "all three chose the heavier PALW branch: {sinks:?}");
+    assert_eq!(snapshot_of(&node_p), snapshot_of(&node_c), "P (DNS-final on the abandoned branch) publishes what the clean node does");
+    assert_eq!(snapshot_of(&node_q), snapshot_of(&node_c), "and so does Q (DNS-final on the winning branch)");
+    assert_eq!(heads_of(&node_p), heads_of(&node_c));
+    assert_eq!(heads_of(&node_q), heads_of(&node_c));
+
+    // ---- every stage x health, an anchor on the abandoned incumbent --------------------------------------------------------
+    let mut q = Rig::new(&p, 0x12_1650_0000);
+    let pre2 = prefix(&mut q).await;
+    let mut r = follower(&p, 0x12_1660_0000, &pre2).await;
+    let x1 = {
+        let e = q.attempt(2, Vec::new(), no_evm());
+        q.take(e, "x1").await
+    };
+    let y1 = {
+        let e = r.attempt(3, Vec::new(), no_evm());
+        r.take(e, "y1").await
+    };
+    q.arrive(y1.clone(), "the sibling").await;
+    let view = ActiveBondView::default();
+    plant_dns(&q, Hash64::default(), 0, x1.header.hash, x1.header.daa_score);
+    let baseline = q.vp().dns_reorg_outcome(y1.header.hash, x1.header.hash, &view);
+    let mut checked = 0;
+    for stage in [DnsRolloutStage::Launch, DnsRolloutStage::Bootstrap, DnsRolloutStage::Active] {
+        for health in [
+            DnsHealth::DisabledBeforeActivation,
+            DnsHealth::Active,
+            DnsHealth::DegradedStakeQualityLow,
+            DnsHealth::DegradedCertificateCensored,
+        ] {
+            q.vp()
+                .dns_state_store
+                .write()
+                .set(kaspa_consensus_core::dns_finality::DnsState {
+                    selected_chain_anchor: x1.header.hash,
+                    anchor_daa_score: x1.header.daa_score,
+                    work_depth: Default::default(),
+                    stake_depth: kaspa_consensus_core::dns_finality::StakeScore(u64::MAX as u128),
+                    last_dns_confirmed_anchor: x1.header.hash,
+                    last_dns_confirmed_anchor_daa_score: x1.header.daa_score,
+                    rollout_stage: stage,
+                    validator_set_commitment: Default::default(),
+                    health,
+                })
+                .unwrap();
+            assert_eq!(q.vp().dns_bft_gate_refusal(y1.header.hash, x1.header.hash), None, "{stage:?}/{health:?}: the gate abstains");
+            assert_eq!(
+                q.vp().dns_reorg_outcome(y1.header.hash, x1.header.hash, &view),
+                baseline,
+                "{stage:?}/{health:?}: the outcome is the anchorless one"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 12);
+
+    // ---- the equivocation as evidence: a transaction citing targets at or past the fence -----------------------------------
+    use super::dns_harness;
+    use kaspa_consensus_core::dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload};
+    let mass = q.config.params.storage_mass_parameter;
+    let net_id = q.config.params.genesis.hash;
+    let validator = dns_harness::harness_validator([0x61; 32]);
+    let bond_outpoint = TransactionOutpoint::new(Hash64::from_u64_word(0x16_0001), 0);
+    let evidence = |target_daa: u64| {
+        let att = |tag: u8| {
+            dns_harness::build_signed_attestation(
+                &validator,
+                net_id.as_byte_slice(),
+                bond_outpoint,
+                1,
+                Hash64::from_bytes([tag; 64]),
+                target_daa,
+                Hash64::default(),
+            )
+        };
+        SlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint,
+            attestation_a: att(0xa1),
+            attestation_b: att(0xb2),
+            reporter_reward_spk_payload: [0x61; 64],
+        }
+    };
+    let retired_at = q.config.params.palw_dns_retirement.expect("armed").activation.daa_score();
+    // At or past the fence: refused by name.
+    let post = {
+        let (float_out, float_entry) = q.wallets.remove(&7).expect("a float");
+        let tx = dns_harness::funded_signed_slashing_evidence_tx(
+            card_seed(7),
+            float_out,
+            float_entry.amount,
+            0,
+            evidence(retired_at),
+            mass,
+        );
+        q.attempt_injecting(0, Vec::new(), no_evm(), vec![tx])
+    };
+    assert!(q.config.params.palw_dns_retired_at(post.header.daa_score), "the block is past the fence (daa {})", post.header.daa_score);
+    let verdict = q.api().validate_and_insert_block(post.to_immutable()).virtual_state_task.await;
+    let err = format!("{:?}", verdict.expect_err("an equivocation cited at a post-fence target must not be accepted into the DAG"));
+    eprintln!("[x16] post-fence target: {err}");
+    assert!(err.contains("DnsLegacyEvidenceOutsideWindow"), "refused by name: {err}");
+    // Below the fence: not refused for THAT reason (the old validator judges it; this bond does not exist, so it may refuse for its own).
+    let twin = {
+        let (float_out, float_entry) = q.wallets.remove(&6).expect("a float");
+        let tx = dns_harness::funded_signed_slashing_evidence_tx(
+            card_seed(6),
+            float_out,
+            float_entry.amount,
+            0,
+            evidence(retired_at - 1),
+            mass,
+        );
+        q.attempt_injecting(0, Vec::new(), no_evm(), vec![tx])
+    };
+    let verdict = q.api().validate_and_insert_block(twin.to_immutable()).virtual_state_task.await;
+    eprintln!("[x16] pre-fence target: {verdict:?}");
+    if let Err(e) = verdict {
+        assert!(!format!("{e:?}").contains("DnsLegacyEvidenceOutsideWindow"), "the twin is not refused for the horizon: {e:?}");
+    }
+}
+
+// =====================================================================================================================
+// MATRIX 12 — RFC-0012 C3: market orders cross the fence with ADR-0162 armed, and the combined ledger still conserves
+// =====================================================================================================================
+
+/// What the deposit locks in C3: 80 MSK, so the account could pay a 50 MSK buy. (`DEPOSIT` locks 1 MSK, which cannot buy a position.)
+const C3_DEPOSIT: u64 = 8_000_000_000;
+/// The buy's value: 50 MSK = 5 x 10^9 sompi = 5 x 10^19 wei.
+const C3_BUY_SOMPI: u64 = 5_000_000_000;
+
+/// The account's buy (nonce 0) and two one-unit sells (nonces 1 and 2) on the first non-floor model line, the same key and chain id as
+/// [`SELLS`]. Regenerate with `cast mktx --private-key 0x5050...50 --chain 5067595 --nonce N --gas-limit 200000 --gas-price
+/// 10000000000 --priority-gas-price 0 --value V 0x...f013 <calldata>` where the calldata is `send_action_buy_calldata(line, 0)` /
+/// `send_action_sell_calldata(line, 1, 0)`; `c3_orders` decodes each and holds it to those fields before it is used.
+const C3_ORDERS: [(u64, &str); 3] = [
+    (
+        0,
+        concat!(
+            "02f90139834d534b80808502540be40083030d4094000000000000000000000000000000000000f0138902b5e3af16b1880000b8c4df42f6",
+            "8f00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000",
+            "0000000000000000640100000174c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8",
+            "ac9213a3a63da409070cb2c98b8e861598db902f7a0000000000000000000000000000000000000000000000000000000000000000000000",
+            "00000000000000000000000000000000000000000000000000c080a0de4396fc0bbbbd97aea46c125e2511ecf068e0f5bd29a173a15fa085",
+            "836ca232a0632f06a7b4bba525b737740cdcf1185ee9160cd84baf7838ac2b73ec911ee6f5",
+        ),
+    ),
+    (
+        1,
+        concat!(
+            "02f90150834d534b01808502540be40083030d4094000000000000000000000000000000000000f01380b8e4df42f68f0000000000000000",
+            "0000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000084",
+            "0100000274c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da40907",
+            "0cb2c98b8e861598db902f7a0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000",
+            "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c080a0846a724b4c",
+            "5a36ab28a195948cb3c16902de849d9e03d449251469076057fc2da058816e88dbe427251e0c245845a7fe69d9a0524f97045f42dfaf180f",
+            "cf06d703",
+        ),
+    ),
+    (
+        2,
+        concat!(
+            "02f90150834d534b02808502540be40083030d4094000000000000000000000000000000000000f01380b8e4df42f68f0000000000000000",
+            "0000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000084",
+            "0100000274c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da40907",
+            "0cb2c98b8e861598db902f7a0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000",
+            "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c001a07ccd5b9856",
+            "9cf34769eff459f10e0725c34d0e1a2cc4b20cf4c95a6715c947d8a061b22a14276268e1fa23a7270b497c001f03cfcbe61f130802ac7c51",
+            "249ae734",
+        ),
+    ),
+];
+
+fn c3_orders(line: &Hash64) -> Vec<Vec<u8>> {
+    use kaspa_consensus_core::evm::model_market::send_action_buy_calldata;
+    C3_ORDERS
+        .iter()
+        .map(|(nonce, hex)| {
+            let raw = decode_fixture(hex);
+            let tx = kaspa_evm::tx::decode_eth_tx(&raw).unwrap_or_else(|e| panic!("order {nonce} does not decode ({e:?})"));
+            let (calldata, value_sompi) = if *nonce == 0 {
+                (send_action_buy_calldata(line, 0), C3_BUY_SOMPI as u128)
+            } else {
+                (send_action_sell_calldata(line, 1, 0), 0)
+            };
+            let mut want_value = [0u8; 32];
+            want_value[16..].copy_from_slice(&(value_sompi * EVM_NATIVE_SCALE as u128).to_be_bytes());
+            assert_eq!(
+                (tx.from, tx.to, tx.nonce, tx.chain_id, tx.gas_limit, tx.max_fee_per_gas, tx.value, &tx.input),
+                (ACCOUNT, Some(MISAKA_MODEL_WRITER.as_bytes()), *nonce, Some(EVM_CHAIN_ID), GAS_LIMIT, MAX_FEE, want_value, &calldata),
+                "order {nonce} is not the fixture it must be (regenerate with the recipe on C3_ORDERS)"
+            );
+            raw
+        })
+        .collect()
+}
+
+/// **EXPECTED (C3), restated after the first run (2026-10-09).** x1 left market orders as `Refused MARKET_MISSING`, because the line
+/// has no seeded market and a seed costs 100,000 MSK. ADR-0162 (`palw_model_virtual_v1`, dormant on every preset, armed here in a TEST
+/// copy of the params at DAA 0) opens every line's market on a virtual reserve - but its Decision 5 opens TRADING only at the class's
+/// approval: status `Active` and, where the registry is in force (testnet-12: from genesis), a lifecycle row at exactly `Active`. No
+/// testnet-12 model class is approved at genesis, and this harness cannot walk a class's lifecycle to `Active` (it produces floor
+/// claims only), so **a fill is not reachable here** (the first run, written to expect fills, measured exactly this: the buy produced
+/// no settlement and both sells settled `Refused { EXCEEDS_POSITION }`). What the run shows instead, with an 80 MSK lock, a 50 MSK
+/// buy and two one-unit sells riding one payload across the fence:
+/// * the precondition, asserted so the test fails by name if testnet-12's genesis ever approves a class: the line's class is not
+///   approved;
+/// * the buy is refused AT THE CALL (`ClassNotEligible`, the EVM lane's copy of the fold's gate): its receipt failed, the 50 MSK
+///   never left the account (the balance is the lock less at most three transactions' gas), and it queues no settlement;
+/// * the market EXISTS now (x1's `MARKET_MISSING` is gone): both sells reach the fold and settle `Refused { EXCEEDS_POSITION }` with
+///   nothing escrowed, and the account holds no position;
+/// * every block is the UTXO-valid sink of the node that built it, before and after the fence, and the combined ledger (`utxo x scale +
+///   EVM balances + wei burned`) moves, on EVERY block, by exactly `(coinbase outputs - L1 fees) x scale` - the reverted buy's and the
+///   sells' gas included;
+/// * the native snapshot is there from the fence on, as in x1.
+///
+/// **The fill itself stays a GAP at this level**; its arithmetic is the fold's (a buy on an `Active` row, palw_state_v2.rs tests) and the
+/// writer's (kaspa-evm `model_market` tests). Reaching it end to end needs an approved class on a harness chain.
+#[tokio::test]
+async fn rfc12_c3_a_market_orders_cross_the_fence_with_the_virtual_market_armed_and_the_ledger_conserves() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1;
+    let p = parts_custom(Some(FENCE), false, |params| {
+        params.palw_model_virtual_v1 = Some(ForkActivation::new(0));
+    });
+    let mut rig = Rig::new(&p, 0x12_c300_0000);
+    let genesis_supply = rig.supply();
+    let line = {
+        let (_, genesis) = rig.chain.tip_state();
+        let base = rig.chain.bundle.base_class_id;
+        *genesis.classes_iter().map(|(id, _)| id).find(|id| **id != base).expect("testnet-12 registers a model class at genesis")
+    };
+    {
+        let (_, genesis) = rig.chain.tip_state();
+        let row = genesis.model_lifecycle(&line).map(|r| r.state);
+        eprintln!("[c3] the line's class at genesis: status {:?}, lifecycle {row:?}", genesis.class(&line).map(|c| &c.status));
+        assert!(
+            !matches!(row, Some(PalwModelLifecycleV1::Active)),
+            "the precondition: testnet-12's genesis approves no model class (if it now does, this test must expect fills)"
+        );
+    }
+    let raws = c3_orders(&line);
+    let b0 = rig.beat();
+    rig.take(b0, "b0-beat").await;
+    let lock = rig.lock_tx_of(1, C3_DEPOSIT);
+    let e1 = rig.attempt(0, vec![lock.clone()], no_evm());
+    rig.take(e1, "e1-lock").await;
+    let b1 = rig.beat();
+    assert_eq!(
+        b1.evm_payload.system_ops,
+        vec![EvmSystemOp::DepositClaim(DepositClaim {
+            deposit_outpoint: TransactionOutpoint::new(lock.id(), 0),
+            evm_address: EvmAddress::from_bytes(ACCOUNT),
+            amount_sompi: C3_DEPOSIT,
+            claim_tip_sompi: 0,
+        })],
+        "the node's own heartbeat carries the claim"
+    );
+    rig.take(b1, "b1-fence-claim").await;
+    let e2 = rig.attempt(2, Vec::new(), EvmTemplateData { transactions: raws.clone(), ..no_evm() });
+    assert_eq!(e2.evm_payload.transactions, raws, "the payload carries the buy and both sells");
+    rig.take(e2, "e2-orders").await;
+    let e3 = rig.attempt(3, Vec::new(), no_evm());
+    rig.take(e3, "e3").await;
+    let e4 = rig.attempt(4, Vec::new(), no_evm());
+    let settles: Vec<_> = e4
+        .evm_payload
+        .system_ops
+        .iter()
+        .filter_map(|op| match op {
+            EvmSystemOp::MarketSettle(s) => Some(*s),
+            _ => None,
+        })
+        .collect();
+    eprintln!("[c3] settlements carried by e4: {settles:?}");
+    assert_eq!(settles.len(), 2, "the two sells reach their settlement, carried by the next block; the refused buy queued none");
+    for (i, s) in settles.iter().enumerate() {
+        assert_eq!((s.seq, s.account, s.line_id), (i as u32, EvmAddress::from_bytes(ACCOUNT), line));
+        assert_eq!(s.action, PALW_EVM_ACTION_SELL, "settlement {i} is a sell");
+        assert_eq!(s.escrow_sompi, 0, "a sell escrows nothing");
+        assert_eq!(
+            s.outcome,
+            PalwEvmSettlementOutcomeV1::Refused { reason: refusal::EXCEEDS_POSITION },
+            "the market exists (no MARKET_MISSING); the account holds nothing to sell"
+        );
+    }
+    rig.take(e4, "e4-settle").await;
+    let e5 = rig.attempt(5, Vec::new(), no_evm());
+    rig.take(e5, "e5").await;
+
+    // The buy: refused at the call, its value never left the account.
+    let receipt = |raw: &[u8]| {
+        rig.api()
+            .get_evm_tx_receipt(kaspa_evm::tx::tx_hash(raw))
+            .expect("a receipt read")
+            .expect("the order was executed on the selected chain")
+            .receipt
+    };
+    assert!(!receipt(&raws[0]).succeeded, "the buy reverted at the call (ClassNotEligible: the class is not approved)");
+    assert!(receipt(&raws[1]).succeeded && receipt(&raws[2]).succeeded, "both sells queued (the fold refused them)");
+    let scale = EVM_NATIVE_SCALE as u128;
+    let balance = balance_of(&rig, ACCOUNT);
+    let spent = C3_DEPOSIT as u128 * scale - balance;
+    eprintln!("[c3] the account holds {balance} wei: {spent} wei of gas spent on three transactions");
+    assert!(
+        spent > 0 && spent <= 3 * GAS_LIMIT as u128 * MAX_FEE,
+        "the lock less gas only: the 50 MSK never left ({spent} wei spent)"
+    );
+    let holder = kaspa_consensus_core::evm::model_market::evm_holder_v1(EVM_CHAIN_ID, &EvmAddress::from_bytes(ACCOUNT));
+    let (_, state) = rig.chain.tip_state();
+    assert_eq!(state.model_position(&line, &holder), 0, "no position");
+    eprintln!("[c3] market {:?}", state.model_market(&line));
+
+    // The ledger, on every block.
+    let mut previous = genesis_supply.wei();
+    for s in &rig.log {
+        let want = previous as i128 + (s.minted as i128 - s.fees as i128) * scale as i128;
+        assert_eq!(
+            s.supply.wei() as i128,
+            want,
+            "block {} (daa {}): the combined ledger moved by {} wei, expected {} (minted {} - fees {})",
+            s.hash,
+            s.daa,
+            s.supply.wei() as i128 - previous as i128,
+            (s.minted as i128 - s.fees as i128) * scale as i128,
+            s.minted,
+            s.fees
+        );
+        previous = s.supply.wei();
+    }
+    assert!(rig.log.iter().any(|s| s.retired) && rig.log.iter().any(|s| !s.retired), "both sides of the fence");
+    let last = rig.log.last().expect("blocks");
+    assert!(last.snapshot.as_ref().expect("readable").is_some(), "a native snapshot from the fence on");
 }

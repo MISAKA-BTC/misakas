@@ -1,5 +1,12 @@
 # ADR-0028: PALW challenge sampling — a scheduler for re-execution, never a verdict
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
@@ -250,94 +257,16 @@ slashes — targeted verifier griefing has negative return, and a panel that is 
 loses fees and a bounded slash, not its base bond.
 
 **4d. The challenger economy is rivalrous by construction.** The refutation bounty stays
-capped at 10 % of slash (v0.1 §18.4) — deliberately not a living: the reliable challengers are
+capped at 49 % of collected slash under [ADR-0032's 2026-10-10 amendment](0032-palw-fee-bond-escrow.md#palw-challenger-share-amendment--2026-10-10),
+with `B_cap` retained in the credit-overlay flow: the reliable challengers are
 *competitors*. A rival miner who refutes removes competing credit AND collects the bounty, so
 `P_check` rests on rivalry, not altruism; §5's fee-bonded audit calls are the paid probing
 market for everyone else. (This is also why §2 tolerates a predictable panel: grinding a rival
 *off* the panel removes their fee, never their refutation right.)
 
-**4e. Admission is doubly capped, and both caps are registration-time checks:**
+**4e. 旧 overlay mint の rate cap・subsidy 比率 — 不採用。**
 
-```
-physical:   R_jobs · q ≤ Σ_v capacity_v(p99)
-    a chain may not credit jobs faster than its class can replay them; at 120 s blocks
-    and the 512-decode ceiling (p99 ≈ 10–20 min), every-block crediting with q = 2 needs
-    ≈ 20 standing replay slots — a 4-host fleet credits sparser, or registers more capacity
-
-economic:   P_check · S_eff ≥ λ · G_max        λ ≥ 2.0
-  P_check = P(≥1 honest full replay AND timely inclusion within W_challenge)
-            — measured from Stage-0/1 refutation drills, never assumed
-  S_eff   = slashable bond reachable by refutation      (max_leverage ≤ 1.0:
-            credit mintable within one unbonding period must not exceed S_eff —
-            under P3 deterrence is economic, so this inequality is load-bearing)
-  G_max   = credit mintable from the dishonest commitment
-```
-
-> **Amendment 2026-08-16 (B15 simulation) — this inequality FAILS at live parameters, and the
-> text above is ambiguous about why.** `G_max` admits two readings that differ by four orders
-> of magnitude:
->
-> * *per-commitment* ("credit mintable from **the** dishonest commitment") — `G_max` = one
->   block's `base(C)` = 4 445.62 BILI, needing `S_eff ≥ 8 891 BILI`: **satisfied**, 2.25× margin.
-> * *aggregate* — which is what the `max_leverage ≤ 1` line itself says ("credit mintable
->   **within one unbonding period** must not exceed `S_eff`"), and what a repeat offender
->   actually exploits: nothing stops cheating job after job against one bond. A miner
->   crediting every physically-allowed slot mints **116.5 M BILI** against a 20 000 BILI bond —
->   **violated by 11 655×** at `P_check = 1.0`, 58 000× at `P_check = 0.2`.
->
-> **The aggregate reading governs.** Two credible remedies, the same inequality solved for
-> different variables, chosen at registration and required **before Stage 2** (Stage 0/1
-> credit nothing and are unaffected):
->
-> 1. a per-validator credited-job cap of `S_eff / (λ · base)` ≈ **2.2 jobs per unbonding
->    period** (≈ 6.2 days per validator), enforced as a registration-time admission rule
->    alongside the physical cap; or
-> 2. **`base(C)` is a fraction of the block subsidy, not all of it** — crediting once every
->    10 blocks requires `base(C) ≤ 9.92 BILI`, i.e. 0.22 % of a subsidy.
->
-> Raising bonds to 233 M BILI is not credible, and shortening unbonding is bounded below by
-> `W_challenge` (≤ 14×). Numbers and their derivation:
-> `scripts/misaka-palw-economics-sim.py`.
->
-> **CORRECTED 2026-08-17.** Both remedies above price a job at `base(C)`, but a credited job
-> mints `base(C) + q · ρ_v · base(C)` — the executor's base plus one share per paid attester,
-> `3 × base(C)` at the live panel (`q = 2`, `ρ_v = 1 000‰`). The encoded check made the same
-> mistake, so it licensed 3× the mint it measured. **Remedy 1 does not exist at this panel:**
-> `jobs ≥ 1` at every interval and one full-subsidy job already pays 13 336.86 BILI against a
-> 20 000 BILI bond, so no rate cap can rescue full-subsidy credit (the ceiling for a single job
-> per unbonding period is `base(C) ≤ 749‰`). **Remedy 2 holds at (14 blocks, 0.1 %)**, not at
-> the printed (10 blocks, 0.2 %). The real lever set is
-> `(min_credit_interval_daa, base_subsidy_permille, q, ρ_v)`; shrinking `ρ_v` to 200‰ restores
-> 0.2 % at one job per 13 blocks. Corrected table and derivation:
-> `docs/palw-economic-parameters-2026-08-16.md` §3; boundaries pinned in
-> `consensus/core/src/palw_schedule.rs`.
-
-> **SUPERSEDED 2026-08-20 — the remedy set above priced an overlay mint that no longer exists.**
-> Both remedies choose a per-job credit price (`base(C)` as a rate cap, or as a fraction of the
-> block subsidy) because at the time this panel was written PALW credit was an *overlay* minted
-> beside a hash-produced block. [ADR-0038](0038-palw-is-the-consensus-work.md) inverted that
-> layering and [ADR-0039](0039-palw-only-block-production.md) removed the last hash path: on the
-> V2 lineage **the block is the unit of credit**, produced only by a bonded producer, and there is
-> no separate `base(C)` knob to set. What replaces each half:
->
-> * **The admission-side quantity** is [ADR-0045](0045-palw-class-economy-on-chain.md) Decision 2 —
->   a per-class epoch budget denominated in **blocks**, `⌊tol‰ · E · s_c / (1000 · denom_c)⌋`,
->   derived at the epoch boundary, frozen in rooted state, and charged to the producing block's own
->   class counter along its own selected chain. `min_credit_interval_daa` /
->   `base_subsidy_permille` are V1-lineage levers and are not the V2 lever set.
-> * **The leverage-side quantity** — the `max_leverage ≤ 1.0` inequality this panel measured
->   violated by 11 655× — is answered per **bond**, not per job, by
->   [ADR-0042](0042-palw-mainnet-candidate-ruleset.md) Decision 6 (P0-10):
->   `reserved_exposure(bond) ≤ slashable_collateral(bond) × max_exposure_ratio`, reserved at
->   commitment admission and released only on `Final` / `Voided` / `timeout`. A per-class block
->   budget bounds a *class*, never a bond, so ADR-0045 does **not** close this half and was never
->   claimed to; ADR-0042 is where the aggregate reading is bounded.
->
-> **Remedy 1 remains non-existent at this panel** for the reason recorded above (no rate cap
-> rescues full-subsidy credit), and **Remedy 2 is void rather than merely re-tuned** — its variable,
-> a subsidy fraction paid to an overlay job, has no referent on the V2 lineage. §4e is retained in
-> full as the measurement that forced the layer inversion; it is not a live parameter panel. Stages
-> 0/1 credit nothing and are unaffected either way.
+PALW が block production を担う構成に変わり、hash block に追加する独立した `base(C)` mint がなくなったため、旧 per-job cap と subsidy 比率の調整は継続しない。現在の class block budget は [ADR-0045](0045-palw-class-economy-on-chain.md)、bond の aggregate exposure は [ADR-0042](0042-palw-mainnet-candidate-ruleset.md) Decision 6 に従う。
 
 ### 5. The audit layer: opening calls as the DA heartbeat — answerable, not correct
 
@@ -473,7 +402,7 @@ Stage 3 Full         wider exposure; requires the second independent reference
   design (future work) inherits this as a hard constraint, not a preference.
 * **Registration grows the published numbers per class:** `p99_cold_replay` at the credited
   ceiling, the credited ceiling itself (window-derived, ≤ the format ceiling), `ρ_v`, and the
-  checkpoint interval's localization cost — plus the §4e caps. The §12 checklist gains:
+  checkpoint interval's localization cost — plus the class budget and bond-exposure limits referenced in §4e. The §12 checklist gains:
   `[ ] windows re-derived from measured p99`, `[ ] credited ceiling derived from windows and
   the pruning horizon`, `[ ] P_check measured in shadow`, `[ ] no-show/inclusion telemetry
   published`.
@@ -494,3 +423,12 @@ challenge samplingの検出率は、客観的convictionの成立とは別に報�
 * 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
 
 本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。
+
+## Bond予算・総影響保存の改定 — 2026-10-10
+
+[ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](../rfc/0015-panel-free-permissionless-verification.md)を適用する。
+
+確率的検出・全constraint coverage・exact courtに、bond/DAAによるclaim発行機会と総経済効果の上限を追加する。計算省略による発行速度優位で枠を増やさない。
+容量倍率の拡大をcheckerのsoundness改善と同一視せず、全claimのerror composition、監視不在、同一seedの相関と期限内の証拠包含・徴収率を再評価する。
+
+本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。

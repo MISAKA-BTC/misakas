@@ -528,6 +528,9 @@ impl VirtualStateProcessor {
                     ))
                     .objects
                     .first()
+                    // A-2 uniformity: a kind whose owning fence is not in force here is the live build's undecodable payload, and
+                    // undecodable bytes burn no rent there — so none here either, whatever a later kind's ceiling would say.
+                    .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, pov_daa_score))
                     // ADR-0152 v3.1 (the Phase 3 review): past `palw_offence_attribution` a whole-prompt
                     // `PromptNotAnchored` pays its prompt's carriage too; below it this is v1 exactly.
                     // ADR-0160 F-B: and below the batch fence a kind-3 whose receipt is `Windowed`
@@ -976,14 +979,17 @@ impl VirtualStateProcessor {
         let attempt_lane = kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::from_fence(
             self.palw_attempt_activation.map(|fence| fence.is_active(header.daa_score)),
         );
-        kaspa_pow::palw_admission::check_palw_block_admission_v1(
+        kaspa_pow::palw_admission::check_palw_block_admission_v2(
             header,
             selected_parent_bond_view,
-            |class_id| self.palw_class_facts_for_block(class_id, header),
+            // The retired V1 credit registration supplies no admission classes.
+            |_| None,
             // ADR-0009 Addendum A.3: the network_id discriminator IS the per-network genesis hash.
             self.genesis.hash.as_bytes().as_slice(),
             commitment_bound,
             attempt_lane,
+            // A-2 uniformity: a carriage form added after the live build, only where its fence is in force at this header.
+            self.palw_header_forms,
             // The curve only. Admission chooses the domain, so this cannot be handed the wrong one
             // — the repair shape audit P0-6 asks for, applied at the site P0-2 opened.
             |key, message, signature, context| {
@@ -1685,109 +1691,6 @@ impl VirtualStateProcessor {
             Some(tx) => Err(ComputeOverlayRetired(tx.id())),
             None => Ok(()),
         }
-    }
-
-    /// kaspa-pq Phase 10/11 (ADR-0016 §D.2): the bond-UTXO spend-gate. Rejects a
-    /// block that includes a transaction spending a **known** bond outpoint
-    /// (present in the block's selected-parent bond view) whose bond is **not
-    /// releasable** at the block's DAA score — releasable meaning the bond is
-    /// `Unbonding` and `daa_score >= unbond_request_daa_score +
-    /// unbonding_period_blocks`. A `Pending`/`Active` bond, an `Unbonding` bond
-    /// before its release height, or a `Slashed` bond therefore cannot have its
-    /// staked output-0 spent, which is what makes the declared `amount` real
-    /// locked capital (D.1 pins `value == amount` to that output at acceptance).
-    ///
-    /// Like the sibling overlay checks this reads the same selected-parent
-    /// [`ActiveBondView`], so it is per-block-deterministic and reorg-safe. Active
-    /// when the overlay is configured **and** `daa_score` has reached
-    /// `dns_activation_daa_score` (= 0 on every current network, so this
-    /// runs from genesis today).
-    /// ADR-0038 Decision D: this block's class target and per-inference cost.
-    ///
-    /// `class_target` is **folded, never read from a store**. The doc on
-    /// `palw_facts::block_pwu_v1` states the rule and the reason: a store row answers about this
-    /// node's virtual tip, and a target that depends on where the tip happens to point is not a
-    /// fact about the chain being weighed. So the anchor is the class's registered `boot_target`
-    /// and the fold runs over the retarget steps this BLOCK's own selected-parent chain carries.
-    ///
-    /// Those steps are collected from chain blocks that declare a class — which, until ADR-0038
-    /// Decision A's fence is installed, is no block at all, because `palw_commitment` must be empty
-    /// below the fence. The fold therefore returns `boot_target` today. That is not a placeholder
-    /// standing in for the real answer: before any class-attributed block exists, `boot_target`
-    /// **is** the target, by `fold_class_target_v1`'s own definition. The collection is written as a
-    /// walk rather than as an empty literal so it starts producing steps the moment blocks start
-    /// declaring classes, instead of needing to be found again.
-    pub(super) fn palw_class_facts_for_block(
-        &self,
-        class_id: &kaspa_hashes::Hash64,
-        header: &Header,
-    ) -> Option<kaspa_pow::palw_admission::PalwAdmissionClassFacts> {
-        let credit = self.palw_credit_params.as_ref()?;
-        // The block's class must be the registered one; a block naming any other class has no
-        // facts on this network, and `None` here is `ClassUnresolved`, not a permissive default.
-        if credit.registration.runtime_class_id != *class_id {
-            return None;
-        }
-        let daa = &credit.class_daa;
-        // Steps from this block's own chain. Empty while no header declares a class — see above.
-        let steps: Vec<kaspa_consensus_core::palw_class_daa::PalwRetargetStepV1> = Vec::new();
-        let _ = header; // the walk's anchor once headers declare classes
-        // `None` refuses rather than defaulting: a class absent from the domain set is not Active,
-        // and a class that is not in the difficulty domain has no expectation to retarget against.
-        let share = daa.single_class_domain(credit.registration.runtime_class_id).ok()?.share_permille(class_id)?;
-        let class_target = kaspa_consensus_core::palw_class_daa::fold_class_target_v1(
-            daa.boot_target,
-            &steps,
-            // ADR-0038 Decision D: the class's share, LOOKED UP in the difficulty domain set
-            // rather than assumed to be the whole cadence. Today the set holds one class and the
-            // lookup returns the full denominator, so this changes no number — what it changes is
-            // what happens when a second class becomes Active. Hardcoded, both classes would
-            // retarget against the whole cadence, each crediting itself the work the other did,
-            // and both targets would ease until the chain ran at twice its intended rate. The
-            // fold's expectation is a SHARE of realized production, and a share is a property of
-            // the class, so it is fetched by the class's own id.
-            share,
-            daa.retarget_interval_daa,
-            daa.max_factor,
-        )
-        .ok()?;
-        Some(kaspa_pow::palw_admission::PalwAdmissionClassFacts {
-            class_target,
-            pwu_per_inference: credit.registration.pwu_per_inference,
-            // **ADR-0069 Decision 7's predicate — and on THIS path it is a constant, said as one
-            // rather than dressed up as a lookup.**
-            //
-            // The first draft wrote `share > 0` here, which reads like a guard and is a
-            // tautology twice over. `share` comes from `single_class_domain(runtime_class_id)`,
-            // which BUILDS the map `{that_class: 1000‰}` from its own argument, and the class
-            // asked about was already required to equal `runtime_class_id` at the top of this
-            // function. Worse, `PalwDifficultyDomainSetV1::validate` refuses a zero share outright
-            // (`ZeroShare`), so `share_permille` returning `Some(0)` is unrepresentable for ANY
-            // domain set, not just this one — the expression could not be false on a real network
-            // or an invented one.
-            //
-            // Where the rule actually binds on a V1-credit network is the line above: a block
-            // naming any class other than the single fence-registered one yields `None`, which is
-            // `ClassUnresolved` — a REFUSAL, which is strictly stronger than weightless. There is
-            // no share-0 entrant to price at zero because a V1 fence carries exactly one
-            // registration and cannot represent a second class at all. Decision 7's live sites are
-            // the V2 state fold (`palw_claim_safe_contribution_v2` at the `Final` accumulation and
-            // at `assert_internal_consistency_v2`'s re-derivation); ADR-0069 says so now, where it
-            // used to claim three sites through one helper.
-            //
-            // The day this path gains a real multi-class domain — a chain-point-resolved share
-            // table, which it does not have and must not take from `load_tip` for the reason the
-            // `class_target` doc above gives — this constant is the line that has to change, and
-            // `single_class_domain`'s own doc ("would be a LIE on a multi-class network") is the
-            // other one.
-            // The impossible case REFUSES rather than panicking. An earlier draft wrote
-            // `debug_assert!(share > 0, ..)` here and handed back a constant `true`; this function
-            // runs inside block validation, so the day a real multi-class table makes the case
-            // reachable, an assert aborts every debug node at the same height, while `None` —
-            // which this function already means by "no facts here" — is a refusal the pipeline
-            // knows how to carry. See the helper's doc.
-            weight_bearing: kaspa_consensus_core::palw_facts::palw_v1_weight_bearing_or_refuse(share)?,
-        })
     }
 
     /// kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): the stake-unbond owner-

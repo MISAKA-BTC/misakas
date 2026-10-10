@@ -1,12 +1,19 @@
 # RFC-0013: Reproducible layouts and resource-bounded model onboarding tools
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
-* Status: Revised Draft, 2026-10-08. Existing tooling remediation plus proposed post-commit conformance records; **no runtime implementation, consensus activation or ceiling increase from this revision**. Earlier test results retain their original scope.
+* Status: Revised Draft, 2026-10-10. Existing tooling remediation and proposed post-commit conformance records plus §10 independent Torrent identity/availability/calculation evidence; **no runtime implementation, consensus activation or ceiling increase from this revision**. Earlier test results retain their original scope.
 * Source baseline: `808baa6b9adcb029e64fffe51fcd84027f82e7c0`; the working-tree fixes accompanying this RFC are not yet a released binary or a main deployment.
 * Validation record: [0013-onboarding-tool-validation.json](evidence/0013-onboarding-tool-validation.json). Real-run stage status is explicit; a test result does not certify registration or source fidelity.
-* Related: [RFC04](0004-palw-model-improvement.md), [RFC05](0005-palw-ml-vm.md), [RFC11](0011-permissionless-model-and-long-context-onboarding.md), [RFC02](0002-palw-tensor-ir.md), [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md).
+* Related: [RFC04](0004-palw-model-improvement.md), [Kernel design](../design/palw/versioned-kernels.md), [RFC11](0011-permissionless-model-and-long-context-onboarding.md), [RFC02](0002-palw-tensor-ir.md), [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md).
 
 ## 0. 日本語での結論と範囲
 
@@ -16,7 +23,7 @@ layoutによるcourtのサイズ超過、異なるDAAの審査、packの記録�
 **最終の512-context候補はlive preflightで受理可能と返ったが、登録transactionはまだ送信していない。**
 
 RFC11にあるclose-sizing・長context・資源認定の方針は維持する。
-RFC05のversioned Kernel拡張、RFC04の評価・昇格方針も変更しない。
+[versioned Kernel 設計](../design/palw/versioned-kernels.md)の拡張方針、RFC04の評価・昇格方針も変更しない。
 追加するのは、**同じartifact・layout・rulesetを各ツールで受け渡し、巨大artifactでも検査を省略せず、
 失敗した段階から再開できる具体的なtoolchain契約**である。
 これを実装しても全モデル・任意contextの無条件登録を保証しない。必要なKernelや資源・権限・証拠が
@@ -100,7 +107,7 @@ Other optional SKIPPED checks are reported separately, never called full source 
 | Court tile/MAC, root and terminal close bytes, sizing work | RFC11 §§1,4A,12–13: bounded sizing, legal layouts, compositional Kernel plans | Operational evidence and exact layout handoff; keep protocol caps unchanged. |
 | 9B recurrent calibration/context metadata and long calibration | RFC11 §§1–4,11–13 | Shared exact-statistics format and stage identity, not a new calibration safety waiver. |
 | 2M context cap, IR held rejection, inline canonical prompt cap and DA reach | RFC11 §§2,4B,12–13 | None to consensus. The Llama run did not test 2M; enough CPU does not remove these format gates. |
-| Missing operators/formats, model extension | RFC05 §§K.1–K.7 and RFC11 §16; frontend for existing semantics, reviewed Kernel update otherwise | Header-only diagnostics cannot misclassify a supported weight-backed conversion as missing semantics. |
+| Missing operators/formats, model extension | [Kernel design §§K.1–K.7](../design/palw/versioned-kernels.md) and RFC11 §16; frontend for existing semantics, reviewed Kernel update otherwise | Header-only diagnostics cannot misclassify a supported weight-backed conversion as missing semantics. |
 | Candidate/adapters, evaluation and promotion | RFC04, including unchanged class identity/composite bindings | Same exact pack contract for standalone classes; composite binding must name its parent before support is claimed. |
 | Small probabilistic normal checks; exact dispute court | RFC11 §15, RFC07 Part V, ADR0171/0172 | Unchanged. Offline executor conformance is not normal per-claim full replay. |
 | Pack exact layout, historical versus live gate, independent large-artifact checks | RFC02 runtime-pack requirements and RFC11 general parity/split-stage obligations, but no complete concrete contract for these failures | §§3–7 define it; these tool-only blockers cannot be solved merely by activating a probabilistic Kernel. |
@@ -336,8 +343,48 @@ verifier must rebuild the same challenge and follow a mismatch through exact cou
 state. Old manifests stay readable with explicit unsupported/missing-evidence labels; upgrading pack metadata
 cannot silently activate a new challenge policy or rehash a legacy class. All §9 implementation evidence is pending.
 
+## 10. Immutable identity and model-bond allocation evidence — 2026-10-10後続改定
+
+[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。chainはmodel取得可否・Seeder登録/独立性・配布量/速度を管理せず、
+旧必須Torrent、独立Bonded Seeder、PoR/Full Fetch/lease/TRDC/FPRと取得不履行に基づく資格/weight停止を撤回する。
+model配布は任意のTorrent/mirror/共有契約で行い、取得失敗・非公開だけでSlash/Final延長を起動しない。
+
+固定Model ID/root、weights/tokenizer/config/specは不変とし、変更は新Model IDとして登録する。
+取得bytesは認証と全量復元rootで照合し、claimも同じroot/specをbindする。
+任意のinfohash対応を登録する場合はimmutable bindingとし、必須取得経路にしない。
+claim固有state/trace/output/witnessの有限な証拠責任は維持するが、modelの全量/反復range公開へ転用しない。
+必要operandの認証と許可unit/累積scopeをADR177 D2で確定し、modelを得たfresh non-seat verifierの
+計算反証/localization/exact courtを試験する。全model保有者拒否時の取得保証は撤回する。
+
+重複しないminer拘束元本`S_m=sum_b C_{b,m}`からmodelのcoinbase予算を`f(S_m)`で配分する。
+同じ元本をclaim数/rho/複数modelで増幅せず、総発行予算と個別bondのQ/B/R/F cap・共通DAA拘束を維持する。
+資本預託だけでは支払わない。model別配分はblock頻度・DAA・fork choiceを自動変更しない。
+公開参加資本が閉鎖自己資本より圧倒的に有利になることは倍率式・経済評価の未立証目標であり、
+同額資本の所有者独立性をchainが識別できるとはしない。既存minerの実収入増も無条件保証しない。
+non-interference、distinct-capital、三層予算、公開/閉鎖比較、回復/移行のgateはADR177 §3を用いる。
+既存実装/測定・旧claim/activation記録は保持し、新配分・Panel=0は未実装/未有効化である。
+
+toolは配分snapshot、`C_b_effective_locked`/`C_{b,m}`/`S_m`、`f`/model予算、network/個別bond予約、
+identity照合と実検査/経済評価の条件を別記録する。取得結果はoff-chain観測であり報酬資格の証明ではない。
+以前の9B/2M/conformance/HF censusの測定scopeを変更せず、新gateのPASSへ流用しない。
+
 ## Mission alignment amendment — 2026-10-07
 
 historical/live gate分離、exact layout、独立streamed conformanceは維持する。registration/PASS/Finalのrelease reportに、その実際のprofileで外部public bondが証拠を公開取得しlocalizeしてconvictできるかを別項目で報告する。preloaded producer captureや既知fault indexを渡すfixtureは独立prosecutionの成功証拠にしない。toolのメモリ削減で裁定の最大bytes/workを隠さない。
 
 本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
+
+## Bond予算・総影響保存の改定 — 2026-10-10
+
+[ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](0015-panel-free-permissionless-verification.md)を適用する。
+
+onboarding/資源測定に、同額bond・同期間・同倍率の正直な計算対高速偽造と容量拡大時の総block/reward/Final credit保存を追加する。claim数の増加を検証供給・徴収可能資本の増加と数えない。
+receipt/rider/期間境界・丸め・reorg・担保再登録まで測定し、小fixtureやschema検査のPASSを実node/経済保証の完成に流用しない。
+
+本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
+
+## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定
+
+[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
+Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
+モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。

@@ -1,4 +1,11 @@
-# ADR-0037: PALW off the block-critical path — an asynchronous, budgeted job state machine over a permanent hash floor
+# ADR-0037: PALW asynchronous job state machine — hash-floor direction withdrawn
+
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
 
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
@@ -40,10 +47,8 @@ Three measured facts force this ADR:
 2. **PALW today is block-critical.** `required_algo_id` returns one mandatory id and
    `check_algo_id` rejects every other (`consensus/core/src/pow_layer0.rs`); there is no
    mixed-algo difficulty arithmetic; `calc_block_level_check_pow_layer0` panics on
-   `PalwUnavailable` (`consensus/pow/src/lib.rs`). A single inference-runtime fault is a
-   chain-liveness fault. ADR-0036 Decision 4 already ruled the mainnet identity MUST ship a
-   permanent hash floor; this ADR supplies the architecture that makes the floor natural rather
-   than grafted.
+   `PalwUnavailable` (`consensus/pow/src/lib.rs`). A single inference-runtime fault was a
+   chain-liveness fault. The proposed permanent hash floor was later withdrawn by ADR-0039.
 
 3. **PALW evidence is reconstructed, not stored.** `compute_palw_credit_outputs`
    (`consensus/src/pipeline/virtual_processor/processor.rs`) re-walks the selected-parent chain
@@ -56,37 +61,13 @@ Three measured facts force this ADR:
 What Ambient demonstrates and MISAKA adopts is *structural*, not cryptographic: one state object
 per job (escrow, fixed payees, deadlines, claim bitmap, selected verifiers), monotone status
 transitions, verification asynchronous to finality, bonded disputes with replacement panels.
-What MISAKA deliberately does **not** adopt: PALW as the sole block PoW, q-of-n committees as
-final truth, tolerance-based comparison as a slash basis, service/admin per-job overrides, and
-self-declared capacity in the safety argument.
+The exclusions that survive are q-of-n committees as final truth, tolerance-based comparison as
+a slash basis, service/admin per-job overrides, and self-declared capacity in the safety argument.
+The original exclusion of PALW block production was withdrawn by ADR-0038.
 
 ## Decision 1 — Three layers; PALW is never block-critical on a value-bearing network
 
-```
-Layer 1  Permanent hash-PoW BlockDAG      — validity, ordering, difficulty, liveness
-Layer 2  Async PALW job/credit machine    — inference, escrow, panels, rewards
-Layer 3  Deterministic dispute court      — bisection to one CPU-adjudicated primitive
-```
-
-Block validity on every value-bearing network is exactly:
-
-```
-valid_block = valid_header ∧ valid_hash_pow ∧ valid_transactions ∧ valid_state_transition
-```
-
-`PALW_runtime_available` and `PALW_full_inference_matches` are **not** conjuncts. Exclusive
-`algo_id = 4` PoW is retired from the value path: PALW commitments ride as ordinary transactions
-(ADR-0029 carriage) and/or a coinbase-extension receipt root. Under any PALW failure — worker
-crash, missing GGUF, missing accelerator, frozen class — the outcome is `PALW credit = 0`,
-block validity unchanged, hash chain continues. (Invariants I1, I2, I12.)
-
-**TN11/devnet exemption, now with an exit.** ADR-0036 Decision 4's choice — soak networks keep
-single-algo PALW because a loud halt beats a silent fork *while PALW is the object under
-observation* — stands, with this added criterion: the exemption is licensed only while the
-network is valueless and `palw_credit`-inert as a *PoW soak instrument*. The moment a network
-carries value, third-party bonds, or nonzero PALW emission, it must be (re)born on the Layer-1/2/3
-shape above. There is no upgrade path from single-algo to floored on a running identity — that is
-a re-genesis, which is what ADR-0036 Decision 2 already requires for mainnet.
+**Withdrawn / 不採用。** hash PoW を本体、PALW を任意の credit overlay にする案は、有用計算を consensus work にする目的と一致しないため。[ADR-0038](0038-palw-is-the-consensus-work.md) が置き換える。Decision 2 以降の job state・escrow・court 規則は後続 ADR の修正範囲を除き維持する。
 
 ## Decision 2 — Jobs are state, not history
 
@@ -336,13 +317,8 @@ I15 Total emission never exceeds the public schedule
 
 ## Implementation order and current status (2026-08-17)
 
-* **Track A — this ADR.** Done on signing: ADR-0028 mainnet mechanism superseded; PALW declared
-  non-block-critical for value networks; genesis PALW cap 0; per-job override prohibited; class
-  activation conditions written (Decision 9, M-stages).
-* **Track B — liveness (status against the audit):** `PalwWorkerFailed` bounded retry, B15
-  always-recompute GGUF gate, B8 libm digest — **landed/in-flight 2026-08-17** (ADR-0036
-  Consequences). Remaining: the hash floor itself and runtime-absent block-validation tests —
-  these land **with the value identity's genesis** (Decision 1), not as a retrofit on soak nets.
+* **Withdrawn tracks:** PALW を任意 overlay にする Track A と hash floor の導入は、有用計算が consensus work を担う目的に合わないため継続しない（ADR-0038/0039）。worker failure の hardening は別の有効な変更として維持する。
+
 * **Track C — state machine + mint: one change set.** `PalwJobStateV3`, consumer-entry signature
   checks, exact-outpoint payees, `job_id` dedup, future-anchor panels, `job_context_hash`
   binding, on-chain rate state, block/epoch budgets, `PalwCreditBatch`, bonded dispute state,
@@ -357,22 +333,11 @@ I15 Total emission never exceeds the public schedule
 
 Mainnet parameters (ADR-0036's "does not decide" stands, now including the four decoupled
 timing parameters); concrete n/q, bonds, leverage limits, budgets (soak/simulation outputs);
-whether/when TN11 or devnet is re-cut onto the three-layer shape (a soak-planning call, licensed
-any time by Decision 1's exit rule); M3.
+M3. The former hash-floor migration is withdrawn by ADR-0038/0039.
 
 ## Summary
 
-```
-Ambient's escrow + state machine + async validation + bonded dispute
-+ MISAKA's permanent hash floor + exact-bit arithmetic + SoftFloat reference
-  + primitive adjudication + Unadjudicable safety
-= a hash-secured BlockDAG with asynchronously verified useful AI work
-```
-
-The near-term engineering decision is therefore **not** to improve algo-4 but to take it off the
-block-critical path and move PALW into the budgeted asynchronous machine above. Polishing the
-arithmetic first would perfect a precision instrument and then detonate it with a HashMap and an
-unbounded coinbase append.
+job state・escrow・budget・objective court は後続 ADR の修正に従って維持する。hash floor 上の任意 PALW overlay に移す旧方針は継続しない。
 
 ## Mission alignment amendment — 2026-10-07
 

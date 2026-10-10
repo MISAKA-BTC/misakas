@@ -2,7 +2,20 @@
 
 > **設計前提(ADR・RFC より上位)— [MISAKAの不可侵原則](../PRINCIPLES.md):** 確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。この索引のすべての文書はこの前提の下にあり、衝突する場合は前提が優先する(2026-10-09)。
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
+## 撤回済み文書の読み方
+
+不採用の実装案は理由と後継文書への参照だけを残す。採用中の決定が同居する文書は撤回部分だけを短縮し、旧仕様・手順・見積もりは Git 履歴を参照する。
+
+ADR 以外に残っていた [三つの EVM lane](../misaka-base-3lane-execution-design-v0.1.md)、[Token Program](../misaka-compute-token-program-design-v0.1.md)、[audit-fee](../misaka-audit-emission-v0.2-design.md)、[float worker](../misaka-palw-vps-canonical-worker-design-v0.1-ja.md)、[旧 PALW PoW](../misaka-palw-pow-detailed-design-v0.1-ja.md)、[専用 OTA](../misaka-palw-ota-secure-update-design-v0.1-ja.md) も同じ方針で整理した。
 
 ## Governing purpose — 2026-10-07
 
@@ -10,14 +23,44 @@
 
 | Decision | Authority and scope |
 | --- | --- |
+| [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md) | Accepted direction, 2026-10-10後続改定: abolish MISAKA Torrent/dedicated Seeder rewards; model acquisition outside consensus; distinct miner-capital coinbase allocation; conditional G14; economic superiority/allocation implementation and activation pending. |
+| [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md) | Accepted design premise, 2026-10-10: probabilistic verification plus bond/time-limited claim capacity, block/reward/Final-weight budgets, common reuse clock and retained liability. Capacity multiplication preserves total economic/consensus credit. Implementation/activation pending. |
+| [ADR-0175](0175-registered-models-are-permanently-immutable.md) | Permanent identity/new independent registrations and no Position/AMM retarget. Earlier availability amendment withdrawn under ADR177; immutable implementation/fence keeps its historical unarmed scope. |
 | [ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md) | Accepted token identity: display name Misaka, ticker BILI; address prefixes, chain IDs and compatibility identifiers remain unchanged; historical evidence retains its recorded label. |
-| [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) | Accepted design mandate. Future prosecution/admission/settlement directions that conflict are amended; historical implementation and activation records stay historical. |
+| [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) | D9–D11 superseded/revised under ADR177: fixed identity, acquisition non-interference, model allocation and conditional prosecution. D12/ADR176 individual bond/time budgets retained. Prior runtime/evidence stay historical. |
 | [RFC-0014](../rfc/0014-panel-independent-fraud-prosecution.md) | Main implementation design and full completion gates; not a claim that these gates already pass. |
-| [RFC-0015](../rfc/0015-panel-free-permissionless-verification.md) | Panel=0 remains deferred until all RFC14 gates and its own verification/economics/migration gates pass; explicit activation still required. |
+| [RFC-0015](../rfc/0015-panel-free-permissionless-verification.md) | §8 specifies the ADR176 design direction for common claim/block/reward/Final-weight budgets and capacity scaling; Panel=0 remains deferred until all RFC14 gates and its own verification/economics/migration gates pass. Specification text does not activate it. |
 
 [全RFC/ADRの確認記録](evidence/0173-mission-alignment-audit-2026-10-07.md)に各文書の版・改定・整合性判断を記載する。以下の旧indexの「today」「still governing」「what to build next」は各節に書かれた過去の日付の記録であり、2026-10-07のruntime auditまたは本目標の完成宣言ではない。将来の実装順序はRFC14の未完了gateを優先し、ADR144の有用なローカル推論、ADR171の確率的検査とexact court、ADR172のKernel-only拡張を維持する。
 
 この文書群は公開mainの未配置文書を取り込み、workspaceにあった文書は保持したreview snapshotである。runtimeのHEADやコードは更新しない。ADR0152/0160等、参照されてもsourceに実体のない文書は推測で作らない。
+
+**2026-10-10 bond予算の追加前提:** ADR176とRFC15 §8.3–8.4を全将来PALW経済に適用する。
+既存163 ADR・17 RFCと主要入口/設計21文書の参照・改定範囲は[整合記録](evidence/0176-bond-budget-policy-alignment-2026-10-10.md)と[JSON一覧](evidence/0176-bond-budget-policy-alignment-2026-10-10.json)に保存した。新経済規則は未実装・未有効化である。
+
+## モデル入手への不介入・model-bond配分 — 2026-10-10後続改定
+
+本review文書群ではADR-0177を使用済みとし、次の新規番号はADR-0178とする。以下の旧番号予約表は各時点の履歴である。
+
+[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を現行設計方針とする。
+**MISAKA Torrentの採用/統合、専用Bonded Seeder、Seeder報酬・固定15%配分を廃止する。**
+旧PoR/全量取得監査/lease/TRDC/FPR、全量公開費用、取得不履行に基づく資格/weight停止も撤回する。
+chainはモデル取得を管理・保証せず、公開拒否だけでは報酬失効やSlashを起動しない。
+
+固定Model ID/root/weights/spec、claim固有の有限証拠/courtと計算反証を維持する。
+全保有者拒否時の取得保証を外し、G14は正しいmodelを得たverifierの条件付き検証能力へ改定する。
+model別の重複しないminer拘束元本`S_m`から、既存coinbase予算を`f(S_m)`で配分する。
+資本だけでは報酬を払わず、ADR176の各bond Q/B/R/F cap・共通DAA時計と三層予算を同時に維持する。
+
+公開参加で追加資本を集めた方が閉鎖自己資本より圧倒的に有利になることを目標にするが、
+同額`S_m`では所有者によらず配分は同じである。倍率式・自己増資/Sybil・集中/競合・既存minerのcap、
+閉鎖時の検出率を敵対的経済評価で立証する。現時点で経済優位・新配分・Panel=0は未完了/未有効化である。
+
+RFC06/08/09/10/11/12/13/14/15、ADR62/67/166/両173/175/176、主要設計・索引へ反映する。
+[今回の文書検証](evidence/0177-model-distribution-policy-alignment-2026-10-10.md)と
+[JSON一覧/撤回記録](evidence/0177-model-distribution-policy-alignment-2026-10-10.json)を参照する。
+旧[Seeder](../rfc/evidence/0014-independent-bonded-seeders-audit-2026-10-10.md)・
+[FPR](../rfc/evidence/0014-forced-public-retrieval-alignment-2026-10-10.md)のPASSは撤回前の文書整合記録として保持する。
 
 > **Looking for how MISAKA works today?** Start with the
 > [architecture overview](../architecture/overview.md): it maps each part of the protocol to the
@@ -37,16 +80,10 @@ non-ancestral lineage (0039–0048), two same-day ADRs claiming one number (0035
 Reading by number alone gives you the wrong decision. The "Number hygiene" table below is the
 authoritative map.
 
-Last reconciled: **2026-09-02**, against `main` at the Relaunch 5e stack (ADR-0075 + ADR-0076),
-including ADR-0077–0079, whose texts landed here in the same pass. Every ADR whose Status line no longer describes the shipped
-state carries a blockquote banner dated 2026-09-02 under its header, pointing back here, and every
-unimplemented decision that was weak against an adversary carries a dated **Security amendment**
-section at its end (the "Security amendments" section below is the list). ADR bodies are otherwise
-never rewritten: a reversed decision stays in the file, labelled, so the reasoning that reached it
-can be found again. **0144-alignment pass: 2026-09-21** — unimplemented ADRs before
-[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) that contradicted its
-constitution were amended the same way (dated banner + end section, bodies not rewritten). The
-implementation order is in "What to build next" below.
+Last reconciled: **2026-09-02** for the historical rollout tables; **2026-10-10** for withdrawn-design summaries.
+
+不採用・撤回済みの設計は、理由と後継文書へのリンクだけを残す。旧仕様・実装手順・見積もりは Git 履歴で参照する。部分撤回の ADR は採用中の規則を残し、撤回箇所だけ短くする。
+DNS validator の新規実装・再構築は行わない。既存ネットワークの規則・bond・報酬債務は [RFC-0012](../rfc/0012-palw-only-consensus-and-native-evm-settlement.md) の移行成立まで有効であり、この文書整理は廃止の activation を意味しない。
 
 > [!IMPORTANT]
 > **Current testnet-11 activation map (reconciled 2026-09-20).** `Params` is the executable
@@ -155,10 +192,10 @@ What that chain means today, in the sentences people most often get wrong:
 | 0026 / 0027 / 0028 | not reversed — **promoted**: the court, fraud proofs and sampling stop being credit machinery and become L1 machinery. 0026's thesis was walked back for one family by 0051 and **restored in full** by 0053 | [0038](0038-palw-is-the-consensus-work.md), [0053](0053-palw-one-execution-family.md) |
 | 0028 §4e — the credit-price remedy set (Remedy 1 rate cap, Remedy 2 subsidy fraction) | Remedy 1 was already recorded as non-existent at this panel; Remedy 2's variable — a subsidy fraction paid to an overlay job — has no referent once the block *is* the unit of credit. The admission quantity moves to a block-denominated per-class epoch budget; the `max_leverage` half moves to a per-**bond** exposure reserve | [0045](0045-palw-class-economy-on-chain.md) D2 (admission), [0042](0042-palw-mainnet-candidate-ruleset.md) D6 / P0-10 (leverage) |
 | 0029 — V1 chain carriage | the Stage-1 shape is reused; the V2 object set replaces it | [0046](0046-palw-v2-consensus-object-carriage.md) |
-| 0032 / 0033 — fee-bond escrow, the credit gate | not reversed, **dormant**: the credit-overlay lineage's value flows. On the V2 lineage the block is the unit of credit; escrow, void and slash are ADR-0042 D6/D10 and the carriage's fee-as-rent (0046, 0075 D1) | — |
+| 0032 / 0033 — fee-bond escrow, the credit gate | not reversed, **dormant**: the credit-overlay lineage's value flows. **2026-10-10: [0032 amendment](0032-palw-fee-bond-escrow.md#palw-challenger-share-amendment--2026-10-10) raises the PALW challenger share to 49%; the legacy `B_cap` stays fixed, and R-core retains its collected-minus-extracted basis (4,900 bps).** On the V2 lineage the block is the unit of credit; escrow, void and slash are ADR-0042 D6/D10 and the carriage's fee-as-rent (0046, 0075 D1) | — |
 | 0035 D1 — "testnet-11 is the *current chain*, continued; no re-genesis at announce" | held for Relaunch 1. The RC rule re-genesises a public RC on any rule change, and testnet-11 has been re-minted as Relaunch 2–5e; the algo-4 `LegacyTn11` lane is not running anywhere. D2 (class admission pinned in code) stands | [0042](0042-palw-mainnet-candidate-ruleset.md) §"The two-network split" |
 | 0036 D2 — backup-lineage ADR-0041's mechanism (`palw_spam` / `palw_algo4_accept` / `palw_compute_work_scale` / qwen-8.0 `mint.rs`) | **not adopted**, not ported. Two of that ADR's *conclusions* are adopted (new network identity; land→accept→mint) | — (0036 is itself the superseding record) |
-| 0036 D4 — "mainnet MUST ship the permanent hash floor" | reversed: a lane that can always produce blocks is a permanent incentive to mine the lane instead of the work. The testnet half of D4 (no floor on TN11/devnet; a loud halt beats a silent fork) survives verbatim — and is then *refined* by 0060: a bounded, near-weightless, fee-only clock lane is not a production floor | [0039](0039-palw-only-block-production.md) D1/D2 (W6′); [0060](0060-the-liveness-doctrine.md) / [0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md) |
+| 0036 D4 — "mainnet MUST ship the permanent hash floor" | reversed: a lane that can always produce blocks is a permanent incentive to mine the lane instead of the work. The testnet half of D4 (no floor on TN11/devnet; a loud halt beats a silent fork) survives — and is then *refined* by 0060: a bounded, near-weightless, fee-only clock lane is not a production floor | [0039](0039-palw-only-block-production.md) D1/D2 (W6′); [0060](0060-the-liveness-doctrine.md) / [0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md) |
 | 0037 D1 — PALW off the block-critical path (async model) | reversed the same day by the layer inversion. D2–D9 (the state machine and mint hygiene) are **carried**, re-seated under the new layer assignment | [0038](0038-palw-is-the-consensus-work.md) |
 | 0038 W4, W6 | the last two hash paths to consensus participation: the anti-stall floor as a block-production path, and `spam_hash_work` as a fork-choice term | [0039](0039-palw-only-block-production.md) W4′, W6′ |
 | 0038 "pure-PALW production" as *no hash lane at all* | amended: a clock lane re-enters, bounded and near-weightless, as the chain's clock and nothing else | [0060](0060-the-liveness-doctrine.md) (doctrine), [0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md) (form), [0068](0068-the-llm-primary-economy-and-the-floors-minimum.md) (armed) |
@@ -323,8 +360,7 @@ survives only as the unrouted `TESTNET11_PARAMS` constant.
   Separately, nothing paid a panel seat (R-7) until [ADR-0124](0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md)
   (2026-09-17): past `Params::palw_panel_economy` a credited seat is paid a fixed share of the
   claim's reward; the fence is dormant on every shipped preset and stated on a mainnet card.
-* **ADR-0066 D4** — the committed liveness table (the pruned-IBD snapshot component) and the leak
-  fence's arming; **ADR-0065 D1** — seat maturity is armable and unarmed; seat accountability past
+* **ADR-0066 D4** — committed validator liveness table not pursued (validator lineage retirement); **ADR-0065 D1** — seat maturity is armable and unarmed; seat accountability past
   the D4 fence is zero until receipts ride the chain independently.
 * **ADR-0064** — trustless recovery from a total stop is answered by the armed clock, not by this
   ADR's mechanism, which stays dormant; the four pipeline fixtures it names were never written.
@@ -401,7 +437,7 @@ It is not this list.
 
 ### Orthogonal / later ops (not 0144 work)
 
-0015 HSM / PKCS#11 / HA; 0064 named pipeline fixtures; 0066 D4 committed liveness table; 0071 §5
+0015 HSM / PKCS#11 / HA and 0066 D4 committed liveness table are no longer planned; 0064 named pipeline fixtures; 0071 §5
 false-capability cost; 0072 §3 mainnet algo + DAA fence handshake; 0093 D8 live drill; 0099 D4
 beyond 8 shards; 0102 D5 catalog row; 0106 W8–W10.
 
@@ -440,21 +476,20 @@ amendment is rewritten. Four principles recur, and are the ones to check first i
 | [0078](0078-what-was-made-from-it-is-committed-the-thing-never-rides.md) — kinds (PROPOSED) | SA-1…SA-6: model-written code runs on an ephemeral EVM state under a gas ceiling in a confined process; every transformer declares input/output bounds; uploaded inputs and the DSL DA election are bounded and authenticated; no manifest, no object; task graphs are never executed |
 | [0079](0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md) — the security ADR (PROPOSED) | SA-1…SA-8: the memory ceiling is not `RLIMIT_AS` (the hybrid maps 33 GiB); the signer trusts the supervisor's channel, not the gateway's bytes; the DA server authenticates; `PATH` leaves the allowlist; Decision 7 = ADR-0077 D6; nothing logs a prompt; per-source rate is not the bound |
 
-Not amended, by decision: [0023](0023-base-three-lane-execution.md) (forward-looking, nothing
-started, outside the PALW lineage — a security pass belongs to the ADR that revives it); 0049 D-G,
+Not amended, by decision: [0023](0023-base-three-lane-execution.md) (withdrawn; outside the PALW reward scope); 0049 D-G,
 and 0070's open items are correctness gaps in the court's coverage rather than adversarial
 surfaces, and are listed under "What the current direction still owes".
 
 ## Still governing, unreversed
 
-0001, 0003–0008, 0010, 0011, 0013–0016, 0019, 0020, 0022–0025, 0030, 0031, 0034, 0035 (D2), 0038
+0001, 0003–0008, 0019, 0020, 0022, 0025, 0030, 0031, 0034, 0035 (D2), 0038
 (as amended by 0039 and 0060), 0039 (D1–D4, D6), 0040 (+ 0047), 0041, 0042, 0043, 0044 (as
 amended), 0045 (as amended), 0046, 0047, 0049 (as amended), 0050, 0052 (as amended), 0053, 0054,
 0055, 0056 (D4 withdrawn), 0057, 0058, 0059, 0060 (the doctrine; D1/D2/D4 in 0066's form), 0061,
 0064 (Facts A and B), 0065 (D1, D2a, D4–D6), 0066 (D1, D2, D4's fence), 0067, 0068, 0069 (as
 amended by 0075), 0070, 0071 (D1a, D2's bucket, D3), 0072, 0073 (①, ② and ③ in force; ④ open), 0074,
-0075, 0076. Proposed and unlanded: 0062, 0063. Dormant, not on the V2 path: 0032, 0033. Forward-looking
-and not started: 0023 (Base three-lane execution; the EVM lane it builds on is 0020, activated).
+0075, 0076. Proposed and unlanded: 0062, 0063. Dormant, not on the V2 path: 0032. Removed V1 gate: 0033. Forward-looking
+and not started designs are reviewed against the current mandate; 0023 is withdrawn. DNS ADR0009–0018/0024 and 0126/0128 are historical rules only, pending RFC12 retirement.
 
 ADR-0007 (layered PoW) is unreversed and worth stating explicitly, because it is easy to read as
 the hash-lane ADR: PALW is a Layer-1 `algo_id` variant, which is the extension point 0007 already
@@ -517,9 +552,9 @@ Legacy validation and native EVM remain scoped separately.
 | [0122](0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md) | PROPOSED 2026-09-12 on `feat/adr-0122-operator-ux`, at the operator's request — **consensus-inert** (the CLI, three additive RPC reads and additive log lines; no object, rule, fence or fingerprint moves). Mining is a purpose, not a set of components: `misaka mining setup|start|stop|status`, `misaka doctor`, `misaka work`, `misaka rewards`, and the same pattern for `verifier` (the PALW panel seat, which is not paid), `validator`, `model` and `position`. One work id from the request to the reward (the claim id; the outbox job before a prompt-lane claim exists) and one state machine across both lanes, where only `final` counts as mined and the reward is a separate track; the miner's own state says in one line why it is not drawing. Every refusal prints Reason / Current / Required / Fix / Docs with an `E-…` code and an exit range 30–37; `stop` refuses while claims are still to defend and offers a drain; the readiness gates and the 240 s stop grace are the fleet's roll procedure made a program. `~/.misaka/mining.toml` is its own file because `config.toml` is parsed with `deny_unknown_fields`; the dashboard is 127.0.0.1:8791 because 8790 is the gateway's. New RPC reads `getPalwNodeStatus`, `getPalwClaims`, `getPalwClasses`; `[…] event` lines beside the unchanged prose. Phased in the operator's order ①–⑧ (§13). |
 | [0124](0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md) | PROPOSED and IMPLEMENTED 2026-09-17 on `feat/adr-0124-panel-reward-and-compute-weight`, at the operator's request — **dormant** behind `Params::palw_panel_economy` and `Params::palw_work_priced_reward` (`None` on every preset — no fingerprint moves; a mainnet card states both from genesis). Past the first: a `Final` claim's reward is split 80/20, every seat whose `Valid` receipt the chain credited inside the receipt window is paid one fixed share of the pool (`pool / drawn seats`; the unpaid shares and the dust go to `panel_reserve_sompi`, never to the producer), a seat may carry its own receipt after the licence until the deadline (the supplementary door, so credit is a chain fact and not the assembler's choice), a drawn seat reserves `3 × claim.reserved` for the claim's life and loses exactly that for contradicting its quorum, a bond is drawn only while it holds ten producer floors and its free collateral covers the reservation, and every eligible bond draws one ticket (C-02's weighting retired). Past the second: a model class's claim is paid the fraction of its escrow that its class's `pwu_per_inference` is of the heaviest weight-bearing model class's, the rest never minted; the floor is not priced. No new issuance; no state version moves (the duty rows and the reserve enter the root only once written). **testnet-11 schedules both at DAA 6,001** (the operator's flag day, §8). |
 | [0125](0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md) | IMPLEMENTED 2026-09-17, dormant, on `feat/palw-exec-lane-and-validator-retirement` (the operator's request: 1 BPS on testnet, 10 BPS the target). The fast lane is round blocks beside the 120-second chain, not a cadence change: algo 10, a constant `2⁻¹⁶` target, never a selected parent, always red, outside the DAA set, zero subsidy — so the chain's GHOSTDAG, windows and depths are those of the DAG without the lane (the anchor rule, Decision 2). One-second rounds; a span's permits come from the attempts finalized in the span before (seed from their claim ids and execution roots — no beacon; each `Final` credits the compute it certified, its exposure pwu capped at ADR-0124's unit), quotas capped at 45 % a security domain in integers, two parity groups so no domain holds consecutive rounds, `⌈width/3⌉` a domain and one permit an operator a round — so the width is a ceiling the domains fill (10 needs six domains, SA-4), and the status reports what the schedule carries. The permit rides signed in the header (`PXR1`, nonce included); the merging block grants it from its parent state (schedule, `Active` bond with the signing key, coinbase naming the bond's payout, unused in the `(span, round)` ledger), accepts only permitted round blocks' transactions and pays their fees to their payouts after the red lump. The width is a stage table (1 BPS first, widenings to 10 each behind a fenced height; a span keeps the width it opens with). A permit signed twice is not relayed and is evidence (`RoundPermitEquivocated`, tag 46) that burns the permit and slashes the collateral floor once. `getPalwRoundLane` (op 181), `misaka palw round-lane`, `misaka mining status`'s lane line; `kaspad --palw-round-lane` produces it; `--palw-execution-lane-devnet` and `scripts/misaka-palw-round-lane-devnet-drill.sh` drill it. **testnet-11 schedules it at DAA 6,001 at one permit a round** (spans of 5 DAA since ADR-0130, no widening yet); `None` on every other preset (§7). **2026-10-07 semantic amendment implemented on `pre`:** shared header-derived `ClassifiedMergesetV1` separates Round from genuine RED for PALW consumers; raw always-red GHOSTDAG, score/work/DAA, rewards and merge-depth rules remain unchanged. Additive JSON/gRPC `palwMergeView`; Explorer E / ROUND separates verdict from colour. No adoption of ADR-0168. |
-| [0126](0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md) | REVISED and IMPLEMENTED 2026-09-17 on `feat/palw-exec-lane-and-validator-retirement`, **testnet-11 at DAA 6,001** (the operator: PALW must not involve validators; the DNS stake reorg gate stays by design; the validator share falls from 30 % to 20 %). The first version retired the whole overlay at a height and was deleted before any network armed it. Past `palw_overlay_carve` the full split's validator share is the fence's and the PALW escrow the fence's worker carve (testnet-11 at DAA 6,001: 20 % and 72 %; testnet-12 and, since 2026-09-25, a mainnet card from genesis — §6a) — the split at the paying block's DAA, the escrow at the lower of the attempt block's and the paying block's, so construction equals validation and the escrow fits its base in any DAG; the tenth is paid at `Final` through ADR-0124's split. Refused beside a non-zero escrow-backing gate, which does not read the fence. §4 lists what was deleted the same day (PALW V1's validator paths, mandatory inclusion, the legacy bond gate, the token overlay, VLT voting weight, the window-bound leak, the VLT compute worker) and what came back (the validator's attestation operations). |
+| [0126](0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md) | 将来設計では不採用。validator 割当と stake veto は RFC12 で廃止する。移行前の旧規則・債務は有効。 |
 | [0127](0127-palw-settles-on-its-own-and-its-terms-are-not-dns-terms.md) | ACCEPTED and IMPLEMENTED 2026-09-17; no consensus change and no fence (the operator: PALW does not depend on DNS finality or BFT validators — say so, keep the PALW terms apart from the DNS ones, and guard the settlement path in CI). A chain block carrying an attempt is a PALW Settlement Anchor, settled when its claim is `Final` (the safe frontier fork choice orders by); PALW Settlement Finality and PALW Future Anchor (the panel draw's seed block) are named apart from DNS finality, DNS anchors and beacons; a consensus-core test fails if the V2 settlement modules name DNS, VLT, validators or beacons outside comments. The DNS stake reorg gate (ADR-0128) is a veto layered on PALW, not a dependency. §4 names what is not yet separated (the V1 lineage modules, two shared helpers under overlay names, the coinbase's output-cap constants the guard pins by count). The settlement read is `getPalwSettlement` (op 182); op 183 `getPrecommitDuty` and op 184 `getPalwClassContexts` (a class's `n_ctx` and its canonical job's footprint) landed beside it. |
-| [0128](0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md) | ACCEPTED and IMPLEMENTED 2026-09-17 (the operator: validator voting power is the bond, the vote is BFT and decides the stake reorg gate, the inactivity leak must read the history it needs and be armable, and VLT weighting is not used). Two rounds over the epoch's canonical anchor — attestation, then a lock-consistent precommit bound to the counted set's commitment — each above two thirds of the bonded stake active at the anchor less the stake silent for `t_leak_daa`; the leak's evidence is the attestations accepted at or below the anchor inside a window every synced node holds (start refuses a pruning depth below it), and it never drops the set below four validators. Past `dns_bft_gate` the confirmed anchor is the newest DNS-final one and the gate refuses any sink that abandons it — before the PALW comparator, reorg or extension — until it is stale. A veto only: it selects no tip and makes nothing PALW-final. testnet-11 at DAA 6,001 with a seven-day leak (5,040 DAA). The in-node validator and the `kaspa-pq-validator` sidecar precommit from `getPrecommitDuty` under a precommit log; the walk reads each chain block's votes once (a memo bounded by the walk). §8 records the choices the decisions left open and what is named rather than closed. |
+| [0128](0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md) | 将来設計では不採用。DNS BFT による PALW chain selection の veto を RFC12 で除く。移行前の旧規則は有効。 |
 | [0129](0129-a-double-spend-needs-the-anchors-not-the-blocks.md) | ACCEPTED and IMPLEMENTED 2026-09-17; no rule and no fence of its own (the operator's double-spend design, 'ADR129 として記述して実装して', with the lane at one block a second on testnet-11 from DAA 6,001). Execution blocks carry no finality (pinned on the fork-choice inputs); confirmations count settled PALW anchors — `getPalwSettlement` (op 182), `misaka palw settlement --min-depth`, the wallet's per-output depth — so a thousand fast blocks are depth 0; the panel quorum already signs each anchor's state (receipt → claim id → challenge → pre-PoW hash → merkle roots and UTXO commitment, pinned); a settled conflicting branch takes both the compute for its anchors and three of five drawn seats per claim on it (receipts for honest inferences on a private branch are not slashable — the draw and the seat floor price that capital); conflicting spends are ordered by the DAG (pinned); permit double-signs are slashed, receipts cannot license another block; domain and operator caps are auxiliary; large payments wait for more anchors. |
 | [0130](0130-bps1-is-hardened-before-it-is-widened.md) | ACCEPTED 2026-09-17; Decisions 2–6 IMPLEMENTED the same day on `feat/palw-exec-lane-and-validator-retirement` (M1 `fc4325d9`, M2 `da837d62`; fingerprint `ab4e7b9c…`), Decision 1 built dormant, Decisions 7–8 not built, the devnet drill not re-run (§7). The operator: BPS stays 1; harden economics, selection and settlement before widening. A seat reserves `max(3 × claim.reserved, λ × max_seat_reward)` behind `palw_panel_exposure_floor` — dormant: on testnet-11 a seat earns ~128 MSK against ~0.40 MSK at risk, but ~500 concurrent seats a genesis bond make λ = 2 need ~256,000 MSK a bond (§3), so arming is the operator's; the panel draw gives one entry per operator (6,001); an operator takes one parity so it never holds consecutive rounds, a parity without an eligible operator is a missed round (6,001); a span's schedule is the snapshot taken a span earlier seeded by the last attempt block mined after it (credits spendable two spans later; no anchor, no schedule); testnet-11's span is 5 DAA; the width stays 1. Deferred by name: the derived panel share, DA reward, tighter domain caps, widths 2–10, a rolling schedule, the contradictory-verdict slash. |
 | [0131](0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md) | PROPOSED 2026-09-17; Decisions 1–2 IMPLEMENTED in shadow the same day (`EconomicComputeV1`, the class census, op 185 `getPalwClassEconomics`, `misaka palw economics`; measured: the hybrid is paid 86.4 % more per MAC-equivalent it ran than the dense tier on the leaf basis, 0 % on the compute bases) (the operator: remove cross-model distortion; PWU stays fork-choice work, CCU becomes the economic price). testnet-11 prices claims by a static leaf count against the heaviest weight-bearing class (Qwen3.8-27B at 1 ‰ is the unit: Qwen2.5 graph-v5@512 73.7 %, Qwen3.6 29.8 %), without the expected-attempts factor its class target implies, and leaves are not compute (jobs differ nine-fold in tokens; kernels differ in cost). Decisions: per-class economics over RPC (`F_m`, `G_m`, `Gap`, leaf and compute bases side by side); `EconomicComputeV1`, kernel-weighted, deterministic, time only for calibration; a later fenced basis of expected attempts × draw compute + job compute; panel verification compute measured separately; a rate rather than a heaviest-class unit; a shadow period before a new model is priced. |

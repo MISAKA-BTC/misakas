@@ -122,7 +122,7 @@ PY
           --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i"
           --palw-producer-pay-address="$addr" --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
     [ "$i" -gt 0 ] && args+=(--connect="127.0.0.1:$P2P_BASE")
-    MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
+    "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
     node_pid=$!
     pids+=("$node_pid")
     log "node-$i pid $node_pid bond $PREMINE_TXID:$i (lane $LANE)"

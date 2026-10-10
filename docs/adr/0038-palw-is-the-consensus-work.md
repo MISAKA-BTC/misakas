@@ -1,4 +1,11 @@
-# ADR-0038: PALW is the consensus work — sampled-verified LLM PoW, a receipt-licensed weight ramp, and a hash anti-stall floor
+# ADR-0038: PALW is the consensus work — sampled verification and a receipt-licensed weight ramp
+
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
 
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
@@ -51,8 +58,8 @@ verifier: full nodes stop re-running inference, ever.
 ```
 MISAKA value network
   PALW  = the consensus work (~90–99% of effective weight in normal operation)
-  Hash  = spam ticket, header binding, randomness, tie-break,
-          and the anti-stall floor (~1–10%; sole survivor only in catastrophe)
+  Hash  = header binding, commitments, randomness, tie-break
+          (hash production / weight floor withdrawn by ADR-0039)
 ```
 
 Block production requires:
@@ -95,7 +102,7 @@ one that does not.
 | well-formed carriage | `validate_shape` + `validate_against_class_v1` | **done** |
 | all six, one call | `kaspa_pow::palw_admission::check_palw_block_admission_v1` | **done** |
 | the call | `verify_expected_utxo_state` | **wired** |
-| the class target | folded from the block's own chain in `palw_class_facts_for_block` | **done** |
+| the former V1 class target | V1 class resolver removed; V2 uses its own class-state fold | **retired** |
 
 **Correction to this ADR's own text.** Decision A writes the lottery clause as
 `palw_ticket < class_target`. The implementation admits on `<=`, and the ADR text is the outlier:
@@ -348,8 +355,8 @@ Block acceptance and PALW finality are split. An admitted block enters the DAG i
 its *weight* matures:
 
 ```
-weight(B) = spam_hash_work(B)                                  (the backbone, always)
-          + pwu(B) × ramp(B)
+weight(B) = pwu(B) × ramp(B)
+            (hash-work addition withdrawn by ADR-0039 W4′)
 
 ramp(B) = 0        at admission                     (provisional)
         = ρ_r      once ≥ k assigned receipts land  (receipt-licensed; ρ_r ≈ 1)
@@ -410,40 +417,12 @@ domain**, and difficulty is measured in PALW Work Units:
   (the multi-algo-chain construction — Myriad/DigiByte-style — with per-class targets), each
   targeting its share of block cadence. Real miner economics then price the classes
   continuously, and no committee maintains a coefficient table.
-* **Class failure = redistribution, not halt.**
-
-```
-class dies (runtime bug, weights unavailable, Unadjudicable, freeze)
-      → its share redistributes across surviving Active classes (their DAAs absorb it)
-      → chain cadence recovers at the next adjustment
-all classes dead
-      → hash anti-stall floor: the spam-hash backbone alone produces (slow, degraded,
-        near-zero-subsidy) blocks — the chain limps, visibly, and never halts (I2')
-```
-
-The anti-stall floor is deliberately unattractive (tiny share of subsidy, slow cadence): it
-exists so "every class dead" is an incident, not an extinction — and so no one can profitably
-mine it while any class lives.
-
-> **Superseded 2026-08-17 by ADR-0039 (W6′) — do not implement the block-producing floor.**
-> "Deliberately unattractive" bounds who *wants* the path; it does not remove the path, and while
-> a hash path to block production exists the chain's production right is not PALW-only. ADR-0039
-> replaces it with a portable integer-only `PALW-BASE-0` class held permanently Active at ~5 %
-> share, so "all classes dead" degrades to a slower PALW class rather than to hash. The honest
-> cost is that a total PALW outage now **halts the chain loudly**, and I2' ("never halts") does
-> not survive — it was only ever obtainable by keeping a non-PALW production path.
+* **Class failure:** the surviving Active classes absorb a failed class's share under the class rules.
+* **Hash anti-stall floor — 不採用。** 有用計算を hash mining で迂回する誘因と混合 difficulty の負担があるため、[ADR-0039](0039-palw-only-block-production.md) で撤回した。後続の [ADR-0060](0060-the-liveness-doctrine.md) の emergency heartbeat は別の liveness 規則である。
 
 ## Decision E — What hash still does
 
-1. **Spam ticket:** `spam_hash < spam_target`, cheap but nonzero — a candidate PALW block
-   costs something CPU-objective before anyone evaluates its carriage. This bounds
-   garbage-candidate flooding (the "million fake candidates per second" problem).
-2. **Header binding & randomness:** the finalizer construction is kept; post-anchor
-   randomness for sample positions extracts from DAG hashes.
-3. **Anti-stall floor** (Decision D): degraded-mode production.
-4. **Tie-break** in fork choice, as today.
-
-Hash is never again the primary security budget on a value network.
+Hash の block-production right と追加 fork-choice weight は採用しない。有用計算を hash mining で迂回できるため（[ADR-0039](0039-palw-only-block-production.md)）。header/transaction identity、commitment、signature input、randomness と既存 tie-break の hash 利用は維持する。
 
 ## Decision F — Fork choice, IBD, and the fabrication problem
 
@@ -456,8 +435,7 @@ only verification distinguishes it from real work. Therefore:
   ML-DSA signatures a private-fork attacker cannot forge for validators they don't control)
   or at PALW-final *on the receipt-covered chain*. An attacker's private fork can fabricate
   its own blocks but not the panel receipts of bonded validators it doesn't own, so its
-  fabricated pwu never matures; its fork weighs `spam_hash_work` — the deliberately tiny
-  backbone.
+  fabricated pwu never matures; it earns no hash-work fallback weight (ADR-0039 W4′).
 * **IBD:** a syncing node validates headers, spam hashes, carriage shape, receipt coverage
   and refutation absence — all DAG-objective; it never re-runs inference. Deep history is
   additionally fenced by the existing pruning-depth rule and the VLT finality overlay
@@ -475,7 +453,7 @@ only verification distinguishes it from real work. Therefore:
 | Identity/signature binding (Decision 3 domains) | Carried; commit message binds the header context. |
 | Future-anchor panels, dual deadlines (Decision 4) | Carried; now assigns *block* panels. |
 | Class registry, freeze, six-path gate (Decision 9) | Carried; freeze now also removes the class from the difficulty domain set (Decision D). |
-| Mint hygiene: subsidy carve, budgets, exact bond-outpoint payees, three-pool separation (Decision 7) | Carried for *rewards*. Block subsidy splits across class-share + receipt fees + anti-stall floor share; still never exceeds schedule (I6/I15). |
+| Mint hygiene: subsidy carve, budgets, exact bond-outpoint payees, three-pool separation (Decision 7) | Carried for *rewards*. Block subsidy funds class production and receipt fees under subsequent rules; still never exceeds schedule (I6/I15). |
 | P_check exclusion, leverage caps (Decision 8) | Carried; receipts are bonded bets (Decision C). |
 | No admin per-job/per-block override | Carried (I13). |
 | **Decision 1 (hash floor as primary; PALW never block-critical)** | **Superseded.** Inverted by Decisions A–E. |
@@ -786,14 +764,13 @@ A2  The bonded receipt set is not majority-corrupt within the unbonding period
 A3  Class PWU derivations are canonical and frozen; per-class DAA absorbs pricing error
 A4  The court's kernel catalog is 100% of reachable kernels per Active class
     (Track D gate unchanged — Unadjudicable-on-gap + freeze is the enforcement)
-A5  Spam target is low enough to be a ticket, high enough to make candidate flooding
-    and anti-stall-floor takeover uneconomic
+A5  Hash-based production / weight assumptions are withdrawn by ADR-0039.
 ```
 
 ## What this ADR does not decide
 
-Numeric parameters: spam_target share, ρ_r, k, W_challenge, per-class initial targets, the
-PWU derivation formula, anti-stall subsidy share, bond sizes. All are soak/simulation outputs
+Numeric parameters: ρ_r, k, W_challenge, per-class initial targets, the
+PWU derivation formula and bond sizes. All are soak/simulation outputs
 (ADR-0036 "does not decide" carried). The TN11/devnet migration path (they already run the
 single-class ancestor of this shape; the delta is commitment-root headers + receipts + ramp)
 is a soak-planning decision. M3 (PALW weight in VLT/BFT voting) remains a separate ADR.
@@ -805,8 +782,7 @@ blockers. The right fix keeps inference as the scarce resource that orders block
 algo-4 lottery already had the correct shape — and replaces the one fatal coupling: full
 nodes verifying by re-execution. Verification becomes: assigned bonded sampling as the alarm,
 the existing exact-bit court as the truth, weight that matures with evidence, classes that
-fail independently, and a hash floor demoted from "the security" to "the reason the lights
-never go fully out".
+fail independently. The former hash-floor production and weight paths are withdrawn by ADR-0039.
 
 ## Mission alignment amendment — 2026-10-07
 
@@ -817,3 +793,12 @@ PALWがconsensus workを担うという設計を維持し、そのworkが影響�
 * 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
 
 本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。
+
+## Bond予算・総影響保存の改定 — 2026-10-10
+
+[ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](../rfc/0015-panel-free-permissionless-verification.md)を適用する。
+
+PALWを正当な有用計算として要求する方針に、producer資本・期間に基づく確定consensus creditの上限を追加する。canonical計算量/PWUの真の記録と付与するweight配分を分離する。
+将来の容量拡大で、暫定capだけを維持してFinal時に未予約full weightを加算する経路は改定対象である。Final/retired/reversalと全fork-choice/settlement readerで同じ予算を使用し、旧claimは旧rulesetのまま完了する。
+
+本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。

@@ -213,11 +213,20 @@ pub(super) fn t12_with_harness_cards_over(
 /// seconds), so a template stamped over it carries a commitment for another block and the node
 /// disqualifies it from the chain; a node's own miner never re-stamps (the heartbeat adapter
 /// re-commits the lane when it stamps a beat for its slot).
+///
+/// **Where the lane is ACTIVE the harness does not re-stamp, it makes the BUILDER read the simulated clock**
+/// ([`T12Chain::arm_clock`] sets `VirtualStateProcessor::template_clock` before every build), so the stamp the lane
+/// executed against is the harness's own and `build == validate` holds with a simulated clock. Here that is only
+/// checked: a template stamped BEFORE the harness's clock means the builder did not read it.
 pub(super) fn stamp_harness_time(params: &Params, header: &mut kaspa_consensus_core::header::Header, timestamp: u64) {
-    assert!(
-        !params.is_evm_active(header.daa_score),
-        "re-stamping a template whose EVM lane is active invalidates its evm_commitment_root — the harness runs with the lane inert"
-    );
+    if params.is_evm_active(header.daa_score) {
+        assert!(
+            header.timestamp >= timestamp,
+            "the builder stamped {} before the harness's clock {timestamp}: arm the template clock before building on an EVM-active network",
+            header.timestamp
+        );
+        return;
+    }
     header.timestamp = timestamp;
 }
 
@@ -286,6 +295,15 @@ impl T12Chain {
         kaspa_consensus_core::palw_execution_lane_v1::palw_execution_round_v1(timestamp_ms, self.config.params.genesis.timestamp)
     }
 
+    /// **Make the template builder read the harness's simulated clock** — on an EVM-active network only (an inert lane is
+    /// re-stamped after the build, as it always was, and no existing test sees a change). The builder takes
+    /// `max(past median + 1, clock)` as its stamp and the lane executes against it.
+    fn arm_clock(&self) {
+        if self.config.params.is_evm_active(self.sink_daa()) {
+            self.vp().template_clock.store(self.ctx.simulated_time, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     /// Insert a block this test built and demand it became the sink — a chain block the node
     /// refused would otherwise surface a hundred blocks later as a wrong number.
     async fn insert_chain_block(&mut self, block: MutableBlock, what: &str) -> Block {
@@ -315,6 +333,7 @@ impl T12Chain {
     pub(super) async fn heartbeat_paying(&mut self, miner: MinerData, step_ms: u64, txs: Vec<Transaction>) -> Block {
         self.ctx.simulated_time += step_ms;
         self.nonce += 1;
+        self.arm_clock();
         let mut t = self
             .ctx
             .consensus
@@ -384,6 +403,7 @@ impl T12Chain {
         };
         self.ctx.simulated_time += step_ms;
         self.nonce += 1;
+        self.arm_clock();
         let bond = self.bonds[card];
         let mut t = self
             .ctx

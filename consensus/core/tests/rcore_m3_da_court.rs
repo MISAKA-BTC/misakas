@@ -572,6 +572,113 @@ fn t18_da7_a_live_default_is_s1_and_writes_one_da_default_record() {
     }
 }
 
+/// **Lane INTF — ADR-0032's 49% share past the dormant `palw_reporter_share_v2`, with conservation.** T18's Live
+/// default on testnet-12's fold three ways, the fence test-armed on the fold's mirror (the release's validation refuses
+/// it; `Params` are not touched): never (int-12's 10%), from genesis (49%), and between the session's open and the
+/// conviction's close — which pins the DAA that fixes each amount: DA-6's exposure at the session's OPEN (10% there,
+/// and it stays 10% across the fence), R-1's reward at the conviction's CLOSE (49% there).
+///
+/// Conservation, exactly: the producer's debit is the only collateral that leaves any bond (seats and the accuser keep
+/// theirs, the accuser's exposure comes back), the debit is the record's `collected`, the reporter's award is
+/// `⌊r × collected⌋` and grows `awarded_sompi` by exactly that, nothing is forgone, and the rest, `collected − R`, is
+/// burned — at 49% at least 51% of the debit (ADR-0032 / ADR-0176 D6: a self-reporter's net loss is ≥ 51% of what was
+/// collected, never 0).
+#[test]
+fn intf_past_the_share_fence_a_da_default_pays_49_percent_and_the_debit_is_conserved() {
+    use kaspa_consensus_core::palw_da_rcore_v1::{palw_da_offence_id_v1, palw_da_session_exposure_at_bps_v1};
+    use kaspa_consensus_core::palw_state_v2::{
+        PALW_RCORE_REPORTER_REWARD_BPS_V1, PALW_RCORE_REPORTER_REWARD_BPS_V2, palw_reporter_reward_amount_v1,
+        palw_reporter_reward_amount_v2,
+    };
+    // (the fence's DAA relative to the accusation block, the exposure share, the reward share)
+    let cases: [(Option<i64>, u16, u16); 3] = [
+        (None, PALW_RCORE_REPORTER_REWARD_BPS_V1, PALW_RCORE_REPORTER_REWARD_BPS_V1),
+        (Some(i64::MIN), PALW_RCORE_REPORTER_REWARD_BPS_V2, PALW_RCORE_REPORTER_REWARD_BPS_V2),
+        (Some(1), PALW_RCORE_REPORTER_REWARD_BPS_V1, PALW_RCORE_REPORTER_REWARD_BPS_V2),
+    ];
+    for (fence, exposure_bps, reward_bps) in cases {
+        let mut c = Chain::new(t12());
+        c.step(&[bond_obj(1, 20_000 * MSK)]);
+        let (id, seats, _) = bound_floor_claim(&mut c, 0x49);
+        let accused_at = c.daa + 1;
+        let fence_daa = fence.map(|rel| if rel == i64::MIN { 0 } else { (accused_at as i64 + rel) as u64 });
+        c.sp = c.sp.clone().with_reporter_share_v2_from_daa(fence_daa);
+        let claim = c.claim(&id);
+        let (producer, _, _) = floor_producer(&c.p);
+        let full = palw_claim_bond_reservation_v1(&c.sp, &claim).unwrap();
+        let total = |c: &Chain| -> u128 { c.s.bonds_iter().map(|(_, b)| u128::from(b.collateral)).sum() };
+        let (total_before, producer_before) = (total(&c), c.s.bond(&producer).unwrap().collateral);
+        let seats_before: Vec<u64> = seats.iter().map(|(k, _)| c.s.bond(k).unwrap().collateral).collect();
+        let accuser_before = c.s.bond(&bond_key(1)).unwrap().collateral;
+        let counters_before = c.s.reporter_counters();
+
+        c.step(&[accuse(id, bond_key(1), 0)]);
+        assert_eq!(c.daa, accused_at);
+        let exposure = c.s.da_session(&id, &bond_key(1)).expect("the session").exposure;
+        let floor = c.sp.min_collateral_sompi();
+        assert_eq!(
+            exposure,
+            palw_da_session_exposure_at_bps_v1(full, floor, exposure_bps),
+            "{fence:?}: DA-6 at the share of the open"
+        );
+        if exposure_bps == PALW_RCORE_REPORTER_REWARD_BPS_V2 {
+            assert_eq!(exposure, (full * 4_900).div_ceil(10_000).min(u128::from(floor)), "49%, rounded up, capped at the floor");
+        } else {
+            assert_eq!(exposure, (full * 1_000).div_ceil(10_000).min(u128::from(floor)), "int-12's 10%");
+        }
+        assert_eq!(palw_accuser_exposure_v1(&c.s, &bond_key(1)), exposure, "{fence:?}: the accuser's ledger holds it");
+
+        let voided_at = run_out(&mut c, id, bond_key(1));
+        assert!(fence_daa.is_none_or(|f| voided_at >= f), "the conviction closes at or past the fence where one is set");
+        assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
+        assert!(c.s.da_session(&id, &bond_key(1)).is_none());
+        assert_eq!(palw_accuser_exposure_v1(&c.s, &bond_key(1)), 0, "{fence:?}: the confirmed session's exposure is returned");
+
+        // Conservation of the slash: one debit, from the producer alone.
+        let debit = producer_before - c.s.bond(&producer).unwrap().collateral;
+        assert_eq!(u128::from(debit), full, "{fence:?}: S1 forfeits the whole commitment");
+        assert_eq!(total_before - total(&c), u128::from(debit), "{fence:?}: no other bond's collateral moved");
+        assert_eq!(seats.iter().map(|(k, _)| c.s.bond(k).unwrap().collateral).collect::<Vec<_>>(), seats_before, "no seat pays");
+        assert_eq!(c.s.bond(&bond_key(1)).unwrap().collateral, accuser_before, "the accuser pays nothing");
+        let key = palw_da_offence_id_v1(&producer.0, &id);
+        let record = c.s.consumed_offence(&key).expect("one DaDefault record");
+        assert_eq!((record.collected, record.accepted_daa), (debit, voided_at), "collected is the debit, at the close");
+        let pending = *c.s.reward_pending(&key).expect("the reward is pending");
+        let reward = pending.amount;
+        let want = if reward_bps == PALW_RCORE_REPORTER_REWARD_BPS_V2 {
+            palw_reporter_reward_amount_v2(debit, 0)
+        } else {
+            palw_reporter_reward_amount_v1(debit, 0)
+        };
+        assert_eq!(reward, want, "{fence:?}: R-1 at the share of the close");
+        assert_eq!(u128::from(reward), u128::from(debit) * u128::from(reward_bps) / 10_000, "⌊r × collected⌋");
+        let burned = debit - reward;
+        assert_eq!(reward + burned, debit, "collected = reporter + burn, exactly");
+        if reward_bps == PALW_RCORE_REPORTER_REWARD_BPS_V2 {
+            assert!(u128::from(burned) * 10_000 >= u128::from(debit) * 5_100, "{fence:?}: at least 51% of the debit burns");
+        }
+        // The sweep past the reveal window awards exactly R to the named accuser; nothing is forgone.
+        c.step_at(pending.reveal_until + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+        assert!(c.s.reward_pending(&key).is_none(), "the window closed");
+        let counters = c.s.reporter_counters();
+        assert_eq!(counters.awarded_sompi - counters_before.awarded_sompi, u128::from(reward), "{fence:?}: awarded grows by R");
+        assert_eq!(counters.forgone_sompi, counters_before.forgone_sompi, "nothing forgone");
+        let award = c.s.reporter_reward(&key).copied().or_else(|| {
+            c.s.pending_payouts_iter()
+                .find(|(k, _)| **k == kaspa_consensus_core::palw_vesting_v1::palw_reporter_payout_key_v1(&key))
+                .map(|(_, p)| *p)
+        });
+        if let Some(award) = award {
+            assert_eq!(award.amount, reward, "{fence:?}: the award is the pending amount");
+            assert_eq!(award.payload, c.s.bond(&bond_key(1)).unwrap().payout_payload, "to the accuser");
+        }
+        println!(
+            "share fence {fence_daa:?}: exposure {exposure} sompi ({exposure_bps} bps at the open), collected {debit}, reporter {reward} \
+             ({reward_bps} bps at the close), burned {burned}"
+        );
+    }
+}
+
 /// **DA-7 at the `Licensed` stage and C7: S1, and S4 only on the signers whose mask covers an
 /// unanswered unit.** A coverage licence (the full seat, four partials); a partial seat — a seat of
 /// the current panel — accuses the run's one event row, which pauses the claim (so it cannot slip into

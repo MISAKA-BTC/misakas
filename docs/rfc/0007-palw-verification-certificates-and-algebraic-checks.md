@@ -1,5 +1,12 @@
 # RFC-0007: PALW constraint verification — batched Freivalds/GKR Panel checks, evidence-bound receipts, and exact court on dispute
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
@@ -16,7 +23,7 @@
 > **Revision precedence:** Part VI owns new post-commit source eligibility, ordering, seed derivation, sampling, interactive-round timing and recovery; other RFCs reference it instead of defining competing seeds. Part V owns checker/receipt coverage. Part II's private sketches and Parts III/IV's older assignment/audit sources are historical or legacy protocols, not substitutions for the new public challenge source. Existing consensus is governed by [spec 18](../spec/palw/18-verification-certificates.md), not retroactively changed by this RFC.
 
 > **Kernel-only boundary (2026-10-06):** [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)
-> and [RFC05 §§K.0–K.8](0005-palw-ml-vm.md) govern Part V. Checkers are approved versioned kernel
+> and [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) govern Part V. Checkers are approved versioned kernel
 > relations; registration, claims, receipts and transcripts bind descriptor/plan identity. GKR's
 > generality does not authorize arbitrary uploaded programs, guests or universal CPU circuits.
 > Missing relations require a coordinated kernel upgrade and matching bounded court, not a VM
@@ -1264,3 +1271,12 @@ Before implementation is eligible for activation, settle the exact suite/transcr
 G7およびPart IV/Vの外部監査主体を、Panelに選ばれたseatから普通のpublic bond全体へ拡張する。private sketches/preprocessingは通常検査の最適化に限り、それを持たない外部verifierにも独立した公開localization/conviction経路を用意する。scope-bound receiptsの集約やquorumは算術真実の根拠ではない。Freivalds/GKRの失敗をそのままslashせず、認証されたbounded terminal proofへ落とす。raw cell samplingと未検出確率は別途扱う。
 
 本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
+
+## Bond予算・総影響保存の改定 — 2026-10-10
+
+[ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](0015-panel-free-permissionless-verification.md)を適用する。
+
+確率的receiptとexact escalationに共通bond/DAA予算を追加する。claim容量×mでもblock/reward/Final weightの総配分は同じであり、受理予約とFinalで検査する。
+全constraint coverage・error composition・challenge bindingを維持する。carrier/claim数の細分化だけで独立乱数sourceや追加work creditを作らず、source/Final/settlement readerを同じversioned会計へ接続する。
+
+本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。

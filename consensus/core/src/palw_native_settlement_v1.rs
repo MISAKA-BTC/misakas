@@ -227,7 +227,11 @@ pub struct SkippedEvidenceV1 {
 
 impl SkippedEvidenceV1 {
     pub fn total(&self) -> u64 {
-        self.voided.saturating_add(self.base_class).saturating_add(self.open_da).saturating_add(self.unpriced).saturating_add(self.bond_not_held)
+        self.voided
+            .saturating_add(self.base_class)
+            .saturating_add(self.open_da)
+            .saturating_add(self.unpriced)
+            .saturating_add(self.bond_not_held)
     }
     pub fn add(&mut self, other: &SkippedEvidenceV1) {
         self.voided = self.voided.saturating_add(other.voided);
@@ -248,6 +252,15 @@ pub fn native_facts_and_skips_v1(
 ) -> (Vec<MatureUsefulWorkV1>, SkippedEvidenceV1) {
     let (accepting_daa, accepting_blue) = accepting;
     let mut skipped = SkippedEvidenceV1::default();
+    // **The trace retention a claim holds NOW.** The record in the block's delta is the claim as it stood in that block, and a class
+    // that committed its own court window (`palw_model_court_window`) extends a claim's retention to a court's deadline when a court
+    // opens on it - possibly after `Final` (palw_state_v2.rs, `CourtOpened`). A fact matured on the frozen value would count work whose
+    // producer still owes the trace to a running court and whose claim can still be convicted. So where the sink still holds the claim,
+    // its live retention counts too; where it does not (retired), the recorded value stands. Without a class window the two are equal,
+    // so this changes nothing on any network that does not arm that fence.
+    let live_retention = |id: &Hash64, recorded: &PalwClaimStateV2| -> u64 {
+        rules.state.claim(id).map_or(recorded.trace_retention_daa, |live| live.trace_retention_daa.max(recorded.trace_retention_daa))
+    };
     let base = rules.params.base_class_id();
     let retirement = rules.params.claim_retirement_daa();
     let mut facts = Vec::new();
@@ -267,8 +280,11 @@ pub fn native_facts_and_skips_v1(
             skipped.open_da += 1;
             continue;
         }
-        let (identity, weight, bond) =
-            (claim.work_id, rules.state.palw_claim_canonical_weight_v1(claim, rules.canonical_work_daa), rules.state.bond(&claim.bond));
+        let (identity, weight, bond) = (
+            claim.work_id,
+            rules.state.palw_claim_canonical_weight_v1(claim, rules.canonical_work_daa),
+            rules.state.bond(&claim.bond),
+        );
         let (Some(identity), Some(work), Some(bond)) = (identity, weight, bond) else {
             if bond.is_none() {
                 skipped.bond_not_held += 1;
@@ -286,7 +302,7 @@ pub fn native_facts_and_skips_v1(
             accepted_blue: claim.accepted_blue_score,
             anchor_daa: claim.accepted_daa,
             accepted_daa: claim.accepted_daa,
-            matured_daa: claim.trace_retention_daa.max(final_daa.saturating_add(retirement)),
+            matured_daa: live_retention(id, claim).max(final_daa.saturating_add(retirement)),
             work,
         });
     }
@@ -325,7 +341,7 @@ pub fn native_facts_and_skips_v1(
         };
         let matured_daa = final_daa
             .max(accepting_daa.saturating_add(rules.quantum_maturity_daa))
-            .max(claim.trace_retention_daa)
+            .max(live_retention(id, claim))
             .max(final_daa.saturating_add(retirement));
         let work = palw_fp_spend_weight_v1(rules.state, claim, *quanta, &pricing);
         for index in fresh {

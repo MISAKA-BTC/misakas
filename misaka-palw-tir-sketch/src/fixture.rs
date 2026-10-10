@@ -136,6 +136,12 @@ pub const FX_EF: u32 = 8;
 
 /// **The dense + MoE fixture** (module note): schedule `[dense, moe]`.
 pub fn dense_moe_v1(seed: u64) -> TirSketchFixtureV1 {
+    dense_moe_windowed_v1(seed, HISTORY_BOUND_V1_SMALL)
+}
+
+/// [`dense_moe_v1`] whose attention keeps a sliding window of `window` rows (`dense_moe_v1` is `window = HISTORY_BOUND_V1_SMALL`):
+/// past `window` positions every `Hist` window slides by one row a position.
+pub fn dense_moe_windowed_v1(seed: u64, window: u32) -> TirSketchFixtureV1 {
     let (v, d, hq, hkv, dh, f, e, ef) = (FX_V, FX_D, FX_HQ, FX_HKV, FX_DH, FX_F, FX_E, FX_EF);
     let mut m = Model::new(v);
     let tok = m.p("tok_embd", DType::I8, &[v, d], false, -128, 127);
@@ -179,8 +185,8 @@ pub fn dense_moe_v1(seed: u64) -> TirSketchFixtureV1 {
         let x = b.narrow_a16(row, lift, p2, z, -32767, 32767, DType::I16);
         b.finish(&[x])
     };
-    let kc = m.pb.hist_state("k_cache", DType::I16, &[hkv, dh], HISTORY_BOUND_V1_SMALL, true);
-    let vc = m.pb.hist_state("v_cache", DType::I16, &[hkv, dh], HISTORY_BOUND_V1_SMALL, true);
+    let kc = m.pb.hist_state("k_cache", DType::I16, &[hkv, dh], window, true);
+    let vc = m.pb.hist_state("v_cache", DType::I16, &[hkv, dh], window, true);
     let dense = {
         let mut b = m.pb.block("dense", carry.clone());
         let x = Ref::CarryIn(0);
@@ -367,5 +373,102 @@ pub fn wide_v1(seed: u64) -> TirSketchFixtureV1 {
     };
     let logits = (m.pb.blocks[post as usize].nodes.len() - 1) as u16;
     let program = std::mem::replace(&mut m.pb, ProgramBuilder::new(0, 0)).finish(pre, vec![wide], post, logits);
+    m.finish(program, seed)
+}
+
+/// **A memory fixture** (RFC-0004 Part II): one layer whose `Fixed` state `mem` (`i32 [D]`) is the memory. At position 0 the layer
+/// reads the memory from the param `mem0` (a step's pre-state), afterwards from the state; the update rule is
+/// `m' = clamp(m − m/4 + x)`, and the head reads `x + m'`. The memory slot is param `mem0` (index 1, layer 0) with the `StateWrite` of state 0
+/// in layer 0.
+pub fn memory_v1(seed: u64) -> TirSketchFixtureV1 {
+    use misaka_palw_tir::Cmp;
+    let (v, d) = (FX_V, FX_D);
+    let mut m = Model::new(v);
+    let tok = m.p("tok_embd", DType::I8, &[v, d], false, -128, 127);
+    let mem0 = m.p("mem0", DType::I32, &[d], true, -(1 << 12), 1 << 12);
+    let lm = m.p("output.w", DType::I8, &[v, d], false, -128, 127);
+    let mem = m.pb.fixed_state("mem", DType::I32, &[d], -(1 << 20), 1 << 20, true);
+    let carry = vec![TensorType::fixed(DType::I32, &[d])];
+    let pre = {
+        let mut b = m.pb.block("pre", vec![]);
+        let row = b.gather(tok, Ref::Input(INPUT_TOKEN), 0, 0);
+        let x = b.cast(row, DType::I32);
+        b.finish(&[x])
+    };
+    let layer = {
+        let mut b = m.pb.block("memory", carry.clone());
+        let zero = b.c(DType::Idx, 0);
+        let first = b.compare(Ref::Input(INPUT_POS), zero, Cmp::Eq);
+        let m_in = b.select(first, mem0, Ref::State(mem), DType::I32);
+        let decay = b.shr(m_in, 2, Rounding::HalfAwayFromZero, DType::I32);
+        let kept = b.sub(m_in, decay, DType::I64);
+        let upd = b.add(kept, Ref::CarryIn(0), DType::I64);
+        let next = b.clamp(upd, -(1 << 20), 1 << 20, DType::I32);
+        b.state_write(mem, next);
+        let h = b.add(next, Ref::CarryIn(0), DType::I64);
+        let h = b.clamp(h, -(1 << 21), 1 << 21, DType::I32);
+        b.finish(&[h])
+    };
+    let post = {
+        let mut b = m.pb.block("post", carry.clone());
+        let h = b.clamp(Ref::CarryIn(0), -32767, 32767, DType::I16);
+        let hc = b.reshape_fixed(h, &[d, 1]);
+        let l = b.matmul(lm, hc, DType::I32);
+        let l = b.reshape_fixed(l, &[v]);
+        b.commit(l);
+        b.finish(&[])
+    };
+    let logits = (m.pb.blocks[post as usize].nodes.len() - 1) as u16;
+    let program = std::mem::replace(&mut m.pb, ProgramBuilder::new(0, 0)).finish(pre, vec![layer], post, logits);
+    m.finish(program, seed)
+}
+
+/// **A test-time-update fixture** (RFC-0004 Part II, "parameter-subset state"): the memory is a weight matrix `fast.w` (`i16 [D, D]`)
+/// the layer applies (`h = (W x) / 64`), and the update rule is an integer optimiser step `W' = clamp(W + (x xᵀ) / 256)`. The slot
+/// is param `fast.w0` (index 1, layer 0) with the `StateWrite` of state 0 in layer 0.
+pub fn memory_ttt_v1(seed: u64) -> TirSketchFixtureV1 {
+    use misaka_palw_tir::Cmp;
+    let (v, d) = (FX_V, FX_D);
+    let mut m = Model::new(v);
+    let tok = m.p("tok_embd", DType::I8, &[v, d], false, -128, 127);
+    let w0 = m.p("fast.w0", DType::I16, &[d, d], true, -(1 << 12), 1 << 12);
+    let lm = m.p("output.w", DType::I8, &[v, d], false, -128, 127);
+    let fast = m.pb.fixed_state("fast.w", DType::I16, &[d, d], -(1 << 12), 1 << 12, true);
+    let carry = vec![TensorType::fixed(DType::I32, &[d])];
+    let pre = {
+        let mut b = m.pb.block("pre", vec![]);
+        let row = b.gather(tok, Ref::Input(INPUT_TOKEN), 0, 0);
+        let x = b.cast(row, DType::I32);
+        b.finish(&[x])
+    };
+    let layer = {
+        let mut b = m.pb.block("fast", carry.clone());
+        let zero = b.c(DType::Idx, 0);
+        let first = b.compare(Ref::Input(INPUT_POS), zero, Cmp::Eq);
+        let w_in = b.select(first, w0, Ref::State(fast), DType::I16);
+        let xs = b.clamp(Ref::CarryIn(0), -127, 127, DType::I16);
+        let xc = b.reshape_fixed(xs, &[d, 1]);
+        let acc = b.matmul(w_in, xc, DType::I32);
+        let y = b.reshape_fixed(acc, &[d]);
+        let h = b.shr(y, 6, Rounding::HalfAwayFromZero, DType::I32);
+        let xr = b.reshape_fixed(xs, &[1, d]);
+        let g = b.matmul(xc, xr, DType::I32);
+        let gs = b.shr(g, 8, Rounding::HalfAwayFromZero, DType::I32);
+        let upd = b.add(w_in, gs, DType::I32);
+        let next = b.clamp(upd, -(1 << 12), 1 << 12, DType::I16);
+        b.state_write(fast, next);
+        b.finish(&[h])
+    };
+    let post = {
+        let mut b = m.pb.block("post", carry.clone());
+        let h = b.clamp(Ref::CarryIn(0), -32767, 32767, DType::I16);
+        let hc = b.reshape_fixed(h, &[d, 1]);
+        let l = b.matmul(lm, hc, DType::I32);
+        let l = b.reshape_fixed(l, &[v]);
+        b.commit(l);
+        b.finish(&[])
+    };
+    let logits = (m.pb.blocks[post as usize].nodes.len() - 1) as u16;
+    let program = std::mem::replace(&mut m.pb, ProgramBuilder::new(0, 0)).finish(pre, vec![layer], post, logits);
     m.finish(program, seed)
 }

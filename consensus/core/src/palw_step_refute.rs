@@ -4512,13 +4512,52 @@ pub fn check_execution_step_refutation_opened_capped_v1(
         Err(e) => return Err(e.into()),
     }
 
+    let (recomputed_row, row_offset, tile_start) = recompute_challenged_row_v1(
+        refutation,
+        refutation.output_preimage.coord,
+        weights,
+        prompt_ids_opening,
+        max_step_leaf_count,
+    )?;
+
+    // 4) Compare the challenged tile's slice, exact bits.
+    let committed: Vec<u32> =
+        refutation.output_preimage.values_le.chunks_exact(4).map(|q| u32::from_le_bytes([q[0], q[1], q[2], q[3]])).collect();
+    // `run_program` says where its slice starts, so a kernel that recomputed only the tile is not
+    // sliced a second time (ADR-0049 Decision B). Whole-row kernels report 0 and behave as before.
+    let local_start = tile_start.checked_sub(row_offset).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let recomputed = recomputed_row
+        .get(local_start..local_start + committed.len())
+        .ok_or(PalwStepRefuteError::InputSetNotCanonical("recomputed row is shorter than the tile claims"))?;
+    if let Some(i) = recomputed.iter().zip(committed.iter()).position(|(a, b)| a != b) {
+        let fault = PalwStepFaultV1::ComputationMismatch { value_index: i as u32 };
+        return Ok(PalwStepRefutationVerdictV1 {
+            fault,
+            evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
+                &binding.committed_execution_root,
+                5,
+                refutation.output_opening.leaf_index,
+                fault,
+            ),
+        });
+    }
+    Err(PalwStepRefuteError::NoFaultFound)
+}
+
+/// **Step 2 of the one-move court at `out_coord`** — the anchor verified before the canonical input set is derived from it, and every
+/// supplied input row exactly that set, each preimage hashed and range-opened to the binding's step root. Returns the verified anchor
+/// and the canonical set. Shared by [`recompute_challenged_row_v1`] and the committed-half retrieval
+/// ([`check_execution_step_committed_half_v1`], LG14-B), so a row reads one way in a court and in a disclosure.
+fn verified_canonical_inputs_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    out_coord: crate::palw_step::PalwStepCoordinateV1,
+    max_step_leaf_count: u64,
+) -> Result<(Option<VerifiedKvAnchor<'_>>, Vec<Vec<(u64, PalwStepCoordinateV1)>>), PalwStepRefuteError> {
+    let binding = &refutation.binding;
     let profile_hash = binding.shape_profile.shape_profile_id();
-    let out_coord = refutation.output_preimage.coord;
-    let (node, layer) = binding.shape_profile.resolve_node_slot(out_coord.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let (node, _layer) = binding.shape_profile.resolve_node_slot(out_coord.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
     let program = resolve_kernel(&node.kernel_semantics_id).ok_or(PalwStepRefuteError::Unadjudicable)?;
 
-    // 2) Canonical input set: exact leaves, exact order, all verified against the tree.
-    //
     // **The anchor is verified BEFORE the set is derived from it.** Deriving a shorter required set
     // from an unverified carried object would let a challenger shrink what it must open by
     // attaching a checkpoint nobody committed — the set has to follow from the CLAIM, not from the
@@ -4580,6 +4619,30 @@ pub fn check_execution_step_refutation_opened_capped_v1(
             }
         }
     }
+
+    Ok((anchor, required))
+}
+
+/// **Steps 2–3 of [`check_execution_step_refutation_opened_capped_v1`], at the coordinate the caller names** — the anchor verified
+/// before the canonical input set is derived from it, every input row verified against the step tree, the id carriages checked,
+/// and the node's output row recomputed by the court's own kernel (`run_program`). Returns `(recomputed_row, row_offset,
+/// tile_start)`. Moved here verbatim (LG14-B) so ONE body serves the one-move court, whose coordinate is the opened preimage's, and
+/// the legacy leaf recompute ([`check_execution_step_leaf_hash_v1`], tag 159), whose coordinate is the canonical one of an opened
+/// leaf that carries no preimage. `refutation.output_preimage` is not read here.
+fn recompute_challenged_row_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    out_coord: crate::palw_step::PalwStepCoordinateV1,
+    weights: &dyn PalwWeightOracleV1,
+    prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+    max_step_leaf_count: u64,
+) -> Result<(Vec<u32>, usize, usize), PalwStepRefuteError> {
+    let binding = &refutation.binding;
+    let (node, layer) = binding.shape_profile.resolve_node_slot(out_coord.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let program = resolve_kernel(&node.kernel_semantics_id).ok_or(PalwStepRefuteError::Unadjudicable)?;
+
+    // 2) Canonical input set: exact leaves, exact order, all verified against the tree
+    //    ([`verified_canonical_inputs_v1`], the same check the committed-half retrieval runs).
+    let (anchor, required) = verified_canonical_inputs_v1(refutation, out_coord, max_step_leaf_count)?;
 
     // 3) Recompute the node's full output row(s) for the challenged position: concatenate
     //    each logical input row's tiles back into one row.
@@ -4646,29 +4709,143 @@ pub fn check_execution_step_refutation_opened_capped_v1(
     let (recomputed_row, row_offset) =
         run_program(program, node, layer, &binding.shape_profile, &inputs, weights, kv_len, (&out_coord, prompt_ids, generated))?;
 
-    // 4) Compare the challenged tile's slice, exact bits.
     let tile_start = out_coord.tile_index as usize * node.tile_len as usize;
-    let committed: Vec<u32> =
-        refutation.output_preimage.values_le.chunks_exact(4).map(|q| u32::from_le_bytes([q[0], q[1], q[2], q[3]])).collect();
-    // `run_program` says where its slice starts, so a kernel that recomputed only the tile is not
-    // sliced a second time (ADR-0049 Decision B). Whole-row kernels report 0 and behave as before.
-    let local_start = tile_start.checked_sub(row_offset).ok_or(PalwStepRefuteError::Unadjudicable)?;
-    let recomputed = recomputed_row
-        .get(local_start..local_start + committed.len())
-        .ok_or(PalwStepRefuteError::InputSetNotCanonical("recomputed row is shorter than the tile claims"))?;
-    if let Some(i) = recomputed.iter().zip(committed.iter()).position(|(a, b)| a != b) {
-        let fault = PalwStepFaultV1::ComputationMismatch { value_index: i as u32 };
-        return Ok(PalwStepRefutationVerdictV1 {
-            fault,
-            evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
-                &binding.committed_execution_root,
-                5,
-                refutation.output_opening.leaf_index,
-                fault,
-            ),
-        });
+    Ok((recomputed_row, row_offset, tile_start))
+}
+
+/// **LG14-B (RFC-0014 §5.1–§5.2): the committed half of one leaf's refutation, by membership alone** — what a `KernelWitness`
+/// answer (tag 158, [`crate::palw_legacy_held_da_v2`]) must be. Retrieval, never adjudication: no kernel runs here.
+///
+/// 1. The output opening walks to the binding's step root, and the carried preimage hashes to the opened leaf hash — so it IS the
+///    committed tile at that index, whatever it says (a structurally faulty committed tile is still the committed tile: its fault
+///    is the court's to find, `ShardCourtAccused`'s structural pass).
+/// 2. The leaf's coordinate is the CANONICAL one at its index (never the preimage's). At a fused-attention site the history is
+///    absent — the input rows and the checkpoint anchor are what the held dissection carries ([`crate::palw_shard_court_v1`]'s
+///    bound verdict refuses them there too). At every other site the input rows are exactly the canonical set, verified against the
+///    tree by [`verified_canonical_inputs_v1`] — the one-move court's own check.
+/// 3. The id carriages verify against the binding ([`check_refutation_id_carriage_v1`]).
+///
+/// The caller compares the binding with the claim's (its root and `verify_binding_v1`), as the fold does for every disclosure.
+pub fn check_execution_step_committed_half_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepRefuteError> {
+    let binding = &refutation.binding;
+    let opening = &refutation.output_opening;
+    let root = crate::palw_step_leg::step_opening_root_capped_v1(binding.step_leaf_count, opening, max_step_leaf_count)?;
+    if root != binding.step_merkle_root {
+        return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::CommittedRootMismatch));
     }
-    Err(PalwStepRefuteError::NoFaultFound)
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    if crate::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, &refutation.output_preimage)
+        != opening.leaf_hash
+    {
+        return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::LeafPreimageMismatch { leaf: "step tile" }));
+    }
+    let coord = crate::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, opening.leaf_index)
+        .ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let fused = binding
+        .shape_profile
+        .resolve_node_slot(coord.node_slot)
+        .is_some_and(|(node, _)| node.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused);
+    if fused {
+        if !refutation.inputs.is_empty() || refutation.kv_checkpoint.is_some() {
+            return Err(PalwStepRefuteError::InputSetNotCanonical(
+                "a fused leaf's committed half carries no history: the held dissection carries it",
+            ));
+        }
+    } else {
+        verified_canonical_inputs_v1(refutation, coord, max_step_leaf_count)?;
+    }
+    check_refutation_id_carriage_v1(refutation, prompt_ids_opening)?;
+    Ok(())
+}
+
+/// **LG14-B (RFC-0014 §5.3, tag 159): a non-fused step's committed leaf HASH against the court's own recomputation.**
+///
+/// The one-move court without the output preimage. `refutation.output_opening` opens the committed leaf HASH at its index against
+/// the binding's step root; `refutation.output_preimage` is NOT read (a filer carries an empty placeholder — the court never asks
+/// the producer for it, which at an embedding gather would be a copy of the registered weights, ADR-0177 D2). The canonical
+/// coordinate at the index, the canonical input set (verified against the tree), the id carriages and the kernel are exactly the
+/// one-move court's ([`recompute_challenged_row_v1`]), so rounding, saturation and accumulation order are the kernel's own. The
+/// court builds the canonical tile leaf from the recomputed values and hashes it:
+///
+/// * different from the committed leaf hash → the committed tile is not the step's function of its committed inputs:
+///   `ComputationMismatch { value_index: u32::MAX }` (evidence kind 7 — "the leaf, by its hash");
+/// * equal → `NoFaultFound` (the accuser's stake).
+///
+/// A fused-attention leaf is `Unadjudicable` here: its terminal is the held dissection. The caller verifies the binding.
+pub fn check_execution_step_leaf_hash_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    weights: &dyn PalwWeightOracleV1,
+    prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    let binding = &refutation.binding;
+    let opening = &refutation.output_opening;
+    let root = crate::palw_step_leg::step_opening_root_capped_v1(binding.step_leaf_count, opening, max_step_leaf_count)?;
+    if root != binding.step_merkle_root {
+        return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::CommittedRootMismatch));
+    }
+    let coord = crate::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, opening.leaf_index)
+        .ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let (node, _) = binding.shape_profile.resolve_node_slot(coord.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    if node.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused {
+        return Err(PalwStepRefuteError::Unadjudicable);
+    }
+    let value_count = crate::palw_step_leg::palw_expected_tile_values_v1(&binding.shape_profile, &binding.job_context, &coord)
+        .ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let (row, row_offset, tile_start) =
+        recompute_challenged_row_v1(refutation, coord, weights, prompt_ids_opening, max_step_leaf_count)?;
+    let local_start = tile_start.checked_sub(row_offset).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let values = row
+        .get(local_start..local_start + value_count as usize)
+        .ok_or(PalwStepRefuteError::InputSetNotCanonical("recomputed row is shorter than the canonical tile"))?;
+    let honest = PalwStepTileLeafV1 {
+        version: crate::palw_step_leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
+        coord,
+        value_count,
+        values_le: values.iter().flat_map(|v| v.to_le_bytes()).collect(),
+    };
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    if crate::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, &honest) == opening.leaf_hash {
+        return Err(PalwStepRefuteError::NoFaultFound);
+    }
+    let fault = PalwStepFaultV1::ComputationMismatch { value_index: u32::MAX };
+    Ok(PalwStepRefutationVerdictV1 {
+        fault,
+        evidence_id: crate::palw_step_leg::step_refutation_evidence_id(&binding.committed_execution_root, 7, opening.leaf_index, fault),
+    })
+}
+
+/// **The canonical tile a leaf would commit, from the court's own recomputation** — the preimage
+/// [`check_execution_step_leaf_hash_v1`] hashes, for a filer that wants to know the honest tile before it files (LG14-B). `None`
+/// where the leaf is fused, has no coordinates, or does not recompute from the carried inputs.
+pub fn palw_recomputed_tile_leaf_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    weights: &dyn PalwWeightOracleV1,
+    prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+    max_step_leaf_count: u64,
+) -> Option<PalwStepTileLeafV1> {
+    let binding = &refutation.binding;
+    let coord =
+        crate::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, refutation.output_opening.leaf_index)?;
+    let (node, _) = binding.shape_profile.resolve_node_slot(coord.node_slot)?;
+    if node.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused {
+        return None;
+    }
+    let value_count = crate::palw_step_leg::palw_expected_tile_values_v1(&binding.shape_profile, &binding.job_context, &coord)?;
+    let (row, row_offset, tile_start) =
+        recompute_challenged_row_v1(refutation, coord, weights, prompt_ids_opening, max_step_leaf_count).ok()?;
+    let local_start = tile_start.checked_sub(row_offset)?;
+    let values = row.get(local_start..local_start + value_count as usize)?;
+    Some(PalwStepTileLeafV1 {
+        version: crate::palw_step_leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
+        coord,
+        value_count,
+        values_le: values.iter().flat_map(|v| v.to_le_bytes()).collect(),
+    })
 }
 
 /// **The two id carriages, checked against the binding alone** — the prompt ids (the whole list

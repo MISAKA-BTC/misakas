@@ -1,0 +1,22 @@
+[package]
+name = "misaka-palw-opv-meas"
+description = "RFC-0015 OPV measurement harness (test-only, not consensus): a FRESH outsider verifier end to end on real PALWTIR1 artifacts (fetch from files and from a localhost HTTP provider, check, localize, assemble the filing, court-check it), timed per step with CPU time, peak RSS, bytes moved and the host's load average."
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "opv-meas"
+path = "src/main.rs"
+
+[dependencies]
+misaka-palw-kernel.workspace = true
+misaka-palw-tir.workspace = true
+misaka-palw-tir-artifact = { path = "../../misaka-palw-tir-artifact" }
+misaka-palw-remote.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+borsh.workspace = true
+serde_json.workspace = true
+libc.workspace = true

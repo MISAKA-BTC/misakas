@@ -14,10 +14,10 @@
 //! * a source that is not REAL useful work (heartbeat, BASE-0 fallback, EXEC, receipt-only, provisional, Panel receipt) — by
 //!   kind, in the challenge contract's eligibility;
 //! * a source whose Final passed through a Panel licence — `FinalPathV1::PanelLicensed` is refused for
-//!   `SubjectKindV1::PanelAssignment` (the circularity work → Panel → Final → beacon → Panel). **Every Final the V2 lattice can
-//!   write is Panel-licensed** ([`ChainPanelBeaconHistoryV1`]), so on today's chain no source is eligible;
-//! * a source whose profile was not Active and G14-complete in the subject's commitment state — the code-derived gate is not
-//!   linked into consensus, so the chain's eligible set is EMPTY;
+//!   `SubjectKindV1::PanelAssignment` (the circularity work → Panel → Final → beacon → Panel). Every Final the V2 lattice writes
+//!   is Panel-licensed; the separate kernel route can supply Panel-independent OPV Finals;
+//! * a source outside the derived OPV-eligible profile set. [`ChainPanelBeaconHistoryV1`] reads the kernel route and OPV extras;
+//!   freezing that set at the epoch's commitment is still a release blocker;
 //! * the claims being assigned, a work accepted before the epoch's start `S`, a duplicate, reordered or substituted contribution,
 //!   a forged accumulator/anchor/output (the contract's recomputation).
 //!
@@ -32,12 +32,14 @@
 use std::collections::BTreeSet;
 
 use kaspa_hashes::Hash64;
-use misaka_palw_challenge::hash::{Digest, object_id};
 use misaka_palw_challenge::beacon::BeaconEvidenceRefusalV1;
+use misaka_palw_challenge::hash::{Digest, object_id};
 use misaka_palw_challenge::policy::PolicyRefusalV1;
 use misaka_palw_challenge::{
-    BeaconContextV1, InteractiveModeV1, PostCommitChallengePolicyV1, SubjectKindV1, WorkBeaconStateV1, WorkBeaconV1, WorkFinalEventV1,
-    collect_work_beacon_v1, verify_work_beacon_v1,
+    AttributedWorkV1, BeaconContextV1, InteractiveModeV1, PostCommitChallengePolicyV1, SealedBeaconStateV3, SealedSourceV3,
+    SourceRuleV1, SubjectKindV1, WorkBeaconStateV1, WorkBeaconV1, WorkFinalEventV1, collect_attributed_work_beacon_v1,
+    collect_sealed_work_beacon_v3, collect_work_beacon_v1, verify_attributed_work_beacon_v1, verify_sealed_work_beacon_v3,
+    verify_work_beacon_v1,
 };
 use misaka_palw_panel::{BeaconProofV1, BeaconRequestV1, MAX_BEACON_PROOF_BYTES_V1, PanelErrorV1};
 
@@ -63,10 +65,15 @@ pub fn panel_beacon_scheme_of_v1(policy: &PostCommitChallengePolicyV1) -> Hash64
 pub trait PanelBeaconHistoryV1 {
     /// Every settlement event of the branch (any order; the contract sorts).
     fn final_events(&self) -> Vec<WorkFinalEventV1>;
+    /// The same settlements with who stands behind each (the producer bond, and the consumer where the route records one), for a
+    /// policy whose source rule is distinct (RFC-0007 §VI). A source without an attribution is attributed to nobody (`[0; 64]`).
+    fn attributed_works(&self) -> Vec<AttributedWorkV1>;
+    /// The sealed-source beacon's (v3) facts: every claim seal of the branch with its reveal and its claim's fate.
+    fn sealed_sources(&self) -> Vec<SealedSourceV3>;
     /// The last position the branch has settled (the carrying block's selected parent's DAA).
     fn tip_position(&self) -> u64;
-    /// Source profiles that were Active AND G14-complete in the epoch's commitment state.
-    fn eligible_profiles(&self) -> BTreeSet<Digest>;
+    /// Source profiles that were Active AND G14-complete (derived OPV-eligible) at the epoch's commitment position.
+    fn eligible_profiles(&self, commitment_position: u64) -> BTreeSet<Digest>;
     /// The canonical work identities of the non-terminal claims sealed for `epoch`: the candidates under test, never sources.
     fn pending_work_of_epoch(&self, epoch: u64) -> BTreeSet<Digest>;
 }
@@ -152,6 +159,44 @@ fn candidate_free_events(history: &impl PanelBeaconHistoryV1, epoch: u64) -> Vec
     history.final_events().into_iter().filter(|event| !under_test.contains(&event.canonical_work_id)).collect()
 }
 
+/// [`candidate_free_events`] over attributed works.
+fn candidate_free_works(history: &impl PanelBeaconHistoryV1, epoch: u64) -> Vec<AttributedWorkV1> {
+    let under_test = history.pending_work_of_epoch(epoch);
+    history.attributed_works().into_iter().filter(|work| !under_test.contains(&work.event.canonical_work_id)).collect()
+}
+
+/// The v3 seals with the claims under test removed: a revealed seal whose claim is itself being assigned in this epoch is not a
+/// source of its own Panel (an unrevealed one is unknown work and stays a seal, as the contract treats it).
+fn candidate_free_seals(history: &impl PanelBeaconHistoryV1, epoch: u64) -> Vec<SealedSourceV3> {
+    let under_test = history.pending_work_of_epoch(epoch);
+    history
+        .sealed_sources()
+        .into_iter()
+        .filter(|seal| match seal.reveal.as_ref().map(|r| &r.fate) {
+            Some(misaka_palw_challenge::SourceFateV3::Final(event)) => !under_test.contains(&event.canonical_work_id),
+            _ => true,
+        })
+        .collect()
+}
+
+/// Which collector a policy names: v3's sealed sources, the distinct rules' attributed works, or v1's plain events.
+fn collector_of(policy: &PostCommitChallengePolicyV1) -> Collector {
+    if policy.is_sealed_source() {
+        Collector::Sealed
+    } else if matches!(policy.source_rule(), Some(rule) if rule != SourceRuleV1::Plain) {
+        Collector::Attributed
+    } else {
+        Collector::Plain
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Collector {
+    Plain,
+    Attributed,
+    Sealed,
+}
+
 /// **A fresh node checks a presented Panel beacon against its own branch.** Refusals are typed; the engine adapter
 /// ([`verify_panel_beacon_for_engine_v1`]) collapses them to `InvalidBeacon`.
 pub fn verify_panel_beacon_v1(
@@ -168,10 +213,17 @@ pub fn verify_panel_beacon_v1(
     if presented.output != digest(proof.output) {
         return Err(PanelBeaconRefusalV1::OutputMismatch);
     }
-    let ctx = panel_beacon_context_v1(request, policy, history.eligible_profiles());
-    verify_work_beacon_v1(&ctx, &presented, &candidate_free_events(history, request.epoch), history.tip_position())
-        .map(|_| ())
-        .map_err(PanelBeaconRefusalV1::Evidence)
+    let ctx = panel_beacon_context_v1(request, policy, history.eligible_profiles(request.release_daa));
+    let tip = history.tip_position();
+    match collector_of(policy) {
+        Collector::Plain => verify_work_beacon_v1(&ctx, &presented, &candidate_free_events(history, request.epoch), tip),
+        Collector::Attributed => {
+            verify_attributed_work_beacon_v1(&ctx, &presented, &candidate_free_works(history, request.epoch), tip)
+        }
+        Collector::Sealed => verify_sealed_work_beacon_v3(&ctx, &presented, &candidate_free_seals(history, request.epoch), tip),
+    }
+    .map(|_| ())
+    .map_err(PanelBeaconRefusalV1::Evidence)
 }
 
 /// [`verify_panel_beacon_v1`] under the engine's `ConsensusViewV1::verify_beacon` signature.
@@ -184,15 +236,31 @@ pub fn verify_panel_beacon_for_engine_v1(
     verify_panel_beacon_v1(approved, history, request, proof).map_err(PanelErrorV1::from)
 }
 
-/// **The beacon an epoch has at `tip_position`** (Collecting / Candidate / Locked / Unavailable), for observation and for a
-/// producer that builds the proof it carries. `Err` when no approved scheme names the request.
+/// **The beacon an epoch has at `tip_position`**, for observation and for a producer that builds the proof it carries: v1/v2's
+/// accumulator state (Collecting / Candidate / Locked / Unavailable) or v3's sealed state (Sealing / Revealing / Settling / Locked /
+/// Unavailable / Vetoed). `Err` when no approved scheme names the request.
 pub fn panel_beacon_state_v1(
     approved: &[PostCommitChallengePolicyV1],
     history: &impl PanelBeaconHistoryV1,
     request: &BeaconRequestV1,
     tip_position: u64,
-) -> Result<WorkBeaconStateV1, PanelBeaconRefusalV1> {
+) -> Result<PanelBeaconStateV1, PanelBeaconRefusalV1> {
     let policy = approved_policy(approved, request)?;
-    let ctx = panel_beacon_context_v1(request, policy, history.eligible_profiles());
-    collect_work_beacon_v1(&ctx, &candidate_free_events(history, request.epoch), tip_position).map_err(PanelBeaconRefusalV1::Policy)
+    let ctx = panel_beacon_context_v1(request, policy, history.eligible_profiles(request.release_daa));
+    let state = match collector_of(policy) {
+        Collector::Plain => collect_work_beacon_v1(&ctx, &candidate_free_events(history, request.epoch), tip_position)
+            .map(PanelBeaconStateV1::Accumulator),
+        Collector::Attributed => collect_attributed_work_beacon_v1(&ctx, &candidate_free_works(history, request.epoch), tip_position)
+            .map(PanelBeaconStateV1::Accumulator),
+        Collector::Sealed => collect_sealed_work_beacon_v3(&ctx, &candidate_free_seals(history, request.epoch), tip_position)
+            .map(PanelBeaconStateV1::Sealed),
+    };
+    state.map_err(PanelBeaconRefusalV1::Policy)
+}
+
+/// An epoch's beacon as [`panel_beacon_state_v1`] reports it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PanelBeaconStateV1 {
+    Accumulator(WorkBeaconStateV1),
+    Sealed(SealedBeaconStateV3),
 }

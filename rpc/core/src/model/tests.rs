@@ -3394,7 +3394,13 @@ mod native_settlement_wire_tests {
             PalwSettlementPolicyV1 { settled_anchor_depth: 2, unique_mature_work: 20, max_operator_permille: 600, max_class_permille: 600 },
             native_maturity_report_v1(3_000, 120),
             SafeWaitV1::MissingHistory { gap: HistoryGapV1::DeltaNotRetained, block: Some(h(4)) },
-            FinalizedReadinessV1 { finalized: None, pruning_point: h(1), pruning_blue: Some(0), wait: Some(FinalizedWaitV1::NoSafePrefix) },
+            FinalizedReadinessV1 {
+                finalized: None,
+                pruning_point: h(1),
+                pruning_blue: Some(0),
+                wait: Some(FinalizedWaitV1::NoSafePrefix),
+                withdrawn_from: Some(kaspa_hashes::Hash64::from_u64_word(7)),
+            },
             SkippedEvidenceV1 { bond_not_held: 2, ..Default::default() },
         )
     }

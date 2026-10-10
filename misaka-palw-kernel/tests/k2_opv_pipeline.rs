@@ -57,10 +57,14 @@ fn policy() -> LedgerPolicyV1 {
         accuser_reward_permille: 500,
         default_penalty: 100,
         claim_reward: 7,
+        job_fee: 2,
+        job_escrow_ttl_daa: 300,
         max_adjudications_per_block: 64,
+        prosecution_reserve_permille: 500,
         max_court_work_per_block: u64::MAX,
         claim_seal_delay_daa: 1,
         seal_ttl_daa: 100,
+        seal_deposit: 1,
         prosecution: ProsecutionPolicyV1 {
             court_deadline_daa: 20,
             max_sessions_per_claim: 1 << 10,
@@ -152,8 +156,11 @@ impl World {
             params,
             events: vec![],
         };
-        let mut txs =
-            vec![LedgerTxV1::SyncBond { bond: PRODUCER, collateral: 5000 }, LedgerTxV1::SyncBond { bond: OUTSIDER, collateral: 1000 }];
+        let mut txs = vec![
+            LedgerTxV1::SyncBond { bond: PRODUCER, collateral: 5000 },
+            LedgerTxV1::SyncBond { bond: OUTSIDER, collateral: 1000 },
+            LedgerTxV1::SyncBond { bond: common::chain::POSTER, collateral: common::chain::POSTER_COLLATERAL },
+        ];
         txs.extend(w.register_txs(opv.map(|_| OPV)));
         let ev = w.block_raw(1, txs);
         if let Some(class) = ev.iter().find_map(|e| if let E::ClassRegistered { class } = e { Some(*class) } else { None }) {
@@ -216,6 +223,8 @@ impl World {
     }
 
     fn block(&mut self, daa: u64, txs: Vec<T>) -> Vec<E> {
+        // Past `palw_panel_free_v1` every reveal carries its seal's salt (OPV-BOOT GAP-B1a).
+        let txs = common::chain::salted(&self.l, txs);
         let seals = common::chain::seals_for(&txs);
         if !seals.is_empty() && self.l.daa < daa {
             let sb = block_of(self.l.daa, seals, PRODUCER);

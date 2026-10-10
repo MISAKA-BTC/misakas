@@ -177,11 +177,18 @@ impl ClaimLifecycleV1 {
                     S::ProbabilisticPass { passed_daa: *daa, window_end_daa: daa + self.policy.challenge_window_daa }
                 }
                 TallyStateV1::Disputed { .. } => S::Disputed { open: 1, resume: Box::new(self.state.clone()) },
-                TallyStateV1::Unavailable { .. } if daa > deadline_daa => S::Unavailable { daa: *daa, producer_defaulted: false },
-                _ if daa > deadline_daa => S::TimedOut { daa: *daa },
+                TallyStateV1::Unavailable { .. } if daa > deadline_daa && *daa >= self.final_hold_until => {
+                    S::Unavailable { daa: *daa, producer_defaulted: false }
+                }
+                _ if daa > deadline_daa && *daa >= self.final_hold_until => S::TimedOut { daa: *daa },
                 _ => self.state.clone(),
             },
-            (S::Checking { deadline_daa, .. }, E::Tick { daa }) if daa > deadline_daa => S::TimedOut { daa: *daa },
+            // C4 F-C4R4-13: the proof grace after a service holds the receipts' deadline too — a claim served past it stays
+            // `Checking` (prosecutable, its reservation held) until the grace ends, so the proof the service enabled can still be filed
+            // and convict. The hold is bounded: a demand opens only by the deadline, so it never passes deadline + court + grace.
+            (S::Checking { deadline_daa, .. }, E::Tick { daa }) if daa > deadline_daa && *daa >= self.final_hold_until => {
+                S::TimedOut { daa: *daa }
+            }
             (S::ProbabilisticPass { window_end_daa, .. } | S::Challengeable { window_end_daa, .. }, E::Tick { daa })
                 if daa >= window_end_daa =>
             {

@@ -37,9 +37,11 @@ pub const PALW_MODEL_BENEFIT_MAX_NOTE: usize = 64;
 /// unknown bit is refused at the fold (N5) rather than stored and ignored, because a promise no
 /// reader can render is not a promise.
 pub mod grant {
-    /// The artifact of a new version, `lead_daa` before the line MAY make it current (§4.4).
+    /// Historical wire bit: refused in new declarations past palw_model_immutable_v1 (ADR-0175).
+    /// Before that fence: a new version's artifact before promotion (§4.4).
     pub const EARLY_VERSION: u32 = 1 << 0;
-    /// Versions published as previews are served to holders and to nobody else.
+    /// Private access to this registration's fixed artifact/service past ADR-0175. It never
+    /// grants a future replacement model. Below the fence: access to historical previews.
     pub const PRIVATE_BETA: u32 = 1 << 1;
     /// The line's gateways serve holders' jobs ahead of others'.
     pub const PRIORITY_INFERENCE: u32 = 1 << 2;

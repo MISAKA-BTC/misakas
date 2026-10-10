@@ -1,5 +1,12 @@
 # ADR-0078: What was made from it is committed; the thing itself never rides
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -16,8 +23,7 @@ the output ids, never the tokens), ADR-0074 Decision 1 (the `User` prompt mode),
 (lifecycle objects; `ObjectChunk` for anything above one carrier), ADR-0053 (one execution family:
 pure Rust in the tree, integer arithmetic, because float is unadjudicable), ADR-0026 (borrow the
 architecture, refuse the tolerant proof model).
-**Leaves open, by name:** weight for a transformer's own computation (§3 Decision 7); it is the
-door this ADR builds and does not walk through.
+**Withdrawn:** independent PALW weight for a transformer's computation (§3 Decision 7). Derivation objects remain weightless under ADR-0144 P3.
 
 > **Security amendment appended (2026-09-02)** — see the last section (SA-1…SA-6): model-written code runs on an ephemeral EVM state under a gas ceiling in a confined process; every transformer declares input/output bounds; uploaded inputs and the DSL DA election are bounded and authenticated; a `kind` with no published manifest is not storable; task graphs are never executed here.
 
@@ -148,7 +154,7 @@ by anyone holding the DSL. Stated rather than hidden: in this ADR a demonstrated
 the executor nothing on chain — no bond hangs on a derivation, because the chain cannot run an
 arbitrary transformer and this ADR refuses to pretend it can. What a false derivation costs is
 the one thing the object exists to carry: the executor's name on a provenance that anyone can
-show is wrong. Decision 7 is the route to making it cost collateral.
+show is wrong. Decision 7's PALW-reward route was withdrawn by ADR-0144.
 
 **Decision 6 — delivery, and what is under a data-availability obligation.** The gateway
 (ADR-0077 Decision 3/4) returns, in one response: the answer (the DSL, as text), the artifact (as
@@ -160,16 +166,9 @@ that opts a claim's DSL into the obligation serves it on request like a capture 
 the default is off, because the DSL is the answer to the user's prompt and ADR-0044 Decision 8's
 sentence about silently publishing prompts applies to answers word for word.
 
-**Decision 7 — the door to weight: a transformer that is a step space is a class.** A
-transformer whose computation is an integer step space — every operation a catalogued kernel,
-every intermediate committable, checkpoint-anchored like a model's layers — can register as an
-execution family through ADR-0075's route, drill, bind to the free-prompt lane, and then its
-leaves are counted work: a simulation run, a rasterization, a mesh build would earn weight
-exactly as an inference does, priced by the leaves it executed, tried by the same court. This
-ADR builds the object and the naming that such a family would need and decides nothing about
-which transformer goes first; the simulation kind is the obvious candidate because an integer
-step simulator IS a step space with no translation. Until a kind takes that route, derivations
-of it weigh nothing, which is the honest weight of a computation no court can try.
+**Decision 7 — transformer に PALW weight を与える案は不採用。**
+
+mesh builder・rasterizer・simulator などを独立した PALW class にする案は、ユーザーがローカルで行う推論を検証する目的から外れるため。[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P3 に従い、derivation object は weightless とする。ユーザーの推論自体である computation は別途 class の要件で判断する。
 
 **Decision 8 — the kind table, v1.** One row per kind a person asked for; each names its DSL, its
 transformer's discipline, its artifact, and what "verify" means. Non-goals are in the table on
@@ -184,7 +183,7 @@ it.
 | `code` | source files + a build manifest (targets, tests) | a pinned, hermetic toolchain: no network, fixed clock, fixed locale and env, build tree hash in the manifest | build outputs + a test log | hermetic reproducible build; the toolchain's own reproducibility is the gate — a toolchain whose output varies across runs is excluded by name | anything that fetches at build time |
 | `map` | tile / graph DSL: cells, edges, integer attributes | integer map compiler | the map file | pure function | — |
 | `music` | note-list DSL: pitch, onset and duration in ticks, channels, programs | Standard MIDI File writer | `.mid` | SMF bytes are canonical | waveform synthesis (float DSP) |
-| `simulation` | scenario DSL: entities, integer rules, a seed, a step count | integer step simulator | a trace + a summary | an integer state machine — the first candidate for Decision 7 | anything with floating-point dynamics |
+| `simulation` | scenario DSL: entities, integer rules, a seed, a step count | integer step simulator | a trace + a summary | an integer state machine; weightless derivation | anything with floating-point dynamics |
 
 A kind is versioned by its grammar and its transformer, never by editing a row: a new grammar or a
 new build is a new `grammar_id` / `transformer_id`, and the old derivations stay checkable against
@@ -298,8 +297,8 @@ that verifies, a reward — and two entrances to it:
      Qwen3.6, A16, …        generator / compiler / checker
              │                         │
      an inference is a         a transformer is a derivation      ← this ADR (weight: none)
-     claim (ADR-0077)          a step-space transformer is a       ← Decision 7 (weight: as a class)
-             │                 class (ADR-0075's route)
+     claim (ADR-0077)          no separate PALW weight             ← ADR-0144 P3
+             │                         │
              └────────────┬────────────┘
                           ▼
                    canonical claim
@@ -311,10 +310,7 @@ that verifies, a reward — and two entrances to it:
                        reward
 ```
 
-Read exactly: in this ADR only the left entrance bears weight. The right entrance is a derivation
-— committed, checkable, weightless — until the transformer registers as a family (Decision 7).
-That is not a limitation the diagram hides; it is the honest weight of a computation no court can
-yet try, and Decision 7 is the door.
+Only the inference entrance bears PALW weight. A transformer produces a committed, checkable, weightless derivation; its former route to independent class weight was withdrawn by ADR-0144 P3.
 
 **Decision 11 — the order in which domains open, and what §6 does with it.** The first areas,
 in order: **① code → ② 3D / CAD → ③ game (map, game data, procedural) → ④ image / music → ⑤
@@ -354,8 +350,7 @@ X2   A DerivedArtifactV1 is accepted only for a claim that exists on this chain,
 X3   A transformer named by any object is byte-identical on two architectures over the drill's
      DSL corpus, and declares no floating-point arithmetic on any path that reaches the output.
 X4   A parse failure under a grammar produces no object and changes nothing about the claim.
-X5   A derivation credits no weight, no payment and no exposure (Decision 7 is the only way it
-     ever will, and it is not this ADR).
+X5   A derivation credits no weight, no payment and no exposure (ADR-0144 P3).
 X6   From (answer ids, the job's context hash, the family, grammar_id, transformer_id) alone, a
      consumer recomputes output_root, dsl_hash and artifact_hash and reaches the object's values
      or a demonstrable mismatch (`palw-derive verify`).
@@ -378,7 +373,6 @@ X9   Extra inputs of a transformation or an optimization are named by hash insid
 | Q-05 | `code` (the hermetic runner, and `contract` / `evm/v1` as the first named toolchain) and `cad` (exact kernel, booleans last) — Decision 11's ① and ② | X3 green each; the kernel's boolean either exact or absent; an external toolchain is named only by its fleet drill |
 | Q-06 | `map`, `image`, `simulation` transformers — ③, ④, ⑤ | X3 green each |
 | Q-07 | the DA election for the DSL | served on request; off by default |
-| Q-08 | Decision 7's first family — a simulation kind as a step space | its own ADR |
 
 **Done when** a person asks a certified class for a scene, receives the JSON and the GLB, keeps
 both, and anyone they hand the JSON to can recompute the claim's `output_root`, the `dsl_hash`
@@ -397,12 +391,8 @@ and the GLB holding the megabytes.
 
 ## 8. What is deliberately not decided
 
-* **Which transformer becomes a family first** (Decision 7), and the step-space encoding of a
-  rasterizer or a mesh builder — each is its own ADR with its own drill.
-* **Slashing for a false derivation.** Without Decision 7 the chain cannot run the transformer,
-  so it cannot convict; a bonded "I will pay if shown wrong" escrow with an off-chain
-  demonstration is possible and deferred, because a court that cannot compute the verdict is a
-  vote, and votes are what this lineage refuses.
+* **Slashing for a false derivation.** The standalone transformer-weight route is withdrawn (Decision 7); a court that cannot compute the transformation cannot objectively convict it. No additional transformer escrow is selected here.
+
 * **Model classes for images and audio** — a diffusion model is a class, and its route is
   ADR-0075's, not this layer's.
 * **Waveform synthesis, physics, texture generation** — floating-point by nature today; a

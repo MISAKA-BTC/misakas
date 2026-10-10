@@ -62,6 +62,10 @@ pub mod sdk;
 /// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
 pub mod tir_equiv;
 pub mod tir_manifest;
+/// RFC-0013 §5/§7.2: a stored Merkle index (one leaf hash per 32 KiB leaf) — authenticated range reads and multiproofs without a pass over the artifact.
+pub mod tir_merkle_index;
+/// RFC-0013 §5: the container as a row source for the tiled independent evaluator, authenticated by the stored index.
+pub mod tir_rows;
 pub mod tir_stream;
 /// RFC-0002 Phase F (F6, node half): registering an IR class.
 pub mod tir_certification;

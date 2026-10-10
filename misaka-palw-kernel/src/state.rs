@@ -103,6 +103,12 @@ pub struct StateRootPartsV1 {
     pub attested_artifacts: Digest,
     pub job_claims: Digest,
     pub seals: Digest,
+    /// GAP-R7: the accusers' proof seals (in the root since the G14-R4 fix).
+    pub proof_seals: Digest,
+    /// GAP-5: the posters' job escrows that fund Final rewards (in the root since the G14-R4 fix).
+    pub job_escrows: Digest,
+    /// The demand bonds of served positions awaiting their fate (in the root since G14-R4).
+    pub served_demands: Digest,
 }
 
 impl StateRootPartsV1 {
@@ -173,6 +179,9 @@ impl KernelLedgerV1 {
             ),
             job_claims: collection_root(&d("job-claims"), self.job_claims.len(), self.job_claims.iter()),
             seals: collection_root(&d("seals"), self.seals.len(), self.seals.iter()),
+            proof_seals: collection_root(&d("proof-seals"), self.proof_seals.len(), self.proof_seals.iter()),
+            job_escrows: collection_root(&d("job-escrows"), self.job_escrows.len(), self.job_escrows.iter()),
+            served_demands: collection_root(&d("served-demand-bonds"), self.served_demands.len(), self.served_demands.iter()),
         }
     }
 
@@ -182,6 +191,60 @@ impl KernelLedgerV1 {
     /// [`StateRootPartsV1::root`], byte for byte. Once an OPV policy is set the root is [`crate::opv::StateRootPartsV2`]: the
     /// historical root of the whole Panel-licensed route, the policy, the OPV classes and the OPV claim rows.
     pub fn root(&self) -> Digest {
-        if self.opv.is_dormant() { self.root_parts().root() } else { self.root_parts_v2().root() }
+        let base = if self.opv.is_dormant() { self.root_parts().root() } else { self.root_parts_v2().root() };
+        // K2-TIR-v4 (tables 20 and 21): an extension only once either holds a row, so every older root is unchanged; then
+        // RFC-0004 Part II's typed tables, each only when non-empty (`crate::rows::root_of_rows` composes them the same way).
+        let base = if self.tiled_jobs.is_empty() && self.seg_progress.is_empty() {
+            base
+        } else {
+            let d = |name: &str| format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes();
+            crate::rows::seg_root_extension_v1(
+                &base,
+                &collection_root(&d("tiled-jobs"), self.tiled_jobs.len(), self.tiled_jobs.iter()),
+                &collection_root(&d("seg-progress"), self.seg_progress.len(), self.seg_progress.iter()),
+            )
+        };
+        // RFC-0004 Part II: the typed tables, each only when non-empty.
+        let base = crate::spec::typed_root_v1(base, &self.typed_root_parts());
+        // OPV-BOOT GAP-B1a / C4R4 F-C4R4-08 (tables 25, 26 and 18): an extension only once any holds a row, so every older root is
+        // unchanged.
+        let d = |name: &str| format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes();
+        let base = if self.claim_beacon_salts.is_empty() && self.forfeited_claim_seals.is_empty() && self.job_posters.is_empty() {
+            base
+        } else {
+            crate::rows::beacon_seal_root_extension_v1(
+                &base,
+                &collection_root(&d("claim-beacon-salts"), self.claim_beacon_salts.len(), self.claim_beacon_salts.iter()),
+                &collection_root(&d("forfeited-claim-seals"), self.forfeited_claim_seals.len(), self.forfeited_claim_seals.iter()),
+                &collection_root(&d("job-posters"), self.job_posters.len(), self.job_posters.iter()),
+            )
+        };
+        // `palw_verifier_pay_v1` (table 27): an extension only once it holds a row.
+        if self.verifier_pay.is_empty() {
+            return base;
+        }
+        crate::rows::verifier_pay_root_extension_v1(
+            &base,
+            &collection_root(&d("verifier-pay"), self.verifier_pay.len(), self.verifier_pay.iter()),
+        )
+    }
+
+    /// RFC-0004 Part II: `(table, collection root)` of every NON-EMPTY typed table, in root order (empty for an untyped ledger).
+    pub fn typed_root_parts(&self) -> Vec<(u8, Digest)> {
+        let d = |name: &str| format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes();
+        let t = &self.typed;
+        let mut out = Vec::new();
+        if !t.classes.is_empty() {
+            let records: std::collections::BTreeMap<Digest, crate::spec::ComputationSpecV1> =
+                t.classes.iter().map(|(k, c)| (*k, c.spec.clone())).collect();
+            out.push((crate::rows::TABLE_SPEC_CLASSES_V1, collection_root(&d("spec-classes"), records.len(), records.iter())));
+        }
+        if !t.jobs.is_empty() {
+            out.push((crate::rows::TABLE_SPEC_JOBS_V1, collection_root(&d("spec-jobs"), t.jobs.len(), t.jobs.iter())));
+        }
+        if !t.lines.is_empty() {
+            out.push((crate::rows::TABLE_MEMORY_LINES_V1, collection_root(&d("memory-lines"), t.lines.len(), t.lines.iter())));
+        }
+        out
     }
 }
