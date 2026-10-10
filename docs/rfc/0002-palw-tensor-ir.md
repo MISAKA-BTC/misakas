@@ -2266,6 +2266,16 @@ concurrent overload. Attribute invalid requests' costs to the attacker and prese
 producer's opportunity to answer. A fresh non-seat verifier must reach objective conviction using
 public authenticated material, and an honest independent participant must reach Final/redemption.
 
+The public onboarding verifier now derives the attempt, bound kernel program, Finals and v3
+source seals from one complete op-211 row snapshot. Every page must retain the same DAA, roots,
+header and total count; ordered rows, advancing cursors, completeness and both reconstructed
+roots are checked before verification. The candidate, descriptor, program, plan and parameter
+link must agree. This checks consistency with the served roots, not their canonical-chain
+authentication: the caller still needs its node/state-proof trust. The 128 MiB retained wire-byte
+ceiling is local reader policy, not a bound on total verifier RAM or a consensus capacity.
+Pinned pagination on a continuously advancing node, complete-check fresh replay, real-checkpoint
+public conviction and independent Final/redemption remain required completion evidence.
+
 Use pinned real checkpoints for dense baselines, GDN/KDA and unequal QK/V heads, MoE/routing,
 Mamba/hybrid state, sparse/compressed attention and complete multimodal tasks. The review's model
 names are discovery candidates, not a supported list; pin revisions and verify their exact required

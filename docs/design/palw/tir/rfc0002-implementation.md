@@ -571,3 +571,37 @@ A separate baseline integration issue was found while checking formatting: gatew
 formatting cannot parse that unchanged file. It needs repair/build verification before gateway
 public-task drills. Unrelated formatter edits were discarded; no gateway/source changes are
 included in this resource increment.
+
+## Verified increment — coherent public onboarding reads and gateway build, 2026-10-10
+
+`misaka model onboard verify` now consumes one op-211 row snapshot rather than combining
+op-231 attempt/program reads with later op-212 Finals and op-211 seals. The SDK checks fixed
+tip DAA, roots, header and declared count across pages, strictly advancing ordered rows/cursors,
+exact completeness and a 128 MiB retained wire-byte ceiling. It reconstructs both served roots,
+then derives the attempt, evidence, bound kernel program, attributed Finals and v3 source seals
+from that same state. The requested candidate, descriptor, program, plan and parameter link
+must agree before fresh verification. Public inventory roots and kernel parameter roots remain
+separate domains. No model-name/frontend allowlist is introduced.
+
+The earlier gateway parser failure is repaired: the scoped candidate spawn closes its map
+closure. Its harness uses the current `ClaimBudget` API and `serve_connection` arguments.
+Validation: five new SDK snapshot tests pass, covering page drift, repeated/false cursors,
+duplicate/omitted rows, oversized declarations, incomplete material, root mutation and
+self-consistent substituted bindings. The gateway binary suite passes 162 tests with one
+existing ignored test. SDK and `misaka` CLI compilation pass with existing warnings.
+
+```sh
+cargo test --locked -p misaka-palw-sdk --test onboarding_snapshot
+cargo test --locked -p misaka-palw-gateway --bin misaka-palw-gateway
+cargo check --locked -p misaka-palw-sdk
+cargo check --locked -p misaka-cli --bin misaka
+```
+
+This is generated-weight snapshot/harness evidence, not a live-node or real-checkpoint PASS.
+The served roots still need caller node/state-proof trust. The byte ceiling does not bound
+total verifier RAM. Strict tip matching fails closed when a node advances between pages;
+pinned/scalable public snapshots remain open. The runtime pack's v1 file-facts runner remains
+separate from the actual chain's attributed/sealed-source policies, and has no RPC adapter;
+its stale claim that no public node reads exist is corrected. Complete-check fresh replay,
+real-checkpoint fidelity/performance, permissionless public conviction and independent
+Final/redemption remain open; RFC02 is not complete and no dormant fence is activated.

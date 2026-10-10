@@ -359,7 +359,7 @@ pub fn config(outbox: &Path) -> Config {
         workdir: std::env::temp_dir(),
         max_prompt_bytes: 64,
         bond_exposure_room_sompi: 0,
-        public_job_budget_permille: 1_000,
+        claim_budget_permille: 1_000,
         claim_exposure_sompi: 0,
         answer_never_commit: false,
         privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
@@ -439,7 +439,7 @@ pub fn chat(
         a.sidecar_report = report;
         (c, a)
     })?;
-    let budget = Mutex::new(crate::PublicJobBudget::new());
+    let budget = Mutex::new(crate::ClaimBudget::new());
     let mut sink = crate::BufferedSink;
     let ctx = crate::RequestCtx { link, request_digest: crate::idempotency::request_digest(&serde_json::to_vec(body).unwrap()).ok() };
     crate::handle_chat(config, identity, worker, &budget, facts, source, &chat_request, &admitted, admitted.sampling, &mut sink, &ctx)

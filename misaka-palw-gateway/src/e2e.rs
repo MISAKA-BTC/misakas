@@ -14,7 +14,7 @@ use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use misaka_palw::host_security::ConfinementBackend;
 
 use crate::testkit::{FloorWorker, identity, offline_source, temp_dir};
-use crate::{Config, Identity, JobRunner, PublicJobBudget, Services, SourceRates, chain, pool};
+use crate::{Config, Identity, JobRunner, ClaimBudget, Services, SourceRates, chain, pool};
 
 pub(crate) struct Harness {
     pub dir: PathBuf,
@@ -24,7 +24,7 @@ pub(crate) struct Harness {
     pub source: chain::ChainSource,
     pub services: Services,
     pub in_flight: AtomicUsize,
-    pub budget: Mutex<PublicJobBudget>,
+    pub budget: Mutex<ClaimBudget>,
     pub sources: Mutex<SourceRates>,
     pub gate: pool::SourceGate,
 }
@@ -48,7 +48,7 @@ impl Harness {
             source,
             services,
             in_flight: AtomicUsize::new(0),
-            budget: Mutex::new(PublicJobBudget::new()),
+            budget: Mutex::new(ClaimBudget::new()),
             sources: Mutex::new(SourceRates::default()),
             gate: pool::SourceGate::new(8, 4),
         })
@@ -71,7 +71,6 @@ impl Harness {
                 &me.budget,
                 &me.sources,
                 ConfinementBackend::None,
-                false,
                 &me.gate,
                 &me.services,
             );

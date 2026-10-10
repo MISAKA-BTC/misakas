@@ -2347,12 +2347,25 @@ fn handle_chat_candidates(
     let results: Vec<Result<serde_json::Value, String>> = match bodies_from_batch {
         Some(bodies) => bodies.into_iter().map(Ok).collect(),
         None => std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..n)
-            .map(|i| {
-                let seed = surface::candidate_seed_v1(&base_seed, i);
-                scope.spawn(move || {
-                    let mut sink = BufferedSink;
-                    handle_chat(config, identity, worker, budget, facts, chain_source, chat, admitted, (seed, temperature_q), &mut sink, ctx)
+            let handles: Vec<_> = (0..n)
+                .map(|i| {
+                    let seed = surface::candidate_seed_v1(&base_seed, i);
+                    scope.spawn(move || {
+                        let mut sink = BufferedSink;
+                        handle_chat(
+                            config,
+                            identity,
+                            worker,
+                            budget,
+                            facts,
+                            chain_source,
+                            chat,
+                            admitted,
+                            (seed, temperature_q),
+                            &mut sink,
+                            ctx,
+                        )
+                    })
                 })
                 .collect();
             handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("a candidate's job panicked".to_string()))).collect()

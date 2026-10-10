@@ -7,7 +7,7 @@
 //! envelope-sign     request.json, re-derived and checked against THIS build's network and fork digest  ── the key ──►  envelope.borsh
 //!                   (file it: `misaka palw submit-object --object envelope.borsh`)
 //! status            op 231: the lifecycle state, the attempt, the beacon, the posted evidence, the gate
-//! verify            ops 231 + 212 (+ 211 for a sealed-source v3 attempt; + the artifact): the fresh verifier rebuilds the verdict
+//! verify            one root-checked op 211 snapshot (+ the artifact): the fresh verifier rebuilds the verdict
 //!                   and says whether it agrees with the chain
 //! ```
 //!
@@ -17,8 +17,8 @@
 use crate::node::Ctx;
 use crate::{CliError, CliResult, OutputFormat, exit};
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
+use kaspa_rpc_core::GetPalwConformanceEvidenceRequest;
 use kaspa_rpc_core::api::rpc::RpcApi;
-use kaspa_rpc_core::{GetPalwConformanceEvidenceRequest, GetPalwKernelFinalsRequest};
 use misaka_palw_sdk::onboarding_chain::{
     EnvelopeSigner, PublicConformanceReadsV1, SignedRegistrationRequestV1, fresh_verify_from_reads_v1, verify_signed_registration_v1,
 };
@@ -185,15 +185,16 @@ pub(crate) async fn status(ctx: &Ctx, class: &str) -> CliResult {
     Ok(())
 }
 
-/// **A v3 attempt's seal facts from op 211**: every page of the route's rows, rebuilt by the SDK and checked against the served roots.
-/// The roots and header must be the same on every page (a route that moved between pages is refused: read again).
-async fn kernel_sealed_sources(
+/// **One conformance snapshot from op 211**: the SDK rebuilds every page and checks both served roots.
+/// The tip, roots, header and row count must match across pages; a moved snapshot is refused.
+async fn kernel_conformance_reads(
     nv: &crate::wallet::NodeView,
-) -> Result<Vec<misaka_palw_sdk::onboarding_chain::SealedSourceV3>, CliError> {
+    class: kaspa_consensus_core::Hash64,
+) -> Result<PublicConformanceReadsV1, CliError> {
     use kaspa_rpc_core::GetPalwKernelRowsRequest;
-    let mut rows = Vec::new();
+    use misaka_palw_sdk::onboarding_snapshot::{KernelRowsPageV1, KernelRowsSnapshotV1, MAX_SNAPSHOT_BYTES_V1};
+    let mut snapshot = KernelRowsSnapshotV1::default();
     let mut request = GetPalwKernelRowsRequest::default();
-    let mut first: Option<(String, String, String)> = None;
     loop {
         let page = nv
             .client
@@ -203,80 +204,68 @@ async fn kernel_sealed_sources(
         if !page.available {
             return Err(CliError::new(exit::NOT_READY, "this node serves no kernel route rows (op 211)"));
         }
-        let roots = (page.ledger_root.clone(), page.aux_root.clone(), page.header.clone());
-        match &first {
-            None => first = Some(roots),
-            Some(f) if *f != roots => {
-                return Err(CliError::new(exit::GENERIC, "the route moved while its pages were read: run verify again"));
-            }
-            Some(_) => {}
+        // Bound hex decoding before allocating an additional copy of an untrusted page.
+        let encoded_bytes = page
+            .rows
+            .iter()
+            .try_fold(page.header.len(), |sum, r| sum.checked_add(r.key.len()).and_then(|n| n.checked_add(r.row.len())));
+        if page.header.len() > 2 * (64 << 10)
+            || encoded_bytes.is_none_or(|n| n > 2 * MAX_SNAPSHOT_BYTES_V1)
+            || page.next_key.len() > 2 * MAX_SNAPSHOT_BYTES_V1
+        {
+            return Err(CliError::new(exit::GENERIC, "SNAPSHOT_TOO_LARGE: served page exceeds the local reader ceiling"));
         }
+        let root = |s: &str| {
+            kaspa_consensus_core::Hash64::from_str(s).map_err(|_| CliError::new(exit::GENERIC, "the node served a malformed root"))
+        };
+        let mut rows = Vec::new();
         for r in &page.rows {
             let table = u8::try_from(r.table).map_err(|_| CliError::new(exit::GENERIC, "the node served a table number past u8"))?;
             rows.push((table, unhex(&r.key)?, unhex(&r.row)?));
         }
-        if !page.more {
-            break;
+        let next = if page.more {
+            Some((
+                u8::try_from(page.next_table).map_err(|_| CliError::new(exit::GENERIC, "the cursor table is past u8"))?,
+                unhex(&page.next_key)?,
+            ))
+        } else {
+            None
+        };
+        let next = snapshot
+            .push(KernelRowsPageV1 {
+                tip_daa: page.tip_daa,
+                ledger_root: root(&page.ledger_root)?,
+                aux_root: root(&page.aux_root)?,
+                header: unhex(&page.header)?,
+                total_rows: page.total_rows,
+                rows,
+                next,
+            })
+            .map_err(refusal)?;
+        match next {
+            None => return snapshot.into_reads(class).map_err(refusal),
+            Some((table, key)) => {
+                request = GetPalwKernelRowsRequest {
+                    has_cursor: true,
+                    after_table: table as u32,
+                    after_key: misaka_palw_sdk::runtime_pack::commit::hex(&key),
+                    max_bytes: 0,
+                }
+            }
         }
-        request = GetPalwKernelRowsRequest { has_cursor: true, after_table: page.next_table, after_key: page.next_key, max_bytes: 0 };
     }
-    let (ledger_root, aux_root, header) = first.expect("at least one page was read");
-    let root = |s: &str| {
-        kaspa_consensus_core::Hash64::from_str(s).map_err(|_| CliError::new(exit::GENERIC, "the node served a malformed root"))
-    };
-    misaka_palw_sdk::onboarding_chain::sealed_sources_from_kernel_rows_v1(
-        &unhex(&header)?,
-        rows,
-        &root(&ledger_root)?,
-        &root(&aux_root)?,
-    )
-    .map_err(refusal)
 }
 
 fn or_dash(s: &str) -> &str {
     if s.is_empty() { "-" } else { s }
 }
 
-/// **`verify`**: the fresh verifier over ops 231 and 212 (and the public artifact, when given).
+/// **`verify`**: the fresh verifier over one root-checked op-211 snapshot (and the public artifact).
 pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> CliResult {
     let nv = crate::wallet::connect(ctx).await?;
-    let r = nv
-        .client
-        .get_palw_conformance_evidence(GetPalwConformanceEvidenceRequest { class_id: class.to_string() })
-        .await
-        .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwConformanceEvidence: {e}")))?;
-    if !r.found || r.attempt_row.is_empty() {
-        return Err(CliError::new(exit::NOT_READY, format!("class {class}: no conformance record on this node")));
-    }
-    let finals = nv
-        .client
-        .get_palw_kernel_finals(GetPalwKernelFinalsRequest { limit: 0 })
-        .await
-        .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwKernelFinals: {e}")))?;
-    let mut events = Vec::new();
-    for f in &finals.finals {
-        if !f.work_final_event.is_empty() {
-            events.push(
-                // An attributed event (the event and its producer): the type is the reads' (inferred).
-                borsh::from_slice(&unhex(&f.work_final_event)?)
-                    .map_err(|e| CliError::new(exit::GENERIC, format!("a Final's beacon event does not decode: {e}")))?,
-            );
-        }
-    }
-    let attempt_row = unhex(&r.attempt_row)?;
-    // A sealed-source (v3) attempt's beacon reads the route's seals: every page of op 211, rebuilt and checked against its roots.
-    let sealed = borsh::from_slice::<kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1>(&attempt_row)
-        .map(|a| a.is_sealed_source())
-        .unwrap_or(false);
-    let sealed_sources = if sealed { kernel_sealed_sources(&nv).await? } else { Vec::new() };
-    let reads = PublicConformanceReadsV1 {
-        attempt_row,
-        evidence_row: if r.evidence_row.is_empty() { None } else { Some(unhex(&r.evidence_row)?) },
-        events,
-        sealed_sources,
-        tip_daa: r.tip_daa,
-        program: unhex(&r.program)?,
-    };
+    let class_id =
+        kaspa_consensus_core::Hash64::from_str(class).map_err(|_| CliError::new(exit::CONFIG, "class is not a full class id"))?;
+    let reads = kernel_conformance_reads(&nv, class_id).await?;
     let report = fresh_verify_from_reads_v1(&reads, artifact).map_err(refusal)?;
     let v = &report.verdict;
     let posted = match &v.posted {
@@ -297,7 +286,7 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
                 "leaves_selected": v.leaves_selected,
                 "leaves_rechecked": v.leaves_rechecked,
                 "leaf_faults": v.leaf_faults,
-                "chain_state": r.lifecycle_state,
+                "chain_state": report.attempt.record.state.code(),
                 "agrees": report.agrees,
                 "why": report.why,
                 "note": "vector logits/commits digests are not re-executed here (the runtime pack's verify-conformance does); their tokens are refutable through a Final kernel claim",
@@ -313,7 +302,7 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
             v.leaves_rechecked,
             v.leaf_faults.len()
         );
-        println!("chain            {} — {}", r.lifecycle_state, if report.agrees { "AGREES" } else { "DISAGREES" });
+        println!("chain            {} — {}", report.attempt.record.state.code(), if report.agrees { "AGREES" } else { "DISAGREES" });
         println!("                 {}", report.why);
         for check in &v.leaf_faults {
             println!("refutable        LeafDecode at check {check}: file a tag-109 Refute with the leaf's opening");

@@ -73,8 +73,8 @@ Beacon conformance (RFC-0013 §9; the policy is an UNAPPROVED test policy; nothi
 `commit-conformance` binds the pack into a ConformanceCommitmentV1 (artifact/program/tokenizer/exact-layout roots re-derived from the
 artifact, the VerificationPlan root of the kernel that would run it — judged hypothetically armed —, the policy, the calibration
 (typed absence for independent integer-import recipes), the implementation set and the sampled-check scope) and refuses before any randomness if static admission fails or the scope cannot
-meet the policy. `run-conformance` takes the canonical beacon facts (misaka.palw.beacon-facts.v1; the node RPC that serves them does
-not exist yet — `synthetic-facts` writes SYNTHETIC ones for exercising the pipeline), derives the beacon and the challenge with the
+meet the policy. `run-conformance` takes v1 file facts (misaka.palw.beacon-facts.v1; this runner has no RPC adapter and is separate
+from the chain's attributed/sealed-source policies — `synthetic-facts` writes SYNTHETIC ones), derives the beacon and the challenge with the
 shared contract only, runs the selected checks and writes BeaconConformanceEvidenceV1. `verify-conformance` recomputes everything in
 a fresh process and re-executes the checks. Exit: run 0 passed, 2 evidence written but not a pass, 3 pending (WaitingRandomness /
 BEACON_UNAVAILABLE / interrupted — resume with the same command), 1 refused; verify 0 PASS, 2 FAIL or not a pass, 3 pending or

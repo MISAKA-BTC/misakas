@@ -1,9 +1,10 @@
 //! **The canonical beacon facts a conformance run consumes, and the boundary they cross.**
 //!
 //! The chain, not this tool, knows the canonical PALW history: the position at which a commitment was accepted, the profiles that
-//! were Active and G14-complete at that moment, and every Final useful-work settlement since. The node RPC that serves them does
-//! not exist yet. [`BeaconFactSource`] is the one seam: lane D implements it over RPC; [`FileFactSource`] implements it over a file
-//! of the same facts (`misaka.palw.beacon-facts.v1`), so a conformance run is reproducible from persisted public facts and a
+//! were Active and G14-complete at that moment, and every Final useful-work settlement since. Public node reads now exist in
+//! [`crate::onboarding_chain`] and [`crate::onboarding_snapshot`] for the chain's attributed/sealed-source policies. This file-facts
+//! v1 runner has no RPC adapter and is not interchangeable with those policies. [`BeaconFactSource`] is its adapter seam;
+//! [`FileFactSource`] reads persisted `misaka.palw.beacon-facts.v1`, so a conformance run is reproducible from those facts and a
 //! unit test can say exactly which history it ran on.
 //!
 //! A facts source supplies only what the CHAIN knows ([`ChainBeaconFactsV1`]). Everything that the commitment fixes — the chain,
@@ -71,7 +72,7 @@ impl ChainBeaconFactsV1 {
     }
 }
 
-/// **The loader boundary.** Lane D implements this over node RPC.
+/// **The v1 file-facts loader boundary.** A policy-compatible node adapter remains unimplemented.
 ///
 /// `commitment` is the committed statement (the chain looks the commitment up by `statement_root()`); `policy` is the committed
 /// policy (a source that carries one names its id, and the consumer refuses any other).
