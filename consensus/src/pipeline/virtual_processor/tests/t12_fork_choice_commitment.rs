@@ -10,7 +10,8 @@
 //!   opening), and no longer under the header's root directly;
 //! * a remote client (`misaka-palw-remote::l2`) verifies the headers from a checkpoint (L1), opens the tip's keys from an attested root
 //!   (L2) and proves a bond at a header the attestation covers (L3): `VERIFIED_REMOTE`, with the issuer named;
-//! * every leaf's ADR-0176 D3 weight-allocation slot is "none in force" (no bond-budget allocation exists in this tree), and the node's
+//! * the issuer side (option D, `issue_attestations_v1`) over what the node served signs exactly the post-states past the fence;
+//! * every leaf's ADR-0176 D3 weight-allocation slot is version 0 (the fold's weights — `palw_bond_budget_v1` clips inside the fold), and the node's
 //!   DNS BFT gate facts are testnet-12's non-refusing state (the overlay outside `Active`, nothing confirmed — live t12 is in Bootstrap).
 
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
@@ -22,8 +23,8 @@ use kaspa_consensus_core::palw_fork_choice_commitment_v1::{
 use kaspa_consensus_core::palw_state_proof_v1::verify_bond_v1;
 use kaspa_hashes::Hash64;
 use misaka_palw_remote::l2::{
-    ForkChoiceAttestationV1, ForkChoiceEvidenceV1, ForkChoiceRulesV1, L2DnsGateV1, L2InputV1, L2LimitsV1, L2VerdictV1, PeerViewV1,
-    l3_root_under_l2_v1, verify_fork_choice_v1,
+    ForkChoiceAttestationV1, ForkChoiceEvidenceV1, ForkChoiceRulesV1, IssuerServedV1, L2DnsGateV1, L2InputV1, L2LimitsV1, L2VerdictV1,
+    PeerViewV1, issue_attestations_v1, l3_root_under_l2_v1, verify_fork_choice_v1,
 };
 use misaka_palw_remote::verify::{
     CheckpointTrustV1, ClientRulesetV1, ModeLabelV1, TrustedCheckpointV1, VerifyLimitsV1, mode_label_v1, verify_header_chain_v1,
@@ -112,20 +113,24 @@ async fn the_fork_choice_commitment_crosses_its_fence_and_a_remote_client_verifi
     let views = [PeerViewV1 { peer: "p1".into(), chain: l1.clone() }, PeerViewV1 { peer: "p2".into(), chain: l1 }];
     let ruleset = ClientRulesetV1::of(&config.params);
     let tip_entry = &entries.last().unwrap().1;
-    let mut attestation = ForkChoiceAttestationV1 {
-        network_id: ruleset.network_id.clone(),
-        consensus_params_id: ruleset.consensus_params_id.clone(),
-        consensus_schedule_id: ruleset.consensus_schedule_id.clone(),
-        block: tip.hash,
-        block_daa: tip.daa_score,
-        committed_root: tip_entry.committed_root,
-        leaf_version: tip_entry.opening.leaf.leaf_version,
-        dns_gate: served.dns_gate,
-        issued_at_daa: tip.daa_score,
-        key_id: b"own-node".to_vec(),
-        signature: Vec::new(),
-    };
-    attestation.signature = attestation.signing_digest().as_bytes().as_slice()[..3].to_vec();
+    // The issuer side (option D) over what this node served: only post-states past the fence are attested, each self-consistent.
+    let issuer_served: Vec<IssuerServedV1> = entries
+        .iter()
+        .map(|(b, e)| IssuerServedV1 {
+            block: *b,
+            daa_score: e.header.daa_score,
+            opening: e.opening,
+            committed_root: e.committed_root,
+            committed_form: e.committed_form,
+        })
+        .collect();
+    let toy_sign = |msg: &[u8]| msg[..3].to_vec();
+    let (attested, not_attested) =
+        issue_attestations_v1(&ruleset, &issuer_served, served.dns_gate, tip.daa_score, b"own-node", &toy_sign);
+    assert_eq!((attested.len(), not_attested.len()), (past, below), "the issuer signs exactly the post-states past the fence");
+    let attestation: ForkChoiceAttestationV1 = attested.into_iter().find(|a| a.block == tip.hash).expect("the tip is attested");
+    assert_eq!(attestation.committed_root, tip_entry.committed_root);
+    assert_eq!(ForkChoiceAttestationV1::from_json_v1(&attestation.to_json_v1()), Ok(attestation.clone()), "the channel file");
     let toy = |pk: &[u8], msg: &[u8], sig: &[u8]| pk == b"pk" && sig == &msg[..3];
     let keys = vec![(b"own-node".to_vec(), b"pk".to_vec())];
     let rules = ForkChoiceRulesV1::of(&config.params);

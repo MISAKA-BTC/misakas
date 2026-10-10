@@ -28,7 +28,7 @@ use crate::attempt::{AttemptError, AttemptExecutor, AttemptParams, AttemptSigner
 use crate::checkpoint::Checkpoint;
 use crate::l2::{
     ForkChoiceAttestationV1, ForkChoiceEvidenceV1, ForkChoiceRulesV1, L2InputV1, L2LimitsV1, L2StopV1, L2VerdictV1, PeerViewV1,
-    candidate_chains_v1, l3_root_under_l2_v1, openings_wanted_v1, verify_fork_choice_v1,
+    candidate_chains_v1, l3_root_under_l2_v1, openings_wanted_v1, verify_attestation_v1, verify_fork_choice_v1,
 };
 use crate::relay::{RelayFailure, RelayReport, Reply, fan_out_verdict};
 use crate::template::{
@@ -491,8 +491,18 @@ fn attested_mode_v1(
     }
     let tips: Vec<Hash64> = candidates.iter().map(|c| c.tip_hash()).collect();
     let attestations = (fc.attestations)(&tips).unwrap_or_default();
+    // A valid, fresh attestation of a block no view shows is the hidden-tip signal — a STOP — even though no node served its opening
+    // (no node that shows the block exists here to serve one). It is checked before the attestations without an opening are dropped.
+    let now_daa = candidates.iter().map(|c| c.tip.daa_score).max().unwrap_or(0);
+    for att in &attestations {
+        if !candidates.iter().any(|c| c.contains(&att.block))
+            && verify_attestation_v1(att, &fc.issuers, &v.ruleset, now_daa, &fc.limits, &fc.verify_signature).is_ok()
+        {
+            return Err(L2StopV1::AttestedBlockHidden(att.block).into());
+        }
+    }
     // Each attestation with an opening of its block: the one that hashes to the attested root if any node served it, else any (refused
-    // by name inside the verdict).
+    // by name inside the verdict). An attestation of a shown block that no node opens leaves that block unweighed.
     let evidence: Vec<ForkChoiceEvidenceV1> = attestations
         .into_iter()
         .filter_map(|attestation| {
@@ -1270,29 +1280,41 @@ mod tests {
         step(&refs, cfg, state, exec, signer, &|_, _, _| true)
     }
 
-    /// RFC-0009 L2 by attestation over `node`'s tip: issuer `own-node` (a toy signature: the digest's first three bytes under key `pk`).
-    fn attested_cfg(pubkey: Vec<u8>, node: &VFake, attest: bool, accept: Option<ModeLabelV1>) -> MinerConfig {
-        use kaspa_consensus_core::config::params::ForkActivation;
-        fn toy(pk: &[u8], msg: &[u8], sig: &[u8]) -> bool {
-            pk == b"pk" && sig == &msg[..3]
-        }
-        let tip = node.tip();
-        let opening = *node.openings.iter().find(|o| o.leaf.block == tip.hash).expect("the tip's opening");
+    /// The toy signature of these tests: the digest's first three bytes, under the key `pk`.
+    fn toy(pk: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+        pk == b"pk" && sig == &msg[..3]
+    }
+
+    /// An attestation by `key_id` (toy-signed) that `block`'s post-state commits `root`, issued at `issued_at_daa`.
+    fn toy_attestation(block: &Header, root: Hash64, issued_at_daa: u64, key_id: &[u8]) -> ForkChoiceAttestationV1 {
         let mut att = ForkChoiceAttestationV1 {
             network_id: "testnet-12".into(),
+            genesis: "g".into(),
             consensus_params_id: "p".into(),
             consensus_schedule_id: "s".into(),
-            block: tip.hash,
-            block_daa: tip.daa_score,
-            committed_root: opening.committed_root(),
-            leaf_version: opening.leaf.leaf_version,
+            block: block.hash,
+            block_daa: block.daa_score,
+            committed_root: root,
+            leaf_version: kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_LEAF_VERSION_V1,
             dns_gate: None,
-            issued_at_daa: tip.daa_score,
-            key_id: b"own-node".to_vec(),
+            issued_at_daa,
+            key_id: key_id.to_vec(),
             signature: Vec::new(),
         };
         att.signature = att.signing_digest().as_bytes().as_slice()[..3].to_vec();
-        let mut c = vcfg(pubkey, &node.chain.borrow()[0], accept);
+        att
+    }
+
+    /// RFC-0009 L2 by attestation, the user's issuer `own-node` (key `pk`), the channel answering with `attestations` (`None`: the issuer
+    /// is unreachable).
+    fn fork_choice_cfg(
+        pubkey: Vec<u8>,
+        checkpoint: &Header,
+        attestations: Option<Vec<ForkChoiceAttestationV1>>,
+        accept: Option<ModeLabelV1>,
+    ) -> MinerConfig {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        let mut c = vcfg(pubkey, checkpoint, accept);
         c.trust.verification.as_mut().unwrap().fork_choice = Some(RemoteForkChoiceV1 {
             rules: ForkChoiceRulesV1 {
                 commitment: Some(ForkActivation::new(0)),
@@ -1302,18 +1324,25 @@ mod tests {
                 dns_gate: None,
                 dns_retired: None,
                 rule_e: None,
-                bond_budget: None,
                 finality_depth: 600,
                 panel: None,
             },
             limits: L2LimitsV1::default(),
             issuers: vec![(b"own-node".to_vec(), b"pk".to_vec())],
             attestations: std::sync::Arc::new(move |_: &[Hash64]| {
-                if attest { Ok(vec![att.clone()]) } else { Err(String::from("the issuer is unreachable")) }
+                attestations.clone().ok_or_else(|| "the issuer is unreachable".into())
             }),
             verify_signature: toy,
         });
         c
+    }
+
+    /// RFC-0009 L2 by attestation over `node`'s tip, by the user's issuer `own-node`.
+    fn attested_cfg(pubkey: Vec<u8>, node: &VFake, attest: bool, accept: Option<ModeLabelV1>) -> MinerConfig {
+        let tip = node.tip();
+        let opening = *node.openings.iter().find(|o| o.leaf.block == tip.hash).expect("the tip's opening");
+        let att = toy_attestation(&tip, opening.committed_root(), tip.daa_score, b"own-node");
+        fork_choice_cfg(pubkey, &node.chain.borrow()[0], attest.then(|| vec![att]), accept)
     }
 
     /// **RFC-0009 L2 by attestation, end to end through the step**: two nodes past the commitment fence, the tip attested by the user's
@@ -1345,6 +1374,148 @@ mod tests {
         let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
         let out = vrun(&[&a, &b], &attested_cfg(pk(&signer), &a, true, None), &mut state, &mut exec, &signer);
         assert!(matches!(out, Err(MinerHalt::Verify(VerifyErrorV1::ContradictsProof { .. }))), "{out:?}");
+        assert_eq!(exec.calls.get(), 0);
+    }
+
+    /// **The attested root is accepted only from an issuer the user chose.** The same correct root, signed under a label the user did
+    /// not configure, or with the user's label by another key, or with no issuer configured at all, leaves L2 unverified: the class is
+    /// `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` (refused without its opt-in, nothing executed), never `VERIFIED_REMOTE`, and the L2 line
+    /// says why.
+    #[test]
+    fn an_attested_root_lifts_the_miner_only_from_an_issuer_the_user_chose() {
+        let signer = keypair();
+        let fresh = || (VFake::enveloped("a", &pk(&signer), h(31), 1), VFake::enveloped("b", &pk(&signer), h(31), 1));
+        let (a, _) = fresh();
+        let tip = a.tip();
+        let root = a.openings.iter().find(|o| o.leaf.block == tip.hash).unwrap().committed_root();
+        let stranger = toy_attestation(&tip, root, tip.daa_score, b"stranger");
+        let mut other_key = toy_attestation(&tip, root, tip.daa_score, b"own-node");
+        other_key.signature = vec![1, 2, 3];
+        for (att, why) in [(stranger, "not trusted"), (other_key, "signature")] {
+            let (a, b) = fresh();
+            let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+            let c = fork_choice_cfg(pk(&signer), &a.chain.borrow()[0].clone(), Some(vec![att]), None);
+            let out = vrun(&[&a, &b], &c, &mut state, &mut exec, &signer);
+            assert!(matches!(&out, Err(MinerHalt::Gate(g)) if g.label == ModeLabelV1::HeaderVerifiedForkChoiceUnverified), "{out:?}");
+            assert_ne!(state.last_mode, Some(ModeLabelV1::VerifiedRemote));
+            assert!(state.last_l2.as_deref().is_some_and(|l| l.contains("NOT verified") && l.contains(why)), "{:?}", state.last_l2);
+            assert_eq!(exec.calls.get(), 0);
+        }
+        // No issuer configured: the user's own-node attestation is not trusted either.
+        let (a, b) = fresh();
+        let mut c = attested_cfg(pk(&signer), &a, true, None);
+        c.trust.verification.as_mut().unwrap().fork_choice.as_mut().unwrap().issuers.clear();
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let out = vrun(&[&a, &b], &c, &mut state, &mut exec, &signer);
+        assert!(matches!(&out, Err(MinerHalt::Gate(g)) if g.label == ModeLabelV1::HeaderVerifiedForkChoiceUnverified), "{out:?}");
+        // The same attestation from the configured issuer: VERIFIED_REMOTE.
+        let (a, b) = fresh();
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let out = vrun(&[&a, &b], &attested_cfg(pk(&signer), &a, true, None), &mut state, &mut exec, &signer).unwrap();
+        assert!(matches!(out, StepOutcome::Published(_)), "{out:?}");
+        assert_eq!(state.last_mode, Some(ModeLabelV1::VerifiedRemote));
+    }
+
+    /// **A stale attestation, or an opening that does not open the attested root, never lifts the miner.** Stale (issued 3 DAA before
+    /// the view, the bound is 2): refused by name. A forged opening (the nodes serve the tip's leaf with its weight raised, so it no
+    /// longer hashes to the root the issuer signed): refused, the tip unweighed. Either way the class stays below `VERIFIED_REMOTE`.
+    #[test]
+    fn a_stale_attestation_or_a_forged_opening_never_lifts_the_miner() {
+        let signer = keypair();
+        let (a, b) = (VFake::enveloped("a", &pk(&signer), h(31), 1), VFake::enveloped("b", &pk(&signer), h(31), 1));
+        let tip = a.tip();
+        let root = a.openings.iter().find(|o| o.leaf.block == tip.hash).unwrap().committed_root();
+        let stale = toy_attestation(&tip, root, tip.daa_score - 3, b"own-node");
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let c = fork_choice_cfg(pk(&signer), &a.chain.borrow()[0].clone(), Some(vec![stale]), None);
+        let out = vrun(&[&a, &b], &c, &mut state, &mut exec, &signer);
+        assert!(matches!(&out, Err(MinerHalt::Gate(g)) if g.label == ModeLabelV1::HeaderVerifiedForkChoiceUnverified), "{out:?}");
+        assert!(state.last_l2.as_deref().is_some_and(|l| l.contains("Stale")), "{:?}", state.last_l2);
+        assert_eq!(exec.calls.get(), 0);
+
+        // Forged openings of the tip on every node (op 203 is untrusted): the attested root is not opened by them.
+        let forge = |mut n: VFake| {
+            let t = n.tip().hash;
+            for o in n.openings.iter_mut().filter(|o| o.leaf.block == t) {
+                o.leaf.safe_weight = 1 << 60;
+            }
+            n
+        };
+        let (a, b) = (forge(VFake::enveloped("a", &pk(&signer), h(31), 1)), forge(VFake::enveloped("b", &pk(&signer), h(31), 1)));
+        let honest = toy_attestation(&tip, root, tip.daa_score, b"own-node");
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let c = fork_choice_cfg(pk(&signer), &a.chain.borrow()[0].clone(), Some(vec![honest]), None);
+        let out = vrun(&[&a, &b], &c, &mut state, &mut exec, &signer);
+        assert!(matches!(&out, Err(MinerHalt::Gate(g)) if g.label == ModeLabelV1::HeaderVerifiedForkChoiceUnverified), "{out:?}");
+        assert!(state.last_l2.as_deref().is_some_and(|l| l.contains("does not hold")), "{:?}", state.last_l2);
+        assert_ne!(state.last_mode, Some(ModeLabelV1::VerifiedRemote));
+        assert_eq!(exec.calls.get(), 0);
+    }
+
+    /// **A branch with valid headers but a non-canonical fork-choice root is never `VERIFIED_REMOTE`.** Every header below passes L1.
+    /// (1) Eclipse: both nodes show branch B while the user's issuer attests branch A's tip — a tip no peer shows: STOP. (2) B's tip
+    /// header commits a forged post-state of its predecessor (the weight raised) while the issuer attests the true one: the chain
+    /// contradicts the issuer — STOP. (3) B's nodes serve openings that hash to B's own (forged) commitments, but the issuer attested
+    /// nothing on B: a fresh attestation of A is a hidden tip (STOP), none at all leaves B unverified. Nothing runs in any case.
+    #[test]
+    fn a_branch_with_valid_headers_but_a_non_canonical_fork_choice_root_is_never_verified_remote() {
+        let signer = keypair();
+        let canonical = VFake::enveloped("a", &pk(&signer), h(31), 1);
+        let a_tip = canonical.tip();
+        let a_root = canonical.openings.iter().find(|o| o.leaf.block == a_tip.hash).unwrap().committed_root();
+        let of_a = toy_attestation(&a_tip, a_root, a_tip.daa_score, b"own-node");
+
+        // (1) Both nodes on branch B (salt 2): the attested block is on no view.
+        let (b1, b2) = (VFake::enveloped("b1", &pk(&signer), h(31), 2), VFake::enveloped("b2", &pk(&signer), h(31), 2));
+        assert_eq!(b1.chain.borrow()[0].hash, canonical.chain.borrow()[0].hash, "one checkpoint");
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let c = fork_choice_cfg(pk(&signer), &b1.chain.borrow()[0].clone(), Some(vec![of_a.clone()]), None);
+        let out = vrun(&[&b1, &b2], &c, &mut state, &mut exec, &signer);
+        assert!(matches!(out, Err(MinerHalt::ForkChoice(L2StopV1::AttestedBlockHidden(x))) if x == a_tip.hash), "{out:?}");
+        assert_ne!(state.last_mode, Some(ModeLabelV1::VerifiedRemote));
+        assert_eq!(exec.calls.get(), 0);
+
+        // (2) A branch whose tip header commits a forged post-state of its predecessor P; the issuer attests P's true root.
+        let forged_tip = |id: &str| {
+            let n = VFake::enveloped(id, &pk(&signer), h(31), 1);
+            let mut chain = n.chain.borrow().clone();
+            let p = chain[chain.len() - 2].clone();
+            let mut forged = *n.openings.iter().find(|o| o.leaf.block == p.hash).unwrap();
+            forged.leaf.safe_weight = 1 << 60;
+            let last = chain.last().unwrap().clone();
+            chain.pop();
+            chain.push(vheader(p.hash, last.daa_score, last.timestamp, forged.committed_root(), 77));
+            let mut n = n;
+            n.openings.retain(|o| o.leaf.block != last.hash);
+            n.openings.push(forged);
+            *n.chain.borrow_mut() = chain;
+            (n, p)
+        };
+        let ((f1, p), (f2, _)) = (forged_tip("f1"), forged_tip("f2"));
+        let p_root = canonical.openings.iter().find(|o| o.leaf.block == p.hash).unwrap().committed_root();
+        let of_p = toy_attestation(&p, p_root, f1.tip().daa_score, b"own-node");
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let c = fork_choice_cfg(pk(&signer), &f1.chain.borrow()[0].clone(), Some(vec![of_p]), None);
+        let out = vrun(&[&f1, &f2], &c, &mut state, &mut exec, &signer);
+        assert!(matches!(out, Err(MinerHalt::ForkChoice(L2StopV1::IssuerContradicted { .. }))), "{out:?}");
+        assert_ne!(state.last_mode, Some(ModeLabelV1::VerifiedRemote));
+        assert_eq!(exec.calls.get(), 0);
+
+        // (3) The forged branch alone, its nodes' openings self-consistent, no attestation of it: never VERIFIED_REMOTE — unverified
+        // when the issuer is silent, a STOP when the issuer's fresh attestation names a block no peer shows.
+        let ((f1, _), (f2, _)) = (forged_tip("f1"), forged_tip("f2"));
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let c = fork_choice_cfg(pk(&signer), &f1.chain.borrow()[0].clone(), None, None);
+        let out = vrun(&[&f1, &f2], &c, &mut state, &mut exec, &signer);
+        assert!(matches!(&out, Err(MinerHalt::Gate(g)) if g.label == ModeLabelV1::HeaderVerifiedForkChoiceUnverified), "{out:?}");
+        assert_eq!(exec.calls.get(), 0);
+        let mut elsewhere = toy_attestation(&a_tip, a_root, f1.tip().daa_score, b"own-node");
+        elsewhere.block = h(0xA1);
+        elsewhere.signature = elsewhere.signing_digest().as_bytes().as_slice()[..3].to_vec();
+        let c = fork_choice_cfg(pk(&signer), &f1.chain.borrow()[0].clone(), Some(vec![elsewhere]), None);
+        let out = vrun(&[&f1, &f2], &c, &mut state, &mut exec, &signer);
+        assert!(matches!(out, Err(MinerHalt::ForkChoice(L2StopV1::AttestedBlockHidden(_)))), "{out:?}");
+        assert_ne!(state.last_mode, Some(ModeLabelV1::VerifiedRemote));
         assert_eq!(exec.calls.get(), 0);
     }
 

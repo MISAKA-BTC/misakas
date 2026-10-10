@@ -128,6 +128,7 @@ fn trusted_keys() -> Vec<(Vec<u8>, Vec<u8>)> {
 fn attest_at(b: &Blk, issued: u64, dns: Option<PalwDnsGateFactV1>) -> ForkChoiceEvidenceV1 {
     let mut a = ForkChoiceAttestationV1 {
         network_id: "testnet-12".into(),
+        genesis: "g".into(),
         consensus_params_id: "p".into(),
         consensus_schedule_id: "s".into(),
         block: b.header.hash,
@@ -155,7 +156,6 @@ fn rules() -> ForkChoiceRulesV1 {
         dns_gate: None,
         dns_retired: None,
         rule_e: None,
-        bond_budget: None,
         finality_depth: 600,
         panel: None,
     }
@@ -595,30 +595,144 @@ fn a_comparator_whose_inputs_the_leaf_does_not_carry_stops_a_conflict() {
 /// attested leaf names no allocation at such a point is not verified, and a leaf naming an allocation this build does not read is
 /// refused even when the issuer signed its root. Unarmed (every network today), nothing changes.
 #[test]
-fn a_bond_budget_allocation_is_read_by_one_versioned_slot_or_the_client_stops() {
+fn a_bond_budget_allocation_is_read_by_one_versioned_slot() {
+    // Lane BUDGET clips weight inside the fold (its design, row 20): the node's comparator reads the fold's weights on both sides of
+    // `palw_bond_budget_v1`, so the slot stays version 0 there and a conflict is weighed exactly as without the fence.
     let f = fork();
     let (ta, tb) = (f.a.last().unwrap(), f.b.last().unwrap());
     let lim = L2LimitsV1::default();
     let views = [view("p1", &f.c, &f.a, f.now), view("p2", &f.c, &f.b, f.now)];
     let ev = [attest(ta, 106), attest(tb, 106)];
-    assert_eq!(chosen_tip(&run(&views, &ev, &rules(), &lim, &f.o).unwrap()), ta.header.hash, "unarmed: the comparator decides");
-    let budget = ForkChoiceRulesV1 { bond_budget: Some(ForkActivation::new(106)), ..rules() };
-    assert!(matches!(run(&views, &ev, &budget, &lim, &f.o), Err(L2StopV1::BondBudgetAllocation(_))));
-    // A single chain past the fence: its attested leaf names no allocation — not the node's leaf there, so L2 is not established.
-    let single = [view("p1", &f.c, &f.a, f.now), view("p4", &f.c, &f.a, f.now)];
-    let at_101 = ForkChoiceRulesV1 { bond_budget: Some(ForkActivation::new(101)), ..rules() };
-    let v = run(&single, &[attest(ta, 103)], &at_101, &lim, &f.o).unwrap();
-    assert!(matches!(&v, L2VerdictV1::Unverified(why) if why.contains("names no bond-budget allocation")), "{v:?}");
-    // Below the fence the same chain is verified.
-    assert_eq!(chosen_tip(&run(&single, &[attest(ta, 103)], &budget, &lim, &f.o).unwrap()), ta.header.hash);
-    // A leaf that names allocation version 1, under a root the issuer signed: refused (this build does not read version 1), never
-    // weighed by the fold's weights.
+    assert_eq!(chosen_tip(&run(&views, &ev, &rules(), &lim, &f.o).unwrap()), ta.header.hash, "the comparator decides");
+    assert!(ta.leaf.weight_allocation == PalwWeightAllocationSlotV1::NONE);
+    // A leaf that names allocation version 1, under a root the issuer signed: refused (this build reads no version above 0), never
+    // weighed by either the fold's or the slot's weights.
     let mut tip = ta.clone();
     tip.leaf.weight_allocation =
         PalwWeightAllocationSlotV1 { version: 1, allocation_root: h(0xA0), capped_safe_weight: 1, capped_bounded_immature: 0 };
     let a2: Vec<Blk> = f.a[..f.a.len() - 1].iter().cloned().chain(std::iter::once(tip.clone())).collect();
-    let v = run(&[view("p1", &f.c, &a2, f.now), view("p4", &f.c, &a2, f.now)], &[attest(&tip, 103)], &at_101, &lim, &f.o).unwrap();
+    let v = run(&[view("p1", &f.c, &a2, f.now), view("p4", &f.c, &a2, f.now)], &[attest(&tip, 103)], &rules(), &lim, &f.o).unwrap();
     assert!(matches!(&v, L2VerdictV1::Unverified(why) if why.contains("allocation version 1")), "{v:?}");
+}
+
+/// **Option D's issuer side and its channel**: an issuer attests only post-states its own node served past the fence, with the
+/// served opening hashing to the served root; the JSON file round-trips; real ML-DSA-87 signatures verify ONLY under the key the user
+/// chose for that label — the same label on another key, the user's key under another label, a drill's genesis and a doctored file are
+/// all refused, and an attestation from an issuer the user did not choose never establishes L2.
+#[test]
+fn an_attested_root_is_accepted_only_from_an_issuer_the_user_chose() {
+    use libcrux_ml_dsa::ml_dsa_87;
+    let f = fork();
+    let ta = f.a.last().unwrap();
+    let views = [view("p1", &f.c, &f.a, f.now), view("p4", &f.c, &f.a, f.now)];
+    let lim = L2LimitsV1::default();
+    let chosen = ml_dsa_87::generate_key_pair([41u8; 32]);
+    let stranger = ml_dsa_87::generate_key_pair([42u8; 32]);
+    let sign_with = |kp: &ml_dsa_87::MLDSA87KeyPair| {
+        let sk = kp.signing_key.clone();
+        move |msg: &[u8]| {
+            let sig = ml_dsa_87::sign(&sk, msg, FORK_CHOICE_ATTESTATION_MLDSA87_CONTEXT, [5u8; 32]).expect("sign");
+            let sig: &[u8] = sig.as_ref();
+            sig.to_vec()
+        }
+    };
+    let opening = PalwForkChoiceOpeningV1 { leaf: ta.leaf, inner_root: ta.inner };
+    let served = IssuerServedV1 {
+        block: ta.header.hash,
+        daa_score: ta.header.daa_score,
+        opening,
+        committed_root: opening.committed_root(),
+        committed_form: true,
+    };
+    let mut below = served;
+    below.committed_form = false;
+    let mut lying = served;
+    lying.committed_root = h(0xBAD);
+    let mut elsewhere = served;
+    elsewhere.block = h(0xE15E);
+    let (atts, skipped) =
+        issue_attestations_v1(&ruleset(), &[served, below, lying, elsewhere], None, 103, b"mine", &sign_with(&chosen));
+    assert_eq!(atts.len(), 1, "only the served, past-the-fence, self-consistent root is attested");
+    assert_eq!(skipped.len(), 3, "{skipped:?}");
+    let att = atts[0].clone();
+    assert_eq!(ForkChoiceAttestationV1::from_json_v1(&att.to_json_v1()), Ok(att.clone()), "the file round-trips");
+    let ev = |a: &ForkChoiceAttestationV1| ForkChoiceEvidenceV1 { attestation: a.clone(), opening };
+    let run_with = |trusted: &[(Vec<u8>, Vec<u8>)], evidence: &[ForkChoiceEvidenceV1]| {
+        let rs = ruleset();
+        verify_fork_choice_v1(
+            &L2InputV1 { views: &views, evidence, chain_openings: &f.o, trusted, ruleset: &rs, rules: &rules(), limits: &lim },
+            &verify_attestation_mldsa87_v1,
+        )
+        .unwrap()
+    };
+    let chosen_pk: &[u8] = chosen.verification_key.as_ref();
+    let users_choice = vec![(b"mine".to_vec(), chosen_pk.to_vec())];
+    // The user's issuer: VERIFIED, and named.
+    let v = run_with(&users_choice, &[ev(&att)]);
+    assert_eq!(chosen_tip(&v), ta.header.hash);
+    assert!(v.trust_line().contains("issuer 'mine'"), "{}", v.trust_line());
+    // Signed by a key the user did not choose, under the user's label: the signature does not verify.
+    let (by_stranger, _) = issue_attestations_v1(&ruleset(), &[served], None, 103, b"mine", &sign_with(&stranger));
+    let v = run_with(&users_choice, &[ev(&by_stranger[0])]);
+    assert!(matches!(&v, L2VerdictV1::Unverified(why) if why.contains("signature")), "{v:?}");
+    // The stranger under its own label: not an issuer the user chose.
+    let (own_label, _) = issue_attestations_v1(&ruleset(), &[served], None, 103, b"stranger", &sign_with(&stranger));
+    let v = run_with(&users_choice, &[ev(&own_label[0])]);
+    assert!(matches!(&v, L2VerdictV1::Unverified(why) if why.contains("not trusted")), "{v:?}");
+    // No issuer chosen at all: nothing is trusted, whatever is signed.
+    let v = run_with(&[], &[ev(&att)]);
+    assert!(matches!(&v, L2VerdictV1::Unverified(why) if why.contains("not trusted")), "{v:?}");
+    // The user's key, attesting under a drill's genesis (same network name): refused as another ruleset.
+    let drill = ClientRulesetV1 { genesis: "drill-genesis".into(), ..ruleset() };
+    let (on_drill, _) = issue_attestations_v1(&drill, &[served], None, 103, b"mine", &sign_with(&chosen));
+    let v = run_with(&users_choice, &[ev(&on_drill[0])]);
+    assert!(matches!(&v, L2VerdictV1::Unverified(why) if why.contains("another ruleset")), "{v:?}");
+    // A doctored file (root swapped after signing): the signature does not cover it.
+    let mut doctored = att.to_file_v1();
+    doctored.committed_root = h(0xF0).to_string();
+    let doctored = ForkChoiceAttestationV1::from_file_v1(&doctored).unwrap();
+    let v = run_with(&users_choice, &[ev(&doctored)]);
+    assert!(matches!(&v, L2VerdictV1::Unverified(_)), "{v:?}");
+    // Malformed keys and signatures are refusals, not panics; a malformed file is an error by name.
+    assert!(!verify_attestation_mldsa87_v1(b"short", b"m", b"s"));
+    assert!(ForkChoiceAttestationV1::from_json_v1("{}").is_err());
+    let mut bad_version = att.to_file_v1();
+    bad_version.version = 2;
+    assert!(ForkChoiceAttestationV1::from_file_v1(&bad_version).is_err());
+}
+
+/// **The issuer channel's directory and the user's key file**: signed files are read newest first (at most 64), a malformed or
+/// oversized file is skipped by name, a non-JSON file is ignored; an issuer key is 2,592 bytes raw or hex, anything else refused.
+#[test]
+fn the_issuer_channel_directory_reads_signed_files_and_names_the_rest() {
+    let f = fork();
+    let dir = std::env::temp_dir().join(format!("l2fc-channel-{}-{}", std::process::id(), T0));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (old, new) = (attest(f.a.last().unwrap(), 100).attestation, attest(f.a.last().unwrap(), 103).attestation);
+    std::fs::write(dir.join("old.json"), old.to_json_v1()).unwrap();
+    std::fs::write(dir.join("new.json"), new.to_json_v1()).unwrap();
+    std::fs::write(dir.join("broken.json"), "{ not json").unwrap();
+    std::fs::write(dir.join("huge.json"), vec![b' '; (ATTESTATION_FILE_MAX_BYTES_V1 + 1) as usize]).unwrap();
+    std::fs::write(dir.join("notes.txt"), "ignored").unwrap();
+    let (found, skipped) = read_attestation_dir_v1(&dir).unwrap();
+    assert_eq!(found, vec![new, old], "newest first");
+    assert_eq!(skipped.len(), 2, "{skipped:?}");
+    assert!(skipped.iter().any(|s| s.contains("broken.json")) && skipped.iter().any(|s| s.contains("huge.json")));
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(read_attestation_dir_v1(&dir).is_err(), "a missing channel is an error, i.e. no attestation");
+    let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([43u8; 32]);
+    let raw: &[u8] = kp.verification_key.as_ref();
+    assert_eq!(parse_issuer_public_key_v1(raw).unwrap(), raw);
+    let hex = format!("0x{}\n", faster_hex::hex_string(raw));
+    assert_eq!(parse_issuer_public_key_v1(hex.as_bytes()).unwrap(), raw);
+    assert!(parse_issuer_public_key_v1(b"abcd").is_err());
+    assert!(parse_issuer_public_key_v1(&raw[1..]).is_err());
+    // The op-203 wire decode: the leaf's own length and a 128-hex root, nothing else.
+    let o = PalwForkChoiceOpeningV1 { leaf: f.a[1].leaf, inner_root: f.a[1].inner };
+    assert_eq!(opening_from_wire_v1(&o.leaf.encode(), &o.inner_root.to_string()), Some(o));
+    assert_eq!(opening_from_wire_v1(&o.leaf.encode()[1..], &o.inner_root.to_string()), None);
+    assert_eq!(opening_from_wire_v1(&o.leaf.encode(), "zz"), None);
 }
 
 /// The robust evaluation is the node's own functions: a strict economic winner dominates under every variant; a hash-only winner
@@ -648,6 +762,7 @@ fn the_attestation_digest_covers_every_field() {
     let d = base.signing_digest();
     let edits: Vec<Box<dyn Fn(&mut ForkChoiceAttestationV1)>> = vec![
         Box::new(|a| a.network_id.push('x')),
+        Box::new(|a| a.genesis.push('x')),
         Box::new(|a| a.consensus_params_id.push('x')),
         Box::new(|a| a.consensus_schedule_id.push('x')),
         Box::new(|a| a.block = h(77)),

@@ -5,8 +5,9 @@
 //! 1. **Values bound to a root.** Past `Params::palw_fork_choice_commitment_v1` a header commits `H(fork-choice leaf ‖ ADR-0043 root)`;
 //!    an opening ([`PalwForkChoiceOpeningV1`]) gives the comparator's inputs in 356 bytes, checked here against the root. The leaf's
 //!    weight-allocation slot (ADR-0176 D3) names the versioned bond-budget allocation the weights are read through; this build reads
-//!    only "none in force", and a conflict where `palw_bond_budget_v1` may be in force STOPs. No leaf or opening carries a
-//!    model-availability condition (ADR-0177).
+//!    only version 0, the fold's own weights — which past `palw_bond_budget_v1` are already the budget-clipped ones (lane BUDGET clips
+//!    Final weight inside the fold, and the node's comparator reads exactly those), so a leaf naming any other version is refused,
+//!    never guessed. No leaf or opening carries a model-availability condition (ADR-0177).
 //! 2. **Transition validity of the root.** Re-executing the fold is a full node's work (`FULL_NODE`). Here the root comes from an
 //!    **attestation** ([`ForkChoiceAttestationV1`]) by an issuer the user chose before talking to any node — the user's "trusted
 //!    checkpoint" — and is cross-checked against the attested block's chain child whenever a peer shows one. The issuer's trust is named
@@ -34,8 +35,7 @@ use kaspa_consensus_core::palw_fork_authority_v2::{
 };
 use kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1;
 use kaspa_consensus_core::palw_fork_choice_commitment_v1::{
-    PALW_FORK_CHOICE_LEAF_VERSION_V1, PALW_WEIGHT_ALLOCATION_NONE_V1, PalwDnsGateFactV1, PalwForkChoiceLeafV1,
-    PalwForkChoiceOpeningV1, PalwForkChoicePointV1,
+    PALW_FORK_CHOICE_LEAF_VERSION_V1, PalwDnsGateFactV1, PalwForkChoiceLeafV1, PalwForkChoiceOpeningV1, PalwForkChoicePointV1,
 };
 use kaspa_consensus_core::palw_panel_v2::{PalwPanelParamsV2, palw_minted_seats_can_reach_quorum_v1};
 use kaspa_hashes::Hash64;
@@ -69,11 +69,6 @@ pub struct ForkChoiceRulesV1 {
     /// Its leaf (v2) ships under that fence. `None` in [`Self::of`] until that fence is in this tree: the integration that brings it
     /// sets this field from it.
     pub rule_e: Option<ForkActivation>,
-    /// **ADR-0176 D3: `palw_bond_budget_v1`** (lane BUDGET, dormant). Where it is in force, Final weight is bounded per bond and the
-    /// comparator reads the budget-capped weights of the leaf's allocation slot; this build reads no allocation version, so a
-    /// conflict there STOPs and a version-0 slot at a point past it is refused. `None` in [`Self::of`] until that fence is in this
-    /// tree: the integration that brings it sets this field from it (and the slot version it reads).
-    pub bond_budget: Option<ForkActivation>,
     pub finality_depth: u64,
     pub panel: Option<PalwPanelParamsV2>,
 }
@@ -92,7 +87,6 @@ impl ForkChoiceRulesV1 {
             dns_gate: params.dns_params.as_ref().and(params.dns_bft_gate.as_ref()).map(|g| g.activation),
             dns_retired: params.palw_dns_retirement.as_ref().map(|r| r.activation),
             rule_e: None,
-            bond_budget: None,
             finality_depth: params.finality_depth(),
             panel,
         }
@@ -122,6 +116,9 @@ impl ForkChoiceRulesV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ForkChoiceAttestationV1 {
     pub network_id: String,
+    /// The genesis the issuer's node runs (128 hex): a salted drill answers to the same network name on another genesis, and an
+    /// attestation made on one is never read on the other.
+    pub genesis: String,
     pub consensus_params_id: String,
     pub consensus_schedule_id: String,
     pub block: Hash64,
@@ -139,6 +136,7 @@ impl ForkChoiceAttestationV1 {
     pub fn signing_digest(&self) -> Hash64 {
         let mut s = keyed(DOMAIN_FORK_CHOICE_ATTESTATION);
         put_len(&mut s, self.network_id.as_bytes());
+        put_len(&mut s, self.genesis.as_bytes());
         put_len(&mut s, self.consensus_params_id.as_bytes());
         put_len(&mut s, self.consensus_schedule_id.as_bytes());
         s.update(self.block.as_bytes().as_slice());
@@ -172,6 +170,248 @@ impl ForkChoiceAttestationV1 {
     pub fn issuer(&self) -> String {
         String::from_utf8(self.key_id.clone()).unwrap_or_else(|_| faster_hex::hex_string(&self.key_id))
     }
+}
+
+/// The ML-DSA-87 context an issuer signs [`ForkChoiceAttestationV1::signing_digest`] under (its own domain: a key that also signs
+/// attempts or transactions cannot have one of those signatures read as an attestation).
+pub const FORK_CHOICE_ATTESTATION_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/remote/fork-choice-attestation/v1";
+
+/// **The binaries' signature primitive for attestations**: ML-DSA-87 (portable verify, as consensus) under
+/// [`FORK_CHOICE_ATTESTATION_MLDSA87_CONTEXT`]. A key or signature of the wrong length is a refusal, never a panic.
+pub fn verify_attestation_mldsa87_v1(public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
+    use libcrux_ml_dsa::ml_dsa_87::{MLDSA87Signature, MLDSA87VerificationKey, portable};
+    let (Ok(pk), Ok(sig)) = (<[u8; 2592]>::try_from(public_key), <[u8; 4627]>::try_from(signature)) else {
+        return false;
+    };
+    portable::verify(&MLDSA87VerificationKey::new(pk), message, FORK_CHOICE_ATTESTATION_MLDSA87_CONTEXT, &MLDSA87Signature::new(sig))
+        .is_ok()
+}
+
+/// **An attestation on the wire / on disk** — the issuer channel's format (JSON; hashes and bytes in hex). The client believes none of
+/// it: [`verify_attestation_v1`] checks the issuer, the ruleset, the signature and the age, and the opening must hash to the root.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForkChoiceAttestationFileV1 {
+    /// Always 1.
+    pub version: u16,
+    pub network_id: String,
+    pub genesis: String,
+    pub consensus_params_id: String,
+    pub consensus_schedule_id: String,
+    pub block: String,
+    pub block_daa: u64,
+    pub committed_root: String,
+    pub leaf_version: u16,
+    /// Absent: the issuer did not attest its DNS gate facts.
+    #[serde(default)]
+    pub dns_gate: Option<ForkChoiceDnsGateFileV1>,
+    pub issued_at_daa: u64,
+    /// The key id, as text when it is UTF-8 (the issuer's label), else hex with a `0x` prefix.
+    pub key_id: String,
+    pub signature: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForkChoiceDnsGateFileV1 {
+    pub stage_active: bool,
+    /// 128 hex, absent with nothing confirmed.
+    #[serde(default)]
+    pub confirmed_anchor: Option<String>,
+    #[serde(default)]
+    pub confirmed_anchor_daa: u64,
+}
+
+impl ForkChoiceAttestationV1 {
+    pub fn to_file_v1(&self) -> ForkChoiceAttestationFileV1 {
+        ForkChoiceAttestationFileV1 {
+            version: 1,
+            network_id: self.network_id.clone(),
+            genesis: self.genesis.clone(),
+            consensus_params_id: self.consensus_params_id.clone(),
+            consensus_schedule_id: self.consensus_schedule_id.clone(),
+            block: self.block.to_string(),
+            block_daa: self.block_daa,
+            committed_root: self.committed_root.to_string(),
+            leaf_version: self.leaf_version,
+            dns_gate: self.dns_gate.map(|f| ForkChoiceDnsGateFileV1 {
+                stage_active: f.stage_active,
+                confirmed_anchor: f.confirmed_anchor.map(|(a, _)| a.to_string()),
+                confirmed_anchor_daa: f.confirmed_anchor.map(|(_, d)| d).unwrap_or(0),
+            }),
+            issued_at_daa: self.issued_at_daa,
+            key_id: match std::str::from_utf8(&self.key_id) {
+                Ok(text) if !text.starts_with("0x") => text.to_string(),
+                _ => format!("0x{}", faster_hex::hex_string(&self.key_id)),
+            },
+            signature: faster_hex::hex_string(&self.signature),
+        }
+    }
+
+    /// Parse the wire form. A malformed field is an error by name (the channel drops that file, it never guesses).
+    pub fn from_file_v1(f: &ForkChoiceAttestationFileV1) -> Result<Self, String> {
+        if f.version != 1 {
+            return Err(format!("attestation file version {} is not 1", f.version));
+        }
+        let hash = |what: &str, text: &str| text.parse::<Hash64>().map_err(|_| format!("{what} {text:?} is not 128 hex"));
+        let hex = |what: &str, text: &str| {
+            let mut out = vec![0u8; text.len() / 2];
+            faster_hex::hex_decode(text.as_bytes(), &mut out).map_err(|_| format!("{what} is not hex"))?;
+            Ok::<_, String>(out)
+        };
+        Ok(Self {
+            network_id: f.network_id.clone(),
+            genesis: f.genesis.clone(),
+            consensus_params_id: f.consensus_params_id.clone(),
+            consensus_schedule_id: f.consensus_schedule_id.clone(),
+            block: hash("block", &f.block)?,
+            block_daa: f.block_daa,
+            committed_root: hash("committedRoot", &f.committed_root)?,
+            leaf_version: f.leaf_version,
+            dns_gate: match &f.dns_gate {
+                None => None,
+                Some(g) => Some(PalwDnsGateFactV1 {
+                    stage_active: g.stage_active,
+                    confirmed_anchor: match &g.confirmed_anchor {
+                        None => None,
+                        Some(a) => Some((hash("confirmedAnchor", a)?, g.confirmed_anchor_daa)),
+                    },
+                }),
+            },
+            issued_at_daa: f.issued_at_daa,
+            key_id: match f.key_id.strip_prefix("0x") {
+                Some(h) => hex("keyId", h)?,
+                None => f.key_id.as_bytes().to_vec(),
+            },
+            signature: hex("signature", &f.signature)?,
+        })
+    }
+
+    pub fn to_json_v1(&self) -> String {
+        serde_json::to_string_pretty(&self.to_file_v1()).expect("an attestation file serializes")
+    }
+
+    pub fn from_json_v1(text: &str) -> Result<Self, String> {
+        let file: ForkChoiceAttestationFileV1 = serde_json::from_str(text).map_err(|e| format!("not an attestation file: {e}"))?;
+        Self::from_file_v1(&file)
+    }
+}
+
+/// **One op-203 entry's opening, from its wire fields** (the borsh leaf, the inner root in hex) — `None` for any other length, a leaf
+/// version this build does not read, a non-canonical slot, or a malformed root. Untrusted either way: an opening counts only where it
+/// hashes to a root the client established.
+pub fn opening_from_wire_v1(leaf: &[u8], inner_root: &str) -> Option<PalwForkChoiceOpeningV1> {
+    Some(PalwForkChoiceOpeningV1 { leaf: PalwForkChoiceLeafV1::decode(leaf)?, inner_root: inner_root.parse::<Hash64>().ok()? })
+}
+
+/// The issuer channel's file limits: at most this many attestations are read per refresh (the newest by `issuedAtDaa`), each file at
+/// most [`ATTESTATION_FILE_MAX_BYTES_V1`].
+pub const ATTESTATION_DIR_MAX_FILES_V1: usize = 64;
+pub const ATTESTATION_FILE_MAX_BYTES_V1: u64 = 64 * 1024;
+
+/// **The issuer channel as a directory** — where an issuer service (`palw-fork-choice-issuer`, run beside the issuer's own full node)
+/// writes one `<block>.json` per attested post-state, synced to the miner by any transport (the files are signed; the transport is
+/// untrusted). Every `*.json` file is read; a malformed or oversized one is skipped and named in the second list, never guessed. The
+/// newest [`ATTESTATION_DIR_MAX_FILES_V1`] by `issuedAtDaa` are returned. Nothing here is trusted: [`verify_fork_choice_v1`] checks each.
+pub fn read_attestation_dir_v1(dir: &std::path::Path) -> Result<(Vec<ForkChoiceAttestationV1>, Vec<String>), String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("the attestation directory {}: {e}", dir.display()))?;
+    let (mut out, mut skipped) = (Vec::new(), Vec::new());
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        let name = path.display().to_string();
+        match entry.metadata() {
+            Ok(m) if m.is_file() && m.len() <= ATTESTATION_FILE_MAX_BYTES_V1 => {}
+            _ => {
+                skipped.push(format!("{name}: not a regular file of at most {ATTESTATION_FILE_MAX_BYTES_V1} bytes"));
+                continue;
+            }
+        }
+        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| ForkChoiceAttestationV1::from_json_v1(&t)) {
+            Ok(att) => out.push(att),
+            Err(why) => skipped.push(format!("{name}: {why}")),
+        }
+    }
+    out.sort_by(|a, b| b.issued_at_daa.cmp(&a.issued_at_daa).then_with(|| a.block.cmp(&b.block)));
+    out.truncate(ATTESTATION_DIR_MAX_FILES_V1);
+    Ok((out, skipped))
+}
+
+/// **An issuer's public key, as the user hands it to the client** — ML-DSA-87, 2,592 bytes, raw or as hex text (whitespace ignored).
+pub fn parse_issuer_public_key_v1(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    const PK: usize = 2592;
+    if bytes.len() == PK {
+        return Ok(bytes.to_vec());
+    }
+    let text: Vec<u8> = bytes.iter().copied().filter(|b| !b.is_ascii_whitespace()).collect();
+    let text = text.strip_prefix(b"0x").unwrap_or(&text);
+    if text.len() != 2 * PK {
+        return Err(format!("an ML-DSA-87 public key is {PK} bytes (raw) or {} hex characters, not {} bytes", 2 * PK, bytes.len()));
+    }
+    let mut out = vec![0u8; PK];
+    faster_hex::hex_decode(text, &mut out).map_err(|_| "the public key is not hex".to_string())?;
+    Ok(out)
+}
+
+/// One block's post-state as the ISSUER's own full node served it (op 203): the block, its DAA, the opening, the root the node says the
+/// post-state is committed as, and whether that root is the envelope (past the fence).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IssuerServedV1 {
+    pub block: Hash64,
+    pub daa_score: u64,
+    pub opening: PalwForkChoiceOpeningV1,
+    pub committed_root: Hash64,
+    pub committed_form: bool,
+}
+
+/// **The issuer side**: attest the post-states the issuer's OWN full node served — only roots op 203 served, only past the fence (a
+/// root below it is the flat ADR-0043 root and opens to nothing), and only where the served opening hashes to the served root and names
+/// the block. Returns the attestations signed (by `sign`, over [`ForkChoiceAttestationV1::signing_digest`]) and, by block, why the
+/// others were not. An issuer signs nothing its node did not compute: this function is the whole of what the statement covers.
+#[allow(clippy::too_many_arguments)]
+pub fn issue_attestations_v1(
+    ruleset: &ClientRulesetV1,
+    served: &[IssuerServedV1],
+    dns_gate: Option<PalwDnsGateFactV1>,
+    issued_at_daa: u64,
+    key_id: &[u8],
+    sign: &dyn Fn(&[u8]) -> Vec<u8>,
+) -> (Vec<ForkChoiceAttestationV1>, Vec<(Hash64, String)>) {
+    let (mut out, mut skipped) = (Vec::new(), Vec::new());
+    for s in served {
+        let why = if !s.committed_form {
+            Some("below palw_fork_choice_commitment_v1: the post-state is committed flat and opens to nothing")
+        } else if s.opening.leaf.block != s.block || s.opening.leaf.daa_score != s.daa_score {
+            Some("the served opening names another point")
+        } else if s.opening.committed_root() != s.committed_root {
+            Some("the served opening does not hash to the served root")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            skipped.push((s.block, why.to_string()));
+            continue;
+        }
+        let mut att = ForkChoiceAttestationV1 {
+            network_id: ruleset.network_id.clone(),
+            genesis: ruleset.genesis.clone(),
+            consensus_params_id: ruleset.consensus_params_id.clone(),
+            consensus_schedule_id: ruleset.consensus_schedule_id.clone(),
+            block: s.block,
+            block_daa: s.daa_score,
+            committed_root: s.committed_root,
+            leaf_version: s.opening.leaf.leaf_version,
+            dns_gate,
+            issued_at_daa,
+            key_id: key_id.to_vec(),
+            signature: Vec::new(),
+        };
+        att.signature = sign(att.signing_digest().as_bytes().as_slice());
+        out.push(att);
+    }
+    (out, skipped)
 }
 
 /// One candidate's evidence: an attestation and the opening of the attested block's post-state (served by any node, op 203).
@@ -312,8 +552,6 @@ pub enum L2StopV1 {
     SelectedChainUnverified { tip: Hash64, why: String },
     #[error("the peers show competing tips while a comparator whose inputs the v1 leaf does not carry may be in force: {0}")]
     LeafV1Insufficient(&'static str),
-    #[error("the peers show competing tips while a bond-budget allocation may be in force (ADR-0176 D3): {0}")]
-    BondBudgetAllocation(&'static str),
     #[error("the peers show competing tips while the DNS BFT gate may run, and {0}")]
     DnsGateMayDecide(&'static str),
     #[error("the competing tips part {depth} blue below {tip}, at or past the finality depth {finality}: a sealed split")]
@@ -343,6 +581,7 @@ pub fn verify_attestation_v1(
     let (_, pubkey) =
         trusted.iter().find(|(id, _)| *id == att.key_id).ok_or_else(|| format!("issuer '{}' is not trusted", att.issuer()))?;
     if att.network_id != ruleset.network_id
+        || att.genesis != ruleset.genesis
         || att.consensus_params_id != ruleset.consensus_params_id
         || att.consensus_schedule_id != ruleset.consensus_schedule_id
     {
@@ -568,17 +807,6 @@ pub fn verify_fork_choice_v1(input: &L2InputV1<'_>, verify: &dyn Fn(&[u8], &[u8]
             }
         }
         match ev.opening.verify(&att.committed_root, &fork_point(&point), input.rules.commitment) {
-            // ADR-0176 D3: past `palw_bond_budget_v1` every reader reads the versioned allocation; a leaf that names none there is not
-            // the node's (it would be weighed by uncapped weights).
-            Ok(_)
-                if ForkChoiceRulesV1::active(input.rules.bond_budget, point.daa_score)
-                    && ev.opening.leaf.weight_allocation.version == PALW_WEIGHT_ALLOCATION_NONE_V1 =>
-            {
-                refusals.push(format!(
-                    "the opening of {} names no bond-budget allocation at a point where palw_bond_budget_v1 is in force",
-                    att.block
-                ))
-            }
             Ok(order) => weighed.push(Weighed { order, opening: ev.opening, att: att.clone() }),
             Err(e) => refusals.push(format!("the opening of {} does not hold: {e}", att.block)),
         }
@@ -622,14 +850,6 @@ pub fn verify_fork_choice_v1(input: &L2InputV1<'_>, verify: &dyn Fn(&[u8], &[u8]
             ));
         }
         return Ok(established(chain, w, Vec::new(), L2DnsGateV1::NotNeeded));
-    }
-
-    // ADR-0176 D3: where a bond-budget allocation may be in force the comparator reads its budget-capped weights, which this build
-    // does not read — named before anything is weighed. (The fence only moves forward, so a tip's DAA is the latest it can start.)
-    if candidates.iter().any(|c| ForkChoiceRulesV1::active(input.rules.bond_budget, c.tip.daa_score)) {
-        return Err(L2StopV1::BondBudgetAllocation(
-            "this build reads no allocation version; the weights the node compares there are the allocation's",
-        ));
     }
 
     // Competing tips: each must be weighed AT its tip.

@@ -1,7 +1,8 @@
 # RFC-0009 L2 — verifying the PALW fork choice without a full node (lane L2FC, 2026-10-09)
 
 Lane L2FC · branch `rfc9/l2-fork-choice` (from the integration head `b676927de`; integration `b8ae9412b` merged 2026-10-10, with the
-user's design changes ADR-0175–0177 and rule E renumbered ADR-0178) · closes the L2 DESIGN_GAP left by C1r2
+user's design changes ADR-0175–0177 and rule E renumbered ADR-0178; integration `589d9aa3e` merged 2026-10-10 — the Lead's live-drill
+E2E of `palw-remote-miner`, BUDGET round 3 — and the issuer channel wired into the miner, §8) · closes the L2 DESIGN_GAP left by C1r2
 ([`rfc-0009-remote-record.md`](rfc-0009-remote-record.md), round 2) · RFC: [0009 §「検証の 3 層と fork-choice gate」](../../rfc/0009-palw-remote-miner.md).
 
 Words as in the RFC-0012 record: **MEASURED** (printed by a test on this branch, named), **DERIVED** (arithmetic on shipped constants or
@@ -77,7 +78,7 @@ chain"; it can claim exactly this:
 | `safe_weight` | u128 | `safe_weight()` | key 2 |
 | `bounded_immature` | u128 | `bounded_immature()` | key 3 (`live_total` is constructed by `PalwCandidateOrderV1::new`, never carried) |
 | `bonds_len` | u64 | `bonds_iter().count()` | D2's count: the registry is append-only (ADR-0065 D5; a bond row is only ever removed by a delta undo), so the bonds minted on a branch after its fork = `bonds_len(tip) − bonds_len(fork block)`, both read off verified leaves |
-| `weight_allocation` | `PalwWeightAllocationSlotV1` (98 B: `version` u16, `allocation_root` Hash64, `capped_safe_weight` u128, `capped_bounded_immature` u128) | `NONE` (version 0, all zero) in this tree | ADR-0176 D3: which versioned bond-budget allocation the comparator's weights are read through (§2.5) |
+| `weight_allocation` | `PalwWeightAllocationSlotV1` (98 B: `version` u16, `allocation_root` Hash64, `capped_safe_weight` u128, `capped_bounded_immature` u128) | `NONE` (version 0, all zero): the fold's weights, budget-clipped by the fold past `palw_bond_budget_v1` | ADR-0176 D3: which versioned bond-budget allocation the comparator's weights are read through (§2.5) |
 
 Every leaf field is already part of the ADR-0043 root except `bonds_len`, which is derived from it, and the slot, which is all zero until
 a bond-budget allocation exists; the leaf adds no state.
@@ -164,13 +165,15 @@ Rules, all in code:
 * **Fail closed on a version this build does not read.** `PALW_WEIGHT_ALLOCATION_READ_MAX_V1 = 0`: `PalwForkChoiceOpeningV1::verify`
   refuses a slot version above it (`WeightAllocation`), even under a root an issuer signed; `decode` refuses a non-canonical version-0
   slot; `parent_by` (the native-settlement walk's leaf rebuild) refuses a non-empty slot, so that walk breaks rather than assumes.
-* **The client knows where an allocation is due.** `ForkChoiceRulesV1::bond_budget` (`None` until the fence is in this tree): an attested
-  leaf naming version 0 at a point past the fence is refused (it would be weighed by uncapped weights); a conflict where the fence may be
-  in force STOPs (`L2StopV1::BondBudgetAllocation`) because this build reads no allocation version.
-* **What lane BUDGET does at integration** (one place each): fill the slot in `PalwForkChoiceLeafV1::of` (the helper every producing and
-  checking site builds a leaf through) for a state past its fence; define version 1's `allocation_root` and raise
-  `PALW_WEIGHT_ALLOCATION_READ_MAX_V1`; set `ForkChoiceRulesV1::bond_budget` from its fence; give `parent_by` the allocation's delta. The
-  leaf length, the envelope key and every other field stay.
+* **Lane BUDGET as merged (integration `589d9aa3e`) needs no version above 0.** `palw_bond_budget_v1` clips Final and provisional
+  weight inside the fold (admission and `finalize_claim`), and its design states fork choice "reads the clipped weights only —
+  unchanged by construction" ([`bond-budget-and-model-allocation.md`](bond-budget-and-model-allocation.md), hook row 20). So past its
+  fence the fold's own `safe_weight` / `bounded_immature` ARE the allocation's weights; the slot stays version 0 on both sides, one
+  reader, one encoding. The client's earlier hooks for an allocation it could not read (refusing version-0 leaves past the budget fence,
+  a `BondBudgetAllocation` STOP on conflicts) were removed at this merge: they would have refused the node's own leaves there.
+* **What a later allocation does** (one place each), only if its comparator weights ever differ from the fold's: fill the slot in
+  `PalwForkChoiceLeafV1::of` under its own fence; define version 1's `allocation_root` and raise `PALW_WEIGHT_ALLOCATION_READ_MAX_V1`;
+  give `parent_by` the allocation's delta. The leaf length, the envelope key and every other field stay.
 * **No reward or weight is added by this lane.** The commitment carries weights the fold (or, past `palw_bond_budget_v1`, the
   allocation) already computed; it draws on no budget and creates no credit.
 
@@ -213,13 +216,15 @@ covered; a header past D is covered only if it commits D's attested root (D's ch
 
 ## 4. The attestation (the checkpoint, generalized)
 
-`ForkChoiceAttestationV1` (client library, `misaka-palw-remote::l2`): `{ network_id, consensus_params_id, consensus_schedule_id,
-block, block_daa, committed_root, leaf_version, issued_at_daa, key_id, signature }`, signed over a domain-separated digest
-(`misaka-palw/remote/fork-choice-attestation/v1`) with the primitive injected (ML-DSA-87 in the binaries), exactly as
-`SignedCheckpointV1`. Rules:
+`ForkChoiceAttestationV1` (client library, `misaka-palw-remote::l2`): `{ network_id, genesis, consensus_params_id, consensus_schedule_id,
+block, block_daa, committed_root, leaf_version, dns_gate, issued_at_daa, key_id, signature }`, signed over a domain-separated digest
+(`misaka-palw/remote/fork-choice-attestation/v1`) with the primitive injected — in the binaries ML-DSA-87 (portable verify) under the
+context `misaka-palw/remote/fork-choice-attestation/v1` (`verify_attestation_mldsa87_v1`), so a key that also signs attempts cannot have
+one of those read as an attestation. `genesis` (added 2026-10-10, after the Lead's salted-drill E2E): a drill answers to `testnet-12`
+on another genesis, and an attestation made on one is refused on the other. Rules:
 
-* **Trust:** a key the client holds before it talks to any node (`--checkpoint-trust signed` key list); an own node over an
-  authenticated channel is the 1-of-1 case. `k`-of-`n` issuers may be required (default 1); attestations from different issuers that
+* **Trust:** a key the client holds before it talks to any node — `palw-remote-miner --fork-choice-issuer <label>=<public key file>`
+  (repeatable; the label is the `key_id` the issuer signs under); an own node over an authenticated channel is the 1-of-1 case. `k`-of-`n` issuers may be required (default 1); attestations from different issuers that
   name conflicting blocks are candidates to resolve (§5), not an error.
 * **Ruleset:** the three ids must be this build's (a node or issuer on another ruleset is refused, as in L1).
 * **Freshness:** `now_daa − issued_at_daa ≤ max_attestation_age_daa` (default 2) — older is `Stale` and refused by name;
@@ -269,7 +274,7 @@ follows with the same build.
 | Node-local rule | When the client may resolve a conflict | Otherwise |
 |---|---|---|
 | DNS BFT gate | the gate cannot run at any tip (retired, or no overlay); or every attestation carries the issuer's gate facts and none names an Active-stage confirmed anchor at or above the checkpoint that is not on every candidate's walked selected chain (**Bootstrap**, live testnet-12: nothing confirmed, the gate never refuses) | STOP: "a DNS-final veto may decide" (also when an attestation carries no gate facts) |
-| a bond-budget allocation (ADR-0176 D3, `palw_bond_budget_v1`) | its fence inactive at every tip | STOP (`BondBudgetAllocation`) until this client reads the allocation's slot version (§2.5) |
+| a bond-budget allocation (ADR-0176 D3, `palw_bond_budget_v1`) | always: BUDGET clips inside the fold, so the opened version-0 weights are the node's (§2.5) | — (a leaf naming a slot version above 0 is refused, never weighed) |
 | D2 frontier provenance | fence inactive at every tip and fork DAA, or for the chosen c and each other o: `!palw_minted_seats_can_reach_quorum_v1(bonds_len(c) − bonds_len(fork(c, o)), panel)` | STOP |
 | finality seal | the fork point is < `finality_depth` blue below each tip | STOP: sealed split |
 | a comparator the v1 leaf cannot feed (ADR-0178 rule E, `palw_fork_choice_rule_e_v1`) | its fence inactive at every tip and fork DAA | STOP (`LeafV1Insufficient`) |
@@ -295,9 +300,13 @@ waits for leaf v2. The robust evaluation of §5.2 (every node-local input taken 
 carry over unchanged; only the inputs opened per candidate change. Validation must then require `palw_fork_choice_commitment_v1` armed at
 or below E (a clause in E's validator, written where both fields exist).
 
-**Integration note.** `ForkChoiceRulesV1::of` sets `rule_e: None` and `bond_budget: None` because neither fence is in this branch's
-`Params`; the merges that bring FINX's and BUDGET's fences set them from `params.palw_fork_choice_rule_e_v1` and
-`params.palw_bond_budget_v1`.
+**Integration note (dependency on lane FINX, stated).** `ForkChoiceRulesV1::of` sets `rule_e: None` because FINX's fence is not in
+`Params` at integration `589d9aa3e` (and `fin/palw-finality-consistency` was not on the remote when this lane merged). The interface
+FINX binds to: (1) set `rule_e` from `params.palw_fork_choice_rule_e_v1` in `ForkChoiceRulesV1::of`; (2) ship leaf v2 with the v1
+fields — the §2.5 slot included — at their v1 offsets, `PALW_FORK_CHOICE_LEAF_VERSION_V1 + 1`, decoded by a `PalwForkChoiceLeafV2::decode`
+that `l2::opening_from_wire_v1` and `PalwForkChoiceOpeningV1::verify` accept under E's fence only; (3) a clause in E's validator
+requiring `palw_fork_choice_commitment_v1` armed at or below E. Until then a conflict where E may be in force STOPs (`LeafV1Insufficient`).
+(`palw_bond_budget_v1` needs no hook, §2.5.)
 
 ## 6. Cost per verified view (testnet-12)
 
@@ -349,10 +358,27 @@ The gate is asked before inference and again right before the signature (unchang
 **Allocations used:** the fence `palw_fork_choice_commitment_v1` and op 203 (registry §2). No object tag, delta number, carriage tail
 or preimage block is taken.
 
-**Not in this lane (stated):** the issuer channel. `palw-remote-miner` configures `fork_choice: None` — there is no issuer service yet
-(nor a flag naming one): a service that signs, for the roots op 203 serves, fresh attestations ≤ 2 DAA old, or the user's own node over
-an authenticated channel. Until one exists the binary's L2 stays C1r2's checkpoint rule (and past the fence its C1 L3 — a proof against
-the header root — fails closed). An attestation needs no new consensus allocation; serving one would take an RPC op (Lead's).
+**The issuer channel (2026-10-10).** No new RPC op or consensus allocation:
+
+* **Issuer side** — `palw-fork-choice-issuer` (new binary, feature `rpc`), run beside the issuer's OWN full node: each round it asks op 203
+  for the sink's and tips' openings, attests through `l2::issue_attestations_v1` only post-states served in the fork-choice form whose
+  opening hashes to the served root and names the block (below the fence it signs nothing and says why), copies the node's DNS gate facts,
+  stamps `issued_at_daa` with the node's virtual DAA, signs with its ML-DSA-87 seed and writes `<out>/<block>.json` atomically (newest
+  `--keep` kept). It refuses a node on another ruleset (genesis included). `--print-public-key` exports the key a miner configures.
+* **Channel** — the directory, synced by any transport (the files are signed; the transport is untrusted). `l2::read_attestation_dir_v1`
+  reads `*.json` (≤ 64 KiB each, the newest 64 by `issuedAtDaa`), skips a malformed file by name.
+* **Miner side** — `palw-remote-miner --verify-headers --fork-choice-issuer <label>=<pubkey> --fork-choice-attestations <dir>
+  [--fork-choice-max-age-daa N] [--fork-choice-min-peers N≥2]` builds `RemoteForkChoiceV1` with `ForkChoiceRulesV1::of(params)` (the
+  drill's params on a drill), the ML-DSA-87 primitive and the directory channel; op 203 was already asked of every node through the wRPC
+  adapter (`WrpcNode::fork_choice_openings`, now decoding through `l2::opening_from_wire_v1`). The `mode` event names the issuers.
+* **A fix found on the way** (`miner::attested_mode_v1`): a valid, fresh attestation of a block no node opens was silently dropped before
+  `verify_fork_choice_v1` saw it — so the hidden-tip signal (an attested block no view shows) was lost exactly when it matters (no peer
+  shows the block, so none serves its opening). It is now checked first: such an attestation is `AttestedBlockHidden`, a STOP.
+
+**What this does NOT change on any live network:** `palw_fork_choice_commitment_v1` is dormant everywhere and refused when armed, so no
+header commits a leaf and the issuer signs nothing; against live t12 or the Lead's salted drill the miner with an issuer configured still
+ends at `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` (no opening of any post-state: `below palw_fork_choice_commitment_v1`). `VERIFIED_REMOTE`
+by attestation is exercised on the in-process t12 harness with the fence armed (`t12_fork_choice_commitment`) and in the miner's tests.
 
 ## 9. Measurements
 
@@ -390,13 +416,18 @@ t12's carriage size in debug, at most 16 per request.
 | an issuer the chain contradicts; an opening that does not hold; below the fence | `l2::tests::an_issuer_the_chain_contradicts_and_an_opening_that_does_not_hold_are_refused` |
 | finality seal, D2 from verified leaves, no walk → STOP | `l2::tests::a_sealed_split_and_an_unbounded_frontier_provenance_veto_stop` |
 | rule E in force → a conflict STOPs, a single chain does not | `l2::tests::a_comparator_whose_inputs_the_leaf_does_not_carry_stops_a_conflict` |
-| ADR-0176 D3: one versioned allocation; an unread version refused; a conflict under the budget fence STOPs; a version-0 leaf past it refused | `l2::tests::a_bond_budget_allocation_is_read_by_one_versioned_slot_or_the_client_stops`, `palw_fork_choice_commitment_v1::tests::the_comparator_reads_the_weights_of_the_allocation_the_slot_names` |
+| ADR-0176 D3: one versioned allocation; an unread version refused; version 0 (the fold's, budget-clipped weights) weighed | `l2::tests::a_bond_budget_allocation_is_read_by_one_versioned_slot`, `palw_fork_choice_commitment_v1::tests::the_comparator_reads_the_weights_of_the_allocation_the_slot_names` |
 | robust dominance = the intersection of in-force rules; the digest covers every field | `l2::tests::robust_dominance_is_the_intersection_of_the_in_force_rules`, `l2::tests::the_attestation_digest_covers_every_field` |
 | commitment: dormant = byte-identical, envelope binds every key (the slot's included), parent-by-delta, fixed 292-byte leaf (ADR-0177: nothing else in it) | `palw_fork_choice_commitment_v1::tests::*` |
 | the native-settlement roots chain in both forms (dormant, armed, straddling; flat-where-due and forged refused) | `native_settlement::tests::rfc9_l2_the_roots_chain_reads_each_header_in_its_committed_form` |
 | the node commits and serves it past the fence (construction = validation), L1+L2+L3 → `VERIFIED_REMOTE`; slot `NONE`; t12's DNS gate facts non-refusing | `t12_fork_choice_commitment` (pipeline) |
 | op 203 round-trips; simnet serves none | `rpc/core` model tests `test_wrpc_serializer_*palw_fork_choice*`; `rpc_tests::sanity_test` (not run here: the integration crate builds the daemon) |
 | the remote miner: attested → `VERIFIED_REMOTE` with the issuer named; no attestation → `HEADER_VERIFIED` (L3 through the envelope); a lying class row → STOP | `miner::tests::an_attested_fork_choice_lifts_the_miner_to_verified_remote_and_names_the_issuer` |
+| (Lead 10-10) an attested root accepted only from issuers the user chose — another label, the user's label on another key, no issuer configured, a drill's genesis, a doctored file: never established; real ML-DSA-87 | `l2::tests::an_attested_root_is_accepted_only_from_an_issuer_the_user_chose`, `miner::tests::an_attested_root_lifts_the_miner_only_from_an_issuer_the_user_chose` |
+| (Lead 10-10) a stale attestation or a forged opening (op 203 untrusted) never lifts the miner | `miner::tests::a_stale_attestation_or_a_forged_opening_never_lifts_the_miner` |
+| (Lead 10-10) a branch with valid headers but a non-canonical fork-choice root is never `VERIFIED_REMOTE`: eclipse onto it (attested block hidden → STOP), its header committing a forged parent state (issuer contradicted → STOP), unattested (unverified / hidden → STOP) | `miner::tests::a_branch_with_valid_headers_but_a_non_canonical_fork_choice_root_is_never_verified_remote` |
+| the issuer channel: the directory read newest-first, malformed/oversized files named, key files raw or hex, op-203 wire decode | `l2::tests::the_issuer_channel_directory_reads_signed_files_and_names_the_rest` |
+| the issuer side over a real node's op-203 answer signs exactly the post-states past the fence; the channel file round-trips | `t12_fork_choice_commitment` (pipeline) |
 
 ## 11. Residuals (stated)
 
@@ -408,7 +439,11 @@ t12's carriage size in debug, at most 16 per request.
   rule remains).
 * Rule E: where it is in force (every network that retires the DNS gate), conflicts STOP until FINX's leaf v2 (§5.4); FINX's leaf v2
   must carry the §2.5 slot at its v1 offset when it is merged.
-* Bond budget: where `palw_bond_budget_v1` is in force, conflicts STOP and version-0 leaves are refused until lane BUDGET defines the
-  slot's version 1 (§2.5). The fence is not in this tree, so the hook is `None` everywhere.
+* Bond budget: BUDGET clips in the fold, so nothing further is needed (§2.5); a future allocation read apart from the fold would take
+  slot version 1 under its own fence.
+* Issuer: there is no public issuer service; a user runs `palw-fork-choice-issuer` beside a node they operate (or trusts someone who
+  does). Option E (a bonded issuer, slashable when a child header contradicts it) remains future work.
+* Live check: nothing ran against a live node in this lane — and could not reach `VERIFIED_REMOTE` there (the fence is dormant
+  everywhere). The first live `VERIFIED_REMOTE` needs the fence armed by the full-activation release and a drill crossing it.
 * A malicious peer can force a STOP (a view through an invalid or merged header next to an attested block, an unweighable tip): STOP is
   the safe answer and costs liveness only; the client never chooses on such a view.

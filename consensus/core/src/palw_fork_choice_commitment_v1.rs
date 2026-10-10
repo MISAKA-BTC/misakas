@@ -23,6 +23,12 @@
 //! budget-capped weight is committed later WITHOUT a new envelope (state-root) version: only the slot's `version` moves. Every later
 //! leaf version keeps it at its v1 offset. This build reads version 0 only; a leaf naming another version is refused, never guessed.
 //!
+//! **Lane BUDGET as merged (2026-10-10) needs no other version.** `palw_bond_budget_v1` clips Final and provisional weight INSIDE the
+//! fold (admission and `finalize_claim`; `bond-budget-and-model-allocation.md` row 20: fork choice "reads the clipped weights only —
+//! unchanged by construction"), so past its fence the fold's own `safe_weight` / `bounded_immature` already ARE the allocation's
+//! weights and the slot stays version 0 on both sides of it. A later allocation whose comparator weights differ from the fold's would
+//! take version 1 under its own fence.
+//!
 //! **No model-availability condition (ADR-0177).** Nothing in the leaf, the slot or the opening says whether a registered model can
 //! be fetched, served or seeded; the chain does not interfere with model acquisition, and no reader may weigh a candidate by it.
 //!
@@ -53,14 +59,16 @@ pub const PALW_WEIGHT_ALLOCATION_SLOT_BYTES_V1: usize = 2 + 64 + 16 + 16;
 pub const PALW_FORK_CHOICE_LEAF_BYTES_V1: usize = 2 + 64 + 8 + 8 + 8 + 64 + 16 + 16 + 8 + PALW_WEIGHT_ALLOCATION_SLOT_BYTES_V1;
 /// The slot version that means "no bond-budget allocation is in force at this state's point": the comparator reads the fold's weights.
 pub const PALW_WEIGHT_ALLOCATION_NONE_V1: u16 = 0;
-/// The highest slot version this build reads. `palw_bond_budget_v1` (lane BUDGET, dormant) defines version 1 and raises this with it.
+/// The highest slot version this build reads. `palw_bond_budget_v1` (lane BUDGET, dormant) clips inside the fold and needs none above
+/// 0; an allocation the comparator reads apart from the fold's weights would define version 1 and raise this with it.
 pub const PALW_WEIGHT_ALLOCATION_READ_MAX_V1: u16 = PALW_WEIGHT_ALLOCATION_NONE_V1;
 
 /// **ADR-0176 D3: the weight-allocation slot of a fork-choice leaf** — which versioned bond-budget allocation the comparator's weights
 /// were read through, and those weights.
 ///
-/// * `version == 0` ([`PALW_WEIGHT_ALLOCATION_NONE_V1`], every state today): no allocation is in force at the state's point; every
-///   other field is zero, and the comparator reads the leaf's own `safe_weight` / `bounded_immature` (the fold's).
+/// * `version == 0` ([`PALW_WEIGHT_ALLOCATION_NONE_V1`], every state today): no separate allocation is read at the state's point; every
+///   other field is zero, and the comparator reads the leaf's own `safe_weight` / `bounded_immature` (the fold's — past
+///   `palw_bond_budget_v1` already budget-clipped by the fold itself).
 /// * `version == n ≥ 1`: version `n` of `palw_bond_budget_v1`'s allocation is in force; `capped_safe_weight` /
 ///   `capped_bounded_immature` are the comparator's key 2 and key 3's addend as that allocation bounds them (the per-bond Final and
 ///   provisional weight ceilings applied), and `allocation_root` commits the per-bond allocation they were computed from, so a reader
@@ -113,8 +121,8 @@ pub struct PalwForkChoiceLeafV1 {
     /// leaves' counts — the bound a client uses to show ADR-0065 D2 cannot veto.
     pub bonds_len: u64,
     /// **ADR-0176 D3's slot** — the versioned bond-budget allocation the comparator's weights are read through
-    /// ([`PalwWeightAllocationSlotV1::NONE`] until `palw_bond_budget_v1` is armed). Part of the v1 fields: every later leaf version keeps
-    /// it at this offset.
+    /// ([`PalwWeightAllocationSlotV1::NONE`] while the comparator reads the fold's weights — `palw_bond_budget_v1` included, which clips
+    /// them in the fold). Part of the v1 fields: every later leaf version keeps it at this offset.
     pub weight_allocation: PalwWeightAllocationSlotV1,
 }
 
@@ -156,8 +164,9 @@ impl PalwForkChoiceLeafV1 {
             safe_weight: state.safe_weight(),
             bounded_immature: state.bounded_immature(),
             bonds_len: state.bonds_iter().count() as u64,
-            // No bond-budget allocation exists in this tree. The merge that brings `palw_bond_budget_v1` fills the slot here (the one
-            // place every producing and checking site builds a leaf through) for a state whose point stands past that fence.
+            // The fold's weights are the comparator's on both sides of `palw_bond_budget_v1` (it clips inside the fold), so the slot is
+            // NONE. An allocation the comparator reads apart from the fold would fill it here — the one place every producing and
+            // checking site builds a leaf through.
             weight_allocation: PalwWeightAllocationSlotV1::NONE,
         })
     }
@@ -341,8 +350,7 @@ impl PalwForkChoiceOpeningV1 {
     /// **Verify an opening** against a root committed for `point`'s post-state (by an attestation, or by a chain child's header):
     /// the leaf's weight-allocation slot must be one this build reads, the state must be past the fence (by the client's own
     /// ruleset), the leaf must name `point` exactly, and the envelope must hash to `committed_root`. Returns the candidate order — the
-    /// comparator's input, built the node's way. (A reader whose ruleset arms `palw_bond_budget_v1` must also refuse a version-0 slot at
-    /// a point past that fence: the remote client does, `misaka-palw-remote::l2`.)
+    /// comparator's input, built the node's way.
     pub fn verify(
         &self,
         committed_root: &Hash64,

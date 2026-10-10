@@ -5,7 +5,16 @@
 //!     --bond <txid>:<index> --class <class id> --artifact-root <root> --pay-address <addr> \
 //!     --key-file <seed> --checkpoint <daa>:<block hash> [--pin <block hash>] \
 //!     --executor-cmd <program> [--executor-arg <arg> …] --state-dir <dir> [--steps N] [--poll-secs N]
+//!     [--verify-headers [--fork-choice-issuer <label>=<pubkey file> … --fork-choice-attestations <dir>]]
 //! ```
+//!
+//! **RFC-0009 L2 by attestation (option D).** With `--verify-headers`, `--fork-choice-issuer` names an issuer YOU chose (its label and
+//! its ML-DSA-87 public key, `palw-fork-choice-issuer --print-public-key`) and `--fork-choice-attestations` the directory its signed
+//! attestations arrive in. Each step asks every node for op-203 openings (`getPalwForkChoiceOpening`), opens the attested roots, walks
+//! the selected chain and weighs competing tips with the node's own decision functions; L1 + L2 + L3 → `VERIFIED_REMOTE`, the issuer
+//! named on the `mode` event's `l2` line. A stale attestation, an issuer you did not name, an opening that does not hash to the attested
+//! root, or a view the chain contradicts never lifts the class; a hidden tip or an unweighable conflict is a STOP. Below
+//! `palw_fork_choice_commitment_v1` (dormant on every network, so today everywhere) no opening exists and L2 stays unverified.
 //!
 //! It reads the chain through several nodes (`getBlockDagInfo`, `getBlockTemplate`, `getPalwProducerFacts`), refuses on any disagreement, a
 //! stale template, a foreign class or a bond whose registered key is not the one it holds, runs the miner's OWN executor, signs once and only on a
@@ -269,7 +278,6 @@ impl RemoteNode for WrpcNode<'_> {
         &self,
         blocks: &[Hash64],
     ) -> Result<Vec<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceOpeningV1>, String> {
-        use kaspa_consensus_core::palw_fork_choice_commitment_v1::{PalwForkChoiceLeafV1, PalwForkChoiceOpeningV1};
         let served = self
             .runtime
             .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
@@ -283,11 +291,7 @@ impl RemoteNode for WrpcNode<'_> {
             .entries
             .iter()
             .filter(|e| e.available)
-            .filter_map(|e| {
-                let leaf = PalwForkChoiceLeafV1::decode(&e.leaf)?;
-                let inner_root = e.inner_root.parse::<Hash64>().ok()?;
-                Some(PalwForkChoiceOpeningV1 { leaf, inner_root })
-            })
+            .filter_map(|e| misaka_palw_remote::l2::opening_from_wire_v1(&e.leaf, &e.inner_root))
             .collect())
     }
 
@@ -416,6 +420,11 @@ struct Args {
     /// schedule through kaspad's `--palw-drill-*-at` flags, which this binary does not re-derive). The ids are accepted ONLY with a salt.
     drill_salt: Option<kaspa_consensus_core::config::drill::PalwDrillSaltV1>,
     drill_ruleset: Option<(String, String)>,
+    /// **RFC-0009 L2 by attestation (option D)**: the issuers the user chose before talking to any node — `(label, ML-DSA-87 public
+    /// key)` — and the directory their signed attestations arrive in (the issuer channel; `palw-fork-choice-issuer` writes it).
+    fork_choice_issuers: Vec<(Vec<u8>, Vec<u8>)>,
+    fork_choice_dir: Option<PathBuf>,
+    fork_choice_limits: misaka_palw_remote::l2::L2LimitsV1,
 }
 
 fn parse_args() -> Args {
@@ -427,6 +436,8 @@ fn parse_args() -> Args {
     let (mut verify_headers, mut checkpoint_trust, mut own_node, mut accept_unverified) =
         (false, misaka_palw_remote::verify::CheckpointTrustV1::UserPinned, false, None);
     let (mut drill_salt, mut drill_ruleset) = (None, None);
+    let (mut fork_choice_issuers, mut fork_choice_dir, mut fork_choice_limits) =
+        (Vec::new(), None, misaka_palw_remote::l2::L2LimitsV1::default());
     while let Some(flag) = it.next() {
         let mut value = |name: &str| it.next().unwrap_or_else(|| die(format!("{name} needs a value")));
         match flag.as_str() {
@@ -481,14 +492,53 @@ fn parse_args() -> Args {
             }
             "--palw-drill-ruleset" => {
                 let v = value("--palw-drill-ruleset");
-                let (p, s) = v.split_once(':').unwrap_or_else(|| die("--palw-drill-ruleset is <consensus_params_id>:<consensus_schedule_id>"));
+                let (p, s) =
+                    v.split_once(':').unwrap_or_else(|| die("--palw-drill-ruleset is <consensus_params_id>:<consensus_schedule_id>"));
                 drill_ruleset = Some((p.to_string(), s.to_string()))
+            }
+            "--fork-choice-issuer" => {
+                let v = value("--fork-choice-issuer");
+                let (label, file) =
+                    v.split_once('=').unwrap_or_else(|| die("--fork-choice-issuer is <label>=<ML-DSA-87 public key file>"));
+                if label.is_empty() || label.starts_with("0x") {
+                    die("--fork-choice-issuer: the label is the issuer's name as it signs (non-empty, not 0x-prefixed)");
+                }
+                let bytes = std::fs::read(file).unwrap_or_else(|e| die(format!("--fork-choice-issuer {file}: {e}")));
+                let key = misaka_palw_remote::l2::parse_issuer_public_key_v1(&bytes)
+                    .unwrap_or_else(|e| die(format!("--fork-choice-issuer {file}: {e}")));
+                if fork_choice_issuers.iter().any(|(l, _): &(Vec<u8>, Vec<u8>)| l == label.as_bytes()) {
+                    die(format!("--fork-choice-issuer: the label {label:?} is given twice"));
+                }
+                fork_choice_issuers.push((label.as_bytes().to_vec(), key));
+            }
+            "--fork-choice-attestations" => fork_choice_dir = Some(PathBuf::from(value("--fork-choice-attestations"))),
+            "--fork-choice-max-age-daa" => {
+                fork_choice_limits.max_attestation_age_daa =
+                    value("--fork-choice-max-age-daa").parse().unwrap_or_else(|_| die("--fork-choice-max-age-daa is not a number"))
+            }
+            "--fork-choice-min-peers" => {
+                let n: usize =
+                    value("--fork-choice-min-peers").parse().unwrap_or_else(|_| die("--fork-choice-min-peers is not a number"));
+                if n < 2 {
+                    die("--fork-choice-min-peers below 2: one peer cannot show the tip it hides");
+                }
+                fork_choice_limits.min_peers = n;
             }
             other => die(format!("unknown flag {other}")),
         }
     }
+    if fork_choice_issuers.is_empty() != fork_choice_dir.is_none() {
+        die(
+            "--fork-choice-issuer and --fork-choice-attestations go together: the issuers you chose and the channel their attestations arrive by",
+        );
+    }
+    if !fork_choice_issuers.is_empty() && !verify_headers {
+        die("--fork-choice-issuer needs --verify-headers: an attested fork choice is weighed over L1-verified views");
+    }
     if drill_ruleset.is_some() && drill_salt.is_none() {
-        die("--palw-drill-ruleset needs --palw-drill-genesis-salt: a stated ruleset is accepted only on a drill, whose genesis no real network shares");
+        die(
+            "--palw-drill-ruleset needs --palw-drill-genesis-salt: a stated ruleset is accepted only on a drill, whose genesis no real network shares",
+        );
     }
     let network = network.unwrap_or_else(|| die("--network is required"));
     let (daa, block_hash) =
@@ -518,6 +568,9 @@ fn parse_args() -> Args {
         accept_unverified,
         drill_salt,
         drill_ruleset,
+        fork_choice_issuers,
+        fork_choice_dir,
+        fork_choice_limits,
     }
 }
 
@@ -675,8 +728,22 @@ fn main() {
                 now_ms: || {
                     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
                 },
-                // RFC-0009 L2 by attestation needs an issuer channel this binary does not have yet: L2 stays the checkpoint rule.
-                fork_choice: None,
+                // RFC-0009 L2 by attestation (option D) when the user named issuers: their signed attestations from the channel
+                // directory, ML-DSA-87; the fork-choice rules are this build's own (the drill's params on a drill). Without: L2 stays
+                // the checkpoint rule.
+                fork_choice: args.fork_choice_dir.clone().map(|dir| misaka_palw_remote::miner::RemoteForkChoiceV1 {
+                    rules: misaka_palw_remote::l2::ForkChoiceRulesV1::of(&params),
+                    limits: args.fork_choice_limits,
+                    issuers: args.fork_choice_issuers.clone(),
+                    attestations: std::sync::Arc::new(move |_: &[Hash64]| {
+                        let (found, skipped) = misaka_palw_remote::l2::read_attestation_dir_v1(&dir)?;
+                        for why in skipped {
+                            eprintln!("[palw-remote-miner] attestation file skipped: {why}");
+                        }
+                        Ok(found)
+                    }),
+                    verify_signature: misaka_palw_remote::l2::verify_attestation_mldsa87_v1,
+                }),
             }),
             accept_unverified: args.accept_unverified,
             // Non-custodial: every template must pay this miner's own --pay-address.
@@ -686,7 +753,12 @@ fn main() {
     say(
         "mode",
         serde_json::json!({
-            "verification": if args.verify_headers { "L1 header chain + L3 proofs from --checkpoint; L2 established only at a trusted checkpoint that is the decision point" } else { "the quorum alone" },
+            "verification": match (args.verify_headers, args.fork_choice_dir.is_some()) {
+                (true, true) => "L1 header chain from --checkpoint; L2 by attested fork-choice roots (op 203 openings, the node's own decision functions) from the issuers you chose; L3 under the attested root",
+                (true, false) => "L1 header chain + L3 proofs from --checkpoint; L2 established only at a trusted checkpoint that is the decision point",
+                _ => "the quorum alone",
+            },
+            "fork_choice_issuers": args.fork_choice_issuers.iter().map(|(l, _)| String::from_utf8_lossy(l).into_owned()).collect::<Vec<_>>(),
             "accepted_below_verified": args.accept_unverified.map(|l| l.as_str()),
             "note": "every step prints the class it ran in; below VERIFIED_REMOTE nothing is executed or signed without --accept-unverified-state <LABEL>",
         }),
