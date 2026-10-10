@@ -5,8 +5,9 @@
 //! evaluated element-wise, so a template for a `ModelSpec` is a `ModelSpec` with operator nodes where
 //! a value depends on the configuration). The language is deliberately small, pure and total:
 //!
-//! * no I/O, no recursion by name, no unbounded loop: evaluation takes at most [`MAX_STEPS`] nodes,
-//!   [`MAX_DEPTH`] levels, lists of at most [`MAX_LIST`] elements;
+//! * no I/O, no recursion by name, no unbounded loop: evaluation takes at most [`MAX_STEPS`] work
+//!   units, [`MAX_CALL_DEPTH`] evaluator calls, [`MAX_DEPTH`] JSON levels, lists of at most
+//!   [`MAX_LIST`] elements and [`MAX_EXPANSION_BYTES`] cumulative logical allocation bytes;
 //! * every read of the configuration goes through the key-tracking [`Cfg`], so a key no rule reads
 //!   is refused (`NOT_LOWERABLE`), never ignored;
 //! * numbers keep their integer-ness (`$add` of two integers is an integer); `$div` is a float
@@ -32,8 +33,15 @@ use std::collections::BTreeSet;
 
 pub const MAX_STEPS: usize = 4_000_000;
 pub const MAX_DEPTH: usize = 96;
+/// Actual evaluator calls (including lazy globals); the operator dispatcher has a larger stack
+/// frame than a JSON traversal. Keep this safe on the ordinary 2 MiB worker/test stack.
+pub const MAX_CALL_DEPTH: usize = 32;
 pub const MAX_LIST: usize = 1 << 20;
 pub const MAX_LAYERS: usize = 4096;
+/// Cumulative logical allocation budget, including copied subtrees and UTF-8 bytes.
+/// This is a compiler limit, not a consensus resource or an estimate of process RSS.
+pub const MAX_EXPANSION_BYTES: usize = 64 << 20;
+pub const EXPANSION_LIMIT: &str = "FRONTEND_EXPANSION_LIMIT";
 
 /// The configuration scope in force: the decoder's, or a nested object's inside a `$sub`.
 pub enum CfgRef<'a> {
@@ -76,12 +84,58 @@ pub struct Env<'a> {
     layer_done: RefCell<std::collections::BTreeMap<String, Value>>,
     in_progress: RefCell<BTreeSet<String>>,
     steps: Cell<usize>,
+    expanded_bytes: Cell<usize>,
+    /// Counts actual calls, including lazy variable evaluation, which starts a new expression.
+    eval_depth: Cell<usize>,
     /// Keys whose value is the class default, not the configuration's.
     pub assumed: RefCell<BTreeSet<String>>,
 }
 
 fn bad(msg: impl Into<String>) -> LowerError {
     LowerError::bad(msg)
+}
+
+/// Bound the traversal itself as well as the copy it describes. Object accounting includes
+/// key storage and map links; allocator overhead is not a protocol value.
+fn value_cost(value: &Value, depth: usize) -> Result<(usize, usize)> {
+    if depth > MAX_DEPTH {
+        return Err(bad(format!("{EXPANSION_LIMIT}: value nested too deeply")));
+    }
+    let mut work = 1usize;
+    let mut bytes = std::mem::size_of::<Value>();
+    let mut add = |child: &Value, extra: usize| -> Result<()> {
+        let (w, b) = value_cost(child, depth + 1)?;
+        work = work.checked_add(w).filter(|n| *n <= MAX_STEPS).ok_or_else(|| bad(EXPANSION_LIMIT))?;
+        bytes = bytes
+            .checked_add(b)
+            .and_then(|n| n.checked_add(extra))
+            .filter(|n| *n <= MAX_EXPANSION_BYTES)
+            .ok_or_else(|| bad(EXPANSION_LIMIT))?;
+        Ok(())
+    };
+    match value {
+        Value::Array(a) => {
+            if a.len() > MAX_LIST {
+                return Err(bad(EXPANSION_LIMIT));
+            }
+            for v in a {
+                add(v, 0)?;
+            }
+        }
+        Value::Object(o) => {
+            if o.len() > MAX_LIST {
+                return Err(bad(EXPANSION_LIMIT));
+            }
+            for (k, v) in o {
+                add(v, k.len().saturating_add(64))?;
+            }
+        }
+        Value::String(s) => {
+            bytes = bytes.checked_add(s.len()).filter(|n| *n <= MAX_EXPANSION_BYTES).ok_or_else(|| bad(EXPANSION_LIMIT))?;
+        }
+        _ => {}
+    }
+    Ok((work, bytes))
 }
 
 fn num(v: &Value) -> Option<N> {
@@ -201,6 +255,8 @@ impl<'a> Env<'a> {
             layer_done: RefCell::new(Default::default()),
             in_progress: RefCell::new(BTreeSet::new()),
             steps: Cell::new(0),
+            expanded_bytes: Cell::new(0),
+            eval_depth: Cell::new(0),
             assumed: RefCell::new(BTreeSet::new()),
         }
     }
@@ -210,6 +266,40 @@ impl<'a> Env<'a> {
             Some(n) => CfgRef::Nested(n.clone()),
             None => CfgRef::Base(self.base),
         }
+    }
+
+    fn charge(&self, work: usize, bytes: usize) -> Result<()> {
+        let steps = self.steps.get().checked_add(work).filter(|n| *n <= MAX_STEPS);
+        let expanded = self.expanded_bytes.get().checked_add(bytes).filter(|n| *n <= MAX_EXPANSION_BYTES);
+        match (steps, expanded) {
+            (Some(steps), Some(expanded)) => {
+                self.steps.set(steps);
+                self.expanded_bytes.set(expanded);
+                Ok(())
+            }
+            _ => Err(bad(format!("{EXPANSION_LIMIT}: adapter exceeds its work or allocation budget"))),
+        }
+    }
+
+    /// Reserve before cloning: a small expression can otherwise expand a nested `$repeat` to
+    /// arbitrarily many values while spending only a handful of evaluator steps.
+    fn reserve_copy(&self, value: &Value, copies: usize) -> Result<()> {
+        let (work, bytes) = value_cost(value, 0)?;
+        let work = work.checked_mul(copies).ok_or_else(|| bad(EXPANSION_LIMIT))?;
+        let bytes = bytes.checked_mul(copies).ok_or_else(|| bad(EXPANSION_LIMIT))?;
+        self.charge(work, bytes)
+    }
+
+    fn copy_value(&self, value: &Value) -> Result<Value> {
+        self.reserve_copy(value, 1)?;
+        Ok(value.clone())
+    }
+
+    fn reserve_list(&self, len: usize) -> Result<()> {
+        if len > MAX_LIST {
+            return Err(bad(format!("{EXPANSION_LIMIT}: adapter list too long")));
+        }
+        self.charge(len, len.checked_mul(std::mem::size_of::<Value>()).ok_or_else(|| bad(EXPANSION_LIMIT))?)
     }
 
     /// Declare a per-layer variable (an expression evaluated for each layer, `i` bound, when first
@@ -239,9 +329,9 @@ impl<'a> Env<'a> {
 
     fn global(&self, name: &str) -> Result<Value> {
         if let Some(v) = self.globals_done.borrow().get(name) {
-            return Ok(v.clone());
+            return self.copy_value(v);
         }
-        let expr = self.globals_pending.borrow().get(name).cloned();
+        let expr = self.globals_pending.borrow().get(name).map(|v| self.copy_value(v)).transpose()?;
         let expr = expr.ok_or_else(|| bad(format!("{}: the adapter reads variable `{name}`, which it never defines", self.arch)))?;
         if !self.in_progress.borrow_mut().insert(format!("g:{name}")) {
             return Err(bad(format!("{}: variable `{name}` is defined in terms of itself", self.arch)));
@@ -249,18 +339,18 @@ impl<'a> Env<'a> {
         let r = self.ev(&expr, 1).map_err(|e| in_var(e, name));
         self.in_progress.borrow_mut().remove(&format!("g:{name}"));
         let v = r?;
-        self.globals_done.borrow_mut().insert(name.to_string(), v.clone());
+        self.globals_done.borrow_mut().insert(name.to_string(), self.copy_value(&v)?);
         Ok(v)
     }
 
     fn var(&self, name: &str) -> Result<Value> {
         if let Some((_, v)) = self.vars.borrow().iter().rev().find(|(n, _)| n == name) {
-            return Ok(v.clone());
+            return self.copy_value(v);
         }
         if let Some(v) = self.layer_done.borrow().get(name) {
-            return Ok(v.clone());
+            return self.copy_value(v);
         }
-        let lexpr = self.layer_pending.borrow().get(name).cloned();
+        let lexpr = self.layer_pending.borrow().get(name).map(|v| self.copy_value(v)).transpose()?;
         if let Some(expr) = lexpr {
             if !self.in_progress.borrow_mut().insert(format!("l:{name}")) {
                 return Err(bad(format!("{}: layer variable `{name}` is defined in terms of itself", self.arch)));
@@ -268,7 +358,7 @@ impl<'a> Env<'a> {
             let r = self.ev(&expr, 1).map_err(|e| in_var(e, name));
             self.in_progress.borrow_mut().remove(&format!("l:{name}"));
             let v = r?;
-            self.layer_done.borrow_mut().insert(name.to_string(), v.clone());
+            self.layer_done.borrow_mut().insert(name.to_string(), self.copy_value(&v)?);
             return Ok(v);
         }
         self.global(name)
@@ -282,13 +372,18 @@ impl<'a> Env<'a> {
     }
 
     /// A configuration value, or the class default; `None` when neither (explicit `null` reads as absent).
-    fn lookup(&self, key: &str) -> Option<Value> {
+    fn lookup(&self, key: &str) -> Result<Option<Value>> {
         match self.cur().raw(key) {
-            Some(v) => Some(v.clone()),
-            None => self.defaults.get(key).filter(|v| !v.is_null()).map(|v| {
-                self.assumed.borrow_mut().insert(key.to_string());
-                v.clone()
-            }),
+            Some(v) => self.copy_value(v).map(Some),
+            None => self
+                .defaults
+                .get(key)
+                .filter(|v| !v.is_null())
+                .map(|v| {
+                    self.assumed.borrow_mut().insert(key.to_string());
+                    self.copy_value(v)
+                })
+                .transpose(),
         }
     }
 
@@ -298,22 +393,24 @@ impl<'a> Env<'a> {
     }
 
     fn ev(&self, v: &Value, depth: usize) -> Result<Value> {
-        if depth > MAX_DEPTH {
-            return Err(bad("adapter expression nested too deeply"));
+        let active = self.eval_depth.get();
+        if depth > MAX_DEPTH || active >= MAX_CALL_DEPTH {
+            return Err(bad(format!("{EXPANSION_LIMIT}: adapter expression nested too deeply")));
         }
-        let s = self.steps.get() + 1;
-        self.steps.set(s);
-        if s > MAX_STEPS {
-            return Err(bad("adapter expression exceeds its evaluation budget"));
-        }
+        self.charge(1, 0)?;
+        self.eval_depth.set(active + 1);
+        let result = self.ev_inner(v, depth);
+        self.eval_depth.set(active);
+        result
+    }
+
+    fn ev_inner(&self, v: &Value, depth: usize) -> Result<Value> {
         if let Some((op, arg)) = operator(v) {
             return self.op(op, arg, depth);
         }
         match v {
             Value::Array(a) => {
-                if a.len() > MAX_LIST {
-                    return Err(bad("adapter list too long"));
-                }
+                self.reserve_list(a.len())?;
                 a.iter().map(|e| self.ev(e, depth + 1)).collect::<Result<Vec<_>>>().map(Value::Array)
             }
             Value::Object(o) => {
@@ -322,11 +419,12 @@ impl<'a> Env<'a> {
                     if k.starts_with('$') {
                         return Err(bad(format!("`{k}` is an operator and must be the only key of its object")));
                     }
+                    self.charge(1, k.len().saturating_add(64))?;
                     out.insert(k.clone(), self.ev(e, depth + 1)?);
                 }
                 Ok(Value::Object(out))
             }
-            other => Ok(other.clone()),
+            other => self.copy_value(other),
         }
     }
 
@@ -348,18 +446,41 @@ impl<'a> Env<'a> {
         a.iter().map(|v| num(v).ok_or_else(|| bad(format!("`{op}` wants numbers, got {v}")))).collect()
     }
 
-    #[allow(clippy::too_many_lines)]
+    // Keep operator families in separate stack frames: lazy variables and deeply nested
+    // templates must reach the depth refusal on an ordinary worker stack.
     fn op(&self, op: &str, arg: &Value, depth: usize) -> Result<Value> {
-        let d = depth + 1;
         match op {
-            // ───────────── configuration ─────────────
+            "$cfg" | "$cfg?" | "$cfgn" | "$alias" | "$has" | "$root" | "$forbid" | "$require_eq" | "$get" => {
+                self.op_configuration(op, arg, depth + 1)
+            }
+            "$has_tensor" | "$tensor_flag" | "$tensor_shape" | "$tensor_prefix" | "$tensor_prefix_scan" => {
+                self.op_tensors(op, arg, depth + 1)
+            }
+            "$var" | "$let" => self.op_variables(op, arg, depth + 1),
+            "$add" | "$sub" | "$mul" | "$div" | "$idiv" | "$mod" | "$neg" | "$abs" | "$sqrt" | "$ln" | "$exp" | "$floor" | "$ceil"
+            | "$round" | "$int" | "$float" | "$min" | "$max" | "$pow" => self.op_arithmetic(op, arg, depth + 1),
+            "$eq" | "$ne" | "$lt" | "$le" | "$gt" | "$ge" | "$and" | "$or" | "$not" | "$if" | "$switch" => {
+                self.op_comparison_logic(op, arg, depth + 1)
+            }
+            "$list" | "$range" | "$chars" | "$len" | "$index" | "$contains" | "$is_num" | "$is_list" | "$sort" | "$unique"
+            | "$find" | "$flatten" | "$concat" | "$repeat" | "$map" | "$sum" | "$cat" | "$starts_with" | "$ends_with" | "$merge"
+            | "$omit" | "$set" => self.op_lists_strings(op, arg, depth + 1),
+            "$check" | "$bad" => self.op_checks(op, arg, depth + 1),
+            "$act" | "$layer_types" | "$scope" | "$alibi" | "$rope_plain" | "$per_layer" | "$rope_config" | "$partial_rotary"
+            | "$rope" | "$rope_temp" | "$layers" => self.op_generic_features(op, arg, depth + 1),
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_configuration(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
             "$cfg" => {
                 let (key, default) = match arg {
                     Value::String(k) => (k.as_str(), None),
                     Value::Array(a) if a.len() == 2 => (as_str(&a[0], "$cfg")?, Some(&a[1])),
                     _ => return Err(bad("`$cfg` takes a key or [key, default]")),
                 };
-                match self.lookup(key) {
+                match self.lookup(key)? {
                     Some(v) => Ok(v),
                     None => match default {
                         Some(e) => self.ev(e, d),
@@ -368,7 +489,7 @@ impl<'a> Env<'a> {
                 }
             }
             // The configuration's own value or null: never a class default (an optional key has none).
-            "$cfg?" => Ok(self.cur().raw(as_str(arg, "$cfg?")?).cloned().unwrap_or(Value::Null)),
+            "$cfg?" => self.cur().raw(as_str(arg, "$cfg?")?).map(|v| self.copy_value(v)).transpose().map(|v| v.unwrap_or(Value::Null)),
             "$cfgn" => {
                 // `usize_or_null`: absent → the class default; an explicit `null` stays null (a
                 // checkpoint switches `sliding_window` off by writing null).
@@ -378,12 +499,12 @@ impl<'a> Env<'a> {
                     _ => return Err(bad("`$cfgn` takes a key or [key, default]")),
                 };
                 match self.cur().raw_nullable(key) {
-                    Some(Some(v)) => Ok(v.clone()),
+                    Some(Some(v)) => self.copy_value(v),
                     Some(None) => Ok(Value::Null),
                     None => match self.defaults.get(key).filter(|v| !v.is_null()) {
                         Some(v) => {
                             self.assumed.borrow_mut().insert(key.to_string());
-                            Ok(v.clone())
+                            self.copy_value(v)
                         }
                         None => match inline {
                             Some(e) => self.ev(e, d),
@@ -403,7 +524,7 @@ impl<'a> Env<'a> {
                 for k in &keys {
                     // The configuration's own values only: a class default for one spelling must
                     // not "disagree" with the value another spelling carries.
-                    let v = self.cur().raw(k).cloned();
+                    let v = self.cur().raw(k).map(|v| self.copy_value(v)).transpose()?;
                     match (&out, v) {
                         (None, Some(v)) => out = Some(v),
                         (Some(a), Some(b)) if !values_equal(a, &b) => {
@@ -426,7 +547,7 @@ impl<'a> Env<'a> {
             "$has" => Ok(Value::Bool(self.cur().has(as_str(arg, "$has")?))),
             "$root" => {
                 let r = self.root.ok_or_else(|| bad("`$root` in an adapter with no wrapper configuration"))?;
-                Ok(r.raw(as_str(arg, "$root")?).cloned().unwrap_or(Value::Null))
+                r.raw(as_str(arg, "$root")?).map(|v| self.copy_value(v)).transpose().map(|v| v.unwrap_or(Value::Null))
             }
             "$forbid" => {
                 let a = self.args(arg, d)?;
@@ -447,11 +568,16 @@ impl<'a> Env<'a> {
                 }
                 let key = as_str(&a[1], op)?;
                 match a[0].as_object().and_then(|o| o.get(key)).filter(|v| !v.is_null()) {
-                    Some(v) => Ok(v.clone()),
-                    None => Ok(a.get(2).cloned().unwrap_or(Value::Null)),
+                    Some(v) => self.copy_value(v),
+                    None => a.get(2).map(|v| self.copy_value(v)).transpose().map(|v| v.unwrap_or(Value::Null)),
                 }
             }
-            // ───────────── tensors ─────────────
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_tensors(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
             "$has_tensor" => {
                 let name = as_str(&self.ev(arg, d)?, op)?.to_string();
                 Ok(match self.tensors {
@@ -539,7 +665,12 @@ impl<'a> Env<'a> {
                     ))),
                 }
             }
-            // ───────────── variables ─────────────
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_variables(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
             "$var" => self.var(as_str(arg, "$var")?),
             "$let" => {
                 let a = arg.as_array().filter(|a| a.len() == 3).ok_or_else(|| bad("`$let` takes [name, value, body]"))?;
@@ -547,7 +678,12 @@ impl<'a> Env<'a> {
                 let v = self.ev(&a[1], d)?;
                 self.with_var(name, v, || self.ev(&a[2], d))
             }
-            // ───────────── arithmetic ─────────────
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_arithmetic(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
             "$add" | "$sub" | "$mul" => {
                 let a = self.args(arg, d)?;
                 if a.len() < 2 {
@@ -634,6 +770,9 @@ impl<'a> Env<'a> {
                 if a.len() == 1
                     && let Value::Array(l) = &a[0]
                 {
+                    for v in l {
+                        self.reserve_copy(v, 1)?;
+                    }
                     a = l.clone();
                 }
                 if a.is_empty() {
@@ -662,7 +801,12 @@ impl<'a> Env<'a> {
                     (b, e) => N::F(crate::detmath::powf(b.f(), e.f())).value(),
                 }
             }
-            // ───────────── comparison and logic ─────────────
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_comparison_logic(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
             "$eq" | "$ne" => {
                 let a = self.args(arg, d)?;
                 self.arity(op, &a, 2)?;
@@ -721,22 +865,24 @@ impl<'a> Env<'a> {
                     None => self.ev(&a[2], d),
                 }
             }
-            // ───────────── lists and strings ─────────────
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_lists_strings(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
             "$list" => Ok(Value::Array(self.args(arg, d)?)),
             "$range" => {
                 let n = as_usize(&self.ev(arg, d)?, op)?;
-                if n > MAX_LIST {
-                    return Err(bad("`$range` too long"));
-                }
+                self.reserve_list(n)?;
                 Ok(Value::Array((0..n as u64).map(Value::from).collect()))
             }
             // A string as the list of its characters, each a one-character string (Nemotron-H's `hybrid_override_pattern`).
             "$chars" => {
                 let v = self.ev(arg, d)?;
                 let s = as_str(&v, op)?;
-                if s.chars().count() > MAX_LIST {
-                    return Err(bad("`$chars` too long"));
-                }
+                self.reserve_list(s.chars().count())?;
+                self.charge(s.len(), s.len())?;
                 Ok(Value::Array(s.chars().map(|c| Value::String(c.to_string())).collect()))
             }
             "$len" => {
@@ -753,7 +899,7 @@ impl<'a> Env<'a> {
                 self.arity(op, &a, 2)?;
                 let l = a[0].as_array().ok_or_else(|| bad("`$index` wants a list"))?;
                 let i = as_usize(&a[1], op)?;
-                l.get(i).cloned().ok_or_else(|| bad(format!("`$index` {i} of a list of {}", l.len())))
+                self.copy_value(l.get(i).ok_or_else(|| bad(format!("`$index` {i} of a list of {}", l.len())))?)
             }
             "$contains" => {
                 let a = self.args(arg, d)?;
@@ -769,7 +915,9 @@ impl<'a> Env<'a> {
             // A list of numbers (or of strings) in ascending order.
             "$sort" => {
                 let v = self.ev(arg, d)?;
+                self.reserve_copy(&v, 1)?;
                 let mut items = v.as_array().ok_or_else(|| bad("`$sort` wants a list"))?.clone();
+                self.charge(items.len().saturating_mul(items.len().max(1).ilog2() as usize + 1), 0)?;
                 if items.iter().all(|x| num(x).is_some()) {
                     items.sort_by(|a, b| {
                         num(a).map(|x| x.f()).partial_cmp(&num(b).map(|x| x.f())).unwrap_or(std::cmp::Ordering::Equal)
@@ -787,8 +935,11 @@ impl<'a> Env<'a> {
                 let items = v.as_array().ok_or_else(|| bad("`$unique` wants a list"))?;
                 let mut out: Vec<Value> = Vec::new();
                 for x in items {
+                    // The pairwise search is work even when no expression is evaluated in it.
+                    let (cost, _) = value_cost(x, 0)?;
+                    self.charge(cost.saturating_mul(out.len()), 0)?;
                     if !out.iter().any(|y| values_equal(x, y)) {
-                        out.push(x.clone());
+                        out.push(self.copy_value(x)?);
                     }
                 }
                 Ok(Value::Array(out))
@@ -804,10 +955,12 @@ impl<'a> Env<'a> {
                 let v = self.ev(arg, d)?;
                 let mut out = Vec::new();
                 for l in v.as_array().ok_or_else(|| bad("`$flatten` wants a list of lists"))? {
-                    out.extend(l.as_array().ok_or_else(|| bad("`$flatten` wants a list of lists"))?.iter().cloned());
-                }
-                if out.len() > MAX_LIST {
-                    return Err(bad("`$flatten` too long"));
+                    let items = l.as_array().ok_or_else(|| bad("`$flatten` wants a list of lists"))?;
+                    if out.len().saturating_add(items.len()) > MAX_LIST {
+                        return Err(bad(EXPANSION_LIMIT));
+                    }
+                    self.reserve_copy(l, 1)?;
+                    out.extend(items.iter().cloned());
                 }
                 Ok(Value::Array(out))
             }
@@ -815,10 +968,12 @@ impl<'a> Env<'a> {
                 let a = self.args(arg, d)?;
                 let mut out = Vec::new();
                 for l in &a {
-                    out.extend(l.as_array().ok_or_else(|| bad("`$concat` wants lists"))?.iter().cloned());
-                }
-                if out.len() > MAX_LIST {
-                    return Err(bad("`$concat` too long"));
+                    let items = l.as_array().ok_or_else(|| bad("`$concat` wants lists"))?;
+                    if out.len().saturating_add(items.len()) > MAX_LIST {
+                        return Err(bad(EXPANSION_LIMIT));
+                    }
+                    self.reserve_copy(l, 1)?;
+                    out.extend(items.iter().cloned());
                 }
                 Ok(Value::Array(out))
             }
@@ -829,6 +984,7 @@ impl<'a> Env<'a> {
                 if n > MAX_LIST {
                     return Err(bad("`$repeat` too long"));
                 }
+                self.reserve_copy(&a[0], n)?;
                 Ok(Value::Array(vec![a[0].clone(); n]))
             }
             "$map" => {
@@ -836,9 +992,10 @@ impl<'a> Env<'a> {
                 let l = self.ev(&a[0], d)?;
                 let name = as_str(&a[1], op)?;
                 let items = l.as_array().ok_or_else(|| bad("`$map` wants a list"))?;
+                self.reserve_list(items.len())?;
                 let mut out = Vec::with_capacity(items.len());
                 for it in items {
-                    out.push(self.with_var(name, it.clone(), || self.ev(&a[2], d))?);
+                    out.push(self.with_var(name, self.copy_value(it)?, || self.ev(&a[2], d))?);
                 }
                 Ok(Value::Array(out))
             }
@@ -860,9 +1017,18 @@ impl<'a> Env<'a> {
                 let mut s = String::new();
                 for v in &a {
                     match v {
-                        Value::String(x) => s.push_str(x),
-                        Value::Number(n) => s.push_str(&n.to_string()),
-                        Value::Bool(b) => s.push_str(&b.to_string()),
+                        Value::String(x) => {
+                            self.charge(1, x.len())?;
+                            s.push_str(x);
+                        }
+                        Value::Number(n) => {
+                            self.charge(1, 32)?;
+                            s.push_str(&n.to_string());
+                        }
+                        Value::Bool(b) => {
+                            self.charge(1, 5)?;
+                            s.push_str(&b.to_string());
+                        }
                         other => return Err(bad(format!("`$cat` of {other}"))),
                     }
                 }
@@ -880,7 +1046,8 @@ impl<'a> Env<'a> {
                 let mut out = Map::new();
                 for o in &a {
                     for (k, v) in o.as_object().ok_or_else(|| bad("`$merge` wants objects"))? {
-                        out.insert(k.clone(), v.clone());
+                        self.charge(1, k.len().saturating_add(64))?;
+                        out.insert(k.clone(), self.copy_value(v)?);
                     }
                 }
                 Ok(Value::Object(out))
@@ -888,6 +1055,7 @@ impl<'a> Env<'a> {
             "$omit" => {
                 let a = self.args(arg, d)?;
                 self.arity(op, &a, 2)?;
+                self.reserve_copy(&a[0], 1)?;
                 let mut o = a[0].as_object().cloned().ok_or_else(|| bad("`$omit` wants an object"))?;
                 for k in a[1].as_array().ok_or_else(|| bad("`$omit` wants a list of keys"))? {
                     o.remove(as_str(k, op)?);
@@ -897,11 +1065,19 @@ impl<'a> Env<'a> {
             "$set" => {
                 let a = self.args(arg, d)?;
                 self.arity(op, &a, 3)?;
+                self.reserve_copy(&a[0], 1)?;
                 let mut o = a[0].as_object().cloned().ok_or_else(|| bad("`$set` wants an object"))?;
-                o.insert(as_str(&a[1], op)?.to_string(), a[2].clone());
+                let key = as_str(&a[1], op)?;
+                self.charge(1, key.len().saturating_add(64))?;
+                o.insert(key.to_string(), self.copy_value(&a[2])?);
                 Ok(Value::Object(o))
             }
-            // ───────────── checks ─────────────
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_checks(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
             "$check" | "$bad" => {
                 let a = arg.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad(format!("`{op}` takes [condition, message]")))?;
                 if as_bool(&self.ev(&a[0], d)?, op)? {
@@ -911,7 +1087,12 @@ impl<'a> Env<'a> {
                     Err(if op == "$check" { LowerError::not_lowerable(m) } else { LowerError::bad(m) })
                 }
             }
-            // ───────────── generic features ─────────────
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_generic_features(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
             "$act" => {
                 let v = self.ev(arg, d)?;
                 let name = as_str(&v, op)?;
@@ -924,6 +1105,9 @@ impl<'a> Env<'a> {
                 // none, the class's own rule `each` (variable `i` = the layer).
                 let o = arg.as_object().ok_or_else(|| bad("`$layer_types` takes {n, allowed, each}"))?;
                 let n = as_usize(&self.ev(o.get("n").ok_or_else(|| bad("`$layer_types`: n"))?, d)?, op)?;
+                if n > MAX_LAYERS {
+                    return Err(bad(format!("{EXPANSION_LIMIT}: too many layers")));
+                }
                 let allowed: Vec<String> = self
                     .ev(o.get("allowed").ok_or_else(|| bad("`$layer_types`: allowed"))?, d)?
                     .as_array()
@@ -947,7 +1131,8 @@ impl<'a> Env<'a> {
                                 return Err(LowerError::not_lowerable(format!("{}: layer type `{t}` is not modelled", self.arch)));
                             }
                         }
-                        Ok(Value::Array(a.clone()))
+                        self.reserve_list(a.len())?;
+                        a.iter().map(|v| self.copy_value(v)).collect::<Result<Vec<_>>>().map(Value::Array)
                     }
                     Some(_) => Err(bad(format!("{}: `{key}` is not a list", self.arch))),
                     None => {
@@ -955,6 +1140,7 @@ impl<'a> Env<'a> {
                         if n > MAX_LAYERS {
                             return Err(LowerError::not_lowerable(format!("{n} layers")));
                         }
+                        self.reserve_list(n)?;
                         let mut out = Vec::with_capacity(n);
                         for i in 0..n {
                             out.push(self.with_var("i", Value::from(i as u64), || self.ev(each, d))?);
@@ -988,6 +1174,10 @@ impl<'a> Env<'a> {
                 // ALiBi slopes (`kind`: "bloom" or "mpt"), as the position term of an attention.
                 let o = arg.as_object().ok_or_else(|| bad("`$alibi` takes {heads, kind, ...}"))?;
                 let heads = as_usize(&self.ev(o.get("heads").ok_or_else(|| bad("`$alibi`: heads"))?, d)?, op)?;
+                if heads == 0 {
+                    return Err(bad("`$alibi`: heads must be positive"));
+                }
+                self.reserve_list(heads)?;
                 let kind = as_str(&self.ev(o.get("kind").ok_or_else(|| bad("`$alibi`: kind"))?, d)?, op)?.to_string();
                 let slopes = match kind.as_str() {
                     "bloom" => crate::rope::alibi_slopes_bloom(heads),
@@ -1058,6 +1248,7 @@ impl<'a> Env<'a> {
                     Value::Object(m) => m,
                     other => return Err(bad(format!("{}: per-layer overrides must be an object, got {other}", self.arch))),
                 };
+                self.reserve_list(n)?;
                 let mut out = vec![Value::Null; n];
                 for (k, v) in m {
                     let i: usize = k.parse().map_err(|_| bad(format!("{}: per-layer key `{k}` is not a layer index", self.arch)))?;
@@ -1065,7 +1256,7 @@ impl<'a> Env<'a> {
                         return Err(LowerError::not_lowerable(format!("{}: per-layer entry `{x}` is not modelled", self.arch)));
                     }
                     if i < n {
-                        out[i] = v.clone();
+                        out[i] = self.copy_value(v)?;
                     }
                 }
                 Ok(Value::Array(out))
@@ -1146,9 +1337,17 @@ impl<'a> Env<'a> {
                     return Err(LowerError::not_lowerable(format!("{} layers (the lowerer reads at most {MAX_LAYERS})", n)));
                 }
                 let each = o.get("each").ok_or_else(|| bad("`$layers`: each"))?;
+                self.reserve_list(n)?;
                 let mut out = Vec::with_capacity(n);
+                let lvars = self.layer_exprs.borrow();
+                // Every layer copies these pending expressions, even a lazy one it never reads.
+                // Reserve those copies before cloning or installing any layer-local bindings.
+                for (name, expr, _) in lvars.iter() {
+                    self.reserve_copy(expr, n + 1)?;
+                    self.charge(n + 1, name.len().saturating_mul(n + 1))?;
+                }
+                let lvars: Vec<(String, Value, bool)> = lvars.clone();
                 self.vars.borrow_mut().push(("n".into(), Value::from(n as u64)));
-                let lvars: Vec<(String, Value, bool)> = self.layer_exprs.borrow().clone();
                 for i in 0..n {
                     let mark = self.vars.borrow().len();
                     self.vars.borrow_mut().push(("i".into(), Value::from(i as u64)));

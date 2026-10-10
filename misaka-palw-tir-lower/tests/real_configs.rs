@@ -551,6 +551,18 @@ fn deepseek_v3_2_fp8_scale_fmt_is_refused_by_name() {
 }
 
 #[test]
+fn glm_token_indexers_keep_their_geometry_and_refuse_shared_selection() {
+    // Configuration/HL evidence only. Real weights, fidelity and the node path are separate gates.
+    let (spec, _) = ok("glm-5");
+    assert_eq!(spec.num_layers(), 78);
+    let Mixer::Mla(mla) = &spec.layers[0].mixer else { panic!("GLM uses MLA") };
+    let indexer = mla.indexer.as_ref().expect("a token indexer");
+    assert_eq!((indexer.heads, indexer.head_dim, indexer.topk), (32, 128, 2048));
+    assert_eq!(indexer.rope.style, crate_rope::RopeStyle::Interleaved);
+    refused("glm-5.3", "ATTN_TOKEN_INDEXER_SHARED_V1");
+}
+
+#[test]
 fn every_real_config_has_a_named_expectation() {
     // A config dropped into tests/configs/real must be exercised by a test above.
     let src = include_str!("real_configs.rs");

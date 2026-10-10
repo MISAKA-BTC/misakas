@@ -18,9 +18,26 @@
 | Author(s) | MISAKA core (drafted with Claude) |
 | Created | 2026-09-28 |
 | Affects | spec/palw 03 (registry), 04/04a (execution, arithmetic), 05 (canonical work), 08 (verification), 09 (court), 14 (node), 16 (fences) · all networks (dormant until armed) · `consensus/core` (admission, court), `misaka-palw-base0` (engines), `misaka-palw-sdk`, `misaka-palw-extension` |
-| Branch | `rfc/0002-tensor-ir` (text only; no prototype yet) |
+| Working branch | `codex/rfc02-implementation` (2026-10-10 revision); the original text-only branch was `rfc/0002-tensor-ir` |
 | Related | ADR-0135 (a model is data; Decision 7 the kernel boundary, historically called VM), ADR-0038 A4 (100 % catalog coverage), ADR-0040 (BASE-0; Decision E order-free accumulation), ADR-0047 (A16), ADR-0049 (adjudication contract), ADR-0052 (QWEN36 ops), ADR-0057 (backends below the semantic boundary), ADR-0069 (e2e adjudicability), ADR-0082/0093 (fused attention and dissection), ADR-0102 (fenced kernels), ADR-0103/0116 (held context, history bound), ADR-0145 (canonical work), ADR-0171/0172 (new verification and kernel-only extension) |
 | Part II | Model onboarding (header-only preflight, streaming loader, runtime packs, quant registry, feature scope, staged enablement) — appended 2026-10-01; §II.7.5 records decided rules, not yet built. §§II.10–II.12 add Hub evidence, future-family extension and local-LLM ≥90% coverage; revised 2026-10-06 to remove the VM residual, all open acceptance work |
+
+## Current requirements and historical records — 2026-10-10
+
+The accepted revision in [§II.14](#ii14-completion-contract--2026-10-10) applies the 2026-10-10
+design review: complete the public compiler interface, preserve efficient sparse/stateful computation,
+derive bounded resources, and bind the whole computation through public verification and terminal court.
+It keeps the deterministic tensor IR and versioned kernel boundary. It does not declare any unfinished
+implementation, model, resource envelope, coverage target or activation gate complete.
+
+| Current requirement | Authoritative sections | Historical material retained below |
+| --- | --- | --- |
+| Typed bounded tensor/state graph; **25 frozen v1 primitives**; reusable versioned extensions when necessary | spec 04b and §II.14.2 | The original 30–50 primitive estimate and Gate 1 development sequence |
+| Reference/independent/backend bit equality; separate source-checkpoint fidelity | §1.2, §II.4–II.5, §II.14.3 | Architecture fixtures and old conversion measurements prove only their recorded scope |
+| Approved probabilistic whole-claim verification, bounded dispute replay and public conviction | Current design boundary, §II.13, mission amendment, §II.14.6; RFC07/14 | Routine full replay in the original admission/verification profile |
+| Model acquisition is outside consensus; fixed model identity and claim-specific evidence remain required | ADR-0177 and §II.14.6 | Old model-availability/serving gates are not reinstated |
+| Resource ceilings, canonical work and bond-bounded economic credit are separate quantities | ADR-0176, §II.14.4–II.14.5 | Historical PWU measurements are not authorization to enlarge B/R/F rights |
+| Completion needs the public extension path and real-checkpoint staged evidence | §II.10–II.12, §II.14; [implementation ledger](../design/palw/tir/rfc0002-implementation.md) | Old “not yet built” annotations record their date, not a current code audit |
 
 ## Current design boundary — 2026-10-06
 
@@ -52,7 +69,8 @@ remains an unmeasured acceptance target.
   ような **層単位の kernel がそのまま consensus の命令** になっている。新しい種類の演算は kernel 追加 = リリース = protocol upgrade。
 - **v1 の完成条件は「モデル」でなく「アーキテクチャ群」(§1)。** Dense・GQA/MQA/sliding・MoE・線形 attention(GDN)・SSM(Mamba/Mamba2)・
   recurrent(RWKV)・hybrid・routing 変種の代表モデルを **全部いったん分解し**、モデル固有 op を 1 個も足さずに表現できる最小の
-  primitive 集合(30〜50 個)を逆算してから v1 を凍結する。Qwen3.8(K 16 / V 48)は適合テストの 1 本にすぎない。
+  primitive 集合を逆算してから v1 を凍結する。Gate 1と正式仕様04bのv1は25個で、30〜50個は当初の見積り。
+  必要な共通意味論は新versionで拡張できる。Qwen3.8(K 16 / V 48)は適合テストの1本にすぎない。
 - **なぜ MISAKA で現実的か。** 汎用 VM の最難関は数値の決定性だが、MISAKA は既に **整数のみ**(ADR-0040)。丸めは名前付きの
   lossy site だけにあり、**丸め・saturation・shift・除算を含まず、全中間値が証明済みの範囲に収まる区間**(order-free region, §3.2)では
   加算順序が結果を変えない。規則は一つ: **fused kernel は order-free region の中だけを並べ替えてよく、lossy site を跨いだ融合で
@@ -65,8 +83,9 @@ remains an unmeasured acceptance target.
 - **ビット一致の範囲。** 参照インタプリタ == 独立の第 2 実装 == 出荷する全 backend はビット一致を要求する。HF の浮動小数モデルとの
   比較は **忠実度指標**(固定評価集合での top-1 一致率・KL・perplexity 差、ファミリーごとの閾値)で、ビット一致ではない(整数量子化は
   意図的に出力を変えるため)。
-- **順序。** コーパス → 意味論 → 参照インタプリタ(遅くて明らかに正しい)→ 範囲・コスト検証器 → lowerer → court → fused kernel →
-  移行。**fused kernel は最後。** 既存 45 kernel は捨てず、IR pattern の fused 実装としてビット一致すれば残す。
+- **順序。** 意味論を固定し、参照実装・範囲／コスト検証・lowerer・checker・courtを揃える。
+  高速実装と証拠生成の性能測定は並行し、実サイズで実現不可能なloweringを後から発見しない。
+  既存kernelはIR patternのfused実装としてビット一致する範囲で利用する。
 - **工数感。** 2〜4 人で 6〜9 か月。既存の Qwen3.6-35B(16/32)も踏んでいる GDN の k≠v 不具合の修正は、本 RFC とは別の小さな
   修正として独立に進められる(§7 Phase 0)。
 - **名称と「VM ではない」こと(09-28)。** PALW-TIR は有限の静的グラフ + 静的な層スケジュール + 位置方向の scan だけで、実行中の
@@ -83,7 +102,7 @@ remains an unmeasured acceptance target.
 ## Summary
 
 Replace the consensus meaning of a PALW class — today a layer-template graph whose nodes name one of
-45 hand-written kernels — with **PALW Canonical Tensor IR v1 (PALW-TIR v1)**: a closed set of 30–50
+45 hand-written kernels — with **PALW Canonical Tensor IR v1 (PALW-TIR v1)**: the frozen set of 25
 architecture-neutral integer primitives, and a class program that is a static, bounded DAG over them,
 carried as chain data. **v1 is frozen on an architecture corpus, not on a model**: it is accepted only
 when representatives of every major decoder family lower to it without a single model-specific
@@ -1545,7 +1564,12 @@ served once the consensus read that carries the seating facts exists.
 This closes F5 and the *reporting* half of F4 (the registry names `READY_SEATS` and the preflight, §II.2.3 item 8, names the
 memory). It changes nothing the chain decides.
 
-### II.7.5 The consensus rules — decided 2026-10-01, NOT YET IMPLEMENTED
+### II.7.5 The consensus rules — historical decision and implementation status at 2026-10-01
+
+**Current reading (2026-10-10):** the seating predicate and dormant fence now exist in
+`palw_class_seating_v1.rs` and `palw_class_seating_fence_v1.rs`. The following “not built” statements
+are the original decision record. Presence of those modules does not prove activation or A7's
+independent registration-to-Final exercise; see the implementation ledger for verified evidence.
 
 The coordinator decided on 2026-10-01: **Proposal A approved** (one seating rule for every class kind, under the new dormant fence
 `palw_class_seating`; the independence floor a fence parameter, default 3; armed with the RFC-0003/0004 flag day, not with int-10);
@@ -2114,3 +2138,97 @@ canonical TIRの実行statement、実仕事量、承認済みkernel/planは正�
 全reward profileのclaim/block/reward/Final weightは同じproducer資本・期間の予算へ束縛し、正当な計算と公開検証の条件を維持する。
 
 本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
+
+## II.14 Completion contract — 2026-10-10
+
+This revision incorporates the model-extensibility design review. All six requirements below are
+part of RFC02 completion, together with the existing A1–A8 criteria. The implementation ledger
+records evidence and unresolved work; passing a newly added unit test cannot close the whole RFC.
+
+### II.14.1 Scoped support and the public extension interface
+
+The support record key is **checkpoint revision × complete task × context range × storage format
+and arithmetic version × kernel/verification/dispute plan**. Record structure/lowering, actual
+weight import, source fidelity, real-size execution, ordinary verification, public localization/
+terminal court and independent real-node Final/redemption as distinct stages. Each has measured
+evidence, `FAIL`, or `NOT_RUN`; a downstream pass is never inferred. Record partial tasks, fixtures,
+and reduced contexts explicitly. They cannot count as real-size/full-task coverage in A6/A8.
+
+Complete both §II.11 paths through the same node binary: independent canonical TIR and a
+content-addressed declarative frontend pack. They consume all math-affecting config keys, tensors
+and components, use bounded expansion before allocation, and cannot depend on an official signer,
+model name, registry entry or compiler. Unknown semantics fail the shared admission gate. Source
+equivalence remains unverified until independently reproducible conversion and fidelity pass.
+
+### II.14.2 Bounded dimensions, sparse computation and state
+
+Preserve v1 bytes, meanings and courts. New dimension/index/state semantics require a versioned
+program/kernel contract covering the entire execution, checker and court path. Token length,
+patch count and audio-frame count have declared maxima and job-committed actual lengths. No claim
+or later slice can enlarge them. Sparse access specifies index length/range, duplicate policy,
+selection and tie rules, and the binding of selected values to the original state/weights.
+
+Long-context acceptance must derive cost and evidence bounds at the requested length; raising
+the v1 history constant alone is insufficient. MoE lowering must preserve selected-expert work;
+sparse attention must preserve sparse access; recurrent updates must preserve state reuse. For
+any unavoidable asymptotic or constant-factor expansion, report the reason, real-size ratio and
+resource failure separately from structural representability. Measure execution, proof creation,
+hashing, retention and delivery early, alongside bit-exact backend conformance.
+
+### II.14.3 Storage, arithmetic and fidelity
+
+Storage decoding (including GGUF, MXFP4 and FP8), consensus arithmetic (width, rounding, saturation,
+normalization), and backend scheduling are independent identities. Decoding a format does not
+establish fidelity; a backend changing committed results requires new semantics, not a tolerance.
+Fix the evaluation corpus, contexts, metrics and acceptance thresholds before the run. Measure
+logits and task quality, routing agreement for MoE/sparse selection, long-context degradation,
+and state saturation/continuity where applicable. Keep failed and missing dimensions visible.
+
+### II.14.4 One derived resource contract
+
+Derive from the admitted program/plan and the committed job dimensions a resource vector for:
+maximum execution operations; executor working memory; state/history bytes; evidence-generation
+work; ordinary verifier work; on-chain checker work; court bytes/operations/rounds; evidence
+retention/delivery; and aggregate concurrent claim/session load. Registration, claim admission,
+proof ingestion and court processing must read the applicable same derived contract, rather than
+trusting independently declared cheap values. Arithmetic is checked; reject overflow, false
+shapes, enormous broadcasts and compiler expansion before their large allocation/work begins.
+Per-block, per-bond and network-wide aggregate limits are required in addition to per-claim caps.
+
+An executor's chosen memory budget does not set consensus capacity. Validator/court memory bounds
+remain independently enforced even when a producer owns a large GPU. New resource-contract or
+limit semantics require an explicit version/fence; legacy admission keeps its exact meaning.
+
+### II.14.5 Work and economic conservation
+
+Resource bounds, canonical work and economic credit are separate. Apply defined canonicalization
+to dead/duplicate/redundant expressions; do not claim to decide semantic usefulness in general.
+Preserve work identity across roots, slices, riders and model copies, and charge derived rights
+to the same principal and window. Excess PWU, redundant computation, model duplication, splitting
+and resubmission cannot enlarge B/R/F ceilings. A faster correct evaluation is valid: claims bind
+results, state and constraints, not a count of physical GPU instructions. Test role swapping and
+the complete accounting path, not only a work-count helper.
+
+### II.14.6 Whole-statement public verification and completion evidence
+
+A new reusable feature ships as **semantics + type/range rules + costs + ordinary checker +
+authenticated evidence binding + localization + terminal court**. Execution-only support cannot
+enable rewards. Bind source weights, routing, previous state, KV positions, checkpoint/slice
+continuity and outputs across the full graph. Sampling guarantees require whole-claim probability
+accounting; primitive court coverage alone does not establish detection probability.
+
+Required adversarial drills include shape/product overflow and huge broadcasts; tiny frontend
+expansion bombs; substituted/duplicate experts and weights; reset state, shifted KV and skipped
+slices; silently ignored config/tensors; wrong backends and artifact roots; floods of invalid
+proofs/courts against an honest producer; duplicate work under different labels; and aggregate
+concurrent overload. Attribute invalid requests' costs to the attacker and preserve the honest
+producer's opportunity to answer. A fresh non-seat verifier must reach objective conviction using
+public authenticated material, and an honest independent participant must reach Final/redemption.
+
+Use pinned real checkpoints for dense baselines, GDN/KDA and unequal QK/V heads, MoE/routing,
+Mamba/hybrid state, sparse/compressed attention and complete multimodal tasks. The review's model
+names are discovery candidates, not a supported list; pin revisions and verify their exact required
+features before choosing tests. RFC03 supplies encoder/image/audio stage bindings; RFC07/11/14
+supply whole-claim verification and G14. Conditional verification (A) remains: obtain the correct
+model externally; do not reintroduce model-distribution consensus. Missing source access or a
+zero detection floor remains a failed security condition, never repaired by type/cost checks.
