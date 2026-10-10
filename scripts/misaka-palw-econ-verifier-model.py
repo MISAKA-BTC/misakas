@@ -1011,9 +1011,114 @@ def section10() -> None:
 
 
 # =====================================================================================================================================
+# §11 f(S_m) under the user's premise (readiness §3f): bond gathered = users gathered; an honest-capital majority as in BFT
+# =====================================================================================================================================
 
 
-SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10}
+def binom_tail(m: int, p: float, k: int) -> float:
+    """P(Bin(m, p) ≥ k)."""
+    return sum(binom_pmf(m, j, p) for j in range(k, m + 1))
+
+
+SIGMA_MAX = 1 / 3  # PROPOSED security assumption: the adversary holds at most 1/3 of locked capital AND of verifier stake (BFT)
+EPS_CLOSED = 0.01  # PROPOSED bar B-R: a closed model's model-leg pay probability ≤ 1% (the stake-only residual)
+DELTA_OPEN = 0.01  # PROPOSED bar B-H: an honest open model is paid with probability ≥ 99%
+PHI_BAR = 2.0  # PROPOSED bar B-O: open ≥ 2× closed for the incumbent, net of the closed model's forging saving (λ)
+
+
+def gate_probs(m: int, k: int, sigma: float, fetch_fail: float = 0.0) -> tuple[float, float]:
+    """The verified-work gate: per model and epoch, m slots drawn by stake from the GLOBAL verifier pool each check one sampled claim
+    with their own copy of the model; the model leg is paid iff ≥ k attest. A closed model: only adversarial slots can attest
+    (an honest slot has no copy). An honest open model: adversarial slots withhold (griefing); an honest slot attests unless it failed
+    to fetch the model in time."""
+    closed = binom_tail(m, sigma, k)
+    opened = binom_tail(m, (1 - sigma) * (1 - fetch_fail), k)
+    return closed, opened
+
+
+def smallest_gate(sigma: float, eps: float, delta: float, m_max: int = 201) -> tuple[int, int] | None:
+    for m in range(1, m_max + 1):
+        for k in range(1, m + 1):
+            c, o = gate_probs(m, k, sigma)
+            if c <= eps and o >= 1 - delta:
+                return m, k
+    return None
+
+
+def gated_publish_ratio(c: Curve, s0: float, e: float, mk: Market, m: int, k: int, sigma: float, omega: float = 0.0,
+                        fetch_fail: float = 0.0) -> float:
+    """Incumbent's model-leg income open / closed under the gate (gross of the capital cost both pay). Closed: the model leg times P_closed, no compute (it forges, p = 0). Open:
+    times P_open, computes honestly; pro-rata intra-model split, plus an owner leg ω of the model's allocation."""
+    p_c, p_o = gate_probs(m, k, sigma, fetch_fail)
+    if not external_joins(c, s0, e, mk):
+        e = 0.0
+    a_open = alloc(c, c.f(s0 + e), mk) * p_o
+    # Gross of the capital cost, which both pay alike on S_0 (net of it the closed side is often negative, an infinite ratio).
+    open_income = omega * a_open + (1 - omega) * a_open * s0 / (s0 + e) * (1 - mk.lam)
+    closed_income = alloc(c, c.f(s0), mk) * p_c
+    return ratio(open_income, closed_income)
+
+
+def section11() -> None:
+    head(11, "f(S_m) under 'bond gathered = users gathered' with an honest-capital majority (BFT premise)")
+    show("PROPOSED", "assumption A-BFT", f"the adversary controls ≤ σ_max = {SIGMA_MAX:.3f} of locked model capital and of the global "
+                                         "verifier stake; honest = protocol-following (attests only what it checked)")
+    show("PROPOSED", "bars (fixed before judging)", f"B-O open ≥ {PHI_BAR}× closed net of forging; B-R closed paid ≤ {EPS_CLOSED:.0%};"
+                                                     f" B-H honest open paid ≥ {1 - DELTA_OPEN:.0%}; B-A adversary share ≤ its capital share;"
+                                                     " B-M no split gain; all at σ ≤ σ_max")
+    mk = Market()
+    # 1. Without a verification gate the premise alone does not help: F4 still gives the closed forger 1/(1 − λ).
+    show("DERIVED", "no gate: closed forging / honest open per unit capital, any f", f"{1 / (1 - mk.lam):.2f}× (F4 unchanged)")
+    # 2. The gate's smallest (m, k) at σ_max.
+    g = smallest_gate(SIGMA_MAX, EPS_CLOSED, DELTA_OPEN)
+    check(g is not None, "a gate meeting B-R and B-H exists at σ = 1/3")
+    m, k = g
+    pc, po = gate_probs(m, k, SIGMA_MAX)
+    show("DERIVED", "smallest gate (m slots, k attestations) meeting B-R and B-H at σ = 1/3", f"m = {m}, k = {k}: P_closed {pc:.4f}, P_open {po:.4f}")
+    for sig in (0.2, 0.25):
+        gg = smallest_gate(sig, EPS_CLOSED, DELTA_OPEN)
+        show("DERIVED", f"smallest gate at σ = {sig}", f"m = {gg[0]}, k = {gg[1]}")
+    # 3. The bars for each curve, under the gate, at σ = σ_max.
+    total = mk.n_o * mk.s_o
+    verdict = {}
+    for c in (power(1.0), power(0.5), capped(2.0), power(2.0), threshold(2.0)):
+        phis = [gated_publish_ratio(c, s0, e * s0, mk, m, k, SIGMA_MAX) for s0 in (0.25, 1.0, 4.0) for e in (0.0, 1.0, 9.0)]
+        prem = [concentration_premium(c, x, total, mk.n_o) * pc / po for x in (0.1, 0.25, SIGMA_MAX)]
+        split = [split_gain(c, 4.0, kk, mk) for kk in (2, 4, 10)]
+        verdict[c.name] = {"B-O": min(phis) >= PHI_BAR, "B-R": pc <= EPS_CLOSED, "B-H": po >= 1 - DELTA_OPEN,
+                           "B-A": max(prem) <= 1.0, "B-M": max(split) <= 1e-12}
+        show("DERIVED", f"f = {c.name:14} gated: min open/closed over S_0 ∈ {{0.25,1,4}}, e ∈ {{0,1,9}}", f"{min(phis):.1f}×; "
+             f"adversary premium (paid share / capital share) ≤ {max(prem):.3f}; split gain ≤ {max(split):+.4f}")
+    for name, v in verdict.items():
+        show("DERIVED", f"{name:16}", "  ".join(f"{b}: {'yes' if ok else 'NO '}" for b, ok in v.items()))
+    check(all(verdict["S^1"].values()), "under A-BFT with the gate, linear f meets every bar")
+    # 4. Owner leg: what an intra-model owner share adds (paid only out of the model's verified, gated allocation).
+    for omega in (0.0, 0.05, 0.10):
+        phi = gated_publish_ratio(power(1.0), 1.0, 9.0, mk, m, k, SIGMA_MAX, omega=omega)
+        show("DERIVED", f"linear, S_0 = 1, e = 9, owner leg ω = {omega}", f"open/closed {phi:.1f}×")
+    # 5. Where it breaks.
+    print("  -- where it breaks (linear f, the σ = 1/3 gate)")
+    for sig in (0.30, 1 / 3, 0.40, 0.45, 0.50):
+        c_, o_ = gate_probs(m, k, sig)
+        phi = gated_publish_ratio(power(1.0), 1.0, 0.0, mk, m, k, sig)
+        show("DERIVED", f"σ = {sig:.3f}", f"P_closed {c_:.4f}, P_open {o_:.4f}, open/closed at e = 0: {phi:.1f}×"
+             + ("" if c_ <= EPS_CLOSED and o_ >= 1 - DELTA_OPEN else "  ← a bar fails"))
+    crit = next(s / 1000 for s in range(334, 501) if gated_publish_ratio(power(1.0), 1.0, 0.0, mk, m, k, s / 1000) < PHI_BAR)
+    show("DERIVED", "σ at which B-O (2×) first fails for this gate", f"{crit:.3f}")
+    for ff in (0.0, 0.02, 0.05, 0.10):
+        c_, o_ = gate_probs(m, k, SIGMA_MAX, ff)
+        show("DERIVED", f"honest fetch failure {ff:.0%} (open but slow to obtain)", f"P_open {o_:.4f}" + ("" if o_ >= 0.99 else "  ← B-H fails"))
+    # 6. The gate's price: m checks per model per epoch at F_min (§6 ASSUMED costs).
+    f_min = 5.59
+    show("DERIVED", "the gate's cost per model per epoch (m · F_min, F_min ASSUMED 5.59)", f"{m * f_min:.0f} BILI")
+    show("DERIVED", "the residual stake-only issuance a σ = 1/3 closed coalition can draw (linear f)",
+         f"≤ P_closed · σ = {pc * SIGMA_MAX:.4%} of the model budget")
+
+
+# =====================================================================================================================================
+
+
+SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11}
 
 
 def main() -> int:

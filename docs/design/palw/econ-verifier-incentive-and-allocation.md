@@ -48,6 +48,7 @@ Amounts are in BILI.
 | **T6** | Whether a drawn verifier really checks (the lazy verifier) can be made observable on chain. | **OPEN**. |
 | **B12** | The seal deposit is derived. A withheld seal stalls 83 DAA. An abandoned one stalls 151 DAA (MEASURED) for 52 BILI. Parity gives `d* = c_ab·T_w/T_ab ≈ 28.6` BILI. A deposit above `d*` buys nothing. The deterred delay value is 0.345/`N_c` BILI per victim-DAA. `d*` exceeds the honest-race ceiling of 1 BILI, so the prices must be split (S3). | **DERIVED** (§4). |
 | **F1–F5** | **Open versus closed for `f(S_m)`.** F1: split-proof and merge-proof together force `f` linear. F2: equal self-funding beats publishing for every `f`. F3: the publish premium *is* a concentration premium. F4: at `p` = 0, a closed model out-earns an open one by `1/(1 − λ)` for every `f`. F5: the budget and the per-bond cap saturate. | **PROVEN** (§5). Grid DERIVED from an ASSUMED market. |
+| **F-BFT** | **Under the user's premise (§3f)**, a verified-work gate makes publishing overwhelmingly better with **linear `f`**. The gate pays a model's epoch allocation only if ≥ `k` of `m` verifiers, drawn by stake from the global pool, attest a checked claim; at `σ` = 1/3, `m` = 47 and `k` = 24. Open/closed is ≥ 38.5×. A closed model is paid with probability 0.9%, so the stake-only residual is ≤ 0.30% of the model budget, and payment stays tied to verified work. It breaks at an adversary share of 0.40 (the 1% and 99% bars) and of 0.44 (the 2× bar), and at 50% closed and open are paid alike. | DERIVED under A-BFT (§5c). The ADR-0177 D1 reading needs the user. |
 | **GATE** | **Round/EXEC ECON gate** (acceptance §4–§5), with nine criteria fixed before judging (§5a). Tickets track canonical work exactly. Revenue per compute cost is equal across model sizes. Saturation and splitting are size-neutral. It **fails** on net revenue per compute: the interim per-claim overhead is 65% of a small job's escrow against 3.6% of a large one's, a 2.7× gap. It also **fails** on capital-bound marginal revenue for the large model: a 28.8-BILI escrow fills the R cap after one job, before the Round cap. | 7 PASS, 2 FAIL. DERIVED from an ASSUMED market (§5a). |
 | **P-list** | BUDGET P-1..P-11. P-1 and P-11 together leave `280 ≤ W ≤ 436` DAA: below that, claims outlive the window; above it, the 65,536 per-span bound stops the shared window from ever saturating. Theorem Y gives P-2's `r` ceiling. G6 gives P-2's `q·ρ` floor. §2.5 gives the open-claim cap. | DERIVED where stated; the rest PROPOSED (§5b). |
 | **F-bar** | **No curve makes publication "overwhelmingly better".** No `f` beats equal self-funding (F2). On the grid, no `f` meets the proposed bar against a closed model that can forge. The one curve that meets it against a non-forging closed model, `S²`, fails the concentration bar with a premium of 1.9–2.8. | **COUNTEREXAMPLE** (§5.4). |
@@ -65,6 +66,8 @@ Amounts are in BILI.
 * No allocation curve achieves the publish goal.
 * At `p` = 0, model coinbase is capital-proportional issuance for no work. That contradicts ADR-0176 §1 and PRINCIPLES §6.
 * `palw_model_bond_allocation_v1` cannot be armed with any `f` until the user decides §6, D-F.
+* **Under the user's premise (§3f, §5c):** with an honest-capital majority as in BFT, linear `f` plus a verified-work gate meets every
+  bar at `σ` ≤ 1/3. The `f`-only negative results above hold without the gate.
 
 ---
 
@@ -693,6 +696,122 @@ The user fixes Φ\* = 2, the ranges and the market assumptions.
 
 ---
 
+## 5c. `f(S_m)` under the user's premise: bond gathered = users gathered (readiness §3f)
+
+The user kept the model leg and set a premise: capital gathered on a model stands for users gathered. An adversary who can post more
+capital than that is outside the security assumption, the way a stake majority is outside BFT's. Model §11 re-runs the search under
+that premise.
+
+### 5c.1 Assumptions (PROPOSED; exact)
+
+* **A-BFT.** The adversary controls at most `σ_max = 1/3` of the locked model capital **and** of the global verifier stake (the
+  M\*-49 pool across all models).
+* **Honest means protocol-following.** An honest verifier attests only what it checked. The lazy-verifier question T6 is therefore
+  outside this result.
+* **Open means obtainable.** External users bring capital the closer does not control. Each of them holds the model, so honest
+  verifiers can obtain an open model in time.
+* **A closed model** has only the closer's capital, and no honest party holds it.
+
+### 5c.2 The bars, fixed before judging (PROPOSED)
+
+| Bar | Condition |
+|---|---|
+| **B-O** | the incumbent's model-leg income open/closed ≥ **2×**, net of the closed model's forging saving (λ = 0.5), for `S_0` ∈ {0.25, 1, 4} and `e` ∈ {0, 1, 9}. 2× is the least margin that still beats the forging edge `1/(1 − λ)` after it is counted |
+| **B-R** | a closed model is paid with probability ≤ 1%: the stake-only residual |
+| **B-H** | an honest open model is paid with probability ≥ 99% |
+| **B-A** | the adversary's paid share is ≤ its capital share |
+| **B-M** | no gain from a model split |
+
+### 5c.3 The premise alone is not enough
+
+At `p = 0` a closed coalition still out-earns an honest open model by `1/(1 − λ)` for every `f` (F4). Capital alone cannot tell the two
+apart.
+
+The premise does bound equal self-funding (F2): a closer can self-fund only up to `σ_max` of all capital. But a closer below that bound
+keeps the forging edge.
+
+**What the premise adds** is that honest capital is the majority **of the verifier stake** too. That makes the following gate sound.
+
+### 5c.4 The answer: a verified-work gate on the model leg (DERIVED)
+
+**The rule.** For each model and allocation epoch:
+1. The beacon draws `m` slots by stake from the **global** M\*-49 verifier pool, not from the model's own pool.
+2. Each drawn slot checks one beacon-chosen Final claim of that model, claim-specifically, with its own copy of the model
+   authenticated against the registered root.
+3. The model's epoch allocation is paid to its Final claims **only if at least `k` slots attest "verified"**. Otherwise that allocation
+   is withheld, not minted (P-7).
+4. A failed check is a fraud proof, and the claim is convicted as usual.
+5. An honest slot that cannot obtain the model attests "could not verify". It is not penalized, and no producer is penalized either.
+
+Only the subsidy depends on the attestations. Claims, user-paid escrow rewards, Final and weight do not.
+
+**Why it works under A-BFT.**
+* For a closed model, only adversarial slots can attest, so it is paid with probability `P(Bin(m, σ) ≥ k)`.
+* For an honest open model, the adversary can withhold its own slots to grief, so it is paid with probability
+  `P(Bin(m, 1 − σ) ≥ k)`.
+
+**Parameters** (DERIVED):
+
+| `σ` | smallest gate meeting B-R and B-H |
+|---|---|
+| 1/3 | `m` = 47, `k` = 24: P_closed 0.9%, P_open 99.1% |
+| 0.25 | `m` = 19, `k` = 10 |
+| 0.2 | `m` = 13, `k` = 7 |
+
+**`f` and the rest:**
+
+| Setting | Recommendation |
+|---|---|
+| curve | **linear** over the whole range |
+| saturation | none |
+| per-model cap | none: a cap breaks B-M and is not needed for B-A |
+| intra-model split | pro rata to capital, paid per verified Final claim, inside each bond's Q/B/R/F caps |
+| owner leg | optional, ω ≤ 10%, paid only out of the model's gated allocation |
+
+**Results at `σ` = 1/3** (DERIVED, on §8's ASSUMED market):
+
+| Curve | B-O (min open/closed) | B-R, B-H | B-A (adversary premium) | B-M |
+|---|---|---|---|---|
+| linear | **38.5×** | yes | **0.009** | **yes** |
+| `S²` | 12.2× | yes | 0.025 | yes |
+| `S·min(1, S/2)` | 15.4× | yes | 0.018 | yes |
+| `√S` | 16.5× | yes | 0.006 | no |
+| `min(S, 2)` | 40.5× | yes | 0.009 | no |
+
+* The owner leg raises the linear ratio to 75× at ω = 5% and 112× at ω = 10% (`S_0` = 1, `e` = 9).
+* Linear is recommended because it alone is neutral to both splitting and merging (F1).
+* The convex curves still drive monoculture (§5.3: the top model takes 0.96 of the budget under `S²`).
+
+**`p = 0` and ADR-0176 §1.** Under the gate, a closed model's subsidy requires attestations that honest verifiers cannot give without
+the model. So the residual stake-only issuance is at most `P_closed · σ` = **0.30% of the model budget** at `σ` = 1/3. Payment stays
+tied to verified work.
+
+**The cost.** `m · F` per model per epoch: about 263 BILI at the ASSUMED `F_min` of 5.59, paid out of the model's allocation or by its
+users.
+
+### 5c.5 Where it breaks (DERIVED)
+
+**The adversary exceeds the honest share.**
+
+| `σ` | P_closed | P_open | B-O | Notes |
+|---|---|---|---|---|
+| 0.40 | 8.2% | 91.8% | holds (5.6×) | B-R and B-H fail |
+| 0.44 | — | — | **fails** | the first `σ` at which B-O fails |
+| 0.50 | 50% | 50% | 0.5× | closed and open are paid alike: the BFT bound is gone |
+
+**Other limits.**
+* **The adversary's share of verifier stake exceeds its share of capital.** The gate reads the verifier pool, so A-BFT must hold there.
+* **An open model is slow to obtain.** At a 2% honest fetch failure, P_open drops to 98.5%, and B-H fails at `m` = 47. The gate's
+  window must hold the fetch, or `m` must grow.
+* **Honest verifiers are lazy** (T6, outside A-BFT).
+* **A model has no Final claim to sample** in an epoch: it is not paid in that epoch.
+
+**ADR-0177 D1.** The gate withholds subsidy because verification was not attested, not because the model was not served. The chain
+checks no availability, and no slash or suspension of claims follows. ECON reads this as consistent with D1, which forbids action
+based *only* on acquisition failure, and with PRINCIPLES §6 condition 6. **The user must confirm that reading.**
+
+---
+
 ## 5a. The Round/EXEC ECON gate (`docs/palw-round-exec-additional-acceptance-2026-10-10.md` §4–§5)
 
 Model §9 compares small and large models on the same bond and period, before and after the cap, with the window unsaturated and
@@ -844,7 +963,7 @@ Every reward, consensus-weight and Panel=0 fence stays refused:
 | D-M\* | Adopt M\*-49 as the direction for verifier pay: per-check fees from the user's escrow, and drawn sealers first inside the 49% | **Adopt.** It is the only design here that satisfies both halves of P0. Keep T6 open, and keep every reward fence refused until T6 is closed |
 | D-q | `q`, `m`, `F`, `B_cap = m·G` per class | Derive them from `p_min` (§3.3) and MEAS's costs. None is set now |
 | D-B12 | The seal deposit | `d_src = c_ab·T_w/T_ab` (28.6 at the interim terms and 49%) on an opt-in source seal (S3). Also S2 (vetoes do not count) and S4 as a concurrency cap `N_max`. `γ*` is set through `D`, not `d` |
-| D-F | Model coinbase at `p` = 0 | **(a)** no model coinbase leg in the release: rewards are user-paid escrow only. **(b)** if the user wants the leg: linear `f`, an explicit cap on its share of `R_PALW`, and an amendment to ADR-0176 §1 accepting a capital-proportional residual for closed models. ECON recommends **(a)** |
+| D-F | Model coinbase at `p` = 0 (the user kept the leg, §3f) | **Linear `f` with the verified-work gate** (§5c): `m` = 47, `k` = 24 at `σ_max` = 1/3; no saturation; no per-model cap; owner leg optional, ≤ 10%. It needs the user to confirm the ADR-0177 D1 reading and to accept `σ_max` = 1/3 for both capital and verifier stake |
 | D-bar | The numeric bar for "overwhelmingly better" | Fix Φ\* (2 proposed), the `S_0` and `e` ranges, and λ and `r` before any curve is evaluated. Record that F2 and F4 make the bar unattainable by `f` alone |
 | D-snap | The allocation snapshot | Time-integrated capital, locked for at least the epoch plus `W`. Never a point snapshot |
 | D-hold | Hold the default's demander share until the liability horizon (O2 on top of F-C4R4-15) | **Yes**, in the single release. It removes the 441 vs 490 residual. Optional if M\*-49 lands first |
