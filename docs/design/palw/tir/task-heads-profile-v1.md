@@ -134,6 +134,13 @@ decode. Below the fence this build reads it exactly so, with ONE predicate:
 | a chunked object / an assembled court close | undecodable | `ChunkedObjectUndecodable` / the declarer convicted, as for undecodable bytes |
 | a version-10 free-prompt payload with a `Head` body | refused at the isolation door: the block is invalid | refused in the header context: the block is invalid |
 
+**Landed in the A2U tables (2026-10-10).** The three wire types are classified in `PALW_INT12_WIRE_CHANGES_V1`
+(`PalwGenProfileOffersV1` and `PalwGenBodyV1` as `CarriedAppended`, `PalwGenProfileV1` as `CarriedReread`), the fence is
+`PalwLifecycleKindFenceV1::TaskHeadsV1` (resolved from `Params::palw_task_heads_v1_fence()`), `palw_lifecycle_kind_owner_v1` has a guarded
+arm for the six int-12 kinds that can carry a `Head` form (the signed envelope keeps its own owner), `palw_fold_kind_in_force_v1` reads the
+mirror, and the central table's rows are `landed`. The node-level sweep (`t12_a2u_new_kinds_uniform`) carries a `Head` registration and a
+`Head` tensor commitment (`appended_probes`) beside the profile-byte probe (`reread_probes`).
+
 A class whose profile BYTE is 6 with an older offers variant is bytes int-12 decodes; it is not dropped, and it takes int-12's own path:
 refused at admission as an unknown profile (`Profile(6)`), because below the fence tag 6 resolves exactly as int-12 resolves it
 (`PalwGenProfileV1::from_tag`; `Head` is not in `PalwGenProfileV1::ALL`, so `palw_gen_v1`'s fingerprint is unchanged). The mixed-verdict
@@ -154,12 +161,25 @@ K2S); until then the fence's value is a placeholder and the profile closes no he
 | `…ForSequenceClassification` lowering (encoder, decoder) | existed (`OUTPUT_CLASSIFY_V1`, `tests/seqcls.rs`) |
 | `…ForTokenClassification`, `…ForQuestionAnswering` lowering (BERT, RoBERTa / XLM-R, DistilBERT) | **built** (`OUTPUT_TOKEN_LOGITS_V1`, `tests/heads.rs`: HF logits, integer program, pipeline, court, admission) |
 | `…ForMaskedLM` at a position | **not built**: needs the task-driven adapter choice (a `…ForMaskedLM` checkpoint is read today as its encoder for sentence embedding) and a third lifted input (`input.pos`) |
-| BERT-type pair segments (token type 1 after the first separator) | **not built** (`ENC_PAIR_SEGMENTS_V1`): a span head over a model with `type_vocab_size > 1` is refused by name (`ARCH_NEEDS_FEATURE(ENC_PAIR_SEGMENTS_V1)`, `route::bidir_needs_pair_segments_v1`); the census's hypothetical `Head` class of a pair task (zero-shot NLI, a reranker) is a `SEQUENCE` class over the concatenated ids, which is the same function only for a model without token types |
+| BERT-type pair segments (token type 1 after the first separator) | **built** (`ENC_PAIR_SEGMENTS_V1`, HFX 2026-10-10: `lower::bidir::BidirExtras::pair_sep`): the segment id of position `i` is 1 iff a separator sits at some `j < i`, computed IN the program from the job's ids (an equality against the class's separator constant, a strictly-lower-triangular count, a clamp to {0, 1}, a gather from a two-row type table), so the job still supplies ids and a count and nothing else (K2-TIR-v5's binding). `tests/heads.rs::a_bert_span_head_with_pair_segments_…` holds the float reference, the calibrated integer program and the pipeline to transformers' logits run with explicit `token_type_ids`. A span head over a token-type table is declared (the separator is the configuration's, the tokenizer's through `lower_bidir_class_shape_with_v1`); a `PAIR` sequence class (zero-shot NLI, a cross-encoder reranker) over a model with token types is still the `SEQUENCE` class over the concatenated ids — the same function only without token types — and needs its own class option (not built) |
 | vision heads (`IMAGE`, `DETECTION`, `SEGMENTATION`) | the ViT / CNN stage programs exist (`read_vision`, `read_cnn`); the heads are not lowered |
 | the `Head` profile in consensus (offers, body, acceptance, fence) | **built, dormant** (`consensus/core/src/palw_task_heads_v1.rs`; the profile's offers check, the job's acceptance, the claim fold's second lock, the registration gate's head ceilings, the node's A-2 drops; tests `palw_task_heads_fence.rs`) |
 | a bidirectional encoder's class declared shape-only and judged (preflight / census) | **built** (`route::lower_bidir_class_shape_v1`, `preflight::pipeline::judge_encoder`): an embedding as `Embedding`, a head as the `Head` profile hypothetically (`HEAD_PROFILE_HYPOTHETICAL`, never a pass) |
 | the declaration tool (`gen_class`), the worker and the gateway for `Head` jobs | **not built** |
 | the census row (`census::tasks`) | the tasks map to `Profile::GenHead` (fence `palw_task_heads_v1`): `FENCE_NOT_ARMED` at every shipped ruleset; a hypothetical ruleset judges the declared class |
+
+## 6a. The same classes under the kernel route (K2-TIR-v5; HFX 2026-10-10)
+
+§5.2's finding is a property of the GENERATIVE route's unit (a position). Lane K2S's K2-TIR-v5 (`k2-real-scale.md` §12) judges the same
+program by committed values and element courts, and the registration of an encoder class there needs no `Head` profile at all: the
+decision (arg-max, span) is off-chain and never consensus. The preflight now reports that route beside the generative verdict
+(`preflight::kernel::encoder_route_of`; `Report.kernel`, the census row's `kernel_route = <shipped>/<hypothetical>`):
+
+* **shipped** `KERNEL_NOT_ACTIVE` (K2-TIR-v5 is `Implemented`, never active), **hypothetical** the descriptor's plan, `check_plan_with_v1` (ranges
+  proven from the inputs' intervals), the per-prosecution gate under `palw_kernel_route_policy_v1`'s ceilings, and the carrier fit —
+  `ELIGIBLE_AT`, or the first refusal by name (`KERNEL_EXTENSION_REQUIRED`, `FRONTEND_REQUIRED`, `PROSECUTION_BOUND`, `CARRIER_FIT`);
+* it is **reported, never merged**: no stage verdict reads it and no row counts as covered because of it (the census keeps it as its own
+  column, `kernel_route_report.py`); it is a different registration route behind its own dormant fences (tag 110, OPV).
 
 ## 7. Allocation (approved by the Lead, 2026-10-08)
 

@@ -1124,17 +1124,23 @@ pub enum PalwLifecycleKindFenceV1 {
     /// `Params::palw_model_bond_allocation_v1` — lane BUDGET's capital assignment (tag 140, ADR-0177 D3). In force only where
     /// `palw_bond_budget_v1` is too (the assignment's rows are the budget's), as the processor's `palw_model_bond_allocation_at` reads it.
     ModelBondAllocationV1 = 5,
+    /// `Params::palw_task_heads_v1` — lane HFX's task-head profile: the `Head` variants appended INSIDE int-12 kinds
+    /// (`PalwGenProfileOffersV1::Head` in the class registration, tag 68; `PalwGenBodyV1::Head` in a generative job, which the
+    /// tensor commitment and the court's proofs and accusations carry). No new object tag: the guarded arm of [`palw_lifecycle_kind_owner_v1`] reads the predicate
+    /// [`crate::palw_task_heads_v1::palw_object_needs_task_heads_v1`].
+    TaskHeadsV1 = 6,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
         Self::ProviderCourtV1,
         Self::LegacyHeldDaV2,
         Self::ModelBondAllocationV1,
+        Self::TaskHeadsV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1146,6 +1152,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::ProviderCourtV1 => "palw_provider_court_v1",
             Self::LegacyHeldDaV2 => "palw_legacy_held_da_v2",
             Self::ModelBondAllocationV1 => "palw_model_bond_allocation_v1",
+            Self::TaskHeadsV1 => "palw_task_heads_v1",
         }
     }
 }
@@ -1168,6 +1175,19 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
     match object {
         // LG14-B's guarded arms: an int-12 kind carrying the appended `PalwDaUnitV1::LegacyHeldV2` (the live build cannot decode it)
         // is owned by `palw_legacy_held_da_v2` (`PALW_INT12_WIRE_CHANGES_V1`'s `CarriedAppended`).
+        // HFX: an int-12 kind carrying a `Head` variant (the live build cannot decode it) is owned by `palw_task_heads_v1`
+        // (`PALW_INT12_WIRE_CHANGES_V1`'s `CarriedAppended` rows for `PalwGenProfileOffersV1` and `PalwGenBodyV1`). The signed-expiry
+        // envelope (108) is a new kind with its own owner; the Head form it wraps is read by the fold's nested predicate.
+        O::ClassRegisteredGenV1 { .. }
+        | O::GenTensorCommitted { .. }
+        | O::CourtClosed { .. }
+        | O::CourtGenRootClaimed { .. }
+        | O::GenShardCourtAccused { .. }
+        | O::TirShardCourtAccused { .. }
+            if crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(object) =>
+        {
+            PalwLifecycleKindOwnerV1::Fence(F::TaskHeadsV1)
+        }
         O::MaterialDisclosedV2 { unit, .. } if unit.is_legacy_held_v2() => PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2),
         O::DefaultAccusedTirStep { accusation } if accusation.unit.is_legacy_held_v2() => {
             PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2)
@@ -1495,6 +1515,8 @@ impl crate::config::params::Params {
                         }
                     }
                     PalwLifecycleKindFenceV1::LegacyHeldDaV2 => self.palw_legacy_held_da_v2,
+                    // HFX: the task-head profile's own fence (a ConsensusV2 rule; `None` where unarmed or `never()`).
+                    PalwLifecycleKindFenceV1::TaskHeadsV1 => self.palw_task_heads_v1_fence().map(|fence| fence.activation),
                     // Lane BUDGET: in force where BOTH the allocation's and the budget's fences are (`palw_model_bond_allocation_at`).
                     PalwLifecycleKindFenceV1::ModelBondAllocationV1 => {
                         let never = crate::config::params::ForkActivation::never();
@@ -1714,6 +1736,20 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
         PalwInt12WireChangeV1::CarriedAppended { fence: "palw_legacy_held_da_v2", digest: 0xcca88a4c7733b9e5 },
     ),
+    // HFX task heads: `Head` appended to the generative class's profile offers (variant 3) and to the job body (variant 2); the profile
+    // byte `Head = 6` is a hand-read tag the live build decodes and refuses at admission (`Profile(6)`), re-read below the fence.
+    (
+        "consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1",
+        PalwInt12WireChangeV1::CarriedAppended { fence: "palw_task_heads_v1", digest: 0x234df741f2be5029 },
+    ),
+    (
+        "consensus/core/src/palw_gen_job_v1.rs::PalwGenBodyV1",
+        PalwInt12WireChangeV1::CarriedAppended { fence: "palw_task_heads_v1", digest: 0xc7a9d888da15e438 },
+    ),
+    (
+        "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1",
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_task_heads_v1", digest: 0x12222f873f5f85a5 },
+    ),
     (
         "consensus/core/src/palw_state_v2.rs::PalwVoidReasonV2",
         PalwInt12WireChangeV1::NotCarried("a claim row's terminal reason, written by the fold; no carried object names one"),
@@ -1924,19 +1960,25 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" },
         "palw_task_heads_v1",
         "HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read)",
-        false,
+        true,
     ),
     a2_row(
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1" },
         "palw_task_heads_v1",
         "HFX task heads: PalwGenProfileOffersV1::Head (3), inside tag 68 (appended)",
-        false,
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_job_v1.rs::PalwGenBodyV1" },
+        "palw_task_heads_v1",
+        "HFX task heads: PalwGenBodyV1::Head (2), inside a generative job (tag 86 and the court proofs that bind one) (appended)",
+        true,
     ),
     a2_row(
         PalwA2SlotV1::FpJobForm { what: "PalwGenBodyV1::Head (2) inside a generative job" },
         "palw_task_heads_v1",
-        "HFX task heads",
-        false,
+        "HFX task heads (the version-10 free-prompt job: `palw_fp_head_job_refusal_at_v1`, the header-context half)",
+        true,
     ),
     // ---- formulas and encodings ----
     a2_row(
@@ -3283,8 +3325,14 @@ pub(crate) mod tests {
                 assert_eq!(palw_lifecycle_kind_owner_v1(object), PalwLifecycleKindOwnerV1::Fence(*fence), "tag {tag}");
                 assert!(!PalwLifecycleKindFencesV1::default().kind_in_force_at(object, u64::MAX), "unarmed is never in force");
             }
+            // Every owning fence owns a kind (a new tag) or a form appended inside a live-build kind (HFX's `palw_task_heads_v1` adds no
+            // tag: its `Head` variants ride inside tags 68 and 87, classified in `PALW_INT12_WIRE_CHANGES_V1`).
             for fence in PalwLifecycleKindFenceV1::ALL {
-                assert!(PALW_LIFECYCLE_NEW_KINDS_V1.iter().any(|(_, _, f)| *f == fence), "{} owns a kind", fence.params_field());
+                let owns_a_tag = PALW_LIFECYCLE_NEW_KINDS_V1.iter().any(|(_, _, f)| *f == fence);
+                let owns_a_form = PALW_INT12_WIRE_CHANGES_V1.iter().any(|(_, c)| {
+                    matches!(c, PalwInt12WireChangeV1::CarriedAppended { fence: f, .. } if *f == fence.params_field())
+                });
+                assert!(owns_a_tag || owns_a_form, "{} owns a kind or an appended form", fence.params_field());
             }
         }
 
@@ -3443,18 +3491,44 @@ pub(crate) mod tests {
                     level: 1,
                     index: 0,
                 });
-            let samples: Vec<(&str, PalwConsensusObjectV2)> = vec![(
-                "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
-                PalwConsensusObjectV2::MaterialDisclosedV2 {
-                    claim: Hash64::from_bytes([1; 64]),
-                    unit,
-                    answer: crate::palw_da_rcore_v1::PalwDaAnswerV1::Event(
-                        crate::palw_step_refute::PalwTraceEventDisclosureV1::OutOfRange { binding: Box::new(zeros()) },
-                    ),
-                    discloser: bond(),
-                    signature: vec![1],
-                },
-            )];
+            // HFX: a tag-68 class registration whose offers are `Head` (variant 3), and a tag-87 tensor commitment whose job body is
+            // `Head` (variant 2) — int-12 cannot decode either.
+            let head_offers = crate::palw_task_heads_v1::PalwGenHeadOffersV1 {
+                task: crate::palw_task_heads_v1::PALW_HEAD_TASK_SEQUENCE_V1,
+                problem: crate::palw_task_heads_v1::PALW_HEAD_PROBLEM_SINGLE_LABEL_V1,
+                labels: 2,
+                label_map_root: crate::palw_task_heads_v1::palw_head_label_map_root_v1(&["a", "b"]),
+                pair_separator: vec![],
+                entailment_label: None,
+                position_scalar: None,
+            };
+            let mut head_class = zero_filled_kind(68);
+            let PalwConsensusObjectV2::ClassRegisteredGenV1 { admission, .. } = &mut head_class else { unreachable!("tag 68") };
+            admission.class.offers.profile = crate::palw_gen_class_v1::PalwGenProfileOffersV1::Head(head_offers);
+            let mut head_job = zero_filled_kind(87);
+            let PalwConsensusObjectV2::GenTensorCommitted { job, .. } = &mut head_job else { unreachable!("tag 87") };
+            job.body = crate::palw_gen_job_v1::PalwGenBodyV1::Head(crate::palw_task_heads_v1::PalwGenHeadBodyV1 {
+                input: crate::palw_gen_job_v1::PalwGenEmbeddingInputV1::Text { token_ids_hash: Hash64::from_bytes([1; 64]), tokens: 4 },
+                task: crate::palw_task_heads_v1::PALW_HEAD_TASK_SEQUENCE_V1,
+                position: 0,
+                output: 3,
+            });
+            let samples: Vec<(&str, PalwConsensusObjectV2)> = vec![
+                (
+                    "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
+                    PalwConsensusObjectV2::MaterialDisclosedV2 {
+                        claim: Hash64::from_bytes([1; 64]),
+                        unit,
+                        answer: crate::palw_da_rcore_v1::PalwDaAnswerV1::Event(
+                            crate::palw_step_refute::PalwTraceEventDisclosureV1::OutOfRange { binding: Box::new(zeros()) },
+                        ),
+                        discloser: bond(),
+                        signature: vec![1],
+                    },
+                ),
+                ("consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1", head_class),
+                ("consensus/core/src/palw_gen_job_v1.rs::PalwGenBodyV1", head_job),
+            ];
             for (key, change) in PALW_INT12_WIRE_CHANGES_V1 {
                 let PalwInt12WireChangeV1::CarriedAppended { fence, .. } = change else { continue };
                 let carrying: Vec<_> = samples.iter().filter(|(k, _)| k == key).collect();

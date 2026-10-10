@@ -248,7 +248,7 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
             m.put("classifier.out.b", Src::t(suffixed(&name, ".bias")))?;
         }
     }
-    let logits = matches!(spec.output, OutputSpec::Logits);
+    let logits = matches!(spec.output, OutputSpec::Logits | OutputSpec::MaskedLm);
     if let OutputSpec::Embedding { proj: Some((_, bias)), .. } = spec.output {
         let w = m.w("embed_proj")?;
         m.put("embed.proj.w", w)?;

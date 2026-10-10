@@ -34897,6 +34897,8 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         // Lane LG14-B: the extras flag the processor resolves from `palw_legacy_held_da_v2` at the block.
         K::Fence(F::LegacyHeldDaV2) => builder.extras.legacy_held_da_v2_active,
         // Lane BUDGET: the mirror carries the allocation's height (at or past the budget's) exactly where both fences are armed.
+        // Lane HFX: the `Head` variants inside int-12 kinds, in force where the fence's mirror says so.
+        K::Fence(F::TaskHeadsV1) => builder.params.task_heads_active_at(ctx.daa_score),
         K::Fence(F::ModelBondAllocationV1) => builder.params.bond_budget().is_some_and(|mirror| mirror.allocation_at(ctx.daa_score).is_some()),
     }
 }

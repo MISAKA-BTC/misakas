@@ -197,6 +197,14 @@ fn source_of(a: &Adapter) -> AdapterSource {
 
 /// Read a Hugging Face `config.json` (and, optionally, the checkpoint's tensor names and shapes)
 /// into a [`ModelSpec`].
+/// **The built-in adapter id that reads a `…ForMaskedLM` configuration's head** (the `fill-mask` task; HFX 2026-10-10), or `None`:
+/// the caller that knows the task passes it as `ReadOptions { adapter: AdapterChoice::BuiltIn(id) }`. Chosen by task and never by
+/// architecture alone, because the same checkpoint is also read as its encoder (a sentence embedder).
+pub fn masked_lm_adapter_for(config: &Value) -> Option<&'static str> {
+    let arch = config.get("architectures")?.as_array()?.first()?.as_str()?;
+    builtin::find_masked_lm_for(arch).map(|a| a.id.as_str())
+}
+
 pub fn read_model(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> Result<ModelRead, ReadFailure> {
     read_model_with(config, tensors, opts, crate::quantfmt::QuantRegistry::builtin())
 }

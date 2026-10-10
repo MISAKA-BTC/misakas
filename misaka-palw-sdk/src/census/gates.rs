@@ -291,6 +291,10 @@ pub struct CensusContext {
     /// A frame's task for a repository that declares none (RFC-0002 §II.12: a GGUF the Hub lists without a task is in the local-LLM
     /// frame as text generation). `None` in the Hub-wide census, where an undeclared task is `TASK_UNKNOWN`.
     pub assume_task: Option<String>,
+    /// **The tokenizer of a repository's pinned base** (HFX 2026-10-10), by repository id: offered to a repository that ships no tokenizer
+    /// file, accepted by the preflight only for the same declared vocabulary. Built from the snapshot's listing (`tokenizer_bases.py`);
+    /// empty in a census that does not offer it.
+    pub base_tokenizers: std::collections::BTreeMap<String, preflight::BaseTokenizerV1>,
 }
 
 impl CensusContext {
@@ -321,6 +325,7 @@ impl CensusContext {
             cache: Default::default(),
             judge_budget: None,
             assume_task: None,
+            base_tokenizers: Default::default(),
         }
     }
 
@@ -332,9 +337,11 @@ impl CensusContext {
 }
 
 /// The preflight at one declared context, a panic caught and named.
-fn run_preflight(cs: &store::CensusSource, ctx: &CensusContext, max_context: u32) -> Result<Report, Found> {
+fn run_preflight(cs: &store::CensusSource, ctx: &CensusContext, max_context: u32, task: &TaskV1) -> Result<Report, Found> {
     let mut opts = ctx.options.clone();
     opts.max_context = Some(max_context);
+    opts.base_tokenizer = cs.base_tokenizer.clone();
+    opts.task = Some(task.task.clone());
     let deadline = ctx.judge_budget.map(|b| std::time::Instant::now() + b);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::tir_layout::tir_with_search_deadline_v1(deadline, || {
@@ -372,14 +379,14 @@ fn judge_at_contexts(
     let mut cx = ContextV1 { primary, source, declared, retry: None, judged_at: Vec::new(), primary_implied: false };
     let mut admit_retry = None;
     let report = match ctx.context_rule {
-        _ if ctx.options.depth == preflight::Depth::Headers => run_preflight(cs, ctx, primary),
+        _ if ctx.options.depth == preflight::Depth::Headers => run_preflight(cs, ctx, primary, task),
         // The narrower context first (admission at 8,192 costs ~30x the CPU of 2,048): a class refused at the narrower context on
         // limits that only grow with the context is refused at the primary too, so the primary is judged only for a class the
         // narrower context admits (or refuses on a code a wider context could change).
         ContextRule::ModelCapped { retry, .. } if primary > retry && !task.profile.is_pipeline() => {
             cx.retry = Some(retry);
             cx.judged_at.push(retry);
-            match run_preflight(cs, ctx, retry) {
+            match run_preflight(cs, ctx, retry, task) {
                 Ok(r2) if r2.verdict.convert.status != StageStatus::Ok => Ok(r2),
                 Ok(r2) => {
                     let a2 = admit_of(&r2);
@@ -395,7 +402,7 @@ fn judge_at_contexts(
                         Ok(r2)
                     } else {
                         cx.judged_at.push(primary);
-                        run_preflight(cs, ctx, primary)
+                        run_preflight(cs, ctx, primary, task)
                     }
                 }
                 Err(f) => Err(f),
@@ -403,7 +410,7 @@ fn judge_at_contexts(
         }
         _ => {
             cx.judged_at.push(primary);
-            run_preflight(cs, ctx, primary)
+            run_preflight(cs, ctx, primary, task)
         }
     };
     (report, Some(cx), admit_retry)
@@ -821,7 +828,8 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                     Ok(cs) if cs.needs_tensor_data.is_some() => {
                         needs_tensor_data = cs.needs_tensor_data.clone();
                     }
-                    Ok(cs) => {
+                    Ok(mut cs) => {
+                        cs.base_tokenizer = ctx.base_tokenizers.get(&l.id).cloned();
                         let probe_image = task.profile == Profile::PartialTextStage
                             && cs.source.config.as_ref().is_some_and(|c| c.get("vision_config").is_some_and(|v| v.is_object()));
                         let (r, cx, ar) = judge_at_contexts(&cs, ctx, &task);
@@ -879,6 +887,7 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                         cache: Default::default(),
                         judge_budget: ctx.judge_budget,
                         assume_task: ctx.assume_task.clone(),
+                        base_tokenizers: Default::default(),
                     };
                     let (r, cx, ar) = judge_at_contexts(&cs, &ctx2, &task);
                     match r {

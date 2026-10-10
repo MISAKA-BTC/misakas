@@ -91,7 +91,8 @@ testnet-12) at --height (default: the first height at which every scheduled fenc
 court window, the canonical job, the fences, the seat's memory (--seat-share [name=]GiB) and the lifecycle forecast.
 --quant-format <file.json> (repeatable) adds quant-format descriptors, --adapter <file.json> a data adapter,
 --max-context N / --tile-len N / --h-chunk N the layout it is judged at, --held the held history bound,
---json the machine form (misaka.palw.preflight.v1: no timestamp, no path). Exits 0 when nothing blocks, 2 when
+--task T the task the class is judged for where the checkpoint alone does not say (`fill-mask` reads a …ForMaskedLM checkpoint's own head;
+any other task reads its encoder). --json the machine form (misaka.palw.preflight.v1: no timestamp, no path). Exits 0 when nothing blocks, 2 when
 something does. Given a .palwtir artifact, `preflight` runs the artifact admission below instead.
 A repository id is read by HTTP ranges, the headers only: `hf://org/name[@revision]` (with --hf-endpoint <url>, default
 https://huggingface.co) or an `http(s)://` base URL of a mirror. --node-facts <file> judges against what a node said (the tip is the
@@ -517,6 +518,9 @@ fn model_preflight(network: Option<&str>, args: &mut Vec<String>) -> Result<bool
         artifact: take_flag(args, "--artifact").map(PathBuf::from),
     };
     let hf_endpoint = take_flag(args, "--hf-endpoint").unwrap_or_else(|| "https://huggingface.co".to_string());
+    // `--task fill-mask`: the task the class is judged for where the checkpoint alone does not say (a `…ForMaskedLM` repository is a
+    // masked-LM class for `fill-mask`, else its encoder).
+    let task = take_flag(args, "--task");
     let held = args.iter().any(|a| a == "--held");
     let json = args.iter().any(|a| a == "--json");
     args.retain(|a| a != "--held" && a != "--json");
@@ -539,6 +543,8 @@ fn model_preflight(network: Option<&str>, args: &mut Vec<String>) -> Result<bool
         full,
         lora: None,
         pipeline_admission: true,
+        base_tokenizer: None,
+        task,
     };
     // A repository: `http(s)://…/<base>` (a mirror, a fixture server) or `hf://org/name[@revision]`, read by ranges.
     let remote_base = if let Some(rest) = input.strip_prefix("hf://") {

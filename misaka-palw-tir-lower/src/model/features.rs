@@ -804,8 +804,9 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     // head and output
     match &s.output {
         OutputSpec::Logits => u.add("OUTPUT_LOGITS_V1", None, ""),
-        OutputSpec::Embedding { .. } | OutputSpec::Classify { .. } | OutputSpec::TokenLogits { .. } => {
+        OutputSpec::Embedding { .. } | OutputSpec::Classify { .. } | OutputSpec::TokenLogits { .. } | OutputSpec::MaskedLm => {
             match &s.output {
+                OutputSpec::MaskedLm => u.add("OUTPUT_LOGITS_V1", None, "a vocabulary logit row per token (masked language model)"),
                 OutputSpec::Classify { labels, pre, .. } => {
                     u.add("OUTPUT_CLASSIFY_V1", None, format!("{labels} labels{}", if pre.is_some() { ", dense + activation first" } else { "" }));
                 }

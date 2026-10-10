@@ -130,7 +130,9 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
         output: match spec.output {
             OutputSpec::Logits => HlOutput::Logits,
             OutputSpec::Embedding { normalize, .. } => HlOutput::Embedding { normalized: normalize },
-            OutputSpec::Classify { .. } | OutputSpec::TokenLogits { .. } => HlOutput::Embedding { normalized: false },
+            // A task head over a bidirectional encoder: its output is a unit-of-its-own tensor, not next-token logits in Q24 (the
+            // masked-LM head's params are the language-model head's, declared by the post block below; the label is the output's).
+            OutputSpec::Classify { .. } | OutputSpec::TokenLogits { .. } | OutputSpec::MaskedLm => HlOutput::Embedding { normalized: false },
         },
         vocab: spec.vocab_size,
         hidden: spec.hidden_size,

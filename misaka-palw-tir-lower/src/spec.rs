@@ -1300,6 +1300,12 @@ pub enum OutputSpec {
     /// `classifier`) and extractive question answering (`…ForQuestionAnswering`'s `qa_outputs`, `labels` = 2: the start logit in
     /// column 0, the end logit in column 1). Unnormalised; a pad row is computed like any other and is not a token of the input.
     TokenLogits { labels: usize, bias: bool },
+    /// **A masked-language-model head** (`…ForMaskedLM`, the `fill-mask` task; HFX 2026-10-10): EVERY row of a bidirectional encoder through
+    /// the head's transform (`HEAD_TRANSFORM_V1`: dense, activation, LayerNorm) and the vocabulary projection (tied to the word
+    /// embeddings, plus the head's bias), `[L, vocab]` logits over the padded token axis. The row of a masked position is what a user reads;
+    /// the program does not know where the mask is (the class has no third job input), and a pad row is computed like any other.
+    /// The HL program is the language-model head's (`HlOutput::Logits`); the bidirectional lowering applies it to every row.
+    MaskedLm,
 }
 
 /// The dense layer and activation between the pooled row and the classification layer.

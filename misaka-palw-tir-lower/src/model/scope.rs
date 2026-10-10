@@ -158,6 +158,7 @@ pub fn scope_of(config: &Value, spec: Option<&ModelSpec>, tensors: Option<&Tenso
             ("question-answering", "token ids (question ‖ separator ‖ context)", "a start and an end logit per token")
         }
         Some(OutputSpec::TokenLogits { .. }) => ("token-classification", "token ids", "one logit per label per token"),
+        Some(OutputSpec::MaskedLm) => ("fill-mask", "token ids (one of them the mask token)", "vocabulary logits per token"),
         _ => ("text-generation", "token ids", "next-token logits"),
     };
     let mut excluded = Vec::new();

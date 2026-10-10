@@ -580,7 +580,10 @@ fn encoder_class(enc: &misaka_palw_tir_lower::model::route::BidirClassShapeV1, c
         ),
         head => {
             let task = match head {
-                BidirHeadV1::Token => heads::PALW_HEAD_TASK_TOKEN_V1,
+                // `[L, vocab]` per-token logits are the TOKEN task's shape (labels = the vocabulary). The profile's own MASKED_LM task
+                // (`[1, vocab]` at a job-scalar position) is a different class form this lowering does not build; the hypothetical class is
+                // the one the program IS, so the generative admission is asked of the real shape.
+                BidirHeadV1::Token | BidirHeadV1::MaskedLm => heads::PALW_HEAD_TASK_TOKEN_V1,
                 BidirHeadV1::SpanQa => heads::PALW_HEAD_TASK_SPAN_QA_V1,
                 _ => heads::PALW_HEAD_TASK_SEQUENCE_V1,
             };

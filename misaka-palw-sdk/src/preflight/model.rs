@@ -203,7 +203,18 @@ fn short(s: &str) -> String {
 pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: Option<&str>) -> Analysis {
     let mut blockers: Vec<Blocker> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
-    let read_opts = ReadOptions { adapter: adapter_text.map(|t| AdapterChoice::Text(t.to_string())).unwrap_or_default() };
+    // **The head a task reads** (HFX 2026-10-10): a `…ForMaskedLM` checkpoint is read as its encoder (a sentence embedder) unless the
+    // task is `fill-mask`, which reads the checkpoint's own head (`hf_schema::masked_lm_adapter_for`). An adapter the caller supplies wins.
+    let masked_lm = (adapter_text.is_none() && opts.task.as_deref() == Some("fill-mask"))
+        .then(|| src.config.as_ref().and_then(misaka_palw_tir_lower::hf_schema::masked_lm_adapter_for))
+        .flatten();
+    let read_opts = ReadOptions {
+        adapter: match (adapter_text, masked_lm) {
+            (Some(t), _) => AdapterChoice::Text(t.to_string()),
+            (None, Some(id)) => AdapterChoice::BuiltIn(id.to_string()),
+            (None, None) => AdapterChoice::default(),
+        },
+    };
     let history_bound =
         if opts.held { misaka_palw_tir::program::HISTORY_BOUND_V1_HELD } else { misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL };
     // **A declared context bounds the history window** (`LowerOpts::max_window`, the runtime pack's `max_window`): every job of a
@@ -598,7 +609,21 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         _ => None,
     };
     let needs_tokenizer = !is_route || src.config.as_ref().is_some_and(misaka_palw_tir_lower::hf_schema::is_encoder_decoder);
-    if tokenizer_known == Some(false) && needs_tokenizer {
+    // A tokenizer the pinned base supplies (the class commits to the bytes of that file), accepted only for the same vocabulary.
+    let declared_vocab = src.config.as_ref().and_then(|c| {
+        c.get("vocab_size").or_else(|| c.get("text_config").and_then(|t| t.get("vocab_size"))).and_then(serde_json::Value::as_u64)
+    });
+    let base_tokenizer = opts
+        .base_tokenizer
+        .as_ref()
+        .filter(|bt| src.kind == InputKind::HfDirectory && declared_vocab == Some(bt.vocab_size));
+    if tokenizer_known == Some(false) && needs_tokenizer && base_tokenizer.is_some() {
+        let bt = base_tokenizer.expect("checked");
+        notes.push(format!(
+            "TOKENIZER_BOUND_FROM_BASE: no tokenizer file beside the checkpoint; the class binds the tokenizer of its pinned base `{}` (its configuration declares vocab_size {} = this model's): the registrant commits to the bytes of that one file",
+            bt.base, bt.vocab_size
+        ));
+    } else if tokenizer_known == Some(false) && needs_tokenizer {
         blockers.push(
             Blocker::new(
                 Stage::Convert,
@@ -628,29 +653,19 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         let st = dir.as_deref().and_then(|d| misaka_palw_tir_lower::encoder::sentence_transformers(d).ok().flatten());
         let mean = st.as_ref().is_none_or(|s| s.pooling == misaka_palw_tir_lower::encoder::StPooling::Mean);
         let normalize = st.as_ref().is_some_and(|s| s.normalize);
-        let segments = misaka_palw_tir_lower::model::route::ENC_PAIR_SEGMENTS_V1;
         match misaka_palw_tir_lower::model::route::lower_bidir_class_shape_v1(&p.spec, &p.hl, config, lmax, mean, normalize) {
-            // A span head over a token-type table: the class would read `question ‖ sep ‖ context` as one segment — a feature, by name.
-            Err(_) if misaka_palw_tir_lower::model::route::bidir_needs_pair_segments_v1(&p.spec) => blockers.push(
-                Blocker::new(
-                    Stage::Convert,
-                    "ARCH_NEEDS_FEATURE",
-                    format!("the model needs `{segments}`, which the generic lowerer does not lower yet"),
-                )
-                .arg(segments.to_string())
-                .evidence([format!(
-                    "a span QA head over a token-type table of {} rows: its pair input is two segments (type 1 from the first separator on); this build adds type row 0 everywhere",
-                    p.spec.embedding.type_rows.unwrap_or(0)
-                )]),
-            ),
             Ok(shape) => {
                 notes.push(format!(
-                    "a bidirectional encoder class ({} head, [{}, {}] output at {} padded positions): lowered to 1 RFC-0003 program; it registers as a pipeline class, {}",
+                    "a bidirectional encoder class ({} head, [{}, {}] output at {} padded positions): lowered to 1 RFC-0003 program; it registers as a pipeline class, {}{}",
                     shape.head.name(),
                     shape.rows,
                     shape.width,
                     shape.lmax,
-                    "judged below by the generative lane's admission (RFC-0003)"
+                    "judged below by the generative lane's admission (RFC-0003)",
+                    shape.pair_sep.map_or(String::new(), |s| format!(
+                        "; pair segments ({}): the segment ids are computed in the program from the job's ids (separator id {s})",
+                        misaka_palw_tir_lower::model::route::ENC_PAIR_SEGMENTS_V1
+                    ))
                 ));
                 routed = Some(RoutedClass::Encoder(Box::new(shape)));
                 encoder_routed = true;
@@ -991,7 +1006,15 @@ fn bound_in_dtype(src: &Source, dtype: &str, unused: &BTreeSet<String>, ignored:
     src.shards
         .iter()
         .flat_map(|s| s.entries.iter())
-        .filter(|(n, e)| e.dtype == dtype && !unused.contains(*n) && !ignored.iter().any(|p| n.starts_with(p.as_str())))
+        .filter(|(n, e)| {
+            e.dtype == dtype
+                && !unused.contains(*n)
+                && !ignored.iter().any(|p| n.starts_with(p.as_str()))
+                // A module BUFFER (`position_ids`, `inv_freq`, …) older checkpoints saved is neither "unused" (the check skips it) nor
+                // bound: it is no weight of the class. Counting it made every BERT checkpoint with an `embeddings.position_ids` (I64)
+                // buffer a `QUANT_NO_DESCRIPTOR(safetensors/I64)` — the MiniLM / MPNet sentence-transformers among them.
+                && !misaka_palw_tir_lower::weights::is_module_buffer(n)
+        })
         .count()
 }
 

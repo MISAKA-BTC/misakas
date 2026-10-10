@@ -160,6 +160,10 @@ pack!(
     "roberta-seqcls",
     "distilbert-seqcls",
     "mixin-tokcls-encoder",
+    "mixin-mlm-encoder",
+    "bert-mlm",
+    "roberta-mlm",
+    "distilbert-mlm",
     "mixin-qa-encoder",
     "bert-tokcls",
     "bert-qa",
@@ -190,6 +194,12 @@ pub fn by_id(id: &str) -> Option<&'static Adapter> {
 pub fn find_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
     let real = || all().iter().filter(|a| a.kind() == "decoder" && (a.value.get("spec").is_some() || a.value.get("dispatch").is_some()));
     real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+}
+
+/// The built-in MASKED-LM adapter reading `arch`'s `fill-mask` head (`match.masked_lm_of`), if there is one. Never returned by
+/// [`find_for`]: the head is a TASK's reading of the checkpoint, chosen by the caller.
+pub fn find_masked_lm_for(arch: &str) -> Option<&'static Adapter> {
+    all().iter().find(|a| a.masked_lm_of().contains(&arch))
 }
 
 /// The built-in ENCODER-DECODER adapter (kind `encdec`) claiming a configuration, by `architectures[0]`, else by
