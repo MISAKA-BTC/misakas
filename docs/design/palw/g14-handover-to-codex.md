@@ -22,6 +22,8 @@
 - X8R統合 `cc4757d04`を`123d8254e`でmergeし、EXEC v2のkind fence 6とLG14-Aの7を両立した。Final deadlineではwork-session holdとdispute holdの両方を維持し、retirementでも両recordを処理する。lifecycle/A2U core 31件と公開reader 6件がPASS。
 - 公開bindingからのIdentityMismatch、shape/count違反、公開token pinからのOutputMismatchを共通filerのreporter doorへ接続した。output-only mismatchをHonestとする抜けを修正し、DA回答済みflagがなくても完全な直接証拠を受け付ける。最新の試験範囲と残条件は監査記録の「公開bindingの直接証拠」を参照。
 
+- 4096 idsを超えるcanonical attempt入力も、公開bindingと記録済みanchorからPromptNotAnchoredのWhole証明を作り、共通reporter doorへ渡す。メモリ予約を取り、直接証拠の判定をblocking workerへ移した。65k／2M contextのsynthetic inputでhonest/unbound拒否と、全Panel Valid後のFinal前後のactual fold convictionを確認。LG14-B 9 V-fold＋2 V-unit、filer 10 V-unit、reporter 21 V-unit PASS。最大modelの実行・通常eligibility・fresh-node full-serviceを立証したものではない。
+
 G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
 
 ## 統合ブランチ

@@ -685,8 +685,10 @@ pub(super) fn palw_fraud_filer_public_filing_v1(
     answer: &PalwDaBuiltAnswerV1,
     file_by: Option<u64>,
 ) -> Result<Option<PalwConvictionFilingV1>, String> {
-    use kaspa_consensus_core::palw_offence_attribution_v1::{palw_binding_identity_fault_v1, palw_output_fault_v1};
-    use kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1;
+    use kaspa_consensus_core::palw_offence_attribution_v1::{
+        palw_binding_identity_fault_v1, palw_output_fault_v1, palw_prompt_not_anchored_admit_v1, palw_prompt_not_anchored_fault_v1,
+    };
+    use kaspa_consensus_core::palw_offence_v1::{PalwPanelContradictionV1, PalwPromptProofV1};
     use kaspa_consensus_core::palw_step_refute::{PalwDecodeTokenPinV1, PalwTiledDecodeTokensV1, PalwTraceEventDisclosureV1};
     let PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event)) = answer else { return Ok(None) };
     let binding = event.binding();
@@ -705,6 +707,12 @@ pub(super) fn palw_fraud_filer_public_filing_v1(
         PalwPanelContradictionV1::IdentityMismatch { binding: binding.clone() }
     } else if kaspa_consensus_core::palw_step_leg::check_step_refutation_capped_v1(&structural, binding.step_leaf_count).is_ok() {
         PalwPanelContradictionV1::StepStructural(structural)
+    } else if palw_prompt_not_anchored_admit_v1(target, binding, rules)
+        .is_ok_and(|prefill| u64::from(prefill) <= kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1)
+        && palw_prompt_not_anchored_fault_v1(target, binding, &PalwPromptProofV1::Whole, rules).map_err(|e| e.to_string())?
+    {
+        // Derive the anchor's prompt, not the producer's ids. The real gate still charges this Whole proof's heavy budget and rent.
+        PalwPanelContradictionV1::PromptNotAnchored { binding: binding.clone(), proof: PalwPromptProofV1::Whole }
     } else {
         let pin = match event {
             PalwTraceEventDisclosureV1::Flat { pin, .. } => PalwDecodeTokenPinV1::Base0V1(pin.clone()),
@@ -905,7 +913,50 @@ impl PalwPanelService {
                     da_signer_liability: params.palw_rcore_plus_active_at(current_daa),
                 };
                 let file_by = view.as_ref().map(|v| v.hard_deadline_daa.saturating_sub(2));
-                match palw_fraud_filer_public_filing_v1(target, rules, answer, file_by) {
+                // The longest canonical prompt needs a whole-root recompute. Reserve its temporary ids/tree and proof buffers,
+                // then do all direct-proof hashing off the service loop. Pressure delays this pursuit rather than settling it.
+                let prefill = match answer {
+                    PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event)) => {
+                        kaspa_consensus_core::palw_offence_attribution_v1::palw_prompt_not_anchored_admit_v1(
+                            target,
+                            event.binding(),
+                            rules,
+                        )
+                        .ok()
+                        .map(u64::from)
+                        .unwrap_or(0)
+                        .min(kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1)
+                    }
+                    _ => 0,
+                };
+                let tiles = prefill.div_ceil(u64::from(kaspa_consensus_core::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN));
+                let bytes = prefill
+                    .saturating_mul(8)
+                    .saturating_add(tiles.saturating_mul(256))
+                    .saturating_add(2 * kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
+                let reserved = match crate::palw_memory_ledger::host_ledger_v1().reserve(
+                    crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                        role: "public-binding-proof",
+                        class_id: target.class_id,
+                        job: claim,
+                    },
+                    bytes,
+                ) {
+                    Ok(reserved) => reserved,
+                    Err(why) => {
+                        debug!("[{PALW_PANEL}] claim {claim}: the public direct proof waits for memory: {why}");
+                        continue;
+                    }
+                };
+                let target = target.clone();
+                let answer = answer.clone();
+                let proof = tokio::task::spawn_blocking(move || {
+                    let _reserved = reserved;
+                    palw_fraud_filer_public_filing_v1(&target, rules, &answer, file_by)
+                })
+                .await
+                .unwrap_or_else(|e| Err(format!("the public proof worker failed: {e}")));
+                match proof {
                     Ok(Some(filing)) => {
                         // This proof supersedes any unsent localization carrier. Keep the chain's live obligations until conviction.
                         court_pending

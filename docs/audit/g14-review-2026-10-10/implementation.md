@@ -314,3 +314,20 @@ history cacheでは、bindingだけ正しくpinが壊れた新しいeventが最�
 検証log: [merge lifecycle](evidence/integration-x8r-lifecycle-final.log)、[merge reader](evidence/integration-x8r-public-history-final.log)、[public binding fold / builder](evidence/public-binding-legacy-final.log)、[reader回帰](evidence/public-binding-reader-final.log)、[reporter回帰](evidence/public-binding-reporter-final.log)。
 
 最終filer回帰も **10 V-unit PASS**。[filer結果](evidence/public-binding-filer-final.log)。統合と修正後の `scripts/t12-repin.sh --shipping --drift-only` は **361 ok、差分なし**。検査対象の全pin・gateを通過し、pinの書換えは行っていない。[repin結果](evidence/public-binding-repin-final.log)、[integration tests](evidence/public-binding-repin-harvest-tests.log)、[lib tests](evidence/public-binding-repin-harvest-lib.log)。
+
+
+## 大型promptの公開入力証明を共通filerへ接続
+
+`58fcf4038`で残した、4096 idsを超えるattempt入力の自動証明を追加した。小型promptは従来のIdentityMismatchが判断する。大型promptでは、shapeとcountが正しい公開bindingをclaimの記録済みjob anchorへ認証し、既存の`palw_prompt_not_anchored_admit_v1`と`palw_prompt_not_anchored_fault_v1(Whole)`を使う。anchorからcanonical prompt rootを再計算して不一致なら、既存kind-4の`PromptNotAnchored { Whole }`を作る。producerのprompt ids、capture、Panel receipt又はDA answered flagは証明の入力にしない。現在のheavy-budgetで受理できるprefillまでを計算対象とし、gateのchargeとWholeのrentをそのまま維持する。
+
+実serviceの直接証拠判定はblocking workerへ移した。起動前にhost ledgerへtemporary prompt ids・Merkle tree・証拠bufferの上限を予約し、guardをworker終了まで保持する。メモリ不足は追及を終了する理由にせず、次tickへ待たせる。root memoは既存の8-entry bounded cacheを使う。これは直接証拠の局所的な予約であり、全node・最大modelのRAM測定の完成を意味しない。
+
+| 検証 | 結果と範囲 |
+| --- | --- |
+| `cargo test -p kaspad --lib lg14b_ --locked` | **9 V-fold＋2 V-unit PASS**。新V-unitは65,536／2,097,152 context（8,191／262,143 prompt ids）のshape-correctなsynthetic bindingで、他anchorのprompt rootだけをrelabelした入力をPromptNotAnchoredへ変換する。honest input・別execution rootを告発せず、kind-4のheavy chargeがprefillを保持する。新V-foldは同じcontext幅のheld fixtureを実v7 header anchorでacceptし、全3 Panel seatのValid後、Final前後でpublic bindingからactual objective foldがCourtFraudへconvictしproducerをchargeする。delta apply/revertとcarriage reloadも従来fixtureで検査する |
+| `cargo test -p kaspad --lib palw_fraud_filer::tests --locked` | **10 V-unit PASS**。三root、partial history、backfill、cache、boundsとservice wiring回帰 |
+| `cargo test -p kaspad --lib reporter_filer::tests --locked` | **21 V-unit PASS**。既存reporter doorのcommit/file/reveal、gate、deadline、dedup回帰 |
+
+[LG14-B / large-prompt結果](evidence/large-prompt-legacy-final.log)、[filer回帰](evidence/large-prompt-filer-final.log)、[reporter回帰](evidence/large-prompt-reporter-final.log)。default feature、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で実行した。初回fold fixtureにFlatネットワーク上のnon-held profileを使ったため、courtがMerkle prompt証明を正しく拒否した。fold fixtureだけ既存held profileを用いる形へ修正した。prompt formのconsensus規則は変えていない。
+
+synthetic bindingのtree rootはfixtureのcommitmentであり、最大profileの実modelを実行した試験ではない。class admissionは既存test fixtureで、通常のproduction eligibilityではない。公開eventをtestへ渡すV-foldであって、fresh-nodeのpaged read→service tick→reporter commit/file/reveal→mempool/template→blockのV-nodeではない。この変更で大型promptの直接証拠生成は接続したが、free-prompt startup、checkpoint/traceの残る局所化、全family／最大profile、post-retirement discovery、reorgによるown replayのjob変更、累積scope、予約枠飽和、恒久retentionと期限内包含は引き続き完成条件である。consensus encoding・activation height・ADR-0177は変更していない。

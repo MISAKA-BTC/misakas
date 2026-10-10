@@ -15,6 +15,8 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 
 Today **no fence is armable**. Integration continues; no new fence for rewards, consensus weight or Panel=0 is armed.
 
+**Codex G14 input-proof update:** the common legacy filer now generates `PromptNotAnchored Whole` from a public authenticated binding and the recorded anchor for canonical prompts past 4,096 ids. Direct-proof hashing runs on a blocking worker under a host-memory reservation; the existing heavy gate and rent remain in force. Synthetic 65k/2M-context input checks and actual attribution after all Panel seats signed Valid, before/after Final, pass (LG14-B: 9 V-fold + 2 V-unit). This is not maximum-model execution, normal production eligibility or fresh-node service/mempool completion. See the [audit record](../../audit/g14-review-2026-10-10/implementation.md).
+
 ## 1. Fences
 
 | Fence (RFC) | Today | Blockers | Owner / next step |

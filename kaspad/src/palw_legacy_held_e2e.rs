@@ -1157,6 +1157,161 @@ async fn lg14b_public_tiled_tokens_prove_output_mismatch_and_refuse_an_honest_or
     assert!(palw_fraud_filer_public_filing_v1(&target, rules, &answer, None).is_err());
 }
 
+/// A shape-correct synthetic execution commitment, used only to exercise objective input attribution.
+fn public_prompt_binding(
+    profile: &PalwShapeProfileV3,
+    anchor: Hash64,
+    prompt_anchor: Hash64,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> PalwStepBindingV2 {
+    use kaspa_consensus_core::palw_attempt_rules_v1::{
+        palw_attempt_canonical_v1, palw_attempt_context_v1, palw_attempt_prompt_root_v1, palw_canonical_checkpoint_profile_v1,
+        palw_int_activation_leg_root_v1,
+    };
+    let canonical = palw_attempt_canonical_v1(profile, false).expect("model canonical job");
+    let prompt_root = palw_attempt_prompt_root_v1(&profile, &prompt_anchor, canonical.0, form).expect("public prompt root");
+    let ctx = palw_attempt_context_v1(&profile, &anchor, canonical, prompt_root);
+    let checkpoint_profile = palw_canonical_checkpoint_profile_v1(&profile);
+    let checkpoint_count =
+        kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1(&profile, &ctx, checkpoint_profile.checkpoint_interval);
+    let mut binding = PalwStepBindingV2 {
+        version: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
+        state_chunk_map_id: profile.state_chunk_map_id,
+        shape_profile: profile.clone(),
+        checkpoint_profile,
+        activation_leg_root: palw_int_activation_leg_root_v1(&ctx),
+        step_leaf_count: kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &ctx, 1 << 40).expect("count"),
+        step_merkle_root: h64(0x1302),
+        checkpoint_count,
+        checkpoint_merkle_root: if checkpoint_count == 0 {
+            kaspa_consensus_core::palw_step_leg::checkpoint_empty_root_v2(&ctx.context_hash())
+        } else {
+            h64(0x1303)
+        },
+        full_logits_trace_root: h64(0x1304),
+        job_context: ctx,
+        committed_execution_root: Hash64::default(),
+    };
+    binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&binding);
+    binding
+}
+
+/// The committed input is another anchor's prompt. Neither the prompt ids nor a producer capture are needed by this filer.
+/// Synthetic bindings at the maximum context test the input-proof route, not execution of a maximum-size model.
+#[tokio::test]
+async fn lg14b_public_binding_proves_large_prompt_relabel_and_refuses_honest_or_unbound_inputs() {
+    use crate::palw_panel::palw_fraud_filer::palw_fraud_filer_public_filing_v1;
+    use kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_canonical_v1;
+    use kaspa_consensus_core::palw_offence_attribution_v1::{
+        PalwClaimSourceKindV1, PalwExecutorRefutedEvidenceV1, PalwIdentityRulesV1, PalwOffenceTargetV1,
+    };
+    use kaspa_consensus_core::palw_offence_v1::{PalwPanelContradictionV1, PalwPromptProofV1};
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1;
+    let form = PalwPromptIdsFormV1::MerkleV1;
+    let anchor = h64(0x1300);
+    let rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: h64(1), da_signer_liability: true };
+    for n_ctx in [65_536, 2_097_152] {
+        let mut profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
+            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+        )
+        .expect("floor graph");
+        profile.n_ctx = n_ctx;
+        let canonical = palw_attempt_canonical_v1(&profile, false).expect("canonical job");
+        assert!(canonical.0 > 4096);
+        for wrong_prompt in [false, true] {
+            let prompt_anchor = if wrong_prompt { h64(0x1301) } else { anchor };
+            let binding = public_prompt_binding(&profile, anchor, prompt_anchor, form);
+            let mut target = PalwOffenceTargetV1 {
+                claim_id: h64(0x1305),
+                class_id: profile.shape_profile_id(),
+                artifact_root: h64(0x1306),
+                executor_bond: bond_key(PRODUCER),
+                execution_root: binding.committed_execution_root,
+                lane: Some(PalwClaimSourceKindV1::Attempt),
+                segment_count: None,
+                phase: None,
+                job_identity: anchor,
+                trace_root: binding.full_logits_trace_root,
+                output_root: h64(0x1307),
+            };
+            // A carrier with only an authenticated binding is sufficient; the invalid absence pin is never trusted as DA.
+            let answer =
+                crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::OutOfRange {
+                    binding: Box::new(binding),
+                }));
+            let filing = palw_fraud_filer_public_filing_v1(&target, rules, &answer, None).expect("bound input");
+            if wrong_prompt {
+                let filing = filing.expect("the canonical-context prompt relabel convicts");
+                let PalwConsensusObjectV2::ObjectiveOffence { kind, evidence, .. } = &filing.object else { panic!("kind 4") };
+                let decoded: PalwExecutorRefutedEvidenceV1 = borsh::from_slice(evidence).expect("input evidence");
+                assert!(matches!(
+                    decoded.contradiction,
+                    PalwPanelContradictionV1::PromptNotAnchored { proof: PalwPromptProofV1::Whole, .. }
+                ));
+                assert_eq!(
+                    kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_heavy_prompt_ids_v1(*kind, evidence, false),
+                    u64::from(canonical.0),
+                    "the proof retains its heavy gate charge"
+                );
+            } else {
+                assert!(filing.is_none(), "an honest input produces no proof, even with a malformed pin");
+            }
+            target.execution_root = h64(0xBAD);
+            assert!(palw_fraud_filer_public_filing_v1(&target, rules, &answer, None).is_err());
+        }
+    }
+}
+
+/// The same input proof passes actual attribution after all Panel seats licensed the claim, before and after Final.
+/// Class admission is the existing test fixture; this is a fold test, not maximum-profile execution or normal eligibility.
+#[tokio::test]
+async fn lg14b_large_prompt_relabel_convicts_after_colluding_valid_before_and_after_final() {
+    use crate::palw_panel::palw_fraud_filer::palw_fraud_filer_public_filing_v1;
+    use kaspa_consensus_core::palw_offence_attribution_v1::{PalwIdentityRulesV1, palw_offence_target_v1};
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1;
+    for n_ctx in [65_536, 2_097_152] {
+        let f = Fixture::new(false);
+        let mut profile = f.profile.clone();
+        profile.n_ctx = n_ctx;
+        let form = PalwPromptIdsFormV1::MerkleV1;
+        let anchor = h64(0x1310);
+        let binding = public_prompt_binding(&profile, anchor, h64(0x1311), form);
+        let d = Produced {
+            ctx: binding.job_context.clone(),
+            execution_root: binding.committed_execution_root,
+            trace_root: binding.full_logits_trace_root,
+            ..f.d
+        };
+        let canonical = public_prompt_binding(&profile, anchor, anchor, form).job_context;
+        let answer = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::OutOfRange {
+            binding: Box::new(binding),
+        }));
+        for after_final in [false, true] {
+            let (s, claim) = rc_licensed_at_header(&d, &canonical, &profile, f.root, Some(anchor));
+            let mut w = World { s, daa: 104, chain: Vec::new() };
+            if after_final {
+                for _ in 0..2_000 {
+                    if matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Final { .. }) {
+                        break;
+                    }
+                    w.quiet();
+                }
+                assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Final { .. }));
+            }
+            let target = palw_offence_target_v1(&w.s, &claim).expect("recorded header target");
+            let rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: h64(1), da_signer_liability: true };
+            let filing = palw_fraud_filer_public_filing_v1(&target, rules, &answer, None).expect("public proof").expect("wrong input");
+            let before = bonds_collateral(&w.s);
+            w.block(vec![filing.object]).expect("objective input conviction");
+            assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+            assert!(bonds_collateral(&w.s).0 < before.0);
+            assert_eq!(bonds_collateral(&w.s).1, before.1);
+        }
+    }
+}
+
 /// The outsider's tag 159 at the located leaf: built from its own replica and the public frontiers, asked of the court's own verdict
 /// locally, then folded.
 fn file_the_recompute(w: &mut World, f: &Fixture, liar: &Produced, o: &Outsider, located: &Located, claim: Hash64) {
