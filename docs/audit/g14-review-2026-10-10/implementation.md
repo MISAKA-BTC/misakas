@@ -719,3 +719,32 @@ input非応答caseは正しいbindingを実PQ mempool・templateへ包含し、u
 [初回build](evidence/pruned-fp-input-build-initial.log)、[修正後build](evidence/pruned-fp-input-build-repair.log)、[通常binary check](evidence/pruned-fp-input-binary-initial.log)、[初回binary SHA-256](evidence/pruned-fp-input-binary-initial.sha256)、[修正後binary SHA-256](evidence/pruned-fp-input-binary-repair.sha256)、[filer/input](evidence/pruned-fp-input-filer-initial.log)、[honest case初回失敗](evidence/pruned-fp-input-honest-initial.log)、[honest case修正後](evidence/pruned-fp-input-honest-repair.log)、[input非応答](evidence/pruned-fp-input-withheld-initial.log)、[identity回帰](evidence/pruned-fp-input-identity-initial.log)、[稼働中sample](evidence/pruned-fp-input-withheld-sample.txt)。
 
 保存前のFP job本体をbindingなしで要求する経路は現在のtag 156／Event／Held再取得に存在せず、別の認証済みjob-body bootstrap又はmigration設計が必要である。今回その経路を実装したとはしない。最大input・34 sessionsの適合、pre-replay ticket／contextが取得不能なjobの直接証明、全family、initial/prefix-state、cumulative scope／hiding、deadline/inclusionとrestart／reorg／network pruned importは引き続き未達。登録モデル保有のADR-0177 D7とfull G14 objectiveを維持する。
+
+## 再計算前のユーザーinput bootstrap（2026-10-11）
+
+従来のユーザーinput bootstrapは、backendのceiling context導出とfull-seat replay ticketの確保後にしか作られなかった。そのため、認証済みjob本体があってもcontextや大きいticketを取得できないと、binding／PromptIdsの公開義務とdirect job proofへ進めない。LG14-B fence内のuser inputもcanonicalと同様、先に小さいinput ticketで保持するよう修正した。missing inputはcontext導出前にPendingで返し、既存public courtへ進める。context／full ticketが後で失敗してもbootstrapは保持し、bindingがなければ公開要求する。inputが揃っていることだけでbinding要求を止めず、binding取得後に余分なPromptIds要求を出さない。
+
+通常のPublicDA ids、又は公開FPM1／FPC1／FPA1のexact job prefixとhash-bound idsだけを認証する。pruned PublicDA payloadが空の場合も、PanelDAと同じ公開prefixの再公開を利用できる。input count／wire length／tail lengthを先に検査し、1候補ずつinput bytesだけをコピーして、hash／Merkle検査をblocking workerで実行する。capture／answer tailはwire lengthを確認するだけで、コピー・deserialize・実行しない。不正jobや不正inputのprefixは採用せず、後続の正しい候補を検査する。小さいticketはworkerの完了までcaseが保持し、full replay ticketが取れた後だけ再計算用のコピーへ進む。既に完全な公開inputがある初回の準備は、実worker起動前にbootstrapを外すため、通常のHonest claimに不要な予約を作らない。
+
+前節のrelease aloneではHonest／最終Unjudgedを区別できないため、test-onlyのbounded read-only observerで実workerのHonest判定を記録し、pruned honest fixtureで直接assertする。判定・root・実行結果を注入するcallbackではなく、productionではfieldも記録処理も存在しない。通常PublicDA inputが揃うHonest caseも、LG14-A/Bをtest-armしたfresh verifierで独立replayし、対象の予約／deposit record／署名付きReserve carrierが作られないことを確認するfixtureを追加した。
+
+unitの初回は22 PASS・1 FAIL。binding要求のfixtureがDA要求を認めないProvisional phaseを使っていたためで、ReceiptLicensedへ修正した。production sourceは変えていない。修正後の最終fixtureを含むbinaryでfiler/input **23 PASS（2.91 s）**。新規unitはFlat／Merkle・PublicDA／PanelDA prefix認証、opaque capture tailを読まずwrong prefixを飛ばす検査、完全inputでもbindingが必要なbootstrap、Honest／host retry／最終Unjudgedの予約解放とjob変更によるinvalidatingを扱う。通常node binary checkも **PASS（7.10 s）**。
+
+実serviceのpruned honest caseは **1 PASS（289.21 s、DAA 1132）**。不正carrierを包含してもinput義務を回答済みにせず、その後に正しいchunkを取得し、実workerの3 root一致判定をobserverからassertして署名付きreleaseまで到達した。pruned input非応答も **1 PASS（611.36 s、DAA 2280）**。正しいbinding回答の後のPromptIds非応答からproducer DA default／正の徴収へ到達した。両caseはunit phase修正と通常Honest fixture追加前のbinaryで、production codeとHonest observerは同一である。
+
+最終fixtureの通常PublicDA honest caseは **1 PASS（377.60 s、DAA 1044）**。実workerのHonest判定をobserverから読み、対象のlive／closed予約recordも署名付きReserve carrierも作られていないことをassertした。同じbinaryでpruned foreign-job回帰も **1 PASS（391.31 s、DAA 1257）**。producer collateralは `93906321001040 → 93906210966308`、全5 Valid signerの正の徴収・外部verifierのcommit/reveal、予約解放、正常exit/joinとcallback owner解放まで確認した。kind-4追加額0は既にkind-3がproducerを徴収したためで、二重徴収を要求しない。
+
+| 今回のpre-replay input修正 | 結果 |
+| --- | --- |
+| 最終filer/input unit | 23 PASS、2.91 s |
+| pruned honest input／実worker判定／署名付きrelease | 1 PASS、289.21 s |
+| 正しいbinding後のpruned input非応答／producer DA default | 1 PASS、611.36 s |
+| 通常PublicDA input／Honest／対象予約なし | 1 PASS、377.60 s |
+| pruned foreign-job／producerと全5 Valid signerの徴収・reveal | 1 PASS、391.31 s |
+| 通常node binary check | PASS、7.10 s |
+
+今回 **27 unique PASS**。前節の23件・124件と重複加算しない。default feature（EVMを含む）のnode test libraryを `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`、private targetでbuildした。fixture内のinert EVM、skip PoW、鍵／premineと休眠fenceのtest-armは前節どおりで、court期限・bond成熟・料金・担保・通常family／graph登録を緩和しない。初回22 PASS／1 FAILを最終成功へ読み替えず、binary hashをfixture変更ごとに保存した。
+
+[初回build](evidence/pre-replay-input-build.log)、[unit phase修正build](evidence/pre-replay-input-build-phase-fix.log)、[最終fixture build](evidence/pre-replay-input-build-final.log)、[通常binary check](evidence/pre-replay-input-binary.log)、[初回unit失敗](evidence/pre-replay-input-filer-before-phase-fix.log)、[最終unit](evidence/pre-replay-input-filer-final.log)、[pruned honest](evidence/pre-replay-input-honest.log)、[pruned input非応答](evidence/pre-replay-input-withheld.log)、[通常PublicDA honest](evidence/pre-replay-input-public-honest.log)、[pruned identity](evidence/pre-replay-input-identity.log)、[pruned honest／非応答のbinary hash](evidence/pre-replay-input-test-before-phase-fix.sha256)、[unit phase修正後のhash](evidence/pre-replay-input-test-before-honest-public-fixture.sha256)、[最終fixtureのhash](evidence/pre-replay-input-test-final.sha256)。
+
+wire／rooted state／activation／shipping pinは変更していない。今回shipping harvestは再実行せず、前節の361 pinは以前のsourceの検証として保持する。context取得不能やfull ticket拒否でもbootstrapを保持する分岐はcodeとunit policyで確認したが、その資源条件を実serviceへ加えた試験はまだない。未解決はpre-fence永久消失jobの取得、最大inputの全chunk／session／carrier予算、initial/prefix-state、全familyの通常入口と算術・output・stateの終局、scope／hiding、最大負荷・包含期限、restart／reorg／network pruned import。input非応答はproducer DA defaultの検証で、全Panelの金銭制裁や全G14の完成を立証しない。ADR-0177 D7の登録モデル保有前提を維持する。

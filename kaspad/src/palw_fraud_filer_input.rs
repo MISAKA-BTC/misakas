@@ -107,12 +107,7 @@ pub(in crate::palw_panel) fn palw_fraud_filer_fp_payload_v1(
 
 /// Read just the authenticated input prefix of a public FPM1/FPC1/FPA1. A capture/answer tail is checked for wire length but
 /// never deserialized, copied, or believed; the verifier executes its own model instead.
-fn public_material_input(
-    bytes: &[u8],
-    job_wire: &[u8],
-    job: &PalwFreePromptJobV3,
-    form: PalwPromptIdsFormV1,
-) -> Option<PalwFpMaterialV1> {
+fn public_material_input_wire<'a>(bytes: &'a [u8], job_wire: &[u8], job: &PalwFreePromptJobV3) -> Option<&'a [u8]> {
     let (body, width) = if let Some(body) = bytes.strip_prefix(&PALW_FP_MATERIAL_V1_MAGIC) {
         (body, 0usize)
     } else if let Some(body) = bytes.strip_prefix(&PALW_FP_CAPTURE_V1_MAGIC) {
@@ -141,9 +136,82 @@ fn public_material_input(
             return None;
         }
     }
+    // Return only the authenticated input prefix. Callers may copy it to a worker without
+    // ever copying/deserializing the producer's capture or answer tail.
+    Some(ids_wire)
+}
+
+fn public_material_input(
+    bytes: &[u8],
+    job_wire: &[u8],
+    job: &PalwFreePromptJobV3,
+    form: PalwPromptIdsFormV1,
+) -> Option<PalwFpMaterialV1> {
+    let ids_wire = public_material_input_wire(bytes, job_wire, job)?;
     let ids: Vec<u32> = ids_wire.chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
     palw_fp_prompt_ids_admit_v1(job, &ids, form).ok()?;
     Some(PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: ids })
+}
+
+/// Pure user-input authentication: no backend context, execution or producer capture is needed.
+fn public_user_input(
+    payload: &PalwFpCommitmentTxPayloadV3,
+    form: PalwPromptIdsFormV1,
+    public_material: &[Vec<u8>],
+) -> Result<Vec<u32>, String> {
+    let job = &payload.commitment.job;
+    if job.prompt_mode != PALW_FP_PROMPT_MODE_USER || !matches!(job.privacy_mode, PALW_FP_PRIVACY_PUBLIC_DA | PALW_FP_PRIVACY_PANEL_DA)
+    {
+        return Err("unsupported FP user input mode".into());
+    }
+    let ids = if job.privacy_mode == PALW_FP_PRIVACY_PUBLIC_DA && !payload.prompt_token_ids.is_empty() {
+        palw_fp_prompt_ids_admit_v1(job, &payload.prompt_token_ids, form).map_err(|e| format!("public FP input: {e}"))?;
+        payload.prompt_token_ids.clone()
+    } else {
+        // A pruned PublicDA payload has no ids. It can use exactly the same hash-bound
+        // public input prefix as PanelDA, rather than ignoring a valid republication.
+        let job_wire = borsh::to_vec(job).map_err(|e| format!("public FP job encoding: {e}"))?;
+        public_material
+            .iter()
+            .find_map(|bytes| public_material_input(bytes, &job_wire, job, form).map(|m| m.prompt_token_ids))
+            .ok_or("the FP job's authenticated public input is not available yet")?
+    };
+    Ok(ids)
+}
+
+/// Read under the caller's small input ticket before requesting a full replay reservation.
+/// Only one candidate input is copied at a time; foreign tails never enter this worker.
+pub(in crate::palw_panel) async fn palw_fraud_filer_read_user_input_v1(
+    payload: Arc<PalwFpCommitmentTxPayloadV3>,
+    form: PalwPromptIdsFormV1,
+    public_material: &[Vec<u8>],
+) -> Result<Vec<u32>, String> {
+    let job = &payload.commitment.job;
+    if job.prompt_mode != PALW_FP_PROMPT_MODE_USER || !matches!(job.privacy_mode, PALW_FP_PRIVACY_PUBLIC_DA | PALW_FP_PRIVACY_PANEL_DA)
+    {
+        return Err("unsupported FP user input mode".into());
+    }
+    if job.privacy_mode == PALW_FP_PRIVACY_PUBLIC_DA && !payload.prompt_token_ids.is_empty() {
+        return tokio::task::spawn_blocking(move || public_user_input(&payload, form, &[]))
+            .await
+            .map_err(|e| format!("public FP input worker: {e}"))?;
+    }
+    let job_wire = borsh::to_vec(job).map_err(|e| format!("public FP job encoding: {e}"))?;
+    for material in public_material {
+        let Some(wire) = public_material_input_wire(material, &job_wire, job) else { continue };
+        let ids_wire = wire.to_vec();
+        let job = job.clone();
+        let ids = tokio::task::spawn_blocking(move || {
+            let ids: Vec<u32> = ids_wire.chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
+            palw_fp_prompt_ids_admit_v1(&job, &ids, form).map(|()| ids)
+        })
+        .await
+        .map_err(|e| format!("public FP input worker: {e}"))?;
+        if let Ok(ids) = ids {
+            return Ok(ids);
+        }
+    }
+    Err("the FP job's authenticated public input is not available yet".into())
 }
 
 #[derive(Debug)]
@@ -174,14 +242,9 @@ pub(in crate::palw_panel) fn palw_fraud_filer_fp_input_v1(
         ids.into_iter()
             .map(|id| u32::try_from(id).map_err(|_| "a canonical FP id is past u32".to_string()))
             .collect::<Result<Vec<_>, _>>()?
-    } else if job.privacy_mode == PALW_FP_PRIVACY_PUBLIC_DA {
-        payload.prompt_token_ids.clone()
     } else {
-        let job_wire = borsh::to_vec(job).map_err(|e| format!("public FP job encoding: {e}"))?;
-        public_material
-            .iter()
-            .find_map(|bytes| public_material_input(bytes, &job_wire, job, form).map(|m| m.prompt_token_ids))
-            .ok_or("the FP job's authenticated public input is not available yet")?
+        return public_user_input(payload, form, public_material)
+            .map(|prompt_ids| PalwFraudFilerFpInputV1 { job: job.clone(), prompt_ids });
     };
     palw_fp_prompt_ids_admit_v1(job, &ids, form).map_err(|e| format!("public FP input: {e}"))?;
     Ok(PalwFraudFilerFpInputV1 { job: job.clone(), prompt_ids: ids })
@@ -483,6 +546,46 @@ pub(in crate::palw_panel) mod tests {
         );
         payload.commitment.job.privacy_mode = 255;
         assert!(palw_fraud_filer_fp_input_v1(&backend, &payload, form, &[]).is_err());
+    }
+
+    #[tokio::test]
+    async fn user_input_republication_needs_no_backend_or_capture_and_skips_false_prefixes() {
+        for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
+            for privacy in [PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PRIVACY_PANEL_DA] {
+                let mut p = payload();
+                let ids = std::mem::take(&mut p.prompt_token_ids);
+                p.commitment.job.privacy_mode = privacy;
+                p.commitment.job.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &ids).unwrap();
+                let p = Arc::new(p);
+                assert!(palw_fraud_filer_read_user_input_v1(p.clone(), form, &[]).await.is_err());
+                let material = PalwFpMaterialV1 { job: p.commitment.job.clone(), prompt_token_ids: ids.clone() };
+                let mut capture = PALW_FP_CAPTURE_V1_MAGIC.to_vec();
+                capture.extend(borsh::to_vec(&material).unwrap());
+                capture.extend(65536u32.to_le_bytes());
+                capture.extend(vec![0xFF; 65536]); // Deliberately not a decodable capture.
+                assert_eq!(
+                    public_material_input_wire(&capture, &borsh::to_vec(&material.job).unwrap(), &material.job).unwrap().len(),
+                    ids.len() * 4,
+                    "the tail is never copied to the hashing worker"
+                );
+                let mut wrong_job = material.clone();
+                wrong_job.job.job_nonce[0] ^= 1;
+                let mut wrong_ids = material.clone();
+                wrong_ids.prompt_token_ids[0] ^= 1;
+                let encode = |m: &PalwFpMaterialV1| {
+                    let mut bytes = PALW_FP_MATERIAL_V1_MAGIC.to_vec();
+                    bytes.extend(borsh::to_vec(m).unwrap());
+                    bytes
+                };
+                assert!(
+                    palw_fraud_filer_read_user_input_v1(p.clone(), form, &[encode(&wrong_job), encode(&wrong_ids)]).await.is_err()
+                );
+                assert_eq!(
+                    palw_fraud_filer_read_user_input_v1(p, form, &[encode(&wrong_job), encode(&wrong_ids), capture]).await.unwrap(),
+                    ids
+                );
+            }
+        }
     }
 
     #[test]

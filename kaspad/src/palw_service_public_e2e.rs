@@ -531,6 +531,11 @@ async fn fresh_public_bond_service_defaults_when_pruned_fp_input_is_withheld() {
     fresh_public_service(PublicCase::PrunedWithheldFpV3Input).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_replays_public_fp_input_without_opening_a_dispute() {
+    fresh_public_service(PublicCase::HonestFpV3Job).await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublicCase {
     Withholding,
@@ -540,6 +545,7 @@ enum PublicCase {
     PrunedForeignFpV3Job,
     PrunedHonestFpV3Job,
     PrunedWithheldFpV3Input,
+    HonestFpV3Job,
 }
 
 impl PublicCase {
@@ -649,7 +655,8 @@ fn public_fp_job(
 
 async fn fresh_public_service(case: PublicCase) {
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
-    let (config, bundle, premine, mut floats) = fixture_config(case == PublicCase::ForeignFpJob, case.pruned_fp());
+    let (config, bundle, premine, mut floats) =
+        fixture_config(case == PublicCase::ForeignFpJob, case.pruned_fp() || case == PublicCase::HonestFpV3Job);
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
     if case.is_fp() {
@@ -1000,6 +1007,28 @@ async fn fresh_public_service(case: PublicCase) {
             );
             next_da_progress = chain.daa() + 100;
         }
+        if case == PublicCase::HonestFpV3Job {
+            assert!(!view.executor_refuted && !view.court_convicted && !view.da_defaulted);
+            assert!(
+                !view.record.as_ref().is_some_and(|record| record.knows(&bond)),
+                "an already public complete input must not consume this verifier's reservation/deposit budget"
+            );
+            if service.fraud_filer_honest_replays.lock().unwrap().contains(&claim) {
+                assert!(
+                    !chain.history[service_start..]
+                        .iter()
+                        .flat_map(|b| b.transactions.iter())
+                        .filter_map(|tx| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload).ok())
+                        .any(|payload| matches!(payload.object, PalwConsensusObjectV2::DisputeReservedV1 { reservation, .. }
+                        if reservation.claim == claim && reservation.reserver == bond))
+                );
+                eprintln!(
+                    "[service-public] complete public FP input independently replayed Honest without any target reservation at DAA {}",
+                    chain.daa()
+                );
+                break;
+            }
+        }
         reserved |= view.record.as_ref().is_some_and(|r| r.live.contains_key(&bond));
         demanded |= view.sessions.iter().any(|(accuser, _)| *accuser == bond);
         if demanded
@@ -1244,6 +1273,10 @@ async fn fresh_public_service(case: PublicCase) {
             assert!(!honest.executor_refuted && !honest.court_convicted && !honest.da_defaulted);
             if honest.record.as_ref().is_some_and(|record| record.closed.contains(&bond)) {
                 assert!(!input_chunks.is_empty(), "the full input was reacquired through real public carriers");
+                assert!(
+                    service.fraud_filer_honest_replays.lock().unwrap().contains(&claim),
+                    "release alone is insufficient: the real replay worker must have judged the three roots Honest"
+                );
                 assert!(honest.record.as_ref().unwrap().live.get(&bond).is_none());
                 let carriers: Vec<_> = chain.history[service_start..]
                     .iter()
@@ -1402,7 +1435,7 @@ async fn fresh_public_service(case: PublicCase) {
                 "objective outcome releases the public reservation"
             );
             eprintln!(
-                "[service-public] objective DA default at {} after {carried} mined service batches, no producer material",
+                "[service-public] objective DA default at {} after {carried} mined service batches, required producer material withheld",
                 chain.daa()
             );
             break;

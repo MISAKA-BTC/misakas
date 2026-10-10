@@ -841,7 +841,7 @@ pub(super) fn palw_fraud_filer_bootstrap_step_v1(
     let Some(input) = case.fp_bootstrap.as_ref() else {
         return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait);
     };
-    if input.ready()
+    if (input.ready() && case.binding.is_some())
         || (case.binding.is_some()
             && input.payload.commitment.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL)
     {
@@ -1235,6 +1235,14 @@ impl PalwPanelService {
                     run.execution_root
                 ),
                 Some(PalwFraudFilerVerdictV1::Honest) => {
+                    #[cfg(test)]
+                    {
+                        let mut observed = self.fraud_filer_honest_replays.lock().unwrap();
+                        if observed.len() >= PALW_FRAUD_FILER_MAX_CASES_V1 {
+                            observed.clear();
+                        }
+                        observed.insert(claim);
+                    }
                     debug!("[{PALW_PANEL}] claim {claim}: the fraud filer's replay reproduces the claim — honest, nothing filed")
                 }
                 Some(PalwFraudFilerVerdictV1::Unjudged(why)) => {
@@ -1792,6 +1800,7 @@ impl PalwPanelService {
         };
         let prompt_form = self.class_prompt_ids_form(job.class_id);
         // The transaction and recorded claim authenticate the FP job. Missing history/input remains pending and spends no run.
+        let mut prepared_only = false;
         let (ctx, mut prompt, fp_payload) = if job.free_prompt {
             let snapshot = candidate.clone();
             let payload = if let Some(input) = book.cases.get(&claim).and_then(|c| c.fp_bootstrap.as_ref()) {
@@ -1809,18 +1818,49 @@ impl PalwPanelService {
                     return;
                 }
             };
-            if payload.commitment.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
+            let fp_job = &payload.commitment.job;
+            let canonical = fp_job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL;
+            let user = fp_job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER;
+            if ((canonical
                 && matches!(
-                    payload.commitment.job.version,
+                    fp_job.version,
                     kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION
                         | kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION
-                )
+                ))
+                || user)
                 && self.consensus_config.params.palw_legacy_held_da_v2_active_at(current_daa)
-                && !self.fraud_filer_hold_fp_input_v1(book, claim, payload.clone(), prompt_form)
             {
-                book.cases.get_mut(&claim).expect("held above").input_retry_at =
-                    current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
-                return;
+                let held = book.cases.get(&claim).is_some_and(|case| case.fp_bootstrap.is_some());
+                if !self.fraud_filer_hold_fp_input_v1(book, claim, payload.clone(), prompt_form) {
+                    book.cases.get_mut(&claim).expect("held above").input_retry_at =
+                        current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+                    return;
+                }
+                // Missing user input must reach the public court BEFORE context derivation or
+                // a full replay ticket can fail. Authentication holds only the input ticket;
+                // the worker hashes one public prefix, never a producer capture, off the loop.
+                if user {
+                    let input = book.cases.get(&claim).and_then(|case| case.fp_bootstrap.as_ref()).expect("held above");
+                    if !input.ready() {
+                        match input::palw_fraud_filer_read_user_input_v1(input.payload.clone(), prompt_form, public_material).await {
+                            Ok(ids) => {
+                                book.cases.get_mut(&claim).expect("held above").fp_bootstrap.as_mut().expect("held above").ids = ids
+                            }
+                            Err(why) => {
+                                book.cases.get_mut(&claim).expect("held above").input_retry_at =
+                                    current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+                                debug!(
+                                    "[{PALW_PANEL}] claim {claim}: the fraud filer's authenticated public FP input waits before replay: {why}"
+                                );
+                                return;
+                            }
+                        }
+                    }
+                    // A fresh complete public input should not open an unnecessary reservation
+                    // while the ordinary replay runs. An existing court bootstrap stays held
+                    // until its replay verdict releases or prosecutes its live reservation.
+                    prepared_only = !held;
+                }
             }
             // Budget the declared ceiling, even if the producer claims an early stop. Only the verifier's run decides its context.
             let Some(ctx) = backend.fp_job_context_v1(&payload.commitment.job) else {
@@ -1865,13 +1905,12 @@ impl PalwPanelService {
                     return;
                 }
             };
-        // Hold the full replay reservation before deriving/copying/authenticating FP input, including the Merkle-root temporary.
+        // Canonical derivation and replay input copies hold the full ticket. Acquired user ids
+        // were already authenticated under the small ticket, off the loop, or by the DA learner.
         let fp_job = if let Some(payload) = fp_payload {
             let acquired = book.cases.get(&claim).and_then(|c| c.fp_bootstrap.as_ref()).filter(|input| input.ready());
             let input_result = if let Some(input) = acquired {
-                kaspa_consensus_core::palw_freeprompt_v3::palw_fp_prompt_ids_admit_v1(&payload.commitment.job, &input.ids, prompt_form)
-                    .map(|()| input::PalwFraudFilerFpInputV1 { job: payload.commitment.job.clone(), prompt_ids: input.ids.clone() })
-                    .map_err(|e| e.to_string())
+                Ok(input::PalwFraudFilerFpInputV1 { job: payload.commitment.job.clone(), prompt_ids: input.ids.clone() })
             } else {
                 palw_fraud_filer_fp_input_v1(backend.as_ref(), &payload, prompt_form, public_material)
             };
@@ -1902,6 +1941,9 @@ impl PalwPanelService {
         } else {
             None
         };
+        if prepared_only {
+            book.cases.get_mut(&claim).expect("held above").fp_bootstrap = None;
+        }
         let Ok(prompt32) = prompt.iter().map(|id| u32::try_from(*id)).collect::<Result<Vec<u32>, _>>() else {
             return unjudged(book, "a prompt id past u32".into());
         };
@@ -2028,6 +2070,79 @@ pub(super) mod tests {
         book.refresh(vec![changed, b], 151);
         assert!(book.cases[&a.claim_id].fp_bootstrap.is_none());
         assert_eq!(book.next_replay_at(151), Some(a.claim_id));
+    }
+
+    #[test]
+    fn input_bootstrap_keeps_binding_proofs_reachable_even_when_all_input_is_public() {
+        let backend = crate::palw_panel::seat_s_tests::floor_backend();
+        let payload = Arc::new(input::tests::payload());
+        let job = &payload.commitment.job;
+        let executed =
+            backend.execute_free_prompt(job, &payload.prompt_token_ids.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();
+        let binding = misaka_palw_base0::produce::base0_material_decode_any_v1(&executed.outcome.material).unwrap().binding().clone();
+        let me = bond(1);
+        let mut case = PalwFraudFilerCaseV1::new(candidate(3, 300, false));
+        case.fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
+            payload: payload.clone(),
+            form: backend.prompt_ids_form(),
+            ids: payload.prompt_token_ids.clone(),
+            chunk: 0,
+            _reservation: None,
+        });
+        let mut v = view(3, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 300 });
+        let mut record = PalwDisputeClaimV1::default();
+        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 300, deposit: 1, sessions_opened: 0 });
+        v.record = Some(record);
+        let step = |case: &PalwFraudFilerCaseV1| {
+            palw_fraud_filer_bootstrap_step_v1(PalwFilerRoleV1::PublicBond, Some(&v), &me, true, case, |_| false)
+        };
+        assert_eq!(
+            step(&case),
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(PalwLegacyProbeV1::Binding { row: 0, tile: 0 })),
+            "a failed ceiling/context must still be able to obtain a binding for direct job proofs"
+        );
+        case.binding = Some(binding);
+        assert_eq!(
+            step(&case),
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait),
+            "available input must not cause redundant PromptIds obligations"
+        );
+    }
+
+    #[test]
+    fn bootstrap_verdicts_release_only_after_honesty_or_final_host_failure_and_reset_on_job_change() {
+        let c = candidate(3, 300, false);
+        for fail in [false, true] {
+            let mut book = PalwFraudFilerBookV1::default();
+            book.refresh(vec![c.clone()], 300);
+            book.cases.get_mut(&c.claim_id).unwrap().fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
+                payload: Arc::new(input::tests::payload()),
+                form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                ids: vec![],
+                chunk: 0,
+                _reservation: None,
+            });
+            if fail {
+                assert!(matches!(book.judge(c.claim_id, Err("host failure".into())), Some(PalwFraudFilerVerdictV1::Pending)));
+                assert!(!book.cases[&c.claim_id].release_pending);
+                assert!(book.cases[&c.claim_id].fp_bootstrap.is_some());
+                book.judge(c.claim_id, Err("host failure again".into()));
+                assert!(matches!(book.cases[&c.claim_id].verdict, PalwFraudFilerVerdictV1::Unjudged(_)));
+            } else {
+                book.judge(c.claim_id, Ok(run(c.job.execution_root, c.job.trace_root)));
+                assert!(matches!(book.cases[&c.claim_id].verdict, PalwFraudFilerVerdictV1::Honest));
+            }
+            assert!(book.cases[&c.claim_id].release_pending);
+            assert_eq!(book.pursued(), vec![c.claim_id]);
+            assert!(
+                book.cases[&c.claim_id].fp_bootstrap.is_none(),
+                "the input ticket is relinquished before releasing the chain reservation"
+            );
+            let mut new = c.clone();
+            new.job.accepted_block = Hash64::from_u64_word(999);
+            book.refresh(vec![new], 301);
+            assert!(!book.cases[&c.claim_id].release_pending, "old replay cannot release a different branch's reservation");
+        }
     }
 
     /// A run whose roots are `execution_root` / `trace_root`, opening no range (the tests never read one).

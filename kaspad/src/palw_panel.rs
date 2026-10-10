@@ -4048,6 +4048,9 @@ enum CaptureSamplesV1 {
 }
 
 pub struct PalwPanelService {
+    /// Read-only test observation of real completed replay verdicts; never drives the service.
+    #[cfg(test)]
+    fraud_filer_honest_replays: std::sync::Mutex<HashSet<Hash64>>,
     config: PalwPanelConfig,
     /// Loaded once, through the SDK — whichever lineage's container each file is. Same contract
     /// as the producer's: container-checked at load, matched against the CHAIN per duty.
@@ -4479,6 +4482,8 @@ impl PalwPanelService {
             None
         };
         Self {
+            #[cfg(test)]
+            fraud_filer_honest_replays: std::sync::Mutex::new(HashSet::new()),
             config,
             consensus_manager,
             flow_context,
