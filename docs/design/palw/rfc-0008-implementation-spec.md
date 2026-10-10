@@ -887,3 +887,30 @@ financial CLI envelopes are version 2 and the dashboard adds decimal-string fund
 A claim with no native row but unpaid additional funds is `exec_pending`, including after native retirement; operators keep it
 pending until all funds move. Forced native EXEC vesting is displayed below R-core+ as well. This observation change neither
 alters any consensus activation height nor changes historical op 199 field order or native monetary policy.
+
+### 15.4 Finite native dispute admission for composite work
+
+A native DA session or computation court cannot enlarge an EXEC dependency's frozen obligation by itself. While the root is
+retained, the session bound is the minimum of the admitted base `H_exec` (§14) and every prefix/slice claim's rooted
+`liability_until`. This differs intentionally from the reward/maturity reader's maximum. A longer-lived dependency cannot
+substitute for another executor's collateral or material. If only a retired root's unpaid receipt remains, its frozen horizon
+bounds admission; retirement already requires the inclusive dependency window to have spent.
+
+R-core+ DA admission requires `deadline + window_challenge_at(opened_daa) <= bound`, with checked arithmetic. This includes
+DA-5's post-session lock/vesting tail, rather than checking disclosure alone. The shared public admission reader and the fold
+use the same predicate. Legacy DA admission and both native court-opening paths require their whole session deadline to fit.
+DA re-keying checks again at Final before extending native vesting or signer locks. The network policy remains stable while
+roots are retained (§14.2); this is not authority to change outstanding commitments through a parameter transition.
+
+At the inclusive boundary a session can be accepted. One DAA beyond it is refused before accusation exposure/session writes;
+no kernel collateral, liability row, additional entitlement, or signed provider commitment is enlarged. Restore also checks
+open DA, legacy disputed phases and computation-court sessions against the same bound. Ordinary native work with no EXEC
+root/receipt retains its existing admission and saturation behavior. No wire field, state-root collection or activation height
+changes; this rule belongs to the dormant EXEC path.
+
+This restriction prevents the extension mismatch but does not establish WINDOW or economic security. Admission of the base
+consumer horizon itself still needs an explicit worker retention authorization, a sufficient signed provider TTL/public-material
+contract, and its capital/retention price before activation. Supporting a session beyond that horizon requires a separately
+specified, bounded authorization and funding transition covering every dependency and provider; there is currently no such
+transition. A larger native class court window is not that authorization. Public native post-Final conviction, the complete
+actor matrix, pruned material and worst-case resource/latency evidence remain separate acceptance requirements.

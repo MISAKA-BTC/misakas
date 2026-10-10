@@ -38,6 +38,71 @@ pub(super) fn horizon(
     Ok(Some(until))
 }
 
+/// Native disputes cannot unilaterally extend the consumer-frozen kernel obligation.
+/// Use the shortest dependency, not the reward reader's maximum: one longer-lived
+/// dependency cannot supply another executor's collateral or public material.
+pub(super) fn require_native_session_window(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    root_id: &Hash64,
+    required_until: u64,
+) -> Result<(), PalwStateV2Error> {
+    let root = state.exec_v2.roots.get(root_id);
+    let mut bound = match root {
+        Some(root) => match &state.kernel_route {
+            Some(kernel) => super::palw_kernel_route_fold_v1::exec_liability_floor_v1(
+                root.expiry_daa,
+                params.window_court(),
+                &kernel.header.policy,
+            )?,
+            None => {
+                root.expiry_daa.checked_add(params.window_court()).ok_or(PalwStateV2Error::Overflow("EXEC native session horizon"))?
+            }
+        },
+        None => match state.exec_v2_rewards.get(root_id) {
+            Some(receipt) => receipt.liability_until,
+            None => return Ok(()),
+        },
+    };
+    if let (Some(root), Some(kernel)) = (root, &state.kernel_route) {
+        let claims = std::iter::once(root.prefix_claim)
+            .chain(state.exec_v2.slices.range((*root_id, 0)..=(*root_id, u32::MAX)).map(|(_, row)| row.evidence_root));
+        for claim in claims {
+            let row: misaka_palw_kernel::ledger::ClaimRowV1 = kernel
+                .rows
+                .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, borsh::to_vec(&claim.as_bytes()).expect("a digest serializes")))
+                .and_then(|bytes| borsh::from_slice(bytes).ok())
+                .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("an EXEC session dependency is missing".into()))?;
+            bound = bound.min(row.liability_until.ok_or_else(|| {
+                PalwStateV2Error::CarriageInconsistent("an EXEC session dependency has no liability horizon".into())
+            })?);
+        }
+    }
+    if required_until > bound {
+        return Err(PalwStateV2Error::ExecV2Refused(format!(
+            "native session requires liability through {required_until}, beyond the EXEC bound {bound}"
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn require_native_da_window(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    root_id: &Hash64,
+    deadline: u64,
+    opened_daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    // Preserve ordinary native admission, including its saturation behavior.
+    if !state.exec_v2.roots.contains_key(root_id) && !state.exec_v2_rewards.contains_key(root_id) {
+        return Ok(());
+    }
+    let until = deadline
+        .checked_add(params.window_challenge_at(opened_daa))
+        .ok_or(PalwStateV2Error::Overflow("EXEC native DA liability horizon"))?;
+    require_native_session_window(state, params, root_id, until)
+}
+
 impl PalwChainStateV2 {
     /// A retired root's unpaid receipt still occupies its bounded execution slot.
     pub(super) fn exec_v2_retained_slots_v1(&self) -> usize {
@@ -442,6 +507,20 @@ pub(super) fn consistent(state: &PalwChainStateV2, params: &PalwStateParamsV2) -
     let bad = |why: &str| PalwStateV2Error::CarriageInconsistent(format!("EXEC reward vesting: {why}"));
     if state.exec_v2_retained_slots_v1() > crate::palw_work_slice_v2::PALW_EXEC_V2_MAX_OPEN_ROOTS {
         return Err(bad("too many roots"));
+    }
+    for ((id, _), session) in &state.da_sessions {
+        require_native_da_window(state, params, id, session.deadline_daa, session.opened_daa)?;
+    }
+    for session in state.court_sessions.values() {
+        require_native_session_window(state, params, &session.claim, session.deadline_daa)?;
+    }
+    for id in state.exec_v2.roots.keys().chain(state.exec_v2_rewards.keys()) {
+        if let Some(PalwClaimStateV2 { phase: PalwClaimPhaseV2::DefaultDisputed { accused_daa, .. }, .. }) = state.claims.get(id) {
+            let deadline = accused_daa
+                .checked_add(palw_da_disclose_window_daa_v1(params))
+                .ok_or(PalwStateV2Error::Overflow("EXEC native DA deadline"))?;
+            require_native_session_window(state, params, id, deadline)?;
+        }
     }
     let mut payees: BTreeMap<PalwBondKeyV2, BTreeSet<Hash64>> = BTreeMap::new();
     for (id, row) in &state.exec_v2_rewards {

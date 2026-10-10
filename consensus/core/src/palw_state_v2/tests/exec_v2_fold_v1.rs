@@ -2335,7 +2335,15 @@ mod amendment_1 {
     fn funded_final_with_delta(
         retirement: u64,
     ) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Vec<KernelSlice>, Prefix, PalwStateDeltaV2) {
-        let (p, mut s, claim, slices, pre) = session_with(1_000_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+        funded_final_with_params(xp(Some(0)), retirement)
+    }
+
+    fn funded_final_with_params(
+        params: PalwStateParamsV2,
+        retirement: u64,
+    ) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Vec<KernelSlice>, Prefix, PalwStateDeltaV2) {
+        let (p, mut s, claim, slices, pre) =
+            session_with_params(params, 1_000_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
         let p = p.with_claim_retirement_daa(retirement).unwrap();
         fund_jobs(&mut s, &pre, &slices, 1_000);
         let s = license(&p, &s, claim, 45, 111);
@@ -2345,6 +2353,94 @@ mod amendment_1 {
         assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Settled { .. }));
         assert!(s.exec_v2_reward_vesting_v1(&claim).unwrap().total_sompi_u128() > 4_000);
         (p, s, claim, slices, pre, delta.unwrap())
+    }
+
+    fn native_dispute_step(
+        s: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        daa: u64,
+        object: PalwConsensusObjectV2,
+    ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+        let (next, delta) =
+            apply_palw_transition_v2_with_extras(s, p, &ctx(10_000, daa, 10_000), &[object], None, true, false, false, true, &xx())?;
+        next.assert_internal_consistency(p).unwrap();
+        next.assert_deadline_consistency(p).unwrap();
+        assert_eq!(apply_delta_v2(s, &delta, p).unwrap().state_root(), next.state_root());
+        assert_eq!(revert_delta_v2(&next, &delta, p).unwrap().state_root(), s.state_root());
+        let carriage = PalwStateCarriageV2::from_state(&next);
+        assert_eq!(carriage.into_state(p, Some(next.state_root())).unwrap().state_root(), next.state_root());
+        Ok(next)
+    }
+
+    #[test]
+    fn exec_native_da_accepts_the_last_funded_window_and_refuses_one_daa_more() {
+        let params = xp(Some(0)).with_fp_exposure_ceiling(500).unwrap();
+        let (p, s, claim, _, _, _) = funded_final_with_params(params, 0);
+        let bound = super::palw_exec_v2_rewards_v1::horizon(&s, &p, &claim).unwrap().unwrap();
+        let now = bound - palw_da_disclose_window_daa_v1(&p) - p.window_challenge_at(bound);
+        let accused =
+            || PalwConsensusObjectV2::DefaultAccused { claim, missing_event_index: 0, accuser: bond_key(2), signature: vec![9; 8] };
+        let admission = palw_da_accusation_admissible_v2(&s, &p, &xx(), &claim, &bond_key(2), now).unwrap();
+        assert_eq!(admission.deadline_daa + p.window_challenge_at(now), bound);
+        let opened = native_dispute_step(&s, &p, now, accused()).unwrap();
+        assert_eq!(opened.da_sessions[&(claim, bond_key(2))].deadline_daa, admission.deadline_daa);
+        assert_eq!(opened.kernel_route.as_ref().unwrap().rows, s.kernel_route.as_ref().unwrap().rows);
+        assert_eq!(opened.exec_v2_rewards[&claim], s.exec_v2_rewards[&claim]);
+        assert_eq!(opened.claim(&claim).unwrap().trace_retention_daa, s.claim(&claim).unwrap().trace_retention_daa);
+        assert!(opened.pending_payouts_iter().next().is_none());
+        let before = s.state_root();
+        assert!(matches!(
+            palw_da_accusation_admissible_v2(&s, &p, &xx(), &claim, &bond_key(2), now + 1),
+            Err(PalwStateV2Error::ExecV2Refused(_))
+        ));
+        assert!(matches!(native_dispute_step(&s, &p, now + 1, accused()), Err(PalwStateV2Error::ExecV2Refused(_))));
+        assert_eq!(s.state_root(), before, "a refused accusation cannot change the parent");
+        let mut bad = opened.clone();
+        bad.da_sessions.get_mut(&(claim, bond_key(2))).unwrap().deadline_daa += 1;
+        assert!(matches!(super::palw_exec_v2_rewards_v1::consistent(&bad, &p), Err(PalwStateV2Error::ExecV2Refused(_))));
+        assert!(PalwStateCarriageV2::from_state(&bad).into_state(&p, None).is_err(), "restore refuses an overlong session");
+    }
+
+    #[test]
+    fn exec_native_session_cannot_borrow_another_dependency_longer_liability() {
+        let (p, mut s, claim, slices, _) = funded_final(0);
+        let until = s.exec_v2_rewards[&claim].liability_until;
+        let kernel = s.kernel_route.as_mut().unwrap();
+        let key = (TABLE_CLAIMS_V1, borsh::to_vec(&slices[0].covered.slice.evidence_root.as_bytes()).unwrap());
+        let mut row: ClaimRowV1 = borsh::from_slice(&kernel.rows[&key]).unwrap();
+        row.liability_until = Some(until - 1);
+        kernel.rows.insert(key, borsh::to_vec(&row).unwrap());
+        assert_eq!(super::palw_exec_v2_rewards_v1::horizon(&s, &p, &claim).unwrap(), Some(until));
+        assert!(matches!(
+            super::palw_exec_v2_rewards_v1::require_native_session_window(&s, &p, &claim, until),
+            Err(PalwStateV2Error::ExecV2Refused(_))
+        ));
+        assert!(super::palw_exec_v2_rewards_v1::require_native_session_window(&s, &p, &claim, until - 1).is_ok());
+    }
+
+    #[test]
+    fn exec_native_model_court_cannot_extend_past_the_frozen_kernel_window() {
+        let params = xp(Some(0)).with_fp_exposure_ceiling(500).unwrap();
+        let (p, s, claim, _, _) = session_with_params(params, 1_000_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+        let bound = super::palw_exec_v2_rewards_v1::horizon(&s, &p, &claim).unwrap().unwrap();
+        let c = s.claim(&claim).unwrap();
+        let court = court_open(claim, c.trace_root, c.bond, bond_key(20));
+        let mut exact = s.clone();
+        exact.class_court_windows.insert(c.class_id, bound - 130);
+        let opened = native_dispute_step(&exact, &p, 130, court.clone()).unwrap();
+        assert_eq!(opened.court_sessions.values().next().unwrap().deadline_daa, bound);
+        assert_eq!(opened.kernel_route.as_ref().unwrap().rows, exact.kernel_route.as_ref().unwrap().rows);
+        let mut late = exact.clone();
+        *late.class_court_windows.get_mut(&c.class_id).unwrap() += 1;
+        assert!(matches!(native_dispute_step(&late, &p, 130, court), Err(PalwStateV2Error::ExecV2Refused(_))));
+    }
+
+    #[test]
+    fn native_da_admission_without_exec_preserves_its_existing_retention_rule() {
+        let (p, s, claim) = world_with(xp(None).with_fp_exposure_ceiling(500).unwrap());
+        let now = 20_000;
+        assert!(palw_da_accusation_admissible_v2(&s, &p, &xx(), &claim, &bond_key(2), now).is_ok());
+        assert!(super::palw_exec_v2_rewards_v1::require_native_da_window(&s, &p, &claim, u64::MAX, u64::MAX).is_ok());
     }
 
     #[test]

@@ -17121,6 +17121,7 @@ impl PalwFoldReadV1<'_> {
         };
         let disclose = palw_da_disclose_window_daa_v1(self.params);
         let deadline_daa = now_daa.checked_add(disclose).ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?;
+        palw_exec_v2_rewards_v1::require_native_da_window(state, self.params, claim_id, deadline_daa, now_daa)?;
         if now_daa < claim.accepted_daa || deadline_daa > claim.trace_retention_daa {
             return Err(PalwStateV2Error::DaOutsideRetention {
                 claim: *claim_id,
@@ -21980,7 +21981,8 @@ impl<'a> TransitionBuilder<'a> {
     /// finds the row unmatured and every lock live. Only ever raises. (M3 applies the lock half
     /// before `Final` too: a seat-paused licensed claim can outlast the licence's lock window, and a
     /// default at the `Licensed` stage charges S4 on live locks.)
-    fn da_rekey_v1(&mut self, claim_id: Hash64, until: u64, now_daa: u64) {
+    fn da_rekey_v1(&mut self, claim_id: Hash64, until: u64, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        palw_exec_v2_rewards_v1::require_native_session_window(&self.state, self.params, &claim_id, until)?;
         if let Some(row) = self.state.vesting.get(&claim_id).cloned()
             && row.expiry_daa < until
         {
@@ -21999,6 +22001,7 @@ impl<'a> TransitionBuilder<'a> {
         for (key, lock) in stale {
             self.write_slashable_lock(key, Some(crate::palw_panel_var_v1::PalwSlashableLockV1 { expiry_daa: until, ..lock }));
         }
+        Ok(())
     }
 
     /// **Every open session on `claim_id` closes and returns its exposure** (a void, a conviction, a
@@ -28463,7 +28466,7 @@ impl<'a> TransitionBuilder<'a> {
         let open: Vec<u64> = self.state.da_sessions_of(&id).map(|(_, session)| session.deadline_daa).collect();
         for deadline in open {
             let until = deadline.saturating_add(self.params.window_challenge_at(final_daa));
-            self.da_rekey_v1(id, until, final_daa);
+            self.da_rekey_v1(id, until, final_daa)?;
         }
         // Below `palw_audit_2026_09_23` the second clock ticks here, as it always did — counted on
         // every network (a fact about the chain) and read by no rule there. Past the fence it
@@ -30761,6 +30764,7 @@ fn open_da_session_v2(
     // question: the producer was already allowed to delete what it is being asked to open.
     let disclose = palw_da_disclose_window_daa_v1(builder.params);
     let deadline_daa = ctx.daa_score.checked_add(disclose).ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?;
+    palw_exec_v2_rewards_v1::require_native_session_window(&builder.state, builder.params, &claim_id, deadline_daa)?;
     if ctx.daa_score < claim.accepted_daa || deadline_daa > claim.trace_retention_daa {
         return Err(PalwStateV2Error::DaOutsideRetention {
             claim: claim_id,
@@ -31082,7 +31086,7 @@ fn open_da_session_rcore_v1(
         builder.disarm_deadline(claim_id);
     }
     let until = admission.deadline_daa.saturating_add(builder.params.window_challenge_at(ctx.daa_score));
-    builder.da_rekey_v1(claim_id, until, ctx.daa_score);
+    builder.da_rekey_v1(claim_id, until, ctx.daa_score)?;
     Ok(())
 }
 
@@ -31728,6 +31732,7 @@ fn open_dissection_at_named_leaf_v1(
     let model_window = builder.state.class_model_court_window_v1(&claim.class_id);
     let session_window = model_window.unwrap_or_else(|| builder.params.window_court());
     let deadline_daa = ctx.daa_score.checked_add(session_window).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
+    palw_exec_v2_rewards_v1::require_native_session_window(&builder.state, builder.params, &claim_id, deadline_daa)?;
     if model_window.is_some() {
         // A model window may outrun the retention obligation the claim was accepted with (the obligation is
         // sized by the network window): the opening must lie inside retention, and the claim's retention is
@@ -36953,6 +36958,7 @@ fn apply_object(
             let model_window = builder.state.class_model_court_window_v1(&claim.class_id);
             let session_window = model_window.unwrap_or_else(|| builder.params.window_court());
             let deadline_daa = ctx.daa_score.checked_add(session_window).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
+            palw_exec_v2_rewards_v1::require_native_session_window(&builder.state, builder.params, claim_id, deadline_daa)?;
             // **Court-window bound (mainnet audit 2026-09-11 deep fence): a court's whole window must
             // fit inside the producer's retention obligation** — the rule the DA-accusation path
             // already enforces (`DaOutsideRetention`, SA-1/SA-6), mirrored onto the interactive court.
