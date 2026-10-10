@@ -345,24 +345,40 @@ fn round_draws_reserve_each_bonds_allocation_and_replay() {
     sim.finalize_all(&ids);
     let fork_at = sim.tape.len();
     let start = sim.c.daa;
+    let lane = sim.c.extras_at(start).round_lane;
+    println!(
+        "round lane at {start}: {lane:?}; pending snapshots {}; seed anchor {:?}",
+        sim.c.s.round_pending_snapshots().len(),
+        sim.c.s.round_seed_anchor().map(|a| a.span)
+    );
+    // Every schedule is checked when it is first seen (a span's schedule leaves once its Round settles).
+    let mut seen: BTreeMap<u64, u64> = BTreeMap::new();
+    let mut drawn = 0u64;
     for k in 0..120u64 {
         sim.block(start + 10 * (k + 1), vec![], Some((90 + (k % 2), 0x7_1000 + k)));
-    }
-    let mut drawn = 0u64;
-    for (span, schedule) in sim.c.s.round_schedules() {
-        let mut per: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
-        for q in &schedule.quanta {
-            *per.entry(q.bond).or_default() += 1;
-        }
-        for (bond, n) in per {
-            drawn += n;
-            assert!(n <= 5, "span {span}: bond's allocation {n} is within its 5 Round rights");
-            if let Some(row) = budget(&sim).claim_row(&palw_round_rights_row_id_v1(*span, &bond)) {
+        for (span, schedule) in sim.c.s.round_schedules() {
+            if seen.contains_key(span) {
+                continue;
+            }
+            let mut per: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+            for q in &schedule.quanta {
+                *per.entry(q.bond).or_default() += 1;
+            }
+            seen.insert(*span, schedule.quanta.len() as u64);
+            for (bond, n) in per {
+                drawn += n;
+                assert!(n <= 5, "span {span}: bond's allocation {n} is within its 5 Round rights");
+                let row = budget(&sim).claim_row(&palw_round_rights_row_id_v1(*span, &bond)).cloned();
+                let row = row.unwrap_or_else(|| panic!("span {span}: the allocation {n} is reserved in the bond's window"));
                 assert_eq!(row.reserved.round_rights, n, "span {span}: the allocation is what was reserved");
             }
         }
     }
-    println!("round draws on the real fold: {drawn} tickets allocated in the schedules still held");
+    println!(
+        "round draws on the real fold: {} schedules seeded, {drawn} tickets; pending snapshots left {}",
+        seen.len(),
+        sim.c.s.round_pending_snapshots().len()
+    );
     budget(&sim).check_consistency().expect("the engine's invariants");
     let tip = sim.c.s.clone();
     let off = sim.rewind_to(fork_at);
