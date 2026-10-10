@@ -433,7 +433,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // fold's past `palw_exec_payload_v2`; below it the walk drops the object by name, as the older build skips it.
         // [`validate_palw_lifecycle_tx`] holds the other half: where a ruleset does NOT tolerate undecodable payloads, tag 130 is
         // refused as undecodable, as the older build refuses it.
-        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } => Ok(()),
+        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } | PalwConsensusObjectV2::ExecOriginRecordedV1 { .. } => Ok(()),
         PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {
             crate::palw_vertex_v1::palw_vertex_shape_v1(vertex).map_err(|_| "a verification vertex is malformed (RFC-0007 Part I)")
         }
@@ -1305,7 +1305,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         // Lane BUDGET: a bond's capital assignment (140).
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
-        O::ExecWorkRootOpenedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
+        O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
     }
 }
 
@@ -1437,6 +1437,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (158, "LegacyHeldAnsweredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (159, "LegacyLeafRecomputedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (130, "ExecWorkRootOpenedV2", PalwLifecycleKindFenceV1::ExecPayloadV2),
+    (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
 
 /// **The owning fences' activations, resolved once from `Params`** (`Params::palw_lifecycle_kind_fences_v1`) and asked by every site
@@ -1710,7 +1711,9 @@ pub enum PalwInt12WireChangeV1 {
 pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     (
         "consensus/core/src/palw_vesting_v1.rs::PalwVestingNoteV1",
-        PalwInt12WireChangeV1::NotCarried("journal-only notes in stored deltas; existing tags are unchanged, appended EXEC notes require a dormant EXEC root"),
+        PalwInt12WireChangeV1::NotCarried(
+            "journal-only notes in stored deltas; existing tags are unchanged, appended EXEC notes require a dormant EXEC root",
+        ),
     ),
     ("consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2", PalwInt12WireChangeV1::ObjectEnum),
     (
@@ -4116,6 +4119,7 @@ pub(crate) mod tests {
             (158, 0x2d33651174652aca),
             (159, 0x0395636b651f74fa),
             (130, 0x5774ef35c9a3fdaa),
+            (131, 0xab59e37a222e6f74),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline

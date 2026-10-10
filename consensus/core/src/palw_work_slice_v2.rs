@@ -77,6 +77,29 @@ pub struct PalwExecOriginV1 {
     pub issued_daa: u64,
 }
 
+/// One legacy native clock proof fits the existing assembled-object carriage budget, including its tag/key/length.
+pub const PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1: usize = crate::palw_state_v2::PALW_OBJECT_CHUNK_SLOT_MASS as usize - 69;
+
+/// Self-authenticating provenance, not a new execution authorization: the full header must hash to the claim's carrying block.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, borsh::BorshSerialize)]
+pub struct PalwExecOriginWitnessV1 {
+    pub claim: Hash64,
+    pub header: Vec<u8>,
+}
+
+impl borsh::BorshDeserialize for PalwExecOriginWitnessV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let claim = Hash64::deserialize_reader(reader)?;
+        let len = u32::deserialize_reader(reader)? as usize;
+        if len > PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "EXEC origin header exceeds its carriage budget"));
+        }
+        let mut header = vec![0; len];
+        reader.read_exact(&mut header)?;
+        Ok(Self { claim, header })
+    }
+}
+
 /// Authenticated one-use history survives its native claim, without retaining collateral or material beyond signed terms.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwExecJobUseV1 {
@@ -271,6 +294,8 @@ pub enum PalwWorkRootRefusalV2 {
     AuthorizationOrigin,
     #[error("the REAL job has no recorded original authorization clock; legacy provenance migration is required")]
     AuthorizationUnrecorded,
+    #[error("the REAL claim already has a recorded original authorization clock")]
+    AuthorizationRecorded,
     #[error("the REAL job authorization has expired or its finite expiry overflows")]
     AuthorizationExpired,
     #[error("the work-slice lane is not in force at this height")]

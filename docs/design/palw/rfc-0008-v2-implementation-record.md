@@ -537,8 +537,28 @@ the finite profile using only recorded state, including after original-header de
 
 Unrecorded legacy claims cannot receive a clock from a late local lookup: new root opening
 explicitly refuses with `AuthorizationUnrecorded`. This is an interim fail-closed rule, not an
-approved permanent exclusion. Legacy provenance migration, real pruned P2P recovery, release
+approved permanent exclusion. The carried proof in §12.8 below provides a bounded explicit migration.
+Its historical coverage/availability, real pruned P2P recovery, release
 resource measurements and the finite profile's coverage of eligible DAG work remain open.
 An already opened root's authenticated F2 history continues to supply its original clock when
 F3 is absent. The native header-loss regression exercises signed root reader/fold and snapshot
 restore, with no DAG mining while the original header is absent; it is not an actual pruning drill.
+
+Spec §12.8 adds `ExecOriginRecordedV1` (tag 131), under the same dormant EXEC fence, to record a
+legacy native clock from an explicitly carried original header. The claim's immutable carrying
+hash, attempt id/class/bond and recorded attribution authenticate the proof; no new income,
+weight, authorization lease or signature permission is created. Existing origin rows cannot be
+overwritten, and an opened root's F2 history cannot be contradicted. This uses existing F3/table 8
+recovery. The ordinary fee-market carrier and generic ObjectChunk completion use the same owning
+fence/A2 semantics. The old live-kind wire pins are unchanged; tag 131 has its own new-kind pin.
+
+Proof length is bounded by the existing 1,600,000-byte assembled-object budget, including the
+69-byte tag/key/length. Parent vectors are checked against remaining bytes and canonical run
+structure before hashing; malformed Borsh parent runs refuse without a panic. Native capture
+uses that safe header decoder too. Core tests cover carried proof, chunks, rollback, no new
+native income/weight, immutable original expiry and rejected substitutions/history conflicts.
+Node tests use an actually admitted signed header in a dormant-native fold control, then exercise
+reader/fold migration from a legacy-shaped snapshot with the actual source header deleted.
+They retain the existing class/Panel and synthetic native-trace seams, and are not a historical
+activation or multi-process pruning/P2P drill. Oversized historical header coverage, availability
+before every original copy is pruned and worst expanded hash cost remain required gates.

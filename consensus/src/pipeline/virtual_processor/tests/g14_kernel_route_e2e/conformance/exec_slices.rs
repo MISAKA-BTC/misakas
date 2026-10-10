@@ -425,7 +425,36 @@ async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_abse
     let mut cw = active_world().await;
     exec_v2_test_admit_class_v1(cw.v2_class, 0);
     let class = cw.v2_class;
+    let before_real = cw.net.chain.tip_state().1;
     let real = real_attempt(&mut cw, ROOT_CARD, class, 0xA77E).await;
+    // Re-fold this actually admitted, signed header with EXEC dormant: native data is identical and the clock is absent.
+    // This is a dormant-native fold control, not a historical network activation or P2P drill.
+    {
+        let native = cw.net.chain.tip_state().1;
+        let row = native.claim(&real.claim).unwrap();
+        let vp = cw.net.chain.vp();
+        let header = vp.headers_store.get_header(row.accepted_block).unwrap();
+        let envelope = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).unwrap();
+        let point = PalwBlockContextV2 {
+            block: row.accepted_block,
+            daa_score: row.accepted_daa,
+            blue_score: row.accepted_blue_score,
+            subsidy: vp.coinbase_manager.calc_block_subsidy(header.daa_score),
+        };
+        let (legacy, _, skips) = vp
+            .palw_v2_fold_attempt_for_tests(
+                &before_real,
+                &cw.net.bundle.state.clone().with_exec_v2_from_daa(None),
+                &point,
+                &[],
+                &envelope,
+                &header,
+            )
+            .unwrap();
+        assert!(skips.is_empty());
+        assert_eq!(legacy.claim(&real.claim), native.claim(&real.claim));
+        assert!(legacy.exec_v2_origin_v1(&real.claim).is_none());
+    }
     let initial = palw_exec_v2_token_state_root_v1(&[&real.stream()]);
     let draft = declaration(&cw, &real, Hash64::default(), initial);
     let (prefix, _, _) = kernel_claims(&mut cw, &real, &draft, false, |_| false, Vec::new()).await;
@@ -441,6 +470,18 @@ async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_abse
     let p = &cw.net.bundle.state;
     let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
     let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(p, Some(state.state_root())).unwrap();
+    // A legacy-shaped authenticated snapshot omits the same target clock while retaining its native data and kernel prefix.
+    let mut old_carriage = PalwStateCarriageV2::from_state(&state);
+    old_carriage.exec_v2_origins.remove(&real.claim);
+    let old_hash = old_carriage.clone().into_state(p, None).unwrap().state_root();
+    let old_bytes = borsh::to_vec(&old_carriage).unwrap();
+    let old = borsh::from_slice::<PalwStateCarriageV2>(&old_bytes).unwrap().into_state(p, Some(old_hash)).unwrap();
+    let proof = Obj::ExecOriginRecordedV1 {
+        witness: Box::new(kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginWitnessV1 {
+            claim: real.claim,
+            header: borsh::to_vec(stored.header.as_ref()).unwrap(),
+        }),
+    };
     let point = PalwBlockContextV2 {
         block: tip,
         daa_score: cw.net.daa() + 1,
@@ -453,9 +494,21 @@ async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_abse
     assert!(vp.headers_store.get_header(origin.source_block).is_err(), "the original full header really is absent");
     let refusal = vp.palw_h1_carrier_refusal_on(&restored, p, &point, &object);
     let result = vp.palw_v2_fold_accepted_with_delta_for_tests(&restored, p, &point, std::slice::from_ref(&object));
+    let proof_refusal = vp.palw_h1_carrier_refusal_on(&old, p, &point, &proof);
+    let migration = vp.palw_v2_fold_accepted_with_delta_for_tests(&old, p, &point, std::slice::from_ref(&proof));
+    let migration_control = vp.palw_v2_fold_accepted_with_delta_for_tests(&state, p, &point, &[]);
     // Restore the DAG header before any further block processing, including assertion failure teardown.
     vp.headers_store.insert(origin.source_block, stored.header, stored.block_level).unwrap();
     assert!(refusal.is_none(), "snapshot authority must not consult the missing original header: {refusal:?}");
+    assert!(
+        proof_refusal.is_none(),
+        "the carried proof supplies provenance with no original header in the node store: {proof_refusal:?}"
+    );
+    let (migrated, migration_delta) = migration.unwrap();
+    assert_eq!(migrated.state_root(), migration_control.unwrap().0.state_root(), "only the missing clock was restored");
+    let old_again = kaspa_consensus_core::palw_state_v2::revert_delta_v2(&migrated, &migration_delta, p).unwrap();
+    assert_eq!(old_again.state_root(), old.state_root());
+    assert!(vp.palw_h1_carrier_refusal_on(&migrated, p, &point, &object).is_none());
     let (pruned, pruned_delta) = result.unwrap();
     assert_eq!(full.state_root(), pruned.state_root());
     assert_eq!(borsh::to_vec(&full_delta).unwrap(), borsh::to_vec(&pruned_delta).unwrap());

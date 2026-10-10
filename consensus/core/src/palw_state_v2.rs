@@ -8676,6 +8676,9 @@ pub enum PalwConsensusObjectV2 {
     ExecWorkRootOpenedV2 {
         declaration: Box<crate::palw_work_slice_v2::PalwWorkRootDeclarationV2>,
     } = 130,
+    /// (tag 131): an original REAL header authenticates a legacy claim's missing clock. No income, weight or new lease.
+    /// Permissionless proof; the claim's immutable carrying hash supplies authority. Fenced by `palw_exec_payload_v2`.
+    ExecOriginRecordedV1 { witness: Box<crate::palw_work_slice_v2::PalwExecOriginWitnessV1> } = 131,
     // Tags 150–153 are lane DA16's provider court (RFC-0009's reservation; the lead's allocation of 2026-10-09). Dropped by name below
     // `palw_provider_court_v1`; rows in the kernel route's aux tables 43–45. Every signature: the signer's ML-DSA-87 over
     // [`crate::palw_provider_court_v1::palw_provider_court_message_v1`] (kind = the tag, payload = the Borsh of the other fields).
@@ -8811,7 +8814,7 @@ pub fn palw_object_is_kernel_route_v1(object: &PalwConsensusObjectV2) -> bool {
 /// `Params::palw_exec_payload_v2` the acceptance walk drops it by name before any slot, rent or budget is charged for it, and the
 /// fold refuses it as the second lock.
 pub fn palw_object_is_exec_v2(object: &PalwConsensusObjectV2) -> bool {
-    matches!(object, PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. })
+    matches!(object, PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } | PalwConsensusObjectV2::ExecOriginRecordedV1 { .. })
 }
 
 /// **Is this object an RFC-0007 audit-mesh move** (tag 102 or 103) — a variant an older build cannot decode and skips (A-2)? Below
@@ -9646,6 +9649,7 @@ pub fn palw_chunked_object_kind_admitted_v1(object: &PalwConsensusObjectV2) -> b
             | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. }
             // DA16: a provider's answer may carry a run of row-tree nodes and the commitments map — judged on the whole, likewise.
             | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
+            | PalwConsensusObjectV2::ExecOriginRecordedV1 { .. }
     )
 }
 
@@ -35273,6 +35277,10 @@ fn apply_object(
         // ---- RFC-0008 v2: a work-session root declaration (tag 130) ----
         PalwConsensusObjectV2::ExecWorkRootOpenedV2 { declaration } => {
             palw_exec_v2_fold::apply_root_declared_v2(builder, ctx, declaration)?;
+        }
+        PalwConsensusObjectV2::ExecOriginRecordedV1 { witness } => {
+            let row = builder.state.exec_v2_origin_witness_admissible_v1(builder.params, ctx.daa_score, witness)?;
+            builder.write_exec_origin(witness.claim, Some(row));
         }
         // ---- RFC-0007 Part I: the verification vertex (tags 100, 101) ----
         PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {

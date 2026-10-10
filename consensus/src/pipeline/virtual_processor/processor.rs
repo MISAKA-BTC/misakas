@@ -10251,6 +10251,9 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| e.to_string())?;
                 }
+                Obj::ExecOriginRecordedV1 { witness } => {
+                    state.exec_v2_origin_witness_admissible_v1(state_params, point.daa_score, witness).map_err(|e| e.to_string())?;
+                }
                 // **RFC-0007 Part IV.1: a trap commitment** (tag 93): the fence, the stateful admission (a registered Active setter drawn
                 // by the slot lottery with no trap open and the deposit free), then the setter's one ML-DSA-87 signature.
                 Obj::TrapCommittedV1 { trap } => {
@@ -22627,6 +22630,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         O::VerificationVertexV1 { .. } => "VerificationVertexV1",
         O::ExecWorkRootOpenedV2 { .. } => "ExecWorkRootOpenedV2",
+        O::ExecOriginRecordedV1 { .. } => "ExecOriginRecordedV1",
         O::VertexEquivocationV1 { .. } => "VertexEquivocationV1",
         O::TrapCommittedV1 { .. } => "TrapCommittedV1",
         O::TrapRevealedV1 { .. } => "TrapRevealedV1",

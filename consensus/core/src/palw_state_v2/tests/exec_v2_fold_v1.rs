@@ -1055,6 +1055,160 @@ fn exec_v2_root_authorization_survives_header_loss_and_ignores_late_clock_inputs
     }
 }
 
+// Arithmetic provenance fixture: an accepted native row is pinned to a complete header; this is not native signature evidence.
+fn legacy_origin_world() -> (PalwStateParamsV2, PalwChainStateV2, Hash64, crate::palw_work_slice_v2::PalwExecOriginWitnessV1) {
+    let (p, mut s, id) = world(Some(0));
+    let envelope = attempt(PWU, 1);
+    let mut header = crate::header::Header::from_precomputed_hash(h64(0xBAD_CACE), vec![]);
+    header.pow_algo_id = crate::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3;
+    header.daa_score = 100;
+    header.nonce = 17;
+    header.palw_commitment = envelope.encode_wire();
+    let claim = s.claims.get_mut(&id).unwrap();
+    claim.accepted_block = crate::hashing::header::hash(&header);
+    claim.job_identity = crate::palw_attempt_v2::execution_anchor_v3(
+        envelope.attempt.network_domain,
+        crate::hashing::header::pre_pow_hash_64(&header),
+        claim.class_id,
+        &claim.bond.0,
+        header.nonce,
+    );
+    s.exec_v2_origins.clear();
+    s.assert_internal_consistency(&p).unwrap();
+    let witness = crate::palw_work_slice_v2::PalwExecOriginWitnessV1 { claim: id, header: borsh::to_vec(&header).unwrap() };
+    (p, s, id, witness)
+}
+
+#[test]
+fn exec_v2_legacy_clock_migrates_from_carried_proof_without_income_or_lease_renewal() {
+    let (p, s, id, witness) = legacy_origin_world();
+    let object = PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(witness.clone()) };
+    let mut extras = xx_declare();
+    extras.exec_v2_origin_headers.clear();
+    extras.exec_v2_test_origin_daa = None;
+    let (migrated, delta) = step_with(&s, &p, 21, 110, &[object.clone()], &extras).unwrap();
+    let control = step_with(&s, &p, 21, 110, &[], &extras).unwrap().0;
+    assert_eq!(migrated.claim(&id), control.claim(&id));
+    assert_eq!(migrated.safe_weight, control.safe_weight);
+    assert_eq!(migrated.reserved_exposure, control.reserved_exposure);
+    assert_eq!(migrated.pending_payouts, control.pending_payouts);
+    assert_eq!(migrated.exec_v2_origin_v1(&id).unwrap().issued_daa, 100);
+    assert_ne!(migrated.state_root(), control.state_root());
+    assert!(delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ExecV2Row { table: PALW_EXEC_V2_TABLE_ORIGINS_V1, .. })));
+    let mut d = decl(id);
+    d.canonical_job_id = s.claim(&id).unwrap().job_identity;
+    assert!(step_with(&s, &p, 22, 111, &[open_object(d.clone())], &extras).is_err());
+    let opened = step_with(&migrated, &p, 22, 111, &[open_object(d.clone())], &extras).unwrap().0;
+    assert_eq!(opened.exec_v2_job_use_v1(&d.job_work_id(&s.claim(&id).unwrap().class_id)).unwrap().expires_daa, 100_100);
+    let repeated = step_with(&migrated, &p, 23, 112, &[object.clone()], &extras).unwrap_err();
+    assert!(repeated.to_string().contains("already has a recorded"));
+    assert!(step_with(&s, &p.clone().with_exec_v2_from_daa(None), 21, 110, &[object], &extras).is_err());
+    // A late carried proof records the same original clock; it does not mint a lease from its migration block.
+    let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+    apply_object(&mut builder, &ctx(25, 100_101, 25), &PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(witness) })
+        .unwrap();
+    assert_eq!(builder.state.exec_v2_origin_v1(&id).unwrap().issued_daa, 100);
+    let error =
+        super::super::palw_exec_v2_history_v1::authorize(&builder.state, &d, builder.state.claim(&id).unwrap(), 100_100).unwrap_err();
+    assert!(error.to_string().contains("expired"));
+}
+
+#[test]
+fn exec_v2_origin_migration_chunks_are_atomic_fenced_and_cannot_contradict_open_history() {
+    let (p, s, id, witness) = legacy_origin_world();
+    let object = PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(witness.clone()) };
+    assert_eq!(borsh::to_vec(&object).unwrap()[0], 131);
+    let cap = borsh::to_vec(&object).unwrap().len().div_ceil(4);
+    let chunks = palw_object_chunks_with_cap_v1(&object, cap).unwrap().unwrap();
+    assert_eq!(chunks.len(), 4);
+    let mut state = s.clone();
+    let mut dormant = s.clone();
+    let mut extras = xx_declare();
+    extras.exec_v2_test_origin_daa = None;
+    for (index, chunk) in chunks.iter().enumerate() {
+        state = step_with(&state, &p, 31 + index as u64, 110 + index as u64, std::slice::from_ref(chunk), &extras).unwrap().0;
+        if index < 3 {
+            assert!(state.exec_v2_origin_v1(&id).is_none(), "partial carriage is never authorization");
+            dormant = step_with(
+                &dormant,
+                &p.clone().with_exec_v2_from_daa(None),
+                31 + index as u64,
+                110 + index as u64,
+                std::slice::from_ref(chunk),
+                &extras,
+            )
+            .unwrap()
+            .0;
+        } else {
+            let error = step_with(&dormant, &p.clone().with_exec_v2_from_daa(None), 34, 113, std::slice::from_ref(chunk), &extras)
+                .unwrap_err();
+            assert!(
+                matches!(error, PalwStateV2Error::ChunkedObjectUndecodable(_)),
+                "below the fence this is the old build's unknown payload: {error}"
+            );
+        }
+    }
+    assert!(state.pending_chunks.is_empty());
+    assert_eq!(state.exec_v2_origin_v1(&id).unwrap().issued_daa, 100);
+    let mut d = decl(id);
+    d.canonical_job_id = state.claim(&id).unwrap().job_identity;
+    let mut opened = step_with(&state, &p, 35, 114, &[open_object(d.clone())], &extras).unwrap().0;
+    opened.exec_v2_origins.clear();
+    assert!(opened.exec_v2_origin_witness_admissible_v1(&p, 115, &witness).is_ok());
+    let history = opened.exec_v2_job_uses.get_mut(&d.job_work_id(&s.claim(&id).unwrap().class_id)).unwrap();
+    history.issued_daa += 1;
+    history.expires_daa += 1;
+    assert!(
+        opened.exec_v2_origin_witness_admissible_v1(&p, 115, &witness).is_err(),
+        "a proof cannot install a clock contradicting authenticated F2 history"
+    );
+}
+
+#[test]
+fn exec_v2_origin_proof_codec_rejects_hostile_parent_runs_and_substitution_before_writes() {
+    use crate::palw_work_slice_v2::{PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1, PalwExecOriginWitnessV1};
+    let (p, s, id, witness) = legacy_origin_world();
+    let mut encoded = id.as_byte_slice().to_vec();
+    encoded.extend_from_slice(&((PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1 + 1) as u32).to_le_bytes());
+    assert!(borsh::from_slice::<PalwExecOriginWitnessV1>(&encoded).unwrap_err().to_string().contains("carriage budget"));
+    let bytes = borsh::to_vec(&witness).unwrap();
+    assert_eq!(borsh::from_slice::<PalwExecOriginWitnessV1>(&bytes).unwrap(), witness);
+    assert!(borsh::from_slice::<PalwExecOriginWitnessV1>(&bytes[..bytes.len() - 1]).is_err());
+    let original: crate::header::Header = borsh::from_slice(&witness.header).unwrap();
+    let mut variants = Vec::new();
+    let mut changed = original.clone();
+    changed.daa_score += 1;
+    variants.push(borsh::to_vec(&changed).unwrap());
+    let mut changed = original.clone();
+    changed.nonce += 1;
+    variants.push(borsh::to_vec(&changed).unwrap());
+    for runs in [vec![(0u8, vec![h64(1)])], vec![(2, vec![h64(1)]), (1, vec![h64(2)])], vec![(1, vec![h64(1)]), (2, vec![h64(1)])]] {
+        let mut changed = original.clone();
+        changed.parents_by_level = borsh::from_slice(&borsh::to_vec(&runs).unwrap()).unwrap();
+        variants.push(borsh::to_vec(&changed).unwrap());
+    }
+    let mut count = witness.header.clone();
+    count[66..70].copy_from_slice(&u32::MAX.to_le_bytes());
+    variants.push(count);
+    for header in variants {
+        let forged = PalwExecOriginWitnessV1 { claim: id, header };
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.exec_v2_origin_witness_admissible_v1(&p, 110, &forged)));
+        assert!(outcome.unwrap().is_err(), "hostile preimages refuse instead of panicking");
+        let extras = xx();
+        let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+        assert!(
+            apply_object(&mut builder, &ctx(21, 110, 21), &PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(forged) })
+                .is_err()
+        );
+        assert!(builder.entries.is_empty());
+        assert_eq!(builder.state.state_root(), s.state_root());
+    }
+    let mut borrowed = witness;
+    borrowed.claim = h64(0xBAD);
+    assert!(s.exec_v2_origin_witness_admissible_v1(&p, 110, &borrowed).is_err());
+}
+
 #[test]
 fn exec_v2_origin_capture_cannot_cap_or_reprice_native_weight_or_income() {
     let (p, state, _) = world(Some(0));

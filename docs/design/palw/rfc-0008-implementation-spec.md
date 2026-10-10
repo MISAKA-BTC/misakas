@@ -740,14 +740,64 @@ reports `authorizationOriginsTotal` separately from active roots and job-use his
 Claims accepted before this fence or restored without a recorded clock are refused for new
 root opening with an explicit `AuthorizationUnrecorded` reason. A late header supplied by a full
 node cannot backfill the row or renew the deadline. This is a fail-closed interim implementation,
-not approval to exclude legacy eligible work permanently. An explicit authenticated migration
-procedure for those claims remains necessary. Already opened roots with F2 history keep their
+not approval to exclude legacy eligible work permanently. Section 12.8 provides an explicit carried
+proof for a missing clock; its availability and largest-header coverage remain activation requirements.
+Already opened roots with F2 history keep their
 authenticated original clock even when no F3 row exists; absence never authorizes a new root.
 
 A real-node reader/fold regression removes the original header and admits the same signed root
 from an authenticated snapshot, producing the same state root and delta as the full-header control.
 It restores the header before further DAG processing. That proves local root-lookup independence;
 it does not prove actual pruning, multi-process P2P transport, legacy migration or native Final.
+
+### 12.8 Carried original-header proof for legacy claims
+
+`ExecOriginRecordedV1` (object tag 131, under `palw_exec_payload_v2`) carries
+`PalwExecOriginWitnessV1 { claim, header: borsh(Header) }`. It is ordinary fee-market registry
+traffic and requires no new owner signature: the immutable carrying hash of the already accepted
+native claim authenticates the full header. It cannot authorize a new claim or execution by itself.
+The reader and fold use the same state-based admission function, without local header lookups or
+clock extras. Claim presence, native attempt source, an absent clock row and the complete proof
+checks of §12.6 precede the origin write. Existing recorded rows cannot be overwritten. For an
+already opened F2 root, the supplied clock/source must also equal its authenticated history.
+The object records raw original DAA, including when supplied late; Root opening still applies
+the original finite deadline. Migration never replaces it with the migration/acceptance block's
+DAA and never creates native income, weight, reservations or a longer material/collateral term.
+Root signatures, job bindings, consent and every other eligibility rule remain required.
+
+The ordinary decoder for proof headers checks all vector counts against bytes actually present.
+At most 255 compressed-parent runs are possible; cumulative levels must start above zero and
+strictly increase, and consecutive equal runs are rejected through `CompressedParents::try_from`.
+This validation occurs before expanded hashing, which would otherwise panic on malformed Borsh
+parent runs. Fixed fields follow the ordinary Header Borsh layout; the REAL commitment is bounded
+by its existing 8,192-byte header rule and must consume the remainder exactly. The cached hash
+remains untrusted. The same safe header decoder is used at fresh native clock capture.
+
+The witness byte cap is the existing assembled-object budget less its 69-byte tag/key/length
+overhead: `16 × 100,000 − 69 = 1,599,931` header bytes. Its decoder checks the declared length
+before allocating. An empty header may decode and ride unjudged below the fence, preserving A2;
+stateful acceptance rejects it after the fence. Tag 131 is in the new-kind/owner/wire-pin tables,
+without changing any frozen live kind. Generic `ObjectChunk` carriage accepts this proof and
+validates it only after complete assembly; partial chunks supply no authorization. Below the
+EXEC fence, the completing payload is refused as the old build's unknown kind. The origin uses
+the existing F3 / table 8 journal, with exact apply, undo and snapshot recovery.
+
+This bounded implementation does not approve permanent exclusion of a legacy header too large
+for that carriage. Prove coverage of every eligible historical header, or supply a bounded larger
+migration transport, before activation. Compressed input size also does not approve hash latency:
+one run can expand across 255 levels, so the largest proof can feed nearly 408 MB of parent bytes
+to each header digest (and both full and pre-PoW digests are needed for a valid proof). Measure
+that cost and the shared chunk lane's availability under load. Existing eight-slot chunk traffic
+can delay a proof; no floor on timely migration is claimed. A producer/archive must supply the
+original bytes before pruning destroys all copies, or an authenticated pre-activation migration
+must preserve them. Actual multi-process activation/pruning/P2P recovery remains unverified.
+
+The node regression re-folds an actually admitted signed REAL header with EXEC dormant, proving
+the native row is unchanged and has no clock. It then uses a legacy-shaped authenticated snapshot
+with the same native data and prefix, deletes the actual source header from the node store, and
+accepts the carried proof through the node reader/fold. The result equals the normal step on an
+already recorded state, and undo restores the missing-clock snapshot. This is local provenance
+and recovery evidence, not an actual historical activation, chunk transport or pruning drill.
 
 
 ## 13. BUDGET correction — root Final authorizes bound kernel fees
