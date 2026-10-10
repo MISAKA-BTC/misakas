@@ -6,13 +6,14 @@
 //! ```text
 //!   block N, in the order the chain's own transition runs it
 //!   ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-//!   2f  advance_v1       engine.advance   releases, seals against the PARENT checkpoint, readiness, due draws
+//!   2f  advance_v1       engine.advance   releases, seals against the PARENT checkpoint, the epoch's source set frozen at its
+//!                                          commitment (the first block reaching `release_daa`), readiness, due draws
 //!                         ├─ binding      → the V2 panel record (anchor = V3 seed), duty row, reserved exposure, PanelBound
 //!                         └─ non-fraud end → V2 void (SealUnavailable / BeaconUnavailable / NoCapablePanel / PanelUnavailable)
 //!   3   objects          a certified epoch output (tag 120) is queued
 //!   4b″ take_block_v1    engine.accept_beacon per queued output (one that does not verify is dropped — the block stands)
 //!                         engine.admit        the claims the block created under the V3 rule, in V2 acceptance order
-//!                         the engine's journal (delta 170–173) is pushed
+//!                         the engine's journal (delta 170–174) is pushed
 //! ```
 //!
 //! **One exposure ledger.** A V3 binding writes the V2 duty row and the V2 `reserved_exposure` of each seat through the very
@@ -63,7 +64,9 @@ pub enum PalwPanelV3BeaconSourceV1 {
     /// classes reach Final without a beacon, and their Finals seed every later draw, the Panel's included).
     #[default]
     Chain,
-    /// A fixed history, for reference replays and tests of the verification path. Never resolved from a running node.
+    /// A fixed history, for reference replays and tests of the verification path. Never resolved from a running node. Its
+    /// `eligible_profiles` is also what the freeze stage freezes for an epoch under this source (so a test drives the freeze), but
+    /// a `Reference` history's own reads return its fields as given — only `Chain` reads the frozen set.
     Reference {
         events: Vec<WorkFinalEventV1>,
         eligible_profiles: BTreeSet<Digest>,
@@ -133,9 +136,6 @@ pub struct ChainPanelBeaconHistoryV1<'a> {
     engine: Option<&'a PermissionlessPanelStateV1>,
     source: &'a PalwPanelV3BeaconSourceV1,
     tip_position: u64,
-    /// The OPV extras in force at the block (the fence's deny-list and the test seam), which derived OPV eligibility reads.
-    /// `None` where the kernel route's OPV mode is not in force: then no profile is eligible.
-    opv: Option<&'a crate::palw_kernel_route_v1::PalwKernelOpvExtrasV1>,
 }
 
 impl<'a> ChainPanelBeaconHistoryV1<'a> {
@@ -146,13 +146,7 @@ impl<'a> ChainPanelBeaconHistoryV1<'a> {
         source: &'a PalwPanelV3BeaconSourceV1,
         tip_position: u64,
     ) -> Self {
-        Self { state, base_class, engine, source, tip_position, opv: None }
-    }
-
-    /// The OPV extras derived eligibility reads (the fold passes the block's; a reader without them sees no eligible profile).
-    pub fn with_opv(mut self, opv: Option<&'a crate::palw_kernel_route_v1::PalwKernelOpvExtrasV1>) -> Self {
-        self.opv = opv;
-        self
+        Self { state, base_class, engine, source, tip_position }
     }
 
     /// The kernel route's attributed OPV Finals (`PanelIndependent`). A route whose rows do not rebuild contributes nothing: the
@@ -213,23 +207,23 @@ impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
         self.tip_position
     }
 
-    /// **The derived OPV-eligible set at the commitment position** (`opv_eligible_set_v1`: Active kernel, conformance passed,
-    /// G14-complete, live DA, bounded, a verified policy, not denied). Empty without the route or its OPV extras.
+    /// **The epoch's source set, FROZEN at its commitment position** — never re-derived. The engine's freeze stage wrote it once, in
+    /// the first block whose DAA reached `commitment_position` (`release_daa`), from what [`palw_panel_v3_epoch_sources_v1`] derived
+    /// at the pre-entropy checkpoint (the derived OPV-eligible set, `opv_eligible_set_v1`: Active kernel, conformance passed,
+    /// G14-complete, live DA, bounded, a verified policy, not denied). A profile denied, lapsed or newly eligible after that block
+    /// does not change it; a reorg across the freeze block reverts and re-freezes it with the branch (delta 174). No engine, or no
+    /// frozen set for the epoch (none derived, an empty or over-cap derivation, the window closed): no eligible profile.
     ///
-    /// RESIDUAL (stated): the set is derived from the ledger the verifying block holds, at the commitment's DAA; a profile whose
-    /// eligibility facts change between the commitment and the lock can change the mixed set. The onboarding commitment freezes its
-    /// set in its row; the Panel epoch's request does not carry a frozen set yet (an engine-encoding change, behind this fence).
+    /// The residual this closes (RFC-0010, the codex audit): the set used to be re-derived from the ledger the VERIFYING block held,
+    /// so a profile whose eligibility facts changed between the commitment and the lock changed the mixed set and let a producer
+    /// steer it. The onboarding commitment freezes its set in its row the same way (`palw_onboarding_fold_v1`).
     fn eligible_profiles(&self, commitment_position: u64) -> BTreeSet<Digest> {
         match self.source {
-            PalwPanelV3BeaconSourceV1::Chain => {
-                let (Some(route), Some(opv)) = (self.state.kernel_route.as_ref(), self.opv) else { return BTreeSet::new() };
-                let Ok(ledger) = route.ledger() else { return BTreeSet::new() };
-                route
-                    .opv_eligible_set_v1(&ledger, commitment_position, &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv))
-                    .into_iter()
-                    .map(|id| id.as_bytes())
-                    .collect()
-            }
+            PalwPanelV3BeaconSourceV1::Chain => self
+                .engine
+                .and_then(|engine| engine.frozen_sources_at(commitment_position))
+                .map(|row| row.profiles.iter().map(|id| id.as_bytes()).collect())
+                .unwrap_or_default(),
             PalwPanelV3BeaconSourceV1::Reference { eligible_profiles, .. } => eligible_profiles.clone(),
         }
     }
@@ -245,6 +239,28 @@ impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+/// **What the freeze stage freezes for an epoch committed at `release_daa`**, derived from `checkpoint` (the block's selected parent:
+/// the pre-entropy checkpoint, never this block's objects). Under `Chain`: the kernel route's derived OPV-eligible set at
+/// `release_daa` under the block's OPV extras (deny-list, floor, test seam) — empty without the route, its OPV extras, or a ledger
+/// that rebuilds. Under `Reference`: the reference's own set.
+pub fn palw_panel_v3_epoch_sources_v1(
+    checkpoint: &PalwChainStateV2,
+    source: &PalwPanelV3BeaconSourceV1,
+    opv: Option<&crate::palw_kernel_route_v1::PalwKernelOpvExtrasV1>,
+    release_daa: u64,
+) -> Vec<Hash64> {
+    match source {
+        PalwPanelV3BeaconSourceV1::Chain => {
+            let (Some(route), Some(opv)) = (checkpoint.kernel_route.as_ref(), opv) else { return Vec::new() };
+            let Ok(ledger) = route.ledger() else { return Vec::new() };
+            route.opv_eligible_set_v1(&ledger, release_daa, &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv))
+        }
+        PalwPanelV3BeaconSourceV1::Reference { eligible_profiles, .. } => {
+            eligible_profiles.iter().map(|id| Hash64::from_bytes(*id)).collect()
+        }
     }
 }
 
@@ -406,9 +422,18 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
             Some(self.engine),
             &self.inputs.beacon_source,
             self.tip_position,
-        )
-        .with_opv(self.builder.extras.kernel_route.as_ref().and_then(|route| route.opv.as_ref()));
+        );
         beacon::verify_panel_beacon_for_engine_v1(&self.inputs.approved_beacons, &history, request, proof)
+    }
+
+    /// The epoch's source set at its commitment, derived from the PARENT (the pre-entropy checkpoint) — frozen by the engine.
+    fn epoch_sources(&self, release_daa: u64) -> Vec<Hash64> {
+        palw_panel_v3_epoch_sources_v1(
+            self.parent,
+            &self.inputs.beacon_source,
+            self.builder.extras.kernel_route.as_ref().and_then(|route| route.opv.as_ref()),
+            release_daa,
+        )
     }
 
     /// The V2 claim has left its Panel's receipts (licensed, final, voided, retired): the engine releases its reservation.
@@ -747,7 +772,7 @@ pub(super) fn take_block_v1(
 // The journal: the engine's keyed decomposition
 // ---------------------------------------------------------------------------------------------
 
-/// The delta entries (170–173) of the engine's change from the parent state to this one.
+/// The delta entries (170–174) of the engine's change from the parent state to this one.
 fn journal(old: Option<&PermissionlessPanelStateV1>, new: Option<&PermissionlessPanelStateV1>) -> Vec<PalwDeltaEntryV2> {
     let mut entries = Vec::new();
     let Some(new) = new else { return entries };
@@ -778,6 +803,14 @@ fn journal(old: Option<&PermissionlessPanelStateV1>, new: Option<&Permissionless
         let (before, after) = (old_beacons.get(key).copied(), new.beacon_rows().get(key).copied());
         if before != after {
             entries.push(PalwDeltaEntryV2::PanelV3Beacon { key: *key, old: before, new: after });
+        }
+    }
+    let empty_sources = BTreeMap::new();
+    let old_sources = old.map(|engine| engine.epoch_source_rows()).unwrap_or(&empty_sources);
+    for key in old_sources.keys().chain(new.epoch_source_rows().keys()).collect::<BTreeSet<_>>() {
+        let (before, after) = (old_sources.get(key), new.epoch_source_rows().get(key));
+        if before != after {
+            entries.push(PalwDeltaEntryV2::PanelV3EpochSources { key: *key, old: before.cloned(), new: after.cloned() });
         }
     }
     entries
@@ -811,7 +844,11 @@ pub(super) fn apply_cursor_entry_v1(
             );
         }
         (None, Some(engine)) => {
-            if !engine.claim_rows().is_empty() || !engine.work_id_rows().is_empty() || !engine.beacon_rows().is_empty() {
+            if !engine.claim_rows().is_empty()
+                || !engine.work_id_rows().is_empty()
+                || !engine.beacon_rows().is_empty()
+                || !engine.epoch_source_rows().is_empty()
+            {
                 return Err(mismatch("the Panel V3 engine is removed while it still holds rows"));
             }
             state.panel_v3 = None;
@@ -866,6 +903,22 @@ pub(super) fn apply_beacon_entry_v1(
         return Err(mismatch("a Panel V3 certified output does not match the delta's expectation"));
     }
     engine.put_beacon_row(key, *install);
+    Ok(())
+}
+
+pub(super) fn apply_epoch_sources_entry_v1(
+    state: &mut PalwChainStateV2,
+    key: u64,
+    old: &Option<eng::EpochSourceSetV1>,
+    new: &Option<eng::EpochSourceSetV1>,
+    revert: bool,
+) -> Result<(), PalwStateV2Error> {
+    let (expected, install) = if revert { (new, old) } else { (old, new) };
+    let engine = state.panel_v3.as_mut().ok_or_else(|| mismatch("a Panel V3 frozen source set without an engine"))?;
+    if engine.epoch_source_rows().get(&key) != expected.as_ref() {
+        return Err(mismatch("a Panel V3 frozen source set does not match the delta's expectation"));
+    }
+    engine.put_epoch_source_row(key, install.clone());
     Ok(())
 }
 

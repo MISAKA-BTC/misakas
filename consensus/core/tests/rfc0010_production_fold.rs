@@ -1080,3 +1080,267 @@ fn a_tampered_snapshot_does_not_reload_and_the_engine_refuses_it() {
         assert!(reloaded.is_err(), "{name}: the carriage reloaded");
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// RFC-0010 residual: the beacon's eligible source set, frozen at the epoch's commitment position
+// ---------------------------------------------------------------------------------------------------------------------------
+//
+// What these drive: the engine's freeze stage (the first block whose DAA reaches the epoch's `release_daa` freezes the set the
+// host derives from that block's PARENT), its journal (delta 174), its prune, its carriage, and the chain history's read of it.
+// The derivation input is the reference source's set (`palw_panel_v3_epoch_sources_v1` under `Reference`): this harness has no
+// kernel route with an OPV-eligible class, so the `Chain` derivation (`opv_eligible_set_v1` on the parent's route) is the same
+// call it was before, now made once at the freeze instead of at every verification. The READ under test is the `Chain` one.
+
+use kaspa_consensus_core::palw_panel_beacon_v1::{PanelBeaconHistoryV1, verify_panel_beacon_v1};
+use kaspa_consensus_core::palw_permissionless_panel_v1::EpochSourceSetV1;
+use kaspa_consensus_core::palw_state_v2::ChainPanelBeaconHistoryV1;
+
+const A: [u8; 64] = [0xA1; 64];
+const B: [u8; 64] = [0xB2; 64];
+const C: [u8; 64] = [0xC3; 64];
+
+/// A reference source whose eligibility is `profiles` (and no events: the fold verifies no proof in these tests).
+fn eligible(profiles: &[[u8; 64]]) -> PalwPanelV3BeaconSourceV1 {
+    PalwPanelV3BeaconSourceV1::Reference {
+        events: Vec::new(),
+        eligible_profiles: profiles.iter().copied().collect(),
+        works: Vec::new(),
+        sealed: Vec::new(),
+    }
+}
+
+fn frozen_of(profiles: &[[u8; 64]], frozen_daa: u64) -> EpochSourceSetV1 {
+    let mut ids: Vec<Hash64> = profiles.iter().map(|p| Hash64::from_bytes(*p)).collect();
+    ids.sort();
+    EpochSourceSetV1 { frozen_daa, profiles: ids }
+}
+
+fn epoch_sources_entries(delta: &PalwStateDeltaV2) -> Vec<&PalwDeltaEntryV2> {
+    delta.entries.iter().filter(|e| matches!(e, PalwDeltaEntryV2::PanelV3EpochSources { .. })).collect()
+}
+
+/// The chain's frozen eligibility with a fixed list of Panel-independent settlements (the V2 lattice derives none: every Final
+/// it writes is Panel-licensed), so a beacon can be verified at the lock against exactly what the chain froze.
+struct FrozenWithEvents<'a> {
+    chain: ChainPanelBeaconHistoryV1<'a>,
+    events: Vec<WorkFinalEventV1>,
+}
+
+impl PanelBeaconHistoryV1 for FrozenWithEvents<'_> {
+    fn final_events(&self) -> Vec<WorkFinalEventV1> {
+        self.events.clone()
+    }
+    fn attributed_works(&self) -> Vec<misaka_palw_challenge::AttributedWorkV1> {
+        Vec::new()
+    }
+    fn sealed_sources(&self) -> Vec<misaka_palw_challenge::SealedSourceV3> {
+        Vec::new()
+    }
+    fn tip_position(&self) -> u64 {
+        self.chain.tip_position()
+    }
+    fn eligible_profiles(&self, commitment_position: u64) -> BTreeSet<misaka_palw_challenge::hash::Digest> {
+        self.chain.eligible_profiles(commitment_position)
+    }
+    fn pending_work_of_epoch(&self, epoch: u64) -> BTreeSet<misaka_palw_challenge::hash::Digest> {
+        self.chain.pending_work_of_epoch(epoch)
+    }
+}
+
+impl V3 {
+    /// A floor claim sealed for its epoch: `(claim, release_daa, epoch)`.
+    fn sealed_claim(&mut self, seed: u64) -> (Hash64, u64, u64) {
+        let id = self.floor_claim(seed);
+        self.step();
+        self.step();
+        let seal = self.record(&id).seal.expect("sealed");
+        (id, seal.anchor_slot, seal.beacon_epoch)
+    }
+
+    fn request(&self, epoch: u64, release: u64) -> BeaconRequestV1 {
+        let mirror = *self.c.sp.panel_v3().expect("the mirror");
+        BeaconRequestV1 {
+            network: mirror.network,
+            ruleset: mirror.ruleset,
+            scheme: mirror.policy.beacon_scheme,
+            epoch,
+            release_daa: release,
+            deadline_daa: release + mirror.policy.beacon_wait_daa,
+        }
+    }
+
+    fn at(&mut self, daa: u64) -> PalwStateDeltaV2 {
+        self.step_at(daa, &[], PalwBlockWorkV3::None, Hash64::default(), 0)
+    }
+}
+
+/// A proof of one independent work by `profile`, built against `built_against` (what a producer believes eligible).
+fn beacon_of(
+    req: &BeaconRequestV1,
+    profile: [u8; 64],
+    release: u64,
+    built_against: BTreeSet<[u8; 64]>,
+) -> (WorkFinalEventV1, Option<BeaconProofV1>) {
+    let event = independent_event(profile, 0x50, release + 1, release + 2);
+    let context = panel_beacon_context_v1(req, &challenge_policy(), built_against);
+    let proof = match collect_work_beacon_v1(&context, std::slice::from_ref(&event), release + 5).expect("a valid policy") {
+        WorkBeaconStateV1::Locked(beacon) => Some(BeaconProofV1 {
+            epoch: req.epoch,
+            output: Hash64::from_bytes(beacon.output),
+            proof: borsh::to_vec(beacon.beacon()).unwrap(),
+        }),
+        _ => None,
+    };
+    (event, proof)
+}
+
+/// **(a) + (b): a profile denied or lapsed after the commitment does not change the beacon at the lock, and one that becomes
+/// eligible after it is not added.** The set is frozen in the first block reaching `release` (from its parent), journaled once,
+/// never rewritten; the chain history reads it — at `release` only — whatever the source answers later.
+#[test]
+fn the_epochs_source_set_is_frozen_at_its_commitment_and_later_eligibility_changes_do_not_move_the_beacon() {
+    let mut w = V3::new();
+    let (_, release, epoch) = w.sealed_claim(60);
+    w.inputs.beacon_source = eligible(&[A, B]);
+    w.at(release - 1);
+    assert!(w.engine().epoch_source_rows().is_empty(), "nothing is frozen below the commitment position");
+    let crossing = w.at(release + 1);
+    let frozen = frozen_of(&[A, B], release + 1);
+    assert_eq!(w.engine().epoch_source_rows().get(&epoch), Some(&frozen), "frozen by the first block reaching release");
+    assert!(matches!(
+        epoch_sources_entries(&crossing)[..],
+        [PalwDeltaEntryV2::PanelV3EpochSources { key, old: None, new: Some(_) }] if *key == epoch
+    ));
+
+    // After the commitment: B is denied (or its DA lapsed), C becomes eligible.
+    w.inputs.beacon_source = eligible(&[A, C]);
+    let later = w.at(release + 2);
+    assert!(epoch_sources_entries(&later).is_empty(), "the frozen set is never rewritten");
+    assert_eq!(w.engine().epoch_source_rows().get(&epoch), Some(&frozen));
+
+    let chain = PalwPanelV3BeaconSourceV1::Chain;
+    let history = ChainPanelBeaconHistoryV1::new(&w.c.s, Hash64::default(), w.c.s.panel_v3(), &chain, release + 2);
+    assert_eq!(history.eligible_profiles(release), BTreeSet::from([A, B]), "the chain reads the frozen set, not today's answer");
+    assert!(history.eligible_profiles(release + 1).is_empty(), "only the epoch's own commitment position has a set");
+    let no_engine = ChainPanelBeaconHistoryV1::new(&w.c.s, Hash64::default(), None, &chain, release + 2);
+    assert!(no_engine.eligible_profiles(release).is_empty(), "no engine, no frozen set: nothing is re-derived");
+
+    // At the lock (tip release + 5): B's work locks the beacon against the frozen set; C's — eligible only after the commitment —
+    // does not, even with a proof its producer built against the later set.
+    let req = w.request(epoch, release);
+    let (b_event, b_proof) = beacon_of(&req, B, release, BTreeSet::from([A, B]));
+    let b_proof = b_proof.expect("B's work locks against the frozen set");
+    let at_lock = |events: Vec<WorkFinalEventV1>| FrozenWithEvents {
+        chain: ChainPanelBeaconHistoryV1::new(&w.c.s, Hash64::default(), w.c.s.panel_v3(), &chain, release + 5),
+        events,
+    };
+    assert_eq!(verify_panel_beacon_v1(&[challenge_policy()], &at_lock(vec![b_event.clone()]), &req, &b_proof), Ok(()));
+    let (c_event, c_proof) = beacon_of(&req, C, release, BTreeSet::from([A, C]));
+    let c_proof = c_proof.expect("against the later set C's work would lock");
+    assert!(verify_panel_beacon_v1(&[challenge_policy()], &at_lock(vec![c_event]), &req, &c_proof).is_err());
+    // The steering this closes: re-derived at the lock, B's denial would have unlocked the epoch and C's admission re-seeded it.
+    assert!(beacon_of(&req, B, release, BTreeSet::from([A, C])).1.is_none(), "a re-derived set would drop B's contribution");
+    assert_ne!(b_proof.output, c_proof.output);
+}
+
+/// **(c): a reorg across the freeze block reverts the freeze and the other branch re-freezes from ITS commitment block's parent.**
+/// The walk a real reorg executes: each block's delta reverted to the fork point (the freeze goes with the block that made it, a
+/// later block's revert leaves it), then the other branch folded; re-applying the first branch's delta reproduces its freeze.
+#[test]
+fn a_reorg_across_the_freeze_block_reverts_it_and_the_other_branch_refreezes() {
+    let mut w = V3::new();
+    let (_, release, epoch) = w.sealed_claim(61);
+    w.inputs.beacon_source = eligible(&[A, B]);
+    w.at(release - 1);
+    let (fork, fork_daa) = (w.c.s.clone(), w.c.daa);
+    let d1 = w.at(release + 1);
+    let branch1 = w.c.s.clone();
+    let d2 = w.at(release + 2);
+    assert_eq!(w.engine().epoch_source_rows().get(&epoch), Some(&frozen_of(&[A, B], release + 1)));
+
+    let back1 = revert_delta_v2(&w.c.s, &d2, &w.c.sp).expect("reverts");
+    assert_eq!(back1, branch1);
+    assert_eq!(back1.panel_v3().unwrap().epoch_source_rows().get(&epoch), Some(&frozen_of(&[A, B], release + 1)));
+    let back0 = revert_delta_v2(&back1, &d1, &w.c.sp).expect("reverts");
+    assert_eq!(back0, fork);
+    assert!(back0.panel_v3().unwrap().epoch_source_rows().is_empty(), "the freeze goes with its block");
+
+    // The other branch: its own commitment block (at release + 3) sees another eligibility at its parent.
+    w.c.s = back0;
+    w.c.daa = fork_daa;
+    w.inputs.beacon_source = eligible(&[A, C]);
+    w.at(release + 3);
+    assert_eq!(w.engine().epoch_source_rows().get(&epoch), Some(&frozen_of(&[A, C], release + 3)));
+    let chain = PalwPanelV3BeaconSourceV1::Chain;
+    let history = ChainPanelBeaconHistoryV1::new(&w.c.s, Hash64::default(), w.c.s.panel_v3(), &chain, release + 3);
+    assert_eq!(history.eligible_profiles(release), BTreeSet::from([A, C]));
+    // And back again: branch 1's delta re-applied to the fork is branch 1, its freeze included.
+    assert_eq!(apply_delta_v2(&fork, &d1, &w.c.sp).expect("re-applies"), branch1);
+}
+
+/// **(d): a restart (the carriage encoded, decoded and loaded under the committed root) and a replay from genesis reproduce the
+/// frozen set; a tampered one does not load.** The set is committed by the engine's root inside the `panel_v3/v1` block.
+#[test]
+fn a_restart_and_a_replay_reproduce_the_frozen_set_and_a_tampered_one_does_not_load() {
+    let drive = |w: &mut V3| -> (u64, u64) {
+        let (_, release, epoch) = w.sealed_claim(62);
+        w.inputs.beacon_source = eligible(&[B, A]);
+        w.at(release + 1);
+        w.inputs.beacon_source = eligible(&[C]);
+        w.at(release + 2);
+        (release, epoch)
+    };
+    let mut w = V3::new();
+    let (release, epoch) = drive(&mut w);
+    let committed = w.c.s.state_root();
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&w.c.s)).expect("encodes");
+    let carriage: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("decodes");
+    let restarted = carriage.into_state(&w.c.sp, Some(committed)).expect("loads under its root");
+    assert_eq!(restarted, w.c.s);
+    assert_eq!(restarted.panel_v3().unwrap().epoch_source_rows().get(&epoch), Some(&frozen_of(&[A, B], release + 1)));
+
+    // A restarted node that replays the same blocks from genesis ends on the same root and set.
+    let mut replay = V3::new();
+    drive(&mut replay);
+    assert_eq!(replay.c.s.state_root(), committed);
+    assert_eq!(replay.engine().epoch_source_rows(), w.engine().epoch_source_rows());
+
+    // A frozen set swapped in an imported carriage does not load under the committed root.
+    let mut tampered = PalwStateCarriageV2::from_state(&w.c.s);
+    tampered.panel_v3.as_mut().unwrap().put_epoch_source_row(epoch, Some(frozen_of(&[A, C], release + 1)));
+    assert!(tampered.panel_v3.as_ref().unwrap().check_consistency().is_ok(), "well formed, only not the chain's");
+    assert!(tampered.into_state(&w.c.sp, Some(committed)).is_err(), "the root commits the frozen set");
+}
+
+/// **Bounded: one set per epoch, dropped once the epoch's contribution window closes** (`release + beacon_wait_daa`), and none for
+/// a derivation above the cap (never a truncated set).
+#[test]
+fn a_frozen_set_is_pruned_after_its_window_and_an_over_cap_derivation_freezes_nothing() {
+    let mut w = V3::new();
+    let (_, release, epoch) = w.sealed_claim(63);
+    w.inputs.beacon_source = eligible(&[A]);
+    w.at(release + 1);
+    assert!(w.engine().epoch_source_rows().contains_key(&epoch));
+    let wait = w.c.sp.panel_v3().unwrap().policy.beacon_wait_daa;
+    w.at(release + wait);
+    assert!(w.engine().epoch_source_rows().contains_key(&epoch), "kept through the window's last DAA");
+    let pruned = w.at(release + wait + 1);
+    assert!(w.engine().epoch_source_rows().is_empty(), "dropped once the window closed");
+    assert!(matches!(
+        epoch_sources_entries(&pruned)[..],
+        [PalwDeltaEntryV2::PanelV3EpochSources { key, old: Some(_), new: None }] if *key == epoch
+    ));
+
+    let mut over = V3::new();
+    let (_, release, _) = over.sealed_claim(64);
+    let many: Vec<[u8; 64]> = (0..=kaspa_consensus_core::palw_permissionless_panel_v1::MAX_EPOCH_SOURCES_V1 as u64)
+        .map(|i| {
+            let mut id = [0u8; 64];
+            id[..8].copy_from_slice(&i.to_le_bytes());
+            id
+        })
+        .collect();
+    over.inputs.beacon_source = eligible(&many);
+    over.at(release + 1);
+    assert!(over.engine().epoch_source_rows().is_empty(), "over the cap: nothing frozen, the epoch has no eligible source");
+}
