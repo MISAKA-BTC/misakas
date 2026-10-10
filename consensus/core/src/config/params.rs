@@ -2990,6 +2990,19 @@ pub struct Params {
     /// preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed
     /// ([`Self::validate_palw_provider_court_v1`]) with the kernel route it ships beside.
     pub palw_provider_court_v1: Option<ForkActivation>,
+    /// **ADR-0176: the bond budget** ([`crate::palw_bond_budget_v1`], lane BUDGET): past this height every reward-bearing PALW claim
+    /// reserves `(Q, B, R, F)` against its producer bond at acceptance, inside a window `W` keyed on acceptance that a reservation leaves
+    /// only at `accepted_daa + W`, and every reward block, payout and Final consumes from that reservation and never beyond it. The
+    /// value carries the versioned policy (W, the rho -> Q/B/R/F rates, the caps) — POLICY, none approved. **Dormant, with no
+    /// activation height**: `None` on every preset and in no flag-day list, hashed Some-only (value included) in both fingerprints,
+    /// collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_bond_budget_v1`]).
+    pub palw_bond_budget_v1: Option<crate::palw_bond_budget_v1::PalwBondBudgetFenceV1>,
+    /// **ADR-0177 D3–D5: the model-bond allocation** ([`crate::palw_bond_budget_v1`]): past this height a bond's signed capital
+    /// assignment (tag 140) counts toward `S_m`, and a claim's reward reservation is also bounded by its model's share
+    /// `R_PALW · f(S_m) / Σ f(S_j)` of the realized PALW carve. Needs `palw_bond_budget_v1` at or below it. **Dormant**, as the budget
+    /// fence: `None` everywhere, Some-only hashed with its policy, collapsed from `Some(never())`, refused when armed
+    /// ([`Self::validate_palw_model_bond_allocation_v1`]).
+    pub palw_model_bond_allocation_v1: Option<crate::palw_bond_budget_v1::PalwModelBondAllocationFenceV1>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -4190,6 +4203,9 @@ impl Params {
         // **RFC-0006 per-segment pricing** (`crate::palw_tir_shard_segment_v2`): refused when armed.
         self.validate_palw_tir_shard_segment_v2()?;
         self.validate_palw_provider_court_v1()?;
+        // **ADR-0176 / ADR-0177's dormant fences** (`crate::palw_bond_budget_v1`): refused when armed.
+        self.validate_palw_bond_budget_v1()?;
+        self.validate_palw_model_bond_allocation_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_inherit_v1()?;
@@ -6557,6 +6573,13 @@ impl Params {
         // The provider court's fence (DA16), likewise.
         if self.palw_provider_court_v1 == Some(ForkActivation::never()) {
             self.palw_provider_court_v1 = None;
+        }
+        // ADR-0176 / ADR-0177's fences, collapsed whole (their policies are never read there).
+        if self.palw_bond_budget_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_bond_budget_v1 = None;
+        }
+        if self.palw_model_bond_allocation_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_model_bond_allocation_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -10264,6 +10287,8 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_bond_budget_v1,
+            palw_model_bond_allocation_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -10538,6 +10563,8 @@ impl Params {
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_tir_shard_segment_v2", *palw_tir_shard_segment_v2),
             ("palw_provider_court_v1", *palw_provider_court_v1),
+            ("palw_bond_budget_v1", palw_bond_budget_v1.as_ref().map(|fence| fence.activation)),
+            ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -10846,6 +10873,17 @@ impl Params {
         if let Some(at) = self.palw_provider_court_v1 {
             h.write(b"palw_provider_court_v1");
             h.write(at.daa_score().to_le_bytes());
+        }
+        // ADR-0176 / ADR-0177's fences (lane BUDGET), NAMED likewise, with their policies (Some-only: every preset leaves them None).
+        if let Some(fence) = &self.palw_bond_budget_v1 {
+            h.write(b"palw_bond_budget_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
+        if let Some(fence) = &self.palw_model_bond_allocation_v1 {
+            h.write(b"palw_model_bond_allocation_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
         }
         // palw_fp_prefix_inherit, NAMED likewise.
         if let Some(at) = self.palw_fp_prefix_inherit {
@@ -11528,6 +11566,8 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_bond_budget_v1,
+            palw_model_bond_allocation_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -12302,6 +12342,13 @@ impl Params {
         if let Some(activation) = palw_provider_court_v1.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0176 / ADR-0177's fences. Some-only; the activation alone.
+        if let Some(fence) = palw_bond_budget_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
+        if let Some(fence) = palw_model_bond_allocation_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
             fork(activation, visit);
@@ -12838,6 +12885,8 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_bond_budget_v1,
+            palw_model_bond_allocation_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -13667,6 +13716,16 @@ impl Params {
             h.write(activation.daa_score().to_le_bytes());
         }
         // The provider court's fence (DA16), Some-only for the same reason.
+        if let Some(fence) = &palw_bond_budget_v1 {
+            h.write(b"palw_bond_budget_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
+        if let Some(fence) = &palw_model_bond_allocation_v1 {
+            h.write(b"palw_model_bond_allocation_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
         if let Some(activation) = palw_provider_court_v1 {
             h.write(b"palw_provider_court_v1");
             h.write(activation.daa_score().to_le_bytes());
@@ -14466,6 +14525,8 @@ impl Params {
             palw_signed_registration_v1: self.palw_signed_registration_v1,
             palw_tir_shard_segment_v2: self.palw_tir_shard_segment_v2,
             palw_provider_court_v1: self.palw_provider_court_v1,
+            palw_bond_budget_v1: self.palw_bond_budget_v1.clone(),
+            palw_model_bond_allocation_v1: self.palw_model_bond_allocation_v1.clone(),
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -15564,6 +15625,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_bond_budget_v1: None,
+    palw_model_bond_allocation_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15858,6 +15921,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_bond_budget_v1: None,
+    palw_model_bond_allocation_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -16134,6 +16199,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_bond_budget_v1: None,
+    palw_model_bond_allocation_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -23764,6 +23831,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_bond_budget_v1: None,
+    palw_model_bond_allocation_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,

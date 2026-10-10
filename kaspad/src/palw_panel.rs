@@ -14266,6 +14266,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
         PalwConsensusObjectV2::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
         PalwConsensusObjectV2::DaTransferV1 { .. } => "DaTransferV1",
+        // Lane BUDGET (tag 140): a bond's capital assignment.
+        PalwConsensusObjectV2::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

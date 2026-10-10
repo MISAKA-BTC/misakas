@@ -139,6 +139,10 @@ mod palw_onboarding_fold_v1;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_provider_court_fold_v1.rs"]
 mod palw_provider_court_fold_v1;
+// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's fold — the engine's journal as deltas 190/191, the capital assignment's arm (tag
+// 140), the per-block clock and the reservation / consumption hooks. A child module for the same reason as the others.
+#[path = "palw_bond_budget_fold_v1.rs"]
+mod palw_bond_budget_fold_v1;
 // RFC-0001 §2.10 (ADR-0163): the adapter class listing's fold arm — a child module for the same reason.
 #[path = "palw_adapter_class_fold_v1.rs"]
 mod palw_adapter_class_fold_v1;
@@ -1740,6 +1744,11 @@ pub struct PalwStateParamsV2 {
     /// reads it). `None` on every shipped preset, and `validate_palw_permissionless_panel_v1` refuses every armed one.
     #[borsh(skip)]
     panel_v3: Option<crate::palw_permissionless_panel_v1::PalwPanelV3ParamsV1>,
+    /// **Lane BUDGET (ADR-0176 / ADR-0177): `Params::palw_bond_budget_v1` and `palw_model_bond_allocation_v1`, mirrored by
+    /// `Params::sync_palw_bond_budget_v1`** — the fences' heights and policies (the fold's budget hooks read it). `None` on every shipped
+    /// preset, and validation refuses both armed.
+    #[borsh(skip)]
+    bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
     /// 2026-10-04 audit's fixes read it). `None` on every shipped preset.
     #[borsh(skip)]
@@ -1980,6 +1989,7 @@ impl PalwStateParamsV2 {
             floor_reserve_from_daa: None,
             anchor_window_from_daa: None,
             panel_v3: None,
+            bond_budget: None,
             audit_1004_from_daa: None,
         })
     }
@@ -2374,6 +2384,23 @@ impl PalwStateParamsV2 {
     /// The permissionless Panel's mirror, if the network arms it.
     pub fn panel_v3(&self) -> Option<&crate::palw_permissionless_panel_v1::PalwPanelV3ParamsV1> {
         self.panel_v3.as_ref()
+    }
+
+    /// **Lane BUDGET: the bond budget's mirror** — written by `Params::sync_palw_bond_budget_v1` and by nothing else (and by fixtures);
+    /// `None` where the fence is not armed.
+    pub fn with_bond_budget(mut self, mirror: Option<crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1>) -> Self {
+        self.bond_budget = mirror;
+        self
+    }
+
+    /// The bond budget's mirror, if the network arms the fence.
+    pub fn bond_budget(&self) -> Option<&crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1> {
+        self.bond_budget.as_ref()
+    }
+
+    /// **Is the bond budget in force at `daa_score`?** `false` on every shipped preset.
+    pub fn bond_budget_active_at(&self, daa_score: u64) -> bool {
+        self.bond_budget.as_ref().is_some_and(|mirror| mirror.active_at(daa_score))
     }
 
     /// **Which rule binds a claim accepted at `accepted_daa`?** `true`: the permissionless Panel (V3) — the fence is in force at
@@ -8548,6 +8575,13 @@ pub enum PalwConsensusObjectV2 {
     /// **(tag 153): a kernel claim's producer moves the claim's DA responsibility to its leases** (irreversible; see
     /// [`crate::palw_provider_court_v1`]). **Tag 153.**
     DaTransferV1 { claim: Hash64, producer: PalwBondKeyV2, signature: Vec<u8> } = 153,
+    // Tags 140–149 are lane BUDGET's (ADR-0176 / ADR-0177; the lead's allocation of 2026-10-10). Dropped by name below
+    // `palw_model_bond_allocation_v1`; rows in the bond budget's table 4.
+    /// **(tag 140): a bond's signed capital assignment** (ADR-0177 D3) — the amounts of its locked capital it assigns to registered models
+    /// (strictly ascending model ids, every amount positive, `Σ ≤` the bond's capital) under a sequence above its last. It replaces the
+    /// bond's pending assignment, which counts toward `S_m` only once seasoned (a decrease at once). Capital is never derived from claims.
+    /// `signature`: the bond's ML-DSA-87 over [`crate::palw_bond_budget_v1::palw_capital_assignment_message_v1`]. **Tag 140.**
+    BondCapitalAssignedV1 { bond: PalwBondKeyV2, assignments: Vec<(Hash64, u64)>, sequence: u64, signature: Vec<u8> } = 140,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -8574,6 +8608,13 @@ pub fn palw_object_is_provider_court_v1(object: &PalwConsensusObjectV2) -> bool 
             | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
             | PalwConsensusObjectV2::DaTransferV1 { .. }
     )
+}
+
+/// **Is this object a bond-budget object (tag 140, lane BUDGET)** — a variant an older build cannot decode and skips (A-2)? Below
+/// `Params::palw_model_bond_allocation_v1` the acceptance walk drops it by name before any slot, rent or budget is charged for it; the
+/// fold refuses it as the second lock.
+pub fn palw_object_is_bond_budget_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::BondCapitalAssignedV1 { .. })
 }
 
 /// **Is this object the signed registration envelope (tag 108)?**
@@ -11003,6 +11044,16 @@ pub enum PalwStateV2Error {
     /// **G14: a kernel route move the fold refuses** (below the fence, or the stored state does not rebuild), by the reason.
     #[error("a kernel route move is refused: {0}")]
     KernelRouteRefused(String),
+    /// **Lane BUDGET (ADR-0176 / ADR-0177): a bond-budget move the fold refuses** (a capital assignment below its fence, from a bond
+    /// that is not Active, or breaking a rule of ADR-0177 D3), by the rule's own reason. Dropped by the acceptance rehearsal; the block
+    /// stands.
+    #[error("a bond-budget move is refused: {0}")]
+    BondBudgetRefused(String),
+    /// **ADR-0176 D1: the producer bond's budget refuses this claim** (its window has no room, or it holds its open-claim cap) — checked
+    /// before the path's first write, so step 4 skips a refused own attempt (its carve withheld as a skipped attempt's, never minted) and
+    /// 4b a merged one; a free-prompt commitment or a rider batch is refused by name.
+    #[error("bond {bond:?}'s budget refuses the claim: {why} (ADR-0176)")]
+    BondBudgetExhausted { bond: PalwBondKeyV2, why: String },
     /// **RFC-0007 Parts II and IV: a mesh move the fold refuses** (a trap object below its fence, an inadmissible commit or reveal,
     /// an audit leaf below `palw_audit_mesh_v1`), by the rule's own reason.
     #[error("an audit mesh move is refused: {0}")]
@@ -11313,6 +11364,11 @@ pub struct PalwChainStateV2 {
     /// `Params::palw_probabilistic_constraints_v1` — which no network can arm — so a dormant network roots exactly as before.
     /// One Some-only root block (`kernel-route/v1`) and one carriage tail (`0xEC`) once `Some`.
     kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>,
+    /// **Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's engine** ([`crate::palw_bond_budget_v1`]) — every budgeted claim's
+    /// reservation and consumption, the bonds' windows and release queue, the capital assignments and the models' allocation. `None`
+    /// until the first block at or past `Params::palw_bond_budget_v1` — which no network can arm — so a dormant network roots exactly as
+    /// before. One Some-only root block (`bond_budget/v1`), carriage tail `0xEF`, deltas 190/191.
+    bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1>,
     /// **ADR-0124 Decisions 2 and 3: the seats on duty for each live claim, and when each
     /// discharged it.** A row is written when a panel is bound past `Params::palw_panel_economy`,
     /// one entry per drawn seat at `0`; an entry becomes the DAA at which the chain credited that
@@ -11831,6 +11887,7 @@ impl PalwChainStateV2 {
             seat_availability: BTreeMap::new(),
             seat_root_readiness: BTreeMap::new(),
             kernel_route: None,
+            bond_budget: None,
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
             round_span: 0,
@@ -14604,6 +14661,17 @@ impl PalwChainStateV2 {
             state.update(b"panel_v3/v1");
             state.update(panel.root().as_byte_slice());
         }
+        // **Lane BUDGET (ADR-0176 / ADR-0177): the bond budget, ONE Some-only block** after the permissionless Panel's — the engine
+        // exists only from the first block at or past `palw_bond_budget_v1`, which no network can arm, so a network that never arms it
+        // roots as before. The header's digest, then its five tables' roots.
+        if let Some(budget) = &self.bond_budget {
+            state.update(b"bond_budget/v1");
+            let (header, tables) = budget.root_parts();
+            state.update(header.as_byte_slice());
+            for table in tables {
+                state.update(table.as_byte_slice());
+            }
+        }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -14671,6 +14739,11 @@ impl PalwChainStateV2 {
         self.assert_mesh_consistency_v1()?;
         // RFC-0010: the permissionless Panel's engine is internally consistent and agrees with the claims, panels and duty rows.
         self.assert_panel_v3_consistency_v1(params)?;
+        // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within
+        // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.
+        if let Some(budget) = &self.bond_budget {
+            budget.check_consistency().map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("bond budget: {why}")))?;
+        }
         let mut exposure: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
         let mut safe: u128 = 0;
         // The same sum with Decision 7 switched OFF: the most `safe_weight` this claim set could
@@ -16568,6 +16641,15 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1>,
         new: Option<crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1>,
     } = 161,
+    /// **Lane BUDGET (delta number 190, declared explicitly; 190–199 are the bond budget's): a row of the bond budget** was written,
+    /// rewritten or dropped — `table` names the table ([`crate::palw_bond_budget_v1::PALW_BUDGET_TABLE_BONDS_V1`] …), the key and row
+    /// ride as their Borsh bytes. One entry for every table. Dormant: `palw_bond_budget_v1` is armed on no network.
+    BondBudgetRow { table: u8, key: Vec<u8>, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 190,
+    /// **Lane BUDGET (delta number 191): the bond budget's header** — `None → Some` creates the engine (the fence's first block).
+    BondBudgetHeader {
+        old: Option<crate::palw_bond_budget_v1::PalwBondBudgetHeaderV1>,
+        new: Option<crate::palw_bond_budget_v1::PalwBondBudgetHeaderV1>,
+    } = 191,
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -29004,6 +29086,11 @@ pub fn palw_v2_pre_object_base_v1(
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
     //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
     builder.advance_floor_state(ctx.daa_score);
+    // 1f. Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's clock — the engine created at the fence's first block (the live old
+    //     claims seeded), every reservation whose `reuse_not_before` has come released (the ONLY release), the allocation epoch rolled
+    //     and this block's carve accrued; before the sweeps and the objects, so every claim of this block reads one window. Mirrored
+    //     in `palw_v2_pre_object_base_v1`. A no-op below `palw_bond_budget_v1`, which no network can arm.
+    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the fold's step 2 closes the reveal windows here, right after the claim
     // sweep; mirrored so the acceptance rehearsal judges every object on the state step 3 sees.
@@ -29382,6 +29469,11 @@ pub fn apply_palw_transition_v7(
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
     //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
     builder.advance_floor_state(ctx.daa_score);
+    // 1f. Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's clock — the engine created at the fence's first block (the live old
+    //     claims seeded), every reservation whose `reuse_not_before` has come released (the ONLY release), the allocation epoch rolled
+    //     and this block's carve accrued; before the sweeps and the objects, so every claim of this block reads one window. Mirrored
+    //     in `palw_v2_pre_object_base_v1`. A no-op below `palw_bond_budget_v1`, which no network can arm.
+    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
 
     // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
     //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.) Claims
@@ -34841,6 +34933,10 @@ fn apply_object(
         }
         PalwConsensusObjectV2::DaTransferV1 { claim, producer, signature: _ } => {
             palw_provider_court_fold_v1::apply_da_transfer_v1(builder, ctx, claim, producer)?;
+        }
+        // **Lane BUDGET (tag 140): a bond's capital assignment** — table 4 of the bond budget (`palw_bond_budget_fold_v1`).
+        PalwConsensusObjectV2::BondCapitalAssignedV1 { bond, assignments, sequence, signature: _ } => {
+            palw_bond_budget_fold_v1::apply_capital_assignment_v1(builder, ctx, bond, assignments, *sequence)?;
         }
         // (tag 108): the acceptance walk replaces the envelope by the registration it wraps, so the fold never meets one.
         PalwConsensusObjectV2::SignedRegistrationV1 { .. } => {
@@ -40805,6 +40901,13 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::PanelV3WorkId { key, old, new } => palw_panel_v3_fold_v1::apply_work_id_entry_v1(state, key, *old, *new, revert)?,
         PalwDeltaEntryV2::PanelV3Beacon { key, old, new } => palw_panel_v3_fold_v1::apply_beacon_entry_v1(state, *key, old, new, revert)?,
         PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } => apply_kernel_route_row_v1(state, *table, key, old, new, revert)?,
+        // Lane BUDGET: the bond budget's rows and header, verify-then-install (`palw_bond_budget_fold_v1`).
+        PalwDeltaEntryV2::BondBudgetRow { table, key, old, new } => {
+            palw_bond_budget_fold_v1::apply_bond_budget_row_v1(state, *table, key, old, new, revert)?
+        }
+        PalwDeltaEntryV2::BondBudgetHeader { old, new } => {
+            palw_bond_budget_fold_v1::apply_bond_budget_header_v1(state, old, new, revert)?
+        }
         PalwDeltaEntryV2::KernelRouteHeader { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if state.kernel_route.as_ref().map(|k| &k.header) != expected.as_ref() {
@@ -41218,6 +41321,8 @@ pub struct PalwStateCarriageV2 {
     pub panel_v3: Option<misaka_palw_panel::PermissionlessPanelStateV1>,
     /// G14 lane D: the kernel route's state, in appended tail `0xEC`, present only when `Some`.
     pub kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>,
+    /// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's engine, in appended tail `0xEF`, present only when `Some`.
+    pub bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
     /// the duties are non-empty or the reserve is non-zero. Each row carries the exposure its seats
     /// reserved (ADR-0130, [`PalwPanelDutyRowV1`]); the tail gained it before any chain wrote one.
@@ -41913,6 +42018,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             crate::palw_kernel_route_v1::PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1.serialize(writer)?;
             kernel.serialize(writer)?;
         }
+        if let Some(budget) = &self.bond_budget {
+            crate::palw_bond_budget_v1::PALW_CARRIAGE_BOND_BUDGET_TAIL_V1.serialize(writer)?;
+            budget.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -42103,6 +42212,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_panel_v3 = false;
         let mut kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1> = None;
         let mut seen_kernel_route = false;
+        let mut bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1> = None;
+        let mut seen_bond_budget = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -42370,6 +42481,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_kernel_route = true;
                     kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::deserialize_reader(reader)?);
                 }
+                crate::palw_bond_budget_v1::PALW_CARRIAGE_BOND_BUDGET_TAIL_V1 if !seen_bond_budget => {
+                    seen_bond_budget = true;
+                    bond_budget = Some(crate::palw_bond_budget_v1::PalwBondBudgetStateV1::deserialize_reader(reader)?);
+                }
                 PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1 if !seen_seat_availability => {
                     seen_seat_availability = true;
                     seat_availability = BTreeMap::deserialize_reader(reader)?;
@@ -42513,6 +42628,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             seat_root_readiness,
             panel_v3,
             kernel_route,
+            bond_budget,
         })
     }
 }
@@ -42630,6 +42746,7 @@ impl PalwStateCarriageV2 {
             seat_root_readiness: state.seat_root_readiness.clone(),
             panel_v3: state.panel_v3.clone(),
             kernel_route: state.kernel_route.clone(),
+            bond_budget: state.bond_budget.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -42850,6 +42967,7 @@ impl PalwStateCarriageV2 {
             seat_root_readiness: self.seat_root_readiness,
             panel_v3: self.panel_v3,
             kernel_route: self.kernel_route,
+            bond_budget: self.bond_budget,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -59987,6 +60105,9 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::PanelV3Beacon { .. } => "panel_v3_beacon",
                     PalwDeltaEntryV2::KernelRouteRow { .. } => "kernel_route_row",
                     PalwDeltaEntryV2::KernelRouteHeader { .. } => "kernel_route_header",
+                    // Lane BUDGET: their round trip is the bond budget's suite (`palw_bond_budget_fold_v1`).
+                    PalwDeltaEntryV2::BondBudgetRow { .. } => "bond_budget_row",
+                    PalwDeltaEntryV2::BondBudgetHeader { .. } => "bond_budget_header",
                     PalwDeltaEntryV2::RealWork { .. } => "floor_state",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
@@ -60402,6 +60523,9 @@ pub(crate) mod tests {
             // G14 lane D (the kernel route, 160–169), declared explicitly.
             (160, PalwDeltaEntryV2::KernelRouteRow { table: 1, key: Vec::new(), old: None, new: None }),
             (161, PalwDeltaEntryV2::KernelRouteHeader { old: None, new: None }),
+            // Lane BUDGET (the bond budget, 190–199), declared explicitly.
+            (190, PalwDeltaEntryV2::BondBudgetRow { table: 1, key: Vec::new(), old: None, new: None }),
+            (191, PalwDeltaEntryV2::BondBudgetHeader { old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -61059,6 +61183,8 @@ pub(crate) mod tests {
             seat_root_readiness: _,
             panel_v3: _,
             kernel_route: _,
+            // Lane BUDGET: one Some-only block (`bond_budget/v1`), as the kernel route's; absent here.
+            bond_budget: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -73136,6 +73262,9 @@ pub(crate) mod tests {
     mod real_work_reserve_v1;
     // ADR-0170 (`palw_anchor_window_v1`): the execution lane's seed anchor as a window — merged attempts anchor, the anchor survives span boundaries, the schedule seeding reads it.
     mod anchor_window_v1;
+    // Lane BUDGET (ADR-0176 / ADR-0177): the bond budget through the fold — the unarmed fold byte for byte, the engine's creation,
+    // its deltas and carriage, the capital assignment, and (milestone 3) every reward path's reservation and consumption.
+    mod bond_budget_fold_v1;
 
     /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
     /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's

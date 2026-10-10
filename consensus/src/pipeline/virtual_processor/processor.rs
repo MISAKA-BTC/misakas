@@ -659,6 +659,11 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_provider_court_v1` (lane DA16, RFC-0009 §4.2): may the provider court's objects (tags 150–153) be folded. Resolved in
     /// ONE place, [`Self::palw_provider_court_at`]. Never armable by a real network.
     pub(super) palw_provider_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_bond_budget_v1` / `palw_model_bond_allocation_v1` (lane BUDGET, ADR-0176 / ADR-0177), their activations: may a
+    /// capital assignment (tag 140) be folded. Resolved in ONE place, [`Self::palw_model_bond_allocation_at`]. Never armable by a real
+    /// network.
+    pub(super) palw_bond_budget_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_model_bond_allocation_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
     /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
     pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
@@ -1290,6 +1295,8 @@ impl VirtualStateProcessor {
             palw_typed_roots_v1: params.palw_typed_roots_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_provider_court_v1: params.palw_provider_court_v1,
+            palw_bond_budget_v1: params.palw_bond_budget_v1.as_ref().map(|fence| fence.activation),
+            palw_model_bond_allocation_v1: params.palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation),
             palw_gen_v1: params.palw_gen_v1_fence(),
             palw_tir_only_v1: params.palw_tir_only_fence(),
             palw_gdn_key_heads: params.palw_gdn_key_heads_fence(),
@@ -7891,6 +7898,16 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a kernel route object was dropped by name below palw_probabilistic_constraints_v1, and the block stands (G14)");
                 continue;
             }
+            // **Lane BUDGET: below `palw_model_bond_allocation_v1` a capital assignment (tag 140) is dropped by name**, first and charged
+            // nothing (an older build cannot decode it and skips it, A-2).
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_bond_budget_v1(&object)
+                && !self.palw_model_bond_allocation_at(point.daa_score)
+            {
+                info!(
+                    "Block {block}: a capital assignment was dropped by name below palw_model_bond_allocation_v1, and the block stands (ADR-0177)"
+                );
+                continue;
+            }
             // **Lane DA16: below `palw_provider_court_v1` a provider-court object (tags 150–153) is dropped by name**, first and charged
             // nothing, for the same reason (an older build cannot decode it and skips it, A-2).
             if kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(&object)
@@ -13262,6 +13279,11 @@ impl VirtualStateProcessor {
                     let payload = borsh::to_vec(claim).map_err(|e| e.to_string())?;
                     self.palw_provider_court_signature_ok(state, point.daa_score, 153, producer, &payload, signature)?;
                 }
+                // **Lane BUDGET (tag 140): a bond's capital assignment** — the fence, an Active signer, its signature; ADR-0177 D3's rules
+                // are the fold's.
+                Obj::BondCapitalAssignedV1 { bond, assignments, sequence, signature } => {
+                    self.palw_capital_assignment_signature_ok(state, point.daa_score, bond, assignments, *sequence, signature)?;
+                }
                 // (tag 108): the acceptance walk replaces the envelope by its registration before this gate; one that reaches it was
                 // not unwrapped (a direct caller of the gate), and is refused.
                 Obj::SignedRegistrationV1 { .. } => {
@@ -14922,6 +14944,53 @@ impl VirtualStateProcessor {
             && self.palw_provider_court_v1.is_some_and(|fence| {
                 fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score)
             })
+    }
+
+    /// **Lane BUDGET: `Params::palw_model_bond_allocation_v1` resolved at the block's DAA**, in exactly one place (the bond budget's fence
+    /// must be in force too: an assignment's rows are the budget's).
+    pub(super) fn palw_model_bond_allocation_at(&self, daa_score: u64) -> bool {
+        let at = |fence: Option<kaspa_consensus_core::config::params::ForkActivation>| {
+            fence.is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score))
+        };
+        at(self.palw_bond_budget_v1) && at(self.palw_model_bond_allocation_v1)
+    }
+
+    /// **Lane BUDGET: a capital assignment's acceptance** (tag 140): the allocation fence, an Active signer bond, and the bond's ML-DSA-87
+    /// signature over `(network, bond, assignments, sequence)`. The rules of ADR-0177 D3 (canonical entries, registered models, the
+    /// capital, the sequence) are the fold's.
+    fn palw_capital_assignment_signature_ok(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+        bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        assignments: &[(kaspa_hashes::Hash64, u64)],
+        sequence: u64,
+        signature: &[u8],
+    ) -> Result<(), String> {
+        if !self.palw_model_bond_allocation_at(daa_score) {
+            return Err(
+                "a capital assignment is refused: palw_model_bond_allocation_v1 is not in force at this block (ADR-0177)".to_string()
+            );
+        }
+        let record = state.bond(bond).ok_or_else(|| "a capital assignment is signed by a bond this chain does not have".to_string())?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err("a capital assignment is signed by a bond that is not Active".to_string());
+        }
+        let message = kaspa_consensus_core::palw_bond_budget_v1::palw_capital_assignment_message_v1(
+            self.palw_network_domain_v2(),
+            bond,
+            assignments,
+            sequence,
+        );
+        if !Self::verify_mldsa87_with_context_bool(
+            &record.pubkey,
+            message.as_byte_slice(),
+            signature,
+            kaspa_consensus_core::palw_bond_budget_v1::PALW_CAPITAL_ASSIGNMENT_MLDSA87_CONTEXT_V1,
+        ) {
+            return Err("a capital assignment carries a signature its bond's key does not verify".to_string());
+        }
+        Ok(())
     }
 
     /// **Lane DA16: a provider-court object's acceptance** (tags 150–153): the court's fence, an Active signer bond, and the signer's
@@ -21790,6 +21859,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
         O::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
         O::DaTransferV1 { .. } => "DaTransferV1",
+        O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
