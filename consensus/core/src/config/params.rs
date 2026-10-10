@@ -6582,6 +6582,7 @@ impl Params {
         // The legacy held DA fence (LG14-B), likewise.
         if self.palw_legacy_held_da_v2 == Some(ForkActivation::never()) {
             self.palw_legacy_held_da_v2 = None;
+        }
         // ADR-0032's amended reporter share (lane INTF), likewise.
         if self.palw_reporter_share_v2 == Some(ForkActivation::never()) {
             self.palw_reporter_share_v2 = None;
@@ -10888,6 +10889,7 @@ impl Params {
         if let Some(at) = self.palw_legacy_held_da_v2 {
             h.write(b"palw_legacy_held_da_v2");
             h.write(at.daa_score().to_le_bytes());
+        }
         // ADR-0032's amended reporter share (lane INTF), NAMED likewise, with the share it arms beside it (the SA-4 rule:
         // two builds arming one height at different shares must not print one schedule id). Some-only.
         if let Some(at) = self.palw_reporter_share_v2 {
@@ -12353,6 +12355,8 @@ impl Params {
         }
         // The legacy held DA fence (LG14-B). Some-only.
         if let Some(activation) = palw_legacy_held_da_v2.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0032's amended reporter share (lane INTF). Some-only.
         if let Some(activation) = palw_reporter_share_v2.as_mut() {
             fork(activation, visit);
@@ -13728,6 +13732,7 @@ impl Params {
         if let Some(activation) = palw_legacy_held_da_v2 {
             h.write(b"palw_legacy_held_da_v2");
             h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0032's amended reporter share (lane INTF), Some-only for the same reason — and the share it arms beside the
         // height, so a 10% and a 49% build never announce one ruleset (the amendment's handshake rule) while every preset
         // that leaves the fence dormant (testnet-12's live ruleset included) fingerprints byte-identically to int-12.
