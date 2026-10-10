@@ -1691,6 +1691,12 @@ pub enum PalwInt12WireChangeV1 {
 /// **Every live-build wire type that has changed since `0b1c11b87`, keyed `"<path>::<item>"`** — reconciled exactly (no missing,
 /// no stale row) by `every_int12_wire_type_is_unchanged_or_classified`.
 pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
+    (
+        "consensus/core/src/dns_finality.rs::TakeoverToken",
+        PalwInt12WireChangeV1::NotCarried(
+            "the HA takeover token, removed with the retired HA-takeover path (codex/docs-retired-designs, the user, 2026-10-10); a signer message, never a lifecycle carriage",
+        ),
+    ),
     ("consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2", PalwInt12WireChangeV1::ObjectEnum),
     (
         "consensus/core/src/palw_state_v2.rs::PalwDeltaEntryV2",
@@ -4085,7 +4091,7 @@ pub(crate) mod tests {
             (106, 0x888f101d106c24bc),
             (107, 0x0081a402000ddbf4),
             (108, 0xac8ecc3ff97ec415),
-            (109, 0xc7d6537424a66090),
+            (109, 0xcd35f41524be4a4f), // OPVB: PostComplete and the derived-eligibility forms of tag 109 (under palw_probabilistic_constraints_v1)
             (110, 0x7da0346d0633de78),
             (111, 0x2d490db20d075bfe),
             (113, 0xca1188bcd2f663d2),
