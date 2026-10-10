@@ -55,7 +55,7 @@ pub(super) fn post(
     let (class, binding) = (Hash64::from_bytes(*class), Hash64::from_bytes(*binding));
     let route = builder.state.kernel_route.as_ref().unwrap();
     let mut ids = route.model_vectors_of_v2(signer);
-    if ids.len() >= MODEL_VECTORS_PER_BOND_V2 || bytes.len() > MODEL_VECTOR_MAX_POST_BYTES_V2 {
+    if ids.len() + route.flat_model_vectors_of_v3(signer).len() >= MODEL_VECTORS_PER_BOND_V2 || bytes.len() > MODEL_VECTOR_MAX_POST_BYTES_V2 {
         return Err(refused("vector catalog or carrier is full"));
     }
     let statement = route.model_artifact_binding_header_v2(&binding).ok_or_else(|| refused("no scoped vector model"))?;

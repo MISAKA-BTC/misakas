@@ -849,3 +849,15 @@ small-node paths and larger merged tails. Constants/public inputs pay reference
 line/sort work. This is a kernel resource preflight component; typed node binding,
 complete execution/checker/DA budgets, aggregate admission and actual-node/Final
 integration remain open. See `tir/evidence/rfc02-flat-scope-v5-verdict.json`.
+
+**2026-10-11 typed node update:** RFC02 §14.25 connects flat-v5 to explicit
+non-reward candidate trace statements, inner 31/32 under dormant route/PanelFree
+fences. The node rederives and persists terminal-scope budgets, shares block
+work/court capacity and original collateral with v2, and caps both catalogs at
+eight statements per bond. Actual-node synthetic tests cover leaf/whole
+convictions, invalid declarations/proof floods, independent replay and challenger
+payout redemption. Public hash openings are supplied by a test helper, not an
+actual node acquisition protocol; no execution Final, full conformance, real
+checkpoint support or privacy/liveness acceptance is established. Public flat
+hash DA/default/session rules, proof pre-emption seals and complete shared
+resource accounting remain open. Evidence: `tir/evidence/rfc02-flat-node-v3-verdict.json`.

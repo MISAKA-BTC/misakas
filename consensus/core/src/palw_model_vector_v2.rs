@@ -119,6 +119,15 @@ pub(crate) fn checked_vector_view(
     binding: Hash64,
     post: &ModelVectorPostV2,
 ) -> Result<misaka_palw_kernel::seg_ledger::SegClaimViewV1, String> {
+    checked_vector_view_with_trace_root(route, class, binding, post, post.trace_root(class.as_bytes(), binding.as_bytes()))
+}
+pub(crate) fn checked_vector_view_with_trace_root(
+    route: &PalwKernelRouteStateV1,
+    class: Hash64,
+    binding: Hash64,
+    post: &ModelVectorPostV2,
+    implementation_root: Digest,
+) -> Result<misaka_palw_kernel::seg_ledger::SegClaimViewV1, String> {
     use misaka_palw_kernel::{descriptor::*, evidence::*, seg::*, seg_ledger::*};
     let record = route.kernel_class_record_v1(&class).ok_or("no admitted vector candidate")?;
     let statement = route.model_artifact_binding_header_v2(&binding).ok_or("no scoped model statement")?;
@@ -173,7 +182,7 @@ pub(crate) fn checked_vector_view(
     let prompt_root = prompt_root_of_ids_v1(&post.prompt);
     if post.evidence.positions > record.plan.max_positions
         || post.evidence.job_input_root != job_input_root_v2(post.prompt.len() as u32, &prompt_root, fed)
-        || post.implementation_roots != [post.trace_root(class.as_bytes(), binding.as_bytes()); 3]
+        || post.implementation_roots != [implementation_root; 3]
     {
         return Err("vector input, context or implementation roots differ".into());
     }

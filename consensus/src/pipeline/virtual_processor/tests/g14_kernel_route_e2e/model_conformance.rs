@@ -1019,3 +1019,266 @@ async fn model_vector_da_deadlines_hold_capital_and_responses_survive_a_full_cou
     let replay = net.replay().await;
     net.assert_same(&replay, "DA slots, hostile proofs, late answer, held horizon, explicit default and new generation replay");
 }
+
+// Explicit flat-v5 profile. The producer helper returns only public commitment
+// structure and hash openings to the filer, never its output values. Point-unit
+// hash DA acquisition is still a separate requirement, not simulated as a node API.
+struct FlatPublicMaterial {
+    c: SegmentedCommitmentsV1,
+    hash: Option<misaka_palw_kernel::merkle5::FlatLeafHashV5>,
+}
+fn flat_vector_post(
+    net: &Net,
+    f: &Fixture,
+    binding: Hash64,
+    prompt: Vec<u32>,
+    lie: bool,
+) -> (kaspa_consensus_core::palw_flat_model_vector_v3::FlatModelVectorPostV3, FlatPublicMaterial) {
+    use kaspa_consensus_core::palw_flat_model_vector_v3::FlatModelVectorPostV3;
+    let encoder = f.d.digest() == k2_tir_v5_descriptor().digest();
+    let e = encoder.then(|| misaka_palw_kernel::seg_encoder::encoder_binding_v1(&f.p).unwrap());
+    let mut trace = if let Some(e) = e {
+        misaka_palw_kernel::seg_encoder::trace_encoder_v1(&f.p, &f.params, &e, &prompt).unwrap()
+    } else {
+        misaka_palw_kernel::trace::trace_v1(&f.p, &f.params, &prompt).unwrap()
+    };
+    if lie {
+        trace.values[0][0][0].data[0] += 1;
+    }
+    let c = SegmentedCommitmentsV1::new(
+        trace
+            .values
+            .iter()
+            .map(|p| {
+                p.iter()
+                    .map(|s| s.iter().map(|t| misaka_palw_kernel::flat_court5::flat_profile_commitment_v5(t).unwrap()).collect())
+                    .collect()
+            })
+            .collect(),
+    );
+    let hash = (trace.values[0][0][0].data.len() >= 64)
+        .then(|| misaka_palw_kernel::merkle5::FlatTreeV5::of(&trace.values[0][0][0]).unwrap().opening(0).unwrap());
+    let ledger = net.ledger();
+    let row = &ledger.conformance_classes[&f.class].1;
+    let scope = misaka_palw_kernel::flat_scope5::flat_resource_scope_v5(&f.p, f.plan.max_positions, e.as_ref()).unwrap();
+    let evidence = build_segmented_evidence_v1(
+        row.header(f.class),
+        &row.descriptor,
+        prompt.len() as u32,
+        &prompt_root_of_ids_v1(&prompt),
+        &[],
+        &c,
+    );
+    let mut post = FlatModelVectorPostV3 {
+        version: 3,
+        profile: scope.profile,
+        scope_root: scope.root(),
+        trace: kaspa_consensus_core::palw_model_vector_v2::ModelVectorPostV2 {
+            version: 2,
+            prompt,
+            max_new_tokens: if encoder { 0 } else { 1 },
+            generated: if encoder { vec![] } else { vec![3] },
+            evidence,
+            segment_roots: c.segment_roots(),
+            implementation_roots: [[0; 64]; 3],
+        },
+    };
+    post.trace.implementation_roots = [post.trace_root(f.class, binding.as_bytes()); 3];
+    (post, FlatPublicMaterial { c, hash })
+}
+async fn send_flat_vector(
+    net: &mut Net,
+    f: &Fixture,
+    binding: Hash64,
+    card: usize,
+    post: &kaspa_consensus_core::palw_flat_model_vector_v3::FlatModelVectorPostV3,
+) -> Hash64 {
+    let id = post.id(f.class, binding.as_bytes());
+    send(net, card, &K::PostFlatModelVectorV3 { class: f.class, binding: binding.as_bytes(), post: borsh::to_vec(post).unwrap() })
+        .await;
+    id
+}
+fn flat_first_relation_fault(
+    view: &kaspa_consensus_core::palw_flat_model_vector_v3::FlatModelVectorViewV3,
+    public: &FlatPublicMaterial,
+    model: &MapParams,
+) -> Vec<u8> {
+    use misaka_palw_kernel::flat_court5::*;
+    use misaka_palw_kernel::merkle3::{LeafOpeningV3, TreesV3};
+    // Only the external model copy and authenticated job input supply operands.
+    let table = model.tensors[&(0, None)].clone();
+    let token = if let Some(e) = view.trace.encoder {
+        e.ids(view.trace.job.inline_prompt.as_ref().unwrap()).unwrap()
+    } else {
+        Tensor::scalar(DType::Idx, view.trace.job.inline_prompt.as_ref().unwrap()[0] as i128).unwrap()
+    };
+    let own = vec![table.clone(), token];
+    let deps = if public.hash.is_some() {
+        flat_leaf_dependencies_v5(&view.context(), 0, 0, 0, 0, &own).unwrap()
+    } else {
+        flat_whole_dependencies_v5(&view.context(), 0, 0, 0, &own).unwrap()
+    };
+    let tree = TreesV3::of(&table);
+    let inputs = vec![
+        FlatOperandV5 {
+            node: None,
+            flat: vec![],
+            legacy: deps.leaves[0]
+                .iter()
+                .map(|(line, tile)| LeafOpeningV3::of_trees(&table, &tree, 0, *line, *tile).unwrap())
+                .collect(),
+        },
+        FlatOperandV5::default(),
+    ];
+    let output = public.c.node_opening(0, 0, 0).unwrap();
+    let fault = if let Some(leaf) = &public.hash {
+        FlatFaultV5::Leaf(FlatLeafFaultV5 { version: 5, output, leaf: leaf.clone(), inputs, token: None })
+    } else {
+        FlatFaultV5::Whole(FlatWholeFaultV5 { output, inputs, token: None })
+    };
+    fault.to_bytes().unwrap()
+}
+#[tokio::test]
+async fn flat_model_vector_node_admits_typed_scope_convicts_leaf_and_whole_once_and_replays_redemption() {
+    for encoder in [true, false] {
+        let f = vector_fixture(encoder);
+        let mut net = Net::over_cfg(config(), TestConsensus::new);
+        let binding = prepare(&mut net, &f).await;
+        let (honest, public) = flat_vector_post(&net, &f, binding, vec![0, 1], false);
+        let honest_id = send_flat_vector(&mut net, &f, binding, 4, &honest).await;
+        let view = net.api().unwrap().flat_model_vector_view_v3(&honest_id).unwrap();
+        let fault = flat_first_relation_fault(&view, &public, &f.params);
+        assert_eq!(
+            misaka_palw_kernel::flat_court5::verify_flat_fault_v5(
+                &view.context(),
+                &misaka_palw_kernel::flat_court5::FlatFaultV5::from_bytes(&fault).unwrap()
+            ),
+            Err(misaka_palw_kernel::verify::DismissalV1::NoFault)
+        );
+        let (bad, public) = flat_vector_post(&net, &f, binding, vec![0, 1], true);
+        let id = send_flat_vector(&mut net, &f, binding, 4, &bad).await;
+        let view = net.api().unwrap().flat_model_vector_view_v3(&id).unwrap();
+        let fault = flat_first_relation_fault(&view, &public, &f.params);
+        let fee = net.slashed(7);
+        send(&mut net, 7, &K::RefuteFlatModelVectorV3 { vector: honest_id.as_bytes(), proof: fault.clone() }).await;
+        assert!(net.slashed(7) > fee);
+        assert!(!net.api().unwrap().flat_model_vector_header_v3(&honest_id).unwrap().refuted);
+        let collateral = net.collateral(4);
+        send(&mut net, 4, &K::RefuteFlatModelVectorV3 { vector: id.as_bytes(), proof: fault.clone() }).await;
+        assert_eq!(net.collateral(4), collateral, "self-operator bounty refused");
+        send(&mut net, 7, &K::RefuteFlatModelVectorV3 { vector: id.as_bytes(), proof: fault.clone() }).await;
+        assert!(net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().refuted);
+        assert_eq!(collateral - net.collateral(4), mega(100));
+        let reward = mega(49);
+        assert_eq!(net.owed(7), reward);
+        let after = net.collateral(4);
+        send(&mut net, 6, &K::RefuteFlatModelVectorV3 { vector: id.as_bytes(), proof: fault }).await;
+        assert_eq!(net.collateral(4), after);
+        send(&mut net, 2, &register(&f)).await;
+        assert!(net.ledger().classes.is_empty());
+        assert!(net.ledger().jobs.is_empty() && net.ledger().claims.is_empty());
+        assert_eq!(minted_and_owed(&net, &net.chain, 7), (reward, 0));
+        let replay = net.replay().await;
+        net.assert_same(&replay, "explicit flat profile typed scope and one collected conviction");
+        assert_eq!(minted_and_owed(&net, &replay, 7), (reward, 0));
+    }
+}
+#[tokio::test]
+async fn flat_model_vector_node_scope_identity_and_hostile_filings_pay_shared_budgets_without_poisoning() {
+    let f = vector_fixture(true);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let (post, _) = flat_vector_post(&net, &f, binding, vec![0, 1], false);
+    let source = net.collateral(1);
+    for field in 0..5 {
+        let mut bad = post.clone();
+        match field {
+            0 => bad.profile[0] ^= 1,
+            1 => bad.scope_root[0] ^= 1,
+            2 => bad.trace.evidence.header.program_root[0] ^= 1,
+            3 => bad.trace.implementation_roots[0][0] ^= 1,
+            _ => bad.trace.evidence.header.artifact_root[0] ^= 1,
+        }
+        if field != 3 {
+            bad.trace.implementation_roots = [bad.trace_root(f.class, binding.as_bytes()); 3];
+        }
+        let fees = net.slashed(4);
+        let id = send_flat_vector(&mut net, &f, binding, 4, &bad).await;
+        assert!(net.api().unwrap().flat_model_vector_header_v3(&id).is_none());
+        assert!(net.slashed(4) > fees);
+        assert_eq!(net.collateral(1), source);
+    }
+    let id = send_flat_vector(&mut net, &f, binding, 4, &post).await;
+    let held = net.chain.tip_state().1.flat_model_vector_reserved_at_v3(&net.bond(4), net.daa());
+    let fees = net.slashed(4);
+    send_flat_vector(&mut net, &f, binding, 4, &post).await;
+    assert!(net.slashed(4) > fees);
+    assert_eq!(held, net.chain.tip_state().1.flat_model_vector_reserved_at_v3(&net.bond(4), net.daa()));
+    let h = net.api().unwrap().flat_model_vector_header_v3(&id).unwrap();
+    let junk = vec![5, 0, 255];
+    let work = kaspa_consensus_core::palw_flat_model_vector_v3::flat_model_vector_work_v3(
+        h.program_bytes_len,
+        h.pc_instances,
+        junk.len() + h.post_bytes_len as usize,
+    )
+    .unwrap()
+        + h.max_court_work;
+    let expected = net.ledger().policy.dismissal_fee_v1(work);
+    let cards = [2, 3, 5, 6, 7];
+    let before: Vec<_> = cards.iter().map(|c| net.slashed(*c)).collect();
+    let objects = cards
+        .iter()
+        .map(|c| (*c, net.route(*c, &K::RefuteFlatModelVectorV3 { vector: id.as_bytes(), proof: junk.clone() })))
+        .collect();
+    net.send(objects).await;
+    let deltas: Vec<_> = cards.iter().zip(before).map(|(c, b)| net.slashed(*c) - b).collect();
+    assert!(deltas.iter().all(|d| *d == 0 || *d == expected));
+    assert_eq!(deltas.iter().filter(|d| **d == expected).count(), net.ledger().policy.max_adjudications_per_block as usize);
+    assert!(!net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().refuted);
+    assert_eq!(net.collateral(1), source);
+    let replay = net.replay().await;
+    net.assert_same(&replay, "flat hostile declarations and bounded court flood");
+}
+#[tokio::test]
+async fn flat_model_vector_node_and_v2_catalogs_share_the_same_capital_and_eight_statement_limit() {
+    use kaspa_consensus_core::palw_state_v2::{palw_bond_backs_live_duty_v1, palw_bond_backs_live_duty_v2, palw_bond_committed_v1};
+    let f = vector_fixture(true);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    for n in 0..8 {
+        if n % 2 == 0 {
+            let (p, _) = flat_vector_post(&net, &f, binding, vec![n, n + 1], false);
+            let id = send_flat_vector(&mut net, &f, binding, 4, &p).await;
+            assert!(net.api().unwrap().flat_model_vector_header_v3(&id).is_some());
+            if n == 0 {
+                let state = net.chain.tip_state().1;
+                let bond = net.bond(4);
+                assert!(palw_bond_committed_v1(&state, &bond, net.daa(), None, 10) >= mega(100) as u128);
+                assert!(palw_bond_backs_live_duty_v1(&state, &bond, net.daa(), None));
+                assert!(palw_bond_backs_live_duty_v2(&state, &bond, net.daa(), None, 10));
+            }
+        } else {
+            let (p, _) = vector_post(&net, &f, binding, vec![n, n + 1], false);
+            let id = send_vector(&mut net, &f, binding, 4, &p).await;
+            assert!(net.api().unwrap().model_vector_header_v2(&id).is_some());
+        }
+    }
+    let bond = net.bond(4);
+    let state = net.chain.tip_state().1;
+    assert_eq!(state.flat_model_vector_reserved_at_v3(&bond, net.daa()), mega(400) as u128);
+    assert_eq!(state.model_vector_reserved_at_v2(&bond, net.daa()), mega(400) as u128);
+    assert!(palw_bond_committed_v1(&state, &bond, net.daa(), None, 10) >= mega(800) as u128);
+    let (p, _) = flat_vector_post(&net, &f, binding, vec![9, 10], false);
+    let id = send_flat_vector(&mut net, &f, binding, 4, &p).await;
+    assert!(net.api().unwrap().flat_model_vector_header_v3(&id).is_none());
+    let (p, _) = vector_post(&net, &f, binding, vec![9, 10], false);
+    let id = send_vector(&mut net, &f, binding, 4, &p).await;
+    assert!(net.api().unwrap().model_vector_header_v2(&id).is_none());
+    let flat_ids = net.api().unwrap().flat_model_vectors_of_v3(&bond);
+    let until = net.api().unwrap().flat_model_vector_header_v3(&flat_ids[0]).unwrap().liability_until;
+    net.beat_to(until + 30).await;
+    assert_eq!(net.chain.tip_state().1.flat_model_vector_reserved_at_v3(&bond, net.daa()), 0);
+    assert_eq!(net.api().unwrap().flat_model_vectors_of_v3(&bond).len(), 4);
+    let replay = net.replay().await;
+    net.assert_same(&replay, "mixed typed vector catalog and shared original capital");
+}

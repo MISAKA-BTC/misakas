@@ -3037,3 +3037,55 @@ fresh prosecution and independent Final/redemption, measured costs, real
 checkpoint/task/context/fidelity, privacy, economic and liveness requirements
 remain open. No shipping descriptor/class/route or fence selects flat-v5, and
 this declaration does not confer reward eligibility or full RFC02 completion.
+
+### 14.25 Dormant actual-node flat-v5 candidate statements and courts
+
+The consumer now has explicit `PostFlatModelVectorV3` and
+`RefuteFlatModelVectorV3` route kinds, inner 31/32, owned by the existing
+`palw_panel_free_v1` fence beneath the kernel-route fence. Shipping activation
+parameters remain unchanged. These are non-reward candidate trace statements,
+not execution claims or full conformance certificates.
+
+The outer v3 statement binds the flat-v5 profile and the independently derived
+§14.24 scope root to the descriptor-scoped class, model binding, program, PC,
+job inputs, generation and segmented commitments. Its nested typed job/evidence
+carrier retains the frozen v2 grammar; the new wrapper, trace/statement domains
+and route kinds select the new interpretation explicitly. Existing v2 vector
+commitments and wire encodings keep their meaning. Aux tables 57/58 store the
+new statements and bounded bond catalog separately from v2 tables.
+
+Admission derives the scope over the candidate's full admitted maximum extent,
+not merely the shorter posted trace, and persists exact filing/work/scratch
+ceilings. Every court rebuilds the typed context and scope and requires equality
+with the stored ceilings. Cached fixed-size program/PC/body lengths price and
+reserve the shared block budget before variable stored program, PC, post or
+fault decoding. The PC-map tariff includes every admitted parameter instance.
+Worst-case court admission must fit the existing guaranteed court budget and
+one-MiB proof carrier. Invalid declarations, duplicate admissible posts and
+invalid filings pay the actor's fee; exhausted block budgets stop further work.
+
+The v2 and v3 catalogs share the same eight-statement limit per bond. Both
+reserve the same original collateral through the existing global commitment
+and exit-duty accounting. Adding a profile does not add capital or court
+capacity. A successful bounded court slashes the statement poster once and
+pays the existing challenger share through ordinary payout/redemption; the
+poster's operator cannot collect that bounty. Invalid filings cannot refute
+an honest statement or slash its model binder.
+
+Actual-node synthetic trials cover the typed decoder and encoder routes,
+large leaf and small whole relation convictions, borrowed proofs, forged
+profile/scope/program/PC/role bindings, duplicate accounting, invalid-proof
+block budgets, mixed v2/v3 catalogs and independent replay/redemption. The
+filer reconstructs operands from its own model copy and authenticated public
+job input and receives only commitment/hash openings for the producer output.
+In these trials a test helper supplies those public hash openings; it is not a
+node public-acquisition protocol. No execution Final is claimed by these tests.
+
+Public flat hash-unit acquisition, localization, retention, default/session
+rules and proof pre-emption seals remain open. Candidate admission still uses
+the existing candidate plan, so this does not admit every large shape allowed
+by the staged terminal-scope component. Full execution/checker/DA/network
+resource accounting, fresh outsider acquisition through actual node APIs,
+execution Final/redemption, real checkpoint/task/context/fidelity, privacy,
+economics and honest liveness requirements remain open. The full RFC02 goal
+remains active, and no shipping fence is armed by this increment.

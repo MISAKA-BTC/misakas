@@ -18,6 +18,7 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | Performance and resource contract | TIR admission derives operation/state/cone costs; SDK conformance and single-program preflight now reuse node prosecution/carrier/block bounds and choose v1/v2/segmented v4; integrated public replay and court bounds | Shared complete resource vector across registration/claim/proof/court; aggregate load enforcement; real-size execution/evidence/hash/storage/delivery ratios |
 | Work/economic conservation | Existing canonical work, RFC8/BUDGET and ADR176 paths must be audited at their call sites | Root/slice/rider/model-copy uniqueness, shared capital/window accounting, no splitting or excess-PWU rights gain, role-swap tests |
 | Public dispute completeness | Kernel and TIR court modules exist; this alone proves no detection or end-to-end gate | Fresh outsider from public material through all relation classes, bounded terminal court, invalid-proof flood and honest liveness trials |
+| Flat-v5 typed node component | Explicit dormant inner 31/32 candidate statements bind the independently derived terminal scope; court folds recheck it, use shared block budgets and share original collateral/eight-statement catalogs with v2 | Public hash-unit acquisition/default/session rules, proof pre-emption seals, complete execution/checker/DA/network resource vector and execution Final; component tests are not full checkpoint/G14 acceptance |
 | Real models and coverage | Dated census reports exist; fixture/structural passes are not full-task passes | Revision/task/context/storage/arithmetic/plan records, real sizes, complete modalities via RFC03, independent Final references, A6 and A8 denominators/confidence/residuals |
 
 The source review names dense baselines, MoE/MXFP4, GDN/KDA with unequal head counts, sparse indexers,
@@ -1742,3 +1743,40 @@ execution/checker/DA integration and aggregate budgets, actual-node acquisition,
 fresh prosecution and independent Final/redemption remain open, along with the
 full original RFC02 checkpoint/task/context/fidelity, security, privacy,
 economics and honest liveness requirements. Shipping fences remain dormant.
+
+### Dormant flat-v5 typed actual-node component — 2026-10-11
+
+RFC02 §14.25 adds explicit non-reward candidate statements and court folds
+behind the existing route/PanelFree fences, without changing shipping presets.
+The node independently derives the full admitted terminal scope and persists
+exact proof/work/scratch limits with program/profile/PC/job/commitment identity.
+Courts reconstruct the scope and reject any difference. Fixed metadata prices
+and reserves shared work before variable stored program/PC/post/fault decoding.
+The old and new catalogs share eight statements per bond, the same original
+collateral and the existing block/court budgets. Live reservations also prevent
+exit and ordinary reuse of that capital.
+
+Synthetic actual-node tests convict large leaf and small whole relation lies,
+dismiss borrowed proofs without harming an honest statement, refuse self-bounty,
+redeem the existing challenger payout exactly once and reproduce it on an
+independent replay node. Hostile profile/scope/program/PC/role substitutions and
+court floods pay only their actors; mixed v2/v3 catalogs cannot double the cap.
+The filer uses its own model copy, public job inputs and output commitment/hash
+openings, with no producer output values. A helper supplies those public hash
+openings in these tests; public acquisition is not implemented or claimed.
+The verified selection passes **38 distinct tests**: 11 actual-node tests
+(three new), nine core codec/accounting tests (two new), 14 A-2 tests and four
+kernel route tests. Production core compilation, targeted formatting and diff
+whitespace checks pass. Earlier failed development tests are excluded.
+Commands, distinct test names and source/binary hashes accompany this increment
+in `evidence/rfc02-flat-node-v3-verdict.json`.
+
+Frozen v2 vectors preserve their wire/root semantics; the separate outer v3
+wrapper and route kinds select flat-v5 explicitly. This is candidate evidence,
+not execution registration, a full conformance certificate or an execution
+Final. Existing candidate admission still restricts the available large shapes.
+Public flat hash DA/localization/retention/default/session rules, pre-emption
+seals, full execution/checker/DA/network accounting and actual acquisition through
+node APIs remain open, together with the original real checkpoint/task/context/
+fidelity, privacy, economics and honest liveness requirements. The full RFC02
+goal remains active and incomplete.
