@@ -222,42 +222,10 @@ impl VirtualFormat {
     /// Static bounds for the untrusted streaming route. Shape/check expressions may read headers
     /// and parameters only, so preflight never depends on packed weight contents or lane values.
     pub fn streaming_work(&self) -> R<usize> {
-        fn count(root: &Node, axes: usize, roles: usize, metadata: bool) -> R<usize> {
-            let mut stack = vec![(root, 0usize)];
-            let mut work = 0usize;
-            while let Some((n, depth)) = stack.pop() {
-                work += 1;
-                if work > 256 || depth > 32 {
-                    return Err(DslError("FRONTEND_DESCRIPTOR_LIMIT: expression nodes/depth".into()));
-                }
-                let mut push = |n| stack.push((n, depth + 1));
-                match n {
-                    Node::Var(s) if metadata && *s < axes => {
-                        return Err(DslError("FRONTEND_DESCRIPTOR: lane-dependent shape/check".into()));
-                    }
-                    Node::Read(s, _) if metadata && *s < roles => {
-                        return Err(DslError("FRONTEND_DESCRIPTOR: data-dependent shape/check".into()));
-                    }
-                    Node::Read(_, ns) | Node::Call(_, ns) => ns.iter().for_each(&mut push),
-                    Node::Table(_, n) | Node::Un(_, n) => push(n),
-                    Node::Bin(_, a, b) => {
-                        push(a);
-                        push(b);
-                    }
-                    Node::Cond(c, a, b) => {
-                        push(c);
-                        push(a);
-                        push(b);
-                    }
-                    _ => {}
-                }
-            }
-            Ok(work)
-        }
         for n in self.shape.iter().chain(self.checks.iter().map(|(n, _)| n)) {
-            count(n, self.axes.len(), self.roles.len(), true)?;
+            super::expr::streaming_nodes(n, Some((self.axes.len(), self.roles.len())))?;
         }
-        count(&self.value, self.axes.len(), self.roles.len(), false)
+        super::expr::streaming_nodes(&self.value, None)
     }
 
     /// Evaluate at most 1024 elements through byte ranges of individual stored role tensors.

@@ -232,9 +232,13 @@ impl ConfigReader {
 
 }
 
+mod streamed;
+pub use streamed::TensorStreamPlan;
+
 /// A compiled `tensors` format.
 #[derive(Clone, Debug)]
 pub struct TensorsFormat {
+    stream_id: [u8; 32],
     pub name: String,
     roles: Vec<Role>,
     reader: ConfigReader,
@@ -429,6 +433,7 @@ impl TensorsFormat {
         let out_n = compile(&dims.out, &scope).map_err(|e| DslError(format!("dims.out: {e}")))?;
         let inp_n = compile(&dims.inp, &scope).map_err(|e| DslError(format!("dims.inp: {e}")))?;
         Ok(TensorsFormat {
+            stream_id: d.digest(),
             name: d.name.clone(),
             roles: rs,
             reader: ConfigReader { name: d.name.clone(), params: d.params.clone(), config: d.config.clone() },

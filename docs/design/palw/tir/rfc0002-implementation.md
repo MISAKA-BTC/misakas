@@ -148,3 +148,47 @@ checks pass. Existing compiler warnings remain. The full RFC02 goal is still act
 beacon integration, versioned dimensions/sparse/state relations, complete shared resource/economic
 accounting, real-size fidelity/performance/aggregate-load measurements, complete modalities, fresh
 outsider G14 and independent Final/redemption, and A6/A8 coverage are still required.
+
+## Verified increment — bounded saved-format interpreter APIs, 2026-10-10
+
+The `tensors` and `blocks` interpreters now prepare opaque, descriptor-pinned stream plans and
+decode ranges of at most 1024 lanes through individual byte reads (at most 8 bytes per stored
+value/field). Tensor decode preserves the original group-index, group-scale/zero/min and element
+evaluation coordinates, including act-order and ragged groups. Block decode retains global row,
+column, block and group coordinates across arbitrary range boundaries. No full code, group-index
+or scale array is materialized by these APIs.
+
+Plans pin role headers and refuse changed shape/dtype/presence or another descriptor before reads.
+Tensor metadata expressions refuse lane dependencies; raw role metadata used for shape/checks
+(compressed-tensors' I64 shape) and JSON role constants are snapshotted once with a 64 KiB total
+cap. Metadata must already be loaded exactly by the caller. Range decode uses that snapshot,
+including for metadata referenced in output expressions. The API does not claim to implement
+bounded checkpoint metadata acquisition or source-change receipt checks for these layouts yet.
+Field bounds, field offsets and row byte counts use checked arithmetic. Invalid ranges, short
+reads, invalid groups/codes/zeros and non-finite decoded binary32 values receive explicit errors.
+Compiler source pins include the new nested interpreter sources.
+
+The new range tests cover all **31 block descriptors / 186 vectors** and **9 tensor descriptors /
+40 vectors**, comparing resident decode bit patterns at chunk sizes 1, 7, 31 and 1024. Registry
+loading also checks those independent pinned vectors (with its existing signed-zero convention).
+Additional unknown descriptors exercise every global block coordinate, ragged/reordered group
+coordinates, metadata snapshots, cross-format/header substitutions and refusal paths. A header-only
+3 × 2^40 tensor test decodes one range without allocating its whole weight or group arrays.
+
+**117/117 targeted tests pass**: 86 lowerer integration tests, 17 quant unit tests and 14 SDK tests.
+
+```sh
+cargo test --locked -p misaka-palw-tir-lower \
+  --test quant_streamed_ranges --test frontend_pack --test quant_decode_pins --test quant_tensors \
+  --test corpus_formats --test quant_corpus --test quantized --test golden_lowering
+cargo test --locked -p misaka-palw-tir-lower --lib quantfmt
+cargo test --locked -p misaka-palw-sdk --test direct_tir_registration --test runtime_pack
+```
+
+New interpreter/test files and the modified frontend source pin pass `rustfmt --check`;
+`git diff --check` passes. Existing compiler warnings remain.
+
+This increment adds interpreter APIs. Frontend/SDK tensors/blocks bindings, bounded metadata reads
+and receipts remain open; existing generic descriptor bindings still accept virtual layouts only.
+Real checkpoint fidelity, live-node permissionless admission/prosecution/Final, resource/economic
+accounting and all remaining completion requirements in this ledger remain open. RFC02 is not complete.

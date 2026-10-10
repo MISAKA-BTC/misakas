@@ -134,6 +134,13 @@ open for this frontend route and receive explicit extension refusals. Existing i
 TIR routes remain available. This increment covers bounded virtual descriptor composition, not all
 saved quant formats, actual checkpoint fidelity or completed RFC02 support.
 
+The underlying stored-format interpreters now expose `prepare_streamed` and
+`decode_range_streamed` for tensors and blocks. These APIs retain global/group coordinates,
+use at most 1024 output lanes, and request individual stored values/fields (at most 8 bytes).
+Tensor plans snapshot role metadata used for shape/check expressions and JSON constants with a
+64 KiB total cap; ordinary weight/group arrays need headers only. This interpreter work is not yet
+wired into this frontend's descriptor binding, metadata provenance or SDK build path.
+
 ## Bounds and reproducibility
 
 Pack text is at most 2 MiB. Evaluation shares the existing 4M work, 64 MiB cumulative logical

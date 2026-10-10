@@ -11,6 +11,9 @@ use super::expr::{Col, DslError, Env, Mask, Name, Node, R, Scope, Table, compile
 use crate::prequant::QWeight;
 use rayon::prelude::*;
 
+mod streamed;
+pub use streamed::BlockStreamPlan;
+
 /// Variable slots of the expressions (both passes; see [`BlocksFormat::decode`]).
 const VARS: &[&str] = &["e", "j", "blk", "row", "i", "g"];
 
@@ -80,6 +83,7 @@ enum Target {
 /// A compiled `blocks` format.
 #[derive(Clone, Debug)]
 pub struct BlocksFormat {
+    stream_id: [u8; 32],
     pub name: String,
     pub elems: usize,
     pub bytes: usize,
@@ -142,7 +146,7 @@ impl BlocksFormat {
         for FieldDesc { name, at, ty, count } in fields {
             let ty = Ty::parse(ty)?;
             let n = count.unwrap_or(1);
-            if n == 0 || at + ty.size() * n > *bytes {
+            if n == 0 || n.checked_mul(ty.size()).and_then(|n| at.checked_add(n)).is_none_or(|end| end > *bytes) {
                 return Err(DslError(format!("field `{name}` ({n} × {} bytes at {at}) leaves the {bytes}-byte block", ty.size())));
             }
             if VARS.contains(&name.as_str()) || fs.iter().any(|f: &Field| f.name == *name) {
@@ -204,7 +208,7 @@ impl BlocksFormat {
             }
             other => return Err(DslError(format!("decode.target `{other}` (integers or floats)"))),
         };
-        Ok(BlocksFormat { name: d.name.clone(), elems: *elems, bytes: *bytes, fields: fs, tables, group: group_size, target })
+        Ok(BlocksFormat { stream_id: d.digest(), name: d.name.clone(), elems: *elems, bytes: *bytes, fields: fs, tables, group: group_size, target })
     }
 
     /// Whether the format decodes to stored integers (else floats).
@@ -257,7 +261,7 @@ impl BlocksFormat {
         if !inp.is_multiple_of(self.elems) {
             return Err(DslError(format!("rows of {inp} are not whole {}-element {} blocks", self.elems, self.name)));
         }
-        Ok(inp / self.elems * self.bytes)
+        (inp / self.elems).checked_mul(self.bytes).ok_or_else(|| DslError("block row byte count overflow".into()))
     }
 
     /// Decode `rows` rows of `inp` columns (`raw` is exactly their bytes) to stored integers.
@@ -419,6 +423,12 @@ impl Env for BEnv<'_> {
         &self.fmt.tables[t]
     }
     fn read(&self, slot: usize, index: &[Col], mask: Mask<'_>) -> R<Col> {
+        self.read_with(slot, index, mask, &|range| self.raw.get(range).map(std::borrow::Cow::Borrowed)
+            .ok_or_else(|| DslError("field reads past the data".into())))
+    }
+}
+impl<'a> BEnv<'a> {
+    fn read_with(&self, slot: usize, index: &[Col], mask: Mask<'_>, read: &dyn Fn(std::ops::Range<usize>) -> R<std::borrow::Cow<'a,[u8]>>) -> R<Col> {
         let f = &self.fmt.fields[slot];
         let size = f.ty.size();
         let count = f.count.unwrap_or(1) as i64;
@@ -433,8 +443,12 @@ impl Env for BEnv<'_> {
             if idx < 0 || idx >= count {
                 return Err(DslError(format!("field `{}` has {count} element(s), indexed at {idx}", f.name)));
             }
-            let off = self.base[k] as usize + f.at + idx as usize * size;
-            let b = self.raw.get(off..off + size).ok_or_else(|| DslError(format!("field `{}` reads past the data", f.name)))?;
+            let off = (self.base[k] as usize).checked_add(f.at).and_then(|at| (idx as usize).checked_mul(size).and_then(|i| at.checked_add(i)))
+                .ok_or_else(|| DslError("block field offset overflows".into()))?;
+            let end = off.checked_add(size).ok_or_else(|| DslError("block field offset overflows".into()))?;
+            let bytes = read(off..end)?;
+            if bytes.len()!=size { return Err(DslError("FRONTEND_BINDING: short block field range".into())); }
+            let b = bytes.as_ref();
             match f.ty {
                 Ty::U8 => ints.push(b[0] as i64),
                 Ty::I8 => ints.push(b[0] as i8 as i64),

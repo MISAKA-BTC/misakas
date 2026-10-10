@@ -472,6 +472,28 @@ pub fn streaming_syntax(src: &str) -> R<()> {
     Ok(())
 }
 
+/// Static work/depth bound shared by all bounded storage interpreters. Metadata cannot read
+/// lane coordinates or raw data; role-dimension readers occupy slots after the raw roles.
+pub(super) fn streaming_nodes(root: &Node, metadata: Option<(usize, usize)>) -> R<usize> {
+    let mut stack = vec![(root, 0usize)];
+    let mut work = 0usize;
+    while let Some((n, depth)) = stack.pop() {
+        work += 1;
+        if work > 256 || depth > 32 { return err("FRONTEND_DESCRIPTOR_LIMIT: expression nodes/depth"); }
+        let mut push = |n| stack.push((n, depth + 1));
+        match n {
+            Node::Var(s) if metadata.is_some_and(|(lanes, _)| *s < lanes) => return err("FRONTEND_DESCRIPTOR: lane-dependent shape/check"),
+            Node::Read(s, _) if metadata.is_some_and(|(_, roles)| *s < roles) => return err("FRONTEND_DESCRIPTOR: data-dependent shape/check"),
+            Node::Read(_, ns) | Node::Call(_, ns) => ns.iter().for_each(&mut push),
+            Node::Table(_, n) | Node::Un(_, n) => push(n),
+            Node::Bin(_, a, b) => { push(a); push(b); }
+            Node::Cond(c, a, b) => { push(c); push(a); push(b); }
+            _ => {}
+        }
+    }
+    Ok(work)
+}
+
 /// Fold constant sub-expressions (a `pow2(5)`, a `2 * 8`), so a descriptor's arithmetic on literals
 /// costs nothing per lane.
 fn fold(n: Node) -> R<Node> {
