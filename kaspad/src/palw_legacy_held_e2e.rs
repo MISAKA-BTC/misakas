@@ -750,6 +750,57 @@ async fn lg14b_a_mid_layer_matmul_lie_is_convicted_from_openings_the_outsider_bu
     let located = localize(&mut w, &liar, &o, claim, false).expect("answered");
     assert_eq!(located.leaf, liar.leaf);
     assert!(!kaspa_consensus_core::palw_shard_court_v1::palw_leaf_is_fused_v2(&located.binding, located.leaf));
+    // ADR-0177 D2 past the fence (DA16b §7.5 item 1): the int-12 held `StepLeaf` answer owes its claim part only — with the
+    // producer's model rows it is refused; without them it is accepted by membership and convicts nobody by itself.
+    use kaspa_consensus_core::palw_held_da_v1::{
+        PALW_HELD_DA_VERSION_V1, PalwHeldDisclosureCarriageV1, PalwHeldDisclosureV1, PalwHeldMissingV1,
+    };
+    let missing = PalwHeldMissingV1::StepLeaf { leaf: located.leaf };
+    let demand = kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_accusation_object_v1(
+        &h64(999),
+        claim,
+        &liar.execution_root,
+        missing,
+        located.binding.clone(),
+        bond_key(OUTSIDER),
+        liar.backend.prompt_ids_form(),
+        |_, _| Some(SIG.to_vec()),
+    )
+    .expect("a non-fused leaf is demandable");
+    w.block(vec![demand]).expect("the StepLeaf demand opens a session");
+    let evidence = kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
+        &liar.backend,
+        &liar.material,
+        &liar.ids,
+        PalwClaimRootsV1 { output_root: None, ..liar.roots() },
+        located.binding.step_leaf_count,
+        located.leaf,
+        liar.backend.prompt_ids_form(),
+    )
+    .expect("the producer's leaf evidence");
+    assert!(!evidence.artifact_openings.is_empty(), "a matmul reads model rows");
+    let answer =
+        |evidence: kaspa_consensus_core::palw_shard_court_v1::PalwLeafEvidenceV1| PalwConsensusObjectV2::MaterialDisclosedV2 {
+            claim,
+            unit: PalwDaUnitV1::Held(missing),
+            answer: PalwDaAnswerV1::Held(Box::new(PalwHeldDisclosureCarriageV1 {
+                version: PALW_HELD_DA_VERSION_V1,
+                claim,
+                missing,
+                binding: located.binding.clone(),
+                disclosure: PalwHeldDisclosureV1::StepLeaf { evidence: Box::new(evidence) },
+                signature: Vec::new(),
+            })),
+            discloser: bond_key(PRODUCER),
+            signature: SIG.to_vec(),
+        };
+    assert!(
+        matches!(rc_step(&w.s, w.daa, &[answer(evidence.clone())]), Err(PalwStateV2Error::HeldDaRefused { .. })),
+        "model rows are never compelled past the fence"
+    );
+    let stripped = kaspa_consensus_core::palw_shard_court_v1::PalwLeafEvidenceV1 { artifact_openings: Vec::new(), ..evidence };
+    w.block(vec![answer(stripped)]).expect("the claim part answers by membership");
+    assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }), "an answer convicts nobody by itself");
     file_the_recompute(&mut w, &f, &liar, &o, &located, claim);
     let PalwClaimPhaseV2::Voided { reason, .. } = phase_of(&w.s, &claim) else { panic!("voided: {:?}", phase_of(&w.s, &claim)) };
     assert_eq!(reason, PalwVoidReasonV2::CourtFraud);

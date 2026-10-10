@@ -31076,8 +31076,29 @@ fn apply_da_answer_v1(
             if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &carriage.binding) {
                 return Err(PalwStateV2Error::HeldDaRefused { claim: claim_id, why });
             }
-            // ADR-0111 Decision 4: a leaf's evidence is adjudicated by the one-move verdict.
-            if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &carriage.disclosure {
+            // **LG14-B × ADR-0177 D2 (DA16b §7.5 item 1): past `palw_legacy_held_da_v2` a `StepLeaf` answer owes its CLAIM part only**
+            // — the committed half of the leaf's refutation, checked by membership (`check_execution_step_committed_half_v1`), and NO
+            // artifact rows: model bytes are never compelled. It is retrieval, not adjudication; the accuser supplies the rows from its
+            // own copy in the one-move filing (`ShardCourtAccused`, or tag 159), so every terminal stays reachable and silence is still
+            // the producer's default. Below the fence, int-12's adjudicated answer, byte for byte.
+            if builder.extras.legacy_held_da_v2_active
+                && let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &carriage.disclosure
+            {
+                if !evidence.artifact_openings.is_empty() {
+                    return Err(PalwStateV2Error::HeldDaRefused {
+                        claim: claim_id,
+                        why: "past palw_legacy_held_da_v2 a StepLeaf answer owes no model rows (ADR-0177 D2): the accuser supplies them"
+                            .to_string(),
+                    });
+                }
+                crate::palw_step_refute::check_execution_step_committed_half_v1(
+                    &evidence.refutation,
+                    evidence.prompt_ids_opening.as_ref(),
+                    ladder,
+                )
+                .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: format!("the leaf's committed half: {e}") })?;
+            } else if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &carriage.disclosure {
+                // ADR-0111 Decision 4: a leaf's evidence is adjudicated by the one-move verdict.
                 let artifact_root =
                     builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
                 // t12 (`palw_audit_2026_09_23`): the verdict `MaterialDisclosedHeld` asks, at the same
