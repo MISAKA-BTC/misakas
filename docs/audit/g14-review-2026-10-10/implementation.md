@@ -247,3 +247,25 @@ upstream `7d8c31270`（実装`91eb1bfd4`）を`b6a90a0d0`で統合した。epoch
 [DA policy](evidence/legacy-responder-policy-final.log)、[LG14-B fold](evidence/legacy-responder-fold-final.log)、[IR回帰](evidence/legacy-responder-ir-final.log)、[dispatch pin](evidence/legacy-responder-dispatch-pin-final.log)、[filer](evidence/legacy-responder-filer-final.log)。default feature、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で実行した。初回は新しいnode-local answer enumに未対応のIR test patternを修正した。dense CKWのfixtureもleaf 0のembeddingを要求してscope検査に拒否されたため、対象を計算leafへ変更し、embedding要求の拒否を別途assertした。model-copyの開示制限を緩めていない。
 
 これはproducer応答の接続である。outsiderの共通filerはまだLG14-B descent・tag 159・fused terminalを使わず、公開tag-158履歴の収集も未接続。上記fold fixtureはfree-prompt worker factsを使っており、実serviceのtickからcanonical node上で完走するV-node試験ではない。非base0 codec、全familyの正規eligibility、最大profileのRAM・時間・期限内包含も完成判定していない。consensus encodingとactivation fenceは変更していない。
+
+## LG14-B outsiderの共通filer接続
+
+前節の未接続状態は`42d634926`時点のsnapshotである。共通filerの実service tickから、base0-codecのown replayを所有する`PalwLegacyReplicaV2`とLG14-B controllerを呼ぶよう接続した。producerのcaptureをverifierへ渡さず、自身のreplay予約とcaptureを保持する。foldはretained levelと必要blockだけを読む。denseは自身のstep hashからtreeを作る。treeのleaf数・rootとown bindingを照合し、公開bindingのstep countが異なる場合はjob/count terminalが必要としてUnjudgedに留める。
+
+公開履歴readerは選択中のunitに一致するtag 158だけをclaim execution rootへ再認証し、mapへ保存する。次の既回答unitを選ぶと古いhistoryのbackfillを再開する。学習済みfrontierはdescent round数を上限として保持し、矛盾する重複を拒否する。CKWは1件だけ保持する。reorgではbinding・frontier・witnessとwalk/cacheを破棄する。case終了時はown replayとmaterial予約も解放する。frontier学習とdescent・terminal生成はblocking workerで行う。
+
+first divergent leafがnon-fusedなら、公開bottom hashとfrontier、自分の登録modelと一致prefixからtag 159を作り、courtのverdictがExecutorGuiltyであることを確認する。embeddingのmodel-copy CKWを要求しない。fusedなら認証済みCKWを取得し、自身のhistoryからfused openingを作り、courtがGuilty又はNeedsDissectionと判断したaccusationだけを生成する。署名前にclose ceiling、署名後にcarrier規則を検査する。own courtが開いたらheld loopへ進行を委ね、on-chain conviction/defaultでsettleする。queue中でもchainのoutcome・既回答状態を読み、重複したreservation/demand/terminalを除く。
+
+step treeの一致だけでexecution MismatchをHonestにしない。checkpoint・trace・job/countの別terminalが必要としてUnjudgedに留める。これはその違反の追及完成ではなく、未確認の不正をHonestへ誤分類しない検査である。
+
+| 検証 | 結果と範囲 |
+| --- | --- |
+| `cargo test -p kaspad --lib lg14b_ --locked` | **7 V-fold PASS**。actual node controllerがreservation→binding→frontier→tag 159でgather／matmulをFinal前後にconvict。既回答の公開historyからfused CKWを学習しactual terminal→held courtでconvict。actual controllerのfrontier／CKW session非応答がDA defaultになる。honest claim、署名前ceiling、unsigned拒否、step一致だけでMismatchをclearしないguard、below-fence対照も含む |
+| `cargo test -p kaspad --lib palw_fraud_filer --locked` | **8 V-unit PASS**。後から選択した既回答unitのbackfillと既存book／linear fallback回帰 |
+| `cargo test -p kaspad --lib accepted_objects_walk_tests --locked` | **5 V-unit PASS**。paged Consensus API adapterでtag-158改ざん・重複・未選択unit・異なるclaim rootを拒否し、正しい選択回答を失わない |
+| `cargo test -p kaspad --lib p2_7_disclosure_policy --locked` | **8 V-unit PASS**。producer DA workerの既存policy回帰 |
+| `cargo test -p kaspad --lib tir_court_e2e --locked` | **19 PASS**。tag-55 IR responder/court回帰 |
+
+[controller fold](evidence/legacy-filer-descent-fold-final.log)、[book](evidence/legacy-filer-descent-book-final.log)、[public reader](evidence/legacy-filer-descent-reader-final.log)、[producer](evidence/legacy-filer-descent-producer-final.log)、[IR](evidence/legacy-filer-descent-ir-final.log)。default feature（EVMを含む）、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で実行した。初回reader testのlocal import不足を修正して再実行した。初回compileのbackend traitに存在しないprompt-form読出しも、chain classからformを渡す形に修正した。
+
+fold fixtureのjobは既存のsupplied public free-prompt job／Attempt envelopeを使い、own replayとcontrollerを注入する。実serviceの`fraud_filer_start_replay_v1`、ledger予約、mempool→template→block、fresh-nodeのpaged readを一続きにしたV-nodeではない。production startupは現在free-promptをUnjudgedとする。step countやcheckpoint/traceのみの不一致、非base0 codec、全familyの正規eligibilityと最大profile、reservation飽和・期限内包含・恒久prune後の再取得も残る。held-court後半のchain readerに別のDAA差ベースのblock capがあるため、そのpaginationも必要。consensus encodingとactivation fenceは変更していない。

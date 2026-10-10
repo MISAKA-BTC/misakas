@@ -17,8 +17,9 @@
 //! **The producer's half** — the answers an honest producer owes from its retention ([`palw_legacy_held_answer_v2`]): a node's
 //! frontier and siblings from its fold (the retained level, a replayed block below it), a leaf's committed half from its own leaf
 //! prover. The node's DA worker (`palw_panel::rcore_da_answers_v1`) now dispatches due legacy units to this responder under its
-//! verified-material and memory-reservation path, then queues signed tag-158 carriers. The verifier's large-tree descent and
-//! terminals still need wiring into LG14-A's common filer (`palw_fraud_filer`); those remain pure functions driven through the fold.
+//! verified-material and memory-reservation path, then queues signed tag-158 carriers. LG14-A's common filer now owns an independent
+//! [`PalwLegacyReplicaV2`] for base0-codec replays, reads authenticated public tag-158 history and queues these step terminals. Other
+//! mismatch classes and fresh-node service completion remain separate acceptance conditions.
 
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1};
 use kaspa_consensus_core::palw_legacy_held_da_v2::{
@@ -36,6 +37,7 @@ use kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_width_v1;
 use kaspa_hashes::Hash64;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// How many replayed blocks a fold tree keeps at once (the descent and an opening read at most two edges at a time).
 const PALW_LEGACY_TREE_BLOCK_CACHE_V2: usize = 4;
@@ -215,6 +217,130 @@ impl PalwLegacyOwnTreeV2 for PalwLegacyTreeV2<'_> {
                 nodes.get(usize::try_from(index.checked_sub(start)?).ok()?).copied()
             }
         }
+    }
+}
+
+/// The public filer's own execution, held under its replay reservation. It owns no producer material. Borrowed tree readers
+/// live inside each blocking step, so their block cache serves the whole descent without a self-referential or shared Cell tree.
+pub(crate) struct PalwLegacyReplicaV2 {
+    pub(crate) backend: Arc<dyn PalwExecutionBackendV1>,
+    pub(crate) capture: Arc<Vec<u8>>,
+    pub(crate) prompt_ids: Arc<Vec<u32>>,
+    pub(crate) form: PalwPromptIdsFormV1,
+    pub(crate) roots: PalwClaimRootsV1,
+}
+
+impl PalwLegacyReplicaV2 {
+    fn with_step_tree<T>(&self, use_tree: impl FnOnce(&PalwLegacyTreeV2<'_>) -> Result<T, String>) -> Result<T, String> {
+        use misaka_palw_base0::produce::{Base0RetentionV1, base0_dense_step_leaves_capped_v1, base0_material_decode_any_v1};
+        let retention = base0_material_decode_any_v1(&self.capture).map_err(|e| format!("this replica has no legacy tree: {e:?}"))?;
+        let binding = retention.binding();
+        if binding.committed_execution_root != self.roots.execution_root || binding.full_logits_trace_root != self.roots.trace_root {
+            return Err("the replica's capture is not its own execution".into());
+        }
+        let tree = match &retention {
+            Base0RetentionV1::Folded(m) => {
+                PalwLegacyTreeV2::from_fold_v1(self.backend.as_ref(), &self.capture, &self.prompt_ids, &m.step_tree)?
+            }
+            Base0RetentionV1::Dense((binding, tiles, ..)) => PalwLegacyTreeV2::leaves_v1(
+                base0_dense_step_leaves_capped_v1(binding, tiles, binding.step_leaf_count)
+                    .ok_or("the replica has no complete dense step tree")?,
+            ),
+        };
+        if tree.leaf_count() != binding.step_leaf_count || tree.root() != Some(binding.step_merkle_root) {
+            return Err("the replica's own tree does not reproduce its binding".into());
+        }
+        use_tree(&tree)
+    }
+
+    pub(crate) fn descent(
+        &self,
+        binding: &PalwStepBindingV2,
+        frontiers: &[kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyFrontierV2],
+    ) -> Result<kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyDescentStepV2, String> {
+        self.with_step_tree(|tree| {
+            if tree.leaf_count() != binding.step_leaf_count {
+                return Err("the claim's step count is not this public job's: the job/count terminal is required".into());
+            }
+            Ok(kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_descent_next_v2(
+                kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyTreeV2::Step,
+                binding.step_leaf_count,
+                &binding.step_merkle_root,
+                tree,
+                frontiers,
+            ))
+        })
+    }
+
+    /// Build an unsigned terminal only after the court's own predicate says it is guilty or needs the fused dissection.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn terminal(
+        &self,
+        binding: &PalwStepBindingV2,
+        frontiers: &[kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyFrontierV2],
+        witness: Option<&PalwCommittedKernelWitnessV2>,
+        leaf: u64,
+        claim: Hash64,
+        bound_to: &kaspa_consensus_core::palw_shard_court_v1::PalwOneMoveClaimV2,
+        trace_root: Hash64,
+        producer: PalwBondKeyV2,
+        accuser: PalwBondKeyV2,
+        ladder: u64,
+    ) -> Result<PalwConsensusObjectV2, String> {
+        use kaspa_consensus_core::palw_legacy_held_da_v2::{palw_legacy_leaf_is_fused_v2, palw_legacy_leaf_recompute_verdict_v2};
+        use kaspa_consensus_core::palw_shard_court_v1::PalwShardCourtVerdictV1;
+        if palw_legacy_leaf_is_fused_v2(binding, leaf) {
+            let witness = witness.ok_or("the fused terminal needs the public committed witness")?;
+            if witness.refutation.binding != *binding || witness.refutation.output_opening.leaf_index != leaf {
+                return Err("the public witness is not the located leaf of this claim".into());
+            }
+            let evidence = palw_legacy_fused_opening_v2(
+                self.backend.as_ref(),
+                &self.capture,
+                &self.prompt_ids,
+                witness,
+                bound_to.artifact_root,
+                ladder,
+            )?
+            .ok_or("the own history agrees with the committed fused tile: nothing guilty to file")?;
+            match evidence.verdict_at_v2(bound_to, ladder, true).map_err(|e| format!("the fused terminal does not adjudicate: {e}"))? {
+                PalwShardCourtVerdictV1::ExecutorGuilty | PalwShardCourtVerdictV1::NeedsDissection => {}
+                _ => return Err("the court does not find this fused accusation actionable".into()),
+            }
+            let accusation = evidence.into_accusation_v1(claim, bound_to.execution_root, trace_root, producer, accuser);
+            accusation.validate_shape(ladder).map_err(|e| format!("the fused accusation's shape: {e}"))?;
+            return Ok(PalwConsensusObjectV2::ShardCourtAccused { accusation: Box::new(accusation) });
+        }
+        self.with_step_tree(|tree| {
+            let committed = frontiers
+                .iter()
+                .find_map(|frontier| frontier.leaf_hash(leaf))
+                .ok_or("no public bottom frontier commits the located leaf")?;
+            let view = PalwLegacyNodeViewV2 { leaf_count: binding.step_leaf_count, divergent: leaf, frontiers, own: tree };
+            let accusation = palw_legacy_leaf_recompute_v2(
+                self.backend.as_ref(),
+                &self.capture,
+                &self.prompt_ids,
+                self.roots,
+                self.form,
+                binding,
+                &view,
+                committed,
+                leaf,
+                claim,
+                trace_root,
+                producer,
+                accuser,
+            )?;
+            match palw_legacy_leaf_recompute_verdict_v2(&accusation, bound_to, ladder)
+                .map_err(|e| format!("the recompute terminal does not adjudicate: {e}"))?
+            {
+                PalwShardCourtVerdictV1::ExecutorGuilty => {
+                    Ok(PalwConsensusObjectV2::LegacyLeafRecomputedV2 { accusation: Box::new(accusation) })
+                }
+                _ => Err("the court does not find the located leaf guilty: nothing filed".into()),
+            }
+        })
     }
 }
 

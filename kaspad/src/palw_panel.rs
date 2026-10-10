@@ -18771,23 +18771,124 @@ mod accepted_objects_walk_tests {
         use super::palw_fraud_filer::palw_fraud_filer_read_page_v1 as page;
         let mut chain = repeated_daa_chain();
         let wanted = BTreeMap::new();
-        let (first, reset, _) = page(&chain, 100, 100, None, 3, &wanted).unwrap();
+        let legacy_wanted = BTreeMap::new();
+        let (first, reset, _) = page(&chain, 100, 100, None, 3, &wanted, &legacy_wanted).unwrap();
         assert!(!reset);
         assert_eq!((first.anchor, first.anchor_daa, first.next), (hash(8), 102, Some(hash(5))));
         append(&mut chain, 9, 150, 8);
-        let (second, reset, _) = page(&chain, 100, 100, Some(first), 3, &wanted).unwrap();
+        let (second, reset, _) = page(&chain, 100, 100, Some(first), 3, &wanted, &legacy_wanted).unwrap();
         assert!(!reset);
         assert_eq!((second.anchor, second.anchor_daa, second.next), (hash(8), 102, Some(hash(2))));
-        let (complete, _, _) = page(&chain, 100, 100, Some(second), 3, &wanted).unwrap();
+        let (complete, _, _) = page(&chain, 100, 100, Some(second), 3, &wanted, &legacy_wanted).unwrap();
         assert_eq!((complete.anchor_daa, complete.next), (102, None), "arrivals do not move the in-progress watermark");
-        let (recent, reset, _) = page(&chain, 100, 140, Some(complete), 3, &wanted).unwrap();
+        let (recent, reset, _) = page(&chain, 100, 140, Some(complete), 3, &wanted, &legacy_wanted).unwrap();
         assert!(!reset);
         assert_eq!((recent.anchor, recent.floor, recent.next), (hash(9), 140, None));
         // Another branch forks below the completed incremental floor. Its old answers must be read, not skipped at DAA 140.
         append(&mut chain, 20, 150, 3);
-        let (fork, reset, _) = page(&chain, 100, 140, Some(recent), 2, &wanted).unwrap();
+        let (fork, reset, _) = page(&chain, 100, 140, Some(recent), 2, &wanted, &legacy_wanted).unwrap();
         assert!(reset);
         assert_eq!((fork.anchor, fork.floor, fork.next), (hash(20), 100, Some(hash(2))));
+    }
+
+    #[test]
+    fn the_filer_reads_only_the_requested_authenticated_legacy_unit_from_public_history() {
+        use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1};
+        use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+        use kaspa_consensus_core::palw_legacy_held_da_v2::{PalwLegacyHeldAnswerV2, PalwLegacyHeldUnitV2};
+        let backend = super::seat_s_tests::floor_backend();
+        let anchor = Hash64::from_u64_word(0xCAFE);
+        let (job, ids) = backend.job_for_anchor(anchor).unwrap();
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, true);
+        let run = backend.execute(&job, &ids).unwrap();
+        let ids: Vec<u32> = ids.into_iter().map(|id| id.try_into().unwrap()).collect();
+        let binding = misaka_palw_base0::produce::base0_material_decode_any_v1(&run.material).unwrap().binding().clone();
+        let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count);
+        let selected = PalwLegacyHeldUnitV2::StepNode { level: height, index: 0 };
+        let roots = PalwClaimRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            anchor,
+            attempt_draw: Some(true),
+            output_root: None,
+            job_pin: None,
+        };
+        let claim = Hash64::from_u64_word(0xC1);
+        let make = |unit| {
+            let (binding, answer) = crate::palw_legacy_held_v2::palw_legacy_held_capture_answer_v2(
+                &backend,
+                &run.material,
+                &ids,
+                roots,
+                backend.prompt_ids_form(),
+                &unit,
+            )
+            .unwrap();
+            palw_da_built_answer_object_v1(
+                &Hash64::from_u64_word(0xD0),
+                claim,
+                PalwDaUnitV1::LegacyHeldV2(unit),
+                PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((binding, answer))),
+                PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
+                u64::MAX,
+                |_, _| Some(vec![1]),
+            )
+            .unwrap()
+        };
+        let good = make(selected);
+        let unused = make(PalwLegacyHeldUnitV2::StepNode { level: height - 1, index: 0 });
+        let mut corrupt = good.clone();
+        let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = &mut corrupt else { unreachable!() };
+        let PalwLegacyHeldAnswerV2::Node { frontier, .. } = &mut answer.answer else { unreachable!() };
+        frontier[0] = Hash64::from_u64_word(0xBAD);
+        let mut chain = repeated_daa_chain();
+        // A carrier can be accepted even when its lifecycle object was refused. Wrong bytes occur first in the newest-first read;
+        // valid but unselected units and repeats must neither poison the selected answer nor enlarge this case's cache.
+        let objects = vec![good.clone(), unused, good.clone(), corrupt];
+        let txs = objects
+            .into_iter()
+            .map(|object| {
+                let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+                Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload)
+            })
+            .collect::<Vec<_>>();
+        let count = txs.len();
+        chain.blocks.insert(hash(2), Block::new(chain.headers[&hash(2)].as_ref().clone(), txs));
+        chain.acceptance.insert(
+            hash(2),
+            Arc::new(vec![MergesetBlockAcceptanceData {
+                block_hash: hash(2),
+                accepted_transactions: (0..count)
+                    .map(|i| AcceptedTxEntry { transaction_id: Default::default(), index_within_block: i as u32 })
+                    .collect(),
+            }]),
+        );
+        let wanted = BTreeMap::from([(claim, run.execution_root)]);
+        let selected_units = BTreeMap::from([(claim, selected)]);
+        let mut previous = None;
+        let mut found = Vec::new();
+        loop {
+            let (walk, reset, answers) =
+                super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, previous, 3, &wanted, &selected_units)
+                    .unwrap();
+            assert!(!reset);
+            found.extend(answers);
+            previous = Some(walk);
+            if walk.next.is_none() {
+                break;
+            }
+        }
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, (claim, PalwDaUnitV1::LegacyHeldV2(selected)));
+        let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = good else { unreachable!() };
+        assert_eq!(found[0].1, PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
+        let wrong_root = BTreeMap::from([(claim, Hash64::from_u64_word(0xBAD))]);
+        assert!(
+            super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, None, 100, &wrong_root, &selected_units,)
+                .unwrap()
+                .2
+                .is_empty()
+        );
     }
 
     /// **ADR-0093 Decision 7's read: accepted objects only, newest first, down to the height.**

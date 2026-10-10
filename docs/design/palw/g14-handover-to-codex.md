@@ -10,11 +10,12 @@
 - `f89431d82`までにK2S `4a6f20aaf`を統合し、small-value whole-value court、認証済みmaterialからの独立再実行、RAM/state/filingの上限を修正した。64要素hiding tileと累積scope、最大chunk数を含む期限は残る。shape上限計算は実modelのpeak測定ではない。
 - `74d59907f`で固定報酬jobの生成数を束縛し、短い正しい計算が満額を得るF-B1を修正した。kernel回帰と実nodeの受入拒否・完全実行Finalを検証済み。
 - `e9eee4911`でLG14-Aを統合し、`a4a62ec21`で単独の不正leafを見逃すmidpoint探索と未認証responseのcache汚染を修正した。core 10件、fold 7件、kaspad filer 5件、実nodeの最終batch 7件と修正後reorg 1件、A2U 3件がPASS。shipping repinは差分なし。実node8件が未解決のままという下記記述は旧snapshotの状態である。
-- LG14-Bの大型tree/fused court本番接続、fresh verifier自身の公開readからの完走、reservation全枠の占有対策、期限内包含は未達。小型fallbackは34-session枠を超えるclaimをUnjudgedとする。
+- LG14-Bのbase0-codec step descentとtag-159／CKW fused openingを共通filerへ接続した。fresh verifier自身のnode startupから公開read・包含までの完走、checkpoint/trace/job/count不一致、reservation全枠の占有対策、期限内包含は未達。unsupported-codecの小型fallbackは34-session枠を超えるclaimをUnjudgedとする。
 - G14Rのverifier-payとPESGはintegration `0b73fd33f`から統合済み。F-MEAS-07のnet徴収計算も現行`required_reservation`では自己還流分を控除する項を含み、下記の総額だけを数えるという記述は現HEADに当てはまらない。
 - integration `7d8c31270`のbeacon source-set freezeを`b6a90a0d0`で統合した。検証結果とscopeは監査記録へ記載する。
 - legacyの公開履歴readerを件数制限付きpaginationへ変更し、開始tipの固定、新しいMismatchのbackfill、reorg時の読み直し、認証済みの利用対象unitだけのcacheを実装した。filer 7件とConsensus API adapter reader 4件、計11 V-unit PASS。恒久的なprune後の取得・再要求とfresh-node追及のV-node試験は残る。
 - LG14-B producer応答を既存DA workerへ接続した。検証済みbase0-codecのdense/fold保持からstep node・checkpoint node・CKWを作り、認証・scope・close ceiling・署名・carrier検査を通るtag 158をqueueする。DA policy 8 V-unit、LG14-B 6 V-fold、IR回帰19件がPASS。outsiderの大型descent/terminalとproduction-serviceのV-nodeは残る。
+- 上記producer接続後、outsiderの共通filerをLG14-Bへ接続した。独立したown replayからstep treeを読み、認証済み公開frontierでdescentし、court自身のpredicateを通ったtag 159又はCKW fused accusationを署名・queueする。公開tag-158履歴は選択unitだけをcacheし、後から選ぶ既回答unitもbackfillする。LG14-B 7 V-fold、filer 8 V-unit、公開reader 5 V-unit PASS。Final前後のgather/matmulとfused conviction、frontier/CKWのDA defaultをactual controllerで確認した。full serviceのV-nodeや最大profileの測定は未達で、step treeのみの一致からHonestとは判定しない。held-court後半の旧readerもpaginationが必要。
 
 G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
 
