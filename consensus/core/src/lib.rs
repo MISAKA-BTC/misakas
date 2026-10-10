@@ -566,6 +566,9 @@ pub mod palw_reporter_share_v2;
 /// to the claim's own hard deadline, the reserved DA budget, direct proofs over open sessions, and the common filer's pure half — fence
 /// `palw_legacy_public_filer_v1` (dormant, refused when armed).
 pub mod palw_legacy_public_filer_v1;
+/// Lane G14-V: authenticated subtree descent over committed step-discipline trees (step, tiled logits rows and tiles, checkpoint
+/// leg) — node policy, consensus-inert; replaces the linear legacy scan and walks past an agreeing step tree.
+pub mod palw_auth_descent_v1;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
 /// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).

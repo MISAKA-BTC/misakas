@@ -34,13 +34,13 @@ use kaspa_muhash::MuHash;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
 use std::{collections::BTreeSet, sync::Arc, thread::JoinHandle, time::Duration};
 
-struct OnetimeTxSelector {
+pub(super) struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,
     rejected: bool,
 }
 
 impl OnetimeTxSelector {
-    fn new(txs: Vec<Transaction>) -> Self {
+    pub(super) fn new(txs: Vec<Transaction>) -> Self {
         Self { txs: Some(txs), rejected: false }
     }
 }
@@ -65,9 +65,9 @@ impl TemplateTransactionSelector for OnetimeTxSelector {
     }
 }
 
-type Funding = (TransactionOutpoint, UtxoEntry);
-const OUTSIDER: usize = 8;
-fn key(card: usize) -> &'static libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair {
+pub(super) type Funding = (TransactionOutpoint, UtxoEntry);
+pub(super) const OUTSIDER: usize = 8;
+pub(super) fn key(card: usize) -> &'static libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair {
     static KEYS: std::sync::OnceLock<Vec<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>> = std::sync::OnceLock::new();
     &KEYS.get_or_init(|| {
         (0..9)
@@ -79,19 +79,19 @@ fn key(card: usize) -> &'static libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair {
             .collect()
     })[card]
 }
-fn card_pubkey(card: usize) -> Vec<u8> {
+pub(super) fn card_pubkey(card: usize) -> Vec<u8> {
     key(card).verification_key.as_ref().to_vec()
 }
-fn card_payout_payload(card: usize) -> Hash64 {
+pub(super) fn card_payout_payload(card: usize) -> Hash64 {
     Hash64::from_bytes(kaspa_hashes::blake2b_512_address_payload(&card_pubkey(card)).as_bytes())
 }
-fn card_payout_spk(card: usize) -> ScriptPublicKey {
+pub(super) fn card_payout_spk(card: usize) -> ScriptPublicKey {
     signable_script(&card_pubkey(card))
 }
-fn signed(card: usize, message: &[u8], context: &[u8]) -> Vec<u8> {
+pub(super) fn signed(card: usize, message: &[u8], context: &[u8]) -> Vec<u8> {
     libcrux_ml_dsa::ml_dsa_87::sign(&key(card).signing_key, message, context, [0x5A; 32]).unwrap().as_ref().to_vec()
 }
-fn fixture_config() -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
+pub(super) fn fixture_config() -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
     let mut params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
     let PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else { unreachable!() };
     let mut row = 0;
@@ -137,16 +137,16 @@ fn fixture_config() -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding
     let bundle = bundle.clone();
     (Config::new(params), bundle, premine, floats.into_iter().map(Option::unwrap).collect())
 }
-struct Chain {
-    tc: Arc<TestConsensus>,
+pub(super) struct Chain {
+    pub(super) tc: Arc<TestConsensus>,
     handles: Vec<JoinHandle<()>>,
-    config: Config,
-    bundle: PalwConsensusParamsV2,
-    bonds: Vec<PalwBondKeyV2>,
-    network_domain: Hash64,
-    time: u64,
-    nonce: u64,
-    history: Vec<Block>,
+    pub(super) config: Config,
+    pub(super) bundle: PalwConsensusParamsV2,
+    pub(super) bonds: Vec<PalwBondKeyV2>,
+    pub(super) network_domain: Hash64,
+    pub(super) time: u64,
+    pub(super) nonce: u64,
+    pub(super) history: Vec<Block>,
 }
 impl Drop for Chain {
     fn drop(&mut self) {
@@ -154,7 +154,7 @@ impl Drop for Chain {
     }
 }
 impl Chain {
-    fn new(config: Config, bundle: PalwConsensusParamsV2, premine: &[Funding]) -> Self {
+    pub(super) fn new(config: Config, bundle: PalwConsensusParamsV2, premine: &[Funding]) -> Self {
         let tc = Arc::new(TestConsensus::new(&config));
         let mut multiset = MuHash::new();
         tc.append_imported_pruning_point_utxos(premine, &mut multiset);
@@ -172,26 +172,26 @@ impl Chain {
         let time = config.params.genesis.timestamp;
         Self { tc, handles, config, bundle, bonds, network_domain, time, nonce: 0, history: vec![] }
     }
-    fn daa(&self) -> u64 {
+    pub(super) fn daa(&self) -> u64 {
         self.tc.get_virtual_daa_score()
     }
-    fn view(&self, claim: Hash64) -> PalwLegacyDisputeViewV1 {
+    pub(super) fn view(&self, claim: Hash64) -> PalwLegacyDisputeViewV1 {
         self.tc.palw_legacy_dispute_v1(claim).unwrap()
     }
-    async fn insert(&mut self, block: MutableBlock) -> Block {
+    pub(super) async fn insert(&mut self, block: MutableBlock) -> Block {
         let block = block.to_immutable();
         self.tc.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("real pipeline accepts block");
         self.history.push(block.clone());
         block
     }
-    fn stamp(&mut self, block: &mut MutableBlock) {
+    pub(super) fn stamp(&mut self, block: &mut MutableBlock) {
         self.time += self.config.params.target_time_per_block();
         self.nonce += 1;
         block.header.timestamp = self.time;
         block.header.nonce = self.nonce;
         block.header.finalize();
     }
-    async fn heartbeat(&mut self, txs: Vec<Transaction>) -> Block {
+    pub(super) async fn heartbeat(&mut self, txs: Vec<Transaction>) -> Block {
         let mut template = self
             .tc
             .build_block_template(
@@ -205,7 +205,7 @@ impl Chain {
         self.time = self.time.max(template.block.header.timestamp);
         self.insert(template.block).await
     }
-    async fn advance(&mut self, to: u64) {
+    pub(super) async fn advance(&mut self, to: u64) {
         let start = self.daa();
         let cap = to.saturating_sub(start).saturating_mul(4).saturating_add(400);
         for n in 0..cap {
@@ -219,7 +219,7 @@ impl Chain {
         }
         panic!("heartbeat did not reach {to}, DAA {}", self.daa());
     }
-    async fn send(
+    pub(super) async fn send(
         &mut self,
         card: usize,
         object: &PalwConsensusObjectV2,
@@ -248,7 +248,7 @@ impl Chain {
         );
         tx
     }
-    async fn import_fresh(&mut self, premine: &[Funding]) {
+    pub(super) async fn import_fresh(&mut self, premine: &[Funding]) {
         let mut fresh = Chain::new(self.config.clone(), self.bundle.clone(), premine);
         for block in &self.history {
             fresh
@@ -265,7 +265,7 @@ impl Chain {
         fresh.history = std::mem::take(&mut self.history);
         std::mem::swap(self, &mut fresh); // The old database and processors are shut down here.
     }
-    fn build_attempt_drawn(
+    pub(super) fn build_attempt_drawn(
         &mut self,
         card: usize,
         step_ms: u64,
@@ -348,12 +348,12 @@ impl Chain {
     }
 }
 
-struct ServiceRun {
-    service: Arc<PalwPanelService>,
-    task: Option<tokio::task::JoinHandle<()>>,
+pub(super) struct ServiceRun {
+    pub(super) service: Arc<PalwPanelService>,
+    pub(super) task: Option<tokio::task::JoinHandle<()>>,
 }
 impl ServiceRun {
-    async fn finish(&mut self) {
+    pub(super) async fn finish(&mut self) {
         self.service.clone().signal_exit();
         tokio::time::timeout(Duration::from_secs(10), self.task.take().unwrap())
             .await
@@ -370,7 +370,7 @@ impl Drop for ServiceRun {
         }
     }
 }
-fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondKeyV2, funding: &Funding) -> PalwPanelConfig {
+pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondKeyV2, funding: &Funding) -> PalwPanelConfig {
     let key_path = dir.join("verifier.key");
     let mut seed = [0xB0; 32];
     seed[0] += OUTSIDER as u8;
@@ -429,7 +429,7 @@ fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondKeyV2, fundi
         producer_class: None,
     }
 }
-async fn pool_heartbeat(chain: &mut Chain, manager: &Arc<ConsensusManager>, pool: &MiningManagerProxy) -> Block {
+pub(super) async fn pool_heartbeat(chain: &mut Chain, manager: &Arc<ConsensusManager>, pool: &MiningManagerProxy) -> Block {
     let session = manager.consensus().unguarded_session();
     let mut template = pool.clone().get_block_template(&session, MinerData::new(card_payout_spk(0), vec![])).await.unwrap();
     chain.stamp(&mut template.block);

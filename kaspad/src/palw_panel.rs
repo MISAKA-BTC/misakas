@@ -67,6 +67,10 @@ use kaspa_utils::triggers::SingleTrigger;
 #[path = "palw_service_public_e2e.rs"]
 mod palw_service_public_e2e;
 
+#[cfg(test)]
+#[path = "palw_service_violations_e2e.rs"]
+mod palw_service_violations_e2e;
+
 #[path = "palw_carrier_fees.rs"]
 mod palw_carrier_fees;
 
@@ -19076,7 +19080,7 @@ mod accepted_objects_walk_tests {
         chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), txs));
         let input_selected = BTreeMap::from([(claim, input_unit)]);
         let (_, _, input_answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_with_form_v1(
-            &chain, 100, 100, None, 100, &wanted, &input_selected, backend.prompt_ids_form(),
+            &chain, 100, 100, None, 100, &wanted, &input_selected, &BTreeMap::new(), backend.prompt_ids_form(),
         ).unwrap();
         assert_eq!(input_answers.len(), 1, "only the valid reacquired input is cached before the missing suffix");
         assert_eq!(input_answers[0].0, (claim, PalwDaUnitV1::LegacyHeldV2(input_unit)));
