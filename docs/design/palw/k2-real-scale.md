@@ -141,6 +141,38 @@ node, against the carrier (`carrier_fit_v1` at registration). Measured at 9B-8k:
 v2 opens one index leaf and one 4,096-element table leaf. A history product whose `k = H` is very long (an attention `P·V` over a 2^18
 window: ≈ 1.7 MB) prices past the carrier and the class is refused by the carrier fit: such a context needs a history-chunked lowering.
 
+### 3.1 Finding (2026-10-10): the price must be the bytes a prover files
+
+The K2-TIR-v5 ledger test filed, for every honest element of a tiny BERT encoder, the prover's filing and compared it with the court's
+price. The first one failed: 2,673 B filed against a price of 2,592 B (`hf-enc/bert`, the embedding `Gather`, element 0). The cause is
+general, not the encoder's:
+
+* **The leaf's wire form.** `LeafOpeningV3` derived borsh, so its values went on the wire as `i128`, 16 bytes an element, while every
+  price (`byte_len`, `element_court_cost_v1`) counted them at the dtype's width. Params are at most 8 bytes wide and committed values
+  at most 4, so a court of long operand lines filed at least 2× its price: 4× for committed lines, 16× for `i8` lines (derived). The gate holds the price against the carrier. At the
+  FFN frontier of §12 the price was 1,579,240 B against the carrier's 1,583,616 B, so the real filing would have been several times the
+  carrier: a lie the gate called prosecutable could not have been filed. **Fixed**: the leaf's wire form carries its values at the
+  dtype's width, little endian, exactly as the leaf hash reads them (`merkle3.rs`). A value outside its dtype, or an unknown dtype, has no
+  wire form (serializing it is an error, never a truncation), and a count the bytes do not carry is refused before it is allocated. The
+  encoded length is `94 + 8·rank + count·width + 64·siblings`, two bytes under `byte_len`.
+* **What the price covered.** It is now an upper bound of every filing, by construction:
+  - the prover and the price choose a leaf's tree by one rule, the one whose covering leaves file fewer bytes (`cheaper_cover`); before,
+    the prover chose by leaf count, the price by bytes, and the output leaf was always a row leaf;
+  - every operand's opening is priced whether or not the element reads it: the node opening of a committed operand, and the 5-byte
+    shell of a const, zeros, a public scalar or a job input. Before, an operand the element did not read cost nothing, though its node
+    opening is filed;
+  - a `Concat` prices a leaf of every input, since an element reads one of them and the first and last elements read only the first and
+    last input;
+  - the per-position token's tile is priced at the tile tree's real depth for `max_positions`, the job tile of a K2-TIR-v5 class at its
+    `L` ids, and a K2-TIR-v5 count at its shell;
+  - **the decode court is priced** (`decode_court_cost_v1`: the logits' node opening and two full row leaves), and the plan's worst court
+    is the maximum over the element courts and the decode court. Before, a decode filing was never priced.
+
+Tested: `element::tests::leaf_openings_file_their_values_at_the_dtype_width` (the wire form of every dtype, both trees, round trip,
+refusals), `element::tests::every_filing_is_within_its_priced_bound` (dense MoE: the first, a middle and the last element of every
+value at the first and last positions, tiled prompt, and a decode filing), and the K2-TIR-v5 ledger test (every honest element of the
+two tiny encoders, and each relation's price within the registered plan's worst court).
+
 ## 4. The DA/demand protocol per segment
 
 * **Demand** — the existing `FileDemand { claim, stage 0, position }` on a segmented claim demands **everything committed at that
@@ -159,6 +191,70 @@ window: ≈ 1.7 MB) prices past the carrier and the class is refused by the carr
   (`M_pos` ≈ 2 GB each at 9B-8k). Proposed for G14-R4 (economics): a demand bond **burned when the position is served and the claim is not
   convicted within the grace** (refunded on conviction, moot or default), sized so `positions × bond` exceeds the producer's carriage cost;
   and the court deadline sized to the chain's object bandwidth (`parts per position / parts per DAA`). G14 does not rest on it.
+
+### 4.1 Court scope under ADR-0177 D2: claim-specific demands, the model from the verifier's own copy
+
+ADR-0177 D2 limits a court's demands to the claim's own evidence (state, trace, output, witness). A demand must never ask the producer
+for weight rows or file ranges, and repeated demands must never add up to the model. A model operand the court needs comes from the
+verifier's own copy, authenticated against the registered root. Every K2-TIR-v4/v5 unit, against that rule:
+
+| Unit | What it opens | From whom | D2 |
+|---|---|---|---|
+| `FileDemand { claim, stage 0, position }` and its `Respond` parts | the claim's committed values at one position (`ChunkV1`: node values, with their node and position paths), derived windows included | the producer | claim-specific: no part carries a param |
+| element court (`ElementFaultV1`), param operand | ≤ 1 leaf (≤ 4,096 elements of one row or column) per dependency line, authenticated against the class's registered v3 param commitments | **the accuser's own copy** (`artifact` in `check_positions_v1`, `prove_element_v1`) | no demand; see the flag below |
+| element court, committed operand / output | leaves of committed values, with node openings | served or published claim material | claim-specific |
+| element court, token or K2-TIR-v5 ids | a prompt tile authenticated against the job's prompt root | the chain (posted tiles) | the job's public input |
+| decode court | ≤ 2 leaves of the committed logits | claim material | claim-specific |
+| route B (`seg_detect`) | position paths of the first divergent segment, then two positions | claim material; the verifier re-executes with its own artifact | claim-specific |
+
+**No K2-TIR-v4/v5 unit demands model bytes from the producer.** Nothing in this lane needs to be restricted on the demand side.
+
+**Flag for DA16's court-scope inventory.** An element court's filing puts param leaves **on chain**: the accuser supplies them from its
+own copy, because the court has no copy. A filing is not a request, so D2's ban does not reach it. Still, every filing publishes up to the
+class's worst court in model bytes, and that includes an honest element filed only to be dismissed, at the dismissed-proof fee. Repeated
+filings could therefore publish a closed model's weights cumulatively. K2 does not bound that today. It belongs in DA16's central
+predicate as a cumulative disclosure scope. When DA16 lands the predicate, K2 will call it at `FileProof` acceptance for a segmented
+claim. (The predicate is not on its branch yet.)
+
+**A second flag: the gate's `weights_public` input.** The v4 gate takes `ProfileMaterialV1::kernel_route(weights_public)`, and the route
+passes `true` for a class whose artifact root is attested (an onboarding binding that is Matured or Final). Under ADR-0177 that flag can
+only mean that the registered root is bound. It cannot mean the bytes are obtainable, because the chain guarantees no acquisition (D1).
+The gate's G14 verdict is therefore **conditional on the verifier holding the model** (D7). The Lead decides whether to rename the
+input, or to have the read API state the condition next to each G14-complete class.
+
+### 4.2 Under DA16b's court scope (`palw_court_scope_v1`, `misaka_palw_kernel::scope`): hiding leaves — DESIGN, staged
+
+DA16b's §7.8–§7.9 bind K2-TIR-v4/v5 to two rules. **Level 1:** a `ModelCopy` or `ModelOnly` value (an embedding row gathered by the
+token, a transposed weight) is never owed in the clear. **The clear budget:** `court_clear_position_budget_v1` is 0 for every class
+with an elementwise model relation (every LM: a norm gain is revealed by one position), so in practice every model-dependent value is
+owed only as commitment structure, as leaf hashes of 64 elements (`COURT_HIDING_LEAF_ELEMENTS_V1`). The court then recomputes ONE leaf
+and compares its hash.
+
+What K2-TIR-v4/v5 does today, against that:
+- **Done at this merge.** A segmented position is a `KernelPosition` unit (`palw_kernel_demand_unit_v1`), so the fold's admission and
+  the per-requester tally (≤ 16 units) cover segmented demands. One prosecution needs 2 positions, plus ≤ 10 probes under withholding.
+- **Not done: a served position still carries every value in the clear.** That includes the model-dependent values, and an embedding
+  row is a `ModelCopy`.
+
+The change, in order. Each step is one milestone, and none of them touches a live id:
+1. **Leaf width.** A masked value's v3 row leaves become 64 elements wide (`TILE_V3` is 4,096 today; v3 is not armed). A line shorter
+   than 64 elements (wide128's `d` = 16) cannot fill a 64-element leaf, and a short leaf brute-forces. Such a value needs a flat-tiled
+   leaf layout for masked values: 64-element tiles of the row-major order, with the ragged tail merged into the previous tile. This is
+   **DESIGN, the Lead's choice**: either the flat layout (a new leaf rule inside v3), or "masked values must have lines of at least 64
+   elements" (a registration refusal).
+2. **DA.** `seg_da::{declared_values, position_parts_v1, classify_part_v1, assemble_position_v1}` drop the masked values' elements and
+   owe their row-leaf hashes and column root instead (a new `ChunkBodyV1` variant).
+3. **The court.** An `ElementFaultV1` whose output is masked carries the output leaf's HASH and path, not its elements. The court
+   recomputes all ≤ 64 elements of that leaf from the operands. Masked operands are supplied by the filer from its own re-execution;
+   they authenticate only if they equal the producer's, because the leaf hashes must match. Params come from the filer's copy. The court
+   convicts iff the recomputed leaf's hash differs. The price becomes the union of the leaf's dependency lines (a `MatMul` output leaf:
+   one `X` row and 64 `W` columns).
+4. **The verifier.** Route A (spot-checking a position from its clear values) is lost for masked values; DA16b accepts that. Route B
+   (re-execute, compare roots, descend to the first divergent position, then to the first divergent node commitment, then to the
+   first divergent leaf hash) is the detector. It already holds every value it needs.
+
+Until then, a K2-TIR-v4/v5 class must not be reward-bearing on the ADR-0177 D2 ground as well: a demand of a v4 position compels
+model-dependent and model-copy values in the clear.
 
 ## 5. Authenticated prompt tiles (behind the K2 fence)
 
@@ -236,6 +332,20 @@ built from the read API's segmented record and public material only):
 | `g14_k2s_a_withheld_segment_is_demanded_and_defaults_never_a_conviction` | the check demands exactly the two positions it reads; a wrong-root response is classified; at the deadline the claim is Unavailable, the default charged, never a conviction, the demand bonds returned |
 | `g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_and_convicted` | nothing published off-chain; both positions demanded, served on chain in parts, both demands closed; the outsider reads the `Respond` parts back from the blocks (the ledger keeps none of their bytes), assembles the positions and convicts (filing 3,359 B after reading 2,208 B back from the blocks) |
 | `g14_k2s_the_mempool_runs_the_kernel_acceptance_gate` | GAP 10 below |
+| `g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_convicts_through_the_real_path` | **G14's own statement.** Every bond but the last genesis card colludes. Each signs a passing receipt for the lying claim; the mempool refuses, by name, those of bonds the route never saw, and the rest are mined and folded with no effect, since an OPV claim has no seats and no receipt counts. Nobody publishes, nobody prosecutes. The outsider, a bond the route has never seen, demands positions 1,199 and 1,200, reads the served parts back from the blocks, files one element court within the class's priced bound, and the claim is convicted. The slash splits exactly into the accuser's reward and the burn, and the next coinbase pays the reward. A second lie is withheld: Unavailable at the deadline, never a conviction, never Final. A third lie is in the output (a delivered id that is not the decode of honest logits): the decode court convicts it from the positions the producer had to serve (GAP-30's decode lie). A replaying node agrees |
+
+G14C's matrix (GAP-30, GAP-31) asks for the remaining lie types, filers and recovery on the node. They are in the same module:
+
+| Test | GAP | What it shows |
+|---|---|---|
+| `g14_k2s_input_borrowed_and_garbage_traces_are_convicted_on_the_node` | 30 | an **input** lie (the producer computes position 4,200 over an id that is not the posted tile's; the embedding court opens tile 1 against the prompt root), a **borrowed** trace (another prompt's honest trace; tile 0) and a **garbage** trace (in-range noise), each found from one position and convicted |
+| `g14_k2s_a_lie_is_convicted_after_final_within_the_liability_horizon` | 30 | Final with no Panel and no prosecution, then a **post-Final** conviction inside the liability horizon; the reservation slashed |
+| `g14_k2s_spam_demands_never_preempt_a_proof_and_simultaneous_filers_get_one_conviction` | 30 (C6) | the coalition holds every session its bonds may open; a direct proof is not pre-empted; two outsiders in ONE block → one conviction, one duplicate, one slash, one reward (slash = reward + burn); the spam settles moot and its bonds return; a later duplicate changes nothing |
+| `g14_k2s_a_reorg_across_live_tiled_job_and_progress_rows_restores_them_exactly` | 30 (C8) | a reorg across a live tiled job (table 20) and open demands (table 21): back to the fork's rows exactly, the slash and reward undone; forward again, identical |
+| `g14_k2s_survives_a_node_restart_with_live_tiled_job_and_progress_rows` | 30 (C8) | a restart over the same database with a half-served demand: tables 20/21 off disk, service and conviction after the restart, replay agrees |
+| `g14_k2s_survives_a_pruned_import_with_live_tiled_job_and_progress_rows` | 30 (C8) | a pruned join at P with tables 20/21 live: the carriage (tail 0xEC) installs them, and the importer folds the service and conviction to A's roots |
+| `g14_k2s_v5_an_encoder_class_on_the_node_convicts_its_lies_and_finalizes_an_honest_claim` | 40 | a **K2-TIR-v5** class (a real tiny BERT encoder with its weights, lowered by `lower::bidir`) registered under OPV on the node; tiled jobs that generate nothing; a lie in the embedding lookup (the court opens the job's prompt tile) and a lie in the result, each demanded (position 0), served on chain, read back and convicted; an honest claim's element dismissed, Final with no Panel |
+| `g14_k2s_a_history_bearing_class_held_at_8192_positions_convicts_a_continuity_lie_across_segments` | 31 | a **history-bearing** class (rotary attention over `Hist` windows, router, experts) at **8,192 positions** on the node, committed by a streaming producer (`trace_streaming_v1`); a **continuity** lie in the k window at position 4,096 (segment 4), whose previous window is in segment 3, demanded, served on chain, read from the blocks and convicted |
 
 **GAP 8 — a cached ledger instead of a rebuild per object.** The route state carries a non-state cache of the ledger its rows describe
 (`Arc`, never hashed, never encoded, never in a delta, equal for every comparison). The fold's flush sets it; every other write of a
@@ -286,6 +396,22 @@ taken at once and only the ragged ends are visited (`row_leaves_fitting`). The l
 refuses, by name, a value whose single row leaf and overhead exceed a part, where the old loop would never end (unreachable while TIR
 caps the rank at 4, but no longer a hang). Re-measured on the 9B-8k fixture (debug): the v4 gate takes **11.3 ms** (was 14.9 s), with the
 same 2,294 parts and the same bounds.
+
+### 8.2 Rewards and weight: the ADR-0176 hook (named, not built)
+
+A K2-TIR-v4/v5 claim can give its producer exactly two things: the Final reward (`LedgerPolicyV1::claim_reward`, settled as
+`SettlementKindV1::FinalReward` in the ledger tick's `Final` transition) and the OPV work credit the consumer releases at Final
+(`OpvEconomicsV1::work_credit_per_claim`). Both are INTERIM and dormant. Under ADR-0176 they draw from the producer bond's Q/B/R/F
+budget of lane BUDGET (`palw_bond_budget_v1`). The hook is:
+
+| Point | Call |
+|---|---|
+| `CommitSegmentedClaim` accepted (`seg_ledger.rs`, at `d` = the claim's DAA) | reserve `Q` = 1 claim and the claim's maximum `R` (its Final reward) and `F` (its work credit) against the producer bond over the window `W`. A refusal refuses the claim (`B` = 0: a kernel-route claim mints no block) |
+| the tick's `Final` transition (`ledger.rs`, `FinalReward`) and the consumer's work-credit release | re-check the reservation and consume it; pay nothing that was not reserved |
+| conviction, Unavailable, TimedOut, void | the reservation is spent, not returned: `reuse_not_before = d + W` (no early recovery) |
+| the accuser's reward | not issuance: a share of the producer's slash. Outside Q/B/R/F. The route's INTERIM policy (`palw_kernel_route_policy_v1`) sets `accuser_reward_permille` = 500, so a self-reporting producer recovers 50% and loses a net 50% of the collected slash. That is above ADR-0032's 4,900 bps (the R-core reporter share, behind `palw_reporter_share_v2`); whether the kernel route adopts 4,900 bps is the Lead's decision |
+
+Until BUDGET's engine exists, every reward or weight fence on this route stays refused. Nothing here is armed.
 
 ## 9. What this does not do
 
@@ -385,8 +511,20 @@ out. The form that fits the principle runs route B on a post-commit sample of cl
 1. after a claim commits, a grinding-resistant beacon (the sealed-source v3, OPVB) draws whether the claim is checked (probability `q`)
    and by which bonded watcher(s);
 2. a drawn watcher runs route B. A checked claim's detection is exact (no per-position loss), so the per-claim detection probability
-   is `P_dc = q · P_run`, where `P_run` is the probability that a drawn watcher actually runs the check and files in time (A-HV);
+   is `P_dc = q · P_run`. `P_run` is the probability that a drawn watcher **holds the registered model** (or acquires it in time),
+   runs the check and files in time (A-HV). Route B re-executes from the artifact, so it needs the model;
 3. the collateral follows SOUND's P-ECON: `reservation ≥ ⌈max(gain + default_penalty, ⌈gain / P_dc⌉) / (1 − a)⌉`.
+
+**`P_run` includes acquisition (ADR-0177 D7).** The chain does not interfere with model acquisition and guarantees none (D1). A watcher
+holds the model only if it obtains it off-chain. For a closed model whose holders all refuse to distribute it, every drawn watcher fails
+for the same reason, and `P_run` (so `P_dc`) is **0**. Then no finite reservation deters: `gain / P_dc` is unbounded. Two consequences
+for this design:
+* `P_run` is one joint probability (holds the model, runs, files in time). It is never a product of separately estimated factors. Several
+  drawn watchers are never counted as independent (`1 − (1 − p)^k`), because acquisition is a common-mode failure: a closed model fails
+  all of them at once;
+* every `P_run` below is an illustrative input, not a property the chain provides. A class whose `P_run` cannot be shown positive (a
+  closed model with no outside holder) stays registered and judgeable, but has no detection, so it earns no reward and no consensus
+  weight (PRINCIPLES §6, ADR-0177 D7: "unproven" is reported as unproven).
 
 At the interim terms (gain 20 BILI, default penalty 100 BILI, `a` = ½):
 
@@ -410,6 +548,7 @@ but earns no reward and no consensus work weight (PRINCIPLES §6):
 | a fee for a drawn check, from the user's escrow | ECON | G14-R4 |
 | `q`, and a derivation of `P_run` (today `assumed_detection_permille` is an input, SG-13) | POLICY | Lead / user |
 | the lazy watcher: a drawn watcher can report "clean" without running, and `P_run` cannot be read from the chain (forced-error audit claims, redundant watchers) | DESIGN | reviewer question |
+| a drawn watcher's acquisition of the model: off-chain, guaranteed by nothing (ADR-0177 D1/D7); `P_run` = 0 for a closed model with no outside holder, and watchers fail together | ECON / POLICY | Lead / user (ADR-0177 D6/D7) |
 | an OPV window that contains a route-B check of the class (`T_check` measured per class) | MEASUREMENT | MEAS |
 | a part-0-only demand (a cheap probe under withholding) | proposal, needs an allocation | Lead |
 
@@ -479,7 +618,48 @@ question is therefore finer here: the court is per element, and the tiles are th
 Shape level (`misaka-palw-sdk/tests/k2s_encoder_court.rs`). The configurations are as published, lowered by `lower::bidir` with no
 weight read. Each is judged as ONE position under the v4 plan, `check_plan_v1`, the per-prosecution gate and the node's carrier.
 
-⟨ENCODER-TABLE⟩
+| Class @ tokens | relations | ε | MACs a position | position material B / parts | public B a prosecution | verifier RAM B | worst court B (where) | filing B | on chain B |
+|---|---|---|---|---|---|---|---|---|---|
+| bge-base-en-v1.5 @512 | 219 | 2^-166 | 48,318,382,080 | 9,053,268,756 / 8,770 | 18,162,950,859 | 18,162,634,619 | 47,568 (block 1 node 119, quant-range) | 51,664 | 4,160 |
+| bge-large-en-v1.5 @512 | 219 | 2^-165 | 167,503,724,544 | 24,045,046,292 / 23,310 | 48,168,480,971 | 48,167,898,491 | 55,760 (block 1 node 119, quant-range) | 59,856 | 4,160 |
+| bge-reranker-large @512 | 237 | 2^-165 | 167,504,774,144 | 24,045,130,340 / 23,310 | 48,621,320,020 | 48,620,735,044 | 55,952 (block 1 node 119, quant-range) | 60,048 | 4,160 |
+| bert-base-cased-squad2 (encoder) @512 | 219 | 2^-166 | 48,318,382,080 | 9,053,268,756 / 8,770 | 18,160,593,189 | 18,160,276,949 | 47,568 (block 1 node 119, quant-range) | 51,664 | 4,160 |
+| at tokens L (d 1024, ff 4096, 1 layer) = 4096 | 219 | 2^-169 | 85,899,345,920 | 34,113,572,948 / 33,874 | 68,319,848,011 | 68,319,646,203 | 169,680 (block 1 node 119, quant-range) | 173,776 | 4,160 |
+| huihui-qwen3.5-9b @8192 (K2-TIR-v4) | 838 | 2^-150 | 8,524,398,592 | 2,341,827,961 / 2,294 | 8,193,657,124 | 8,191,777,252 | 170,432 (block 3 node 41, quant-range) | 174,528 | 4,608 |
+| at hidden d (L 512, ff 4·d, 1 layer) = 27200 | 219 | 2^-165 | 4,559,837,593,600 | 29,038,337,108 / 28,245 | 68,677,244,483 | 68,676,813,307 | 399,048 (block 1 node 125, dense-matrix) | 403,144 | 4,160 |
+| at FFN width ff (L 512, d 1024, 1 layer) = 439808 | 219 | 2^-169 | 463,856,467,968 | 17,160,783,444 / 17,139 | 35,300,729,443 | 35,299,118,075 | 1,579,240 (block 1 node 125, dense-matrix) | 1,583,336 | 4,160 |
+| at vocabulary (L 512, d 1024, 1 layer) = 16777216 | 219 | 2^-169 | 6,979,321,856 | 1,093,467,732 / 1,060 | 36,712,778,049 | 36,712,690,929 | 54,992 (block 1 node 119, quant-range) | 59,088 | 4,160 |
+| at layers at L 512 (bge-large) = 34 | 219 | 2^-164 | 237,296,943,104 | 34,023,993,492 / 32,984 | 68,126,590,603 | 68,125,792,891 | 55,952 (block 1 node 119, quant-range) | 60,048 | 4,160 |
+| at layers at L 4096 (bge-large) = 1 | 219 | 2^-169 | 85,899,345,920 | 34,113,572,948 / 33,874 | 68,319,848,011 | 68,319,646,203 | 169,680 (block 1 node 119, quant-range) | 173,776 | 4,160 |
+
+Every number in the table is **derived**: the gate computes it from the plan and the program's shapes (`derive_budgets`,
+`public_prosecution_complete_v4`, `carrier_fit_v1`), and `check_plan_v1` recomputes it, so no registrant can declare its own. Log:
+`~/Downloads/MISAKA-wt-b/k2s-e3b-encoders.log`. Refused, by name:
+- BGE-M3 at 8,192 tokens does not lower (a score `MatMul` over 2^28 elements);
+- BGE-M3 at 4,096 tokens: one prosecution would read 1,602,842,453,219 B, above the 2^40 limit, and needs 1,602,841,756,051 B of verifier
+  RAM, above the 2^36 limit.
+
+**The frontier: the worst geometry the ceilings admit** (from bge-large's geometry, one axis at a time, one layer where the axis is per
+layer; derived):
+
+| Axis | Largest admitted | What refuses the next value up |
+|---|---|---|
+| tokens `L` (d 1,024, ff 4,096) | 4,096 | the axis's own cap: v5 reads the ids from one prompt tile |
+| hidden `d` (L 512, ff 4·d) | 27,200 | verifier RAM 68,859,342,331 B, above 2^36 |
+| FFN width `ff` (L 512, d 1,024) | 439,808 | the carrier: a worst filing of 1,583,663 B against a `FileProof` of 1,583,616 B |
+| vocabulary (L 512, d 1,024) | 16,777,216 | the axis's own cap |
+| layers at L 512 | 34 | verifier RAM 70,121,582,331 B |
+| layers at L 4,096 | 1 | verifier RAM 135,018,369,659 B |
+
+At every admitted geometry the worst filing fits the carrier: the gate refuses any class whose priced court does not. The largest
+court any v5 class can have is therefore 1,579,240 B, and its filing is 1,583,336 B (the FFN frontier). The largest verifier RAM is
+2^36.
+
+**Measured** (the K2-TIR-v5 ledger test on two real tiny encoders, `hf-enc/bert` and `hf-cls/xlmr_rerank`, lowered with their weights at
+`L` = 12): the prover filed the first, a middle and the last element of every committed value, 1,155 and 1,209 filings. The court
+dismissed every one, and each was within its relation's price (the largest at 0.892 of it). Every price was within the registered
+plan's worst court. Lies in the embedding lookup, a projection, the key mask, an attention product and the result were each found at
+the lying value and convicted, filed in 1,136–3,831 B.
 
 ### 12.3 Against PRINCIPLES §6
 
@@ -489,7 +669,8 @@ weight read. Each is judged as ONE position under the v4 plan, `check_plan_v1`, 
   the table: the producer's own work) and compare ONE segment root. For an encoder that is cheap enough to run on **every** claim, so
   `q = 1` is affordable and `P_dc = P_run`. At the interim terms (gain 20 BILI, default penalty 100 BILI, `a` = ½, `P_run` = ½) the
   reservation is **240 BILI**, against 40,960 BILI for sampling a 9B-8k claim (§11.3). The detection cost is one job's compute, not a
-  fraction of a terabyte-scale claim.
+  fraction of a terabyte-scale claim. `P_run` = ½ is an input, not a guarantee: it includes the watcher holding the model (§11.3,
+  ADR-0177 D7), and it is 0 for a closed encoder nobody outside its holders can obtain.
 * **Condition 6 (the verifier's resources).** A check costs the forward pass plus hashing the position's values (the material
   column). It reads the artifact and the job's ids. Only when the roots differ does it also read one position of material and file one
   element court, whose size is the table's worst-court column, far under the carrier. The per-prosecution bound is the gate's column.
@@ -536,3 +717,10 @@ throughput option once K2-TIR-v5 carries G14.
   v5's one-tile input (`L ≤ 4,096`) is a second limit, and lifting it means a multi-tile `token` field.
 * **The Head profile** (`palw_task_heads_v1`) is the generative route's fence. A K2 encoder class is the kernel route (tag 110, OPV),
   under its own dormant fence. The Head profile's decode rule (`HEAD_DECODE_V1`) applies unchanged to the verified output.
+* **A court for `HEAD_DECODE_V1` (G14C GAP-40).** No K2-TIR-v5 claim carries a decision. The claim delivers no id, and the decision
+  (arg-max, multi-label, regression, best span) is a pure function of the committed output node. HFX's code says the same: "never
+  consensus". Once the output's element courts have judged the output, there is nothing left to adjudicate. If a future profile puts
+  a decision on chain (a label a user pays against), it will need a decision court shaped like the greedy decode court: an arg-max
+  label and its rival are two leaves of the output, a multi-label decision is one element per label, a regression decision is the
+  value, and a best span is the two logit rows of the span. That is DESIGN, and it needs an allocation (a claim field and a
+  `SegFaultV1` variant). Until then a Head class's earning rests on the verified output alone.
