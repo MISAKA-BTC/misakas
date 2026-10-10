@@ -331,3 +331,24 @@ history cacheでは、bindingだけ正しくpinが壊れた新しいeventが最�
 [LG14-B / large-prompt結果](evidence/large-prompt-legacy-final.log)、[filer回帰](evidence/large-prompt-filer-final.log)、[reporter回帰](evidence/large-prompt-reporter-final.log)。default feature、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で実行した。初回fold fixtureにFlatネットワーク上のnon-held profileを使ったため、courtがMerkle prompt証明を正しく拒否した。fold fixtureだけ既存held profileを用いる形へ修正した。prompt formのconsensus規則は変えていない。
 
 synthetic bindingのtree rootはfixtureのcommitmentであり、最大profileの実modelを実行した試験ではない。class admissionは既存test fixtureで、通常のproduction eligibilityではない。公開eventをtestへ渡すV-foldであって、fresh-nodeのpaged read→service tick→reporter commit/file/reveal→mempool/template→blockのV-nodeではない。この変更で大型promptの直接証拠生成は接続したが、free-prompt startup、checkpoint/traceの残る局所化、全family／最大profile、post-retirement discovery、reorgによるown replayのjob変更、累積scope、予約枠飽和、恒久retentionと期限内包含は引き続き完成条件である。consensus encoding・activation height・ADR-0177は変更していない。
+
+
+## Reorg後のjob更新と旧blocking replayの破棄
+
+最新のClaude integration `589d9aa3e`（remote-minerのsalted drill adapter）を`7bd999b17`でmergeした。remote binaryの`cargo check -p misaka-palw-remote --features rpc --bin palw-remote-miner --locked`は成功。上流記録のlive 9-node drillをここで再実行したという意味ではない。[merge check](evidence/remote-drill-merge-check.log)。
+
+共通filerのcandidate refreshはjob factsだけを上書きし、旧受理blockのHonest／Mismatch判定を保持していた。実行中workerもclaim idだけを持つため、reorgで同じclaimが別header上へ移った後、旧jobの遅延結果を新jobへ適用できた。3rootが同じでも、headerから導出するjob anchorが変わるため、旧結果をHonestとすれば新branchの違反を追及しない。
+
+candidateの受理block・job・producer・role等の公開snapshotが変われば、caseをPendingへ戻す。旧own capture、frontier、CKW、binding、探索区間、selected unit、送信回数と直接証拠handoffを破棄し、cacheとwalk watermarkも更新する。実tickは無効化したcaseの未送信reservation/demand/terminalとqueue deadlineを取り下げる。別caseの終了だけでは進行中のhistory walkを巻き戻さない。jobは同じだがpublic-history branchが変わった場合は、そのown replayを保持しつつ学習済み探索・selected unit・送信debounceと未送信carrierを破棄し、新branchで再要求できるようにする。
+
+blocking replayは起動時candidateのsnapshotとhandleを保持する。refresh後のcandidateと一致しない完了結果は、Honest／Mismatch／Unjudgedのどれにも適用せず、retry回数も消費しない。実行中のworkerはdetachやabortをせず、旧workerが終了するまで次のreplayを開始しない。fence-offのbook clearでもhandleを保持し、後続tickで完了したcaptureを破棄して予約を解放する。これでstarted blocking workerの実行中に予約を忘れたり、上限を越えて別workerを開始したりしない。
+
+| 検証 | 結果と範囲 |
+| --- | --- |
+| `cargo test -p kaspad --lib palw_fraud_filer::tests --locked` | **14 V-unit PASS**。新4件は、3rootが同じで受理blockだけ違うjobへのHonest／Mismatchの無効化、旧結果と旧worker失敗の拒否、新jobの追及とbackfill、実blocking worker＋memory ledgerの終了前／結果保持中／破棄後の予約、clear後の単一worker維持、同jobでのbranch reset時の再送復旧、別case終了でhistory cursorを巻き戻さないこと、Panel seatになったbondがpublic laneを離れることを検査 |
+| `cargo test -p kaspad --lib lg14b_ --locked` | **9 V-fold＋2 V-unit PASS**。Final前後のgather/matmul/job/input conviction、fused conviction、DA defaultとhonest twin等の回帰 |
+| `cargo test -p kaspad --lib accepted_objects_walk_tests --locked` | **6 V-unit PASS**。actual Consensus API adapterのpaged public reader、branch reset、selected unitと認証回帰 |
+
+[book / worker](evidence/filer-reorg-job-final.log)、[LG14-B回帰](evidence/reorg-job-legacy-final.log)、[reader回帰](evidence/reorg-job-reader-final.log)。default feature、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`。consensus encoding・fenceは変更していない。
+
+このjob変更の修正はnode policyのV-unitであり、稼働nodeへ競合branchを投入してservice tickから新jobをreplayしconvictするV-nodeはまだない。full-serviceのfresh start/reorg、free-promptの公開job/input bootstrap、checkpoint/traceの残る局所化、全family／profile、retired discovery、累積scope・全枠飽和・恒久retentionと期限内包含は未完で、G14全域の完成判定は行わない。

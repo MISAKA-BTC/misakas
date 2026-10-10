@@ -24,6 +24,8 @@
 
 - 4096 idsを超えるcanonical attempt入力も、公開bindingと記録済みanchorからPromptNotAnchoredのWhole証明を作り、共通reporter doorへ渡す。メモリ予約を取り、直接証拠の判定をblocking workerへ移した。65k／2M contextのsynthetic inputでhonest/unbound拒否と、全Panel Valid後のFinal前後のactual fold convictionを確認。LG14-B 9 V-fold＋2 V-unit、filer 10 V-unit、reporter 21 V-unit PASS。最大modelの実行・通常eligibility・fresh-node full-serviceを立証したものではない。
 
+- integration `589d9aa3e`のremote-miner drill adapterを`7bd999b17`でmergeし、RPC binaryのcheckを通した。共通filerでは受理block/job/role変更時に旧判定・探索・queueを破棄し、起動時snapshotと違う旧replay結果を適用しない。blocking workerは予約を保持してdrainし、book clear後も終わるまで次のworkerを開始しない。filer 14 V-unit、LG14-B 9 V-fold＋2 V-unit、public reader 6 V-unit PASS。full nodeのreorg完走は未検証。
+
 G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
 
 ## 統合ブランチ

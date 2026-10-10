@@ -368,12 +368,19 @@ impl PalwFraudFilerCaseV1 {
     }
 }
 
+/// A blocking replay is tied to the exact candidate snapshot that started it. Keep the handle until it terminates,
+/// even after invalidation: aborting a started blocking worker cannot stop it or release its memory safely.
+struct PalwFraudFilerReplayV1 {
+    candidate: PalwFraudFilerCandidateV1,
+    handle: tokio::task::JoinHandle<Result<PalwFraudFilerRunV1, String>>,
+}
+
 /// **The filer's book** (the module's header): the cases by claim, the replay in flight, and the answers read off the accepted blocks.
 #[derive(Default)]
 pub(super) struct PalwFraudFilerBookV1 {
     pub(super) cases: BTreeMap<Hash64, PalwFraudFilerCaseV1>,
     read_at: Option<u64>,
-    running: Option<(Hash64, tokio::task::JoinHandle<Result<PalwFraudFilerRunV1, String>>)>,
+    running: Option<PalwFraudFilerReplayV1>,
     /// `(claim, unit) → authenticated answer`, only the binding and consecutive ranges this localizer reads.
     pub(super) answers: BTreeMap<(Hash64, PalwDaUnitV1), PalwDaBuiltAnswerV1>,
     /// The DAA the walks have read down to (`None`: never walked since the start).
@@ -387,27 +394,51 @@ pub(super) struct PalwFraudFilerBookV1 {
 }
 
 impl PalwFraudFilerBookV1 {
-    /// Forget everything (below the fence, or a node that does not carry).
+    /// Forget cases below the fence, but drain any already-started blocking replay before another can start.
     pub(super) fn clear(&mut self) {
-        *self = Self::default();
+        let running = self.running.take();
+        *self = Self { running, ..Self::default() };
     }
 
     /// **Take a fresh candidate read**: a new claim opens a case; a case whose claim left the candidates is dropped unless it is
-    /// pursued (its outcome is read off the tip); a case's job facts follow the tip. Bounded by [`PALW_FRAUD_FILER_MAX_CASES_V1`].
-    pub(super) fn refresh(&mut self, candidates: Vec<PalwFraudFilerCandidateV1>, now_daa: u64) {
+    /// pursued (its outcome is read off the tip). A changed acceptance/job/role restarts that case and invalidates its queued items.
+    /// Unrelated settled-case cleanup does not restart a pursued claim's partial backfill. Bounded by [`PALW_FRAUD_FILER_MAX_CASES_V1`].
+    pub(super) fn refresh(&mut self, candidates: Vec<PalwFraudFilerCandidateV1>, now_daa: u64) -> BTreeSet<Hash64> {
         let fresh: BTreeSet<Hash64> = candidates.iter().map(|c| c.claim_id).collect();
-        self.cases.retain(|claim, case| fresh.contains(claim) || case.pursued());
+        let mut invalidated = BTreeSet::new();
+        let mut changed = false;
+        self.cases.retain(|claim, case| {
+            let keep = fresh.contains(claim) || case.pursued();
+            if !keep {
+                invalidated.insert(*claim);
+            }
+            keep
+        });
         for candidate in candidates {
             let room = self.cases.len() < PALW_FRAUD_FILER_MAX_CASES_V1;
             match self.cases.get_mut(&candidate.claim_id) {
-                Some(case) => case.candidate = candidate,
+                Some(case) if case.candidate != candidate => {
+                    changed = true;
+                    invalidated.insert(candidate.claim_id);
+                    *case = PalwFraudFilerCaseV1::new(candidate);
+                }
+                Some(_) => {}
                 None if room => {
                     self.cases.insert(candidate.claim_id, PalwFraudFilerCaseV1::new(candidate));
                 }
                 None => {}
             }
         }
+        if !invalidated.is_empty() {
+            self.answers.retain(|(claim, _), _| !invalidated.contains(claim));
+        }
+        if changed {
+            self.walked_from = None;
+            self.walked_to = None;
+            self.walk = None;
+        }
         self.read_at = Some(now_daa);
+        invalidated
     }
 
     /// Whether the chain should be read again at `now_daa`.
@@ -443,6 +474,18 @@ impl PalwFraudFilerBookV1 {
             .collect();
         out.sort();
         out.into_iter().map(|(_, claim)| claim).collect()
+    }
+
+    /// A result of an older acceptance/job/role snapshot must neither clear nor settle the current case.
+    fn judge_replay(
+        &mut self,
+        replayed: &PalwFraudFilerCandidateV1,
+        result: Result<PalwFraudFilerRunV1, String>,
+    ) -> Option<&PalwFraudFilerVerdictV1> {
+        if self.cases.get(&replayed.claim_id)?.candidate != *replayed {
+            return None;
+        }
+        self.judge(replayed.claim_id, result)
     }
 
     /// Judge all three committed roots. An output-only or trace-only mismatch still needs a public proof or DA default.
@@ -502,6 +545,8 @@ impl PalwFraudFilerBookV1 {
                 case.witness = None;
                 case.binding = None;
                 case.bisect = PalwLegacyBisectV1::new(0);
+                case.legacy_wanted = None;
+                case.sent = None;
             }
         }
         if walk.next.is_none() {
@@ -804,6 +849,10 @@ impl PalwPanelService {
         });
         let params = &self.consensus_config.params;
         if !(params.palw_legacy_public_filer_active_at(current_daa) && self.config.fee_outpoint.is_some()) {
+            if book.running.as_ref().is_some_and(|replay| replay.handle.is_finished()) {
+                let replay = book.running.take().expect("finished above");
+                drop(replay.handle.await); // Discard the result, releasing its capture and reservation.
+            }
             if !book.cases.is_empty() || book.running.is_some() {
                 book.clear();
             }
@@ -812,7 +861,13 @@ impl PalwPanelService {
         }
         if book.stale(current_daa) {
             let candidates = session.clone().spawn_blocking(move |c| c.palw_fraud_filer_candidates_v1(bond_key)).await;
-            book.refresh(candidates, current_daa);
+            let invalidated = book.refresh(candidates, current_daa);
+            court_pending.retain(|(claim, round, responder, _)| {
+                !invalidated.contains(claim) || !palw_fraud_filer_queued_v1(*round, *responder)
+            });
+            court_due.retain(|(claim, round, responder), _| {
+                !invalidated.contains(claim) || !palw_fraud_filer_queued_v1(*round, *responder)
+            });
             if book.role.is_none() {
                 let operator = palw_operator_da::palw_operator_registrations_v1(params).iter().any(|(bond, _)| *bond == bond_key);
                 book.role = Some(if operator { PalwFilerRoleV1::Operator } else { PalwFilerRoleV1::PublicBond });
@@ -843,7 +898,18 @@ impl PalwPanelService {
                     })
                     .await;
                 match result {
-                    Ok((walk, reset, answers)) => book.walked(walk, reset, answers),
+                    Ok((walk, reset, answers)) => {
+                        if reset {
+                            let restarted: BTreeSet<Hash64> = book.pursued().into_iter().collect();
+                            court_pending.retain(|(claim, round, responder, _)| {
+                                !restarted.contains(claim) || !palw_fraud_filer_queued_v1(*round, *responder)
+                            });
+                            court_due.retain(|(claim, round, responder), _| {
+                                !restarted.contains(claim) || !palw_fraud_filer_queued_v1(*round, *responder)
+                            });
+                        }
+                        book.walked(walk, reset, answers);
+                    }
                     Err(why) => {
                         warn!("[{PALW_PANEL}] the fraud filer's public history page is unavailable: {why}; watermark unchanged")
                     }
@@ -851,10 +917,11 @@ impl PalwPanelService {
             }
         }
         // The replay in flight, polled every tick until it returns.
-        if book.running.as_ref().is_some_and(|(_, handle)| handle.is_finished()) {
-            let (claim, handle) = book.running.take().expect("held above");
-            let result = handle.await.unwrap_or_else(|e| Err(format!("the replay task did not finish: {e}")));
-            match book.judge(claim, result) {
+        if book.running.as_ref().is_some_and(|replay| replay.handle.is_finished()) {
+            let replay = book.running.take().expect("held above");
+            let claim = replay.candidate.claim_id;
+            let result = replay.handle.await.unwrap_or_else(|e| Err(format!("the replay task did not finish: {e}")));
+            match book.judge_replay(&replay.candidate, result) {
                 Some(PalwFraudFilerVerdictV1::Mismatch(run)) => error!(
                     "[{PALW_PANEL}] claim {claim}: this node's replay of the claim's job does NOT reproduce its execution root (replayed \
                      {}) — every seat of its panel let it pass or none looked; pursuing it as a public bond (LG14-A, RFC-0014 §6)",
@@ -1245,8 +1312,9 @@ impl PalwPanelService {
         network_domain: Hash64,
     ) {
         let Some(case) = book.cases.get(&claim) else { return };
-        let job = case.candidate.job.clone();
-        let producer = case.candidate.producer;
+        let candidate = case.candidate.clone();
+        let job = candidate.job.clone();
+        let producer = candidate.producer;
         let unjudged = |book: &mut PalwFraudFilerBookV1, why: String| {
             debug!("[{PALW_PANEL}] claim {claim}: the fraud filer does not judge it — {why}");
             book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(why));
@@ -1325,7 +1393,7 @@ impl PalwPanelService {
                 _reservation: Some(reserved),
             })
         });
-        book.running = Some((claim, handle));
+        book.running = Some(PalwFraudFilerReplayV1 { candidate, handle });
     }
 }
 
@@ -1444,6 +1512,160 @@ mod tests {
         assert!(book.descent_failed(&claim, "complete history cannot supply a proof".into()));
         assert_eq!(book.held_runs(), 0);
         assert!(matches!(book.cases[&claim].verdict, PalwFraudFilerVerdictV1::Unjudged(_)));
+    }
+
+    #[test]
+    fn another_acceptance_restarts_an_honest_or_mismatched_case_and_rejects_old_results() {
+        let old = candidate(3, 300, false);
+        let claim = old.claim_id;
+        for mismatch in [false, true] {
+            let mut book = PalwFraudFilerBookV1::default();
+            book.refresh(vec![old.clone()], 10);
+            let result =
+                if mismatch { run(Hash64::default(), old.job.trace_root) } else { run(old.job.execution_root, old.job.trace_root) };
+            book.judge_replay(&old, Ok(result)).expect("current job");
+            let old_capture = match &book.cases[&claim].verdict {
+                PalwFraudFilerVerdictV1::Mismatch(run) => Some(Arc::downgrade(run)),
+                _ => None,
+            };
+            let case = book.cases.get_mut(&claim).unwrap();
+            case.frontiers.push(PalwLegacyFrontierV2 {
+                level: 1,
+                index: 0,
+                below: 0,
+                first: 0,
+                nodes: vec![Hash64::from_u64_word(1)],
+                leaf_hashes: None,
+            });
+            case.bisect = PalwLegacyBisectV1::new(64);
+            case.legacy_wanted = Some(PalwLegacyHeldUnitV2::StepNode { level: 1, index: 0 });
+            case.note_sent(PalwFraudFilerSentV1::Reserve, 10);
+            case.direct_handed = 2;
+            case.direct_asked_at = Some(10);
+            let page = PalwFraudFilerWalkV1 { floor: 300, anchor: Hash64::from_u64_word(1000), anchor_daa: 1000, next: None };
+            book.walked(page, false, vec![]);
+            assert!(book.refresh(vec![old.clone()], 11).is_empty(), "an unchanged candidate retains its replay");
+            assert_eq!(book.cases[&claim].frontiers.len(), 1);
+            let mut new = old.clone();
+            new.job.accepted_block = Hash64::from_u64_word(2000); // Same claim and all three roots, a different header-derived job.
+            assert_eq!(book.refresh(vec![new.clone()], 12), BTreeSet::from([claim]));
+            let case = &book.cases[&claim];
+            assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Pending));
+            assert!(case.frontiers.is_empty());
+            assert_eq!(
+                (case.bisect, case.legacy_wanted, case.sent, case.runs, case.direct_handed, case.direct_asked_at),
+                (PalwLegacyBisectV1::new(0), None, None, 0, 0, None)
+            );
+            assert_eq!((book.walk, book.walked_from, book.walked_to), (None, None, None));
+            if let Some(capture) = old_capture {
+                assert!(capture.upgrade().is_none(), "old own capture is released");
+            }
+            // Even matching roots in a late old result cannot make the new header's job Honest; an old failure cannot spend a retry.
+            assert!(book.judge_replay(&old, Ok(run(old.job.execution_root, old.job.trace_root))).is_none());
+            assert!(book.judge_replay(&old, Err("an old worker's failure".into())).is_none());
+            assert_eq!(book.cases[&claim].runs, 0);
+            assert_eq!(book.next_replay(), Some(claim));
+            assert!(matches!(
+                book.judge_replay(&new, Ok(run(Hash64::default(), new.job.trace_root))),
+                Some(PalwFraudFilerVerdictV1::Mismatch(_))
+            ));
+            assert_eq!(book.walk_floor(), Some(300), "new job's mismatch backfills from acceptance");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_invalidated_blocking_replay_drains_under_its_reservation_before_the_next_starts() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1, PalwMemoryReservationKeyV1};
+        for clear in [false, true] {
+            let old = candidate(3, 300, false);
+            let claim = old.claim_id;
+            let mut new = old.clone();
+            new.job.accepted_block = Hash64::from_u64_word(2000);
+            let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(4096), || None);
+            let reserved = ledger
+                .reserve(
+                    PalwMemoryReservationKeyV1 { role: PALW_FRAUD_FILER_REPLAY_ROLE_V1, class_id: old.job.class_id, job: claim },
+                    2048,
+                )
+                .expect("reservation");
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let (finish, wait) = std::sync::mpsc::channel();
+            let job = old.job.clone();
+            let handle = tokio::task::spawn_blocking(move || {
+                started.send(()).expect("observer");
+                wait.recv().expect("continue worker");
+                let mut result = run(job.execution_root, job.trace_root);
+                result._reservation = Some(reserved);
+                Ok(result)
+            });
+            let mut book = PalwFraudFilerBookV1::default();
+            book.refresh(vec![old.clone()], 10);
+            book.running = Some(PalwFraudFilerReplayV1 { candidate: old, handle });
+            tokio::time::timeout(std::time::Duration::from_secs(5), ready).await.expect("worker starts").expect("started");
+            if clear {
+                book.clear();
+            }
+            book.refresh(vec![new], 11);
+            assert!(book.running.is_some(), "clear/invalidation must not detach a blocking worker");
+            assert_eq!(book.next_replay(), None, "one worker remains in flight");
+            assert_eq!(ledger.reserved_bytes(), 2048, "the live worker's memory stays reserved");
+            finish.send(()).expect("finish old worker");
+            let replay = book.running.take().expect("still observed");
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(5), replay.handle).await.expect("worker drains").expect("joined");
+            assert_eq!(ledger.reserved_bytes(), 2048, "the returned capture still holds its reservation");
+            assert!(book.judge_replay(&replay.candidate, result).is_none());
+            assert_eq!(ledger.reserved_bytes(), 0, "discarding the stale capture releases it");
+            assert_eq!(book.next_replay(), Some(claim));
+            assert!(matches!(book.cases[&claim].verdict, PalwFraudFilerVerdictV1::Pending));
+        }
+    }
+
+    #[test]
+    fn restarting_public_history_discards_old_localization_and_resend_state_but_keeps_the_same_jobs_replay() {
+        let c = candidate(3, 300, false);
+        let claim = c.claim_id;
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![c.clone()], 10);
+        book.judge_replay(&c, Ok(run(Hash64::default(), c.job.trace_root)));
+        let case = book.cases.get_mut(&claim).unwrap();
+        case.legacy_wanted = Some(PalwLegacyHeldUnitV2::StepNode { level: 1, index: 0 });
+        case.note_sent(PalwFraudFilerSentV1::Reserve, 10);
+        case.note_sent(PalwFraudFilerSentV1::Reserve, 40);
+        assert_eq!(case.may_send(PalwFraudFilerSentV1::Reserve, 70), Err(()));
+        let page = PalwFraudFilerWalkV1 { floor: 300, anchor: Hash64::from_u64_word(2000), anchor_daa: 1000, next: Some(claim) };
+        book.walked(page, true, vec![]);
+        let case = &book.cases[&claim];
+        assert!(case.pursued(), "unchanged job's own replay is still valid");
+        assert_eq!((case.legacy_wanted, case.sent), (None, None));
+        assert_eq!(case.may_send(PalwFraudFilerSentV1::Reserve, 70), Ok(true), "new branch can reserve afresh");
+        assert_eq!(book.walk_floor(), Some(300));
+    }
+
+    #[test]
+    fn unrelated_settled_case_cleanup_cannot_restart_a_pursuits_history_and_a_new_seat_leaves_the_public_lane() {
+        let c = candidate(3, 300, false);
+        let claim = c.claim_id;
+        let other = candidate(4, 400, false);
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![c.clone(), other.clone()], 10);
+        book.judge_replay(&c, Ok(run(Hash64::default(), c.job.trace_root)));
+        book.judge_replay(&other, Ok(run(other.job.execution_root, other.job.trace_root)));
+        let page = PalwFraudFilerWalkV1 {
+            floor: 300,
+            anchor: Hash64::from_u64_word(1000),
+            anchor_daa: 1000,
+            next: Some(Hash64::from_u64_word(600)),
+        };
+        book.walked(page, false, vec![]);
+        assert_eq!(book.refresh(vec![c.clone()], 11), BTreeSet::from([other.claim_id]));
+        assert_eq!(book.walk, Some(page), "unrelated expired/honest claims cannot continually rewind another pursuit");
+        let mut seat = c.clone();
+        seat.seat = true;
+        assert_eq!(book.refresh(vec![seat], 12), BTreeSet::from([claim]));
+        assert!(book.pursued().is_empty());
+        assert_eq!(book.next_replay(), None, "the new Panel seat's replay belongs to its seat lane");
+        assert!(book.judge_replay(&c, Ok(run(Hash64::default(), c.job.trace_root))).is_none());
     }
 
     /// **The book replays oldest first, one at a time, never a seat's claim, and holds at most two mismatches.**

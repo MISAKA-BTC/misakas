@@ -1,0 +1,182 @@
+    Checking futures-core v0.3.31
+    Checking byteorder v1.5.0
+    Checking futures-io v0.3.31
+    Checking zerocopy v0.7.35
+    Checking futures-sink v0.3.31
+   Compiling num-traits v0.2.19
+    Checking futures-channel v0.3.31
+    Checking ppv-lite86 v0.2.20
+    Checking tracing-core v0.1.36
+    Checking mio v1.0.2
+    Checking socket2 v0.5.7
+    Checking futures-task v0.3.31
+    Checking futures-util v0.3.31
+    Checking tokio v1.42.1
+    Checking tracing v0.1.44
+    Checking smallvec v1.13.2
+    Checking futures-lite v2.3.0
+    Checking async-channel v2.3.1
+    Checking polling v3.7.3
+    Checking rand_chacha v0.3.1
+    Checking piper v0.2.4
+    Checking chrono v0.4.38
+    Checking async-io v2.3.4
+    Checking blocking v1.6.1
+    Checking rand v0.8.6
+    Checking async-executor v1.13.1
+    Checking futures-executor v0.3.31
+    Checking futures v0.3.31
+    Checking async-global-executor v2.4.1
+    Checking async-channel v1.9.0
+    Checking web-sys v0.3.77
+    Checking async-std v1.13.0
+    Checking rand_chacha v0.9.0
+    Checking rand v0.9.4
+    Checking parking_lot_core v0.9.10
+    Checking parking_lot v0.12.3
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/utils)
+    Checking ahash v0.8.11
+    Checking uuid v1.18.1
+    Checking zerofrom v0.1.7
+    Checking workflow-core v0.18.0
+    Checking workflow-panic-hook v0.18.0
+    Checking stable_deref_trait v1.2.0
+    Checking yoke v0.8.1
+    Checking hashbrown v0.14.5
+    Checking workflow-wasm v0.18.0
+    Checking kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/hashes)
+    Checking ordered-float v2.10.1
+    Checking serde-value v0.7.0
+    Checking malachite-base v0.4.16
+   Compiling ring v0.17.14
+    Checking misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir)
+    Checking zeroize v1.9.0
+    Checking log4rs v1.4.0
+    Checking rustls-pki-types v1.14.1
+    Checking zerovec v0.11.5
+    Checking malachite-nz v0.4.16
+    Checking misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-gen)
+    Checking misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-challenge)
+    Checking http v1.1.0
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-kernel)
+    Checking kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/math)
+    Checking kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/core)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-panel)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/merkle)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/muhash)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/addresses)
+    Checking workflow-serializer v0.18.0
+    Checking kaspa-txscript-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/txscript/errors)
+    Checking untrusted v0.9.0
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+   Compiling rustls v0.23.39
+    Checking rustls-webpki v0.103.13
+    Checking httparse v1.9.5
+    Checking tinystr v0.8.2
+    Checking writeable v0.6.3
+    Checking litemap v0.8.2
+    Checking icu_locale_core v2.1.1
+    Checking zerotrie v0.2.3
+    Checking potential_utf v0.1.4
+    Checking kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/wasm/core)
+    Checking icu_collections v2.1.1
+    Checking icu_provider v2.1.1
+    Checking icu_properties_data v2.1.2
+    Checking icu_normalizer_data v2.1.1
+    Checking tokio-rustls v0.26.4
+    Checking http-body v1.0.1
+    Checking webpki-roots v0.26.6
+    Checking tokio-util v0.7.12
+    Checking try-lock v0.2.5
+    Checking want v0.3.1
+    Checking h2 v0.4.19
+    Checking icu_normalizer v2.1.1
+    Checking icu_properties v2.1.2
+   Compiling system-configuration-sys v0.6.0
+    Checking percent-encoding v2.3.1
+    Checking form_urlencoded v1.2.1
+    Checking idna_adapter v1.2.1
+    Checking hyper v1.9.0
+    Checking sha1 v0.10.6
+    Checking num-integer v0.1.46
+    Checking socket2 v0.6.3
+    Checking utf8_iter v1.0.4
+    Checking tower-service v0.3.3
+    Checking utf-8 v0.7.6
+    Checking data-encoding v2.6.0
+    Checking tungstenite v0.23.0
+    Checking hyper-util v0.1.20
+    Checking idna v1.1.0
+   Compiling workflow-task-macros v0.18.0
+    Checking core-foundation v0.9.4
+    Checking aho-corasick v1.1.3
+    Checking hex v0.4.3
+    Checking regex-syntax v0.8.5
+    Checking regex-automata v0.4.8
+    Checking system-configuration v0.6.1
+    Checking workflow-task v0.18.0
+    Checking url v2.5.4
+    Checking hyper-rustls v0.27.3
+    Checking tokio-tungstenite v0.23.1
+    Checking num-bigint v0.4.6
+    Checking serde_urlencoded v0.7.1
+    Checking http-body-util v0.1.2
+    Checking rustls-pemfile v2.2.0
+    Checking sync_wrapper v1.0.2
+    Checking toml_datetime v0.6.8
+    Checking serde_spanned v0.6.8
+    Checking encoding_rs v0.8.34
+    Checking downcast-rs v1.2.1
+    Checking base64 v0.22.1
+    Checking winnow v0.6.20
+    Checking mime v0.3.17
+    Checking reqwest v0.12.8
+    Checking toml_edit v0.22.22
+    Checking workflow-websocket v0.18.0
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+    Checking num-rational v0.4.2
+    Checking regex v1.11.0
+    Checking num-iter v0.1.45
+    Checking manual_future v0.1.1
+   Compiling kaspa-rpc-macros v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/macros)
+    Checking num-complex v0.4.6
+    Checking num v0.4.3
+    Checking workflow-rpc v0.18.0
+    Checking workflow-dom v0.18.0
+    Checking toml v0.8.19
+    Checking workflow-http v0.18.0
+    Checking misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-artifact)
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+    Checking kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/txscript)
+    Checking kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/mining/errors)
+    Checking kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/pow)
+    Checking kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/notify)
+    Checking kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/client)
+    Checking kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/notify)
+    Checking kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/wasm)
+    Checking kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/indexes/core)
+    Checking kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspa-pq-validator-core)
+    Checking kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/core)
+    Checking kaspa-wrpc-client v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/wrpc/client)
+    Checking misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-remote)
+warning: unused imports: `PalwClassAdmissionCarriageV2` and `PalwPwuRuleV2`
+  --> misaka-palw-remote/src/bundle.rs:43:103
+   |
+43 |     PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwClassAdmissionCarriageV2,
+   |                                                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+44 |     PalwConsensusObjectV2, PalwPwuRuleV2, palw_class_registration_message_v2,
+   |                            ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-remote` (lib) generated 1 warning (run `cargo fix --lib -p misaka-palw-remote` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.23s

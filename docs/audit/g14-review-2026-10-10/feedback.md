@@ -17,9 +17,11 @@
 4. **共謀者による枠の占有:** claim共通のlive 64・生涯256 reservation枠を先取りされても、outsiderが必要materialを取得できる設計が必要。別bondのreservationが1件ある試験は、全枠飽和への耐性ではない。
 5. **正規eligibilityと測定:** 各active familyをtest-only admissionなしで登録し、fresh verifier自身のnode/RPC、最大profileの実測RAM・時間、restart/IBD/reorgを確認する。shape計算や小型fixtureだけで代替しない。legacy readerの途中走査の取りこぼしは修正したが、恒久的にprune済みの回答の取得・再要求とfresh-node追及の実node試験は残る（下記）。
 
+**Reorgのjob更新:** 受理blockが変わっても旧jobの判定が残る抜けを修正した。candidate snapshotが変わればPendingへ戻し、遅延した旧replay結果を捨てる。実行中のblocking workerは予約とhandleを保持してdrainし、その間は次のreplayを開始しない。探索履歴と未送信carrierもbranch/jobの変更に合わせて破棄する。新4件を含むfiler 14 V-unitで確認したが、実nodeの競合branch→新job再実行→convictionの一続きの検証は残る。
+
 有効化heightは変更していない。X8R統合のfence番号に合わせ、EXEC v2を6、LegacyPublicFilerを7とした。以下は比較用に保持した初回レビューであり、解決済みのcompile・資源バグを現HEADの未解決事項として再掲するものではない。
 
-**LG14-B outsider接続の最新検証:** LG14-B **9 V-fold＋2 V-unit PASS**、共通filer **10 V-unit PASS**、公開history API adapter **6 V-unit PASS**、reporter **21 V-unit PASS**。X8R統合後のlifecycle/A2U **31 V-unit PASS**、shipping pin検査 **361 ok・差分なし**。producer DA policyとIRの回帰も確認した。学習対象のtag 158を1つに絞り、frontierをdescent round数で制限し、重複・未選択・改ざんcarrierではcacheを増やさない。過去に回答済みの次unitを選ぶとbackfillを再開する。ここで使うfold fixtureはsupplied public jobからown replayを注入しており、実nodeのstartup・memory ledger・mempool包含まで立証したものではない。held-court後半のhistory readerにも、固定件数のpagination、最古の認証済みfilingの選択、選択chunkの認証とbackfill、branch確認を追加した。reader／held controllerのfixture回帰は確認したが、fresh nodeのfull service完走と責任期間内の恒久保持は別の受入条件である。
+**LG14-B outsider接続の最新検証:** LG14-B **9 V-fold＋2 V-unit PASS**、共通filer **14 V-unit PASS**、公開history API adapter **6 V-unit PASS**、reporter **21 V-unit PASS**。X8R統合後のlifecycle/A2U **31 V-unit PASS**、shipping pin検査 **361 ok・差分なし**。producer DA policyとIRの回帰も確認した。学習対象のtag 158を1つに絞り、frontierをdescent round数で制限し、重複・未選択・改ざんcarrierではcacheを増やさない。過去に回答済みの次unitを選ぶとbackfillを再開する。ここで使うfold fixtureはsupplied public jobからown replayを注入しており、実nodeのstartup・memory ledger・mempool包含まで立証したものではない。held-court後半のhistory readerにも、固定件数のpagination、最古の認証済みfilingの選択、選択chunkの認証とbackfill、branch確認を追加した。reader／held controllerのfixture回帰は確認したが、fresh nodeのfull service完走と責任期間内の恒久保持は別の受入条件である。
 
 **C2履歴readerの修正:** 以前はDAA差をblock件数へ変換し、途中で打ち切った走査も要求floorまで読んだと記録していた。公開済みunitが`AwaitAnswer`に留まる経路を、再開cursor・開始tipの固定・完了範囲の記録・新しい追及のbackfill・branch変更時の読み直しで修正した。認証済みの利用対象unitだけを重複なくcacheする。node-policyの **11 V-unit PASS**（filer 7、Consensus API adapterのreader 4）がある。これはfresh-node追及のV-node試験ではない。恒久的にpruneされた回答は今回の修正でも取得できず、完了扱いをせず再試行する。現行consensusは既回答unitの再要求も拒否するため、保持・取得・再要求の経路と期限を別途完成させる必要がある。詳細とlogは[修正記録](implementation.md)の履歴pagination節を参照。
 
