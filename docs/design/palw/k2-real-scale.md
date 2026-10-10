@@ -224,6 +224,15 @@ input, or to have the read API state the condition next to each G14-complete cla
 
 ### 4.2 Under DA16b's court scope (`palw_court_scope_v1`, `misaka_palw_kernel::scope`): hiding leaves — DESIGN, staged
 
+**2026-10-11 dependency-court update:** RFC02 §14.22 adds an explicit
+kernel flat-profile context and authenticated hash-leaf relation court using the
+frozen element evaluator. It recomputes the complete 64–127-element span from
+filer-owned dependency leaves, with source/state/history binding, derived
+per-leaf caps and bounded codecs. No node descriptor/statement selects this
+profile. Typed node admission, all-profile courts, hash-unit DA and aggregate
+resources, fresh actual-node prosecution and independent Final/redemption remain
+required; the full real-scale milestone is still open.
+
 **2026-10-11 staged material update:** RFC02 §14.21 and `merkle4` implement a
 separate flat-v4 namespace, 64–127-element leaves with tail merging, bounded
 public/filer openings, cached root descent and explicit material bounds. They

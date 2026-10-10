@@ -2846,3 +2846,77 @@ and aggregate budgets, connect authenticated DA/default and verifier descent,
 and pass fresh actual-node prosecution/Final trials. It cannot inherit reward
 eligibility from the existing v4/v5 plans. Existing commitments, plans, claims,
 candidate v2 statements and every §II.14 completion requirement remain in force.
+
+### 14.22 Staged flat-profile dependency-leaf terminal court
+
+`misaka-palw-kernel::flat_court4` adds a **separate, explicit profile context**
+for a terminal relation court over the §14.21 material. Its profile ID must be
+bound by a future consumer's typed statement, alongside the program, parameter
+commitments, job input, extents and segmented evidence roots. No existing
+execution descriptor, candidate-v2 statement, route discriminant, class,
+reward or shipping fence selects this context. Passing this component's tests
+cannot establish node prosecution, Final/redemption, complete-domain security
+or real-checkpoint support.
+
+Under this staged profile, a committable node value with at least 64 elements
+uses flat-v4. Other node values retain v3, including small and wide intermediate
+values; registered parameters retain their existing v3 commitments. This is an
+explicit mixed grammar, not reinterpretation of a shape in an existing claim.
+Non-committable values are not thereby legal commit points. The existing TIR
+primitive set, integer arithmetic, program validation and state wiring are
+unchanged. The profile ID and fault version are checked independently of the
+untrusted filing.
+
+A filing contains the output's authenticated node opening and **one hash-only
+flat leaf opening**, plus a sorted, duplicate-free union of operand value
+leaves. It contains no producer output values. The court authenticates the
+output coordinate against its segment, resolves each source from validated
+program wiring, and authenticates every filed operand against that exact
+source. Carry-in names the preceding occurrence's carry-out; fixed state names
+the preceding position's writer, or zeros at initialization; history names the
+preceding position's window and the current row. Crossing a 1024-position
+segment boundary does not permit a replacement state or window. A parameter
+leaf names its declared parameter and layer instance. Public tokens, positions,
+constants and encoder job inputs come from their bound job/program context.
+Borrowed coordinates, substituted weights/routing, missing dependencies and
+malformed material dismiss rather than convict the output.
+
+The court calls the frozen `element_value_v1` for every element of the declared
+64..127-element span, hashes the resulting raw-width bytes using the flat leaf
+preimage and compares that digest. A different digest, or authenticated operands
+for which the reference semantics refuse, proves this leaf relation false. A
+matching digest is `NoFault`. The model holder's dependency recorder calls the
+same evaluator over its own operand tensors and deduplicates the actual leaf
+union. The court reads sorted proof leaves through cached layouts and binary
+search; it does not build a full tensor, a per-element map or an operand tree.
+
+The staged per-leaf admission derives maximum dependency reads, leaf counts,
+full paths, raw-width carriers, reference line/sort scratch, hash/lookup work,
+and bounded program/wiring work. Identity-coordinate relations use a contiguous
+flat-span bound. Strided/Gather/MatMul/reduction bounds conservatively cap the
+union by both dependency reads and the source's leaf count, not by opening an
+entire source unconditionally. Every ragged output tail is priced at its actual
+count, up to 127. A relation exceeding one MiB, 2^30 abstract work units, 32 MiB
+scratch or 1024 operand leaves is refused before reference evaluation. These
+are component bounds, not measured peak RSS/time or network-wide admission;
+a consumer still needs worst bounds across all positions/leaves and shared
+per-block/per-bond/network accounting before accepting this profile.
+
+The strict fault decoder caps all vector counts before allocation: rank four,
+64 node/hash siblings, ten position/prompt siblings, nine operands, 1024 total
+operand leaves, 4096 values per legacy row leaf and 4096 prompt IDs. It checks
+exact value spans, known dtype/version/option tags and end of input. The
+in-memory verifier enforces the same carrier/shape/count ceilings and each
+relation's derived opening limit. Legacy row leaves are filer-owned proof
+material; no public DA service of them is introduced. Root-only hashing of an
+already resident tensor uses fixed scratch and avoids retaining another tree.
+
+Still required: typed node admission/statement binding, public hash-unit
+DA/default/session accounting and deadlines, complete-profile malformed/decode
+and small/wide-node courts, acquisition/localization from actual chain carriers,
+fresh model-holder prosecution with independent node replay and Final/redemption,
+measured verifier resources and honest liveness under aggregate invalid filings.
+Real checkpoint/task/context/fidelity, arithmetic/backend conformance, whole
+statement security and all other §II.14 requirements also remain open. This
+stage implements the dependency-leaf relation component; it does not activate
+or declare completion of the large-model path.

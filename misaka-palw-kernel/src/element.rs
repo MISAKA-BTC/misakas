@@ -414,16 +414,26 @@ pub(crate) fn flat_gather_v1(node: &Node, inputs: &[Vec<usize>], out: &[usize]) 
 }
 
 /// The program's per-position structure the courts read: the wiring and the flat index of each occurrence's first node.
-struct PreparedV1<'a> {
-    w: WiringV1<'a>,
+pub(crate) struct PreparedV1<'a> {
+    pub(crate) w: WiringV1<'a>,
     offsets: Vec<u64>,
-    node_count: u64,
+    pub(crate) node_count: u64,
     /// `[occurrence][node]`: values never served (`crate::seg_scope`).
     withheld: Vec<Vec<bool>>,
 }
 
 impl<'a> PreparedV1<'a> {
     fn new(program: &'a TirProgramV1, encoder: Option<&crate::seg_encoder::EncoderBindingV1>) -> Result<Self, String> {
+        let mut prepared = Self::without_scope(program, encoder)?;
+        prepared.withheld = crate::seg_scope::seg_withheld_mask_v1(program);
+        Ok(prepared)
+    }
+
+    /// Shared validated wiring without choosing the frozen disclosure/court profile.
+    pub(crate) fn without_scope(
+        program: &'a TirProgramV1,
+        encoder: Option<&crate::seg_encoder::EncoderBindingV1>,
+    ) -> Result<Self, String> {
         let w = match encoder {
             Some(e) => WiringV1::for_stage(program, Some(&e.stage())),
             None => WiringV1::new(program),
@@ -435,7 +445,7 @@ impl<'a> PreparedV1<'a> {
             offsets.push(at);
             at += program.blocks[*b as usize].nodes.len() as u64;
         }
-        Ok(Self { w, offsets, node_count: at, withheld: crate::seg_scope::seg_withheld_mask_v1(program) })
+        Ok(Self { w, offsets, node_count: at, withheld: Vec::new() })
     }
 
     fn is_withheld(&self, s: u16, n: u16) -> bool {
@@ -447,22 +457,22 @@ impl<'a> PreparedV1<'a> {
         Some(self.w.program.blocks[*b as usize].nodes.len() as u16)
     }
 
-    fn valid(&self, s: u16, n: u16) -> bool {
+    pub(crate) fn valid(&self, s: u16, n: u16) -> bool {
         self.nodes_in(s).is_some_and(|c| n < c)
     }
 
-    fn index(&self, s: u16, n: u16) -> u64 {
+    pub(crate) fn index(&self, s: u16, n: u16) -> u64 {
         self.offsets[s as usize] + n as u64
     }
 
     /// The declared type of `(s, n)`'s value at `p`.
-    fn declared(&self, s: u16, n: u16, p: u32) -> (DType, Vec<usize>) {
+    pub(crate) fn declared(&self, s: u16, n: u16, p: u32) -> (DType, Vec<usize>) {
         let node = self.w.node(s, n);
         (node.out.dtype, node.out.resolve(self.w.h(s, p)))
     }
 
     /// The shapes `(p, s, n)`'s element is evaluated at.
-    fn shapes(&self, p: u32, s: u16, n: u16) -> ElementShapesV1 {
+    pub(crate) fn shapes(&self, p: u32, s: u16, n: u16) -> ElementShapesV1 {
         let block = self.w.occurrences[s as usize].0 as usize;
         let node = self.w.node(s, n);
         let h = self.w.h(s, p);
@@ -491,13 +501,13 @@ impl<'a> PreparedV1<'a> {
 
 /// Where an operand of `(p, s, n)` comes from, `i` counting a `HistAppend`'s previous window as operand 1.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum OperandSourceV1 {
+pub(crate) enum OperandSourceV1 {
     Source(SourceV1),
     Token,
     Position,
 }
 
-fn operand_sources(pr: &PreparedV1<'_>, p: u32, s: u16, n: u16) -> Result<Vec<OperandSourceV1>, String> {
+pub(crate) fn operand_sources(pr: &PreparedV1<'_>, p: u32, s: u16, n: u16) -> Result<Vec<OperandSourceV1>, String> {
     let node = pr.w.node(s, n);
     let mut out = Vec::new();
     for (i, r) in node.inputs.iter().enumerate() {
@@ -555,7 +565,7 @@ fn header_of(l: &LeafOpeningV3) -> Option<(DType, Vec<usize>)> {
 }
 
 /// The token a node reads at `p` (the job's prompt, a tile, or a delivered id).
-fn token_at(c: &SegClaimContextV1<'_>, p: u32, tile: Option<&PromptTileOpeningV1>) -> Option<u32> {
+pub(crate) fn token_at(c: &SegClaimContextV1<'_>, p: u32, tile: Option<&PromptTileOpeningV1>) -> Option<u32> {
     if p < c.prompt_len {
         match c.inline_prompt {
             Some(ids) => ids.get(p as usize).copied(),

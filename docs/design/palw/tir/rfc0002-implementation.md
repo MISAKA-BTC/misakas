@@ -1649,3 +1649,48 @@ correction; the six flat tests ran after that correction. Logs, source/binary
 hashes, exact verification timing and selection audit are recorded in
 `evidence/rfc02-flat-v4-verdict.json`. No actual-node flat court/DA/Final
 verification is claimed.
+
+### Staged flat-profile dependency-leaf court — 2026-10-11
+
+`flat_court4` extends the flat material with an explicit mixed trace profile and
+a terminal relation court: large committable node values use flat-v4, other
+intermediates retain v3, and parameter commitments retain v3. No descriptor,
+class, candidate-v2 or node route selects this profile. Consumers must explicitly
+bind its ID and its complete typed statement before admission.
+
+The court receives an authenticated output leaf digest, not output values. It
+recomputes all 64..127 elements with the frozen evaluator from an authenticated,
+sorted, duplicate-free union of operand leaves. Source coordinates come from
+validated wiring, including carry-in, parameter/layer, fixed-state initialization
+and the previous writer, current history row and previous window. The model
+holder's recorder uses the same evaluator over its own operands. Court reads use
+cached layouts and binary search without a full tensor or element map. Per-leaf
+bounds and strict codecs cap carriers, dependency leaves, line/sort scratch,
+reference work and metadata; large unbounded lines fail before evaluation.
+Root-only hashing of a resident tensor avoids retaining a second Merkle tree.
+
+Synthetic component trials cover all 25 primitives, every leaf and merged tail
+of multiple sizes, honest dismissal, substituted weights/routing, missing and
+borrowed sources/profile/job input, fixed state and growing/sliding history,
+the 1023→1024 boundary, public token tiles, nonzero-axis batched Gather,
+authenticated semantic refusal and wide v3 intermediate operands. Truncations,
+unknown versions, huge counts, duplicate/excess paths/leaves and surplus bytes
+are refused. These are kernel component trials, not actual-node prosecution,
+real checkpoint support, model-privacy entropy results or complete security.
+
+Typed node admission, all-profile malformed/decode/small/wide-node courts, hash-only
+DA/default/slot budgets and complete statement resources, public-chain acquisition,
+fresh prosecution and independent Final/redemption remain open, along with the
+original §II.14 checkpoint/task/context/fidelity, economics and liveness contract.
+The RFC02 goal remains active and shipping fences stay dormant. See §14.22.
+
+**116 distinct kernel tests passed (131 passing executions):** the complete
+library run passed 114 cases, then the final eleven flat-court cases and six
+material cases ran against the final binary. Nine initial court cases and six
+material repeats are counted once. One manual producer timing benchmark is
+ignored and excluded. The complete run precedes final flat-only profile/job/
+codec guards and test additions; its other production paths are unchanged,
+with only formatting of shared wiring afterward. The final 17 targeted cases
+cover the final flat implementation. Commands, exact names, source/binary
+hashes, logs, timing and limits are in `evidence/rfc02-flat-court-v4-verdict.json`.
+No actual-node flat-profile or full RFC02 completion is claimed.

@@ -162,6 +162,49 @@ pub fn flat_commitment_from_bytes_v4(dtype: DType, shape: &[u64], bytes: &[u8]) 
     Ok(commitment(dtype, shape, &root.ok_or_else(invalid)?))
 }
 
+/// Root-only hashing of an already resident reference tensor, using the same
+/// fixed stack and raw-width leaf buffer; it does not retain an additional tree
+/// or allocate a full raw-width copy of the tensor.
+pub fn flat_commitment_from_tensor_v4(t: &Tensor) -> Result<Digest, Error> {
+    if t.shape.len() > misaka_palw_tir::types::MAX_RANK || !t.dtype.committable() {
+        return Err(invalid());
+    }
+    let shape: Vec<_> = t.shape.iter().map(|d| *d as u64).collect();
+    let l = FlatLayoutV4::of(&shape).ok_or_else(invalid)?;
+    if l.elements != t.data.len() as u64 {
+        return Err(invalid());
+    }
+    let mut stack = [None; 64];
+    let mut bytes = Vec::with_capacity(FLAT_LEAF_MAX_ELEMENTS_V4 * t.dtype.width());
+    for index in 0..l.leaves {
+        let (first, count) = l.span(index).ok_or_else(invalid)?;
+        bytes.clear();
+        for v in &t.data[first as usize..first as usize + count] {
+            if !t.dtype.contains(*v) {
+                return Err(invalid());
+            }
+            t.dtype.encode_le(*v, &mut bytes);
+        }
+        let mut s = leaf_state(t.dtype, index, count);
+        s.update(&bytes);
+        let mut hash = finish(s);
+        let mut level = 0;
+        while let Some(left) = stack[level].take() {
+            hash = node_hash(&left, &hash);
+            level += 1;
+        }
+        stack[level] = Some(hash);
+    }
+    let mut root = None;
+    for left in stack.into_iter().flatten() {
+        root = Some(match root {
+            None => left,
+            Some(right) => node_hash(&left, &right),
+        });
+    }
+    Ok(commitment(t.dtype, &shape, &root.ok_or_else(invalid)?))
+}
+
 /// A model holder/producer may retain the priced tree to serve/localize paths.
 /// Path reads visit one digest per level; no full tree is copied per probe.
 pub struct FlatTreeV4 {
@@ -558,6 +601,7 @@ mod tests {
                 let root = tree.commitment();
                 assert_eq!(root, raw.commitment());
                 assert_eq!(root, oracle(&t));
+                assert_eq!(root, flat_commitment_from_tensor_v4(&t).unwrap());
                 assert_eq!(root, flat_commitment_from_bytes_v4(dtype, &[n as u64], &bytes).unwrap());
                 assert_ne!(root, crate::merkle3::tensor_commitment_v3(&t));
                 for index in [0, tree.layout.leaves / 2, tree.layout.leaves - 1] {

@@ -96,6 +96,8 @@ pub mod lifecycle;
 pub mod merkle;
 pub mod merkle3;
 pub mod merkle4;
+/// Staged flat-profile dependency-leaf courts; no shipping descriptor selects them.
+pub mod flat_court4;
 /// Bounded raw-width producer hashing of the unchanged v3 tensor commitments.
 pub mod merkle3_stream;
 pub mod mode;
