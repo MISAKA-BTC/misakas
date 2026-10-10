@@ -2,8 +2,10 @@
 
 Lane PESG-B, branch `pesg/detection-bounds` (from integration `0fc729c55`), 2026-10-10. This is the B part of the
 [Probabilistic–Economic Security Gate](probabilistic-economic-security-gate.md). It fills in the T1 coverage table for B and gives
-the T2 analysis: the probability and cryptography terms. It changes no consensus code, fence, wire id or parameter. The only code
-it adds is a test file, `misaka-palw-kernel/tests/pesg_b_detection.rs` (§3, §7).
+the T2 analysis: the probability and cryptography terms. The original PESG-B lane added only the tests in
+`misaka-palw-kernel/tests/pesg_b_detection.rs` (§3, §7). The subsequent Codex review fixes F-B1 in the dormant kernel admission
+rules: every generative job now requires exactly `max_new_tokens` tokens. The historical wire field name stays unchanged; there
+is no EOS/stop rule. This semantic tightening needs consensus review before activation; no fence or network id was changed.
 
 Verdicts use only **PASS / FAIL / UNKNOWN**. An unknown is never a pass. B judges one thing: `p_check`, the probability that a
 capable honest verifier who **runs** the profile's check, on time and with the material, finds the worst fault. B judges neither
@@ -36,7 +38,7 @@ covers only classes small enough to pass that gate.
 
 **T1 outcome for B (§2).** These reward- or gate-bearing relations have the method **none**. Each is a **T1 FAIL** for its family:
 - **N1** — conformance vector logits and commit digests have no court (SG-11).
-- **N2** — the delivered generation length is bound by no rule (finding F-B1, §6). This affects every generative family.
+- **N2 / F-B1 — FIXED in the Codex review branch:** the chain refuses any delivered generation length unequal to the job's required length. See §6; this does not close N1/N3 or any timing/inclusion gap.
 - **N3** — every relation of the legacy V2 route under T3 collusion.
 
 ## 1. Scope and definitions
@@ -80,7 +82,7 @@ exactly one relation, with no omission, no duplicate and no weaker checker. Lemm
 | Inputs: tokens, params against the registered commitments, consts, initial state | **C** (bound in the evidence; params authenticated at every opening) | O | `shape_and_binding`, `check_evidence_v1` |
 | Segment entry/exit state roots | **C** (recomputed from the commitments) | chain at inclusion | `evidence.rs:184` |
 | Each delivered token (greedy decode) | **C** | O | `check_program` |
-| Generation length (`1 ≤ len ≤ max_new_tokens`, fixed reward) | **none** — any length is accepted (F-B1) | — | `job.rs:153` |
+| Generation length (`len = max_new_tokens > 0`, fixed reward) | **C** — exact public job binding; a wrong length is refused before reward eligibility (F-B1 fixed) | chain at inclusion | `job.rs` `generation_length_matches_v1` |
 | Model-weight binding (param commitments ↔ artifact root) | **C**, refutable by a verifier that holds the bytes (tag 105); conditional on acquisition (ADR-0177) | O | readiness matrix, GAP 1 withdrawn |
 | Interim Panel seats (PanelLicensed) | **A + C** on `WholeClaim`, but with **public coins grindable by the claim id** (`palw_kernel_interim_seed_v1`) | seats | not soundness-bearing (SG-05) |
 
@@ -88,7 +90,7 @@ exactly one relation, with no omission, no duplicate and no weaker checker. Lemm
 
 Each stage is checked like §2.1 (`FreshPipelineVerifierV1::check_salted`, `WholeClaim` per stage). Stage edges (`EdgeRecompute`:
 job values, earlier stages' committed rows, RFC-0003's `R` from `random_binding`) are **C**. The stream decode is **C**.
-Generation length is **none** (F-B1). RFC-0003's `R` is a public function of the job's seed. That makes it a generation-randomness
+Generation length is **C** at inclusion via `generation_length_matches_v1` (F-B1 fixed). RFC-0003's `R` is a public function of the job's seed. That makes it a generation-randomness
 question, not a detection gap: the relation `R = H(seed, item)` is checked exactly.
 
 ### 2.3 K2-TIR-v4 segmented (`ClaimBodyV1::Segmented`)
@@ -100,7 +102,7 @@ question, not a detection gap: the relation `R = H(seed, item)` is checked exact
 | Decode at a selecting position | **C** at the checked positions (route A); every position (route B) | O | `element.rs:1021` |
 | Cross-segment continuity | **C** (by wiring: position `p` reads `p − 1`'s committed values; no separate boundary statement) | O | K2S §1.3 |
 | Sublinear-read aggregate check (Freivalds/GKR over a polynomial commitment) | **none exists** (DESIGN_GAP, K2S §11.4) | — | — |
-| Generation length | **none** (F-B1) | — | — |
+| Generation length | **C** — exact required length (F-B1 fixed) | chain at inclusion | `seg_ledger.rs` |
 
 ### 2.4 K2-TIR-v5 encoders and heads
 
@@ -316,13 +318,15 @@ Moving the fault collapses detection from 1 to `s/P`. At 9B-8k with `m = 8` that
 
 ## 6. Findings
 
-- **F-B1 (T1, P1 for rewards) — the generation length is a reward-bearing quantity with no relation.** `job.rs:153` accepts any
-  `1 ≤ len ≤ max_new_tokens`. There is no stop/EOS rule. `claim_reward` and `work_credit_per_claim` are fixed per claim (`opv.rs:156`).
-  So a producer that delivers one token earns the same as one that delivers `max_new_tokens`. Every delivered token is correct, so
-  no court can convict this, yet the paid useful work is unbound. This affects v1–v4 and the pipeline stream. Fix options (a design
-  decision):
-  - define the length by the job: exactly `max_new_tokens`, or a committed stop rule checked like the decode;
-  - make reward and credit proportional to the verified positions.
+- **F-B1 (T1, P1 for rewards) — FIXED: exact generation length at admission.** The old rule accepted any
+  `1 ≤ len ≤ max_new_tokens` while reward and work credit were fixed per claim. A correct one-token prefix therefore obtained
+  the full reward without a computational fault. The shared `generation_length_matches_v1` now requires exact equality and a
+  positive required count in single-program (including typed component jobs), pipeline stream and segmented decoder admission.
+  Non-generative pipelines and encoders keep their separate zero-generation rule. `max_new_tokens` retains its wire name but
+  means a required count until an EOS/stop rule is committed and adjudicated. This changes dormant protocol semantics and needs
+  consensus review before activation. Kernel regressions exercise short, exact and overlong authentic executions; a correctly
+  signed shortened claim also has a real-node regression. It is refused at admission, so it cannot earn the fixed reward and
+  does not need a fraud conviction to exclude it.
 - **F-B2 (T2) — the claim draw's veto semantics decide whether `q`-sampling has any power** (§4.6): re-drawing after a veto gives
   `q^(R+1)`.
 - **F-B3 (T2, accounting) — never charge grinding of a sampled check by a union bound.** The exact escape is

@@ -283,9 +283,10 @@ on a real 5-position claim (3,570 placements per mode, isolated and self-consist
 | Sampled conformance; legacy V2 under full collusion | ~0 / 0 | FAIL |
 | v4 route B on a `q`-sample of claims | `q·(1−ε_src)` at best; the draw is not wired | UNKNOWN |
 
-New blocking finding **F-B1**: generation length is bound by no rule (`job.rs` accepts 1..`max_new_tokens`, reward is per claim),
-so a 1-token claim earns the full reward with no court able to convict it. It is a T1 FAIL for v1–v4 and pipelines until the job
-fixes the length or pay is per verified position. Also open: N1 (conformance logits and commit digests have no court),
+**F-B1 is fixed in the Codex review branch**: `generation_length_matches_v1` requires exactly the job's positive
+`max_new_tokens` at admission for generative v1–v4 and pipelines. A short correct prefix is refused before reward eligibility;
+non-generative zero-output routes keep their own rule. The historical wire name is unchanged, but this dormant semantic
+tightening still requires consensus review. This closes the length-binding counterexample only. Also open: N1 (conformance logits and commit digests have no court),
 F-B3 (grinding uses the exact escape `1−(1−ε_sel)^G`), F-B4 (interim Panel seeds can be ground from the claim id),
 F-B5 (legacy samplers are slightly biased) and F-B6 (sampled conformance has no power against sparse faults).
 

@@ -294,7 +294,7 @@ impl KernelLedgerV1 {
             }
             &[]
         } else {
-            if claim.generated.is_empty() || claim.generated.len() as u64 > job.max_new_tokens as u64 {
+            if !crate::job::generation_length_matches_v1(job.max_new_tokens, claim.generated.len()) {
                 return Err(rule("binding fault WrongGenerationLength".into()));
             }
             if claim.generated.iter().any(|t| *t >= class.program.token_bound) {

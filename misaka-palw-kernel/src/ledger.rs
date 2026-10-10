@@ -1938,7 +1938,7 @@ impl KernelLedgerV1 {
         }
         match stream_stage(&class.pipeline) {
             Some(si) => {
-                if claim.generated.is_empty() || claim.generated.len() as u64 > job.max_new_tokens as u64 {
+                if !crate::job::generation_length_matches_v1(job.max_new_tokens, claim.generated.len()) {
                     return fault(F::WrongGenerationLength);
                 }
                 let bound = class.programs[class.pipeline.stages[si].program as usize].token_bound;

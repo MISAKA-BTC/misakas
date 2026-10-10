@@ -157,6 +157,7 @@ pub const PIPELINE_CLAIM_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/pipeline-claim/
 pub struct PipelineJobPostV1 {
     pub class_binding_id: Digest,
     pub facts: PipelineJobFactsV1,
+    /// Exact output length for a stream job (Greedy has no EOS rule); zero for a non-generative pipeline.
     pub max_new_tokens: u32,
     pub nonce: Digest,
 }

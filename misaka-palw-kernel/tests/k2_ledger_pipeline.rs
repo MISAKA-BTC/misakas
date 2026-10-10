@@ -296,6 +296,24 @@ fn vlm_job() -> PipelineJob {
     PipelineJob { prompt: vec![3, PLACEHOLDER, PLACEHOLDER, 5], ..vision_job() }
 }
 
+#[test]
+fn f_b1_a_pipeline_prefix_cannot_complete_a_fixed_reward_job() {
+    for delivered in [1, 3, 4] {
+        let mut w = World::new(vlm_pipeline(), 400, Some(DecodeRuleV1::Greedy));
+        let job = w.post(2, &vlm_job(), 3, 1);
+        let generated = w.generate(&job, delivered);
+        let produced = w.produce(&job, generated, RANDOM, |_| {});
+        let id = produced.claim.id();
+        let ev = w.block(10, vec![produced.tx, T::PanelCovered { claim: id }]);
+        if delivered == 3 {
+            assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
+        } else {
+            assert!(refused(&ev).is_some_and(|why| why.contains("WrongGenerationLength")), "{ev:?}");
+            assert!(!w.l.claims.contains_key(&id));
+        }
+    }
+}
+
 struct NoProducerValues;
 impl PublicSourceV1 for NoProducerValues {
     fn node(&self, _: u8, _: u32, _: u16, _: u16) -> Option<Tensor> {

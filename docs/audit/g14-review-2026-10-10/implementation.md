@@ -143,4 +143,28 @@ BGE-base 512はRAM **69,698,109,792 B**で、現行上限68,719,476,736 Bを超�
 
 [全kernel](evidence/scope-verified-kernel.log)、[segmented node](evidence/scope-verified-node.log)、[SDK configuration](evidence/scope-sdk-config-final.log)、[9B RAM再算定](evidence/scope-9b-ram.log)。
 
-長時間の8k-historyとSDK geometry全軸sweepは別runで継続中であり、上表のPASS件数には含めていない。SDKのtiny BERT/XLM-R courtは同じ最新production codeで通過したが、全軸sweepが終了するまではSDK suite全体のPASSとは記録しない。
+長時間の別runも終了した。8k-historyはPASS（元batchはmaterialの重複readを数えた別test 1件がFAILであり、修正後は上記13件で再検証）。SDKのtiny BERT/XLM-R courtとgeometry全軸sweepもPASSした。SDK元batchのconfiguration testは旧「BGEは受入可能」というassertionでFAILし、その修正後のconfiguration reportが上記1件でPASSしている。別runの結果を、単一の全件green logであるかのようには扱わない。
+
+[8k-historyを含む初回node batch](evidence/scope-node-initial-with-history.log)、[SDK tiny court・全軸sweepと旧config assertionの失敗](evidence/scope-sdk-sweep-before-config-report-fix.log)。型別courtではtiny BERTの1,155件、XLM-R headの1,209件のhonest element filingsが棄却され、各fixtureのembedding/projection/mask/attention/outputへの不正がconvictされた。
+
+
+## 0b73fd33f統合とF-B1の修正
+
+integration `0b73fd33f`を`c4966e5df`で取り込んだ。新しいverifier-pay、保証金safety項、PESG検出確率の試験を確認し、F-B1を修正した。固定報酬のjobに対し、指定数より短い正しい生成結果でも満額を得る受入規則が原因である。
+
+現行GreedyにはEOS停止規則がないため、`max_new_tokens`を**必須の生成token数**として照合する。wire field名は保持し、単体program、pipeline stream、segmented decoderが同じ`generation_length_matches_v1`を使う。typed compositeのgenerative componentも単体programのbindingを使う。非生成型pipeline/encoderのzero-generation規則は別扱いである。短い実行が計算自体は正しくても、jobを完了したclaimとしては受け入れない。これにより、convictionが作れない正しい短縮計算を報酬対象から除外する。
+
+これはdormant protocolの意味の変更であり、既存の「最大値で任意停止」との互換性はない。EOS等を許す場合は停止規則自体をjobへcommitし、courtで検証する別設計が必要になる。fence、network id、報酬額を変更していない。
+
+| 検証 | 結果と範囲 |
+| --- | --- |
+| 最新統合版・修正前のnode `g14_` | 136 PASS / 0 FAIL / 1 ignored。長時間の8k-historyは対象外 |
+| 保証金policy | 35 PASS / 0 FAIL |
+| verifier-pay + PESG | 11 PASS / 0 FAIL / 6 ignored。PESGの長時間全列挙は未実行 |
+| F-B1修正後のkernel | 272 PASS / 0 FAIL / 7 ignored / 2 filtered。短い・一致・長すぎる生成を単体、pipeline、segmentedで試験。既知F-C4R4-17とPESG全列挙はignored。長時間Merkle全leafと9B shape再算定は前段で検証済みのため除外 |
+
+[統合node](evidence/next-integration-node.log)、[保証金](evidence/next-integration-budget.log)、[報酬・検出](evidence/next-integration-kernel.log)、[F-B1 kernel](evidence/length-kernel.log)。全域のscope、期限、legacy追及、production eligibilityの残条件は、これらのPASSでは閉じない。
+
+F-B1の実node回帰も1 PASS。正しいproducer署名とsalted sealを持つ1-token claimを、2-token jobに対して実際のmempool→template→blockに載せた。mempoolの構造・署名検査は通過するが、block foldは短縮claimを記録しない。同じjobの正しい2-token claimは記録されFinalへ到達する。最初のbatchは「mempoolが意味検査まで行う」というtest側の誤った期待で1件失敗し、既存13件はPASS。その期待を実装の責任境界に合わせて修正した1件を再実行した。
+
+[実nodeの修正済み回帰](evidence/length-node-binding.log)、[初回batch（13 PASSとtest期待の失敗）](evidence/length-node.log)。

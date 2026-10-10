@@ -254,7 +254,7 @@ impl SegWorld {
         self.tiled_job_generating(prompt, 2).await
     }
 
-    /// [`Self::tiled_job`] of a job that generates at most `max_new_tokens` ids.
+    /// [`Self::tiled_job`] of a job that requires exactly `max_new_tokens` ids.
     async fn tiled_job_generating(&mut self, prompt: &[u32], max_new_tokens: u32) -> Digest {
         self.jobs += 1;
         let job = TiledJobV1 {
@@ -525,6 +525,47 @@ async fn g14_k2s_a_withheld_segment_is_demanded_and_defaults_never_a_conviction(
     assert!(ledger.seg_progress.keys().all(|(c, _, _)| *c != claim.id), "no progress row outlives the demand");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay of the default");
+}
+
+/// A correct one-token prefix cannot complete a fixed two-token job (F-B1), even with a genuine producer seal and signature.
+#[tokio::test]
+async fn g14_k2s_a_short_correct_claim_is_refused_before_it_can_earn_the_fixed_reward() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = SegWorld::new().await;
+    let prompt = [1, 3, 5];
+    let job = w.tiled_job(&prompt).await;
+    let trace = trace_v1(&w.f.program, &w.f.params, &prompt).unwrap();
+    let last = trace.values.last().unwrap().last().unwrap();
+    let generated = vec![DecodeRuleV1::Greedy.select(&last[w.f.program.logits as usize]).unwrap()];
+    let c = seg_commitments_of_trace_v1(&trace);
+    let ledger = w.net.ledger();
+    let class = &ledger.classes[&w.class];
+    let evidence = build_segmented_evidence_v1(
+        class.header(w.class),
+        &class.descriptor,
+        prompt.len() as u32,
+        &prompt_root_of_ids_v1(&prompt),
+        &[],
+        &c,
+    );
+    let claim = KernelClaimV1 { job_id: job, producer_bond: w.net.kid(0), generated, evidence_root: evidence.root() };
+    let id = claim.id();
+    let salt = misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt", &id);
+    let seal = w.net.route(0, &K::SealClaim { producer: w.net.kid(0), job, seal: claim_seal_v2(&id, &salt) });
+    w.net.send_all(vec![(0, seal)]).await;
+    let reveal = w.net.route(
+        0,
+        &K::CommitClaimSalted { salt, commit: SaltedCommitV1::Segmented { claim, evidence, segment_roots: c.segment_roots() } },
+    );
+    // The mempool authenticates the carrier; state-dependent claim binding is the block fold's job. A colluding miner carrying
+    // the valid signature still cannot make this wrong-length claim enter the ledger or become eligible for a reward.
+    w.net.send_all(vec![(0, reveal)]).await;
+    assert!(!w.net.ledger().claims.contains_key(&id), "the block fold refuses the short claim");
+    // A full completion of the same job still commits and reaches Final.
+    let complete = w.claim(0, job, &prompt, None).await;
+    w.net.beat_to(w.net.daa() + 80).await;
+    assert!(matches!(w.net.claim_state(&complete.id), ClaimStateV1::Final { .. }));
+    assert!(!w.net.ledger().claims.contains_key(&id));
 }
 
 /// **GAP 10: the mempool runs the kernel route's acceptance gate** — a carrier whose signature its bond's key does not verify, and one

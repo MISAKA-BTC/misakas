@@ -62,7 +62,7 @@ M\*-49 と default 時の取り分の保留を、新しい休眠 fence `palw_ver
 - **cumulative scope（F-C4R4-17）:** kernel ledger の hook（`cumulative_scope_allows_v1`）は、現状すべてを受け入れる。DA16b の predicate（`palw_court_scope_v1`、`misaka_palw_kernel::scope`）への接続が残っている。
 - **16 unit の範囲内で、任意の不正位置を局所化できることの証明**（codex のレビュー指摘）。
 - **期限内の包含:** junk な FileProof が court budget を消費する（arming list の CODE 14）。
-- **F-B1（PESG-B、新規の blocking 項目）:** 生成長がどの規則にも束縛されていない。`job.rs` は 1..`max_new_tokens` の任意の長さを受け入れ、報酬は claim 単位で固定なので、1 token の claim が満額を得て、どの court も有罪にできない。v1–v4 と pipeline の T1 FAIL。job で長さを固定するか、検証済み位置ごとの支払いにする必要がある。詳細は `pesg-b-detection-bounds.md`。
+- **F-B1（PESG-B、以下は発見時の記録）:** 生成長がどの規則にも束縛されていない。`job.rs` は 1..`max_new_tokens` の任意の長さを受け入れ、報酬は claim 単位で固定なので、1 token の claim が満額を得て、どの court も有罪にできない。v1–v4 と pipeline の T1 FAIL。job で長さを固定するか、検証済み位置ごとの支払いにする必要がある。詳細は `pesg-b-detection-bounds.md`。Codex review branchでは、生成型jobの`max_new_tokens`を必須の生成数として受入時に照合する修正と回帰試験を追加した。非生成型のzero-generation規則は別扱い。wire名を維持した意味の変更であり、activation前のconsensus reviewは必要。
 - **v4 route A（m/P 標本）は FAIL、`q` 標本の route B は draw が未配線で UNKNOWN（PESG-B）。**
 - **A2U の pin:** 解決済み（`d9f7cbd6c` で tag 109 再 pin・TakeoverToken を NotCarried に分類、`824e6da15` で kernel route の mempool gate を fence 未満では判定せず通すよう修正）。
 

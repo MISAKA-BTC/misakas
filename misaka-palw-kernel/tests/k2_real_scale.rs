@@ -214,6 +214,25 @@ fn artifact(w: &W) -> impl Fn(u16, Option<u16>) -> Option<Tensor> + '_ {
 }
 
 #[test]
+fn f_b1_a_segmented_prefix_cannot_complete_a_fixed_reward_job() {
+    for required in [1, 2, 3] {
+        let fx = wide128_v1(7);
+        let mut w = W::new(fx.program, fx.params, 32);
+        let prompt = [1, 3, 5];
+        let job = w.tiled_job(&prompt, required);
+        let produced = produce(&w, job, &prompt, None); // Two correct tokens and an otherwise authentic trace.
+        let id = produced.claim.id();
+        let ev = commit(&mut w, &produced);
+        if required == 2 {
+            assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
+        } else {
+            assert!(refusal(&ev).is_some_and(|why| why.contains("WrongGenerationLength")), "{ev:?}");
+            assert!(!w.l.claims.contains_key(&id));
+        }
+    }
+}
+
+#[test]
 fn k2s_the_gate_rederives_the_plan_and_prices_decoded_working_memory_and_all_progress() {
     use misaka_palw_kernel::gate::ProsecutionGapV1 as G;
     let fx = wide128_v1(7);
