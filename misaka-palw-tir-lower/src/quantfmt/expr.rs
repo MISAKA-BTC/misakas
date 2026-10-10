@@ -460,7 +460,7 @@ pub fn compile(src: &str, scope: &dyn Scope) -> R<Node> {
 /// Preflight for declarative frontend streaming imports, before recursive parsing/folding.
 /// The legacy descriptor interpreter keeps its existing contract; this caller needs tighter bounds.
 pub fn streaming_syntax(src: &str) -> R<()> {
-    if src.len() > 1024 || lex(src)?.len() > 128 {
+    if src.len() > 1024 || lex(src)?.len() > 256 {
         return err("FRONTEND_DESCRIPTOR_LIMIT: expression bytes/tokens");
     }
     let mut depth = 0usize;

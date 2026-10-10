@@ -123,7 +123,7 @@ impl ConfigReader {
         let mut keys: Vec<String> = vec!["quant_method".into()];
         keys.extend(self.params.values().filter_map(|p| p.config.as_deref().map(top)));
         if let Some(c) = &self.config {
-            keys.extend(c.inert.iter().cloned());
+            keys.extend(c.inert.iter().map(|p| top(p)));
             keys.extend(c.skip.iter().cloned());
             keys.extend(c.checks.iter().map(|k| top(&k.path)));
         }

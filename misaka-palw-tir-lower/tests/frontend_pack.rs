@@ -600,7 +600,7 @@ fn descriptor_headers_vectors_config_and_expansion_refuse_before_checkpoint_read
     wrong["quant_formats"]["outsider"]["tests"][0]["roles"]["codes"]["shape"] = json!([usize::MAX, 2]);
     cases.push((wrong, "FRONTEND_DESCRIPTOR_LIMIT"));
     let mut wrong = d.clone();
-    wrong["quant_formats"]["outsider"]["decode"]["value"] = json!("1+".repeat(100) + "1");
+    wrong["quant_formats"]["outsider"]["decode"]["value"] = json!("1+".repeat(160) + "1");
     cases.push((wrong, "FRONTEND_DESCRIPTOR_LIMIT"));
     let mut wrong = d.clone();
     wrong["quant_formats"]["outsider"]["decode"]["value"] = json!("(".repeat(40) + "1" + &")".repeat(40));
@@ -613,7 +613,8 @@ fn descriptor_headers_vectors_config_and_expansion_refuse_before_checkpoint_read
     cases.push((wrong, "lane-dependent"));
     let mut wrong = d.clone();
     wrong["quant_formats"]["outsider"]["layout"] = json!({"kind":"blocks","elems":32,"bytes":1,"fields":[]});
-    cases.push((wrong, "EXTENSION_REQUIRED"));
+    wrong["quant_formats"]["outsider"]["params"] = json!({"unused":{"default":1}});
+    cases.push((wrong, "unsupported block configuration"));
     let mut wrong = d.clone();
     wrong["bindings"]["$concat"][1]["$flatten"]["$map"][2][0]["import"]["roles"]["hidden"] = json!("packed.0");
     cases.push((wrong, "undeclared descriptor role"));
@@ -735,5 +736,349 @@ fn the_pack_wide_descriptor_vector_budget_cannot_reset_between_formats() {
     assert!(text.len() < frontend_pack::MAX_PACK_BYTES, "must reach the vector work bound");
     let error = FrontendPack::parse(&text).err().unwrap().to_string();
     assert!(error.contains("FRONTEND_DESCRIPTOR_LIMIT: vector work"), "{error}");
+    assert_eq!(s.reads.get(), 0);
+}
+
+fn saved_fixture(f: &misaka_palw_tir_lower::quantfmt::QuantFormat, vector: usize) -> (Value, Source, TirProgramV1, Vec<i128>) {
+    use misaka_palw_tir_lower::quantfmt::tensors::RoleTensor;
+    let test = &f.desc.tests[vector];
+    let mut tensors = BTreeMap::new();
+    let mut roles = serde_json::Map::new();
+    let (out, inp) = if let Some(t) = f.as_tensors() {
+        let mut headers = Vec::new();
+        for (name, _, _) in t.roles() {
+            if let Some(r) = test.roles.get(name) {
+                let raw = frontend_pack::program::unhex(&r.hex, 64 << 10).unwrap();
+                headers.push(Some(RoleTensor { shape: r.shape.clone(), dtype: r.dtype.clone(), data: raw.clone() }));
+                let key = format!("outside.{name}");
+                roles.insert(name.into(), json!(key));
+                tensors.insert(key, (TensorMeta { shape: r.shape.clone(), dtype: r.dtype.clone(), bytes: raw.len() as u64 }, raw));
+            } else {
+                headers.push(None);
+            }
+        }
+        let params = f.read_config(&test.config.clone().unwrap_or(json!({}))).unwrap().params;
+        let shape = t.prepare_streamed(&headers, &params).unwrap().shape();
+        (shape[0], shape[1])
+    } else {
+        let b = f.as_blocks().unwrap();
+        let raw = frontend_pack::program::unhex(&test.block_hex, 64 << 10).unwrap();
+        let total = raw.len() / b.bytes * b.elems;
+        tensors
+            .insert("outside.data".into(), (TensorMeta { dtype: "U8".into(), shape: vec![raw.len()], bytes: raw.len() as u64 }, raw));
+        roles.insert("data".into(), json!("outside.data"));
+        (1, total)
+    };
+    let mut pb = ProgramBuilder::new(out as u32, HISTORY_BOUND_V1_SMALL);
+    let table = pb.param("public.storage", DType::I16, &[out as u32, inp as u32], false);
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let y = b.gather(table, Ref::Input(0), 0, 0);
+        let y = b.cast(y, DType::I32);
+        b.finish(&[y])
+    };
+    let post = {
+        let mut b = pb.block("post", vec![TensorType::fixed(DType::I32, &[inp as u32])]);
+        let y = b.reshape_fixed(Ref::CarryIn(0), &[inp as u32, 1]);
+        let y = b.matmul(table, y, DType::I64);
+        let y = b.reshape_fixed(y, &[out as u32]);
+        let y = b.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.commit(y);
+        b.finish(&[])
+    };
+    let logits = (pb.blocks[post as usize].nodes.len() - 1) as u16;
+    let p = pb.finish(pre, vec![], post, logits);
+    let mut inert = serde_json::Map::new();
+    // The library writes a type label; the descriptor reads block size/dtype/shape/nesting.
+    if test.roles.contains_key("qstate") {
+        inert.insert("qstate".into(), json!(["quant_type"]));
+    }
+    let d = json!({"format":frontend_pack::FORMAT,"id":"independent-saved-layout","scope":{"task":"text-generation","completeness":"partial","components":["stored-weight-fixture"]},
+        "program":Program::of(&p),"quant_formats":{"published":f.desc},"bindings":[
+        {"param":0,"layer":null,"import":{"kind":"descriptor","format":"published","roles":roles,
+         "config":test.config.clone().unwrap_or(json!({})),"metadata_inert":inert,"shift":0,"round":"half_away_from_zero","overflow":"saturate"}}]});
+    let raw = frontend_pack::program::unhex(&test.values_f32_hex, 64 << 10).unwrap();
+    let expected = raw
+        .chunks_exact(4)
+        .map(|b| {
+            let f = f32::from_le_bytes(b.try_into().unwrap());
+            assert!(f.is_finite());
+            (f.round() as i128).clamp(i16::MIN as i128, i16::MAX as i128)
+        })
+        .collect();
+    (d, Source { tensors, reads: Cell::new(0), peak: Cell::new(0), limit: 256 }, p, expected)
+}
+
+#[test]
+fn every_builtin_tensors_and_blocks_layout_imports_without_registry_dispatch() {
+    let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin();
+    let dir = Temp::new();
+    let mut count = 0;
+    for f in reg.all().iter().filter(|f| f.as_virtual().is_none()) {
+        let (d, s, p, expected) = saved_fixture(f, 0);
+        let pack = FrontendPack::parse(&d.to_string()).unwrap_or_else(|e| panic!("{}: {e}", f.name()));
+        let compiled =
+            pack.compile_bounded(&json!({}), &s, &admission::default_inputs(), 256).unwrap_or_else(|e| panic!("{}: {e}", f.name()));
+        let path = dir.0.join(f.name());
+        let conversion = compiled.write(&path, &s, [0; 64], 256).unwrap_or_else(|e| panic!("{}: {e}", f.name()));
+        assert!(conversion.max_read_bytes <= 256);
+        let (_, params) = artifact::read(&path, &p).unwrap();
+        assert_eq!(
+            params.tensors[&(0, None)].le_bytes(),
+            expected.into_iter().flat_map(|n| (n as i16).to_le_bytes()).collect::<Vec<_>>(),
+            "{}",
+            f.name()
+        );
+        common::three_ways(&p, &params, &[vec![0, 0]]).unwrap();
+        common::court_coverage(&p, &params, &[0, 0], &[0, 1], &[4]).unwrap();
+        count += 1;
+    }
+    assert_eq!(count, 40);
+}
+
+#[test]
+fn role_json_and_shape_metadata_are_read_bounded_and_pinned_before_artifact_write() {
+    let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin();
+    let dir = Temp::new();
+    for name in ["BNB_NF4", "CT_PACK_QUANTIZED"] {
+        let f = reg.all().iter().find(|f| f.name() == name).unwrap();
+        let (d, mut s, p, _) = saved_fixture(f, 0);
+        s.limit = 48;
+        let pack = FrontendPack::parse(&d.to_string()).unwrap();
+        let compiled = pack.compile_bounded(&json!({}), &s, &admission::default_inputs(), 48).unwrap();
+        assert!(s.reads.get() > 0);
+        assert!(s.peak.get() <= 48);
+        let a = dir.0.join(format!("{name}-a"));
+        let first = compiled.write(&a, &s, [0; 64], 48).unwrap();
+        s.limit = 96;
+        let other = pack.compile_bounded(&json!({}), &s, &admission::default_inputs(), 96).unwrap();
+        let b = dir.0.join(format!("{name}-b"));
+        let second = other.write_checked(&b, &s, [0; 64], 96, Some(&first.record)).unwrap();
+        assert_eq!(first.record, second.record);
+        assert_eq!(std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
+        let metadata = if name == "BNB_NF4" { "outside.qstate" } else { "outside.shape" };
+        let raw = &mut s.tensors.get_mut(metadata).unwrap().1;
+        raw[0] ^= 1;
+        let previous = std::fs::read(&b).unwrap();
+        let e = compiled.write(&b, &s, [0; 64], 48).err().unwrap().to_string();
+        assert!(e.contains("metadata changed since compilation"), "{e}");
+        assert_eq!(std::fs::read(&b).unwrap(), previous);
+        assert_eq!(compiled.program(), &p);
+    }
+}
+
+#[test]
+fn unread_role_json_unknown_inert_metadata_and_later_bad_headers_refuse() {
+    let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin();
+    let f = reg.all().iter().find(|f| f.name() == "BNB_NF4").unwrap();
+    let (d, s, _, _) = saved_fixture(f, 0);
+    let mut wrong = d.clone();
+    wrong["bindings"][0]["import"]["metadata_inert"] = json!({});
+    let e = refuse_saved(wrong, &json!({}), &s);
+    assert!(e.contains("quant_type"), "{e}");
+    let mut wrong = d.clone();
+    wrong["bindings"][0]["import"]["metadata_inert"] = json!({"weight":["anything"]});
+    let e = refuse_saved(wrong, &json!({}), &s);
+    assert!(e.contains("declared JSON role"), "{e}");
+    let mut wrong = d.clone();
+    wrong["bindings"][0]["import"]["roles"]["extra"] = json!("outside.qstate");
+    s.reads.set(0);
+    assert!(refuse_saved(wrong, &json!({}), &s).contains("undeclared descriptor role"));
+    assert_eq!(s.reads.get(), 0);
+    let mut wrong = d.clone();
+    wrong["bindings"] = json!([]);
+    s.reads.set(0);
+    assert!(refuse_saved(wrong, &json!({}), &s).contains("missing parameter instance"));
+    assert_eq!(s.reads.get(), 0);
+    let mut wrong = d;
+    wrong["bindings"][0]["param"] = json!(1);
+    s.reads.set(0);
+    assert!(refuse_saved(wrong, &json!({}), &s).contains("unexpected"));
+    assert_eq!(s.reads.get(), 0);
+}
+
+fn refuse_saved(d: Value, config: &Value, source: &Source) -> String {
+    match FrontendPack::parse(&d.to_string())
+        .and_then(|p| p.compile_bounded(config, source, &admission::default_inputs(), source.limit))
+    {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("malformed saved format was admitted"),
+    }
+}
+
+#[test]
+fn unaligned_block_fields_and_opaque_storage_use_bounded_pages_with_the_exact_pinned_layout() {
+    let raw: Vec<_> = [1.25f64, -2.5, 3.75, 4.0].into_iter().flat_map(|f| std::iter::once(0x99).chain(f.to_le_bytes())).collect();
+    let expected: Vec<_> = [1.25f32, -2.5, 3.75, 4.0].into_iter().flat_map(f32::to_le_bytes).collect();
+    let f = misaka_palw_tir_lower::quantfmt::QuantFormat::from_json(&json!({
+        "schema":"misaka.palw.quant-format.v1","name":"outside-unaligned-double-block",
+        "layout":{"kind":"blocks","elems":1,"bytes":9,"fields":[{"name":"value","at":1,"type":"f64"}]},
+        "decode":{"target":"floats","value":"value"},"tests":[{"block_hex":frontend_pack::program::hex(&raw),"values_f32_hex":frontend_pack::program::hex(&expected)}]
+    }).to_string()).unwrap();
+    let (d, mut s, p, expected) = saved_fixture(&f, 0);
+    s.limit = 8;
+    // A raw GGUF-like source gives a logical shape and an opaque dtype. No type-name lookup occurs.
+    let meta = &mut s.tensors.get_mut("outside.data").unwrap().0;
+    meta.dtype = "UnregisteredStoredType999".into();
+    meta.shape = vec![1, 4];
+    let pack = FrontendPack::parse(&d.to_string()).unwrap();
+    let compiled = pack.compile_bounded(&json!({}), &s, &admission::default_inputs(), 8).unwrap();
+    let dir = Temp::new();
+    let path = dir.0.join("unaligned");
+    let conversion = compiled.write(&path, &s, [0; 64], 8).unwrap();
+    assert!(conversion.max_read_bytes <= 8);
+    let (_, params) = artifact::read(&path, &p).unwrap();
+    assert_eq!(params.tensors[&(0, None)].le_bytes(), expected.into_iter().flat_map(|n| (n as i16).to_le_bytes()).collect::<Vec<_>>());
+    let mut wrong = s.tensors.clone();
+    wrong.get_mut("outside.data").unwrap().0.bytes -= 1;
+    let wrong = Source { tensors: wrong, reads: Cell::new(0), peak: Cell::new(0), limit: 8 };
+    assert!(refuse_saved(d, &json!({}), &wrong).contains("block source bytes/shape/storage"));
+    assert_eq!(wrong.reads.get(), 0);
+}
+
+#[test]
+fn stored_format_metadata_limits_and_storage_semantics_refuse_before_weight_reads() {
+    let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin();
+    let f = reg.all().iter().find(|f| f.name() == "BNB_NF4").unwrap();
+    let (d, mut s, _, _) = saved_fixture(f, 0);
+    s.tensors.get_mut("outside.qstate").unwrap().0 = TensorMeta { dtype: "U8".into(), shape: vec![65537], bytes: 65537 };
+    assert!(refuse_saved(d, &json!({}), &s).contains("role metadata exceeds 64 KiB"));
+    assert_eq!(s.reads.get(), 0);
+    let f = reg.all().iter().find(|f| f.name() == "AWQ").unwrap();
+    for (key, v) in [("version", json!("gemv")), ("zero_point", json!(false)), ("desc_act", json!(true))] {
+        let (mut d, s, _, _) = saved_fixture(f, 0);
+        d["bindings"][0]["import"]["config"][key] = v;
+        assert!(refuse_saved(d, &json!({}), &s).contains("AWQ"));
+        assert_eq!(s.reads.get(), 0);
+    }
+    let f = reg.all().iter().find(|f| f.name() == "CT_PACK_QUANTIZED").unwrap();
+    let (mut d, s, _, _) = saved_fixture(f, 0);
+    d["bindings"][0]["import"]["config"]["config_groups"]["group_0"]["input_activations"] = json!({"num_bits":8});
+    assert!(refuse_saved(d, &json!({}), &s).contains("activations"));
+    assert_eq!(s.reads.get(), 0);
+}
+
+#[test]
+fn frontend_cli_rebuilds_role_json_metadata_with_the_chosen_range_budget() {
+    let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin();
+    let f = reg.all().iter().find(|f| f.name() == "BNB_NF4").unwrap();
+    let (d, mut s, _, _) = saved_fixture(f, 0);
+    s.limit = 32;
+    let dir = Temp::new();
+    let mut header = serde_json::Map::new();
+    let mut bytes: Vec<u8> = Vec::new();
+    for (name, (meta, raw)) in &s.tensors {
+        let start = bytes.len();
+        bytes.extend(raw);
+        header.insert(name.clone(), json!({"dtype":meta.dtype,"shape":meta.shape,"data_offsets":[start,bytes.len()]}));
+    }
+    let encoded = serde_json::to_vec(&header).unwrap();
+    let mut file = (encoded.len() as u64).to_le_bytes().to_vec();
+    file.extend(encoded);
+    file.extend(bytes);
+    std::fs::write(dir.0.join("model.safetensors"), file).unwrap();
+    std::fs::write(dir.0.join("config.json"), "{}").unwrap();
+    let pack_path = dir.0.join("frontend.json");
+    std::fs::write(&pack_path, d.to_string()).unwrap();
+    let direct = dir.0.join("direct");
+    let built = FrontendPack::parse(&d.to_string())
+        .unwrap()
+        .compile_bounded(&json!({}), &s, &admission::default_inputs(), 32)
+        .unwrap()
+        .write(&direct, &s, [0; 64], 32)
+        .unwrap();
+    let cli = dir.0.join("cli");
+    let receipt = dir.0.join("record.json");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_palw-tir-frontend"))
+        .arg(&dir.0)
+        .arg("--frontend-pack")
+        .arg(&pack_path)
+        .arg("--out")
+        .arg(&cli)
+        .arg("--record")
+        .arg(&receipt)
+        .args(["--block-bytes", "32"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let record: frontend_pack::BuildRecord = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+    assert_eq!(record, built.record);
+    assert_eq!(std::fs::read(cli).unwrap(), std::fs::read(direct).unwrap());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(report["max_read_bytes"].as_u64().unwrap() <= 32);
+}
+
+#[test]
+fn a_nested_inert_storage_path_consumes_its_leaf_without_authorizing_other_siblings() {
+    let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin();
+    let f = reg.all().iter().find(|f| f.name() == "AWQ").unwrap();
+    let (mut d, s, _, _) = saved_fixture(f, 0);
+    d["quant_formats"]["published"]["config"]["inert"] = json!(["tooling.author"]);
+    d["bindings"][0]["import"]["config"]["tooling"] = json!({"author":"independent"});
+    FrontendPack::parse(&d.to_string()).unwrap().compile_bounded(&json!({}), &s, &admission::default_inputs(), 256).unwrap();
+    assert_eq!(s.reads.get(), 0);
+    d["bindings"][0]["import"]["config"]["tooling"]["arithmetic"] = json!("different");
+    assert!(refuse_saved(d, &json!({}), &s).contains("tooling.arithmetic"));
+    assert_eq!(s.reads.get(), 0);
+}
+
+#[test]
+fn aggregate_metadata_is_reserved_before_reading_any_repeated_binding() {
+    let mut pb = ProgramBuilder::new(16, HISTORY_BOUND_V1_SMALL);
+    let table = pb.param("table", DType::I8, &[16, 4], false);
+    let a = pb.param("a", DType::I8, &[4, 4], true);
+    let b = pb.param("b", DType::I8, &[4, 4], true);
+    let pre = {
+        let mut block = pb.block("pre", vec![]);
+        let y = block.gather(table, Ref::Input(0), 0, 0);
+        let y = block.cast(y, DType::I32);
+        block.finish(&[y])
+    };
+    let carry = vec![TensorType::fixed(DType::I32, &[4])];
+    let layer = {
+        let mut block = pb.block("layer", carry.clone());
+        let x = block.reshape_fixed(Ref::CarryIn(0), &[4, 1]);
+        let x = block.matmul(a, x, DType::I64);
+        let x = block.clamp(x, -1000, 1000, DType::I32);
+        let x = block.matmul(b, x, DType::I64);
+        let x = block.clamp(x, -1000, 1000, DType::I32);
+        let x = block.reshape_fixed(x, &[4]);
+        block.finish(&[x])
+    };
+    let post = {
+        let mut block = pb.block("post", carry);
+        let x = block.reshape_fixed(Ref::CarryIn(0), &[4, 1]);
+        let y = block.matmul(table, x, DType::I64);
+        let y = block.reshape_fixed(y, &[16]);
+        let y = block.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32);
+        block.commit(y);
+        block.finish(&[])
+    };
+    let logits = (pb.blocks[post as usize].nodes.len() - 1) as u16;
+    let p = pb.finish(pre, vec![layer; 600], post, logits);
+    let floats = vec![0u8; 64];
+    let descriptor = json!({"schema":"misaka.palw.quant-format.v1","name":"large-shared-metadata",
+        "layout":{"kind":"tensors","roles":[{"name":"q","rank":2,"dtypes":["I8"],"suffix":".q"},{"name":"marker","rank":1,"dtypes":["U8"],"suffix":".marker"}],
+        "dims":{"out":"dim_q[0]","inp":"dim_q[1]"},"checks":[{"expr":"marker[0] == 0","message":"marker mismatch"}]},
+        "decode":{"target":"floats","value":"q[o,i]"},"tests":[{"roles":{"q":{"dtype":"I8","shape":[4,4],"hex":"00".repeat(16)},"marker":{"dtype":"U8","shape":[1],"hex":"00"}},"values_f32_hex":frontend_pack::program::hex(&floats)}]});
+    let mut bindings = vec![json!({"param":0,"layer":null,"source":"table","import":{"kind":"integer"}})];
+    for layer in 0..600 {
+        for param in [1, 2] {
+            bindings.push(json!({"param":param,"layer":layer,"import":{"kind":"descriptor","format":"public","roles":{"q":"q","marker":"marker"},"config":{},"shift":0,"round":"half_away_from_zero","overflow":"reject"}}));
+        }
+    }
+    let d = json!({"format":frontend_pack::FORMAT,"id":"aggregate-metadata","scope":{"task":"text-generation","completeness":"partial","components":["metadata-budget"]},"program":Program::of(&p),"quant_formats":{"public":descriptor},"bindings":bindings});
+    let s = Source {
+        tensors: BTreeMap::from([
+            ("table".into(), (TensorMeta { dtype: "I8".into(), shape: vec![16, 4], bytes: 64 }, vec![0; 64])),
+            ("q".into(), (TensorMeta { dtype: "I8".into(), shape: vec![4, 4], bytes: 16 }, vec![0; 16])),
+            ("marker".into(), (TensorMeta { dtype: "U8".into(), shape: vec![65536], bytes: 65536 }, vec![])),
+        ]),
+        reads: Cell::new(0),
+        peak: Cell::new(0),
+        limit: 65536,
+    };
+    let e = refuse_saved(d, &json!({}), &s);
+    assert!(e.contains("aggregate metadata bytes"), "{e}");
     assert_eq!(s.reads.get(), 0);
 }

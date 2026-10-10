@@ -10,7 +10,7 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | --- | --- | --- |
 | Current specification | RFC02 now separates current requirements from historical primitive-count, replay, availability and seating notes; §II.14 incorporates all six review requirements | Keep formal specification and implementation aligned as versioned features land |
 | Direct canonical TIR | SDK `tests/direct_tir_registration.rs` exercises byte-based admission and provenance-independent identity; the generic frontend now reproduces the same program/inventory/class ID through common admission | Same-binary real-checkpoint registration, independent conformance/claim/Final/redemption and all §II.11.4 mutations |
-| Declarative frontend pack | Implemented content-addressed primitive/state grammar, strict config/source bindings, bounded streaming integer/IEEE and inline virtual descriptor imports, replayable receipts and SDK companion build/verify with source SHAs and all three engines; [format contract](tir-frontend-pack-v1.md) | Remaining tensors/blocks saved-format contracts and role-document parameters, HF-reference/beacon runtime-pack integration, all advertised tasks/components and real-node §II.11.4 acceptance |
+| Declarative frontend pack | Implemented content-addressed primitive/state grammar, strict config/source bindings, bounded streaming integer/IEEE and inline virtual/tensors/blocks descriptor imports, with pinned shape/JSON metadata, replayable receipts and SDK companion build/verify with source SHAs and all three engines; [format contract](tir-frontend-pack-v1.md) | Native GGUF-container acquisition for the generic CLI/SDK, HF-reference/beacon runtime-pack integration, all advertised tasks/components and real-node §II.11.4 acceptance |
 | Compiler expansion bounds | Shared work/allocation/depth budget now also protects general frontend variables/program/bindings; strict key tracking survives nested scopes; structural/constant bounds precede canonical encoding and weight reads | Maintain coverage as descriptor and versioned graph/dimension features land; existing bounds do not prove whole-node load safety |
 | Bounded dimensions and sparse/state semantics | v1 has fixed/Hist dimensions and fixed-axis TopK; v2 stage programs exist | Versioned length commitments; efficient sparse/routing/state relations; complete evaluator/checker/court/evidence binding; long-context and boundary trials |
 | Fidelity and reproducibility | ModelSpec runtime pack has source/frontend/artifact checks, executor vectors and logit fidelity; generic companion pins source SHA/compiler/executor revisions and reproduces canonical bytes/inventory while reporting SOURCE_EQUIVALENCE_UNVERIFIED | Pre-run thresholds and checkpoint-scoped routing, task quality, long-context and saturation measurements; generic frontend HF-reference/beacon evidence; named failures rather than broad PASS |
@@ -192,3 +192,61 @@ This increment adds interpreter APIs. Frontend/SDK tensors/blocks bindings, boun
 and receipts remain open; existing generic descriptor bindings still accept virtual layouts only.
 Real checkpoint fidelity, live-node permissionless admission/prosecution/Final, resource/economic
 accounting and all remaining completion requirements in this ledger remain open. RFC02 is not complete.
+
+## Verified increment — saved-format frontend/SDK bindings, 2026-10-10
+
+Inline `tensors` and `blocks` descriptors now use the same generic frontend, raw source binding,
+canonical artifact writer and SDK build/verify path as virtual descriptors. Formats are explicitly
+selected by a local pack key and pinned digest, never a registry/model name. Block imports accept
+an exact byte container or a logical-shaped opaque raw `TensorSource`; raw dtype labels confer no
+priority. Tensor decoding preserves group-index/group/element semantics and supports bounded
+I64 shape metadata and exact-number JSON role parameters, including nested bitsandbytes offsets.
+Unaligned block fields can cross page boundaries without widening a source read past its budget.
+
+Every binding header, required parameter instance, source inventory and ordinary TIR admission
+passes before metadata acquisition. Metadata snapshots are capped at 64 KiB per plan and 64 MiB
+across parameter instances; metadata read calls at 4M. The aggregate reservation happens before
+any metadata read. Strict JSON path checks consume parameter leaves and explicit `metadata_inert`
+paths only; ambiguous/unknown paths, siblings, extra array elements and deep documents refuse.
+Raw metadata pins are checked at artifact conversion, closing the stale-compiled-metadata gap.
+Sources are still hashed before/after conversion, and failures preserve previous output.
+`compile_bounded` and both CLI/SDK callers use the chosen read budget across both phases; operational
+read counters include metadata while artifact/receipt identity remains independent of chunk size.
+
+Descriptor preflight now compiles all three layouts once, checks their vector geometry/work and
+then runs the pinned self-vectors. Lexical expression tokens are bounded at 256 (with the existing
+1024-byte/32-nesting and compiled 256-node/32-depth bounds), covering IQ1_M's stored decode formula.
+AWQ and compressed-tensors descriptors explicitly check known packing/activation/group conditions;
+calibration observer metadata is explicitly inert. Nested inert paths track the appropriate root
+without consuming unknown sibling leaves. New descriptor digests intentionally record these
+contracts; existing tested decoded weights and canonical lowering bytes stay identical.
+
+**128/128 targeted tests pass**: 94 lowerer integration tests, 17 quant unit tests and 17 SDK tests.
+
+```sh
+cargo test --locked -p misaka-palw-tir-lower \
+  --test frontend_pack --test quant_streamed_ranges --test quant_tensors --test quantized \
+  --test golden_lowering --test corpus_formats --test quant_corpus --test quant_decode_pins
+cargo test --locked -p misaka-palw-tir-lower --lib quantfmt
+cargo test --locked -p misaka-palw-sdk --test direct_tir_registration --test runtime_pack
+```
+
+All 31 block and 9 tensor descriptors pass frontend vector preflight. Their first pinned vectors
+import through the generic frontend, match explicitly rounded integer weights and run on all three
+engines plus court-demand evaluation. The separate range suite retains all 226 vector comparisons.
+Unknown tensor/block/JSON formats build from generated safetensors, rebuild on a peer, execute SDK
+CLIs, reproduce Direct-TIR inventory/class identity and pass testnet-12 offline admission. The
+generic frontend CLI separately rebuilds the bitsandbytes JSON fixture with the chosen byte budget.
+These are storage/interface fixtures, not actual model task fidelity or a public node conviction.
+
+Mutation coverage includes metadata/source changes, invalid source bytes, oversized metadata,
+unknown/inert JSON roles, unread nested paths, unsupported AWQ packing and activation quantization.
+A 1,200-binding graph requiring more than 64 MiB of metadata is refused before a source read.
+Changed source/compiler/fidelity/conformance claims remain explicit SDK refusals. Formatter checks
+on the changed frontend/interpreter/SDK files, `git diff --check` and local Markdown targets pass.
+Existing compiler warnings remain.
+
+The goal remains active and not complete. Native GGUF-container acquisition in the generic CLI/SDK,
+HF-reference/beacon runtime-pack integration, versioned dimensions/sparse/state relations, complete
+resource/economic accounting, real-size fidelity/performance/aggregate-load evidence, complete
+modalities, public G14 and independent Final/redemption, and the full A6/A8 requirements remain open.

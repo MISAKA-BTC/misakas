@@ -70,7 +70,7 @@ fn run(a: Args) -> Result<(), String> {
     protected.push(a.out.clone());
     misaka_palw_tir_lower::frontend_pack::distinct_output(&a.record, &protected).map_err(|e| e.to_string())?;
     let inputs = misaka_palw_tir::admit::TirAdmitInputsV1 { tile_len: a.tile_len, h_chunk: a.h_chunk, ..admission::default_inputs() };
-    let compiled = pack.compile(&config, &source, &inputs).map_err(|e| e.to_string())?;
+    let compiled = pack.compile_bounded(&config, &source, &inputs, a.block_bytes).map_err(|e| e.to_string())?;
     let tokenizer = match a.tokenizer.or_else(|| artifact::tokenizer_path_in(dir)) {
         Some(path) => artifact::tokenizer_id_of(&read(&path, 64 << 20)?),
         None => [0; 64],

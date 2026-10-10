@@ -54,15 +54,19 @@ impl QuantFormat {
     pub fn from_json(text: &str) -> Result<QuantFormat> {
         let bad = |e: expr::DslError| LowerError::bad(format!("quant-format descriptor: {e}"));
         let desc = QuantFormatDesc::from_json(text).map_err(bad)?;
+        let f = Self::compile_desc(desc)?;
+        f.run_tests()?;
+        Ok(f)
+    }
+
+    pub(crate) fn compile_desc(desc: QuantFormatDesc) -> Result<QuantFormat> {
         let bad = |e: expr::DslError| LowerError::bad(format!("quant format `{}`: {e}", desc.name));
         let (blocks, tensors, virt) = match &desc.layout {
             LayoutDesc::Blocks { .. } => (Some(BlocksFormat::compile(&desc).map_err(bad)?), None, None),
             LayoutDesc::Tensors { .. } => (None, Some(TensorsFormat::compile(&desc).map_err(bad)?), None),
             LayoutDesc::Virtual { .. } => (None, None, Some(VirtualFormat::compile(&desc).map_err(bad)?)),
         };
-        let f = QuantFormat { digest: desc.digest(), desc, blocks, tensors, virt };
-        f.run_tests()?;
-        Ok(f)
+        Ok(QuantFormat { digest: desc.digest(), desc, blocks, tensors, virt })
     }
 
     pub fn name(&self) -> &str {
@@ -101,7 +105,7 @@ impl QuantFormat {
     }
 
     /// The descriptor's own vectors: each block's bytes must decode to its `f32` values, bit for bit.
-    fn run_tests(&self) -> Result<()> {
+    pub(crate) fn run_tests(&self) -> Result<()> {
         if let Some(t) = &self.tensors {
             return self.run_tensor_tests(t);
         }

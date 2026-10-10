@@ -58,15 +58,9 @@ impl TensorsFormat {
             .chain(self.group_index.iter())
             .try_fold(8usize, |n, node| Ok(n + super::super::expr::streaming_nodes(node, None)?))
     }
-    /// Headers suffice, except role metadata read by dimensions/checks or JSON role parameters.
-    /// Those roles must be loaded; the total snapshot is capped at 64 KiB and retained in the plan.
-    /// Preparing is independent of row/input width: no whole group-index or scale array is built.
-    pub fn prepare_streamed(&self, roles: &[Option<RoleTensor>], params: &BTreeMap<String, i64>) -> R<TensorStreamPlan> {
+    /// Raw role slots whose bounded contents are needed before range decoding.
+    pub fn metadata_roles(&self) -> R<Vec<usize>> {
         self.streaming_work()?;
-        if roles.len() != self.roles.len() {
-            return Err(DslError("FRONTEND_DESCRIPTOR: wrong number of roles".into()));
-        }
-        check_roles(&self.name, &self.roles, roles)?;
         let mut required = vec![false; self.roles.len()];
         let mut stack = self.metadata_nodes();
         while let Some(n) = stack.pop() {
@@ -88,12 +82,27 @@ impl TensorsFormat {
             let slot = self.roles.iter().position(|r| r.name == p.role).expect("compiled role parameter");
             required[slot] = true;
         }
+        Ok(required.into_iter().enumerate().filter_map(|(i, needed)| needed.then_some(i)).collect())
+    }
+    /// Validate role headers without fetching metadata or weight bytes.
+    pub fn validate_headers(&self, roles: &[Option<RoleTensor>]) -> R<()> {
+        if roles.len() != self.roles.len() {
+            return Err(DslError("FRONTEND_DESCRIPTOR: wrong number of roles".into()));
+        }
+        check_roles(&self.name, &self.roles, roles)
+    }
+    /// Headers suffice, except role metadata read by dimensions/checks or JSON role parameters.
+    /// Those roles must be loaded; the total snapshot is capped at 64 KiB and retained in the plan.
+    /// Preparing is independent of row/input width: no whole group-index or scale array is built.
+    pub fn prepare_streamed(&self, roles: &[Option<RoleTensor>], params: &BTreeMap<String, i64>) -> R<TensorStreamPlan> {
+        self.streaming_work()?;
+        if roles.len() != self.roles.len() {
+            return Err(DslError("FRONTEND_DESCRIPTOR: wrong number of roles".into()));
+        }
+        check_roles(&self.name, &self.roles, roles)?;
         let mut metadata = vec![None; roles.len()];
         let mut bytes = 0usize;
-        for (slot, required) in required.into_iter().enumerate() {
-            if !required {
-                continue;
-            }
+        for slot in self.metadata_roles()? {
             let r = roles[slot].as_ref().ok_or_else(|| DslError("FRONTEND_DESCRIPTOR: required role metadata absent".into()))?;
             let size = r.stored_bytes().ok_or_else(|| DslError("FRONTEND_DESCRIPTOR_LIMIT: metadata shape overflow".into()))?;
             bytes = bytes

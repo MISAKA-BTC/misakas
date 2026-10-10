@@ -79,6 +79,9 @@ impl Compiled {
         if !(8..=MAX_BLOCK_BYTES).contains(&block_bytes) {
             return Err(bad("FRONTEND_STREAM_LIMIT: block bytes must be 8..=16MiB"));
         }
+        if self.metadata_max_read_bytes > block_bytes {
+            return Err(bad("FRONTEND_STREAM_LIMIT: recompile metadata with the requested block budget"));
+        }
         let names: BTreeSet<_> = source.names().into_iter().collect();
         let expected: BTreeSet<_> = self.bindings.values().flat_map(|r| r.sources.keys().cloned()).collect();
         if names != expected {
@@ -108,8 +111,8 @@ impl Compiled {
         let mut records = BTreeMap::<String, SourceRecord>::new();
         let mut saturated_values = 0u64;
         let mut tensor_bytes = 0u64;
-        let mut max_read_bytes = 0usize;
-        let mut source_read_bytes = 0u64;
+        let mut max_read_bytes = self.metadata_max_read_bytes;
+        let mut source_read_bytes = self.metadata_read_bytes;
         let mut quant_formats = BTreeMap::new();
         let artifact_digest = misaka_palw_tir_artifact::write_container_v1_streamed(
             &temp.0,

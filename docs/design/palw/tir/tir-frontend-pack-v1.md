@@ -23,7 +23,7 @@ provenance; it grants no support or fidelity verdict.
 | `vars` | Optional object of named expressions/fragments; all globals are forced and bounded |
 | `program` | Expression producing the frozen program grammar below |
 | `bindings` | Expression producing one source binding per required parameter instance |
-| `quant_formats` | Optional object of pinned, data-only virtual tensor descriptors; no registry selection |
+| `quant_formats` | Optional object of pinned, data-only stored-format descriptors; no registry selection |
 
 Unknown document/grammar/binding fields are refused. Variables/fragments use the existing
 [bounded expression language](model-adapter-v1.md): config/variable reads, finite map/repeat,
@@ -101,7 +101,7 @@ determines emitted weights. This conversion specification does not prove source-
 quality, routing agreement or state fidelity.
 
 A third import composes a descriptor embedded under `quant_formats.<id>`, using the existing
-`misaka.palw.quant-format.v1` **virtual** layout (1–4 output axes). The format label is local to the
+`misaka.palw.quant-format.v1` **virtual** (1–4 output axes), **tensors** or **blocks** layout. The format label is local to the
 pack; no built-in name, `quant_method`, registry membership, suffix inference or model name selects it.
 Each role names an actual raw tensor explicitly. A descriptor binding omits `source`:
 
@@ -120,26 +120,46 @@ higher precision of an original source format. Saving packed weights, agreeing o
 and preserving model quality are separate claims.
 
 Every descriptor carries at least one decode vector, which the loader checks against the pinned
-binary32 expected bytes. The published MXFP4 vectors and a previously unknown nibble descriptor are
-covered by tests. Author-supplied vectors establish internal consistency only; they confer no
-source-fidelity or on-chain authority. Missing/unknown roles, wrong types/ranks/bytes, a decoded
-shape different from the TIR parameter, unused descriptors and unknown config leaves refuse before
-checkpoint data reads. Nested parameter/check paths consume just their specified leaves; inert keys
-must be explicitly declared. Shape/check expressions may depend on headers and parameters, never
-lane coordinates or weight contents. Output expressions may use lane-dependent dimension indexes;
-the shared reader evaluates each lane, so read boundaries do not change the artifact.
+binary32 expected bytes after bounded preflight. All 31 built-in block and 9 tensor descriptors,
+the MXFP4 virtual descriptor and previously unknown formats are covered by tests. Author-supplied
+vectors establish internal consistency only; they confer no source-fidelity or on-chain authority.
+Missing/unknown roles, wrong types/ranks/bytes, unused descriptors, unknown config leaves and basic
+binding inventory errors refuse before checkpoint reads. The whole graph first passes ordinary TIR
+admission. Header preflight is separate from metadata preparation; a decoded shape mismatch that
+requires metadata refuses after that bounded preparation, before artifact conversion.
 
-The `tensors`/`blocks` layout import contracts and parameters read from JSON role documents remain
-open for this frontend route and receive explicit extension refusals. Existing importer and Direct
-TIR routes remain available. This increment covers bounded virtual descriptor composition, not all
-saved quant formats, actual checkpoint fidelity or completed RFC02 support.
+Nested parameter/check paths consume just their specified leaves; inert keys must be explicitly
+declared. Virtual shape/check expressions use headers/parameters only. Tensor metadata expressions
+may also read small roles, such as compressed-tensors' I64 shape or bitsandbytes' JSON quant state;
+lane-dependent metadata is refused. `params.<name>.from_role` retains the existing exact-number JSON
+reader, including float offsets. Every JSON leaf must be read by a declared parameter or explicitly
+listed under the binding's `metadata_inert` role/path map:
 
-The underlying stored-format interpreters now expose `prepare_streamed` and
-`decode_range_streamed` for tensors and blocks. These APIs retain global/group coordinates,
-use at most 1024 output lanes, and request individual stored values/fields (at most 8 bytes).
-Tensor plans snapshot role metadata used for shape/check expressions and JSON constants with a
-64 KiB total cap; ordinary weight/group arrays need headers only. This interpreter work is not yet
-wired into this frontend's descriptor binding, metadata provenance or SDK build path.
+```json
+{"kind":"descriptor","format":"public-nf4",
+ "roles":{"weight":"saved.weight","absmax":"saved.absmax","qstate":"saved.qstate"},
+ "config":{},"metadata_inert":{"qstate":["quant_type"]},
+ "shift":12,"round":"half_away_from_zero","overflow":"reject"}
+```
+
+The actual role set comes from that pinned descriptor. Unknown inert roles, malformed paths,
+unread siblings/additional array elements and deeply nested JSON refuse. Small metadata used by a
+plan is read in the chosen byte budget, snapshotted once and pinned as raw bytes. Changes between
+compilation and artifact conversion refuse; raw sources are also hashed before/after conversion.
+All binding headers and aggregate metadata/read-count budgets are checked before metadata reads.
+
+A block binding uses exactly `roles: {"data":"raw.name"}`, empty config and no metadata inert map.
+Its logical shape is the TIR parameter: leading axes flatten to rows and the last axis is tiled by
+the descriptor's block elements. The source is an I8/U8 byte container, or a raw `TensorSource` with
+an opaque storage dtype and the same logical shape. The source bytes must exactly equal the
+computed block bytes. No opaque dtype name selects the descriptor. Current CLI/SDK checkpoint
+acquisition uses local safetensors (byte containers can hold raw blocks); native GGUF-container
+acquisition for the generic CLI/SDK remains separate work. The legacy GGUF importer remains available.
+
+Tensor group-index, scale/zero/min and element passes preserve their original coordinates. Blocks
+retain global row/column/block/group coordinates, including when a range splits a group or row.
+Output expressions may use lane-dependent dimension indexes; the shared reader evaluates each lane.
+These storage contracts do not establish actual checkpoint fidelity or completed RFC02 support.
 
 ## Bounds and reproducibility
 
@@ -150,15 +170,23 @@ compiler checks v1's declarations, ranks, names, inputs/carries and total 64 KiB
 Canonical decoding enforces the 256 KiB program ceiling. The caller supplies `TirAdmitInputsV1`,
 so provenance cannot enlarge execution/court ceilings.
 
-At most 16 inline descriptors are accepted, each <=256 KiB, with <=16 roles/tables, <=32 parameters/
+At most 16 inline descriptors are accepted, each <=256 KiB, with <=16 roles/tables, <=32 block fields/parameters/
 checks/vectors, <=64 KiB table data and at least one vector. A vector has <=8192 decoded values and
 <=64 KiB per raw role. All vectors together consume <=4M expression-lane work. Expressions have
-<=1024 bytes, <=128 lexical tokens and <=32 delimiter nesting before parsing; compiled expressions
+<=1024 bytes, <=256 lexical tokens and <=32 delimiter nesting before parsing; compiled expressions
 have <=256 nodes and <=32 node depth. Shape/byte products and offsets use checked arithmetic.
 These are compiler/import limits; they do not replace the TIR execution/checker/court resource contract.
 
+Tensor metadata snapshots total at most 64 KiB per plan and 64 MiB across the compiler's parameter
+instances. Metadata read calls total at most 4M. JSON metadata also obeys the depth/logical input
+bound before the exact-number parser is entered. `compile_bounded` accepts the same `block_bytes`
+budget as conversion; `compile` uses a 1 MiB metadata-read default. Converting with a smaller read
+budget than was used during metadata compilation refuses and asks for bounded recompilation.
+CLI and SDK callers pass their chosen budget to both phases. Reported source-read bytes/peak include
+metadata acquisition; those operational measurements are excluded from reproducible identity.
+
 Conversion uses raw byte ranges with no whole-tensor/f32 fallback. `block_bytes` is 8..16 MiB;
-stored and encoded buffers are each bounded by it even when widening I8 to I64. The container
+conversion pages and encoded buffers are each bounded by it even when widening I8 to I64. The container
 writer adds its ordinary buffer/header. Read boundaries do not enter artifact identity. Failure
 removes the temporary artifact and preserves previous output. Header/inventory changes, short
 ranges, changed tied tensors and receipt mismatches are explicit refusals.
@@ -167,7 +195,8 @@ Descriptor conversion retains one page per present role; their total raw cache i
 The budget must hold at least eight bytes per present role. It decodes <=1024 values per batch;
 intermediate expression columns have a fixed bound (<=2 MiB logical column data plus coordinates,
 constants and normal container buffers), and the decoded/encoded buffers are independently bounded.
-There is no whole-role load or `DescribedSource` cache fallback. Raw roles are hashed in bounded
+Ordinary weight roles have no whole-role load or `DescribedSource` cache fallback; the separate
+metadata snapshots obey the explicit caps above. Raw roles are hashed in bounded
 scans before and after conversion; mismatches refuse before replacing the output. Strided layouts
 can incur extra cache misses. CLI `source_bytes`, `tensor_bytes` and `source_read_bytes` expose stored
 size, emitted integer size and actual raw read traffic, including the pinning scans. Read traffic

@@ -2002,12 +2002,15 @@ now composes the frozen primitive/state grammar without ModelSpec dispatch, cons
 bindings, and streams exact integer or explicitly rounded IEEE imports into the ordinary container.
 `palw-tir-frontend` emits replayable receipts; SDK `pack build-frontend`/`verify-frontend` pins source
 SHAs/compiler/executor revisions and uses common inventory and three-way conformance. Fixtures
-include direct-byte equality and offline class admission. Bounded inline **virtual** quant descriptors
-now feed the same compiler/SDK route, with explicit raw roles, mandatory decode vectors, nested-config
-checks, bounded caches and before/after source hashes; MXFP4 expert axes and an unknown packed format
-are exercised. Storage decode is explicitly binary32 before the declared integer rounding. This does
-not close §II.11.4: remaining saved-format contracts, source-fidelity/beacon pack integration and
-real-checkpoint independent-seat claim/Final/redemption evidence remain open in the [implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+include direct-byte equality and offline class admission. Bounded inline **virtual**, **tensors**
+and **blocks** quant descriptors now feed the same compiler/SDK route, with explicit raw roles,
+mandatory decode vectors, nested-config checks, bounded pages and before/after source hashes.
+Tensor shape/JSON metadata is acquired after all binding-header checks, with per-plan and aggregate
+limits, exact-number parsing and source-change pins. MXFP4 expert axes, all built-in saved layouts
+and unknown third-party formats are exercised. Storage decode is explicitly binary32 before the
+declared integer rounding. This does not close §II.11.4: native GGUF-container acquisition in the
+generic CLI/SDK, source-fidelity/beacon pack integration and real-checkpoint independent-seat
+claim/Final/redemption evidence remain open in the [implementation ledger](../design/palw/tir/rfc0002-implementation.md).
 
 ### II.11.3 Direct-TIR escape hatch and exact boundary of permissionlessness
 

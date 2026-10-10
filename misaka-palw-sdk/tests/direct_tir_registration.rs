@@ -212,17 +212,30 @@ fn the_ir_registration_path_names_no_model_identity() {
 /// engines as a direct compiler. This fixture proves an interface, not real-checkpoint Final.
 #[test]
 fn third_party_frontend_rebuilds_and_registers_through_the_common_sdk() {
-    frontend_sdk(false);
+    frontend_sdk(0);
 }
 #[test]
 fn third_party_packed_descriptor_rebuilds_and_registers_through_the_common_sdk() {
-    frontend_sdk(true);
+    frontend_sdk(1);
 }
-fn frontend_sdk(packed: bool) {
+#[test]
+fn third_party_tensors_descriptor_rebuilds_and_registers_through_the_common_sdk() {
+    frontend_sdk(2);
+}
+#[test]
+fn third_party_blocks_descriptor_rebuilds_and_registers_through_the_common_sdk() {
+    frontend_sdk(3);
+}
+#[test]
+fn third_party_role_json_descriptor_rebuilds_and_registers_through_the_common_sdk() {
+    frontend_sdk(4);
+}
+fn frontend_sdk(saved: usize) {
+    let packed = saved != 0;
     use misaka_palw_sdk::runtime_pack::{conformance::ConformanceJob, primitive};
     use misaka_palw_tir_lower::frontend_pack::{FORMAT, program::Program};
     use serde_json::{Value, json};
-    let dir = std::env::temp_dir().join(format!("palw-frontend-sdk-{}-{packed}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("palw-frontend-sdk-{}-{saved}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let model = dir.join("checkpoint");
@@ -251,8 +264,22 @@ fn frontend_sdk(packed: bool) {
         header.insert(source.clone(),json!({"dtype":p.params[*j as usize].dtype.name().to_ascii_uppercase(),"shape":tensor.shape,"data_offsets":[start,data.len()]}));
         if packed && *j == 1 {
             header.insert(source.clone(), json!({"dtype":"U8","shape":[4,2],"data_offsets":[start,data.len()]}));
+            let mut roles = json!({"codes":source});
+            let mut inert = json!({});
+            if saved == 3 {
+                roles = json!({"data":source});
+            }
+            if saved == 4 {
+                let metadata_name = format!("{source}.metadata");
+                let metadata = br#"{"shape":[4,4],"offset":-8.0,"flavor":"nibble"}"#;
+                let at = data.len();
+                data.extend(metadata);
+                header.insert(metadata_name.clone(), json!({"dtype":"U8","shape":[metadata.len()],"data_offsets":[at,data.len()]}));
+                roles["meta"] = json!(metadata_name);
+                inert = json!({"meta":["flavor"]});
+            }
             bindings.push(json!({"param":j,"layer":l,"import":{"kind":"descriptor","format":"public-nibble",
-                "roles":{"codes":source},"config":{},"shift":0,"round":"half_away_from_zero","overflow":"reject"}}));
+                "roles":roles,"config":{},"metadata_inert":inert,"shift":0,"round":"half_away_from_zero","overflow":"reject"}}));
         } else {
             bindings.push(json!({"param":j,"layer":l,"source":source,"import":{"kind":"integer"}}));
         }
@@ -275,11 +302,40 @@ fn frontend_sdk(packed: bool) {
             "tests":[{"roles":{"codes":{"dtype":"U8","shape":[1,2],"hex":"f078"}},
                 "values_f32_hex":misaka_palw_tir_lower::frontend_pack::program::hex(&floats)}]}});
     }
+    if saved == 2 {
+        definition["quant_formats"]["public-nibble"]["layout"] = json!({"kind":"tensors","roles":[{"name":"codes","suffix":".anything","dtypes":["U8"],"rank":2}],"dims":{"out":"dim_codes[0]","inp":"dim_codes[1]*2"}});
+        definition["quant_formats"]["public-nibble"]["decode"] = json!({"target":"integers","group":{"size":2},"q":"(codes[o,i/2] >> (4*(i%2))) & 15","scale":"1","zero":"8","code":{"min":0,"max":15}});
+    } else if saved == 3 {
+        definition["quant_formats"]["public-nibble"]["layout"] =
+            json!({"kind":"blocks","elems":4,"bytes":2,"fields":[{"name":"codes","at":0,"type":"u8","count":2}]});
+        definition["quant_formats"]["public-nibble"]["decode"] = json!({"target":"integers","group":{"size":4},"q":"(codes[e/2] >> (4*(e%2))) & 15","scale":"1","zero":"8","code":{"min":0,"max":15}});
+        let test = &mut definition["quant_formats"]["public-nibble"]["tests"][0];
+        test.as_object_mut().unwrap().remove("roles");
+        test["block_hex"] = json!("f078");
+    } else if saved == 4 {
+        definition["quant_formats"]["public-nibble"]["layout"] = json!({"kind":"tensors","roles":[{"name":"codes","suffix":".anything","dtypes":["U8"],"rank":2},{"name":"meta","suffix":".metadata","dtypes":["U8"],"rank":1}],"dims":{"out":"rows","inp":"cols"}});
+        definition["quant_formats"]["public-nibble"]["params"] = json!({"rows":{"from_role":{"role":"meta","path":"shape[0]","kind":"int"}},"cols":{"from_role":{"role":"meta","path":"shape[1]","kind":"int"}},"offset":{"from_role":{"role":"meta","path":"offset","kind":"float"}}});
+        definition["quant_formats"]["public-nibble"]["decode"] =
+            json!({"target":"floats","value":"((codes[o,i/2] >> (4*(i%2))) & 15) + offset"});
+        let test = &mut definition["quant_formats"]["public-nibble"]["tests"][0];
+        let vector_meta = br#"{"shape":[1,4],"offset":-8.0}"#;
+        test["roles"]["meta"] =
+            json!({"dtype":"U8","shape":[vector_meta.len()],"hex":misaka_palw_tir_lower::frontend_pack::program::hex(vector_meta)});
+    }
     std::fs::write(&frontend, definition.to_string()).unwrap();
     let pack_dir = dir.join("pack");
     let artifact = dir.join("model.palwtir");
     let jobs = vec![ConformanceJob { label: "public-prompt".into(), prompt: vec![1, 2, 3, 4], decode: 4 }];
-    let built = primitive::build(&model, &frontend, &artifact, &pack_dir, &jobs, Some("fixture-revision".into()), 8).unwrap();
+    let built = primitive::build(
+        &model,
+        &frontend,
+        &artifact,
+        &pack_dir,
+        &jobs,
+        Some("fixture-revision".into()),
+        if saved == 4 { 16 } else { 8 },
+    )
+    .unwrap();
     assert_eq!(built.source_equivalence, SOURCE_EQUIVALENCE_UNVERIFIED);
     assert_eq!(built.implementations.len(), 3);
     assert_eq!(built.build.quant_formats.len(), usize::from(packed));

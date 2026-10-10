@@ -181,7 +181,7 @@ pub fn build(
     let frontend = FrontendPack::parse(std::str::from_utf8(&text).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let config: Value = serde_json::from_slice(&read(&model.join("config.json"), 2 << 20)?).map_err(|e| e.to_string())?;
     let source = Checkpoint::open(model).map_err(|e| e.to_string())?;
-    let compiled = frontend.compile(&config, &source, &admission::default_inputs()).map_err(|e| e.to_string())?;
+    let compiled = frontend.compile_bounded(&config, &source, &admission::default_inputs(), block_bytes).map_err(|e| e.to_string())?;
     let conversion = compiled.write(artifact_path, &source, tokenizer(model)?, block_bytes).map_err(|e| e.to_string())?;
     let (vectors, _) = conformance::run_streamed(artifact_path, jobs, ImplSet::default(), &|_| {})?;
     if pins != files(model)? {
@@ -243,7 +243,7 @@ pub fn verify(
     let frontend = FrontendPack::read(&pack_dir.join(FRONTEND_FILE)).map_err(|e| e.to_string())?;
     let config: Value = serde_json::from_slice(&read(&model.join("config.json"), 2 << 20)?).map_err(|e| e.to_string())?;
     let source = Checkpoint::open(model).map_err(|e| e.to_string())?;
-    let compiled = frontend.compile(&config, &source, &admission::default_inputs()).map_err(|e| e.to_string())?;
+    let compiled = frontend.compile_bounded(&config, &source, &admission::default_inputs(), block_bytes).map_err(|e| e.to_string())?;
     compiled.write_checked(rebuilt, &source, tokenizer(model)?, block_bytes, Some(&pack.build)).map_err(|e| e.to_string())?;
     if manifest(rebuilt)? != pack.artifact {
         return Err("FRONTEND_REBUILD_MISMATCH: rebuilt inventory differs".into());

@@ -132,6 +132,8 @@ pub enum Import {
         format: String,
         roles: BTreeMap<String, String>,
         config: Value,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        metadata_inert: BTreeMap<String, Vec<String>>,
         shift: i16,
         round: program::Round,
         overflow: Overflow,
@@ -234,9 +236,24 @@ impl FrontendPack {
         &self.definition.id
     }
 
-    /// Only source headers are read here. All bindings and TIR admission precede any weight read.
+    /// Source headers and bounded role metadata are read here. All binding headers and TIR
+    /// admission precede metadata acquisition; weight values are read by the streamed writer.
     /// `inputs` comes from the caller's network profile; successful compilation does not activate it.
     pub fn compile(&self, config: &Value, source: &dyn TensorSource, inputs: &TirAdmitInputsV1) -> Result<Compiled> {
+        self.compile_bounded(config, source, inputs, 1 << 20)
+    }
+
+    /// All binding headers and admission are checked before bounded metadata acquisition.
+    pub fn compile_bounded(
+        &self,
+        config: &Value,
+        source: &dyn TensorSource,
+        inputs: &TirAdmitInputsV1,
+        block_bytes: usize,
+    ) -> Result<Compiled> {
+        if !(8..=stream::MAX_BLOCK_BYTES).contains(&block_bytes) {
+            return Err(bad("FRONTEND_STREAM_LIMIT: block bytes must be 8..=16MiB"));
+        }
         let d = &self.definition;
         let map = config.as_object().ok_or_else(|| bad("FRONTEND_ENCODING: config is an object"))?;
         let mut remaining = MAX_PACK_BYTES;
@@ -278,12 +295,13 @@ impl FrontendPack {
             if !expected.contains(&(b.param, b.layer)) || resolved.contains_key(&(b.param, b.layer)) {
                 return Err(bad("FRONTEND_BINDING: unexpected or repeated parameter instance"));
             }
-            let (meta, sources, decoder) = if let Import::Descriptor { format, roles, config, shift, .. } = &b.import {
+            let target_shape: Vec<_> = program.params[b.param as usize].shape.iter().map(|n| *n as usize).collect();
+            let (meta, sources, decoder) = if let Import::Descriptor { format, roles, config, metadata_inert, shift, .. } = &b.import {
                 if !b.source.is_empty() || !(-64..=64).contains(shift) {
                     return Err(bad("FRONTEND_BINDING: descriptor uses roles only and shift -64..=64"));
                 }
                 let format = self.formats.get(format).ok_or_else(|| bad("FRONTEND_BINDING: undeclared descriptor"))?.clone();
-                let (decoder, meta, sources) = descriptor::resolve(format, roles, config, source)?;
+                let (decoder, meta, sources) = descriptor::resolve(format, roles, config, metadata_inert, &target_shape, source)?;
                 if let Import::Descriptor { format, .. } = &b.import {
                     used_formats.insert(format.clone());
                 }
@@ -327,6 +345,17 @@ impl FrontendPack {
         if used_formats.len() != self.formats.len() {
             return Err(bad("FRONTEND_DESCRIPTOR: unused format"));
         }
+        let mut metadata_budget = descriptor::MetadataBudget::new(block_bytes);
+        for r in resolved.values() {
+            if let Some(decoder) = &r.decoder {
+                metadata_budget.reserve(decoder)?;
+            }
+        }
+        for r in resolved.values_mut() {
+            if let Some(decoder) = &mut r.decoder {
+                decoder.prepare(source, &r.sources, &mut metadata_budget)?;
+            }
+        }
         Ok(Compiled {
             program,
             admission,
@@ -336,6 +365,8 @@ impl FrontendPack {
             scope: d.scope.clone(),
             config_hash: digest(b"MISAKA/PALW/TIR/FRONTEND/CONFIG/V1", canonical_json(config).as_bytes()),
             assumed_defaults,
+            metadata_read_bytes: metadata_budget.read_bytes,
+            metadata_max_read_bytes: metadata_budget.peak,
         })
     }
 }
@@ -370,6 +401,8 @@ pub struct Compiled {
     scope: Scope,
     config_hash: String,
     assumed_defaults: Vec<String>,
+    metadata_read_bytes: u64,
+    metadata_max_read_bytes: usize,
 }
 impl Compiled {
     pub fn program(&self) -> &TirProgramV1 {
