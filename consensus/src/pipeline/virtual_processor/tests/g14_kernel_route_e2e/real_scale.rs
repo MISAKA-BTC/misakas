@@ -107,7 +107,7 @@ impl SegMaterialV1 for FromBlocks {
 
 /// The largest object one carrier takes here (the canonical harness's chunk size): a larger one rides `ObjectChunk`s, since a
 /// `Respond` part (≤ `SEG_PART_BYTES_V4` = 1 MiB) or a class registration can exceed a block's compute mass in one carrier.
-const SEG_CARRIER_CAP: usize = 50_000;
+const SEG_CARRIER_CAP: usize = 100_000;
 
 impl Net {
     /// [`Net::send`] for objects of any size: one carrier when the object fits [`SEG_CARRIER_CAP`], else its generic `ObjectChunk`s
@@ -1023,6 +1023,8 @@ async fn g14_k2s_spam_demands_never_preempt_a_proof_and_simultaneous_filers_get_
             spam.push((c, w.net.route(c, &K::FileDemand { demander: w.net.kid(c), claim: lie.id, stage: 0, position })));
         }
     }
+    // What each coalition bond holds reserved before its spam (card 1 also holds the jobs' escrows).
+    let reserved_before: Vec<u128> = coalition.iter().map(|c| w.net.kernel_reserved(*c)).collect();
     w.net.send_all(spam).await;
     let open = w.net.ledger().demands.keys().filter(|(c, _, _)| *c == lie.id).count();
     assert_eq!(open, coalition.len() * per as usize, "every spam session is open");
@@ -1039,7 +1041,8 @@ async fn g14_k2s_spam_demands_never_preempt_a_proof_and_simultaneous_filers_get_
     assert!((ra == reward && rb == 0) || (ra == 0 && rb == reward), "exactly one accuser is paid: {ra} / {rb} (reward {reward})");
     assert_eq!(ledger.burned - ledger_burned, slashed - reward, "one slash: reward + burn");
     assert!(ledger.demands.keys().all(|(c, _, _)| *c != lie.id), "the spam demands are moot");
-    assert!(coalition.iter().all(|c| w.net.kernel_reserved(*c) == 0), "and their bonds return");
+    let reserved_after: Vec<u128> = coalition.iter().map(|c| w.net.kernel_reserved(*c)).collect();
+    assert_eq!(reserved_after, reserved_before, "and their demand bonds return");
     // A later duplicate changes nothing (the first reward has been paid by a coinbase meanwhile: nothing new is queued).
     let row = ledger.claims[&lie.id].clone();
     let collateral = w.net.collateral(0);

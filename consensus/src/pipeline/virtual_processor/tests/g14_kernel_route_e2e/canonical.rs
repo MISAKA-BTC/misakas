@@ -86,6 +86,11 @@ fn canonical_config(opv: bool) -> (Config, PalwConsensusParamsV2, Premine, Premi
     params.genesis.utxo_commitment = multiset.finalize();
     params.genesis.hash = kaspa_consensus_core::header::Header::from(&params.genesis).hash;
     params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
+    // OPV eligibility is DERIVED (OPVB): the pre-derivation fixture class is named through the processor's test seam, as the parent's
+    // OPV worlds do (`kernel_config_opv`) — the integration head's harness still relied on the retired admission list.
+    if opv {
+        opv_test_eligible(&opv_admitted());
+    }
     params.palw_panel_free_v1 =
         if opv { Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), opv_admitted())) } else { None };
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));

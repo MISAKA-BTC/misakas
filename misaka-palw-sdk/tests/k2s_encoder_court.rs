@@ -623,12 +623,20 @@ fn produce(w: &World, job: Digest, prompt: &[u32], lie: Option<(u16, u16)>) -> P
 }
 
 fn commit(w: &mut World, p: &Produced) -> Vec<E> {
-    let ev = w.block(vec![obj(PROD, O::SealClaim { producer: PROD, job: p.claim.job_id, seal: claim_seal_v1(&p.claim.id()) })]);
+    // Past `palw_panel_free_v1` (the OPV policy's activation) the seal is claim seal v2 and the reveal carries its salt.
+    let id = p.claim.id();
+    let salted = w.l.salted_seals_from().is_some_and(|at| w.l.daa.saturating_add(1) >= at);
+    let salt = misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt", &id);
+    let seal = if salted { misaka_palw_kernel::ledger::claim_seal_v2(&id, &salt) } else { claim_seal_v1(&id) };
+    let ev = w.block(vec![obj(PROD, O::SealClaim { producer: PROD, job: p.claim.job_id, seal })]);
     assert!(refusal(&ev).is_none(), "{ev:?}");
-    w.block(vec![obj(
-        PROD,
-        O::CommitSegmentedClaim { claim: p.claim.clone(), evidence: p.evidence.clone(), segment_roots: p.c.segment_roots() },
-    )])
+    let (claim, evidence, segment_roots) = (p.claim.clone(), p.evidence.clone(), p.c.segment_roots());
+    let reveal = if salted {
+        O::CommitClaimSalted { salt, commit: misaka_palw_kernel::ledger::SaltedCommitV1::Segmented { claim, evidence, segment_roots } }
+    } else {
+        O::CommitSegmentedClaim { claim, evidence, segment_roots }
+    };
+    w.block(vec![obj(PROD, reveal)])
 }
 
 /// The nodes a lie is put in: the first node that reads the job's ids (the embedding lookup: its court opens the prompt tile), the
