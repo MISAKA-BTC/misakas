@@ -1451,3 +1451,46 @@ independent runtime-pack certification, a complete network resource/liveness pro
 full RFC02 completion. Large domains still need GAP-70; all §II.14 feature, checkpoint/task/
 context, capital/resource, G14, independent redemption and activation requirements remain
 mandatory. Shipping fences remain dormant.
+
+
+## Authenticated candidate trace statements and public courts — 2026-10-11
+
+Inner 26/27 provide a separate typed trace assertion and bounded refutation for an admitted
+scoped candidate, including vocabularies and inventories outside finite enumeration. The
+ordinary signed consumer authenticates the poster/challenger. A preceding execution class,
+job, claim or Final is unnecessary. Public input/delivery, exact model binding and program/
+plan/PC, network/ruleset and segmented roots determine its statement identity. All three
+claimed implementation roots must match that typed statement. Legacy flat vector digests
+retain their old grammar. Equal claimed roots do not establish independent runtime identity.
+
+Aux 51/52 store the fixed liability/court header and an eight-entry lifetime bond catalog.
+Each distinct assertion reserves the poster's 100 BILI for 200 DAA, shared with its other
+commitments and both withdrawal duty checks. Judged assertions, including duplicates, pay
+the actor's fee. Refutations reserve shared block prosecution work before variable decoding;
+invalid judged proofs cost only their submitter, and excess filings are not judged. Admission
+requires the worst program/wire plus court envelope to fit reserved proof work and the carrier.
+Nested counts/leaves/paths are bounded before allocation. WholeValue is outside this grammar.
+A valid fault slashes the poster once, with only the existing collected-slash 49% bounty;
+self-operator bounties are refused and the separate source binder is not charged.
+
+The node trials use synthetic T=2048 encoder and stateful-decoder candidates; the latter
+contains a 4 MiB source. A fresh verifier uses its own matching model and the public statement,
+convicts a changed intermediate with a dependency proof below 32 KiB, and independently
+replays the once-only slash and coinbase redemption. Other trials cover copied proofs, bad
+role/plan roots, catalog/capital/withdrawal duty and clocked release, duplicate-post charging
+and invalid-proof floods at the existing shared block cap. These are mechanics checks, not
+actual checkpoint fidelity, full context/task support or runtime independence certification.
+
+The first node attempts exposed a fixture using the last delivered token as fed input and
+an assertion that all five flooded filings pay despite the four-judgment block cap. The
+fixture/input and fee expectation were corrected without raising any limit. Final verification
+results: **69 distinct tests passed** (36 core, 29 actual-node, four kernel route). All runs
+use the final production/test code. Source/binary/log hashes are recorded in
+`evidence/rfc02-model-vector-verdict.json`.
+
+This is a non-reward signal. It grants no complete-domain conformance, execution admission or
+sampled eligibility. Public trace demand/default, discovery/transport tooling, whole-statement
+soundness/policy, legacy flat-digest courts and independent runtime certification remain open.
+Opaque/withheld source-PC relations, actual checkpoint/task/context and feature coverage,
+full resource/capital/liveness accounting and every other RFC02 §II.14 requirement remain
+mandatory. Shipping fences stay dormant and the full RFC02 implementation goal stays active.

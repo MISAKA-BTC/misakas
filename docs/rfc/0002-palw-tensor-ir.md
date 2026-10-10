@@ -2636,3 +2636,49 @@ role roots do not certify independent runtime implementations or source checkpoi
 Large vocabularies/context remain outside exhaustive enumeration and need GAP-70. The full
 shared resource/liveness contract, real-checkpoint task/context coverage and the remaining
 §II.14 requirements stay open. Shipping fences remain dormant.
+
+
+### 14.18 Public trace courts for unregistered scoped candidates
+
+A new versioned, non-reward statement uses inner **26 `PostModelVectorV2`** and
+**27 `RefuteModelVectorV2`** under authenticated outer 110 and dormant PanelFree.
+An active bond may publish a vector of an admitted scoped candidate without creating
+an execution class, job or kernel claim. It need not obtain a preceding Final. The
+statement binds the exact candidate and model binding, the public prompt, exact delivery
+length and delivered ids, network/ruleset, program/plan/PC identity, segmented evidence
+and segment roots. For a decoder, the last delivered token is not fed back as input.
+
+The three claimed implementation roots must agree with this explicit typed trace grammar.
+It commits intermediate values and logits through the existing v3/segmented trees, so a
+shared wrong computation is subject to the existing bounded element/type/decode courts.
+A public verifier with the matching model reconstructs this context and supplies a fault
+against its roots. A proof cannot be borrowed by another vector, source binding, program
+or plan. This is a new statement, not a reinterpretation of legacy tag-109 `a`/`b` flat
+logit/commit digests. Equality of role roots still does not establish actual independent
+software execution or source-checkpoint fidelity.
+
+Aux **51** stores a fixed reservation/court header followed by bounded post bytes; **52**
+is the poster's lifetime catalog, capped at eight statements. A new distinct assertion
+reserves 100 BILI of the poster's own free capital for the existing 200-DAA liability
+horizon. Both withdrawal duty gates and ordinary committed/free-capital calculations read
+this reservation together with all other commitments. Expiry is a clocked read and does
+not erase the catalog or scan all vectors per block. The model binder owns no liability
+for another bond's vector. Identical content shares a statement and grants no priority.
+
+Posting and refuting reserve the existing shared block work before program/post/proof
+decoding. Every judged post, including a truthful duplicate, pays the actor's policy fee.
+An invalid judged refutation also pays the actor's scaled fee; an over-budget filing is
+not judged or charged. The fixed header prices the worst admitted court plus program/wire
+work; admission requires this whole envelope to fit the work reserved for prosecution.
+Nested counts, v3 leaf sizes and paths are bounded before allocation. WholeValue's optional
+whole tensors are excluded from this filing grammar pending their own resource contract.
+A valid fault slashes the poster's reservation once and pays only the existing 49% share
+of the collected slash; self-operator bounties are refused.
+
+This path offers falsifiable integer trace assertions for domains too large to enumerate.
+It is **not** complete-domain conformance, an OPV eligibility source, or a sampled reward
+gate. Public trace demand/default, vector discovery/transport tooling, immutable policy
+selection and its whole-statement soundness, legacy flat-digest courts and independent
+runtime certification remain required before integrating it into reward eligibility.
+Opaque/withheld source-PC relation cases and every other §II.14 requirement remain open.
+Shipping activation is unchanged.

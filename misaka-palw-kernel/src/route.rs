@@ -67,6 +67,8 @@ pub const TAG_BIND_MODEL_ARTIFACT_V2: u8 = 22;
 pub const TAG_REFUTE_MODEL_ARTIFACT_V2: u8 = 23;
 pub const TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2: u8 = 24;
 pub const TAG_COMPLETE_MODEL_CONFORMANCE_V2: u8 = 25;
+pub const TAG_POST_MODEL_VECTOR_V2: u8 = 26;
+pub const TAG_REFUTE_MODEL_VECTOR_V2: u8 = 27;
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 
@@ -172,6 +174,17 @@ impl SaltedCommitV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum KernelRouteObjectV1 {
+    /// Non-reward conformance trace of a scoped candidate, authenticated by the consumer.
+    PostModelVectorV2 {
+        class: Digest,
+        binding: Digest,
+        post: Vec<u8>,
+    } = 26,
+    /// Bounded public element/type/decode court of that trace; needs no execution Final.
+    RefuteModelVectorV2 {
+        vector: Digest,
+        proof: Vec<u8>,
+    } = 27,
     /// Consumer-owned exact finite-domain conformance over an explicit model statement.
     CompleteModelConformanceV2 {
         class: Digest,
@@ -432,6 +445,8 @@ impl KernelRouteObjectV1 {
     /// The variant's declared discriminant.
     pub const fn tag(&self) -> u8 {
         match self {
+            Self::PostModelVectorV2 { .. } => TAG_POST_MODEL_VECTOR_V2,
+            Self::RefuteModelVectorV2 { .. } => TAG_REFUTE_MODEL_VECTOR_V2,
             Self::CompleteModelConformanceV2 { .. } => TAG_COMPLETE_MODEL_CONFORMANCE_V2,
             Self::BindModelArtifactV2 { .. } => TAG_BIND_MODEL_ARTIFACT_V2,
             Self::RefuteModelArtifactV2 { .. } => TAG_REFUTE_MODEL_ARTIFACT_V2,
@@ -530,6 +545,8 @@ impl KernelRouteObjectV1 {
 pub const fn name_of_tag(tag: u8) -> &'static str {
     match tag {
         TAG_COMPLETE_MODEL_CONFORMANCE_V2 => "CompleteModelConformanceV2",
+        TAG_POST_MODEL_VECTOR_V2 => "PostModelVectorV2",
+        TAG_REFUTE_MODEL_VECTOR_V2 => "RefuteModelVectorV2",
         TAG_BIND_MODEL_ARTIFACT_V2 => "BindModelArtifactV2",
         TAG_REFUTE_MODEL_ARTIFACT_V2 => "RefuteModelArtifactV2",
         TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2 => "RegisterModelConformanceClassV2",
@@ -564,6 +581,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_BIND_MODEL_ARTIFACT_V2 | TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2 => MAX_REGISTER_CLASS_BYTES_V1,
         TAG_REFUTE_MODEL_ARTIFACT_V2 => 2 << 20,
         TAG_COMPLETE_MODEL_CONFORMANCE_V2 => 90_000 + 134,
+        TAG_POST_MODEL_VECTOR_V2 | TAG_REFUTE_MODEL_VECTOR_V2 => MAX_FILE_PROOF_BYTES_V1,
         TAG_REGISTER_CONFORMANCE_CLASS_V1 => MAX_REGISTER_CLASS_BYTES_V1,
         TAG_REGISTER_CLASS_V1 => MAX_REGISTER_CLASS_BYTES_V1,
         TAG_REGISTER_PIPELINE_CLASS_V1 => MAX_REGISTER_PIPELINE_CLASS_BYTES_V1,
@@ -641,8 +659,8 @@ mod tests {
         let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_REGISTER_CONFORMANCE_CLASS_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!(max_encoded_bytes_of_tag(26).is_none(), "26 is not allocated");
-        for tag in 22..=25 {
+        assert!(max_encoded_bytes_of_tag(28).is_none(), "28 is not allocated");
+        for tag in 22..=27 {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         let complete = KernelRouteObjectV1::CompleteModelConformanceV2 { class: [1; 64], binding: [2; 64], proof: vec![0; 90_000] };

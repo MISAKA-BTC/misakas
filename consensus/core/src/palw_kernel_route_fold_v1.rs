@@ -534,6 +534,12 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     // Inner 22/23 are consensus-owned state/collateral courts, never bare-ledger moves.
     match &object {
+        KernelRouteObjectV1::PostModelVectorV2 { class, binding, post } => {
+            return super::palw_model_vector_fold_v2::post(builder, ctx, signer, class, binding, post);
+        }
+        KernelRouteObjectV1::RefuteModelVectorV2 { vector, proof } => {
+            return super::palw_model_vector_fold_v2::refute(builder, ctx, signer, vector, proof);
+        }
         KernelRouteObjectV1::CompleteModelConformanceV2 { class, binding, proof } => {
             return super::palw_model_conformance_fold_v2::complete(builder, ctx, signer, class, binding, proof);
         }

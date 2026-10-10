@@ -143,6 +143,8 @@ mod palw_onboarding_fold_v1;
 mod palw_model_artifact_fold_v2;
 #[path = "palw_model_conformance_fold_v2.rs"]
 mod palw_model_conformance_fold_v2;
+#[path = "palw_model_vector_fold_v2.rs"]
+mod palw_model_vector_fold_v2;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_provider_court_fold_v1.rs"]
 mod palw_provider_court_fold_v1;
@@ -3965,6 +3967,7 @@ pub fn palw_bond_backs_live_duty_v1(state: &PalwChainStateV2, key: &PalwBondKeyV
         || state.kernel_reserved(key) > 0
         || state.onboarding_reserved(key) > 0
         || state.model_artifact_reserved_at_v2(key, now_daa) > 0
+        || state.model_vector_reserved_at_v2(key, now_daa) > 0
         || state.provider_court_reserved(key) > 0
         // Lane BUDGET (ADR-0176 D4): the capital that earned a budget window stays until the window has passed (design §2.4).
         || state.bond_budget_window_holds(key, now_daa)
@@ -4009,6 +4012,7 @@ pub fn palw_bond_backs_live_duty_v2(
         || state.kernel_reserved(key) > 0
         || state.onboarding_reserved(key) > 0
         || state.model_artifact_reserved_at_v2(key, now_daa) > 0
+        || state.model_vector_reserved_at_v2(key, now_daa) > 0
         || state.provider_court_reserved(key) > 0
         // Lane BUDGET (ADR-0176 D4): the capital that earned a budget window stays until the window has passed (design §2.4).
         || state.bond_budget_window_holds(key, now_daa)
@@ -4278,6 +4282,7 @@ pub fn palw_bond_committed_v1(
         .saturating_add(state.kernel_reserved(bond))
         .saturating_add(state.onboarding_reserved(bond))
         .saturating_add(state.model_artifact_reserved_at_v2(bond, now_daa))
+        .saturating_add(state.model_vector_reserved_at_v2(bond, now_daa))
         // DA16: the provider court's leases and challenge bonds.
         .saturating_add(state.provider_court_reserved(bond))
 }

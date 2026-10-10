@@ -606,6 +606,7 @@ pub mod palw_tir_only_v1;
 pub mod palw_tir_artifact_v1;
 pub mod palw_model_artifact_v2;
 pub mod palw_model_conformance_v2;
+pub mod palw_model_vector_v2;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.
 pub mod palw_tir_admission_v1;
 /// RFC-0002 Phase F step F6: an IR class's attempt job — the canonical job, the yardstick context and the job an anchor names (J5).
