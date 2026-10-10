@@ -124,9 +124,25 @@ fn row_leaves_fitting(l: &LayoutV3, width: u64, from: u64, total: u64, cap: u64)
 /// **The deterministic greedy layout of a position's values into parts**: a value that fits the current part joins it, one that fits an
 /// empty part starts one, and a larger one is cut into contiguous row-leaf ranges, each as long as the part it lands in allows.
 fn layout_parts(values: &[(u16, u16, DType, Vec<usize>, bool)]) -> Result<Vec<Vec<ChunkSpecV1>>, String> {
+    Ok(layout_parts_sized(values)?.0)
+}
+
+/// **The encoded-size bound of every part position `p` is served in** (lane G14-B): [`PART_HEADER_BOUND_V4`] plus the value bytes and
+/// overheads the layout charged to the part — what that part's `Respond` payload carries at most, never more than
+/// [`SEG_PART_BYTES_V4`] — in the order of [`position_parts_v1`]. `crate::budget` counts the route chunks they take.
+pub fn position_part_bytes_v1(program: &TirProgramV1, p: u32) -> Result<Vec<u64>, String> {
+    let w = WiringV1::new(program).map_err(|e| e.to_string())?;
+    let (parts, used) = layout_parts_sized(&declared_values(&w, p))?;
+    debug_assert_eq!(parts.len(), used.len());
+    Ok(used.into_iter().map(|u| PART_HEADER_BOUND_V4 + u).collect())
+}
+
+/// [`layout_parts`] and, per part, the bytes the walk charged to it (the same walk: the same parts).
+fn layout_parts_sized(values: &[(u16, u16, DType, Vec<usize>, bool)]) -> Result<(Vec<Vec<ChunkSpecV1>>, Vec<u64>), String> {
     let node_count = values.len() as u64;
     let budget = SEG_PART_BYTES_V4 - PART_HEADER_BOUND_V4;
     let mut parts: Vec<Vec<ChunkSpecV1>> = vec![Vec::new()];
+    let mut used_by: Vec<u64> = vec![0];
     let mut room = budget;
     for (s, n, dtype, shape, withheld) in values {
         let (s, n) = (*s, *n);
@@ -134,9 +150,11 @@ fn layout_parts(values: &[(u16, u16, DType, Vec<usize>, bool)]) -> Result<Vec<Ve
             let oh = chunk_overhead(node_count, 1, 0);
             if oh > room {
                 parts.push(Vec::new());
+                used_by.push(0);
                 room = budget;
             }
             parts.last_mut().expect("a part").push(ChunkSpecV1::Withheld { occurrence: s, node: n });
+            *used_by.last_mut().expect("a part") += oh;
             room -= oh;
             continue;
         }
@@ -146,11 +164,13 @@ fn layout_parts(values: &[(u16, u16, DType, Vec<usize>, bool)]) -> Result<Vec<Ve
         let oh = chunk_overhead(node_count, l.leaves(AXIS_ROW), shape.len());
         if bytes + oh <= room {
             parts.last_mut().expect("a part").push(ChunkSpecV1::Whole { occurrence: s, node: n });
+            *used_by.last_mut().expect("a part") += bytes + oh;
             room -= bytes + oh;
             continue;
         }
         if bytes + oh <= budget {
             parts.push(vec![ChunkSpecV1::Whole { occurrence: s, node: n }]);
+            used_by.push(bytes + oh);
             room = budget - bytes - oh;
             continue;
         }
@@ -164,11 +184,13 @@ fn layout_parts(values: &[(u16, u16, DType, Vec<usize>, bool)]) -> Result<Vec<Ve
                     return Err(format!("({s}, {n}): one row leaf and its overhead exceed a part"));
                 }
                 parts.push(Vec::new());
+                used_by.push(0);
                 room = budget;
                 continue;
             }
             let used = oh + leaf_bytes;
             parts.last_mut().expect("a part").push(ChunkSpecV1::Rows { occurrence: s, node: n, first_leaf: i, leaves: k });
+            *used_by.last_mut().expect("a part") += used;
             room -= used;
             i += k;
         }
@@ -176,7 +198,7 @@ fn layout_parts(values: &[(u16, u16, DType, Vec<usize>, bool)]) -> Result<Vec<Ve
     if parts.len() as u64 > SEG_MAX_PARTS_V4 as u64 {
         return Err(format!("{} parts a position: past the bound", parts.len()));
     }
-    Ok(parts)
+    Ok((parts, used_by))
 }
 
 /// What a chunk carries.

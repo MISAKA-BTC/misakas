@@ -79,6 +79,7 @@
 
 pub mod assurance;
 pub mod beacon;
+pub mod budget;
 pub mod challenge;
 pub mod check;
 pub mod claim_subject;

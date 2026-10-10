@@ -1660,3 +1660,105 @@ async fn g14_k2s_v5_an_encoder_class_on_the_node_convicts_its_lies_and_finalizes
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay of the v5 class's convictions and Final");
 }
+
+/// **G14-B on the real node: the worst-case pursuit of the deepest search completes before the class's liability horizon.** The wide
+/// class at 8,192 positions; a liar's claim; the producer and every other bond collude. Two public bonds outside them (the verifier's
+/// two cards, so the court's round of two positions rides one block) run the deepest search the class admits — ten probe demands and
+/// the court's round — on the schedule `misaka_palw_kernel::budget::seg_pursuit_schedule_v1` derives from the route's own policies,
+/// while the producer answers every demand on the LAST DAA of its window. Everything rides the mempool, the node's template and the
+/// chain block's fold; the claim reaches Final as early as the lifecycle lets it (between a served demand and Final the verifier waits
+/// out the dead zone). Every demand is admitted and served, and the filing convicts inside the horizon registration derived for the
+/// class (`ClassRowV1::liability_daa`) — at the derived DAAs exactly. The policy's own 200 could not have carried the last round.
+#[tokio::test]
+async fn g14b_the_worst_case_pursuit_completes_on_the_node_inside_the_class_horizon() {
+    use misaka_palw_kernel::budget::*;
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = SegWorld::new().await;
+    let (verifier, second) = (w.net.chain.bonds.len() - 1, w.net.chain.bonds.len() - 2);
+    let prompt: Vec<u32> = (0..2100u32).map(|i| (i * 7 + 1) % 32).collect();
+    let job = w.tiled_job(&prompt).await;
+    let (_, s, n) = matmul_at(&w.f.program, 0);
+    let lie_at = 1200u32;
+    let lie = w.claim(0, job, &prompt, Some((lie_at, s, n))).await;
+    let ledger = w.net.ledger();
+    let (policy, opv) = (ledger.policy, ledger.opv.policy.expect("an OPV network"));
+    let clock = PursuitClockV1::of_opv(&policy, &opv);
+    let class_liability = ledger.classes[&w.class].liability_daa;
+    let c = ledger.claims[&lie.id].committed_daa;
+    let window = ledger.demand_window_daa_v1(&lie.id, lie_at);
+    let fault = w.fault_from_published(&lie);
+    let filing = fault.to_bytes();
+    let filing_chunks = route_object_chunks_v1(filing.len() as u128 + FILE_PROOF_ENVELOPE_BYTES_V1 as u128);
+    let rounds = seg_search_rounds_v1(SEG_MAX_POSITIONS);
+    let plan = seg_pursuit_schedule_v1(&clock, rounds, window, filing_chunks);
+    assert_eq!(class_liability, policy.liability_daa.max(plan.liability_needed_daa), "registration derived the class horizon");
+    assert!(plan.liability_needed_daa > policy.liability_daa, "the deepest search outlasts the policy's own 200");
+    // An object sent at tip DAA d is folded at d+1 (the ledger reads it at the carrying block's DAA); a card's k-th object of one send at d+1+k.
+    const LAG: u64 = 1;
+    let probes = [1024u32, 1536, 1280, 1152, 1088, 1120, 1136, 1144, 1148, 1150];
+    let window_end = c + clock.window_daa;
+    let final_at = c + plan.final_daa;
+    let mut t = c + clock.first_step_daa;
+    let (mut last_demand, mut last_served) = (0u64, 0u64);
+    for round in 0..rounds as usize {
+        if t >= window_end {
+            t = t.max(final_at + 1); // the dead zone: the window is closed and Final not reached
+        }
+        let positions = if round < probes.len() { vec![probes[round]] } else { vec![lie_at - 1, lie_at] };
+        w.net.beat_to(t - LAG).await;
+        let demands: Vec<(usize, Obj)> = positions
+            .iter()
+            .zip([verifier, second])
+            .map(|(p, card)| {
+                (card, w.net.route(card, &K::FileDemand { demander: w.net.kid(card), claim: lie.id, stage: 0, position: *p }))
+            })
+            .collect();
+        w.net.send_all(demands).await;
+        let ledger = w.net.ledger();
+        for p in &positions {
+            let d = ledger.demands.get(&(lie.id, 0, *p)).unwrap_or_else(|| panic!("round {round}: the demand on {p} is open"));
+            assert_eq!((d.filed_daa, d.deadline_daa), (t, t + window), "round {round}");
+        }
+        // The producer stalls: the last answer lands on the deadline (two answers of one card ride two blocks).
+        let answers: Vec<(usize, Obj)> = positions
+            .iter()
+            .map(|p| {
+                let part = position_part_v1(&w.f.program, *p, &lie.values[*p as usize], lie.c.position_path(*p).1, 0).unwrap();
+                (0usize, w.net.route(0, &K::Respond { claim: lie.id, stage: 0, position: *p, bytes: borsh::to_vec(&part).unwrap() }))
+            })
+            .collect();
+        w.net.beat_to(t + window - LAG - (positions.len() as u64 - 1)).await;
+        w.net.send_all(answers).await;
+        let ledger = w.net.ledger();
+        for p in &positions {
+            let g = ledger.seg_progress.get(&(lie.id, 0, *p));
+            assert!(g.is_some_and(|g| g.complete_daa.is_some()), "round {round}: position {p} served on chain");
+        }
+        assert!(!ledger.claims[&lie.id].convicted && !matches!(ledger.claims[&lie.id].life.state, ClaimStateV1::Unavailable { .. }));
+        (last_demand, last_served) = (t, t + window);
+        t = last_served + clock.turnaround_daa;
+    }
+    let ledger = w.net.ledger();
+    let ClaimStateV1::Final { final_daa } = ledger.claims[&lie.id].life.state else {
+        panic!("Final during the pursuit: {:?}", ledger.claims[&lie.id].life.state)
+    };
+    let until = ledger.claims[&lie.id].liability_until.expect("a Final claim is liable");
+    assert_eq!((final_daa, until), (final_at, final_at + class_liability));
+    let file_at = last_served + clock.prove_daa + (filing_chunks - 1) * ROUTE_DAA_PER_CHUNK_V1;
+    assert!(file_at <= until);
+    w.net.beat_to(file_at - LAG).await;
+    let slashed = w.net.slashed(0);
+    w.file(verifier, &lie.id, &fault).await;
+    let ledger = w.net.ledger();
+    assert!(ledger.claims[&lie.id].convicted, "convicted inside the class horizon");
+    assert!(ledger.daa <= until && w.net.slashed(0) > slashed);
+    assert_eq!((last_demand - c, file_at - c, until - final_daa), (plan.last_demand_daa, plan.filed_daa, class_liability));
+    assert!(last_demand + window + policy.proof_grace_daa > final_daa + policy.liability_daa, "200 could not carry the last round");
+    eprintln!(
+        "[g14b] node: {rounds} rounds, Final +{}, last demand +{}, filed +{} <= horizon +{} (class liability {class_liability})",
+        final_daa - c,
+        last_demand - c,
+        file_at - c,
+        until - c
+    );
+}

@@ -353,7 +353,10 @@ impl KernelLedgerV1 {
             return Err(rule("the claim is already decided"));
         }
         let is_final = matches!(row.life.state, ClaimStateV1::Final { .. });
-        let path = self.policy.court_deadline_daa.saturating_add(self.policy.proof_grace_daa);
+        // G14-B: the response window counts the route chunks of the position's parts (its declared layout); a post-Final demand opens
+        // only if that whole window and the grace after it fit the liability horizon.
+        let window = self.demand_window_daa_v1(claim, position);
+        let path = window.saturating_add(self.policy.proof_grace_daa);
         let window_open = match &row.life.state {
             ClaimStateV1::Final { .. } => row.liability_until.is_some_and(|u| daa.saturating_add(path) <= u),
             s => demand_window_open(s, daa),
@@ -393,7 +396,7 @@ impl KernelLedgerV1 {
         let program = self.classes.get(&class_id).map(|c| c.program.clone()).ok_or_else(|| rule("no such class"))?;
         let parts = position_parts_v1(&program, position).map_err(|_| rule("the position does not lay out"))?.len() as u32;
         self.bonds.get_mut(demander).expect("checked").reserved += need;
-        let deadline = daa + self.policy.court_deadline_daa;
+        let deadline = daa + window;
         self.demands.insert(k, DemandRowV1 { demanders: vec![(*demander, need)], filed_daa: daa, deadline_daa: deadline, last: None });
         self.seg_progress.insert(k, SegProgressV1::new(parts));
         if !is_final {

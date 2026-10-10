@@ -158,6 +158,126 @@ The **overall G14 result remains FAIL / incomplete**; no activation or new famil
 ADR-0177 D7's registered-model possession premise is confirmed by the user. GAP-80 has also been decided: legacy is in scope;
 the old "awaiting user decision" descriptions below are historical. Required family coverage is not waived.
 
+## 2c. G14-B: maximum-profile budgets and deadlines (2026-10-11, lane G14-B, branch `g14/b-budgets-deadlines`)
+
+The gate (`gate.rs`) bounds what one prosecution reads, opens and holds. G14-B asks the other half of the bar: **can the pursuit
+FINISH** — every search round, every chunk of every demanded response, the filing — before the claim's liability horizon, against a
+producer that answers every demand on the last DAA it may? The derivations are code (`misaka-palw-kernel/src/budget.rs`); nothing
+below is measured. Verifier compute enters only through the OPV policy's declared budgets (cold 10, check 10, localize 2, court 3,
+carrier 2, reorg 2 DAA — claims an external gate must measure).
+
+**Carriage (derived, pinned against consensus).** A route chunk is ≤ 100,000 B, ≤ 16 an object, around a 16 KiB wrapper. The tag-113
+lane (`KernelRouteChunkV1`) was already end-to-end on the integration line (carrier, per-bond groups with deposits, TTL ≤ 64 DAA,
+reassembly and application in the fold). A testnet-12 block carries `max_block_mass / TRANSIENT_BYTE_TO_MASS_FACTOR` = 125,000
+transaction bytes: **one full chunk a DAA, network-wide**. A maximal `Respond` (one 1 MiB part) is **11 chunks**; the consensus
+chunker's real count equals the kernel's count.
+
+**What changed** (implemented, verified by the tests below; dormant — the whole kernel route sits behind the never-armed
+`palw_probabilistic_constraints_v1`; nothing is armable):
+
+| Rule | Before | Now |
+|---|---|---|
+| Segmented position demand deadline | `filed + court_deadline` (20) for any position size | `filed + court_deadline + (chunks − 1)`. `chunks` = Σ over the position's parts of the route chunks of each part's `Respond`, from the class's deterministic layout (`seg_da::position_part_bytes_v1`), never from what the producer sends: a maximal answer buys no time |
+| Post-Final demand admission | `daa + court + grace ≤ liability_until` | `daa + window + grace ≤ liability_until` (the counted window) |
+| A class's liability horizon | `policy.liability_daa` (200) for every claim | segmented (v4/v5) classes: `max(200, the worst-case pursuit's need)` (`ClassRowV1::liability_daa`, derived at registration and at every row rebuild, never stored); every other class unchanged |
+| Registration of a segmented class | gate bounds + carrier fit | also `budget::class_pursuit_v1`: refused **by name** (`PURSUIT_SCHEDULE: …`) when the claim's worst-case lifetime (commitment → end of liability) exceeds 436 = `PALW_BOND_BUDGET_W_MAX_DAA_V1`. ECON derives `W ≥ L` (L the longest claim lifetime), so no admissible `W` can carry more. An admitted class needs the chosen `W` ≥ its lifetime. `W` is not decided here: `class_pursuit_with_ceiling_v1` takes any ceiling, and the tests sweep 280/300/358/400/436 |
+| Inline (v1–v3, typed) demand deadline | 20 | **unchanged** (open item 3) |
+
+No wire type, tag, table, RPC or registry number is added. No int-12 object changes (A-2: nothing to classify; the A2U suites
+stay green). Ledger values change only on the dormant route: `deadline_daa` of chunked segmented demands and `liability_until` of
+deep segmented classes.
+
+**The worst-case schedule** (`budget::seg_pursuit_schedule_v1`):
+- **Rounds.** G14-V's search, consumed as a parameter: `⌈log2 min(P, 1024)⌉` probes (each a full position demand) plus the
+  court's round (q − 1 and q together). That is **11** at P ≥ 1,024.
+- **Producer.** It stalls every answer to the deadline.
+- **Lifecycle.** The claim reaches Final as early as the lifecycle allows:
+  - pre-Final demands hold Final until served + grace;
+  - between a served demand and Final no demand opens (the dead zone);
+  - Final happens in its block's tick, so the first post-Final demand is in the next block.
+- **Result** (interim clock, one-chunk positions): Final +78, last demand +271, filing +300. The need is **223 DAA of liability**,
+  for a lifetime of 301. The policy's own 200 cannot carry the implemented search (10 rounds would fit 200). ECON's `L = 280` (the
+  interim kernel lifetime, 50 + 20 + 10 + 200) cannot either.
+
+**Per-profile table.** Each route at the largest context it admits. Source: `g14b_every_shipped_profile_…`, which asserts the
+gate's verdict equals the schedule's at every ceiling.
+
+| Profile | Position material (last position) | Response window | Liability need / lifetime (DAA) | Verdict (registration ceiling 436; needs `W ≥` lifetime) |
+|---|---|---|---|---|
+| wide128 sketch @8,192 (v4; the node fixture) | 1 part, 1 chunk | 20 | 223 / 301 | **fits**; needs W ≥ 301 |
+| dense-MoE windowed (window 16…1,024) @8,192 (v4; K2S GAP-31's node fixture at 1,024) | 1 part, 5 chunks; filing 4 chunks (9 at window 512) | 24 | 289 / 347 (294 / 352) | **fits**; needs W ≥ 347 (352) |
+| fat fixture @64 (v4, 1.28 MB position) | 2 parts, 11 + 3 chunks (position 1) | 33 | 229 / 296 (simulated, 7 rounds) | fits |
+| Largest position that fits, 11 rounds, lifetime ceiling 358 / 400 / 436 | ≤ 6 / 10 / 13 chunks | 25 / 29 / 32 | — | boundary (one more chunk refuses); at 280 / 300 nothing with 11 rounds fits |
+| mamba-370m @32,783 (v4) | 386 parts / 3,379 chunks | 3,398 | 34,034 | **refused by name** |
+| qwen3.5-0.8b @32,783 (v4) | 1,768 parts / 19,441 chunks | 19,460 | 194,656 | **refused by name** |
+| Huihui-Qwen3.5-9B @8,192 (v4) | 2,029 parts / 22,244 chunks; filing 1,030,590 B = 11 chunks | 22,263 | 222,686 | **refused by name**: its own window outlasts every value in the range |
+| granite-3.1-1b, smollm2-1.7b @32,783 | — | — | — | refused by the v4 gate (verifier RAM) |
+| 9B @262,144 / @2,097,152 | — | — | — | refused (retained state / `check_plan` positions) |
+| v5 encoder (1 position) | any | any | 0: the one demand is pre-Final and holds Final | fits; Final can be held for a whole window (open item 4) |
+| Legacy held 8k (LG14-A/B) | 4 input units + 5 descent rounds (2^40 leaves) + 2 = 11 sessions | 1,200 a session (`W_disclose = window_challenge()`) | sessions open until 4,200 after acceptance | **FAIL: at most 4 sessions fit** |
+| Legacy held 2M | 1,024 input units + 7 = 1,031 sessions | — | — | **FAIL: past the 34-session budget itself** |
+| Legacy at the applied short window (120) | — | 120 | — | 35 sessions would fit (the 34 budget and the 8k profile) |
+
+**Tests and results** (run on this branch):
+
+- **Kernel crate, every test:** **PASS — 285 passed, 0 failed** (7 ignored, pre-existing). It includes:
+  - `budget::tests` (9): chunk and carrier boundaries exactly at 16 chunks and one byte over; round counts; the 223-DAA boundary
+    (`fits(223)` holds, `fits(222)` does not); the ceiling sweep, where at each of 280/300/358/400/436 the largest chunk count
+    fits and one more is refused; filing chunks; one-round fit and the inline squeeze; the legacy session boundary; population.
+  - `k2_real_scale::g14b_*` (3, V-ref):
+    - the profile table;
+    - the worst-case pursuit driven through `apply_block`: 11 demands, each answered on its last DAA; Final +78; the last demand at
+      +271, on the boundary of the class horizon; conviction at +300 ≤ +301 — exactly the derived times;
+    - the maximal response (11 + 3 chunks) lands on its counted deadline and is served, and the same position withheld defaults at
+      the counted deadline, not later.
+- **consensus-core:** **PASS — 51 passed, 0 failed** (filters `g14b_`, `palw_kernel_route_v1`, `palw_legacy_public_filer_v1`, `palw_lifecycle_objects_v2`: the A2U pins and `every_int12_wire_type_is_unchanged_or_classified` included). It includes `g14b_a_maximal_respond_rides_the_chunk_lane_in_the_chunks_the_kernel_counts`: the mirrors are pinned; testnet-12 carries one full chunk a block; a 1 MiB-part `Respond` is cut into 11 tag-113 chunks, reassembled by `chunk_completion_v1` one chunk a block inside the TTL, and lands on its counted deadline's last DAA, which the old fixed window would have missed. It also includes the legacy FAIL derivation `g14b_a_stalling_producer_…`.
+- **Node (V-node):** **PASS — 19 passed, 0 failed** (filters `g14_k2s`, `g14b_`, `t12_a2u`; 904 s). It includes `real_scale::g14b_the_worst_case_pursuit_completes_on_the_node_inside_the_class_horizon`: two outside bonds run 11 demand rounds through mempool → template → fold while the colluding producer answers on each deadline's last DAA. Final +78, last demand +271, filing +300, horizon +301, class liability 223 — the derived DAAs exactly. All 17 existing `g14_k2s_*` node tests still pass under the new rules, including K2S GAP-31's dense-MoE class held at 8,192 (lifetime 347 ≤ 436), and so do the three `t12_a2u_*` suites.
+
+**Largest population (what is provable).** The chain carries one chunk a DAA, whoever's (`concurrent_pursuits_bound_v1`). The
+counted windows assume the demanded material gets that capacity. N simultaneous demands of `c`-chunk positions need `N·c` DAA of
+carriage.
+- **Provable:** a pursuit of `k` chunks in total fits `⌊H / k⌋` concurrent copies in a span `H`. At the 436 lifetime ceiling a maximal
+  pursuit is 12 × 13 + 1 = 157 chunks, so 2 copies fit. One-carrier pursuits (wide128: about 24 small objects) are bounded by block
+  bytes, not chunks.
+- **Not provable here (UNKNOWN):** inclusion order under a coalition that fills blocks with paid traffic. There is no reserved byte
+  lane for prosecution objects; the prosecution reserve counts court runs, not bytes. Closing this needs a reserved route byte share
+  or a fee-priority argument.
+
+**Open items:**
+1. **Every real-shape v4 profile is refused.** At one chunk a DAA, no `W` in the range carries a position of more than 13 chunks
+   (about 1.3 MB) through 11 rounds. Real-scale v4 needs a different carriage. Candidates:
+   - off-chain DA with a provider court (DA16);
+   - probe demands that serve only part 0;
+   - the four open sessions used as a 5-ary search: 5 rounds instead of 11 (G14-V's call).
+2. **Legacy: FAIL, not wired.** Reserved DA sessions each last `W_disclose` = 1,200 DAA (the unshortened `window_challenge()`), one at
+   a time, until the hard deadline at 4,200. A stalling producer therefore caps a reserved pursuit at 4 sessions, below the 8k
+   profile's 11 and the 34-session budget.
+   - Options:
+     - reserved sessions on the applied window (120 DAA: 35 sessions fit; but SA-3 asks `W_disclose ≥ 2 ×` finality);
+     - concurrent reserved sessions;
+     - retention extended for an open pursuit.
+   - This is a consensus decision on a dormant fence of the live route; it is not taken here.
+   - Derivation and test: `palw_legacy_public_filer_v1::g14b_a_stalling_producer_holds_the_reserved_pursuit_to_four_sessions_on_the_t12_lattice`.
+3. **Inline deadlines are not chunk-counted.** Under the 20-DAA base deadline, a maximal one-object inline response (16 chunks) leaves
+   the producer 5 DAA to react, less than the interim disclose budget (8). Counting the gate's worst-case response bound would move
+   about 20 existing kernel tests' deadlines by 1–2 DAA, because that bound is far above the fixtures' real responses. Left for a lane
+   that owns those tests.
+4. **Pre-Final holds.** A pre-Final demand holds Final until its counted window ends. Two upper-bound reads do not count the window
+   extension or the class liability:
+   - the OPV row's reported `hard_deadline_daa` (window + court + grace);
+   - the consensus `palw_kernel_claim_horizon_bound_v1` (chunk TTL, provider lease).
+
+   Final claims use the exact `liability_until`.
+5. **Verifier times are declared, not measured** (the OPV budgets). A slower real verifier shrinks every boundary above. For legacy,
+   the 34-session count is the cap, not a measured descent. Sessions to acquire the FP job or the prefix state are not counted.
+6. **Not changed here:**
+   - v4 `max_retained_state` / `max_verifier_ram` (left open by codex);
+   - the BUDGET engine's liability hold `H_L` (280). A class liable past it is held by the kernel ledger's own reservation, but
+     ECON's L/W relation must be revisited when `W` is chosen.
+
+   G14-S's hiding tiles will change position material. `position_part_bytes_v1` follows the layout, so the windows and needs follow
+   automatically.
+
 ## 3. Family matrices (milestone baseline)
 
 ### 3.1 F1 — K2-TIR v1/v2 single-program classes (Panel-licensed with every interim seat colluding, and OPV)
@@ -678,3 +798,4 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   inverse `kernel_route_test_opv_ineligible_v1`); legacy rows updated to LG14-B's V-fold; BUDGET hook coverage listed. Integration
   compile fix: `2d93ac288` did not build — the BUDGET merge dropped the `Ok(())` and closing brace of LG14-B's
   `palw_legacy_held_signature_ok` in `processor.rs`; restored.
+* 2026-10-11 — G14-B (§2c): maximum-profile budgets and deadlines. `misaka-palw-kernel::budget` (route carriage, chunk-counting windows, the worst-case pursuit schedule, legacy sessions, population). Segmented demands now count chunks. Segmented classes get a derived liability horizon and are refused by name past a 436-DAA lifetime. The legacy 4-session FAIL is derived. Kernel 285, core 51 and node 19 PASS.
