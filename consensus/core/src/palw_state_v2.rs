@@ -24167,7 +24167,7 @@ impl<'a> TransitionBuilder<'a> {
 
     /// **A registered class's row, opened from its carriage** (ADR-0135 Decisions 2 and 3): the
     /// work is read off the graph, the profile derived from it, and the class starts PREFETCHING
-    /// (or REGISTERED, never admitting, where the graph derives no work — the VM boundary).
+    /// (or REGISTERED, never admitting, where the graph derives no supported kernel work).
     /// ADR-0135 manifest V2: the registrant's byte count lands on the class's registry row. The
     /// signature is the acceptance layer's (like a readiness proof's); here the rule is who may
     /// speak for the class and what the row does with the number.

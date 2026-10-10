@@ -47,8 +47,8 @@ pub enum PalwTrustLabelV1 {
     Trusted = 4,
 }
 
-/// **Verification types of Phase A** (RFC-0004 §5.2). EXEC, CRITIC and PROOF are RFC-0005 Phase C's
-/// and have no value here: a v1 decoder refuses their tags.
+/// **Verification types of Phase A** (RFC-0004 §5.2). This vocabulary is closed: a v1 decoder
+/// refuses unknown tags. Extensions require a separately reviewed bounded kernel/task profile (ADR-0172).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
@@ -88,8 +88,8 @@ impl PalwTeacherClassV1 {
     }
 }
 
-/// **Teaching-artifact kinds of Phase A** (RFC-0004 §5.3). `TestCase`, `Counterexample`,
-/// `VerifiedCode`, `ToolTrace` and `FormalProof` need execution and arrive with RFC-0005 Phase C.
+/// **Teaching-artifact kinds of Phase A** (RFC-0004 §5.3). Additional kinds require a separately
+/// reviewed bounded kernel/task profile (ADR-0172); they have no tags in this closed v1 vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]

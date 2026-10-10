@@ -1,4 +1,4 @@
-//! **K2-TIR-v3's media-pipeline family end to end** (RFC-0005 §K.3, RFC-0003 pipelines, RFC-0004 §7.2 evaluation pipelines) on
+//! **K2-TIR-v3's media-pipeline family end to end** (Kernel design §K.3, RFC-0003 pipelines, RFC-0004 §7.2 evaluation pipelines) on
 //! the IR's own v2 fixtures: a text-to-image pipeline (encoder rows → denoiser with per-step `R` noise and a `post` latent write →
 //! decoder), a vision encoder over a canonical job image, a vision-language text stream, an encoder–decoder, and an exact-match
 //! evaluation pipeline over a decode stage. Registration needs the media-pipeline family; the kernel's per-stage traces equal the

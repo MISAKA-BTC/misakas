@@ -1509,7 +1509,7 @@ RpcPalwClassBlocking {
 | State (and condition) | Stage | Code | have / need |
 | --- | --- | --- | --- |
 | no row, or the base class | — | (none: legacy, never gated) | |
-| `Registered`, `ops_supported` false | convert | `VM_BOUNDARY` | |
+| `Registered`, `ops_supported` false | convert | `KERNEL_EXTENSION_REQUIRED` | |
 | `Registered`, no artifact bytes or no derived work | convert | `NO_WORK` | |
 | `Candidate` | register | `ADMISSION_JURY` | ready seats now / the jury quorum (`seat_count / 2 + 1`); the jury counts only its drawn operators |
 | `Prefetching` | mine | `READY_SEATS` | `ready_seats_now` / `required_ready_seats` |
@@ -1520,6 +1520,9 @@ RpcPalwClassBlocking {
 | `Held`, below the required seats | mine | `READY_SEATS` | `ready_seats_now` / `required_ready_seats` |
 | `Held`, seats back, window does not fit | mine | `WINDOW_DOES_NOT_FIT` | |
 | `Active` | — | (none) | |
+
+`KERNEL_EXTENSION_REQUIRED` waits for the unsupported operation's reviewed kernel extension to be
+implemented and activated; then the model must be lowered and registered as a new class (ADR-0172).
 
 `what` carries the numbers a reader needs (`3 of 7 seats hold a fresh possession proof; 14 bonds on the network have the
 collateral headroom to be a seat`; `4 of 10 probe claims have reached Final; 0 failed since entry`), and `next` says the act that

@@ -1,4 +1,4 @@
-//! **Public prosecution on the kernel route** (ADR-0173; the 2026-10-07 mission-alignment amendments of RFC-0004, RFC-0005,
+//! **Public prosecution on the kernel route** (ADR-0173; the 2026-10-07 mission-alignment amendments of RFC-0004, ADR-0172,
 //! RFC-0007 and RFC-0011; RFC-0015 §1.1's G14 criteria).
 //!
 //! The amendments make one thing the measure of this route: an **ordinary, non-seat public bond** that started after the claim was
