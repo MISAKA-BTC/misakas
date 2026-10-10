@@ -220,12 +220,21 @@ impl KernelLedgerV1 {
             )
         };
         // `palw_verifier_pay_v1` (table 27): an extension only once it holds a row.
-        if self.verifier_pay.is_empty() {
+        let base = if self.verifier_pay.is_empty() {
+            base
+        } else {
+            crate::rows::verifier_pay_root_extension_v1(
+                &base,
+                &collection_root(&d("verifier-pay"), self.verifier_pay.len(), self.verifier_pay.iter()),
+            )
+        };
+        // The court scope (table 28, `palw_provider_court_v1`, G14-S): an extension only once it holds a row.
+        if self.court_scope.is_empty() {
             return base;
         }
-        crate::rows::verifier_pay_root_extension_v1(
+        crate::rows::court_scope_root_extension_v1(
             &base,
-            &collection_root(&d("verifier-pay"), self.verifier_pay.len(), self.verifier_pay.iter()),
+            &collection_root(&d("court-scope"), self.court_scope.len(), self.court_scope.iter()),
         )
     }
 

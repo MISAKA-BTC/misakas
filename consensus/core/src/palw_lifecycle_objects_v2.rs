@@ -2057,6 +2057,15 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "G14R M*-49 / O2 (ECON, readiness §3f)",
         true,
     ),
+    // G14-S (2026-10-11): ADR-0177 D2's cumulative court scope — kernel ledger table 28 (per claim: each requester's units, each
+    // accuser's dismissed filings), in the route's rows and its root extension only once non-empty. No new object kind and no wire
+    // change: below `palw_provider_court_v1` the consumer injects no scope, the ledger writes no row of it and every root is unchanged.
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel ledger table 28 court scope (per-requester units, dismissed filings)" },
+        "palw_provider_court_v1",
+        "G14-S (ADR-0177 D2, DA16b §7.3/§7.9)",
+        true,
+    ),
     a2_row(
         PalwA2SlotV1::StateEncoding { what: "bond budget engine Q/B/R/F (deltas 190–199, tail 0xEF, root block bond_budget/v1)" },
         "palw_bond_budget_v1",

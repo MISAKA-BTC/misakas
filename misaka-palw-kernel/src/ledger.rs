@@ -258,6 +258,9 @@ pub struct ClassRowV1 {
     pub ruleset_digest: Digest,
     /// The code-derived gate's bounds (registration refuses a class without them).
     pub bounds: ProsecutionBoundsV1,
+    /// **K2-TIR-v4/v5: the court-scope gate** (`crate::seg_scope::seg_scope_report_v2` at the plan's context; derived, never stored):
+    /// a class whose report is incomplete takes no claim (`COURT_SCOPE_INCOMPLETE`). `None` for every other descriptor.
+    pub court_scope: Option<crate::seg_scope::SegScopeReportV1>,
 }
 
 impl ClassRowV1 {
@@ -784,6 +787,12 @@ pub struct KernelLedgerV1 {
     pub verifier_pay_policy: Option<crate::verifier_pay::VerifierPayPolicyV1>,
     /// **Table 27**: check-fee escrows, claim draws and held default shares (empty below the fence; in the root only once non-empty).
     pub verifier_pay: crate::verifier_pay::VerifierPayTableV1,
+    /// **The court scope's terms** (`palw_provider_court_v1`, G14-S), consumer-injected before every object and tick like the verifier
+    /// pay terms; NOT part of this state or its root. `None`: every rule of `crate::court_scope` is the historical one.
+    pub court_scope_policy: Option<crate::court_scope::CourtScopePolicyV1>,
+    /// **Table 28** (`crate::court_scope`): per claim, the units each requester named and each accuser's dismissed filings (written
+    /// only past the court scope; in the root only once non-empty).
+    pub court_scope: BTreeMap<Digest, crate::court_scope::CourtScopeRowV1>,
     budget: BlockBudgetV1,
 }
 
@@ -858,6 +867,8 @@ impl KernelLedgerV1 {
             provider_liable: BTreeSet::new(),
             verifier_pay_policy: None,
             verifier_pay: BTreeMap::new(),
+            court_scope_policy: None,
+            court_scope: BTreeMap::new(),
             budget: BlockBudgetV1::default(),
         })
     }
@@ -1507,6 +1518,9 @@ impl KernelLedgerV1 {
         if let Some(p) = opv {
             self.opv_class_economics(&p, &bounds).map_err(rule)?;
         }
+        // The court-scope gate is derived now (a class that fails it registers, and takes no claim: never reward-bearing).
+        let court_scope =
+            crate::descriptor::is_segmented_v1(&d).then(|| crate::seg_scope::seg_scope_report_v2(&program, plan.max_positions));
         self.classes.insert(
             class,
             ClassRowV1 {
@@ -1518,6 +1532,7 @@ impl KernelLedgerV1 {
                 network_domain: self.policy.network_domain,
                 ruleset_digest: self.policy.ruleset_digest,
                 bounds,
+                court_scope,
             },
         );
         if mode.is_optimistic() {
@@ -1863,6 +1878,8 @@ impl KernelLedgerV1 {
         let job = self.jobs.get(&claim.job_id).ok_or_else(|| rule("no such job".into()))?;
         let class = self.classes.get(&job.class_binding_id).ok_or_else(|| rule("no such class".into()))?;
         self.opv_claim_gate(&job.class_binding_id).map_err(rule)?;
+        // The per-claim reward gate's court-scope condition (`crate::court_scope`; v1/v2: past the court scope and the OPV fence).
+        self.class_court_scope_v1(&job.class_binding_id).map_err(rule)?;
         if let Some(f) = binding_fault_v1(job, claim, evidence, class.program.token_bound) {
             return Err(rule(format!("binding fault {f:?}")));
         }
@@ -2137,6 +2154,17 @@ impl KernelLedgerV1 {
         // out), no proof can change anything: the filing is REFUSED before any court runs, and no fee is charged — a TRUE proof never
         // costs its filer the dismissal fee, and a refusal is free for everyone (it is dropped, as an unknown claim is).
         self.proof_open(row).map_err(rule)?;
+        // ADR-0177 D2 (`crate::court_scope`): within the accuser's dismissed filings and units of this claim — refused free, before any
+        // court runs (per accuser: no other bond can spend an honest prosecutor's allowance).
+        let unit = match (&row.body, proof) {
+            (ClaimBodyV1::Segmented { .. }, ProsecutionV1::Segmented(bytes)) if self.court_scope_in_force() => {
+                let prompt_len = self.job_view_v1(&row.job_id).map_or(0, |j| j.prompt_len);
+                crate::element::SegFaultV1::from_bytes(bytes).ok().and_then(|f| f.position_v1(prompt_len)).map(|p| (0u8, p))
+            }
+            _ => None,
+        };
+        self.court_scope_filing_allows_v1(accuser, claim, unit).map_err(|why| rule(&why))?;
+        let row = self.claims.get(claim).expect("checked");
         let bounds = self.bounds_of(&row.class_binding_id);
         let cheap = bounds.and_then(|b| oversized(proof, &b));
         let verdict = match cheap {
@@ -2154,8 +2182,12 @@ impl KernelLedgerV1 {
                 self.adjudicate(claim, proof)
             }
         };
+        if let Some(unit) = unit {
+            self.court_scope_record_unit_v1(accuser, claim, unit);
+        }
         match verdict {
             Err(why) => {
+                self.court_scope_record_dismissal_v1(accuser, claim);
                 let b = self.bonds.get_mut(accuser).expect("checked");
                 b.collateral -= fee;
                 self.burned += fee;
@@ -2348,16 +2380,6 @@ impl KernelLedgerV1 {
         }
     }
 
-    /// **ADR-0177 D2 — the cumulative-scope hook** (C4 F-C4R4-17). Every demand passes here before it reserves anything: a demand
-    /// whose served values, together with what the claim (and other claims of the class) already made public, would rebuild a
-    /// registered weight tensor must be refused. The predicate is DA16b's central one (`da16/transport-provider-court`); until it
-    /// lands this hook admits every demand, and the kernel PoC `f_c4r4_17_…` stays an ignored FAIL. The predicate must be a pure
-    /// function of the ledger's rows (served positions, open demands, the class's program) so every node refuses the same demand.
-    fn cumulative_scope_allows_v1(&self, claim: &Digest, stage: u8, position: u32) -> Result<(), &'static str> {
-        let _ = (claim, stage, position);
-        Ok(())
-    }
-
     /// Return every demand bond of `d` (the demand is over).
     pub(crate) fn refund(&mut self, claim: &Digest, d: &DemandRowV1, out: &mut Vec<LedgerEventV1>) {
         for (bond, amount) in &d.demanders {
@@ -2423,7 +2445,8 @@ impl KernelLedgerV1 {
         if self.served.contains_key(&k) {
             return Err(rule("already served: it is public"));
         }
-        self.cumulative_scope_allows_v1(claim, stage, position).map_err(rule)?;
+        // ADR-0177 D2 (`crate::court_scope`): the requester's units of the claim, and a v1/v2 position's model clear budget.
+        self.cumulative_scope_allows_v1(demander, claim, stage, position).map_err(|why| rule(&why))?;
         let need = self.policy.demand_bond;
         let Some(b) = self.bonds.get(demander) else { return Err(rule("the demander is not a registered bond")) };
         if b.exit_requested.is_some() || b.free() < need {
@@ -2442,9 +2465,11 @@ impl KernelLedgerV1 {
                 self.bonds.get_mut(demander).expect("checked").reserved += need;
                 settle(out, *demander, need, SettlementKindV1::ReserveDemand, Some(*claim));
             }
+            self.court_scope_record_unit_v1(demander, claim, (stage, position));
             out.push(LedgerEventV1::DemandJoined { claim: *claim, stage, position });
             return Ok(());
         }
+        self.court_scope_record_unit_v1(demander, claim, (stage, position));
         // One session per stage position: the count is bounded by the claim's positions, and no demand can crowd out another.
         self.bonds.get_mut(demander).expect("checked").reserved += need;
         let deadline = daa + self.policy.court_deadline_daa;

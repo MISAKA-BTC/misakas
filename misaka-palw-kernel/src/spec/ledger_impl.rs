@@ -104,6 +104,8 @@ impl KernelLedgerV1 {
                     network_domain: self.policy.network_domain,
                     ruleset_digest: self.policy.ruleset_digest,
                     bounds: base,
+                    // A memory rule is a K2-TIR-v1/v2 program (`public_prosecution_complete_v1` above): no segmented report.
+                    court_scope: None,
                 };
                 (SpecClassKindV1::Memory { rule: Box::new(rule), root: m.clone(), writers }, bounds)
             }

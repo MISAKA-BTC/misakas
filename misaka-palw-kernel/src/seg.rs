@@ -452,15 +452,14 @@ impl TiledJobRowV1 {
     }
 }
 
-/// **A producer's segmented commitments of its trace**: the v3 commitment of every committed value of every position.
-pub fn seg_commitments_of_trace_v1(trace: &crate::trace::TraceV1) -> SegmentedCommitmentsV1 {
-    SegmentedCommitmentsV1::new(
-        trace
-            .values
-            .iter()
-            .map(|p| p.iter().map(|o| o.iter().map(crate::merkle3::tensor_commitment_v3).collect()).collect())
-            .collect(),
-    )
+/// **A producer's segmented commitments of its trace**: the commitment of every committed value of every position under the program's
+/// value modes (`crate::seg_scope`: a hiding value's flat hiding commitment, every other one's v3).
+pub fn seg_commitments_of_trace_v1(
+    program: &misaka_palw_tir::program::TirProgramV1,
+    trace: &crate::trace::TraceV1,
+) -> SegmentedCommitmentsV1 {
+    let modes = crate::seg_scope::seg_value_modes_v1(program);
+    SegmentedCommitmentsV1::new(trace.values.iter().map(|p| crate::seg_scope::seg_position_commitments_v1(&modes, p)).collect())
 }
 
 /// **The evidence object a producer commits** for a segmented claim of `prompt_len` prompt ids (root `prompt_root`) and the fed ids.

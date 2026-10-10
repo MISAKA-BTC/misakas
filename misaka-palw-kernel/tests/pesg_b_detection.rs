@@ -488,8 +488,8 @@ struct SegServed {
 }
 
 impl SegServed {
-    fn of(values: Vec<Vec<Vec<Tensor>>>) -> Self {
-        let c = seg_commitments_of_trace_v1(&TraceV1 { values: values.clone(), inputs: Vec::new() });
+    fn of(program: &misaka_palw_tir::program::TirProgramV1, values: Vec<Vec<Vec<Tensor>>>) -> Self {
+        let c = seg_commitments_of_trace_v1(program, &TraceV1 { values: values.clone(), inputs: Vec::new() });
         SegServed { values, c }
     }
 }
@@ -580,7 +580,7 @@ fn pesg_b_v4_route_a_samples_and_route_b_reexecution() {
     let w = SegWorld::new();
     let (tokens, generated, honest) = w.claim(None, false).unwrap();
     let art = |j: u16, l: Option<u16>| w.params.tensors.get(&(j, l)).cloned();
-    let own_roots = seg_commitments_of_trace_v1(&honest).position_roots;
+    let own_roots = seg_commitments_of_trace_v1(&w.program, &honest).position_roots;
     let mut stats: BTreeMap<(&'static str, &'static str), (u32, u32)> = BTreeMap::new();
     let mut worst = 0u32;
     for pl in placements(&w.program, &honest) {
@@ -589,7 +589,7 @@ fn pesg_b_v4_route_a_samples_and_route_b_reexecution() {
             if t == honest && gen_ids == generated {
                 continue;
             }
-            let served = SegServed::of(t.values.clone());
+            let served = SegServed::of(&w.program, t.values.clone());
             let roots = served.c.segment_roots();
             let ctx = w.ctx(&roots, &gen_ids);
             let mut d = 0u32;
@@ -601,7 +601,8 @@ fn pesg_b_v4_route_a_samples_and_route_b_reexecution() {
             assert!(d != 0, "{pl:?} consistent={consistent}: route A over every position misses");
             // Route B: the verifier's own re-execution of the claim's fed ids.
             let own_trace = trace_v1(&w.program, &w.params, &toks).unwrap();
-            let own = if toks == tokens { own_roots.clone() } else { seg_commitments_of_trace_v1(&own_trace).position_roots };
+            let own =
+                if toks == tokens { own_roots.clone() } else { seg_commitments_of_trace_v1(&w.program, &own_trace).position_roots };
             let post = w.program.occurrences().len() - 1;
             let logits = |p: u32| own_trace.values.get(p as usize).map(|v| v[post][w.program.logits as usize].clone());
             let mismatch = first_decode_mismatch_v1(&ctx, &logits);
@@ -624,7 +625,7 @@ fn pesg_b_v4_route_a_samples_and_route_b_reexecution() {
     // The last delivered token: a decode lie over honest values is seen only where it is selected (the last position).
     let mut cheat = generated.clone();
     cheat[1] = (cheat[1] + 1) % w.program.token_bound;
-    let served = SegServed::of(honest.values.clone());
+    let served = SegServed::of(&w.program, honest.values.clone());
     let roots = served.c.segment_roots();
     let ctx = w.ctx(&roots, &cheat);
     let d: Vec<u32> = (0..P).filter(|q| seg_found(&ctx, check_positions_v1(&ctx, &served, &art, &tokens, &[*q]))).collect();

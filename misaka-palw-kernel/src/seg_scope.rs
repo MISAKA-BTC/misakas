@@ -1,24 +1,24 @@
-//! **K2-TIR-v4/v5 under DA16b's court scope** (`crate::scope`; `docs/design/palw/k2-real-scale.md` §4.2) — option (c), the Lead's
-//! 2026-10-10 decision: a SMALL model-dependent value is never served; its court is a whole-value recompute.
+//! **K2-TIR-v4/v5 under DA16b's court scope** (`crate::scope`; `docs/design/palw/k2-real-scale.md` §4.2) — every model-dependent value
+//! (DA16b Level 2, which contains Level 1's model bytes) is owed only as commitment structure, never in the clear. A committed value has
+//! one of three modes ([`SegValueModeV1`]), a pure function of the program, so the ledger's DA layout, the gate's price, the courts and
+//! every verifier agree on it without any declaration:
 //!
-//! DA16b's clear budget is 0 for every LM (an elementwise model relation is revealed by one position), so every model-dependent value
-//! (`crate::scope::court_model_dependent_mask_v1`, Level 2, which contains Level 1's model bytes) is owed only as commitment structure.
-//! A value is **withheld** when it is model-dependent AND its whole-value court fits [`SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1`]:
+//! * **Clear** — model-independent: served in the clear, judged by the element court (v3 commitment).
+//! * **Withheld** — option (c), the Lead's 2026-10-10 decision: model-dependent AND its whole-value court fits
+//!   [`SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1`] / [`SEG_WHOLE_VALUE_COURT_MAX_WORK_V1`]. Served as its node opening alone
+//!   (`ChunkBodyV1::Withheld`); the court (`SegFaultV1::WholeValue`) recomputes EVERY element from the filed operands and compares the
+//!   v3 commitment.
+//! * **Hiding** — option (a) (lane G14-S, 2026-10-11): model-dependent and NOT withheld (every 9B / BGE activation). Committed under
+//!   flat 64-element hiding tiles ([`crate::hide`]), served as its leaf hashes (`ChunkBodyV1::Hidden`), judged by the hiding-leaf court
+//!   (`SegFaultV1::HidingLeaf`): ONE tile recomputed from operands the filer supplies from its own re-execution, its hash compared with
+//!   the producer's authenticated leaf hash. A hiding court whose price exceeds [`SEG_HIDING_COURT_MAX_BYTES_V1`] /
+//!   [`SEG_HIDING_COURT_MAX_WORK_V1`] at the class's context is **unbounded**: the class's court scope is incomplete.
 //!
-//! * a demanded position serves a withheld value as its node opening alone (`ChunkBodyV1::Withheld`): its commitment and path, never an
-//!   element, a leaf or a leaf hash;
-//! * a verifier holds the model (ADR-0177 D7) and re-executes: its own value of a withheld node authenticates iff its commitment is the
-//!   producer's, and a different commitment is a fault;
-//! * the court (`SegFaultV1::WholeValue`) recomputes EVERY element of the value from the filed operands — the filer's own earlier values
-//!   (authenticated whole against their commitments, or by leaves), param leaves from the filer's own copy against the registered v3
-//!   commitments — and convicts iff the recomputed commitment is not the committed one, or the semantics refuse an element.
+//! [`seg_scope_report_v2`] is the GATE (not a report): a class whose `court_scope_complete()` is false takes no claim
+//! (`KernelLedgerV1::commit_segmented_claim` refuses it by name, `COURT_SCOPE_INCOMPLETE`), so it is never reward-bearing.
 //!
-//! A model-dependent value whose whole-value court does NOT fit stays served in the clear: DA16b's option (a), flat 64-element hiding
-//! tiles, is its planned remedy and is not built. [`seg_scope_report_v1`] reports this gap. The report is not yet connected to the
-//! ledger's reward gate; a false report is a remaining implementation gap, not an enforced refusal of rewards.
-//!
-//! The decision is a pure function of the program (its shapes at the worst `H`), so the ledger's DA layout, the gate's price and every
-//! verifier agree on it without any declaration.
+//! A verifier holds the model (ADR-0177 D7) and re-executes: its own value of a withheld or hiding node authenticates iff its commitment
+//! is the producer's, and the first one whose commitment differs is the fault.
 
 use misaka_palw_tir::program::{INPUT_TOKEN, Ref, TirProgramV1};
 use misaka_palw_tir::{DType, Prim};
@@ -32,6 +32,13 @@ use crate::seg::PROMPT_TILE_IDS_V1;
 pub const SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1: u64 = 1 << 20;
 /// A commitment-only response must also have an executable court under the v4/v5 descriptor's work ceiling.
 pub const SEG_WHOLE_VALUE_COURT_MAX_WORK_V1: u64 = 1 << 36;
+/// **The most a hiding-leaf court may file** (option (a)), in bytes: one filing in ONE kernel-route carrier (1,583,616 B) with the
+/// segmented filing header (4,096 B) and the object's envelope (≤ 6,656 B) — a court past it would need chunked filing carriage
+/// (tag 113, lane G14-B), which no hiding court relies on today. A hiding value whose court is larger is **unbounded**: its class's
+/// court scope is incomplete (never reward-bearing).
+pub const SEG_HIDING_COURT_MAX_BYTES_V1: u64 = 1_572_864;
+/// The hiding-leaf court's work ceiling (the whole-value court's).
+pub const SEG_HIDING_COURT_MAX_WORK_V1: u64 = SEG_WHOLE_VALUE_COURT_MAX_WORK_V1;
 
 /// How many of the program's params are weights: all of them, but a K2-TIR-v5 encoder's trailing job inputs (ids, count).
 pub fn seg_model_params_v1(program: &TirProgramV1) -> usize {
@@ -50,6 +57,13 @@ fn all_leaves_bytes(shape: &[usize], dtype: DType) -> u64 {
     l.len * dtype.width() as u64 + leaves * ((crate::merkle::depth(leaves) + 1) * 64 + 8 * shape.len() as u64 + 32)
 }
 
+/// The bytes of EVERY hiding tile of a tensor, each at the hiding tree's full depth: what opening all of a hiding operand files.
+pub fn all_hiding_tiles_bytes_v1(shape: &[usize], dtype: DType) -> u64 {
+    let len = LayoutV3::of(shape).len;
+    let tiles = crate::hide::hide_tiles_v1(len);
+    4 + len * dtype.width() as u64 + tiles * (8 + 4 + 4 + 64 * crate::merkle::depth(tiles.max(1)))
+}
+
 /// **The price of a whole-value court of `(occurrence s, node n)`** (`(bytes, work)`): the filing's fixed fields and the output's node
 /// opening (no leaf: its elements are recomputed), and per operand an upper bound of what a filer opens — a committed operand whole or
 /// by every leaf (whichever is larger), a param by every leaf, a token or job ids by their tile. A filer opens only what the elements
@@ -61,13 +75,20 @@ pub fn whole_value_court_cost_v1(program: &TirProgramV1, s: usize, n: usize, nod
     let h = crate::plan::worst_h(program, block);
     let encoder = crate::seg_encoder::encoder_binding_v1(program).ok();
     let node_bytes = crate::element::node_opening_bytes_v1(node_count);
-    let shell = 5u64;
+    // A `WholeOperandV1` shell: its node `Option` tag, the leaf and hidden vectors' lengths and its `whole` tag.
+    let shell = 10u64;
     let mut bytes = 64 + node_bytes;
+    // A committed operand's source may be clear (v3 leaves), withheld (whole) or hiding (hiding tiles): the largest of the three, so
+    // the price never depends on which occurrence feeds the operand (and the modes are never priced in a circle). Plus the operand's shell.
     let operand = |shape: Vec<usize>, dtype: DType, committed: bool| {
         if committed {
-            node_bytes + whole_tensor_bytes_v1(&shape, dtype).max(all_leaves_bytes(&shape, dtype)) + 1
+            node_bytes
+                + whole_tensor_bytes_v1(&shape, dtype)
+                    .max(all_leaves_bytes(&shape, dtype))
+                    .max(all_hiding_tiles_bytes_v1(&shape, dtype))
+                + shell
         } else {
-            8 + all_leaves_bytes(&shape, dtype)
+            shell + 2 + all_leaves_bytes(&shape, dtype)
         }
     };
     for r in &node.inputs {
@@ -135,33 +156,158 @@ pub fn seg_withheld_mask_v1(program: &TirProgramV1) -> Vec<Vec<bool>> {
         .collect()
 }
 
-/// What DA16b's court scope makes of a K2-TIR-v4/v5 program.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SegScopeReportV1 {
-    /// Model-dependent values (Level 2) a position commits.
-    pub masked: u64,
-    /// Of those, withheld (option (c): never served; whole-value courts).
-    pub withheld: u64,
-    /// Of those, still served in the clear: they need option (a) (flat 64-element hiding tiles), which is not built.
-    pub clear_masked: u64,
+/// **How a committed value is owed** (see the module note): a pure function of the program.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SegValueModeV1 {
+    /// Model-independent: served in the clear, v3 commitment.
+    Clear,
+    /// Option (c): model-dependent with a bounded whole-value court; never served, v3 commitment.
+    Withheld,
+    /// Option (a): model-dependent, not withheld; flat 64-element hiding tiles, owed as leaf hashes.
+    Hiding,
 }
 
-impl SegScopeReportV1 {
-    /// Whether no model-dependent value is served in the clear. This report does not itself enforce reward eligibility.
-    pub fn court_scope_complete(&self) -> bool {
-        self.clear_masked == 0
+/// **`[occurrence][node]`: every committed value's mode.**
+pub fn seg_value_modes_v1(program: &TirProgramV1) -> Vec<Vec<SegValueModeV1>> {
+    let masked = crate::scope::court_model_dependent_mask_v1(program, seg_model_params_v1(program));
+    let withheld = seg_withheld_mask_v1(program);
+    masked
+        .iter()
+        .zip(&withheld)
+        .map(|(m, w)| {
+            m.iter()
+                .zip(w)
+                .map(|(m, w)| match (m, w) {
+                    (false, _) => SegValueModeV1::Clear,
+                    (true, true) => SegValueModeV1::Withheld,
+                    (true, false) => SegValueModeV1::Hiding,
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// **`[occurrence][node]`: the hiding values** (option (a)).
+pub fn seg_hiding_mask_v1(program: &TirProgramV1) -> Vec<Vec<bool>> {
+    seg_value_modes_v1(program).into_iter().map(|o| o.into_iter().map(|m| m == SegValueModeV1::Hiding).collect()).collect()
+}
+
+/// **The commitment of one committed value under its mode**: a hiding value's is `C_hide` ([`crate::hide`]), every other one's v3.
+pub fn seg_value_commitment_v1(mode: SegValueModeV1, t: &misaka_palw_tir::Tensor) -> crate::hash::Digest {
+    match mode {
+        SegValueModeV1::Hiding => crate::hide::tensor_commitment_hide_v1(t),
+        SegValueModeV1::Clear | SegValueModeV1::Withheld => crate::merkle3::tensor_commitment_v3(t),
     }
 }
 
-/// **The court-scope report of a program** (see [`SegScopeReportV1`]).
+/// **Every node commitment of one position's values** under `modes` (`[occurrence][node]`; a value past `modes` is committed v3).
+pub fn seg_position_commitments_v1(
+    modes: &[Vec<SegValueModeV1>],
+    values: &[Vec<misaka_palw_tir::Tensor>],
+) -> Vec<Vec<crate::hash::Digest>> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(s, occ)| {
+            occ.iter()
+                .enumerate()
+                .map(|(n, t)| {
+                    let mode = modes.get(s).and_then(|o| o.get(n)).copied().unwrap_or(SegValueModeV1::Clear);
+                    seg_value_commitment_v1(mode, t)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// What DA16b's court scope makes of a K2-TIR-v4/v5 class — **the gate**: [`Self::court_scope_complete`] decides whether the class may
+/// take (reward-bearing) claims.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SegScopeReportV1 {
+    /// Model-dependent values (Level 2) a position commits, counted per `(occurrence, node)`.
+    pub masked: u64,
+    /// Of those, withheld (option (c): never served; whole-value courts).
+    pub withheld: u64,
+    /// Of those, hiding (option (a): leaf hashes served; hiding-leaf courts).
+    pub hiding: u64,
+    /// Of those, served in the clear. Always 0 since option (a): kept so a report can never claim completeness while one is.
+    pub clear_masked: u64,
+    /// Hiding values whose hiding-leaf court exceeds [`SEG_HIDING_COURT_MAX_BYTES_V1`] or [`SEG_HIDING_COURT_MAX_WORK_V1`] at the
+    /// class's context: a lie in one cannot be convicted inside one carrier.
+    pub unbounded: u64,
+    /// The first unbounded value `(occurrence, node, bytes, work)`, for the refusal's name.
+    pub first_unbounded: Option<(u16, u16, u64, u64)>,
+    /// Masked values shorter than one full hiding tile at `H = 1`: their commitment (one leaf) hashes fewer than 64 elements. A
+    /// residual, not a gap: the commitment is published whatever the court is.
+    pub short: u64,
+}
+
+impl SegScopeReportV1 {
+    /// **The gate**: no model-dependent value is ever served in the clear, and every one has a bounded court (whole-value or
+    /// hiding-leaf). A class for which this is false takes no claim (`COURT_SCOPE_INCOMPLETE`).
+    pub fn court_scope_complete(&self) -> bool {
+        self.clear_masked == 0 && self.unbounded == 0
+    }
+
+    /// The refusal's text when incomplete.
+    pub fn refusal(&self) -> Option<String> {
+        if self.court_scope_complete() {
+            return None;
+        }
+        Some(match self.first_unbounded {
+            Some((s, n, b, w)) => format!(
+                "COURT_SCOPE_INCOMPLETE: {} of {} model-dependent values have no bounded court (first: occurrence {s} node {n}, a \
+                 hiding-leaf court of {b} B / work {w} past {SEG_HIDING_COURT_MAX_BYTES_V1} B / {SEG_HIDING_COURT_MAX_WORK_V1}); the \
+                 class is not reward-bearing",
+                self.unbounded, self.masked
+            ),
+            None => format!("COURT_SCOPE_INCOMPLETE: {} model-dependent values are served in the clear", self.clear_masked),
+        })
+    }
+}
+
+/// **The court-scope report of a program at its own worst history** (see [`seg_scope_report_v2`]).
 pub fn seg_scope_report_v1(program: &TirProgramV1) -> SegScopeReportV1 {
-    let masked = crate::scope::court_model_dependent_mask_v1(program, seg_model_params_v1(program));
-    let withheld = seg_withheld_mask_v1(program);
+    seg_scope_report_v2(program, u32::MAX)
+}
+
+/// **The court-scope gate of a class**: its program's value modes, and every hiding value's court priced at the class's context
+/// (`min(window, max_positions)`, the history a claim of the class can reach), once per `(block, node)`.
+pub fn seg_scope_report_v2(program: &TirProgramV1, max_positions: u32) -> SegScopeReportV1 {
+    let modes = seg_value_modes_v1(program);
+    let encoder = crate::seg_encoder::encoder_binding_v1(program).ok();
+    let node_count: u64 = modes.iter().map(|o| o.len() as u64).sum();
+    let occurrences = program.occurrences();
+    type PriceKey = (u8, u16, Vec<Option<SegValueModeV1>>);
+    let mut priced: std::collections::BTreeMap<PriceKey, (u64, u64)> = Default::default();
     let mut r = SegScopeReportV1::default();
-    for (m, w) in masked.iter().flatten().zip(withheld.iter().flatten()) {
-        r.masked += *m as u64;
-        r.withheld += *w as u64;
-        r.clear_masked += (*m && !*w) as u64;
+    for (s, occ) in modes.iter().enumerate() {
+        let block = occurrences[s].0;
+        for (n, mode) in occ.iter().enumerate() {
+            if *mode == SegValueModeV1::Clear {
+                continue;
+            }
+            r.masked += 1;
+            let node = &program.blocks[block as usize].nodes[n];
+            if LayoutV3::of(&node.out.resolve(1)).len < crate::hide::HIDE_TILE_V1 {
+                r.short += 1;
+            }
+            match mode {
+                SegValueModeV1::Withheld => r.withheld += 1,
+                SegValueModeV1::Hiding => {
+                    r.hiding += 1;
+                    let key = (block, n as u16, crate::element::operand_source_modes_v1(program, &modes, s, n));
+                    let (bytes, work) = *priced.entry(key).or_insert_with(|| {
+                        crate::element::hiding_leaf_court_cost_v1(program, s, n, node_count, max_positions, encoder.as_ref(), &modes)
+                    });
+                    if bytes > SEG_HIDING_COURT_MAX_BYTES_V1 || work > SEG_HIDING_COURT_MAX_WORK_V1 {
+                        r.unbounded += 1;
+                        r.first_unbounded.get_or_insert((s as u16, n as u16, bytes, work));
+                    }
+                }
+                SegValueModeV1::Clear => {}
+            }
+        }
     }
     r
 }

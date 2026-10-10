@@ -13,9 +13,11 @@ use misaka_palw_tir::program::TirProgramV1;
 use misaka_palw_tir::{DType, Tensor};
 
 use crate::hash::Digest;
+use crate::hide::{HidingHashRangeV1, HidingTreeV1, hide_tiles_v1};
 use crate::merkle::AXIS_ROW;
 use crate::merkle3::{LayoutV3, RowRangeV3, TILE_V3, TreesV3, tensor_commitment_v3};
 use crate::seg::{NodeOpeningV1, SEG_LEN_V4, position_in_segment, position_node_opening_v1};
+use crate::seg_scope::{SegValueModeV1, seg_position_commitments_v1, seg_value_modes_v1};
 use crate::trace::WiringV1;
 
 /// The most bytes one served part may hold (its borsh encoding).
@@ -45,14 +47,22 @@ pub enum ChunkSpecV1 {
         occurrence: u16,
         node: u16,
     },
+    /// A hiding value (DA16b option (a), `crate::hide`): a contiguous range of its leaf hashes with its range proof, never an element.
+    Hidden {
+        occurrence: u16,
+        node: u16,
+        first_leaf: u64,
+        leaves: u64,
+    },
 }
 
 impl ChunkSpecV1 {
     pub fn at(&self) -> (u16, u16) {
         match *self {
-            Self::Whole { occurrence, node } | Self::Rows { occurrence, node, .. } | Self::Withheld { occurrence, node } => {
-                (occurrence, node)
-            }
+            Self::Whole { occurrence, node }
+            | Self::Rows { occurrence, node, .. }
+            | Self::Withheld { occurrence, node }
+            | Self::Hidden { occurrence, node, .. } => (occurrence, node),
         }
     }
 }
@@ -64,15 +74,15 @@ fn chunk_overhead(node_count: u64, row_leaves: u64, rank: usize) -> u64 {
     16 + 64 + 4 + 64 * depth(node_count) + 4 + 8 * rank as u64 + 1 + 4 + 16 + 4 + 64 * 2 * depth(row_leaves) + 64 + 64
 }
 
-/// The declared values of position `p`: `(occurrence, node, dtype, shape, withheld)` in canonical order.
-fn declared_values(w: &WiringV1<'_>, p: u32) -> Vec<(u16, u16, DType, Vec<usize>, bool)> {
-    let withheld = crate::seg_scope::seg_withheld_mask_v1(w.program);
+/// The declared values of position `p`: `(occurrence, node, dtype, shape, mode)` in canonical order.
+fn declared_values(w: &WiringV1<'_>, p: u32) -> Vec<(u16, u16, DType, Vec<usize>, SegValueModeV1)> {
+    let modes = seg_value_modes_v1(w.program);
     let mut out = Vec::new();
     for s in 0..w.occurrences.len() as u16 {
         let b = w.occurrences[s as usize].0 as usize;
         for n in 0..w.program.blocks[b].nodes.len() as u16 {
             let node = w.node(s, n);
-            out.push((s, n, node.out.dtype, node.out.resolve(w.h(s, p)), withheld[s as usize][n as usize]));
+            out.push((s, n, node.out.dtype, node.out.resolve(w.h(s, p)), modes[s as usize][n as usize]));
         }
     }
     out
@@ -123,14 +133,38 @@ fn row_leaves_fitting(l: &LayoutV3, width: u64, from: u64, total: u64, cap: u64)
 
 /// **The deterministic greedy layout of a position's values into parts**: a value that fits the current part joins it, one that fits an
 /// empty part starts one, and a larger one is cut into contiguous row-leaf ranges, each as long as the part it lands in allows.
-fn layout_parts(values: &[(u16, u16, DType, Vec<usize>, bool)]) -> Result<Vec<Vec<ChunkSpecV1>>, String> {
+fn layout_parts(values: &[(u16, u16, DType, Vec<usize>, SegValueModeV1)]) -> Result<Vec<Vec<ChunkSpecV1>>, String> {
     let node_count = values.len() as u64;
     let budget = SEG_PART_BYTES_V4 - PART_HEADER_BOUND_V4;
     let mut parts: Vec<Vec<ChunkSpecV1>> = vec![Vec::new()];
     let mut room = budget;
-    for (s, n, dtype, shape, withheld) in values {
+    for (s, n, dtype, shape, mode) in values {
         let (s, n) = (*s, *n);
-        if *withheld {
+        if *mode == SegValueModeV1::Hiding {
+            // Leaf-hash DA: 64 bytes a tile, in contiguous ranges with their range proofs, as many as the current part allows.
+            let total = hide_tiles_v1(LayoutV3::of(shape).len);
+            let oh = chunk_overhead(node_count, total.max(1), 0);
+            if total == 0 {
+                return Err(format!("({s}, {n}): an empty hiding value"));
+            }
+            let mut i = 0u64;
+            while i < total {
+                let k = (room.saturating_sub(oh) / 64).min(total - i);
+                if k == 0 {
+                    if room == budget {
+                        return Err(format!("({s}, {n}): one leaf hash and its overhead exceed a part"));
+                    }
+                    parts.push(Vec::new());
+                    room = budget;
+                    continue;
+                }
+                parts.last_mut().expect("a part").push(ChunkSpecV1::Hidden { occurrence: s, node: n, first_leaf: i, leaves: k });
+                room -= oh + 64 * k;
+                i += k;
+            }
+            continue;
+        }
+        if *mode == SegValueModeV1::Withheld {
             let oh = chunk_overhead(node_count, 1, 0);
             if oh > room {
                 parts.push(Vec::new());
@@ -190,6 +224,8 @@ pub enum ChunkBodyV1 {
     Rows(RowRangeV3) = 1,
     /// A withheld value: nothing but the chunk's node opening (`crate::seg_scope`).
     Withheld = 2,
+    /// A hiding value's leaf hashes (a contiguous range, with its range proof): never an element (`crate::hide`).
+    Hidden(HidingHashRangeV1) = 3,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -220,7 +256,7 @@ pub fn position_part_v1(
 ) -> Result<SegPartResponseV1, String> {
     let parts = position_parts_v1(program, p)?;
     let specs = parts.get(part as usize).ok_or("no such part")?;
-    let commitments: Vec<Vec<Digest>> = values.iter().map(|occ| occ.iter().map(tensor_commitment_v3).collect()).collect();
+    let commitments: Vec<Vec<Digest>> = seg_position_commitments_v1(&seg_value_modes_v1(program), values);
     let mut chunks = Vec::with_capacity(specs.len());
     let mut position_root = [0u8; 64];
     for spec in specs {
@@ -235,6 +271,9 @@ pub fn position_part_v1(
                 ChunkBodyV1::Rows(RowRangeV3::of(t, &TreesV3::of(t), first_leaf, leaves).ok_or("a row range outside the value")?)
             }
             ChunkSpecV1::Withheld { .. } => ChunkBodyV1::Withheld,
+            ChunkSpecV1::Hidden { first_leaf, leaves, .. } => ChunkBodyV1::Hidden(
+                HidingHashRangeV1::of(&HidingTreeV1::of(t), first_leaf, leaves).ok_or("a leaf-hash range outside the value")?,
+            ),
         };
         chunks.push(ChunkV1 { occurrence: s, node: n, commitment: opening.commitment, node_siblings: opening.node_siblings, body });
     }
@@ -318,6 +357,17 @@ pub fn classify_part_v1(
             }
             // A withheld value: its authenticated opening is all it owes.
             (ChunkSpecV1::Withheld { .. }, ChunkBodyV1::Withheld) => {}
+            // A hiding value: the range of its leaf hashes the layout names, proving the committed value of the declared type.
+            (ChunkSpecV1::Hidden { first_leaf, leaves, .. }, ChunkBodyV1::Hidden(range)) => {
+                if (range.first, range.leaves.len() as u64) != (*first_leaf, *leaves) {
+                    return Err("malformed");
+                }
+                match range.recomputed_commitment(dtype, &shape) {
+                    Some(c) if c == chunk.commitment => {}
+                    Some(_) => return Err("wrong_root"),
+                    None => return Err("fake_opening"),
+                }
+            }
             _ => return Err("malformed"),
         }
     }
@@ -325,9 +375,12 @@ pub fn classify_part_v1(
     Ok(r.part)
 }
 
-/// A position assembled from its served parts: every value (a withheld one as zeros of its declared shape — the verifier supplies its
-/// own), every node commitment, and the position root's path.
+/// A position assembled from its served parts: every value (a withheld or hiding one as an EMPTY placeholder of shape `[0]` — the
+/// verifier supplies its own), every node commitment, and the position root's path.
 pub type AssembledPositionV1 = (Vec<Vec<Tensor>>, Vec<Digest>, Vec<Vec<Digest>>);
+
+/// The served leaf hashes of every hiding value of a position (`[occurrence][node]`, `None` for a value that is not hiding).
+pub type HiddenLeavesV1 = Vec<Vec<Option<Vec<Digest>>>>;
 
 /// **Every committed value of position `p` from its served parts** (a fresh verifier reading the responses from the blocks): `None`
 /// unless every part is present and authentic. Returns `(values, siblings, commitments)` ([`AssembledPositionV1`]).
@@ -338,6 +391,29 @@ pub fn assemble_position_v1(
     p: u32,
     parts: &[Vec<u8>],
 ) -> Option<AssembledPositionV1> {
+    assemble_position_full_v1(program, segment_roots, positions, p, parts).map(|(a, _)| a)
+}
+
+/// **The served leaf hashes of every hiding value of position `p`** (DA16b option (a)) from its served parts — what a verifier
+/// descends a hiding value's tiles with (`SegMaterialV1::hidden_leaves`). `None` unless every part is present and authentic.
+pub fn assemble_hidden_leaves_v1(
+    program: &TirProgramV1,
+    segment_roots: &[Digest],
+    positions: u32,
+    p: u32,
+    parts: &[Vec<u8>],
+) -> Option<HiddenLeavesV1> {
+    assemble_position_full_v1(program, segment_roots, positions, p, parts).map(|(_, h)| h)
+}
+
+/// Both: the assembled position and the hiding values' served leaf hashes.
+pub fn assemble_position_full_v1(
+    program: &TirProgramV1,
+    segment_roots: &[Digest],
+    positions: u32,
+    p: u32,
+    parts: &[Vec<u8>],
+) -> Option<(AssembledPositionV1, HiddenLeavesV1)> {
     let w = WiringV1::new(program).ok()?;
     let layout = position_parts_v1(program, p).ok()?;
     let mut by_part: Vec<Option<SegPartResponseV1>> = vec![None; layout.len()];
@@ -347,6 +423,7 @@ pub fn assemble_position_v1(
     }
     let mut bytes: Vec<Vec<Option<Vec<u8>>>> =
         w.occurrences.iter().map(|(b, _)| vec![Some(Vec::new()); program.blocks[*b as usize].nodes.len()]).collect();
+    let mut hidden: HiddenLeavesV1 = w.occurrences.iter().map(|(b, _)| vec![None; program.blocks[*b as usize].nodes.len()]).collect();
     let mut commitments: Vec<Vec<Digest>> =
         w.occurrences.iter().map(|(b, _)| vec![[0u8; 64]; program.blocks[*b as usize].nodes.len()]).collect();
     let mut siblings = None;
@@ -364,6 +441,10 @@ pub fn assemble_position_v1(
                     }
                 }
                 ChunkBodyV1::Withheld => *slot = None,
+                ChunkBodyV1::Hidden(range) => {
+                    *slot = None;
+                    hidden[c.occurrence as usize][c.node as usize].get_or_insert_with(Vec::new).extend(range.leaves);
+                }
             }
         }
     }
@@ -375,12 +456,14 @@ pub fn assemble_position_v1(
             let shape = node.out.resolve(w.h(s as u16, p));
             row.push(match b {
                 Some(b) => Tensor::from_le_bytes(node.out.dtype, &shape, &b).ok()?,
-                None => Tensor::zeros(node.out.dtype, &shape),
+                // A withheld or hiding value is never served: an EMPTY placeholder (no element is allocated for it — a 9B window is
+                // 10^8 bytes as decoded tensors; the verifier's own value replaces it once its commitment matches).
+                None => Tensor { dtype: node.out.dtype, shape: vec![0], data: Vec::new() },
             });
         }
         values.push(row);
     }
-    Some((values, siblings.unwrap_or_default(), commitments))
+    Some(((values, siblings.unwrap_or_default(), commitments), hidden))
 }
 
 /// What one position of a segmented claim costs to serve: `(material bytes, parts)`.
@@ -388,8 +471,12 @@ pub fn position_material_v1(program: &TirProgramV1, p: u32) -> Result<(u128, u32
     let w = WiringV1::new(program).map_err(|e| e.to_string())?;
     let bytes: u128 = declared_values(&w, p)
         .iter()
-        .filter(|(.., withheld)| !withheld)
-        .map(|(_, _, d, sh, _)| LayoutV3::of(sh).len as u128 * d.width() as u128)
+        .map(|(_, _, d, sh, mode)| match mode {
+            SegValueModeV1::Clear => LayoutV3::of(sh).len as u128 * d.width() as u128,
+            SegValueModeV1::Withheld => 0,
+            // Leaf-hash DA: 64 bytes a hiding tile.
+            SegValueModeV1::Hiding => hide_tiles_v1(LayoutV3::of(sh).len) as u128 * 64,
+        })
         .sum();
     Ok((bytes, position_parts_v1(program, p)?.len() as u32))
 }
@@ -492,8 +579,8 @@ mod tests {
             (0..40u16).map(|n| (0, n, DType::I32, vec![1 + (n as usize * 7_919) % 9_000, 3 + n as usize * 13])).collect(),
         ];
         for (c, values) in cases.iter().enumerate() {
-            let clear: Vec<(u16, u16, DType, Vec<usize>, bool)> =
-                values.iter().map(|(s, n, d, sh)| (*s, *n, *d, sh.clone(), false)).collect();
+            let clear: Vec<(u16, u16, DType, Vec<usize>, SegValueModeV1)> =
+                values.iter().map(|(s, n, d, sh)| (*s, *n, *d, sh.clone(), SegValueModeV1::Clear)).collect();
             let fast = layout_parts(&clear).unwrap();
             assert_eq!(fast, reference_layout(values), "case {c}");
             assert!(fast.len() >= 1);
