@@ -86,8 +86,12 @@ fn canonical_config(opv: bool) -> (Config, PalwConsensusParamsV2, Premine, Premi
     params.genesis.utxo_commitment = multiset.finalize();
     params.genesis.hash = kaspa_consensus_core::header::Header::from(&params.genesis).hash;
     params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
-    params.palw_panel_free_v1 =
-        if opv { Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), opv_admitted())) } else { None };
+    // OPV admission is DERIVED since OPV-BOOT (E1–E7): the single-program class is named through the processor's cfg(test) seam,
+    // exactly as the parent's OPV world does; the fence's list is a deny-list (empty).
+    if opv {
+        opv_test_eligible(&opv_admitted());
+    }
+    params.palw_panel_free_v1 = if opv { Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new())) } else { None };
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
     params.skip_proof_of_work = true;
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fence; only this harness bypasses it");
