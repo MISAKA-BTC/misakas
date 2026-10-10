@@ -27,6 +27,8 @@
 
 **C2履歴readerの修正:** 以前はDAA差をblock件数へ変換し、途中で打ち切った走査も要求floorまで読んだと記録していた。公開済みunitが`AwaitAnswer`に留まる経路を、再開cursor・開始tipの固定・完了範囲の記録・新しい追及のbackfill・branch変更時の読み直しで修正した。認証済みの利用対象unitだけを重複なくcacheする。node-policyの **11 V-unit PASS**（filer 7、Consensus API adapterのreader 4）がある。これはfresh-node追及のV-node試験ではない。恒久的にpruneされた回答は今回の修正でも取得できず、完了扱いをせず再試行する。現行consensusは既回答unitの再要求も拒否するため、保持・取得・再要求の経路と期限を別途完成させる必要がある。詳細とlogは[修正記録](implementation.md)の履歴pagination節を参照。
 
+**回答済み公開DAの再取得:** 当初のpagination修正だけでは恒久的にpruneされた回答を取得できなかった。追加修正では、休眠tag 156の署名付きsession番号・期限を用いて、Event／Held／LG14-Bの回答済みunitに新しい公開義務を開く。historical回答を消さず、古い署名の再送を拒否する。古いsuffixが欠けても新tipの再公開を読む。上記の「既回答unitの再要求も拒否する」という記述は、この対応unitについては追加修正前の状況である。TIR／pipeline、FP job commitment自体、input bootstrap、全枠飽和とfull-nodeの期限内包含は未達であり、これを全familyのC2/C7/C8達成とは数えない。最終検証は[修正記録](implementation.md)末尾を参照。
+
 ## 初回レビューの判定
 
 **方向は妥当だが、提示されたG14を満たすコード設計としてはまだ十分ではない。**

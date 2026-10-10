@@ -1,0 +1,122 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+warning: unused import: `crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict`
+  --> consensus/core/src/palw_state_v2/tests/mesh_fold_v1.rs:10:5
+   |
+10 | use crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_pipeline_da_fold_v1.rs:472:14
+    |
+472 |         let (mut run, claim_id) = claimed(&binding, false);
+    |              ----^^^
+    |              |
+    |              help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `seed`
+   --> consensus/core/src/palw_improve_state_v1.rs:960:29
+    |
+960 |     pub(crate) fn result_v1(seed: u8) -> PalwEvalResultV1 {
+    |                             ^^^^ help: if this is intentional, prefix it with an underscore: `_seed`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: function `bound_opened` is never used
+    --> consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs:1176:8
+     |
+1176 |     fn bound_opened() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+     |        ^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-consensus-core` (lib test) generated 5 warnings (run `cargo fix --lib -p kaspa-consensus-core --tests` to apply 4 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 33s
+     Running unittests src/lib.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec)
+
+running 31 tests
+test palw_lifecycle_objects_v2::tests::a2u::every_tag_row_is_inside_its_allocation ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kind_list_is_frozen ... ok
+test palw_lifecycle_objects_v2::tests::a2u::a_not_in_force_kind_is_undecodable_in_the_live_builds_words ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_appended_form_has_a_guarded_owner_arm ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_cannot_declare_collateral_it_did_not_lock ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_that_locks_its_collateral_rides ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_kernel_inner_kind_has_exactly_one_row ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_without_a_signature_does_not_ride ... ok
+test palw_lifecycle_objects_v2::tests::a_lifecycle_object_rides_a_transaction_and_arrives_in_acceptance_order ... ok
+test palw_lifecycle_objects_v2::tests::a_malformed_carrier_is_skipped_with_a_reason ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_kind_in_the_enum_has_exactly_one_owner ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_new_kind_table_is_the_owner_function ... ok
+test palw_lifecycle_objects_v2::tests::admission_accepts_exactly_what_the_walk_extracts ... ok
+test palw_lifecycle_objects_v2::tests::an_unsigned_reporter_commitment_may_not_ride ... ok
+test palw_lifecycle_objects_v2::tests::a_class_registration_rides_only_when_it_carries_what_checks_it ... ok
+test palw_lifecycle_objects_v2::tests::an_historical_full_v2_possession_proof_still_rides_and_reaches_the_fold ... ok
+test palw_lifecycle_objects_v2::tests::certification_objects_ride_and_extract_unchanged ... ok
+test palw_lifecycle_objects_v2::tests::naming_the_carrier_by_id_is_a_fixed_point_no_registrant_can_solve ... ok
+test palw_lifecycle_objects_v2::tests::objects_that_must_not_ride_are_skipped_with_their_own_reason ... ok
+test palw_lifecycle_objects_v2::tests::the_band_id_is_what_selects_this_walk ... ok
+test palw_lifecycle_objects_v2::tests::the_seed_testnet_11_carried_at_daa_1945_still_decodes ... ok
+test palw_lifecycle_objects_v2::tests::a2u::below_its_fence_a_new_kind_is_judged_as_the_live_build_judges_undecodable_bytes ... ok
+test palw_lifecycle_objects_v2::tests::the_two_unauthenticated_objects_may_not_ride ... ok
+test palw_lifecycle_objects_v2::tests::consensus_object_discriminants_are_the_ones_the_chain_carries ... ok
+test palw_lifecycle_objects_v2::tests::derived_artifacts_ride_signed_and_shaped_and_extract_unchanged ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_fence_list_is_the_enum ... ok
+test palw_lifecycle_objects_v2::tests::a2u::an_owning_fence_needs_the_audit_fence_declared ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kinds_refused_past_a_fence_are_the_rows ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_int12_wire_type_is_unchanged_or_classified ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... FAILED
+
+failures:
+
+---- palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form stdout ----
+
+thread 'palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form' (2542124) panicked at consensus/core/src/palw_lifecycle_objects_v2.rs:4231:13:
+[a2u-pins] A-2 wire pins differ (A-2 uniformity).
+* PALW_A2_INT12_VARIANTS_WIRE_V1 (pinned 0xd1982421da455cca, now 0xd1982421da455cca): a variant the live build decodes changed its declaration — classify it (an Int12Inner row and a guarded owner arm, or a re-read and its probe), never by re-pinning alone.
+* PALW_A2_NEW_KIND_WIRE_V1: a lane that creates or changes a post-int-12 kind re-pins it here and keeps the change under its row's fence. Current pins:
+[a2u-pins-begin]
+    (104, 0x98d7608e0a24ad99),
+    (105, 0xdaed6c0cfaf81e2f),
+    (106, 0x888f101d106c24bc),
+    (107, 0x0081a402000ddbf4),
+    (108, 0xac8ecc3ff97ec415),
+    (109, 0xcd35f41524be4a4f),
+    (110, 0x7da0346d0633de78),
+    (111, 0x2d490db20d075bfe),
+    (113, 0xca1188bcd2f663d2),
+    (120, 0xcbb24fb8f993e5c6),
+    (130, 0x5774ef35c9a3fdaa),
+    (140, 0xa4ab9f7696775588),
+    (150, 0x5fb8c8b2822f8386),
+    (151, 0x6a81242ebaeba7fd),
+    (152, 0xc48f175fa3456d1e),
+    (153, 0x74bac59d2cf50cd4),
+    (154, 0x047359d4d8ba0a7b),
+    (155, 0x6d9c4e7671a9cac7),
+    (156, 0xd43488cfc9640788),
+    (157, 0x342660230d2d6514),
+    (158, 0x2d33651174652aca),
+    (159, 0x0395636b651f74fa),
+[a2u-pins-end]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form
+
+test result: FAILED. 30 passed; 1 failed; 0 ignored; 0 measured; 3582 filtered out; finished in 0.18s
+
+error: test failed, to rerun pass `-p kaspa-consensus-core --lib`

@@ -5,7 +5,7 @@ question for every reward-bearing plan family: **which G14 conditions are proven
 It does not replace `g14-integration-matrix.md`, `g14-node-e2e-record.md` or the lane records. Those keep their history. For the
 question of G14 completeness, this matrix supersedes their "Real node" columns.
 
-**Latest review refresh:** §2b records the Codex branch through the public-history pager and tag-158 DA-worker follow-ups; it overrides older status descriptions only for the
+**Latest review refresh:** §2b records the Codex branch through numbered public DA reacquisition and the public-history / tag-158 DA-worker follow-ups; it overrides older status descriptions only for the
 specific cases it names. The milestone tables remain evidence history, not proof that every currently allowed profile is complete.
 
 ## 0. The bar
@@ -133,6 +133,8 @@ of G14.
 
 Detailed changes, commands, failures and reruns are in the [audit implementation record](../../audit/g14-review-2026-10-10/implementation.md).
 The **overall G14 result remains FAIL / incomplete**; no activation or new family-wide PASS follows from these repairs.
+
+**Numbered public DA reacquisition follow-up:** the dormant LG14-A tag 156 now requests a fresh public copy of one historical Event/Held/LG14-B unit, signed over its reservation DAA, next session counter and expiry. Historical answered bits remain replay guards; new producer duties, authenticated answers and timeout use the pending reacquisition. Flat coverage is reported without expanding the unit list. The history reader preserves authenticated prefixes and reads new-tip answers despite an unavailable old suffix. These changes address part of the pruned-answer gap named below; they do not establish full C2/C7/C8. Permanently pruned FP job commitments, TIR/pipeline acquisition, input bootstrap, full-node inclusion and saturated reservation slots remain gaps. Final commands and evidence are in the audit implementation record.
 
 | Scope | New evidence / correction | Still open |
 | --- | --- | --- |

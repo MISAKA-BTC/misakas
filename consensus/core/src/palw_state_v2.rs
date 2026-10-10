@@ -8751,6 +8751,8 @@ pub enum PalwConsensusObjectV2 {
     DisputeReservedV1 { reservation: Box<crate::palw_legacy_public_filer_v1::PalwDisputeReservationV1>, signature: Vec<u8> } = 154,
     /// **(tag 155): the reserver ends its own reservation**; its deposit is held until the claim resolves. **Tag 155.**
     DisputeReleasedV1 { claim: Hash64, reserver: PalwBondKeyV2, signature: Vec<u8> } = 155,
+    /// A reserver's nonce-bound request for a fresh public copy of one answered unit, under the public-filer fence.
+    DisputeReacquiredV1 { request: Box<crate::palw_legacy_public_filer_v1::PalwDisputeReacquireV1>, signature: Vec<u8> } = 156,
     // ---- Lane LG14-B (RFC-0014 §4–§5 on the legacy V2 route, user decision GAP-80): tags 157–159, dormant behind
     // `palw_legacy_held_da_v2`; dropped by name below it (A-2). See [`crate::palw_legacy_held_da_v2`]. ----
     /// **(tag 157): a demand of one legacy held unit** — an interior node of a V2 claim's step or checkpoint tree, or a leaf's
@@ -21883,6 +21885,11 @@ impl<'a> TransitionBuilder<'a> {
             .cloned()
             .ok_or_else(|| PalwStateV2Error::CarriageInconsistent(format!("no DA session of {accuser:?} on claim {claim_id}")))?;
         self.write_da_session((claim_id, accuser), None);
+        if let Some(mut dispute) = self.state.legacy_disputes.get(&claim_id).cloned()
+            && dispute.reacquiring.remove(&accuser).is_some()
+        {
+            self.write_legacy_dispute(claim_id, Some(dispute));
+        }
         let mut record = self.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
         if session.accuser_is_seat {
             record.open_seat_sessions = record.open_seat_sessions.saturating_sub(1);
@@ -22126,7 +22133,7 @@ impl<'a> TransitionBuilder<'a> {
     /// session on the claim (exposure returned) and refunds its refuted exposure (a DA default is a
     /// conviction, DA-6).
     fn da_default_v1(&mut self, ctx: &PalwBlockContextV2, claim_id: Hash64, accuser: PalwBondKeyV2) -> Result<(), PalwStateV2Error> {
-        use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_in_run_rows_v1, palw_da_unit_answered_v1};
+        use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_in_run_rows_v1};
         let now = ctx.daa_score;
         let session = self
             .state
@@ -22138,7 +22145,7 @@ impl<'a> TransitionBuilder<'a> {
         let record = self.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
         let in_run = palw_da_in_run_rows_v1(&claim, self.extras.fp_da_pins_active);
         let unanswered: Vec<crate::palw_da_rcore_v1::PalwDaUnitV1> =
-            session.units.iter().filter(|unit| !palw_da_unit_answered_v1(&record, unit, in_run)).copied().collect();
+            session.units.iter().filter(|unit| !self.state.palw_da_unit_available_v1(&claim_id, &record, unit, in_run)).copied().collect();
         if unanswered.is_empty() {
             // Unreachable: a session never opens on an answered named unit (`open_da_session_rcore_v1`,
             // M3 review F3), and the answer that completes a session's units refutes and closes it in
@@ -31019,6 +31026,18 @@ fn open_da_session_rcore_v1(
     named: crate::palw_da_rcore_v1::PalwDaUnitV1,
     binding: Option<&crate::palw_step_leg::PalwStepBindingV2>,
 ) -> Result<(), PalwStateV2Error> {
+    open_da_session_rcore_mode_v1(builder, ctx, claim_id, accuser, named, binding, false)
+}
+
+fn open_da_session_rcore_mode_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    accuser: PalwBondKeyV2,
+    named: crate::palw_da_rcore_v1::PalwDaUnitV1,
+    binding: Option<&crate::palw_step_leg::PalwStepBindingV2>,
+    reacquire: bool,
+) -> Result<(), PalwStateV2Error> {
     use crate::palw_da_rcore_v1::{PalwDaDrawSpaceV1, PalwDaSessionV1, PalwDaUnitV1, palw_da_draw_seed_v1, palw_da_draw_units_v1};
     use crate::palw_held_da_v1::PalwHeldMissingV1;
     if !builder.da_court {
@@ -31033,7 +31052,7 @@ fn open_da_session_rcore_v1(
     // binds only (domain, claim, index, accuser), so without this a third party could REPLAY an
     // answered accusation to burn its accuser's stake and spend its seat's session budget: a refuted
     // session's units are all answered, so this refuses every replay of one.
-    if builder.state.da_claims.get(&claim_id).is_some_and(|record| {
+    if !reacquire && builder.state.da_claims.get(&claim_id).is_some_and(|record| {
         crate::palw_da_rcore_v1::palw_da_unit_answered_v1(
             record,
             &named,
@@ -31143,7 +31162,7 @@ fn open_da_session_rcore_v1(
     };
     let mut units = Vec::with_capacity(1 + drawn.len());
     units.push(named);
-    units.extend(drawn);
+    if !reacquire { units.extend(drawn); }
     // ADR-0152 §4-ter.3 step 6 (the second review's MEDIUM): the challenger of a live held forfeit on
     // this claim pauses it as a seat does, once a record — counted with the seats' sessions (DL-1 and
     // DA-5 read nothing else), after DA-8 admitted it on the budget its standing gives it.
@@ -31695,7 +31714,7 @@ fn da_answer_admitted_v1(
     unit: &crate::palw_da_rcore_v1::PalwDaUnitV1,
     discloser: PalwBondKeyV2,
 ) -> Result<(PalwClaimStateV2, crate::palw_da_rcore_v1::PalwDaClaimV1, u32), PalwStateV2Error> {
-    use crate::palw_da_rcore_v1::{palw_da_in_run_rows_v1, palw_da_unit_answered_v1};
+    use crate::palw_da_rcore_v1::palw_da_in_run_rows_v1;
     if !builder.da_court {
         return Err(PalwStateV2Error::DaCourtDormant);
     }
@@ -31712,7 +31731,7 @@ fn da_answer_admitted_v1(
         return Err(PalwStateV2Error::DaUnitNotDemanded(claim_id));
     }
     let in_run = palw_da_in_run_rows_v1(&claim, builder.extras.fp_da_pins_active);
-    if palw_da_unit_answered_v1(&record, unit, in_run) {
+    if builder.state.palw_da_unit_available_v1(&claim_id, &record, unit, in_run) {
         return Err(PalwStateV2Error::DaUnitAlreadyAnswered(claim_id));
     }
     Ok((claim, record, in_run))
@@ -31730,16 +31749,19 @@ fn da_answer_recorded_v1(
     in_run: u32,
     now: u64,
 ) -> Result<(), PalwStateV2Error> {
-    use crate::palw_da_rcore_v1::palw_da_unit_answered_v1;
     let mut answered = record;
     answered.answered.insert(unit);
     answered.flat_answered |= flat;
     builder.write_da_claim(claim_id, Some(answered.clone()));
+    if let Some(mut dispute) = builder.state.legacy_disputes.get(&claim_id).cloned() {
+        dispute.reacquiring.retain(|_, asked| *asked != unit && !(flat && crate::palw_da_rcore_v1::palw_da_flat_answers_unit_v1(asked, in_run)));
+        builder.write_legacy_dispute(claim_id, Some(dispute));
+    }
     // Every session whose units are now all answered is refuted.
     let refuted: Vec<PalwBondKeyV2> = builder
         .state
         .da_sessions_of(&claim_id)
-        .filter(|(_, session)| session.units.iter().all(|u| palw_da_unit_answered_v1(&answered, u, in_run)))
+        .filter(|(_, session)| session.units.iter().all(|u| builder.state.palw_da_unit_available_v1(&claim_id, &answered, u, in_run)))
         .map(|(accuser, _)| *accuser)
         .collect();
     for accuser in refuted {
@@ -35751,6 +35773,9 @@ fn apply_object(
         // acceptance walk drops them by name first; this is the second lock).
         PalwConsensusObjectV2::DisputeReservedV1 { reservation, signature: _ } => {
             palw_legacy_public_filer_fold_v1::apply_dispute_reserved_v1(builder, ctx, reservation)?;
+        }
+        PalwConsensusObjectV2::DisputeReacquiredV1 { request, signature: _ } => {
+            palw_legacy_public_filer_fold_v1::apply_dispute_reacquired_v1(builder, ctx, request)?;
         }
         PalwConsensusObjectV2::DisputeReleasedV1 { claim, reserver, signature: _ } => {
             palw_legacy_public_filer_fold_v1::apply_dispute_released_v1(builder, ctx, *claim, *reserver)?;

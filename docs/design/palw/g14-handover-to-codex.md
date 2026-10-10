@@ -100,3 +100,9 @@ M\*-49 と default 時の取り分の保留を、新しい休眠 fence `palw_ver
 PESG に従い、PASS / FAIL / UNKNOWN の 3 種類だけを使う。
 fixture の PASS や `cfg(test)` の seam は、production 経路が完成した証拠にしない。
 ADR-0177 に従い、G14 は model を取得できた verifier を前提とする。閉鎖 model の `p = 0` は独立した未解決 gate である。
+
+## Codex追記: 回答済み公開DAの再取得
+
+`codex/g14-prosecution-bounds`の`20c746436`以後、回答済みunitの公開carrierが失われても追及できるよう、休眠LG14-Aへ署名付き予約DAA・次session番号・期限・unitのtag 156を追加した。historical answeredは保持し、古いaccusationと旧番号を再送して担保や枠を消費することを拒否する。Event／Held／LG14-Bのみ対象で、同じunitの認証済み再公開又はDA defaultへ進める。公開viewのFlat回答範囲も反映する。readerは古いsuffixの欠落を完了とせず、新tipの再公開を読む。最終検証結果は[実装修正記録](../../audit/g14-review-2026-10-10/implementation.md)を参照。
+
+これは全G14達成ではない。次はPanelDA inputを持たないverifierのbootstrap、pruneされたFP jobの認証済み再取得、TIR／pipelineへの接続、全familyの正規registrationとfresh-node実service／包含、累積scopeと最大profile・期限・枠飽和を閉じる。有効化は変更していない。

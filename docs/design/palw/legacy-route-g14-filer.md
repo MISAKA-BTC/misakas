@@ -439,6 +439,21 @@ branch. Only authenticated units used by the contiguous localizer enter the dedu
 per pursued claim. Filer **7 V-unit PASS** and accepted-history reader **4 V-unit PASS** cover pagination, repeated DAA, later tips,
 reorgs, read failures/restoration and the cache unit bound. This does not establish full C2 on a freshly started real node.
 
-Permanent pruning remains unresolved: an unavailable historical response is retried explicitly, while current DA admission
-rejects a repeated demand for an already answered unit. Retention/public acquisition or an authenticated re-demand path must
-last through the liability window. The [audit record](../../audit/g14-review-2026-10-10/implementation.md) contains the logs.
+The original pagination repair alone did not retrieve permanently pruned answers: ordinary DA admission rejects an already answered unit. The numbered reacquisition below adds a fresh public disclosure obligation for supported units. Full-node retention/startup and the remaining unit families still require validation. The [audit record](../../audit/g14-review-2026-10-10/implementation.md) contains the logs.
+
+
+## 回答済みunitの再取得（Codex、2026-10-10）
+
+公開carrierがpruneされた時に、`answered`だけを理由に追及を止めないため、LG14-Aへ割当済みの未使用tag 156を`DisputeReacquiredV1`へ使う。既存の休眠`palw_legacy_public_filer_v1` fence内であり、heightの有効化は行わない。
+
+要求はclaim、reserver、予約の受理DAA、次のsession番号、署名付き期限、unitと必要なbindingを持つ。session番号は予約rowの`sessions_opened + 1`に一致し、要求期限はclaim自身のhard deadline以下でなければならない。既存DAのActive/floor、担保・exposure、1 bond/claimの1 open session、予約の34-session予算とretention期限を維持する。再取得は既に回答済みの1 unitだけを要求し、追加のランダムdrawを行わない。
+
+historical `answered`は消さない。従来の番号なしaccusationは再取得の前後も拒否される。open sessionがある間は`DaSessionAlreadyOpen`が先に返ることもあり、session終了後は`DaUnitAlreadyAnswered`となる。新要求もsession番号を受理時に消費するため、回答後に古い署名を再送して別sessionを開けない。未回答の明示的再取得はdispute recordのreserver→unit mapで保持し、通常のdispute writer／delta 200／休眠tail 0xE2へjournalする。回答admission、producer／covering signer duties、session close、defaultは同じfreshness predicateを読む。
+
+producer又は依然責任を負うsignerの再公開は既存tag 55／158を使い、同じclaim root、binding、openingを検証する。新しい署名を必要とせず、第三者が元の正しい署名付き回答を再掲してもよい。そのbytesが再び公開されたこと自体が要求を満たす。異なるunitの回答、又はFlatがcoverしないtileは満たさない。正しい再公開は同unitを待つ全sessionを閉じ、非応答はretention内の通常DA defaultへ進む。算術のCourtFraudとは区別する。
+
+公開viewとop 204のJSONには`flatAnsweredRows`を追加し、Flatによるhistorical回答も個別unitを列挙せず伝える。Flatのcoverageはin-runのtile 0だけであり、隣のtileや範囲外のrowへ広げない。
+
+nodeの共通filerは、必要unitの公開bytesがない場合、30 DAAの履歴再試行後に明示的要求を署名してqueueする。signatureのretryと次の番号の要求は区別する。履歴readerは古いsuffixで失敗しても、それ以前に読めた独立に認証済みの回答を保持する。floorの読了watermarkは進めず、次tickで新しいtipから再開するため、古いcarrierが永久に欠けていても新しい再公開を読める。
+
+現段階の対応unitはEvent、従来Held（prompt tile／state chunk／step range／非fused leaf）、LG14-B frontier／CKW。TIR／pipelineの自動再取得、pruneされたFP job commitmentそのものの再取得、input未取得のbootstrap、全枠飽和、fresh nodeの実service／包含、最大profileと累積scopeの完成は別途必要である。再取得回数も既存予算を消費するため、任意回数のrestartや無期限の取得を保証しない。検証結果は監査記録へ追記する。

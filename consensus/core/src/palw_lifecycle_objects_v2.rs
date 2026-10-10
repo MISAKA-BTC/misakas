@@ -391,7 +391,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // Lane LG14-A (tags 154–155): the dispute reservation and its release ride at every height with NO stateless refusal — the live
         // int-12 build cannot decode them and tolerates their bytes, so refusing any shape here would mark invalid a block it accepts
         // (A-2). The fence, the signature, the bond and the rules are the acceptance layer's and the fold's.
-        PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } => Ok(()),
+        PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } | PalwConsensusObjectV2::DisputeReacquiredV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -1131,7 +1131,7 @@ pub enum PalwLifecycleKindFenceV1 {
     ModelBondAllocationV1 = 5,
     /// `Params::palw_exec_payload_v2` — RFC-0008 v2's work-root declaration (tag 130), only on a `ConsensusV2` network.
     ExecPayloadV2 = 6,
-    /// `Params::palw_legacy_public_filer_v1` — lane LG14-A's dispute reservation and its release (tags 154–155; 156 reserved).
+    /// `Params::palw_legacy_public_filer_v1` — lane LG14-A's dispute reservation and its release (tags 154–156).
     LegacyPublicFilerV1 = 7,
 }
 
@@ -1315,7 +1315,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
-        O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
+        O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } | O::DisputeReacquiredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
     }
 }
 
@@ -1446,6 +1446,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (153, "DaTransferV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
     (154, "DisputeReservedV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
     (155, "DisputeReleasedV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
+    (156, "DisputeReacquiredV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
     (157, "LegacyHeldDemandedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (158, "LegacyHeldAnsweredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (159, "LegacyLeafRecomputedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
@@ -1886,8 +1887,8 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // under this fence) re-pins `PALW_A2_NEW_KIND_WIRE_V1` in the same commit and keeps this row's fence, or adds a row for another.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 150, hi: 153 }, "palw_provider_court_v1", "DA16 provider court", true),
     // LG14-B: the legacy V2 route's descent demand, its answer and the leaf recompute (RFC-0014 §4–§5).
-    // LG14-A: the dispute reservation and its release (RFC-0014 §6–§7); 156 reserved, no kind.
-    a2_row(PalwA2SlotV1::ObjectTags { lo: 154, hi: 155 }, "palw_legacy_public_filer_v1", "LG14-A dispute reservation", true),
+    // LG14-A: reservation, release and nonce-bound public DA reacquisition (RFC-0014 §6–§7).
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 154, hi: 156 }, "palw_legacy_public_filer_v1", "LG14-A dispute reservation", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 159 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
@@ -4145,6 +4146,7 @@ pub(crate) mod tests {
             (153, 0x74bac59d2cf50cd4),
             (154, 0x047359d4d8ba0a7b),
             (155, 0x6d9c4e7671a9cac7),
+            (156, 0xd43488cfc9640788),
             (157, 0x342660230d2d6514),
             (158, 0x2d33651174652aca),
             (159, 0x0395636b651f74fa),

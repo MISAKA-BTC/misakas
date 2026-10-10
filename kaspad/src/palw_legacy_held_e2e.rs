@@ -655,7 +655,7 @@ fn service_filer_drive(
         PalwFilerActionV1, PalwLegacyProbeV1, palw_dispute_reserved_object_v1, palw_fraud_filer_demand_object_v1,
         palw_fraud_filer_reservation_v1,
     };
-    for _ in 0..32 {
+    for _ in 0..128 {
         let claim = case.candidate.claim_id;
         match service_filer_step(w, case).expect("the production controller can judge the own replica") {
             PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve) => {
@@ -703,6 +703,36 @@ fn service_filer_drive(
                     _ => panic!("the production LG14-B path never scans a linear range"),
                 };
                 w.block(vec![answer]).expect("the public answer authenticates");
+            }
+            PalwFraudFilerStepV1::AwaitAnswer(probe) => {
+                let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap();
+                let Some(request) = case.reacquire_after_v1(&view, bond_key(OUTSIDER), probe, w.daa) else {
+                    w.quiet();
+                    continue;
+                };
+                w.block(vec![kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_reacquire_object_v1(
+                    h64(999),
+                    request,
+                    |_| SIG.to_vec(),
+                )])
+                .expect("the nonce-bound public reacquisition lands");
+                let answer = match probe {
+                    PalwLegacyProbeV1::Binding { row, tile } => PalwConsensusObjectV2::MaterialDisclosedV2 {
+                        claim,
+                        unit: probe.unit(),
+                        answer: PalwDaAnswerV1::Event(d.backend.disclose_trace_event(&d.material, row, tile).unwrap()),
+                        discloser: bond_key(PRODUCER),
+                        signature: SIG.to_vec(),
+                    },
+                    PalwLegacyProbeV1::HeldNode { unit } => {
+                        if withhold(unit) {
+                            return Err(unit);
+                        }
+                        producer_answers(d, case.binding.as_ref().unwrap(), claim, unit)
+                    }
+                    _ => panic!("the test reacquires binding/frontier units"),
+                };
+                w.block(vec![answer]).expect("the fresh copy authenticates against the original roots");
             }
             PalwFraudFilerStepV1::Learn(probe) => {
                 let answer = service_public_answer(&w.chain, claim, probe.unit(), d.execution_root).expect("public bytes");
@@ -1172,6 +1202,134 @@ async fn lg14b_public_fp_bootstrap_own_replay_localizes_and_convicts_after_collu
         w.block(vec![terminal]).expect("the production FP terminal convicts");
         assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
         assert!(bonds_collateral(&w.s).0 < before.0);
+        assert_eq!(bonds_collateral(&w.s).1, before.1);
+    }
+}
+
+/// All Panel seats have already voted Valid; every localization answer exists in historical state, but a restarted
+/// verifier holds none of its carrier bytes. The real controller re-acquires them, with nonce/replay guards, and convicts.
+#[tokio::test(flavor = "multi_thread")]
+async fn lg14b_a_restarted_outsider_reacquires_answered_units_without_replaying_old_accusations() {
+    use crate::palw_panel::palw_fraud_filer::PalwFraudFilerStepV1;
+    use kaspa_consensus_core::palw_legacy_public_filer_v1::{PalwLegacyProbeV1, palw_dispute_reacquire_object_v1};
+    let f = Fixture::new(false);
+    let liar = produce_at(&f.artifact, &f.profile, Some(&|_| 0));
+    for (after_final, withhold) in [(false, false), (true, false), (true, true)] {
+        let (s, claim) = rc_licensed(&liar, &f.canonical, &f.profile, f.root);
+        let mut w = World { s, daa: 104, chain: vec![] };
+        if after_final {
+            while !matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Final { .. }) {
+                w.quiet();
+            }
+        }
+        let o = Outsider::start(&f, &liar);
+        let mut original = service_filer_case(&f, &liar, &o, claim);
+        assert_eq!(service_filer_localize(&mut w, &liar, &mut original), liar.leaf);
+        let spent = w.s.legacy_dispute_reservation_v1(&claim, &bond_key(OUTSIDER)).unwrap().sessions_opened;
+        w.chain.clear(); // Lost/pruned public carriers; chain facts, historical answered bits and reservation stay intact.
+        let mut fresh = service_filer_case(&f, &liar, &o, claim);
+        let probe = PalwLegacyProbeV1::Binding { row: 0, tile: 0 };
+        assert_eq!(service_filer_step(&w, &fresh).unwrap(), PalwFraudFilerStepV1::AwaitAnswer(probe));
+        let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap();
+        assert!(fresh.reacquire_after_v1(&view, bond_key(OUTSIDER), probe, w.daa).is_none());
+        assert!(fresh.reacquire_after_v1(&view, bond_key(OUTSIDER), probe, w.daa + 29).is_none());
+        for _ in 0..30 {
+            w.quiet();
+        }
+        let request = fresh.reacquire_after_v1(&view, bond_key(OUTSIDER), probe, w.daa).unwrap();
+        assert_eq!(request.session_number, spent + 1);
+        let build = |r| palw_dispute_reacquire_object_v1(h64(999), r, |_| SIG.to_vec());
+        for bad in [
+            kaspa_consensus_core::palw_legacy_public_filer_v1::PalwDisputeReacquireV1 { session_number: spent + 2, ..request.clone() },
+            kaspa_consensus_core::palw_legacy_public_filer_v1::PalwDisputeReacquireV1 {
+                reserved_daa: request.reserved_daa + 1,
+                ..request.clone()
+            },
+            kaspa_consensus_core::palw_legacy_public_filer_v1::PalwDisputeReacquireV1 {
+                valid_until_daa: w.daa - 1,
+                ..request.clone()
+            },
+            kaspa_consensus_core::palw_legacy_public_filer_v1::PalwDisputeReacquireV1 {
+                valid_until_daa: view.hard_deadline_daa + 1,
+                ..request.clone()
+            },
+            kaspa_consensus_core::palw_legacy_public_filer_v1::PalwDisputeReacquireV1 {
+                binding: original.binding.clone(),
+                ..request.clone()
+            },
+        ] {
+            assert!(rc_step(&w.s, w.daa + 1, &[build(bad)]).is_err());
+        }
+        let object = build(request.clone());
+        w.block(vec![object.clone()]).expect("the explicit request opens one bounded session");
+        let row = w.s.da_session(&claim, &bond_key(OUTSIDER)).unwrap().clone();
+        assert_eq!(row.units, vec![probe.unit()], "reacquisition adds no random drawn units");
+        let historical = w.s.da_claim(&claim).unwrap();
+        assert!(kaspa_consensus_core::palw_da_rcore_v1::palw_da_unit_answered_v1(historical, &probe.unit(), 2));
+        assert!(!w.s.palw_da_unit_available_v1(&claim, historical, &probe.unit(), 2), "historical presence is not fresh delivery");
+        assert!(rc_step(&w.s, w.daa + 1, &[object.clone()]).is_err(), "a duplicate counter cannot open another session");
+        let old = PalwConsensusObjectV2::DefaultAccused {
+            claim,
+            missing_event_index: 0,
+            accuser: bond_key(OUTSIDER),
+            signature: SIG.to_vec(),
+        };
+        assert!(
+            matches!(
+                rc_step(&w.s, w.daa + 1, &[old.clone()]),
+                Err(PalwStateV2Error::DaUnitAlreadyAnswered(_)) | Err(PalwStateV2Error::DaSessionAlreadyOpen { .. })
+            ),
+            "old signatures stay refused even while a new session is open"
+        );
+        let duties = kaspa_consensus_core::palw_producer_v2::palw_disclosure_duties_v1(
+            &w.s,
+            &rc_params(),
+            &rc_extras(true),
+            &[bond_key(PRODUCER)],
+            w.daa,
+        );
+        assert!(duties.duties.iter().any(|d| d.claim_id == claim && d.unit == probe.unit()), "producer owes a fresh copy");
+        let before = bonds_collateral(&w.s);
+        if withhold {
+            let deadline = row.deadline_daa;
+            w.s = rc_step(&w.s, deadline + 1, &[]).expect("the reacquired unit has an objective timeout");
+            assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
+            assert!(bonds_collateral(&w.s).0 < before.0);
+            assert_eq!(bonds_collateral(&w.s).1, before.1);
+            assert!(w.s.legacy_dispute_v1(&claim).is_none_or(|r| r.reacquiring.is_empty()));
+            continue;
+        }
+        let answer = PalwConsensusObjectV2::MaterialDisclosedV2 {
+            claim,
+            unit: probe.unit(),
+            answer: PalwDaAnswerV1::Event(liar.backend.disclose_trace_event(&liar.material, 0, 0).unwrap()),
+            discloser: bond_key(PRODUCER),
+            signature: SIG.to_vec(),
+        };
+        let mut bad = answer.clone();
+        if let PalwConsensusObjectV2::MaterialDisclosedV2 { answer: PalwDaAnswerV1::Event(event), .. } = &mut bad {
+            match event {
+                kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat { binding, .. }
+                | kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Tiled { binding, .. }
+                | kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::OutOfRange { binding, .. } => {
+                    binding.committed_execution_root = h64(0xBAD)
+                }
+            }
+        }
+        assert!(rc_step(&w.s, w.daa + 1, &[bad]).is_err(), "historical answered bits do not validate corrupt fresh bytes");
+        w.block(vec![answer]).expect("the same authenticated answer can be served publicly again");
+        assert!(w.s.da_session(&claim, &bond_key(OUTSIDER)).is_none());
+        assert!(
+            matches!(rc_step(&w.s, w.daa + 1, &[old]), Err(PalwStateV2Error::DaUnitAlreadyAnswered(_))),
+            "old unnumbered signature remains refused after the fresh session closes"
+        );
+        assert!(w.s.legacy_dispute_v1(&claim).unwrap().reacquiring.is_empty());
+        assert!(rc_step(&w.s, w.daa + 1, &[object]).is_err(), "answered reacquisition signature never reopens");
+        let leaf = service_filer_localize(&mut w, &liar, &mut fresh);
+        assert_eq!(leaf, liar.leaf);
+        w.block(vec![service_filer_terminal(&f, &liar, &fresh, leaf)])
+            .expect("fresh authenticated copies lead to objective conviction");
+        assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
         assert_eq!(bonds_collateral(&w.s).1, before.1);
     }
 }

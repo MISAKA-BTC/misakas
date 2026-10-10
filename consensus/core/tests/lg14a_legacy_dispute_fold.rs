@@ -13,7 +13,7 @@ use common::*;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_da_rcore_v1::PalwDaClaimV1;
 use kaspa_consensus_core::palw_legacy_public_filer_v1::{
-    PALW_DISPUTE_RESERVATION_VERSION_V1, PalwDisputeReservationV1, palw_dispute_hard_deadline_v1,
+    PALW_DISPUTE_RESERVATION_VERSION_V1, PalwDisputeReacquireV1, PalwDisputeReservationV1, palw_dispute_hard_deadline_v1,
 };
 use kaspa_consensus_core::palw_offence_attribution_v1::{
     PALW_EXECUTOR_REFUTED_VERSION_V1, PalwExecutorRefutedEvidenceV1, PalwIdentityRulesV1, PalwSessionRuleV1,
@@ -97,10 +97,26 @@ fn lg14a_unarmed_the_fold_refuses_the_objects_and_is_byte_identical() {
         roots.push(c.s.state_root());
         let (b6, b7) = bystanders(&c);
         // The objects are refused by the fold below the fence.
-        for object in [reserve(&c, id, b7), release(id, b7)] {
+        for object in [
+            reserve(&c, id, b7),
+            release(id, b7),
+            PalwConsensusObjectV2::DisputeReacquiredV1 {
+                request: Box::new(PalwDisputeReacquireV1 {
+                    version: 999,
+                    claim: id,
+                    reserver: b7,
+                    reserved_daa: 0,
+                    session_number: 0,
+                    valid_until_daa: 0,
+                    unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row: 0, tile: 0 },
+                    binding: None,
+                }),
+                signature: Vec::new(),
+            },
+        ] {
             match try_step(&c, std::slice::from_ref(&object)) {
                 Err(PalwStateV2Error::LegacyDisputeRefused(why)) => assert!(why.contains("not in force"), "{why}"),
-                other => panic!("the second lock refuses tag 154/155 below the fence: {other:?}"),
+                other => panic!("the second lock refuses tags 154–156 below the fence: {other:?}"),
             }
         }
         // A bystander's DA session (the int-12 non-seat route) and the claim's Final.

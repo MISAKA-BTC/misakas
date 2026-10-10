@@ -1770,7 +1770,7 @@ pub fn palw_disclosure_duties_v1(
     mine: &[PalwBondKeyV2],
     now_daa: u64,
 ) -> PalwDisclosureDutiesV1 {
-    use crate::palw_da_rcore_v1::{palw_da_in_run_rows_v1, palw_da_unit_answered_v1};
+    use crate::palw_da_rcore_v1::palw_da_in_run_rows_v1;
     if !params.rcore_plus_active_at(now_daa) || mine.is_empty() {
         return PalwDisclosureDutiesV1::default();
     }
@@ -1794,7 +1794,7 @@ pub fn palw_disclosure_duties_v1(
             if session.deadline_daa < now_daa {
                 continue;
             }
-            for unit in session.units.iter().filter(|unit| !palw_da_unit_answered_v1(&record, unit, in_run_rows)) {
+            for unit in session.units.iter().filter(|unit| !state.palw_da_unit_available_v1(&claim_id, &record, unit, in_run_rows)) {
                 let deadline = units.entry(*unit).or_insert(session.deadline_daa);
                 *deadline = (*deadline).min(session.deadline_daa);
             }

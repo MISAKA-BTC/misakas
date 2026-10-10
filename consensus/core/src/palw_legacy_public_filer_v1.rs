@@ -37,8 +37,8 @@ use crate::palw_state_v2::{PalwBondKeyV2, PalwClaimPhaseV2, PalwClaimStateV2, Pa
 pub const PALW_DISPUTE_RESERVED_TAG_V1: u8 = 154;
 /// Tag 155: a reserver's release ([`PalwConsensusObjectV2::DisputeReleasedV1`]).
 pub const PALW_DISPUTE_RELEASED_TAG_V1: u8 = 155;
-/// Tag 156: allocated to this lane and declared by no variant (reserved).
-pub const PALW_DISPUTE_SPARE_TAG_V1: u8 = 156;
+/// Tag 156: a nonce-bound reacquisition of an answered public DA unit, inside the existing never-armed fence.
+pub const PALW_DISPUTE_REACQUIRE_TAG_V1: u8 = 156;
 /// Delta 200: the one journaled writer of `legacy_disputes` (`PalwDeltaEntryV2::LegacyDispute`). 201–204 are reserved.
 pub const PALW_DELTA_LEGACY_DISPUTE_V1: u8 = 200;
 /// The carriage tail of `legacy_disputes`, written only when the table is non-empty.
@@ -78,6 +78,31 @@ pub struct PalwDisputeReservationV1 {
     pub execution_root: Hash64,
     pub trace_root: Hash64,
     pub reserver: PalwBondKeyV2,
+}
+
+/// A reserver explicitly requests a fresh public copy of one previously answered unit. The expected session counter is
+/// signed, so neither this request nor an old unnumbered accusation can reopen a session after its answer. A request spends
+/// the reservation's existing session budget and names no extra drawn units. `binding` is present exactly for held units.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwDisputeReacquireV1 {
+    pub version: u16,
+    pub claim: Hash64,
+    pub reserver: PalwBondKeyV2,
+    pub reserved_daa: u64,
+    pub session_number: u8,
+    pub valid_until_daa: u64,
+    pub unit: crate::palw_da_rcore_v1::PalwDaUnitV1,
+    pub binding: Option<crate::palw_step_leg::PalwStepBindingV2>,
+}
+
+pub fn palw_dispute_reacquire_object_v1(
+    network_domain: Hash64,
+    request: PalwDisputeReacquireV1,
+    sign: impl FnOnce(&[u8]) -> Vec<u8>,
+) -> PalwConsensusObjectV2 {
+    let payload = borsh::to_vec(&request).expect("a reacquisition request serializes");
+    let message = palw_legacy_dispute_message_v1(network_domain, PALW_DISPUTE_REACQUIRE_TAG_V1, &request.reserver, &payload);
+    PalwConsensusObjectV2::DisputeReacquiredV1 { request: Box::new(request), signature: sign(message.as_byte_slice()) }
 }
 
 /// **The message a legacy-dispute object's signer signs**: `H(domain; network ‖ kind ‖ signer ‖ len ‖ payload)`, `payload` the
@@ -143,7 +168,12 @@ pub fn palw_dispute_released_object_v1(
 /// `Params::palw_legacy_public_filer_v1` the acceptance walk drops it by name before any slot, rent or budget is charged for it; the
 /// fold refuses it as the second lock.
 pub fn palw_object_is_legacy_dispute_v1(object: &PalwConsensusObjectV2) -> bool {
-    matches!(object, PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. })
+    matches!(
+        object,
+        PalwConsensusObjectV2::DisputeReservedV1 { .. }
+            | PalwConsensusObjectV2::DisputeReleasedV1 { .. }
+            | PalwConsensusObjectV2::DisputeReacquiredV1 { .. }
+    )
 }
 
 // ---- the state ------------------------------------------------------------------------------------------------------------------
@@ -175,6 +205,9 @@ pub struct PalwDisputeClaimV1 {
     /// Deposits of reservations that ended without an objective outcome, `(reserver, amount)` in closing order: refunded at a
     /// conviction, burned when the claim retires (DA-6's `refuted_held`, for the reservation).
     pub dismissed_held: Vec<(PalwBondKeyV2, u128)>,
+    /// Open explicit reacquisitions. Historical `da_claims.answered` is never cleared: old accusation signatures remain refused.
+    /// A fresh authenticated answer closes all reacquisitions of its unit. At most one per reserver (and one DA session per bond).
+    pub reacquiring: BTreeMap<PalwBondKeyV2, crate::palw_da_rcore_v1::PalwDaUnitV1>,
 }
 
 impl PalwDisputeClaimV1 {
@@ -965,6 +998,7 @@ mod tests {
             record: None,
             sessions: Vec::new(),
             answered: Vec::new(),
+            flat_answered_rows: 0,
             open_courts: 0,
             executor_refuted: false,
             court_convicted: false,

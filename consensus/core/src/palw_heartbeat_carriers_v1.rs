@@ -216,6 +216,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         // halt's obligation (the policy stays H-1's enumeration).
         | O::DisputeReservedV1 { .. }
         | O::DisputeReleasedV1 { .. }
+        | O::DisputeReacquiredV1 { .. }
         // LG14-B (tags 157–159, dormant): fee-market traffic, never an H-1 carrier — below their fence they ride unjudged (A-2), and
         // an H-1 carrier is asked of the gate at the template.
         | O::LegacyHeldDemandedV2 { .. }

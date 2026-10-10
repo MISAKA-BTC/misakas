@@ -1,4 +1,4 @@
-//! **Lane LG14-A: the legacy route's dispute reservations in the fold** — tags 154–155, the lapse at the claim's hard deadline, the
+//! **Lane LG14-A: the legacy route's dispute reservations in the fold** — tags 154–156, the lapse at the claim's hard deadline, the
 //! release inside every conviction / void / default (`da_release_all_v1`), the burn at the claim's retirement, and the reserved DA
 //! budget. A child module of `palw_state_v2`, so it reads the builder and the tables and writes `legacy_disputes` only through its one
 //! journaled writer (delta 200). See [`crate::palw_legacy_public_filer_v1`] for the design.
@@ -36,6 +36,18 @@ pub(super) fn palw_legacy_dispute_indexes_of_v1(
 // ---- reads ------------------------------------------------------------------------------------------------------------------------
 
 impl PalwChainStateV2 {
+    /// Historical answers remain replay guards. An explicit reacquisition is not satisfied until an authenticated copy
+    /// appears again on chain. This single read is shared by answer admission, responder duties, close and timeout.
+    pub fn palw_da_unit_available_v1(
+        &self,
+        claim_id: &Hash64,
+        record: &crate::palw_da_rcore_v1::PalwDaClaimV1,
+        unit: &crate::palw_da_rcore_v1::PalwDaUnitV1,
+        in_run: u32,
+    ) -> bool {
+        !self.legacy_disputes.get(claim_id).is_some_and(|d| d.reacquiring.values().any(|u| u == unit))
+            && crate::palw_da_rcore_v1::palw_da_unit_answered_v1(record, unit, in_run)
+    }
     /// A claim's dispute record, if any reservation was ever accepted on it (and it still holds something).
     pub fn legacy_dispute_v1(&self, claim_id: &Hash64) -> Option<&PalwDisputeClaimV1> {
         self.legacy_disputes.get(claim_id)
@@ -99,6 +111,20 @@ impl PalwChainStateV2 {
             };
             if record.live.is_empty() && record.dismissed_held.is_empty() {
                 return bad(format!("claim {claim_id}'s record holds nothing and was not deleted"));
+            }
+            if record.reacquiring.len() > PALW_DISPUTE_RESERVERS_PER_CLAIM_TOTAL_V1
+                || record.reacquiring.iter().any(|(bond, unit)| {
+                    self.da_sessions.get(&(*claim_id, *bond)).is_none_or(|session| session.units.as_slice() != [*unit])
+                        || self.da_claims.get(claim_id).is_none_or(|da| {
+                            !crate::palw_da_rcore_v1::palw_da_unit_answered_v1(
+                                da,
+                                unit,
+                                crate::palw_da_rcore_v1::palw_da_in_run_rows_v1(claim, true),
+                            )
+                        })
+                })
+            {
+                return bad(format!("claim {claim_id}'s reacquisition has no matching historical answer and open session"));
             }
             if record.holds() && matches!(claim.phase, PalwClaimPhaseV2::Voided { .. } | PalwClaimPhaseV2::DefaultDisputed { .. }) {
                 return bad(format!("claim {claim_id} is voided with a live reservation (every void releases them)"));
@@ -224,6 +250,7 @@ impl TransitionBuilder<'_> {
         let held = record.holds();
         let live: Vec<PalwBondKeyV2> = record.live.keys().copied().collect();
         record.live.clear();
+        record.reacquiring.clear();
         record.closed.extend(live);
         if convicted {
             record.dismissed_held.clear();
@@ -360,6 +387,72 @@ pub(super) fn apply_dispute_reserved_v1(
     Ok(())
 }
 
+/// Tag 156: an explicitly signed, replay-safe reacquisition. The ordinary accusation path keeps rejecting historical answers.
+/// Validate the exact already-answered unit as on its original path, then open one ordinary, priced, retention-bounded session.
+pub(super) fn apply_dispute_reacquired_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    request: &PalwDisputeReacquireV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_da_rcore_v1::PalwDaUnitV1 as U;
+    let now = ctx.daa_score;
+    if !builder.params.legacy_public_filer_active_at(now) || !builder.params.rcore_plus_active_at(now) {
+        return Err(refused("palw_legacy_public_filer_v1 is not in force at this block"));
+    }
+    if request.version != PALW_DISPUTE_RESERVATION_VERSION_V1 || now > request.valid_until_daa {
+        return Err(refused("the reacquisition's version or signed deadline is invalid"));
+    }
+    let claim_id = request.claim;
+    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    let panel = builder.state.panels.get(&claim_id).ok_or(PalwStateV2Error::DaClaimNotAccusable(claim_id))?;
+    if panel.seats.iter().any(|seat| seat.bond == request.reserver) {
+        return Err(refused("reacquisition uses an outside bond's live reservation"));
+    }
+    let row = builder
+        .state
+        .legacy_dispute_reservation_v1(&claim_id, &request.reserver)
+        .ok_or_else(|| refused("reacquisition requires this bond's live reservation"))?;
+    let hard = palw_dispute_hard_deadline_v1(&claim, palw_da_disclose_window_daa_v1(builder.params));
+    if row.reserved_daa != request.reserved_daa
+        || row.sessions_opened.checked_add(1) != Some(request.session_number)
+        || request.valid_until_daa > hard
+        || now > hard
+    {
+        return Err(refused("the reacquisition's reservation, session counter or deadline no longer matches"));
+    }
+    let in_run = crate::palw_da_rcore_v1::palw_da_in_run_rows_v1(&claim, builder.extras.fp_da_pins_active);
+    if builder
+        .state
+        .da_claims
+        .get(&claim_id)
+        .is_none_or(|da| !crate::palw_da_rcore_v1::palw_da_unit_answered_v1(da, &request.unit, in_run))
+    {
+        return Err(refused("reacquisition names a unit that has never been answered"));
+    }
+    let session_binding = match (&request.unit, &request.binding) {
+        (U::Event { .. }, None) => None,
+        (U::Held(_), Some(binding)) => Some(binding),
+        (U::LegacyHeldV2(unit), Some(binding)) => {
+            if !builder.extras.legacy_held_da_v2_active || builder.state.tir_classes.contains_key(&claim.class_id) {
+                return Err(refused("this claim has no legacy held reacquisition route"));
+            }
+            crate::palw_legacy_held_da_v2::palw_legacy_held_check_demand_v2(&claim.execution_root, unit, binding)
+                .map_err(|e| refused(e.to_string()))?;
+            if let Some(why) = builder.da_binding_answers_another_job_v1(now, &claim_id, binding) {
+                return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
+            }
+            None
+        }
+        _ => return Err(refused("this unit has no reacquisition route, or its binding form is wrong")),
+    };
+    // The existing gate retains Active/floor/exposure, one open session, per-reservation budget, Final and retention checks.
+    open_da_session_rcore_mode_v1(builder, ctx, claim_id, request.reserver, request.unit, session_binding, true)?;
+    let mut record = builder.state.legacy_disputes.get(&claim_id).cloned().expect("the session counted its live reservation");
+    record.reacquiring.insert(request.reserver, request.unit);
+    builder.write_legacy_dispute(claim_id, Some(record));
+    Ok(())
+}
+
 /// **Tag 155: the reserver ends its own reservation.** Past the fence; a live reservation of this bond on this claim. Its deposit is
 /// held until the claim resolves. The signature is the processor's.
 pub(super) fn apply_dispute_released_v1(
@@ -423,6 +516,11 @@ impl PalwChainStateV2 {
             record: self.legacy_disputes.get(claim_id).cloned(),
             sessions: self.da_sessions_of(claim_id).map(|(accuser, session)| (*accuser, session.clone())).collect(),
             answered: self.da_claims.get(claim_id).map(|record| record.answered.iter().copied().collect()).unwrap_or_default(),
+            flat_answered_rows: self
+                .da_claims
+                .get(claim_id)
+                .filter(|r| r.flat_answered)
+                .map_or(0, |_| crate::palw_da_rcore_v1::palw_da_in_run_rows_v1(claim, true)),
             open_courts: self.open_courts_of(claim_id),
             executor_refuted: recorded(crate::palw_offence_attribution_v1::palw_executor_refuted_offence_id_v1(&producer, claim_id)),
             court_convicted: recorded(palw_court_conviction_offence_id_v1(&producer, claim_id)),
@@ -464,6 +562,8 @@ pub struct PalwLegacyDisputeViewV1 {
     pub record: Option<PalwDisputeClaimV1>,
     pub sessions: Vec<(PalwBondKeyV2, crate::palw_da_rcore_v1::PalwDaSessionV1)>,
     pub answered: Vec<crate::palw_da_rcore_v1::PalwDaUnitV1>,
+    /// Historical Flat coverage: only Event rows below this bound, tile zero. Never expanded into an unbounded unit list.
+    pub flat_answered_rows: u32,
     pub open_courts: u32,
     pub executor_refuted: bool,
     pub court_convicted: bool,
@@ -497,6 +597,13 @@ pub struct PalwFraudFilerCandidateV1 {
     pub seat: bool,
     /// What the node replays (lane B's job facts: the claim's block, class, artifact root and committed roots).
     pub job: crate::palw_operator_da_v1::PalwOperatorDaJobV1,
+}
+
+impl PalwLegacyDisputeViewV1 {
+    pub fn unit_was_answered_v1(&self, unit: &crate::palw_da_rcore_v1::PalwDaUnitV1) -> bool {
+        self.answered.contains(unit)
+            || matches!(unit, crate::palw_da_rcore_v1::PalwDaUnitV1::Event { row, tile: 0 } if *row < self.flat_answered_rows)
+    }
 }
 
 /// One live reservation, as op 206 reports it.
@@ -563,6 +670,7 @@ pub struct PalwLegacyDisputeObservationV1 {
     pub executor_refuted: bool,
     pub court_convicted: bool,
     pub da_defaulted: bool,
+    pub flat_answered_rows: u32,
 }
 
 /// `txid:index`, the form the RPC parses bonds in.
@@ -622,6 +730,7 @@ impl PalwLegacyDisputeObservationV1 {
             executor_refuted: view.executor_refuted,
             court_convicted: view.court_convicted,
             da_defaulted: view.da_defaulted,
+            flat_answered_rows: view.flat_answered_rows,
         }
     }
 

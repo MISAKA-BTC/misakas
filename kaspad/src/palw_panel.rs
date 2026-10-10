@@ -14555,6 +14555,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         // Lane LG14-A (tags 154–155): the legacy route's dispute reservation.
         PalwConsensusObjectV2::DisputeReservedV1 { .. } => "DisputeReservedV1",
         PalwConsensusObjectV2::DisputeReleasedV1 { .. } => "DisputeReleasedV1",
+        PalwConsensusObjectV2::DisputeReacquiredV1 { .. } => "DisputeReacquiredV1",
         // LG14-B (tags 157–159): the legacy route's public descent and held DA units, dormant.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. } => "LegacyHeldDemandedV2",
         PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
@@ -19074,6 +19075,24 @@ mod accepted_objects_walk_tests {
         }
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].0, (claim, PalwDaUnitV1::LegacyHeldV2(selected)));
+        chain.acceptance.remove(&hash(1));
+        let (partial, _, readable) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, None, 100, &wanted, &selected_units,
+        ).unwrap();
+        assert_eq!(partial.next, Some(partial.anchor), "missing old history never completes the floor");
+        assert_eq!(readable.len(), 1, "authenticated answers before the prune boundary are retained");
+        let saved = chain.blocks.remove(&hash(2)).unwrap();
+        append(&mut chain, 9, 160, 8);
+        let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: good.clone() }).unwrap());
+        chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), vec![tx]));
+        let (fresh, _, delivered) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, Some(partial), 100, &wanted, &selected_units,
+        ).unwrap();
+        assert_eq!(fresh.anchor, hash(9), "a stalled old walk revisits the new tip");
+        assert!(fresh.next.is_some(), "still no completed watermark across missing history");
+        assert_eq!(delivered.len(), 1, "the reacquired copy is readable although its original carrier is gone");
+        chain.blocks.insert(hash(2), saved);
         let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = good else { unreachable!() };
         assert_eq!(found[0].1, PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
         let wrong_root = BTreeMap::from([(claim, Hash64::from_u64_word(0xBAD))]);

@@ -382,3 +382,30 @@ actual replay workerは、モデル保有前提どおりfresh backendからexecu
 coreのlifecycle/A2U回帰は **31 PASS**、既存legacy dispute foldは **7 PASS**。通常featureのkaspad binary checkも成功した。[lifecycle](evidence/fp-bootstrap-core-lifecycle-final.log)、[dispute fold](evidence/fp-bootstrap-core-dispute-final.log)、[binary check](evidence/fp-bootstrap-binary-final.log)。Final後のFP予約拒否の修正前の再現logは[こちら](evidence/fp-bootstrap-fold-debug.log)。警告は既存のunused/dead-code等が残る。
 
 最終sourceの `scripts/t12-repin.sh --shipping --drift-only` は **361 ok、差分なし**。fresh harvest logの再読込もexit 0。pinの書換えは行っていない。[repin](evidence/fp-bootstrap-repin-final.log)、[harvest tests](evidence/fp-bootstrap-repin-harvest-tests.log)、[harvest lib](evidence/fp-bootstrap-repin-harvest-lib.log)、[log再検証](evidence/fp-bootstrap-repin-replay-final.log)。
+
+
+## 回答済みDA materialの番号付き再取得
+
+前節のFP startupを`20c746436`でpushした後、permanently prunedな公開回答の追及を進めた。単に`DaUnitAlreadyAnswered`を外すと、古いaccusation署名の再送でverifierの担保・session枠を消費できるため、番号付きの明示的要求を休眠tag 156へ追加した。要求とstate/readerの仕様は[設計追記](../../design/palw/legacy-route-g14-filer.md#回答済みunitの再取得codex2026-10-10)を参照。
+
+`PalwDisputeClaimV1`の末尾へpending reacquisition mapを追加した。既存のdispute writer、delta 200、tail 0xE2を使う。このrecordはnever-armedなLG14-A専用であり、live variantのwireを変更していない。従来のtest-armed carriageの保存形式は変わる。新tag 156のA2 wire pinは`0xd43488cfc9640788`とし、既存tagとint-12 variantのpinは変更していない。新tagは休眠fence 7がownerで、below-fenceのstateless skip／fold拒否、signature processor、heartbeat carriageへ配線した。有効化heightは変更していない。
+
+公開view／op 204のJSONにFlat回答のrow範囲を追加した。個別answeredにないEventでも、historical Flatがcoverしたtile 0は再取得へ進む。隣tileと範囲外rowはansweredにしない。
+
+| 最終ソースのコマンド | 結果と検証範囲 |
+| --- | --- |
+| `cargo test -p kaspad --lib palw_filer_held::e2e --locked` | **25 PASS**。LG14-Bは11 V-fold＋2 V-unit、既存held replayは12件。新試験は全Panel Validの小型fixtureで、公開carrier喪失後のFinal前後の再取得→CourtFraud、Final後の非応答→ProducerWithholding、期限・予約DAA・counter・bindingの拒否、旧署名の拒否、producer duty、corrupt answer拒否と担保を確認。全foldでdelta再適用／巻戻しとcarriage reloadを検査 |
+| `cargo test -p kaspad --lib palw_fraud_filer --locked` | **18 V-unit PASS**。既存15件＋FP input/replay 3件。Flat historical回答のAwaitAnswerと番号付き再取得、tile／row境界の反例を既存試験へ追加 |
+| `cargo test -p kaspad --lib accepted_objects_walk_tests --locked` | **7 V-unit PASS**。欠けた古いsuffixを完了とせず、認証済みprefixを保持し、新tipの再公開を読めることをfake ConsensusApiで検査 |
+| `cargo test -p kaspad --lib reporter_filer::tests --locked` | **21 V-unit PASS**。reporter doorの既存回帰 |
+| `cargo check -p kaspad --bin kaspad --locked` | **成功**。通常featureのnode／署名processorをcompile |
+
+node側合計 **71 PASS**。[held](evidence/reacquire-held-verified.log)、[filer](evidence/reacquire-filer-final.log)、[reader](evidence/reacquire-reader-final.log)、[reporter](evidence/reacquire-reporter-verified.log)、[binary check](evidence/reacquire-binary-final.log)。CARGO_INCREMENTAL=0、CARGO_BUILD_JOBS=2、default feature。既存unused／dead-code警告は残る。
+
+初回の新fold試験は、open session中の旧accusationに`DaSessionAlreadyOpen`が先に返ることを考慮していなかった。拒否を両方で確認し、session終了後には`DaUnitAlreadyAnswered`を厳密に確認した。初回A2検査は新tagのpin未追加だけがFAILで、全既存pinは同値だった。追加中のFlat対応をbuild中に編集したため、一度古いcoreと新nodeの組合せでcompileが失敗した。その後ソースを固定して全群を再buildした。最終PASSだけを上表へ計上する。
+
+新fold試験はpublic carrier vectorを消去するfixtureであり、実DB pruningではない。jobは従来held fixtureのpublic job、独立model replayを用い、signature verification callback／class admissionには既存test doubleを使う。履歴adapterも別のV-unitである。これをfull service startup→mempool/template→実block inclusionのV-node、全familyのpruned start成功と数えない。TIR／pipeline、FP job自体の再取得、input未取得bootstrap、飽和枠、最大profile、累積scopeと期限は残る。34-session予算を消費するため、無制限のrestartを保証しない。
+
+coreの最終source回帰はlifecycle/A2U **31 PASS**、共通filer **10 PASS**、legacy dispute fold **7 PASS**。新tag 156を含むfence-off twinは、None／never／未到達heightでrootとdeltaの互換性を確認した。[lifecycle](evidence/reacquire-core-lifecycle-final.log)、[filer](evidence/reacquire-core-filer-final.log)、[dispute fold](evidence/reacquire-core-dispute-final.log)。nodeの71件と合わせ、この範囲の回帰は **119 PASS**。全G14達成とは判定しない。
+
+最終sourceの `scripts/t12-repin.sh --shipping --drift-only` はexit 0、**361 ok・差分なし**。network／genesis／ruleset等のshipping pinを書き換えていない。[repin](evidence/reacquire-repin-final.log)、[fresh harvest tests](evidence/reacquire-repin-harvest-tests.log)、[fresh harvest lib](evidence/reacquire-repin-harvest-lib.log)。

@@ -13653,6 +13653,18 @@ impl VirtualStateProcessor {
                         signature,
                     )?;
                 }
+                Obj::DisputeReacquiredV1 { request, signature } => {
+                    let payload = borsh::to_vec(request.as_ref()).map_err(|e| e.to_string())?;
+                    let court = self.palw_court_params_v2.as_ref().ok_or("public reacquisition needs V2 court parameters")?;
+                    if payload.len() as u64 > court.max_close_bytes() {
+                        return Err("public reacquisition exceeds the ruleset's close carriage ceiling".into());
+                    }
+                    self.palw_legacy_dispute_signature_ok(
+                        state, point.daa_score,
+                        kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_DISPUTE_REACQUIRE_TAG_V1,
+                        &request.reserver, &payload, signature,
+                    )?;
+                }
                 Obj::DisputeReleasedV1 { claim, reserver, signature } => {
                     let payload = kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_released_payload_v1(claim);
                     self.palw_legacy_dispute_signature_ok(
@@ -22763,6 +22775,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::DaTransferV1 { .. } => "DaTransferV1",
         O::DisputeReservedV1 { .. } => "DisputeReservedV1",
         O::DisputeReleasedV1 { .. } => "DisputeReleasedV1",
+        O::DisputeReacquiredV1 { .. } => "DisputeReacquiredV1",
         O::LegacyHeldDemandedV2 { .. } => "LegacyHeldDemandedV2",
         O::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",

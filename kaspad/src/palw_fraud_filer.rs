@@ -55,9 +55,10 @@ use kaspa_consensus_core::palw_legacy_held_da_v2::{
     palw_legacy_held_check_answer_v2, palw_legacy_leaf_is_fused_v2,
 };
 use kaspa_consensus_core::palw_legacy_public_filer_v1::{
-    PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1, PalwFilerActionV1, PalwFilerPhaseV1, PalwFilerRoleV1, PalwLegacyBisectV1,
-    PalwLegacyProbeV1, palw_dispute_reserved_object_v1, palw_fraud_filer_demand_object_v1, palw_fraud_filer_facts_v1,
-    palw_fraud_filer_learn_v1, palw_fraud_filer_next_v1, palw_fraud_filer_reservation_v1,
+    PALW_DISPUTE_RESERVATION_VERSION_V1, PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1, PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1,
+    PalwFilerActionV1, PalwFilerPhaseV1, PalwFilerRoleV1, PalwLegacyBisectV1, PalwLegacyProbeV1, palw_dispute_reserved_object_v1,
+    palw_fraud_filer_demand_object_v1, palw_fraud_filer_facts_v1, palw_fraud_filer_learn_v1, palw_fraud_filer_next_v1,
+    palw_fraud_filer_reservation_v1,
 };
 use kaspa_consensus_core::palw_state_v2::{PalwFraudFilerCandidateV1, PalwLegacyDisputeViewV1};
 use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
@@ -128,6 +129,7 @@ pub(super) enum PalwFraudFilerVerdictV1 {
 pub(super) enum PalwFraudFilerSentV1 {
     Reserve,
     Demand(PalwLegacyProbeV1),
+    Reacquire { probe: PalwLegacyProbeV1, session_number: u8 },
     Terminal { leaf: u64 },
 }
 
@@ -161,7 +163,8 @@ fn palw_fraud_filer_cache_unit_v1(unit: &PalwDaUnitV1, leaf_count: Option<u64>) 
 }
 
 /// Read/resume one page. A reorg beyond the old anchor restarts at the current tip and the oldest pursued claim, including when
-/// a recent incremental floor would otherwise hide the new branch's old answers. No watermark is returned on a read failure.
+/// a recent incremental floor would otherwise hide the new branch's old answers. An unavailable old suffix retains authenticated
+/// answers from the readable prefix, with an incomplete watermark and a restart at the next tip.
 pub(super) fn palw_fraud_filer_read_page_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
     oldest: u64,
@@ -174,7 +177,7 @@ pub(super) fn palw_fraud_filer_read_page_v1(
     let tip = consensus.get_sink();
     let same_branch = previous.is_none_or(|p| p.anchor == tip || consensus.is_chain_ancestor_of(p.anchor, tip).unwrap_or(false));
     let reset = !same_branch;
-    let continuing = previous.filter(|p| same_branch && p.next.is_some());
+    let continuing = previous.filter(|p| same_branch && p.next.is_some() && p.next != Some(p.anchor));
     let floor = continuing.map_or(if reset { oldest } else { floor }, |p| p.floor);
     let anchor = continuing.map_or(tip, |p| p.anchor);
     let anchor_daa = continuing.map_or_else(
@@ -215,7 +218,13 @@ pub(super) fn palw_fraud_filer_read_page_v1(
                 .or_insert(PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
         }
         _ => {}
-    })?;
+    })
+    .unwrap_or_else(|why| {
+        debug!("[{PALW_PANEL}] partial public history: {why}; completion watermark unchanged");
+        Some(anchor)
+    });
+    // `next == anchor` is the unavailable-history sentinel: retain independently authenticated answers from the readable
+    // prefix, never mark the floor completed, and restart at the NEW tip on the next tick so a reacquired copy is reachable.
     Ok((PalwFraudFilerWalkV1 { floor, anchor, anchor_daa, next }, reset, answers.into_iter().collect()))
 }
 
@@ -264,6 +273,7 @@ pub(super) struct PalwFraudFilerCaseV1 {
     pub(super) legacy_wanted: Option<PalwLegacyHeldUnitV2>,
     pub(super) runs: u8,
     input_retry_at: u64,
+    awaiting_public: Option<(PalwLegacyProbeV1, u64)>,
     /// The last item sent, when, and how many times.
     pub(super) sent: Option<(PalwFraudFilerSentV1, u64, u8)>,
     /// Reporter-door handoffs of the claim's direct proof, bounded like the replay lane's.
@@ -283,6 +293,7 @@ impl PalwFraudFilerCaseV1 {
             legacy_wanted: None,
             runs: 0,
             input_retry_at: 0,
+            awaiting_public: None,
             sent: None,
             direct_handed: 0,
             direct_asked_at: None,
@@ -348,8 +359,54 @@ impl PalwFraudFilerCaseV1 {
         }
     }
 
-    /// May `item` be sent now? A different item always; the same one only once [`PALW_FRAUD_FILER_RESEND_DAA_V1`] passed since it was
-    /// sent and fewer than [`PALW_FRAUD_FILER_SENDS_V1`] sends were made. `Err` once the sends are spent.
+    /// Give the bounded history walk a retry interval, then explicitly reacquire a missing answered unit. A new request
+    /// consumes this reservation's next session counter; retries of the same signed request never consume another counter.
+    pub(super) fn reacquire_after_v1(
+        &mut self,
+        view: &PalwLegacyDisputeViewV1,
+        me: PalwBondKeyV2,
+        probe: PalwLegacyProbeV1,
+        now_daa: u64,
+    ) -> Option<kaspa_consensus_core::palw_legacy_public_filer_v1::PalwDisputeReacquireV1> {
+        if now_daa > view.hard_deadline_daa || view.sessions.iter().any(|(bond, _)| *bond == me) {
+            return None;
+        }
+        let row = view.record.as_ref()?.live.get(&me)?;
+        if !view.unit_was_answered_v1(&probe.unit()) {
+            return None;
+        }
+        let since = match self.awaiting_public {
+            Some((held, at)) if held == probe => at,
+            _ => {
+                self.awaiting_public = Some((probe, now_daa));
+                return None;
+            }
+        };
+        if now_daa.saturating_sub(since) < PALW_FRAUD_FILER_RESEND_DAA_V1 {
+            return None;
+        }
+        let session_number = row.sessions_opened.checked_add(1)?;
+        if session_number > PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1 {
+            return None;
+        }
+        let binding = match probe.unit() {
+            PalwDaUnitV1::Event { .. } => None,
+            PalwDaUnitV1::Held(_) | PalwDaUnitV1::LegacyHeldV2(_) => Some(self.binding.clone()?),
+            _ => return None,
+        };
+        Some(kaspa_consensus_core::palw_legacy_public_filer_v1::PalwDisputeReacquireV1 {
+            version: PALW_DISPUTE_RESERVATION_VERSION_V1,
+            claim: self.candidate.claim_id,
+            reserver: me,
+            reserved_daa: row.reserved_daa,
+            session_number,
+            valid_until_daa: now_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1).min(view.hard_deadline_daa),
+            unit: probe.unit(),
+            binding,
+        })
+    }
+
+    /// May `item` be sent now? A different item always; the same item has a bounded retry interval and count.
     fn may_send(&self, item: PalwFraudFilerSentV1, now_daa: u64) -> Result<bool, ()> {
         match self.sent {
             Some((last, at, sends)) if last == item => {
@@ -560,6 +617,7 @@ impl PalwFraudFilerBookV1 {
                 case.bisect = PalwLegacyBisectV1::new(0);
                 case.legacy_wanted = None;
                 case.sent = None;
+                case.awaiting_public = None;
             }
         }
         if walk.next.is_none() {
@@ -699,7 +757,7 @@ pub(super) fn palw_fraud_filer_legacy_step_v2(
     Ok(match action {
         PalwFilerActionV1::Demand(probe) => {
             let unit = probe.unit();
-            match (view.is_some_and(|view| view.answered.contains(&unit)), answer_read(&unit)) {
+            match (view.is_some_and(|view| view.unit_was_answered_v1(&unit)), answer_read(&unit)) {
                 (true, true) => PalwFraudFilerStepV1::Learn(probe),
                 (true, false) => PalwFraudFilerStepV1::AwaitAnswer(probe),
                 _ => PalwFraudFilerStepV1::Engine(action),
@@ -725,7 +783,7 @@ pub(super) fn palw_fraud_filer_step_v1(
     match action {
         PalwFilerActionV1::Demand(probe) if !matches!(probe, PalwLegacyProbeV1::Terminal { .. }) => {
             let unit = probe.unit();
-            match (view.is_some_and(|view| view.answered.contains(&unit)), answer_read(&unit)) {
+            match (view.is_some_and(|view| view.unit_was_answered_v1(&unit)), answer_read(&unit)) {
                 (true, true) => PalwFraudFilerStepV1::Learn(probe),
                 (true, false) => PalwFraudFilerStepV1::AwaitAnswer(probe),
                 (false, _) => PalwFraudFilerStepV1::Engine(action),
@@ -1133,8 +1191,12 @@ impl PalwPanelService {
                 if *round == PALW_FRAUD_FILER_RESERVE_ROUND_V1 { return !facts.reserved; }
                 if *round == PALW_FRAUD_FILER_TERMINAL_ROUND_V2 { return !own_court_open; }
                 if facts.session_open { return false; }
+                if let Some((PalwFraudFilerSentV1::Reacquire { session_number, .. }, _, _)) = book.cases.get(&claim).and_then(|c| c.sent) {
+                    return view.as_ref().and_then(|v| v.record.as_ref()).and_then(|r| r.live.get(&bond_key))
+                        .is_some_and(|row| row.sessions_opened < session_number);
+                }
                 !book.cases.get(&claim).is_some_and(|case| matches!(case.sent,
-                    Some((PalwFraudFilerSentV1::Demand(probe), _, _)) if view.as_ref().is_some_and(|v| v.answered.contains(&probe.unit()))))
+                    Some((PalwFraudFilerSentV1::Demand(probe), _, _)) if view.as_ref().is_some_and(|v| v.unit_was_answered_v1(&probe.unit()))))
             });
             if court_pending.iter().any(|(held, round, responder, _)| *held == claim && palw_fraud_filer_queued_v1(*round, *responder))
             {
@@ -1181,6 +1243,7 @@ impl PalwPanelService {
                         match learned {
                             Ok(owned) => {
                                 let case = book.cases.get_mut(&claim).expect("held above");
+                                case.awaiting_public = None;
                                 case.binding = owned.binding;
                                 case.bisect = owned.bisect;
                                 case.frontiers = owned.frontiers;
@@ -1201,6 +1264,26 @@ impl PalwPanelService {
                     PalwFraudFilerStepV1::AwaitAnswer(probe) => {
                         if let PalwLegacyProbeV1::HeldNode { unit } = probe {
                             book.want_legacy(claim, unit);
+                        }
+                        if let Some(view) = view.as_ref()
+                            && let Some(request) =
+                                book.cases.get_mut(&claim).and_then(|c| c.reacquire_after_v1(view, bond_key, probe, current_daa))
+                        {
+                            let item = PalwFraudFilerSentV1::Reacquire { probe, session_number: request.session_number };
+                            self.fraud_filer_queue_v1(book, claim, item, current_daa, court_pending, court_due, || {
+                                let mut signed = true;
+                                let object = kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_reacquire_object_v1(
+                                    network_domain,
+                                    request,
+                                    |m| {
+                                        self.sign(m, PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1).unwrap_or_else(|| {
+                                            signed = false;
+                                            Vec::new()
+                                        })
+                                    },
+                                );
+                                if signed { Ok(object) } else { Err("no signing key for reacquisition".into()) }
+                            });
                         }
                         break;
                     }
@@ -1363,7 +1446,7 @@ impl PalwPanelService {
             Ok(object) => {
                 let round = match item {
                     PalwFraudFilerSentV1::Reserve => PALW_FRAUD_FILER_RESERVE_ROUND_V1,
-                    PalwFraudFilerSentV1::Demand(_) => PALW_FRAUD_FILER_DEMAND_ROUND_V1,
+                    PalwFraudFilerSentV1::Demand(_) | PalwFraudFilerSentV1::Reacquire { .. } => PALW_FRAUD_FILER_DEMAND_ROUND_V1,
                     PalwFraudFilerSentV1::Terminal { .. } => PALW_FRAUD_FILER_TERMINAL_ROUND_V2,
                 };
                 info!("[{PALW_PANEL}] claim {claim}: the fraud filer queues {item:?} (LG14-A, RFC-0014 §6–§7)");
@@ -1532,6 +1615,7 @@ mod tests {
             record: None,
             sessions: Vec::new(),
             answered: Vec::new(),
+            flat_answered_rows: 0,
             open_courts: 0,
             executor_refuted: false,
             court_convicted: false,
@@ -1823,6 +1907,18 @@ mod tests {
         v.answered.push(binding.unit());
         assert_eq!(step(&v, false, false), PalwFraudFilerStepV1::AwaitAnswer(binding));
         assert_eq!(step(&v, false, true), PalwFraudFilerStepV1::Learn(binding));
+        v.answered.clear();
+        v.flat_answered_rows = 1;
+        assert_eq!(
+            step(&v, false, false),
+            PalwFraudFilerStepV1::AwaitAnswer(binding),
+            "historical Flat coverage also waits for public bytes"
+        );
+        assert!(!v.unit_was_answered_v1(&PalwDaUnitV1::Event { row: 0, tile: 1 }), "Flat never covers another tile");
+        assert!(!v.unit_was_answered_v1(&PalwDaUnitV1::Event { row: 1, tile: 0 }), "Flat never covers a row past its bound");
+        let mut fresh = book.cases[&claim].clone();
+        assert!(fresh.reacquire_after_v1(&v, me, binding, 200).is_none());
+        assert!(fresh.reacquire_after_v1(&v, me, binding, 230).is_some(), "historical Flat coverage uses numbered reacquisition");
         // The outcome ends it whatever else stands.
         v.phase =
             PalwClaimPhaseV2::Voided { voided_daa: 200, reason: kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2::CourtFraud };
