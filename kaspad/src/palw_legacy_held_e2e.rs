@@ -580,7 +580,11 @@ async fn lg14b_a_lie_in_one_fused_tile_is_localized_and_convicted_by_a_fresh_out
         located.replays,
         located.resident_leaves,
     );
-    assert!(located.resident_leaves < n, "resident {} of {n} leaves", located.resident_leaves);
+    // Bounded by the replica's own retention, not the job: at most the block cache (four blocks of 2^retain) and the retained
+    // levels — on this 11k-leaf fixture that is about the whole job, at the canonical 8k row it is 1.9 MB of 6.75 GB (unit test).
+    let block = 1u64 << retain;
+    assert!(located.resident_leaves <= 4 * block + 2 * n.div_ceil(block), "resident {} leaves", located.resident_leaves);
+    assert!(located.replays <= u64::from(located.rounds) + 2, "{} blocks replayed in {} rounds", located.replays, located.rounds);
     // 2. Gap (c): the committed fused tile, disclosed by the unit DA-3 used to refuse.
     let ckw = PalwLegacyHeldUnitV2::KernelWitness { leaf: located.leaf };
     w.block(vec![o.demand(claim, ckw, &located.binding)]).expect("a fused leaf's witness is demandable");
