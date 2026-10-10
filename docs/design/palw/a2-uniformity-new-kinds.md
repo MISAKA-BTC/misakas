@@ -257,9 +257,9 @@ row, so a kind landing there fails the table test until the Lead allocates it. T
 | header form algo 7 `PFS4` | V4 receipt carriage | `palw_receipt_spend_v4` | RFC-0009 | yes |
 | header form algo 10 `PXE2` | EXEC envelope | `palw_exec_payload_v2` | X8R | no |
 | coinbase trailer `PXA2` | EXEC anchor | `palw_exec_payload_v2` | X8R | no |
-| inside tag 68 (re-read) | `PalwGenProfileV1::Head = 6` | `palw_task_heads_v1` | HFX | no |
-| inside tag 68 (appended) | `PalwGenProfileOffersV1::Head` (3) | `palw_task_heads_v1` | HFX | no |
-| FP job form (0x4a) | `PalwGenBodyV1::Head` (2) | `palw_task_heads_v1` | HFX | no |
+| inside tag 68 (re-read) | `PalwGenProfileV1::Head = 6` | `palw_task_heads_v1` | HFX | yes (no guarded arm: int-12's own `Profile(6)` verdict, probed) |
+| inside tag 68 (appended) | `PalwGenProfileOffersV1::Head` (3) | `palw_task_heads_v1` | HFX | yes (guarded arm; fence `TaskHeadsV1`) |
+| inside a generative job (tensor commitment, court proofs, accusations; the 0x4a FP form) | `PalwGenBodyV1::Head` (2) | `palw_task_heads_v1` | HFX | yes (guarded arm; the FP form by `palw_fp_head_job_refusal_at_v1`) |
 | header formula | `palw_state_root = H(fork-choice leaf ‖ ADR-0043 root)` past the fence | `palw_fork_choice_commitment_v1` | L2FC | no |
 | state encoding | per-shard V3 draw (delta 171, tail `0xED`) | `palw_permissionless_panel_v1` | SHARD | yes |
 | state encoding | per-segment pricing, the shard engine's encodings | `palw_tir_shard_segment_v2` | SHARD | yes |
@@ -446,7 +446,7 @@ registry below it, and node C disqualified the block whose founded line the live
 leaves a fence the ruleset already runs untouched.
 
 Rows awaiting their lanes (pending, by design): tag 113 / inner 15 / inner 20 / the salted-`Spec` nested row (G14R, §8), 16–18 and the
-`Segmented` nested row (K2S), 130–139 / `PXE2` / `PXA2` (X8R), the three HFX rows, L2FC's formula, BUDGET's two encodings, INTF's
+`Segmented` nested row (K2S), 130–139 / `PXE2` / `PXA2` (X8R), L2FC's formula, BUDGET's two encodings, INTF's
 reporter share.
 
 ## 8. Merging `g14/r4-fixes` and `adv/c4r4` with this branch (the Lead, 2026-10-10)

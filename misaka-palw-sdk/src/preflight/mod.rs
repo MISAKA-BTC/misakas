@@ -227,6 +227,25 @@ pub struct Options {
     /// register and mine stages stay `unknown` — the behaviour the corpus pins (`tests/golden/corpus_preflight_v1.json`, hashed by the
     /// RFC-0011 coverage audit) record for `Options::default()`. The CLIs and the census turn it on.
     pub pipeline_admission: bool,
+    /// **The tokenizer a class may bind from its pinned base** (HFX 2026-10-10; `TOKENIZER_MISSING`, 29,174 repositories): a fine-tune
+    /// that ships no tokenizer file registers by committing to the bytes of its base's tokenizer file. The caller (the census, from the
+    /// snapshot's listing; a registrant, from the base repository) says which base and the vocabulary its configuration declares; the
+    /// preflight accepts the binding only when the model's own configuration declares the SAME vocabulary size, so every id the tokenizer
+    /// can emit indexes a row of the embedding table. `None`: no base binding is offered.
+    pub base_tokenizer: Option<BaseTokenizerV1>,
+    /// **The task the class is judged for** (`fill-mask`, …; the Hub's pipeline tag or the census's inferred task), where the checkpoint
+    /// alone does not say: a `…ForMaskedLM` repository is a masked-LM class for `fill-mask` and its encoder for anything else. `None`:
+    /// the checkpoint's architecture alone.
+    pub task: Option<String>,
+}
+
+/// A base repository's tokenizer, offered to a class that has none of its own ([`Options::base_tokenizer`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct BaseTokenizerV1 {
+    /// The base repository's id.
+    pub base: String,
+    /// The `vocab_size` the base's configuration declares (the embedding table's rows, which its tokenizer indexes).
+    pub vocab_size: u64,
 }
 
 /// An adapter the preflight attaches to the model it reads ([`Options::lora`]).
@@ -255,6 +274,8 @@ impl Default for Options {
             full: full::FullInputs::default(),
             lora: None,
             pipeline_admission: false,
+            base_tokenizer: None,
+            task: None,
         }
     }
 }
@@ -495,9 +516,29 @@ pub struct JudgeCache {
     file: Option<std::sync::Mutex<std::fs::File>>,
 }
 
+/// **The judged ruleset's identity** for a cache key: the network's `consensus_params_id` and `consensus_schedule_id` as this build
+/// states them. A network NAME and a height are not enough: two builds can schedule different fences at the same height of one
+/// network (the 2026-10-08 withdrawal of testnet-12's DAA 9,000 schedule did exactly that), and a judgment cached under the old
+/// schedule must not answer under the new one. Memoised per network name.
+fn ruleset_tag(network: &Option<String>) -> String {
+    static TAGS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    let Some(name) = network else { return "no-network".to_string() };
+    let tags = TAGS.get_or_init(Default::default);
+    if let Some(t) = tags.lock().expect("ruleset tags").get(name) {
+        return t.clone();
+    }
+    let tag = match chain::PreflightNetwork::parse(name) {
+        Ok(net) => format!("{}|{}", net.params.consensus_params_id(), net.params.consensus_schedule_id()),
+        Err(e) => format!("unparsed:{e}"),
+    };
+    tags.lock().expect("ruleset tags").insert(name.clone(), tag.clone());
+    tag
+}
+
 impl JudgeCache {
     pub fn key(program: &misaka_palw_tir::TirProgramV1, analysis: &model::Analysis, opts: &Options) -> String {
         let mut st = blake2b_simd::Params::new().hash_length(32).key(b"misaka-palw/preflight-judge-cache/v1").to_state();
+        st.update(ruleset_tag(&opts.network).as_bytes());
         st.update(&program.encode());
         let a = analysis.artifact.as_ref().map(|a| (a.params_bytes, a.inventory_leaves_estimate));
         st.update(
@@ -521,6 +562,7 @@ impl JudgeCache {
     /// The key of a pipeline class's judgment: its programs' bytes, its lengths, its template and every option the judgment reads.
     pub fn pipeline_key(routed: &model::RoutedClass, opts: &Options) -> String {
         let mut st = blake2b_simd::Params::new().hash_length(32).key(b"misaka-palw/preflight-judge-cache/pipeline/v1").to_state();
+        st.update(ruleset_tag(&opts.network).as_bytes());
         match routed {
             model::RoutedClass::EncDec(e) => {
                 st.update(&e.encoder.encode());
@@ -531,6 +573,18 @@ impl JudgeCache {
             }
             model::RoutedClass::Undeclarable { kind, adapter, why } => {
                 st.update(format!("undeclarable|{kind}|{adapter}|{why}").as_bytes());
+            }
+            model::RoutedClass::Image(e) => {
+                st.update(&e.program.encode());
+                st.update(&e.pipeline.encode());
+                st.update(format!("|image|{}|{}|{}|{:?}", e.kind, e.rows, e.width, e.size).as_bytes());
+            }
+            model::RoutedClass::Encoder(e) => {
+                st.update(&e.program.encode());
+                st.update(&e.pipeline.encode());
+                st.update(
+                    format!("|encoder|{}|{}|{}|{}|{}|{}", e.head.name(), e.rows, e.width, e.pooling, e.normalised, e.lmax).as_bytes(),
+                );
             }
         }
         st.update(
@@ -721,10 +775,21 @@ fn run_on_source_cached(
     let residency = analysis.program.as_ref().map(|p| residency::residency_of(p, rules, canonical));
     let kernel_positions =
         chain_out.admission.as_ref().and_then(|a| a.layout.as_ref()).map(|l| l.max_context).or(opts.max_context).unwrap_or(u32::MAX);
+    let kernel_daa = network.as_ref().map(|n: &chain::NetworkInfo| n.daa).unwrap_or(0);
     let kernel = analysis
         .program
         .as_ref()
-        .map(|p| kernel::kernel_route_of(p, kernel_positions, network.as_ref().map(|n: &chain::NetworkInfo| n.daa).unwrap_or(0)));
+        .map(|p| kernel::kernel_route_of(p, kernel_positions, kernel_daa))
+        // A bidirectional encoder's class (an embedding, a sequence / token / span head): its program is ONE position over a padded
+        // token axis, so the kernel route that can hold it is K2-TIR-v5's (element courts), reported beside the generative verdict.
+        .or_else(|| match &analysis.routed {
+            Some(model::RoutedClass::Encoder(shape)) => Some(kernel::encoder_route_of(&shape.program, kernel_daa)),
+            // An image classifier's pipeline is the media-pipeline family's (K2-TIR-v3), as a vision-chat model's tower is.
+            Some(model::RoutedClass::Image(shape)) => {
+                Some(kernel::pipeline_route_of(&shape.pipeline, std::slice::from_ref(&shape.program), kernel_daa))
+            }
+            _ => None,
+        });
     Ok(Report {
         schema: PREFLIGHT_SCHEMA_V1,
         mode: "model",
@@ -759,4 +824,21 @@ fn run_on_source_cached(
         notes,
         registries: registries(reg),
     })
+}
+
+#[cfg(test)]
+mod judge_cache_key_tests {
+    use super::*;
+
+    /// A judgment is keyed by the ruleset it was judged on, not by the network's name: testnet-12's key carries this build's params and
+    /// schedule ids (the live int-12 ones), so a cache written by a build with another schedule never answers here.
+    #[test]
+    fn the_cache_key_names_the_ruleset_not_only_the_network() {
+        let tag = ruleset_tag(&Some("testnet-12".to_string()));
+        let net = chain::PreflightNetwork::parse("testnet-12").expect("testnet-12");
+        assert_eq!(tag, format!("{}|{}", net.params.consensus_params_id(), net.params.consensus_schedule_id()));
+        assert!(tag.starts_with("5ee7fd8ee019968c"), "{tag}");
+        assert_eq!(ruleset_tag(&None), "no-network");
+        assert_eq!(ruleset_tag(&Some("testnet-12".to_string())), tag, "memoised");
+    }
 }

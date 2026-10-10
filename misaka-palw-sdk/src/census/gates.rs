@@ -291,6 +291,10 @@ pub struct CensusContext {
     /// A frame's task for a repository that declares none (RFC-0002 §II.12: a GGUF the Hub lists without a task is in the local-LLM
     /// frame as text generation). `None` in the Hub-wide census, where an undeclared task is `TASK_UNKNOWN`.
     pub assume_task: Option<String>,
+    /// **The tokenizer of a repository's pinned base** (HFX 2026-10-10), by repository id: offered to a repository that ships no tokenizer
+    /// file, accepted by the preflight only for the same declared vocabulary. Built from the snapshot's listing (`tokenizer_bases.py`);
+    /// empty in a census that does not offer it.
+    pub base_tokenizers: std::collections::BTreeMap<String, preflight::BaseTokenizerV1>,
 }
 
 impl CensusContext {
@@ -321,6 +325,7 @@ impl CensusContext {
             cache: Default::default(),
             judge_budget: None,
             assume_task: None,
+            base_tokenizers: Default::default(),
         }
     }
 
@@ -332,9 +337,11 @@ impl CensusContext {
 }
 
 /// The preflight at one declared context, a panic caught and named.
-fn run_preflight(cs: &store::CensusSource, ctx: &CensusContext, max_context: u32) -> Result<Report, Found> {
+fn run_preflight(cs: &store::CensusSource, ctx: &CensusContext, max_context: u32, task: &TaskV1) -> Result<Report, Found> {
     let mut opts = ctx.options.clone();
     opts.max_context = Some(max_context);
+    opts.base_tokenizer = cs.base_tokenizer.clone();
+    opts.task = Some(task.task.clone());
     let deadline = ctx.judge_budget.map(|b| std::time::Instant::now() + b);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::tir_layout::tir_with_search_deadline_v1(deadline, || {
@@ -372,14 +379,14 @@ fn judge_at_contexts(
     let mut cx = ContextV1 { primary, source, declared, retry: None, judged_at: Vec::new(), primary_implied: false };
     let mut admit_retry = None;
     let report = match ctx.context_rule {
-        _ if ctx.options.depth == preflight::Depth::Headers => run_preflight(cs, ctx, primary),
+        _ if ctx.options.depth == preflight::Depth::Headers => run_preflight(cs, ctx, primary, task),
         // The narrower context first (admission at 8,192 costs ~30x the CPU of 2,048): a class refused at the narrower context on
         // limits that only grow with the context is refused at the primary too, so the primary is judged only for a class the
         // narrower context admits (or refuses on a code a wider context could change).
         ContextRule::ModelCapped { retry, .. } if primary > retry && !task.profile.is_pipeline() => {
             cx.retry = Some(retry);
             cx.judged_at.push(retry);
-            match run_preflight(cs, ctx, retry) {
+            match run_preflight(cs, ctx, retry, task) {
                 Ok(r2) if r2.verdict.convert.status != StageStatus::Ok => Ok(r2),
                 Ok(r2) => {
                     let a2 = admit_of(&r2);
@@ -395,7 +402,7 @@ fn judge_at_contexts(
                         Ok(r2)
                     } else {
                         cx.judged_at.push(primary);
-                        run_preflight(cs, ctx, primary)
+                        run_preflight(cs, ctx, primary, task)
                     }
                 }
                 Err(f) => Err(f),
@@ -403,7 +410,7 @@ fn judge_at_contexts(
         }
         _ => {
             cx.judged_at.push(primary);
-            run_preflight(cs, ctx, primary)
+            run_preflight(cs, ctx, primary, task)
         }
     };
     (report, Some(cx), admit_retry)
@@ -491,10 +498,14 @@ fn lower_listing(l: &ListingV1, task: &TaskV1, sel: &SelectedV1) -> Vec<Found> {
     if task.task == "unknown" {
         // A repository whose configuration names no model class is not one the frontend can read; one that does is a task the
         // inference could not place (`listing::task_of_architecture_class`).
+        // A GGUF whose `general.architecture` is one of llama.cpp's model architectures names a model class too (inference v4): an
+        // architecture whose task is not derivable is a task the inference could not place, not a repository without a model — it
+        // stays in denominator (b) as a failure (RFC-0011 §18: an unsupported architecture is never excluded).
         let described = l
             .config
             .as_object()
-            .is_some_and(|o| o.contains_key("architectures") || o.contains_key("model_type") || o.contains_key("peft"));
+            .is_some_and(|o| o.contains_key("architectures") || o.contains_key("model_type") || o.contains_key("peft"))
+            || l.gguf_arch.as_deref().is_some_and(|g| crate::census::inference_tables::LLAMA_CPP_MODEL_ARCHS_V1.contains(&g));
         f.push(found(
             codes::TASK_UNKNOWN,
             (!described).then(|| codes::TASK_UNKNOWN_NO_CONFIG.to_string()),
@@ -509,6 +520,18 @@ fn lower_listing(l: &ListingV1, task: &TaskV1, sel: &SelectedV1) -> Vec<Found> {
             codes::MODALITY_PROFILE_MISSING,
             Some(task.task.clone()),
             vec![format!("task `{}` has no canonical job profile", task.task)],
+        ));
+    } else if task.profile == Profile::GenHead && !crate::census::tasks::head_profile_armed() {
+        // The task's profile exists (the `Head` profile) and its fence is armed by no judged ruleset: decided by the listing, exactly.
+        // A fetched repository is still lowered and judged as the profile would judge it, beside this verdict (`evaluate`).
+        f.push(found(
+            codes::PROFILE_NOT_ARMED,
+            Some(format!("{}:{}", crate::census::tasks::HEAD_PROFILE_FENCE, task.task)),
+            vec![format!(
+                "task `{}`: its canonical job is the `Head` profile (task-heads-profile-v1), behind {}, which no ruleset schedules",
+                task.task,
+                crate::census::tasks::HEAD_PROFILE_FENCE
+            )],
         ));
     } else if task.profile == Profile::PartialTextStage {
         f.push(found(
@@ -607,7 +630,14 @@ fn summary(r: &Report) -> PreflightSummaryV1 {
         max_context: r.admission.as_ref().and_then(|a| a.layout.as_ref()).map(|l| l.max_context),
         artifact_bytes: r.artifact.as_ref().map(|a| a.estimate_bytes),
         download_bytes_needed: r.artifact.as_ref().and_then(|a| a.download_bytes_needed),
-        notes: r.notes.iter().take(6).cloned().collect(),
+        // The first notes, and always the hypothetical `Head` admission (the census's hypothetical column reads it).
+        notes: r
+            .notes
+            .iter()
+            .take(6)
+            .chain(r.notes.iter().skip(6).filter(|n| n.starts_with(crate::preflight::pipeline::HEAD_PROFILE_HYPOTHETICAL_V1)))
+            .cloned()
+            .collect(),
         kernel_route: r.kernel.as_ref().map(|k| format!("{}/{}", k.shipped, k.hypothetical)),
         kernel_bucket: r.kernel.as_ref().map(|k| k.bucket.clone()),
     }
@@ -789,13 +819,17 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
     {
         match sel.kind {
             ArtifactKind::Safetensors | ArtifactKind::SafetensorsOther | ArtifactKind::Gguf
-                if lower_found_listing.is_empty() || task.profile == Profile::PartialTextStage =>
+                if lower_found_listing.is_empty()
+                    || task.profile == Profile::PartialTextStage
+                    || (task.profile == Profile::GenHead
+                        && lower_found_listing.iter().all(|x| x.code == codes::PROFILE_NOT_ARMED)) =>
             {
                 match store::source_of(l, &sel, fx) {
                     Ok(cs) if cs.needs_tensor_data.is_some() => {
                         needs_tensor_data = cs.needs_tensor_data.clone();
                     }
-                    Ok(cs) => {
+                    Ok(mut cs) => {
+                        cs.base_tokenizer = ctx.base_tokenizers.get(&l.id).cloned();
                         let probe_image = task.profile == Profile::PartialTextStage
                             && cs.source.config.as_ref().is_some_and(|c| c.get("vision_config").is_some_and(|v| v.is_object()));
                         let (r, cx, ar) = judge_at_contexts(&cs, ctx, &task);
@@ -853,6 +887,7 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                         cache: Default::default(),
                         judge_budget: ctx.judge_budget,
                         assume_task: ctx.assume_task.clone(),
+                        base_tokenizers: Default::default(),
                     };
                     let (r, cx, ar) = judge_at_contexts(&cs, &ctx2, &task);
                     match r {
@@ -930,6 +965,11 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                 let wanted = match task.profile {
                     Profile::TextDecoder => Some("text-generation"),
                     Profile::GenEmbedding => Some("text-embedding"),
+                    // A head class computes its head's task: a pair task (zero-shot NLI, a reranker) is a sequence classifier's.
+                    Profile::GenHead => Some(match task.task.as_str() {
+                        "zero-shot-classification" | "text-ranking" => "text-classification",
+                        t => t,
+                    }),
                     _ => None,
                 };
                 let routed = r.notes.iter().any(|n| n.contains("RFC-0003 program"));
@@ -998,7 +1038,14 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
         // pipeline admission at the judged height, or `NOT_RUN_PIPELINE_ADMISSION` for a route this build cannot declare shape-only
         // (`admit_of`). A pipeline task whose class is not a data route (an embedding model, a text-to-image repository) has no
         // pipeline admission to read here.
-        if task.profile.is_pipeline() && !routed {
+        // **A causal language model tagged with a text-to-text task** (summarization, translation, text2text-generation; the Lead's
+        // decision of 2026-10-08): the advertised I/O — text in, generated text out — is what the text decoder class computes, the
+        // prompt template being serving detail, so its admission is the decoder's. An encoder–decoder is routed above and keeps the
+        // pipeline route.
+        let decoder_serves = task.profile == Profile::GenText
+            && !routed
+            && rep.is_some_and(|r| r.pipeline.is_none() && r.scope.as_ref().is_some_and(|s| s.task == "text-generation"));
+        if task.profile.is_pipeline() && !routed && !decoder_serves {
             return not_run(
                 Gate::Admit,
                 codes::NOT_RUN_PIPELINE_ADMISSION,
@@ -1009,6 +1056,9 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
             return not_run(Gate::Admit, if fetched.is_none() { codes::NOT_RUN_NOT_SAMPLED } else { "NOT_RUN_NO_PREFLIGHT" }, vec![]);
         };
         let mut a = admit_of(r);
+        if decoder_serves {
+            a.evidence.push(format!("task `{}` served by the text decoder class (a causal LM: text in, generated text out)", task.task));
+        }
         if let Some(cx) = &context
             && cx.primary_implied
         {
@@ -1162,13 +1212,43 @@ mod tests {
         assert_eq!(r.stopped_at, "source");
     }
 
+    /// **RFC-0011 §18: an architecture this build cannot place stays in the denominator.** A GGUF whose `general.architecture` is a
+    /// llama.cpp model architecture names a model class even when no task follows from it: `TASK_UNKNOWN` with a configuration
+    /// (FRONTEND, inside denominator (b)), never `no-config` (external, outside it). An architecture no runtime table knows is no-config.
+    #[test]
+    fn a_gguf_of_a_llama_cpp_architecture_is_a_model_class_even_without_a_task() {
+        let mut l = listing(None, &["model.gguf"]);
+        l.gguf_arch = Some("wavtokenizer-dec".into());
+        let r = evaluate(&l, None, &ctx());
+        let lo = gate(&r.technical, Gate::Lower);
+        assert_eq!((lo.blocking.as_deref(), lo.arg.as_deref()), (Some(codes::TASK_UNKNOWN), None));
+        l.gguf_arch = Some("an-unknown-writer".into());
+        let r = evaluate(&l, None, &ctx());
+        let lo = gate(&r.technical, Gate::Lower);
+        assert_eq!((lo.blocking.as_deref(), lo.arg.as_deref()), (Some(codes::TASK_UNKNOWN), Some(codes::TASK_UNKNOWN_NO_CONFIG)));
+    }
+
+    /// A head task's profile exists and is not armed: decided by the listing as `PROFILE_NOT_ARMED`, the kernel's (not a missing
+    /// profile), never a pass.
+    #[test]
+    fn a_head_task_is_decided_as_its_profile_not_armed() {
+        for t in ["text-classification", "token-classification", "question-answering", "fill-mask", "image-classification"] {
+            let r = evaluate(&listing(Some(t), &["config.json", "model.safetensors"]), None, &ctx());
+            let lo = gate(&r.technical, Gate::Lower);
+            assert_eq!(lo.blocking.as_deref(), Some(codes::PROFILE_NOT_ARMED), "{t}");
+            assert_eq!(lo.arg.as_deref(), Some(format!("palw_task_heads_v1:{t}").as_str()));
+            assert_eq!(lo.class, Some(GapClassV1::KernelNotActive), "{t}");
+            assert!(!r.shape_ready);
+        }
+    }
+
     #[test]
     fn a_task_without_a_profile_fails_lower_from_the_listing_alone() {
-        let l = listing(Some("image-classification"), &["config.json", "model.safetensors"]);
+        let l = listing(Some("depth-estimation"), &["config.json", "model.safetensors"]);
         let r = evaluate(&l, None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Source).status, GateStatus::Pass);
         let lo = gate(&r.technical, Gate::Lower);
-        assert_eq!((lo.blocking.as_deref(), lo.arg.as_deref()), (Some(codes::MODALITY_PROFILE_MISSING), Some("image-classification")));
+        assert_eq!((lo.blocking.as_deref(), lo.arg.as_deref()), (Some(codes::MODALITY_PROFILE_MISSING), Some("depth-estimation")));
         assert_eq!(gate(&r.technical, Gate::Admit).blocking.as_deref(), Some("NOT_RUN_AFTER_LOWER"));
         // Strict: the rights policy `none` confirms nothing, so the strict view stops at source.
         assert_eq!(gate(&r.gates, Gate::Source).blocking.as_deref(), Some(codes::RIGHTS_UNCONFIRMED));
@@ -1180,7 +1260,7 @@ mod tests {
     /// that was not run `NOT_RUN` (never a gap), a PASS none.
     #[test]
     fn every_gate_of_a_row_carries_who_has_to_change_something() {
-        let r = evaluate(&listing(Some("image-classification"), &["config.json", "model.safetensors"]), None, &ctx());
+        let r = evaluate(&listing(Some("depth-estimation"), &["config.json", "model.safetensors"]), None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Source).class, None);
         assert_eq!(gate(&r.technical, Gate::Lower).class, Some(GapClassV1::ProfileRequired));
         assert_eq!(gate(&r.technical, Gate::Lower).class_reason, Some("task profile"));
@@ -1254,9 +1334,9 @@ mod tests {
         // Not a transformers checkpoint: a configuration beside `training_args.bin` alone is no weights; a bare `.pt` has no reader.
         let r = evaluate(&listing(Some("text-generation"), &["config.json", "model.pt"]), None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::FORMAT_UNSUPPORTED));
-        // An earlier answer stands: a task with no profile is the profile's, whatever the weights are.
+        // An earlier answer stands: a task whose profile is not armed is the profile's, whatever the weights are.
         let r = evaluate(&listing(Some("text-classification"), &["config.json", "pytorch_model.bin"]), None, &ctx());
-        assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::MODALITY_PROFILE_MISSING));
+        assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::PROFILE_NOT_ARMED));
         // Another format beside it (onnx, tensorflow) changes nothing: the transformers checkpoint is the one the frontend reads.
         let r = evaluate(&listing(Some("text-generation"), &["config.json", "pytorch_model.bin", "model.onnx"]), None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY));

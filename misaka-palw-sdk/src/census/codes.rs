@@ -112,6 +112,10 @@ pub const TASK_UNKNOWN: &str = "TASK_UNKNOWN";
 pub const TASK_UNKNOWN_NO_CONFIG: &str = "no-config";
 /// The declared task has no canonical job profile (inputs, output, court path, artifact) in any RFC this build carries.
 pub const MODALITY_PROFILE_MISSING: &str = "MODALITY_PROFILE_MISSING";
+/// The declared task HAS a canonical job profile in this build, behind a fence no ruleset the census judges arms (the `Head` profile,
+/// `palw_task_heads_v1`, HFX 2026-10-08): not registrable at any judged height. A fetched repository is still lowered and its class
+/// judged as the profile would judge it (recorded beside the row, never a pass).
+pub const PROFILE_NOT_ARMED: &str = "PROFILE_NOT_ARMED";
 /// The declared task needs parts the class this build produces does not compute (a VLM's vision stage): the text class is a
 /// separately scoped class and does not credit the repository's task.
 pub const PARTIAL_TASK_ONLY: &str = "PARTIAL_TASK_ONLY";
@@ -163,6 +167,8 @@ pub fn gate_code_of_preflight(code: &str) -> Option<(Gate, &'static str)> {
         // A weight file the frontend refuses by its form (a PyTorch pickle off the allowlist, a strided view, the legacy format).
         "FORMAT_UNSUPPORTED" => (Gate::Lower, FORMAT_UNSUPPORTED),
         "SOURCE_INCOMPLETE" => (Gate::Source, WEIGHTS_INCOMPLETE),
+        // A program over the IR's element cap at the declared context (an 8,192-position encoder's scores): a size limit, `RESOURCE`.
+        "SHAPE_OVER_CAP" => (Gate::Lower, CONTEXT_BOUND),
         // register stage → admit
         "ADMISSION_EXCEEDS" => (Gate::Admit, "ADMISSION_EXCEEDS"),
         "ADMISSION_REFUSED" => (Gate::Admit, "ADMISSION_REFUSED"),
@@ -204,6 +210,7 @@ pub fn priority(gate: Gate, code: &str) -> u32 {
         Gate::Lower => &[
             TASK_UNKNOWN,
             MODALITY_PROFILE_MISSING,
+            PROFILE_NOT_ARMED,
             PARTIAL_TASK_ONLY,
             FORMAT_UNSUPPORTED,
             ADAPTER_UNCHECKED,
@@ -219,6 +226,7 @@ pub fn priority(gate: Gate, code: &str) -> u32 {
             "TENSOR_MISSING",
             "TENSOR_SHAPE",
             "TOKENIZER_MISSING",
+            CONTEXT_BOUND,
             UNMAPPED_PREFLIGHT_CODE,
         ],
         Gate::Admit => &[
@@ -275,11 +283,34 @@ mod tests {
             "INDEPENDENT_OPERATORS",
             "PACK_NOT_VERIFIED",
             "PIPELINE_CLASS_UNDECLARED",
+            "SHAPE_OVER_CAP",
         ];
         for c in published {
             assert!(gate_code_of_preflight(c).is_some(), "{c} has no gate");
         }
         assert_eq!(gate_code_of_preflight("SOMETHING_NEW"), None);
+    }
+
+    /// **An encoder over the IR's element cap is a size limit, not a frontend refusal** (HFX m3: six 8,192-position BGE-M3 / XLM-R
+    /// encoders, ≈ 2,021 repositories, were booked `FRONTEND / ARCH_REFUSED`). The lowering error the census met → the preflight's
+    /// `SHAPE_OVER_CAP` → the census's `CONTEXT_BOUND` at the lower gate → `RESOURCE_REFUSED`; any other encoder failure stays the
+    /// frontend's, and a frontend refusal beside it still ranks first.
+    #[test]
+    fn an_encoder_over_the_element_cap_is_a_resource_refusal() {
+        use crate::census::onboarding::{GapClassV1, classify_census_code_v1};
+        let met = "eval: internal: the encoder program is not in normal form: Shape: block 1 node 36 (MatMul): more than 2^28 elements at the worst-case H";
+        let b = crate::preflight::model::encoder_lowering_blocker(met, 8192);
+        assert_eq!((b.code.as_str(), b.arg.as_deref()), ("SHAPE_OVER_CAP", Some("2^28 elements")));
+        let (gate, code) = gate_code_of_preflight(&b.code).expect("mapped");
+        assert_eq!((gate, code), (Gate::Lower, CONTEXT_BOUND));
+        assert_eq!(classify_census_code_v1(gate, code, b.arg.as_deref(), &b.evidence), GapClassV1::ResourceRefused);
+        assert!(
+            priority(Gate::Lower, "ARCH_REFUSED") < priority(Gate::Lower, CONTEXT_BOUND),
+            "a frontend refusal beside it ranks first"
+        );
+        let other = crate::preflight::model::encoder_lowering_blocker("tensor `pooler.dense.weight` has shape [3, 4]", 512);
+        assert_eq!(other.code, "ARCH_REFUSED");
+        assert_eq!(classify_census_code_v1(Gate::Lower, &other.code, None, &other.evidence), GapClassV1::FrontendRequired);
     }
 
     /// The source code grep: every `Blocker::new(Stage::…, "<CODE>"` in the preflight is one of the published codes above, so the

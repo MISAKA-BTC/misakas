@@ -231,6 +231,9 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     if let OutputSpec::Classify { bias, pre, .. } = &spec.output {
         if let Some(p) = pre {
             m.lin("classifier.pre", "cls_pre", p.bias)?;
+            if let Some(n) = &p.norm {
+                m.norm("classifier.pre.norm", "cls_pre_norm", n)?;
+            }
         }
         let role = if m.st.name("cls_out").is_some() { "cls_out" } else { "lm_head" };
         // A plain nn.Linear whatever the body's convention (GPT-2's `score` is not a Conv1D): no transpose, like the vocabulary head.
@@ -240,7 +243,21 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
             m.put("classifier.out.b", Src::t(suffixed(&name, ".bias")))?;
         }
     }
-    let logits = matches!(spec.output, OutputSpec::Logits);
+    // Per-token logits: the classification layer (`cls_out`: `classifier` of a token classifier, `qa_outputs` of a span QA head).
+    if let OutputSpec::TokenLogits { bias, pre, .. } = &spec.output {
+        if let Some(p) = pre {
+            m.lin("classifier.pre", "cls_pre", p.bias)?;
+            if let Some(n) = &p.norm {
+                m.norm("classifier.pre.norm", "cls_pre_norm", n)?;
+            }
+        }
+        let name = m.role("cls_out")?;
+        m.put("classifier.out.w", Src::t(suffixed(&name, ".weight")))?;
+        if *bias {
+            m.put("classifier.out.b", Src::t(suffixed(&name, ".bias")))?;
+        }
+    }
+    let logits = matches!(spec.output, OutputSpec::Logits | OutputSpec::MaskedLm);
     if let OutputSpec::Embedding { proj: Some((_, bias)), .. } = spec.output {
         let w = m.w("embed_proj")?;
         m.put("embed.proj.w", w)?;

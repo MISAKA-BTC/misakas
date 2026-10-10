@@ -27,6 +27,10 @@ V = 64
 DEC = dict(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
            max_position_embeddings=64, pad_token_id=0)
 DSEQ = [[5, 17, 33, 8, 21], [40, 2, 29, 11, 50, 7, 21, 9]]
+MODERN = dict(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=3, num_attention_heads=4, max_position_embeddings=64,
+              local_attention=4, global_attn_every_n_layers=3, pad_token_id=0, bos_token_id=1, eos_token_id=2, cls_token_id=1,
+              sep_token_id=2, norm_bias=False, attention_bias=False, mlp_bias=False, hidden_activation="gelu", classifier_activation="gelu",
+              layer_types=["full_attention", "sliding_attention", "sliding_attention"])
 ENC = dict(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=4)
 
 # name -> (config class, model class, kwargs, sequences, kind)
@@ -49,6 +53,16 @@ CONFIGS = {
     "bert_rerank": ("BertConfig", "BertForSequenceClassification", dict(ENC, max_position_embeddings=32, type_vocab_size=2, hidden_act="gelu", layer_norm_eps=1e-12, pad_token_id=0, num_labels=1), [[2, 11, 25, 3, 7, 9, 3], [2, 40, 9, 3, 33, 21, 8, 5, 3]], "encoder:0:12"),
     "roberta_cls": ("RobertaConfig", "RobertaForSequenceClassification", dict(ENC, max_position_embeddings=34, type_vocab_size=1, hidden_act="gelu", layer_norm_eps=1e-5, pad_token_id=1, bos_token_id=0, eos_token_id=2, num_labels=2), [[0, 11, 25, 7, 2], [0, 40, 9, 17, 33, 21, 8, 2]], "encoder:1:12"),
     "xlmr_rerank": ("XLMRobertaConfig", "XLMRobertaForSequenceClassification", dict(ENC, max_position_embeddings=34, type_vocab_size=1, hidden_act="gelu", layer_norm_eps=1e-5, pad_token_id=1, bos_token_id=0, eos_token_id=2, num_labels=1), [[0, 11, 25, 7, 2], [0, 40, 9, 17, 33, 21, 8, 2]], "encoder:1:12"),
+    # HFX 2026-10-10: ALBERT (a pooler `dense` + tanh, shared layers), DeBERTa-v2 (ContextPooler: `dense` + the pooler activation) and
+    # CamemBERT (RoBERTa's classification head under the `roberta.` prefix).
+    "albert_cls": ("AlbertConfig", "AlbertForSequenceClassification", dict(ENC, embedding_size=16, max_position_embeddings=32, type_vocab_size=2, hidden_act="gelu_new", layer_norm_eps=1e-12, pad_token_id=0, num_hidden_groups=1, inner_group_num=1, num_labels=3), [[2, 11, 25, 7, 3], [2, 40, 9, 17, 33, 21, 8, 3]], "encoder:0:12"),
+    "deberta_v2_cls": ("DebertaV2Config", "DebertaV2ForSequenceClassification", dict(ENC, max_position_embeddings=32, type_vocab_size=0, hidden_act="gelu", layer_norm_eps=1e-7, pad_token_id=0, relative_attention=True, position_buckets=8, max_relative_positions=-1, pos_att_type=["p2c", "c2p"], share_att_key=True, norm_rel_ebd="layer_norm", position_biased_input=False, pooler_hidden_size=32, pooler_hidden_act="gelu", pooler_dropout=0.0, legacy=True, num_labels=3), [[1, 11, 25, 7, 2], [1, 40, 9, 17, 33, 21, 8, 2]], "encoder:0:12"),
+    "camembert_cls": ("CamembertConfig", "CamembertForSequenceClassification", dict(ENC, max_position_embeddings=34, type_vocab_size=1, hidden_act="gelu", layer_norm_eps=1e-5, pad_token_id=1, bos_token_id=0, eos_token_id=2, num_labels=2), [[0, 11, 25, 7, 2], [0, 40, 9, 17, 33, 21, 8, 2]], "encoder:1:12"),
+    # ModernBERT: the prediction head (dense, activation, norm) before the classifier; `classifier_pooling` cls and mean.
+    "modernbert_cls": ("ModernBertConfig", "ModernBertForSequenceClassification", dict(MODERN, classifier_bias=True, classifier_pooling="cls", num_labels=3), [[1, 11, 25, 7, 2], [1, 40, 9, 17, 33, 21, 8, 2]], "encoder:0:12"),
+    "modernbert_cls_mean": ("ModernBertConfig", "ModernBertForSequenceClassification", dict(MODERN, classifier_bias=False, classifier_pooling="mean", num_labels=2), [[1, 11, 25, 7, 2], [1, 40, 9, 17, 33, 21, 8, 2]], "encoder:0:12"),
+    "modernbert_cls_nobias": ("ModernBertConfig", "ModernBertForSequenceClassification", dict(MODERN, classifier_bias=False, classifier_pooling="cls", num_labels=2), [[1, 11, 25, 7, 2], [1, 40, 9, 17, 33, 21, 8, 2]], "encoder:0:12"),
+    "modernbert_cls_mean_bias": ("ModernBertConfig", "ModernBertForSequenceClassification", dict(MODERN, classifier_bias=True, classifier_pooling="mean", num_labels=3), [[1, 11, 25, 7, 2], [1, 40, 9, 17, 33, 21, 8, 2]], "encoder:0:12"),
     "distilbert_cls": ("DistilBertConfig", "DistilBertForSequenceClassification", dict(vocab_size=V, dim=32, hidden_dim=64, n_layers=2, n_heads=4, max_position_embeddings=32, activation="gelu", pad_token_id=0, num_labels=2), [[2, 11, 25, 7, 3], [2, 40, 9, 17, 33, 21, 8, 3]], "encoder:0:12"),
 }
 

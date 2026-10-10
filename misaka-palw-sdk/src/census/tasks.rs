@@ -14,7 +14,10 @@ pub const TASK_PROFILES_VERSION: &str = "misaka.palw.hf-census-tasks.v1";
 /// The rules `census::listing::task_of` infers a missing task by: v2 (2026-10-04) adds transformers head classes and GGUF
 /// architecture names to v1's causal-LM classes and PEFT task types; v3 (2026-10-08) reads every PEFT `task_type` and, for an adapter
 /// that declares none, the task of its pinned base's head class (`store::base_task_of`, applied where the base was read).
-pub const TASK_INFERENCE_VERSION: &str = "inference-v3";
+/// v4 (HFX 2026-10-08) adds transformers' auto-model tables and llama.cpp's converter registrations (`census::inference_tables`,
+/// data pinned to transformers 5.17.0 and llama.cpp @030ebb55), and keeps a GGUF of a llama.cpp model architecture with no derivable
+/// task inside denominator (b) (`TASK_UNKNOWN` with a model class, never `no-config`).
+pub const TASK_INFERENCE_VERSION: &str = "inference-v4";
 
 /// What carries a task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -28,6 +31,10 @@ pub enum Profile {
     GenEmbedding,
     /// RFC-0003's image profile, text-to-image (`palw_gen_v1`).
     GenImage,
+    /// **The task-head profile** (`Head`, `docs/design/palw/tir/task-heads-profile-v1.md`, HFX 2026-10-08): a classifier, a token or
+    /// span head, a masked-LM head or a vision head as a complete task — its logits the verified output, its label map and decode
+    /// rule in the class. Behind the dormant fence `palw_task_heads_v1`, which no ruleset schedules.
+    GenHead,
     /// The task needs a part (a vision or audio input stage) the class this build's preflight produces does not compute: the text
     /// stage is a separately scoped class (§II.10.1), the repository's task is not credited.
     PartialTextStage,
@@ -41,14 +48,23 @@ impl Profile {
         match self {
             Profile::TextDecoder => Some("palw_tir_v1"),
             Profile::GenText | Profile::GenEmbedding | Profile::GenImage => Some("palw_gen_v1"),
+            Profile::GenHead => Some(HEAD_PROFILE_FENCE),
             Profile::PartialTextStage | Profile::None => None,
         }
     }
 
     /// The class is an RFC-0003 pipeline class (registered and admitted by the generative lane's rules).
     pub fn is_pipeline(self) -> bool {
-        matches!(self, Profile::GenText | Profile::GenEmbedding | Profile::GenImage)
+        matches!(self, Profile::GenText | Profile::GenEmbedding | Profile::GenImage | Profile::GenHead)
     }
+}
+
+/// The fence the `Head` profile is behind (requested of the Lead; armed by no ruleset of this build).
+pub const HEAD_PROFILE_FENCE: &str = "palw_task_heads_v1";
+
+/// Whether the `Head` profile's fence is armed on the ruleset a census judges: on none, in this build.
+pub fn head_profile_armed() -> bool {
+    false
 }
 
 /// A task's row: its group (a stratum) and its profile.
@@ -80,21 +96,21 @@ pub const TASKS_V1: &[TaskRow] = &[
     row("audio-text-to-text", "multimodal-text", Profile::PartialTextStage),
     row("any-to-any", "multimodal-text", Profile::PartialTextStage),
     row("image-to-text", "multimodal-text", Profile::None),
-    row("fill-mask", "nlu", Profile::None),
-    row("text-classification", "nlu", Profile::None),
-    row("token-classification", "nlu", Profile::None),
-    row("zero-shot-classification", "nlu", Profile::None),
-    row("question-answering", "nlu", Profile::None),
+    row("fill-mask", "nlu", Profile::GenHead),
+    row("text-classification", "nlu", Profile::GenHead),
+    row("token-classification", "nlu", Profile::GenHead),
+    row("zero-shot-classification", "nlu", Profile::GenHead),
+    row("question-answering", "nlu", Profile::GenHead),
     row("table-question-answering", "nlu", Profile::None),
-    row("text-ranking", "nlu", Profile::None),
+    row("text-ranking", "nlu", Profile::GenHead),
     row("multiple-choice", "nlu", Profile::None),
     row("image-to-image", "image-generation", Profile::None),
     row("unconditional-image-generation", "image-generation", Profile::None),
     row("image-to-3d", "image-generation", Profile::None),
     row("text-to-3d", "image-generation", Profile::None),
-    row("image-classification", "vision", Profile::None),
-    row("object-detection", "vision", Profile::None),
-    row("image-segmentation", "vision", Profile::None),
+    row("image-classification", "vision", Profile::GenHead),
+    row("object-detection", "vision", Profile::GenHead),
+    row("image-segmentation", "vision", Profile::GenHead),
     row("depth-estimation", "vision", Profile::None),
     row("zero-shot-image-classification", "vision", Profile::None),
     row("zero-shot-object-detection", "vision", Profile::None),
@@ -154,6 +170,9 @@ mod tests {
         assert_eq!(task_row("a-new-hub-task").profile, Profile::None);
         assert_eq!(task_row("text-generation").profile.fence(), Some("palw_tir_v1"));
         assert_eq!(task_row("image-text-to-text").profile, Profile::PartialTextStage);
+        assert_eq!(task_row("text-classification").profile.fence(), Some(HEAD_PROFILE_FENCE));
+        assert_eq!(task_row("multiple-choice").profile, Profile::None, "no head profile for a task the design does not cover");
+        assert!(!head_profile_armed());
         assert_eq!(tasks_digest().len(), 64);
     }
 }

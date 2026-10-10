@@ -40,7 +40,7 @@
 
 その後、canonical harness への移設と、LG14-B の descent の配線が要る。
 
-**番号の注意（10-10 Lead）:** 統合では lifecycle kind fence の 6 を X8R の `ExecPayloadV2` が使った（`66597500a`）。LG14-A を merge するときは `PalwLifecycleKindFenceV1` の 7 を使い、`ALL` を 8 要素にすること（discriminant は連番必須）。詳細は `docs/design/palw/legacy-route-g14-filer.md` §12。
+**番号の注意（10-10 Lead）:** 統合では lifecycle kind fence の 6 を X8R の `ExecPayloadV2` が使った（`66597500a`）。LG14-A を merge するときは `PalwLifecycleKindFenceV1` の 8 を使い、`ALL` を 9 要素にすること（7 は HFX の `TaskHeadsV1`）（discriminant は連番必須）。詳細は `docs/design/palw/legacy-route-g14-filer.md` §12。
 
 ### LG14-B（`g14/legacy-held-da` @ `19522bc01`）
 

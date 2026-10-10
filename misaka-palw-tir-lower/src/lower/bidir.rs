@@ -40,6 +40,18 @@ pub struct BidirCfg {
     pub normalize: bool,
 }
 
+/// **Class choices that are not the model's, the pooling's or the normalisation's** (HFX 2026-10-10).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BidirExtras {
+    /// **`ENC_PAIR_SEGMENTS_V1`**: the id of the separator that closes the first segment of a pair input (`question ‖ sep ‖ context`).
+    /// A model with a token-type table of two or more rows then adds type row 1 to every position after the first separator and row 0
+    /// to the others — computed IN the program from the job's ids (an equality against this constant, a strictly-lower-triangular
+    /// count of earlier separators, a clamp to `{0, 1}` and a two-row gather), so the job supplies ids and a count and nothing else
+    /// (K2-TIR-v5's binding). `None`: one segment (type row 0 everywhere), the lowering before this feature. Ignored by a model
+    /// with fewer than two type rows (RoBERTa / XLM-R, DistilBERT: no segment ids exist).
+    pub pair_sep: Option<u32>,
+}
+
 /// The input params' names (lifted into inputs in this order).
 pub const IDS_PARAM: &str = "input.ids";
 pub const COUNT_PARAM: &str = "input.count";
@@ -94,7 +106,23 @@ struct Arch {
     /// ALBERT: the embedding is at the table's width and a projection (bias or not) lifts the normed row to the hidden width.
     proj_in: Option<bool>,
     /// `OUTPUT_CLASSIFY_V1`: the pooled row `[CLS]` goes through an optional dense layer + activation and a linear layer to the labels.
-    classify: Option<(bool, Option<crate::spec::ClassifyPre>)>,
+    classify: Option<(bool, Option<crate::spec::ClassifyPre>, bool)>,
+    /// `OUTPUT_TOKEN_LOGITS_V1`: every row goes through a linear layer (its bias) to the labels; no pooling.
+    token_logits: Option<(bool, Option<crate::spec::ClassifyPre>)>,
+    /// `ENC_PAIR_SEGMENTS_V1`: the first segment's closing separator (set only for a model with a type table of two rows or more).
+    pair_sep: Option<u32>,
+    /// `OutputSpec::MaskedLm`: every row through the head's transform (dense, activation, LayerNorm) and the vocabulary projection.
+    mlm: Option<MlmArch>,
+}
+
+/// A masked-LM head's transform and projection (`HEAD_TRANSFORM_V1`; the projection is the head param `head.w`, bound to the word
+/// embeddings when the head is tied, with the head's bias `head.b`).
+#[derive(Clone, Copy, Debug)]
+struct MlmArch {
+    dense_bias: bool,
+    act: crate::spec::Act,
+    norm: NormCfg,
+    head_bias: bool,
 }
 
 impl Arch {
@@ -229,7 +257,22 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
         proj_in: factorised.then_some(e.proj_in_bias),
         dis: e.disentangled,
         classify: match &spec.output {
-            crate::spec::OutputSpec::Classify { bias, pre, .. } => Some((*bias, *pre)),
+            crate::spec::OutputSpec::Classify { bias, pre, mean, .. } => Some((*bias, *pre, *mean)),
+            _ => None,
+        },
+        token_logits: match &spec.output {
+            crate::spec::OutputSpec::TokenLogits { bias, pre, .. } => Some((*bias, *pre)),
+            _ => None,
+        },
+        pair_sep: None,
+        mlm: match (&spec.output, &spec.head.transform) {
+            (crate::spec::OutputSpec::MaskedLm, Some(t)) => {
+                if spec.head.tied && spec.head.proj_out {
+                    return bad("a masked-LM head with a projection out of the hidden width");
+                }
+                Some(MlmArch { dense_bias: t.bias, act: t.act, norm: norm_cfg(&t.norm), head_bias: spec.head.bias })
+            }
+            (crate::spec::OutputSpec::MaskedLm, None) => return bad("a masked-LM output without HEAD_TRANSFORM_V1"),
             _ => None,
         },
     })
@@ -251,6 +294,20 @@ pub fn deberta_index(i: usize, j: usize, span: usize, max_position: usize) -> us
         ((a / b * (mid - 1) as f32).ceil() as i64 + mid) * sign
     };
     (bucket + span as i64).clamp(0, 2 * span as i64 - 1) as usize
+}
+
+/// **`ENC_PAIR_SEGMENTS_V1`'s segment ids** of a padded id row: position `i` is in segment 1 iff a separator sits at some `j < i`
+/// (the first separator closes segment 0 and is itself in it; every later position — a second separator and the pad included —
+/// is in segment 1). All zeros without a separator id. The program computes exactly this from the ids.
+pub fn pair_segment_types(ids: &[usize], sep: Option<u32>) -> Vec<usize> {
+    let mut seen = false;
+    ids.iter()
+        .map(|id| {
+            let t = usize::from(seen);
+            seen |= sep.is_some_and(|s| *id == s as usize);
+            t
+        })
+        .collect()
 }
 
 /// One row through a LayerNorm or RMSNorm, in f64.
@@ -282,7 +339,13 @@ pub(super) fn hl_param(hl: &HlProgram, name: &str) -> Result<u32> {
 /// program's "logits" node is the pooled vector `[1, d]` in the class's fixed point (`Q30` when
 /// normalised, a power-of-two unit otherwise).
 pub fn lower_bidir(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg) -> Result<Lowered> {
-    let a = arch_of(spec)?;
+    lower_bidir_with(hl, spec, cfg, &BidirExtras::default())
+}
+
+/// [`lower_bidir`] with the class's [`BidirExtras`].
+pub fn lower_bidir_with(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg, extras: &BidirExtras) -> Result<Lowered> {
+    let mut a = arch_of(spec)?;
+    a.pair_sep = extras.pair_sep.filter(|_| spec.embedding.type_rows.is_some_and(|r| r > 1));
     let l = cfg.lmax;
     let max_rows = spec.embedding.positions.as_ref().map_or(0, |p| p.rows);
     if l == 0 || (a.has_positions && a.pos_offset + l as usize > max_rows) {
@@ -441,6 +504,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             let (pp, tp2) = (if a.has_positions { Some(hl_param(hl, "embed.pos_table")?) } else { None }, hl_param(hl, "embed.type_table").ok());
             let off = a.pos_offset;
             let lr = l as usize;
+            let segments = a.pair_sep.is_some();
             let sum = if pp.is_none() && tp2.is_none() {
                 word
             } else {
@@ -458,9 +522,10 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                             Some(p) => Some(c.f(p)?),
                             None => None,
                         };
+                        // With segments the type rows are a separate two-row table (below), not folded into the positions.
                         let t = match tp2 {
-                            Some(t) => Some(c.f(t)?),
-                            None => None,
+                            Some(t) if !segments => Some(c.f(t)?),
+                            _ => None,
                         };
                         let mut v = Vec::with_capacity(lr * cols);
                         for i in 0..lr {
@@ -472,7 +537,45 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                         Ok(IntTensor::i32(vec![lr, cols], v))
                     }),
                 )?;
-                let sum = b.add(word, pos, DType::I64);
+                let mut sum = b.add(word, pos, DType::I64);
+                if let (Some(sep), Some(tt)) = (a.pair_sep, tp2) {
+                    // **`ENC_PAIR_SEGMENTS_V1`**: the segment id of position `i` is 1 iff a separator sits at some `j < i`, computed
+                    // from the job's ids: `ids == sep`, masked by the strictly-lower triangle (`j < i`), summed over `j`, clamped to
+                    // {0, 1}, and used to gather from the two-row type table (rows 0 and 1, at the residual scale).
+                    let ty = decl(
+                        &mut b,
+                        cx,
+                        &lb,
+                        "embed.type_rows",
+                        DType::I32,
+                        &[2, cols],
+                        false,
+                        Arc::new(move |c| {
+                            let sr = c.scale(&ScaleKey::resid())?;
+                            let t = c.f(tt)?;
+                            let v: Vec<i32> = (0..2 * cols)
+                                .map(|k| (t.data[k] as f64 / sr).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
+                                .collect();
+                            Ok(IntTensor::i32(vec![2, cols], v))
+                        }),
+                    )?;
+                    let sepc = b.c(DType::Idx, sep as i128);
+                    let is_sep = b.compare(ids, sepc, tir::Cmp::Eq);
+                    let one = b.c(DType::I32, 1);
+                    let zero = b.c(DType::I32, 0);
+                    let m = b.select(is_sep, one, zero, DType::I32);
+                    let m_row = b.reshape_fixed(m, &[1, l]);
+                    let ii = b.iota(DType::Idx, &[Dim::Fixed(l), Dim::Fixed(1)], 0, 0, 1);
+                    let jj = b.iota(DType::Idx, &[Dim::Fixed(1), Dim::Fixed(l)], 1, 0, 1);
+                    let before = b.compare(jj, ii, tir::Cmp::Lt);
+                    let hit = b.select(before, m_row, zero, DType::I32);
+                    let cnt = b.reduce_sum(hit, 1, DType::I32);
+                    let cnt = b.reshape_fixed(cnt, &[l]);
+                    let seg = b.clamp(cnt, 0, 1, DType::I32);
+                    let seg = b.cast(seg, DType::Idx);
+                    let trow = b.gather(ty, seg, 0, 0);
+                    sum = b.add(sum, trow, DType::I64);
+                }
                 b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32)
             };
             let sum = rows_val(sum, DType::I32, resid.clone(), cols, "embed.sum");
@@ -790,6 +893,94 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                 }
                 None => x,
             };
+            // **A masked-LM head** (`OutputSpec::MaskedLm`): every row through the head's transform and the vocabulary projection,
+            // `[L, vocab]` in one power-of-two unit. The program reads no mask position; a pad row is computed like any other.
+            if let Some(m) = a.mlm {
+                if cfg.normalize {
+                    return Err(LowerError::not_lowerable("a masked-LM head reads the encoder's rows, un-normalised"));
+                }
+                let codes_want = |site: &str| Want { dt: DType::I16, key: site_key(site) };
+                let h0 = codes_rows(&mut b, cx, &mut lb, &x)?;
+                let up = linear_rows(
+                    &mut b,
+                    cx,
+                    &mut lb,
+                    &h0,
+                    "head.transform.dense.w",
+                    m.dense_bias.then_some("head.transform.dense.b"),
+                    "mlm.dense",
+                    &codes_want("mlm.dense"),
+                )?;
+                note_site(cx, tb, &up);
+                let act = lower_table_named(&mut b, cx, &mut lb, &up, TableFn::Act(m.act), "mlm.act")?;
+                note_site(cx, tb, &act);
+                let nrm = norm_rows_kind(
+                    &mut b,
+                    cx,
+                    &mut lb,
+                    &act,
+                    m.norm.kind,
+                    m.norm.eps,
+                    "head.transform.norm",
+                    m.norm.bias,
+                    &codes_want("mlm.norm"),
+                )?;
+                note_site(cx, tb, &nrm);
+                let key = ScaleKey { base: Base::Pow2Site { names: vec!["mlm.out".into()] }, factor: 1.0 };
+                let out = linear_rows(
+                    &mut b,
+                    cx,
+                    &mut lb,
+                    &nrm,
+                    "head.w",
+                    m.head_bias.then_some("head.b"),
+                    "mlm.out",
+                    &Want { dt: DType::I32, key },
+                )?;
+                let out = ensure_node(&mut b, &out);
+                let tir::Ref::Node(oi) = out.r else { unreachable!("ensure_node") };
+                b.commit(out.r);
+                note_site(cx, tb, &out);
+                cx.logits_key = Some(out.key.clone());
+                return Ok((b.finish(&[]), Some(oi)));
+            }
+            // **Per-token logits** (`OUTPUT_TOKEN_LOGITS_V1`): every row through the classification layer, `[L, labels]` in one
+            // power-of-two unit; no pooling. A pad row is computed like any other.
+            if let Some((tbias, tpre)) = a.token_logits {
+                if cfg.normalize {
+                    return Err(LowerError::not_lowerable("per-token logits read the encoder's rows, un-normalised"));
+                }
+                let codes_want = |site: &str| Want { dt: DType::I16, key: site_key(site) };
+                let mut h = codes_rows(&mut b, cx, &mut lb, &x)?;
+                // A prediction head before the classifier (ModernBERT's: dense, activation, norm), on every row.
+                if let Some(p) = tpre {
+                    let up = linear_rows(&mut b, cx, &mut lb, &h, "classifier.pre.w", p.bias.then_some("classifier.pre.b"), "tok.pre", &codes_want("tok.pre"))?;
+                    note_site(cx, tb, &up);
+                    h = lower_table_named(&mut b, cx, &mut lb, &up, TableFn::Act(p.act), "tok.act")?;
+                    note_site(cx, tb, &h);
+                    if let Some(n) = p.norm {
+                        h = norm_rows_kind(&mut b, cx, &mut lb, &h, n.kind, n.eps, "classifier.pre.norm", n.bias, &codes_want("tok.norm"))?;
+                        note_site(cx, tb, &h);
+                    }
+                }
+                let key = ScaleKey { base: Base::Pow2Site { names: vec!["tok.out".into()] }, factor: 1.0 };
+                let out = linear_rows(
+                    &mut b,
+                    cx,
+                    &mut lb,
+                    &h,
+                    "classifier.out.w",
+                    tbias.then_some("classifier.out.b"),
+                    "tok.out",
+                    &Want { dt: DType::I32, key },
+                )?;
+                let out = ensure_node(&mut b, &out);
+                let tir::Ref::Node(oi) = out.r else { unreachable!("ensure_node") };
+                b.commit(out.r);
+                note_site(cx, tb, &out);
+                cx.logits_key = Some(out.key.clone());
+                return Ok((b.finish(&[]), Some(oi)));
+            }
             let pooled = match cfg.pooling {
                 Pooling::Cls => b.slice(x.r, 0, 0, 1),
                 Pooling::Mean => {
@@ -816,9 +1007,10 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             // **A classification head** (`OUTPUT_CLASSIFY_V1`): the `[CLS]` row through the optional dense + activation (BERT's pooler,
             // RoBERTa's `dense` + tanh, DistilBERT's `pre_classifier` + ReLU) and the linear layer to the labels; the output is the
             // labels' logits in one power-of-two unit.
-            if let Some((cbias, pre)) = a.classify {
-                if cfg.pooling != Pooling::Cls || cfg.normalize {
-                    return Err(LowerError::not_lowerable("a classification head reads the [CLS] row, un-normalised"));
+            if let Some((cbias, pre, mean)) = a.classify {
+                let want_pooling = if mean { Pooling::Mean } else { Pooling::Cls };
+                if cfg.pooling != want_pooling || cfg.normalize {
+                    return Err(LowerError::not_lowerable("a classification head reads the pooled row its spec names ([CLS] or the mean), un-normalised"));
                 }
                 let codes_want = |site: &str| Want { dt: DType::I16, key: site_key(site) };
                 let mut h = codes_rows(&mut b, cx, &mut lb, &pv)?;
@@ -827,6 +1019,10 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                     note_site(cx, tb, &up);
                     h = lower_table_named(&mut b, cx, &mut lb, &up, TableFn::Act(p.act), "cls.act")?;
                     note_site(cx, tb, &h);
+                    if let Some(n) = p.norm {
+                        h = norm_rows_kind(&mut b, cx, &mut lb, &h, n.kind, n.eps, "classifier.pre.norm", n.bias, &codes_want("cls.norm"))?;
+                        note_site(cx, tb, &h);
+                    }
                 }
                 let key = ScaleKey { base: Base::Pow2Site { names: vec!["cls.out".into()] }, factor: 1.0 };
                 let out = linear_rows(&mut b, cx, &mut lb, &h, "classifier.out.w", cbias.then_some("classifier.out.b"), "cls.out", &Want { dt: DType::I32, key })?;
@@ -1202,9 +1398,23 @@ pub fn float_forward(
     cfg: &BidirCfg,
     params: &ParamStore,
     seq: &Padded,
+    stats: Option<&mut BTreeMap<String, SiteStat>>,
+) -> Result<Vec<f64>> {
+    float_forward_with(hl, spec, cfg, &BidirExtras::default(), params, seq, stats)
+}
+
+/// [`float_forward`] with the class's [`BidirExtras`].
+pub fn float_forward_with(
+    hl: &HlProgram,
+    spec: &ArchSpec,
+    cfg: &BidirCfg,
+    extras: &BidirExtras,
+    params: &ParamStore,
+    seq: &Padded,
     mut stats: Option<&mut BTreeMap<String, SiteStat>>,
 ) -> Result<Vec<f64>> {
-    let a = arch_of(spec)?;
+    let mut a = arch_of(spec)?;
+    a.pair_sep = extras.pair_sep.filter(|_| spec.embedding.type_rows.is_some_and(|r| r > 1));
     let (l, d) = (cfg.lmax as usize, hl.hidden);
     if seq.ids.len() != l || seq.count == 0 || seq.count > l {
         return Err(LowerError::eval(format!("a padded sequence of {} ids with {} real ones for L = {l}", seq.ids.len(), seq.count)));
@@ -1256,10 +1466,16 @@ pub fn float_forward(
     let pos = if a.has_positions { Some(p("embed.pos_table", None)?) } else { None };
     let typ = p("embed.type_table", None).ok();
     let ed = hl.params[hl_param(hl, "embed.table")? as usize].shape[1];
+    // Segment ids of a pair input: type 1 from the first separator's NEXT position on, else type 0 (`pair_segment_types`).
+    let seg = pair_segment_types(&seq.ids, a.pair_sep);
     let mut x: Vec<Vec<f64>> = (0..l)
         .map(|i| {
             (0..ed)
-                .map(|j| word[seq.ids[i] * ed + j] + pos.as_ref().map_or(0.0, |p| p[(a.pos_offset + i) * ed + j]) + typ.as_ref().map_or(0.0, |t| t[j]))
+                .map(|j| {
+                    word[seq.ids[i] * ed + j]
+                        + pos.as_ref().map_or(0.0, |p| p[(a.pos_offset + i) * ed + j])
+                        + typ.as_ref().map_or(0.0, |t| t[seg[i] * ed + j])
+                })
                 .collect()
         })
         .collect();
@@ -1436,14 +1652,54 @@ pub fn float_forward(
         x = x.iter().map(|r| norm(r, n, "final_norm", None)).collect::<Result<_>>()?;
         observe("post.final_norm".into(), &x[..n_real]);
     }
+    // A masked-LM head: the real rows' vocabulary logits, row-major `[count, vocab]`.
+    if let Some(m) = a.mlm {
+        let wd = p("head.transform.dense.w", None)?;
+        let bd = if m.dense_bias { Some(p("head.transform.dense.b", None)?) } else { None };
+        let mut rows: Vec<Vec<f64>> = x.iter().map(|r| lin(r, &wd, bd.as_deref(), d)).collect();
+        observe("post.mlm.dense".into(), &rows[..n_real]);
+        rows = rows.iter().map(|r| r.iter().map(|v| crate::float_ref::act(m.act, *v as f32) as f64).collect()).collect();
+        observe("post.mlm.act".into(), &rows[..n_real]);
+        rows = rows.iter().map(|r| norm(r, &m.norm, "head.transform.norm", None)).collect::<Result<_>>()?;
+        observe("post.mlm.norm".into(), &rows[..n_real]);
+        let wh = p("head.w", None)?;
+        let vocab = hl.params[hl_param(hl, "head.w")? as usize].shape[0];
+        let bh = if m.head_bias { Some(p("head.b", None)?) } else { None };
+        let out: Vec<Vec<f64>> = rows.iter().map(|r| lin(r, &wh, bh.as_deref(), vocab)).collect();
+        observe("post.mlm.out".into(), &out[..n_real]);
+        return Ok(out[..n_real].concat());
+    }
+    // Per-token logits: the real rows' logits, row-major `[count, labels]`.
+    if let Some((tbias, tpre)) = a.token_logits {
+        let mut x = x;
+        if let Some(pr) = tpre {
+            let wd = p("classifier.pre.w", None)?;
+            let bd = if pr.bias { Some(p("classifier.pre.b", None)?) } else { None };
+            x = x.iter().map(|r| lin(r, &wd, bd.as_deref(), d)).collect();
+            observe("post.tok.pre".into(), &x[..n_real]);
+            x = x.iter().map(|r| r.iter().map(|v| crate::float_ref::act(pr.act, *v as f32) as f64).collect()).collect();
+            observe("post.tok.act".into(), &x[..n_real]);
+            if let Some(n) = pr.norm {
+                x = x.iter().map(|r| norm(r, &norm_cfg(&n), "classifier.pre.norm", None)).collect::<Result<_>>()?;
+                observe("post.tok.norm".into(), &x[..n_real]);
+            }
+        }
+        let w = p("classifier.out.w", None)?;
+        let labels = hl.params[hl_param(hl, "classifier.out.w")? as usize].shape[0];
+        let bv = if tbias { Some(p("classifier.out.b", None)?) } else { None };
+        let rows: Vec<Vec<f64>> = x.iter().map(|r| lin(r, &w, bv.as_deref(), labels)).collect();
+        observe("post.tok.out".into(), &rows[..n_real]);
+        return Ok(rows[..n_real].concat());
+    }
     let pooled: Vec<f64> = match cfg.pooling {
         Pooling::Cls => x[0].clone(),
         Pooling::Mean => (0..d).map(|j| (0..n_real).map(|i| x[i][j]).sum::<f64>() / n_real as f64).collect(),
     };
     observe("post.pool".into(), std::slice::from_ref(&pooled));
-    if let Some((cbias, pre)) = a.classify {
-        if cfg.pooling != Pooling::Cls || cfg.normalize {
-            return Err(LowerError::not_lowerable("a classification head reads the [CLS] row, un-normalised"));
+    if let Some((cbias, pre, mean)) = a.classify {
+        let want_pooling = if mean { Pooling::Mean } else { Pooling::Cls };
+        if cfg.pooling != want_pooling || cfg.normalize {
+            return Err(LowerError::not_lowerable("a classification head reads the pooled row its spec names ([CLS] or the mean), un-normalised"));
         }
         let mut h = pooled.clone();
         if let Some(pr) = pre {
@@ -1453,6 +1709,10 @@ pub fn float_forward(
             observe("post.cls.pre".into(), std::slice::from_ref(&h));
             h = h.iter().map(|v| crate::float_ref::act(pr.act, *v as f32) as f64).collect();
             observe("post.cls.act".into(), std::slice::from_ref(&h));
+            if let Some(n) = pr.norm {
+                h = norm(&h, &norm_cfg(&n), "classifier.pre.norm", None)?;
+                observe("post.cls.norm".into(), std::slice::from_ref(&h));
+            }
         }
         let w = p("classifier.out.w", None)?;
         let labels = hl.params[hl_param(hl, "classifier.out.w")? as usize].shape[0];

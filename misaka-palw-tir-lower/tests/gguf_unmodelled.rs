@@ -268,6 +268,82 @@ fn any_unmodelled_metadata_namespace_is_refused_and_provenance_is_not() {
     g.model().expect("quantize.* is provenance");
 }
 
+/// **The inert provenance registry** (`GGUF_INERT_PROVENANCE_V1`): a quantiser's bookkeeping namespace, as the census found it in
+/// 123 saved headers (`mradermacher.*`, every key and value type of the observed files), is ignored and recorded; the model is the
+/// file's model without it. An unlisted key of a registered namespace, a table value in one, and an unregistered namespace are
+/// refused by name.
+#[test]
+fn an_inert_provenance_namespace_is_ignored_by_name_and_nothing_else_is() {
+    let plain = base().model().expect("the fixture maps");
+    let mut g = base();
+    for (k, v) in [
+        ("mradermacher.quantize_version", "2"),
+        ("mradermacher.quantized_by", "mradermacher"),
+        ("mradermacher.quantized_at", "2025-02-23T04:13:46+01:00"),
+        ("mradermacher.quantized_on", "nico1"),
+        ("mradermacher.convert_type", "hf"),
+    ] {
+        let (ty, raw) = s(v);
+        g.set(k, ty, raw);
+    }
+    let m = g.model().expect("a quantiser's bookkeeping is inert");
+    assert_eq!(m.config, plain.config, "the same model as the file without its bookkeeping");
+    assert_eq!(m.inert_keys().len(), 5, "{:?}", m.inert_keys());
+    assert!(m.inert_keys().iter().all(|k| k.starts_with("mradermacher.")));
+    assert_eq!(m.unmapped(), plain.unmapped());
+    // The second registered namespace, as observed (free text).
+    let mut g = base();
+    for (k, v) in [
+        ("duynt.quantized.by", "duyntnet"),
+        ("duynt.greetings", "hello"),
+        ("duynt.random.quote", "q"),
+        ("duynt.quantization.date", "d"),
+    ] {
+        let (ty, raw) = s(v);
+        g.set(k, ty, raw);
+    }
+    assert_eq!(g.model().expect("inert").inert_keys().len(), 4);
+    // An unlisted key of a registered namespace is refused, naming the key and the registry.
+    let mut g = base();
+    let (ty, raw) = s("hf");
+    g.set("mradermacher.convert_type", ty, raw);
+    let (ty, raw) = u(1);
+    g.set("mradermacher.weight_permutation", ty, raw);
+    let Err(LowerError::NotLowerable(msg)) = g.model() else { panic!("an unlisted key is refused") };
+    assert!(msg.contains("`mradermacher.weight_permutation`") && msg.contains("GGUF_INERT_PROVENANCE_V1"), "{msg}");
+    // A listed key whose value is a table is refused.
+    let mut g = base();
+    let (ty, raw) = arr_str(&["a", "b"]);
+    g.set("mradermacher.quantized_by", ty, raw);
+    let Err(LowerError::NotLowerable(msg)) = g.model() else { panic!("a table is never inert") };
+    assert!(msg.contains("array"), "{msg}");
+    // A namespace that declares a reshape of the stored tensors stays refused, inert keys beside it or not.
+    let mut g = base();
+    let (ty, raw) = s("hf");
+    g.set("mradermacher.convert_type", ty, raw);
+    let (ty, raw) = arr_str(&["64", "128"]);
+    g.set("comfy.gguf.orig_shape.token_embd.weight", ty, raw);
+    let Err(LowerError::NotLowerable(msg)) = g.model() else { panic!("refused") };
+    assert!(msg.contains("`comfy.*`"), "{msg}");
+}
+
+/// The registry never lists a namespace that declares something about the weights, and its identity is fixed by its rows.
+#[test]
+fn the_inert_registry_and_the_never_inert_list_are_disjoint() {
+    use misaka_palw_tir_lower::gguf::{GGUF_INERT_NAMESPACES_V1, GGUF_NEVER_INERT_NAMESPACES_V1, gguf_inert_registry_digest_v1};
+    for r in GGUF_INERT_NAMESPACES_V1 {
+        assert!(
+            !GGUF_NEVER_INERT_NAMESPACES_V1.iter().any(|(ns, _)| *ns == r.namespace),
+            "`{}` declares something about the weights and is listed inert",
+            r.namespace
+        );
+        assert!(!["general", "tokenizer", "quantize", "split", "prism"].contains(&r.namespace));
+        assert!(!r.keys.is_empty() && !r.why.is_empty());
+    }
+    assert!(GGUF_NEVER_INERT_NAMESPACES_V1.iter().any(|(ns, _)| *ns == "prism"));
+    assert_eq!(gguf_inert_registry_digest_v1().len(), 64);
+}
+
 #[test]
 fn multi_token_prediction_layers_are_dropped_by_name() {
     let mut g = base();

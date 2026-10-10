@@ -84,6 +84,119 @@ pub fn pipeline_route_of(
     }
 }
 
+/// **The kernel route of a bidirectional encoder's class** (K2-TIR-v5, lane K2S `k2-real-scale.md` §12; HFX 2026-10-10): the
+/// class's one-stage pipeline is ONE position over a padded token axis, which the generative route's position-sized bounds refuse for
+/// every encoder (the m3 finding). Under K2-TIR-v5 the unit of a court is one element of one committed value, so the same program —
+/// the version-1 view of `encoder::bidir_v2`, whose last two params are the job's ids and count — is judged by the descriptor's plan,
+/// `check_plan_with_v1` (ranges proven from the inputs' intervals), the per-prosecution gate under the interim route policy and the
+/// node's carrier. `shipped` is the outcome under the schedule this binary ships (the descriptor is `Implemented`, never active);
+/// `hypothetical` is the same checks with the descriptor armed. Reported beside the generative verdict and **never merged into it**
+/// (a different registration route, behind its own dormant fences): no row counts as covered because of it.
+pub fn encoder_route_of(program: &misaka_palw_tir::program_v2::TirProgramV2, daa: u64) -> KernelRouteInfo {
+    let d = misaka_palw_kernel::descriptor::k2_tir_v5_descriptor();
+    let name = format!("K2-TIR-v5 {}", misaka_palw_kernel::hash::hex(&d.digest()[..8]));
+    let refused = |code: &str, why: String| KernelRouteInfo {
+        kernel: name.clone(),
+        shipped: code.to_string(),
+        hypothetical: code.to_string(),
+        detail: why.chars().take(400).collect(),
+        bucket: "frontend_gap".to_string(),
+        max_positions: 1,
+    };
+    let view = program.v1_view();
+    let run = || -> Result<KernelRouteInfo, KernelRouteInfo> {
+        let enc = misaka_palw_kernel::seg_encoder::encoder_binding_v1(&view)
+            .map_err(|e| refused("FRONTEND_REQUIRED", format!("not a K2-TIR-v5 encoder: {e}")))?;
+        misaka_palw_kernel::seg_encoder::prove_encoder_ranges_v1(&view, &enc)
+            .map_err(|e| refused("FRONTEND_REQUIRED", format!("the ranges are not proven from the inputs' intervals: {e}")))?;
+        let root = misaka_palw_kernel::public::program_root_v1(&view.encode());
+        let plan = misaka_palw_kernel::plan::plan_for_tir_program_v1(&d, &view, root, 1).map_err(|(family, why)| {
+            refused("KERNEL_EXTENSION_REQUIRED", format!("a {} relation: {why}", family.name()))
+        })?;
+        let judge = |schedule: &KernelScheduleV1| {
+            misaka_palw_kernel::check::check_plan_with_v1(
+                schedule,
+                &d,
+                &view,
+                root,
+                &plan,
+                daa,
+                misaka_palw_kernel::check::RangeRuleV1::ProvenByV2,
+            )
+        };
+        let shipped = match judge(&builtin_schedule_v1()) {
+            Ok(a) => RegistrationOutcomeV1::EligibleAt {
+                daa,
+                descriptor: d.digest(),
+                plan_root: a.plan_root,
+                error_bits: a.error_bits,
+            },
+            Err(o) => o,
+        };
+        let armed_schedule = KernelScheduleV1::default().with(d.digest(), KernelStatusV1::Active { since_daa: 0 });
+        let accepted = match judge(&armed_schedule) {
+            Ok(a) => a,
+            Err(o) => {
+                return Ok(KernelRouteInfo {
+                    kernel: name.clone(),
+                    shipped: shipped.code().to_string(),
+                    hypothetical: o.code().to_string(),
+                    detail: o.to_string().chars().take(400).collect(),
+                    bucket: shipped.coverage_bucket(misaka_palw_kernel::outcome::CoverageEvidenceV1::NONE).name().to_string(),
+                    max_positions: 1,
+                });
+            }
+        };
+        // The route's per-prosecution ceilings and the carrier: a class whose priced court does not fit is refused by name.
+        let policy = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(
+            kaspa_hashes::Hash64::from_bytes([0; 64]),
+            kaspa_hashes::Hash64::from_bytes([0; 64]),
+        );
+        let carrier = kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1;
+        let gated = misaka_palw_kernel::gate::public_prosecution_complete_v4(
+            &d,
+            &plan,
+            &view,
+            &misaka_palw_kernel::public::ProfileMaterialV1::kernel_route(true),
+            &policy.prosecution,
+        )
+        .map_err(|g| format!("PROSECUTION_BOUND: the gate refuses {g:?}"))
+        .and_then(|(bounds, _seg)| {
+            misaka_palw_kernel::ledger::carrier_fit_v1(&bounds, carrier, carrier, carrier)
+                .map(|_| bounds)
+                .map_err(|e| format!("CARRIER_FIT: {e}"))
+        });
+        let (hypothetical, detail) = match gated {
+            Ok(b) => (
+                "ELIGIBLE_AT".to_string(),
+                format!(
+                    "{} relations, eps <= 2^-{}; per prosecution: public {} B, verifier RAM {} B, worst filing {} B",
+                    plan.relations.len(),
+                    accepted.error_bits,
+                    b.max_public_bytes,
+                    b.max_verifier_ram,
+                    b.max_filing_bytes
+                ),
+            ),
+            Err(why) => {
+                let (code, rest) = why.split_once(": ").unwrap_or(("PROSECUTION_BOUND", &why));
+                (code.to_string(), rest.to_string())
+            }
+        };
+        Ok(KernelRouteInfo {
+            kernel: name.clone(),
+            shipped: shipped.code().to_string(),
+            hypothetical,
+            detail: detail.chars().take(400).collect(),
+            bucket: shipped.coverage_bucket(misaka_palw_kernel::outcome::CoverageEvidenceV1::NONE).name().to_string(),
+            max_positions: 1,
+        })
+    };
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+        .unwrap_or_else(|_| Err(refused("FRONTEND_REQUIRED", "the K2-TIR-v5 check panicked".into())))
+        .unwrap_or_else(|r| r)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

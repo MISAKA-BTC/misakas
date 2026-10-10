@@ -213,6 +213,15 @@ fn vit_class_embedding_and_rows_match_their_hf_fixture() {
     check_tower_with("vit", "last_hidden_state", Some(vision::VisionOut::Rows));
 }
 
+/// `ViTForImageClassification` (HFX 2026-10-10): the class row through the final layernorm and the linear `classifier` to
+/// `num_labels` logits — the float reference, the calibrated integer program, the one-stage JobImage pipeline, the three
+/// implementations, the court and both admissions, against transformers' logits.
+#[test]
+fn vit_image_classifier_matches_its_hf_logits() {
+    let b = check_tower("vit_cls", "logits");
+    assert!(b.out_scale > 0.0);
+}
+
 #[test]
 fn qwen2_vl_vision_with_its_merger_matches_its_hf_fixture() {
     check_tower("qwen2_vl_vision", "merged");

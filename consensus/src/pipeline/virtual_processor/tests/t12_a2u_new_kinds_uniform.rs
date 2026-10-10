@@ -126,6 +126,11 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             }
             PalwLifecycleKindFenceV1::ProviderCourtV1 => params.palw_provider_court_v1 = Some(at),
             PalwLifecycleKindFenceV1::LegacyHeldDaV2 => params.palw_legacy_held_da_v2 = Some(at),
+            // Lane HFX: the `Head` variants inside tag 68 and a generative job; the fence mirrors onto the V2 bundle.
+            PalwLifecycleKindFenceV1::TaskHeadsV1 => {
+                params.palw_task_heads_v1 = Some(kaspa_consensus_core::palw_task_heads_v1::PalwTaskHeadsFenceV1::testnet12_v1(at));
+                params.sync_palw_task_heads_v1();
+            }
             // Lane BUDGET: the allocation needs the budget at or below it; both with the unapproved probe policies, mirrored.
             PalwLifecycleKindFenceV1::ModelBondAllocationV1 => {
                 // Caps per base unit of capital (a TEST policy, never binding here): this harness judges kinds, not budgets.
@@ -181,6 +186,7 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_panel_free_v1"
             | "palw_typed_roots_v1"
             | "palw_legacy_held_da_v2"
+            | "palw_task_heads_v1"
             | "palw_exec_payload_v2" => {} // armed above, through their enums
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
@@ -526,6 +532,38 @@ fn reread_probes() -> Vec<Obj> {
     vec![class]
 }
 
+/// **Forms appended inside int-12 kinds** (HFX, `PalwInt12WireChangeV1::CarriedAppended`): a tag-68 registration whose profile offers are
+/// the appended `Head` variant (3), and a tag-87 tensor commitment whose job body is `Head` (2). The live build cannot decode either:
+/// it tolerates the carrier and folds nothing; below `palw_task_heads_v1` every build must do the same, and a node with the fence armed
+/// far above the chain agrees.
+fn appended_probes() -> Vec<Obj> {
+    use kaspa_consensus_core::palw_task_heads_v1::{PALW_HEAD_PROBLEM_SINGLE_LABEL_V1, PALW_HEAD_TASK_SEQUENCE_V1, PalwGenHeadBodyV1, PalwGenHeadOffersV1};
+    let mut class = zero_filled_kind(68);
+    let Obj::ClassRegisteredGenV1 { admission, .. } = &mut class else { unreachable!("tag 68") };
+    admission.class.profile = 6;
+    admission.class.offers.profile = kaspa_consensus_core::palw_gen_class_v1::PalwGenProfileOffersV1::Head(PalwGenHeadOffersV1 {
+        task: PALW_HEAD_TASK_SEQUENCE_V1,
+        problem: PALW_HEAD_PROBLEM_SINGLE_LABEL_V1,
+        labels: 2,
+        label_map_root: kaspa_consensus_core::palw_task_heads_v1::palw_head_label_map_root_v1(&["a", "b"]),
+        pair_separator: vec![],
+        entailment_label: None,
+        position_scalar: None,
+    });
+    let mut job = zero_filled_kind(87);
+    let Obj::GenTensorCommitted { job: tensor_job, .. } = &mut job else { unreachable!("tag 87") };
+    tensor_job.body = kaspa_consensus_core::palw_gen_job_v1::PalwGenBodyV1::Head(PalwGenHeadBodyV1 {
+        input: kaspa_consensus_core::palw_gen_job_v1::PalwGenEmbeddingInputV1::Text {
+            token_ids_hash: Hash64::from_bytes([1; 64]),
+            tokens: 4,
+        },
+        task: PALW_HEAD_TASK_SEQUENCE_V1,
+        position: 0,
+        output: 3,
+    });
+    vec![class, job]
+}
+
 /// The chunks of a group carrying `inner`, cut in `parts` (each `ObjectChunk` names the group id of the whole).
 fn chunks_of(inner: &Obj, parts: usize) -> Vec<Obj> {
     let whole = borsh::to_vec(inner).unwrap();
@@ -757,6 +795,9 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     payloads.push(("the reference: tag 254, which no build decodes".into(), reference.clone()));
     for probe in reread_probes() {
         payloads.push(("a live-build kind carrying a re-read value (tag 68, profile 6)".into(), payload_of(&probe)));
+    }
+    for probe in appended_probes() {
+        payloads.push((format!("an appended Head form inside a live-build kind: {probe:?}").chars().take(70).collect(), payload_of(&probe)));
     }
     for object in adr0175_objects() {
         payloads.push((format!("ADR-0175: {object:?}").chars().take(60).collect(), payload_of(&object)));

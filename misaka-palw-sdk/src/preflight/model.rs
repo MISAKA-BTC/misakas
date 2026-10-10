@@ -116,6 +116,35 @@ pub enum RoutedClass {
     EncDec(Box<misaka_palw_tir_lower::model::route::EncDecStagesV1>),
     /// A route whose class this build cannot declare shape-only, and why (never a pass).
     Undeclarable { kind: String, adapter: String, why: String },
+    /// **A bidirectional encoder's class** (HFX 2026-10-08): an embedding, a sequence classifier or a token head, lowered shape-only to
+    /// its one-stage pipeline and judged by the generative lane's admission. An embedding is an `Embedding`-profile class (RFC-0003
+    /// §II.3, `palw_gen_v1`); a head's task profile is the dormant `Head` profile's (`task-heads-profile-v1.md`), judged as that
+    /// profile would judge it and refused by name while its fence is not armed.
+    Encoder(Box<misaka_palw_tir_lower::model::route::BidirClassShapeV1>),
+    /// **An image classifier's class** (HFX 2026-10-10): a vision tower or a convolutional network ending in its classifier, lowered
+    /// shape-only to a one-stage pipeline over the job's canonical image.
+    Image(Box<misaka_palw_tir_lower::model::route::ImageClassShapeV1>),
+}
+
+/// **Why a bidirectional encoder's class did not lower at `lmax` padded positions, as a blocker.** The IR's element cap (no node holds
+/// more than 2^28 elements: an 8,192-position encoder's attention scores) is a SIZE limit of the declared context, `SHAPE_OVER_CAP`
+/// (the census's `CONTEXT_BOUND`, a resource refusal) — not the architecture's; any other failure is `ARCH_REFUSED`.
+pub fn encoder_lowering_blocker(error: &str, lmax: u32) -> Blocker {
+    if error.contains("more than 2^28 elements") {
+        return Blocker::new(
+            Stage::Convert,
+            "SHAPE_OVER_CAP",
+            "the bidirectional encoder's class at the declared context has a node over the IR's 2^28-element cap",
+        )
+        .arg("2^28 elements")
+        .evidence([format!("{lmax} padded positions: {}", short(error))])
+        .safe([
+            "a narrower context (--max-context) lowers; the class then declares that context, not the model's".to_string(),
+            "a tiled encoder court (one close per tile of rows) would not hold the whole score matrix in one node".to_string(),
+        ]);
+    }
+    Blocker::new(Stage::Convert, "ARCH_REFUSED", "the bidirectional encoder's class cannot be lowered at the declared context")
+        .evidence([format!("{lmax} padded positions: {}", short(error))])
 }
 
 /// Everything the convert stage learned.
@@ -142,12 +171,17 @@ fn capped(mut v: Vec<String>) -> Vec<String> {
     v
 }
 
-/// The `quantization_config` of a configuration (the text decoder's, when the model nests it).
-fn quantization_config(config: &serde_json::Value) -> Option<&serde_json::Value> {
-    config
-        .get("quantization_config")
-        .filter(|q| !q.is_null())
-        .or_else(|| config.get("text_config").and_then(|t| t.get("quantization_config")).filter(|q| !q.is_null()))
+/// The quantisation block of a configuration, as the lowering reads it (`misaka_palw_tir_lower::prequant::quant_block`: a
+/// `quantization_config`, or MLX's `quantization` block named `quant_method: "mlx"`), else the text decoder's
+/// `quantization_config` when the model nests it. A block the lowering refuses (a `quantization` that is not MLX's, two that
+/// disagree) is not a storage description: the lowering's own refusal names it.
+fn quantization_config(config: &serde_json::Value) -> Option<serde_json::Value> {
+    let root = config.as_object()?;
+    match misaka_palw_tir_lower::prequant::quant_block(root) {
+        Ok(Some(q)) => Some(q),
+        Ok(None) => config.get("text_config").and_then(|t| t.get("quantization_config")).filter(|q| !q.is_null()).cloned(),
+        Err(_) => None,
+    }
 }
 
 fn float_dtype(d: &str) -> bool {
@@ -172,7 +206,18 @@ fn short(s: &str) -> String {
 pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: Option<&str>) -> Analysis {
     let mut blockers: Vec<Blocker> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
-    let read_opts = ReadOptions { adapter: adapter_text.map(|t| AdapterChoice::Text(t.to_string())).unwrap_or_default() };
+    // **The head a task reads** (HFX 2026-10-10): a `…ForMaskedLM` checkpoint is read as its encoder (a sentence embedder) unless the
+    // task is `fill-mask`, which reads the checkpoint's own head (`hf_schema::masked_lm_adapter_for`). An adapter the caller supplies wins.
+    let masked_lm = (adapter_text.is_none() && opts.task.as_deref() == Some("fill-mask"))
+        .then(|| src.config.as_ref().and_then(misaka_palw_tir_lower::hf_schema::masked_lm_adapter_for))
+        .flatten();
+    let read_opts = ReadOptions {
+        adapter: match (adapter_text, masked_lm) {
+            (Some(t), _) => AdapterChoice::Text(t.to_string()),
+            (None, Some(id)) => AdapterChoice::BuiltIn(id.to_string()),
+            (None, None) => AdapterChoice::default(),
+        },
+    };
     let history_bound =
         if opts.held { misaka_palw_tir::program::HISTORY_BOUND_V1_HELD } else { misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL };
     // **A declared context bounds the history window** (`LowerOpts::max_window`, the runtime pack's `max_window`): every job of a
@@ -210,6 +255,14 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         for p in g.pending_tensor_data() {
             notes.push(format!(
                 "{p}: its values are read at conversion; the program's structure does not depend on them (ROPE_FREQ_FACTORS_V1), so this verdict stands for any table"
+            ));
+        }
+        if !g.inert_keys().is_empty() {
+            notes.push(format!(
+                "GGUF_INERT_PROVENANCE_V1: {} metadata key(s) ignored as a publisher's bookkeeping ({}); the registry's digest {}",
+                g.inert_keys().len(),
+                g.inert_keys().join(", "),
+                &misaka_palw_tir_lower::gguf::gguf_inert_registry_digest_v1()[..16]
             ));
         }
     }
@@ -327,6 +380,15 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
                             .evidence([format!("source and target of {ctx} positions: {}", short(&e))]),
                         ),
                     }
+                } else if kind == "vision" || kind == "cnn" {
+                    // An image classifier is declared shape-only (HFX 2026-10-10); a backbone is not.
+                    routed = Some(match misaka_palw_tir_lower::model::route::lower_image_class_shape_v1(config) {
+                        Ok(misaka_palw_tir_lower::model::route::ImageShapeV1::Class(shape)) => RoutedClass::Image(shape),
+                        Ok(misaka_palw_tir_lower::model::route::ImageShapeV1::NotDeclarable(why)) => {
+                            RoutedClass::Undeclarable { why, kind, adapter }
+                        }
+                        Err(why) => RoutedClass::Undeclarable { why: format!("the image class cannot be lowered shape-only: {why}"), kind, adapter },
+                    });
                 } else {
                     routed = Some(RoutedClass::Undeclarable {
                         why: format!(
@@ -559,7 +621,21 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         _ => None,
     };
     let needs_tokenizer = !is_route || src.config.as_ref().is_some_and(misaka_palw_tir_lower::hf_schema::is_encoder_decoder);
-    if tokenizer_known == Some(false) && needs_tokenizer {
+    // A tokenizer the pinned base supplies (the class commits to the bytes of that file), accepted only for the same vocabulary.
+    let declared_vocab = src.config.as_ref().and_then(|c| {
+        c.get("vocab_size").or_else(|| c.get("text_config").and_then(|t| t.get("vocab_size"))).and_then(serde_json::Value::as_u64)
+    });
+    let base_tokenizer = opts
+        .base_tokenizer
+        .as_ref()
+        .filter(|bt| src.kind == InputKind::HfDirectory && declared_vocab == Some(bt.vocab_size));
+    if tokenizer_known == Some(false) && needs_tokenizer && base_tokenizer.is_some() {
+        let bt = base_tokenizer.expect("checked");
+        notes.push(format!(
+            "TOKENIZER_BOUND_FROM_BASE: no tokenizer file beside the checkpoint; the class binds the tokenizer of its pinned base `{}` (its configuration declares vocab_size {} = this model's): the registrant commits to the bytes of that one file",
+            bt.base, bt.vocab_size
+        ));
+    } else if tokenizer_known == Some(false) && needs_tokenizer {
         blockers.push(
             Blocker::new(
                 Stage::Convert,
@@ -573,8 +649,45 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         );
     }
 
+    // ---- a bidirectional encoder (an embedding, a sequence classifier, a token head): an RFC-0003 pipeline class --------------------
+    // Its class is the one-stage pipeline over the padded token axis, not the per-position program above: it is declared shape-only and
+    // judged by the generative lane's admission (`super::pipeline`), as an encoder–decoder is.
+    let mut encoder_routed = false;
+    if opts.pipeline_admission
+        && routed.is_none()
+        && let (Some(p), Some(config)) = (&prepared, &src.config)
+        && misaka_palw_tir_lower::model::route::bidir_head_of(&p.spec).is_some()
+        && p.spec.features().iter().any(|f| f.id.0 == "ENC_BIDIR_V1")
+    {
+        let lmax = opts.max_context.unwrap_or_else(|| pipeline_default_context(config));
+        // A sentence-transformers repository says its pooling and normalisation; without its files, the mean (the costlier mode).
+        let dir = (src.kind == InputKind::HfDirectory).then(|| std::path::PathBuf::from(&src.label)).filter(|d| d.is_dir());
+        let st = dir.as_deref().and_then(|d| misaka_palw_tir_lower::encoder::sentence_transformers(d).ok().flatten());
+        let mean = st.as_ref().is_none_or(|s| s.pooling == misaka_palw_tir_lower::encoder::StPooling::Mean);
+        let normalize = st.as_ref().is_some_and(|s| s.normalize);
+        match misaka_palw_tir_lower::model::route::lower_bidir_class_shape_v1(&p.spec, &p.hl, config, lmax, mean, normalize) {
+            Ok(shape) => {
+                notes.push(format!(
+                    "a bidirectional encoder class ({} head, [{}, {}] output at {} padded positions): lowered to 1 RFC-0003 program; it registers as a pipeline class, {}{}",
+                    shape.head.name(),
+                    shape.rows,
+                    shape.width,
+                    shape.lmax,
+                    "judged below by the generative lane's admission (RFC-0003)",
+                    shape.pair_sep.map_or(String::new(), |s| format!(
+                        "; pair segments ({}): the segment ids are computed in the program from the job's ids (separator id {s})",
+                        misaka_palw_tir_lower::model::route::ENC_PAIR_SEGMENTS_V1
+                    ))
+                ));
+                routed = Some(RoutedClass::Encoder(Box::new(shape)));
+                encoder_routed = true;
+            }
+            Err(e) => blockers.push(encoder_lowering_blocker(&e.to_string(), lmax)),
+        }
+    }
+
     // ---- the artifact estimate ------------------------------------------------------------------------------------------------------
-    let program = prepared.as_ref().map(|p| p.lowered.program.clone());
+    let program = prepared.as_ref().filter(|_| !encoder_routed).map(|p| p.lowered.program.clone());
     let artifact = program.as_ref().map(|p| artifact_of(src, p, &scope, &tensors, &unused_set, &ignored));
     Analysis { model, scope, storage, tensors, artifact, blockers, notes, program, tokenizer_known, routed }
 }
@@ -634,7 +747,7 @@ fn storage_of(src: &Source, reg: &QuantRegistry) -> (StorageInfo, Vec<Blocker>) 
         }
         let q = src.config.as_ref().and_then(quantization_config);
         let mut described: Option<DescriptorRef> = None;
-        if let Some(q) = q {
+        if let Some(q) = q.as_ref() {
             let method = q.get("quant_method").and_then(|m| m.as_str()).unwrap_or("unknown").to_ascii_lowercase();
             let name = match q.get("format").and_then(|f| f.as_str()) {
                 Some(f) => format!("{method}/{f}"),
@@ -776,8 +889,10 @@ fn tensor_check(
         Some(check_weights(&prep.hl, &prep.binding, m))
     } else if src.shapes_known() {
         let hs = HeaderSource::new(&src.shards);
+        let no_entries = BTreeMap::new();
+        let entries = prep.spec.hf.quant.as_ref().map_or(&no_entries, |q| &q.module_params);
         match prep.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()).and_then(|q| q.fmt.binding()) {
-            Some((f, params)) => match misaka_palw_tir_lower::weights::described::DescribedSource::new(Box::new(hs), f, params) {
+            Some((f, params)) => match misaka_palw_tir_lower::weights::described::DescribedSource::new_with(Box::new(hs), f, params, entries) {
                 Ok(d) => {
                     info.checked = "shapes".into();
                     Some(check_weights(&prep.hl, &prep.binding, &d))
@@ -903,7 +1018,15 @@ fn bound_in_dtype(src: &Source, dtype: &str, unused: &BTreeSet<String>, ignored:
     src.shards
         .iter()
         .flat_map(|s| s.entries.iter())
-        .filter(|(n, e)| e.dtype == dtype && !unused.contains(*n) && !ignored.iter().any(|p| n.starts_with(p.as_str())))
+        .filter(|(n, e)| {
+            e.dtype == dtype
+                && !unused.contains(*n)
+                && !ignored.iter().any(|p| n.starts_with(p.as_str()))
+                // A module BUFFER (`position_ids`, `inv_freq`, …) older checkpoints saved is neither "unused" (the check skips it) nor
+                // bound: it is no weight of the class. Counting it made every BERT checkpoint with an `embeddings.position_ids` (I64)
+                // buffer a `QUANT_NO_DESCRIPTOR(safetensors/I64)` — the MiniLM / MPNet sentence-transformers among them.
+                && !misaka_palw_tir_lower::weights::is_module_buffer(n)
+        })
         .count()
 }
 

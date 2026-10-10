@@ -1,0 +1,26 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mixin-mlm-encoder",
+  "doc": "A mixin: `\u2026ForMaskedLM` over a BERT-lineage encoder (mixin-bert-encoder): EVERY row of the encoder through the head's transform (`HEAD_TRANSFORM_V1`: dense, the model's activation, LayerNorm) and the vocabulary projection, which is tied to the word embeddings (`tie_word_embeddings`, true for every transformers MLM head) and carries the head's own bias \u2014 `[L, vocab]` logits per token (`OutputSpec::MaskedLm`). The program reads no mask position: the row at the masked position is what a user reads. The decoder weight of an older checkpoint (`\u2026decoder.weight`) is the embedding table and is not read twice. HFX 2026-10-10.",
+  "vars": [
+    {
+      "name": "head",
+      "value": {
+        "tied": false,
+        "bias": true,
+        "transform": {
+          "bias": true,
+          "act": {
+            "$var": "act"
+          },
+          "norm": {
+            "$var": "norm"
+          }
+        }
+      }
+    }
+  ],
+  "spec": {
+    "output": "MaskedLm"
+  }
+}

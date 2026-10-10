@@ -142,6 +142,12 @@ pub struct TransactionValidator {
     /// transaction validity byte for byte.
     palw_fp_job_v5_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
+    /// **The task-head profile: `Params::palw_task_heads_v1`'s height** (`never()` read as absence). A version-10 commitment whose
+    /// job body is `Head` (bytes the int-12 build cannot decode, refusing the block at its isolation door) is refused in the header
+    /// context below this height — at every height where it is `None`, which is every shipped preset — so the block is invalid on
+    /// both builds (`kaspa_consensus_core::palw_task_heads_v1::palw_fp_head_job_refusal_at_v1`).
+    palw_task_heads_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
     /// **RFC-0001 §2.6 stage 2: `Params::palw_fp_prefix_state_fence()`** (`never()` read as absence). Isolation asks the
     /// height-free question (`.is_some()`: a prefix-state claim, FP job version 11, passes the door's stateless rules where
     /// the ruleset carries the fence at all, and is refused by name everywhere else); the header-context door refuses one
@@ -220,6 +226,7 @@ impl TransactionValidator {
             palw_model_sink_bound_fence: None,
             palw_fp_decode_rules_fence: None,
             palw_fp_job_v5_fence: None,
+            palw_task_heads_fence: None,
             palw_fp_prefix_state_fence: None,
             palw_fp_prefix_inherit_fence: None,
             palw_fp_decode_constraint_fence: None,
@@ -266,6 +273,12 @@ impl TransactionValidator {
     /// fence's height in the header context.
     pub fn with_fp_job_v5_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
         self.palw_fp_job_v5_fence = fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// The task-head profile: declare `Params::palw_task_heads_v1`'s height, below which a `Head` job is refused in the header context.
+    pub fn with_task_heads_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_task_heads_fence = fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
         self
     }
 
@@ -390,6 +403,7 @@ impl TransactionValidator {
             palw_fp_decode_rules_fence: None,
             // Every shipped preset's door: the tensor claim is dormant, so version 10 is refused at isolation.
             palw_fp_job_v5_fence: None,
+            palw_task_heads_fence: None,
             palw_fp_prefix_state_fence: None,
             palw_fp_prefix_inherit_fence: None,
             palw_fp_decode_constraint_fence: None,

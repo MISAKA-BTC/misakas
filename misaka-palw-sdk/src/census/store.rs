@@ -203,6 +203,9 @@ pub struct CensusSource {
     /// The frontend needs the data of a tensor the store does not hold (a GGUF whose configuration is rebuilt from a small tensor,
     /// `rope_freqs.weight`): its name and size.
     pub needs_tensor_data: Option<String>,
+    /// The tokenizer of the repository's pinned base, offered to the preflight when the repository ships none of its own
+    /// ([`crate::preflight::Options::base_tokenizer`]); set by the census from its `--tokenizer-bases` table.
+    pub base_tokenizer: Option<crate::preflight::BaseTokenizerV1>,
 }
 
 /// **The preflight source of a fetched repository**, or the source-gate problems that stop it (a needed file not fetched, a shard the
@@ -315,7 +318,7 @@ pub fn source_of(l: &ListingV1, sel: &SelectedV1, fx: &Fetched) -> Result<Census
             // The tokenizer check of a directory reads the file names; the census's are the inventory's.
             src.kind = InputKind::HfDirectory;
             src.label = label.clone();
-            Ok(CensusSource { source: src, scratch, label, bytes_read, needs_tensor_data: None })
+            Ok(CensusSource { source: src, scratch, label, bytes_read, needs_tensor_data: None, base_tokenizer: None })
         }
         ArtifactKind::Gguf => {
             if sel.weights.len() != 1 {
@@ -376,7 +379,7 @@ pub fn source_of(l: &ListingV1, sel: &SelectedV1, fx: &Fetched) -> Result<Census
                 weights_refusal: None,
                 bytes_read,
             };
-            Ok(CensusSource { source: src, scratch, label, bytes_read, needs_tensor_data })
+            Ok(CensusSource { source: src, scratch, label, bytes_read, needs_tensor_data, base_tokenizer: None })
         }
         ArtifactKind::Diffusers | ArtifactKind::Adapter | ArtifactKind::Other | ArtifactKind::None => {
             Err(vec![problem(codes::FETCH_FAILED, "(selection)", format!("{:?} has no preflight source", sel.kind))])

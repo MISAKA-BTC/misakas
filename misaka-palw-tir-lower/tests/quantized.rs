@@ -36,7 +36,12 @@ struct Outcome {
 
 /// Formats whose elements are floats: no projection is lowered from integers.
 fn decodes_to_floats(name: &str) -> bool {
-    name.starts_with("fp8_") || name.starts_with("mxfp4_") || name == "ct_fp8_channel" || name.starts_with("bnb_nf4") || name.starts_with("bnb_fp4")
+    name.starts_with("fp8_")
+        || name.starts_with("mxfp4_")
+        || name == "ct_fp8_channel"
+        || name.starts_with("bnb_nf4")
+        || name.starts_with("bnb_fp4")
+        || name.starts_with("mlx_")
 }
 
 /// Formats whose stored scales are float32 (bitsandbytes' `SCB`): 24 significant bits, where the lowering's per-row integer scale has 20, so
@@ -185,6 +190,13 @@ quantised!(
     fp8_block_ragged,
     fp8_block_qwen3moe,
     ct_fp8_channel,
+    // MLX affine (MLX_QUANT_V1, quantised by MLX itself: tools/gen_mlx_fixtures.py): the codes under the float export's own name,
+    // served as the float weight — projections, the embedding table and a tied head — on the ordinary W8 path. 4 bits / group 32
+    // (both config keys); 3 bits (codes straddling the words) / group 64 with bfloat16 scales and a tied head (`quantization`
+    // alone); 6 bits with per-module entries (a projection at 8 bits / group 64, the embedding at 5 bits, a projection in float).
+    mlx_b4_g32,
+    mlx_b3_g64_bf16,
+    mlx_b6_mixed,
 );
 
 /// A checkpoint whose config says GPTQ but whose projection is stored in float is a clear error,

@@ -48,7 +48,7 @@ fn every_decoder_sequence_classifier_is_read_by_its_adapter_and_binds_every_tens
             r.adapter
         );
         assert!(
-            matches!(r.spec.output, OutputSpec::Classify { labels: l, bias: false, pre: None } if l == *labels),
+            matches!(r.spec.output, OutputSpec::Classify { labels: l, bias: false, pre: None, .. } if l == *labels),
             "{name}: {:?}",
             r.spec.output
         );
@@ -180,6 +180,15 @@ const ENCODERS: &[(&str, &str, usize, bool, u32)] = &[
     ("roberta_cls", "roberta-seqcls", 2, true, 1),
     ("xlmr_rerank", "roberta-seqcls", 1, true, 1),
     ("distilbert_cls", "distilbert-seqcls", 2, true, 0),
+    // HFX 2026-10-10: ALBERT's pooler, DeBERTa-v2's ContextPooler, CamemBERT under RoBERTa's head.
+    ("albert_cls", "albert-seqcls", 3, true, 0),
+    ("deberta_v2_cls", "deberta-v2-seqcls", 3, true, 0),
+    ("camembert_cls", "roberta-seqcls", 2, true, 1),
+    // ModernBERT's head (dense, activation, norm) and its two poolings.
+    ("modernbert_cls", "modernbert-seqcls", 3, true, 0),
+    ("modernbert_cls_mean", "modernbert-seqcls", 2, true, 0),
+    ("modernbert_cls_nobias", "modernbert-seqcls", 2, true, 0),
+    ("modernbert_cls_mean_bias", "modernbert-seqcls", 3, true, 0),
 ];
 
 #[test]
@@ -195,7 +204,7 @@ fn every_encoder_sequence_classifier_is_read_by_its_adapter_and_binds_every_tens
             r.adapter
         );
         assert!(
-            matches!(r.spec.output, OutputSpec::Classify { labels: l, bias: true, pre: Some(_) } if l == *labels && *pre),
+            matches!(r.spec.output, OutputSpec::Classify { labels: l, pre: Some(_), .. } if l == *labels && *pre),
             "{name}: {:?}",
             r.spec.output
         );
@@ -220,7 +229,9 @@ fn encoder_end_to_end(name: &str, pad: u32, float_tol: f64, int_tol: f64) {
     let ck = Checkpoint::open(&dir).expect("checkpoint");
     let (params_f, _) = ParamStore::from_source(&hl, &binding, &ck).expect("params");
     let lmax = 12u32;
-    let cfg = BidirCfg { lmax, pooling: Pooling::Cls, normalize: false };
+    // The pooled row the head names: `[CLS]`, or the mean of the real rows (ModernBERT's `classifier_pooling = "mean"`).
+    let pooling = if matches!(spec.output, OutputSpec::Classify { mean: true, .. }) { Pooling::Mean } else { Pooling::Cls };
+    let cfg = BidirCfg { lmax, pooling, normalize: false };
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("outputs.json")).unwrap()).unwrap();
     let seqs: Vec<(Padded, Vec<f64>)> = v["sequences"]
         .as_array()

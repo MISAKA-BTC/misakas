@@ -1,0 +1,57 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "bert-qa",
+  "doc": "BertForQuestionAnswering: an extractive span QA head: the encoder, then every row through `qa_outputs` to a start and an end logit per token (OUTPUT_TOKEN_LOGITS_V1). HFX 2026-10-08.",
+  "extends": [
+    "bert",
+    "mixin-qa-encoder"
+  ],
+  "match": {
+    "architectures": [
+      "BertForQuestionAnswering"
+    ],
+    "model_types": [
+      "bert"
+    ]
+  },
+  "vars": [
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.word_embeddings",
+        "pos_embed": "embeddings.position_embeddings",
+        "type_embed": "embeddings.token_type_embeddings",
+        "embed_norm": "embeddings.LayerNorm",
+        "attn.q": "encoder.layer.{L}.attention.self.query",
+        "attn.k": "encoder.layer.{L}.attention.self.key",
+        "attn.v": "encoder.layer.{L}.attention.self.value",
+        "attn.o": "encoder.layer.{L}.attention.output.dense",
+        "norm.mix": "encoder.layer.{L}.attention.output.LayerNorm",
+        "mlp.up": "encoder.layer.{L}.intermediate.dense",
+        "mlp.down": "encoder.layer.{L}.output.dense",
+        "norm.ffn": "encoder.layer.{L}.output.LayerNorm",
+        "cls_out": "qa_outputs"
+      }
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "cls.",
+        "lm_head.",
+        "vocab_transform.",
+        "vocab_layer_norm.",
+        "vocab_projector.",
+        "pooler."
+      ]
+    },
+    {
+      "name": "prefix_aliases",
+      "value": [
+        [
+          "",
+          "bert."
+        ]
+      ]
+    }
+  ]
+}

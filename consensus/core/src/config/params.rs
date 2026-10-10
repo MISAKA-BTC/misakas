@@ -2946,6 +2946,17 @@ pub struct Params {
     /// collapsed from `Some(never())`. Requires `palw_gen_v1` in force at or below it ([`Self::validate_palw_gen_range_twin_v1`]).
     pub palw_gen_range_twin_v1: Option<ForkActivation>,
 
+    /// **The task-head profile** ([`crate::palw_task_heads_v1`], HFX 2026-10-08): past this height a generative class may be a task
+    /// head (profile tag 6, `PalwGenProfileOffersV1::Head`, `PalwGenBodyV1::Head`) — a classifier, a token or span head, a masked-LM head
+    /// or a vision head as a complete task. Below it, and on every network that leaves it `None`, an object carrying a `Head` variant is
+    /// read exactly as the int-12 build reads its bytes: not decodable (the module doc's A-2 table).
+    ///
+    /// Dormant: `None` on every preset and in no flag-day list; hashed Some-only in both fingerprints with its value, the activation
+    /// alone visited by `for_each_fence`, the whole option collapsed from `Some(never())`. **This build refuses arming it**
+    /// ([`Self::validate_palw_task_heads_v1`]); the full-activation release will require `palw_gen_v1` in force at or below it
+    /// ([`Self::palw_task_heads_v1_arming_preconditions`]).
+    pub palw_task_heads_v1: Option<crate::palw_task_heads_v1::PalwTaskHeadsFenceV1>,
+
     /// **RFC-0011 §15.7: the probabilistic-constraint route's fence** ([`crate::palw_probabilistic_constraints_v1`]): the separately
     /// named fence under which kernel-bound classes (ADR-0172; `misaka-palw-kernel`'s versioned descriptors, `VerificationPlanV1`,
     /// constraint receipts) would be registered and their claims finalized. **Dormant with no activation height**: `None` on every
@@ -4223,6 +4234,8 @@ impl Params {
         self.validate_palw_fp_job_v5_v1()?;
         // **The generative range twin** (`crate::palw_gen_range_twin_v1`): over the generative fence.
         self.validate_palw_gen_range_twin_v1()?;
+        // **The task-head profile** (`crate::palw_task_heads_v1`): dormant, refused when armed.
+        self.validate_palw_task_heads_v1()?;
         // **RFC-0011 §15.7's dormant fence** (`crate::palw_probabilistic_constraints_v1`): refused when armed.
         self.validate_palw_probabilistic_constraints_v1()?;
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
@@ -6600,6 +6613,10 @@ impl Params {
         // The generative range twin, likewise.
         if self.palw_gen_range_twin_v1 == Some(ForkActivation::never()) {
             self.palw_gen_range_twin_v1 = None;
+        }
+        // The task-head profile, likewise: the WHOLE option collapses from `Some(never())`.
+        if self.palw_task_heads_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_task_heads_v1 = None;
         }
         // The probabilistic-constraint fence, likewise.
         if self.palw_probabilistic_constraints_v1 == Some(ForkActivation::never()) {
@@ -10369,6 +10386,7 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
+            palw_task_heads_v1,
             palw_probabilistic_constraints_v1,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
@@ -10651,6 +10669,7 @@ impl Params {
             ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
             ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
+            ("palw_task_heads_v1", palw_task_heads_v1.map(|fence| fence.activation)),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
             ("palw_fork_choice_rule_e_v1", *palw_fork_choice_rule_e_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
@@ -10942,6 +10961,12 @@ impl Params {
         if let Some(at) = self.palw_gen_range_twin_v1 {
             h.write(b"palw_gen_range_twin_v1");
             h.write(at.daa_score().to_le_bytes());
+        }
+        // The task-head profile, NAMED likewise, with its value.
+        if let Some(fence) = self.palw_task_heads_v1 {
+            h.write(b"palw_task_heads_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
         }
         // The probabilistic-constraint fence, NAMED likewise.
         if let Some(at) = self.palw_probabilistic_constraints_v1 {
@@ -11697,6 +11722,7 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
+            palw_task_heads_v1,
             palw_probabilistic_constraints_v1,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
@@ -12460,6 +12486,10 @@ impl Params {
         if let Some(activation) = palw_gen_range_twin_v1.as_mut() {
             fork(activation, visit);
         }
+        // The task-head profile. Some-only.
+        if let Some(fence) = palw_task_heads_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // The probabilistic-constraint fence. Some-only.
         if let Some(activation) = palw_probabilistic_constraints_v1.as_mut() {
             fork(activation, visit);
@@ -13046,6 +13076,7 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
+            palw_task_heads_v1,
             palw_probabilistic_constraints_v1,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
@@ -13857,6 +13888,12 @@ impl Params {
         if let Some(activation) = palw_gen_range_twin_v1 {
             h.write(b"palw_gen_range_twin_v1");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // The task-head profile, Some-only for the same reason.
+        if let Some(fence) = palw_task_heads_v1 {
+            h.write(b"palw_task_heads_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
         }
         // The probabilistic-constraint fence, Some-only for the same reason.
         if let Some(activation) = palw_probabilistic_constraints_v1 {
@@ -14721,6 +14758,7 @@ impl Params {
             palw_gen_v1: self.palw_gen_v1,
             palw_fp_job_v5: self.palw_fp_job_v5,
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
+            palw_task_heads_v1: self.palw_task_heads_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
             palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
@@ -15827,6 +15865,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
+    palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
@@ -16129,6 +16168,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
+    palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
@@ -16413,6 +16453,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
+    palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
@@ -23754,6 +23795,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_held_close_chunks_v1();
     // RFC-0003's generative range twin, likewise.
     params.sync_palw_gen_range_twin_v1();
+    // The task-head profile, likewise.
+    params.sync_palw_task_heads_v1();
     // RFC-0007's verification vertex, likewise.
     params.sync_palw_verification_vertex_v1();
     // RFC-0008 v2's EXEC payload, likewise.
@@ -24039,6 +24082,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
+    palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
