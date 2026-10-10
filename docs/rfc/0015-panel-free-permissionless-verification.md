@@ -787,6 +787,8 @@ RFC14 §16.8/ADR177 §3のnon-interference、資本重複排除、model/network/
 旧7/5/15%・監査/lease・FPR全量公開/代替Seeder/公開費gateは撤回する。
 G14 PASSでも自動有効化しない。モデル非公開時の経済優位は未立証であり、旧claimと発行上限を保持する。
 
+**2026-10-10追加（ユーザー指示）:** 本RFCの有効化には、[PALW確率・経済安全性ゲート](../design/palw/probabilistic-economic-security-gate.md)（四条件、T1–T6、A–F、三つの反例、経済的抑止と独立の被害有界化）のPASSを追加で要求する。PASS / FAIL / UNKNOWNのうちUNKNOWNはPASSにしない。
+
 ## 14. 本RFCで決めない値と現状
 
 activation DAA、object tag・signature domain、bond/exposure比率、bounty/費用、
