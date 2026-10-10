@@ -46,8 +46,12 @@ const SIG: [u8; 8] = [0x6B; 8];
 
 // ---- the fold: R-core+ in force, the fence test-armed -----------------------------------------------------------------------------
 
+/// R-core+ in force from DAA 104: the registry, the claim, the panel and the licence fold as T54g's (100–103), and every DA
+/// session, answer and court move after them under R-core+ — a fence crossing, not a mixed fold.
+const RCORE_FROM_DAA: u64 = 104;
+
 fn rc_params() -> PalwStateParamsV2 {
-    params().with_rcore_plus_mirrors(Some(0), 0, Vec::new())
+    params().with_rcore_plus_mirrors(Some(RCORE_FROM_DAA), 0, Vec::new())
 }
 
 fn rc_extras(armed: bool) -> PalwTransitionExtrasV1 {
@@ -147,8 +151,7 @@ fn rc_licensed(
         bond: bond_key(n),
         pubkey: vec![n as u8; 4],
         operator_pubkey: op_key(20 + n),
-        // Deep enough that each seat's R-core+ lock fits its work room (the backed subset licenses).
-        collateral: 1 << 50,
+        collateral: 1_000_000_000,
         payout_payload: Hash64::from_u64_word(0x9A00 + n),
         capable_classes: Default::default(),
         signature: Vec::new(),
