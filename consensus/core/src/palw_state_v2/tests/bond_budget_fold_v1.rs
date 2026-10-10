@@ -20,6 +20,7 @@ fn test_policy(rho: u32) -> PalwBondBudgetPolicyV1 {
         final_weight_per_unit: 1_000,
         max_open_claims_per_bond: 1_000,
         slice_rights_by_rho: false,
+        round_rights: PalwRoundRightsPolicyV1::CountAgainstBlocks,
     }
 }
 
@@ -272,7 +273,7 @@ fn an_attempts_reservation_bounds_its_immature_weight_its_final_weight_and_its_p
     let row = *s2.bond_budget().unwrap().claim_row(&claim_id).expect("a budgeted claim");
     assert_eq!(
         row.reserved,
-        PalwBudgetVectorV1 { claims: 1, block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 4, final_weight: 2 }
+        PalwBudgetVectorV1 { claims: 1, block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 4, final_weight: 2, round_rights: 0 }
     );
     assert_eq!(row.consumed.block_units, PALW_BUDGET_BLOCK_UNIT_V1, "its block was consumed at acceptance");
     assert_eq!((row.accepted_daa, row.reuse_not_before), (101, 151));

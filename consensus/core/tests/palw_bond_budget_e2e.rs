@@ -67,6 +67,7 @@ fn policy(unit_msk: u64, window: u64, rho: u32, reward_msk: u64, slice: bool) ->
         final_weight_per_unit: 1_000_000_000_000_000_000,
         max_open_claims_per_bond: 10_000,
         slice_rights_by_rho: slice,
+        round_rights: PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 },
     }
 }
 
@@ -321,4 +322,52 @@ fn a_budgeted_tape_rewinds_and_replays_to_the_same_chain() {
     assert_eq!(sim.tape.len(), total);
     assert_eq!(sim.c.s, tip, "the replay is the chain");
     budget(&sim).check_consistency().expect("the engine's invariants");
+}
+
+/// **Readiness §3e on the real fold: the Round draw past the fence** — Finals earn tickets; every span schedule the lane seeds lists at
+/// most each bond's remaining Round rights, each `(span, bond)` allocation is reserved in the bond's window (and only released at
+/// `draw + W`), and the tape replays to the same chain (RECOVERY's budget half).
+#[test]
+fn round_draws_reserve_each_bonds_allocation_and_replay() {
+    let pol = PalwBondBudgetPolicyV1 {
+        round_rights: PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 5 },
+        ..policy(1_000_000, 100_000, 100, 1_000_000, false)
+    };
+    let mut sim = Sim::new(budget_params(250, pol.clone(), None), Class::Floor, &[(90, 1_000_000), (91, 1_000_000)]);
+    let ids: Vec<Hash64> =
+        [(90u64, 0x7_0000u64), (91, 0x7_0001), (90, 0x7_0002)].iter().filter_map(|(n, s)| sim.claim(*n, *s)).collect();
+    let seats = sim.seats();
+    for id in &ids {
+        let bound = sim.bind(*id, &seats);
+        sim.license(*id, &seats, bound);
+    }
+    for batch in audit_receipts_for(&sim.c.s, &sim.c.sp, &ids) {
+        sim.step(vec![batch]);
+    }
+    sim.finalize_all(&ids);
+    let fork_at = sim.tape.len();
+    let start = sim.c.daa;
+    for k in 0..120u64 {
+        sim.block(start + 10 * (k + 1), vec![], Some((90 + (k % 2), 0x7_1000 + k)));
+    }
+    let mut drawn = 0u64;
+    for (span, schedule) in sim.c.s.round_schedules() {
+        let mut per: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+        for q in &schedule.quanta {
+            *per.entry(q.bond).or_default() += 1;
+        }
+        for (bond, n) in per {
+            drawn += n;
+            assert!(n <= 5, "span {span}: bond's allocation {n} is within its 5 Round rights");
+            if let Some(row) = budget(&sim).claim_row(&palw_round_rights_row_id_v1(*span, &bond)) {
+                assert_eq!(row.reserved.round_rights, n, "span {span}: the allocation is what was reserved");
+            }
+        }
+    }
+    println!("round draws on the real fold: {drawn} tickets allocated in the schedules still held");
+    budget(&sim).check_consistency().expect("the engine's invariants");
+    let tip = sim.c.s.clone();
+    let off = sim.rewind_to(fork_at);
+    sim.replay(&off);
+    assert_eq!(sim.c.s, tip, "the replay is the chain");
 }

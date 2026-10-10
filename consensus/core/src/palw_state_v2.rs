@@ -26212,13 +26212,27 @@ impl<'a> TransitionBuilder<'a> {
                         due.target_span = span_now;
                         let (frontier_blue_score, frontier) = self.state.safe_frontier();
                         let mut schedule = palw_execution_schedule_seeded_v1(&due, &anchor, frontier_blue_score, frontier);
-                        palw_execution_schedule_assign_quanta_windowed_v1(
+                        let window_rounds =
+                            crate::palw_execution_quanta_v1::palw_execution_span_rounds_v1(span_daa, safety.target_time_per_block_ms);
+                        // **Lane BUDGET (readiness §3e): past `palw_bond_budget_v1` every bond's Round rights are capped BEFORE the
+                        // draw's candidate set, and what the draw allocates is reserved in its window.** Below the fence, the mint as
+                        // it always was, ticket for ticket.
+                        if !self.bond_budget_round_draw_v1(
+                            ctx,
                             &mut schedule,
                             lane.execution_quantum,
                             lane.span_open_round,
-                            crate::palw_execution_quanta_v1::palw_execution_span_rounds_v1(span_daa, safety.target_time_per_block_ms),
+                            window_rounds,
                             &forfeited,
-                        );
+                        ) {
+                            palw_execution_schedule_assign_quanta_windowed_v1(
+                                &mut schedule,
+                                lane.execution_quantum,
+                                lane.span_open_round,
+                                window_rounds,
+                                &forfeited,
+                            );
+                        }
                         self.write_round_schedule(span_now, Some(schedule));
                         seeded_this_span = true;
                     } else if target.saturating_add(crate::palw_execution_lane_v1::PALW_EXEC_PENDING_GRACE_SPANS_V1) < span_now {
@@ -29218,6 +29232,12 @@ pub fn palw_v2_pre_object_base_v1(
     for seq in builder.state.evm_settlements.keys().copied().collect::<Vec<_>>() {
         builder.write_evm_settlement(seq, None);
     }
+    // 1c″. Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's clock — the engine created at the fence's first block (the live old
+    //      claims seeded), every reservation whose `reuse_not_before` has come released (the ONLY release), the allocation epoch rolled
+    //      and this block's carve accrued; before the execution lane's span rotation (whose Round draw reads the bonds' remaining
+    //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
+    //      `palw_bond_budget_v1`, which no network can arm.
+    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
     // ADR-0125: the span boundary runs where the fold runs it — before any claim is finalized here.
     if let Some(lane) = extras.round_lane {
         builder.rotate_round_lane(ctx, lane.schedule_span_daa);
@@ -29225,11 +29245,6 @@ pub fn palw_v2_pre_object_base_v1(
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
     //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
     builder.advance_floor_state(ctx.daa_score);
-    // 1f. Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's clock — the engine created at the fence's first block (the live old
-    //     claims seeded), every reservation whose `reuse_not_before` has come released (the ONLY release), the allocation epoch rolled
-    //     and this block's carve accrued; before the sweeps and the objects, so every claim of this block reads one window. Mirrored
-    //     in `palw_v2_pre_object_base_v1`. A no-op below `palw_bond_budget_v1`, which no network can arm.
-    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the fold's step 2 closes the reveal windows here, right after the claim
     // sweep; mirrored so the acceptance rehearsal judges every object on the state step 3 sees.
@@ -29600,6 +29615,12 @@ pub fn apply_palw_transition_v7(
         builder.write_evm_settlement(seq, None);
     }
 
+    // 1c″. Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's clock — the engine created at the fence's first block (the live old
+    //      claims seeded), every reservation whose `reuse_not_before` has come released (the ONLY release), the allocation epoch rolled
+    //      and this block's carve accrued; before the execution lane's span rotation (whose Round draw reads the bonds' remaining
+    //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
+    //      `palw_bond_budget_v1`, which no network can arm.
+    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
     // 1d. ADR-0125: the execution lane's span boundary — before the sweeps, so an attempt finalized
     //     by this block is a credit in THIS block's span, never in the one its finals just closed.
     if let Some(lane) = extras.round_lane {
@@ -29608,11 +29629,6 @@ pub fn apply_palw_transition_v7(
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
     //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
     builder.advance_floor_state(ctx.daa_score);
-    // 1f. Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's clock — the engine created at the fence's first block (the live old
-    //     claims seeded), every reservation whose `reuse_not_before` has come released (the ONLY release), the allocation epoch rolled
-    //     and this block's carve accrued; before the sweeps and the objects, so every claim of this block reads one window. Mirrored
-    //     in `palw_v2_pre_object_base_v1`. A no-op below `palw_bond_budget_v1`, which no network can arm.
-    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
 
     // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
     //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.) Claims

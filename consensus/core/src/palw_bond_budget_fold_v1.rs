@@ -282,6 +282,7 @@ impl TransitionBuilder<'_> {
                         block_units: PALW_BUDGET_BLOCK_UNIT_V1,
                         reward_sompi: claim.escrowed_reward,
                         final_weight: crate::palw_weight_cap_v1::palw_weight_final_safe_v1(self.params, claim, contribution),
+                        round_rights: 0,
                     }
                 }
                 (PalwClaimSourceV2::FreePrompt { quanta, spent }, _) => {
@@ -295,6 +296,7 @@ impl TransitionBuilder<'_> {
                         block_units: PALW_BUDGET_BLOCK_UNIT_V1.saturating_mul(left),
                         reward_sompi: carve.saturating_mul(left),
                         final_weight: per_quantum.saturating_mul(left as u128),
+                        round_rights: 0,
                     }
                 }
             };
@@ -418,6 +420,55 @@ impl TransitionBuilder<'_> {
             .expect("eligible")
             .map_err(|why| PalwStateV2Error::CapacityRiders(format!("the lead's block cannot be shared: {why}")))?;
         Ok(each)
+    }
+
+    /// **The Round draw with every bond's rights capped before its candidate set** (readiness §3e; design §3b): `false` below the fence
+    /// (the caller mints as it always did). Past it, the bond's remaining Round rights — its caps less every reservation still in its
+    /// window — bound its candidates, the draw allocates at most the window, and each bond's allocated tickets are reserved (and used)
+    /// at this DAA, released at `+ W`.
+    pub(super) fn bond_budget_round_draw_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        schedule: &mut crate::palw_execution_lane_v1::PalwExecScheduleV1,
+        quantum: u64,
+        open_round: u64,
+        window_rounds: u64,
+        forfeited: &std::collections::BTreeSet<Hash64>,
+    ) -> bool {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return false };
+        if self.state.bond_budget.is_none() {
+            self.create_bond_budget_v1(ctx, &mirror);
+        }
+        let policy = mirror.policy;
+        {
+            let budget = self.state.bond_budget.as_ref().expect("created above");
+            let bonds = &self.state.bonds;
+            let remaining = |bond: &PalwBondKeyV2| {
+                palw_round_rights_remaining_v1(&policy, bonds.get(bond).map(|r| r.collateral).unwrap_or(0), budget.bond_row(bond))
+            };
+            crate::palw_execution_lane_v1::palw_execution_schedule_assign_quanta_windowed_capped_v1(
+                schedule,
+                quantum,
+                open_round,
+                window_rounds,
+                forfeited,
+                &remaining,
+            );
+        }
+        let mut allocated: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+        for q in &schedule.quanta {
+            *allocated.entry(q.bond).or_default() += 1;
+        }
+        let span = schedule.span_index;
+        let now = ctx.daa_score;
+        self.bond_budget_op(|budget, state, j| {
+            for (bond, n) in allocated {
+                let capital = state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
+                let fitted = budget.reserve_round_rights_v1(&policy, capital, span, bond, now, n, j);
+                debug_assert!(fitted.is_ok(), "the candidates were capped at the remaining rights of this same state: {fitted:?}");
+            }
+        });
+        true
     }
 
     /// **A Final's weight under the budget** (`finalize_claim`): the grant, clipped to the claim's reservation; the input unchanged for

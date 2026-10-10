@@ -22,7 +22,7 @@ use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_bond_budget_v1::{
     PALW_BOND_BUDGET_POLICY_VERSION_V1, PALW_BUDGET_BLOCK_UNIT_V1, PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1,
-    palw_bond_budget_caps_v1,
+    PalwRoundRightsPolicyV1, palw_bond_budget_caps_v1,
 };
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_state_v2::{
@@ -64,6 +64,7 @@ fn test_policy(unit: u64, rho: u32) -> PalwBondBudgetPolicyV1 {
         final_weight_per_unit: u64::MAX / 4,
         max_open_claims_per_bond: 1_000,
         slice_rights_by_rho: false,
+        round_rights: PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 },
     }
 }
 

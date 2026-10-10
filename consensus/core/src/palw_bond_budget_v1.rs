@@ -40,6 +40,7 @@ pub const PALW_CAPITAL_ASSIGNMENT_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/capi
 const PALW_CAPITAL_ASSIGNMENT_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/capital-assignment/message/v1";
 const PALW_BOND_BUDGET_POLICY_DOMAIN_V1: &[u8] = b"misaka-palw/bond-budget/policy/v1";
 const PALW_BOND_BUDGET_HEADER_DOMAIN_V1: &[u8] = b"misaka-palw/bond-budget/header/v1";
+const PALW_ROUND_RIGHTS_ROW_DOMAIN_V1: &[u8] = b"misaka-palw/bond-budget/round-rights-row/v1";
 /// At most this many points describe the allocation curve `f`.
 pub const PALW_ALLOCATION_CURVE_MAX_POINTS_V1: usize = 32;
 
@@ -65,6 +66,8 @@ pub enum PalwBudgetDimV1 {
     Reward = 2,
     /// `F`: Final weight, the state's weight units.
     FinalWeight = 3,
+    /// `T`: Round rights — execution tickets (readiness §3e; `PalwRoundRightsPolicyV1`).
+    RoundRights = 4,
 }
 
 /// A `(Q, B, R, F)` vector: a cap, a window, a reservation or a consumption.
@@ -74,10 +77,12 @@ pub struct PalwBudgetVectorV1 {
     pub block_units: u64,
     pub reward_sompi: u64,
     pub final_weight: u128,
+    /// Round rights (execution tickets) — readiness §3e.
+    pub round_rights: u64,
 }
 
 impl PalwBudgetVectorV1 {
-    pub const ZERO: Self = Self { claims: 0, block_units: 0, reward_sompi: 0, final_weight: 0 };
+    pub const ZERO: Self = Self { claims: 0, block_units: 0, reward_sompi: 0, final_weight: 0, round_rights: 0 };
 
     pub fn is_zero(&self) -> bool {
         *self == Self::ZERO
@@ -89,6 +94,7 @@ impl PalwBudgetVectorV1 {
             PalwBudgetDimV1::BlockUnits => self.block_units as u128,
             PalwBudgetDimV1::Reward => self.reward_sompi as u128,
             PalwBudgetDimV1::FinalWeight => self.final_weight,
+            PalwBudgetDimV1::RoundRights => self.round_rights as u128,
         }
     }
 
@@ -98,6 +104,7 @@ impl PalwBudgetVectorV1 {
             block_units: self.block_units.checked_add(o.block_units)?,
             reward_sompi: self.reward_sompi.checked_add(o.reward_sompi)?,
             final_weight: self.final_weight.checked_add(o.final_weight)?,
+            round_rights: self.round_rights.checked_add(o.round_rights)?,
         })
     }
 
@@ -107,6 +114,7 @@ impl PalwBudgetVectorV1 {
             block_units: self.block_units.checked_sub(o.block_units)?,
             reward_sompi: self.reward_sompi.checked_sub(o.reward_sompi)?,
             final_weight: self.final_weight.checked_sub(o.final_weight)?,
+            round_rights: self.round_rights.checked_sub(o.round_rights)?,
         })
     }
 
@@ -117,9 +125,15 @@ impl PalwBudgetVectorV1 {
 
     /// The first dimension (in `Q, B, R, F` order) where `self` exceeds `caps`.
     pub fn first_excess(&self, caps: &Self) -> Option<PalwBudgetDimV1> {
-        [PalwBudgetDimV1::Claims, PalwBudgetDimV1::BlockUnits, PalwBudgetDimV1::Reward, PalwBudgetDimV1::FinalWeight]
-            .into_iter()
-            .find(|dim| self.get(*dim) > caps.get(*dim))
+        [
+            PalwBudgetDimV1::Claims,
+            PalwBudgetDimV1::BlockUnits,
+            PalwBudgetDimV1::Reward,
+            PalwBudgetDimV1::FinalWeight,
+            PalwBudgetDimV1::RoundRights,
+        ]
+        .into_iter()
+        .find(|dim| self.get(*dim) > caps.get(*dim))
     }
 
     /// Component-wise minimum.
@@ -129,6 +143,7 @@ impl PalwBudgetVectorV1 {
             block_units: self.block_units.min(o.block_units),
             reward_sompi: self.reward_sompi.min(o.reward_sompi),
             final_weight: self.final_weight.min(o.final_weight),
+            round_rights: self.round_rights.min(o.round_rights),
         }
     }
 }
@@ -156,6 +171,8 @@ pub enum PalwBudgetOriginV1 {
     Legacy = 3,
     /// A kernel-route claim (hook H-1).
     KernelRoute = 4,
+    /// A bond's Round rights drawn in one span (readiness §3e): reserved and used at the draw, released at `draw + W`.
+    RoundRights = 5,
 }
 
 /// Why the engine refused.
@@ -222,6 +239,20 @@ pub struct PalwBondBudgetPolicyV1 {
     pub max_open_claims_per_bond: u32,
     /// D2's "A → A/m": each claim's `R` and `F` are also capped at `⌊rate / (q·ρ)⌋` (POLICY; `B` is physical and never sliced).
     pub slice_rights_by_rho: bool,
+    /// Readiness §3e: how Round rights (execution tickets, fee-only Rounds included) are bounded — POLICY P-9.
+    pub round_rights: PalwRoundRightsPolicyV1,
+}
+
+/// **How a bond's Round rights are bounded** (readiness §3e, POLICY P-9). Both modes cap every ticket before the draw; neither leaves
+/// a fee-only Round outside the budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwRoundRightsPolicyV1 {
+    /// Each allocated ticket takes one reward block ([`PALW_BUDGET_BLOCK_UNIT_V1`]) of the bond's `B`.
+    CountAgainstBlocks = 0,
+    /// A separate dimension: `⌊C · rights_per_unit / u⌋` tickets per window.
+    ExecutionCap { rights_per_unit: u64 } = 1,
 }
 
 impl PalwBondBudgetPolicyV1 {
@@ -239,6 +270,7 @@ impl PalwBondBudgetPolicyV1 {
             final_weight_per_unit: 1,
             max_open_claims_per_bond: 1,
             slice_rights_by_rho: false,
+            round_rights: PalwRoundRightsPolicyV1::CountAgainstBlocks,
         }
     }
 
@@ -269,6 +301,9 @@ impl PalwBondBudgetPolicyV1 {
         }
         if self.max_open_claims_per_bond == 0 {
             return Err("the open-claim cap must be positive");
+        }
+        if self.round_rights == (PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 0 }) {
+            return Err("an execution cap must allow a positive number of Round rights per unit");
         }
         Ok(())
     }
@@ -469,6 +504,14 @@ impl Params {
                 "palw_bond_budget_v1 requires palw_audit_2026_09_23 at or below it: a budget-refused attempt's carve is withheld only there",
             ));
         }
+        // Readiness §3e: the Round rights are capped in the windowed mint, which is ADR-0151's (`palw_economic_safety`).
+        let safety_below =
+            self.palw_economic_safety.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.activation.daa_score());
+        if !safety_below {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_bond_budget_v1 requires palw_economic_safety at or below it: Round rights are capped in its windowed mint",
+            ));
+        }
         Err(PalwModeV2Error::Invalid(
             "palw_bond_budget_v1 cannot be armed: ADR-0176's window W, the rho -> Q/B/R/F mapping and the cap values are POLICY the user has not set, and no reward or consensus-weight fence it bounds is armable",
         ))
@@ -537,7 +580,38 @@ pub fn palw_bond_budget_caps_v1(policy: &PalwBondBudgetPolicyV1, capital: u64) -
         block_units: sat(floor_mul_div(c, policy.block_units_per_unit as u128, u)),
         reward_sompi: sat(floor_mul_div(c, policy.reward_per_unit_sompi as u128, u)),
         final_weight: floor_mul_div(c, policy.final_weight_per_unit as u128, u),
+        round_rights: match policy.round_rights {
+            // B binds: each ticket takes a block there; this dimension is never the binding one.
+            PalwRoundRightsPolicyV1::CountAgainstBlocks => u64::MAX,
+            PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit } => sat(floor_mul_div(c, rights_per_unit as u128, u)),
+        },
     }
+}
+
+/// **What `n` Round rights reserve** under `policy` (readiness §3e): `n` tickets, and `n` blocks where they count against `B`.
+pub fn palw_round_rights_vector_v1(policy: &PalwBondBudgetPolicyV1, n: u64) -> PalwBudgetVectorV1 {
+    let blocks = match policy.round_rights {
+        PalwRoundRightsPolicyV1::CountAgainstBlocks => n.saturating_mul(PALW_BUDGET_BLOCK_UNIT_V1),
+        PalwRoundRightsPolicyV1::ExecutionCap { .. } => 0,
+    };
+    PalwBudgetVectorV1 { round_rights: n, block_units: blocks, ..PalwBudgetVectorV1::ZERO }
+}
+
+/// **A bond's remaining Round rights just before a draw** (readiness §3e: `BondRemainingRoundRights`) — its caps at its capital less
+/// every reservation still in its window (other spans' draws, claims' blocks), in the binding dimension of the policy's mode. The open-
+/// claim cap does not apply (a draw opens no claim).
+pub fn palw_round_rights_remaining_v1(policy: &PalwBondBudgetPolicyV1, capital: u64, row: Option<&PalwBudgetBondRowV1>) -> u64 {
+    let caps = palw_bond_budget_caps_v1(policy, capital);
+    let window = row.map(|r| r.window).unwrap_or_default();
+    match policy.round_rights {
+        PalwRoundRightsPolicyV1::CountAgainstBlocks => caps.block_units.saturating_sub(window.block_units) / PALW_BUDGET_BLOCK_UNIT_V1,
+        PalwRoundRightsPolicyV1::ExecutionCap { .. } => caps.round_rights.saturating_sub(window.round_rights),
+    }
+}
+
+/// The budget row of a bond's Round rights drawn in `span` (one per `(span, bond)`).
+pub fn palw_round_rights_row_id_v1(span: u64, bond: &PalwBondKeyV2) -> Hash64 {
+    keyed64(PALW_ROUND_RIGHTS_ROW_DOMAIN_V1, &[&span.to_le_bytes(), &borsh::to_vec(bond).expect("a bond key serializes")])
 }
 
 /// **The per-claim ceilings** when the policy slices rights by ρ: `R ≤ ⌊r/(q·ρ)⌋`, `F ≤ ⌊w/(q·ρ)⌋` (so `Q_max` such claims fit `R_max`
@@ -553,8 +627,13 @@ pub fn palw_bond_budget_claim_ceilings_v1(policy: &PalwBondBudgetPolicyV1) -> Op
 /// **A claim's reservation from its ask** (design §2.5): one claim, the ask's blocks (never sliced: blocks are physical), and its reward
 /// and weight clipped by the per-claim ceilings where the policy slices. The model clip (ADR-0177) is applied by the caller on `R`.
 pub fn palw_bond_budget_reservation_v1(policy: &PalwBondBudgetPolicyV1, ask: PalwBudgetAskV1) -> PalwBudgetVectorV1 {
-    let mut v =
-        PalwBudgetVectorV1 { claims: 1, block_units: ask.block_units, reward_sompi: ask.reward_sompi, final_weight: ask.final_weight };
+    let mut v = PalwBudgetVectorV1 {
+        claims: 1,
+        block_units: ask.block_units,
+        reward_sompi: ask.reward_sompi,
+        final_weight: ask.final_weight,
+        round_rights: 0,
+    };
     if let Some((r_claim, f_claim)) = palw_bond_budget_claim_ceilings_v1(policy) {
         v.reward_sompi = v.reward_sompi.min(r_claim);
         v.final_weight = v.final_weight.min(f_claim);
@@ -1136,6 +1215,7 @@ impl PalwBondBudgetStateV1 {
             PalwBudgetDimV1::BlockUnits => claim.consumed.block_units += grant as u64,
             PalwBudgetDimV1::Reward => claim.consumed.reward_sompi += grant as u64,
             PalwBudgetDimV1::FinalWeight => claim.consumed.final_weight += grant,
+            PalwBudgetDimV1::RoundRights => claim.consumed.round_rights += grant as u64,
         }
         if grant > 0 {
             self.put_claim(claim_id, Some(claim), j);
@@ -1213,6 +1293,39 @@ impl PalwBondBudgetStateV1 {
                 return Err("a bond's window or open count disagrees with its claims");
             }
         }
+        Ok(())
+    }
+
+    /// **Reserve a bond's Round rights drawn in `span`** (readiness §3e): `n` allocated tickets, reserved and used at once (an allocated
+    /// ticket is a used right, executed or not), released only at `draw_daa + W`. The caller capped the candidates at
+    /// [`palw_round_rights_remaining_v1`], so this fits; it is admitted against the caps all the same.
+    pub fn reserve_round_rights_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        span: u64,
+        bond: PalwBondKeyV2,
+        draw_daa: u64,
+        n: u64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        if n == 0 {
+            return Ok(());
+        }
+        let id = palw_round_rights_row_id_v1(span, &bond);
+        let vector = palw_round_rights_vector_v1(policy, n);
+        let caps = palw_bond_budget_caps_v1(policy, capital);
+        let window = self.bonds.get(&bond).map(|r| r.window).unwrap_or_default();
+        if let Some(dim) = window.checked_add(vector).ok_or(PalwBudgetRefusalV1::Overflow)?.first_excess(&caps) {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim });
+        }
+        self.reserve(policy, capital, id, bond, None, draw_daa, vector, PalwBudgetOriginV1::RoundRights, false, j)?;
+        let mut row = *self.claims.get(&id).expect("reserved above");
+        row.consumed = row.reserved;
+        self.put_claim(&id, Some(row), j);
+        self.close(&id, j);
+        // Not a V2 claim: nothing else will ever forget it, so it leaves at its release.
+        self.forget(&id, j);
         Ok(())
     }
 
@@ -1388,6 +1501,7 @@ mod tests {
             final_weight_per_unit: 400,
             max_open_claims_per_bond: 1_000_000,
             slice_rights_by_rho: slice,
+            round_rights: PalwRoundRightsPolicyV1::CountAgainstBlocks,
         }
     }
 
@@ -1588,7 +1702,13 @@ mod tests {
         let p = policy(1, false);
         let mut s = PalwBondBudgetStateV1::new(50, &p);
         let mut j = Vec::new();
-        let ask = PalwBudgetVectorV1 { claims: 1, block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 999 * BILI, final_weight: 1 };
+        let ask = PalwBudgetVectorV1 {
+            claims: 1,
+            block_units: PALW_BUDGET_BLOCK_UNIT_V1,
+            reward_sompi: 999 * BILI,
+            final_weight: 1,
+            round_rights: 0,
+        };
         // A seed may overfill the window (old liabilities are counted, never refused) …
         s.reserve(&p, 1_000 * BILI, h(7), bond(1), None, 40, ask, PalwBudgetOriginV1::Legacy, false, &mut j).unwrap();
         // … the old claim is paid by its old rule …
@@ -1615,7 +1735,13 @@ mod tests {
         let p = policy(1, false);
         let mut s = PalwBondBudgetStateV1::new(0, &p);
         let mut j = Vec::new();
-        let r = PalwBudgetVectorV1 { claims: 1, block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 10 * BILI, final_weight: 30 };
+        let r = PalwBudgetVectorV1 {
+            claims: 1,
+            block_units: PALW_BUDGET_BLOCK_UNIT_V1,
+            reward_sompi: 10 * BILI,
+            final_weight: 30,
+            round_rights: 0,
+        };
         s.reserve(&p, 100_000 * BILI, h(1), bond(1), None, 9, r, PalwBudgetOriginV1::Attempt, true, &mut j).unwrap();
         let smaller = PalwBudgetVectorV1 { reward_sompi: 4 * BILI, block_units: 500_000, ..r };
         assert_eq!(s.clone().shrink_same_block(&h(1), smaller, 10, &mut j), Err(PalwBudgetRefusalV1::BadShrink));
@@ -1864,7 +1990,13 @@ mod tests {
         let p = policy(1, false);
         let mut s = PalwBondBudgetStateV1::new(0, &p);
         let mut j = Vec::new();
-        let half = PalwBudgetVectorV1 { claims: 1, block_units: PALW_BUDGET_BLOCK_UNIT_V1 / 2, reward_sompi: 0, final_weight: 0 };
+        let half = PalwBudgetVectorV1 {
+            claims: 1,
+            block_units: PALW_BUDGET_BLOCK_UNIT_V1 / 2,
+            reward_sompi: 0,
+            final_weight: 0,
+            round_rights: 0,
+        };
         s.reserve(&p, 100_000 * BILI, h(1), bond(1), None, 1, half, PalwBudgetOriginV1::Rider, true, &mut j).unwrap();
         assert!(s.consume_block_for_bond(&bond(1), &mut j).is_err());
         assert_eq!(s.claim_row(&h(1)).unwrap().consumed.block_units, 0, "all or nothing");
@@ -1928,5 +2060,179 @@ mod tests {
         assert_eq!(mirror.allocation_epoch_at(149), None);
         assert_eq!(mirror.allocation_epoch_at(150), Some(0));
         assert_eq!(mirror.allocation_epoch_at(169), Some(1));
+    }
+
+    // ---- readiness §3e: Round rights capped before the draw ----
+
+    use crate::palw_execution_lane_v1::PalwExecFinalV1;
+    use crate::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_windowed_capped_v1};
+
+    fn exec_final(claim: u64, root: u64, credit: u64, b: u32) -> PalwExecFinalV1 {
+        PalwExecFinalV1 {
+            domain: h(1_000 + b as u64),
+            bond: bond(b),
+            operator_id: h(2_000 + b as u64),
+            claim_id: h(claim),
+            execution_root: h(root),
+            credit,
+            accepted_blue_score: 0,
+        }
+    }
+
+    fn per_bond(quanta: &[crate::palw_execution_quanta_v1::PalwExecQuantumV1]) -> BTreeMap<PalwBondKeyV2, u64> {
+        let mut out = BTreeMap::new();
+        for q in quanta {
+            *out.entry(q.bond).or_insert(0u64) += 1;
+        }
+        out
+    }
+
+    fn draw(
+        finals: &[PalwExecFinalV1],
+        seed: u64,
+        window: u64,
+        remaining: &dyn Fn(&PalwBondKeyV2) -> u64,
+    ) -> BTreeMap<PalwBondKeyV2, u64> {
+        per_bond(&palw_execution_mint_quanta_windowed_capped_v1(
+            finals,
+            h(seed),
+            PALW_EXECUTION_QUANTUM_V1 as u128,
+            0,
+            window,
+            &BTreeSet::new(),
+            remaining,
+        ))
+    }
+
+    /// **WORK**: the same bond with light and heavy verified work — below the cap the candidates follow the work (3 vs 30 tickets of
+    /// 100,000 credit units), at the cap they stop at the bond's remaining rights.
+    #[test]
+    fn candidates_follow_work_below_the_cap_and_stop_at_it() {
+        let finals = [exec_final(1, 11, 300_000, 1), exec_final(2, 12, 3_000_000, 2)];
+        let free = draw(&finals, 7, 10_000, &|_| 1_000);
+        assert_eq!((free[&bond(1)], free[&bond(2)]), (3, 30), "proportional to verified work below the cap");
+        let capped = draw(&finals, 7, 10_000, &|b| if *b == bond(2) { 10 } else { 1_000 });
+        assert_eq!((capped[&bond(1)], capped[&bond(2)]), (3, 10), "the heavy job stops at its bond's remaining rights");
+        let none = draw(&finals, 7, 10_000, &|_| 0);
+        assert!(none.is_empty(), "no remaining rights, no candidate: a capped bond floods nothing");
+    }
+
+    /// **WINDOW**: a saturated shared window (120) with a huge candidate set allocates exactly 120, never more than a bond's remaining;
+    /// concurrent draws in two spans, through the engine, never pass the bond's cap, and the room returns only at `draw + W`.
+    #[test]
+    fn the_window_is_shared_and_concurrent_draws_never_pass_the_cap() {
+        let finals: Vec<_> = (0..40u64).map(|i| exec_final(100 + i, 200 + i, 50_000_000, (i % 8) as u32 + 1)).collect();
+        let caps: BTreeMap<PalwBondKeyV2, u64> = (1..=8u32).map(|b| (bond(b), 20 * b as u64)).collect();
+        let allocated = draw(&finals, 9, 120, &|b| caps[b]);
+        assert_eq!(allocated.values().sum::<u64>(), 120, "the shared window, not a per-claim grant");
+        assert!(allocated.iter().all(|(b, n)| *n <= caps[b]), "{allocated:?}");
+        // Concurrent windows through the engine (ExecutionCap: 30 tickets per 1,000 BILI).
+        let p =
+            PalwBondBudgetPolicyV1 { round_rights: PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 30 }, ..policy(1, false) };
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        let mut total = 0;
+        for span in 0..4u64 {
+            let remaining = palw_round_rights_remaining_v1(&p, capital, s.bond_row(&bond(1)));
+            let got =
+                draw(&finals, 20 + span, 120, &|b| if *b == bond(1) { remaining } else { 0 }).get(&bond(1)).copied().unwrap_or(0);
+            s.reserve_round_rights_v1(&p, capital, span, bond(1), 10 + span, got, &mut j).unwrap();
+            total += got;
+            s.check_consistency().unwrap();
+        }
+        assert_eq!(total, 30, "four spans inside one window share the bond's 30 rights");
+        assert_eq!(palw_round_rights_remaining_v1(&p, capital, s.bond_row(&bond(1))), 0);
+        s.release_due(109, &mut j);
+        assert_eq!(palw_round_rights_remaining_v1(&p, capital, s.bond_row(&bond(1))), 0, "nothing returns before draw + W");
+        s.release_due(113, &mut j);
+        assert_eq!(palw_round_rights_remaining_v1(&p, capital, s.bond_row(&bond(1))), 30, "all four draws released by their + W");
+        s.check_consistency().unwrap();
+    }
+
+    /// **NEUTRALITY**: swapping two bonds' roles — operator id, domain, which is "genesis" (the lower key) and which is new — swaps the
+    /// allocation exactly; the input (registration) order is irrelevant.
+    #[test]
+    fn a_role_swap_swaps_the_allocation_and_order_is_irrelevant() {
+        for seed in 0..50u64 {
+            let a = exec_final(1, 11, 2_000_000, 1);
+            let b = exec_final(2, 12, 2_000_000, 2);
+            let one = draw(&[a, b], seed, 25, &|_| 1_000);
+            let swapped = |f: PalwExecFinalV1, to: &PalwExecFinalV1| PalwExecFinalV1 {
+                bond: to.bond,
+                operator_id: to.operator_id,
+                domain: to.domain,
+                ..f
+            };
+            let two = draw(&[swapped(a, &b), swapped(b, &a)], seed, 25, &|_| 1_000);
+            assert_eq!(one.get(&bond(1)), two.get(&bond(2)), "seed {seed}: the work's allocation follows the work, not the role");
+            assert_eq!(one.get(&bond(2)), two.get(&bond(1)));
+            assert_eq!(draw(&[b, a], seed, 25, &|_| 1_000), one, "order-free");
+        }
+    }
+
+    /// **SPLIT**: the same total work and the same total capital split across bonds, operator keys or claims never raise the candidate
+    /// total beyond the tolerance (one rounding ticket per Final); at the capital cap a split never raises it at all.
+    #[test]
+    fn splitting_bonds_or_claims_never_raises_candidates() {
+        let p =
+            PalwBondBudgetPolicyV1 { round_rights: PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 25 }, ..policy(1, false) };
+        let mut rng = Rng(0x5eed_00e3);
+        let (mut whole_sum, mut split_sum) = (0u64, 0u64);
+        for trial in 0..300u64 {
+            let credit = 1 + rng.below(20_000_000);
+            let capital = rng.below(10_000 * BILI);
+            let k = 1 + rng.below(6);
+            // The whole: one bond, one claim.
+            let whole_r = palw_round_rights_remaining_v1(&p, capital, None);
+            let whole = draw(&[exec_final(1, 1, credit, 1)], trial, 1 << 15, &|_| whole_r).values().sum::<u64>();
+            // The split: k bonds (k operator keys), the work in k claims of distinct roots, the capital in k pieces.
+            let mut finals = Vec::new();
+            let mut pieces = Vec::new();
+            let (mut c_left, mut w_left) = (capital, credit);
+            for i in 0..k {
+                let (c, w) = if i + 1 == k { (c_left, w_left) } else { (rng.below(c_left + 1), rng.below(w_left + 1)) };
+                c_left -= c;
+                w_left -= w;
+                pieces.push((bond(10 + i as u32), palw_round_rights_remaining_v1(&p, c, None)));
+                finals.push(exec_final(100 + i, 100 + i, w, 10 + i as u32));
+            }
+            let caps: BTreeMap<_, _> = pieces.into_iter().collect();
+            let split = draw(&finals, trial, 1 << 15, &|b| caps[b]).values().sum::<u64>();
+            assert!(split <= whole + k, "trial {trial}: split {split} vs whole {whole} beyond one rounding ticket per Final");
+            let r_sum: u64 = caps.values().sum();
+            assert!(r_sum <= whole_r, "capital caps are sub-additive");
+            if credit / PALW_EXECUTION_QUANTUM_V1 > whole_r + k {
+                assert!(split <= whole, "trial {trial}: at the capital cap a split never raises the candidates ({split} > {whole})");
+            }
+            whole_sum += whole;
+            split_sum += split;
+        }
+        assert!(split_sum <= whole_sum + 300, "in expectation the split is no better ({split_sum} vs {whole_sum})");
+    }
+
+    /// **BUDGET**: one row per (span, bond), reserved and used at the draw, a duplicate refused, released only at `draw + W`; in
+    /// `CountAgainstBlocks` mode each ticket takes a block of `B`.
+    #[test]
+    fn round_rights_reserve_once_and_release_at_d_plus_w() {
+        let p = policy(1, false); // CountAgainstBlocks; B = 4 blocks per 1,000 BILI
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        assert_eq!(palw_round_rights_remaining_v1(&p, capital, None), 4);
+        s.reserve_round_rights_v1(&p, capital, 7, bond(1), 50, 3, &mut j).unwrap();
+        assert_eq!(s.bond_row(&bond(1)).unwrap().window.block_units, 3 * PALW_BUDGET_BLOCK_UNIT_V1, "fee-only Rounds take B");
+        assert_eq!(palw_round_rights_remaining_v1(&p, capital, s.bond_row(&bond(1))), 1);
+        assert!(s.clone().reserve_round_rights_v1(&p, capital, 7, bond(1), 51, 1, &mut j).is_err(), "one row per (span, bond)");
+        assert!(s.clone().reserve_round_rights_v1(&p, capital, 8, bond(1), 51, 2, &mut j).is_err(), "never past the cap");
+        let id = palw_round_rights_row_id_v1(7, &bond(1));
+        let row = *s.claim_row(&id).unwrap();
+        assert_eq!((row.origin, row.open, row.consumed), (PalwBudgetOriginV1::RoundRights, false, row.reserved));
+        s.release_due(149, &mut j);
+        assert_eq!(palw_round_rights_remaining_v1(&p, capital, s.bond_row(&bond(1))), 1);
+        s.release_due(150, &mut j);
+        assert_eq!(palw_round_rights_remaining_v1(&p, capital, s.bond_row(&bond(1))), 4);
+        assert!(s.claim_row(&id).is_none(), "the row leaves at its release");
+        s.check_consistency().unwrap();
     }
 }
