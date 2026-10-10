@@ -18,6 +18,7 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 
 ## Governing design
 
+- [Round / EXEC additional acceptance conditions (2026-10-10)](palw-round-exec-additional-acceptance-2026-10-10.md) — adopted design gates for compute-proportional tickets, bond budgets, shared-window neutrality and economics; implementation and activation pending
 - [ADR index](adr/README.md)
 - [PQ specification](kaspa-pq-spec.md)
 - [ML-DSA-87 design](kaspa-pq-design-mldsa87.md)
