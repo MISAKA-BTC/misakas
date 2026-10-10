@@ -448,23 +448,24 @@ async fn da16_a_common_mode_provider_outage_voids_the_claim_without_a_miner_slas
     let (producer_before, p_before) = (w.net.collateral(0), providers.map(|p| w.net.collateral(p)));
     let (unit, unit2) = (PublicUnitV1::ClaimPosition { stage: 0, position: 1 }, PublicUnitV1::ClaimPosition { stage: 0, position: 2 });
     // Two challengers (any bonds of other operators — here a seat too: seats have no power here), in one block: one deadline.
-    let second = seats[0];
-    let (out_before, second_before) = (w.net.collateral(outsider), w.net.collateral(second));
+    let (second, third) = (seats[0], seats[1]);
+    let (out_before, second_before, third_before) = (w.net.collateral(outsider), w.net.collateral(second), w.net.collateral(third));
     let (c0, c0b, c1) = (
         w.net.court_challenge(outsider, subject, providers[0], unit),
-        w.net.court_challenge(outsider, subject, providers[0], unit2),
+        w.net.court_challenge(third, subject, providers[0], unit2),
         w.net.court_challenge(second, subject, providers[1], unit),
     );
-    w.net.send(vec![(outsider, c0), (outsider, c0b), (second, c1)]).await;
+    w.net.send(vec![(outsider, c0), (third, c0b), (second, c1)]).await;
     // A position the claim does not commit is no unit of it (refused, not a default by construction); an artifact unit is model bytes.
     let none = w.net.court_challenge(outsider, subject, providers[0], PublicUnitV1::ClaimPosition { stage: 0, position: 9_999 });
     let model = w.net.court_challenge(outsider, subject, providers[0], PublicUnitV1::ArtifactLeaf { index: 0 });
     w.net.send(vec![(outsider, none), (outsider, model)]).await;
     assert_eq!(w.net.court(&subject).challenges.len(), 3);
-    assert_eq!(w.net.court_reserved(outsider), 2 * u128::from(PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1), "two challenge bonds held");
+    assert_eq!(w.net.court_reserved(third), u128::from(PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1), "a challenge bond held");
     let deadlines: Vec<u64> = w.net.court(&subject).challenges.iter().map(|(_, _, r)| r.deadline_daa).collect();
     assert!(deadlines.iter().all(|d| *d == deadlines[0]), "filed in one block");
-    w.net.beat_to(deadlines[0] + 1).await;
+    let last = deadlines[0];
+    w.net.beat_to(last + 1).await;
 
     assert!(
         matches!(w.net.claim_state(&claim.id), ClaimStateV1::Unavailable { producer_defaulted: false, .. }),
@@ -480,14 +481,20 @@ async fn da16_a_common_mode_provider_outage_voids_the_claim_without_a_miner_slas
         assert_eq!(w.net.slashed(*p), mega(600), "the whole reservation is collected");
     }
     // Conservation: each slash is paid out as one share to its challenger and the rest burned — nothing minted, nothing kept.
-    assert_eq!((w.net.owed(outsider), w.net.owed(second)), (share, share), "one share per charge, never two (the moot one pays none)");
+    assert_eq!((w.net.owed(outsider), w.net.owed(second)), (share, share), "one share per charge");
+    assert_eq!(w.net.owed(third), 0, "never two: the moot challenge pays none");
     assert!(share < mega(600) && mega(600) - share == mega(600) * 5_100 / 10_000, "the burned remainder");
     assert_eq!((w.net.court_reserved(outsider), w.net.court_reserved(second)), (0, 0), "the challenge bonds returned");
-    assert_eq!((w.net.collateral(outsider), w.net.collateral(second)), (out_before, second_before), "no fee: nobody answered");
+    assert_eq!(
+        (w.net.collateral(outsider), w.net.collateral(second), w.net.collateral(third)),
+        (out_before, second_before, third_before),
+        "no fee: nobody answered"
+    );
+    assert_eq!(w.net.court_reserved(third), 0, "the moot challenge's bond returned");
     let lapsed = w.net.court(&subject);
     assert!(lapsed.row.as_ref().unwrap().lapsed_daa.is_some() && lapsed.row.as_ref().unwrap().charged.len() == 2);
     assert!(lapsed.challenges.is_empty(), "the moot challenge went with the charge");
-    w.net.beat_to(deadlines[0] + 100).await;
+    w.net.beat_to(last + 100).await;
     assert!(!w.net.ledger().claims[&claim.id].rewarded, "void: no reward ever");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
