@@ -264,88 +264,9 @@ with `B_cap` retained in the credit-overlay flow: the reliable challengers are
 market for everyone else. (This is also why §2 tolerates a predictable panel: grinding a rival
 *off* the panel removes their fee, never their refutation right.)
 
-**4e. Admission is doubly capped, and both caps are registration-time checks:**
+**4e. 旧 overlay mint の rate cap・subsidy 比率 — 不採用。**
 
-```
-physical:   R_jobs · q ≤ Σ_v capacity_v(p99)
-    a chain may not credit jobs faster than its class can replay them; at 120 s blocks
-    and the 512-decode ceiling (p99 ≈ 10–20 min), every-block crediting with q = 2 needs
-    ≈ 20 standing replay slots — a 4-host fleet credits sparser, or registers more capacity
-
-economic:   P_check · S_eff ≥ λ · G_max        λ ≥ 2.0
-  P_check = P(≥1 honest full replay AND timely inclusion within W_challenge)
-            — measured from Stage-0/1 refutation drills, never assumed
-  S_eff   = slashable bond reachable by refutation      (max_leverage ≤ 1.0:
-            credit mintable within one unbonding period must not exceed S_eff —
-            under P3 deterrence is economic, so this inequality is load-bearing)
-  G_max   = credit mintable from the dishonest commitment
-```
-
-> **Amendment 2026-08-16 (B15 simulation) — this inequality FAILS at live parameters, and the
-> text above is ambiguous about why.** `G_max` admits two readings that differ by four orders
-> of magnitude:
->
-> * *per-commitment* ("credit mintable from **the** dishonest commitment") — `G_max` = one
->   block's `base(C)` = 4 445.62 BILI, needing `S_eff ≥ 8 891 BILI`: **satisfied**, 2.25× margin.
-> * *aggregate* — which is what the `max_leverage ≤ 1` line itself says ("credit mintable
->   **within one unbonding period** must not exceed `S_eff`"), and what a repeat offender
->   actually exploits: nothing stops cheating job after job against one bond. A miner
->   crediting every physically-allowed slot mints **116.5 M BILI** against a 20 000 BILI bond —
->   **violated by 11 655×** at `P_check = 1.0`, 58 000× at `P_check = 0.2`.
->
-> **The aggregate reading governs.** Two credible remedies, the same inequality solved for
-> different variables, chosen at registration and required **before Stage 2** (Stage 0/1
-> credit nothing and are unaffected):
->
-> 1. a per-validator credited-job cap of `S_eff / (λ · base)` ≈ **2.2 jobs per unbonding
->    period** (≈ 6.2 days per validator), enforced as a registration-time admission rule
->    alongside the physical cap; or
-> 2. **`base(C)` is a fraction of the block subsidy, not all of it** — crediting once every
->    10 blocks requires `base(C) ≤ 9.92 BILI`, i.e. 0.22 % of a subsidy.
->
-> Raising bonds to 233 M BILI is not credible, and shortening unbonding is bounded below by
-> `W_challenge` (≤ 14×). Numbers and their derivation:
-> `scripts/misaka-palw-economics-sim.py`.
->
-> **CORRECTED 2026-08-17.** Both remedies above price a job at `base(C)`, but a credited job
-> mints `base(C) + q · ρ_v · base(C)` — the executor's base plus one share per paid attester,
-> `3 × base(C)` at the live panel (`q = 2`, `ρ_v = 1 000‰`). The encoded check made the same
-> mistake, so it licensed 3× the mint it measured. **Remedy 1 does not exist at this panel:**
-> `jobs ≥ 1` at every interval and one full-subsidy job already pays 13 336.86 BILI against a
-> 20 000 BILI bond, so no rate cap can rescue full-subsidy credit (the ceiling for a single job
-> per unbonding period is `base(C) ≤ 749‰`). **Remedy 2 holds at (14 blocks, 0.1 %)**, not at
-> the printed (10 blocks, 0.2 %). The real lever set is
-> `(min_credit_interval_daa, base_subsidy_permille, q, ρ_v)`; shrinking `ρ_v` to 200‰ restores
-> 0.2 % at one job per 13 blocks. Corrected table and derivation:
-> `docs/palw-economic-parameters-2026-08-16.md` §3; boundaries pinned in
-> `consensus/core/src/palw_schedule.rs`.
-
-> **SUPERSEDED 2026-08-20 — the remedy set above priced an overlay mint that no longer exists.**
-> Both remedies choose a per-job credit price (`base(C)` as a rate cap, or as a fraction of the
-> block subsidy) because at the time this panel was written PALW credit was an *overlay* minted
-> beside a hash-produced block. [ADR-0038](0038-palw-is-the-consensus-work.md) inverted that
-> layering and [ADR-0039](0039-palw-only-block-production.md) removed the last hash path: on the
-> V2 lineage **the block is the unit of credit**, produced only by a bonded producer, and there is
-> no separate `base(C)` knob to set. What replaces each half:
->
-> * **The admission-side quantity** is [ADR-0045](0045-palw-class-economy-on-chain.md) Decision 2 —
->   a per-class epoch budget denominated in **blocks**, `⌊tol‰ · E · s_c / (1000 · denom_c)⌋`,
->   derived at the epoch boundary, frozen in rooted state, and charged to the producing block's own
->   class counter along its own selected chain. `min_credit_interval_daa` /
->   `base_subsidy_permille` are V1-lineage levers and are not the V2 lever set.
-> * **The leverage-side quantity** — the `max_leverage ≤ 1.0` inequality this panel measured
->   violated by 11 655× — is answered per **bond**, not per job, by
->   [ADR-0042](0042-palw-mainnet-candidate-ruleset.md) Decision 6 (P0-10):
->   `reserved_exposure(bond) ≤ slashable_collateral(bond) × max_exposure_ratio`, reserved at
->   commitment admission and released only on `Final` / `Voided` / `timeout`. A per-class block
->   budget bounds a *class*, never a bond, so ADR-0045 does **not** close this half and was never
->   claimed to; ADR-0042 is where the aggregate reading is bounded.
->
-> **Remedy 1 remains non-existent at this panel** for the reason recorded above (no rate cap
-> rescues full-subsidy credit), and **Remedy 2 is void rather than merely re-tuned** — its variable,
-> a subsidy fraction paid to an overlay job, has no referent on the V2 lineage. §4e is retained in
-> full as the measurement that forced the layer inversion; it is not a live parameter panel. Stages
-> 0/1 credit nothing and are unaffected either way.
+PALW が block production を担う構成に変わり、hash block に追加する独立した `base(C)` mint がなくなったため、旧 per-job cap と subsidy 比率の調整は継続しない。現在の class block budget は [ADR-0045](0045-palw-class-economy-on-chain.md)、bond の aggregate exposure は [ADR-0042](0042-palw-mainnet-candidate-ruleset.md) Decision 6 に従う。
 
 ### 5. The audit layer: opening calls as the DA heartbeat — answerable, not correct
 
@@ -481,7 +402,7 @@ Stage 3 Full         wider exposure; requires the second independent reference
   design (future work) inherits this as a hard constraint, not a preference.
 * **Registration grows the published numbers per class:** `p99_cold_replay` at the credited
   ceiling, the credited ceiling itself (window-derived, ≤ the format ceiling), `ρ_v`, and the
-  checkpoint interval's localization cost — plus the §4e caps. The §12 checklist gains:
+  checkpoint interval's localization cost — plus the class budget and bond-exposure limits referenced in §4e. The §12 checklist gains:
   `[ ] windows re-derived from measured p99`, `[ ] credited ceiling derived from windows and
   the pruning horizon`, `[ ] P_check measured in shadow`, `[ ] no-show/inclusion telemetry
   published`.

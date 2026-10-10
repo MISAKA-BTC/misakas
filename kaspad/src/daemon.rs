@@ -632,160 +632,6 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         }
     }
 
-    // MISAKA Phase 4 (PALW LLM PoW, ADR-0021) startup rails. Header validation on a PALW-active
-    // network replays a pinned-LLM inference per header; a node whose runtime is missing there
-    // would price every honest header as failed PoW and follow nothing (ADR-0042 Decision 4 —
-    // the panic is reserved for a runtime that registers and then breaks). Check the operator's
-    // intent HERE, at startup, with actionable messages, before a peer is dialed.
-    {
-        // "Ever active on this network": is_active at the largest checkable score — false only
-        // for `ForkActivation::never()`.
-        let palw_ever_active = params.pow_palw_activation.is_active(u64::MAX - 1);
-        // Phase 4b (algo_id = 5): the Ollama-runtime PALW network. Validation reaches a
-        // host-local Ollama server, so check reachability and the model pin NOW.
-        let palw_ollama_ever_active = params.pow_palw_ollama_activation.is_active(u64::MAX - 1);
-        let devnet = network.network_type == kaspa_consensus_core::network::NetworkType::Devnet;
-        // The fixture derives DIFFERENT tags than the pinned model — fixture rules are a
-        // different network. `kaspa_pow::palw::fixture_permitted_on` confines them to devnet at the
-        // point the tag is computed, so this rail no longer decides WHETHER the fixture applies; it
-        // decides what to tell the operator about a variable that will not do what they think.
-        //
-        // Two cases, and they used to be one `exit(1)`:
-        //
-        // * PALW is active here and this is not devnet — the operator asked for fixture rules on a
-        //   network that has real ones. Stop, with the message naming the variable: continuing
-        //   would need a real worker they have not configured, and failing at the first relayed
-        //   header is the outcome this whole block exists to prevent.
-        // * PALW is NOT active here — the variable cannot affect a single tag on this network,
-        //   because nothing on it computes one. Aborting was over-broad, and measurably so: it
-        //   made one process unable to host a devnet consensus and a simnet consensus at once, so
-        //   the integration suite could not be run in a single invocation whatever the variable was
-        //   set to. Say it once and carry on.
-        let fixture = kaspa_pow::palw::fixture_requested();
-        if fixture && !devnet {
-            if palw_ever_active || palw_ollama_ever_active {
-                println!(
-                    "MISAKA_PALW_POW_FIXTURE=1 is only honored on devnet: fixture PALW tags are a \
-                     different rule set than the pinned model, and running them against {} would just \
-                     fork you off the network at the first block. Unset it, or use --devnet.",
-                    network
-                );
-                exit(1);
-            }
-            warn!(
-                "MISAKA_PALW_POW_FIXTURE=1 is set but {} does not validate PALW proof-of-work — the \
-                 variable is ignored here and changes nothing this node accepts.",
-                network
-            );
-        }
-        // Below, "fixture" must mean "the fixture is what this node validates", not "somebody
-        // exported the variable" — on a non-devnet network the runtime checks still apply.
-        let fixture = fixture && devnet;
-        // ADR-0042 Decision 4 (PR-02): the consensus build carries no model runtime — kaspad is
-        // the composition root that wires one in, and only where this network's rules can ever
-        // demand an inference-priced tag. Everywhere else NOTHING is registered, so no
-        // validation path can reach a model, or a model's failure modes: an algo-4/5 header on
-        // such a network simply fails PoW.
-        if (palw_ever_active || palw_ollama_ever_active) && !fixture {
-            misaka_palw_pow_driver::install();
-        }
-        if palw_ollama_ever_active && !fixture {
-            let model = match std::env::var(misaka_palw_pow_driver::PALW_OLLAMA_MODEL_ENV) {
-                Ok(m) => m,
-                Err(_) => {
-                    println!(
-                        "network {} validates PALW-Ollama (algo_id = 5) LLM proof-of-work.\nSet {}=<pinned model, e.g. \
-                         qwen3.5:2b> (and optionally {}=http://127.0.0.1:11434), with `ollama serve` running and the \
-                         model pulled — see docs/testnet10-palw-rollout-runbook.md.{}",
-                        network,
-                        misaka_palw_pow_driver::PALW_OLLAMA_MODEL_ENV,
-                        misaka_palw_pow_driver::PALW_OLLAMA_URL_ENV,
-                        if network.network_type == kaspa_consensus_core::network::NetworkType::Devnet {
-                            "\nOr export MISAKA_PALW_POW_FIXTURE=1 for the model-free devnet fixture."
-                        } else {
-                            ""
-                        }
-                    );
-                    exit(1);
-                }
-            };
-            let url = std::env::var(misaka_palw_pow_driver::PALW_OLLAMA_URL_ENV)
-                .unwrap_or_else(|_| misaka_palw_pow_driver::DEFAULT_OLLAMA_URL.to_string());
-            let hostport = url.strip_prefix("http://").unwrap_or(&url).trim_end_matches('/').to_string();
-            match std::net::TcpStream::connect_timeout(
-                &hostport.parse().unwrap_or_else(|_| {
-                    println!("{} must be http://host:port, got {url}", misaka_palw_pow_driver::PALW_OLLAMA_URL_ENV);
-                    exit(1);
-                }),
-                Duration::from_secs(3),
-            ) {
-                Ok(_) => match misaka_palw_pow_driver::verify_ollama_model_pin(&url, &model) {
-                    Ok(()) => info!("PALW-Ollama runtime: {url} serving the pinned model blob as {model}"),
-                    Err(e) => {
-                        println!("{e}");
-                        exit(1);
-                    }
-                },
-                Err(e) => {
-                    println!(
-                        "cannot reach the Ollama server at {url}: {e}\nStart it (`ollama serve`, or the systemd unit from \
-                         scripts/misaka-palw-ollama-setup.sh) and pull the pinned model (`ollama pull {model}`)."
-                    );
-                    exit(1);
-                }
-            }
-        }
-        if palw_ever_active && !fixture {
-            match std::env::var("PALW_WORKER") {
-                Err(_) => {
-                    println!(
-                        "network {} validates PALW (algo_id = 4) LLM proof-of-work, which needs the \
-                         pinned worker runtime.\nSet PALW_WORKER=<path to palw-worker> and \
-                         MISAKA_PALW_GGUF=<path to {}>{}",
-                        network,
-                        kaspa_consensus_core::vlt::qwen35_pins::GGUF_FILENAME,
-                        if network.network_type == kaspa_consensus_core::network::NetworkType::Devnet {
-                            ", or export MISAKA_PALW_POW_FIXTURE=1 for the model-free devnet fixture."
-                        } else {
-                            "."
-                        }
-                    );
-                    exit(1);
-                }
-                Ok(worker) => {
-                    if !std::path::Path::new(&worker).is_file() {
-                        println!("PALW_WORKER points at {worker}, which does not exist.");
-                        exit(1);
-                    }
-                    if std::env::var("MISAKA_PALW_GGUF").is_err() {
-                        println!(
-                            "PALW_WORKER is set but MISAKA_PALW_GGUF is not — the worker refuses to run \
-                             without the pinned {} (size+sha checked).",
-                            kaspa_consensus_core::vlt::qwen35_pins::GGUF_FILENAME
-                        );
-                        exit(1);
-                    }
-                    // Class-pinned nets (ADR-0035): prove this runtime is in the network's
-                    // determinism class BEFORE any peer is dialed — one probe inference now,
-                    // with a clear message, instead of a silent self-fork at the first header.
-                    // (The tag runner re-checks lazily via the same memoized probe, so a miner
-                    // or harness that bypasses this rail is covered too.)
-                    let net_id_bytes = network.to_string();
-                    if kaspa_consensus_core::pow_layer0::palw_worker_calibration_v1(net_id_bytes.as_bytes()).is_some() {
-                        info!("PALW class calibration: replaying the pinned probe (one inference — this takes seconds)…");
-                        match kaspa_pow::palw::verify_worker_calibration(net_id_bytes.as_bytes()) {
-                            Ok(()) => info!("PALW worker runtime verified in the pinned determinism class of {network}"),
-                            Err(e) => {
-                                println!("{e}");
-                                exit(1);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     let config = Arc::new(
         ConfigBuilder::new(params).adjust_perf_params_to_consensus_params().apply_args(|config| args.apply_to_config(config)).build(),
     );
@@ -1758,6 +1604,7 @@ Do you confirm? (y/n)";
                     genesis_hash: config.params.genesis.hash,
                     genesis_timestamp_ms: config.params.genesis.timestamp,
                     last_signed_round_path: palw_panel_state_dir(&app_dir, network).join("palw-round-last-signed"),
+                    exec_v2_fence: config.params.palw_exec_payload_v2_fence(),
                 },
                 consensus_manager.clone(),
                 mining_manager.clone(),
@@ -1765,6 +1612,28 @@ Do you confirm? (y/n)";
             )))
         }
         Err(_) => None,
+    };
+
+    // RFC-0008 v2 amendment 1: the EXEC_SLICE producer — the round lane's bond identity, where the EXEC v2 payload is armed. Publishes
+    // only the slices an operator's intents name (`<state dir>/exec-slices/*.json`) and nothing below the fence; not started on any
+    // network that does not arm it (every shipped preset).
+    let palw_exec_slice_producer_service = match (&palw_duty_plan.round_lane, config.params.palw_exec_payload_v2_fence()) {
+        (Ok(crate::palw_duties::PalwBondIdentityV1 { key_path, bond }), Some(exec_v2_fence)) => {
+            Some(Arc::new(crate::palw_exec_slice_producer::PalwExecSliceProducerService::new(
+                crate::palw_exec_slice_producer::PalwExecSliceProducerConfig {
+                    key_path: key_path.clone(),
+                    bond: bond.clone(),
+                    network_id: config.params.net,
+                    genesis_hash: config.params.genesis.hash,
+                    exec_v2_fence,
+                    intents_dir: palw_panel_state_dir(&app_dir, network).join("exec-slices"),
+                },
+                consensus_manager.clone(),
+                mining_manager.clone(),
+                flow_context.clone(),
+            )))
+        }
+        _ => None,
     };
 
     // kaspa-pq Phase 11 (ADR-0010): expose the in-process validator service's status via
@@ -2233,6 +2102,9 @@ Do you confirm? (y/n)";
     }
     if let Some(palw_panel_service) = palw_panel_service {
         async_runtime.register(palw_panel_service);
+    }
+    if let Some(palw_exec_slice_producer_service) = palw_exec_slice_producer_service {
+        async_runtime.register(palw_exec_slice_producer_service);
     }
     if let Some(palw_round_producer_service) = palw_round_producer_service {
         async_runtime.register(palw_round_producer_service);

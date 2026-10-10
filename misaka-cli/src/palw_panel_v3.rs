@@ -5,8 +5,8 @@
 //! `unavailable`), the assignment (seed, seats, exposure, the inclusion witness block), the redraws so far and the terminal reason
 //! (`SEAL_UNAVAILABLE`, `BEACON_UNAVAILABLE`, `NO_CAPABLE_PANEL`, `PANEL_UNAVAILABLE` — all non-fraud — or `RELEASED`). Read-only
 //! (`getPalwPanelV3Status`, op 220: a node built before it drops the connection, so the read goes on a connection of its own).
-//! Nothing here is a rule. On today's chain no beacon source is approved, so every sealed claim reads `BEACON_UNAVAILABLE`
-//! (`EXTERNAL_GATE_PENDING`): the document says so, it does not paper over it.
+//! Nothing here is a rule. Shipped presets are dormant; the release metadata reports that activation is unsupported and no
+//! Panel beacon scheme is approved. An observed engine alone is not evidence of permissionless completion.
 
 use crate::node::Ctx;
 use crate::{CliError, CliResult, OutputFormat, exit};
@@ -54,11 +54,16 @@ fn short(hash: &str) -> String {
 pub(crate) fn render(doc: &serde_json::Value) -> String {
     let mut out = String::new();
     let overview = &doc["overview"];
+    if doc["release"]["activationSupported"] == serde_json::Value::Bool(false) {
+        out.push_str("this release cannot activate permissionless Panel binding; release gates are pending\n");
+        if doc["release"]["approvedBeaconSchemes"].as_array().is_some_and(|schemes| schemes.is_empty()) {
+            out.push_str("  approved Panel beacon schemes: none\n");
+        }
+    }
     if overview["active"] != serde_json::Value::Bool(true) {
         out.push_str("permissionless Panel: not active on this chain (the fence has not been crossed)\n");
-        return out;
-    }
-    out.push_str(&format!(
+    } else {
+        out.push_str(&format!(
         "permissionless Panel: tip {} (height {}, DAA {}) policy {}\n  tracked {}  pendingSeal {}  sealed {}  entropyReady {}  bound {}  released {}  voided {}  retained work ids {}\n  certified epochs: {}\n",
         short(&text(overview, "tip")),
         text(overview, "height"),
@@ -73,7 +78,8 @@ pub(crate) fn render(doc: &serde_json::Value) -> String {
         text(overview, "voided"),
         text(overview, "retainedWorkIds"),
         overview["certifiedEpochs"].as_array().map(|a| a.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ")).filter(|s| !s.is_empty()).unwrap_or_else(|| "none".into()),
-    ));
+        ));
+    }
     for claim in doc["claims"].as_array().into_iter().flatten() {
         out.push_str(&format!(
             "\nclaim {}\n  rule {}  accepted DAA {}  V2 phase {}  engine phase {}  retries {}\n",
@@ -158,11 +164,20 @@ mod tests {
 
     #[test]
     fn the_subcommand_parses_its_claims_and_limit() {
-        use clap::Parser;
-        let id = "ab".repeat(64);
-        let cli = crate::Cli::try_parse_from(["misaka", "palw", "panel-v3", "--claim", &id, "--limit", "5", "--json"]).expect("parses");
-        let crate::Command::Palw(crate::PalwCmd::PanelV3(args)) = cli.command else { panic!("panel-v3") };
-        assert_eq!((args.claim, args.limit, args.json), (vec![id], 5, true));
+        // Match the CLI's existing parsing tests: the full clap tree exceeds the default 2 MiB test stack.
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                use clap::Parser;
+                let id = "ab".repeat(64);
+                let cli = crate::Cli::try_parse_from(["misaka", "palw", "panel-v3", "--claim", &id, "--limit", "5", "--json"])
+                    .expect("parses");
+                let crate::Command::Palw(crate::PalwCmd::PanelV3(args)) = cli.command else { panic!("panel-v3") };
+                assert_eq!((args.claim, args.limit, args.json), (vec![id], 5, true));
+            })
+            .expect("the parsing thread starts")
+            .join()
+            .expect("panel-v3 parses");
     }
 
     #[test]
@@ -185,5 +200,22 @@ mod tests {
         assert!(text.contains("not held by this state"), "{text}");
         let inactive = serde_json::json!({"overview": {"active": false}, "claims": [], "unknown": []});
         assert!(render(&inactive).contains("not active"));
+    }
+
+    #[test]
+    fn a_dormant_release_still_shows_named_legacy_claims_and_unknown_ids() {
+        let doc = serde_json::json!({
+            "overview": {"active": false},
+            "release": {"activationSupported": false, "approvedBeaconSchemes": []},
+            "claims": [{"claimId": "ab".repeat(64), "rule": "historicalLaneA", "acceptedDaa": 10,
+                "v2Phase": "provisional", "enginePhase": null, "retries": 0}],
+            "unknown": ["cd".repeat(64)]
+        });
+        let text = render(&doc);
+        assert!(text.contains("cannot activate") && text.contains("beacon schemes: none"), "{text}");
+        assert!(text.contains("rule historicalLaneA") && text.contains("not held by this state"), "{text}");
+        let mut fixture = doc;
+        fixture["overview"]["active"] = true.into();
+        assert!(render(&fixture).contains("cannot activate"), "an engine cannot override the release's status");
     }
 }

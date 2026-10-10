@@ -1462,6 +1462,12 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwActivationPoolResponse>, protowire
         error: None,
     }
 });
+from!(item: &kaspa_rpc_core::GetPalwExecV2StatusRequest, protowire::GetPalwExecV2StatusRequestMessage, {
+    Self { root_claim_ids: item.root_claim_ids.clone(), block_hash: item.block_hash.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwExecV2StatusResponse>, protowire::GetPalwExecV2StatusResponseMessage, {
+    Self { available: item.available, observation_version: item.observation_version, json: item.json.clone(), error: None }
+});
 from!(item: &kaspa_rpc_core::GetPalwPanelV3StatusRequest, protowire::GetPalwPanelV3StatusRequestMessage, {
     Self { claim_ids: item.claim_ids.clone(), limit: item.limit }
 });
@@ -3879,6 +3885,12 @@ try_from!(item: &protowire::GetPalwActivationPoolResponseMessage, RpcResult<kasp
         bonus_cap_sompi: item.bonus_cap_sompi,
     }
 });
+try_from!(item: &protowire::GetPalwExecV2StatusRequestMessage, kaspa_rpc_core::GetPalwExecV2StatusRequest, {
+    Self { root_claim_ids: item.root_claim_ids.clone(), block_hash: item.block_hash.clone() }
+});
+try_from!(item: &protowire::GetPalwExecV2StatusResponseMessage, RpcResult<kaspa_rpc_core::GetPalwExecV2StatusResponse>, {
+    Self { available: item.available, observation_version: item.observation_version, json: item.json.clone() }
+});
 try_from!(item: &protowire::GetPalwPanelV3StatusRequestMessage, kaspa_rpc_core::GetPalwPanelV3StatusRequest, {
     Self { claim_ids: item.claim_ids.clone(), limit: item.limit }
 });
@@ -5703,6 +5715,25 @@ mod palw_kernel_route_grpc_tests {
         let wire: protowire::GetPalwConformanceEvidenceResponseMessage = RpcResult::Ok(&response).into();
         let back: kaspa_rpc_core::GetPalwConformanceEvidenceResponse = (&wire).try_into().unwrap();
         assert_eq!(back, response);
+    }
+}
+
+#[cfg(test)]
+mod palw_exec_v2_status_grpc_tests {
+    use crate::protowire;
+    use kaspa_rpc_core::{GetPalwExecV2StatusRequest, GetPalwExecV2StatusResponse, RpcResult};
+
+    /// **`getPalwExecV2Status` (op 240) survives the grpc wire, both ways**, each field distinct.
+    #[test]
+    fn op_240_round_trips_on_the_grpc_wire() {
+        let request = GetPalwExecV2StatusRequest { root_claim_ids: vec!["ab".repeat(64), "cd".repeat(64)], block_hash: "ef".repeat(64) };
+        let wire: protowire::GetPalwExecV2StatusRequestMessage = (&request).into();
+        let back: GetPalwExecV2StatusRequest = (&wire).try_into().unwrap();
+        assert_eq!(back, request);
+        let response = GetPalwExecV2StatusResponse { available: true, observation_version: 1, json: "{\"version\":1}".into() };
+        let wire: protowire::GetPalwExecV2StatusResponseMessage = RpcResult::Ok(&response).into();
+        let back: RpcResult<GetPalwExecV2StatusResponse> = (&wire).try_into();
+        assert_eq!(back.unwrap(), response);
     }
 }
 

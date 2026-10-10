@@ -778,6 +778,36 @@ impl ConsensusSessionOwned {
         self.consensus.round_adapt_block_template(template, round, payout)
     }
 
+    /// RFC-0008 v2: re-shape a standard template into an `EXEC_SLICE` lane block — the template build's call profile.
+    pub fn exec_v2_slice_adapt_block_template(
+        &self,
+        template: kaspa_consensus_core::block::BlockTemplate,
+        payout: kaspa_consensus_core::tx::ScriptPublicKey,
+    ) -> Result<kaspa_consensus_core::block::BlockTemplate, kaspa_consensus_core::errors::block::RuleError> {
+        self.consensus.exec_v2_slice_adapt_block_template(template, payout)
+    }
+
+    /// RFC-0008 v2 amendment 1: the slice statement a bond signs for `(root, index)` backed by a kernel claim (the producer's input).
+    pub fn palw_exec_v2_slice_statement_v1(
+        &self,
+        root: kaspa_consensus_core::Hash64,
+        index: u32,
+        claim: kaspa_consensus_core::Hash64,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<kaspa_consensus_core::palw_exec_v2::PalwWorkSliceV1, String> {
+        self.consensus.palw_exec_v2_slice_statement_v1(root, index, claim, bond)
+    }
+
+    /// RFC-0008 v2: whether an anchor on this node's selected chain covered `block`.
+    pub fn palw_exec_v2_anchored_v1(&self, block: kaspa_consensus_core::BlockHash) -> bool {
+        self.consensus.palw_exec_v2_anchored_v1(block)
+    }
+
+    /// RFC-0008 v2 amendment 1, §10.3: the relay prefilter of an `EXEC_SLICE` block, off the async runtime.
+    pub async fn async_palw_exec_v2_slice_relayable_v1(&self, slice: kaspa_consensus_core::palw_exec_v2::PalwWorkSliceV1) -> bool {
+        self.clone().spawn_blocking(move |c| c.palw_exec_v2_slice_relayable_v1(&slice)).await
+    }
+
     pub fn get_virtual_bits(&self) -> u32 {
         // Accessing cached virtual fields is lock-free and does not require spawn_blocking
         self.consensus.get_virtual_bits()

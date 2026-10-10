@@ -659,7 +659,7 @@ PY
     # read, so N seats cost one copy of the pages.
     args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT")
     if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:16430); fi
-    MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
+    "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
     # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a
     # negative array index at PARSE time — the whole file fails to load, not the line.
     node_pid=$!
@@ -728,7 +728,7 @@ PY
   # when it has seen its own carrier on the chain, and then stops the registrar: its job is done
   # and a fourth node mapping a 1.7 GiB artifact is not free.
   log "registering $MODEL_ID from the artifact (as bond $REG_BOND, the outside operator)"
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-reg" \
+  "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-reg" \
         --rpclisten-borsh=127.0.0.1:17830 --nogrpc --nodnsseed --disable-upnp \
         --connect=127.0.0.1:16430 --utxoindex --palw-panel \
         --palw-register-class="$MODEL_ID" --palw-class-artifact="$MISAKA_PALW_ARTIFACT" \

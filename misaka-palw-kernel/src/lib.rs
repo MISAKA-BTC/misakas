@@ -1,6 +1,6 @@
 //! **ADR-0172 — model extensibility through versioned kernels, not a universal VM.**
 //!
-//! This crate is the reference implementation of the route RFC-0005 §§K.0–K.8, RFC-0011 §§15–16 and
+//! This crate is the reference implementation of the route `docs/design/palw/versioned-kernels.md` §§K.0–K.8, RFC-0011 §§15–16 and
 //! RFC-0004 §0 specify, for the semantics MISAKA already has: PALW-TIR v1 programs and RFC-0003 pipelines of TIR v2 programs.
 //! Three descriptors of one kernel line: K2-TIR-v1 (every TIR v1 family up to an `i64` accumulator), K2-TIR-v2 (the
 //! multi-modulus dense relation for `i128` accumulators) and K2-TIR-v3 (the media-pipeline family). The completion matrix is
@@ -11,7 +11,7 @@
 //!   post-commit public challenges (small checks) → Pass  |  Fault (a public fault proof)  |  Unavailable
 //! ```
 //!
-//! * [`descriptor`] — `KernelDescriptorV1` (RFC-0005 §K.2), the class binding `ModelKernelBindingV1`, and
+//! * [`descriptor`] — `KernelDescriptorV1` (Kernel design §K.2), the class binding `ModelKernelBindingV1`, and
 //!   the binary's schedule of descriptors (`Proposed → Implemented → LockedIn → Active → Deprecated`).
 //!   Registration selects only an `Active` descriptor; a code hash never authorizes anything.
 //! * [`family`] — the reusable constraint families (§K.3), never one kernel per model brand.
@@ -40,7 +40,7 @@
 //! * [`improve`] — RFC-0004 §0 on this route: the epoch's pinned kernel policy, candidate admission under a pinned kernel of the
 //!   parent's family, assurance-labelled evaluation results, and §7.5's integer promotion rule kept apart from the computational error.
 //! * [`assurance`] — RFC-0004 §0's labels for evaluation evidence and the promotion error budget.
-//! * [`pipeline`] — RFC-0005 §K.3's media-pipeline family (K2-TIR-v3): each pipeline stage a claim over its v1 view with
+//! * [`pipeline`] — the Kernel design §K.3's media-pipeline family (K2-TIR-v3): each pipeline stage a claim over its v1 view with
 //!   committed inputs, every edge (job values, canonical images, earlier stages' rows and finals, `R`) recomputed exactly, an
 //!   edge court, pipeline plans and evidence.
 //! * [`public`] — the 2026-10-07 amendments' measure: a fresh non-seat verifier built from a claim's published **bytes**, fault
@@ -50,6 +50,12 @@
 //!   the `Challengeable` lifecycle with no Panel tally, the window / budget relations and the producer-reservation economics as
 //!   validated policy, job holding from the first reveal, Final receipts for RFC-0010's Panel-independent beacon sources, and a
 //!   state root that stays the historical one until an OPV policy is set.
+//! * [`merkle3`], [`seg`], [`element`], [`seg_da`], [`seg_ledger`] — **K2-TIR-v4, the real-scale suite**
+//!   (`docs/design/palw/k2-real-scale.md`): tiled dual-root commitments, position / segment / claim roots with only the segment roots on
+//!   chain, element courts bounded by the tile, per-position demands served in parts, prompts posted in tiles, and the per-prosecution
+//!   bounds of `PUBLIC_PROSECUTION_COMPLETE`. [`seg_detect`] is the detector that pairs with them at real scale: re-execute the claim,
+//!   compare roots, descend the first divergent segment and check two positions. [`seg_encoder`] is K2-TIR-v5: an encoder or a head
+//!   as ONE position whose ids are the job's.
 //! * [`ledger`], [`route`], [`settle`], [`state`], [`claim_subject`] — the consensus-embeddable shape of the route: signed
 //!   [`route::KernelRouteObjectV1`]s applied one at a time by a transactional ledger (a refusal leaves the state byte-identical,
 //!   a per-block adjudication budget), bonds and the Panel's coverage supplied by the consumer, every money decision an explicit
@@ -77,6 +83,7 @@ pub mod challenge;
 pub mod check;
 pub mod claim_subject;
 pub mod descriptor;
+pub mod element;
 pub mod evidence;
 pub mod family;
 pub mod field;
@@ -87,6 +94,7 @@ pub mod job;
 pub mod ledger;
 pub mod lifecycle;
 pub mod merkle;
+pub mod merkle3;
 pub mod mode;
 pub mod opv;
 pub mod outcome;
@@ -97,16 +105,23 @@ pub mod public;
 pub mod receipt;
 pub mod route;
 pub mod rows;
+pub mod scope;
+pub mod seg;
+pub mod seg_da;
+pub mod seg_detect;
+pub mod seg_encoder;
+pub mod seg_ledger;
 pub mod settle;
 pub mod spec;
 pub mod state;
 pub mod trace;
+pub mod verifier_pay;
 pub mod verify;
 
 pub use check::{PlanAcceptanceV1, check_plan_v1};
 pub use descriptor::{
     KernelDescriptorV1, KernelScheduleV1, KernelStatusV1, ModelKernelBindingV1, builtin_schedule_v1, k2_tir_v1_descriptor,
-    k2_tir_v2_descriptor, k2_tir_v3_descriptor,
+    k2_tir_v2_descriptor, k2_tir_v3_descriptor, k2_tir_v4_descriptor,
 };
 pub use evidence::{VerificationEvidenceV1, build_evidence_v1};
 pub use family::{CheckerIdV1, ConstraintFamilyV1, CourtIdV1};

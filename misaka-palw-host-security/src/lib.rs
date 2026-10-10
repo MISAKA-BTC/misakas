@@ -774,17 +774,10 @@ impl ExecveDenial {
 }
 
 // -------------------------------------------------------------------------------------------
-// Decision 10 / S6 — the public-entrance guard, shared so there is ONE spelling of the rule
+// Decision 10 / S6 — the loopback-only gateway guard
 // -------------------------------------------------------------------------------------------
 
-/// The acknowledgement variable for a non-loopback PALW gateway bind (ADR-0079 Decision 10),
-/// extending `SECURITY.md`'s existing `RKSTRATUM_ALLOW_PUBLIC_DASHBOARD` pattern rather than
-/// inventing a second one.
-pub const ALLOW_PUBLIC_GATEWAY_ENV: &str = "MISAKA_PALW_ALLOW_PUBLIC_GATEWAY";
-
-/// Is this listen address a loopback bind? A host name that is not an IP literal is treated as
-/// public: a name resolves to whatever DNS says today, which is not a property a startup guard
-/// may take on trust.
+/// Recognize an IP loopback address or localhost; arbitrary hostnames are refused.
 pub fn listen_is_loopback(listen: &str) -> bool {
     let host = match listen.rfind(':') {
         Some(at) => &listen[..at],
@@ -797,39 +790,17 @@ pub fn listen_is_loopback(listen: &str) -> bool {
     }
 }
 
-/// Decision 10's two refusals, as one function so the gateway and the report cannot disagree
-/// about what the rule is. `Ok(())` means the bind may proceed.
-pub fn check_public_bind(listen: &str, acknowledged: bool, backend: ConfinementBackend) -> Result<(), String> {
+/// ADR-0144: the gateway serves the user's own inference over loopback only.
+pub fn check_loopback_bind(listen: &str) -> Result<(), String> {
     if listen_is_loopback(listen) {
-        return Ok(());
+        Ok(())
+    } else {
+        Err(format!("refusing to bind {listen}: the PALW gateway is local-only; use 127.0.0.1 or [::1] (ADR-0144)"))
     }
-    if !acknowledged {
-        return Err(format!(
-            "refusing to bind {listen}: this is a PUBLIC entrance and a stranger chooses its input.\n\
-             The intended production pattern is an AUTHENTICATING REVERSE PROXY in front of a \
-             loopback-bound gateway (bind 127.0.0.1 and proxy to it).\n\
-             If you have that proxy — or you accept the exposure — acknowledge it explicitly with \
-             {ALLOW_PUBLIC_GATEWAY_ENV}=1."
-        ));
-    }
-    if backend == ConfinementBackend::None {
-        return Err(format!(
-            "refusing to bind {listen}: the confinement backend in force on this host is `none`, and a public \
-             entrance is the one place where a stranger chooses the model's input (ADR-0079 Decision 10).\n\
-             {ALLOW_PUBLIC_GATEWAY_ENV}=1 does NOT override this. Bind loopback and put an authenticating \
-             reverse proxy in front of it."
-        ));
-    }
-    Ok(())
-}
-
-/// Is the public-gateway acknowledgement set in this process's environment?
-pub fn public_gateway_acknowledged() -> bool {
-    std::env::var(ALLOW_PUBLIC_GATEWAY_ENV).map(|v| v == "1").unwrap_or(false)
 }
 
 // -------------------------------------------------------------------------------------------
-// Decision 4 / S5 — no process that parses a stranger's bytes holds a key
+// Decision 4 / S5 — no process that parses input holds a key
 // -------------------------------------------------------------------------------------------
 
 /// Environment names that would put a signing secret in a process's view. A gateway that finds
@@ -1030,21 +1001,14 @@ mod tests {
         }
     }
 
-    /// **S6.** A public bind needs the acknowledgement, AND fails unconditionally when the
-    /// backend in force is `none` — the acknowledgement does not override the second rule.
     #[test]
-    fn a_public_bind_needs_the_acknowledgement_and_a_backend() {
-        assert!(check_public_bind("127.0.0.1:8790", false, ConfinementBackend::None).is_ok());
-
-        let err = check_public_bind("0.0.0.0:8790", false, ConfinementBackend::LinuxSeccompLandlock).unwrap_err();
-        assert!(err.contains(ALLOW_PUBLIC_GATEWAY_ENV), "the failure must name the acknowledgement");
-        assert!(err.to_lowercase().contains("reverse proxy"), "the failure must name the intended pattern");
-
-        assert!(check_public_bind("0.0.0.0:8790", true, ConfinementBackend::LinuxSeccompLandlock).is_ok());
-
-        let err = check_public_bind("0.0.0.0:8790", true, ConfinementBackend::None).unwrap_err();
-        assert!(err.contains("none"), "the failure must say which backend is in force");
-        assert!(err.contains("does NOT override"), "the acknowledgement must not be a way past this one");
+    fn gateway_binds_only_to_loopback() {
+        for addr in ["127.0.0.1:8790", "[::1]:8790", "localhost:8790"] {
+            assert!(check_loopback_bind(addr).is_ok());
+        }
+        for addr in ["0.0.0.0:8790", "192.168.1.10:8790", "[::]:8790", "gateway.example.com:8790"] {
+            assert!(check_loopback_bind(addr).is_err());
+        }
     }
 
     /// **S12, the default.** The honest absence of a backend is a value with a name, and

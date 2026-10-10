@@ -168,8 +168,15 @@ pub fn palw_class_seating_root_v1(
     activation_pool: bool,
 ) -> Option<PalwClassSeatingV1> {
     let ready = class_ready_operators_v1(state, params, fold, class_id, root, executor, daa)?;
-    let base =
-        palw_base_population_v1(state, params, fold, class_id, daa, crate::palw_execution_lane_v1::palw_execution_span_v1(daa, fold.span_daa), activation_pool);
+    let base = palw_base_population_v1(
+        state,
+        params,
+        fold,
+        class_id,
+        daa,
+        crate::palw_execution_lane_v1::palw_execution_span_v1(daa, fold.span_daa),
+        activation_pool,
+    );
     let in_base: std::collections::BTreeSet<&PalwBondKeyV2> = base.iter().map(|(key, _)| *key).collect();
     let registrant_operator = state
         .classes
@@ -213,7 +220,8 @@ fn class_ready_operators_v1(
             continue;
         }
         let Some(row) = state.seat_readiness_for_root(key, class_id, root) else { continue };
-        let not_ready = crate::palw_model_registry_v1::palw_seat_class_not_ready_reason_v1(state, params, key, class_id, row, now_daa, fold);
+        let not_ready =
+            crate::palw_model_registry_v1::palw_seat_class_not_ready_reason_v1(state, params, key, class_id, row, now_daa, fold);
         if not_ready.is_none() {
             ready.entry(bond.operator_id).or_default().push(*key);
         }
@@ -226,12 +234,7 @@ impl PalwFoldReadV1<'_> {
     /// *seated* for `executor` at `daa`, else `ClassNotSeated` naming the floor that failed (the generative lane's possession
     /// floor keeps its own name, `GenClassNotReady`, in its own gate). `Ok` below the fence, for the base class, without a
     /// registry, and for a class the registry gates no claim of (no lifecycle row and no generative row: legacy, never gated).
-    pub(super) fn check_class_seated_v1(
-        &self,
-        class_id: &Hash64,
-        executor: &PalwBondKeyV2,
-        daa: u64,
-    ) -> Result<(), PalwStateV2Error> {
+    pub(super) fn check_class_seated_v1(&self, class_id: &Hash64, executor: &PalwBondKeyV2, daa: u64) -> Result<(), PalwStateV2Error> {
         self.check_class_seated_root_v1(class_id, None, executor, daa)
     }
 
@@ -246,7 +249,8 @@ impl PalwFoldReadV1<'_> {
         executor: Option<&PalwBondKeyV2>,
         daa: u64,
     ) -> Result<(), PalwStateV2Error> {
-        if !self.params.audit_1004_active_at(daa) || self.state.classes.get(class_id).is_none_or(|class| class.artifact_root == *root) {
+        if !self.params.audit_1004_active_at(daa) || self.state.classes.get(class_id).is_none_or(|class| class.artifact_root == *root)
+        {
             return Ok(());
         }
         let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
@@ -305,6 +309,10 @@ impl PalwFoldReadV1<'_> {
         daa: u64,
     ) -> Result<(), PalwStateV2Error> {
         let root = root.filter(|_| self.params.audit_1004_active_at(daa));
+        // RFC-0008 v2 (X8R): the composed run's test seam — empty in production (`test_admitted_class_v1`).
+        if self.test_admitted_class_v1(class_id) {
+            return Ok(());
+        }
         let Some(terms) = self.params.class_seating_terms_at(daa) else { return Ok(()) };
         if *class_id == self.params.base_class_id() {
             return Ok(());

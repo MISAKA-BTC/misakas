@@ -48,7 +48,8 @@ use kaspa_consensus_core::palw_tir_class_v1::PalwTirAdmissionCarriageV1;
 use kaspa_consensus_core::palw_tir_court_v1::{build_tir_cone_refutation_v1, check_tir_cone_refutation_v1};
 use kaspa_consensus_core::palw_tir_one_move_v1::{palw_tir_one_move_accusation_v1, palw_tir_one_move_verdict_v1};
 use kaspa_consensus_core::palw_tir_shard_v1::{
-    PalwSeatReceiptV4, PalwTirShardPartV1, palw_tir_shard_assignment_v1, palw_tir_shard_outsider_mask_v1, palw_tir_shard_ready_class_v1,
+    PalwSeatReceiptV4, PalwTirShardPartV1, palw_tir_shard_assignment_v1, palw_tir_shard_outsider_mask_v1,
+    palw_tir_shard_ready_class_v1,
 };
 use kaspa_consensus_core::palw_tir_shard_watch_v1::{PALW_TIR_SHARD_WATCH_NO_SEAT_V1, palw_tir_shard_watch_duties_v1};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
@@ -124,7 +125,12 @@ fn params() -> PalwStateParamsV2 {
         .with_tir_shard_from_daa(Some(SHARD_AT))
         .with_worker_carve_permille(620)
         .unwrap()
-        .with_panel_v3(Some(PalwPanelV3ParamsV1 { from_daa: V3_AT, policy: engine_policy(), network: h64(0x4E37), ruleset: h64(0x5255) }))
+        .with_panel_v3(Some(PalwPanelV3ParamsV1 {
+            from_daa: V3_AT,
+            policy: engine_policy(),
+            network: h64(0x4E37),
+            ruleset: h64(0x5255),
+        }))
 }
 
 fn bond(n: u64, capable: &[Hash64]) -> PalwConsensusObjectV2 {
@@ -207,8 +213,12 @@ impl Run {
             final_path: FinalPathV1::PanelIndependent,
         };
         if let Some(inputs) = self.extras.panel_v3.as_mut() {
-            inputs.beacon_source =
-                PalwPanelV3BeaconSourceV1::Reference { events: vec![event.clone()], eligible_profiles: BTreeSet::from([profile]) };
+            inputs.beacon_source = PalwPanelV3BeaconSourceV1::Reference {
+                events: vec![event.clone()],
+                eligible_profiles: BTreeSet::from([profile]),
+                works: Vec::new(),
+                sealed: Vec::new(),
+            };
         }
         let request = BeaconRequestV1 {
             network: mirror.network,
@@ -219,7 +229,8 @@ impl Run {
             deadline_daa: release + mirror.policy.beacon_wait_daa,
         };
         let context = panel_beacon_context_v1(&request, &challenge_policy(), BTreeSet::from([profile]));
-        let WorkBeaconStateV1::Locked(beacon) = collect_work_beacon_v1(&context, &[event], release + 5).expect("a valid policy") else {
+        let WorkBeaconStateV1::Locked(beacon) = collect_work_beacon_v1(&context, &[event], release + 5).expect("a valid policy")
+        else {
             panic!("the reference source locks a beacon");
         };
         BeaconProofV1 { epoch, output: Hash64::from_bytes(beacon.output), proof: borsh::to_vec(beacon.beacon()).unwrap() }
@@ -236,6 +247,10 @@ fn fixture_gqa() -> Fixture {
 /// shard 0's and shard 1's ready bonds (`shard0`, `shard1`: each declares its shard's readiness class), the base class's outsiders and
 /// the watcher at DAA 1 (the engine is created there); the plan at `SHARD_AT`; the claim at `CLAIM_AT`; the seal two blocks later.
 fn sealed(f: &Fixture, x: &Execution, shard0: &[u64], shard1: &[u64]) -> (Run, Hash64) {
+    sealed_with_policy(f, x, shard0, shard1, engine_policy())
+}
+
+fn sealed_with_policy(f: &Fixture, x: &Execution, shard0: &[u64], shard1: &[u64], policy: PanelPolicyV1) -> (Run, Hash64) {
     let extras = PalwTransitionExtrasV1 {
         admission_independence_daa: Some(0),
         panel_economy_active: true,
@@ -245,11 +260,20 @@ fn sealed(f: &Fixture, x: &Execution, shard0: &[u64], shard1: &[u64]) -> (Run, H
             capability_proof: false,
             floor_class: h64(1),
             approved_beacons: vec![challenge_policy()],
-            beacon_source: PalwPanelV3BeaconSourceV1::Reference { events: Vec::new(), eligible_profiles: BTreeSet::new() },
+            beacon_source: PalwPanelV3BeaconSourceV1::Reference {
+                events: Vec::new(),
+                eligible_profiles: BTreeSet::new(),
+                works: Vec::new(),
+                sealed: Vec::new(),
+            },
         }),
         ..Default::default()
     };
-    let mut run = Run { p: params(), s: PalwChainStateV2::genesis(), daa: 0, extras };
+    let mut p = params();
+    let mut mirror = *p.panel_v3().unwrap();
+    mirror.policy = policy;
+    p = p.with_panel_v3(Some(mirror));
+    let mut run = Run { p, s: PalwChainStateV2::genesis(), daa: 0, extras };
     let ready = |s: u16| palw_tir_shard_ready_class_v1(&f.class_id, 2, s);
     let mut objects = vec![
         PalwConsensusObjectV2::ClassRegistered {
@@ -291,7 +315,11 @@ fn sealed(f: &Fixture, x: &Execution, shard0: &[u64], shard1: &[u64]) -> (Run, H
     });
     run.at(1, &objects, None);
     assert!(run.s.panel_v3().is_some(), "the engine exists past the fence");
-    run.at(SHARD_AT, &[PalwConsensusObjectV2::TirShardPlanDeclared { class_id: f.class_id, s_l: 2, s_p: 1, signature: vec![1; 8] }], None);
+    run.at(
+        SHARD_AT,
+        &[PalwConsensusObjectV2::TirShardPlanDeclared { class_id: f.class_id, s_l: 2, s_p: 1, signature: vec![1; 8] }],
+        None,
+    );
     let network_domain = h64(999);
     let producer = bond_key(PRODUCER).0;
     let env = PalwAttemptEnvelopeV2 {
@@ -450,6 +478,40 @@ fn a_stratum_short_of_ready_bonds_ends_the_claim_no_capable_panel_never_a_flat_p
     assert!(run.s.withholding_strikes(&bond_key(PRODUCER)).is_none(), "no strike");
 }
 
+#[test]
+fn an_oversized_shard_population_cannot_prioritize_large_bonds_or_a_partial_panel() {
+    use kaspa_consensus_core::palw_permissionless_panel_v1::{PanelErrorV1, panel_stratified_candidates_v1};
+    let f = fixture_gqa();
+    let x = f.honest();
+    let (run, claim) = sealed(&f, &x, &SHARD0, &SHARD1);
+    let record = run.record(&claim);
+    let strata = record.strata.unwrap();
+    let population = record.snapshot.unwrap().candidates.len() as u32;
+    assert!(population > strata.seat_count() as u32);
+    let mut policy = engine_policy();
+    policy.max_candidates = population - 1;
+    let inputs = run.extras.panel_v3.as_ref().unwrap();
+    assert_eq!(
+        panel_stratified_candidates_v1(&run.s, claim, inputs.floor_class, run.daa, policy, inputs.draw, false, &strata),
+        Err(PanelErrorV1::ResourceLimit),
+        "capacity never keeps just the largest bonds"
+    );
+    // Re-run from genesis with the smaller capacity committed in the policy. The harness checks
+    // the full fold's deltas and reloads its carriage, including the non-fraud terminal outcome.
+    let (mut limited, claim) = sealed_with_policy(&f, &x, &SHARD0, &SHARD1, policy);
+    assert!(limited.record(&claim).snapshot.unwrap().candidates.is_empty(), "no chosen subset");
+    let release = limited.record(&claim).seal.unwrap().anchor_slot;
+    let proof = limited.proof_for(&claim);
+    limited.at(release + 4, &[], None);
+    limited.at(release + 5, &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }], None);
+    let before = limited.s.bond(&bond_key(PRODUCER)).unwrap().clone();
+    limited.at(release + 10, &[], None);
+    assert!(matches!(limited.phase(&claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::PermissionlessNoCapablePanel, .. }));
+    assert!(limited.s.panel(&claim).is_none());
+    let after = limited.s.bond(&bond_key(PRODUCER)).unwrap();
+    assert_eq!((before.collateral, before.slashed), (after.collateral, after.slashed));
+}
+
 /// A lane of leaf `i` moved by one inside its proven interval, if it can be.
 fn forged_lane(f: &Fixture, values: &mut [Vec<i128>], i: usize) -> Option<usize> {
     let leaf = &f.leaves[i];
@@ -496,15 +558,21 @@ fn a_bond_outside_every_seat_convicts_a_v3_sharded_lie_from_public_material() {
     }
     // A seat of shard 0 watches only shard 1; the producer watches nothing of its own claim.
     let seat0 = seats[1];
-    assert_eq!(palw_tir_shard_watch_duties_v1(&run.s, &run.p, &seat0).iter().map(|d| d.tir_shard.unwrap().shard).collect::<Vec<_>>(), vec![1]);
+    assert_eq!(
+        palw_tir_shard_watch_duties_v1(&run.s, &run.p, &seat0).iter().map(|d| d.tir_shard.unwrap().shard).collect::<Vec<_>>(),
+        vec![1]
+    );
     assert!(palw_tir_shard_watch_duties_v1(&run.s, &run.p, &bond_key(PRODUCER)).is_empty());
     // From the claim's public material (the capture the liar served) alone: the cone close, the watcher's bond the accuser.
     let refutation = refute(&f, &lie, leaf);
     let record = run.s.claim(&claim).unwrap().clone();
-    let mut accusation =
-        palw_tir_one_move_accusation_v1(claim, &record, watcher, PalwCourtVerdictV2::ExecutorGuilty, PalwCourtVerdictProofV2::TirCone {
-            refutation: Box::new(refutation),
-        });
+    let mut accusation = palw_tir_one_move_accusation_v1(
+        claim,
+        &record,
+        watcher,
+        PalwCourtVerdictV2::ExecutorGuilty,
+        PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) },
+    );
     accusation.signature = vec![9; 8];
     let court = PalwCourtParamsV2::new(LADDER, 20, 2).expect("a court");
     assert_eq!(

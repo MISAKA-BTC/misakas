@@ -309,7 +309,7 @@ The sidecar `SigningPurpose` for RDA4 was not needed for that drill; it was adde
 | stale checkpoint / stale tip | `checkpoint::verify_signed_checkpoint` (Stale); `StaleTip` | IMPLEMENTED_AND_TESTED |
 | restart, another peer: same verdict, no carried trust | `verify::a_restarted_client_re_verifies_from_scratch_whoever_serves` | IMPLEMENTED_AND_TESTED |
 | no opt-in → no inference, no signature | `miner::an_unverified_quorum_neither_executes_nor_signs_without_the_opt_in`, `model_bundle::model_sign_refuses_to_sign_unverified_state…`, `bond_remote::register_sign_needs_the_class_named…` | IMPLEMENTED_AND_TESTED |
-| the wRPC adapters (`header_chain` via getVirtualChainFromBlock + getBlock, `state_proof` op 202, `ruleset` getPalwNodeStatus) | build; never run against a node | IMPLEMENTED_REFERENCE_ONLY |
+| the wRPC adapters (`header_chain` via getVirtualChainFromBlock + getBlock, `state_proof` op 202, `ruleset` getPalwNodeStatus) | run against a live 9-node salted drill on the integration build (Lead E2E 2026-10-10, below) | IMPLEMENTED_AND_TESTED (devnet) |
 
 **What a header-only client cannot prove on this DAG — DESIGN_GAP, stated:** GHOSTDAG's selected-parent choice and heaviest-chain
 selection (the other parents' headers / mergesets are not served); `bits` against the DAA window (the window's mergesets); heartbeat PoW
@@ -442,3 +442,29 @@ guard (RFC-0009 §6). The authorization body is built by `kaspa_pq_validator_cor
 | `consensus/core` `signing_purpose_discriminants_are_api_stable`, `the_receipt_authorization_purpose_is_appended_and_its_digest_agrees_with_it` | 0–7 unchanged, 8 appended; digest variant index 8; the purpose/digest/context triple |
 | `consensus/core/tests/palw_receipt_spend_v4_fence.rs` | offered nowhere a preset ships it (t12, mainnet, devnet, rc), never at `never()`, and from the height only where armed; the params/schedule ids are the dormant ruleset's |
 | `kaspa-pq-signer` `the_receipt_authorization_purpose_is_refused_until_the_fence_is_offered`, `the_redemption_bundle_is_built_through_the_sidecar_and_a_dormant_daemon_refuses` | dormant daemon refuses by name; once offered, the bundle verifies with the chain's own check and equals the in-process authorization; context borrowing refused |
+
+
+## Lead E2E against live nodes (2026-10-10)
+
+Build: integration `0b73fd33f` (kaspad, misaka) and the miner with the drill flags below; a 9-node salted testnet-12 drill on one Mac
+(`tests/hf-onboarding/devnet.sh`, RUN_ID=lead2), two of its nodes as `--rpc`, bond 8 registered by the HF onboarding run, class
+`f1c5635c…` (registry Active). The executor is `/usr/bin/false`: everything up to inference runs against the nodes, and no execution
+result is fabricated.
+
+| Run | Result |
+|---|---|
+| public-t12 miner → drill nodes | refused before inference: `consensus_params_id` differs (and, with this change, the genesis) |
+| `--verify-headers` from the genesis checkpoint | L1 header chain verified over wRPC; `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED`; STOP without the opt-in, nothing signed |
+| `--own-node --checkpoint-trust own-node` | `FULL_NODE`; every gate passed; halted at the executor (exit 1) |
+| `--pin <sink>` + opt-in | op 202 state proof: bond proven `Active`, collateral 3,119,045,986,560 sompi; halted at the executor |
+| a class the model registry holds `Candidate` | the node refuses the template by name (no new claims) |
+| wrong drill salt | refused: another genesis |
+| `--palw-drill-ruleset` without a salt | refused at start-up |
+
+Changes made for it (`palw-remote-miner`): `--palw-drill-genesis-salt` (params from `palw_chain_params_v1`, so every signature is under the
+drill's domain) and `--palw-drill-ruleset <params id>:<schedule id>` (a drill compresses its fence schedule through kaspad flags this
+binary does not re-derive; accepted only with a salt). The node ruleset now carries `getPalwNodeStatus`'s `genesis_hash` — before, the
+miner never compared genesis (`genesis: None`) and relied on the params id alone.
+
+Not covered (unchanged gaps): a real executor (the backend is not extracted), signing a winning attempt, submit and the Panel's replay of
+a remote miner's capture; L2 below `FULL_NODE` stays a DESIGN_GAP.

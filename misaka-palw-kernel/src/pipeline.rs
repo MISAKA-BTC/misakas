@@ -1,4 +1,4 @@
-//! **The media-pipeline family** (RFC-0005 §K.3 "media and pipelines", RFC-0003 §I.2.3, spec 04b §15) on the kernel route.
+//! **The media-pipeline family** (`docs/design/palw/versioned-kernels.md` §K.3 "media and pipelines", RFC-0003 §I.2.3, spec 04b §15) on the kernel route.
 //!
 //! A pipeline class is several TIR v2 programs run in declared order (a text encoder, a denoiser, a decoder; a vision encoder
 //! and a language model; an evaluation's subject and scorer). Every stage is checked as a K2 claim over its **version-1 view**
@@ -489,8 +489,8 @@ impl PipelineEvidenceV1 {
     }
 }
 
-/// The class header a pipeline claim is about.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The class header a pipeline claim is about (borsh: the wire form `getPalwKernelClaim` serves beside the record, GAP 6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PipelineHeaderV1 {
     pub network_domain: Digest,
     pub ruleset_digest: Digest,

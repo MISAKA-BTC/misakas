@@ -12811,6 +12811,63 @@ impl Deserializer for GetPalwForkChoiceOpeningResponse {
     }
 }
 
+/// **RFC-0008 v2: `getPalwExecV2Status` (op 240)** — the EXEC v2 lane's observation of the tip: counts, the named work roots (or, when
+/// none is named, the first ones in id order) with every slice and the state of its kernel-route verification claim, the refusal record
+/// of `block_hash` when one is named, and the lane's health. Read-only: no rule reads it. **Op 240 is new: a node built before it drops
+/// the WebSocket on it**, so a client asks it on a connection of its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwExecV2StatusRequest {
+    /// Root claim ids, 128 hex each (at most 64). Empty: the first roots.
+    pub root_claim_ids: Vec<String>,
+    /// A chain block whose refusal record to read (128 hex), or empty for none.
+    pub block_hash: String,
+}
+
+impl Serializer for GetPalwExecV2StatusRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(Vec<String>, &self.root_claim_ids, writer)?;
+        store!(String, &self.block_hash, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwExecV2StatusRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { root_claim_ids: load!(Vec<String>, reader)?, block_hash: load!(String, reader)? })
+    }
+}
+
+/// **The `getPalwExecV2Status` answer.** `json` is the camelCase serde form of the node's `PalwExecV2ObservationV1`, whose own
+/// `version` is `observation_version`: fields are only ever appended. Empty (and `available` false) where `palw_exec_payload_v2` is not
+/// armed or before PALW state exists.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwExecV2StatusResponse {
+    pub available: bool,
+    pub observation_version: u32,
+    pub json: String,
+}
+
+impl Serializer for GetPalwExecV2StatusResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u32, &self.observation_version, writer)?;
+        store!(String, &self.json, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwExecV2StatusResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { available: load!(bool, reader)?, observation_version: load!(u32, reader)?, json: load!(String, reader)? })
+    }
+}
+
 /// **RFC-0010: `getPalwPanelV3Status` (op 220)** — the permissionless Panel's observation of the tip: the engine's overview and the
 /// status of the claims named (or, when none is, the first tracked claims in id order). Read-only: no rule reads it. **Op 220 is
 /// new: a node built before it drops the WebSocket on it**, so a client asks it on a connection of its own.

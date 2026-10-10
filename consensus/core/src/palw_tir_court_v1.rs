@@ -2325,7 +2325,13 @@ pub fn palw_tir_step_tree_height_v1(leaf_count: u64) -> u8 {
 
 /// The frontier level of node `(level, ·)`'s answer.
 fn frontier_level(level: u8) -> u8 {
-    level.saturating_sub(PALW_TIR_STEP_NODE_DEPTH_V1)
+    frontier_level_at(level, PALW_TIR_STEP_NODE_DEPTH_V1)
+}
+
+/// The frontier level of node `(level, ·)`'s answer when an answer covers `depth` levels (the IR route's
+/// [`PALW_TIR_STEP_NODE_DEPTH_V1`]; the legacy held route's own, `crate::palw_legacy_held_da_v2`).
+fn frontier_level_at(level: u8, depth: u8) -> u8 {
+    level.saturating_sub(depth)
 }
 
 /// The positions node `(level, index)` covers at `below ≤ level`: `[lo, hi)`, or `None` when the node
@@ -2403,11 +2409,22 @@ fn walk_to_root(leaf_count: u64, level: u8, index: u64, node: Hash64, siblings: 
 /// step-leaf hashes (the leaf hashes, not the tree's index-bound leaf nodes). `None` when the node is
 /// not in the tree or `level` is 0 (a leaf is a `TirStepLeaf`).
 pub fn palw_tir_step_node_parts_v1(ordered_leaf_hashes: &[Hash64], level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+    palw_step_node_parts_at_depth_v1(PALW_TIR_STEP_NODE_DEPTH_V1, ordered_leaf_hashes, level, index)
+}
+
+/// [`palw_tir_step_node_parts_v1`] for an answer that covers `depth` levels — one body for the IR route (depth
+/// [`PALW_TIR_STEP_NODE_DEPTH_V1`]) and the legacy held route (LG14-B), whose trees are the same `step_merkle` trees.
+pub fn palw_step_node_parts_at_depth_v1(
+    depth: u8,
+    ordered_leaf_hashes: &[Hash64],
+    level: u8,
+    index: u64,
+) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
     let leaf_count = ordered_leaf_hashes.len() as u64;
     if level == 0 {
         return None;
     }
-    let below = frontier_level(level);
+    let below = frontier_level_at(level, depth);
     let (lo, hi) = covered(leaf_count, level, index, below)?;
     let mut levels: Vec<Vec<Hash64>> = vec![
         ordered_leaf_hashes.iter().enumerate().map(|(i, leaf)| crate::palw_step_leg::step_merkle_leaf_v1(i as u64, leaf)).collect(),
@@ -2530,10 +2547,24 @@ pub fn palw_tir_step_node_reaches_v1(
     frontier: &[Hash64],
     siblings: &[Hash64],
 ) -> Result<(), &'static str> {
+    palw_step_node_reaches_at_depth_v1(PALW_TIR_STEP_NODE_DEPTH_V1, leaf_count, step_root, level, index, frontier, siblings)
+}
+
+/// [`palw_tir_step_node_reaches_v1`] for an answer that covers `depth` levels (LG14-B: the same hash arithmetic over a legacy claim's
+/// step or checkpoint tree, at the legacy route's depth).
+pub fn palw_step_node_reaches_at_depth_v1(
+    depth: u8,
+    leaf_count: u64,
+    step_root: &Hash64,
+    level: u8,
+    index: u64,
+    frontier: &[Hash64],
+    siblings: &[Hash64],
+) -> Result<(), &'static str> {
     if level == 0 {
         return Err("a step node is an interior node: a leaf is demanded as a TirStepLeaf");
     }
-    let node = fold_frontier(leaf_count, level, index, frontier_level(level), frontier)
+    let node = fold_frontier(leaf_count, level, index, frontier_level_at(level, depth), frontier)
         .ok_or("the frontier is not the node's, or the node is not in the tree")?;
     let root = walk_to_root(leaf_count, level, index, node, siblings).ok_or("the node's siblings do not walk to a root")?;
     if root != *step_root {
@@ -2548,10 +2579,15 @@ pub fn palw_tir_step_node_reaches_v1(
 /// own tree disagrees with: `TirStepNode { level: frontier level, index: first + k }`, or, at level 0,
 /// `TirStepLeaf { index: first + k }`.
 pub fn palw_tir_step_node_frontier_v1(leaf_count: u64, level: u8, index: u64) -> Option<(u8, u64, u64)> {
+    palw_step_node_frontier_at_depth_v1(PALW_TIR_STEP_NODE_DEPTH_V1, leaf_count, level, index)
+}
+
+/// [`palw_tir_step_node_frontier_v1`] for an answer that covers `depth` levels (LG14-B).
+pub fn palw_step_node_frontier_at_depth_v1(depth: u8, leaf_count: u64, level: u8, index: u64) -> Option<(u8, u64, u64)> {
     if level == 0 {
         return None;
     }
-    let below = frontier_level(level);
+    let below = frontier_level_at(level, depth);
     let (lo, hi) = covered(leaf_count, level, index, below)?;
     Some((below, lo, hi))
 }

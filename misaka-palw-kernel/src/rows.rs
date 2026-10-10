@@ -22,11 +22,11 @@ use misaka_palw_tir::program::TirProgramV1;
 use misaka_palw_tir::program_v2::TirProgramV2;
 
 use crate::descriptor::{KernelDescriptorV1, KernelScheduleV1};
-use crate::gate::{public_pipeline_prosecution_complete_v1, public_prosecution_complete_v1};
+use crate::gate::public_pipeline_prosecution_complete_v1;
 use crate::hash::{Digest, finish, id, keyed, object_id};
-use crate::ledger::{ClaimRowV1, DemandKeyV1, DemandRowV1, KernelLedgerV1, LedgerPolicyV1, PipelineClassRowV1, ClassRowV1, BondRowV1};
-use crate::pipeline::{pipeline_root_v1};
+use crate::ledger::{BondRowV1, ClaimRowV1, ClassRowV1, DemandKeyV1, DemandRowV1, KernelLedgerV1, LedgerPolicyV1, PipelineClassRowV1};
 use crate::opv::{OPV_POLICY_DOMAIN_V1, OPV_STATE_VERSION_V2, OpvClaimRowV1, OpvPolicyV1, StateRootPartsV2};
+use crate::pipeline::pipeline_root_v1;
 use crate::pipeline_public::PipelineClassV1;
 use crate::public::{ProfileMaterialV1, ServedPositionV1};
 use crate::state::{
@@ -53,6 +53,23 @@ pub const TABLE_SEALS_V1: u8 = 11;
 pub const TABLE_OPV_ADMITTED_V1: u8 = 12;
 pub const TABLE_OPV_CLASSES_V1: u8 = 13;
 pub const TABLE_OPV_CLAIMS_V1: u8 = 14;
+/// GAP-R7: `(claim, accuser) → the accuser's unrevealed proof seal` (in the state root since the G14-R4 fix).
+pub const TABLE_PROOF_SEALS_V1: u8 = 15;
+/// GAP-5: `job → its poster's escrow` (the Final reward's funding; in the state root since the G14-R4 fix).
+pub const TABLE_JOB_ESCROWS_V1: u8 = 16;
+/// `(claim, stage, position) → the demand bonds of a served position awaiting their fate` (in the state root since G14-R4).
+pub const TABLE_SERVED_DEMAND_BONDS_V1: u8 = 17;
+/// C4R4 F-C4R4-08: `job → the bond that posted it`, written past `palw_panel_free_v1` and kept (in the beacon-seal extension). 19 is
+/// G14-R4's (unused), 20–21 K2S's.
+pub const TABLE_JOB_POSTERS_V1: u8 = 18;
+// 20–21: K2-TIR-v4 (lane K2S, allocated 2026-10-08), in the root only when non-empty.
+// 22–24: RFC-0004 Part II's typed tables.
+/// K2-TIR-v4: `tiled job id → TiledJobRowV1` (the job and its posted-tile bitmap).
+pub const TABLE_TILED_JOBS_V1: u8 = 20;
+/// K2-TIR-v4: `(claim, stage, position) → SegProgressV1` (a position demand's served parts; a served position).
+pub const TABLE_SEG_PROGRESS_V1: u8 = 21;
+/// The domain of the root extension the two K2-TIR-v4 tables add (absent while both are empty: every older root is unchanged).
+pub const SEG_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-seg-extension/v1";
 /// RFC-0004 Part II: `class → ComputationSpecV1` (typed classes), `job → SpecJobV1`, `memory class → MemoryLineV1`. Each table is in
 /// the root only when non-empty ([`crate::spec::typed_root_v1`]), so every ledger without a typed row roots as before.
 pub const TABLE_SPEC_CLASSES_V1: u8 = 22;
@@ -60,6 +77,16 @@ pub const TABLE_SPEC_JOBS_V1: u8 = 23;
 pub const TABLE_MEMORY_LINES_V1: u8 = 24;
 /// The typed tables, in root order.
 pub const TYPED_TABLES_V1: [u8; 3] = [TABLE_SPEC_CLASSES_V1, TABLE_SPEC_JOBS_V1, TABLE_MEMORY_LINES_V1];
+/// OPV-BOOT GAP-B1a: `claim id → the salt of its seal` (claim seal v2), written past `palw_panel_free_v1`.
+pub const TABLE_CLAIM_BEACON_SALTS_V1: u8 = 25;
+/// OPV-BOOT GAP-B1a: `(job, producer, sealed_daa) → a claim seal that expired unrevealed past `palw_panel_free_v1``.
+pub const TABLE_FORFEITED_CLAIM_SEALS_V1: u8 = 26;
+/// The domain of the root extension tables 25, 26 and 18 add (absent while all are empty: every older root is unchanged).
+pub const BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-beacon-seal-extension/v1";
+/// **Table 27** (`palw_verifier_pay_v1`, G14R round 3): check-fee escrows, claim draws and held default shares, key `(kind, digest)`.
+pub const TABLE_VERIFIER_PAY_V1: u8 = 27;
+/// The root extension table 27 adds once it holds a row (every older root unchanged).
+pub const VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-verifier-pay-extension/v1";
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -91,6 +118,15 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_OPV_ADMITTED_V1 => "opv-admitted",
         TABLE_OPV_CLASSES_V1 => "opv-classes",
         TABLE_OPV_CLAIMS_V1 => "opv-claims",
+        TABLE_TILED_JOBS_V1 => "tiled-jobs",
+        TABLE_SEG_PROGRESS_V1 => "seg-progress",
+        TABLE_PROOF_SEALS_V1 => "proof-seals",
+        TABLE_JOB_ESCROWS_V1 => "job-escrows",
+        TABLE_SERVED_DEMAND_BONDS_V1 => "served-demand-bonds",
+        TABLE_CLAIM_BEACON_SALTS_V1 => "claim-beacon-salts",
+        TABLE_JOB_POSTERS_V1 => "job-posters",
+        TABLE_FORFEITED_CLAIM_SEALS_V1 => "forfeited-claim-seals",
+        TABLE_VERIFIER_PAY_V1 => "verifier-pay",
         TABLE_SPEC_CLASSES_V1 => "spec-classes",
         TABLE_SPEC_JOBS_V1 => "spec-jobs",
         TABLE_MEMORY_LINES_V1 => "memory-lines",
@@ -141,6 +177,27 @@ impl KernelLedgerV1 {
         for (k, v) in &self.seals {
             rows.insert((TABLE_SEALS_V1, bytes_of(k)), bytes_of(v));
         }
+        for (k, v) in &self.proof_seals {
+            rows.insert((TABLE_PROOF_SEALS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.job_escrows {
+            rows.insert((TABLE_JOB_ESCROWS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.served_demands {
+            rows.insert((TABLE_SERVED_DEMAND_BONDS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.claim_beacon_salts {
+            rows.insert((TABLE_CLAIM_BEACON_SALTS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.job_posters {
+            rows.insert((TABLE_JOB_POSTERS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.forfeited_claim_seals {
+            rows.insert((TABLE_FORFEITED_CLAIM_SEALS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.verifier_pay {
+            rows.insert((TABLE_VERIFIER_PAY_V1, bytes_of(k)), bytes_of(v));
+        }
         for k in &self.opv.admitted {
             rows.insert((TABLE_OPV_ADMITTED_V1, bytes_of(k)), Vec::new());
         }
@@ -149,6 +206,12 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.opv.claims {
             rows.insert((TABLE_OPV_CLAIMS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.tiled_jobs {
+            rows.insert((TABLE_TILED_JOBS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.seg_progress {
+            rows.insert((TABLE_SEG_PROGRESS_V1, bytes_of(k)), bytes_of(v));
         }
         for (k, c) in &self.typed.classes {
             rows.insert((TABLE_SPEC_CLASSES_V1, bytes_of(k)), bytes_of(&c.spec));
@@ -214,6 +277,33 @@ impl KernelLedgerV1 {
                 TABLE_SEALS_V1 => {
                     l.seals.insert(dec(key, "seal key")?, dec(row, "seal")?);
                 }
+                TABLE_PROOF_SEALS_V1 => {
+                    l.proof_seals.insert(dec(key, "proof seal key")?, dec(row, "proof seal")?);
+                }
+                TABLE_SERVED_DEMAND_BONDS_V1 => {
+                    l.served_demands.insert(dec::<DemandKeyV1>(key, "served demand key")?, dec(row, "served demand bonds")?);
+                }
+                TABLE_CLAIM_BEACON_SALTS_V1 => {
+                    l.claim_beacon_salts.insert(dec(key, "claim id")?, dec(row, "claim beacon salt")?);
+                }
+                TABLE_JOB_POSTERS_V1 => {
+                    l.job_posters.insert(dec(key, "job id")?, dec(row, "job poster")?);
+                }
+                TABLE_FORFEITED_CLAIM_SEALS_V1 => {
+                    l.forfeited_claim_seals.insert(
+                        dec::<(Digest, Digest, u64)>(key, "forfeited seal key")?,
+                        dec::<crate::ledger::ForfeitedSealRowV1>(row, "forfeited seal")?,
+                    );
+                }
+                TABLE_VERIFIER_PAY_V1 => {
+                    l.verifier_pay.insert(
+                        dec::<(u8, Digest)>(key, "verifier pay key")?,
+                        dec::<crate::verifier_pay::VerifierPayRowV1>(row, "verifier pay row")?,
+                    );
+                }
+                TABLE_JOB_ESCROWS_V1 => {
+                    l.job_escrows.insert(dec(key, "job escrow key")?, dec::<crate::ledger::JobEscrowRowV1>(row, "job escrow")?);
+                }
                 TABLE_OPV_ADMITTED_V1 => {
                     l.opv.admitted.insert(dec(key, "admitted class")?);
                 }
@@ -222,6 +312,12 @@ impl KernelLedgerV1 {
                 }
                 TABLE_OPV_CLAIMS_V1 => {
                     l.opv.claims.insert(dec(key, "opv claim key")?, dec::<OpvClaimRowV1>(row, "opv claim")?);
+                }
+                TABLE_TILED_JOBS_V1 => {
+                    l.tiled_jobs.insert(dec(key, "tiled job key")?, dec(row, "tiled job")?);
+                }
+                TABLE_SEG_PROGRESS_V1 => {
+                    l.seg_progress.insert(dec::<DemandKeyV1>(key, "progress key")?, dec(row, "demand progress")?);
                 }
                 TABLE_SPEC_CLASSES_V1 => specs.push((dec(key, "spec class key")?, dec(row, "spec class")?)),
                 TABLE_SPEC_JOBS_V1 => {
@@ -245,6 +341,25 @@ impl KernelLedgerV1 {
     }
 }
 
+impl KernelLedgerV1 {
+    /// **This ledger exactly as [`KernelLedgerV1::from_rows`] would rebuild it from `rows`** — the rows it was just flushed to. The
+    /// consumer-derived inputs a fold sets on every load and never writes (the attested artifacts, the admitted OPV classes) are read
+    /// back from the rows, the derived live-claim index is rebuilt and the block's scratch budget cleared. A consumer that caches the
+    /// ledger between objects (GAP 8) caches this, so a cached load and a rebuilt one are the same ledger (`to_rows` equal).
+    pub fn as_rebuilt_from_v1(mut self, rows: &LedgerRowsV1) -> Self {
+        fn dec<T: borsh::BorshDeserialize>(b: &[u8]) -> Option<T> {
+            borsh::from_slice(b).ok()
+        }
+        self.attested_artifacts = rows.keys().filter(|(t, _)| *t == TABLE_ATTESTED_V1).filter_map(|(_, k)| dec::<Digest>(k)).collect();
+        self.opv.admitted = rows.keys().filter(|(t, _)| *t == TABLE_OPV_ADMITTED_V1).filter_map(|(_, k)| dec::<Digest>(k)).collect();
+        self.opv_rebuild_live();
+        self.restore_budget(Default::default());
+        // DA16's provider-liable set is consumer-derived (re-injected before every object), never a row: the rows' ledger has none.
+        self.provider_liable = Default::default();
+        self
+    }
+}
+
 /// A single-program class's derived row from its record: decode the program, resolve the descriptor and recompute the gate's bounds
 /// (all pure functions of the record and the policy — what registration computed).
 fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, String> {
@@ -255,9 +370,9 @@ fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, Str
         .cloned()
         .ok_or_else(|| "a stored class names a kernel this binary does not implement".to_string())?;
     let program = TirProgramV1::decode_canonical(&r.program_bytes).map_err(|e| format!("a stored class's program: {e}"))?;
-    let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
-    let bounds = public_prosecution_complete_v1(&d, &r.plan, nodes, &ProfileMaterialV1::kernel_route(true), &l.policy.prosecution)
-        .map_err(|g| format!("a stored class is no longer publicly prosecutable: {g:?}"))?;
+    let bounds =
+        crate::gate::class_prosecution_bounds_v1(&d, &r.plan, &program, &ProfileMaterialV1::kernel_route(true), &l.policy.prosecution)
+            .map_err(|g| format!("a stored class is no longer publicly prosecutable: {g:?}"))?;
     Ok(ClassRowV1 {
         descriptor: d,
         program_bytes: r.program_bytes.clone(),
@@ -319,7 +434,17 @@ fn pipeline_class_row_of(l: &KernelLedgerV1, r: &PipelineClassRecordV1) -> Resul
 /// is not the order of the Borsh bytes (the position is little-endian). Every other table's key is a 64-byte digest, whose byte
 /// order is its order.
 fn sort_key(table: u8, key: &[u8]) -> (Vec<u8>, u8, u32) {
-    if matches!(table, TABLE_DEMANDS_V1 | TABLE_SERVED_V1) && key.len() == 64 + 1 + 4 {
+    // `(job, producer, sealed_daa)`: the DAA is little-endian in its Borsh bytes, so it is ordered by its big-endian bytes.
+    if table == TABLE_FORFEITED_CLAIM_SEALS_V1 && key.len() == 64 + 64 + 8 {
+        let mut daa = [0u8; 8];
+        daa.copy_from_slice(&key[128..136]);
+        let mut k = key[..128].to_vec();
+        k.extend_from_slice(&u64::from_le_bytes(daa).to_be_bytes());
+        return (k, 0, 0);
+    }
+    if matches!(table, TABLE_DEMANDS_V1 | TABLE_SERVED_V1 | TABLE_SERVED_DEMAND_BONDS_V1 | TABLE_SEG_PROGRESS_V1)
+        && key.len() == 64 + 1 + 4
+    {
         let stage = key[64];
         let mut p = [0u8; 4];
         p.copy_from_slice(&key[65..69]);
@@ -371,6 +496,9 @@ pub fn root_of_rows(
         attested_artifacts: coll(TABLE_ATTESTED_V1),
         job_claims: coll(TABLE_JOB_CLAIMS_V1),
         seals: coll(TABLE_SEALS_V1),
+        proof_seals: coll(TABLE_PROOF_SEALS_V1),
+        job_escrows: coll(TABLE_JOB_ESCROWS_V1),
+        served_demands: coll(TABLE_SERVED_DEMAND_BONDS_V1),
     };
     let _ = LEDGER_ROOT_DOMAIN_V1;
     let v1 = parts.root();
@@ -390,7 +518,52 @@ pub fn root_of_rows(
         }
         .root(),
     };
-    crate::spec::typed_root_v1(base, &typed)
+    // K2-TIR-v4: tables 20 and 21 extend the root only once either holds a row; then RFC-0004 Part II's typed tables, each only
+    // when non-empty (an untyped ledger's root is unchanged).
+    let seg = by_table.contains_key(&TABLE_TILED_JOBS_V1) || by_table.contains_key(&TABLE_SEG_PROGRESS_V1);
+    let base = if seg { seg_root_extension_v1(&base, &coll(TABLE_TILED_JOBS_V1), &coll(TABLE_SEG_PROGRESS_V1)) } else { base };
+    let base = crate::spec::typed_root_v1(base, &typed);
+    // OPV-BOOT GAP-B1a / C4R4 F-C4R4-08: tables 25, 26 and 18 extend the root only once any of them holds a row.
+    let base = if [TABLE_CLAIM_BEACON_SALTS_V1, TABLE_FORFEITED_CLAIM_SEALS_V1, TABLE_JOB_POSTERS_V1]
+        .iter()
+        .any(|t| by_table.contains_key(t))
+    {
+        beacon_seal_root_extension_v1(
+            &base,
+            &coll(TABLE_CLAIM_BEACON_SALTS_V1),
+            &coll(TABLE_FORFEITED_CLAIM_SEALS_V1),
+            &coll(TABLE_JOB_POSTERS_V1),
+        )
+    } else {
+        base
+    };
+    // `palw_verifier_pay_v1`: table 27 extends the root only once it holds a row.
+    if by_table.contains_key(&TABLE_VERIFIER_PAY_V1) {
+        verifier_pay_root_extension_v1(&base, &coll(TABLE_VERIFIER_PAY_V1))
+    } else {
+        base
+    }
+}
+
+/// `H(extension; root ‖ table 27)` (`palw_verifier_pay_v1`).
+pub fn verifier_pay_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
+    let mut s = keyed(VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(table);
+    finish(s)
+}
+
+/// `H(extension; base root ‖ claim beacon salts ‖ forfeited claim seals ‖ job posters)` (OPV-BOOT GAP-B1a, C4R4 F-C4R4-08).
+pub fn beacon_seal_root_extension_v1(base: &Digest, salts: &Digest, forfeited: &Digest, posters: &Digest) -> Digest {
+    let mut s = keyed(BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(salts).update(forfeited).update(posters);
+    finish(s)
+}
+
+/// `H(extension; base root ‖ tiled jobs ‖ demand progress)` (K2-TIR-v4, tables 20 and 21).
+pub fn seg_root_extension_v1(base: &Digest, tiled: &Digest, progress: &Digest) -> Digest {
+    let mut s = keyed(SEG_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(tiled).update(progress);
+    finish(s)
 }
 
 /// One row's change between two row sets: `(key, old, new)`, in key order.

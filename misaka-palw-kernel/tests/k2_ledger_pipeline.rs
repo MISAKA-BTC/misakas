@@ -53,10 +53,14 @@ fn policy() -> LedgerPolicyV1 {
         accuser_reward_permille: 500,
         default_penalty: 100,
         claim_reward: 7,
+        job_fee: 2,
+        job_escrow_ttl_daa: 300,
         max_adjudications_per_block: 64,
+        prosecution_reserve_permille: 500,
         max_court_work_per_block: u64::MAX,
         claim_seal_delay_daa: 1,
         seal_ttl_daa: 100,
+        seal_deposit: 1,
         prosecution: ProsecutionPolicyV1 {
             court_deadline_daa: 20,
             max_sessions_per_claim: 1 << 10,
@@ -165,6 +169,7 @@ impl World {
             vec![
                 T::RegisterBond { bond: PRODUCER, collateral: 5000 },
                 T::RegisterBond { bond: OUTSIDER, collateral: 1000 },
+                T::RegisterBond { bond: common::chain::POSTER, collateral: common::chain::POSTER_COLLATERAL },
                 w.register(decode),
             ],
         );

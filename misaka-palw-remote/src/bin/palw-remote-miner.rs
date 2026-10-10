@@ -26,7 +26,6 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use kaspa_consensus_core::block::Block;
-use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::dns_finality::{PalwAttemptSignRecordV1, SignedEpochCheckOutcome};
 use kaspa_consensus_core::network::NetworkId;
 use kaspa_consensus_core::palw_attempt_v2::{
@@ -297,7 +296,8 @@ impl RemoteNode for WrpcNode<'_> {
         let status = self.runtime.block_on(self.client.get_palw_node_status()).map_err(|e| format!("getPalwNodeStatus: {e}"))?;
         Ok(misaka_palw_remote::verify::NodeRulesetV1 {
             network_id: info.network.to_string(),
-            genesis: None,
+            // Version 4+: the genesis the node runs (a drill answers to `testnet-12` on another genesis); empty from an older node.
+            genesis: (!status.genesis_hash.is_empty()).then(|| status.genesis_hash.clone()),
             consensus_params_id: status.consensus_params_id,
             consensus_schedule_id: status.consensus_schedule_id,
         })
@@ -411,6 +411,11 @@ struct Args {
     checkpoint_trust: misaka_palw_remote::verify::CheckpointTrustV1,
     own_node: bool,
     accept_unverified: Option<misaka_palw_remote::verify::ModeLabelV1>,
+    /// **A salted testnet-12 drill** (ADR-0152 §8.2): the salt whose genesis this miner's params carry, so every PALW signature is made
+    /// under the drill's domain and is refused by public testnet-12; and the drill's own ruleset ids (a drill compresses the fence
+    /// schedule through kaspad's `--palw-drill-*-at` flags, which this binary does not re-derive). The ids are accepted ONLY with a salt.
+    drill_salt: Option<kaspa_consensus_core::config::drill::PalwDrillSaltV1>,
+    drill_ruleset: Option<(String, String)>,
 }
 
 fn parse_args() -> Args {
@@ -421,6 +426,7 @@ fn parse_args() -> Args {
         (None, Vec::new(), None, None, 5u64, None);
     let (mut verify_headers, mut checkpoint_trust, mut own_node, mut accept_unverified) =
         (false, misaka_palw_remote::verify::CheckpointTrustV1::UserPinned, false, None);
+    let (mut drill_salt, mut drill_ruleset) = (None, None);
     while let Some(flag) = it.next() {
         let mut value = |name: &str| it.next().unwrap_or_else(|| die(format!("{name} needs a value")));
         match flag.as_str() {
@@ -466,8 +472,23 @@ fn parse_args() -> Args {
                     ))
                 }))
             }
+            "--palw-drill-genesis-salt" => {
+                let v = value("--palw-drill-genesis-salt");
+                drill_salt = Some(
+                    kaspa_consensus_core::config::drill::PalwDrillSaltV1::from_hex(&v)
+                        .unwrap_or_else(|e| die(format!("--palw-drill-genesis-salt: {e}"))),
+                )
+            }
+            "--palw-drill-ruleset" => {
+                let v = value("--palw-drill-ruleset");
+                let (p, s) = v.split_once(':').unwrap_or_else(|| die("--palw-drill-ruleset is <consensus_params_id>:<consensus_schedule_id>"));
+                drill_ruleset = Some((p.to_string(), s.to_string()))
+            }
             other => die(format!("unknown flag {other}")),
         }
+    }
+    if drill_ruleset.is_some() && drill_salt.is_none() {
+        die("--palw-drill-ruleset needs --palw-drill-genesis-salt: a stated ruleset is accepted only on a drill, whose genesis no real network shares");
     }
     let network = network.unwrap_or_else(|| die("--network is required"));
     let (daa, block_hash) =
@@ -495,6 +516,8 @@ fn parse_args() -> Args {
         checkpoint_trust,
         own_node,
         accept_unverified,
+        drill_salt,
+        drill_ruleset,
     }
 }
 
@@ -530,7 +553,9 @@ fn main() {
     let args = parse_args();
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap_or_else(|e| die(e));
     let net: NetworkId = args.network.parse().unwrap_or_else(|e| die(format!("--network: {e}")));
-    let params = Params::from(net);
+    // A drill's params carry its salted genesis (the signing domain); every real network's are the preset's.
+    let params = kaspa_consensus_core::config::drill::palw_chain_params_v1(net, args.drill_salt.as_ref())
+        .unwrap_or_else(|e| die(format!("--palw-drill-genesis-salt: {e}")));
     let key = ValidatorKey::from_seed(load_validator_seed(&args.key_file).unwrap_or_else(|e| die(e)));
     let pubkey = key.public_key().to_vec();
     let prefix = params.prefix();
@@ -632,7 +657,14 @@ fn main() {
         trust: misaka_palw_remote::miner::MinerTrustV1 {
             own_full_node: args.own_node,
             verification: args.verify_headers.then(|| misaka_palw_remote::miner::RemoteVerificationV1 {
-                ruleset: misaka_palw_remote::verify::ClientRulesetV1::of(&params),
+                ruleset: {
+                    let mut ours = misaka_palw_remote::verify::ClientRulesetV1::of(&params);
+                    if let Some((params_id, schedule_id)) = &args.drill_ruleset {
+                        ours.consensus_params_id = params_id.clone();
+                        ours.consensus_schedule_id = schedule_id.clone();
+                    }
+                    ours
+                },
                 checkpoint: misaka_palw_remote::verify::TrustedCheckpointV1 {
                     block: args.checkpoint.block_hash,
                     daa_score: args.checkpoint.daa_score,

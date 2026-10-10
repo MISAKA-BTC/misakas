@@ -708,6 +708,7 @@ impl RpcApi for KaspaRpcClient {
             GetPalwStateProof,
             GetPalwForkChoiceOpening,
             GetPalwPanelV3Status,
+            GetPalwExecV2Status,
             GetPalwKernelClaim,
             GetPalwKernelRows,
             GetPalwKernelFinals,

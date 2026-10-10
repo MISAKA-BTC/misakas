@@ -344,7 +344,7 @@ for ((i=0; i<NODES; i++)); do
         --palw-producer-bond="$PREMINE_TXID:$i" --palw-producer-pay-address="$addr"
         --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
   [ "$i" -gt 0 ] && args+=(--connect=127.0.0.1:16510)
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
+  "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
   # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
   # array index at PARSE time — the whole script fails to load, not the line.
   node_pid=$!
@@ -748,7 +748,7 @@ run_tier() {
   # daemon: the panel marks `class_registration_done` and keeps validating. So run it in the
   # background, watch the chain-side sentence the panel prints when the object is IN a block, and
   # take the node down ourselves. A timeout here is a FAILURE with the log, never a pass.
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/reg-$tag" \
+  "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/reg-$tag" \
         --rpclisten-borsh=127.0.0.1:$((17900 + tier_index)) --nogrpc --nodnsseed --disable-upnp \
         --connect=127.0.0.1:16510 --utxoindex \
         --palw-register-class="$model_id" --palw-class-artifact="$artifact" \

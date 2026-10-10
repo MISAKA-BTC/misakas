@@ -89,6 +89,14 @@ impl HeaderProcessor {
             return Err(RuleError::BadRoundLaneParents(
                 "every parent is a round block, and a block that is not one must name a chain parent".into(),
             ));
+        } else if any_round && self.palw_exec_v2.is_some_and(|fence| fence.is_active(header.daa_score)) {
+            // **RFC-0008 v2: lane edges are execution data, not consensus parents.** Past the fence a block that is not a lane
+            // block names NO lane block as a parent: the chain's GHOSTDAG, mergeset, merge depth, DAA window and pruning level
+            // never see an EXEC block, and a stale lane tip can neither wedge a template nor ride into a mergeset. The lane
+            // reaches the chain through the anchor trailer of a coinbase.
+            return Err(RuleError::BadRoundLaneParents(
+                "past palw_exec_payload_v2 a block that is not a lane block names no lane block as a parent".into(),
+            ));
         }
         Ok(())
     }
@@ -203,11 +211,13 @@ impl HeaderProcessor {
         // ADR-0072 SA-3: the admissible envelope version travels with the lane, so pre-fence
         // history validates under the old version and post-fence blocks under the new, in one
         // binary. `Unfenced` supplies the compiled-in version, which is every shipped preset.
-        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at(
+        // A2U: a carriage form added after the live build is read as that build reads it unless its fence is in force HERE.
+        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_with_forms_at(
             header.pow_algo_id,
             &header.palw_commitment,
             commitment_bound,
             attempt_lane,
+            |form| self.palw_header_forms.in_force_at(form, header.daa_score),
         )
         .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))?;
         // The `palw_state_root` shape rule, on the `palw_commitment` pattern: the field is
@@ -272,13 +282,23 @@ impl HeaderProcessor {
             .filter(|(fence, _)| fence.is_active(header.daa_score))
             .map(|(_, state_params)| state_params);
         let receipt_v4_active = self.palw_receipt_spend_v4.is_some_and(|fence| fence.is_active(header.daa_score));
-        palw_carriage_stateless_v2(header, attempt_lane, network_domain, header_pins, self.genesis.timestamp, receipt_v4_active)
-            .map_err(|reason| RuleError::BadPalwCarriageAdmission { algo_id: header.pow_algo_id, reason })
+        let exec_v2_active = self.palw_exec_v2.is_some_and(|fence| fence.is_active(header.daa_score));
+        palw_carriage_stateless_v2(
+            header,
+            attempt_lane,
+            network_domain,
+            header_pins,
+            self.genesis.timestamp,
+            receipt_v4_active,
+            exec_v2_active,
+        )
+        .map_err(|reason| RuleError::BadPalwCarriageAdmission { algo_id: header.pow_algo_id, reason })
     }
 }
 
-/// **RFC-0009: [`palw_carriage_stateless_v1`] plus the receipt lane's `PFS4` carriage.** A `PFS4` header is refused by name below
-/// `palw_receipt_spend_v4` (`receipt_v4_active == false`, which is every height of every shipped preset); past it, the carriage's shape,
+/// **RFC-0009: [`palw_carriage_stateless_v1`] plus the receipt lane's `PFS4` carriage.** Below `palw_receipt_spend_v4` a `PFS4` header
+/// never reaches here — the shape gate reads it as the live build does and refuses it for its `PFS3` magic (A2U) — and the by-name
+/// refusal below is the second lock (`receipt_v4_active == false`, which is every height of every shipped preset); past it, the carriage's shape,
 /// its challenge (recomputed from the header position) and BOTH ML-DSA-87 signatures are checked here, on the relay path — the carriage is
 /// inside the block identity and outside the PoW pre-image, so an unverified signature would be free bytes (one solve, unbounded blocks).
 /// Whether the carried keys are the named bonds' keys is the chain walk's stateful question. Every other header takes the V1 function
@@ -290,8 +310,42 @@ pub(crate) fn palw_carriage_stateless_v2(
     header_pins: Option<&kaspa_consensus_core::palw_state_v2::PalwStateParamsV2>,
     genesis_timestamp_ms: u64,
     receipt_v4_active: bool,
+    exec_v2_active: bool,
 ) -> Result<(), String> {
     use kaspa_consensus_core::palw_receipt_v4::{PalwReceiptSpendEnvelopeV4, PalwReceiptV4Error, palw_receipt_v4_carriage_is_v4};
+    // **RFC-0008 v2: an algo-10 header carries exactly the envelope its height admits.** Past `palw_exec_payload_v2` that is a
+    // `PXE2` envelope (either subtype) and a `PXR1` one is refused by name — one carrier is never accepted through both paths, and
+    // v1 does not coexist with v2 past the fence. Below it a `PXE2` header is refused by name and `PXR1` takes the v1 arm
+    // untouched. The v2 check is shape, network, round (a permit), the payload commitment against the header's own merkle root (a
+    // permit) or the slice's digest, and the signature in the subtype's own domain and ML-DSA context — all on the relay path,
+    // because the envelope is inside the block identity and outside the PoW pre-image (an unverified signature is free bytes).
+    if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 {
+        let is_v2 = kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope::is_v2_carriage(&header.palw_commitment);
+        if is_v2 && !exec_v2_active {
+            return Err("a PXE2 EXEC envelope below palw_exec_payload_v2".into());
+        }
+        if !is_v2 && exec_v2_active {
+            return Err("a PXR1 round envelope past palw_exec_payload_v2: the v1 envelope is no longer a carrier".into());
+        }
+        if is_v2 {
+            let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+            return kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope::decode(&header.palw_commitment)
+                .and_then(|envelope| {
+                    envelope.validate_stateless(
+                        network_domain,
+                        pre_pow_hash,
+                        header.hash_merkle_root,
+                        header.timestamp,
+                        header.nonce,
+                        genesis_timestamp_ms,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                })
+                .map_err(|e| e.to_string());
+        }
+    }
     if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3
         && palw_receipt_v4_carriage_is_v4(&header.palw_commitment)
     {

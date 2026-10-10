@@ -151,7 +151,9 @@ impl ConsensusServices {
             params.deflationary_phase_daa_score,
             params.pre_deflationary_phase_base_subsidy,
             params.target_time_per_block_history(),
-        );
+        )
+        // RFC-0008 v2: the anchor-trailer readings exist only where the EXEC payload is armed.
+        .with_exec_v2_armed(params.palw_exec_payload_v2_fence().is_some());
 
         let mass_calculator = MassCalculator::new(
             params.mass_per_tx_byte,
@@ -208,6 +210,8 @@ impl ConsensusServices {
         // RFC-0001 §A.4 (FP Job V4): the V4 job's two doors, where the ruleset carries the decode-rules
         // fence. `None` on every shipped preset, which keeps each network's transaction validity as is.
         .with_dns_retirement(params.palw_dns_retirement)
+        // A-2 uniformity: a lifecycle kind the live build cannot decode meets its own stateless rule only past its owning fence.
+        .with_lifecycle_kind_fences(params.palw_lifecycle_kind_fences_v1())
         .with_fp_decode_rules_fence(params.palw_fp_decode_rules_fence())
         // RFC-0003 §I.4.4 (the tensor claim, FP job version 10): its two doors, where the ruleset carries
         // `palw_fp_job_v5`. `None` on every shipped preset.
@@ -241,7 +245,8 @@ impl ConsensusServices {
             relations_service.clone(),
         );
 
-        let pruning_proof_manager = Arc::new(PruningProofManager::new(
+        let pruning_proof_manager = Arc::new(
+            PruningProofManager::new(
             db,
             &storage,
             parents_manager.clone(),
@@ -274,7 +279,10 @@ impl ConsensusServices {
             // no Layer-0 work, so the proof's PoW check reads the same fence the pipeline does.
             params.palw_single_lottery,
             is_consensus_exiting,
-        ));
+        )
+        // A-2 uniformity: a header carriage form added after the live build is read as that build reads it below its fence.
+        .with_header_forms(params.palw_header_form_fences_v1()),
+        );
 
         let sync_manager = SyncManager::new(
             params.mergeset_size_limit(),
@@ -286,6 +294,65 @@ impl ConsensusServices {
             storage.pruning_point_store.clone(),
             storage.statuses_store.clone(),
         );
+        // **RFC-0008 v2 (sync): the EXEC blocks a chain block's anchor covers**, so that IBD lists and requests them although no block
+        // names them as a parent. Installed only where the payload is armed.
+        let sync_manager = if let Some(exec_v2_fence) = params.palw_exec_payload_v2_fence() {
+            use crate::model::stores::{
+                acceptance_data::AcceptanceDataStoreReader, ghostdag::GhostdagStoreReader as _, headers::HeaderStoreReader,
+                relations::RelationsStoreReader,
+            };
+            use kaspa_consensus_core::BlockHash;
+            let members = {
+                let acceptance_data_store = storage.acceptance_data_store.clone();
+                let ghostdag_store = storage.ghostdag_store.clone();
+                Arc::new(move |chain_block: BlockHash| -> Vec<BlockHash> {
+                    let (Ok(acceptance), Ok(data)) = (acceptance_data_store.get(chain_block), ghostdag_store.get_data(chain_block))
+                    else {
+                        return Vec::new();
+                    };
+                    acceptance
+                        .iter()
+                        .map(|entry| entry.block_hash)
+                        .filter(|block| {
+                            *block != data.selected_parent
+                                && !data.mergeset_blues.contains(block)
+                                && !data.mergeset_reds.contains(block)
+                        })
+                        .collect()
+                }) as crate::processes::sync::ExecHook
+            };
+            let children = {
+                let relations_service = relations_service.clone();
+                let headers_store = storage.headers_store.clone();
+                let bound = params.palw_execution_lane_fence().map(|lane| lane.max_per_mergeset as usize).unwrap_or(0);
+                Arc::new(move |from: BlockHash| -> Vec<BlockHash> {
+                    let lane_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
+                    let mut found: Vec<BlockHash> = Vec::new();
+                    let mut queue = vec![from];
+                    while let Some(current) = queue.pop() {
+                        let Ok(children) = relations_service.get_children(current) else { continue };
+                        for child in children.read().iter().copied() {
+                            if found.len() >= bound || found.contains(&child) {
+                                continue;
+                            }
+                            // Lane blocks of the v2 era only: below the fence a round block reaches a syncee through the mergeset
+                            // that names it, and the list stays the one the build before RFC-0008 v2 served (the X8R review).
+                            if headers_store
+                                .get_header(child)
+                                .is_ok_and(|header| header.pow_algo_id == lane_id && exec_v2_fence.is_active(header.daa_score))
+                            {
+                                found.push(child);
+                                queue.push(child);
+                            }
+                        }
+                    }
+                    found
+                }) as crate::processes::sync::ExecHook
+            };
+            sync_manager.with_exec_hooks(members, children)
+        } else {
+            sync_manager
+        };
 
         Arc::new(Self {
             _storage: storage,

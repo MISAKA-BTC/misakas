@@ -238,11 +238,7 @@ pub mod palw_context_ladder;
 /// shipped constant; it relates two numbers that had never appeared in one expression.
 pub mod palw_court_deadline;
 pub mod palw_court_v2;
-/// MISAKA PALW class registration (B12): the object every "pinned at registration" sentence
-/// across ADR-0026…0033 meant — measured identities, the derived credited ceiling, windows,
-/// commitment form and adjudication depth, with the validation that makes an incoherent
-/// registration unrepresentable. Land-stage, consensus-inert (ADR-0033's gate is its first
-/// consumer).
+/// Reserved encoding of the retired V1 credit parameters; no executable credit gate.
 pub mod palw_credit;
 pub mod palw_credit_batch;
 pub mod palw_decode_constraint_v1;
@@ -275,6 +271,14 @@ pub mod palw_exec_view_v1;
 /// ADR-0125 — the execution lane's round rules (a second, a seed, capped quotas, alternating
 /// permits) as pure functions; consensus-inert until the lane that reads them is built.
 pub mod palw_execution_lane_v1;
+/// RFC-0008 v2: the unified EXEC lane's wire layer — one versioned envelope, two exclusive subtypes (`EXEC_TX`, `EXEC_SLICE`); dormant behind `palw_exec_payload_v2`.
+pub mod palw_exec_v2;
+/// RFC-0008 v2: the weightless carriage — the anchor trailer, the closure of lane heads, the covered-set root; dormant behind `palw_exec_payload_v2`.
+pub mod palw_exec_v2_anchor;
+/// RFC-0008 v2 amendment 1: the slice verification route — a slice is verified, convicted or defaulted through the G14 kernel route.
+pub mod palw_exec_v2_verify;
+/// RFC-0008 v2: the work-slice ledgers (`WorkSliceUse`, `RootWorkBudget`, `JobWorkUse`), the canonical plan, the admission refusals and the root's one settlement; dormant behind `palw_exec_payload_v2`.
+pub mod palw_work_slice_v2;
 /// Spend-once execution-round quanta: 1 verified CanonicalWork → N unique permit tickets.
 pub mod palw_execution_quanta_v1;
 pub mod palw_exposure;
@@ -497,6 +501,8 @@ pub mod palw_gen_range_twin_v1;
 pub mod palw_probabilistic_constraints_v1;
 /// RFC-0004 Part II: the typed-roots fence `palw_typed_roots_v1` — dormant, no height, refused when armed.
 pub mod palw_typed_roots_v1;
+/// ECON's M*-49 verifier pay and the held default share: the fence `palw_verifier_pay_v1` — dormant, no height, refused when armed.
+pub mod palw_verifier_pay_v1;
 /// G14 lane D: the kernel route's consensus state, messages and interim policy (fence `palw_probabilistic_constraints_v1`).
 pub mod palw_kernel_route_v1;
 /// G14 lane D phase 3: the onboarding objects (artifact binding and its refutation, the kernel binding, the conformance commitment,
@@ -507,6 +513,9 @@ pub mod palw_onboarding_v1;
 pub mod palw_conformance_evidence_v1;
 /// RFC-0015: the Panel=0 (`OptimisticPublicVerification`) fence `palw_panel_free_v1` — dormant, no height, refused when armed.
 pub mod palw_panel_free_v1;
+/// The OPV ↔ PALW Work Beacon startup cycle, closed: the complete-check bootstrap, derived OPV eligibility, the effective bits of a
+/// passed attempt, and the dependency graph (`docs/design/palw/opv-beacon-bootstrap.md`) — dormant with the kernel route's fences.
+pub mod palw_opv_bootstrap_v1;
 /// RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt; dormant behind `palw_fp_prefix_state`.
 pub mod palw_fp_prefix_v1;
 /// RFC-0001 §2.9: the job's tokenizer must be the class's listed one; dormant behind `palw_fp_tokenizer_match`.
@@ -529,11 +538,25 @@ pub mod palw_evidence_v1;
 /// RFC-0009 stage B: the provider challenge court (`palw_evidence_court_v1`, DORMANT, not yet folded into the chain state).
 pub mod palw_evidence_court_v1;
 /// Lane DA16 (RFC-0014 §16, RFC-0009 §4): public material units — what an artifact leaf, a bound kernel row or a claim position is checked
-/// against (always the chain's root), the artifact manifest, and a binding confirmed or refuted from the bytes.
+/// against (always the chain's root), the artifact manifest, and a binding confirmed or refuted from the bytes. Since ADR-0177 the
+/// ARTIFACT half is NON-CONSENSUS (optional off-chain tooling; no fold arm reads it); only `ClaimPosition` is a court unit.
 pub mod palw_public_material_v1;
 /// Lane DA16 (RFC-0009 §4.2): the provider court on the kernel route — leases, unit challenges, answers, the DA transfer, its rows and its
 /// fence `palw_provider_court_v1` (dormant, refused when armed).
 pub mod palw_provider_court_v1;
+/// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget (Q/B/R/F reserved at acceptance, consumed by every reward writer, released only at
+/// `accepted_daa + W`) and the model-bond allocation — fences `palw_bond_budget_v1` and `palw_model_bond_allocation_v1` (dormant, refused
+/// when armed).
+pub mod palw_bond_budget_v1;
+/// Lane DA16: the court scope (ADR-0177 D2, RFC-0014 §16.4) — what a court may demand (claim-specific units only), what a verifier
+/// supplies from its own copy against the registered root, the node-level model-bytes masks and the cumulative bound.
+pub mod palw_court_scope_v1;
+/// **Lane LG14-B (RFC-0014 §4–§5): the legacy V2 route's public descent and held/fused DA units** — tags 157–159 behind the dormant
+/// fence `palw_legacy_held_da_v2` (refused when armed).
+pub mod palw_legacy_held_da_v2;
+/// Lane INTF (ADR-0032's 2026-10-10 amendment): the PALW reporter share, 10% below and 49% at or past the dormant fence
+/// `palw_reporter_share_v2` (refused when armed) — R-1 fixed at the conviction's close, DA-6 at the session's open.
+pub mod palw_reporter_share_v2;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
 /// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).

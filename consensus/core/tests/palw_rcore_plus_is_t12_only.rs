@@ -77,15 +77,6 @@ const AT_V22: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
-// Schedule encoding gained additional fences after the v22 snapshot above. These are the current
-// schedule pins on 2026-10-10; the reporter-share amendment changes neither their inputs nor their
-// hashing. Keep AT_V21/AT_V22's historical schedule comparison separately below.
-const CURRENT_SCHEDULE_IDS: &[(&str, &str)] = &[
-    ("testnet-11", "83622fc518dbf78c03762d6bc348bcbe661859a4dffceb39b744d8413815962d"),
-    ("devnet", "5e737b9062fe50e4e974070ea697d54a02ff5846e947b9b0d24898ae4d1e4478"),
-    ("mainnet", "f4eeb6983780ce29f39c64429db600dd900b855c8adb9cc6d8cd8fa506c23c23"),
-];
-
 fn shipped(name: &str) -> Params {
     match name {
         "testnet-11" => palw_rc_shipped_params(),
@@ -126,11 +117,15 @@ fn the_fence_is_armed_on_testnet12_only() {
     assert!(delay > bundle.bond.withdrawal_delay_daa(), "not the bond's bare delay");
     assert_eq!(delay, 12_900, "S-SPEC §6 T23: 7,500 + the DA lattice's 5,400 on testnet-12");
     assert_eq!(bundle.state.rcore_conservative_classes(), PALW_T12_RCORE_CONSERVATIVE_CLASSES.as_slice());
-    assert_eq!(
-        kaspa_consensus_core::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V1,
-        4_900,
-        "ADR-0032's 2026-10-10 amendment sets PALW's reporter share to 49%"
-    );
+    // T24, split by ADR-0032's 2026-10-10 amendment (lane INTF): testnet-12 pays PALW's historical 10% at every height (the
+    // amended 49% waits behind the dormant `palw_reporter_share_v2`, so its live 10% history is never re-read), and the DNS
+    // slashing split is a separate account that is checked on its own, not tied to the PALW share.
+    use kaspa_consensus_core::palw_state_v2::{PALW_RCORE_REPORTER_REWARD_BPS_V1, PALW_RCORE_REPORTER_REWARD_BPS_V2};
+    assert_eq!(PALW_RCORE_REPORTER_REWARD_BPS_V1, 1_000, "the historical PALW share (ADR-0152 §3.6)");
+    assert_eq!(PALW_RCORE_REPORTER_REWARD_BPS_V2, 4_900, "ADR-0032's amended share, behind palw_reporter_share_v2");
+    assert_eq!(t12.palw_reporter_share_v2, None, "the amended share is dormant on testnet-12");
+    assert_eq!(t12.palw_reporter_share_bps_at(u64::MAX), PALW_RCORE_REPORTER_REWARD_BPS_V1, "testnet-12 pays 10% at every height");
+    assert_eq!(bundle.state.reporter_reward_bps_at(u64::MAX), PALW_RCORE_REPORTER_REWARD_BPS_V1, "and so does its fold's mirror");
     assert_eq!(
         t12.dns_params.as_ref().map(|dns| dns.reward_params.slashing_reporter_reward_bps),
         Some(1_000),
@@ -163,8 +158,7 @@ fn every_other_preset_moves_only_by_the_v22_version_re_pin() {
     for ((name, p21, i21, s21), (_, p22, i22, s22)) in AT_V21.iter().zip(AT_V22) {
         let now = ids(&shipped(name));
         println!("{name}: params {} identity {} schedule {}", now.0, now.1, now.2);
-        let schedule = CURRENT_SCHEDULE_IDS.iter().find(|(preset, _)| preset == name).expect("a current schedule pin").1;
-        if (now.0.as_str(), now.1.as_str(), now.2.as_str()) != (*p22, *i22, schedule) {
+        if (now.0.as_str(), now.1.as_str(), now.2.as_str()) != (*p22, *i22, *s22) {
             report.push(format!("{name}: {now:?}"));
         }
         assert_eq!(s21, s22, "{name}: the schedule id is not moved by the version");

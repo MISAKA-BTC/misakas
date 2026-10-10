@@ -34,6 +34,8 @@ pub mod palw_host_ledger;
 pub mod palw_lane_watch;
 /// V04 (the pre-t12 drill of 2026-09-25): the order a collector offers licences in (node policy).
 pub mod palw_licence_order;
+/// LG14-B (RFC-0014 §4–§5 on the legacy V2 route): the public localizer and the producer's responder for the legacy held DA units.
+pub mod palw_legacy_held_v2;
 pub mod palw_memory_ledger;
 pub mod palw_panel;
 /// int-10.2 A2: the prefill run width a replay runs at, chosen from the memory the ledger can grant
@@ -52,6 +54,7 @@ mod palw_producer_t12_tests;
 pub mod palw_receipt_pool;
 pub mod palw_retention;
 pub mod palw_round_producer;
+pub mod palw_exec_slice_producer;
 /// 2026-10-01 (F2): which claim a seat replays next — closest to quorum first, claims already at quorum
 /// last (node policy).
 pub mod palw_seat_schedule;

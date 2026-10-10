@@ -2,6 +2,9 @@ mod apply;
 mod build;
 mod validate;
 
+// Preserve the default ordered header-PoW batch after retiring the inference runtime.
+const HEADER_POW_BATCH_SIZE: usize = 1;
+
 use std::{
     collections::{
         VecDeque,
@@ -124,10 +127,10 @@ pub struct PruningProofManager {
     /// pruning-proof path enforces the SAME per-DAA required-algo rule as the main
     /// header pipeline (`check_pow_algo_id`) — not merely "any known algo id".
     pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
-    /// MISAKA Phase 4: PALW LLM (`algo_id = 4`) activation — same POW-01 rationale as above.
+    /// Reserved legacy algo-4 activation, never armed by current network presets.
     pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
     palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
-    /// MISAKA Phase 4b: PALW-Ollama (`algo_id = 5`) activation — same POW-01 rationale.
+    /// Reserved legacy algo-5 activation, never armed by current network presets.
     pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0042 Decision 1 (PR-08 seam): the algo id a `ConsensusV2` network demands, `None`
     /// otherwise (every network today). Consulted first by the proof-header algo-id gate so it
@@ -158,6 +161,11 @@ pub struct PruningProofManager {
     /// checked with the same rule the header pipeline uses — checking them with the fence off made a
     /// proof fail its own PoW and no new node could join by a pruned sync.
     palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **A-2 uniformity: the header carriage forms' owning fences.** A proof is how a fresh node learns the history it will trust, and
+    /// this path runs only the shape gate, so a form whose fence is not in force at a proof header's DAA is read exactly as the live
+    /// testnet-12 build reads it (a `PFS4` receipt carriage refused for its `PFS3` magic). `Default` (every fence unarmed) until
+    /// [`Self::with_header_forms`].
+    palw_header_forms: kaspa_consensus_core::pow_layer0::PalwHeaderFormFencesV1,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -238,9 +246,16 @@ impl PruningProofManager {
             palw_heartbeat_transparent,
             palw_round_lane,
             palw_single_lottery,
+            palw_header_forms: Default::default(),
 
             is_consensus_exiting,
         }
+    }
+
+    /// The header forms' owning fences (`Params::palw_header_form_fences_v1`), for the proof header gate.
+    pub fn with_header_forms(mut self, forms: kaspa_consensus_core::pow_layer0::PalwHeaderFormFencesV1) -> Self {
+        self.palw_header_forms = forms;
+        self
     }
 
     /// Reject a proof / pruning-point header BEFORE any Layer-0 PoW is computed for it, mirroring
@@ -251,9 +266,7 @@ impl PruningProofManager {
     /// * **algo id** — a header WITH parents must declare the `pow_algo_id` this network mandates at
     ///   its DAA score ([`check_algo_id`]). Parentless roots (genesis, trusted set) are exempt,
     ///   exactly as the main pipeline exempts them — their PoW is never validated and they may carry
-    ///   any id. This is the gate that stops a peer-chosen id from reaching the PoW finalizer: its
-    ///   PALW arm turns a missing worker into a node-wide panic, and any unknown id would have
-    ///   panicked there before `kaspa_pow` made `calculate_l1_tag` a total function (audit P0-1).
+    ///   any id. This enforces the network's algorithm rule before the PoW finalizer.
     /// * **palw_commitment shape** — applies to EVERY header, parentless included, because the field
     ///   is hash-invisible on non-PALW headers ([`check_palw_commitment_shape`]): unbounded junk
     ///   there survives the block-hash check and would be persisted to the header store this path
@@ -269,8 +282,7 @@ impl PruningProofManager {
     pub(super) fn check_proof_header_shape(&self, header: &Header, level: BlockLevel) -> PruningImportResult<()> {
         // Exempt EXACTLY the headers whose PoW short-circuits, using the shared predicate rather
         // than `direct_parents().is_empty()`. The two differ for `parents_by_level == [[]]`, where
-        // `direct_parents()` reports parentless but the finalizer still runs — which let algo_id = 4
-        // reach the panicking PALW arm through this very gate (see the predicate's own docs).
+        // `direct_parents()` reports parentless but the finalizer still runs.
         // ADR-0072 SA-3/SA-4. Resolved before the short-circuit guard because the commitment-shape
         // check below runs for EVERY proof header, root included.
         let attempt_lane = kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::from_fence(
@@ -312,11 +324,13 @@ impl PruningProofManager {
         let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
         // ADR-0072 SA-3: pre-fence proof headers validate under the old envelope version, which is
         // the whole point of a fence on a chain that keeps its history.
-        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at(
+        // A2U: and a carriage form added after the live build only where its fence is in force at the proof header's own DAA.
+        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_with_forms_at(
             header.pow_algo_id,
             &header.palw_commitment,
             commitment_bound,
             attempt_lane,
+            |form| self.palw_header_forms.in_force_at(form, header.daa_score),
         )
         .map_err(|e| PruningImportError::PruningProofBadPalwCommitment(header.hash, level, e.to_string()))?;
         Ok(())
