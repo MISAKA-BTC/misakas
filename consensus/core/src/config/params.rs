@@ -2991,6 +2991,13 @@ pub struct Params {
     /// ([`Self::validate_palw_provider_court_v1`]) with the kernel route it ships beside.
     pub palw_provider_court_v1: Option<ForkActivation>,
 
+    /// **Lane LG14-B (RFC-0014 §4–§5 on the legacy V2 Panel route, user decision GAP-80): public descent and the held/fused DA
+    /// units** ([`crate::palw_legacy_held_da_v2`]). Past this height any bond may demand an interior node of a V2 claim's step or
+    /// checkpoint tree (its frontier and opening), or the committed half of one leaf's refutation (`KernelWitness`), and may convict
+    /// a non-fused step by recomputing its leaf hash from its committed inputs and its own model copy (tags 157–159). **Dormant, with
+    /// no activation height**: `None` on every preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from
+    /// `Some(never())`, refused when armed ([`Self::validate_palw_legacy_held_da_v2`]).
+    pub palw_legacy_held_da_v2: Option<ForkActivation>,
     /// **Lane INTF (ADR-0032's 2026-10-10 amendment): the PALW reporter share, 10% → 49%** ([`crate::palw_reporter_share_v2`]).
     /// Below this height R-1's reward and DA-6's refuted cost are 1,000 bps (`PALW_RCORE_REPORTER_REWARD_BPS_V1`, the share every
     /// conviction and session on every shipped network was priced at); at or past it 4,900 bps (`PALW_RCORE_REPORTER_REWARD_BPS_V2`).
@@ -4185,6 +4192,7 @@ impl Params {
         // **RFC-0006 per-segment pricing** (`crate::palw_tir_shard_segment_v2`): refused when armed.
         self.validate_palw_tir_shard_segment_v2()?;
         self.validate_palw_provider_court_v1()?;
+        self.validate_palw_legacy_held_da_v2()?;
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;
         self.validate_palw_permissionless_panel_v1()?;
@@ -6556,6 +6564,10 @@ impl Params {
         // The provider court's fence (DA16), likewise.
         if self.palw_provider_court_v1 == Some(ForkActivation::never()) {
             self.palw_provider_court_v1 = None;
+        }
+        // The legacy held DA fence (LG14-B), likewise.
+        if self.palw_legacy_held_da_v2 == Some(ForkActivation::never()) {
+            self.palw_legacy_held_da_v2 = None;
         }
         // ADR-0032's amended reporter share (lane INTF), likewise.
         if self.palw_reporter_share_v2 == Some(ForkActivation::never()) {
@@ -10267,6 +10279,7 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_legacy_held_da_v2,
             palw_reporter_share_v2,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
@@ -10542,6 +10555,7 @@ impl Params {
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_tir_shard_segment_v2", *palw_tir_shard_segment_v2),
             ("palw_provider_court_v1", *palw_provider_court_v1),
+            ("palw_legacy_held_da_v2", *palw_legacy_held_da_v2),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
@@ -10855,6 +10869,11 @@ impl Params {
         // The provider court's fence (DA16), NAMED likewise.
         if let Some(at) = self.palw_provider_court_v1 {
             h.write(b"palw_provider_court_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The legacy held DA fence (LG14-B), NAMED likewise.
+        if let Some(at) = self.palw_legacy_held_da_v2 {
+            h.write(b"palw_legacy_held_da_v2");
             h.write(at.daa_score().to_le_bytes());
         }
         // ADR-0032's amended reporter share (lane INTF), NAMED likewise, with the share it arms beside it (the SA-4 rule:
@@ -11545,6 +11564,7 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_legacy_held_da_v2,
             palw_reporter_share_v2,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
@@ -12319,6 +12339,10 @@ impl Params {
         if let Some(activation) = palw_provider_court_v1.as_mut() {
             fork(activation, visit);
         }
+        // The legacy held DA fence (LG14-B). Some-only.
+        if let Some(activation) = palw_legacy_held_da_v2.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0032's amended reporter share (lane INTF). Some-only.
         if let Some(activation) = palw_reporter_share_v2.as_mut() {
             fork(activation, visit);
@@ -12859,6 +12883,7 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_legacy_held_da_v2,
             palw_reporter_share_v2,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
@@ -13689,6 +13714,11 @@ impl Params {
             h.write(b"palw_provider_court_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The legacy held DA fence (LG14-B), Some-only for the same reason.
+        if let Some(activation) = palw_legacy_held_da_v2 {
+            h.write(b"palw_legacy_held_da_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0032's amended reporter share (lane INTF), Some-only for the same reason — and the share it arms beside the
         // height, so a 10% and a 49% build never announce one ruleset (the amendment's handshake rule) while every preset
         // that leaves the fence dormant (testnet-12's live ruleset included) fingerprints byte-identically to int-12.
@@ -14492,6 +14522,7 @@ impl Params {
             palw_signed_registration_v1: self.palw_signed_registration_v1,
             palw_tir_shard_segment_v2: self.palw_tir_shard_segment_v2,
             palw_provider_court_v1: self.palw_provider_court_v1,
+            palw_legacy_held_da_v2: self.palw_legacy_held_da_v2,
             palw_reporter_share_v2: self.palw_reporter_share_v2,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
@@ -15591,6 +15622,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_legacy_held_da_v2: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
@@ -15886,6 +15918,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_legacy_held_da_v2: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
@@ -16163,6 +16196,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_legacy_held_da_v2: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
@@ -23796,6 +23830,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_legacy_held_da_v2: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,

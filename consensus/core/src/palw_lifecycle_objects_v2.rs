@@ -388,6 +388,11 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::ProviderChallengeV1 { .. }
         | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
         | PalwConsensusObjectV2::DaTransferV1 { .. } => Ok(()),
+        // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
+        // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
+        PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
+        | PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }
+        | PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => Ok(()),
         PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
             if signature.is_empty() {
                 Err("a signed registration envelope must carry its signer's signature")
@@ -1102,12 +1107,20 @@ pub enum PalwLifecycleKindFenceV1 {
     /// `Params::palw_provider_court_v1` — lane DA16's provider court (tags 150–153). In force only where the kernel route's fence is
     /// too (the court's rows are the route's), as the processor's `palw_provider_court_at` reads it.
     ProviderCourtV1 = 3,
+    /// `Params::palw_legacy_held_da_v2` — lane LG14-B's legacy held DA (tags 157–159, and the appended `PalwDaUnitV1::LegacyHeldV2`
+    /// inside tags 55 / 67 / 83).
+    LegacyHeldDaV2 = 4,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 4] =
-        [Self::ProbabilisticConstraintsV1, Self::SignedRegistrationV1, Self::PermissionlessPanelV1, Self::ProviderCourtV1];
+    pub const ALL: [Self; 5] = [
+        Self::ProbabilisticConstraintsV1,
+        Self::SignedRegistrationV1,
+        Self::PermissionlessPanelV1,
+        Self::ProviderCourtV1,
+        Self::LegacyHeldDaV2,
+    ];
 
     /// The `Params` field the fence is resolved from.
     pub const fn params_field(self) -> &'static str {
@@ -1116,6 +1129,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::SignedRegistrationV1 => "palw_signed_registration_v1",
             Self::PermissionlessPanelV1 => "palw_permissionless_panel_v1",
             Self::ProviderCourtV1 => "palw_provider_court_v1",
+            Self::LegacyHeldDaV2 => "palw_legacy_held_da_v2",
         }
     }
 }
@@ -1136,6 +1150,15 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
     use PalwConsensusObjectV2 as O;
     use PalwLifecycleKindFenceV1 as F;
     match object {
+        // LG14-B's guarded arms: an int-12 kind carrying the appended `PalwDaUnitV1::LegacyHeldV2` (the live build cannot decode it)
+        // is owned by `palw_legacy_held_da_v2` (`PALW_INT12_WIRE_CHANGES_V1`'s `CarriedAppended`).
+        O::MaterialDisclosedV2 { unit, .. } if unit.is_legacy_held_v2() => PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2),
+        O::DefaultAccusedTirStep { accusation } if accusation.unit.is_legacy_held_v2() => {
+            PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2)
+        }
+        O::DefaultAccusedPipelineStep { accusation } if accusation.unit.is_legacy_held_v2() => {
+            PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2)
+        }
         // The 100 kinds the live build decodes — frozen; never extended (see `PALW_LIFECYCLE_INT12_KINDS_V1`).
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
@@ -1253,6 +1276,10 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         // Lane DA16: the provider court — lease, challenge, answer, DA transfer (150–153).
         O::ProviderLeaseV1 { .. } | O::ProviderChallengeV1 { .. } | O::ProviderAnswerV1 { .. } | O::DaTransferV1 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::ProviderCourtV1)
+        }
+        // Lane LG14-B: the legacy held DA — demand, answer, leaf recompute (157–159).
+        O::LegacyHeldDemandedV2 { .. } | O::LegacyHeldAnsweredV2 { .. } | O::LegacyLeafRecomputedV2 { .. } => {
+            PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2)
         }
     }
 }
@@ -1380,6 +1407,9 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (151, "ProviderChallengeV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
     (152, "ProviderAnswerV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
     (153, "DaTransferV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
+    (157, "LegacyHeldDemandedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
+    (158, "LegacyHeldAnsweredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
+    (159, "LegacyLeafRecomputedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
 ];
 
 /// **The owning fences' activations, resolved once from `Params`** (`Params::palw_lifecycle_kind_fences_v1`) and asked by every site
@@ -1445,6 +1475,7 @@ impl crate::config::params::Params {
                             _ => None,
                         }
                     }
+                    PalwLifecycleKindFenceV1::LegacyHeldDaV2 => self.palw_legacy_held_da_v2,
                 },
             )
         })
@@ -1637,6 +1668,11 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         "consensus/core/src/palw_state_v2.rs::PalwDeltaEntryV2",
         PalwInt12WireChangeV1::NotCarried("the fold's journal (stored deltas), never a block's carriage"),
     ),
+    // LG14-B: `LegacyHeldV2` appended; every int-12 kind carrying it is owned by `palw_legacy_held_da_v2` (guarded arms).
+    (
+        "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
+        PalwInt12WireChangeV1::CarriedAppended { fence: "palw_legacy_held_da_v2", digest: 0xcca88a4c7733b9e5 },
+    ),
     (
         "consensus/core/src/palw_state_v2.rs::PalwVoidReasonV2",
         PalwInt12WireChangeV1::NotCarried("a claim row's terminal reason, written by the fold; no carried object names one"),
@@ -1786,6 +1822,8 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // DA16: lease, challenge, answer, transfer. A change to their wire form (DA16's re-scope: the `Artifact` lease subject removed
     // under this fence) re-pins `PALW_A2_NEW_KIND_WIRE_V1` in the same commit and keeps this row's fence, or adds a row for another.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 150, hi: 153 }, "palw_provider_court_v1", "DA16 provider court", true),
+    // LG14-B: the legacy V2 route's descent demand, its answer and the leaf recompute (RFC-0014 §4–§5).
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 159 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
@@ -1826,6 +1864,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 10, magic: *b"PXE2" }, "palw_exec_payload_v2", "X8R EXEC envelope", false),
     a2_row(PalwA2SlotV1::CoinbaseTrailer { magic: *b"PXA2" }, "palw_exec_payload_v2", "X8R anchor trailer", false),
     // ---- forms appended inside kinds int-12 decodes (tag 68 is ARMED on testnet-12: `palw_gen_v1`) ----
+    a2_row(
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1" },
+        "palw_legacy_held_da_v2",
+        "LG14-B: PalwDaUnitV1::LegacyHeldV2 appended (carried by tags 55, 67, 83; written into da_sessions / da_claims only past the fence)",
+        true,
+    ),
     a2_row(
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" },
         "palw_task_heads_v1",
@@ -1918,6 +1962,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (130, 139, "EXEC payload v2 (X8R)", &["palw_exec_payload_v2"]),
     (140, 149, "BUDGET (ADR-0176/0177)", &["palw_bond_budget_v1", "palw_model_bond_allocation_v1"]),
     (150, 153, "DA16 provider court", &["palw_provider_court_v1"]),
+    (157, 159, "LG14-B legacy held DA", &["palw_legacy_held_da_v2"]),
 ];
 
 #[cfg(test)]
@@ -3332,7 +3377,23 @@ pub(crate) mod tests {
         #[test]
         fn every_appended_form_has_a_guarded_owner_arm() {
             // `(manifest key, an object of an int-12 kind carrying the appended form)` — one per `CarriedAppended` change.
-            let samples: Vec<(&str, PalwConsensusObjectV2)> = Vec::new();
+            let unit =
+                crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::StepNode {
+                    level: 1,
+                    index: 0,
+                });
+            let samples: Vec<(&str, PalwConsensusObjectV2)> = vec![(
+                "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
+                PalwConsensusObjectV2::MaterialDisclosedV2 {
+                    claim: Hash64::from_bytes([1; 64]),
+                    unit,
+                    answer: crate::palw_da_rcore_v1::PalwDaAnswerV1::Event(
+                        crate::palw_step_refute::PalwTraceEventDisclosureV1::OutOfRange { binding: Box::new(zeros()) },
+                    ),
+                    discloser: bond(),
+                    signature: vec![1],
+                },
+            )];
             for (key, change) in PALW_INT12_WIRE_CHANGES_V1 {
                 let PalwInt12WireChangeV1::CarriedAppended { fence, .. } = change else { continue };
                 let carrying: Vec<_> = samples.iter().filter(|(k, _)| k == key).collect();
@@ -3978,11 +4039,15 @@ pub(crate) mod tests {
             (109, 0xc7d6537424a66090),
             (110, 0x7da0346d0633de78),
             (111, 0x2d490db20d075bfe),
+            (113, 0xca1188bcd2f663d2),
             (120, 0xcbb24fb8f993e5c6),
             (150, 0x5fb8c8b2822f8386),
             (151, 0x6a81242ebaeba7fd),
             (152, 0xc48f175fa3456d1e),
             (153, 0x74bac59d2cf50cd4),
+            (157, 0x342660230d2d6514),
+            (158, 0x2d33651174652aca),
+            (159, 0x0395636b651f74fa),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline

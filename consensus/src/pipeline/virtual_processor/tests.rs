@@ -16844,6 +16844,8 @@ mod g14_kernel_route_e2e;
 mod r4x_typed_roots_e2e;
 // RFC-0002 Phase F's second IR fence: the IR step-leaf DA demand at the gate.
 mod t12_tir_da_step_gate;
+// LG14-B (RFC-0014 §4–§5 on the legacy V2 route): tags 157–159 dropped by name below `palw_legacy_held_da_v2`, signed past it.
+mod t12_legacy_held_da_gate;
 // RFC-0004 A4/A5: the material objects' and the candidate's signatures at the gate, and a licence
 // through the walk and the fold, with real card and rights-holder signatures.
 mod t12_improve_material_gate;
