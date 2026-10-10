@@ -336,8 +336,8 @@ impl<'a, 'b> FoldView<'a, 'b> {
 impl ConsensusViewV1 for FoldView<'_, '_> {
     /// The public population frozen at the PRE-ENTROPY CHECKPOINT: the parent state, never this block's registrations, top-ups,
     /// readiness proofs or objects. Sanitised so that the engine's structural checks cannot fail the block: an exclusion,
-    /// an immature or under-collateralised bond is simply not a candidate, and a population above the cap keeps its highest
-    /// collateral (ties by bond id) — weight is proportional to collateral, so the dropped tail carries the least of it.
+    /// an immature or under-collateralised bond is simply not a candidate. A population above the cap follows the same
+    /// no-panel path as the flat adapter; it never ranks individual bond sizes to discard smaller public participants.
     fn candidates(&self, claim: &AdmittedClaimV1) -> Result<Vec<SeatCandidateV1>, PanelErrorV1> {
         let policy = self.mirror.policy;
         let checkpoint_daa = self.engine.daa();
@@ -353,17 +353,13 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
         // A claim the checkpoint does not hold seals an empty population (and ends non-fraud), never a failed block.
         .unwrap_or_default();
         rows.retain(|seat| self.admissible(seat, claim));
-        if rows.len() > policy.max_candidates as usize {
-            rows.sort_by(|a, b| b.collateral.cmp(&a.collateral).then(a.bond.cmp(&b.bond)));
-            rows.truncate(policy.max_candidates as usize);
-        }
         Ok(rows)
     }
 
     /// **The population of a claim drawn per shard** (RFC-0006 × RFC-0010), at the same checkpoint and sanitised exactly as
     /// [`Self::candidates`]: per shard, the bonds that proved the shard's readiness (`palw_tir_shard_ready_class_v1` — the same
     /// eligibility lane A's per-shard draw reads), each with its stratum bits; and, for an outsider-judged claim, the base
-    /// class's population as OUTSIDER role. A population above the cap keeps its highest collateral, the bits kept aligned.
+    /// class's population as OUTSIDER role. Above the capacity bound no partial population is selected.
     fn stratified_candidates(
         &self,
         claim: &AdmittedClaimV1,
@@ -382,10 +378,6 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
         )
         .unwrap_or_default();
         rows.retain(|(seat, _)| self.admissible(seat, claim));
-        if rows.len() > policy.max_candidates as usize {
-            rows.sort_by(|(a, _), (b, _)| b.collateral.cmp(&a.collateral).then(a.bond.cmp(&b.bond)));
-            rows.truncate(policy.max_candidates as usize);
-        }
         Ok(rows.into_iter().unzip())
     }
 
