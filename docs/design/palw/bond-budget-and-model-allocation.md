@@ -520,4 +520,35 @@ Results are recorded in §12 when each milestone is built.
 
 ## 12. Results
 
-(filled in per milestone)
+Status words: **implemented** (code on this branch), **verified** (a named test passed on a build of this branch),
+**armable** (none: every POLICY value in §10 is open, and both validators refuse an armed fence).
+
+Built 2026-10-10 on `budget/adr176-177` after merging integration `f325d6696`, with `BUILDSLOT_SINCE=1760000002`.
+The test names in §9 were planned in M1. The rows below name the tests that exist.
+
+| Area | Status | Tests that passed |
+|---|---|---|
+| Engine: caps, ceilings, ρ, split, clock, reservation, consumption, riders, deltas, carriage | verified | `palw_bond_budget_v1::tests` (27, incl. `rho_moves_q_only`, `split_capital_never_raises_caps`, `release_only_at_d_plus_w_and_closing_returns_nothing`, `delta_round_trip_and_revert`, `carriage_round_trip`) |
+| Model allocation (ADR-0177 D3–D5) | verified | `model_budgets_sum_within_accrued_and_zero_denominator_is_zero`, `many_claims_do_not_multiply_s_m_and_assignments_never_exceed_capital`, `seasoning_delays_increases_not_decreases_and_pro_rata_after_slash`, `same_s_m_same_allocation_whoever_owns_it`, `model_budget_clips_reward_and_never_restores_the_bond_window` |
+| §3e BUDGET / WORK / WINDOW / NEUTRALITY / SPLIT (engine) | verified | `round_rights_reserve_once_and_release_at_d_plus_w`, `candidates_follow_work_below_the_cap_and_stop_at_it`, `the_window_is_shared_and_concurrent_draws_never_pass_the_cap`, `a_role_swap_swaps_the_allocation_and_order_is_irrelevant`, `splitting_bonds_or_claims_never_raises_candidates` |
+| Fences dormant, Some-only hashed, refused when armed | verified | `both_fences_are_dormant_some_only_hashed_and_refused_when_armed`, `fork_id_v1::`, `consensus_params_id_tests` |
+| Unarmed fold byte-identical | verified | `the_unarmed_fold_is_byte_identical_whether_the_fence_is_absent_or_scheduled_ahead`; `palw_state_v2::` (whole module), `palw_execution_quanta`, `palw_execution_lane` |
+| Fold wiring (attempt, FP, riders, Final, void, retirement, reversal, withdrawal hold) | verified | `palw_state_v2::tests::bond_budget_fold_v1` (12) |
+| Sim harness on the real fold | verified | `palw_bond_budget_e2e`: 7 of 7 (honest vs forger, ρ ×1/×100/×1000, early Final / void / retry, ten bonds vs one, allocation, rewind/replay, Round draw) |
+| Real node (T12Chain) | verified | `budget_e2e` 4 of 4 (equal ceilings, no early recovery, restart; refusal and ρ; IBD block by block; reorg) |
+| A-2 row for tag 140 | verified | `t12_a2u_new_kinds_uniform` 3 of 3; wire pin `(140, 0xa4ab9f7696775588)` |
+| Unaffected neighbours | verified | `p2_mint_path`, `rfc9_v4_chain_e2e` |
+| RPC 250–253, EVM view | not implemented | §8.4 |
+
+**The Round draw on the real fold** is wired and replays, but no tickets were drawn in it. With an admitted attempt in every
+block, 400 blocks seeded one matured snapshot through `palw_execution_mint_quanta_windowed_capped_v1`. That schedule was empty
+because a floor Final's CanonicalWork is below one execution quantum (100,000). The 2M class could not stand in on this harness,
+because only one attempt was admitted there. So the ticket arithmetic past the fence (candidates bounded by remaining rights,
+shared capacity, reserve at the draw and release at `draw + W`) is verified only at the engine level. A fold-level test that draws
+non-zero tickets needs a heavier class fixture. It is open.
+
+Failures on this tree that are not this lane's: the `a2u` pins for tags 109 (changed) and 113 (unpinned), and
+`dns_finality::TakeoverToken (gone)` missing from `PALW_INT12_WIRE_CHANGES_V1`.
+
+`scripts/t12-repin.sh --shipping --drift-only` on this tree: no drift (361 ok, 29 history, 3 label). The testnet-12
+params id `5ee7fd8e…` and schedule id `1678e073…` are unchanged.

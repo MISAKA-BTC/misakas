@@ -384,6 +384,9 @@ fn round_draws_reserve_each_bonds_allocation_and_replay() {
         seen.len(),
         sim.c.s.round_pending_snapshots().len()
     );
+    // A floor Final's CanonicalWork is below one execution quantum (100,000), so the schedule the capped draw seeds is empty: this
+    // test proves the wiring and the replay, and the ticket arithmetic is the engine's (`palw_bond_budget_v1::tests`).
+    assert!(!seen.is_empty(), "a matured snapshot was seeded through the capped draw");
     budget(&sim).check_consistency().expect("the engine's invariants");
     let tip = sim.c.s.clone();
     let off = sim.rewind_to(fork_at);
