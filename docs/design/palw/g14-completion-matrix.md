@@ -91,7 +91,7 @@ only partial everywhere.
 | F6 | RFC-0004 typed roots: Memory / Retrieval / Composite | kernel route OPV + `palw_typed_roots_v1` | INT: V-node T02–T05 (conviction, default). Replay only for C8. | **Must not be reward-bearing**: no eligibility path (OB GAP-B16: Spec kinds are admitted only through a `cfg(test)` seam). Plus GAP-51 and GAP-52. |
 | F7 | RFC-0008 EXEC work slices (legs) | `palw_exec_payload_v2` | X8: V-node E01 (outsider convicts a slice's kernel claim; suffix and root void) and E02 | Not met: slice DA default is fold-only, the REAL root is admitted through a seam, initial boundary is a DESIGN_GAP, plus C1, C2 and C7-RPC. |
 | F8 | Onboarding conformance evidence (tag 109 Post / Refute / PostComplete) and the artifact binding (104 / 105) | the reward gate (OB `palw_reward_gate_v1`) | INT: V-node B01–B12. OB: B13–B24 (B15 and B19 failed at run 4; fixed, unbuilt). | Complete-check path: met in the fold (no outsider needed). Sampled path: **cannot gate rewards** (no digest court, GAP-B6, GAP-B7). Under the ruled 128-bit floor only complete checks pass (B22). |
-| F9–F16 | Legacy V2 Panel route on testnet-12: FP attempt floor; FP held 8k / 2M (graph-v7 fused); FP free prompt; FP Job V4 decode; FP V5 / Gen (RFC-0003); TIR v1 (RFC-0002); TIR shard (RFC-0006); RFC-0004 Part I improvement evaluation | the old Panel route (live int-12); exempt `LEGACY_PANEL_ROUTE` under OB's gate | V-fold pieces only; seat filers; the held [C12] gaps are pinned. | **Cannot meet G14.** Must not be reward-bearing on any G14-gated channel (OPV, Panel=0, post-fence rewards). Whether they keep earning after the release is a **user decision** (GAP-80). |
+| F9–F16 | Legacy V2 Panel route on testnet-12 (**not Panel=0 / not new-reward eligible** until the user answers GAP-80): FP attempt floor; FP held 8k / 2M (graph-v7 fused); FP free prompt; FP Job V4 decode; FP V5 / Gen (RFC-0003); TIR v1 (RFC-0002); TIR shard (RFC-0006); RFC-0004 Part I improvement evaluation | the old Panel route (live int-12); exempt `LEGACY_PANEL_ROUTE` under OB's gate | V-fold pieces only; seat filers; the held [C12] gaps are pinned. | **Cannot meet G14.** Must not be reward-bearing on any G14-gated channel (OPV, Panel=0, post-fence rewards). Whether they keep earning after the release is a **user decision** (GAP-80). |
 | F17 | Post-fence V2 REAL work of a class the reward gate `Passed` | the V2 attempt lane, through OB's gate | none: the gate's evidence is the bound KERNEL class, not the V2 claim | **Hole, not met** (GAP-81). |
 | — | BASE-0 base class | bonded fallback | — | Exempt (`BASE_FLOOR`); not useful-computation reward; outside G14 by design. |
 
@@ -317,9 +317,11 @@ same job, the way slices are), or give the V2 claim a G14 path.
 3. **K2-TIR-v5 encoders and task heads** (and HFX's Head profile on the Gen route) until GAP-40.
 4. **Every kernel-route profile needing private or fused material**: by construction.
 5. **RFC-0004 typed roots (Memory / Retrieval / Composite)** until GAP-50, GAP-51 and GAP-52.
-6. **Sampled conformance as a reward gate** until GAP-70. Only complete-check classes can pass under the ruled floor.
-7. **The legacy V2 Panel route (F9–F16)** on every G14-gated channel. Whether the old channel continues is GAP-80.
-8. **Post-fence V2 REAL work of a `Passed` class** until GAP-81.
+6. **Sampled conformance as a reward gate**: decided (§5a). Only the complete check gates rewards for the release.
+7. **The legacy V2 Panel route (F9–F16)** on every G14-gated channel: not Panel=0, not new-reward eligible. Whether the old
+   channel continues is GAP-80, with the user.
+8. **V2-root claims of a kernel-bound class**: decided (§5a) — they never earn the new rewards; only kernel-route claims pass the
+   per-claim reward gate (OPVB implements).
 9. **K2-TIR v1/v2 single-program classes** until GAP-00, -01, -02, -03, -04, -05, -06 and -10. This is the nearest family.
 10. **EXEC slice legs** until GAP-60 to -63 and F1's items. Pipeline-class slices are refused.
 
@@ -358,11 +360,21 @@ milestone throughout.
 | GAP-61 | Replace `exec_v2_test_admit_class_v1` with OB's `palw_reward_gate_v1` (`Cw::active_admitting_real`). | C7 | F7 | **X8R** (after OB integrates) | S |
 | GAP-62 | DESIGN_GAP: link the initial boundary to the REAL claim's verified output (the same root cause as GAP-81). | C3, C5 | F7, F17 | **X8R** + Lead | M |
 | GAP-63 | Merge `b8ae9412b`; rebuild. | — | F7 | **X8R** | S |
-| GAP-70 | Sampled conformance: a court for vector logits / commit digests (OB-P0 GAP 2); vector refutation for a new class (GAP-B6); self-reported implementation results (GAP-B7). **Or** the Lead rules that sampled conformance never gates reward and only `PostComplete` counts, until a production policy exists. | C3–C5 | F8 | Lead decision; if built, **G14C** | L or decision |
+| GAP-70 | Sampled conformance: a court for vector logits / commit digests (OB-P0 GAP 2); vector refutation for a new class (GAP-B6); self-reported implementation results (GAP-B7). **Or** the Lead rules that sampled conformance never gates reward and only `PostComplete` counts, until a production policy exists. | C3–C5 | F8 | **Decided (§5a): only the complete check gates rewards; the digest court stays on the DESIGN list, nobody builds it now** | — |
 | GAP-71 | SDK fresh verifiers: a public seal read for v3 attempts (GAP-B17, condition 9) → **OPVB** (S–M); a fresh complete-check verifier (GAP-B10) → **G14C** (S). | C2 | F8 | OPVB / G14C | S–M |
-| GAP-80 | DECISION: the legacy V2 Panel route cannot meet G14 (§3.9). Does `LEGACY_PANEL_ROUTE` keep earning after the full-activation release (ruling #5) despite PRINCIPLES §6? If G14 is required there: RFC-0014 P1–P4 on V2 (shared non-seat filer, `CommittedKernelWitness`, a Final-holding reservation for non-seat pursuits, direct-proof priority over open courts), plus a chain-path non-seat E2E for each of F9–F16. | all | F9–F16 | **User / Lead**; if built, G14C + DA16 | XL |
-| GAP-81 | DECISION + code: a `Passed` class's V2 REAL work has no G14 path (§3.10). | all | F17 | **Lead** → OPVB (gate), X8R (binding), G14C (E2E) | L |
+| GAP-80 | DECISION: the legacy V2 Panel route cannot meet G14 (§3.9). Does `LEGACY_PANEL_ROUTE` keep earning after the full-activation release (ruling #5) despite PRINCIPLES §6? If G14 is required there: RFC-0014 P1–P4 on V2 (shared non-seat filer, `CommittedKernelWitness`, a Final-holding reservation for non-seat pursuits, direct-proof priority over open courts), plus a chain-path non-seat E2E for each of F9–F16. | all | F9–F16 | **With the user (§5a)**; meanwhile "not Panel=0 / not new-reward eligible"; no XL work starts | XL |
+| GAP-81 | A `Passed` class's V2 REAL work has no G14 path (§3.10). **Decided (§5a):** the reward gate is per CLAIM verification route. | all | F17 | **OPVB** implements | L |
 | GAP-82 | Only if GAP-80 keeps legacy in scope: a chain-path E2E of `--palw-tir-shard-watch` with every seat colluding, plus a V2 Final hold. | C2–C8 | F15 | G14C | M |
+
+### 5a. The Lead's decisions on the open points (2026-10-10, on milestone 1)
+
+* **GAP-81 — the reward gate is per CLAIM verification route, not per class.** Only a claim whose work is verified on a
+  G14-complete route (the kernel route) can pass `palw_reward_gate_v1`. V2-root claims of a kernel-bound class stay on the legacy
+  channel under the old rules and never earn the new rewards. OPVB implements it.
+* **GAP-70 — for the release, only the complete check gates rewards.** Sampled conformance stays a non-reward signal until a digest
+  court exists. That court stays on the DESIGN list; nobody builds it now.
+* **GAP-80 — the legacy Panel route goes to the user.** Until the user answers, this matrix treats F9–F16 as "not Panel=0 / not
+  new-reward eligible", and no XL work on them starts.
 
 ## 6. Proposed order
 
@@ -394,7 +406,11 @@ milestone throughout.
    - OPVB: GAP-71 (B17).
 6. **G14C milestone 4:** GAP-50 and GAP-51 (typed roots).
 7. **G14C milestone 5:** GAP-20 and GAP-21 (pipelines), once K2S's wire form is integrated.
-8. Then GAP-70, GAP-81 and GAP-80 / GAP-82 as decided.
+8. GAP-70, GAP-80 and GAP-81 are decided or with the user (§5a). GAP-82 waits on GAP-80.
+
+**The Lead's order for G14C (2026-10-10):** milestone 2 (GAP-01 to 04), then milestone 3 (GAP-10), then GAP-71b, then typed roots
+(GAP-50/51), then pipelines (GAP-20/21) once K2S's pipeline header is integrated. `g14/r4-fixes` is merged into `g14/completion` only
+once G14R reports it green; until then the harness is built on `b8ae9412b` with the conviction path's specifics behind an adapter.
 
 ## 7. Test index
 
