@@ -19473,7 +19473,17 @@ impl VirtualStateProcessor {
         // RFC-0012: once the virtual is past the retirement the DNS row is a frozen historical fact (nothing writes it any more),
         // and an anchor frozen below the fence must not keep releasing coinbases early in the mempool while the wallet — which
         // clears the shortcut when the node reports none — shows them pending. The long fallback still releases them by the DAA alone.
-        let retired = self.virtual_stores.read().state.get().ok().is_some_and(|v| self.dns_retired_at(v.daa_score));
+        //
+        // **The virtual's DAA comes from `lkg_virtual_state`, never from `virtual_stores` (VSTALL, 2026-10-10).** Every caller of
+        // this function is the mempool path (`validate_mempool_transaction{,s_in_parallel}`), which already HOLDS a
+        // `virtual_stores.read()` guard for the whole validation. A second read of that parking_lot lock queues behind a
+        // pending writer: once the virtual processor's `commit_virtual_state` has started `RwLockUpgradableReadGuard::upgrade`
+        // (WRITER_BIT set, waiting for the readers to leave), this inner read parks forever, the outer guard is never
+        // released, and the upgrade never completes — the virtual processor stops after a block's UTXO validation while
+        // headers, bodies, P2P and RPC keep running (the 0b73fd33f drill's three stalls). The same shape as D6's, closed for
+        // the PALW readers in `palw_v2_reader_state`. The LKG state is the last committed virtual, which is what this policy
+        // read has always meant ("state as of this node's last virtual commit"), and it takes no lock.
+        let retired = self.dns_retired_at(self.lkg_virtual_state.load().daa_score);
         let confirmed_anchor_daa = if retired {
             None
         } else {
