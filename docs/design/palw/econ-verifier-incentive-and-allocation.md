@@ -50,6 +50,7 @@ Amounts are in BILI.
 | **F1–F5** | **Open versus closed for `f(S_m)`.** F1: split-proof and merge-proof together force `f` linear. F2: equal self-funding beats publishing for every `f`. F3: the publish premium *is* a concentration premium. F4: at `p` = 0, a closed model out-earns an open one by `1/(1 − λ)` for every `f`. F5: the budget and the per-bond cap saturate. | **PROVEN** (§5). Grid DERIVED from an ASSUMED market. |
 | **F-BFT** | **Under the user's premise (§3f)**, a verified-work gate makes publishing overwhelmingly better with **linear `f`**. The gate pays a model's epoch allocation only if ≥ `k` of `m` verifiers, drawn by stake from the global pool, attest a checked claim; at `σ` = 1/3, `m` = 47 and `k` = 24. Open/closed is ≥ 38.5×. A closed model is paid with probability 0.9%, so the stake-only residual is ≤ 0.30% of the model budget, and payment stays tied to verified work. It breaks at an adversary share of 0.40 (the 1% and 99% bars) and of 0.44 (the 2× bar), and at 50% closed and open are paid alike. | DERIVED under A-BFT (§5c). The ADR-0177 D1 reading needs the user. |
 | **AGG** | **The revised ADR-0177 goal** (§5d): `A_m = S_m^α`, with the 2× net-profit bar fixed first over 4–30× capital, below the caps. α = 1.5 passes 52 of 54 cells and never caps in range. α = 2 passes 16 of 18 and caps at about 10% of capital, withholding 19% of the budget at 30×. Every failing cell is one where honest mining is unprofitable for any α. Concentration premium: 1.4–1.8 at α = 1.5, 2.0–2.8 at α = 2; the operator's advantage is 2.0× at 10% of capital. `p = 0` stays separate: the whole model budget is fraud revenue there, for any α. | DERIVED (§5d). Recommended α = 1.5. |
+| **PESG A/E** | §5e. **T4:** UNKNOWN for every class and profile, and FAIL where MEAS proves `p_min = 0` (gather lie, 9B-8k, closed model). Known `G` = 25 per claim; the full `G` is UNKNOWN (weight value, external settlement). **E:** six of the seven attack rows PASS; one deposit with many attempts FAILS at the interim `d`. **T5:** `F_min` = 0.81–1.38, but `F = F_min` FAILS in fault-free periods unless it also carries the stake's capital cost (C9). Counter-examples: B3–B5 UNKNOWN; C3–C5 FAIL; C6–C8 UNKNOWN. | Verdicts as stated (§5e). |
 | **GATE** | **Round/EXEC ECON gate** (acceptance §4–§5), with nine criteria fixed before judging (§5a). Tickets track canonical work exactly. Revenue per compute cost is equal across model sizes. Saturation and splitting are size-neutral. It **fails** on net revenue per compute: the interim per-claim overhead is 65% of a small job's escrow against 3.6% of a large one's, a 2.7× gap. It also **fails** on capital-bound marginal revenue for the large model: a 28.8-BILI escrow fills the R cap after one job, before the Round cap. | 7 PASS, 2 FAIL. DERIVED from an ASSUMED market (§5a). |
 | **P-list** | BUDGET P-1..P-11. P-1 and P-11 together leave `280 ≤ W ≤ 436` DAA: below that, claims outlive the window; above it, the 65,536 per-span bound stops the shared window from ever saturating. Theorem Y gives P-2's `r` ceiling. G6 gives P-2's `q·ρ` floor. §2.5 gives the open-claim cap. | DERIVED where stated; the rest PROPOSED (§5b). |
 | **F-bar** | **No curve makes publication "overwhelmingly better".** No `f` beats equal self-funding (F2). On the grid, no `f` meets the proposed bar against a closed model that can forge. The one curve that meets it against a non-forging closed model, `S²`, fails the concentration bar with a premium of 1.9–2.8. | **COUNTEREXAMPLE** (§5.4). |
@@ -945,6 +946,142 @@ The cap clips this at `y_cap` per unit.
 * users must pay compute, or `κ ≤ 0.5`;
 * inside a model the split is pro rata, with no per-model cap (a cap would reward model splits) and no saturation term;
 * region Z is unaffected.
+
+---
+
+## 5e. PESG §4 A and §4 E (ECON), T4 / T5
+
+This section applies `probabilistic-economic-security-gate.md`, with MEAS's §4 D (`pesg-d-conviction-probability.md`) as the source of
+every `p_min`. It is computed in model §13 and uses only the verdicts PASS / FAIL / UNKNOWN. `p_check` is UNKNOWN until PESG-B lands.
+
+### 5e.1 §4 A: attacker profit bounds
+
+**`G_max` per claim (interim):**
+* **Known parts:** reward `R` = 5 (the producer's and seats' legs, BUDGET D-2), work credit 5, compute saved ≈ 5, the declared external
+  bound `X` = 10, and the model leg (0 until armed). Total **25**.
+* **Unknown parts:** the value of fork-choice weight, and EVM/external settlement. So the full `G_max` is **UNKNOWN** until §6 bounds
+  them.
+
+**`L_collected`:** `0.51·K`, net of the 49% return.
+* Panel=0 counts the producer only.
+* Panel=1 and the current Panel route add a seat's lock only where its FalseValid scope is proven, and seat lock values are unset. So
+  the full `L` is UNKNOWN; the producer-only `L` is a lower bound.
+
+**`C_attack`:** 1.04 (the OPV admission fee and carriers). The Panel route has no admission fee, so `C` = 0.
+
+**Exposure:**
+* 3 live claims per producer, 32 in all;
+* the reservation comes from free collateral, so none is reused (N11);
+* the unpaid reward is the escrow `R`, held until Final;
+* exit only after the 200-DAA liability horizon and the 30-DAA exit delay;
+* a reorg restores the state (N13).
+
+**`EV` per class and profile** (worst case, `p_req = (G − C)/(G + L)`):
+
+| Class (MEAS row) | `L` | `p_req` | `p_min` | `EV`, known `G` | `EV`, full `G` |
+|---|---|---|---|---|---|
+| Qwen2.5-0.5B, P ≤ 32 (N1, N5) | 510 | > 4.48% | UNKNOWN | UNKNOWN | UNKNOWN |
+| Qwen2.5-0.5B, gather lie (N4) | 510 | > 4.48% | 0 (M) | **FAIL** | UNKNOWN |
+| 0.8B / 1B / 1.5B / 1.7B (not run) | 510 | > 4.48% | UNKNOWN | UNKNOWN | UNKNOWN |
+| 9B-8k, 40,157 reservation (N2) | 20,480 | > 0.12% | 0 | **FAIL** | UNKNOWN |
+| any closed model (N3) | 510 | > 4.48% | 0 | **FAIL** | UNKNOWN |
+
+The rows are identical for Panel=0, Panel=1 and the current Panel route. Their difference is only the UNKNOWN seat term in `L`, which
+can only lower `p_req`.
+
+**Per bond and window (ADR-0176).** `G_W ≤ λ·R_max(C, W) + X_W` and `L_W ≤ 0.51·min(ΣK, C)`. For a 13,000-BILI bond, with `r` still
+unset POLICY:
+
+| `r` per 1,000 BILI per W | `p_req` | `EV` |
+|---|---|---|
+| 4 | > 0.78% | UNKNOWN (`p_min` UNKNOWN) |
+| 40 | > 7.3% | UNKNOWN |
+
+**T4: UNKNOWN for every class and profile, and FAIL wherever `p_min = 0`** (N2, N3, N4).
+
+### 5e.2 §4 E: the five economic attacks (executable, model §13)
+
+M\*-49 and the held demander share are both adopted.
+
+| Attack | Result | Verdict |
+|---|---|---|
+| self-Sybil fake detection against an honest claim | dismissed; the filer pays the court-scaled fee (−0.1) | **PASS** |
+| self-fraud with self-detection (bounty farm) | −511 (−51% − fee) | **PASS** |
+| seal the proof first | the drawn honest sealer takes 40 first, the liar's seal 450; the coalition keeps ≤ 49% | **PASS** |
+| dilute verifier bounties | slots drawn by stake (T2) are Sybil-neutral; non-drawn filers are paid nothing | **PASS** |
+| dilute DA-default demanders | the held share is paid only without a conviction and split equally: a Sybil still halves an honest demander's share, but drawn demands are paid by `F` | **PASS** for verifier pay; residual named |
+| replace seals repeatedly | S1: each re-seal forfeits `d` at its own position | **PASS** |
+| one deposit, many attempts | F-ECON-3 (MEASURED): `d` = 1 < `d*` = 28.6; S3/S4 not built | **FAIL** (interim); UNKNOWN once built |
+
+**T5: the honest watcher's books, including fault-free periods.**
+
+MEAS's costs for Qwen2.5-0.5B at P = 3:
+* the check: 154 CPU-s, times 1.35 for wall time;
+* 180 MB fetched;
+* a 31 KB filing;
+* 10.4 GB RAM.
+
+**`F_min` per check** = check + fetch + carrier + demand burn + acquisition / 100. The CPU price is ASSUMED, since no market price
+exists:
+
+| CPU price (BILI per hour) | `F_min` |
+|---|---|
+| 0.1 | 0.81 |
+| 1 | 0.86 |
+| 10 | 1.38 |
+
+**In a fault-free period a fee of exactly `F_min` loses money.** It leaves the watcher stake's capital cost unpaid (this is C9). The fee
+needs a stake-capital term:
+
+```text
+F ≥ F_min + r_w · S_pool / (q·m·N)
+```
+
+At 0.001 draws per BILI of stake that is 1.36, against 0.86. With that term, the books are ≥ 0 in every epoch. **PASS** by parameter;
+the values stay **UNKNOWN** until MEAS P2 and a price exist.
+
+**Sybil farming of the fee:**
+
+| Route | Result | Verdict |
+|---|---|---|
+| splitting stake | draws are proportional to stake | **PASS** |
+| self-posted jobs | the coalition gets back only `σ·m·F`, losing 8.38 per checked claim at `σ` = 0.25 | **PASS** |
+| attesting without checking (T6) | earns `F` at almost no cost | **UNKNOWN** |
+
+The verifier cannot work at all for a closed model, or past MEAS's time, RAM or wire limits. Those are C3–C5 below.
+
+### 5e.3 §5 counter-examples B and C
+
+| Id | Case | Verdict |
+|---|---|---|
+| B1 | post-Final reward kept: a post-Final conviction does not claw back `R`; counted in `G` | PASS (accounted) |
+| B2 | exit before the liability ends: blocked (N11) | PASS (cited) |
+| B3 | collateral reused across concurrent claims or at `d + W`: BUDGET reward paths H-1..H-5 unconnected | UNKNOWN |
+| B4 | EVM, bridge or market export before Final: no §6 bound | UNKNOWN |
+| B5 | fork-choice weight gained before conviction: weight's value unknown | UNKNOWN |
+| B6 | model leg paid at Final, then a post-Final conviction: in `G` | PASS (accounted) |
+| B7 | the 49% self-return across default and conviction: one pool, held share | PASS |
+| C1 | no pay for checking honest claims (M0) | PASS under M\*-49; UNKNOWN until built |
+| C2 | the liar's earliest seal takes the bounty | PASS under drawn-first; UNKNOWN until built |
+| C3 | closed model (N3) | **FAIL** |
+| C4 | cannot check in time or in RAM (N2) | **FAIL** |
+| C5 | evidence over the wire ceiling (N4, gather lie) | **FAIL** |
+| C6 | served-demand burn on a drawn demand | UNKNOWN until built |
+| C7 | pool capture (the coalition's share `σ` of a model's pool) | UNKNOWN |
+| C8 | lazy verifier (T6) | UNKNOWN |
+| C9 | `F = F_min` leaves the stake's capital cost unpaid in fault-free periods | FAIL at `F_min`; PASS with the `r_w` term |
+| C10 | DA load of checking every claim (149 MB/s and 117 cores at 100 claims/DAA) | PASS only with sampling (`q < 1`) |
+
+### 5e.4 §6 values the economics needs (for BUDGET)
+
+| Item | Value |
+|---|---|
+| `d + W` | 280 ≤ `W` ≤ 436 DAA at the interim terms (§5b). The liability hold `H_L` = 280 stays separate |
+| open claims per bond | ≤ `⌊C/K⌋` |
+| reward per bond per `W` | `(r + w·v_F + expected fees)/u ≤ p_min·(1 − a)·W / (H_L·λ)` (Theorem Y). With `p_min` UNKNOWN, **no `r > 0` is safe yet** |
+| maximum unsettled weight | `F_max = ⌊C·w/u⌋`, with `w·v_F` inside the same budget. `v_F` (the value of weight) is UNKNOWN: FINX and BUDGET |
+| maximum external loss | 0 before Final; after Final, ≤ 0.51 × the collateral still held for that claim's liability, less `G`'s other parts |
+| no payout before Final | every leg (escrow, model leg, Round subsidy) at Final; the bounty at conviction, from collected slash |
 
 ---
 
