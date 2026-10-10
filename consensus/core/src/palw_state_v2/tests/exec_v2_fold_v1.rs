@@ -926,6 +926,7 @@ fn executor_funds_partially_drain_with_the_market_reserve_and_the_plan_matches_t
     s.exec_v2_rewards
         .insert(root, PalwExecV2RewardRowV1 { final_daa: 101, liability_until: 101, allocation_sompi: total as u64, legs });
     s.vesting_counters.created += total;
+    s.rebuild_vesting_indices();
     // Eight old non-market payments drain at step 1b, leaving the two market keys to reserve width at 3d.
     for i in 0..10 {
         let mut bytes = [0u8; 64];
@@ -2344,6 +2345,248 @@ mod amendment_1 {
         assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Settled { .. }));
         assert!(s.exec_v2_reward_vesting_v1(&claim).unwrap().total_sompi_u128() > 4_000);
         (p, s, claim, slices, pre, delta.unwrap())
+    }
+
+    fn aggregate_params(p: &PalwStateParamsV2) -> PalwStateParamsV2 {
+        use crate::palw_aggregate_liability_v1::{PalwCapacityLiabilityV1, PalwCapacityStepV1};
+        p.clone().with_capacity_liability(Some(PalwCapacityLiabilityV1 {
+            activation: crate::config::params::ForkActivation::new(0),
+            steps: vec![PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 0 }],
+        }))
+    }
+
+    // Tests the existing conviction funnel after an actual funded composite Final. Objective court admission
+    // is a separate acceptance gate; this helper does not claim to prove a public native/kernel offence.
+    fn aggregate_exec_actor(
+        s: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        bond: PalwBondKeyV2,
+        daa: u64,
+        offence: crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1,
+    ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+        let extras = xx();
+        let mut b = TransitionBuilder::new(s, p, false, false, false, false, &extras);
+        b.aggregate_on_conviction_v1(daa, h64(0xFA17), crate::palw_offence_v1::PalwOffenceKindV1::ExecutorRefuted, &[(bond, offence)])
+            .unwrap();
+        let point = ctx(s.last_point.unwrap().blue_score + 1, daa, s.last_point.unwrap().blue_score + 1);
+        b.entries.push(PalwDeltaEntryV2::LastPoint { old: s.last_point, new: Some(point) });
+        b.state.last_point = Some(point);
+        let delta = PalwStateDeltaV2 { point, entries: b.entries };
+        let replay = apply_delta_v2(s, &delta, p).unwrap();
+        assert_eq!(replay, b.state, "actor and derived index replay are exact");
+        assert_eq!(revert_delta_v2(&replay, &delta, p).unwrap(), *s);
+        replay.assert_internal_consistency(p).unwrap();
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&replay)).unwrap();
+        let back = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(p, Some(replay.state_root())).unwrap();
+        assert_eq!(back, replay, "holds and payee index survive restart");
+        (replay, delta)
+    }
+
+    #[test]
+    fn aggregate_intent_burns_only_the_executor_own_unpaid_funds_even_after_maturity_and_is_fenced() {
+        use crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1 as O;
+        use crate::palw_vesting_v1::{PalwVestingNoteV1, palw_vesting_burned_by_delta_v1, palw_vesting_notes_of_delta_v1};
+        for latched in [false, true] {
+            let (p, mut s, claim, _, _) = funded_final(0);
+            if latched {
+                s.vesting.get_mut(&claim).unwrap().matured_at = Some(s.last_point.unwrap().daa_score);
+                s.rebuild_vesting_indices();
+            }
+            let original = s.exec_v2_rewards[&claim].clone();
+            let native = s.vesting[&claim].clone();
+            let bond = bond_key(20);
+            let own: Vec<_> = original.legs.iter().filter(|((who, _), _)| *who == bond).collect();
+            assert_eq!(own.len(), 2, "both source funds must be exercised");
+            let expected: u128 = own.iter().map(|(_, leg)| u128::from(leg.amount)).sum();
+            let daa = if latched { original.liability_until + 2 } else { s.last_point.unwrap().daa_score + 1 };
+            let (off, _) = aggregate_exec_actor(&s, &p, bond, daa, O::Contradiction { tag: 9 });
+            assert_eq!(off.exec_v2_rewards, s.exec_v2_rewards, "the dormant aggregate fence cannot burn");
+            assert_eq!(off.vesting_counters, s.vesting_counters);
+            let p = aggregate_params(&p);
+            let (after, delta) = aggregate_exec_actor(&s, &p, bond, daa, O::Contradiction { tag: 9 });
+            assert_eq!(after.vesting[&claim], native, "an unrelated conviction must keep the root producer, Panel and reserve");
+            let mut kept = original.legs.clone();
+            kept.retain(|(who, _), _| *who != bond);
+            assert_eq!(after.exec_v2_rewards[&claim].legs, kept);
+            assert_eq!(after.vesting_counters.burned - s.vesting_counters.burned, expected);
+            assert_eq!(after.bond_freezes[&bond].forfeited_sompi as u128, u128::from(s.bonds[&bond].collateral) + expected);
+            assert_eq!(palw_vesting_burned_by_delta_v1(&delta) as u128, expected);
+            assert_eq!(
+                palw_vesting_notes_of_delta_v1(&delta)
+                    .filter(|note| matches!(note,
+                PalwVestingNoteV1::ExecReward { action: PalwExecV2RewardActionV1::Forfeited { offence_id }, bond: who, .. }
+                if *offence_id == h64(0xFA17) && *who == bond))
+                    .count(),
+                2
+            );
+            let (again, _) = aggregate_exec_actor(&after, &p, bond, daa + 1, O::Contradiction { tag: 9 });
+            assert_eq!(again.vesting_counters, after.vesting_counters, "duplicate aggregate forfeiture cannot burn twice");
+            assert_eq!(again.exec_v2_rewards, after.exec_v2_rewards);
+        }
+    }
+
+    #[test]
+    fn executor_tier_freeze_holds_only_its_funds_through_restart_and_releases_at_its_lift() {
+        use crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1 as O;
+        let (p, s, claim, _, _) = funded_final(700);
+        let p = aggregate_params(&p);
+        let until = s.exec_v2_rewards[&claim].liability_until;
+        let lift = until + p.window_court();
+        let own: u128 = s.exec_v2_rewards[&claim]
+            .legs
+            .iter()
+            .filter(|((who, _), _)| *who == bond_key(20))
+            .map(|(_, leg)| u128::from(leg.amount))
+            .sum();
+        let (s, _) = aggregate_exec_actor(&s, &p, bond_key(20), until, O::Equivocation);
+        assert_eq!(s.exec_v2_reward_holds.get(&(claim, bond_key(20))), Some(&lift));
+        assert!(!s.exec_v2_reward_holds.contains_key(&(claim, bond_key(21))));
+        let word = s.last_point.unwrap().blue_score + 1;
+        let s = step(&s, &p, word, until + 1, &[]).unwrap().0;
+        let s = step(&s, &p, word + 1, until + 2, &[]).unwrap().0;
+        assert!(s.vesting_row(&claim).is_none());
+        assert!(
+            s.exec_v2_rewards[&claim].legs.keys().all(|(who, _)| *who == bond_key(20)),
+            "other executor funds must move on their original schedule"
+        );
+        assert_eq!(s.exec_v2_rewards[&claim].total_sompi_u128(), own);
+        assert!(palw_bond_is_payee_of_unmatured_row_v1(&s, &p, &bond_key(20), lift - 1, None));
+        assert!(!palw_bond_is_payee_of_unmatured_row_v1(&s, &p, &bond_key(21), lift - 1, None));
+        let s = step(&s, &p, word + 2, lift - 1, &[]).unwrap().0;
+        assert_eq!(s.exec_v2_rewards[&claim].total_sompi_u128(), own);
+        let s = step(&s, &p, word + 3, lift, &[]).unwrap().0;
+        assert!(s.exec_v2_reward_vesting_v1(&claim).is_none());
+        assert!(s.exec_v2_reward_holds.is_empty() && s.exec_v2_reward_payees.is_empty());
+        assert_eq!(s.vesting_counters.moved, s.vesting_counters.created);
+        assert_eq!(s.vesting_counters.burned, 0);
+    }
+
+    #[test]
+    fn executor_b3_tracks_its_clocks_and_forced_native_vesting_even_below_rcore_without_rearming_queue_waiters() {
+        use crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1 as O;
+        let (p, s, claim, _, _) = funded_final(0);
+        let until = s.exec_v2_rewards[&claim].liability_until;
+        let off = p.clone().with_rcore_plus_mirrors(None, 0, Vec::new());
+        for params in [&p, &off] {
+            for who in [bond_key(20), s.vesting[&claim].producer_bond] {
+                let mut retiring = s.bonds[&who].clone();
+                retiring.status = PalwBondStatusV2::Retiring { since_daa: 0, settled_at_since: 0 };
+                assert!(palw_bond_collateral_is_locked_v6(
+                    &s,
+                    params,
+                    &who,
+                    &retiring,
+                    until,
+                    params.withdrawal_delay_daa(),
+                    None,
+                    false
+                ));
+                assert!(
+                    !palw_bond_collateral_is_locked_v6(
+                        &s,
+                        params,
+                        &who,
+                        &retiring,
+                        until + 1,
+                        params.withdrawal_delay_daa(),
+                        None,
+                        false
+                    ),
+                    "spent clocks must not lock only because a receipt waits in the payout queue"
+                );
+            }
+        }
+        // The shared second clock holds an executor after the DAA horizon, but a native latch cannot be rearmed.
+        let mut clocked = s.clone();
+        clocked.recent_anchor_daas = vec![until + 1];
+        assert!(palw_bond_is_payee_of_unmatured_row_v1(&clocked, &p, &bond_key(20), until + 1, Some(100)));
+        assert!(
+            !palw_bond_is_payee_of_unmatured_row_v1(&clocked, &p, &bond_key(20), until + 1 + 2 * p.window_court(), Some(100)),
+            "the shared clock has a finite per-obligation bound"
+        );
+        clocked.vesting.get_mut(&claim).unwrap().matured_at = Some(until + 1);
+        clocked.rebuild_vesting_indices();
+        assert!(!palw_bond_is_payee_of_unmatured_row_v1(&clocked, &p, &bond_key(20), until + 1, Some(100)));
+        let p = aggregate_params(&p);
+        let (s, _) = aggregate_exec_actor(&s, &p, bond_key(20), until + 2, O::Equivocation);
+        assert!(s.exec_v2_reward_holds.is_empty(), "a tier conviction cannot rearm already matured executor funds");
+    }
+
+    #[test]
+    fn a_later_final_cannot_recreate_a_forfeited_executor_fee_or_slice_reward() {
+        use crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1 as O;
+        let (p, mut s, claim, slices, pre) = session_with(1_000_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+        let p = aggregate_params(&p);
+        fund_jobs(&mut s, &pre, &slices, 1_000);
+        let own = bond_key(20);
+        let collateral = s.bonds[&own].collateral;
+        let (s, _) = aggregate_exec_actor(&s, &p, own, 110, O::Contradiction { tag: 9 });
+        assert_eq!(s.bond_freezes[&own].forfeited_sompi, collateral);
+        let s = license(&p, &s, claim, 45, 111);
+        let s = carry_all(&p, &s, &slices);
+        let s = kernel_block(&p, &s, 60, 130, slices.iter().map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect());
+        let (s, delta) = run_to_terminal_with_delta(&p, s, claim, 70, 131);
+        assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Settled { .. }));
+        assert!(matches!(s.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+        assert!(s.exec_v2_rewards[&claim].legs.keys().all(|(who, _)| *who != own));
+        assert!(s.exec_v2_reward_hold_after_v1(&claim, &own).is_none());
+        let burned = crate::palw_vesting_v1::palw_vesting_burned_by_delta_v1(&delta.unwrap());
+        assert!(burned > 1_000, "both a debited fee and the later native slice leg are forfeited");
+        assert_eq!(s.bond_freezes[&own].forfeited_sompi, collateral + burned);
+        assert_eq!(s.vesting_counters.burned, u128::from(burned));
+        crate::palw_vesting_v1::palw_vesting_counters_consistent_v1(&s).unwrap();
+    }
+
+    #[test]
+    fn executor_hold_tail_is_optional_and_restoration_rejects_orphan_duplicate_and_truncated_holds() {
+        use crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1 as O;
+        let (p, s, claim, _, _) = funded_final(0);
+        let old_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
+        let old = borsh::from_slice::<PalwStateCarriageV2>(&old_bytes).unwrap();
+        assert!(old.exec_v2_reward_holds.is_empty(), "the previous F0 layout needs no actor tail");
+        assert_eq!(old.into_state(&p, Some(s.state_root())).unwrap(), s);
+        let p = aggregate_params(&p);
+        let (s, _) = aggregate_exec_actor(&s, &p, bond_key(20), s.exec_v2_rewards[&claim].liability_until, O::Equivocation);
+        let carriage = PalwStateCarriageV2::from_state(&s);
+        let bytes = borsh::to_vec(&carriage).unwrap();
+        let tail = borsh::to_vec(&s.exec_v2_reward_holds).unwrap();
+        assert_eq!(bytes[bytes.len() - tail.len() - 1], PALW_CARRIAGE_EXEC_V2_REWARD_HOLDS_TAIL_V1);
+        assert_eq!(PALW_CARRIAGE_EXEC_V2_REWARD_HOLDS_TAIL_V1, 0xF1);
+        let mut twice = bytes.clone();
+        twice.push(PALW_CARRIAGE_EXEC_V2_REWARD_HOLDS_TAIL_V1);
+        twice.extend_from_slice(&tail);
+        assert!(borsh::from_slice::<PalwStateCarriageV2>(&twice).is_err());
+        assert!(borsh::from_slice::<PalwStateCarriageV2>(&bytes[..bytes.len() - 1]).is_err());
+        let non_executor = *s
+            .bonds
+            .keys()
+            .find(|bond| !s.exec_v2_rewards[&claim].legs.keys().any(|(who, _)| who == *bond))
+            .expect("a registered bond with no executor fund");
+        for who in [non_executor, bond_key(99)] {
+            let mut bad = carriage.clone();
+            bad.exec_v2_reward_holds.insert((claim, who), u64::MAX);
+            assert!(bad.into_state(&p, None).is_err(), "a hold without this actor's executor fund must fail restore");
+        }
+        let mut shortened = carriage.clone();
+        shortened.exec_v2_reward_holds.clear();
+        assert!(
+            shortened.into_state(&p, Some(s.state_root())).is_err(),
+            "omitting a rooted extension cannot pass the committed snapshot root"
+        );
+        let mut bad = carriage.clone();
+        bad.exec_v2_reward_holds.insert((claim, bond_key(20)), s.exec_v2_rewards[&claim].liability_until);
+        assert!(bad.into_state(&p, None).is_err());
+        let mut phantom = carriage;
+        phantom.exec_v2_reward_holds.insert((h64(0xFA11), bond_key(20)), u64::MAX);
+        assert!(phantom.into_state(&p, None).is_err());
+        let action = PalwExecV2RewardActionV1::Forfeited { offence_id: h64(0xFA17) };
+        assert_eq!(borsh::to_vec(&action).unwrap()[0], 3);
+        for (tag, old) in [PalwExecV2RewardActionV1::Created, PalwExecV2RewardActionV1::Moved, PalwExecV2RewardActionV1::Burned]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(borsh::to_vec(&old).unwrap(), vec![tag as u8]);
+        }
     }
 
     #[test]

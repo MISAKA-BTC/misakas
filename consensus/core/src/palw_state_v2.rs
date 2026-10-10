@@ -4049,7 +4049,7 @@ pub fn palw_bond_is_payee_of_unmatured_row_v1(
             return true;
         }
         if escaped.is_none() || now_daa >= expiry_daa.saturating_add(window_court.saturating_mul(2)) {
-            return false;
+            break;
         }
         // A payee entry without its row is an invariant break; holding is the safe direction.
         let settled_at_final = state.vesting.get(&claim_id).map(|row| row.settled_at_final).unwrap_or(u64::MAX);
@@ -4057,7 +4057,7 @@ pub fn palw_bond_is_payee_of_unmatured_row_v1(
             return true;
         }
     }
-    false
+    palw_exec_v2_rewards_v1::bond_unmatured(state, params, key, now_daa, raw_depth, false)
 }
 
 pub fn palw_bond_collateral_is_locked_v2(bond: &PalwBondStateV2, now_daa: u64, withdrawal_delay_daa: u64) -> bool {
@@ -4822,6 +4822,8 @@ pub fn palw_bond_collateral_is_locked_v6(
             && palw_bond_committed_v1(state, key, now_daa, escaped, window_court) > state.registration_exposure(key))
         || (rcore && palw_bond_has_open_court_v1(state, key))
         || (rcore && palw_bond_is_payee_of_unmatured_row_v1(state, params, key, now_daa, raw_depth))
+        // EXEC forces vesting even below R-core+; its actual payees keep their collectible collateral.
+        || (!rcore && palw_exec_v2_rewards_v1::bond_unmatured(state, params, key, now_daa, raw_depth, true))
         // ADR-0160 lane liab (AG-3): a frozen bond's exit is held — for good once forfeited, until the
         // freeze lifts otherwise. The map is empty below `Params::palw_capacity_aggregate_liability`.
         || crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, key)
@@ -11534,6 +11536,10 @@ pub struct PalwChainStateV2 {
     exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1,
     /// Additional EXEC executor reward legs, separate from Panel seat penalties and optional in root/carriage.
     exec_v2_rewards: BTreeMap<Hash64, crate::palw_work_slice_v2::PalwExecV2RewardRowV1>,
+    // Actor-specific tier-freeze extensions; independent of other payees on the same root.
+    exec_v2_reward_holds: BTreeMap<(Hash64, PalwBondKeyV2), u64>,
+    // Derived from additional reward legs; not rooted or carried.
+    exec_v2_reward_payees: BTreeMap<PalwBondKeyV2, BTreeSet<Hash64>>,
     /// **RFC-0006: each IR class's layer-shard plan**, declared once by its registrant (`TirShardPlanDeclared`), with the
     /// cell shares derived at the declaration. Enters the root and the carriage (tail `0xE1`) only when non-empty —
     /// nothing can be written below `Params::palw_tir_shard_v1` — so a dormant network roots exactly as before.
@@ -12080,6 +12086,8 @@ impl PalwChainStateV2 {
             vertex: crate::palw_vertex_v1::PalwVertexStateV1::default(),
             exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1::default(),
             exec_v2_rewards: BTreeMap::new(),
+            exec_v2_reward_holds: BTreeMap::new(),
+            exec_v2_reward_payees: BTreeMap::new(),
             tir_shard_plans: BTreeMap::new(),
             tir_shard_claims: BTreeMap::new(),
             floor_state: None,
@@ -14165,12 +14173,18 @@ impl PalwChainStateV2 {
         }
     }
 
-    /// Rebuild the four vesting indexes from `vesting` (import; phase2-plan I-7).
+    /// Rebuild the four native vesting indexes and the additional EXEC payee index (import; phase2-plan I-7).
     fn rebuild_vesting_indices(&mut self) {
         self.vesting_order.clear();
         self.vesting_unlatched.clear();
         self.vesting_unlatched_by_settled.clear();
         self.vesting_payees.clear();
+        self.exec_v2_reward_payees.clear();
+        for (id, row) in &self.exec_v2_rewards {
+            for (bond, _) in row.legs.keys() {
+                self.exec_v2_reward_payees.entry(*bond).or_default().insert(*id);
+            }
+        }
         let rows: Vec<crate::palw_vesting_v1::PalwVestingRowV1> = self.vesting.values().cloned().collect();
         for row in &rows {
             self.vesting_index_insert(row);
@@ -14883,6 +14897,10 @@ impl PalwChainStateV2 {
         if !self.exec_v2_rewards.is_empty() {
             state.update(b"exec_v2_reward_vesting/v1");
             state.update(collection_root(b"exec_v2_reward_vesting", &self.exec_v2_rewards).as_byte_slice());
+        }
+        if !self.exec_v2_reward_holds.is_empty() {
+            state.update(b"exec_v2_reward_holds/v1");
+            state.update(collection_root(b"exec_v2_reward_holds", &self.exec_v2_reward_holds).as_byte_slice());
         }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -16897,6 +16915,7 @@ pub const PALW_EXEC_V2_TABLE_SLICES_V1: u8 = 2;
 pub const PALW_EXEC_V2_TABLE_JOBS_V1: u8 = 3;
 pub const PALW_EXEC_V2_TABLE_ANCHORED_V1: u8 = 4;
 pub const PALW_EXEC_V2_TABLE_REWARDS_V1: u8 = 5;
+pub const PALW_EXEC_V2_TABLE_REWARD_HOLDS_V1: u8 = 6;
 
 /// The full effect one block application had on the state, in application order. Applying it to
 /// the same parent reproduces the transition's output exactly ([`apply_delta_v2`]); reverting it
@@ -22390,6 +22409,7 @@ impl<'a> TransitionBuilder<'a> {
                 let freeze = PalwBondFreezeV1 { since_daa: now_daa, offence_key: key, forfeited_sompi: prior_forfeited, final_: false };
                 self.write_bond_freeze_v1(*bond, Some(freeze));
                 if let Some(lift) = freeze.lifts_at_v1(self.params.window_court) {
+                    palw_exec_v2_rewards_v1::freeze_bond(self, *bond, now_daa, lift);
                     self.rekey_frozen_rows_v1(*bond, lift);
                 }
             }
@@ -22426,6 +22446,8 @@ impl<'a> TransitionBuilder<'a> {
     ///    whole row with `burn_vesting_row` took the honest seats' 20% pool share, 640.17 MSK per
     ///    floor row). The row stands, so a later conviction binding that claim still finds it (S3).
     ///
+    /// Additional EXEC slice/fee funds are included by their payee index, independently of Panel seats;
+    /// only the forfeited actor's unpaid funds burn, with their original funding role and offence key.
     /// So A-I1: what it takes is at most the posted collateral plus the bond's own unmatured legs.
     fn forfeit_bond_v1(
         &mut self,
@@ -22463,6 +22485,7 @@ impl<'a> TransitionBuilder<'a> {
         for id in sat {
             taken = taken.saturating_add(self.burn_vesting_seat_legs_v1(id, bond, key)?);
         }
+        taken = taken.saturating_add(palw_exec_v2_rewards_v1::forfeit_bond(self, bond, key)?);
         Ok(taken)
     }
 
@@ -42055,6 +42078,7 @@ pub struct PalwStateCarriageV2 {
     /// RFC-0008 v2: the work-slice ledgers in appended tail `0xEE`, present only when any table is non-empty.
     pub exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1,
     pub exec_v2_rewards: BTreeMap<Hash64, crate::palw_work_slice_v2::PalwExecV2RewardRowV1>,
+    pub exec_v2_reward_holds: BTreeMap<(Hash64, PalwBondKeyV2), u64>,
     /// RFC-0006: the layer-shard plans, in tail `0xE1` (with the claims'), present only when either is non-empty.
     pub tir_shard_plans: BTreeMap<Hash64, crate::palw_tir_shard_v1::PalwTirShardPlanV1>,
     /// RFC-0006: the per-shard claim records, in tail `0xE1`.
@@ -42413,6 +42437,7 @@ const PALW_CARRIAGE_VERTEX_TAIL_V1: u8 = 0xE4;
 /// `exec_v2_tail_is_pinned_at_0xee` pins the value.
 const PALW_CARRIAGE_EXEC_V2_TAIL_V1: u8 = 0xEE;
 const PALW_CARRIAGE_EXEC_V2_REWARDS_TAIL_V1: u8 = 0xF0;
+const PALW_CARRIAGE_EXEC_V2_REWARD_HOLDS_TAIL_V1: u8 = 0xF1;
 
 /// **RFC-0006's tail** (`tir_shard_plans`, then `tir_shard_claims`): `0xE1`, the next byte after the court windows'.
 /// Present only when either table is non-empty, which nothing can make so below `Params::palw_tir_shard_v1`.
@@ -42782,6 +42807,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_EXEC_V2_REWARDS_TAIL_V1.serialize(writer)?;
             self.exec_v2_rewards.serialize(writer)?;
         }
+        if !self.exec_v2_reward_holds.is_empty() {
+            PALW_CARRIAGE_EXEC_V2_REWARD_HOLDS_TAIL_V1.serialize(writer)?;
+            self.exec_v2_reward_holds.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -42978,6 +43007,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_exec_v2 = false;
         let mut exec_v2_rewards = BTreeMap::new();
         let mut seen_exec_v2_rewards = false;
+        let mut exec_v2_reward_holds = BTreeMap::new();
+        let mut seen_exec_v2_reward_holds = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -43241,6 +43272,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_exec_v2_rewards = true;
                     exec_v2_rewards = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_EXEC_V2_REWARD_HOLDS_TAIL_V1 if !seen_exec_v2_reward_holds => {
+                    seen_exec_v2_reward_holds = true;
+                    exec_v2_reward_holds = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_SEAT_ROOT_READINESS_TAIL_V1 if !seen_seat_root_readiness => {
                     seen_seat_root_readiness = true;
                     seat_root_readiness = BTreeMap::deserialize_reader(reader)?;
@@ -43403,6 +43438,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             bond_budget,
             exec_v2,
             exec_v2_rewards,
+            exec_v2_reward_holds,
         })
     }
 }
@@ -43523,6 +43559,7 @@ impl PalwStateCarriageV2 {
             bond_budget: state.bond_budget.clone(),
             exec_v2: state.exec_v2.clone(),
             exec_v2_rewards: state.exec_v2_rewards.clone(),
+            exec_v2_reward_holds: state.exec_v2_reward_holds.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -43746,6 +43783,8 @@ impl PalwStateCarriageV2 {
             bond_budget: self.bond_budget,
             exec_v2: self.exec_v2,
             exec_v2_rewards: self.exec_v2_rewards,
+            exec_v2_reward_holds: self.exec_v2_reward_holds,
+            exec_v2_reward_payees: BTreeMap::new(),
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -61972,6 +62011,7 @@ pub(crate) mod tests {
             // RFC-0008 v2: one Some-only block of three, empty here.
             exec_v2: _,
             exec_v2_rewards: _,
+            exec_v2_reward_holds: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 

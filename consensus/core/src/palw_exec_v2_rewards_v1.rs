@@ -54,10 +54,149 @@ impl PalwChainStateV2 {
         self.exec_v2_rewards.iter()
     }
 
+    /// This executor's earliest DAA release (shared native clocks can still delay it).
+    pub fn exec_v2_reward_hold_after_v1(&self, root: &Hash64, bond: &PalwBondKeyV2) -> Option<u64> {
+        let row = self.exec_v2_rewards.get(root)?;
+        row.legs
+            .keys()
+            .any(|(payee, _)| payee == bond)
+            .then(|| row.liability_until.saturating_add(1).max(self.exec_v2_reward_holds.get(&(*root, *bond)).copied().unwrap_or(0)))
+    }
+
     /// Additional new keys ahead of native vesting, after this block's drain (or its next-block simulation).
     pub fn exec_v2_reward_release_keys_v1(&self, daa: u64, after_drain: bool) -> usize {
         release_plan(self, daa, after_drain).1
     }
+}
+
+/// Maintain the derived actor index on the fold and on delta replay.
+pub(super) fn index_replace(state: &mut PalwChainStateV2, root: Hash64, old: Option<&Row>, new: Option<&Row>) {
+    if let Some(old) = old {
+        for (bond, _) in old.legs.keys() {
+            if let Some(roots) = state.exec_v2_reward_payees.get_mut(bond) {
+                roots.remove(&root);
+                if roots.is_empty() {
+                    state.exec_v2_reward_payees.remove(bond);
+                }
+            }
+        }
+    }
+    if let Some(new) = new {
+        for (bond, _) in new.legs.keys() {
+            state.exec_v2_reward_payees.entry(*bond).or_default().insert(root);
+        }
+    }
+}
+
+/// B-3 uses the obligation clocks, not DA/halt/payout-queue presence. A spent native latch is irreversible.
+fn native_unmatured(state: &PalwChainStateV2, params: &PalwStateParamsV2, root: &Hash64, daa: u64, raw: Option<u64>) -> bool {
+    let Some(row) = state.vesting.get(root) else { return false };
+    row.matured_at.is_none()
+        && crate::palw_vesting_v1::palw_vesting_lock_is_live_v1(
+            row.expiry_daa,
+            row.settled_at_final,
+            daa,
+            state.settled_attempt_finals,
+            palw_second_clock_depth_v1(raw, &state.recent_anchor_daas, daa, params.window_court()),
+            params.window_court(),
+        )
+}
+
+fn actor_unmatured(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    root: &Hash64,
+    bond: &PalwBondKeyV2,
+    daa: u64,
+    raw: Option<u64>,
+) -> bool {
+    let Some(row) = state.exec_v2_rewards.get(root) else { return true }; // An index without its receipt must hold safely.
+    daa <= row.liability_until
+        || state.exec_v2_reward_holds.get(&(*root, *bond)).is_some_and(|after| daa < *after)
+        || native_unmatured(state, params, root, daa, raw)
+}
+
+/// With R-core+ off, also retain the native payees of actual forced EXEC vesting (including empty receipts).
+pub(super) fn bond_unmatured(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    daa: u64,
+    raw: Option<u64>,
+    include_native: bool,
+) -> bool {
+    if state.exec_v2_rewards.is_empty() {
+        return false;
+    }
+    state
+        .exec_v2_reward_payees
+        .get(bond)
+        .is_some_and(|roots| roots.iter().any(|root| actor_unmatured(state, params, root, bond, daa, raw)))
+        || (include_native
+            && state
+                .vesting_unlatched_of_payee(bond)
+                .any(|(_, root)| state.exec_v2_rewards.contains_key(&root) && native_unmatured(state, params, &root, daa, raw)))
+}
+
+/// Tier-freeze only still-unmatured executor funds. Other executors on this root keep their own clocks.
+pub(super) fn freeze_bond(builder: &mut TransitionBuilder<'_>, bond: PalwBondKeyV2, daa: u64, lift: u64) {
+    let raw = palw_settled_anchor_depth_v1(builder.extras);
+    let roots: Vec<_> = builder.state.exec_v2_reward_payees.get(&bond).into_iter().flatten().copied().collect();
+    for root in roots {
+        let row = &builder.state.exec_v2_rewards[&root];
+        let after =
+            row.liability_until.saturating_add(1).max(builder.state.exec_v2_reward_holds.get(&(root, bond)).copied().unwrap_or(0));
+        if lift > after && actor_unmatured(&builder.state, builder.params, &root, &bond, daa, raw) {
+            builder.write_exec_reward_hold((root, bond), Some(lift));
+        }
+    }
+}
+
+fn burn_actor(
+    builder: &mut TransitionBuilder<'_>,
+    root: Hash64,
+    bond: PalwBondKeyV2,
+    action: Action,
+) -> Result<u64, PalwStateV2Error> {
+    let Some(mut row) = builder.state.exec_v2_rewards.get(&root).cloned() else { return Ok(0) };
+    let own: Vec<_> = row.legs.iter().filter(|((payee, _), _)| *payee == bond).map(|(who, leg)| (*who, *leg)).collect();
+    let mut taken = 0u64;
+    let mut c = builder.state.vesting_counters;
+    for (who, payout) in own {
+        taken = taken.checked_add(payout.amount).ok_or(PalwStateV2Error::Overflow("EXEC forfeiture"))?;
+        c.burned = c.burned.checked_add(u128::from(payout.amount)).ok_or(PalwStateV2Error::Overflow("EXEC vesting burned"))?;
+        row.legs.remove(&who);
+        builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ExecReward {
+            claim_id: root,
+            bond,
+            fund: who.1,
+            action,
+            payout,
+        });
+    }
+    // During Final the kernel fee is credited before the native row exists. Preserve the allocation receipt
+    // so a forfeited fee cannot erase the later slice/native accounting in this same atomic settlement.
+    let final_in_progress = builder.state.claims.get(&root).is_some_and(|claim| !claim.phase.is_terminal());
+    builder.write_exec_reward(
+        root,
+        if row.legs.is_empty() && !builder.state.vesting.contains_key(&root) && !final_in_progress { None } else { Some(row) },
+    );
+    builder.write_vesting_counters(c);
+    Ok(taken)
+}
+
+/// AG-2 burns every unpaid fund of this actor, including spent clocks waiting for queue room, exactly once.
+pub(super) fn forfeit_bond(
+    builder: &mut TransitionBuilder<'_>,
+    bond: PalwBondKeyV2,
+    offence_id: Hash64,
+) -> Result<u64, PalwStateV2Error> {
+    let roots: Vec<_> = builder.state.exec_v2_reward_payees.get(&bond).into_iter().flatten().copied().collect();
+    let mut taken = 0u64;
+    for root in roots {
+        taken = taken.saturating_add(burn_actor(builder, root, bond, Action::Forfeited { offence_id })?);
+    }
+    Ok(taken)
 }
 
 pub(super) fn start(builder: &mut TransitionBuilder<'_>, root: Hash64, allocation: u64, daa: u64) -> Result<(), PalwStateV2Error> {
@@ -106,6 +245,20 @@ pub(super) fn add(
         action: Action::Created,
         payout: PalwPayoutV2 { payload, amount },
     });
+    if let Some(freeze) = builder.state.bond_freezes.get(&bond).copied() {
+        if freeze.final_ {
+            let taken = burn_actor(builder, root, bond, Action::Forfeited { offence_id: freeze.offence_key })?;
+            builder.write_bond_freeze_v1(
+                bond,
+                Some(crate::palw_aggregate_liability_v1::PalwBondFreezeV1 {
+                    forfeited_sompi: freeze.forfeited_sompi.saturating_add(taken),
+                    ..freeze
+                }),
+            );
+        } else if let Some(lift) = freeze.lifts_at_v1(builder.params.window_court()) {
+            freeze_bond(builder, bond, builder.state.exec_v2_rewards[&root].final_daa, lift);
+        }
+    }
     Ok(())
 }
 
@@ -165,6 +318,9 @@ fn release_plan(state: &PalwChainStateV2, daa: u64, after_drain: bool) -> (Vec<L
     let mut out = Vec::new();
     for (id, row) in ready {
         for (who, leg) in &row.legs {
+            if state.exec_v2_reward_holds.get(&(*id, who.0)).is_some_and(|after| daa < *after) {
+                continue;
+            }
             let payout_key = key(who.1, &leg.payload);
             if !queued.contains_key(&payout_key) && !fresh.contains(&payout_key) {
                 if fresh.len() >= width {
@@ -271,7 +427,11 @@ pub(super) fn consistent(state: &PalwChainStateV2, params: &PalwStateParamsV2) -
     if state.exec_v2_retained_slots_v1() > crate::palw_work_slice_v2::PALW_EXEC_V2_MAX_OPEN_ROOTS {
         return Err(bad("too many roots"));
     }
+    let mut payees: BTreeMap<PalwBondKeyV2, BTreeSet<Hash64>> = BTreeMap::new();
     for (id, row) in &state.exec_v2_rewards {
+        for (bond, _) in row.legs.keys() {
+            payees.entry(*bond).or_default().insert(*id);
+        }
         let native_receipt = row.legs.is_empty() && state.vesting.contains_key(id);
         if (row.legs.is_empty()
             && !state.vesting.contains_key(id)
@@ -307,6 +467,15 @@ pub(super) fn consistent(state: &PalwChainStateV2, params: &PalwStateParamsV2) -
             {
                 return Err(bad("native and additional vesting disagree"));
             }
+        }
+    }
+    if payees != state.exec_v2_reward_payees {
+        return Err(bad("payee index disagrees"));
+    }
+    for ((root, bond), after) in &state.exec_v2_reward_holds {
+        let Some(row) = state.exec_v2_rewards.get(root) else { return Err(bad("actor hold has no receipt")) };
+        if !row.legs.keys().any(|(payee, _)| payee == bond) || *after <= row.liability_until.saturating_add(1) {
+            return Err(bad("actor hold has no fund or extension"));
         }
     }
     Ok(())

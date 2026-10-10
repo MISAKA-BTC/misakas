@@ -535,6 +535,10 @@ pub enum PalwExecV2RewardActionV1 {
     Created,
     Moved,
     Burned,
+    /// Aggregate intent forfeiture of this payee; does not invalidate the unrelated root.
+    Forfeited {
+        offence_id: Hash64,
+    },
 }
 
 /// The additional executor legs of one settled root, with payee payloads frozen at Final.

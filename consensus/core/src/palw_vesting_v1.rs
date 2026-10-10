@@ -843,9 +843,13 @@ pub fn palw_vesting_burned_by_delta_v1(delta: &PalwStateDeltaV2) -> u64 {
         | PalwVestingNoteV1::ShareBurned { sompi, .. }
         | PalwVestingNoteV1::ProducerLegBurned { sompi, .. } => sum.saturating_add(*sompi),
         PalwVestingNoteV1::ExecDependencyBurned { sompi, .. } => sum.saturating_add(*sompi),
-        PalwVestingNoteV1::ExecReward { action: crate::palw_work_slice_v2::PalwExecV2RewardActionV1::Burned, payout, .. } => {
-            sum.saturating_add(payout.amount)
-        }
+        PalwVestingNoteV1::ExecReward {
+            action:
+                crate::palw_work_slice_v2::PalwExecV2RewardActionV1::Burned
+                | crate::palw_work_slice_v2::PalwExecV2RewardActionV1::Forfeited { .. },
+            payout,
+            ..
+        } => sum.saturating_add(payout.amount),
         _ => sum,
     })
 }

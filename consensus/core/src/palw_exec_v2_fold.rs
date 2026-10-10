@@ -565,7 +565,26 @@ impl TransitionBuilder<'_> {
     }
 
     pub(super) fn write_exec_reward(&mut self, key: Hash64, new: Option<crate::palw_work_slice_v2::PalwExecV2RewardRowV1>) {
+        let old = self.state.exec_v2_rewards.get(&key).cloned();
+        if let Some(previous) = &old {
+            let removed: BTreeSet<_> = previous
+                .legs
+                .keys()
+                .map(|(bond, _)| *bond)
+                .filter(|bond| new.as_ref().is_none_or(|row| !row.legs.keys().any(|(who, _)| who == bond)))
+                .collect();
+            for bond in removed {
+                if self.state.exec_v2_reward_holds.contains_key(&(key, bond)) {
+                    self.write_exec_reward_hold((key, bond), None);
+                }
+            }
+        }
+        super::palw_exec_v2_rewards_v1::index_replace(&mut self.state, key, old.as_ref(), new.as_ref());
         self.write_exec_v2_row(PALW_EXEC_V2_TABLE_REWARDS_V1, key, new, |s| &mut s.exec_v2_rewards);
+    }
+
+    pub(super) fn write_exec_reward_hold(&mut self, key: (Hash64, PalwBondKeyV2), new: Option<u64>) {
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_REWARD_HOLDS_V1, key, new, |s| &mut s.exec_v2_reward_holds);
     }
 }
 
@@ -616,7 +635,16 @@ pub(super) fn apply_exec_v2_row_v1(
         PALW_EXEC_V2_TABLE_SLICES_V1 => swap(&mut state.exec_v2.slices, key, old, new, revert),
         PALW_EXEC_V2_TABLE_JOBS_V1 => swap(&mut state.exec_v2.jobs, key, old, new, revert),
         PALW_EXEC_V2_TABLE_ANCHORED_V1 => swap(&mut state.exec_v2.anchored, key, old, new, revert),
-        PALW_EXEC_V2_TABLE_REWARDS_V1 => swap(&mut state.exec_v2_rewards, key, old, new, revert),
+        PALW_EXEC_V2_TABLE_REWARDS_V1 => {
+            let id: Hash64 =
+                borsh::from_slice(key).map_err(|_| PalwStateV2Error::DeltaMismatch("an EXEC reward key does not decode"))?;
+            let previous = state.exec_v2_rewards.get(&id).cloned();
+            swap(&mut state.exec_v2_rewards, key, old, new, revert)?;
+            let installed = state.exec_v2_rewards.get(&id).cloned();
+            super::palw_exec_v2_rewards_v1::index_replace(state, id, previous.as_ref(), installed.as_ref());
+            Ok(())
+        }
+        PALW_EXEC_V2_TABLE_REWARD_HOLDS_V1 => swap(&mut state.exec_v2_reward_holds, key, old, new, revert),
         _ => Err(PalwStateV2Error::DeltaMismatch("an exec v2 row names no table")),
     }
 }

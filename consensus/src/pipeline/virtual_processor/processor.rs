@@ -6680,7 +6680,8 @@ impl VirtualStateProcessor {
     /// `palw_bond_collateral_is_locked_v6` with the RAW second-clock depth (`palw_settled_anchor_depth_at`)
     /// — v6 computes the liveness escape itself from the state's ring and the params' court window,
     /// which is exactly what `palw_second_clock_depth_at` computed here before, and adds the accuser
-    /// and vesting-payee clauses past `palw_rcore_plus`. Below that fence it is v5, byte for byte. A
+    /// and vesting-payee clauses past `palw_rcore_plus`. Actual forced EXEC vesting also holds its
+    /// payees below that fence; without EXEC receipts the old v5 rule remains byte-identical. A
     /// node with no state params keeps v5 with the unbounded second-clock hold (fail closed), as before.
     fn palw_v2_bond_is_locked(
         &self,

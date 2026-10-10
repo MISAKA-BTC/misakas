@@ -377,3 +377,57 @@ async fn p2_t23_fence_off_twin_no_row_holds_a_bond_below_rcore_plus() {
         g.every_site_answers(case.name, &state, case.now, false);
     }
 }
+
+/// A restored closed EXEC receipt holds both funding roles at every actual UTXO caller until its actor lift,
+/// including below R-core+. This planted receipt proves the reader/gate connection, not a funded node Final
+/// or public court proof (the funded fold and prosecution gates are verified separately).
+#[tokio::test]
+async fn p2_exec_actor_holds_reach_block_burn_mempool_and_wallet_after_carriage_restore() {
+    use kaspa_consensus_core::palw_work_slice_v2::{PalwExecV2RewardFundV1 as Fund, PalwExecV2RewardRowV1};
+    for armed in [true, false] {
+        let g = gate(armed).await;
+        let lift = g.expiry() + 10;
+        let case = Case {
+            name: "EXEC actor lift",
+            now: lift - 1,
+            ring: vec![lift - 1],
+            licences_met: true,
+            latched: false,
+            halted: false,
+            held: true,
+        };
+        let bare = g.state(&case, false);
+        g.every_site_answers("no EXEC receipt", &bare, case.now, false);
+        let mut carriage = PalwStateCarriageV2::from_state(&bare);
+        let root = Hash64::from_u64_word(0xB3_E8EC);
+        // This harness heartbeat remains at DAA 0. Like the native row scenarios, plant the
+        // historical point explicitly; the receipt's horizon must be behind it for a retired root.
+        carriage.last_point.as_mut().unwrap().daa_score = 1;
+        let past = 0;
+        let legs = [(PAYEE, Fund::KernelFee), (SEAT, Fund::NativeSlice)]
+            .into_iter()
+            .map(|(card, fund)| {
+                let bond = g.bond(card);
+                ((bond, fund), PalwPayoutV2 { payload: bare.bond(&bond).unwrap().payout_payload, amount: 1_000 })
+            })
+            .collect();
+        carriage
+            .exec_v2_rewards
+            .insert(root, PalwExecV2RewardRowV1 { final_daa: past, liability_until: past, allocation_sompi: 2_000, legs });
+        carriage.vesting_counters.created += 2_000;
+        for card in PAYEES {
+            carriage.exec_v2_reward_holds.insert((root, g.bond(card)), lift);
+        }
+        let rooted = carriage.clone().into_state(g.sp(), None).unwrap();
+        let bytes = borsh::to_vec(&carriage).unwrap();
+        let restored =
+            borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(g.sp(), Some(rooted.state_root())).unwrap();
+        for card in PAYEES {
+            assert_eq!(restored.exec_v2_reward_hold_after_v1(&root, &g.bond(card)), Some(lift));
+            assert!(g.v6(&restored, case.now, card));
+            assert!(!g.v6(&restored, lift, card), "queue presence alone cannot rearm the actor's clocks");
+        }
+        g.every_site_answers("restored EXEC funds before lift", &restored, case.now, true);
+        g.every_site_answers("restored EXEC funds at lift", &restored, lift, false);
+    }
+}

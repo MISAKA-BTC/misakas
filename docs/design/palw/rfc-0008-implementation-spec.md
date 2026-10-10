@@ -828,3 +828,30 @@ material/provider TTL, worker consent and capital cost, the full actor-specific/
 actual-node native root Final followed by public conviction/default and payment recovery. The existing vesting RPC describes
 native rows; it does not yet page the independent executor-fund rows. Standalone kernel budgets, R6/R7/R12 and economic gates
 remain independent blockers. This change neither enables a public preset nor approves an activation height.
+
+
+### 15.2 Additional executor funds under aggregate liability and B-3
+
+AG-2 includes both additional `NativeSlice` and `KernelFee` funds of the forfeited bond. It burns only that actor's
+unpaid legs, even after their clocks have spent while awaiting payout capacity. The unrelated root producer, Panel,
+reserve, other executors and already-moved payouts remain governed by their existing attribution rules. The burn
+journal identifies the actual aggregate offence key and original fund; `forfeited_sompi` includes these earnings.
+A previously verified slice settling after its executor's final freeze cannot recreate either fee or issuance:
+settlement accounts for creation and forfeiture atomically, retaining the allocation receipt while Final is in progress.
+
+AG-3 extends still-unmatured additional funds with an actor-specific earliest-release DAA. It does not extend another
+executor's additional funds or rearm spent clocks merely because their payout has not moved. Shared native row clocks
+still apply to all funds as in §15; this extension is independent of that shared hold. The extension survives the end-of-block
+freeze sweep and restart, releases at its lift, and is removed when the actor has no remaining additional fund.
+
+B-3 reads each executor's inclusive liability horizon, actor extension and the unlatched native row's bounded V-4(a)
+clocks. A halt, DA/queue presence or a spent native latch alone does not rearm collateral. Actual EXEC vesting also holds
+its native and additional payees below R-core+, because composite Final forces vesting there. Without any EXEC receipt
+that extra path is empty. The derived additional-payee index is maintained by reward writes and delta replay, rebuilt
+on import and checked against the primary fund rows.
+
+The optional actor-extension carriage tail is `0xF1`, the independent root collection is `exec_v2_reward_holds`, and delta
+180 table 6 journals the extension. The earlier `0xF0` reward-row layout and action tags 0/1/2 remain unchanged; aggregate
+forfeiture appends action tag 3. Missing, orphan, non-extending and malformed holds fail restore or committed-root validation.
+These are dormant EXEC/capacity-liability paths; shipped activation heights remain unchanged. A funded-Final conviction-funnel
+test establishes actor isolation and accounting, not admission of a public offence against the native/kernel claim.
