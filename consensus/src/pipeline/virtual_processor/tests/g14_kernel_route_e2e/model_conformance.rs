@@ -697,25 +697,30 @@ impl SegMaterialV1 for VectorReplies {
 #[tokio::test]
 async fn model_vector_da_public_replies_enable_a_fresh_whole_value_conviction_without_model_disclosure() {
     use kaspa_consensus_core::palw_model_vector_da_v2::*;
-    for encoder in [true, false] {
+    for (encoder, gather_fault) in [(true, false), (false, false), (false, true)] {
         let f = vector_fixture(encoder);
         let mut net = Net::over_cfg(config(), TestConsensus::new);
         let binding = prepare(&mut net, &f).await;
         let (mut post, mut producer) = vector_post(&net, &f, binding, vec![0, 1], false);
-        let mask = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&f.p);
+        let mask = misaka_palw_kernel::seg_scope::model_vector_withheld_mask_v2(&f.p);
         let w = misaka_palw_kernel::trace::WiringV1::new(&f.p).unwrap();
-        let target = w
-            .occurrences
-            .iter()
-            .enumerate()
-            .find_map(|(s, (b, _))| {
-                f.p.blocks[*b as usize].nodes.iter().enumerate().find_map(|(n, node)| {
-                    (mask[s][n] && node.inputs.iter().any(|r| matches!(r, Ref::Node(k) if mask[s][*k as usize]))).then_some((s, n))
+        let target = if gather_fault {
+            assert!(!misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&f.p)[0][0]);
+            assert!(mask[0][0], "4 MiB source Gather has a bounded dependency court");
+            (0, 0)
+        } else {
+            w.occurrences
+                .iter()
+                .enumerate()
+                .find_map(|(s, (b, _))| {
+                    f.p.blocks[*b as usize].nodes.iter().enumerate().find_map(|(n, node)| {
+                        (mask[s][n] && node.inputs.iter().any(|r| matches!(r, Ref::Node(k) if mask[s][*k as usize]))).then_some((s, n))
+                    })
                 })
-            })
-            .expect("fixture keeps a whole-value relation with a withheld committed operand");
-        // Keep the large source and conservative disclosure mask. The Gather is not
-        // necessarily withheld at this source size; corrupt a later priced relation.
+                .expect("fixture keeps a whole-value relation with a withheld committed operand")
+        };
+        // Exercise both an earlier bounded dependency relation and a later
+        // relation with an authenticated whole committed operand.
         producer.values.as_mut().unwrap()[target.0][target.1].data[0] += 1;
         let mut commitments = producer.c.commitments.clone();
         commitments[0] = producer
@@ -800,14 +805,100 @@ async fn model_vector_da_public_replies_enable_a_fresh_whole_value_conviction_wi
         let view = route.model_vector_view_v2(&vector).unwrap();
         let params = f.params.clone();
         let own_model = move |j, l| params.tensors.get(&(j, l)).cloned();
-        let fault = match misaka_palw_kernel::element::check_positions_v1(&view.context(), &public, &own_model, &post.prompt, &[0]) {
+        let fault = match misaka_palw_kernel::element::check_model_vector_positions_v2(
+            &view.context(),
+            &public,
+            &own_model,
+            &post.prompt,
+            &[0],
+        ) {
             SegFindingV1::Fault(f) => *f,
             other => panic!("public replies plus the verifier's own model must construct a court: {other:?}"),
         };
-        assert!(
-            matches!(&fault, SegFaultV1::WholeValue(f) if f.inputs.iter().any(|i| i.whole.is_some())),
-            "public openings plus own replay require the bounded optional whole tensor operand"
-        );
+        assert!(matches!(&fault, SegFaultV1::WholeValue(f) if (f.occurrence as usize, f.node as usize) == target));
+        if !gather_fault {
+            assert!(matches!(&fault, SegFaultV1::WholeValue(f) if f.inputs.iter().any(|i| i.whole.is_some())));
+        } else {
+            let SegFaultV1::WholeValue(ref whole) = fault else { unreachable!() };
+            assert!(whole.inputs[0].whole.is_none());
+            assert_eq!(whole.inputs[0].leaves.len(), 1, "court opens one selected weight row, not 2048 rows");
+            assert!(
+                matches!(misaka_palw_kernel::element::verify_seg_fault_v1(&view.context(), &fault), Err(_)),
+                "the frozen claim court does not acquire candidate scope"
+            );
+            assert!(misaka_palw_kernel::element::verify_model_vector_fault_v2(&view.context(), &fault).is_ok());
+            let mut tampered = whole.clone();
+            tampered.inputs[0].leaves[0].values[0] += 1;
+            let invalid = SegFaultV1::WholeValue(tampered).to_bytes();
+            let before = net.collateral(4);
+            let fee_before = net.slashed(6);
+            send(&mut net, 6, &K::RefuteModelVectorV2 { vector: vector.as_bytes(), proof: invalid }).await;
+            assert!(!net.api().unwrap().model_vector_header_v2(&vector).unwrap().refuted);
+            assert_eq!(net.collateral(4), before);
+            assert!(net.slashed(6) > fee_before, "unbound weight bytes spend the challenger's fee");
+            let count = w.occurrences.iter().map(|(b, _)| f.p.blocks[*b as usize].nodes.len() as u64).sum();
+            let (opening_bound, work_bound) = misaka_palw_kernel::seg_scope::model_vector_whole_court_cost_v2(&f.p, 0, 0, count);
+            assert!(net.api().unwrap().model_vector_header_v2(&vector).unwrap().max_court_work >= work_bound);
+            let mut oversized = whole.clone();
+            let leaf = oversized.inputs[0].leaves[0].clone();
+            while SegFaultV1::WholeValue(oversized.clone()).to_bytes().len() as u64 <= opening_bound {
+                oversized.inputs[0].leaves.push(leaf.clone());
+            }
+            let oversized = SegFaultV1::WholeValue(oversized);
+            assert!(misaka_palw_kernel::element::verify_model_vector_fault_v2(&view.context(), &oversized).is_err());
+            let before = net.collateral(4);
+            let fee_before = net.slashed(6);
+            send(&mut net, 6, &K::RefuteModelVectorV2 { vector: vector.as_bytes(), proof: oversized.to_bytes() }).await;
+            assert_eq!(net.collateral(4), before);
+            assert!(net.slashed(6) > fee_before);
+            let mut no_wire = whole.clone();
+            no_wire.inputs[0].leaves[0].dtype = 255;
+            assert!(
+                misaka_palw_kernel::element::verify_model_vector_fault_v2(&view.context(), &SegFaultV1::WholeValue(no_wire)).is_err()
+            );
+
+            // An honest control acquires its node opening from a separate
+            // statement's authenticated public answer. Its parameter witness
+            // comes from the same verifier-owned model, not from the producer.
+            let (honest_post, honest_material) = vector_post(&net, &f, binding, post.prompt.clone(), false);
+            let honest = send_vector(&mut net, &f, binding, 4, &honest_post).await;
+            let unit = node_unit(0);
+            let demand = ask_vector(&mut net, honest, 7, 0, &unit).await.unwrap();
+            send(
+                &mut net,
+                4,
+                &K::AnswerModelVectorV2 {
+                    demand: demand.as_bytes(),
+                    answer: borsh::to_vec(&vector_answer(&honest_material, &unit)).unwrap(),
+                },
+            )
+            .await;
+            let wire = vector_answer_from_blocks(&net, honest, &unit, demand);
+            let answer = decode_model_vector_answer_v2(&wire).unwrap();
+            assert!(answer.tile.is_none());
+            let mut honest_proof = whole.clone();
+            honest_proof.output = answer.opening;
+            let honest_proof = SegFaultV1::WholeValue(honest_proof);
+            let honest_view = net.api().unwrap().model_vector_view_v2(&honest).unwrap();
+            assert_eq!(
+                misaka_palw_kernel::element::verify_model_vector_fault_v2(&honest_view.context(), &honest_proof),
+                Err(misaka_palw_kernel::verify::DismissalV1::NoFault)
+            );
+            let before = net.collateral(4);
+            let fee_before = net.slashed(6);
+            send(&mut net, 6, &K::RefuteModelVectorV2 { vector: honest.as_bytes(), proof: honest_proof.to_bytes() }).await;
+            assert_eq!(net.collateral(4), before);
+            assert!(!net.api().unwrap().model_vector_header_v2(&honest).unwrap().refuted);
+            assert!(net.slashed(6) > fee_before);
+            println!(
+                "candidate Gather: source_bytes={} opening_bound={} court_work={} proof_bytes={} selected_parameter_leaves={}",
+                f.params.tensors[&(0, None)].to_le_bytes().len(),
+                opening_bound,
+                work_bound,
+                fault.to_bytes().len(),
+                whole.inputs[0].leaves.len()
+            );
+        }
         let proof = fault.to_bytes();
         assert!(proof.len() < 32 << 10);
         assert_eq!(kaspa_consensus_core::palw_model_vector_v2::decode_model_vector_fault_v2(&proof).unwrap(), fault);

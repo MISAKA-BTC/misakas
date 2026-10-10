@@ -570,8 +570,34 @@ fn token_at(c: &SegClaimContextV1<'_>, p: u32, tile: Option<&PromptTileOpeningV1
 /// **The segmented court.** Every opening authenticated against the claim's segment roots or the class's param commitments; nothing
 /// read from the producer.
 pub fn verify_seg_fault_v1(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Result<SegConvictionV1, DismissalV1> {
+    let pr = PreparedV1::new(c.program, c.encoder.as_ref()).map_err(DismissalV1::NotAuthentic)?;
+    verify_prepared_fault(c, fault, &pr)
+}
+
+/// Non-reward candidate trace v2 court. Its commitment-only scope and Gather
+/// dependency price are distinct from the frozen v4/v5 claim court contract.
+pub fn verify_model_vector_fault_v2(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Result<SegConvictionV1, DismissalV1> {
+    let mut pr = PreparedV1::new(c.program, c.encoder.as_ref()).map_err(DismissalV1::NotAuthentic)?;
+    pr.withheld = crate::seg_scope::model_vector_withheld_mask_v2(c.program);
+    if let SegFaultV1::WholeValue(f) = fault {
+        if !pr.valid(f.occurrence, f.node) || !pr.is_withheld(f.occurrence, f.node) {
+            return Err(DismissalV1::NotAuthentic("candidate whole court is not bounded for this node".into()));
+        }
+        let (bytes, _) =
+            crate::seg_scope::model_vector_whole_court_cost_v2(c.program, f.occurrence as usize, f.node as usize, pr.node_count);
+        // Redundant, duplicate and unrelated openings cannot spend another
+        // relation's larger envelope on this dependency-priced court.
+        let wire =
+            borsh::to_vec(fault).map_err(|e| DismissalV1::NotAuthentic(format!("candidate whole filing has no wire form: {e}")))?;
+        if wire.len() as u64 > bytes {
+            return Err(DismissalV1::NotAuthentic("candidate whole filing exceeds its dependency bound".into()));
+        }
+    }
+    verify_prepared_fault(c, fault, &pr)
+}
+
+fn verify_prepared_fault(c: &SegClaimContextV1<'_>, fault: &SegFaultV1, pr: &PreparedV1<'_>) -> Result<SegConvictionV1, DismissalV1> {
     let na = DismissalV1::NotAuthentic;
-    let pr = PreparedV1::new(c.program, c.encoder.as_ref()).map_err(na)?;
     let node_ok = |o: &NodeOpeningV1, p: u32, s: u16, n: u16| -> Result<(), DismissalV1> {
         if (o.position, o.occurrence, o.node) != (p, s, n) || p >= c.positions || !pr.valid(s, n) {
             return Err(DismissalV1::NotAuthentic(format!(
@@ -926,6 +952,34 @@ pub fn check_positions_v1(
         Ok(pr) => pr,
         Err(why) => return SegFindingV1::Inconsistent(why),
     };
+    check_prepared_positions(c, material, artifact, tokens, positions, &pr)
+}
+
+/// A model holder checks candidate traces using exactly their commitment-only
+/// court scope. No producer value is needed for a bounded Gather's output.
+pub fn check_model_vector_positions_v2(
+    c: &SegClaimContextV1<'_>,
+    material: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    positions: &[u32],
+) -> SegFindingV1 {
+    let mut pr = match PreparedV1::new(c.program, c.encoder.as_ref()) {
+        Ok(pr) => pr,
+        Err(why) => return SegFindingV1::Inconsistent(why),
+    };
+    pr.withheld = crate::seg_scope::model_vector_withheld_mask_v2(c.program);
+    check_prepared_positions(c, material, artifact, tokens, positions, &pr)
+}
+
+fn check_prepared_positions(
+    c: &SegClaimContextV1<'_>,
+    material: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    positions: &[u32],
+    pr: &PreparedV1<'_>,
+) -> SegFindingV1 {
     let mut ps: Vec<u32> = positions.to_vec();
     ps.sort_unstable();
     ps.dedup();

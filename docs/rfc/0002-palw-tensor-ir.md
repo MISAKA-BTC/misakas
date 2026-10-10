@@ -2690,11 +2690,13 @@ Inner **28 `DemandModelVectorV2`**, **29 `AnswerModelVectorV2`**, and **30
 `SettleModelVectorDemandV2`** use the same signed, dormant PanelFree consumer. A demand
 names the exact statement and `(position, occurrence, node, axis, line, tile)`: row/column
 tiles (axis 0/1), or node commitment and Merkle paths only (axis 2, zero line/tile). No
-parameter, model file or inventory range can be requested. The existing v4/v5 disclosure
-mask is authoritative: a model-derived value marked withheld owes only its node opening.
+parameter, model file or inventory range can be requested. The candidate commitment-only
+mask (§14.20) is authoritative for this new statement; a value marked withheld owes only its node opening. The v4/v5 claim
+disclosure mask remains unchanged.
 The Level-1 model-byte mask also forbids requesting a copied or model-only tensor even
 when its WholeValue envelope is too large for the existing disclosure mask.
-Its tensor is supplied by the verifier's own model, under the existing whole-value court.
+Where a bounded court exists (§14.20), its tensor is supplied by the verifier's
+own model under that candidate court.
 Conditional model acquisition remains outside consensus.
 
 A requester owns four reusable slots, backed by its free collateral together with all
@@ -2745,6 +2747,49 @@ These routes remain non-reward conformance signals and grant no execution eligib
 Legacy flat-vector courts, immutable whole-statement policy/soundness, actual checkpoint
 fidelity and task/context/feature coverage, discovery/transport tooling and the complete
 network resource/liveness/economic contract remain required. Opaque source-PC fidelity
-relations and large model-only trace relations outside the existing WholeValue price
-cap remain open; the latter still require a bounded court, not forced weight disclosure.
+relations and large model-only trace relations outside the bounded candidate courts
+remain open; §14.20 extends the parameter-Gather case without forced weight disclosure.
 All other §II.14 requirements remain open. Shipping fences stay dormant.
+
+
+### 14.20 Candidate Gather dependency courts without a full weight opening
+
+Candidate statements (inner 26–30) use `model_vector_withheld_mask_v2`,
+`check_model_vector_positions_v2` and `verify_model_vector_fault_v2` together.
+The existing v4/v5 program arithmetic, plan, trace commitments, claim checker/court,
+`seg_withheld_mask_v1` and reward eligibility retain their meaning. These non-reward
+statements do not change the disclosure contract of an execution claim.
+
+For `Gather(axis=0,batch_dims=0)` whose data operand is a registered model parameter,
+the candidate whole-value court price includes the row leaves covering at most the
+number of selected items. It includes each selected item's full trailing dimensions,
+all row tiles and each leaf's full Merkle depth. For rank-one data, each scattered
+index may touch a distinct 4096-element tile. Repeated indices never increase this
+worst bound beyond the parameter's complete row tree. The independent index operand,
+node paths, reference element evaluation and both output commitment hashes retain
+full prices. Other axes, batch dimensions, primitives and committed data operands
+retain the established conservative whole-value price.
+
+A model-dependent node is commitment-only for this statement when its whole-value
+opening and work fit the existing one-MiB and 2^36 ceilings, or when the frozen
+v4/v5 mask already withholds it. Admission takes the maximum of the established
+class bounds and these additional candidate court bounds before checking the shared
+reserved proof work and actual carrier. Refutation must fit the stored admission
+header and its own node's dependency opening bound. An unnecessarily large filing
+cannot borrow another node's larger byte envelope. These bounds are derived, never
+supplied by the poster.
+
+The verifier acquires the matching model outside consensus and re-executes. At the
+first divergent bounded Gather, it files only the output's public authenticated node
+opening, the authenticated selected parameter leaves from its own model, and the
+index operand. The court recomputes every output element and the v3 commitment;
+it need not receive the poster's Gather tensor or the full weight file. Bad parameter
+bytes or a borrowed commitment dismiss at the challenger's cost. The same request
+lane refuses copied-model tensor tiles and serves the node commitment only.
+
+This closes the bounded parameter-Gather dependency case, not all large model-only
+relations. A whole output beyond these limits, another axis, a large committed data source,
+opaque source-PC fidelity or a relation outside these ceilings still needs a separate
+bounded court. No sampled security/complete-domain conformance, actual checkpoint
+support, independent runtime identity or reward eligibility follows. Every remaining
+§II.14 completion requirement and the dormant shipping fences remain in force.

@@ -1560,3 +1560,53 @@ public block-reader and explicit saturation assertion were added. The 23 legacy 
 regressions ran with identical production code before that last test-only assertion.
 Final results, source/binary hashes and logs are recorded in
 `evidence/rfc02-vector-da-verdict.json`.
+
+
+### Candidate parameter-Gather dependency courts — 2026-10-11
+
+The initial DA trial's unpriced first Gather exposed a real gap: the frozen
+whole-value estimate opens every leaf of the source parameter, even when the
+relation reads only a few selected rows. The new candidate-only whole court
+prices those authenticated dependency rows, including trailing dimensions,
+full paths and tiles. Rank-one scattered reads retain a whole tile per distinct
+index. The index operand, exact reference evaluation and both output hashes
+keep their full prices. There is no new primitive or arithmetic, and no model,
+compiler or operator name is used for admission.
+
+`model_vector_withheld_mask_v2`, `check_model_vector_positions_v2` and
+`verify_model_vector_fault_v2` agree on this candidate contract. The v4/v5
+execution claim mask/checker/court, canonical plans and reward eligibility are
+unchanged. Candidate posting reserves the maximum of established class bounds
+and additional candidate courts. Each refutation must fit its stored header's
+work and filing ceiling and its own dependency opening bound; oversized
+redundant openings cannot borrow another relation's larger envelope. An invalid
+in-memory leaf with no wire form dismisses instead of panicking.
+
+The synthetic decoder keeps its 2048-by-2048 I8 source (4 MiB) and a false first
+Gather. A fresh model holder acquires only node openings through signed demands,
+reads their answer carriers back from the selected chain, recomputes with its
+own model and files the selected registered parameter row. No producer Gather
+value or full weight file is required by the court. The trial also checks an
+honest statement's public opening, substituted weight bytes, repeated redundant
+openings, rejection by the frozen claim court, once-only poster slash/bounty and
+independent node replay. Encoder and decoder trials retain the earlier committed
+whole-operand case. Cost tests cover ranks 1–4, scattered and duplicate indices,
+full coverage, partial tiles and a very large declaration without allocation.
+
+This is a bounded parameter-Gather component. Other axes/batch dimensions,
+large committed data sources and large whole outputs still need further courts;
+opaque source-PC fidelity, complete-domain policy/soundness, runtime independence,
+actual checkpoint/task/context/fidelity and common-feature coverage, RPC/transport,
+and the complete resource/liveness/economic contract remain open. These tests do
+not certify any real checkpoint or reward eligibility. The RFC02 goal remains
+active and shipping fences remain dormant. See RFC02 §14.20.
+
+**94 distinct tests passed (95 executions):** 39 core, 31 actual-node and 24
+kernel unit/integration cases. One repeated allocation test is counted once;
+three zero-test filter queries are excluded and their intended cases were run by
+actual name. All final checks used the final production code. The 4 MiB decoder's
+selected-row proof is **3,288 bytes** against a **21,602-byte** opening bound and
+**10,019,328 abstract work units**; these are synthetic court measurements, not
+real-model performance/fidelity or network serving-cost results. Full logs,
+source/binary hashes, commands and limitations are recorded in
+`evidence/rfc02-candidate-gather-verdict.json`.

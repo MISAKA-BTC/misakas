@@ -83,7 +83,7 @@ pub(super) fn post(
             .find(|d| d.digest() == record.descriptor)
             .ok_or("unknown vector descriptor")?;
         let policy = route_ledger_policy_v1(builder).map_err(|e| e.to_string())?;
-        let bounds = misaka_palw_kernel::gate::class_prosecution_bounds_v1(
+        let mut bounds = misaka_palw_kernel::gate::class_prosecution_bounds_v1(
             &d,
             &record.plan,
             &view.program,
@@ -91,6 +91,10 @@ pub(super) fn post(
             &policy.prosecution,
         )
         .map_err(|e| format!("vector plan is not publicly prosecutable: {e:?}"))?;
+        let (opening, court_work) = misaka_palw_kernel::seg_scope::model_vector_whole_court_bounds_v2(&view.program);
+        bounds.max_filing_bytes =
+            bounds.max_filing_bytes.max(opening.saturating_add(misaka_palw_kernel::gate::SEG_FILING_HEADER_BYTES_V4));
+        bounds.max_court_work = bounds.max_court_work.max(court_work);
         let worst_work = model_artifact_work_v2(
             statement.program_bytes_len as usize,
             (bounds.max_filing_bytes as usize).saturating_add(bytes.len()),
@@ -166,7 +170,24 @@ pub(super) fn refute(
         }
         let fault = decode_model_vector_fault_v2(bytes).map_err(|e| e.to_string())?;
         let view = builder.state.kernel_route.as_ref().unwrap().model_vector_view_v2(&id)?;
-        misaka_palw_kernel::element::verify_seg_fault_v1(&view.context(), &fault).map(|_| ()).map_err(|e| format!("{e:?}"))
+        if let misaka_palw_kernel::element::SegFaultV1::WholeValue(f) = &fault {
+            let occurrences = view.program.occurrences();
+            let (block, _) = occurrences.get(f.occurrence as usize).ok_or("uncommitted whole court occurrence")?;
+            view.program.blocks[*block as usize].nodes.get(f.node as usize).ok_or("uncommitted whole court node")?;
+            let count = occurrences.iter().map(|(b, _)| view.program.blocks[*b as usize].nodes.len() as u64).sum();
+            let (_, work) = misaka_palw_kernel::seg_scope::model_vector_whole_court_cost_v2(
+                &view.program,
+                f.occurrence as usize,
+                f.node as usize,
+                count,
+            );
+            // Persisted assertions keep their own admitted envelope. A later
+            // consumer must not acquire an underpriced court from a new scope.
+            if work > h.max_court_work {
+                return Err("vector whole court exceeds its stored work admission".into());
+            }
+        }
+        misaka_palw_kernel::element::verify_model_vector_fault_v2(&view.context(), &fault).map(|_| ()).map_err(|e| format!("{e:?}"))
     })()
     .is_ok();
     if !proven {
@@ -234,7 +255,8 @@ pub(super) fn demand(
                 &view.program,
                 misaka_palw_kernel::seg_scope::seg_model_params_v1(&view.program),
             );
-            if unit.axis > 1 || model_bytes[s][n] || misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&view.program)[s][n] {
+            if unit.axis > 1 || model_bytes[s][n] || misaka_palw_kernel::seg_scope::model_vector_withheld_mask_v2(&view.program)[s][n]
+            {
                 return Err("model-derived bytes are supplied by the verifier, never demanded".into());
             }
             let layout = misaka_palw_kernel::merkle3::LayoutV3::try_of(&node.out.resolve(w.h(unit.occurrence, unit.position)))
