@@ -23,6 +23,9 @@ pub struct PermissionlessPanelStateV1 {
     beacons: BTreeMap<u64, Hash64>,
     #[serde(serialize_with = "serialize_reservations")]
     reservations: BTreeMap<BondIdV1, u128>,
+    /// **Each live epoch's beacon source set, frozen at its commitment position** (RFC-0010 residual closed: the verifier never
+    /// re-derives eligibility from the ledger it holds at the lock). Keyed by epoch; see [`EpochSourceSetV1`].
+    epoch_sources: BTreeMap<u64, EpochSourceSetV1>,
 }
 
 impl PermissionlessPanelStateV1 {
@@ -48,6 +51,7 @@ impl PermissionlessPanelStateV1 {
             work_ids: BTreeSet::new(),
             beacons: BTreeMap::new(),
             reservations: BTreeMap::new(),
+            epoch_sources: BTreeMap::new(),
         })
     }
 
@@ -121,6 +125,7 @@ impl PermissionlessPanelStateV1 {
             work_ids: BTreeSet::new(),
             beacons: BTreeMap::new(),
             reservations: BTreeMap::new(),
+            epoch_sources: BTreeMap::new(),
         })
     }
 
@@ -132,6 +137,19 @@ impl PermissionlessPanelStateV1 {
     }
     pub fn beacon_rows(&self) -> &BTreeMap<u64, Hash64> {
         &self.beacons
+    }
+    /// The frozen beacon source sets, by epoch ([`EpochSourceSetV1`]).
+    pub fn epoch_source_rows(&self) -> &BTreeMap<u64, EpochSourceSetV1> {
+        &self.epoch_sources
+    }
+    /// **The source set frozen for the epoch committed at `commitment_position`** (`epoch × beacon_period_daa`); `None` for a position
+    /// that is no epoch's commitment or an epoch that froze none.
+    pub fn frozen_sources_at(&self, commitment_position: u64) -> Option<&EpochSourceSetV1> {
+        let period = self.policy.beacon_period_daa;
+        if period == 0 || commitment_position % period != 0 {
+            return None;
+        }
+        self.epoch_sources.get(&(commitment_position / period))
     }
 
     /// Delta application. These write one keyed row (or the cursor) and nothing else; a delta is applied row by row and
@@ -162,6 +180,16 @@ impl PermissionlessPanelStateV1 {
             self.work_ids.insert(id);
         } else {
             self.work_ids.remove(&id);
+        }
+    }
+    pub fn put_epoch_source_row(&mut self, epoch: u64, row: Option<EpochSourceSetV1>) {
+        match row {
+            Some(row) => {
+                self.epoch_sources.insert(epoch, row);
+            }
+            None => {
+                self.epoch_sources.remove(&epoch);
+            }
         }
     }
     pub fn put_beacon_row(&mut self, epoch: u64, output: Option<Hash64>) {
@@ -201,7 +229,9 @@ impl PermissionlessPanelStateV1 {
         let seats = (policy.seat_count as u64).max(MAX_STRATIFIED_SEATS_V1 as u64);
         let limit = 4096u64
             + policy.max_tracked_claims as u64
-                * (8192 + policy.max_candidates as u64 * 400 + (policy.max_retries as u64 + 1) * seats * 100);
+                * (8192 + policy.max_candidates as u64 * 400 + (policy.max_retries as u64 + 1) * seats * 100)
+            // The frozen source sets: at most `max_pending` epochs, each at most `MAX_EPOCH_SOURCES_V1` 64-byte profiles.
+            + policy.max_pending as u64 * (32 + MAX_EPOCH_SOURCES_V1 as u64 * 64);
         if bytes.len() as u64 > limit {
             return Err(PanelErrorV1::ResourceLimit);
         }
@@ -242,6 +272,7 @@ impl PermissionlessPanelStateV1 {
         let mut events = PanelFoldEventsV1::default();
         next.stage_release(step.daa, view, &mut events)?;
         next.stage_seal(step.daa, view, &mut events)?;
+        next.stage_freeze_sources(step.daa, view)?;
         for proof in &step.beacons {
             next.stage_beacon(step.daa, proof, view)?;
         }
@@ -276,6 +307,7 @@ impl PermissionlessPanelStateV1 {
         let mut events = PanelFoldEventsV1::default();
         next.stage_release(step.daa, view, &mut events)?;
         next.stage_seal(step.daa, view, &mut events)?;
+        next.stage_freeze_sources(step.daa, view)?;
         next.stage_ready(step.daa, &mut events)?;
         next.stage_assign(step.block, step.daa, view, &mut events)?;
         next.stage_close(step)?;
@@ -467,6 +499,31 @@ impl PermissionlessPanelStateV1 {
             record.snapshot = Some(snapshot);
             record.phase = ClaimPhaseV3::Sealed;
         }
+        Ok(())
+    }
+
+    /// **The freeze of the next epoch's beacon source set, exactly once, at its commitment position.** The next epoch after the
+    /// parent's DAA is the only one a claim can be sealed for (`stage_seal`); its commitment position is `release`. The first block
+    /// whose DAA reaches it — so the cursor (still the parent's) is below it — freezes the set the host derives from the pre-entropy
+    /// checkpoint, if a live claim is sealed for the epoch (no claim, no beacon: nothing to freeze). No later block can freeze it
+    /// again: past the crossing the cursor's next epoch is a later one. An empty derivation or one above [`MAX_EPOCH_SOURCES_V1`]
+    /// freezes nothing (an epoch without a set has no eligible source; a truncated set would be steerable).
+    fn stage_freeze_sources(&mut self, step_daa: u64, view: &impl ConsensusViewV1) -> Result<(), PanelErrorV1> {
+        let epoch = add(self.daa / self.policy.beacon_period_daa, 1)?;
+        let release = epoch.checked_mul(self.policy.beacon_period_daa).ok_or(PanelErrorV1::Overflow)?;
+        if step_daa < release
+            || self.epoch_sources.contains_key(&epoch)
+            || !self.claims.values().any(|r| !r.phase.terminal() && r.seal.as_ref().is_some_and(|s| s.beacon_epoch == epoch))
+        {
+            return Ok(());
+        }
+        let mut profiles = view.epoch_sources(release);
+        profiles.sort();
+        profiles.dedup();
+        if profiles.is_empty() || profiles.len() > MAX_EPOCH_SOURCES_V1 as usize {
+            return Ok(());
+        }
+        self.epoch_sources.insert(epoch, EpochSourceSetV1 { frozen_daa: step_daa, profiles });
         Ok(())
     }
 
@@ -786,11 +843,16 @@ impl PermissionlessPanelStateV1 {
         self.validate()
     }
 
-    /// Beacons are retained only while a nonterminal claim can need their output.
+    /// Beacons are retained only while a nonterminal claim can need their output; a frozen source set only while, in addition, its
+    /// epoch's contribution window is open (no output is accepted past `release + beacon_wait_daa`).
     fn retain_needed_beacons(&mut self) {
         let epochs: BTreeSet<_> =
             self.claims.values().filter(|r| !r.phase.terminal()).filter_map(|r| r.seal.as_ref().map(|s| s.beacon_epoch)).collect();
         self.beacons.retain(|e, _| epochs.contains(e));
+        let (period, wait, daa) = (self.policy.beacon_period_daa, self.policy.beacon_wait_daa, self.daa);
+        self.epoch_sources.retain(|e, _| {
+            epochs.contains(e) && e.checked_mul(period).and_then(|release| release.checked_add(wait)).is_some_and(|end| daa <= end)
+        });
     }
 
     fn void(r: &mut ClaimRecordV3, daa: u64, reason: NonFraudReasonV1, e: &mut PanelFoldEventsV1) {
@@ -835,8 +897,21 @@ impl PermissionlessPanelStateV1 {
             || self.work_ids.len() != self.claims.len()
             || self.claims.values().filter(|r| !r.phase.terminal()).count() > self.policy.max_pending as usize
             || self.beacons.len() > self.policy.max_pending as usize
+            || self.epoch_sources.len() > self.policy.max_pending as usize
         {
             return Err(PanelErrorV1::InvalidCarriage);
+        }
+        for (epoch, row) in &self.epoch_sources {
+            let release = epoch.checked_mul(self.policy.beacon_period_daa).ok_or(PanelErrorV1::Overflow)?;
+            if row.profiles.is_empty()
+                || row.profiles.len() > MAX_EPOCH_SOURCES_V1 as usize
+                || row.profiles.windows(2).any(|pair| pair[0] >= pair[1])
+                || row.frozen_daa < release
+                || row.frozen_daa > self.daa
+                || self.daa > add(release, self.policy.beacon_wait_daa)?
+            {
+                return Err(PanelErrorV1::InvalidCarriage);
+            }
         }
         let mut orders = BTreeSet::new();
         let mut ids = BTreeSet::new();
