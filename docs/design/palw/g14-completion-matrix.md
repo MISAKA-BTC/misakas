@@ -763,3 +763,9 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   floor: 5 step-lie op kinds + honest twin, 7 trace/token/output/input/state-identity lies, 2 post-Final lies, 2 LG14-B lies — all
   PASS; kernel canonical gather / matmul / clamp ×(Panel, OPV)×(pre, post Final) PASS; `g14_k2s_` 15 PASS; `r4x_` 11 PASS / 1 FAIL
   (integration-owned, see §2c.2).
+  Regression on this head: kaspad `palw_fraud_filer` 20, `accepted_objects_walk_tests` 7, `reporter_filer::tests` 21,
+  `palw_filer_held::e2e` 27 (LG14-B honest-claim guard updated to the past-step semantics), core `palw_legacy` 20 +
+  `palw_auth_descent` 5, consensus `t12_a2u` 3 and `lg14a_` 8 — PASS; normal `kaspad` lib build OK. Codex's
+  `fresh_public_bond_service_carries_reserved_da_to_objective_default` FAILED twice on its 360 s wall-clock deadline under host load
+  (load average 10–15; reached DAA ~2,036 of the 2,231 default) and PASSED (objective DA default at 2,236) with the deadline raised
+  locally to 1,500 s — the raise is not committed; the test's wall-clock bound is load-sensitive.
