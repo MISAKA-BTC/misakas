@@ -236,6 +236,23 @@ execution cap, and whether market fee income counts in R_max.
   - **The adversary bound is 1/3** of capital and of verifier stake, as in BFT. The bars fail at 0.40 / 0.44.
   - **BUDGET implements it now**, as an extension of `palw_model_bond_allocation_v1`. The values are an unapproved policy.
 
+## 3g. ADR-0177 goal changed: bond-aggregation advantage (user, 2026-10-10)
+
+The goal is now "strongly favour models that gather more effective locked miner bond", no longer "favour publication itself".
+Publication is the means by which other miners can join; equal capital is treated equally whoever owns it.
+- "Publish always beats equal self-funding" is removed from the release requirements. ECON's counter-examples stay as the record
+  of the old goal.
+- The curve candidate is `A_m = S_m^α` (α > 1, compare α = 2) inside the fixed PALW budget. α is POLICY. The new acceptance
+  requirement quantifies the advantage: capital range, multiplier, and whether it holds for allocation, actual payment or net
+  profit, below the individual caps.
+- Large-capital concentration, including adversarial capital, is accepted as residual risk. Inflating small capital
+  (double counting, epoch-edge moves, key or claim splitting) stays forbidden.
+- **`p = 0` compute-skipping is a separate, unresolved safety gate.** The curve is never its evidence. Reports split "honest
+  verifiers function" from "every owner closes, p = 0".
+- Unchanged: Q/B/R/F individual caps, the total budget, distinct capital and the common hold. Block issuance, beacon, Final
+  weight and fork choice are not scaled by bond aggregation.
+- The verification-attestation gate (ECON round 2) may continue as a dormant subsidy condition. It is not a p = 0 resolution.
+
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
 Waves, because the Mac (32 GiB, ~40 GB free disk) cannot build a dozen targets at once, and builds are batched (user rule): each lane
