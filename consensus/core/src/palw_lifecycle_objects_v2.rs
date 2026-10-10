@@ -1708,6 +1708,10 @@ pub enum PalwInt12WireChangeV1 {
 /// **Every live-build wire type that has changed since `0b1c11b87`, keyed `"<path>::<item>"`** — reconciled exactly (no missing,
 /// no stale row) by `every_int12_wire_type_is_unchanged_or_classified`.
 pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
+    (
+        "consensus/core/src/palw_vesting_v1.rs::PalwVestingNoteV1",
+        PalwInt12WireChangeV1::NotCarried("journal-only notes in stored deltas; existing tags are unchanged, appended EXEC notes require a dormant EXEC root"),
+    ),
     ("consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2", PalwInt12WireChangeV1::ObjectEnum),
     (
         "consensus/core/src/palw_state_v2.rs::PalwDeltaEntryV2",

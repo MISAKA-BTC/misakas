@@ -37,8 +37,8 @@ use kaspa_consensus_core::{
     },
     palw_native_settlement_v1::{
         MatureUsefulWorkV1, NativeDeltaEvidenceV1, NativeEffectV1, NativeFactRulesV1, NativePrefixV1, NativeSettlementSnapshotV1,
-        SettlementStopV1, SkippedEvidenceV1, certify_native_prefix_v1, native_delta_evidence_v1, native_facts_and_skips_v1,
-        native_open_from_v1, native_open_sessions_v1,
+        SettlementStopV1, SkippedEvidenceV1, certify_native_prefix_v1, native_delta_evidence_v1, native_effective_retention_v1,
+        native_facts_and_skips_v1, native_open_from_v1, native_open_sessions_v1,
     },
     palw_state_v2::{PalwChainStateV2, PalwClaimPhaseV2},
 };
@@ -333,7 +333,9 @@ impl VirtualStateProcessor {
         // (a session whose claim is gone is open for every effect). Claims already retired are absent from state and
         // therefore closed.
         let open_from = native_open_from_v1(
-            state.claims_iter().map(|(_, c)| (c.accepted_blue_score, c.phase.clone(), c.trace_retention_daa)),
+            state.claims_iter().map(|(id, c)| {
+                (c.accepted_blue_score, c.phase.clone(), native_effective_retention_v1(&state, params, id, c).unwrap_or(u64::MAX))
+            }),
             open_sessions.iter().map(|(claim, _)| state.claim(claim).map(|c| c.accepted_blue_score)),
             sink_daa,
         );
@@ -482,15 +484,17 @@ impl VirtualStateProcessor {
                 let mut open_claims: Vec<OpenClaimV1> = w
                     .state
                     .claims_iter()
-                    .filter(|(_, c)| {
+                    .filter(|(id, c)| {
                         !(matches!(c.phase, PalwClaimPhaseV2::Voided { .. })
-                            || (matches!(c.phase, PalwClaimPhaseV2::Final { .. }) && c.trace_retention_daa <= w.sink_daa))
+                            || (matches!(c.phase, PalwClaimPhaseV2::Final { .. })
+                                && params.and_then(|p| native_effective_retention_v1(&w.state, p, id, c)).unwrap_or(u64::MAX)
+                                    <= w.sink_daa))
                     })
                     .map(|(id, c)| OpenClaimV1 {
                         claim: *id,
                         stage: ClaimStageV1::of(&c.phase),
                         accepted_blue: c.accepted_blue_score,
-                        retention_daa: c.trace_retention_daa,
+                        retention_daa: params.and_then(|p| native_effective_retention_v1(&w.state, p, id, c)).unwrap_or(u64::MAX),
                         next_deadline_daa: None,
                     })
                     .collect();

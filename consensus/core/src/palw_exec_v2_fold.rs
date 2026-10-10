@@ -326,6 +326,7 @@ impl PalwChainStateV2 {
     /// **The consistency of the work-slice ledgers** against each other and against the claims, checked with the rest of
     /// `assert_internal_consistency`. Empty tables are consistent by construction.
     pub(super) fn assert_exec_v2_consistency_v1(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
+        super::palw_exec_v2_rewards_v1::consistent(self, params)?;
         let bad = |why: String| PalwStateV2Error::CarriageInconsistent(format!("exec v2: {why}"));
         if let Some(kernel) = &self.kernel_route {
             use misaka_palw_kernel::{exec_reward::ExecRewardHoldV1, rows::TABLE_EXEC_REWARD_HOLDS_V1};
@@ -562,6 +563,10 @@ impl TransitionBuilder<'_> {
     pub(super) fn write_exec_anchored(&mut self, key: Hash64, new: Option<u64>) {
         self.write_exec_v2_row(PALW_EXEC_V2_TABLE_ANCHORED_V1, key, new, |s| &mut s.exec_v2.anchored);
     }
+
+    pub(super) fn write_exec_reward(&mut self, key: Hash64, new: Option<crate::palw_work_slice_v2::PalwExecV2RewardRowV1>) {
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_REWARDS_V1, key, new, |s| &mut s.exec_v2_rewards);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -611,6 +616,7 @@ pub(super) fn apply_exec_v2_row_v1(
         PALW_EXEC_V2_TABLE_SLICES_V1 => swap(&mut state.exec_v2.slices, key, old, new, revert),
         PALW_EXEC_V2_TABLE_JOBS_V1 => swap(&mut state.exec_v2.jobs, key, old, new, revert),
         PALW_EXEC_V2_TABLE_ANCHORED_V1 => swap(&mut state.exec_v2.anchored, key, old, new, revert),
+        PALW_EXEC_V2_TABLE_REWARDS_V1 => swap(&mut state.exec_v2_rewards, key, old, new, revert),
         _ => Err(PalwStateV2Error::DeltaMismatch("an exec v2 row names no table")),
     }
 }
@@ -747,7 +753,7 @@ pub(super) fn apply_root_declared_v2(
     if exposure == 0 {
         return Err(no(R::ClaimUnreserved));
     }
-    if builder.state.exec_v2.roots.len() >= PALW_EXEC_V2_MAX_OPEN_ROOTS
+    if builder.state.exec_v2_retained_slots_v1() >= PALW_EXEC_V2_MAX_OPEN_ROOTS
         || builder.state.exec_v2.open_roots_of(&claim.bond) >= PALW_EXEC_V2_MAX_OPEN_ROOTS_PER_BOND
     {
         return Err(no(R::RootQuota));
@@ -975,6 +981,7 @@ pub(super) fn settle_at_final_v2(
         .collect::<Result<_, _>>()?;
     let mut settlement = settle_root_v2(amount, root.total_work, root.prefix_work(), &credited, root.root_bond)
         .ok_or(PalwStateV2Error::Overflow("exec v2 settlement"))?;
+    super::palw_exec_v2_rewards_v1::start(builder, *claim_id, amount, final_daa)?;
     if builder.state.kernel_route.is_some() {
         let mut held: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
         for (_, row) in &rows {
@@ -1036,7 +1043,7 @@ fn release_executor_exposure_v2(builder: &mut TransitionBuilder<'_>, root: &Palw
 
 /// **The claim was voided** (by any route): the root and its pending slices go void with it, the extra executors' exposure
 /// returns, nobody is paid and nobody is charged here — a slashing is a conviction's, proven where it is proven. The rows stay
-/// (the job's one-use tombstone with them) until the claim retires. A no-op for a claim with no root or a root already terminal.
+/// (the job's one-use tombstone with them) until the claim retires. A settled root has already returned exposure.
 pub(super) fn on_claim_voided_v2(
     builder: &mut TransitionBuilder<'_>,
     claim_id: &Hash64,
@@ -1044,7 +1051,7 @@ pub(super) fn on_claim_voided_v2(
 ) -> Result<(), PalwStateV2Error> {
     let Some(root) = builder.state.exec_v2.roots.get(claim_id).cloned() else { return Ok(()) };
     super::palw_kernel_route_fold_v1::cancel_exec_rewards_v1(builder, *claim_id, voided_daa)?;
-    if !matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
+    if matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. }) {
         return Ok(());
     }
     let from_index = builder
@@ -1067,7 +1074,11 @@ pub(super) fn on_claim_voided_v2(
         row.stage = PalwWorkSliceStageV2::Voided { voided_daa };
         builder.write_exec_slice(key, Some(row));
     }
-    release_executor_exposure_v2(builder, &root)?;
+    if matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
+        release_executor_exposure_v2(builder, &root)?;
+    } else {
+        super::palw_exec_v2_rewards_v1::burn(builder, *claim_id)?;
+    }
     let mut voided = root;
     voided.phase = PalwWorkRootPhaseV2::Voided { from_index, voided_daa };
     builder.write_exec_root(*claim_id, Some(voided));
@@ -1168,7 +1179,9 @@ pub(super) fn sync_slice_verification_v2(
         .exec_v2
         .roots
         .iter()
-        .filter(|(_, root)| matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete))
+        .filter(|(_, root)| {
+            matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete | PalwWorkRootPhaseV2::Settled { .. })
+        })
         .filter(|(_, root)| matches!(root.prefix, PalwWorkPrefixStageV2::Pending | PalwWorkPrefixStageV2::Verified { .. }))
         .filter(|(_, root)| written.contains(&palw_exec_v2_kernel_key_v1(&root.prefix_claim)))
         .map(|(id, root)| (*id, root.clone()))
@@ -1199,10 +1212,10 @@ pub(super) fn sync_slice_verification_v2(
                 release_final_hold_v2(builder, root_id, ctx.daa_score)?;
             }
             PalwSliceVerificationV1::ProvenFalse => {
-                void_prefix_v2(builder, root_id, PalwWorkPrefixStageV2::ProvenFalse { daa: ctx.daa_score }, ctx.daa_score)?;
+                void_prefix_v2(builder, root_id, PalwWorkPrefixStageV2::ProvenFalse { daa: ctx.daa_score }, ctx)?;
             }
             PalwSliceVerificationV1::Defaulted => {
-                void_prefix_v2(builder, root_id, PalwWorkPrefixStageV2::Defaulted { daa: ctx.daa_score }, ctx.daa_score)?;
+                void_prefix_v2(builder, root_id, PalwWorkPrefixStageV2::Defaulted { daa: ctx.daa_score }, ctx)?;
             }
             _ => {}
         }
@@ -1218,8 +1231,8 @@ pub(super) fn sync_slice_verification_v2(
         .collect();
     for ((root_id, index), row) in touched {
         let Some(root) = builder.state.exec_v2.roots.get(&root_id).cloned() else { continue };
-        if !matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
-            continue; // settled, or voided earlier in this loop
+        if matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. }) {
+            continue; // voided earlier in this loop
         }
         let (claim_row, claim_reward) = match builder.state.kernel_route.as_ref() {
             Some(kernel) => (
@@ -1254,13 +1267,13 @@ pub(super) fn sync_slice_verification_v2(
                 release_final_hold_v2(builder, root_id, ctx.daa_score)?;
             }
             PalwSliceVerificationV1::ProvenFalse => {
-                void_suffix_v2(builder, root_id, index, PalwWorkSliceStageV2::ProvenFalse { daa: ctx.daa_score }, ctx.daa_score)?;
+                void_suffix_v2(builder, root_id, index, PalwWorkSliceStageV2::ProvenFalse { daa: ctx.daa_score }, ctx)?;
             }
             // A pending slice's claim defaulted or timed out — or a verified slice's claim forfeited its reservation after Final
             // (a demand it left unserved inside its liability horizon, the route's `PostFinalDefault`): the material is withheld, so
             // the slice is defaulted while its root has not settled, exactly as a conviction after Final proves it false.
             PalwSliceVerificationV1::Defaulted => {
-                void_suffix_v2(builder, root_id, index, PalwWorkSliceStageV2::Defaulted { daa: ctx.daa_score }, ctx.daa_score)?;
+                void_suffix_v2(builder, root_id, index, PalwWorkSliceStageV2::Defaulted { daa: ctx.daa_score }, ctx)?;
             }
             _ => {}
         }
@@ -1277,13 +1290,15 @@ pub(super) fn void_suffix_v2(
     root_id: Hash64,
     from_index: u32,
     cause: PalwWorkSliceStageV2,
-    daa: u64,
+    ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
+    let daa = ctx.daa_score;
     let Some(root) = builder.state.exec_v2.roots.get(&root_id).cloned() else { return Ok(()) };
     super::palw_kernel_route_fold_v1::cancel_exec_rewards_v1(builder, root_id, daa)?;
-    if !matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
+    if matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. }) {
         return Ok(());
     }
+    let settled = matches!(root.phase, PalwWorkRootPhaseV2::Settled { .. });
     let suffix: Vec<((Hash64, u32), PalwWorkSliceRowV2)> = builder
         .state
         .exec_v2
@@ -1295,7 +1310,9 @@ pub(super) fn void_suffix_v2(
         row.stage = if index == from_index { cause } else { PalwWorkSliceStageV2::Voided { voided_daa: daa } };
         builder.write_exec_slice((root_id, index), Some(row));
     }
-    release_executor_exposure_v2(builder, &root)?;
+    if !settled {
+        release_executor_exposure_v2(builder, &root)?;
+    }
     let mut voided = root;
     voided.phase = PalwWorkRootPhaseV2::Voided { from_index, voided_daa: daa };
     builder.write_exec_root(root_id, Some(voided));
@@ -1304,7 +1321,10 @@ pub(super) fn void_suffix_v2(
         _ => PalwVoidReasonV2::WorkSliceDefaulted,
     };
     // The root is already `Voided`, so the void hook (`on_claim_voided_v2`) finds nothing open and leaves it as written here.
-    if let Some(claim) = builder.state.claims.get(&root_id).cloned()
+    if settled {
+        let dependency = builder.state.exec_v2.slices[&(root_id, from_index)].evidence_root;
+        super::palw_exec_v2_rewards_v1::invalidate_final(builder, root_id, dependency, ctx, reason)?;
+    } else if let Some(claim) = builder.state.claims.get(&root_id).cloned()
         && !claim.phase.is_terminal()
     {
         builder.void_claim(root_id, &claim, daa, reason)?;
@@ -1321,20 +1341,25 @@ pub(super) fn void_prefix_v2(
     builder: &mut TransitionBuilder<'_>,
     root_id: Hash64,
     cause: PalwWorkPrefixStageV2,
-    daa: u64,
+    ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
+    let daa = ctx.daa_score;
     let Some(root) = builder.state.exec_v2.roots.get(&root_id).cloned() else { return Ok(()) };
     super::palw_kernel_route_fold_v1::cancel_exec_rewards_v1(builder, root_id, daa)?;
-    if !matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
+    if matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. }) {
         return Ok(());
     }
+    let settled = matches!(root.phase, PalwWorkRootPhaseV2::Settled { .. });
+    let dependency = root.prefix_claim;
     let slices: Vec<((Hash64, u32), PalwWorkSliceRowV2)> =
         builder.state.exec_v2.slices.range((root_id, 0)..=(root_id, u32::MAX)).map(|(key, row)| (*key, row.clone())).collect();
     for (key, mut row) in slices {
         row.stage = PalwWorkSliceStageV2::Voided { voided_daa: daa };
         builder.write_exec_slice(key, Some(row));
     }
-    release_executor_exposure_v2(builder, &root)?;
+    if !settled {
+        release_executor_exposure_v2(builder, &root)?;
+    }
     let mut voided = root;
     voided.prefix = cause;
     voided.phase = PalwWorkRootPhaseV2::Voided { from_index: 0, voided_daa: daa };
@@ -1343,7 +1368,9 @@ pub(super) fn void_prefix_v2(
         PalwWorkPrefixStageV2::ProvenFalse { .. } => PalwVoidReasonV2::WorkSliceProvenFalse,
         _ => PalwVoidReasonV2::WorkSliceDefaulted,
     };
-    if let Some(claim) = builder.state.claims.get(&root_id).cloned()
+    if settled {
+        super::palw_exec_v2_rewards_v1::invalidate_final(builder, root_id, dependency, ctx, reason)?;
+    } else if let Some(claim) = builder.state.claims.get(&root_id).cloned()
         && !claim.phase.is_terminal()
     {
         builder.void_claim(root_id, &claim, daa, reason)?;

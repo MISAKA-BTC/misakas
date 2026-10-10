@@ -523,6 +523,37 @@ pub struct PalwExecV2StateV1 {
     pub anchored: std::collections::BTreeMap<Hash64, u64>,
 }
 
+/// Separate from Panel seats: a seat-only penalty must never consume a slice executor's reward.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwExecV2RewardFundV1 {
+    NativeSlice,
+    KernelFee,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwExecV2RewardActionV1 {
+    Created,
+    Moved,
+    Burned,
+}
+
+/// The additional executor legs of one settled root, with payee payloads frozen at Final.
+/// Lives in a separate optional carriage tail; existing root/slice and native vesting layouts are unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwExecV2RewardRowV1 {
+    pub final_daa: u64,
+    pub liability_until: u64,
+    /// The executor allocation before fee replacement. All these legs together fit inside it.
+    pub allocation_sompi: u64,
+    pub legs: std::collections::BTreeMap<(PalwBondKeyV2, PalwExecV2RewardFundV1), crate::palw_state_v2::PalwPayoutV2>,
+}
+
+impl PalwExecV2RewardRowV1 {
+    pub fn total_sompi_u128(&self) -> u128 {
+        self.legs.values().map(|leg| u128::from(leg.amount)).sum()
+    }
+}
+
 impl PalwExecV2StateV1 {
     pub fn is_empty(&self) -> bool {
         self.roots.is_empty() && self.slices.is_empty() && self.jobs.is_empty() && self.anchored.is_empty()

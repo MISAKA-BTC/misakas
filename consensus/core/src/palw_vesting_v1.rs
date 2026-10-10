@@ -225,6 +225,21 @@ pub enum PalwVestingNoteV1 {
         kind: PalwOffenceKindV1,
         sompi: u64,
     },
+    /// Appended: extra executor legs retain their role and fixed payee in the financial journal.
+    ExecReward {
+        claim_id: Hash64,
+        bond: PalwBondKeyV2,
+        fund: crate::palw_work_slice_v2::PalwExecV2RewardFundV1,
+        action: crate::palw_work_slice_v2::PalwExecV2RewardActionV1,
+        payout: PalwPayoutV2,
+    },
+    /// A dependency verdict invalidates the composite root, without accusing its other actors of an offence.
+    ExecDependencyBurned {
+        claim_id: Hash64,
+        kernel_claim_id: Hash64,
+        sompi: u64,
+        legs: Vec<PalwVestingLegV1>,
+    },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -715,13 +730,14 @@ pub fn palw_vesting_next_block_plan_v1(
     next_daa: u64,
     raw_depth: Option<u64>,
 ) -> PalwVestingMintPlanV1 {
-    if !params.rcore_plus_active_at(next_daa) {
+    if !params.rcore_plus_active_at(next_daa) && state.exec_v2_reward_vesting_iter_v1().next().is_none() {
         return PalwVestingMintPlanV1 { moves: Vec::new(), legs: 0, new_keys: 0, stopped: PalwVestingStopV1::Empty, stopped_at: None };
     }
     // The parent's non-market part — 3d's keys and the Activation Pool's 3d′ flush, together at most
     // the width the market's reserve leaves — is drained whole by the next block's 1b, so this is 0
     // on testnet-12; the pool's flush runs after 3d and never takes vesting's width.
-    let non_market_after_drain = palw_vesting_non_market_rows_waiting_v1(state).saturating_sub(PALW_V2_MAX_PAYOUTS_PER_BLOCK);
+    let non_market_after_drain = palw_vesting_non_market_rows_waiting_v1(state).saturating_sub(PALW_V2_MAX_PAYOUTS_PER_BLOCK)
+        + state.exec_v2_reward_release_keys_v1(next_daa, true);
     palw_vesting_plan_while_v1(
         state,
         PALW_V2_VESTING_LEGS_PER_BLOCK.saturating_sub(non_market_after_drain),
@@ -787,6 +803,7 @@ pub fn palw_vesting_counters_consistent_v1(state: &PalwChainStateV2) -> Result<(
             ));
         }
     }
+    live += state.exec_v2_reward_vesting_iter_v1().map(|(_, row)| row.total_sompi_u128()).sum::<u128>();
     let c = state.vesting_counters();
     if c.created != live + c.moved + c.burned {
         return Err(format!("created {} != live {live} + moved {} + burned {}", c.created, c.moved, c.burned));
@@ -825,6 +842,10 @@ pub fn palw_vesting_burned_by_delta_v1(delta: &PalwStateDeltaV2) -> u64 {
         PalwVestingNoteV1::Burned { sompi, .. }
         | PalwVestingNoteV1::ShareBurned { sompi, .. }
         | PalwVestingNoteV1::ProducerLegBurned { sompi, .. } => sum.saturating_add(*sompi),
+        PalwVestingNoteV1::ExecDependencyBurned { sompi, .. } => sum.saturating_add(*sompi),
+        PalwVestingNoteV1::ExecReward { action: crate::palw_work_slice_v2::PalwExecV2RewardActionV1::Burned, payout, .. } => {
+            sum.saturating_add(payout.amount)
+        }
         _ => sum,
     })
 }
@@ -959,6 +980,25 @@ mod tests {
                     offence_id: Hash64::from_bytes([4; 64]),
                     kind: PalwOffenceKindV1::DaDefault,
                     sompi: 5,
+                },
+            ),
+            (
+                8,
+                PalwVestingNoteV1::ExecReward {
+                    claim_id: r.claim_id,
+                    bond: r.producer_bond,
+                    fund: crate::palw_work_slice_v2::PalwExecV2RewardFundV1::KernelFee,
+                    action: crate::palw_work_slice_v2::PalwExecV2RewardActionV1::Burned,
+                    payout: r.producer,
+                },
+            ),
+            (
+                9,
+                PalwVestingNoteV1::ExecDependencyBurned {
+                    claim_id: r.claim_id,
+                    kernel_claim_id: Hash64::from_bytes([10; 64]),
+                    sompi: 5,
+                    legs: vec![leg],
                 },
             ),
         ];

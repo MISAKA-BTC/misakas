@@ -205,6 +205,12 @@ fn opened() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
     (p, s, claim)
 }
 
+fn held_exec_to(s: &PalwChainStateV2, claim: Hash64, bond: PalwBondKeyV2) -> u64 {
+    s.exec_v2_reward_vesting_v1(&claim)
+        .map(|row| row.legs.iter().filter(|((who, _), _)| *who == bond).map(|(_, leg)| leg.amount).sum())
+        .unwrap_or(0)
+}
+
 #[test]
 fn budget_and_exec_ledgers_coexist_in_the_state_root_delta_and_restart_carriage() {
     use crate::palw_bond_budget_v1::{PalwBondBudgetMirrorV1, PalwBondBudgetPolicyV1};
@@ -735,15 +741,28 @@ fn deadline_of(s: &PalwChainStateV2, claim: Hash64) -> Option<u64> {
 }
 
 /// Advance with empty blocks until `claim` is `Final` or voided (or give up).
-fn run_to_terminal(p: &PalwStateParamsV2, mut s: PalwChainStateV2, claim: Hash64, mut word: u64, mut daa: u64) -> PalwChainStateV2 {
+fn run_to_terminal(p: &PalwStateParamsV2, s: PalwChainStateV2, claim: Hash64, word: u64, daa: u64) -> PalwChainStateV2 {
+    run_to_terminal_with_delta(p, s, claim, word, daa).0
+}
+
+fn run_to_terminal_with_delta(
+    p: &PalwStateParamsV2,
+    mut s: PalwChainStateV2,
+    claim: Hash64,
+    mut word: u64,
+    mut daa: u64,
+) -> (PalwChainStateV2, Option<PalwStateDeltaV2>) {
+    let mut last = None;
     for _ in 0..400 {
         if s.claim(&claim).is_none_or(|c| c.phase.is_terminal()) {
-            return s;
+            return (s, last);
         }
         let at = deadline_of(&s, claim).unwrap_or(daa + 1).max(daa + 1);
         daa = at;
         word += 1;
-        s = step(&s, p, word, daa, &[]).expect("an empty block").0;
+        let (next, delta) = step(&s, p, word, daa, &[]).expect("an empty block");
+        s = next;
+        last = Some(delta);
     }
     panic!("the claim never reached a terminal phase");
 }
@@ -808,10 +827,7 @@ fn the_root_settles_once_at_final_and_the_allocation_is_conserved_against_a_sess
     assert_eq!(s.reserved_exposure(&b), 0);
     // ---- conservation: the producer's vested leg plus the slice legs is exactly the twin's producer leg ----
     let producer_leg = s.vesting_row(&claim).expect("the vested row").producer.amount;
-    let payee_of = |bond: PalwBondKeyV2| s.bond(&bond).unwrap().payout_payload;
-    let paid_to = |bond: PalwBondKeyV2| {
-        s.pending_payouts_iter().filter(|(_, row)| row.payload == payee_of(bond)).map(|(_, row)| row.amount).sum::<u64>()
-    };
+    let paid_to = |bond: PalwBondKeyV2| held_exec_to(&s, claim, bond);
     let (leg_a, leg_b) = (paid_to(a), paid_to(b));
     assert_eq!(producer_leg + leg_a + leg_b, twin_leg, "nothing minted, nothing lost");
     // work shares of 800: a executed 240 + 160, b executed 240 (the prefix 160 is the root's)
@@ -892,6 +908,75 @@ fn run_to_retirement(p: &PalwStateParamsV2, mut s: PalwChainStateV2, claim: Hash
 // =============================================================================================
 // Consistency, branches, the carriage tail
 // =============================================================================================
+
+#[test]
+fn executor_funds_partially_drain_with_the_market_reserve_and_the_plan_matches_the_fold() {
+    let (p, mut s, _) = world(Some(0));
+    let root = h64(0xDEAD);
+    let legs: BTreeMap<_, _> = s
+        .bonds
+        .iter()
+        .flat_map(|(bond, row)| {
+            [PalwExecV2RewardFundV1::NativeSlice, PalwExecV2RewardFundV1::KernelFee]
+                .map(|fund| ((*bond, fund), PalwPayoutV2 { payload: row.payout_payload, amount: 100 }))
+        })
+        .collect();
+    assert_eq!(legs.len(), 16);
+    let total = legs.len() as u128 * 100;
+    s.exec_v2_rewards
+        .insert(root, PalwExecV2RewardRowV1 { final_daa: 101, liability_until: 101, allocation_sompi: total as u64, legs });
+    s.vesting_counters.created += total;
+    // Eight old non-market payments drain at step 1b, leaving the two market keys to reserve width at 3d.
+    for i in 0..10 {
+        let mut bytes = [0u8; 64];
+        if i >= 8 {
+            bytes[0] = PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX;
+        }
+        bytes[63] = i + 1;
+        s.pending_payouts.insert(Hash64::from_bytes(bytes), PalwPayoutV2 { payload: h64(0xD000 + i as u64), amount: 1 });
+    }
+    s.assert_internal_consistency(&p).unwrap();
+    assert_eq!(s.exec_v2_reward_release_keys_v1(103, true), 6);
+    let first = step(&s, &p, 10, 103, &[]).unwrap().0;
+    assert_eq!(first.exec_v2_reward_vesting_v1(&root).unwrap().legs.len(), 10);
+    assert_eq!(first.pending_payouts_iter().count(), 8);
+    assert_eq!(first.vesting_counters().moved, 600);
+    let mut s = first;
+    for i in 1..=3 {
+        let predicted = s.exec_v2_reward_release_keys_v1(103 + i, true);
+        let next = step(&s, &p, 10 + i, 103 + i, &[]).unwrap().0;
+        assert_eq!(next.pending_payouts_iter().count(), predicted);
+        assert!(predicted <= 8);
+        s = next;
+    }
+    assert!(s.exec_v2_reward_vesting_v1(&root).is_none());
+    assert!(s.pending_payouts_iter().next().is_none());
+    assert_eq!(s.vesting_counters().moved, total);
+    assert_eq!(s.vesting_counters().burned, 0);
+}
+
+#[test]
+fn closed_unpaid_receipts_reserve_slots_before_a_new_root_can_commit_to_final() {
+    for count in [PALW_EXEC_V2_MAX_OPEN_ROOTS - 1, PALW_EXEC_V2_MAX_OPEN_ROOTS] {
+        let (p, mut s, claim) = world(Some(0));
+        let past = s.last_point.as_ref().unwrap().daa_score - 1;
+        // Isolate the quota using closed, zero-value receipts awaiting the next step 3d cleanup.
+        for n in 0..count {
+            s.exec_v2_rewards.insert(
+                h64(0xF000 + n as u64),
+                PalwExecV2RewardRowV1 { final_daa: past, liability_until: past, allocation_sompi: 0, legs: BTreeMap::new() },
+            );
+        }
+        s.assert_internal_consistency(&p).unwrap();
+        if count == PALW_EXEC_V2_MAX_OPEN_ROOTS {
+            assert!(
+                matches!(open(&p, &s, decl(claim)).unwrap_err(), PalwStateV2Error::ExecV2Refused(reason) if reason == PalwWorkRootRefusalV2::RootQuota.to_string())
+            );
+        } else {
+            open(&p, &s, decl(claim)).expect("the last reserved execution slot can be admitted");
+        }
+    }
+}
 
 #[test]
 fn a_corrupted_ledger_is_caught_by_the_consistency_check() {
@@ -1426,7 +1511,17 @@ mod amendment_1 {
         rewarded: bool,
         claim_reward: Option<u64>,
     ) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Vec<KernelSlice>, Prefix) {
-        let (p, mut s, claim) = world(Some(0));
+        session_with_params(xp(Some(0)), reserved, prefix, rewarded, claim_reward)
+    }
+
+    fn session_with_params(
+        params: PalwStateParamsV2,
+        reserved: u64,
+        prefix: ClaimStateV1,
+        rewarded: bool,
+        claim_reward: Option<u64>,
+    ) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Vec<KernelSlice>, Prefix) {
+        let (p, mut s, claim) = world_with(params);
         with_route(&mut s, claim, Some(PLAN));
         if let Some(reward) = claim_reward {
             s.kernel_route.as_mut().unwrap().header.policy.claim_reward = reward;
@@ -1730,10 +1825,7 @@ mod amendment_1 {
         let finals = slices.iter().map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect();
         let s = kernel_block(&p, &s, 60, 130, finals);
         let s = run_to_terminal(&p, s, claim, 70, 131);
-        let payee_of = |bond: PalwBondKeyV2| s.bond(&bond).unwrap().payout_payload;
-        let paid_to = |bond: PalwBondKeyV2| {
-            s.pending_payouts_iter().filter(|(_, row)| row.payload == payee_of(bond)).map(|(_, row)| row.amount).sum::<u64>()
-        };
+        let paid_to = |bond: PalwBondKeyV2| held_exec_to(&s, claim, bond);
         let producer = s.vesting_row(&claim).expect("the vested row").producer.amount;
         let (leg_a, leg_b) = (paid_to(bond_key(20)), paid_to(bond_key(21)));
         assert_eq!(leg_a, 14, "capped at the collateral the route holds on 20's two claims");
@@ -1853,10 +1945,7 @@ mod amendment_1 {
     /// The legs `run_to_terminal` paid: `(root executor's vested producer leg, bond 20's, bond 21's)`, and the session-free twin's
     /// producer leg — what the three must add up to.
     fn paid_legs(s: &PalwChainStateV2, claim: Hash64) -> (u64, u64, u64, u64) {
-        let payee_of = |bond: PalwBondKeyV2| s.bond(&bond).unwrap().payout_payload;
-        let paid_to = |bond: PalwBondKeyV2| {
-            s.pending_payouts_iter().filter(|(_, row)| row.payload == payee_of(bond)).map(|(_, row)| row.amount).sum::<u64>()
-        };
+        let paid_to = |bond: PalwBondKeyV2| held_exec_to(s, claim, bond);
         let producer = s.vesting_row(&claim).expect("the vested row").producer.amount;
         let (pt, st, claim_t) = world(Some(0));
         let twin = run_to_terminal(&pt, license(&pt, &st, claim_t, 45, 111), claim_t, 70, 111);
@@ -2188,7 +2277,7 @@ mod amendment_1 {
     }
 
     #[test]
-    fn root_final_pays_actual_job_fees_within_one_allocation_and_refunds_unused_escrow() {
+    fn root_final_funds_vested_job_fees_within_one_allocation_and_refunds_unused_escrow() {
         use misaka_palw_kernel::rows::{TABLE_EXEC_REWARD_HOLDS_V1, TABLE_JOB_ESCROWS_V1};
         for fee in [0, 1_000, 200_000] {
             let (p, mut s, claim, slices, pre) = session_with(1_000_000, ClaimStateV1::Final { final_daa: 105 }, false, Some(fee));
@@ -2223,7 +2312,8 @@ mod amendment_1 {
             assert_eq!(total_b, share(work(1)));
             assert_eq!(producer + root.prefix.route_reward() + total_a + total_b, allocation);
             assert!(fee_a <= total_a && fee_b <= total_b);
-            assert_eq!(before - s.bonds[&bond_key(6)].collateral, route_total, "actual debit equals actual fee payout");
+            assert_eq!(before - s.bonds[&bond_key(6)].collateral, route_total, "actual debit funds exactly the fee entitlement");
+            assert!(s.pending_payouts_iter().next().is_none(), "Final creates no immediately spendable executor or Panel reward");
             assert!(route_total <= 4 * fee);
             assert!(
                 s.kernel_route
@@ -2234,6 +2324,261 @@ mod amendment_1 {
                     .all(|(t, _)| *t != TABLE_JOB_ESCROWS_V1 && *t != TABLE_EXEC_REWARD_HOLDS_V1)
             );
         }
+    }
+
+    fn funded_final(retirement: u64) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Vec<KernelSlice>, Prefix) {
+        let (p, s, claim, slices, pre, _) = funded_final_with_delta(retirement);
+        (p, s, claim, slices, pre)
+    }
+
+    fn funded_final_with_delta(
+        retirement: u64,
+    ) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Vec<KernelSlice>, Prefix, PalwStateDeltaV2) {
+        let (p, mut s, claim, slices, pre) = session_with(1_000_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+        let p = p.with_claim_retirement_daa(retirement).unwrap();
+        fund_jobs(&mut s, &pre, &slices, 1_000);
+        let s = license(&p, &s, claim, 45, 111);
+        let s = carry_all(&p, &s, &slices);
+        let s = kernel_block(&p, &s, 60, 130, slices.iter().map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect());
+        let (s, delta) = run_to_terminal_with_delta(&p, s, claim, 70, 131);
+        assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Settled { .. }));
+        assert!(s.exec_v2_reward_vesting_v1(&claim).unwrap().total_sompi_u128() > 4_000);
+        (p, s, claim, slices, pre, delta.unwrap())
+    }
+
+    #[test]
+    fn final_journal_freezes_the_consumer_window_for_native_maturity_and_readiness_after_retirement() {
+        use crate::palw_native_settlement_v1::*;
+        let (p, s, claim, _, _, delta) = funded_final_with_delta(700);
+        let until = s.exec_v2_reward_vesting_v1(&claim).unwrap().liability_until;
+        let evidence = native_delta_evidence_v1(&delta);
+        assert_eq!(evidence.exec_liability_until.get(&claim), Some(&until));
+        let original = &evidence.finalized_attempts.iter().find(|(id, _)| *id == claim).unwrap().1;
+        assert_eq!(native_effective_retention_v1(&s, &p, &claim, original).unwrap(), original.trace_retention_daa.max(until + 1));
+        let open = |state: &PalwChainStateV2, daa| {
+            native_open_from_v1(
+                state.claims_iter().map(|(id, c)| {
+                    (c.accepted_blue_score, c.phase.clone(), native_effective_retention_v1(state, &p, id, c).unwrap_or(u64::MAX))
+                }),
+                std::iter::empty(),
+                daa,
+            )
+        };
+        assert_eq!(open(&s, until), original.accepted_blue_score, "the inclusive dependency window is still open");
+        let after = original.trace_retention_daa.max(until + 1);
+        assert_eq!(open(&s, after), u64::MAX, "readiness closes on the same effective clock");
+        // A non-floor, priced evidence record lets the converter exercise maturity independently of the base-class exclusion.
+        let mut priced = evidence.clone();
+        priced.finalized_attempts[0].1.class_id = h64(0xABC);
+        priced.finalized_attempts[0].1.work_id = Some(h64(0xBEEF));
+        let facts = |state: &PalwChainStateV2| {
+            native_facts_of_block_v1(
+                &NativeFactRulesV1 {
+                    state,
+                    params: &p,
+                    canonical_work_daa: Some(0),
+                    quantum_maturity_daa: 0,
+                    claims_with_open_disputes: &BTreeSet::new(),
+                },
+                &priced,
+                &BTreeSet::new(),
+                (131, 71),
+            )
+        };
+        assert!(facts(&s).iter().all(|fact| fact.matured_daa > until));
+        assert_eq!(facts(&s).len(), 1);
+        let retired = run_to_retirement(&p, s, claim);
+        assert!(retired.exec_v2_root_v1(&claim).is_none());
+        let preserved = facts(&retired);
+        assert_eq!(preserved.len(), 1);
+        assert!(preserved[0].matured_daa > until, "frozen Final evidence survives removal of the live root");
+    }
+
+    #[test]
+    fn a_composite_final_vests_even_when_rcore_is_off_and_zero_slice_rounding_keeps_the_release_receipt() {
+        for escrow in [1, 1_000_000] {
+            let params = xp(Some(0)).with_rcore_plus_mirrors(None, 0, Vec::new());
+            let (p, mut s, claim, slices, _) =
+                session_with_params(params, 1_000_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+            // Arithmetic control for a root whose slice shares all round to zero.
+            s.claims.get_mut(&claim).unwrap().escrowed_reward = escrow;
+            let s = license(&p, &s, claim, 45, 111);
+            let s = carry_all(&p, &s, &slices);
+            let s =
+                kernel_block(&p, &s, 60, 130, slices.iter().map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect());
+            let s = run_to_terminal(&p, s, claim, 70, 131);
+            assert!(!p.rcore_plus_active_at(131));
+            assert!(s.pending_payouts_iter().next().is_none());
+            let native = s.vesting_row(&claim).expect("composite Final always vests its native reward");
+            let receipt = s.exec_v2_reward_vesting_v1(&claim).expect("receipt retains the forced vesting path");
+            if escrow == 1 {
+                assert!(receipt.legs.is_empty());
+            }
+            let daa = native.expiry_daa;
+            let word = s.last_point.as_ref().unwrap().blue_score + 1;
+            let released = step(&s, &p, word, daa, &[]).unwrap().0;
+            assert!(released.vesting_row(&claim).is_none(), "the force-vested row cannot be stranded by the off fence");
+            let done = step(&released, &p, word + 1, daa + 1, &[]).unwrap().0;
+            assert!(done.exec_v2_reward_vesting_v1(&claim).is_none());
+            assert_eq!(done.vesting_counters().created, done.vesting_counters().moved);
+        }
+    }
+
+    #[test]
+    fn native_final_reversal_closes_the_settled_exec_root_without_returning_exposure_twice() {
+        for reason in [PalwVoidReasonV2::CourtFraud, PalwVoidReasonV2::ProducerWithholding] {
+            let (p, s, claim, _, _) = funded_final(700);
+            let amount = s.exec_v2_reward_vesting_v1(&claim).unwrap().total_sompi_u128();
+            let before = s.vesting_counters();
+            let extras = xx();
+            let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+            let daa = s.last_point.as_ref().unwrap().daa_score + 1;
+            let context = ctx(0x1234, daa, s.last_point.as_ref().unwrap().blue_score + 1);
+            builder.reverse_convicted_final(&context, claim, reason).unwrap();
+            assert!(matches!(builder.state.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }));
+            assert!(
+                builder.state.exec_v2_reward_vesting_v1(&claim).unwrap().legs.is_empty(),
+                "a zero-value receipt preserves any actor-specific native legs until they finish"
+            );
+            assert_eq!(builder.state.vesting_counters().burned - before.burned, amount);
+            assert_eq!(builder.state.reserved_exposure(&bond_key(20)), 0);
+            assert_eq!(builder.state.reserved_exposure(&bond_key(21)), 0);
+            builder.state.assert_internal_consistency(&p).unwrap();
+            let root = builder.state.state_root();
+            builder.reverse_convicted_final(&context, claim, reason).unwrap();
+            assert_eq!(builder.state.state_root(), root, "duplicate reversal is idempotent");
+            let native = builder.state.vesting_row(&claim).unwrap().total_sompi_u128();
+            builder.burn_vesting_row(claim, h64(0xF0), crate::palw_offence_v1::PalwOffenceKindV1::CourtConviction).unwrap();
+            assert!(builder.state.exec_v2_reward_vesting_v1(&claim).is_none());
+            assert_eq!(builder.state.vesting_counters().burned - before.burned, native + amount);
+            crate::palw_vesting_v1::palw_vesting_consistency_v1(&builder.state).unwrap();
+            // The whole-native burn can arrive first too: neither counter write may overwrite the other fund's burn.
+            let mut other = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+            other.burn_vesting_row(claim, h64(0xF0), crate::palw_offence_v1::PalwOffenceKindV1::CourtConviction).unwrap();
+            assert!(other.state.exec_v2_reward_vesting_v1(&claim).is_none());
+            assert_eq!(other.state.vesting_counters().burned - before.burned, native + amount);
+            crate::palw_vesting_v1::palw_vesting_counters_consistent_v1(&other.state).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_settled_prefix_or_middle_slice_verdict_reverses_native_weight_evidence_and_every_unreleased_leg_once() {
+        for prefix in [false, true] {
+            for fraud in [false, true] {
+                let (p, mut s, claim, slices, pre) = funded_final(700);
+                // An independent history's weight must survive this one root's reversal.
+                s.safe_weight += 999;
+                s.retired_safe_weight += 999;
+                s.assert_internal_consistency(&p).unwrap();
+                let native = s.vesting_row(&claim).unwrap().total_sompi_u128();
+                let extra = s.exec_v2_reward_vesting_v1(&claim).unwrap().total_sompi_u128();
+                let before = s.vesting_counters();
+                let balances: Vec<_> = s.bonds.iter().map(|(key, row)| (*key, row.collateral)).collect();
+                let dependency = if prefix { pre.claim_id } else { slices[1].claim_id };
+                let key = palw_exec_v2_kernel_key_v1(&dependency);
+                let mut row: ClaimRowV1 =
+                    borsh::from_slice(&s.kernel_route.as_ref().unwrap().rows[&(TABLE_CLAIMS_V1, key.clone())]).unwrap();
+                row.convicted = fraud;
+                row.reserved = 0;
+                let word = s.last_point.as_ref().unwrap().blue_score + 1;
+                let daa = s.last_point.as_ref().unwrap().daa_score + 1;
+                let extras = PalwTransitionExtrasV1 {
+                    exec_v2_test_kernel_rows: vec![(TABLE_CLAIMS_V1, key, Some(borsh::to_vec(&row).unwrap()))],
+                    ..xx()
+                };
+                let (after, delta) = step_with(&s, &p, word, daa, &[], &extras).unwrap();
+                let reason = if fraud { PalwVoidReasonV2::WorkSliceProvenFalse } else { PalwVoidReasonV2::WorkSliceDefaulted };
+                assert!(
+                    matches!(after.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Voided { reason: actual, .. } if actual == reason)
+                );
+                assert!(matches!(after.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }));
+                assert_eq!(after.safe_weight(), 999, "only this root's exact Final contribution leaves");
+                assert_eq!(crate::palw_native_settlement_v1::native_delta_evidence_v1(&delta).voided, vec![claim]);
+                assert!(after.vesting_row(&claim).is_none() && after.exec_v2_reward_vesting_v1(&claim).is_none());
+                assert_eq!(after.vesting_counters().created, before.created);
+                assert_eq!(after.vesting_counters().moved, before.moved);
+                assert_eq!(after.vesting_counters().burned - before.burned, native + extra);
+                assert_eq!(u128::from(crate::palw_vesting_v1::palw_vesting_burned_by_delta_v1(&delta)), native + extra);
+                assert_eq!(
+                    after.bonds.iter().map(|(key, row)| (*key, row.collateral)).collect::<Vec<_>>(),
+                    balances,
+                    "the consumer adds no collateral punishment"
+                );
+                assert_eq!(after.reserved_exposure(&bond_key(20)), 0);
+                assert_eq!(after.reserved_exposure(&bond_key(21)), 0, "no second release of Final's executor exposures");
+                assert!(after.pending_payouts_iter().next().is_none());
+                let again = step_with(&after, &p, word + 1, daa + 1, &[], &extras).unwrap().0;
+                assert_eq!(again.safe_weight(), 999);
+                assert_eq!(again.vesting_counters(), after.vesting_counters(), "a duplicate verdict cannot burn twice");
+            }
+        }
+    }
+
+    #[test]
+    fn all_executor_rewards_wait_through_the_inclusive_horizon_and_release_finitely_with_retirement_and_queue_width() {
+        let (p, s, claim, _, _) = funded_final(700);
+        let until = s.exec_v2_reward_vesting_v1(&claim).unwrap().liability_until;
+        let native = s.vesting_row(&claim).unwrap();
+        assert_eq!(native.expiry_daa, until + 1);
+        assert!(deadline_of(&s, claim).unwrap() > until, "retirement cannot strand actionable dependency weight");
+        let created = s.vesting_counters().created;
+        assert_eq!(created, native.total_sompi_u128() + s.exec_v2_reward_vesting_v1(&claim).unwrap().total_sompi_u128());
+        assert!(s.pending_payouts_iter().next().is_none());
+        let word = s.last_point.as_ref().unwrap().blue_score + 1;
+        let at_last = step(&s, &p, word, until, &[]).unwrap().0;
+        assert!(at_last.claim(&claim).is_some());
+        assert!(at_last.vesting_row(&claim).is_some() && at_last.exec_v2_reward_vesting_v1(&claim).is_some());
+        assert!(at_last.pending_payouts_iter().next().is_none(), "last-day proofs remain actionable before any payout");
+        let first_release = step(&at_last, &p, word + 1, until + 1, &[]).unwrap().0;
+        assert!(first_release.vesting_row(&claim).is_none());
+        assert!(first_release.exec_v2_reward_vesting_v1(&claim).is_some(), "additional legs follow the native clock's release");
+        let mut state = first_release;
+        for i in 2..6 {
+            let predicted_keys = state.exec_v2_reward_release_keys_v1(until + i, true);
+            let predicted_native = crate::palw_vesting_v1::palw_vesting_next_block_plan_v1(&state, &p, until + i, None);
+            state = step(&state, &p, word + i, until + i, &[]).unwrap().0;
+            assert!(state.pending_payouts_iter().count() <= PALW_V2_MAX_PAYOUTS_PER_BLOCK);
+            assert!(predicted_keys + predicted_native.new_keys <= PALW_V2_MAX_PAYOUTS_PER_BLOCK);
+            if state.exec_v2_reward_vesting_v1(&claim).is_none() {
+                break;
+            }
+        }
+        assert!(state.claim(&claim).is_none() && state.exec_v2_root_v1(&claim).is_none());
+        assert!(state.exec_v2_reward_vesting_v1(&claim).is_none());
+        assert_eq!(state.vesting_counters().moved, created);
+        assert_eq!(state.vesting_counters().burned, 0);
+        crate::palw_vesting_v1::palw_vesting_counters_consistent_v1(&state).unwrap();
+    }
+
+    #[test]
+    fn executor_vesting_has_a_separate_optional_rooted_tail_and_refuses_shortened_or_overallocated_restore() {
+        let (p, s, claim, _, _) = funded_final(0);
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
+        let tail = borsh::to_vec(&s.exec_v2_rewards).unwrap();
+        assert_eq!(bytes[bytes.len() - tail.len() - 1], PALW_CARRIAGE_EXEC_V2_REWARDS_TAIL_V1);
+        let mut twice = bytes.clone();
+        twice.push(PALW_CARRIAGE_EXEC_V2_REWARDS_TAIL_V1);
+        twice.extend(tail);
+        assert!(borsh::from_slice::<PalwStateCarriageV2>(&twice).is_err());
+        assert!(borsh::from_slice::<PalwStateCarriageV2>(&bytes[..bytes.len() - 1]).is_err());
+        for shortened in [false, true] {
+            let mut bad = s.clone();
+            let row = bad.exec_v2_rewards.get_mut(&claim).unwrap();
+            if shortened {
+                row.liability_until = row.final_daa;
+            } else {
+                row.allocation_sompi = 0;
+            }
+            assert_ne!(bad.state_root(), s.state_root());
+            assert_ne!(borsh::to_vec(&PalwStateCarriageV2::from_state(&bad)).unwrap(), bytes);
+            assert!(bad.assert_internal_consistency(&p).is_err());
+            assert!(PalwStateCarriageV2::from_state(&bad).into_state(&p, None).is_err());
+        }
+        let mut short_native = PalwStateCarriageV2::from_state(&s);
+        short_native.vesting.get_mut(&claim).unwrap().expiry_daa = s.exec_v2_reward_vesting_v1(&claim).unwrap().liability_until;
+        assert!(
+            matches!(short_native.into_state(&p, None), Err(PalwStateV2Error::CarriageInconsistent(reason)) if reason.contains("native and additional vesting disagree"))
+        );
     }
 
     #[test]

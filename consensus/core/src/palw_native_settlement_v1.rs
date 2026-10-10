@@ -122,6 +122,8 @@ pub struct MatureUsefulWorkV1 {
 /// deltas are kept for the whole selected chain above the pruning point.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NativeDeltaEvidenceV1 {
+    /// Consumer liability frozen in the Final block's journal, retained even after root retirement.
+    pub exec_liability_until: std::collections::BTreeMap<Hash64, u64>,
     /// REAL (attempt) claims that entered `Final` in this block, with their record at `Final`.
     pub finalized_attempts: Vec<(Hash64, PalwClaimStateV2)>,
     /// Free-prompt claims whose spent set grew in this block: the record after the spend and the newly spent quanta.
@@ -142,6 +144,14 @@ impl NativeDeltaEvidenceV1 {
 pub fn native_delta_evidence_v1(delta: &PalwStateDeltaV2) -> NativeDeltaEvidenceV1 {
     let mut out = NativeDeltaEvidenceV1::default();
     for entry in &delta.entries {
+        if let PalwDeltaEntryV2::ExecV2Row { table, key, new: Some(bytes), .. } = entry
+            && *table == crate::palw_state_v2::PALW_EXEC_V2_TABLE_REWARDS_V1
+            && let (Ok(id), Ok(row)) =
+                (borsh::from_slice::<Hash64>(key), borsh::from_slice::<crate::palw_work_slice_v2::PalwExecV2RewardRowV1>(bytes))
+        {
+            let until = out.exec_liability_until.entry(id).or_default();
+            *until = (*until).max(row.liability_until);
+        }
         let PalwDeltaEntryV2::Claim { key, old, new: Some(new) } = entry else {
             continue;
         };
@@ -189,6 +199,21 @@ pub fn native_open_sessions_v1(state: &PalwChainStateV2) -> Vec<(Hash64, u64)> {
         .map(|((claim, _), session)| (*claim, session.deadline_daa))
         .chain(state.court_sessions_iter().map(|(_, session)| (session.claim, session.deadline_daa)))
         .collect()
+}
+
+/// A composite root remains retractable through its dependency window. This changes eligibility, never the signed trace lease.
+pub fn native_effective_retention_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> Option<u64> {
+    let until = state.exec_v2_liability_until_v1(params, id).ok()?;
+    let after = match until {
+        Some(until) => until.checked_add(1)?,
+        None => 0,
+    };
+    Some(claim.trace_retention_daa.max(after))
 }
 
 fn fp_slice_identity(work_id: &Hash64, index: u32) -> Hash64 {
@@ -269,8 +294,14 @@ pub fn native_facts_and_skips_v1(
     // producer still owes the trace to a running court and whose claim can still be convicted. So where the sink still holds the claim,
     // its live retention counts too; where it does not (retired), the recorded value stands. Without a class window the two are equal,
     // so this changes nothing on any network that does not arm that fence.
-    let live_retention = |id: &Hash64, recorded: &PalwClaimStateV2| -> u64 {
-        rules.state.claim(id).map_or(recorded.trace_retention_daa, |live| live.trace_retention_daa.max(recorded.trace_retention_daa))
+    let live_retention = |id: &Hash64, recorded: &PalwClaimStateV2| -> Option<u64> {
+        let current = rules.state.claim(id).unwrap_or(recorded);
+        let retained = native_effective_retention_v1(rules.state, rules.params, id, current)?.max(recorded.trace_retention_daa);
+        let after = match evidence.exec_liability_until.get(id) {
+            Some(until) => until.checked_add(1)?,
+            None => 0,
+        };
+        Some(retained.max(after))
     };
     let base = rules.params.base_class_id();
     let retirement = rules.params.claim_retirement_daa();
@@ -304,6 +335,10 @@ pub fn native_facts_and_skips_v1(
             }
             continue;
         };
+        let Some(retention) = live_retention(id, claim) else {
+            skipped.unpriced += 1;
+            continue;
+        };
         facts.push(MatureUsefulWorkV1 {
             identity,
             anchor: claim.accepted_block,
@@ -313,7 +348,7 @@ pub fn native_facts_and_skips_v1(
             accepted_blue: claim.accepted_blue_score,
             anchor_daa: claim.accepted_daa,
             accepted_daa: claim.accepted_daa,
-            matured_daa: live_retention(id, claim).max(final_daa.saturating_add(retirement)),
+            matured_daa: retention.max(final_daa.saturating_add(retirement)),
             work,
         });
     }
@@ -350,9 +385,13 @@ pub fn native_facts_and_skips_v1(
             }
             continue;
         };
+        let Some(retention) = live_retention(id, claim) else {
+            skipped.unpriced += 1;
+            continue;
+        };
         let matured_daa = final_daa
             .max(accepting_daa.saturating_add(rules.quantum_maturity_daa))
-            .max(live_retention(id, claim))
+            .max(retention)
             .max(final_daa.saturating_add(retirement));
         let work = palw_fp_spend_weight_v1(rules.state, claim, *quanta, &pricing);
         for index in fresh {

@@ -132,6 +132,8 @@ mod palw_vertex_fold_v1;
 // RFC-0008 v2: the work-slice ledgers' fold arm — a child module for the same reason.
 #[path = "palw_exec_v2_fold.rs"]
 mod palw_exec_v2_fold;
+#[path = "palw_exec_v2_rewards_v1.rs"]
+mod palw_exec_v2_rewards_v1;
 #[path = "palw_mesh_fold_v1.rs"]
 mod palw_mesh_fold_v1;
 #[path = "palw_kernel_route_fold_v1.rs"]
@@ -5460,7 +5462,8 @@ pub fn palw_rcore_deadline_v1(
                 .ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?,
         ),
         PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
-            palw_da_terminal_deadline_v1(terminal_deadline_at_v1(claim, params, last_daa)?, da)
+            let at = palw_exec_v2_rewards_v1::retirement(state, params, claim_id, terminal_deadline_at_v1(claim, params, last_daa)?, claim)?;
+            palw_da_terminal_deadline_v1(at, da)
         }
     })
 }
@@ -11529,6 +11532,8 @@ pub struct PalwChainStateV2 {
     /// ([`crate::palw_work_slice_v2::PalwExecV2StateV1`]). One Some-only root block and one carriage tail (`0xEE`) once any row
     /// exists, which nothing below `Params::palw_exec_payload_v2` can write.
     exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1,
+    /// Additional EXEC executor reward legs, separate from Panel seat penalties and optional in root/carriage.
+    exec_v2_rewards: BTreeMap<Hash64, crate::palw_work_slice_v2::PalwExecV2RewardRowV1>,
     /// **RFC-0006: each IR class's layer-shard plan**, declared once by its registrant (`TirShardPlanDeclared`), with the
     /// cell shares derived at the declaration. Enters the root and the carriage (tail `0xE1`) only when non-empty —
     /// nothing can be written below `Params::palw_tir_shard_v1` — so a dormant network roots exactly as before.
@@ -12074,6 +12079,7 @@ impl PalwChainStateV2 {
             class_court_windows: BTreeMap::new(),
             vertex: crate::palw_vertex_v1::PalwVertexStateV1::default(),
             exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1::default(),
+            exec_v2_rewards: BTreeMap::new(),
             tir_shard_plans: BTreeMap::new(),
             tir_shard_claims: BTreeMap::new(),
             floor_state: None,
@@ -14874,6 +14880,10 @@ impl PalwChainStateV2 {
             state.update(collection_root(b"exec_v2_jobs", &self.exec_v2.jobs).as_byte_slice());
             state.update(collection_root(b"exec_v2_anchored", &self.exec_v2.anchored).as_byte_slice());
         }
+        if !self.exec_v2_rewards.is_empty() {
+            state.update(b"exec_v2_reward_vesting/v1");
+            state.update(collection_root(b"exec_v2_reward_vesting", &self.exec_v2_rewards).as_byte_slice());
+        }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -15929,8 +15939,8 @@ impl PalwChainStateV2 {
                         *id,
                     ));
                 }
-                PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 => {
-                    // Final is gated by the court; no deadline until the last session closes.
+                PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 || self.exec_v2_holds_final_v1(id) => {
+                    // Final is gated by an open court or incomplete EXEC root on either native lifecycle.
                 }
                 PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
                     // The stored deadline may be LATER than licensed+window when a court cleared
@@ -15968,7 +15978,7 @@ impl PalwChainStateV2 {
                 // holds leave no entry, and a swept retirement leaves no CLAIM, so a terminal
                 // record that is still here owes at most one.
                 PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
-                    if let Some(at) = terminal_deadline_of(claim, params, self.last_point.as_ref())? {
+                    if let Some(at) = terminal_deadline_of(self, id, claim, params, self.last_point.as_ref())? {
                         expected.insert((at, *id));
                     }
                 }
@@ -16024,11 +16034,13 @@ fn terminal_daa_of(claim: &PalwClaimStateV2) -> Option<u64> {
 ///
 /// `None` when retirement is off, which is every state that predates the param.
 fn terminal_deadline_of(
+    state: &PalwChainStateV2,
+    id: &Hash64,
     claim: &PalwClaimStateV2,
     params: &PalwStateParamsV2,
     last_point: Option<&PalwBlockContextV2>,
 ) -> Result<Option<u64>, PalwStateV2Error> {
-    terminal_deadline_at_v1(claim, params, last_point.map(|point| point.daa_score))
+    palw_exec_v2_rewards_v1::retirement(state, params, id, terminal_deadline_at_v1(claim, params, last_point.map(|point| point.daa_score))?, claim)
 }
 
 /// [`terminal_deadline_of`] on the last point's DAA alone — the form DL-1
@@ -16884,6 +16896,7 @@ pub const PALW_EXEC_V2_TABLE_ROOTS_V1: u8 = 1;
 pub const PALW_EXEC_V2_TABLE_SLICES_V1: u8 = 2;
 pub const PALW_EXEC_V2_TABLE_JOBS_V1: u8 = 3;
 pub const PALW_EXEC_V2_TABLE_ANCHORED_V1: u8 = 4;
+pub const PALW_EXEC_V2_TABLE_REWARDS_V1: u8 = 5;
 
 /// The full effect one block application had on the state, in application order. Applying it to
 /// the same parent reproduces the transition's output exactly ([`apply_delta_v2`]); reverting it
@@ -24508,6 +24521,7 @@ impl<'a> TransitionBuilder<'a> {
         // epoch still takes scores, and frees its job (spec 17 §17.8.6).
         self.note_improvement_eval_reversed_v1(&id, &claim)?;
         self.write_claim(id, Some(voided.clone()));
+        palw_exec_v2_fold::on_claim_voided_v2(self, &id, ctx.daa_score)?;
         self.disarm_deadline(id);
         self.arm_retirement(id, &voided)?;
         Ok(())
@@ -28262,7 +28276,7 @@ impl<'a> TransitionBuilder<'a> {
         // and is recorded as the row's `buyback_bound`; the work-price remainder, which is never
         // named at all; FP receipt-spend payouts and execution-lane rights, which never pass here.
         // Below the fence (every other network, and a t12 twin with the fence off) nothing moves.
-        let vests = self.params.rcore_plus_active_at(final_daa);
+        let vests = self.params.rcore_plus_active_at(final_daa) || self.state.exec_v2.roots.contains_key(&id);
         let mut vested: Option<PalwVestedRewardV1> = None;
         // RFC-0008 v2: whether the claim's work session was settled (and its slice executors' legs read out below). It stays `false`
         // for a claim with no root — every claim below the fence — and then a nil settlement below is a no-op.
@@ -28388,11 +28402,9 @@ impl<'a> TransitionBuilder<'a> {
                     }
                 }
             }
-            // RFC-0008 v2: each slice executor's leg, paid as a seat's is (keyed by payee, accumulated) — never a carrier subsidy.
-            // These legs are not vested: no post-Final conviction route for a slice exists in this release (a gate).
+            // Additional EXEC legs retain their distinct role until the root's dependency horizon and native second clock close.
             for (bond, amount) in &exec_legs {
-                let leg_payload = self.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?.payout_payload;
-                self.add_panel_payout(leg_payload, *amount)?;
+                palw_exec_v2_rewards_v1::add(self, id, *bond, crate::palw_work_slice_v2::PalwExecV2RewardFundV1::NativeSlice, *amount)?;
             }
         }
         // RFC-0008 v2: a claim with a session whose reward leg was nil (no escrow) still settles — once, owing nothing — so the
@@ -28415,6 +28427,7 @@ impl<'a> TransitionBuilder<'a> {
         if let Some(vested) = vested {
             self.write_vesting_row_at_final(id, claim, final_daa, vested)?;
         }
+        palw_exec_v2_rewards_v1::finish(self, id);
         // ADR-0125: past the lane's fence a finalized attempt is a credit in its span's schedule.
         if let Some(lane) = self.extras.round_lane {
             self.record_round_final(id, claim, final_daa, lane.schedule_span_daa)?;
@@ -28576,7 +28589,8 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         let terminal_daa = terminal_daa_of(claim).expect("arm_retirement is called on a terminal claim");
-        let at = terminal_daa.checked_add(self.params.claim_retirement_daa).ok_or(PalwStateV2Error::Overflow("claim retirement"))?;
+        let ordinary = terminal_daa.checked_add(self.params.claim_retirement_daa).ok_or(PalwStateV2Error::Overflow("claim retirement"))?;
+        let at = palw_exec_v2_rewards_v1::retirement(&self.state, self.params, &id, Some(ordinary), claim)?.expect("retirement is configured");
         self.arm_deadline(at, id);
         Ok(())
     }
@@ -29087,7 +29101,10 @@ impl<'a> TransitionBuilder<'a> {
             seats: vested.seats,
             reserve: vested.reserve,
             final_daa,
-            expiry_daa: crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(final_daa, self.params.window_court),
+            expiry_daa: match palw_exec_v2_rewards_v1::horizon(&self.state, self.params, &id)? {
+                Some(until) => until.checked_add(1).ok_or(PalwStateV2Error::Overflow("EXEC vesting expiry"))?,
+                None => crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(final_daa, self.params.window_court),
+            },
             settled_at_final: self.state.settled_attempt_finals,
             matured_at: None,
         };
@@ -29119,12 +29136,14 @@ impl<'a> TransitionBuilder<'a> {
         kind: crate::palw_offence_v1::PalwOffenceKindV1,
     ) -> Result<Option<u64>, PalwStateV2Error> {
         let Some(row) = self.state.vesting.get(&claim_id).cloned() else {
+            palw_exec_v2_rewards_v1::burn(self, claim_id)?;
             return Ok(None);
         };
         let mut counters = self.state.vesting_counters;
         counters.burned = counters.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting burned"))?;
         self.write_vesting(claim_id, None);
         self.write_vesting_counters(counters);
+        palw_exec_v2_rewards_v1::burn(self, claim_id)?;
         let sompi = row.total_sompi();
         self.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::Burned {
             claim_id,
@@ -30011,7 +30030,8 @@ pub fn apply_palw_transition_v7(
     //     `Params::palw_rcore_plus`): maturity — latch, then plan, then move. After 3′ and 3c, so
     //     the market's moves this block see the queue before any maturity insert, and before 3a.
     //     Below the fence this is skipped entirely and the fold is byte-identical to before.
-    if builder.params.rcore_plus_active_at(ctx.daa_score) {
+    if builder.params.rcore_plus_active_at(ctx.daa_score) || !builder.state.exec_v2_rewards.is_empty() {
+        palw_exec_v2_rewards_v1::mature(&mut builder, ctx.daa_score)?;
         apply_vesting_maturity(&mut builder, ctx)?;
     }
     // 3d′. ADR-0152-adjacent (Activation Pool; the fix round's F5): the scheduled pool payouts are
@@ -42034,6 +42054,7 @@ pub struct PalwStateCarriageV2 {
     pub vertex: crate::palw_vertex_v1::PalwVertexStateV1,
     /// RFC-0008 v2: the work-slice ledgers in appended tail `0xEE`, present only when any table is non-empty.
     pub exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1,
+    pub exec_v2_rewards: BTreeMap<Hash64, crate::palw_work_slice_v2::PalwExecV2RewardRowV1>,
     /// RFC-0006: the layer-shard plans, in tail `0xE1` (with the claims'), present only when either is non-empty.
     pub tir_shard_plans: BTreeMap<Hash64, crate::palw_tir_shard_v1::PalwTirShardPlanV1>,
     /// RFC-0006: the per-shard claim records, in tail `0xE1`.
@@ -42391,6 +42412,7 @@ const PALW_CARRIAGE_VERTEX_TAIL_V1: u8 = 0xE4;
 /// from every tail taken or reserved (`0x87`–`0xBB`, `0xC0`–`0xDA`, `0xE0`, `0xE1`, `0xE4`, `0xE6`, `0xEA`, `0xEB`);
 /// `exec_v2_tail_is_pinned_at_0xee` pins the value.
 const PALW_CARRIAGE_EXEC_V2_TAIL_V1: u8 = 0xEE;
+const PALW_CARRIAGE_EXEC_V2_REWARDS_TAIL_V1: u8 = 0xF0;
 
 /// **RFC-0006's tail** (`tir_shard_plans`, then `tir_shard_claims`): `0xE1`, the next byte after the court windows'.
 /// Present only when either table is non-empty, which nothing can make so below `Params::palw_tir_shard_v1`.
@@ -42756,6 +42778,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_EXEC_V2_TAIL_V1.serialize(writer)?;
             self.exec_v2.serialize(writer)?;
         }
+        if !self.exec_v2_rewards.is_empty() {
+            PALW_CARRIAGE_EXEC_V2_REWARDS_TAIL_V1.serialize(writer)?;
+            self.exec_v2_rewards.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -42950,6 +42976,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_bond_budget = false;
         let mut exec_v2 = crate::palw_work_slice_v2::PalwExecV2StateV1::default();
         let mut seen_exec_v2 = false;
+        let mut exec_v2_rewards = BTreeMap::new();
+        let mut seen_exec_v2_rewards = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -43209,6 +43237,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_exec_v2 = true;
                     exec_v2 = crate::palw_work_slice_v2::PalwExecV2StateV1::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_EXEC_V2_REWARDS_TAIL_V1 if !seen_exec_v2_rewards => {
+                    seen_exec_v2_rewards = true;
+                    exec_v2_rewards = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_SEAT_ROOT_READINESS_TAIL_V1 if !seen_seat_root_readiness => {
                     seen_seat_root_readiness = true;
                     seat_root_readiness = BTreeMap::deserialize_reader(reader)?;
@@ -43370,6 +43402,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             kernel_route,
             bond_budget,
             exec_v2,
+            exec_v2_rewards,
         })
     }
 }
@@ -43489,6 +43522,7 @@ impl PalwStateCarriageV2 {
             kernel_route: state.kernel_route.clone(),
             bond_budget: state.bond_budget.clone(),
             exec_v2: state.exec_v2.clone(),
+            exec_v2_rewards: state.exec_v2_rewards.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -43711,6 +43745,7 @@ impl PalwStateCarriageV2 {
             kernel_route: self.kernel_route,
             bond_budget: self.bond_budget,
             exec_v2: self.exec_v2,
+            exec_v2_rewards: self.exec_v2_rewards,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -61936,6 +61971,7 @@ pub(crate) mod tests {
             bond_budget: _,
             // RFC-0008 v2: one Some-only block of three, empty here.
             exec_v2: _,
+            exec_v2_rewards: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 

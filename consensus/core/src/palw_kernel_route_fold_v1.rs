@@ -394,6 +394,7 @@ pub(super) fn exec_liability_floor_v1(
         .checked_add(native_window.max(policy.liability_daa))
         .and_then(|until| until.checked_add(policy.court_deadline_daa))
         .and_then(|until| until.checked_add(policy.proof_grace_daa))
+        .filter(|until| *until < u64::MAX)
         .ok_or_else(|| refused("EXEC liability horizon overflows"))
 }
 
@@ -442,7 +443,7 @@ pub(super) fn finish_exec_rewards_v1(
         *cap -= fee;
         paid.push(fee);
     }
-    apply_settlements(builder, &events, true)?;
+    apply_settlements_to_exec_vesting(builder, &events, true, Some(root))?;
     flush(builder, &ledger, &before);
     Ok(paid)
 }
@@ -472,6 +473,15 @@ pub(super) fn apply_settlements(
     builder: &mut TransitionBuilder<'_>,
     events: &[LedgerEventV1],
     strict: bool,
+) -> Result<(), PalwStateV2Error> {
+    apply_settlements_to_exec_vesting(builder, events, strict, None)
+}
+
+fn apply_settlements_to_exec_vesting(
+    builder: &mut TransitionBuilder<'_>,
+    events: &[LedgerEventV1],
+    strict: bool,
+    exec_root: Option<Hash64>,
 ) -> Result<(), PalwStateV2Error> {
     // GAP-5: what this batch actually debited from posters' escrows — the only source a Final reward is paid from. A `FinalReward`
     // with no spent escrow behind it is never paid (there is no unfunded reward path).
@@ -521,6 +531,19 @@ pub(super) fn apply_settlements(
                 } else {
                     s.amount
                 };
+                if s.kind == SettlementKindV1::FinalReward
+                    && let Some(root) = exec_root
+                {
+                    let bond = key.ok_or_else(|| refused("an EXEC fee names an unknown bond"))?;
+                    super::palw_exec_v2_rewards_v1::add(
+                        builder,
+                        root,
+                        bond,
+                        crate::palw_work_slice_v2::PalwExecV2RewardFundV1::KernelFee,
+                        amount,
+                    )?;
+                    continue;
+                }
                 let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
                 match payee {
                     Some(payload) => match builder.add_kernel_payout(payload, amount) {

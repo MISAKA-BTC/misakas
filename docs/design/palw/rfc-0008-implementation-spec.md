@@ -385,8 +385,8 @@ the root's settlement is capped at the sum of its slices' caps; the excess stays
 `sum(paid) == allocation` still holds). **Why:** section 6 requires retention "to cover … collectible liability after Final"; an
 uncapped leg larger than the collateral that backs it would be an uncollectible gain. The route's own invariant is `claim_reward <
 claim_collateral` (what one claim gains stays below what it puts at risk); a slice leg is a second gain on the same claim, so the two
-together are held under the same reservation. The legs stay unvested (`add_panel_payout`): vesting would add a second, V2-side forfeiture
-path for a fault the kernel route already convicts.
+together are held under the same reservation. Section 15 supersedes the original immediate-payment design: an independently
+funded EXEC reward row holds slice and fee legs without inventing an additional collateral offence against another actor.
 
 **Revision (X8R round 2, 2026-10-09).** The first text capped each leg at the reservation the route held *at the root's settlement*. The
 route releases a Final claim's reservation once its liability horizon passes, so that cap fell to zero for every slice verified long
@@ -697,24 +697,23 @@ native leg_b = e_b - Σ fee payments to b
 Σ actual poster debits = Σ f_i
 ```
 
-A single ledger batch releases the FULL escrow reservation, debits only `f_i`, pays exactly `f_i` to the claim producer,
+A single ledger batch releases the FULL escrow reservation, debits only `f_i`, funds exactly `f_i` for the claim producer,
 and releases the unused reservation to its poster. Re-sync poster collateral against the consumer's real bonds before the batch.
 `apply_settlements` matches a FinalReward to PayJobEscrow of the SAME claim; another claim's debit cannot fund it.
 The actual amounts, rather than `policy.claim_reward`, are saved in the existing prefix/slice `route_reward` fields at root Final.
 When `A = 0`, every escrow is released and every producer leg is 0. No additional R reservation is created for a bound claim;
 consuming the root's gross allocation once covers native and fee funding together.
 
-All ledger rows, poster debits, payout rows, exposure releases and the root `Settled` marker are journaled by the same transition.
+All ledger rows, poster debits, funded vesting rows, exposure releases and the root `Settled` marker are journaled by the same transition.
 The existing delta/carriage rules apply and revert them together. A second root Final returns no new payment. A voided root pays
 zero; an incomplete root cannot invoke settlement. Default, conviction or expiry cancels every bound hold and releases escrow
 without reward or collateral debit. A previously verified piece receives no partial payment from an unsuccessful root.
 
 ### 13.3 Remaining acceptance boundaries
 
-This correction does not prove post-root-Final recovery. Section 14 prevents a bound kernel reservation's ordinary expiry before
-the root's base liability/court path, but a Settled root is still outside dependency-verdict propagation, and slice/native/kernel
-payouts do not yet all share the root's vesting horizon.
-Those WINDOW requirements remain activation blockers. Standalone kernel budget consumers, fee-only Round B policy,
+Section 14 prevents a bound kernel reservation's ordinary expiry before the root's base liability/court path. Section 15 connects
+settled-root verdicts and delayed native/slice/kernel payments in the fold; its remaining WINDOW boundaries still block activation.
+Standalone kernel budget consumers, fee-only Round B policy,
 market-fee R policy, whole-model soundness, economics, pruned authorization history and worst-case resources retain their
 separate requirements in the full RFC6/7/8/12 audit. No preset or public activation validation is armed by this change.
 
@@ -770,7 +769,7 @@ retention, existing outsider verdict propagation before root Final and replay. A
 liability and an early lost reservation. The actual node still uses the existing REAL Panel admission seam and reaches ready,
 not native root Final.
 
-This floor alone does not close WINDOW. Required follow-ups remain:
+This floor alone does not close WINDOW. Section 15 addresses the first two items in the fold, with the stated evidence limits:
 
 - Propagate settled-root prefix/slice conviction and post-Final availability default into native Final evidence and exact safe
   weight reversal, and burn every still-unreleased native/kernel/slice reward leg consistently.
@@ -782,3 +781,50 @@ This floor alone does not close WINDOW. Required follow-ups remain:
   admission limit is a bound, not proof that the existing signed job contract has agreed to that obligation.
 
 These requirements retain their separate acceptance evidence in the full RFC6/7/8/12 audit. Public fences remain dormant.
+
+## 15. Composite reward vesting and settled-root retraction
+
+This revision supersedes the immediate slice/fee payment statements in sections 10 and 13. A native root Final funds its
+allocation once. Native producer/Panel/reserve legs remain in the existing native vesting row. Additional executor legs use a
+separate root-keyed row whose `(bond, NativeSlice | KernelFee)` keys preserve their role and funding source. A Panel-seat-only
+burn cannot accidentally treat a slice executor as a seat. Kernel fee entitlement requires the matching actual poster debit;
+funding occurs at Final, while spendable payout waits. Rounded zero additional legs still retain a zero-value receipt while the
+forced native row exists. A native actor-specific cancellation also retains this zero-value receipt until the remaining native
+legs finish or are burned; cancelling the additional fund cannot strand that native row. This forces every composite root to
+vest even if the independent rcore fence is off, while leaving
+off-fence histories without an EXEC receipt unchanged.
+
+The row freezes `final_daa`, `allocation_sompi`, fixed payout payloads and the maximum of `H_exec` and every stored dependency's
+liability horizon. The native row's expiry is strictly after this inclusive horizon. Additional payments wait until that day
+has passed AND the native row has left its second-clock/DA/freeze hold. An existing queue budget reserves up to two market keys;
+the release planner merges existing payout keys and admits only the remaining new keys, partially draining an old additional
+row before new native moves. Native and additional counter totals satisfy `created = live + moved + burned`. A retired root's
+unpaid receipt still occupies the global execution quota, so admission reserves a Final slot before writing a new root.
+
+Prefix and slice verdict sync includes Settled roots. A failed dependency voids the affected prefix/suffix and composite root,
+reverses exactly the native Final's budgeted/scaled safe contribution and native evidence, forfeits this claim's minted Round
+rights, and burns every unreleased native and additional reward leg once. Kernel prosecution supplies the offending executor's
+collateral charge; this propagation creates no offence or extra slash against the other actors. Exposure returned at Final is
+never returned again. A native Final reversal also closes its settled EXEC root and cancels the additional earnings; the native
+actor-specific penalty paths retain their existing attribution rules and need the separate compatibility acceptance below.
+
+Claim retirement waits strictly past the dependency horizon. Native Safe facts and the node's lifecycle/readiness paths use the
+same effective deadline, taking the maximum with the original signed trace retention. The Final journal freezes the consumer
+deadline for native evidence after live-root retirement; no producer-signed trace lease is silently rewritten. The optional
+`0xF0` state-carriage tail and a separate state-root collection carry additional rows. Existing native vesting row bytes,
+existing note tags and empty EXEC state-root/carriage bytes retain their layouts. All mutations use the common transition
+journal, including apply/revert and restore consistency checks.
+
+### 15.1 Acceptance boundaries
+
+Fold tests exercise native root Final, exact funding, prefix/middle-slice post-Final fraud/default verdicts, duplicate retraction,
+inclusive horizon, bounded queue release, native retirement, frozen maturity evidence, malformed tails, shortened allocation/
+horizon refusal, and per-transition apply/revert/carriage restoration. Verdict injections isolate propagation from prosecution;
+real kernel lifecycle and actual-node tests establish prosecution and binding separately. Combining those tests is not an
+actual-node post-native-Final public-proof demonstration. Pruned P2P provenance and worst-case release latency remain open.
+
+The complete WINDOW gate still requires native DA/computation-court extension to retain dependency collateral and public
+material/provider TTL, worker consent and capital cost, the full actor-specific/tier/B-3/RPC reader compatibility matrix, and
+actual-node native root Final followed by public conviction/default and payment recovery. The existing vesting RPC describes
+native rows; it does not yet page the independent executor-fund rows. Standalone kernel budgets, R6/R7/R12 and economic gates
+remain independent blockers. This change neither enables a public preset nor approves an activation height.
