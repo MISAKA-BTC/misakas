@@ -61,7 +61,7 @@ fn rc_params() -> PalwStateParamsV2 {
 }
 
 fn rc_extras(armed: bool) -> PalwTransitionExtrasV1 {
-    PalwTransitionExtrasV1 { legacy_held_da_v2_active: armed, ..launch() }
+    PalwTransitionExtrasV1 { legacy_held_da_v2_active: armed, objective_offence_daa: Some(0), ..launch() }
 }
 
 /// One block through the real transition, checked as T54g's are: consistency, the delta re-applies and reverts, the carriage reloads.
@@ -156,6 +156,16 @@ fn rc_licensed(
     profile: &PalwShapeProfileV3,
     artifact_root: Hash64,
 ) -> (PalwChainStateV2, Hash64) {
+    rc_licensed_at_header(d, canonical, profile, artifact_root, None)
+}
+
+fn rc_licensed_at_header(
+    d: &Produced,
+    canonical: &PalwJobContextV2,
+    profile: &PalwShapeProfileV3,
+    artifact_root: Hash64,
+    job_anchor: Option<Hash64>,
+) -> (PalwChainStateV2, Hash64) {
     let class_id = profile.shape_profile_id();
     let bond = |n: u64| PalwConsensusObjectV2::BondRegistered {
         bond: bond_key(n),
@@ -223,7 +233,37 @@ fn rc_licensed(
         signature: vec![0; 8],
     };
     let claim = attempt_id_v2(&env.attempt);
-    let s = rc_step_with(&s, 101, &[], Some(&env), true).expect("the claim");
+    let s = if let Some(anchor) = job_anchor {
+        // The older localizer fixtures have no header. This identity fixture threads the real v7 fold's header inputs,
+        // rather than editing a claim's recorded identity after its acceptance.
+        let p = rc_params();
+        let extras = PalwTransitionExtrasV1 { own_job_anchor: anchor, ..rc_extras(true) };
+        let key = kaspa_consensus_core::palw_attempt_v2::execution_commitment_v3(&env.attempt, anchor);
+        let (child, delta, _) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
+            &s,
+            &p,
+            None,
+            &point(101),
+            &[],
+            kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(&env),
+            &[],
+            key,
+            false,
+            false,
+            false,
+            true,
+            &extras,
+        )
+        .expect("the anchored claim");
+        child.assert_internal_consistency(&p).expect("consistent anchored claim");
+        child.assert_deadline_consistency(&p).expect("consistent deadlines");
+        assert_eq!(apply_delta_v2(&s, &delta, &p).expect("reapplies"), child);
+        assert_eq!(revert_delta_v2(&child, &delta, &p).expect("reverts"), s);
+        assert_eq!(PalwStateCarriageV2::from_state(&child).into_state(&p, Some(child.state_root())).expect("reloads"), child);
+        child
+    } else {
+        rc_step_with(&s, 101, &[], Some(&env), true).expect("the claim")
+    };
     let seats = vec![
         PalwPanelSeatV2 { bond: bond_key(SEAT), operator_id: palw_operator_id_v2(&op_key(20 + SEAT)) },
         PalwPanelSeatV2 { bond: bond_key(COLLUDER), operator_id: palw_operator_id_v2(&op_key(20 + COLLUDER)) },
@@ -489,6 +529,7 @@ fn service_filer_case(
     case.verdict = PalwFraudFilerVerdictV1::Mismatch(Arc::new(PalwFraudFilerRunV1 {
         execution_root: o.roots.execution_root,
         trace_root: o.roots.trace_root,
+        output_root: o.roots.output_root.unwrap_or_default(),
         legacy: Some(replica),
         own_range: Box::new(|_, _| panic!("the LG14-B controller does not use the linear range fallback")),
         _reservation: None,
@@ -997,6 +1038,123 @@ async fn lg14b_a_garbage_gather_is_convicted_by_the_leaf_recompute_before_and_af
         assert!(after.0 < before.0, "the producer is charged (after_final {after_final})");
         assert_eq!(after.1, before.1, "the outsider pays nothing (after_final {after_final})");
     }
+}
+
+/// A public event from a borrowed execution proves a wrong job, including after a colluding Panel made the claim Final.
+/// The fixture intentionally places a free-prompt execution on an attempt claim: the recorded header anchor is another job.
+#[tokio::test]
+async fn lg14b_a_public_binding_convicts_the_wrong_job_without_an_answered_session_before_and_after_final() {
+    use crate::palw_panel::palw_fraud_filer::palw_fraud_filer_public_filing_v1;
+    use kaspa_consensus_core::palw_offence_attribution_v1::{
+        PalwExecutorRefutedEvidenceV1, PalwIdentityRulesV1, palw_offence_target_v1,
+    };
+    use kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1;
+    let f = Fixture::new(false);
+    let d = produce(&f.artifact, &f.profile, false);
+    // Producer publishes the authenticated event; the outsider only receives its public bytes, never this capture.
+    let event = d.backend.disclose_trace_event(&d.material, 0, 0).expect("public event");
+    for after_final in [false, true] {
+        let (s, claim) = rc_licensed_at_header(&d, &f.canonical, &f.profile, f.root, Some(h64(0xA001)));
+        let mut w = World { s, daa: 104, chain: Vec::new() };
+        if after_final {
+            for _ in 0..2_000 {
+                if matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Final { .. }) {
+                    break;
+                }
+                w.quiet();
+            }
+            assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Final { .. }));
+        }
+        assert!(w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).expect("view").answered.is_empty());
+        let target = palw_offence_target_v1(&w.s, &claim).expect("recorded public target");
+        let rules =
+            PalwIdentityRulesV1 { prompt_ids_form: d.backend.prompt_ids_form(), base_class_id: h64(1), da_signer_liability: true };
+        let answer = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event.clone()));
+        let filing =
+            palw_fraud_filer_public_filing_v1(&target, rules, &answer, Some(w.daa)).expect("proof builds").expect("wrong job");
+        let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &filing.object else { panic!("kind 4") };
+        let decoded: PalwExecutorRefutedEvidenceV1 = borsh::from_slice(evidence).expect("court evidence");
+        assert!(matches!(decoded.contradiction, PalwPanelContradictionV1::IdentityMismatch { .. }));
+        let before = bonds_collateral(&w.s);
+        // The node hands this object to its reporter door; this fold assertion checks the conviction itself without reporter reward.
+        w.block(vec![filing.object]).expect("the actual objective adjudicator convicts");
+        let PalwClaimPhaseV2::Voided { reason, .. } = phase_of(&w.s, &claim) else { panic!("convicted") };
+        assert_eq!(reason, PalwVoidReasonV2::CourtFraud);
+        assert!(bonds_collateral(&w.s).0 < before.0);
+        assert_eq!(bonds_collateral(&w.s).1, before.1);
+    }
+}
+
+/// Output evidence is built only from the publicly authenticated event. An honest output and an unbound event never file.
+#[tokio::test]
+async fn lg14b_public_tiled_tokens_prove_output_mismatch_and_refuse_an_honest_or_unbound_twin() {
+    use crate::palw_panel::palw_fraud_filer::palw_fraud_filer_public_filing_v1;
+    use kaspa_consensus_core::palw_offence_attribution_v1::{
+        PalwClaimSourceKindV1, PalwExecutorRefutedEvidenceV1, PalwIdentityRulesV1, PalwOffenceTargetV1,
+    };
+    use kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1;
+    let f = Fixture::new(false);
+    let d = produce(&f.artifact, &f.profile, false);
+    let event = d.backend.disclose_trace_event(&d.material, 0, 0).expect("public event");
+    assert!(matches!(event, kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Tiled { .. }));
+    let binding = event.binding();
+    let ids = match &event {
+        kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Tiled { generated_token_ids, .. } => generated_token_ids,
+        _ => unreachable!(),
+    };
+    // Unit-level target for the correctly recorded FP job; the wrong-attempt-job fold test above uses actual state facts.
+    let mut target = PalwOffenceTargetV1 {
+        claim_id: h64(500),
+        class_id: f.profile.shape_profile_id(),
+        artifact_root: f.root,
+        executor_bond: bond_key(PRODUCER),
+        execution_root: binding.committed_execution_root,
+        lane: Some(PalwClaimSourceKindV1::FreePrompt),
+        segment_count: None,
+        phase: None,
+        job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
+        trace_root: binding.full_logits_trace_root,
+        output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, ids),
+    };
+    let rules = PalwIdentityRulesV1 { prompt_ids_form: d.backend.prompt_ids_form(), base_class_id: h64(1), da_signer_liability: true };
+    let answer = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event.clone()));
+    assert!(palw_fraud_filer_public_filing_v1(&target, rules, &answer, None).expect("honest").is_none());
+    target.output_root = h64(501);
+    let filing = palw_fraud_filer_public_filing_v1(&target, rules, &answer, None).expect("bound").expect("wrong output");
+    let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = filing.object else { panic!("kind 4") };
+    let decoded: PalwExecutorRefutedEvidenceV1 = borsh::from_slice(&evidence).expect("court evidence");
+    assert!(matches!(decoded.contradiction, PalwPanelContradictionV1::OutputMismatch { .. }));
+    // A newer carrier may have a real binding but garbage token bytes. Across two pages the good historical pin wins.
+    let mut junk = event.clone();
+    if let kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Tiled { generated_token_ids, .. } = &mut junk {
+        generated_token_ids[0] = generated_token_ids[0].wrapping_add(1);
+    }
+    let junk = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(junk));
+    assert!(palw_fraud_filer_public_filing_v1(&target, rules, &junk, None).is_err());
+    let key = (target.claim_id, PalwDaUnitV1::Event { row: 0, tile: 0 });
+    let mut cache = BTreeMap::new();
+    crate::palw_panel::palw_fraud_filer::palw_fraud_filer_cache_answer_v1(&mut cache, key, junk.clone());
+    crate::palw_panel::palw_fraud_filer::palw_fraud_filer_cache_answer_v1(&mut cache, key, answer.clone());
+    crate::palw_panel::palw_fraud_filer::palw_fraud_filer_cache_answer_v1(&mut cache, key, junk);
+    assert_eq!(cache.len(), 1);
+    assert!(palw_fraud_filer_public_filing_v1(&target, rules, &cache[&key], None).expect("good historical pin retained").is_some());
+    // Count-only faults are terminal from the authenticated binding, before descent compares tree widths.
+    let mut count_event = event.clone();
+    let changed = match &mut count_event {
+        kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Tiled { binding, .. } => binding,
+        _ => unreachable!(),
+    };
+    changed.step_leaf_count += 1;
+    changed.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(changed);
+    target.execution_root = changed.committed_execution_root;
+    let count_answer = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(count_event));
+    let proof =
+        palw_fraud_filer_public_filing_v1(&target, rules, &count_answer, None).expect("count proof").expect("noncanonical count");
+    let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = proof.object else { panic!("kind 4") };
+    let decoded: PalwExecutorRefutedEvidenceV1 = borsh::from_slice(&evidence).expect("count evidence");
+    assert!(matches!(decoded.contradiction, PalwPanelContradictionV1::StepStructural(_)));
+    target.execution_root = h64(502);
+    assert!(palw_fraud_filer_public_filing_v1(&target, rules, &answer, None).is_err());
 }
 
 /// The outsider's tag 159 at the located leaf: built from its own replica and the public frontiers, asked of the court's own verdict

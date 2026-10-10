@@ -201,6 +201,13 @@ behind new dormant fences, because the route is ARMED on testnet-12 and the live
   consistent-garbage-trace (row 0) / borrowed-trace / state / routing / checkpoint / output cases.
 Until both lanes' fences are verified, legacy classes are "not Panel=0, not new-reward eligible".
 
+Codex review branch update (2026-10-10): the common filer now hands public binding identity/shape faults and authenticated
+output token pins to the existing kind-4 reporter door, before subtree descent. It compares execution, trace AND output roots
+before clearing a replay as honest. Wrong-job conviction before/after Final is V-fold; output/count proof builders and pin-cache
+poisoning rejection are V-unit. This does not complete long-prompt input proof wiring, checkpoint/trace localization, public
+free-prompt startup, post-retirement discovery, all-family eligibility or the full service V-node run. The latest scope/logs are
+in `docs/audit/g14-review-2026-10-10/implementation.md`. Fences remain dormant.
+
 ## 3e. Round / EXEC additional acceptance conditions (user, 2026-10-10)
 
 The user adopted `docs/palw-round-exec-additional-acceptance-2026-10-10.md`:

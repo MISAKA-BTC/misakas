@@ -19,6 +19,9 @@
 
 - held-court後半のpublic readerもpaginationへ変更した。部分suffixからroot filingを採用せず、要求floorまでの最古の認証済みfilingと選択chunkだけを保持する。unit選択変更でbackfillし、cached filingのbranch確認をtickで行う。reorgではchallenger evidenceとqueued moveを破棄し、branch確認が読めない場合はmoveを待つ。reader 6 V-unit、held policy 6 V-unit、held controller 20 V-fold、LG14-B 7 V-foldを検証した。full service／最大profile／恒久pruneの完成ではない。
 
+- X8R統合 `cc4757d04`を`123d8254e`でmergeし、EXEC v2のkind fence 6とLG14-Aの7を両立した。Final deadlineではwork-session holdとdispute holdの両方を維持し、retirementでも両recordを処理する。lifecycle/A2U core 31件と公開reader 6件がPASS。
+- 公開bindingからのIdentityMismatch、shape/count違反、公開token pinからのOutputMismatchを共通filerのreporter doorへ接続した。output-only mismatchをHonestとする抜けを修正し、DA回答済みflagがなくても完全な直接証拠を受け付ける。最新の試験範囲と残条件は監査記録の「公開bindingの直接証拠」を参照。
+
 G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
 
 ## 統合ブランチ

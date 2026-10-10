@@ -1073,6 +1073,15 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// The public filer's objective-proof target, resolved from the tip's claim/liability/vesting rows.
+    /// These are public chain facts; a caller never reconstructs the recorded job identity from served material.
+    fn palw_fraud_filer_target_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Option<crate::palw_offence_attribution_v1::PalwOffenceTargetV1> {
+        None
+    }
+
     /// **Lane LG14-A (RPC 205): the claims a live dispute reservation holds at the tip** (those of `reserver` when given), at most
     /// `limit`, in claim order.
     fn palw_legacy_disputes_v1(&self, _reserver: Option<crate::palw_state_v2::PalwBondKeyV2>, _limit: usize) -> Vec<crate::Hash64> {

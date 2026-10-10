@@ -2314,6 +2314,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_legacy_dispute_v1_impl(claim)
     }
 
+    fn palw_fraud_filer_target_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1> {
+        kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_target_v1(self.palw_state_v2_tip()?.as_ref(), &claim)
+    }
+
     fn palw_legacy_disputes_v1(
         &self,
         reserver: Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

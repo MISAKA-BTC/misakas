@@ -15,10 +15,12 @@
 //!    descending to the first divergent leaf. Other captures use the bounded, contiguous `StepRange` fallback;
 //! 4. **terminal** — the LG14-B replica builds tag 159 from its own registered model and public leaf hashes, or uses a public CKW
 //!    to open a fused held court. The fallback demands `StepLeaf`. Silence on a required unit defaults (DA-7).
-//!    Job/count/checkpoint/trace-only mismatches still remain Unjudged; step-tree agreement never clears a mismatched execution.
+//!    Public binding/job/shape/output faults go through the reporter door as kind 4 before descent. Checkpoint/trace localization
+//!    beyond these direct proofs remains incomplete; step-tree agreement never clears a mismatched execution.
 //!
 //! **Shared progress** (§7.4): a unit the chain already answered — this node's before a restart, or anybody's — is read off the
-//! accepted blocks, never demanded again; the unit must be marked answered and the consumed bytes must authenticate to the claim.
+//! accepted blocks, never demanded again; the unit must be marked answered for descent. A complete direct proof needs only
+//! authenticated public bytes and the recorded target, even when the DA arm refused that disclosure.
 //!
 //! **Restart** (§6.3): the book is a cache, nothing is persisted. The candidates and every case's chain facts come from the tip, the
 //! answers from the accepted blocks (walked back to the oldest pursued claim's acceptance after a start), and the honest run from a
@@ -39,6 +41,9 @@
 use super::*;
 use std::collections::BTreeSet;
 
+use super::reporter_filer::{
+    PalwConvictionDoorV1, PalwConvictionFilingV1, PalwFileOutcomeV1, PalwFilingOriginV1, PalwReporterFilerV1,
+};
 use crate::palw_legacy_held_v2::PalwLegacyReplicaV2;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_step_leaf_is_fused_v1};
@@ -92,6 +97,7 @@ pub(super) fn palw_fraud_filer_queued_v1(round: u32, responder: bool) -> bool {
 pub(super) struct PalwFraudFilerRunV1 {
     pub(super) execution_root: Hash64,
     pub(super) trace_root: Hash64,
+    pub(super) output_root: Hash64,
     /// This node's own leaf hashes of `[first, first + count)`.
     pub(super) own_range: Box<dyn Fn(u64, u32) -> Result<Vec<Hash64>, String> + Send + Sync>,
     pub(super) legacy: Option<Arc<PalwLegacyReplicaV2>>,
@@ -185,7 +191,7 @@ pub(super) fn palw_fraud_filer_read_page_v1(
                 },
             ) =>
         {
-            answers.entry((claim, unit)).or_insert(PalwDaBuiltAnswerV1::Rcore(answer));
+            palw_fraud_filer_cache_answer_v1(&mut answers, (claim, unit), PalwDaBuiltAnswerV1::Rcore(answer));
         }
         PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
             if legacy_wanted.get(&answer.claim) == Some(&answer.unit)
@@ -209,6 +215,39 @@ pub(super) fn palw_fraud_filer_read_page_v1(
     Ok((PalwFraudFilerWalkV1 { floor, anchor, anchor_daa, next }, reset, answers.into_iter().collect()))
 }
 
+/// Preserve an authenticated binding even when its event bytes are malformed, since the binding can prove a job/shape fault.
+/// A valid public event replaces a binding-only carrier, so junk pin bytes cannot hide an older output proof across pages.
+pub(super) fn palw_fraud_filer_cache_answer_v1(
+    answers: &mut BTreeMap<(Hash64, PalwDaUnitV1), PalwDaBuiltAnswerV1>,
+    key: (Hash64, PalwDaUnitV1),
+    answer: PalwDaBuiltAnswerV1,
+) {
+    let event_valid = |a: &PalwDaBuiltAnswerV1| match (key.1, a) {
+        (PalwDaUnitV1::Event { row, tile }, PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(e))) => {
+            let b = e.binding();
+            kaspa_consensus_core::palw_step_refute::check_trace_event_disclosure_v1(
+                b.full_logits_trace_root,
+                b.committed_execution_root,
+                row,
+                tile,
+                e,
+                b.step_leaf_count,
+            )
+            .is_ok()
+        }
+        _ => false,
+    };
+    match answers.entry(key) {
+        std::collections::btree_map::Entry::Vacant(slot) => {
+            slot.insert(answer);
+        }
+        std::collections::btree_map::Entry::Occupied(mut slot) if event_valid(&answer) && !event_valid(slot.get()) => {
+            slot.insert(answer);
+        }
+        _ => {}
+    }
+}
+
 /// **One case** — a candidate claim and this node's pursuit of it.
 #[derive(Clone)]
 pub(super) struct PalwFraudFilerCaseV1 {
@@ -222,6 +261,9 @@ pub(super) struct PalwFraudFilerCaseV1 {
     pub(super) runs: u8,
     /// The last item sent, when, and how many times.
     pub(super) sent: Option<(PalwFraudFilerSentV1, u64, u8)>,
+    /// Reporter-door handoffs of the claim's direct proof, bounded like the replay lane's.
+    direct_handed: u8,
+    direct_asked_at: Option<u64>,
 }
 
 impl PalwFraudFilerCaseV1 {
@@ -236,6 +278,8 @@ impl PalwFraudFilerCaseV1 {
             legacy_wanted: None,
             runs: 0,
             sent: None,
+            direct_handed: 0,
+            direct_asked_at: None,
         }
     }
 
@@ -401,16 +445,17 @@ impl PalwFraudFilerBookV1 {
         out.into_iter().map(|(_, claim)| claim).collect()
     }
 
-    /// **Judge a returned replay** against the claim's committed roots: the execution root reproduces — honest; it does not — the
-    /// case is pursued; the execution reproduces and the trace does not — not this filer's (P2-6's event demands); a failure on this
-    /// host — run once more, then unjudged.
+    /// Judge all three committed roots. An output-only or trace-only mismatch still needs a public proof or DA default.
     pub(super) fn judge(&mut self, claim: Hash64, result: Result<PalwFraudFilerRunV1, String>) -> Option<&PalwFraudFilerVerdictV1> {
         let case = self.cases.get_mut(&claim)?;
         case.runs = case.runs.saturating_add(1);
         case.verdict = match result {
-            Ok(run) if run.execution_root != case.candidate.job.execution_root => PalwFraudFilerVerdictV1::Mismatch(Arc::new(run)),
-            Ok(run) if run.trace_root != case.candidate.job.trace_root => {
-                PalwFraudFilerVerdictV1::Unjudged("the execution reproduces and the trace does not (P2-6's event demands)".into())
+            Ok(run)
+                if run.execution_root != case.candidate.job.execution_root
+                    || run.trace_root != case.candidate.job.trace_root
+                    || run.output_root != case.candidate.job.output_root =>
+            {
+                PalwFraudFilerVerdictV1::Mismatch(Arc::new(run))
             }
             Ok(_) => PalwFraudFilerVerdictV1::Honest,
             Err(_) if case.runs < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1 => PalwFraudFilerVerdictV1::Pending,
@@ -489,7 +534,7 @@ impl PalwFraudFilerBookV1 {
                         }
                     }
             }) {
-                self.answers.entry(key).or_insert(answer);
+                palw_fraud_filer_cache_answer_v1(&mut self.answers, key, answer);
             }
         }
         // An answer of a claim no longer pursued leaves with its case.
@@ -508,6 +553,16 @@ impl PalwFraudFilerBookV1 {
             case.witness = None;
             case.legacy_wanted = None;
         }
+    }
+
+    /// A newer binding-only carrier can be read before an older valid token pin. Do not discard the pursuit on descent's
+    /// inability to explain matching step trees until that public backfill completes.
+    fn descent_failed(&mut self, claim: &Hash64, why: String) -> bool {
+        if self.walk.is_none_or(|walk| walk.next.is_some()) {
+            return false;
+        }
+        self.settle(claim, PalwFraudFilerVerdictV1::Unjudged(why));
+        true
     }
 
     /// Reading a previously answered legacy unit needs its historical bytes, even if a prior walk predated this selection.
@@ -622,6 +677,66 @@ pub(super) fn palw_fraud_filer_step_v1(
     }
 }
 
+/// A direct proof from one public, authenticated event and the claim facts the tip recorded.
+/// No producer capture, own replay, Panel receipt or answered-session flag enters this decision.
+pub(super) fn palw_fraud_filer_public_filing_v1(
+    target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+    rules: kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1,
+    answer: &PalwDaBuiltAnswerV1,
+    file_by: Option<u64>,
+) -> Result<Option<PalwConvictionFilingV1>, String> {
+    use kaspa_consensus_core::palw_offence_attribution_v1::{palw_binding_identity_fault_v1, palw_output_fault_v1};
+    use kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1;
+    use kaspa_consensus_core::palw_step_refute::{PalwDecodeTokenPinV1, PalwTiledDecodeTokensV1, PalwTraceEventDisclosureV1};
+    let PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event)) = answer else { return Ok(None) };
+    let binding = event.binding();
+    if !kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(
+        &PalwDaUnitV1::Event { row: 0, tile: 0 },
+        &PalwDaAnswerV1::Event(event.clone()),
+        &target.execution_root,
+    ) {
+        return Err("the public event does not authenticate to this claim".into());
+    }
+    let structural = kaspa_consensus_core::palw_step_leg::PalwStepRefutationV1 {
+        binding: binding.clone(),
+        evidence: kaspa_consensus_core::palw_step_leg::PalwStepEvidenceV1::Shape,
+    };
+    let contradiction = if palw_binding_identity_fault_v1(target, binding, rules, true).map_err(|e| e.to_string())?.is_some() {
+        PalwPanelContradictionV1::IdentityMismatch { binding: binding.clone() }
+    } else if kaspa_consensus_core::palw_step_leg::check_step_refutation_capped_v1(&structural, binding.step_leaf_count).is_ok() {
+        PalwPanelContradictionV1::StepStructural(structural)
+    } else {
+        let pin = match event {
+            PalwTraceEventDisclosureV1::Flat { pin, .. } => PalwDecodeTokenPinV1::Base0V1(pin.clone()),
+            PalwTraceEventDisclosureV1::Tiled { generated_token_ids, row_opening, .. } => {
+                let rows_root = kaspa_consensus_core::palw_step_leg::step_opening_root_capped_v1(
+                    u64::from(binding.job_context.exact_decode_tokens),
+                    row_opening,
+                    binding.step_leaf_count,
+                )
+                .map_err(|e| e.to_string())?;
+                PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated_token_ids.clone() })
+            }
+            PalwTraceEventDisclosureV1::OutOfRange { .. } => return Ok(None),
+        };
+        if !palw_output_fault_v1(target, binding, &pin).map_err(|e| e.to_string())? {
+            return Ok(None);
+        }
+        PalwPanelContradictionV1::OutputMismatch { binding: binding.clone(), pin }
+    };
+    let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_v1(
+        target.claim_id,
+        target.executor_bond,
+        contradiction,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    let filing = PalwConvictionFilingV1::of_offence(built.object, target.claim_id, file_by, PalwFilingOriginV1::Replay)
+        .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+        .ok_or("the reporter's key differs from the proof builder's")?;
+    Ok(Some(filing))
+}
+
 pub(super) fn palw_fraud_filer_sign_terminal_v2(
     object: PalwConsensusObjectV2,
     domain: &Hash64,
@@ -661,6 +776,7 @@ impl PalwPanelService {
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         book: &mut PalwFraudFilerBookV1,
+        reporter: &mut PalwReporterFilerV1,
         current_daa: u64,
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
@@ -752,7 +868,7 @@ impl PalwPanelService {
         let role = book.role.unwrap_or(PalwFilerRoleV1::PublicBond);
         let form = params.palw_prompt_ids_form_at(current_daa);
         for claim in book.pursued() {
-            let (view, reservable, own_court_open) = session
+            let (view, reservable, own_court_open, target) = session
                 .clone()
                 .spawn_blocking(move |c| {
                     let view = c.palw_legacy_dispute_v1(claim);
@@ -762,7 +878,7 @@ impl PalwPanelService {
                         .is_some_and(|check: Result<u128, String>| check.is_ok());
                     let own_court_open =
                         c.palw_court_duties_v2(vec![bond_key]).iter().any(|duty| duty.claim_id == claim && !duty.i_am_responder);
-                    (view, reservable, own_court_open)
+                    (view, reservable, own_court_open, c.palw_fraud_filer_target_v1(claim))
                 })
                 .await;
             let facts = palw_fraud_filer_facts_v1(
@@ -775,6 +891,45 @@ impl PalwPanelService {
                 court_pending.retain(|(held, round, responder, _)| *held != claim || !palw_fraud_filer_queued_v1(*round, *responder));
                 book.settle(&claim, PalwFraudFilerVerdictV1::Settled(facts.outcome.unwrap_or(PalwFilerPhaseV1::Expired)));
                 continue;
+            }
+            // Even a disclosure the session arm refused can carry a complete cryptographic proof of a wrong job.
+            // Judge the binding against the recorded target BEFORE a mismatched count can stop subtree descent.
+            // The reporter door rehearses the actual gate; an open colluder court cannot veto a valid direct proof.
+            if params.palw_offence_attribution_active_at(current_daa)
+                && let (Some(target), Some(answer), kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)) =
+                    (target.as_ref(), book.answers.get(&(claim, PalwDaUnitV1::Event { row: 0, tile: 0 })), &params.palw_consensus_mode)
+            {
+                let rules = kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+                    prompt_ids_form: params.palw_prompt_ids_form_at(current_daa),
+                    base_class_id: bundle.base_class_id,
+                    da_signer_liability: params.palw_rcore_plus_active_at(current_daa),
+                };
+                let file_by = view.as_ref().map(|v| v.hard_deadline_daa.saturating_sub(2));
+                match palw_fraud_filer_public_filing_v1(target, rules, answer, file_by) {
+                    Ok(Some(filing)) => {
+                        // This proof supersedes any unsent localization carrier. Keep the chain's live obligations until conviction.
+                        court_pending
+                            .retain(|(held, round, responder, _)| *held != claim || !palw_fraud_filer_queued_v1(*round, *responder));
+                        let mut door = self.conviction_door_v1(session, reporter, bond_key, network_domain);
+                        let case = book.cases.get_mut(&claim).expect("pursued above");
+                        if !door.holds(&filing.offence_key)
+                            && case.direct_handed < super::reporter_filer::PALW_FILER_HAND_OFFS_PER_OFFENCE_V1
+                            && case.direct_asked_at.is_none_or(|at| current_daa.saturating_sub(at) >= PALW_FRAUD_FILER_RESEND_DAA_V1)
+                        {
+                            case.direct_asked_at = Some(current_daa);
+                            match door.file(filing) {
+                                PalwFileOutcomeV1::Queued { .. } | PalwFileOutcomeV1::AlreadyFiled => case.direct_handed += 1,
+                                PalwFileOutcomeV1::AlreadyConvicted => {}
+                                why => {
+                                    warn!("[{PALW_PANEL}] claim {claim}: the public direct proof waits at the reporter door: {why:?}")
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(why) => debug!("[{PALW_PANEL}] claim {claim}: this public event yields no direct proof: {why}"),
+                }
             }
             // A queued item can have landed on another branch/read, or another public party may have answered its unit.
             // Query the chain before a pending carrier suppresses progression; discard duplicates before paying to resend them.
@@ -810,7 +965,9 @@ impl PalwPanelService {
                         Ok(step) => step,
                         Err(why) => {
                             warn!("[{PALW_PANEL}] claim {claim}: the public legacy descent cannot proceed: {why}");
-                            book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(why));
+                            if !book.descent_failed(&claim, why) {
+                                debug!("[{PALW_PANEL}] claim {claim}: waiting for the remaining public proof history before settling");
+                            }
                             break;
                         }
                     }
@@ -1109,6 +1266,7 @@ impl PalwPanelService {
             Ok(PalwFraudFilerRunV1 {
                 execution_root: outcome.execution_root,
                 trace_root: outcome.trace_root,
+                output_root: outcome.output_root,
                 own_range: Box::new(move |first, count| {
                     own_backend.held_step_range_answer_v1(&own_material, &own_prompt, first, count).map(|opening| opening.leaf_hashes)
                 }),
@@ -1181,10 +1339,60 @@ mod tests {
         PalwFraudFilerRunV1 {
             execution_root,
             trace_root,
+            output_root: Hash64::default(),
             own_range: Box::new(|_, _| Err("no range".into())),
             legacy: None,
             _reservation: None,
         }
+    }
+
+    #[test]
+    fn trace_only_and_output_only_mismatches_are_pursued_and_only_three_matching_roots_are_honest() {
+        let c = candidate(3, 300, false);
+        let claim = c.claim_id;
+        for (trace_diff, output_diff) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut book = PalwFraudFilerBookV1::default();
+            book.refresh(vec![c.clone()], 10);
+            let mut replay = run(c.job.execution_root, c.job.trace_root);
+            if trace_diff {
+                replay.trace_root = Hash64::from_u64_word(88);
+            }
+            if output_diff {
+                replay.output_root = Hash64::from_u64_word(99);
+            }
+            let verdict = book.judge(claim, Ok(replay)).expect("held");
+            if trace_diff || output_diff {
+                assert!(matches!(verdict, PalwFraudFilerVerdictV1::Mismatch(_)));
+                assert_eq!(book.walk_floor(), Some(300), "public binding backfill remains required");
+            } else {
+                assert!(matches!(verdict, PalwFraudFilerVerdictV1::Honest));
+                assert_eq!(book.walk_floor(), None);
+            }
+        }
+    }
+
+    #[test]
+    fn a_partial_history_page_cannot_end_a_pursuit_before_older_direct_evidence_is_read() {
+        let c = candidate(3, 300, false);
+        let claim = c.claim_id;
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![c], 10);
+        book.judge(claim, Ok(run(Hash64::default(), Hash64::default())));
+        assert!(!book.descent_failed(&claim, "no successful history page yet".into()));
+        let page = PalwFraudFilerWalkV1 {
+            floor: 300,
+            anchor: Hash64::from_u64_word(1000),
+            anchor_daa: 1000,
+            next: Some(Hash64::from_u64_word(500)),
+        };
+        book.walked(page, false, vec![]);
+        assert!(!book.descent_failed(&claim, "a pin is not read yet".into()));
+        assert_eq!(book.held_runs(), 1);
+        assert_eq!(book.walk_floor(), Some(300));
+        book.walked(PalwFraudFilerWalkV1 { next: None, ..page }, false, vec![]);
+        assert!(book.descent_failed(&claim, "complete history cannot supply a proof".into()));
+        assert_eq!(book.held_runs(), 0);
+        assert!(matches!(book.cases[&claim].verdict, PalwFraudFilerVerdictV1::Unjudged(_)));
     }
 
     /// **The book replays oldest first, one at a time, never a seat's claim, and holds at most two mismatches.**

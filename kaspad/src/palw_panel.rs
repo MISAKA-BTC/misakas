@@ -12984,6 +12984,7 @@ impl PalwPanelService {
             self.fraud_filer_tick_v1(
                 &session,
                 &mut fraud_filer,
+                &mut reporter_filer,
                 current_daa,
                 network_domain,
                 bond_key,

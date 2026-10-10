@@ -288,3 +288,29 @@ cached filingを取得した後にもtickでanchorのbranchを確認する。reo
 [reader API adapter](evidence/held-history-page-adapter-final.log)、[held policy](evidence/held-history-policy-final.log)、[selected-history held fold](evidence/held-history-court-fold-selected-final.log)、[outsider LG14-B fold](evidence/held-history-legacy-fold-final.log)。default feature、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で実行した。初回test fixtureがanchorを含めないsiteの0-position layoutを使ったため、chunkのfixtureだけanchor付きsiteのpositionで作り直した。認証条件は緩めていない。
 
 この試験もV-nodeのfull service完走ではない。後半fold fixtureはpublic object listを1 completed pageとして読み、pagination自体は別のAPI adapterで検査する。最大historyの読出し時間・包含期限、全profileの実model RAM、責任期間内の恒久retention、prune後の公開取得・replay-safe再要求、全familyの正規eligibilityは残る。IR／dense courtの別の旧history walkerまで変更したものでもない。
+
+
+## X8R統合と公開bindingの直接証拠
+
+Claude統合 `cc4757d04bcf3629337c9037fff47cd356275a15`を`123d8254e`でmergeした。EXEC v2のlifecycle kind fenceを6、LG14-Aを7とし、`ALL`を8要素にした。deadlineのarm primitiveではwork-session holdとdispute holdのどちらも有効にし、claim retirementでも両方のrecordを片付ける。merge後のdefault-feature kaspad buildが成功し、公開history API adapter **6 V-unit**、lifecycle/A2U core **31 V-unit**がPASSした。
+
+共通filerはexecutionとtraceだけでHonestを判定していたため、output-only不正を取りこぼしていた。own replayのoutput rootも保存・比較し、三rootのどれかが違えば公開binding取得へ進める。公開bindingが回答するjob/class/seed/context/prompt/traceのidentity違反、shape/count違反、公開token pinが証明するoutput不正は、subtree descentより先に既存kind-4 builderとreporter doorへ渡す。型・version・root・evidence digest・carrier capと実gateのrehearsalを維持し、独自の有罪判定やunsigned carrierの直接queueは追加しない。
+
+claimのjob identityはproducerのserved contextから作らず、新しいread-only Consensus APIでtipのclaim/liability/vesting rowを読む。完全な直接証拠の判断にはDAのanswered flagを要求しない。公開carrierが正しいbindingを含んでもwrong-job DA armがその回答を拒否する場合、binding自身からのIdentityMismatchは提出可能である。subtree descentのshared-answer規則は従来どおりanswered＋認証を要求する。reporter bookのdedup、commit/file/reveal、gate再確認と最大2 handoffを使い、直接証拠が揃えば未送信の探索carrierを取り下げる。
+
+history cacheでは、bindingだけ正しくpinが壊れた新しいeventが最初に採用され、古い正しいpinを隠せる可能性があった。binding-only回答を保持してjob/shape証拠へ使えるようにしつつ、認証済みeventが来ればその1件へ置き換える。後から来た壊れたeventでは戻さない。ページ内のcollectとbookへのmergeの両方で同じ優先規則を使い、entry数は増やさない。最古の正しいpinをまだ読めていないpartial pageでstep treeが一致しても、descentの失敗を理由にpursuitを捨てない。未読／partialのbackfillが完了するまでMismatchとown replayを保持する。
+
+| 検証 | 範囲 |
+| --- | --- |
+| `palw_fraud_filer::tests` | **10 V-unit PASS**。三root一致だけがHonest、output-only/trace-onlyの追及とbackfill、未読／partial pageでのdescent失敗からの追及維持、既存controller/cache/wiring回帰 |
+| `lg14b_` | **8 V-fold＋1 V-unit PASS**。新しいwrong-job testは実v7のheader anchorとexecution keyからjob identityを記録し、全PanelのValid後、Final前後にpublic bindingからactual objective foldがconvictすることを検査。実DA answered sessionは不要。delta再適用・revert・carriage reloadも検査。output/count/cacheのtestは正しいFP targetを手で構成したbuilderのV-unitであり、outputのfull node又はfull fold完走ではない |
+| `accepted_objects_walk_tests` | **6 V-unit PASS**。actual API adapterのpagination、改ざん拒否、selected unit、backfill/reorg回帰 |
+| `reporter_filer::tests` | **21 V-unit PASS**。commit/file/reveal、dedup、gate拒否、期限、restart、handoffの既存回帰 |
+
+初回のwrong-job fixtureは古いv2 wrapperを使いjob identityを記録せず、IdentityNotRecordedを正しく返したため、testのacceptanceだけ実v7へ移した。次の実行はobjective offence fenceがfixtureで休眠していたため、R-core+ from genesisの設定に合わせextrasもtest-armした。判定条件や認証条件は緩めていない。
+
+公開bindingのidentity違反とcountの直接証拠に加えても、G14全域は未達である。4096 idsを超えるcanonical promptのPromptNotAnchored自動提出、checkpoint/traceの残る局所化、free-promptの公開job/inputからのstartup、非base0 codecと全familyの正規eligibility、full service→public read→mempool/template→conviction、post-retirementの自動発見、最大profile・恒久retention・累積scope・全枠飽和・期限内包含は残る。wrong-job fixtureは公開eventをtestへ直接渡すため、新規nodeのhistory歩行から証拠提出までの一続きのV-nodeとは数えない。新しいread APIはconsensus encodingを変更せず、activation heightとADR-0177の登録モデル保有前提を維持する。
+
+検証log: [merge lifecycle](evidence/integration-x8r-lifecycle-final.log)、[merge reader](evidence/integration-x8r-public-history-final.log)、[public binding fold / builder](evidence/public-binding-legacy-final.log)、[reader回帰](evidence/public-binding-reader-final.log)、[reporter回帰](evidence/public-binding-reporter-final.log)。
+
+最終filer回帰も **10 V-unit PASS**。[filer結果](evidence/public-binding-filer-final.log)。統合と修正後の `scripts/t12-repin.sh --shipping --drift-only` は **361 ok、差分なし**。検査対象の全pin・gateを通過し、pinの書換えは行っていない。[repin結果](evidence/public-binding-repin-final.log)、[integration tests](evidence/public-binding-repin-harvest-tests.log)、[lib tests](evidence/public-binding-repin-harvest-lib.log)。
