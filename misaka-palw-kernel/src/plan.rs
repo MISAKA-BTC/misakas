@@ -424,6 +424,8 @@ pub(crate) fn derive_budgets(
 ) -> PlanBudgetsV1 {
     let encoder =
         if crate::descriptor::is_encoder_v1(descriptor) { crate::seg_encoder::encoder_binding_v1(program).ok() } else { None };
+    // K2-TIR-v4/v5's withheld values (`crate::seg_scope`), computed once, when an element court is priced.
+    let mut withheld: Option<Vec<Vec<bool>>> = None;
     let mut b = PlanBudgetsV1 {
         artifact_bytes: program
             .params
@@ -453,13 +455,14 @@ pub(crate) fn derive_budgets(
         };
         let (work, bytes, cb, cw) = relation_costs(rel, window_rows, row_bytes);
         let (cb, cw) = if rel.court == CourtIdV1::ElementRecompute {
-            crate::element::element_court_cost_in_v1(
+            crate::element::element_court_cost_masked_v1(
                 program,
                 rel.block as usize,
                 rel.node as usize,
                 node_count,
                 max_positions,
                 encoder.as_ref(),
+                withheld.get_or_insert_with(|| crate::seg_scope::seg_withheld_mask_v1(program)),
             )
         } else {
             (cb, cw)

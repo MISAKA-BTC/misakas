@@ -30,14 +30,29 @@ pub const SEG_MAX_PARTS_V4: u32 = 1 << 20;
 /// One chunk of a part, as the layout names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum ChunkSpecV1 {
-    Whole { occurrence: u16, node: u16 },
-    Rows { occurrence: u16, node: u16, first_leaf: u64, leaves: u64 },
+    Whole {
+        occurrence: u16,
+        node: u16,
+    },
+    Rows {
+        occurrence: u16,
+        node: u16,
+        first_leaf: u64,
+        leaves: u64,
+    },
+    /// A withheld value (`crate::seg_scope`, DA16b option (c)): its node opening alone, never an element.
+    Withheld {
+        occurrence: u16,
+        node: u16,
+    },
 }
 
 impl ChunkSpecV1 {
     pub fn at(&self) -> (u16, u16) {
         match *self {
-            Self::Whole { occurrence, node } | Self::Rows { occurrence, node, .. } => (occurrence, node),
+            Self::Whole { occurrence, node } | Self::Rows { occurrence, node, .. } | Self::Withheld { occurrence, node } => {
+                (occurrence, node)
+            }
         }
     }
 }
@@ -49,20 +64,22 @@ fn chunk_overhead(node_count: u64, row_leaves: u64, rank: usize) -> u64 {
     16 + 64 + 4 + 64 * depth(node_count) + 4 + 8 * rank as u64 + 1 + 4 + 16 + 4 + 64 * 2 * depth(row_leaves) + 64 + 64
 }
 
-/// The declared values of position `p`: `(occurrence, node, dtype, shape)` in canonical order.
-fn declared_values(w: &WiringV1<'_>, p: u32) -> Vec<(u16, u16, DType, Vec<usize>)> {
+/// The declared values of position `p`: `(occurrence, node, dtype, shape, withheld)` in canonical order.
+fn declared_values(w: &WiringV1<'_>, p: u32) -> Vec<(u16, u16, DType, Vec<usize>, bool)> {
+    let withheld = crate::seg_scope::seg_withheld_mask_v1(w.program);
     let mut out = Vec::new();
     for s in 0..w.occurrences.len() as u16 {
         let b = w.occurrences[s as usize].0 as usize;
         for n in 0..w.program.blocks[b].nodes.len() as u16 {
             let node = w.node(s, n);
-            out.push((s, n, node.out.dtype, node.out.resolve(w.h(s, p))));
+            out.push((s, n, node.out.dtype, node.out.resolve(w.h(s, p)), withheld[s as usize][n as usize]));
         }
     }
     out
 }
 
-/// **The parts position `p`'s material is served in** — a pure function of the program and `p` (the shapes at `H(p)`).
+/// **The parts position `p`'s material is served in** — a pure function of the program and `p` (the shapes at `H(p)`; a withheld
+/// value is its node opening alone).
 pub fn position_parts_v1(program: &TirProgramV1, p: u32) -> Result<Vec<Vec<ChunkSpecV1>>, String> {
     let w = WiringV1::new(program).map_err(|e| e.to_string())?;
     layout_parts(&declared_values(&w, p))
@@ -106,13 +123,23 @@ fn row_leaves_fitting(l: &LayoutV3, width: u64, from: u64, total: u64, cap: u64)
 
 /// **The deterministic greedy layout of a position's values into parts**: a value that fits the current part joins it, one that fits an
 /// empty part starts one, and a larger one is cut into contiguous row-leaf ranges, each as long as the part it lands in allows.
-fn layout_parts(values: &[(u16, u16, DType, Vec<usize>)]) -> Result<Vec<Vec<ChunkSpecV1>>, String> {
+fn layout_parts(values: &[(u16, u16, DType, Vec<usize>, bool)]) -> Result<Vec<Vec<ChunkSpecV1>>, String> {
     let node_count = values.len() as u64;
     let budget = SEG_PART_BYTES_V4 - PART_HEADER_BOUND_V4;
     let mut parts: Vec<Vec<ChunkSpecV1>> = vec![Vec::new()];
     let mut room = budget;
-    for (s, n, dtype, shape) in values {
+    for (s, n, dtype, shape, withheld) in values {
         let (s, n) = (*s, *n);
+        if *withheld {
+            let oh = chunk_overhead(node_count, 1, 0);
+            if oh > room {
+                parts.push(Vec::new());
+                room = budget;
+            }
+            parts.last_mut().expect("a part").push(ChunkSpecV1::Withheld { occurrence: s, node: n });
+            room -= oh;
+            continue;
+        }
         let l = LayoutV3::of(shape);
         let width = dtype.width() as u64;
         let bytes = l.len * width;
@@ -161,6 +188,8 @@ pub enum ChunkBodyV1 {
     Whole(Vec<u8>) = 0,
     /// A contiguous range of its row leaves with the range proof and the column root.
     Rows(RowRangeV3) = 1,
+    /// A withheld value: nothing but the chunk's node opening (`crate::seg_scope`).
+    Withheld = 2,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -205,6 +234,7 @@ pub fn position_part_v1(
             ChunkSpecV1::Rows { first_leaf, leaves, .. } => {
                 ChunkBodyV1::Rows(RowRangeV3::of(t, &TreesV3::of(t), first_leaf, leaves).ok_or("a row range outside the value")?)
             }
+            ChunkSpecV1::Withheld { .. } => ChunkBodyV1::Withheld,
         };
         chunks.push(ChunkV1 { occurrence: s, node: n, commitment: opening.commitment, node_siblings: opening.node_siblings, body });
     }
@@ -286,6 +316,8 @@ pub fn classify_part_v1(
                     None => return Err("fake_opening"),
                 }
             }
+            // A withheld value: its authenticated opening is all it owes.
+            (ChunkSpecV1::Withheld { .. }, ChunkBodyV1::Withheld) => {}
             _ => return Err("malformed"),
         }
     }
@@ -293,15 +325,19 @@ pub fn classify_part_v1(
     Ok(r.part)
 }
 
+/// A position assembled from its served parts: every value (a withheld one as zeros of its declared shape — the verifier supplies its
+/// own), every node commitment, and the position root's path.
+pub type AssembledPositionV1 = (Vec<Vec<Tensor>>, Vec<Digest>, Vec<Vec<Digest>>);
+
 /// **Every committed value of position `p` from its served parts** (a fresh verifier reading the responses from the blocks): `None`
-/// unless every part is present and authentic.
+/// unless every part is present and authentic. Returns `(values, siblings, commitments)` ([`AssembledPositionV1`]).
 pub fn assemble_position_v1(
     program: &TirProgramV1,
     segment_roots: &[Digest],
     positions: u32,
     p: u32,
     parts: &[Vec<u8>],
-) -> Option<(Vec<Vec<Tensor>>, Vec<Digest>)> {
+) -> Option<AssembledPositionV1> {
     let w = WiringV1::new(program).ok()?;
     let layout = position_parts_v1(program, p).ok()?;
     let mut by_part: Vec<Option<SegPartResponseV1>> = vec![None; layout.len()];
@@ -309,17 +345,25 @@ pub fn assemble_position_v1(
         let i = classify_part_v1(program, segment_roots, positions, p, b).ok()?;
         by_part[i as usize] = borsh::from_slice(b).ok();
     }
-    let mut bytes: Vec<Vec<Vec<u8>>> =
-        w.occurrences.iter().map(|(b, _)| vec![Vec::new(); program.blocks[*b as usize].nodes.len()]).collect();
+    let mut bytes: Vec<Vec<Option<Vec<u8>>>> =
+        w.occurrences.iter().map(|(b, _)| vec![Some(Vec::new()); program.blocks[*b as usize].nodes.len()]).collect();
+    let mut commitments: Vec<Vec<Digest>> =
+        w.occurrences.iter().map(|(b, _)| vec![[0u8; 64]; program.blocks[*b as usize].nodes.len()]).collect();
     let mut siblings = None;
     for r in by_part {
         let r = r?;
         siblings = Some(r.position_siblings.clone());
         for c in r.chunks {
+            commitments[c.occurrence as usize][c.node as usize] = c.commitment;
             let slot = &mut bytes[c.occurrence as usize][c.node as usize];
             match c.body {
-                ChunkBodyV1::Whole(b) => *slot = b,
-                ChunkBodyV1::Rows(range) => slot.extend_from_slice(&range.bytes),
+                ChunkBodyV1::Whole(b) => *slot = Some(b),
+                ChunkBodyV1::Rows(range) => {
+                    if let Some(v) = slot.as_mut() {
+                        v.extend_from_slice(&range.bytes)
+                    }
+                }
+                ChunkBodyV1::Withheld => *slot = None,
             }
         }
     }
@@ -328,17 +372,25 @@ pub fn assemble_position_v1(
         let mut row = Vec::with_capacity(occ.len());
         for (n, b) in occ.into_iter().enumerate() {
             let node = w.node(s as u16, n as u16);
-            row.push(Tensor::from_le_bytes(node.out.dtype, &node.out.resolve(w.h(s as u16, p)), &b).ok()?);
+            let shape = node.out.resolve(w.h(s as u16, p));
+            row.push(match b {
+                Some(b) => Tensor::from_le_bytes(node.out.dtype, &shape, &b).ok()?,
+                None => Tensor::zeros(node.out.dtype, &shape),
+            });
         }
         values.push(row);
     }
-    Some((values, siblings.unwrap_or_default()))
+    Some((values, siblings.unwrap_or_default(), commitments))
 }
 
 /// What one position of a segmented claim costs to serve: `(material bytes, parts)`.
 pub fn position_material_v1(program: &TirProgramV1, p: u32) -> Result<(u128, u32), String> {
     let w = WiringV1::new(program).map_err(|e| e.to_string())?;
-    let bytes: u128 = declared_values(&w, p).iter().map(|(_, _, d, sh)| LayoutV3::of(sh).len as u128 * d.width() as u128).sum();
+    let bytes: u128 = declared_values(&w, p)
+        .iter()
+        .filter(|(.., withheld)| !withheld)
+        .map(|(_, _, d, sh, _)| LayoutV3::of(sh).len as u128 * d.width() as u128)
+        .sum();
     Ok((bytes, position_parts_v1(program, p)?.len() as u32))
 }
 
@@ -440,7 +492,9 @@ mod tests {
             (0..40u16).map(|n| (0, n, DType::I32, vec![1 + (n as usize * 7_919) % 9_000, 3 + n as usize * 13])).collect(),
         ];
         for (c, values) in cases.iter().enumerate() {
-            let fast = layout_parts(values).unwrap();
+            let clear: Vec<(u16, u16, DType, Vec<usize>, bool)> =
+                values.iter().map(|(s, n, d, sh)| (*s, *n, *d, sh.clone(), false)).collect();
+            let fast = layout_parts(&clear).unwrap();
             assert_eq!(fast, reference_layout(values), "case {c}");
             assert!(fast.len() >= 1);
         }

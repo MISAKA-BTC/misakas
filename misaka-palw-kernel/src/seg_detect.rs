@@ -35,13 +35,15 @@ use crate::seg::{
 
 /// Replay directly from the authenticated job and the acquired registered model. The result is reused to localize differing segments.
 /// The caller supplies fed ids (prompt + generated ids except the last), or the complete prompt for a v5 encoder. They are
-/// checked against the public job before use. Only position roots and one decode-mismatch index survive streaming replay.
-/// Producer values are read exclusively by the subsequent authenticated two-position court prover.
-pub fn prepare_reexecution_v1(
+/// checked against the public job before use. The callback chooses what survives streaming replay; this function reads no producer
+/// values. `through` bounds the prefix needed for a localized court.
+fn replay_values_v1(
     c: &SegClaimContextV1<'_>,
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],
-) -> Result<OwnReplayV1, String> {
+    through: Option<u32>,
+    visit: &mut dyn FnMut(u32, &[Vec<Tensor>]) -> misaka_palw_tir::TirResult<()>,
+) -> Result<(), String> {
     let inconsistent = |why: String| Err(why);
     let Some(prompt) = tokens.get(..c.prompt_len as usize) else {
         return inconsistent("the public job's prompt is not in hand".into());
@@ -96,10 +98,24 @@ pub fn prepare_reexecution_v1(
         }
     }
     let registered = RegisteredModel { params: c.params, source: artifact, job_inputs, error: Default::default() };
+    let fed = if c.encoder.is_some() { &[0u32][..] } else { tokens };
+    let end = through.map_or(fed.len(), |p| (p as usize).saturating_add(1).min(fed.len()));
+    let result = crate::trace::trace_streaming_v1(c.program, &registered, &fed[..end], visit);
+    if let Err(e) = result {
+        return inconsistent(registered.error.into_inner().unwrap_or_else(|| format!("registered-model replay could not run: {e}")));
+    }
+    Ok(())
+}
+
+/// Replay once to retain only position roots and the first decode mismatch. Reuse these between adaptive DA responses.
+pub fn prepare_reexecution_v1(
+    c: &SegClaimContextV1<'_>,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+) -> Result<OwnReplayV1, String> {
     let mut roots = Vec::with_capacity(c.positions as usize);
     let mut decode_mismatch = None;
-    let fed = if c.encoder.is_some() { &[0u32][..] } else { tokens };
-    let result = crate::trace::trace_streaming_v1(c.program, &registered, fed, &mut |p, values| {
+    replay_values_v1(c, artifact, tokens, None, &mut |p, values| {
         let commitments = values.iter().map(|o| o.iter().map(crate::merkle3::tensor_commitment_v3).collect()).collect::<Vec<_>>();
         roots.push(crate::seg::position_root_of_v1(p, &commitments));
         if c.encoder.is_none() && decode_mismatch.is_none() && p + 1 >= c.prompt_len {
@@ -110,11 +126,38 @@ pub fn prepare_reexecution_v1(
             }
         }
         Ok(())
-    });
-    if let Err(e) = result {
-        return inconsistent(registered.error.into_inner().unwrap_or_else(|| format!("registered-model replay could not run: {e}")));
-    }
+    })?;
     Ok(OwnReplayV1 { roots, decode_mismatch })
+}
+
+/// Only the verifier's internal replay can populate these values; a public material provider cannot label its own bytes trusted.
+pub(crate) struct OwnPositionV1 {
+    pub commitments: Vec<Vec<Digest>>,
+    pub withheld: Vec<Vec<Option<Tensor>>>,
+}
+
+pub(crate) fn replay_positions_v1(
+    c: &SegClaimContextV1<'_>,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    positions: &std::collections::BTreeSet<u32>,
+    mask: &[Vec<bool>],
+) -> Result<BTreeMap<u32, OwnPositionV1>, String> {
+    let mut selected = BTreeMap::new();
+    let Some(last) = positions.last().copied() else { return Ok(selected) };
+    if last >= c.positions {
+        return Err("a replay position outside the claim".into());
+    }
+    replay_values_v1(c, artifact, tokens, Some(last), &mut |p, values| {
+        if positions.contains(&p) {
+            let commitments = values.iter().map(|o| o.iter().map(crate::merkle3::tensor_commitment_v3).collect()).collect();
+            let withheld =
+                values.iter().zip(mask).map(|(o, m)| o.iter().zip(m).map(|(t, masked)| masked.then(|| t.clone())).collect()).collect();
+            selected.insert(p, OwnPositionV1 { commitments, withheld });
+        }
+        Ok(())
+    })?;
+    Ok(selected)
 }
 
 /// The small replay result reused between adaptive DA requests. It contains no node values or producer state.

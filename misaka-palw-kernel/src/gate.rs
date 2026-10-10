@@ -451,12 +451,22 @@ fn verifier_ram_bound_v4(program: &TirProgramV1, plan: &VerificationPlanV1, posi
     let mut max_params = 0u128;
     let mut max_operands = 0u128;
     let mut max_trees = 0u128;
-    for (b, _) in program.occurrences() {
+    let mask = crate::seg_scope::seg_withheld_mask_v1(program);
+    let mut withheld = 0u128;
+    let mut history_rows = 0u128;
+    for (s, (b, _)) in program.occurrences().into_iter().enumerate() {
         let b = b as usize;
         let h = crate::plan::worst_h(program, b).min(plan.max_positions as usize).max(1);
-        for node in &program.blocks[b].nodes {
+        for (n, node) in program.blocks[b].nodes.iter().enumerate() {
             let out = tensor(&node.out, h);
             position = position.saturating_add(out);
+            if mask[s][n] {
+                withheld = withheld.saturating_add(out);
+            }
+            if matches!(node.prim, misaka_palw_tir::Prim::HistAppend { .. }) {
+                // Streaming keeps each appended row in a deque in addition to the current and previous position tensors.
+                history_rows = history_rows.saturating_add(out).saturating_add((h as u128).saturating_mul(512));
+            }
             max_node = max_node.max(out);
             let mut params = 0u128;
             let mut operands = 0u128;
@@ -484,7 +494,12 @@ fn verifier_ram_bound_v4(program: &TirProgramV1, plan: &VerificationPlanV1, posi
             max_operands = max_operands.max(operands);
         }
     }
-    position.saturating_mul(3) // two positions + streamed appended history rows
+    let local_positions = plan.max_positions.min(2) as u128;
+    // The second replay runs while the authenticated public positions are retained: two public + current/previous replay
+    // positions for a decoder; only one public + one replay position for a one-position encoder. History rows are separate.
+    position.saturating_mul(local_positions.saturating_mul(2))
+        .saturating_add(history_rows)
+        .saturating_add(withheld.saturating_mul(local_positions))
         .saturating_add(max_params) // evaluator borrows the same owned allocations; hashing scratch is priced with trees
         .saturating_add(max_operands.saturating_mul(2))
         .saturating_add(max_node.saturating_mul(4)) // output, evaluator scratch, copied history window
@@ -591,6 +606,7 @@ pub fn public_prosecution_complete_v4(
     };
     let l = &descriptor.limits;
     let (replay_work, _, _) = crate::plan::reexecution_bounds_v1(program, plan);
+    let replay_work = replay_work.saturating_mul(2); // roots, selected withheld values, localized checks and independent court verification
     for (what, required, limit) in [
         ("public bytes (one prosecution)", bounds.max_public_bytes, policy.max_public_bytes),
         ("opening bytes (one element court)", bounds.max_opening_bytes as u128, l.max_court_bytes as u128),

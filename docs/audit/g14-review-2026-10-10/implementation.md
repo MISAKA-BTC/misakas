@@ -105,3 +105,42 @@ raw Tensor providerにもcanonical range/length確認を追加した。I8の値�
 4. **F-MEAS-07は現snapshotでは修正済み。** `required_reservation`は自己還流分を除くnet penaltyから導出している。旧handoverのgross-slash指摘を現在のbugとして再掲しない。p=0等のPESG/経済gateは別途残る。
 
 この段階の判定は、登録モデル保有者による告発経路と資源式の改善がverified、G14全域は未完成である。armingの許可や外部soundness reviewの完了を意味しない。
+
+## K2Sのsmall-value courtを統合・修正
+
+未検証だった`k2/real-scale`の`4a6f20aaf`を取り込み、DAで値を開示せずcommitmentだけを返す小型nodeのcourtを完成させた。基点は引き続きintegration `3730cc90f`である。ユーザー確認済みのADR-0177 D7（正しい登録モデルを保有するverifier）を維持している。
+
+WIPの`SegMaterialV1::own()`は削除した。同じpublic providerがproducer値と「verifier自身の値」の両方を供給できると、独立再計算をせず嘘をCleanにできるためである。verifierの値は認証済みjobと登録param commitmentsから内部で再計算し、一致した値だけをcourt inputsに使う。block readerはDA assemblerの明示的なnode commitmentsを保持し、省略値のzero placeholderをhashして代用しない。
+
+不正位置は公開rootのdescentで特定する。局所checkは公開応答が揃い、認証できてから追加のprefix再計算を行う。応答待ちの再試行で毎回モデルを再実行せず、選択された2 positionの非公開値だけを保持する。任意の後方positionから、それ以前の全positionを暗黙に取得する経路は除いた。element proofだけを構築するAPIは、全入力値をpublic rootで認証して使い、correctness verdictを返す独立再計算とは区別する。
+
+`WholeValue` courtは、そのnodeに価格付けされた場合だけ受理する。1 MiBのfiling上限に加え、全output要素のMatMul contraction、TopK、output hashを含むwork上限を適用する。小さい偽proofで価格付けされていない巨大nodeの全計算を起動する経路を拒否した。正しいwhole-value filingはNoFaultとなり、偽のcommitmentは認証されたinputsから再計算してconvictする。
+
+wide128とwindowed dense/MoEの試験では、モデル依存値をすべて`Withheld`としてwire応答から除き、公開commitmentsとverifierのモデルだけから未知の不正位置を特定し、ledgerの通常FileProofでconvictした。実ノードの共謀試験も、このcommitment-only応答をblocksから読む。入力差し替え・別jobのtrace・garbageのnode試験も、fault位置をAPIへ渡さない再計算へ変更した。
+
+RAMは公開応答を保持したまま行う追加再計算を含めて再算定した。decoderのcurrent/previous positionとhistory rows、局所position、selected valuesを同時に計上し、1-position encoderでは存在しないprevious positionを数えない。9B・8kのshape fixtureはRAM **67,191,831,824 B**、public **21,288,122,497 B**、保持state **275,829,248 B**、1 position **2,029 parts**、12 roundsである。これはweights未ロードの資源式検査であり、peak実測・実行時間・deadline保証ではない。
+
+BGE-base 512はRAM **69,698,109,792 B**で、現行上限68,719,476,736 Bを超える。BGE-large 512は184,119,637,904 B、reranker-large 512は187,858,961,568 Bとなる。SDK試験の旧「これらはPASS」という前提を修正し、受入拒否をREFUSEDとして記録した。上限を緩めてPASSにはしていない。SDKがclaim carrierとretained stateを混同していた8 KiB assertionも、独立のcommit boundと全stateのpolicy boundに分けた。
+
+### この統合で残る重要な指摘
+
+1. **small-value courtの完成だけでは累積開示scopeは閉じない。** 大きなモデル依存値は依然clear応答であり、flat hiding tilesは未実装。旧routeの`cumulative_scope_allows_v1`とF-C4R4-17も残る。
+2. **`court_scope_complete()`はreward gateではない。** WIPの「falseなら報酬を得ない」という文言は実装に対応していなかった。現時点ではreportにすぎないとsource/design文書を訂正した。これを実際のreward判定へ接続する作業は必要である。
+3. **DA期限は未解決。** 2,029 partsのresponseと最大12 roundsを、固定20 DAAと現在のliability開始条件で必ず完遂できる証拠はない。誠実なproducerを帯域不足だけでdefaultにしない期限設計と、tag-113 terminalの実ノード試験が必要。
+4. **大型encoderのRAMも未解決。** 現行gateの拒否は安全側の結果であり、その構成への対応完了を意味しない。局所materialの保持方法を改善し、実機peakも検証する必要がある。
+
+作業中にupstream integration `0b73fd33f`を確認した。追加のverifier-pay/PESGとF-B1（generation lengthを満たさず短いclaimがfull rewardを得る問題）は、本段落の基点にはまだ統合していない。次の統合・再検証対象であり、旧snapshotの結果から解決済みとはしない。
+
+### small-value統合後の検証記録
+
+| 対象 | 結果 |
+| --- | --- |
+| 全kernel | **260 PASS / 0 FAIL / 1 ignored**。F-C4R4-17は未解決。全対象nodeの嘘のconviction、honest Element/WholeValueのNoFault、無価格のWholeValue拒否を含む |
+| segmented実ノード | **13 PASS / 0 FAIL**。最新RAM式とcommitment-only応答、共謀、input/borrowed/garbage、decode、reorg/restart/pruned import。長時間の8k-history試験はこの最終runから除外 |
+| SDK実configurationの資源検査 | **1 PASS**。BGE系のRAM拒否も明示的に確認する試験であり、これらのprofileへの対応PASSではない |
+| 9B/8k shapeの再算定 | **1 PASS**。実weights・peak・期限の検証ではない |
+| format / diff | 変更Rustファイルのrustfmt checkとgit diff --checkがPASS |
+
+[全kernel](evidence/scope-verified-kernel.log)、[segmented node](evidence/scope-verified-node.log)、[SDK configuration](evidence/scope-sdk-config-final.log)、[9B RAM再算定](evidence/scope-9b-ram.log)。
+
+長時間の8k-historyとSDK geometry全軸sweepは別runで継続中であり、上表のPASS件数には含めていない。SDKのtiny BERT/XLM-R courtは同じ最新production codeで通過したが、全軸sweepが終了するまではSDK suite全体のPASSとは記録しない。

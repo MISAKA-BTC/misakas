@@ -601,6 +601,9 @@ impl SegMaterialV1 for Counted<'_> {
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
         self.inner.position_siblings(p)
     }
+    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+        self.inner.commitments(p)
+    }
     fn position_path(&self, p: u32) -> Option<(Digest, Vec<Digest>)> {
         self.probes.set(self.probes.get() + 1);
         (p < self.inner.c.positions()).then(|| self.inner.c.position_path(p))
@@ -667,8 +670,7 @@ fn k2s_a_reexecuting_verifier_finds_any_lie_with_certainty_reading_two_positions
     read.dedup();
     assert_eq!(read, vec![2999, 3000], "two positions of material, whatever the context");
     let SegFindingV1::Fault(fault) = r.finding else { panic!("the lie is not found: {:?}", r.finding) };
-    let SegFaultV1::Element(e) = fault.as_ref() else { panic!("an element fault") };
-    assert_eq!((e.position, e.occurrence, e.node), (3000, s, n));
+    assert_eq!(fault.at(), Some((3000, s, n)), "{fault:?}");
     let bytes = fault.to_bytes();
     eprintln!(
         "[k2s] SG-06 re-execution check: {} positions, divergent position {:?} after {} position paths, material read {} B \
@@ -715,7 +717,7 @@ fn fat_v1(seed: u8) -> (TirProgramV1, MapParams) {
     };
     let fat = {
         let mut b = pb.block("fat", carry.clone());
-        let wide = b.broadcast(Ref::CarryIn(0), &[Dim::Fixed(40_000), Dim::Fixed(8)]);
+        let wide = b.iota(DType::I32, &[Dim::Fixed(40_000), Dim::Fixed(8)], 0, 0, 1);
         let s = b.reduce_sum(wide, 0, DType::I64);
         let s = b.reshape_fixed(s, &[8]);
         let c = b.clamp(s, -(1 << 20), 1 << 20, DType::I32);
@@ -739,6 +741,65 @@ fn fat_v1(seed: u8) -> (TirProgramV1, MapParams) {
         tensors.insert((j as u16, None), Tensor::new(d.dtype, d.shape.iter().map(|x| *x as usize).collect(), data).unwrap());
     }
     (program, MapParams { tensors })
+}
+
+#[test]
+fn k2s_small_model_values_are_never_served_and_a_model_holder_convicts_from_commitments() {
+    use misaka_palw_kernel::seg_da::{AssembledPositionV1, ChunkBodyV1};
+    struct PublicParts(std::collections::BTreeMap<u32, AssembledPositionV1>);
+    impl SegMaterialV1 for PublicParts {
+        fn position(&self, p: u32) -> Option<Vec<Vec<Tensor>>> {
+            self.0.get(&p).map(|x| x.0.clone())
+        }
+        fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
+            self.0.get(&p).map(|x| x.1.clone())
+        }
+        fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+            self.0.get(&p).map(|x| x.2.clone())
+        }
+    }
+    for fx in [wide128_v1(7), misaka_palw_tir_sketch::fixture::dense_moe_windowed_v1(7, 4)] {
+        let mut w = W::new(fx.program, fx.params, 16);
+        let scope = misaka_palw_kernel::seg_scope::seg_scope_report_v1(&w.program);
+        assert!(scope.masked > 0 && scope.court_scope_complete(), "{scope:?}");
+        let mask = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&w.program);
+        let prompt = [1, 3, 5, 7, 9];
+        let job = w.tiled_job(&prompt, 2);
+        let lying = produce(&w, job, &prompt, Some((3, 0, 0)));
+        commit(&mut w, &lying);
+        let id = lying.claim.id();
+        let view = w.l.seg_claim_view_v1(&id).unwrap();
+        let mut public = PublicParts(Default::default());
+        assert_eq!(
+            check_positions_v1(
+                &view.context(),
+                &public,
+                &|_, _| panic!("a missing response must not trigger replay"),
+                &lying.tokens,
+                &[3]
+            ),
+            SegFindingV1::Demand(vec![2, 3])
+        );
+        for p in 0..view.positions {
+            let mut encoded = Vec::new();
+            for part in 0..position_parts_v1(&w.program, p).unwrap().len() as u32 {
+                let response = position_part_v1(&w.program, p, &lying.values[p as usize], lying.c.position_path(p).1, part).unwrap();
+                for c in &response.chunks {
+                    assert_eq!(matches!(c.body, ChunkBodyV1::Withheld), mask[c.occurrence as usize][c.node as usize]);
+                }
+                encoded.push(borsh::to_vec(&response).unwrap());
+            }
+            public.0.insert(p, assemble_position_v1(&w.program, &view.segment_roots, view.positions, p, &encoded).unwrap());
+        }
+        // No producer value (including the wrong value) is an input to the verifier: only wire responses and its registered model.
+        let r = misaka_palw_kernel::seg_detect::reexecute_claim_v1(&view.context(), &public, &artifact(&w), &lying.tokens);
+        assert_eq!(r.divergent, Some(3));
+        let SegFindingV1::Fault(fault) = r.finding else { panic!("{:?}", r.finding) };
+        assert!(matches!(fault.as_ref(), SegFaultV1::WholeValue(_)));
+        assert_eq!(fault.at(), Some((3, 0, 0)));
+        let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(fault.to_bytes()) })]);
+        assert!(ev.iter().any(|e| matches!(e, E::Convicted { claim, accuser, .. } if *claim == id && *accuser == OUT)), "{ev:?}");
+    }
 }
 
 #[test]
@@ -774,8 +835,16 @@ fn k2s_a_position_is_served_in_parts_and_its_demand_bonds_wait_for_the_grace() {
     assert_eq!(w.l.bonds[&OUT].reserved, 0, "settled at the grace's end");
     // A fresh verifier rebuilds the position from the served parts alone and checks it.
     let view = w.l.seg_claim_view_v1(&id).unwrap();
-    let (values, siblings) = assemble_position_v1(&w.program, &view.segment_roots, view.positions, 1, &served).unwrap();
-    assert_eq!(values, honest.values[1]);
+    let (values, siblings, commitments) = assemble_position_v1(&w.program, &view.segment_roots, view.positions, 1, &served).unwrap();
+    assert_eq!(commitments, honest.commitments(1).unwrap(), "every node commitment, withheld values' included");
+    let withheld = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&w.program);
+    for (s, occ) in values.iter().enumerate() {
+        for (n, t) in occ.iter().enumerate() {
+            if !withheld[s][n] {
+                assert_eq!(t, &honest.values[1][s][n], "a served value is the committed one");
+            }
+        }
+    }
     assert_eq!(siblings, honest.c.position_path(1).1);
 }
 
@@ -857,8 +926,17 @@ fn k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers() {
     let worst = {
         let mut best = (0u64, 0u8, 0u16);
         let nc = seg.node_count;
+        let withheld = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&program);
         for r in &plan.relations {
-            let (b, _) = misaka_palw_kernel::element::element_court_cost_v1(&program, r.block as usize, r.node as usize, nc, ctx);
+            let (b, _) = misaka_palw_kernel::element::element_court_cost_masked_v1(
+                &program,
+                r.block as usize,
+                r.node as usize,
+                nc,
+                ctx,
+                None,
+                &withheld,
+            );
             if b > best.0 {
                 best = (b, r.block, r.node);
             }
