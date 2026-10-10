@@ -1,0 +1,34 @@
+# VSTALL drills — 9-node salted testnet-12 (wc-lead tests/hf-onboarding/devnet.sh, unmodified; RUN_ID=vstall, ports 61300/62300/63300/64300)
+# Load: 13 keys (main + 12 funded throwaway keys) send distinct wallet txs round-robin over the nine RPCs as fast as each confirms.
+# Watcher: a node is STALLED when its virtual DAA is flat for 240 s while the highest DAA moved by >= 3; it is then `sample`d once.
+
+## UNFIXED — symbol build of 0b73fd33f (kaspad release, line tables). up 20:59 (2026-10-10); load 21:13-21:50, then natural traffic only.
+## (watcher re-armed at 21:33, so "min" below counts from 21:33)
+tick 0 min: A=17 B=17 C=17 D1=17 D2=17 D3=17 D4=17 D5=17 D6=17
+STALL C pid 11702 daa 21 max 24 at 21:47:36 after 14 min; sample sample-unfixed-node-C.txt
+STALL D1 pid 12147 daa 21 max 24 at 21:47:48 after 14 min; sample sample-unfixed-node-D1.txt
+STALL D4 pid 13525 daa 21 max 24 at 21:47:59 after 14 min; sample sample-unfixed-node-D4.txt
+tick 15 min: A=24 B=24 C=21 D1=21 D2=24 D3=24 D4=21 D5=24 D6=24
+tick 30 min: A=30 B=30 C=21 D1=21 D2=30 D3=30 D4=21 D5=30 D6=30
+STALL D6 pid 14488 daa 32 max 35 at 22:15:06 after 41 min; sample sample-unfixed-node-D6.txt
+tick 45 min: A=36 B=36 C=21 D1=21 D2=36 D3=36 D4=21 D5=36 D6=32
+STALL A pid 10777 daa 36 max 39 at 22:25:25 after 51 min; sample sample-unfixed-node-A.txt
+tick 60 min: A=36 B=42 C=21 D1=21 D2=42 D3=42 D4=21 D5=42 D6=32
+tick 90 min: A=36 B=53 C=21 D1=21 D2=53 D3=53 D4=21 D5=53 D6=32
+tick 121 min: A=36 B=64 C=21 D1=21 D2=64 D3=64 D4=21 D5=64 D6=32
+# 5 of 9 nodes stalled; every sample shows the same three stacks (virtual-processor in commit_virtual_state :4034 upgrade ->
+# wait_for_readers; a mempool batch holding the virtual read at :19816; a rayon worker in dns_coinbase_settlement :19106 ->
+# lock_shared_slow). The five stalled nodes did not exit on SIGINT within 90 s (the shutdown waits on the virtual processor) and
+# were SIGKILLed; the four live ones stopped normally.
+
+## FIXED — d003b841c (same build flags). Fresh drill, up 23:54; load 23:55-01:55 throughout (613 load txs accepted). 120 min.
+tick 0 min: A=2 B=2 C=2 D1=2 D2=2 D3=2 D4=2 D5=2 D6=2
+tick 15 min: A=9 B=9 C=9 D1=9 D2=9 D3=9 D4=9 D5=9 D6=9
+tick 30 min: A=16 B=16 C=16 D1=16 D2=16 D3=16 D4=16 D5=16 D6=16
+tick 45 min: A=23 B=23 C=23 D1=23 D2=23 D3=23 D4=23 D5=23 D6=23
+tick 60 min: A=29 B=29 C=29 D1=29 D2=29 D3=29 D4=29 D5=29 D6=29
+tick 75 min: A=35 B=35 C=35 D1=35 D2=35 D3=35 D4=35 D5=35 D6=35
+tick 90 min: A=41 B=41 C=41 D1=41 D2=41 D3=41 D4=41 D5=41 D6=41
+tick 105 min: A=47 B=47 C=47 D1=47 D2=47 D3=47 D4=47 D5=47 D6=47
+tick 120 min: A=53 B=53 C=53 D1=53 D2=53 D3=53 D4=53 D5=53 D6=53
+# No stall; all nine in lockstep through DAA 53 (the unfixed run's stalls were at DAA 21, 32, 36). All nine stopped on SIGINT.
