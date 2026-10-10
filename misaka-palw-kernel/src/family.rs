@@ -1,4 +1,4 @@
-//! **Constraint families, not model-brand kernels** (RFC-0005 §K.3).
+//! **Constraint families, not model-brand kernels** (`docs/design/palw/versioned-kernels.md` §K.3).
 //!
 //! Every PALW-TIR v1 primitive belongs to exactly one family. A kernel descriptor lists the families it
 //! implements, each with ONE checker and ONE terminal court; a plan cannot choose a weaker checker, and

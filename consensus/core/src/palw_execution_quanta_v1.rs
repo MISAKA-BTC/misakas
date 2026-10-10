@@ -331,6 +331,81 @@ pub fn palw_execution_mint_quanta_windowed_v1(
         .collect()
 }
 
+/// **The windowed mint with every bond's Round rights capped BEFORE the draw** (lane BUDGET, readiness §3e; past
+/// `palw_bond_budget_v1` only — below it the schedule is [`palw_execution_mint_quanta_windowed_v1`]'s, ticket for ticket).
+///
+/// ```text
+/// T_candidate(b) = Σ over b's Finals, in canonical order, of min(T_earned, what is left of remaining(b))
+/// T_allocated    = the first `window_rounds` of every candidate ticket, ranked by H(seed ‖ quantum_id)
+/// ```
+///
+/// Finals collapse by `execution_root` and a forfeited execution mints nothing, as in the windowed mint. **There is no per-Final
+/// `min(window)` here**: that cap let a split into `k` claims field `k·window` candidates where the whole fielded `window`, so it is
+/// replaced by the bond's capital-derived `remaining` (sub-additive over splits) — `Σ_i min(T_i, R_i) ≤ min(Σ T_i, Σ R_i)`. The total
+/// candidates of a span are still bounded by [`PALW_EXEC_MAX_QUANTA_PER_SPAN_V1`] (an approved policy keeps `Σ remaining` below it).
+/// The draw reads no operator, domain, genesis flag or input order (role- and order-neutral).
+pub fn palw_execution_mint_quanta_windowed_capped_v1(
+    finals: &[PalwExecFinalV1],
+    seed: Hash64,
+    quantum: u128,
+    open_round: u64,
+    window_rounds: u64,
+    forfeited_roots: &std::collections::BTreeSet<Hash64>,
+    remaining: &dyn Fn(&PalwBondKeyV2) -> u64,
+) -> Vec<PalwExecQuantumV1> {
+    let window = usize::try_from(window_rounds).unwrap_or(usize::MAX).min(PALW_EXEC_MAX_QUANTA_PER_SPAN_V1);
+    if window == 0 {
+        return Vec::new();
+    }
+    let mut by_work: Vec<&PalwExecFinalV1> = finals
+        .iter()
+        .filter(|f| f.credit > 0)
+        .filter(|f| !crate::palw_economic_safety_v1::palw_exec_rights_are_forfeit_v1(forfeited_roots, &f.execution_root))
+        .collect();
+    by_work.sort_by(|a, b| {
+        a.execution_root.cmp(&b.execution_root).then(crate::palw_execution_lane_v1::palw_exec_final_acceptance_order_v1(a, b))
+    });
+    by_work.dedup_by(|a, b| a.execution_root == b.execution_root);
+    let mut left: std::collections::BTreeMap<PalwBondKeyV2, u64> = std::collections::BTreeMap::new();
+    let mut drawn: Vec<(Hash64, PalwExecQuantumV1)> = Vec::new();
+    for f in by_work {
+        let budget = left.entry(f.bond).or_insert_with(|| remaining(&f.bond));
+        let earned = u64::from(palw_execution_quantum_count_v1(u128::from(f.credit), quantum, seed, f.claim_id));
+        let n = earned.min(*budget);
+        *budget -= n;
+        let work_id = palw_execution_canonical_work_id_v1(f.execution_root);
+        for index in 0..n as u32 {
+            if drawn.len() >= PALW_EXEC_MAX_QUANTA_PER_SPAN_V1 {
+                break;
+            }
+            let quantum_id = palw_execution_quantum_id_v1(work_id, f.claim_id, index);
+            let mut order = keyed(PALW_EXEC_QUANTUM_ROUND_DOMAIN);
+            order.update(seed.as_byte_slice());
+            order.update(quantum_id.as_byte_slice());
+            drawn.push((
+                finish(order),
+                PalwExecQuantumV1 {
+                    quantum_id,
+                    final_id: f.claim_id,
+                    index,
+                    bond: f.bond,
+                    operator_id: f.operator_id,
+                    domain: f.domain,
+                    scheduled_round: 0,
+                },
+            ));
+        }
+    }
+    drawn.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.quantum_id.cmp(&b.1.quantum_id)));
+    drawn.truncate(window);
+    let first = open_round.saturating_add(PALW_EXEC_TICKET_LEAD_ROUNDS_V1);
+    drawn
+        .into_iter()
+        .enumerate()
+        .map(|(position, (_, q))| PalwExecQuantumV1 { scheduled_round: first.saturating_add(position as u64), ..q })
+        .collect()
+}
+
 fn assign_round(seed: Hash64, quantum_id: Hash64, open_round: u64, taken: &mut BTreeSet<u64>) -> u64 {
     let mut state = keyed(PALW_EXEC_QUANTUM_ROUND_DOMAIN);
     state.update(seed.as_byte_slice());

@@ -12,6 +12,7 @@
 //! real node's mempool), and judges each reply against the id it computed from the bytes. Only what the real node accepted is mined.
 use super::*;
 use kaspa_consensus_core::config::params::Params;
+use kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1;
 use misaka_palw_remote::relay::{NodeOutcome, RelayNode, Reply, broadcast_signed_tx, tx_id_of_bytes};
 
 // ---- the node-less path --------------------------------------------------------------------------------------------------
@@ -168,8 +169,10 @@ struct Escape {
     outsider_fee: u64,
     /// What the conviction owes the outsider (its bounty), measured in the folding block.
     outsider_paid: u64,
-    /// The claim's whole reservation at admission (the undiluted bounty is the accuser's share of it).
+    /// The claim's whole reservation at admission.
     reservation: u64,
+    /// What the self-inflicted default collected (the default penalty).
+    penalty: u64,
     convicted: bool,
     state: ClaimStateV1,
     censored_daa: u64,
@@ -209,6 +212,7 @@ async fn escape_by_self_default(mut w: World, cover: bool) -> Escape {
         outsider_fee: outsider_before - w.net.collateral(outsider),
         outsider_paid: w.net.owed(outsider),
         reservation,
+        penalty: w.policy().default_penalty,
         convicted: ledger.claims[&lie.id].convicted,
         state: ledger.claims[&lie.id].life.state.clone(),
         censored_daa: deadline - opened,
@@ -234,7 +238,15 @@ async fn g14_c4r3_a_self_inflicted_default_must_not_erase_a_provable_fraud() {
     assert!(e.convicted, "a valid proof inside the claim's horizon convicts it (it was {:?})", e.state);
     assert_eq!(e.outsider_fee, 0, "a true fraud proof never costs its filer the dismissal fee");
     assert!(e.sybil_gain < e.producer_loss as i128, "the colluding demander recoups less than the default cost the producer");
-    assert_eq!(e.outsider_paid, e.reservation / 2, "the honest accuser's bounty is not diluted by the self-inflicted default");
+    // C4 F-C4R4-15: one reporter pool per claim — the bounty is the share of what the conviction collected (the reservation less
+    // the default's penalty), and the default's demanders plus the bounty stay within the share of everything collected. The
+    // honest accuser's residual dilution (the Sybil demander's part of the default's share) is ECON's.
+    let s = u64::from(PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1);
+    assert_eq!(e.outsider_paid, (e.reservation - e.penalty) * s / 1000, "the bounty is the share of what the conviction collected");
+    assert!(
+        (e.sybil_gain + e.outsider_paid as i128) * 1000 <= (e.reservation as i128) * s as i128,
+        "every reporter together: at most the share of what the default and the conviction collected"
+    );
 }
 
 /// F-C4R3-02 on an OPV class: the same escape (it used to cost the colluders only RFC-0015's 10 % default burn). Fixed the same way.
@@ -249,7 +261,15 @@ async fn g14_c4r3_opv_a_self_inflicted_default_must_not_erase_a_provable_fraud()
     assert!(e.convicted, "a valid proof inside the claim's horizon convicts it (it was {:?})", e.state);
     assert_eq!(e.outsider_fee, 0, "a true fraud proof never costs its filer the dismissal fee");
     assert!(e.sybil_gain < e.producer_loss as i128, "the colluding demander recoups less than the default cost the producer");
-    assert_eq!(e.outsider_paid, e.reservation / 2, "the honest accuser's bounty is not diluted by the self-inflicted default");
+    // C4 F-C4R4-15: one reporter pool per claim — the bounty is the share of what the conviction collected (the reservation less
+    // the default's penalty), and the default's demanders plus the bounty stay within the share of everything collected. The
+    // honest accuser's residual dilution (the Sybil demander's part of the default's share) is ECON's.
+    let s = u64::from(PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1);
+    assert_eq!(e.outsider_paid, (e.reservation - e.penalty) * s / 1000, "the bounty is the share of what the conviction collected");
+    assert!(
+        (e.sybil_gain + e.outsider_paid as i128) * 1000 <= (e.reservation as i128) * s as i128,
+        "every reporter together: at most the share of what the default and the conviction collected"
+    );
 }
 
 // ---- GAP-R7: proof front-running (closed by the accuser seal) ------------------------------------------------------------
@@ -468,7 +488,9 @@ async fn g14_c4r3_an_envelope_in_flight_must_not_split_builds_that_differ_only_i
 /// proof filed inside the horizon convicts.
 #[tokio::test]
 async fn g14_c4r3_eight_junk_chunk_groups_must_not_hold_a_chunked_proof_off_the_chain() {
-    use kaspa_consensus_core::palw_kernel_route_v1::{PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1, PalwKernelChunkTargetV1, PalwKernelChunkV1};
+    use kaspa_consensus_core::palw_kernel_route_v1::{
+        PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1, PalwKernelChunkTargetV1, PalwKernelChunkV1,
+    };
     kaspa_core::log::try_init_logger("warn");
     let mut w = World::new().await;
     let job = w.job().await;

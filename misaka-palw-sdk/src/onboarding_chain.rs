@@ -18,15 +18,15 @@
 //! # The fresh verifier
 //!
 //! [`fresh_verify_from_reads_v1`] takes what a node serves publicly — op 231's attempt and evidence rows and the class's program,
-//! op 212's Final facts — plus, optionally, the artifact from its public source, and re-derives the beacon, the seed, the selection
-//! and the evidence exactly as the chain's fold does (consensus-core's one implementation), then re-reads every selected leaf from
-//! the artifact. It needs no node-private state and no producer state.
+//! op 212's Final facts, and for a sealed-source (v3) attempt the seal facts of op 211's rows ([`sealed_sources_from_kernel_rows_v1`])
+//! — plus, optionally, the artifact from its public source, and re-derives the beacon, the seed, the selection and the evidence
+//! exactly as the chain's fold does (consensus-core's one implementation), then re-reads every selected leaf from the artifact. It
+//! needs no node-private state, no producer state and no Panel (G14 condition 9, RFC-0014 §3.4).
 
 use crate::runtime_pack::commit::{Refusal, hex};
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::palw_conformance_evidence_v1::{
     ConformanceEvidenceActionV1, ConformanceEvidencePostV1, FreshInputV1, FreshVerdictV1, SelectedLeafV1, fresh_verify_v1,
-    palw_onboarding_challenge_policy_v1,
 };
 use kaspa_consensus_core::palw_onboarding_v1::{
     ConformanceAttemptRowV1, PALW_ONBOARDING_MLDSA87_CONTEXT_V1, PALW_SIGNED_REGISTRATION_MLDSA87_CONTEXT_V1,
@@ -36,6 +36,8 @@ use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, 
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::{Hash, Hash64};
 use misaka_palw_challenge::AttributedWorkV1;
+/// The v3 seal fact a reader derives from op 211's rows (re-exported so a caller need not depend on the challenge crate).
+pub use misaka_palw_challenge::SealedSourceV3;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -262,6 +264,8 @@ pub struct PublicConformanceReadsV1 {
     /// Every Final fact with a beacon event (op 212 `workFinalEvent`: an attributed event — the producer stands behind it, for the
     /// policy's distinct source rule), any order.
     pub events: Vec<AttributedWorkV1>,
+    /// A sealed-source (v3) attempt's beacon facts, from op 211's rows ([`sealed_sources_from_kernel_rows_v1`]); empty for v2.
+    pub sealed_sources: Vec<SealedSourceV3>,
     /// The DAA the reads were taken at.
     pub tip_daa: u64,
     /// The class's canonical program bytes (op 231 `program`).
@@ -293,13 +297,9 @@ pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Op
     };
     let program = misaka_palw_tir::TirProgramV1::decode_canonical(&reads.program)
         .map_err(|e| Refusal::new("PROGRAM_MALFORMED", e.to_string()))?;
-    let policy = palw_onboarding_challenge_policy_v1();
-    if attempt.is_sealed_source() {
-        return Err(Refusal::new(
-            "SEALED_SOURCE",
-            "a sealed-source (v3) attempt's beacon reads the route's seals, which no public read serves yet (GAP: a seal-facts read)",
-        ));
-    }
+    // The network policy the commitment names (the sampled v2 or the sealed-source v3 one; an unknown id falls to v2 and is refused
+    // as substituted just below).
+    let policy = attempt.policy();
     if attempt.is_complete_check() {
         return Err(Refusal::new(
             "COMPLETE_CHECK",
@@ -347,6 +347,7 @@ pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Op
         policy: &policy,
         ctx: &ctx,
         events: &reads.events,
+        sealed: &reads.sealed_sources,
         tip_daa: reads.tip_daa,
         program: &program,
         post: post.as_ref(),
@@ -367,6 +368,21 @@ pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Op
         (true, format!("the attempt ended: {:?}", attempt.last_end))
     };
     Ok(FreshReportV1 { verdict, attempt, chain_says_passed, agrees, why })
+}
+
+/// **A v3 attempt's seal facts from op 211's pages**: the reader rebuilds its own copy of the route from every served row
+/// (`PalwKernelRouteStateV1::from_served_rows_v1`, refused unless the rows root to the served roots) and derives the facts with the
+/// chain's own function — no seal-specific read, no node-private state.
+pub fn sealed_sources_from_kernel_rows_v1(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+) -> Result<Vec<SealedSourceV3>, Refusal> {
+    let route =
+        kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(header, rows, ledger_root, aux_root)
+            .map_err(|e| Refusal::new("ROWS_NOT_THE_CHAIN", e))?;
+    route.beacon_sealed_sources_v1().map_err(|e| Refusal::new("ROWS_MALFORMED", e))
 }
 
 fn unhex(s: &str) -> Result<Vec<u8>, String> {

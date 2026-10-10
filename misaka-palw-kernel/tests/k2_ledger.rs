@@ -674,10 +674,12 @@ fn a_self_inflicted_default_never_erases_a_provable_fraud_and_a_true_proof_never
     // The outsider's proof, kept out until after the default, still convicts inside the default's horizon.
     let outsider0 = w.l.bonds[&OUTSIDER].collateral;
     let ev = w.block(32, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof: proof.clone() }]);
-    assert_eq!(convicted(&ev), Some((900, 500, false)), "{ev:?}");
+    assert_eq!(convicted(&ev), Some((900, 450, false)), "{ev:?}");
     assert!(matches!(w.state(&id), ClaimStateV1::Convicted { .. }), "a fraud, not a default: {:?}", w.state(&id));
     assert_eq!(w.l.bonds[&OUTSIDER].collateral, outsider0, "a true proof is never charged the dismissal fee");
-    assert_eq!(w.consumer.paid(&OUTSIDER), 500, "the bounty the outsider would have had with no default");
+    // C4 F-C4R4-15: one reporter pool per claim — the bounty is the share of what THIS conviction collected (900), so the demander
+    // (50) and the accuser (450) together take the share of the 1,000 collected, never more.
+    assert_eq!(w.consumer.paid(&OUTSIDER), 450, "the share of what the conviction collected");
     assert_eq!(w.l.bonds[&PRODUCER].collateral, producer0 - 1000, "the producer loses the whole reservation");
     assert_eq!(w.l.bonds[&PRODUCER].reserved, 0);
     let colluders = (w.l.bonds[&PRODUCER].collateral + w.l.bonds[&SPAM1].collateral + w.consumer.paid(&SPAM1)) as i128
@@ -858,6 +860,22 @@ fn a_served_demand_bond_is_refunded_on_conviction_or_default_and_burned_only_at_
     let ev = w.block(31, vec![]);
     assert!(ev.iter().any(|e| matches!(e, E::ProducerDefault { position: 2, .. })), "{ev:?}");
     assert_eq!((w.l.bonds[&OUTSIDER].reserved, w.l.bonds[&OUTSIDER].collateral), (0, 1000), "refunded with the default");
+    assert!(w.l.served_demands.is_empty());
+
+    // A claim the Panel never covers TIMES OUT: the served position's bond is refunded with the timeout (the claim never stood Final,
+    // so no horizon can burn it).
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    let (id, trace) = (h.claim.id(), h.trace.clone());
+    w.block(10, vec![h.tx]);
+    w.block(11, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: 1 }]);
+    serve(&mut w, 12, id, &trace, 1);
+    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 10, "held while the claim is undecided");
+    let ev = w.block(200, vec![]);
+    assert!(matches!(w.l.claims[&id].life.state, ClaimStateV1::TimedOut { .. }), "{:?}", w.l.claims[&id].life.state);
+    assert!(!ev.iter().any(|e| matches!(e, E::ServedDemandBondsBurned { .. })), "{ev:?}");
+    assert_eq!((w.l.bonds[&OUTSIDER].reserved, w.l.bonds[&OUTSIDER].collateral), (0, 1000), "refunded with the timeout");
     assert!(w.l.served_demands.is_empty());
 }
 

@@ -14,9 +14,9 @@
 //! ([`palw_admission_claims_per_span_v1`]), so no share is set by anyone. Wall-clock p99s are
 //! telemetry: they say whether the derived profile is being met, never what it is.
 //!
-//! The boundary that stays: a model the canonical ML VM can express (matmul, attention, MoE, GDN,
-//! norms, …) registers without a fork; a model that needs an instruction the VM lacks is a VM
-//! upgrade (`PalwManifestVerdictV1::UnsupportedOp`), not a registration.
+//! A model expressible by the supported tensor kernels (matmul, attention, MoE, GDN, norms, …)
+//! registers without a fork. An unsupported operation (`PalwManifestVerdictV1::UnsupportedOp`)
+//! requires a reviewed kernel extension and protocol activation before registration (ADR-0172).
 
 use crate::Hash64;
 use crate::palw_verification_profile_v1::{PALW_SEAT_COUNT_V1, PALW_SPAN_MS_V1};
@@ -45,7 +45,7 @@ pub struct PalwModelWorkV1 {
     pub economic_ccu_per_claim: u128,
     pub artifact_bytes: u64,
     pub working_set_bytes: u64,
-    /// Whether every op of the graph is one the canonical VM defines at `runtime_version`.
+    /// Whether every op of the graph is supported by the tensor kernels at `runtime_version`.
     pub ops_supported: bool,
 }
 
@@ -129,8 +129,8 @@ pub fn palw_registry_globals_of_bundle_v1(bundle: &crate::palw_mode_v2::PalwCons
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwManifestVerdictV1 {
     Valid,
-    /// The graph names an op the canonical VM does not define at this runtime version: a VM
-    /// instruction upgrade, not a registration.
+    /// The graph names an op unsupported at this runtime version: a kernel extension must be
+    /// implemented, reviewed and activated before registration.
     UnsupportedOp,
     EmptyArtifact,
     EmptyJob,
@@ -1551,7 +1551,7 @@ pub fn palw_lifecycle_reason_v2(
              verify this class"
                 .to_string()
         }
-        PalwModelLifecycleV1::Registered => "no work derived from the graph (the VM boundary): never admits".to_string(),
+        PalwModelLifecycleV1::Registered => "no work derived from the graph (the kernel support boundary): never admits".to_string(),
         PalwModelLifecycleV1::Prefetching => {
             format!("ready {} < {} required (seats prove possession to be counted)", row.ready_seats, row.profile.required_ready_seats)
         }
@@ -1653,7 +1653,7 @@ pub struct PalwModelRegistryClassReadV1 {
     pub no_capable_panel_voids: u32,
     /// Why the row is where it is, from its last reading: `ready {n} < {seats} for a panel`,
     /// `overloaded`, `ready {n} < {required} required`, `probing {passed}/{needed}`, `stable
-    /// {n}/{needed}`, `admitting`, `base class`, `no work (VM boundary)` — for an operator to tell
+    /// {n}/{needed}`, `admitting`, `base class`, `no work (kernel support boundary)` — for an operator to tell
     /// a HELD by the rule from a HELD by a fault.
     pub reason: String,
 }
@@ -2488,15 +2488,15 @@ mod tests {
         );
     }
 
-    /// **The manifest is judged before it is a class, and the VM boundary is one verdict.**
+    /// **The manifest is judged before it is a class, and unsupported kernels are one verdict.**
     #[test]
-    fn adr0135_a_manifest_is_judged_and_the_vm_boundary_is_a_verdict() {
+    fn adr0135_a_manifest_is_judged_and_kernel_support_is_a_verdict() {
         assert_eq!(palw_manifest_verdict_v1(&manifest(1, 7), &dense()), PalwManifestVerdictV1::Valid);
         let alien = PalwModelWorkV1 { ops_supported: false, ..dense() };
         assert_eq!(
             palw_manifest_verdict_v1(&manifest(1, 7), &alien),
             PalwManifestVerdictV1::UnsupportedOp,
-            "a new opcode is a VM upgrade, not a registration"
+            "an unsupported operation requires a kernel extension before registration"
         );
         assert_eq!(palw_manifest_verdict_v1(&manifest(0, 7), &dense()), PalwManifestVerdictV1::EmptyArtifact);
         assert_eq!(palw_manifest_verdict_v1(&manifest(1, 0), &dense()), PalwManifestVerdictV1::EmptyJob);

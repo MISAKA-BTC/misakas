@@ -84,45 +84,7 @@ withdrawn as unsound (below). Four decisions, in order of how much each changes 
 
 ### Decision 1 — WITHDRAWN: sampling the PoW checks is UNSOUND in this proof structure
 
-The first draft of this ADR proposed sampling the per-header PoW check, on the argument that a
-prover must corrupt a large fraction `f` of headers to move the decision, so a sample of 64 detects
-it with probability `1 − (1 − f)^64`. **Settling the scheme's constants disproved the argument.**
-Recorded here rather than deleted, because the reasoning is the kind a reader would re-derive.
-
-A proof's weight is not a header count. `compare_proofs_inner` compares `blue_work_diff`, read from
-the RECOMPUTED ghostdag (`validate.rs:84-89`), and ghostdag accumulates
-
-```
-blue_work = Σ over mergeset blues of  max( calc_work(header.bits), level_work(level) )
-```
-
-(`ghostdag/protocol.rs:155-161`). Both terms are prover-chosen and both are validated by the PoW and
-by nothing else:
-
-* `header.bits` is peer-supplied. Its only validator is `pow_passes` at `validate.rs:250` — the PoW
-  value must meet the declared target. Skip that check and a header may declare an arbitrarily hard
-  `bits`, hence arbitrary `calc_work`.
-* the LEVEL a header sits at is the prover's choice of which array it appears in.
-  `level_work(level, max_block_level) = 1 << (level + 256 − max_block_level)`
-  (`difficulty.rs:273-281`) is a function of that position, not of the header. Its only validator is
-  `header_level < level → reject` at `validate.rs:247`, and `header_level` comes from the PoW.
-
-So **one** unverified header can claim unbounded work. The detection probability is not
-`1 − (1 − f)^s` with a large `f`; it is `s/N` for a single planted header — 64/9,000 ≈ **0.7 %**. The
-draft's table was answering a question the attacker does not have to ask.
-
-The two obvious repairs both fail:
-
-* *Credit an unsampled header only `level_work`* — no: the level is exactly what is unvalidated, so
-  the prover places the garbage header at level 250 and collects `level_work(250)`.
-* *Credit an unsampled header zero* — no: the DEFENDER's proof is the node's own and is trusted in
-  full (`ProofContext::from_proof(self, &defender_proof, false).expect("local")`), so measuring only
-  the challenger at `s/N` of its work means an honest heavier chain can never win. That is not a
-  weakened security bound, it is a broken IBD.
-
-Sampling would become available only if the proof carried a commitment binding each header's claimed
-work to its level independently of the PoW — a change to the proof format and to the MLS argument,
-which is not this ADR's scope. **Verification stays exhaustive.**
+PoW header 検証の sampling は実装しない。一つの未検証 header だけで任意に大きい work を主張でき、少数 sampling では重い偽 chain を十分に排除できないため。検証は全件のままとする。
 
 ### Decision 1′ — Amortise the per-header cost (this is the real lever)
 

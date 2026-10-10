@@ -291,7 +291,7 @@ is dormant behind `palw_probabilistic_constraints_v1` (OPV parts behind `palw_pa
 reservation until `default + liability_daa`. A valid proof in that horizon convicts (`Convicted`), paying the accuser its share of the
 whole admitted reservation. A proof past any horizon, or against a timed-out claim (it never passed and never paid), is refused before
 any court runs and charges no fee. What a self-inflicted default still buys the colluders is bounded by their demanders' share of the
-penalty (50 KAS of 1,000 at the interim terms).
+penalty (49 BILI of 1,000 at the interim terms; 50 at the 500‰ share before ADR-0032's 49 %).
 
 **The route's own chunk lane (F-C4R3-03).** A prosecution object larger than one carrier rides `KernelRouteChunkV1` (tag 113): every
 chunk signed by the opener's Active bond, groups keyed `(opener, group)` in aux table 41, ≤ 2 open per bond, a deposit of 1 KAS per
@@ -362,6 +362,14 @@ model computes it when the seal is posted, and a beacon over such seals is groun
   unchanged (its `sealed_daa` is the seal position, its `committed_daa` the reveal position);
 * a seal accepted past the fence that expires unrevealed is KEPT as `(job, producer, sealed_daa) → { seal, forfeited_daa }` (table 26),
   so a withheld seal stays in the v3 mix and vetoes it instead of silently dropping out of it (SOUND SG-01a(i));
+* **a re-seal past the fence forfeits the seal it replaces** (ECON F-ECON-1 / F-ECON-2, fix S1, 2026-10-09): the replaced seal goes
+  to table 26 at its OWN `sealed_daa` with its deposit burned, and the new seal is bonded afresh. Before the fix a re-seal kept the
+  one deposit and overwrote the row, so (1) one deposit, re-sealed under the TTL, stayed live forever and vetoed every attempt of a
+  class, and (2) a re-seal inside a reveal window moved a mixed seal out of its seal window — a free, uncounted withdrawal chosen after
+  the honest salts were public (2^a lockable outputs with `a` attacker seals). Now every seal position, once taken, is in the read
+  until revealed or forfeited, and staying live costs a deposit per re-seal. (Refusing the re-seal outright was the alternative; the
+  forfeit keeps the honest "seal another output" path and makes its price explicit.) Below the fence the historical one-deposit rule
+  stands. k2_opv `past_the_fence_a_re_seal_forfeits_the_replaced_seal_at_its_position_so_no_seal_is_withdrawn_for_free`;
 * `claim_beacon_seals_v1()` lists live, salted-revealed and forfeited seals together in `(sealed_daa, seal)` order (a re-seal counts at
   its latest seal) — OPV-BOOT maps it into `SealedSourceV3`;
 * **the job's poster is kept** (C4R4 F-C4R4-08, agreed with OPV-BOOT): `job → poster` (table 18, `job_posters`, `job_poster()`),
@@ -393,11 +401,33 @@ salt that does not open the seal refused, the salted reveal commits, the salt in
 `past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists_every_seal_in_seal_order`; the golden roots
 (k2_ledger_route, k2_opv) and core `the_interim_opv_policy_validates_…` assert the empty tables add no extension; node
 `g14_opv_a_claim_commits_only_over_its_salted_seal_and_its_salt_is_kept`. Every OPV node test now seals and reveals salted
-(`seal_and_reveal`), and the kernel harness salts every reveal past the fence (`common::chain::salted`).
+(`seal_and_reveal`), and the kernel harness salts every reveal past the fence (`common::chain::salted`). Final / reorg (the user's
+"verified", 2026-10-09): node `g14_opv_the_salted_seal_rows_roll_back_and_reapply_identically_across_a_reorg` — ONE carrying block
+writes a job's poster row (18), a salted reveal's salt (25) and a re-seal's forfeited position (26), its fee, deposit and posting fee
+asserted conserved; a second node replays it; a two-block-deep heartbeat branch takes that node back to the fork's route exactly
+(rows, aux, the three rows gone, collateral and money as at the fork); the original chain out-working it re-applies all three
+identically; the node then follows the original chain to the claim's Final and the re-seal's own expiry (a second table-26 row), and a
+fresh replay agrees. (The first version forked a hundred ticks back, before the first post; a node is not required to take a deep
+heartbeat-only branch, so it kept its chain and the case failed — the fork is now as shallow as every other reorg case here.)
+
+**Conservation (the user's ruling, 2026-10-09).** Every fee, escrow and slash is asserted collected from its payer, and the books
+balance with no mint but the payouts the debits fund:
+* *kernel, every ledger test*: the test consumer checks after every block that Σ collateral + Σ paid + burned + withdrawn = Σ declared
+  (the `SyncBond` deltas), beside the existing "slashed = routed", "the ledger's burn = the burn instructions'" and "no Final reward
+  without a spent escrow" checks;
+* *node*: `kernel_money_v1` reads Σ collateral and Σ `slashed` of every card's bond, Σ kernel payouts minted by a coinbase or still
+  queued, and the ledger's burn; `assert_kernel_conserved_v1` checks `Δcollateral = −Δslashed` and `Δslashed = Δpaid + Δburned` across
+  a window — asserted for the OPV admission fee of a salted reveal, a seal deposit forfeited at its TTL (the C4R4 stale-expectation
+  fix: collected from the sealer's real bond, burned, nothing paid), the post + reveal + re-seal block of the reorg case, an OPV
+  default (penalty, demander share, fee), and R4X's typed
+  claims (a commit and its conviction, a commit and its default), each with the payer's `slashed` checked to rise by exactly the fee
+  plus the slash or penalty. (A window must not hold a debit outside the kernel ledger: a chunk group's forfeited deposit or a
+  registration burn.)
 
 **Served demands (K2S's DA griefing).** A served position's demand bonds stay reserved: refunded the moment the claim is convicted,
 defaults or times out; burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction (even
-long after the grace) is never penalised.
+long after the grace) is never penalised. Pinned per fate — conviction (even post-Final), default, timeout (a claim the Panel never covers) and the
+unconvicted horizon — by k2_ledger `a_served_demand_bond_is_refunded_on_conviction_or_default_and_burned_only_at_an_unconvicted_horizon`.
 
 **Accuser seals (GAP-R7).** `SealProof` (kernel tag 15) commits `H(claim ‖ accuser ‖ H(proof))`; the bounty of a conviction goes to the
 earliest seal of the convicting bytes at least `claim_seal_delay_daa` old, whoever files them. Self-recoup (the colluders' own first
@@ -412,7 +442,7 @@ priced above — but an honest verifier who finds the same lie is never first an
 so condition 6 (an incentive for honest verifiers) is not met by the slash alone. No rule keyed on time after the commit fixes this
 (the liar can always be first); the bounty must instead be bound to something the liar cannot know or cannot pre-empt.
 
-*Sketch (not built; a new inner kind and a class-level sampler, so after this lane):*
+*Sketch (not built — **superseded**: the user showed attacks on both parts, see item 14; lane ECON owns the question):*
 1. **Pre-committed watcher salts.** A verifier bonds a watch commitment `c_v = H(salt_v)` (a new route object, bonded, one per bond)
    at any DAA before the claims it will watch. For a claim, its sample `S_v(claim) = PRF(salt_v, claim id)` selects the positions /
    relations of that claim it checks. A proof is **bounty-eligible** for `v` only if it opens `c_v` (reveals `salt_v`) and the
@@ -454,7 +484,9 @@ BILI, ADR-0174; `SOMPI_PER_KASPA` is the legacy name of 1 BILI.)
   `FinalReward` only up to what the `PayJobEscrow` before it in the same batch actually debited; the reference consumer's book refuses
   a `FinalReward` beyond the escrow spent (checked in every ledger test).
 * An escrow no claim can still use goes back to its poster (`ReleaseJobEscrow`, receipt `JobEscrowReturned`) once
-  `job_escrow_ttl_daa` has passed since posting, no live claim holds the job and no producer's seal of it is live.
+  `job_escrow_ttl_daa` has passed since posting, no live claim holds the job and no producer's seal of it is live — and in any case
+  once one more `seal_ttl_daa` has passed, whatever seals are live (C4R4 F-C4R4-03, `a1473a3d9`: a squatter's re-seals no longer
+  hold the escrow, and through it the poster's exit, indefinitely).
 * Interim values: `claim_reward` (the escrow) 5 BILI, `job_fee` 1 BILI, `job_escrow_ttl_daa` 300 DAA (validated: `job_fee > 0`,
   TTL ≥ the seal TTL) — policy values like every other interim term.
 
@@ -472,61 +504,143 @@ BILI, ADR-0174; `SOMPI_PER_KASPA` is the legacy name of 1 BILI.)
 *Not covered.* RFC-0015's `work_credit_per_claim` (nothing releases it; it must come from the same escrow before it does); the price
 level (escrow = `claim_reward`) is a policy value.
 
-### What still refuses arming `palw_probabilistic_constraints_v1` / `palw_panel_free_v1` (end of G14-R4, 2026-10-08)
+### G14-R4, successor (2026-10-10): the user's design changes on this lane
+
+**ADR-0032 — the reporter share is 49 %.** Every place the kernel route pays a reporter out of a slash uses ONE constant,
+`PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1` = **490‰** (it was 500‰): the convicting accuser's bounty (`convict`: 490‰ of the claim's
+admitted reservation, never more than this conviction collected), the demanders' share of a default penalty (490‰; an OPV claim's
+burn is the larger of 510‰ and `default_burn_permille`), and the onboarding challenger of a refuted artifact binding
+(`PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1`, now the same constant). The rest of every slash is burned. The route is dormant as a
+whole and has never been in force at another rate, so it needs no fence of its own beside INTF's `palw_reporter_share_v2` (R-core).
+**Attacker accounting is net of the self-return:** a producer whose own Sybil accuses it recovers 49 % of the collected slash, so its
+loss is ≥ 51 % of what was collected — never the gross slash. Three points for ECON (not changed here):
+* *A default before the conviction.* The bounty's basis is the reservation as if no default had come first (C4 F-C4R3-02, so a
+  self-inflicted default cannot dilute an honest accuser), and the demanders were already paid 49 % of the penalty. When all
+  reporters are the producer's own, they recover `0.49·slash + 0.98·penalty` of `slash + penalty` collected — 53.9 % at the interim
+  terms (1,000 reserved, 100 penalty), above ADR-0032's 49 %. Capping the bounty at 49 % of the total collected minus the demanders'
+  share restores 49 % but lets a Sybil demander dilute the honest accuser again: a choice between the two invariants (ECON).
+* *DA16's provider challenger* (`PALW_PROVIDER_CHALLENGER_REWARD_PERMILLE_V1`) is still 500‰ — DA16's constant, flagged here.
+* *The honest verifier's incentive* (item 14 below) is unchanged by the rate.
+
+**ADR-0176 — rewards draw on the bond's Q/B/R/F budget.** This lane does not build the engine (lane BUDGET, `palw_bond_budget_v1`).
+The hook points are named in the code, so BUDGET has one place to call per obligation:
+* `budget-accept` — `KernelLedgerV1::commit_claim`'s admission tail (beside `ReserveClaim`): the claim reserves Q, and R / F for the
+  reward it can draw at Final (the job escrow's amount, GAP-5; for an OPV claim also `work_credit_per_claim`) and for any verifier
+  bounty a conviction could pay; refused when the budget is spent, exactly as `need` refuses it on collateral;
+* `budget-final` — `pay_from_job_escrow` (the ledger) and the node's payout arm in `apply_settlements` (`palw_kernel_route_fold_v1`):
+  a reward is paid only within the reservation, re-checked at payout; nothing recovers before `d + W`;
+* `budget-bounty` — `convict`: the bounty is a slash split, not issuance, but it counts against the claim's R reservation.
+Until the engine exists, **rewards are not budgeted under ADR-0176**, and that is on the arming list (CODE 3).
+
+**ADR-0177 — the chain does not interfere with model acquisition.** G14 on this route is **conditional on the verifier having
+acquired the registered model**: a fresh outsider checks a claim with its OWN copy of the class's parameters, authenticated against
+the registered commitments (`OutsiderV1 { artifact, .. }`), plus the claim's committed values. The route never asks a producer for
+weights: a `FileDemand` names a claim's committed position, and a court reads the model operand from the verifier's copy. No
+eligibility, Final, reward or slash of the kernel route depends on whether a model is served — there is no availability gate in the
+kernel ledger or its fold, and none was added. Two things on this branch arrived by merges and belong to other lanes:
+* DA16's artifact-availability gate in the onboarding fold (`palw_onboarding_fold_v1`: a binding past `palw_provider_court_v1` needs
+  two live `Artifact` leases; the gate's `AVAILABILITY_REQUIRED` on a lapsed pair) is withdrawn by ADR-0177 (§3c (a)) — DA16b's to
+  remove. (The gate's other `AVAILABILITY_REQUIRED` codes report the binding's maturity — refuted, missing, inside its horizon — not
+  model availability; the code name is misleading.)
+* R4X's snapshot-slice demand (`spec_slice_demandable`: any slice of a Retrieval class's registered snapshot is demandable on any
+  typed claim, "though no claim commits it") is a court request for registered material, repeatable across claims until the snapshot
+  is rebuilt — the cumulative scope ADR-0177 forbids. R4X / INTF to re-scope (a slice the claim's own committed item list names).
+The effective detection probability `p` is acquisition-conditional and can be 0 (a closed model): the OPV relation's
+`assumed_detection_permille` (interim 500‰) is a POLICY value that must come from MEAS's acquisition-conditional `p` per class.
+
+**F-ECON-3** (one unrevealed seal stalls concurrent attempts) belongs to the GAP-B12 deposit derivation — ECON's; noted only.
+
+**C4R4's three fixes, carried (the Lead's GAP-00, 2026-10-10).** Cherry-picked from `adv/c4r4` and adapted: F-C4R4-03 (`a1473a3d9`,
+the escrow-return rule above); F-C4R4-05 (`2dfcee86e`, `LedgerPolicyV1::dismissal_fee_v1`: a dismissed filing that ran a court pays
+`dismissed_proof_fee` per `1 / max_adjudications_per_block` share of the block's court work its class reserved, at least one fee, so
+one junk filing against the heaviest class no longer holds a valid proof out for one fee a block; light classes pay one fee); F-C4R4-10
+(`63da18025`, an onboarding object stops short of the runs reserved for proofs). C4R4's kernel PoC file `tests/c4r4.rs` comes whole
+(byte-identical to `adv/c4r4`'s, so C4R4's merge adds nothing twice); its node PoC file `conformance/c4r4.rs` is left to C4R4's merge
+(its A-2 tag-113 case needs A2U's central table). **OPVB's `b5d4ba90c` supersedes F-C4R4-10's rule for refutations** (a conformance
+refutation is a proof: it may spend the reserve and pays `dismissed_proof_fee` when it proves nothing): at OPVB's merge, take OPVB's
+`charge_route_budget_v1(.., may_spend_reserve)` and its hostile-evidence expectation.
+
+**OPV-BOOT #1 (tag-113 `Conformance { v2_class }`).** OPVB implemented `palw_conformance_chunk_target_v1(route, v2_class, daa) ->
+Option<u64>` and wired it into the lane on its branch (`opv/bootstrap-beacon` `b5d4ba90c`: the placeholder's body calls it). This
+branch keeps the placeholder (`None`: every conformance group refused at its first chunk) so the two do not conflict at integration;
+the node case that carries a Post and a Refute through tag 113 is still to be written after both are merged.
+
+**Allocation note.** `LedgerEventV1::ServedDemandBondsBurned` is discriminant **24** (the registry's 2026-10-09 line gives G14R
+21–24; the brief says 21–23): the Lead should confirm 24 in the registry. DA16's 30 / 31 sit after it.
+
+### G14-R4 round 2 (2026-10-10): C4R4 round 4b's full-collusion breaks
+
+PoCs from `adv/c4r4` @ `162df6b16` (kernel `tests/c4r4.rs`, node `da16/c4r4.rs`), each flipped or kept as stated:
+* **F-C4R4-14 (P1) — the response lane.** A `Respond` spends no run of the block's shared adjudication budget (classifying it is
+  linear in its own carried bytes, bounded by `max_response_bytes`), so no ordering of a block can push an honest producer's valid
+  answer over budget before its deadline. A rejected response (oversized or not serving) costs its signer `dismissed_proof_fee`
+  (slashed, burned; a signer that cannot pay is refused before classification) and changes nothing the producer needs: the demand
+  keeps its deadline, and only the producer's own response records the demand's last rejection class. A valid response is free,
+  whoever signs it. The PoC proves, for junk from any bond and from the griefer as producer of its own self-demanded claim: served in
+  the first block, no default, nothing lost; every junk response paid its fee; the griefer was paid nothing.
+* **F-C4R4-13 (P2).** The proof grace after a service holds the receipts' deadline too: a `Checking` claim served past it stays
+  prosecutable (reservation held) until `served + proof_grace_daa`, then times out. Bounded: demands open only by the deadline.
+* **F-C4R4-15 (P2) — one reporter pool per claim.** The bounty is `⌊share × what this conviction collected⌋` and a pre-Final
+  default pays its demanders `⌊share × penalty⌋` (rounded down; the rest burned), so all reporters of one claim together take at most
+  `⌊share × everything collected⌋` (49 %): a coalition holding every role loses ≥ 51 %. This replaces F-C4R3-02's "as if no default"
+  basis. **Residual for ECON:** after a self-inflicted default the honest accuser's bounty falls from `share × R` to `share × (R −
+  P)`; the difference went to the colluders' Sybil demanders (≤ `share × P` = 49 BILI of 490 at the interim terms). Restoring it
+  needs the default's demander share deferred to the liability horizon and redirected to a later conviction (a held amount and its
+  demanders as state — not built).
+* **F-C4R4-16.** The interim share is 490‰ (`4d4d8423f`); pinned by core `palw_kernel_route_the_interim_reporter_share_is_adr_0032s_49_percent`.
+  C4R4's own `c4r4_reporter_share_49.rs` needs INTF's `palw_reporter_share_v2` functions and passes once both are merged.
+* **F-C4R4-17 (P2, ADR-0177 D2).** Hook `KernelLedgerV1::cumulative_scope_allows_v1(claim, stage, position)` runs in every
+  `FileDemand` before anything is reserved; it admits everything until DA16b's central predicate lands (a pure function of the rows).
+  The PoC stays an ignored FAIL.
+* F-C4R4-19 (DA16's court vs ADR-0177) is carried as C4R4 wrote it: an ignored FAIL for DA16b.
+
+### What still refuses arming `palw_probabilistic_constraints_v1` / `palw_panel_free_v1` (end of lane, 2026-10-10)
 
 The validators (`validate_palw_probabilistic_constraints_v1`, `validate_palw_panel_free_v1`, `validate_palw_signed_registration_v1`)
-refuse any armed height unconditionally. What has to be true before they can be replaced by real conditions:
+refuse any armed height unconditionally. Nothing here is armable.
 
-*Code a lane can write.*
+*CODE (a lane can write it).*
 1. The validators themselves: replace the blanket refusal by the fence relations (OPV ≥ route height, the envelope fence, a validated
-   ledger policy) — the last step, after everything below.
-2. A home for the ledger policy in `Params` (today `palw_kernel_route_policy_v1` is a code constant marked INTERIM), Some-only hashed like
-   OPV's fence value, so a release chooses and pins it.
-3. Panel-licensed mode: the interim seat draw is grindable (claim-id seeded). Arm OPV-only, or wire RFC-0010's beacon-assigned Panel
-   (no beacon scheme is approved: `approved_beacons` is empty).
-4. Real-class carriage: a held / long-context class's worst response (~190 MB) far exceeds the route's 1.6 MB object (16 chunks); such
-   classes are refused at registration by design until K2S's segmented commitments (`k2/real-scale`) land.
-5. Pipeline claims on the node have no Panel / receipt path and no header wire form (§6.6); OPV pipeline classes need none.
-6. The per-object fold rebuilds the ledger from its rows (§6.8): a cached per-block ledger, and the DoS figure measured.
-7. The mempool does not run the acceptance gate for `0x4b` objects (§6.10); RPC through a running service (§6.12); verdict events not
-   stored (§6.9).
-8. Node-level cases for families 2–13 and 15 (the route E2E class is single-layer).
-9. `Respond` is signed by any bond and a rejected response spends a court run for free (O-C4R3-respond): a fee or a producer-only rule.
-10. RFC-0015's `work_credit_per_claim` is released by nothing; it must come from the job escrow (GAP-5) before it is.
-11. OPV-BOOT #1: wire `palw_conformance_chunk_target_v1` into the chunk lane (the placeholder `palw_conformance_chunk_target_pending_v1`
-    refuses every conformance group; the integrator replaces its body with the call), then a node case that carries a Post and a Refute
-    through the lane; OPV-BOOT's beacon v3 over the bonded, salted seals (`beacon_sealed_sources_v1()` over `claim_beacon_seals_v1()`,
-    OPV-BOOT's), and K2S's segmented commit appended to `SaltedCommitV1` at integration (a segmented claim past the fence must reveal
-    salted too).
-13. The prune horizon of table 26 (forfeited claim seals), once OPV-BOOT's v3 policy is a ledger constant (see "Retention" above);
-    until then the rows are kept and their growth is priced in forfeited deposits.
-14. DESIGN_GAP, PRINCIPLES §6 condition 6: an honest verifier's bounty can always be pre-empted by the liar's own Sybil (proof bytes
-    do not depend on the verifier's salt). Sketch above ("the honest verifier's incentive"): pre-committed watcher salts and a split
-    among every covering watcher, priced against MEAS's check cost.
-12. The FileProof-over-budget gap (accepted by the lead, bounded here): a proof refused over budget is not "accepted", so Final can pass
-    and post-Final liability convicts. Junk FileProofs can fill every run of a block (the prosecution reserve is theirs too), each
-    dismissed at `dismissed_proof_fee`: holding ONE valid proof out costs `max_adjudications × fee` per block = 64 × 0.1 = 6.4 BILI per
-    block at the interim terms; keeping it out through the window and the whole liability horizon (50 + 200 DAA) costs ≈ 1,600 BILI —
-    more than the 1,000 BILI reservation it would save, and the OPV relation `censorship_cost > max gain` holds by registration. The block
-    producer also chooses the order of a block's objects, so a colluding miner pays this only on the blocks it does not mine.
+   ledger policy) — the last step.
+2. A home for the ledger policy in `Params` (today `palw_kernel_route_policy_v1` is a code constant marked INTERIM), Some-only hashed.
+3. **Rewards not budgeted under ADR-0176**: the GAP-5 escrow Final reward, the OPV work credit and every verifier bounty reserve
+   against no Q/B/R/F budget — hooks `budget-accept` / `budget-final` / `budget-bounty` named above; engine `palw_bond_budget_v1`
+   (BUDGET).
+4. RFC-0015's `work_credit_per_claim` is released by nothing: it must come from the job escrow (GAP-5) and the budget (3) first.
+5. Panel-licensed mode: the interim seat draw is grindable. Arm OPV-only, or wire RFC-0010's beacon-assigned Panel (no approved beacon).
+6. Real-class carriage: K2S's segmented commitments (`k2/real-scale`); appended to `SaltedCommitV1` at integration.
+7. Pipeline claims on the node: no Panel / receipt path, no header wire form (§6.6).
+8. A cached per-block ledger (§6.8, O(rows) per object) and the DoS figure measured; the mempool acceptance gate for `0x4b` objects
+   (§6.10); RPC through a running service (§6.12); verdict events stored (§6.9).
+9. Node cases for constraint families 2–13 and 15 (the route E2E class is single-layer).
+10. (closed, F-C4R4-14) responses ride their own lane; a rejected one pays the dismissal fee.
+11. OPV-BOOT: the conformance chunk target merged (OPVB's `b5d4ba90c`) and a node case through tag 113; beacon v3 over the bonded
+    salted seals (OPVB); the prune horizon of table 26 once v3's policy is a ledger constant.
+12. ADR-0177 clean-up from merged lanes: DA16's artifact-availability gate out of the onboarding fold (DA16b, F-C4R4-19); R4X's
+    snapshot-slice demand re-scoped; DA16b's cumulative-scope predicate behind `cumulative_scope_allows_v1` (F-C4R4-17).
+13. Rule E (ADR-0178, FINX) armed at or below the release (fork choice).
+14. The FileProof-over-budget gap, accepted and bounded (holding one valid proof out through window + horizon ≈ 1,600 BILI > the
+    1,000 BILI reservation it would save); a block producer that orders the objects pays it only on blocks it does not mine.
 
-*Policy values the user must choose* (every number below is INTERIM, chosen for no network): the ledger policy (claim collateral 1,000
-BILI, demand bond 1, check / challenge / court / grace / liability 100 / 50 / 20 / 10 / 200 DAA, exit delay 30, dismissed fee 0.1, accuser
-share 500‰, default penalty 100, Final reward = job escrow 5, job fee 1, escrow TTL 300, 64 runs a block with 500‰ reserved for proofs,
-court work 2^30, seal delay 1 / TTL 100 / deposit 1); the OPV terms (the 50-DAA window and 37-DAA budgets — to come from a measured
-`T_challenge ≥ T_beacon + T_fetch + T_check + T_localize + T_file + T_margin`, of which the validated relations cover fetch + check + file +
-reorg margin for the first step and localize + court + file inside the grace, but no `T_beacon` term — reservation 1,000, work credit 5,
-external gain 10, detection 500‰, caps 3 / 32 + 16 fresh, default burn 10% (≥ 50% effective), admission fee 1, carriers); the chunk lane
-(2 groups a bond, TTL 64, 1 BILI a part); onboarding (binding reservation 100, window 40, liability 200, challenger 500‰); the admitted
-OPV class list; the demand-bond size against a position's carriage cost; the seal deposit against an honest producer's race-loss cost
-(`(n − 1)·d` per won claim with `n` competing sealers, above); and the one coordinated activation height with RFC-0010 / 0012 / 0008.
+*POLICY (the user / ECON decides).*
+* Every interim value: claim collateral 1,000 BILI, demand bond 1, check / challenge / court / grace / liability 100 / 50 / 20 / 10 /
+  200 DAA, exit delay 30, dismissed fee 0.1, **reporter share 490‰ (ADR-0032)**, default penalty 100, Final reward = escrow 5, job fee
+  1, escrow TTL 300, 64 court runs a block with 500‰ reserved for proofs, court work 2^30, seal delay 1 / TTL 100 / deposit 1; the OPV
+  terms (50-DAA window and 37-DAA budgets from a measured `T_challenge`, reservation 1,000, work credit 5, external gain 10,
+  **assumed detection 500‰ — must be the acquisition-conditional `p` (ADR-0177)**, caps 3 / 32 + 16, default burn 10 %, admission fee
+  1); the chunk lane (2 groups, TTL 64, 1 BILI a part); onboarding (reservation 100, window 40, liability 200); the admitted OPV
+  classes; the one coordinated activation height.
+* ADR-0176's `W`, the rho ↔ Q/B/R/F mapping and the caps (BUDGET implements, the user sets).
+* ECON: the honest verifier's incentive (PRINCIPLES §6 condition 6 — a DESIGN_GAP: the liar's Sybil is always the first sealer of
+  the convicting bytes); the reporter total above 49 % after a pre-Final default (above); F-ECON-3 (GAP-B12's deposit); the seal
+  deposit against an honest producer's race loss; the demand bond against a position's carriage cost.
 
-*External gates*: an independent soundness review (Freivalds / CRT / alias composition, exact court terminals); RFC-0011 §15.7's
-activation tests (adaptive adversary, beacon bias and withholding, reference vectors) and real-scale reports (9B-8k, 2M, Kimi K3);
-measured OPV budgets and their DAA conversion, court / localization bandwidth, the worst dispute deadline and the fold's cost on real
-hardware; RFC-0015 §13.3's panel-free collateral, accounting and monitoring-economics review and the inclusion / censorship assumption;
-artifact availability (RFC-0014 §16 — a binding is bonded and refutable, not proven); an independent adversarial node E2E with recovery
-and migration, a shadow period, a public drill, audit and soak.
+*EXTERNAL.* An independent soundness review (Freivalds / CRT / alias composition, exact court terminals); RFC-0011 §15.7's activation
+tests and real-scale reports (9B-8k, 2M, Kimi K3); MEAS: per-class `T_check` / fetch / localize on real hardware, the window and
+collateral formulas, and the **acquisition-conditional detection probability** per class (ADR-0177: 0 for a model nobody else holds);
+RFC-0015 §13.3's panel-free collateral, accounting and monitoring-economics review and the inclusion / censorship assumption; an
+independent adversarial node E2E with recovery and migration, a shadow period, a public drill, audit and soak. (RFC-0014 §16 artifact
+availability is no longer a gate: withdrawn by ADR-0177.)
 
 **Final halting (checked).** A valid `FileProof` accepted in a block is adjudicated in that same block (the court is a single exact step),
 so it always settles before any Final. A demand accepted in the window disputes the claim and holds Final until it is served (then

@@ -22,8 +22,10 @@ use kaspa_consensus_core::palw_conformance_evidence_v1::{
     derive_selection_v1, openings_root_v1, palw_onboarding_challenge_policy_v1, palw_onboarding_sealed_policy_v1,
     reference_leaf_result_v1,
 };
-use kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1;
-use kaspa_consensus_core::palw_onboarding_v1::{AttemptBeaconV1, ConformanceAttemptEndV1, ConformanceAttemptRowV1};
+use kaspa_consensus_core::palw_kernel_route_v1::{PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1, PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1};
+use kaspa_consensus_core::palw_onboarding_v1::{
+    ArtifactBindingStateV1, AttemptBeaconV1, ConformanceAttemptEndV1, ConformanceAttemptRowV1,
+};
 use kaspa_consensus_core::palw_opv_bootstrap_v1::*;
 use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_operands_v1;
 use misaka_palw_challenge::{
@@ -37,12 +39,17 @@ const OUTSIDER: usize = 7;
 /// Producers of OPV claims, rotated (a producer holds at most three live OPV claims; the distinct rule wants distinct bonds).
 const PRODUCERS: [usize; 5] = [0, 2, 4, 5, 6];
 
-/// The onboarding network with the OPV fence (nothing denied, the given effective-bits floor), armed WITHOUT its validation.
+/// The onboarding network with the OPV fence (the given deny-list), armed WITHOUT its validation, on the DRILL terms: the floor at
+/// `min_effective_bits` and a sampled conformance allowed to gate (GAP-70's switch, which validation refuses on any real network).
+/// The bootstrap's mechanics — a sampled class becoming a source after the complete check — need both; what the release terms decide
+/// is asserted where it differs ([`eligibility_release`]).
 fn boot_config(min_effective_bits: u16, denied: Vec<Hash64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, premine, floats) = kernel_config_onboarding();
     let mut params = config.params.clone();
     let mut fence = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), denied);
     fence.min_effective_bits = min_effective_bits;
+    fence.sampled_conformance_gates_reward = true;
+    assert!(fence.validate_value().is_err(), "GAP-70's drill switch is refused by the value's own validation");
     params.palw_panel_free_v1 = Some(fence);
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences");
     (Config::new(params), bundle, premine, floats)
@@ -180,7 +187,11 @@ async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
         };
         items.push((s.card, net.route(s.card, &register)));
     }
-    net.send(items).await;
+    // A kernel registration spends one of the block's NON-proof adjudication runs: the test node's four, less the half reserved for
+    // proofs (C4 F-C4R3-05) — two per block. A third in the same block is refused over budget, so they go two blocks at a time.
+    for wave in items.chunks(2) {
+        net.send(wave.to_vec()).await;
+    }
     let (complete, sampled, sealed) = (
         palw_onboarding_complete_check_policy_v1().id(),
         palw_onboarding_challenge_policy_v1().id(),
@@ -311,13 +322,24 @@ fn chunk_target(net: &Net, v2: Hash64) -> Option<u64> {
     kaspa_consensus_core::palw_onboarding_v1::palw_conformance_chunk_target_v1(&net.api().expect("the route"), &v2, net.daa())
 }
 
-/// The derived eligibility of `o`'s OPV class at the tip, under a floor of `floor` effective bits (nothing denied, no hook).
-fn eligibility(net: &Net, o: &Onb, floor: u16) -> Result<OpvEligibleV1, OpvIneligibleV1> {
+/// The derived eligibility of `o`'s OPV class at the tip (nothing denied, no hook) under the given terms.
+fn eligibility_under(net: &Net, o: &Onb, floor: u16, sampled_gates_reward: bool) -> Result<OpvEligibleV1, OpvIneligibleV1> {
     let route = net.api().expect("the route");
     let ledger = route.ledger().expect("the rows rebuild");
     let policy = route.header.opv.expect("the network declares OPV");
-    let view = OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: floor, test_eligible: &[] };
+    let view =
+        OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: floor, sampled_gates_reward, test_eligible: &[] };
     route.opv_eligibility_v1(&ledger, &o.facts(), net.daa(), &view)
+}
+
+/// ... on the DRILL terms (floor 0, a sampled conformance may gate).
+fn eligibility_drill(net: &Net, o: &Onb) -> Result<OpvEligibleV1, OpvIneligibleV1> {
+    eligibility_under(net, o, 0, true)
+}
+
+/// ... on the RELEASE terms: the ruled floor of 128 effective bits, and only the complete check gates rewards (GAP-70).
+fn eligibility_release(net: &Net, o: &Onb) -> Result<OpvEligibleV1, OpvIneligibleV1> {
+    eligibility_under(net, o, 128, false)
 }
 
 /// Card `card` registers `o`'s kernel class under OPV (tag 13).
@@ -418,7 +440,7 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
     let c = onbs.pop().unwrap();
     let b = onbs.pop().unwrap();
     assert!(net.api().unwrap().finals_read_v1().unwrap().is_empty(), "zero Finals");
-    assert_eq!(eligibility(&net, &b, 0), Err(OpvIneligibleV1::ConformanceNotPassed), "nothing is eligible before a conformance");
+    assert_eq!(eligibility_drill(&net, &b), Err(OpvIneligibleV1::ConformanceNotPassed), "nothing is eligible before a conformance");
     assert!(!register_opv(&mut net, BOOT, &b).await, "an OPV registration before eligibility is refused (no registrant choice)");
 
     // ---- B: the complete check, judged in the fold ----
@@ -437,8 +459,12 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
     assert_eq!(net.collateral(BOOT), collateral - PALW_COMPLETE_CHECK_FEE_SOMPI_V1, "the complete check's fee is burned");
     let domain = palw_complete_check_domain_v1(&b.f.program, b.f.plan.max_positions).unwrap();
     assert!(net.budget().2 >= domain.work, "its work was charged to the block's adjudication budget");
-    assert_eq!(eligibility(&net, &b, 0), Ok(OpvEligibleV1::Derived { v2_class: b.v2 }));
-    assert_eq!(eligibility(&net, &b, 128), Ok(OpvEligibleV1::Derived { v2_class: b.v2 }), "a complete check meets any floor");
+    assert_eq!(eligibility_drill(&net, &b), Ok(OpvEligibleV1::Derived { v2_class: b.v2 }));
+    assert_eq!(
+        eligibility_release(&net, &b),
+        Ok(OpvEligibleV1::Derived { v2_class: b.v2 }),
+        "a complete check meets the release terms: any floor, and it is the one conformance that gates rewards (GAP-70)"
+    );
     assert!(register_opv(&mut net, BOOT, &b).await, "B's OPV class registers: derived-eligible");
 
     // ---- C: the sampled commitment freezes the eligible set as its sources ----
@@ -448,7 +474,7 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
     for id in [c.v2, Hash64::from_bytes(c.legacy), Hash64::from_bytes(c.opv)] {
         assert!(attempt.excluded_profiles.contains(&id), "the candidate under every mode is excluded");
     }
-    assert_eq!(eligibility(&net, &c, 0), Err(OpvIneligibleV1::ConformanceNotPassed));
+    assert_eq!(eligibility_drill(&net, &c), Err(OpvIneligibleV1::ConformanceNotPassed));
     let p = palw_onboarding_challenge_policy_v1();
     assert_eq!(
         chunk_target(&net, c.v2),
@@ -486,9 +512,9 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
     assert_eq!(net.attempt(c.v2).record.state, S::G14Eligible, "C passed with the bootstrap's beacon");
 
     // ---- C is eligible by the derived rule (the drill floor), not under the ruled 128 ----
-    assert_eq!(eligibility(&net, &c, 0), Ok(OpvEligibleV1::Derived { v2_class: c.v2 }));
+    assert_eq!(eligibility_drill(&net, &c), Ok(OpvEligibleV1::Derived { v2_class: c.v2 }));
     assert!(
-        matches!(eligibility(&net, &c, 128), Err(OpvIneligibleV1::PolicyNotVerified(_))),
+        matches!(eligibility_release(&net, &c), Err(OpvIneligibleV1::PolicyNotVerified(_))),
         "a 2-bit sampled scope against the last contributor's grinding is 0 effective bits: below the ruled floor"
     );
     assert_eq!(
@@ -510,7 +536,8 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
     let route = net.api().unwrap();
     let ledger = route.ledger().unwrap();
     let policy = route.header.opv.unwrap();
-    let view = OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: 0, test_eligible: &[] };
+    let view =
+        OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: 0, sampled_gates_reward: true, test_eligible: &[] };
     let mut want = vec![Hash64::from_bytes(b.opv), Hash64::from_bytes(c.opv)];
     want.sort();
     assert_eq!(route.opv_eligible_set_v1(&ledger, net.daa(), &view), want);
@@ -541,7 +568,7 @@ async fn g14_opv_bootstrap_without_a_complete_check_class_the_beacon_never_comes
     assert!(matches!(a.last_end, Some((ConformanceAttemptEndV1::BeaconUnavailable, _))));
     commit(&mut net, &c, 0x23).await;
     assert!(net.attempt(c.v2).eligible_profiles.is_empty(), "and again: the fixed point from genesis is empty");
-    assert_eq!(eligibility(&net, &c, 0), Err(OpvIneligibleV1::ConformanceNotPassed));
+    assert_eq!(eligibility_drill(&net, &c), Err(OpvIneligibleV1::ConformanceNotPassed));
     assert!(!register_opv(&mut net, CAND, &c).await, "never eligible: the OPV registration is refused");
     // The main chain lives: blocks keep coming, the PALW state keeps moving, and no Final exists anywhere.
     assert!(net.daa() > start + policy.beacon_window_slots);
@@ -799,7 +826,7 @@ async fn g14_opv_bootstrap_a_block_of_hostile_complete_checks_spends_budget_and_
 /// **Eligibility is lost when its condition stops holding (DA lapse), and with it the mode.** C binds its V2 class to the commitments
 /// of OTHER weights of its program (a false binding nobody refutes at first), passes a sampled conformance with the bootstrap's beacon,
 /// becomes eligible and registers its OPV class. Then an outsider refutes the binding with two disagreeing openings: C is
-/// `DaLapsed`, its next claim is dropped at the door, no new commitment takes it as a source — and the bootstrap class, whose complete
+/// `BindingNotStanding`, its next claim is dropped at the door, no new commitment takes it as a source — and the bootstrap class, whose complete
 /// check PROVED its binding, keeps its eligibility (its binding cannot be refuted). Another plan of C's program is another class:
 /// never eligible without its own conformance.
 #[tokio::test]
@@ -831,7 +858,7 @@ async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refu
     let posted = net.attempt(c.v2).evidence.expect("posted");
     net.beat_to(posted.window_end_daa + 1).await;
     assert_eq!(net.attempt(c.v2).record.state, S::G14Eligible);
-    assert_eq!(eligibility(&net, &c, 0), Ok(OpvEligibleV1::Derived { v2_class: c.v2 }), "eligible while the binding stands");
+    assert_eq!(eligibility_drill(&net, &c), Ok(OpvEligibleV1::Derived { v2_class: c.v2 }), "eligible while the binding stands");
     let kernel_root = Hash64::from_bytes(c.kernel.pc.root());
     let binding = net.api().unwrap().artifact_binding_v1(&c.v2, &kernel_root).unwrap();
     assert!(net.daa() + 12 < binding.final_daa, "the refutation horizon is still open (margin {})", binding.final_daa - net.daa());
@@ -841,8 +868,8 @@ async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refu
     let o = net.artifact_challenged(OUTSIDER, c.v2, kernel_root, proof);
     net.send(vec![(OUTSIDER, o)]).await;
     assert!(net.api().unwrap().artifact_binding_v1(&c.v2, &kernel_root).unwrap().refuted, "refuted by two disagreeing openings");
-    assert_eq!(eligibility(&net, &c, 0), Err(OpvIneligibleV1::DaLapsed), "eligibility lost");
-    assert_eq!(eligibility(&net, &b, 0), Ok(OpvEligibleV1::Derived { v2_class: b.v2 }), "the bootstrap's proven binding stands");
+    assert_eq!(eligibility_drill(&net, &c), Err(OpvIneligibleV1::BindingNotStanding), "eligibility lost");
+    assert_eq!(eligibility_drill(&net, &b), Ok(OpvEligibleV1::Derived { v2_class: b.v2 }), "the bootstrap's proven binding stands");
     let jobs = post_jobs(&mut net, CAND, c.opv, 1, 0x60).await;
     let id = claims(&mut net, &c.kfx(), c.opv, &jobs, &PRODUCERS[2..3]).await[0];
     assert!(!net.ledger().claims.contains_key(&id), "a claim of a class that lost eligibility is dropped at the door");
@@ -853,7 +880,8 @@ async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refu
     let route = net.api().unwrap();
     let ledger = route.ledger().unwrap();
     let policy = route.header.opv.unwrap();
-    let view = OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: 0, test_eligible: &[] };
+    let view =
+        OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: 0, sampled_gates_reward: true, test_eligible: &[] };
     assert_eq!(route.opv_eligibility_v1(&ledger, &facts, net.daa(), &view), Err(OpvIneligibleV1::NotOnboarded));
     assert_eq!(route.opv_eligible_set_v1(&ledger, net.daa(), &view), vec![Hash64::from_bytes(b.opv)], "only the bootstrap stays");
     let z = net.replay().await;
@@ -880,7 +908,13 @@ async fn g14_opv_bootstrap_the_deny_list_takes_eligibility_away_and_never_grants
     let ledger = route.ledger().unwrap();
     let policy = route.header.opv.unwrap();
     let denied_ids = [Hash64::from_bytes(denied)];
-    let view = OpvEligibilityViewV1 { policy: &policy, denied: &denied_ids, min_effective_bits: 0, test_eligible: &[] };
+    let view = OpvEligibilityViewV1 {
+        policy: &policy,
+        denied: &denied_ids,
+        min_effective_bits: 0,
+        sampled_gates_reward: true,
+        test_eligible: &[],
+    };
     assert_eq!(route.opv_eligibility_v1(&ledger, &b.facts(), net.daa(), &view), Err(OpvIneligibleV1::Denied));
     assert!(route.opv_eligible_set_v1(&ledger, net.daa(), &view).is_empty());
 }
@@ -991,6 +1025,55 @@ async fn reveal_now(net: &mut Net, reveals: &[(usize, K, Digest)]) {
     net.send(items).await;
 }
 
+/// **G14 condition 9 for v3 (RFC-0014 §3.4): the fresh non-Panel verifier**, from public reads alone — op 231's rows and the class's
+/// program, op 212's Finals, and every page of op 211 (the route rebuilt and checked against the served roots, its seal facts derived
+/// by the chain's own function) — through the SDK's path (`misaka model onboard verify`).
+fn fresh_v3(net: &Net, o: &Onb) -> misaka_palw_sdk::onboarding_chain::FreshReportV1 {
+    use misaka_palw_sdk::onboarding_chain::{
+        PublicConformanceReadsV1, fresh_verify_from_reads_v1, sealed_sources_from_kernel_rows_v1,
+    };
+    let api = net.api().expect("the route");
+    let (mut rows, mut after) = (Vec::new(), None);
+    loop {
+        // A small page, so the reader really gathers several (op 211's cursor).
+        let page = api.rows_page_v1(after.take(), 4_096);
+        rows.extend(page.rows);
+        match page.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+    assert!(rows.len() as u64 == api.rows_page_v1(None, usize::MAX).total_rows, "every row gathered");
+    let header = borsh::to_vec(&api.header).expect("the header serializes");
+    let sealed_sources = sealed_sources_from_kernel_rows_v1(&header, rows.clone(), &api.ledger_root(), &api.aux_root())
+        .expect("the served rows are the chain's");
+    // One row changed: the reader's copy no longer roots to the served root, and it is refused.
+    let mut forged = rows;
+    if let Some(r) = forged.iter_mut().find(|(table, _, _)| *table < PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1) {
+        r.2.push(0);
+    }
+    assert!(
+        sealed_sources_from_kernel_rows_v1(&header, forged, &api.ledger_root(), &api.aux_root()).is_err(),
+        "a forged row is refused"
+    );
+    let read = net.chain.ctx.consensus.palw_conformance_evidence_v1(o.v2).expect("the class is known");
+    let events = api
+        .finals_read_v1()
+        .expect("the rows rebuild")
+        .into_iter()
+        .filter_map(|f| f.event.map(|e| borsh::from_slice(&e).expect("a beacon event")))
+        .collect();
+    let reads = PublicConformanceReadsV1 {
+        attempt_row: read.attempt_row.expect("the attempt row"),
+        evidence_row: read.evidence_row,
+        events,
+        sealed_sources,
+        tip_daa: net.daa(),
+        program: read.program.expect("the class's program"),
+    };
+    fresh_verify_from_reads_v1(&reads, None).expect("the SDK verifier runs a v3 attempt")
+}
+
 fn beacon_of(net: &Net, o: &Onb) -> AttemptBeaconV1 {
     net.api().expect("the route").attempt_beacon_v1(&net.attempt(o.v2), net.daa()).expect("a beacon read")
 }
@@ -1058,9 +1141,34 @@ async fn g14_opv_bootstrap_a_sealed_source_v3_beacon_locks_on_salted_seals_and_t
     net.send(vec![(CAND, o)]).await;
     let posted = net.attempt(c.v2).evidence.expect("the fold accepted the evidence under the v3 seed");
     assert_eq!(posted.beacon_output.as_bytes(), locked.output);
+    // G14 condition 9: a fresh non-Panel verifier re-derives the same v3 beacon, the same seed and a passing verdict from public reads.
+    let fresh = fresh_v3(&net, &c);
+    assert_eq!(
+        fresh.verdict.beacon_output,
+        Some(locked.output),
+        "the fresh verifier's v3 beacon is the chain's: {}",
+        fresh.verdict.beacon
+    );
+    assert_eq!(fresh.verdict.seed, Some(posted.seed.as_bytes()), "and its seed");
+    assert_eq!(fresh.verdict.posted, Some(Ok(())), "and the evidence, bound and passing");
+    assert!(fresh.agrees, "an open window: the verifier agrees with the chain ({})", fresh.why);
     net.beat_to(posted.window_end_daa + 1).await;
-    assert_eq!(net.attempt(c.v2).record.state, S::G14Eligible, "C passed with the v3 beacon");
-    assert_eq!(eligibility(&net, &c, 0), Ok(OpvEligibleV1::Derived { v2_class: c.v2 }));
+    let fresh = fresh_v3(&net, &c);
+    assert!(
+        fresh.chain_says_passed && fresh.agrees,
+        "after the window: the chain passed it and the fresh verifier agrees ({})",
+        fresh.why
+    );
+    // Passed: G14_ELIGIBLE, or already ACTIVE_REWARDABLE — the v3 beacon needs `2W` DAA of seal and reveal windows plus the sources'
+    // OPV Finals, long enough for C's artifact binding to pass its whole refutation horizon, after which `activate_due_classes` may
+    // activate C. ACTIVE_REWARDABLE is legitimate only past that horizon (the binding Final), never because of the beacon.
+    let state = net.attempt(c.v2).record.state;
+    assert!(matches!(state, S::G14Eligible | S::ActiveRewardable), "C passed with the v3 beacon: {state:?}");
+    if state == S::ActiveRewardable {
+        let binding = net.api().unwrap().artifact_binding_v1(&c.v2, &Hash64::from_bytes(c.kernel.pc.root())).expect("C's binding");
+        assert_eq!(binding.state_at(net.daa()), ArtifactBindingStateV1::Final, "activated only past the binding's horizon");
+    }
+    assert_eq!(eligibility_drill(&net, &c), Ok(OpvEligibleV1::Derived { v2_class: c.v2 }));
     // v3's accounting: a 2-bit scope is still 0 effective bits (a drill), whatever the beacon; never above ε_src − 1.
     assert_eq!(
         attempt_effective_bits_v1(&net.api().unwrap(), &c.v2, &net.attempt(c.v2)),

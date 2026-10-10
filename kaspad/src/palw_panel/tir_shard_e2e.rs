@@ -12,10 +12,9 @@
 //! The wire and the pool are tested beside it: a V4 receipt queues and nothing else decodes as one.
 
 use super::tir_shard::{
-    PalwTirShardShadowV1, palw_tir_shard_shadow_run_v1,
-    PalwTirRowFetchV1, PalwTirRunPursuitV1,
-    PalwTirShardOutcomeV1, palw_tir_shard_accusation_over_v1, palw_tir_shard_accusation_v1, palw_tir_shard_arrival_push_v1, palw_tir_shard_outcome_over_v1,
-    palw_tir_shard_outcome_v1,
+    PalwTirRowFetchV1, PalwTirRunPursuitV1, PalwTirShardOutcomeV1, PalwTirShardShadowV1, palw_tir_shard_accusation_over_v1,
+    palw_tir_shard_accusation_v1, palw_tir_shard_arrival_push_v1, palw_tir_shard_outcome_over_v1, palw_tir_shard_outcome_v1,
+    palw_tir_shard_shadow_run_v1,
 };
 use crate::palw_backends::PalwBackendRegistry;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
@@ -319,7 +318,8 @@ fn a_shard_only_seat_files_the_accusation_a_full_holder_would_and_the_gate_convi
             let d = duty(&ir, shard, 2, 1, PalwSegmentMaskV2::full(1), false);
             let holding =
                 fetch_shard_params_v1(&capture.binding.class, ir.class_id, ir.root, 2, shard, &TirFileMirrorV1(path.clone())).unwrap();
-            let PalwTirShardOutcomeV1::Fault { leaf: found, row, .. } = palw_tir_shard_outcome_over_v1(&holding, &capture, &d, &mut kaspa_cpu()).unwrap()
+            let PalwTirShardOutcomeV1::Fault { leaf: found, row, .. } =
+                palw_tir_shard_outcome_over_v1(&holding, &capture, &d, &mut kaspa_cpu()).unwrap()
             else {
                 continue;
             };
@@ -335,10 +335,28 @@ fn a_shard_only_seat_files_the_accusation_a_full_holder_would_and_the_gate_convi
                 free_prompt: false,
             };
             let over = palw_tir_shard_accusation_over_v1(
-                &holding, &capture, found, row, &target, bond(9), &court, &rules, LADDER, PalwPromptIdsFormV1::Flat,
+                &holding,
+                &capture,
+                found,
+                row,
+                &target,
+                bond(9),
+                &court,
+                &rules,
+                LADDER,
+                PalwPromptIdsFormV1::Flat,
             );
             let full = palw_tir_shard_accusation_v1(
-                &tir, &forged.material, found, row, &target, bond(9), &court, &rules, LADDER, PalwPromptIdsFormV1::Flat,
+                &tir,
+                &forged.material,
+                found,
+                row,
+                &target,
+                bond(9),
+                &court,
+                &rules,
+                LADDER,
+                PalwPromptIdsFormV1::Flat,
             )
             .unwrap();
             match over {
@@ -439,7 +457,8 @@ fn a_job_of_more_runs_than_a_seats_sessions_is_pursued_off_chain_and_its_lie_is_
     while !pursuit.complete() {
         ticks += 1;
         assert!(ticks < 20_000, "the pursuit ends");
-        let (_, refused) = pursuit.drain(claim, &mut pool, forged.trace_root, forged.execution_root, &capture.binding.class.program, ladder);
+        let (_, refused) =
+            pursuit.drain(claim, &mut pool, forged.trace_root, forged.execution_root, &capture.binding.class.program, ladder);
         refused_total += refused;
         let asks = pursuit.asks_due(now, daa);
         assert!(asks.len() <= 4, "at most four asks in flight");
@@ -468,7 +487,11 @@ fn a_job_of_more_runs_than_a_seats_sessions_is_pursued_off_chain_and_its_lie_is_
         now += Duration::from_secs(5);
         daa += 1;
     }
-    assert_eq!(demands, usize::from(PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1), "the sessions are spent on enforcement, no more than four");
+    assert_eq!(
+        demands,
+        usize::from(PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1),
+        "the sessions are spent on enforcement, no more than four"
+    );
     assert!(refused_total >= 1, "a doctored run failed the chain's own check and was dropped");
     // The runs make the very capture the executor committed, and the shard seats judge it as full holders do.
     let (binding, prompt, runs) = pursuit.answered_runs().expect("every run is in");
@@ -481,8 +504,11 @@ fn a_job_of_more_runs_than_a_seats_sessions_is_pursued_off_chain_and_its_lie_is_
     let mut convicted = 0;
     for shard in 0..2u16 {
         let d = duty(&ir, shard, 2, 1, PalwSegmentMaskV2::full(1), false);
-        let holding = fetch_shard_params_v1(&rebuilt.binding.class, ir.class_id, ir.root, 2, shard, &TirFileMirrorV1(path.clone())).unwrap();
-        if let PalwTirShardOutcomeV1::Fault { leaf, row, .. } = palw_tir_shard_outcome_over_v1(&holding, &rebuilt, &d, &mut kaspa_cpu()).unwrap() {
+        let holding =
+            fetch_shard_params_v1(&rebuilt.binding.class, ir.class_id, ir.root, 2, shard, &TirFileMirrorV1(path.clone())).unwrap();
+        if let PalwTirShardOutcomeV1::Fault { leaf, row, .. } =
+            palw_tir_shard_outcome_over_v1(&holding, &rebuilt, &d, &mut kaspa_cpu()).unwrap()
+        {
             let target = PalwDisputableClaimV2 {
                 accepted_block: d.accepted_block,
                 claim_id: d.claim_id,
@@ -494,7 +520,18 @@ fn a_job_of_more_runs_than_a_seats_sessions_is_pursued_off_chain_and_its_lie_is_
                 licensed_daa: 100,
                 free_prompt: false,
             };
-            let built = palw_tir_shard_accusation_over_v1(&holding, &rebuilt, leaf, row, &target, bond(9), &court, &rules, LADDER, PalwPromptIdsFormV1::Flat);
+            let built = palw_tir_shard_accusation_over_v1(
+                &holding,
+                &rebuilt,
+                leaf,
+                row,
+                &target,
+                bond(9),
+                &court,
+                &rules,
+                LADDER,
+                PalwPromptIdsFormV1::Flat,
+            );
             if matches!(built, Ok(Some(_))) {
                 convicted += 1;
             }
@@ -563,8 +600,18 @@ fn a_non_seat_watcher_verifies_whole_shards_and_accuses_a_lie_as_itself() {
         ..duty(&ir, shard, 2, 1, PalwSegmentMaskV2::full(1), true)
     };
     let find = |material: &[u8], d: &PalwSeatDutyV2| {
-        palw_tir_shard_watch_finding_v1(&tir, material, d, watcher, &court, &rules, LADDER, PalwPromptIdsFormV1::Flat, &mut kaspa_cpu())
-            .expect("the watch duty runs")
+        palw_tir_shard_watch_finding_v1(
+            &tir,
+            material,
+            d,
+            watcher,
+            &court,
+            &rules,
+            LADDER,
+            PalwPromptIdsFormV1::Flat,
+            &mut kaspa_cpu(),
+        )
+        .expect("the watch duty runs")
     };
     for shard in 0..2u16 {
         let d = watch(shard, honest.execution_root, honest.trace_root);
@@ -594,7 +641,17 @@ fn a_non_seat_watcher_verifies_whole_shards_and_accuses_a_lie_as_itself() {
     assert!(accused >= 3, "the watcher's accusation is one the one-move gate convicts on: {accused}");
     let flat = PalwSeatDutyV2 { tir_shard: None, ..watch(0, honest.execution_root, honest.trace_root) };
     assert!(
-        palw_tir_shard_watch_finding_v1(&tir, &honest.material, &flat, watcher, &court, &rules, LADDER, PalwPromptIdsFormV1::Flat, &mut kaspa_cpu())
-            .is_err()
+        palw_tir_shard_watch_finding_v1(
+            &tir,
+            &honest.material,
+            &flat,
+            watcher,
+            &court,
+            &rules,
+            LADDER,
+            PalwPromptIdsFormV1::Flat,
+            &mut kaspa_cpu()
+        )
+        .is_err()
     );
 }

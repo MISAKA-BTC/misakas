@@ -9,7 +9,7 @@
 //! `Params::palw_share_growth_final` dormant (the rule every shipped network runs today, pinned
 //! here as the limitation it is) and armed.
 //!
-//! Run: `MISAKA_PALW_POW_FIXTURE=1 cargo test -p kaspa-consensus-core --test palw_adr0107_share_growth_final`
+//! Run: `cargo test -p kaspa-consensus-core --test palw_adr0107_share_growth_final`
 
 use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2};
 use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2};

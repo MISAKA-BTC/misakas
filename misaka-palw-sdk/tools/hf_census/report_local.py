@@ -14,8 +14,8 @@
 The unit is the repository (HF) or the unit (Ollama). Exact mirrors collapse by digest only where digests were read, so the
 population counts are an upper bound on distinct checkpoints.
 
-**Routes.** `UNSUPPORTED` — the source fails (not in `L_files`) or the task has no canonical job; `GVM_FALLBACK` — the first TIR
-blocker is a missing semantic (`FEATURE_C`): the RFC-0005 residual queue, NOT_RUN until RFC-0005's fallback exists (never inferred);
+**Routes.** `UNSUPPORTED` — the source fails (not in `L_files`) or the task has no canonical job; `KERNEL_EXTENSION_REQUIRED` — the
+first TIR blocker is a missing semantic (`FEATURE_C`): unsupported until a reviewed kernel extension is activated (ADR-0172);
 `TIR` — everything else, with its first TIR blocker or `shape-ready`. A TIR pass needs `Final` on chain: **0 measured**; the shape-ready
 TIR share is the upper bound it is.
 """
@@ -36,17 +36,15 @@ from report import Inputs, gate, stop_key, weight_of  # noqa: E402
 TEXT_GROUPS = {"text-generation", "multimodal-text"}
 
 
-# RFC-0005 §II.10.1's routing of a checkpoint whose TIR path stops (the first TIR blocker is kept either way):
+# RFC-0002 §II.12 / ADR-0172: route a checkpoint by its first TIR blocker:
 # * UNSUPPORTED — the source fails (not in L_files), or the full advertised task has no canonical job (`MODALITY_PROFILE_MISSING`;
-#   `PARTIAL_TASK_ONLY`, a chat model whose image/audio input needs an RFC-0003 profile: NEEDS_JOB_PROFILE). "A missing source
-#   converter or canonical task must be fixed in RFC-0002/0003 even if its numerical core runs in GVM."
-# * GVM_FALLBACK — source-eligible, a canonical task, and the TIR blocker is a missing semantic (`FEATURE_C`: a feature or primitive
-#   TIR does not have) — the residual a `Gvm(1)`/`GvmTextFallbackV1` class would carry. NOT_RUN: no such class exists and no real-size
-#   canonical job has been exercised; never counted as covered.
+#   `PARTIAL_TASK_ONLY`, a chat model whose image/audio input needs an RFC-0003 profile: NEEDS_JOB_PROFILE).
+# * KERNEL_EXTENSION_REQUIRED — source-eligible with a canonical task, but an unsupported semantic (`FEATURE_C`).
+#   It remains uncovered until the required kernel extension is implemented, reviewed and activated.
 # * TIR — everything else: importer, format, quantisation, configuration and real-size admission blockers stay RFC-0002's to close
 #   (§II.12.3), with their first blocker.
 UNSUPPORTED_CODES = {"MODALITY_PROFILE_MISSING", "PARTIAL_TASK_ONLY"}
-GVM_CODES = {"FEATURE_C"}
+KERNEL_EXTENSION_CODES = {"FEATURE_C"}
 RFC6_CODES = {"COURT_BUDGET", "ADMISSION_EXCEEDS", "CLOSE_TOO_LARGE"}
 
 
@@ -54,8 +52,8 @@ def route_of(stop: tuple[str, str, str]) -> str:
     g, code, _ = stop
     if g == "source" or code in UNSUPPORTED_CODES:
         return "UNSUPPORTED"
-    if code in GVM_CODES:
-        return "GVM_FALLBACK"
+    if code in KERNEL_EXTENSION_CODES:
+        return "KERNEL_EXTENSION_REQUIRED"
     if g == "admit" and code in RFC6_CODES:
         # Real-size admission past the court's per-claim ceilings: still RFC-0002's route, through RFC-0006's layer×position cells
         # (a seat carries a shard of the court's work). NOT_RUN: no sharded admission exists; never counted as covered.
@@ -310,7 +308,7 @@ def main() -> int:
     L_files = files + len(ol_files)
     sh = share(e_shape, L_files, max(1, in_frame_sampled))
     res = {
-        "schema": "misaka.palw.local-llm-frame.v1",
+        "schema": "misaka.palw.local-llm-frame.v2",
         "frame": {
             "sources": ["huggingface: the census snapshot", "ollama: library pages and registry manifests (ollama/fetch.log.jsonl)"],
             "hf_listed": listed,
@@ -336,14 +334,6 @@ def main() -> int:
             "unjudged_eligible": sh["unjudged_eligible"],
             "lower_pass_est": round(e_lower.total()["total"], 1),
         },
-        "gvm": {
-            "status": "NOT_RUN",
-            "why": "no GvmTextFallbackV1 class exists and no real-size canonical job has been exercised (RFC-0005 §II.10.1); the "
-            "GVM_FALLBACK units are the queue, not coverage",
-            "final_measured": 0,
-            "queue_units_est": round(routes.get("GVM_FALLBACK", 0.0), 1),
-        },
-        "combined_tir_or_gvm_final_measured": 0,
         "cohorts": cohort_summary,
         "undecided_unmeasured": undecided_unmeasured,
         "routes_est_hf": {k: round(v, 1) for k, v in routes.most_common()},

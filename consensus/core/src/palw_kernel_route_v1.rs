@@ -168,6 +168,8 @@ pub struct PalwKernelOpvExtrasV1 {
     pub denied_classes: Vec<Hash64>,
     /// The effective-bits floor a class's conformance policy must reach.
     pub min_effective_bits: u16,
+    /// GAP-70: whether a sampled conformance may satisfy E6 (`false` on every network the validation admits).
+    pub sampled_conformance_gates_reward: bool,
     /// **TEST SEAM, empty in every build that can run a network**: mode-bound class ids a pre-derivation mechanics test treats as
     /// eligible (the processor fills it only under `cfg(test)`, from `kernel_route_test_opv_eligible_v1`, exactly as it fills
     /// `attested_artifacts`). The bootstrap E2E uses none.
@@ -180,10 +182,16 @@ pub struct PalwKernelOpvExtrasV1 {
 /// The terms of the G14-for-rewards gate at one block (from `Params::palw_panel_free_v1`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwRewardGateTermsV1 {
-    /// `Some(activation)` iff the fence grandfathers live Panel-route classes: a class registered below this DAA and never
-    /// kernel-bound keeps the pre-gate rules. `None` (the default): nothing is grandfathered.
-    pub grandfathered_before_daa: Option<u64>,
+    /// The fence's activation: a class registered below it keeps earning through the OLD Panel route, in full; one registered at or
+    /// past it earns only through the onboarding/G14 path (the user's ruling of 2026-10-09: the two reward channels never mix).
+    pub fence_activation_daa: u64,
 }
+
+/// **The PALW reporter share on the kernel route, permille** (ADR-0032's 2026-10-10 amendment: 4,900 bps): what an accuser, a
+/// demander or an onboarding challenger is paid of a slash the chain actually collected; the rest is burned. One constant for every
+/// reporter path of the route, so the share cannot drift between them. (`palw_reporter_share_v2` is INTF's fence for the R-core rate;
+/// the kernel route is dormant as a whole, so its share needs no fence of its own: it has never been in force at any other rate.)
+pub const PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1: u16 = 490;
 
 /// **The INTERIM ledger policy.** Windows are short so a drill crosses them; the amounts are sompi. Values are consensus constants
 /// of the (never-armed) fence, written once here: a real activation would revisit every one.
@@ -208,7 +216,11 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
         liability_daa: 200,
         exit_delay_daa: 30,
         dismissed_proof_fee: SOMPI_PER_KASPA / 10,
-        accuser_reward_permille: 500,
+        // ADR-0032 (2026-10-10 amendment): the PALW reporter share is 49 % (4,900 bps) of what a slash actually COLLECTED, the rest
+        // burned. The route's accuser (a conviction), its demanders (a default penalty) and — at the same rate — the onboarding
+        // challenger are PALW reporters, so the interim share is that ceiling, not the 500‰ it was. A self-reporter recovers at most
+        // 49 %: the net loss of a convicted producer is ≥ 51 % of the collected slash, never the gross slash (ADR-0176 D6).
+        accuser_reward_permille: PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1,
         default_penalty: 100 * SOMPI_PER_KASPA,
         // GAP-5 (the user's ruling: user-pays escrow): the reward is paid out of the job's ESCROW, reserved from the poster's bond at
         // posting and spent once at the job's first Final — never new money.
@@ -521,6 +533,10 @@ pub struct KernelClaimReadV1 {
     pub aux_root: Hash64,
 }
 
+/// The first table number of the route's consensus (aux) tables; the kernel ledger's own tables are numbered below it (op 211 serves
+/// both, in key order, so a page is ledger rows then aux rows).
+pub const PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1: u8 = 32;
+
 /// One page of the route's rows, in `(table, key)` order (ledger tables first, then the consensus tables).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KernelRowsPageV1 {
@@ -683,6 +699,41 @@ impl PalwKernelRouteStateV1 {
     /// **A page of rows**, `(table, key, row)` in order, starting after `after` (exclusive; `None` = the beginning) and stopping once
     /// `max_bytes` of keys and rows are gathered (at least one row, so a page always makes progress). A reader that collects every page
     /// and rebuilds a ledger from them must reach [`Self::ledger_root`].
+    /// **A fresh reader's copy of the route, rebuilt from op 211's pages** (G14 condition 9, RFC-0014 §3.4: a non-Panel verifier
+    /// reproduces the whole post-commit path from public reads alone). `header` is op 211's Borsh header; `rows` every
+    /// `(table, key, row)` of every page — the ledger's tables below [`PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1`], the consensus (aux)
+    /// tables from it. Refused unless the rows root to the served `ledger_root` and `aux_root` and no row is served twice. Every read
+    /// of this type then runs on the reader's own copy, by the chain's own functions: the Final facts (`finals_read_v1`), the v3
+    /// seal facts (`beacon_sealed_sources_v1`), an attempt's beacon (`attempt_beacon_v1`). (Authenticating the served roots against
+    /// the chain's committed state is the state proof's job, shared by every public read.)
+    pub fn from_served_rows_v1(
+        header: &[u8],
+        rows: impl IntoIterator<Item = (u8, Vec<u8>, Vec<u8>)>,
+        ledger_root: &Hash64,
+        aux_root: &Hash64,
+    ) -> Result<Self, String> {
+        let header: PalwKernelRouteHeaderV1 =
+            borsh::from_slice(header).map_err(|e| format!("the route header does not decode: {e}"))?;
+        let mut route = Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new(), ledger_cache: KernelLedgerCacheV1::default() };
+        for (table, key, row) in rows {
+            let twice = if table < PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1 {
+                route.rows.insert((table, key), row).is_some()
+            } else {
+                route.aux.insert((table, key), row).is_some()
+            };
+            if twice {
+                return Err(format!("a row of table {table} is served twice"));
+            }
+        }
+        if route.ledger_root() != *ledger_root {
+            return Err("the served rows do not root to the served ledger root".into());
+        }
+        if route.aux_root() != *aux_root {
+            return Err("the served rows do not root to the served aux root".into());
+        }
+        Ok(route)
+    }
+
     pub fn rows_page_v1(&self, after: Option<(u8, Vec<u8>)>, max_bytes: usize) -> KernelRowsPageV1 {
         use std::ops::Bound::{Excluded, Unbounded};
         let total_rows = (self.rows.len() + self.aux.len()) as u64;
@@ -940,6 +991,17 @@ impl PalwKernelRouteStateV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **C4 F-C4R4-16 (ADR-0032 49 %)**: the route's interim accuser share — and so the demanders' share of a default and the
+    /// onboarding challenger's — is at most 490‰; a self-reporter keeps at most 49 % of a slash, a net loss of at least 51 %.
+    #[test]
+    fn palw_kernel_route_the_interim_reporter_share_is_adr_0032s_49_percent() {
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        assert_eq!(p.accuser_reward_permille, 490);
+        assert_eq!(crate::palw_onboarding_v1::PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1, 490);
+        let kept = p.claim_collateral - p.claim_collateral * u64::from(p.accuser_reward_permille) / 1000;
+        assert!(kept * 100 >= p.claim_collateral * 51, "net loss {kept} of {}", p.claim_collateral);
+    }
 
     #[test]
     fn the_interim_policy_validates_and_the_bond_digest_separates_indices() {

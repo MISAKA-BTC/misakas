@@ -80,8 +80,10 @@ const PALW_SIGNED_REGISTRATION_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/onboardi
 pub const PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1: u64 = 100 * SOMPI_PER_KASPA;
 pub const PALW_ONBOARDING_BINDING_WINDOW_DAA_V1: u64 = 40;
 pub const PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1: u64 = 200;
-/// The challenger's share of a refuted binding's slash (permille); the rest is burned (the slash's burn at release).
-pub const PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1: u64 = 500;
+/// The challenger's share of a refuted binding's slash (permille); the rest is burned (the slash's burn at release). The PALW reporter
+/// share of ADR-0032 (49 %), the route's one rate (`PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1`).
+pub const PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1: u64 =
+    crate::palw_kernel_route_v1::PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1 as u64;
 
 /// **The message an onboarding object's signer signs**: `H(domain; network ‖ kind ‖ signer ‖ len ‖ payload)`. `payload` is the
 /// object's Borsh with its signature field left out, so the signature covers every other field.
@@ -401,13 +403,8 @@ impl PalwKernelRouteStateV1 {
                 (PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1, Vec::new())..(PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1 + 1, Vec::new()),
             )
             .filter_map(|((_, key), row)| {
-                let (class, root) = borsh::from_slice::<(Hash64, Hash64)>(key).ok()?;
+                let (_, root) = borsh::from_slice::<(Hash64, Hash64)>(key).ok()?;
                 let row = borsh::from_slice::<ArtifactBindingRowV1>(row).ok()?;
-                // DA16: a binding whose artifact pair lapsed after it was bound (every provider charged) attests nothing — its bytes
-                // stopped being publicly obtainable inside its refutation horizon. (No lapse row exists below the court's fence.)
-                if self.provider_pair_lapsed_since_v1(&class, &root, row.bound_daa) {
-                    return None;
-                }
                 matches!(row.state_at(daa), ArtifactBindingStateV1::Matured | ArtifactBindingStateV1::Final).then_some(root)
             })
             .collect();
@@ -440,7 +437,21 @@ impl PalwKernelRouteStateV1 {
     /// kernel-bound one is held until its artifact binding is Final (past the refutation horizon), the kernel class stands, and its
     /// conformance record is past `CONFORMANCE_PASSED` (verified-and-unrefuted evidence of a committed attempt, then the
     /// public-prosecution step). **A commitment alone never passes**: it waits for randomness, then for evidence, then for the window.
+    ///
+    /// ADR-0177 withdrew DA16's artifact-lapse hold (DA16b removed the lapse and its provider-pair read), so this IS
+    /// [`Self::onboarding_identity_gate_v1`]: availability never holds a class. (The integration head `679a0d7f8` still called the
+    /// removed `provider_pair_lapsed_since_v1` here and did not compile; lane K2S, 2026-10-10.)
     pub fn onboarding_gate_v1(&self, class: &Hash64, artifact_root: &Hash64, daa: u64) -> PalwOnboardingGateV1 {
+        // ADR-0177 / DA16b: the artifact-lapse hold is withdrawn with the `Artifact` lease subject (its lapse rows no longer exist), so
+        // the gate is its identity part. (The integration merge kept this caller of the removed `provider_pair_lapsed_since_v1`.)
+        self.onboarding_identity_gate_v1(class, artifact_root, daa)
+    }
+
+    /// **The onboarding gate's IDENTITY part** — everything [`Self::onboarding_gate_v1`] asks except DA16's artifact-lapse hold: kernel
+    /// bound, the kernel class standing, the binding past its refutation horizon and unrefuted (a clock and proofs, never whether the
+    /// bytes are served — the historical code `AVAILABILITY_REQUIRED` of a binding inside its horizon means only that), and the
+    /// conformance record. What the G14-for-rewards gate reads (ADR-0177; `docs/design/palw/opv-beacon-bootstrap.md` §14.1).
+    pub fn onboarding_identity_gate_v1(&self, class: &Hash64, artifact_root: &Hash64, daa: u64) -> PalwOnboardingGateV1 {
         let Some(binding) = self.kernel_binding_v1(class) else {
             // A class with an artifact binding (live or refuted) has begun onboarding: it is held until it is kernel-bound. Only a class
             // with no onboarding row at all follows the legacy path.
@@ -459,14 +470,7 @@ impl PalwKernelRouteStateV1 {
                 why: "the kernel class the V2 class is bound to is not registered in the route",
             };
         }
-        let row = self.artifact_binding_v1(class, &binding.kernel_param_root);
-        if row.is_some_and(|row| self.provider_pair_lapsed_since_v1(class, &binding.kernel_param_root, row.bound_daa)) {
-            return PalwOnboardingGateV1::Held {
-                code: "AVAILABILITY_REQUIRED",
-                why: "the artifact's bytes stopped being publicly obtainable inside the binding's horizon (every provider was charged): re-bind over live leases",
-            };
-        }
-        match row.map(|row| row.state_at(daa)) {
+        match self.artifact_binding_v1(class, &binding.kernel_param_root).map(|row| row.state_at(daa)) {
             Some(ArtifactBindingStateV1::Final) => {}
             Some(ArtifactBindingStateV1::Refuted) | None => {
                 return PalwOnboardingGateV1::Held {

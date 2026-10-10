@@ -452,11 +452,7 @@ honest "red (integration), lands in PR-N."
   `pow/tests/palw_admission_fixture.rs:82-85`.
 - **Guard:** `palw_v2_consensus_has_no_runtime_dependency` — a CI test over the crate dependency
   graph asserting `consensus`/`misakad` have **no** edge to any model-runtime crate.
-- **Status:** **green** (PR-02, `955422d7`): the driver code moved to `misaka-palw-pow-driver`,
-  kaspa-pow keeps only a set-once runtime slot, and `no_model_runtime_edge.rs` fails on any
-  declared edge — normal, build, dev, optional included — from the consensus crates to a
-  runtime-reaching crate (mutation-checked red on both paths). `PalwUnavailable` is a failed PoW,
-  not a panic. **ADR-0042:** Decision 4.
+- **Status:** **green**: the algo-4/5 driver, runtime slot, fixture dispatch and dedicated launchers are removed. `no_model_runtime_edge.rs` guards the consensus dependency graph; current V2 verification has no model runtime edge.
 
 ### Per-class DAA / lifecycle unwired
 - **Evidence:** `virtual_processor/utxo_validation.rs:1576-1613`;

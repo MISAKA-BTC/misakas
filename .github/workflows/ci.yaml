@@ -354,17 +354,11 @@ jobs:
       - name: Check misaka CLI evm-send feature
         run: cargo check --locked -p misaka-cli --bin misaka --features evm-send
 
-      # PALW proof-of-work is active from genesis on devnet and testnet-11, and validating one
-      # header there replays a pinned 1.2 GB LLM. CI has no such model, so it runs the model-free
-      # fixture tag family — the reason that family exists. It is honored on devnet only
-      # (`kaspa_pow::palw::fixture_permitted_on`), so setting it here changes nothing about any
-      # other network's rules: tests that assert real-PoW behaviour still get it.
       - name: Run cargo test regular features
         run: cargo nextest run
         env:
           # The `ci` profile (.config/nextest.toml) adds a JUnit report for the summary below.
           NEXTEST_PROFILE: ci
-          MISAKA_PALW_POW_FIXTURE: "1"
           # This step runs the WHOLE workspace, `misaka-palw-derive` included, so it needs the
           # same declaration the dedicated step below makes: CI holds no Qwen checkpoint, and
           # `tests/corpus_width.rs` fails by name rather than passing quietly when it cannot
@@ -393,7 +387,6 @@ jobs:
       - name: Run the misaka-palw-derive suite with its binaries
         run: cargo test -p misaka-palw-derive
         env:
-          MISAKA_PALW_POW_FIXTURE: "1"
           # CI holds no checkpoint. `tests/corpus_width.rs` FAILS by name when the dense tokenizer
           # or the QWEN36 .gguf is absent — a run that checked nothing must not read as one that
           # checked — unless the host declares it cannot check; this is that declaration, and the
@@ -402,8 +395,6 @@ jobs:
 
       - name: Run cargo doc tests
         run: cargo test --doc
-        env:
-          MISAKA_PALW_POW_FIXTURE: "1"
 
       - name: Run cargo test on kaspa-hashes without asm
         run: cargo nextest run -p kaspa-hashes --features=no-asm --benches
@@ -461,8 +452,6 @@ jobs:
 
       - name: Run the pinned 4,096 and 32,768-position vectors
         run: cargo test --release -p misaka-palw-base0 --lib -- --ignored context_vector
-        env:
-          MISAKA_PALW_POW_FIXTURE: "1"
 
 
   # test-release:

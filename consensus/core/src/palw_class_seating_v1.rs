@@ -313,11 +313,6 @@ impl PalwFoldReadV1<'_> {
         if *class_id == self.params.base_class_id() {
             return Ok(());
         }
-        // G14-for-rewards: a class admitted through the G14 path is not seated by Panel possession — its artifact is public DA (E4)
-        // and its claims are adjudicated by any one outsider, not by seats.
-        if self.reward_gate_v1(class_id, daa) == crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Passed {
-            return Ok(());
-        }
         let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
         if !self.state.model_lifecycles.contains_key(class_id) && !self.state.gen_classes.contains_key(class_id) {
             return Ok(());

@@ -844,7 +844,7 @@ The acceptance criteria are §II.0.2.
 | R5 staged enablement | §II.7 | analysed here; the registry's `blocking` field and its CLI display are node-only and specified in §II.7.4; the consensus rules of §II.7.5 are decided (2026-10-01) and not yet built |
 | R6 Hub-majority outcome | §II.10 | new acceptance program, **not an implementation claim**; requires a live Hub census, real checkpoints and an adequately seated end-to-end drill |
 | R7 future-family extension | §II.11 | proposed direct-TIR and third-party frontend contract; existing data adapters and quant descriptors cover only their current languages, so this is **not yet a proven end-to-end capability** |
-| R8 local-LLM kernel coverage | §II.12 and RFC-0005 §§K.0–K.8 | unmeasured target; real-size checker/court/panel resources need evidence; no VM route |
+| R8 local-LLM kernel coverage | §II.12 and [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) | unmeasured target; real-size checker/court/panel resources need evidence; no VM route |
 | A1–A5 | §II.8 | A2 is met by the pack; A1, A3, A4, A5 complete with the preflight (task 7), `blocking` and the decision on §II.7.5 |
 | A6 | §II.10.5 | open until the measured `register` and `Final` gates pass; neither the 92 % A/B corpus reading nor the earlier Hub estimates close it |
 | A7 | §II.11.4 | open until third-party direct-TIR and frontend-pack paths pass with unchanged node/consensus binaries and independent seats |
@@ -1516,7 +1516,7 @@ RpcPalwClassBlocking {
 | State (and condition) | Stage | Code | have / need |
 | --- | --- | --- | --- |
 | no row, or the base class | — | (none: legacy, never gated) | |
-| `Registered`, `ops_supported` false | convert | `VM_BOUNDARY` | |
+| `Registered`, `ops_supported` false | convert | `KERNEL_EXTENSION_REQUIRED` | |
 | `Registered`, no artifact bytes or no derived work | convert | `NO_WORK` | |
 | `Candidate` | register | `ADMISSION_JURY` | ready seats now / the jury quorum (`seat_count / 2 + 1`); the jury counts only its drawn operators |
 | `Prefetching` | mine | `READY_SEATS` | `ready_seats_now` / `required_ready_seats` |
@@ -1527,6 +1527,9 @@ RpcPalwClassBlocking {
 | `Held`, below the required seats | mine | `READY_SEATS` | `ready_seats_now` / `required_ready_seats` |
 | `Held`, seats back, window does not fit | mine | `WINDOW_DOES_NOT_FIT` | |
 | `Active` | — | (none) | |
+
+`KERNEL_EXTENSION_REQUIRED` waits for the unsupported operation's reviewed kernel extension to be
+implemented and activated; then the model must be lowered and registered as a new class (ADR-0172).
 
 `what` carries the numbers a reader needs (`3 of 7 seats hold a fresh possession proof; 14 bonds on the network have the
 collateral headroom to be a seat`; `4 of 10 probe claims have reached Final; 0 failed since entry`), and `next` says the act that
@@ -2018,7 +2021,7 @@ none may be inferred from another.
 
 *Added 2026-10-03; revised 2026-10-06 under ADR-0172. The historical 90/10 VM split is withdrawn.
 This is not a present 90 % measurement. It is narrower than A6's all-Hub denominator and broader than the old
-decoder-only safetensors corpus. RFC05 §§K.0–K.8 define kernel-only extension.*
+decoder-only safetensors corpus. [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) define kernel-only extension.*
 
 ### II.12.1 Define “90 % of local LLMs” before counting
 
@@ -2079,7 +2082,7 @@ broader all-HF target retains `D_all`; neither target implies the other.
 post-commit challenge protocol. For a new versioned class/profile, bind the active KernelDescriptor digest,
 VerificationPlan root, `challenge_policy_id`, program/artifact/tokenizer/input-schema/layout/context commitments
 and RFC14 dispute-plan digest before any challenge randomness. Resolve checker/challenge/soundness as the approved
-immutable Kernel tuple of RFC05; a declarative plan cannot select weaker randomness, omit relations or upload a checker.
+immutable tuple in the [Kernel design](../design/palw/versioned-kernels.md); a declarative plan cannot select weaker randomness, omit relations or upload a checker.
 
 | Immutable identity/statement bindings | Later conformance or activation evidence |
 | --- | --- |

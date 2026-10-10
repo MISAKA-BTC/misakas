@@ -130,6 +130,13 @@ R-coreが設定されたrulesetの`consensus_params_id`にはPALW率をcommitし
 既存chainへ適用するには過去の10%会計を再解釈しないversioned移行が必要であり、
 以前の10%による測定・activation記録を49%の結果として扱ってはならない。
 
+**実装(lane INTF, 2026-10-10):** 49%は休眠fence `Params::palw_reporter_share_v2`の後ろに置く
+（全shipped presetで`None`、Some-onlyでparams/schedule idへ高さと4,900 bpsをcommit、`Some(never())`は不在、
+有効化は単一の全面有効化releaseまで検証で拒否）。fence前は`PALW_RCORE_REPORTER_REWARD_BPS_V1`＝1,000 bps、
+fence以後は`PALW_RCORE_REPORTER_REWARD_BPS_V2`＝4,900 bps。R-1はconvictionのclose（offenceを消費しrewardを開くblock）、
+DA-6はsessionのopen（accusation block、exposureはsessionに保存）のDAAで率を確定し、以後の再計算はしない。
+したがってtestnet-12の稼働中id（params `5ee7fd8ee019968c…`、schedule `1678e07359f6727e…`）と10%の履歴は不変である。
+
 ## Bond予算・総影響保存の改定 — 2026-10-10
 
 [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](../rfc/0015-panel-free-permissionless-verification.md)を適用する。

@@ -66,10 +66,16 @@ fn policy() -> LedgerPolicyV1 {
         accuser_reward_permille: 500,
         default_penalty: 100,
         claim_reward: 7,
+        // G14-R4 (merged): the job's escrow and fee (GAP-5), the prosecution reserve (F-C4R3-05), the bonded seal (OPV-BOOT #2) — the
+        // values of the shared ledger-test world.
+        job_fee: 2,
+        job_escrow_ttl_daa: 300,
         max_adjudications_per_block: 64,
+        prosecution_reserve_permille: 500,
         max_court_work_per_block: u64::MAX,
         claim_seal_delay_daa: 1,
         seal_ttl_daa: 100,
+        seal_deposit: 1,
         prosecution: ProsecutionPolicyV1 {
             court_deadline_daa: 20,
             max_sessions_per_claim: 1 << 10,
@@ -100,7 +106,10 @@ fn opv() -> OpvPolicyV1 {
             assumed_detection_permille: 500,
             max_live_claims_per_producer: 8,
             max_live_claims_total: 32,
+            // G14-R4 (merged, F-C4R3-05): the hard ceiling's fresh slots and the non-refundable admission fee.
+            fresh_producer_slots: 2,
             default_burn_permille: 100,
+            admission_fee: 3,
         },
         carrier: CarrierCapsV1 { filing_cap: 1 << 26, response_cap: 1 << 27, commit_cap: 1 << 27 },
     }

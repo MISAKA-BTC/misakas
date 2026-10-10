@@ -5,6 +5,9 @@ Economic-simulation-gated amounts are checked against measured inputs and their 
 ADR-0032's 2026-10-10 amendment fixes the PALW bounty share at 49% as a policy choice and
 retains the historical 2,000-coin B_cap candidate. The bounty check is arithmetic under those
 inputs, not a new measurement or a complete economic-safety gate for the amended share.
+This script models the FUTURE ruleset at 49%. On chain the 49% share sits behind the dormant
+fence `palw_reporter_share_v2` (lane INTF, 2026-10-10): every shipped network, testnet-12's live
+history included, still pays the historical 10% (1,000 bps) until the full-activation release.
 Where a constraint cannot be satisfied the script says so instead of picking a number.
 
 Measured inputs (all cited, none invented):
@@ -32,7 +35,7 @@ BASE_SUBSIDY_120_SOMPI = GENESIS_SUBSIDY_10BPS_SOMPI * BLOCKS_PER_SEC_10BPS * SE
 BASE_SUBSIDY_120_MSK = BASE_SUBSIDY_120_SOMPI / SOMPI
 
 BOND_MSK = 20_000                       # live bonded amount per validator
-PALW_REPORTER_REWARD_BPS = 4_900        # ADR-0032 amendment, 2026-10-10
+PALW_REPORTER_REWARD_BPS = 4_900        # ADR-0032 amendment, 2026-10-10 (past palw_reporter_share_v2; 10% below it)
 B_CAP_MSK = 2_000                      # retained 2026-08-16 candidate, not recomputed from 49%
 Q = 2                                   # funded panel size (ADR-0028 §4, Stage 1-2)
 RHO_V = 1.0                             # measured replay/primary cost ratio (≈1.0, registered)

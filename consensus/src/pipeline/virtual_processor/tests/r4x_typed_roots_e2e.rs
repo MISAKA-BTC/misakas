@@ -11,6 +11,7 @@
 //!
 //! Every outsider here is built from the node's read API (the rows and the committed root) and a public DA directory — nothing the
 //! producer keeps privately — with its own salt.
+use super::g14_kernel_route_e2e::{assert_kernel_conserved_v1, kernel_money_v1};
 use super::g14_registration_e2e::{arrive, chain_blocks, root_at};
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_genesis_chain_on, t12_with_harness_cards,
@@ -63,7 +64,7 @@ const FEE: u64 = 2_000_000;
 const MAX_POSITIONS: u32 = 64;
 const OPV: VerificationModeV1 = VerificationModeV1::OptimisticPublicVerification;
 
-// ---- the classes (pure functions: their ids are the network's OPV admission list) -----------------------------------------------
+// ---- the classes (pure functions: their ids are what the test seam names OPV-eligible) ------------------------------------------
 
 fn weights(fx: &TirSketchFixtureV1) -> WeightsRootV1 {
     let d = k2_tir_v2_descriptor();
@@ -148,11 +149,13 @@ fn typed_config(typed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
     params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
-    let admitted: Vec<Hash64> = [memory_spec(), retrieval_spec(3), retrieval_spec(2), composite_spec()]
-        .iter()
-        .map(|s| Hash64::from_bytes(s.class_id().unwrap()))
-        .collect();
-    params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), admitted));
+    // OPV eligibility is DERIVED from chain state (OPV-BOOT), and a `Memory` / `Retrieval` / `Composite` class has no onboarding path
+    // yet (GAP-B16): these mechanics worlds name their typed classes through the processor's `cfg(test)` seam, exactly as the
+    // pre-derivation OPV worlds do. The fence's list is a DENY-list (nothing denied here), never an admission list.
+    for s in [memory_spec(), retrieval_spec(3), retrieval_spec(2), composite_spec()] {
+        crate::pipeline::virtual_processor::processor::kernel_route_test_opv_eligible_v1(Hash64::from_bytes(s.class_id().unwrap()));
+    }
+    params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new()));
     params.palw_typed_roots_v1 = typed.then(|| ForkActivation::new(1));
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
     params.skip_proof_of_work = true;
@@ -304,6 +307,10 @@ impl Net {
 
     fn collateral(&self, card: usize) -> u64 {
         self.chain.tip_state().1.bond(&self.bond(card)).expect("the bond").collateral
+    }
+
+    fn slashed(&self, card: usize) -> u64 {
+        self.chain.tip_state().1.bond(&self.bond(card)).expect("the bond").slashed
     }
 
     fn owed(&self, card: usize) -> u64 {
@@ -596,7 +603,7 @@ async fn r4x_memory_class_end_to_end_a_lie_in_one_step_is_convicted_and_memory_i
             bump(&mut t.values[0][s_at][n_at], 1)
         }
     });
-    let before = m.net.collateral(4);
+    let (before, slashed4, money0) = (m.net.collateral(4), m.net.slashed(4), kernel_money_v1(&m.net.chain));
     let c2 = m.net.commit(4, SpecClaimV1::Memory(lie.claim.clone())).await;
     let fault = fault_of(fresh(&m.net, c2, &Da::memory(&lie, None), &m.fx.params, &(), 0x22));
     let SpecFaultV1::MemoryStep { step: 1, proof } = &fault else { panic!("localised to step 1: {fault:?}") };
@@ -610,6 +617,8 @@ async fn r4x_memory_class_end_to_end_a_lie_in_one_step_is_convicted_and_memory_i
     let slashed = economics.reservation_per_claim;
     // (and the non-refundable OPV admission fee burned at the commit: G14-R4's F-C4R3-05)
     assert_eq!(m.net.collateral(4), before - slashed - economics.admission_fee, "the real bond lost the OPV reservation");
+    assert_eq!(m.net.slashed(4), slashed4 + slashed + economics.admission_fee, "the fee and the slash are collected from the producer");
+    assert_kernel_conserved_v1(money0, kernel_money_v1(&m.net.chain), "a typed claim's commit and conviction");
     assert_eq!(m.net.owed(outsider), slashed * u64::from(l.policy.accuser_reward_permille) / 1000, "the outsider's reward is queued");
     assert_eq!(m.head(), root1, "a convicted claim never moves the line");
 
@@ -640,7 +649,7 @@ async fn r4x_memory_a_withheld_pre_state_is_classified_as_a_default() {
 
     let job2 = m.job(vec![vec![7, 7], vec![9]]).await;
     let p2 = m.produce(&job2, 4, &m.chain_head(), |_, _| {});
-    let before = m.net.collateral(4);
+    let (before, slashed4, money0) = (m.net.collateral(4), m.net.slashed(4), kernel_money_v1(&m.net.chain));
     let c2 = m.net.commit(4, SpecClaimV1::Memory(p2.claim.clone())).await;
     let at = p2.traces[0].values.len() as u32 - 1;
     let mut da = Da::memory(&p2, None);
@@ -666,6 +675,8 @@ async fn r4x_memory_a_withheld_pre_state_is_classified_as_a_default() {
     // (and the non-refundable OPV admission fee burned at the commit: G14-R4's F-C4R3-05)
     let fee = m.net.api().unwrap().header.opv.unwrap().economics.admission_fee;
     assert_eq!(m.net.collateral(4), before - l.policy.default_penalty - fee, "the fixed default penalty, not the fraud slash");
+    assert_eq!(m.net.slashed(4), slashed4 + l.policy.default_penalty + fee, "the penalty and the fee are collected from the producer");
+    assert_kernel_conserved_v1(money0, kernel_money_v1(&m.net.chain), "a typed claim's commit and default");
     assert_eq!(m.head(), *p1.claim.step_roots.last().unwrap(), "a defaulted claim never moves the line");
     m.net.assert_replays().await;
 }
@@ -795,3 +806,6 @@ impl DebugName for ClaimStateV1 {
         format!("{self:?}")
     }
 }
+
+// Lane DA16: the court scope (ADR-0177 D2) on the typed roots — a child module so it runs on this harness unchanged.
+mod da16_scope;

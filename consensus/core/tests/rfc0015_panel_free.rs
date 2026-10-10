@@ -95,17 +95,15 @@ fn rfc0015_the_fence_carries_the_deny_list_the_floor_and_the_terms_and_all_are_i
     let mut floor = fence(vec![a]);
     floor.min_effective_bits = 2;
     assert_ne!(id(fence(vec![a])), id(floor), "another floor is another network");
-    assert!(
-        !fence(vec![]).grandfather_panel_route_classes,
-        "G14-for-rewards: live Panel-route classes are not grandfathered by default"
-    );
-    let mut grandfather = fence(vec![a]);
-    grandfather.grandfather_panel_route_classes = true;
-    assert_ne!(id(fence(vec![a])), id(grandfather), "grandfathering is a user decision, and identity");
     let mut terms = fence(vec![a]);
     terms.economics.default_burn_permille += 1;
     assert_ne!(id(fence(vec![a])), id(terms), "other terms are another network");
     assert_eq!(id(fence(vec![a])), id(fence(vec![a])), "and the value is deterministic");
+    assert!(!fence(vec![]).sampled_conformance_gates_reward, "GAP-70: only the complete check gates rewards");
+    let mut drill = fence(vec![a]);
+    drill.sampled_conformance_gates_reward = true;
+    assert!(drill.validate_value().is_err(), "a sampled conformance may not gate rewards on any network (GAP-70)");
+    assert_ne!(id(fence(vec![a])), id(drill.clone()), "GAP-70's switch is identity");
 
     // The value is checked, in the params validation, before the arming refusal.
     let mut bad_order = fence(vec![a, b]);

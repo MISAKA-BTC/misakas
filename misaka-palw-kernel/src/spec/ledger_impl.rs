@@ -16,12 +16,13 @@ use crate::spec::memory::{
     step_claim_v1, step_header_v1, step_job_v1, step_record_v1,
 };
 use crate::spec::retrieval::{
-    check_query_v1, check_result_v1, classify_slice_response_v1, judge_retrieval_fault_v1, payload_digest_v1,
+    RetrievalRootV1, RetrievedV1, check_query_v1, check_result_v1, classify_entry_response_v1, classify_slice_response_v1,
+    judge_retrieval_fault_v1, payload_digest_v1,
 };
 use crate::spec::{
-    ComputationSpecV1, MEMORY_PRE_STATE_STAGE_V1, SNAPSHOT_STAGE_BASE_V1, SpecClaimBodyV1, SpecClaimV1, SpecClassKindV1,
-    SpecClassRowV1, SpecFaultV1, SpecJobV1, SpecObjectV1, SpecShapeV1, composite_bounds_v1, k2_tr_v1_descriptor, memory_bounds_v1,
-    retrieval_bounds_v1,
+    ComputationSpecV1, MEMORY_PRE_STATE_STAGE_V1, RETRIEVAL_ENTRY_STAGE_BASE_V1, SNAPSHOT_STAGE_BASE_V1, SpecClaimBodyV1, SpecClaimV1,
+    SpecClassKindV1, SpecClassRowV1, SpecFaultV1, SpecJobV1, SpecObjectV1, SpecShapeV1, composite_bounds_v1, k2_tr_v1_descriptor,
+    memory_bounds_v1, retrieval_bounds_v1,
 };
 
 impl KernelLedgerV1 {
@@ -603,10 +604,33 @@ impl KernelLedgerV1 {
         }
     }
 
-    /// Whether `(stage, position)` is a snapshot slice of a typed claim (demandable though no claim commits it: it is the snapshot's).
+    /// Whether `(stage, position)` is a snapshot slice of a typed claim (demandable though no claim commits it: it is the snapshot's), or
+    /// one of its retrieved entries (`0xC0 + s`, GAP-52: the claim's own stated output).
     pub(super) fn spec_slice_demandable(&self, row: &ClaimRowV1, stage: u8, position: u32) -> bool {
         matches!(row.body, ClaimBodyV1::Spec(_))
-            && self.slice_root(row, stage).is_some_and(|r| (position as u64) < r.snapshot.slices())
+            && (self.slice_root(row, stage).is_some_and(|r| (position as u64) < r.snapshot.slices())
+                || self.entry_of(row, stage, position).is_some())
+    }
+
+    /// **Retrieved entry `position` of a typed claim's retrieval stage** (`0xC0 + s`), with the root it is opened against: a plain
+    /// retrieval claim's result (`s = 0`), or a composite claim's retrieval stage `s`.
+    fn entry_of(&self, row: &ClaimRowV1, stage: u8, position: u32) -> Option<(&RetrievalRootV1, RetrievedV1)> {
+        let s = stage.checked_sub(RETRIEVAL_ENTRY_STAGE_BASE_V1)? as usize;
+        let ClaimBodyV1::Spec(body) = &row.body else { return None };
+        match (&self.typed.classes.get(&row.class_binding_id)?.kind, &body.claim) {
+            (SpecClassKindV1::Retrieval { root }, SpecClaimV1::Retrieval(c)) if s == 0 => {
+                Some((root, *c.result.get(position as usize)?))
+            }
+            (SpecClassKindV1::Composite { components, .. }, SpecClaimV1::Composite(c)) => {
+                match (components.get(s)?, c.stages.get(s)?) {
+                    (ComponentV1::Retrieval(root), StageClaimV1::Retrieval { result, .. }) => {
+                        Some((root, *result.get(position as usize)?))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// The classification of a slice response (`None`: not a slice stage — the position path classifies it).
@@ -619,6 +643,9 @@ impl KernelLedgerV1 {
     ) -> Option<Result<ServedPositionV1, &'static str>> {
         if !matches!(row.body, ClaimBodyV1::Spec(_)) {
             return None;
+        }
+        if let Some((root, entry)) = self.entry_of(row, stage, position) {
+            return Some(classify_entry_response_v1(root, &entry, bytes));
         }
         self.slice_root(row, stage).map(|r| classify_slice_response_v1(r, position as u64, bytes))
     }
