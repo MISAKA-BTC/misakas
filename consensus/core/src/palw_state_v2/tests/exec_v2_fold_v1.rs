@@ -125,6 +125,7 @@ fn decl(claim: Hash64) -> PalwWorkRootDeclarationV2 {
         total_work: 800,
         boundaries: vec![PWU, 400, 640, 800],
         initial_state_root: h64(0x33),
+        prefix_claim: h64(0x3F),
         evidence_policy_root: h64(0x34),
         extra_executors: vec![bond_key(20), bond_key(21)],
         expiry_daa: 5_000,
@@ -474,7 +475,7 @@ fn each_admission_rule_refuses_by_name_in_the_specs_order_and_a_refusal_writes_n
     let a = bond_key(20);
     let good = slice_of(&s, claim, 0, a);
     let admit = |c: &PalwExecV2CoveredSliceV1| s.exec_v2_admit_slice_v1(&p, 120, c, 0);
-    assert_eq!(admit(&good), Ok(PalwSliceAdmissionV2 { work: 240, verified_at: None, leg_cap: 0 }));
+    assert_eq!(admit(&good), Ok(PalwSliceAdmissionV2 { work: 240, verified_at: None, leg_cap: 0, route_reward: 0 }));
     let mutated = |f: &dyn Fn(&mut PalwExecV2CoveredSliceV1)| {
         let mut c = good.clone();
         f(&mut c);
@@ -485,7 +486,7 @@ fn each_admission_rule_refuses_by_name_in_the_specs_order_and_a_refusal_writes_n
     assert_eq!(s.exec_v2_admit_slice_v1(&p, 5_000, &good, 0), Err(R::RootExpired), "at and past the expiry");
     assert_eq!(
         s.exec_v2_admit_slice_v1(&p, 4_999, &good, 0),
-        Ok(PalwSliceAdmissionV2 { work: 240, verified_at: None, leg_cap: 0 }),
+        Ok(PalwSliceAdmissionV2 { work: 240, verified_at: None, leg_cap: 0, route_reward: 0 }),
         "the last DAA before it"
     );
     // ---- 2: the bond ----
@@ -1043,7 +1044,11 @@ fn an_anchor_records_what_it_covered_once_and_the_window_drops_the_old() {
 
 mod amendment_1 {
     use super::*;
-    use crate::palw_exec_v2_verify::{palw_exec_v2_kernel_key_v1, palw_exec_v2_slice_job_nonce_v1, palw_exec_v2_token_state_root_v1};
+    use crate::palw_attempt_rules_v1::palw_attempt_output_root_v1;
+    use crate::palw_exec_v2_verify::{
+        palw_exec_v2_kernel_key_v1, palw_exec_v2_prefix_job_nonce_v1, palw_exec_v2_real_job_v1, palw_exec_v2_slice_job_nonce_v1,
+        palw_exec_v2_token_state_root_v1,
+    };
     use crate::palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1, palw_kernel_route_policy_v1};
     use crate::palw_onboarding_v1::{KernelBindingRowV1, PALW_ONBOARDING_TABLE_KERNEL_BINDINGS_V1};
     use misaka_palw_kernel::job::{DecodeRuleV1, KernelClaimV1, KernelJobV1};
@@ -1076,10 +1081,97 @@ mod amendment_1 {
         s.kernel_route = Some(route);
     }
 
+    /// GAP-62: the REAL claim's run that the root bond's prefix claim carries.
+    const PREFIX_RUN: [u32; 1] = [5];
+
+    /// **GAP-62: the root bond's prefix claim** — the root claim's class stood in as an IR class (`test_row_v1`), the claim's output
+    /// root the commitment of [`PREFIX_RUN`] under its anchored job, and the prefix claim itself (the job carrying the prefix job nonce
+    /// and the anchored prompt, the root bond's run) in the route.
+    struct Prefix {
+        claim_id: Hash64,
+        job: KernelJobV1,
+        row: ClaimRowV1,
+        /// The session's stream so far: the anchored prompt and the run.
+        stream: Vec<u32>,
+    }
+
+    impl Prefix {
+        fn new(s: &mut PalwChainStateV2, claim: Hash64, state: ClaimStateV1, rewarded: bool) -> Self {
+            let class = s.claim(&claim).unwrap().class_id;
+            s.test_insert_tir_class_v1(class, crate::palw_tir_admission_v1::PalwTirClassRecordV1::test_row_v1(class));
+            let facts = s.tir_class_v1(&class).unwrap().facts.clone();
+            let root_claim = s.claim(&claim).unwrap().clone();
+            let (prompt, context) = palw_exec_v2_real_job_v1(&facts, &root_claim.job_identity, xx_declare().prompt_ids_form_v1())
+                .expect("the anchored job");
+            s.claims.get_mut(&claim).unwrap().output_root = palw_attempt_output_root_v1(&context, &PREFIX_RUN);
+            let d = decl(claim);
+            let job = KernelJobV1 {
+                class_binding_id: digest(h64(KERNEL_CLASS)),
+                prompt: prompt.clone(),
+                max_new_tokens: PREFIX_RUN.len() as u32,
+                decode: DecodeRuleV1::Greedy,
+                nonce: digest(palw_exec_v2_prefix_job_nonce_v1(&claim, d.boundaries[0], &d.canonical_job_id, &d.plan_root)),
+            };
+            let kernel_bond = palw_kernel_bond_id_v1(&root_claim.bond);
+            let kclaim = KernelClaimV1 {
+                job_id: job.id(),
+                producer_bond: kernel_bond,
+                generated: PREFIX_RUN.to_vec(),
+                evidence_root: digest(h64(0xDF)),
+            };
+            let row = ClaimRowV1 {
+                producer: kernel_bond,
+                class_binding_id: digest(h64(KERNEL_CLASS)),
+                job_id: job.id(),
+                body: ClaimBodyV1::Program { claim: kclaim.clone(), evidence: evidence(), commitments: Vec::new() },
+                committed_daa: 100,
+                life: ClaimLifecycleV1 {
+                    policy: LifecyclePolicyV1 { check_window_daa: 10, challenge_window_daa: 10 },
+                    state,
+                    retention_met: true,
+                    final_hold_until: 0,
+                },
+                reserved: 1_000,
+                liability_until: None,
+                convicted: false,
+                rewarded,
+            };
+            let mut stream = prompt;
+            stream.extend_from_slice(&PREFIX_RUN);
+            let prefix = Prefix { claim_id: Hash64::from_bytes(kclaim.id()), job, row, stream };
+            prefix.install(s);
+            prefix
+        }
+
+        /// Put the job and the claim into the route (setup surgery).
+        fn install(&self, s: &mut PalwChainStateV2) {
+            let route = s.kernel_route.as_mut().expect("a route");
+            route.rows.insert((TABLE_JOBS_V1, borsh::to_vec(&self.job.id()).unwrap()), borsh::to_vec(&self.job).unwrap());
+            route.rows.insert((TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&self.claim_id)), borsh::to_vec(&self.row).unwrap());
+        }
+
+        /// The claim row with `state` (and `convicted`), as a kernel row write of a block.
+        fn write(&self, state: ClaimStateV1, convicted: bool) -> (u8, Vec<u8>, Option<Vec<u8>>) {
+            let mut row = self.row.clone();
+            row.life.state = state;
+            row.convicted = convicted;
+            (TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&self.claim_id), Some(borsh::to_vec(&row).unwrap()))
+        }
+
+        /// The declaration that opens on this prefix: it names the claim and starts from `token_state(prompt ‖ run)`.
+        fn decl(&self, claim: Hash64) -> PalwWorkRootDeclarationV2 {
+            let mut d = decl(claim);
+            d.prefix_claim = self.claim_id;
+            d.initial_state_root = palw_exec_v2_token_state_root_v1(&[&self.stream]);
+            d
+        }
+    }
+
     fn bound_opened() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
         let (p, mut s, claim) = world(Some(0));
         with_route(&mut s, claim, Some(PLAN));
-        let s = open(&p, &s, decl(claim)).expect("a session on a kernel-bound class opens");
+        let prefix = Prefix::new(&mut s, claim, ClaimStateV1::Final { final_daa: 105 }, false);
+        let s = open(&p, &s, prefix.decl(claim)).expect("a session on a kernel-bound class opens");
         (p, s, claim)
     }
 
@@ -1201,12 +1293,12 @@ mod amendment_1 {
         }
     }
 
-    /// The token stream of the session: the prompt and each slice's run.
-    const PROMPT: [u32; 3] = [11, 12, 13];
-    const RUNS: [[u32; 2]; 3] = [[21, 22], [31, 32], [41, 42]];
+    /// Each slice's run of the session's token stream.
+    const RUNS: [[u32; 2]; 3] = [[1, 2], [3, 4], [6, 7]];
 
-    fn prompt_of(index: usize) -> Vec<u32> {
-        let mut prompt = PROMPT.to_vec();
+    /// Slice `index`'s prompt: the stream after the prefix (`base`, the anchored prompt and the REAL claim's run) and the runs before it.
+    fn prompt_of(base: &[u32], index: usize) -> Vec<u32> {
+        let mut prompt = base.to_vec();
         for run in RUNS.iter().take(index) {
             prompt.extend_from_slice(run);
         }
@@ -1214,25 +1306,40 @@ mod amendment_1 {
     }
 
     /// The three slices of the session, chained through one token stream, executed by 20, 21, 20, each claim holding `reserved`.
-    /// The root's initial boundary must be the prompt's token state: the declaration says so.
+    /// GAP-62: the root's initial boundary is the prefix claim's stream (the REAL claim's anchored prompt and committed run); the
+    /// prefix claim is Final (verified at the declaration) and unrewarded.
     fn session(reserved: u64) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Vec<KernelSlice>) {
+        let (p, s, claim, slices, _) = session_with(reserved, ClaimStateV1::Final { final_daa: 105 }, false, None);
+        (p, s, claim, slices)
+    }
+
+    /// [`session`] with the prefix claim in `prefix` (rewarded if `rewarded`) and, if given, the route's `Final` reward set to
+    /// `claim_reward` (setup surgery on the route's policy).
+    fn session_with(
+        reserved: u64,
+        prefix: ClaimStateV1,
+        rewarded: bool,
+        claim_reward: Option<u64>,
+    ) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Vec<KernelSlice>, Prefix) {
         let (p, mut s, claim) = world(Some(0));
         with_route(&mut s, claim, Some(PLAN));
-        let mut d = decl(claim);
-        d.initial_state_root = palw_exec_v2_token_state_root_v1(&[&PROMPT]);
-        let mut s = open(&p, &s, d).expect("the session opens");
+        if let Some(reward) = claim_reward {
+            s.kernel_route.as_mut().unwrap().header.policy.claim_reward = reward;
+        }
+        let pre = Prefix::new(&mut s, claim, prefix, rewarded);
+        let mut s = open(&p, &s, pre.decl(claim)).expect("the session opens");
         let executors = [bond_key(20), bond_key(21), bond_key(20)];
         let mut slices = Vec::new();
         for (i, executor) in executors.iter().enumerate() {
-            let k = KernelSlice::new(&s, claim, i as u32, *executor, &prompt_of(i), &RUNS[i], reserved);
+            let k = KernelSlice::new(&s, claim, i as u32, *executor, &prompt_of(&pre.stream, i), &RUNS[i], reserved);
             k.install(&mut s);
             slices.push(k);
         }
         // Chain: slice i+1's predecessor is slice i's result, so `slice_of`'s placeholder predecessor is replaced by the token state.
         for (i, k) in slices.iter().enumerate() {
-            assert_eq!(k.covered.slice.predecessor_state_root, palw_exec_v2_token_state_root_v1(&[&prompt_of(i)]));
+            assert_eq!(k.covered.slice.predecessor_state_root, palw_exec_v2_token_state_root_v1(&[&prompt_of(&pre.stream, i)]));
         }
-        (p, s, claim, slices)
+        (p, s, claim, slices, pre)
     }
 
     fn carry_all(p: &PalwStateParamsV2, s: &PalwChainStateV2, slices: &[KernelSlice]) -> PalwChainStateV2 {
@@ -1262,7 +1369,8 @@ mod amendment_1 {
         assert!(refused.to_string().contains("kernel verification plan"), "{refused}");
         let (p, mut s, claim) = world(Some(0));
         with_route(&mut s, claim, Some(PLAN));
-        open(&p, &s, decl(claim)).expect("bound, under its plan");
+        let prefix = Prefix::new(&mut s, claim, ClaimStateV1::Final { final_daa: 105 }, false);
+        open(&p, &s, prefix.decl(claim)).expect("bound, under its plan, from its prefix");
         // (control) with no kernel route the pre-amendment rule stands: the fixture chains of the other tests open as before.
         let (p, s, claim) = world(Some(0));
         open(&p, &s, decl(claim)).expect("no route: the binding is not asked");
@@ -1342,7 +1450,7 @@ mod amendment_1 {
         );
         assert!(matches!(
             s.exec_v2_slice_v1(&claim, 0).unwrap().stage,
-            PalwWorkSliceStageV2::Verified { verified_daa: 130, leg_cap: 1_000_000_000 }
+            PalwWorkSliceStageV2::Verified { verified_daa: 130, leg_cap: 1_000_000_000, route_reward: 0 }
         ));
         assert!(matches!(s.exec_v2_slice_v1(&claim, 1).unwrap().stage, PalwWorkSliceStageV2::Verified { .. }));
         assert!(matches!(s.exec_v2_slice_v1(&claim, 2).unwrap().stage, PalwWorkSliceStageV2::Pending));
@@ -1469,7 +1577,7 @@ mod amendment_1 {
         let (after, delta) = step_with(&s, &p, 50, 120, &[], &xx_slices(vec![slices[0].covered.clone(), wrong.clone()])).unwrap();
         assert!(matches!(
             after.exec_v2_slice_v1(&claim, 0).unwrap().stage,
-            PalwWorkSliceStageV2::Verified { verified_daa: 120, leg_cap: 1_000 }
+            PalwWorkSliceStageV2::Verified { verified_daa: 120, leg_cap: 1_000, route_reward: 0 }
         ));
         let root = after.exec_v2_root_v1(&claim).unwrap();
         assert_eq!((root.pending, root.verified_work), (0, 400 - PWU), "verified at once: never pending");
@@ -1537,7 +1645,7 @@ mod amendment_1 {
             assert!(
                 matches!(
                     s.exec_v2_slice_v1(&claim, index).unwrap().stage,
-                    PalwWorkSliceStageV2::Verified { verified_daa: 130, leg_cap: 1_000_000_000 }
+                    PalwWorkSliceStageV2::Verified { verified_daa: 130, leg_cap: 1_000_000_000, .. }
                 ),
                 "a release past the horizon is no default and moves no cap: {:?}",
                 s.exec_v2_slice_v1(&claim, index).unwrap().stage
@@ -1586,9 +1694,10 @@ mod amendment_1 {
         ));
         let s = run_to_terminal(&p, s, claim, 70, 131);
         let (producer, leg_a, leg_b, twin_leg) = paid_legs(&s, claim);
-        assert_eq!(leg_a, 14, "bond 20: two claims, 7 each after the route's reward");
-        assert_eq!(leg_b, (twin_leg as u128 * 240 / 800) as u64, "bond 21: under its cap");
-        assert_eq!(producer + leg_a + leg_b, twin_leg, "the excess stays with the root executor");
+        // ADR-0176 D2 (X8R round 3): the route already paid 3 × its reward for this work — more than the root's whole allocation here
+        // (the route's interim reward is 5 KAS, the fixture's allocation a fraction of one) — so the allocation pays nothing more.
+        assert!(3 * reward > twin_leg, "the fixture's route rewards exceed the allocation");
+        assert_eq!((producer, leg_a, leg_b), (0, 0, 0), "one work, one right: nothing is paid twice");
     }
 
     /// **A verified slice whose kernel claim forfeits its reservation after Final is defaulted** (the X8R round-2 review): the route
@@ -1640,6 +1749,186 @@ mod amendment_1 {
             crate::palw_exec_v2_verify::PalwSliceVerificationV1::Verified { final_daa: 130 },
             "past the horizon a reservation of 0 is the release"
         );
+    }
+
+    /// **GAP-62 (X8R round 3): the initial boundary is the REAL claim's output, carried by the root bond's prefix claim.** On a
+    /// kernel-bound class a session opens only when the declaration names a kernel claim, by the root bond, of the job carrying the
+    /// prefix job nonce, whose prompt is the one the REAL claim's anchor names and whose run is the REAL claim's committed output; the
+    /// initial boundary is then `token_state(prompt ‖ run)` and nothing else. Each mismatch is refused by name and writes nothing.
+    #[test]
+    fn a_bound_session_starts_from_the_real_claims_output_and_each_prefix_mismatch_is_refused_by_name() {
+        let setup = || {
+            let (p, mut s, claim) = world(Some(0));
+            with_route(&mut s, claim, Some(PLAN));
+            let prefix = Prefix::new(&mut s, claim, ClaimStateV1::Final { final_daa: 105 }, false);
+            (p, s, claim, prefix)
+        };
+        let refused = |p: &PalwStateParamsV2, s: &PalwChainStateV2, d: PalwWorkRootDeclarationV2, want: &str| {
+            let e = open(p, s, d).expect_err(want).to_string();
+            assert!(e.contains(want), "expected `{want}`, got `{e}`");
+        };
+        // The honest declaration opens, verified at once (its prefix claim is Final), from the prefix's stream.
+        let (p, s, claim, prefix) = setup();
+        let opened = open(&p, &s, prefix.decl(claim)).expect("the honest prefix binds");
+        let root = opened.exec_v2_root_v1(&claim).unwrap();
+        assert_eq!(root.prefix_claim, prefix.claim_id);
+        assert_eq!(root.prefix, PalwWorkPrefixStageV2::Verified { verified_daa: 110, route_reward: 0 });
+        assert_eq!(root.last_state_root, palw_exec_v2_token_state_root_v1(&[&prefix.stream]), "slice 0 continues the REAL output");
+        assert_eq!(opened.exec_v2_root_of_kernel_claim_v1(&prefix.claim_id), Some(claim), "BUDGET's H-3a read");
+        // No such claim.
+        let mut d = prefix.decl(claim);
+        d.prefix_claim = h64(0xBAD);
+        refused(&p, &s, d, "prefix claim is not held");
+        // A boundary the root bond chose: the prompt without the REAL claim's run, or any other root.
+        let mut d = prefix.decl(claim);
+        d.initial_state_root = palw_exec_v2_token_state_root_v1(&[&prefix.job.prompt]);
+        refused(&p, &s, d, "initial boundary is not the token state");
+        let mut d = prefix.decl(claim);
+        d.initial_state_root = h64(0x33);
+        refused(&p, &s, d, "initial boundary is not the token state");
+        // The REAL claim committed another output: the prefix claim does not carry its run.
+        let mut other = s.clone();
+        other.claims.get_mut(&claim).unwrap().output_root = h64(0x0BAD);
+        refused(&p, &other, prefix.decl(claim), "its output differs");
+        // A prefix claim of another bond.
+        let mut other = s.clone();
+        let mut row = prefix.row.clone();
+        row.producer = palw_kernel_bond_id_v1(&bond_key(20));
+        if let ClaimBodyV1::Program { claim: c, .. } = &mut row.body {
+            c.producer_bond = row.producer;
+        }
+        Prefix { row, ..prefix_clone(&prefix) }.install(&mut other);
+        refused(&p, &other, prefix.decl(claim), "its executor differs");
+        // A job whose prompt is not the anchored one (its nonce is right): the job and the claim are re-made around it.
+        let mut other = s.clone();
+        let mut job = prefix.job.clone();
+        job.prompt[0] ^= 1;
+        let rebuilt = rebuild(&prefix, job);
+        rebuilt.install(&mut other);
+        let mut d = prefix.decl(claim);
+        d.prefix_claim = rebuilt.claim_id;
+        refused(&p, &other, d, "its prompt differs");
+        // A job of another root's prefix (the nonce binds the root, its prefix work, the job and the plan).
+        let mut other = s.clone();
+        let mut job = prefix.job.clone();
+        job.nonce = digest(palw_exec_v2_prefix_job_nonce_v1(&h64(0x5150), PWU, &h64(JOB), &h64(PLAN)));
+        let rebuilt = rebuild(&prefix, job);
+        rebuilt.install(&mut other);
+        let mut d = prefix.decl(claim);
+        d.prefix_claim = rebuilt.claim_id;
+        refused(&p, &other, d, "its job nonce differs");
+        // A failed prefix claim binds nothing.
+        let mut other = s.clone();
+        let mut row = prefix.row.clone();
+        row.convicted = true;
+        Prefix { row, ..prefix_clone(&prefix) }.install(&mut other);
+        refused(&p, &other, prefix.decl(claim), "prefix claim has failed");
+        // A class with no IR record: the REAL claim's job cannot be derived.
+        let (p2, mut s2, claim2) = world(Some(0));
+        with_route(&mut s2, claim2, Some(PLAN));
+        refused(&p2, &s2, prefix.decl(claim2), "cannot be derived");
+        // (control) every refusal above wrote nothing: the state is the parent's.
+        assert!(s.exec_v2_root_v1(&claim).is_none());
+    }
+
+    fn prefix_clone(p: &Prefix) -> Prefix {
+        Prefix { claim_id: p.claim_id, job: p.job.clone(), row: p.row.clone(), stream: p.stream.clone() }
+    }
+
+    /// The prefix's claim re-made around `job` (same run, same producer).
+    fn rebuild(p: &Prefix, job: KernelJobV1) -> Prefix {
+        let mut row = p.row.clone();
+        row.job_id = job.id();
+        let ClaimBodyV1::Program { claim, .. } = &mut row.body else { unreachable!() };
+        claim.job_id = job.id();
+        let claim_id = Hash64::from_bytes(claim.id());
+        Prefix { claim_id, job, row, stream: p.stream.clone() }
+    }
+
+    /// **GAP-62: a pending prefix holds the root's `Final`; its conviction (an outsider's proof of a lie in the REAL claim's run) voids
+    /// the whole session, verified slices included; a default of its material does the same as a default; its `Final` releases the
+    /// hold.** Nothing is charged at V2: the evidence-bound slash is the route's, on the root bond's kernel reservation.
+    #[test]
+    fn a_pending_prefix_holds_the_roots_final_and_its_conviction_or_default_voids_the_whole_session() {
+        let (p, s, claim, slices, prefix) =
+            session_with(1_000, ClaimStateV1::Challengeable { since_daa: 100, window_end_daa: 200 }, false, None);
+        assert_eq!(s.exec_v2_root_v1(&claim).unwrap().prefix, PalwWorkPrefixStageV2::Pending);
+        let s = license(&p, &s, claim, 45, 111);
+        let s = carry_all(&p, &s, &slices);
+        let finals = slices.iter().map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect();
+        let s = kernel_block(&p, &s, 60, 130, finals);
+        let root = s.exec_v2_root_v1(&claim).unwrap();
+        assert_eq!((root.pending, root.verified_work), (0, 800 - PWU), "every slice verified");
+        assert!(!root.ready_for_final() && s.exec_v2_holds_final_v1(&claim), "the pending prefix holds the REAL claim's Final");
+        assert!(deadline_of(&s, claim).is_none());
+        // (a) the prefix verifies: the hold is released.
+        let ok = kernel_block(&p, &s, 61, 131, vec![prefix.write(ClaimStateV1::Final { final_daa: 131 }, false)]);
+        assert_eq!(ok.exec_v2_root_v1(&claim).unwrap().prefix, PalwWorkPrefixStageV2::Verified { verified_daa: 131, route_reward: 0 });
+        assert!(ok.exec_v2_root_v1(&claim).unwrap().ready_for_final() && !ok.exec_v2_holds_final_v1(&claim));
+        assert!(deadline_of(&ok, claim).is_some_and(|at| at >= 131));
+        // (b) an outsider convicted the prefix claim: the REAL claim's run is false, every slice and the root are void.
+        let collateral: Vec<(PalwBondKeyV2, u64)> = s.bonds.iter().map(|(k, b)| (*k, b.collateral)).collect();
+        let convicted = kernel_block(&p, &s, 61, 131, vec![prefix.write(ClaimStateV1::Convicted { daa: 131 }, true)]);
+        let root = convicted.exec_v2_root_v1(&claim).unwrap();
+        assert_eq!(root.prefix, PalwWorkPrefixStageV2::ProvenFalse { daa: 131 });
+        assert_eq!(root.phase, PalwWorkRootPhaseV2::Voided { from_index: 0, voided_daa: 131 });
+        for index in 0..3 {
+            assert_eq!(convicted.exec_v2_slice_v1(&claim, index).unwrap().stage, PalwWorkSliceStageV2::Voided { voided_daa: 131 });
+        }
+        assert!(matches!(
+            convicted.claim(&claim).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkSliceProvenFalse, voided_daa: 131 }
+        ));
+        let after: Vec<(PalwBondKeyV2, u64)> = convicted.bonds.iter().map(|(k, b)| (*k, b.collateral)).collect();
+        assert_eq!(after, collateral, "no V2 charge");
+        assert_eq!(convicted.reserved_exposure(&bond_key(20)), 0, "the extra executors' exposure returns");
+        assert!(convicted.vesting_row(&claim).is_none(), "nobody is paid");
+        // (c) the prefix claim's material was withheld: a default, the same void.
+        let defaulted =
+            kernel_block(&p, &s, 61, 131, vec![prefix.write(ClaimStateV1::Unavailable { daa: 131, producer_defaulted: true }, false)]);
+        assert_eq!(defaulted.exec_v2_root_v1(&claim).unwrap().prefix, PalwWorkPrefixStageV2::Defaulted { daa: 131 });
+        assert!(matches!(
+            defaulted.claim(&claim).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkSliceDefaulted, .. }
+        ));
+    }
+
+    /// **ADR-0176 D2 (X8R round 3): one work, one right, one budget.** Every kernel claim of the session (the prefix's and the three
+    /// slices') is paid the route's `Final` reward `r`; the root's one allocation `A` then pays each piece its work share less what the
+    /// route already paid for it, so `root leg + Σ slice legs + 4 r == A` and each executor's total is exactly its work share.
+    #[test]
+    fn one_work_one_right_the_routes_rewards_on_the_bound_claims_are_drawn_from_the_roots_one_allocation() {
+        const R: u64 = 1_000;
+        let (p, s, claim, slices, _) = session_with(1_000_000_000, ClaimStateV1::Final { final_daa: 105 }, true, Some(R));
+        assert_eq!(s.exec_v2_root_v1(&claim).unwrap().prefix, PalwWorkPrefixStageV2::Verified { verified_daa: 110, route_reward: R });
+        let s = license(&p, &s, claim, 45, 111);
+        let s = carry_all(&p, &s, &slices);
+        let finals = slices
+            .iter()
+            .map(|k| {
+                k.write_with(|row| {
+                    row.life.state = ClaimStateV1::Final { final_daa: 130 };
+                    row.rewarded = true;
+                })
+            })
+            .collect();
+        let s = kernel_block(&p, &s, 60, 130, finals);
+        for index in 0..3 {
+            assert!(matches!(
+                s.exec_v2_slice_v1(&claim, index).unwrap().stage,
+                PalwWorkSliceStageV2::Verified { route_reward: R, .. }
+            ));
+        }
+        for k in &slices {
+            assert_eq!(s.exec_v2_root_of_kernel_claim_v1(&k.claim_id), Some(claim), "every bound claim names its root");
+        }
+        let s = run_to_terminal(&p, s, claim, 70, 131);
+        let (producer, leg_a, leg_b, twin_leg) = paid_legs(&s, claim);
+        let share = |work: u64| (twin_leg as u128 * work as u128 / 800) as u64;
+        assert!(share(160) > R, "the fixture's shares exceed the route reward");
+        assert_eq!(leg_a, share(240) + share(160) - 2 * R, "bond 20: its two slices' shares less the two route rewards");
+        assert_eq!(leg_b, share(240) - R, "bond 21: its share less the route reward");
+        assert_eq!(producer + leg_a + leg_b + 4 * R, twin_leg, "one allocation pays the session, route rewards included");
     }
 
     #[test]

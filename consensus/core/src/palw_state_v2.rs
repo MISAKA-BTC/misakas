@@ -16771,9 +16771,9 @@ impl<'a> PalwFoldReadV1<'a> {
 impl PalwFoldReadV1<'_> {
     /// **RFC-0008 v2 (X8R), a TEST SEAM: is `class_id` one whose REAL attempts skip the registry, seating and share gates?** Only
     /// where the processor's `cfg(test)` hook named it (`PalwKernelRouteExtrasV1::test_admitted_classes`, empty in every build that is
-    /// not a test, and absent wherever the kernel route is not in force) — the composed EXEC-slice × G14 run's stand-in for an
-    /// onboarded class that can take REAL work. **Residual: an onboarded class admitting REAL work under its real budget = the
-    /// G14-for-rewards gap.**
+    /// not a test, and absent wherever the kernel route is not in force) — the composed EXEC-slice × G14 run's stand-in for the legacy
+    /// channel's Panel admission of the session's V2 REAL root (the Lead's GAP-81 decision: an onboarded class's V2 claims earn only
+    /// there; the harness cannot prove seat readiness).
     pub(super) fn test_admitted_class_v1(&self, class_id: &Hash64) -> bool {
         self.extras.kernel_route.as_ref().is_some_and(|route| route.test_admitted_classes.contains(class_id))
     }

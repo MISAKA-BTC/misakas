@@ -249,9 +249,11 @@ fn kernel_route_test_attestations_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64
 }
 
 /// **RFC-0008 v2 (X8R), TEST ONLY: the classes whose REAL attempts skip the model-registry, seating and per-bond-share gates** — the
-/// stand-in, in the composed EXEC-slice × G14 run (`g14_kernel_route_e2e::conformance::exec_slices`), for an onboarded class that can
-/// take REAL work. **Residual: an onboarded class admitting REAL work under its real budget = the G14-for-rewards gap** (assigned with
-/// derived eligibility; when it lands this seam goes). Named and shaped like [`kernel_route_test_attest_artifact_v1`]: height-gated and
+/// stand-in, in the composed EXEC-slice × G14 run (`g14_kernel_route_e2e::conformance::exec_slices`), for the admission of the session's
+/// REAL root. **Re-scoped by the Lead's GAP-81 decision (2026-10-10):** a V2 REAL claim of an onboarded class earns only on the LEGACY
+/// channel, whose old rules need Panel seat readiness (possession proofs) that this harness cannot produce — so this stands for that
+/// channel's admission; no reward gate can replace it (the gate grants a V2 root nothing). Named and shaped like
+/// [`kernel_route_test_attest_artifact_v1`]: height-gated and
 /// append-only, so every node of one test, replaying the same blocks, waives the same gates at the same block; empty in every build
 /// that is not a test (`PalwKernelRouteExtrasV1::test_admitted_classes`).
 #[cfg(test)]

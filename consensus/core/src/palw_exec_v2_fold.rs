@@ -27,15 +27,16 @@
 use super::*;
 use crate::palw_exec_v2::PalwWorkRangeV1;
 use crate::palw_exec_v2_verify::{
-    PalwSliceVerificationV1, palw_exec_v2_claim_outcome_v1, palw_exec_v2_kernel_key_v1, palw_exec_v2_leg_cap_v1,
+    PalwExecV2PrefixInputsV1, PalwSliceVerificationV1, palw_exec_v2_claim_outcome_v1, palw_exec_v2_kernel_key_v1,
+    palw_exec_v2_leg_cap_v1, palw_exec_v2_prefix_binding_v1, palw_exec_v2_real_job_v1, palw_exec_v2_route_reward_v1,
     palw_exec_v2_verification_binding_v1,
 };
 use crate::palw_work_slice_v2::{
     PALW_EXEC_V2_MAX_OPEN_ROOTS, PALW_EXEC_V2_MAX_OPEN_ROOTS_PER_BOND, PALW_EXEC_V2_MAX_PENDING_DEPTH,
     PALW_EXEC_V2_MAX_PENDING_PER_BOND, PALW_EXEC_V2_MAX_ROOT_LIFETIME_DAA, PALW_EXEC_V2_MAX_SLICES_PER_BLOCK,
-    PalwExecV2CoveredSliceV1, PalwExecV2StateV1, PalwSliceAdmissionV2, PalwSliceRefusalV2, PalwWorkRootDeclarationV2,
-    PalwWorkRootPhaseV2, PalwWorkRootRefusalV2, PalwWorkRootV2, PalwWorkSliceRowV2, PalwWorkSliceStageV2, palw_work_plan_range_v2,
-    settle_root_partial_v2, settle_root_v2,
+    PalwExecV2CoveredSliceV1, PalwExecV2StateV1, PalwSliceAdmissionV2, PalwSliceRefusalV2, PalwWorkPrefixStageV2,
+    PalwWorkRootDeclarationV2, PalwWorkRootPhaseV2, PalwWorkRootRefusalV2, PalwWorkRootV2, PalwWorkSliceRowV2, PalwWorkSliceStageV2,
+    palw_work_plan_range_v2, settle_root_partial_v2, settle_root_v2,
 };
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
@@ -47,6 +48,18 @@ fn refused(why: impl Into<String>) -> PalwStateV2Error {
 // ---------------------------------------------------------------------------------------------
 
 impl PalwChainStateV2 {
+    /// **The EXEC root a kernel claim is bound to, if any** (X8R round 3; ADR-0176 D2's hook H-3a for lane BUDGET): a root's prefix claim
+    /// or an accepted slice's verification claim. BUDGET's engine reads it at a kernel claim's `Final` to draw the route reward from
+    /// the ROOT's one reservation instead of a fresh one on the executor's bond. Bounded by the open-root and per-root slice bounds.
+    pub fn exec_v2_root_of_kernel_claim_v1(&self, kernel_claim: &Hash64) -> Option<Hash64> {
+        self.exec_v2
+            .roots
+            .iter()
+            .find(|(_, root)| root.prefix != PalwWorkPrefixStageV2::Unbound && root.prefix_claim == *kernel_claim)
+            .map(|(id, _)| *id)
+            .or_else(|| self.exec_v2.slices.iter().find(|(_, row)| row.evidence_root == *kernel_claim).map(|((root, _), _)| *root))
+    }
+
     /// The root claim's session, if one is open or retained.
     pub fn exec_v2_root_v1(&self, root_claim_id: &Hash64) -> Option<&PalwWorkRootV2> {
         self.exec_v2.roots.get(root_claim_id)
@@ -191,9 +204,11 @@ impl PalwChainStateV2 {
                     daa_score,
                 )?;
                 match palw_exec_v2_claim_outcome_v1(&row, daa_score) {
-                    PalwSliceVerificationV1::Verified { final_daa } => {
-                        Some((final_daa, palw_exec_v2_leg_cap_v1(&row, kernel.header.policy.claim_reward)))
-                    }
+                    PalwSliceVerificationV1::Verified { final_daa } => Some((
+                        final_daa,
+                        palw_exec_v2_leg_cap_v1(&row, kernel.header.policy.claim_reward),
+                        palw_exec_v2_route_reward_v1(&row, kernel.header.policy.claim_reward),
+                    )),
                     _ => None,
                 }
             }
@@ -212,8 +227,9 @@ impl PalwChainStateV2 {
         let work = planned.work().ok_or(R::Overflow)?;
         Ok(PalwSliceAdmissionV2 {
             work,
-            verified_at: verified_at.map(|(final_daa, _)| final_daa),
-            leg_cap: verified_at.map(|(_, cap)| cap).unwrap_or(0),
+            verified_at: verified_at.map(|(final_daa, _, _)| final_daa),
+            leg_cap: verified_at.map(|(_, cap, _)| cap).unwrap_or(0),
+            route_reward: verified_at.map(|(_, _, reward)| reward).unwrap_or(0),
         })
     }
 
@@ -462,6 +478,53 @@ pub(super) fn apply_root_declared_v2(
     if declaration.boundaries.first().copied() != Some(admitted) {
         return Err(no(R::PrefixMismatch { declared: declaration.boundaries.first().copied().unwrap_or(0), admitted }));
     }
+    // **GAP-62 (X8R round 3): the initial boundary is the REAL claim's own output, carried by the root bond's prefix claim on the kernel
+    // route** — derived from chain data, never the root bond's to choose. The prefix claim's later conviction, default or post-Final
+    // forfeit voids the whole session (`sync_slice_verification_v2`); a pending one holds the root's `Final`.
+    let prefix = match builder.state.kernel_route.as_ref() {
+        None => PalwWorkPrefixStageV2::Unbound,
+        Some(kernel) => {
+            let binding = kernel.kernel_binding_v1(&claim.class_id).ok_or_else(|| no(R::ClassNotKernelBound))?;
+            let tir = builder.state.tir_class_v1(&claim.class_id).ok_or_else(|| no(R::PrefixNotDerivable))?;
+            let (prompt, context) = palw_exec_v2_real_job_v1(&tir.facts, &claim.job_identity, builder.extras.prompt_ids_form_v1())
+                .ok_or_else(|| no(R::PrefixNotDerivable))?;
+            let row = kernel
+                .rows
+                .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&declaration.prefix_claim)))
+                .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok())
+                .ok_or_else(|| no(R::PrefixClaimMissing))?;
+            let job = kernel
+                .rows
+                .get(&(misaka_palw_kernel::rows::TABLE_JOBS_V1, borsh::to_vec(&row.job_id).expect("a digest serializes")))
+                .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::job::KernelJobV1>(bytes).ok());
+            let inputs = PalwExecV2PrefixInputsV1 {
+                root_claim_id: claim_id,
+                prefix_work: admitted,
+                canonical_job_id: declaration.canonical_job_id,
+                plan_root: declaration.plan_root,
+                initial_state_root: declaration.initial_state_root,
+                real_prompt: &prompt,
+                real_context: &context,
+                real_output_root: claim.output_root,
+            };
+            palw_exec_v2_prefix_binding_v1(
+                &inputs,
+                &binding,
+                &row,
+                job.as_ref(),
+                &crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&claim.bond),
+                daa,
+            )
+            .map_err(no)?;
+            match palw_exec_v2_claim_outcome_v1(&row, daa) {
+                PalwSliceVerificationV1::Verified { .. } => PalwWorkPrefixStageV2::Verified {
+                    verified_daa: daa,
+                    route_reward: palw_exec_v2_route_reward_v1(&row, kernel.header.policy.claim_reward),
+                },
+                _ => PalwWorkPrefixStageV2::Pending,
+            }
+        }
+    };
     if declaration.expiry_daa <= daa || declaration.expiry_daa > daa.saturating_add(PALW_EXEC_V2_MAX_ROOT_LIFETIME_DAA) {
         return Err(no(R::BadExpiry));
     }
@@ -520,6 +583,8 @@ pub(super) fn apply_root_declared_v2(
             verified_work: 0,
             pending: 0,
             phase: PalwWorkRootPhaseV2::Open,
+            prefix_claim: declaration.prefix_claim,
+            prefix,
         }),
     );
     Ok(())
@@ -583,7 +648,11 @@ fn accept_slice_v2(
             evidence_root: slice.evidence_root,
             da_root: slice.da_root,
             stage: match admission.verified_at {
-                Some(_) => PalwWorkSliceStageV2::Verified { verified_daa: ctx.daa_score, leg_cap: admission.leg_cap },
+                Some(_) => PalwWorkSliceStageV2::Verified {
+                    verified_daa: ctx.daa_score,
+                    leg_cap: admission.leg_cap,
+                    route_reward: admission.route_reward,
+                },
                 None => PalwWorkSliceStageV2::Pending,
             },
         }),
@@ -722,6 +791,33 @@ pub(super) fn settle_at_final_v2(
         }
         settlement.slice_legs.retain(|(_, amount)| *amount > 0);
         settlement.root_leg = settlement.root_leg.checked_add(excess).ok_or(PalwStateV2Error::Overflow("exec v2 leg cap"))?;
+    }
+    // **ADR-0176 D2 (X8R round 3): one work, one right, one budget.** The kernel claims that verify the prefix and the slices were each
+    // paid the route's own `Final` reward for the same work this allocation pays for. That reward is an advance on the work's share of
+    // the root's one allocation: each slice executor's leg is its share less what the route paid it (aggregated per bond, never below
+    // 0), and the root executor keeps `amount − Σ route rewards − Σ slice legs`. So `Σ legs + root leg + Σ route rewards == amount`
+    // whenever the route rewards fit inside it; what the route already paid is never paid twice (it is not minted here). Zero where no
+    // kernel route exists (the test door's arithmetic chains): every snapshot is 0 there.
+    let mut route_by_bond: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+    let mut route_total: u64 = root.prefix.route_reward();
+    for row in &rows {
+        if let PalwWorkSliceStageV2::Verified { route_reward, .. } = row.stage
+            && route_reward > 0
+        {
+            let entry = route_by_bond.entry(row.executor).or_insert(0);
+            *entry = entry.checked_add(route_reward).ok_or(PalwStateV2Error::Overflow("exec v2 route reward"))?;
+            route_total = route_total.checked_add(route_reward).ok_or(PalwStateV2Error::Overflow("exec v2 route reward"))?;
+        }
+    }
+    if route_total > 0 {
+        let mut legs: u64 = 0;
+        for (bond, leg) in settlement.slice_legs.iter_mut() {
+            let advanced = route_by_bond.get(bond).copied().unwrap_or(0);
+            *leg -= (*leg).min(advanced);
+            legs = legs.checked_add(*leg).ok_or(PalwStateV2Error::Overflow("exec v2 legs"))?;
+        }
+        settlement.slice_legs.retain(|(_, amount)| *amount > 0);
+        settlement.root_leg = amount.saturating_sub(route_total).saturating_sub(legs);
     }
     // Release the extra executors' exposure and mark the root settled: the marker and the payments are one journaled step.
     release_executor_exposure_v2(builder, &root)?;
@@ -870,6 +966,52 @@ pub(super) fn sync_slice_verification_v2(
     if written.is_empty() {
         return Ok(());
     }
+    // **GAP-62: each bound prefix follows its claim first** — a prefix that fails voids the whole session, so its slices are not read
+    // after it in this block.
+    let prefixes: Vec<(Hash64, PalwWorkRootV2)> = builder
+        .state
+        .exec_v2
+        .roots
+        .iter()
+        .filter(|(_, root)| matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete))
+        .filter(|(_, root)| matches!(root.prefix, PalwWorkPrefixStageV2::Pending | PalwWorkPrefixStageV2::Verified { .. }))
+        .filter(|(_, root)| written.contains(&palw_exec_v2_kernel_key_v1(&root.prefix_claim)))
+        .map(|(id, root)| (*id, root.clone()))
+        .collect();
+    for (root_id, root) in prefixes {
+        let (claim_row, claim_reward) = match builder.state.kernel_route.as_ref() {
+            Some(kernel) => (
+                kernel
+                    .rows
+                    .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&root.prefix_claim)))
+                    .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok()),
+                kernel.header.policy.claim_reward,
+            ),
+            None => (None, 0),
+        };
+        let pending = matches!(root.prefix, PalwWorkPrefixStageV2::Pending);
+        let outcome = match &claim_row {
+            Some(claim) => palw_exec_v2_claim_outcome_v1(claim, ctx.daa_score),
+            None if pending => PalwSliceVerificationV1::Defaulted,
+            None => continue,
+        };
+        match outcome {
+            PalwSliceVerificationV1::Verified { .. } if pending => {
+                let route_reward = claim_row.as_ref().map(|claim| palw_exec_v2_route_reward_v1(claim, claim_reward)).unwrap_or(0);
+                let mut next = root;
+                next.prefix = PalwWorkPrefixStageV2::Verified { verified_daa: ctx.daa_score, route_reward };
+                builder.write_exec_root(root_id, Some(next));
+                release_final_hold_v2(builder, root_id, ctx.daa_score)?;
+            }
+            PalwSliceVerificationV1::ProvenFalse => {
+                void_prefix_v2(builder, root_id, PalwWorkPrefixStageV2::ProvenFalse { daa: ctx.daa_score }, ctx.daa_score)?;
+            }
+            PalwSliceVerificationV1::Defaulted => {
+                void_prefix_v2(builder, root_id, PalwWorkPrefixStageV2::Defaulted { daa: ctx.daa_score }, ctx.daa_score)?;
+            }
+            _ => {}
+        }
+    }
     let touched: Vec<((Hash64, u32), PalwWorkSliceRowV2)> = builder
         .state
         .exec_v2
@@ -906,8 +1048,9 @@ pub(super) fn sync_slice_verification_v2(
             PalwSliceVerificationV1::Verified { .. } if pending => {
                 let work = row.range.work().ok_or(PalwStateV2Error::Overflow("exec v2 slice work"))?;
                 let leg_cap = claim_row.as_ref().map(|claim| palw_exec_v2_leg_cap_v1(claim, claim_reward)).unwrap_or(0);
+                let route_reward = claim_row.as_ref().map(|claim| palw_exec_v2_route_reward_v1(claim, claim_reward)).unwrap_or(0);
                 let mut verified = row;
-                verified.stage = PalwWorkSliceStageV2::Verified { verified_daa: ctx.daa_score, leg_cap };
+                verified.stage = PalwWorkSliceStageV2::Verified { verified_daa: ctx.daa_score, leg_cap, route_reward };
                 builder.write_exec_slice((root_id, index), Some(verified));
                 let mut next = root;
                 next.pending = next.pending.checked_sub(1).ok_or(PalwStateV2Error::Overflow("exec v2 pending"))?;
@@ -973,6 +1116,44 @@ pub(super) fn void_suffix_v2(
     Ok(())
 }
 
+/// **The prefix void** (GAP-62): the root's own prefix claim failed — `cause` is `ProvenFalse` (convicted, before or after its `Final`)
+/// or `Defaulted` (withheld material, a timeout, a forfeit after `Final`). The REAL claim's run is not the session's honest start, so
+/// every accepted slice is `Voided` (each chains from it), the root becomes `Voided { from_index: 0 }` with its extra executors'
+/// exposure returned, and the REAL claim is voided `WorkSliceProvenFalse` / `WorkSliceDefaulted` (the prefix is the session's first
+/// verified piece) — uncharged here: the evidence-bound charge is the route's, on the root bond's kernel reservation.
+pub(super) fn void_prefix_v2(
+    builder: &mut TransitionBuilder<'_>,
+    root_id: Hash64,
+    cause: PalwWorkPrefixStageV2,
+    daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    let Some(root) = builder.state.exec_v2.roots.get(&root_id).cloned() else { return Ok(()) };
+    if !matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
+        return Ok(());
+    }
+    let slices: Vec<((Hash64, u32), PalwWorkSliceRowV2)> =
+        builder.state.exec_v2.slices.range((root_id, 0)..=(root_id, u32::MAX)).map(|(key, row)| (*key, row.clone())).collect();
+    for (key, mut row) in slices {
+        row.stage = PalwWorkSliceStageV2::Voided { voided_daa: daa };
+        builder.write_exec_slice(key, Some(row));
+    }
+    release_executor_exposure_v2(builder, &root)?;
+    let mut voided = root;
+    voided.prefix = cause;
+    voided.phase = PalwWorkRootPhaseV2::Voided { from_index: 0, voided_daa: daa };
+    builder.write_exec_root(root_id, Some(voided));
+    let reason = match cause {
+        PalwWorkPrefixStageV2::ProvenFalse { .. } => PalwVoidReasonV2::WorkSliceProvenFalse,
+        _ => PalwVoidReasonV2::WorkSliceDefaulted,
+    };
+    if let Some(claim) = builder.state.claims.get(&root_id).cloned()
+        && !claim.phase.is_terminal()
+    {
+        builder.void_claim(root_id, &claim, daa, reason)?;
+    }
+    Ok(())
+}
+
 /// **TEST ONLY — the door a verification route will one day own.** Marks slice `(claim_id, index)` positively verified and, if that
 /// completes the root, releases the claim's `Final` hold. There is no production caller: the `WORK_SLICE` challenge, public-bond
 /// prosecution and the DA court are the gates (spec section 9) that must supply the evidence, and a harness-signed receipt is not
@@ -990,7 +1171,7 @@ pub(crate) fn mark_slice_verified_for_tests(
     }
     let work = row.range.work().ok_or_else(|| refused("empty range"))?;
     // No kernel claim backs a test-door verification: the cap is unbounded, and settlement caps only where a kernel route exists.
-    row.stage = PalwWorkSliceStageV2::Verified { verified_daa, leg_cap: u64::MAX };
+    row.stage = PalwWorkSliceStageV2::Verified { verified_daa, leg_cap: u64::MAX, route_reward: 0 };
     builder.write_exec_slice((claim_id, index), Some(row));
     let mut root = builder.state.exec_v2.roots.get(&claim_id).cloned().ok_or_else(|| refused("no such root"))?;
     root.pending = root.pending.checked_sub(1).ok_or(PalwStateV2Error::Overflow("exec v2 pending"))?;

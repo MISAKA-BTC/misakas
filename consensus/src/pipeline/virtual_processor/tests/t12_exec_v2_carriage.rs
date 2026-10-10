@@ -126,6 +126,8 @@ fn declaration_for(chain: &T12Chain, claim: Hash64, expiry: u64) -> PalwWorkRoot
         total_work: prefix + 3 * SLICE_WORK,
         boundaries: vec![prefix, prefix + SLICE_WORK, prefix + 2 * SLICE_WORK, prefix + 3 * SLICE_WORK],
         initial_state_root: Hash64::from_u64_word(0x33),
+        // No kernel route on these chains: the prefix stays the REAL claim's own route's (GAP-62 binds it where the route is in force).
+        prefix_claim: Hash64::from_u64_word(0x3F),
         evidence_policy_root: Hash64::from_u64_word(0x34),
         extra_executors: extra,
         expiry_daa: expiry,

@@ -419,3 +419,80 @@ lengthens the consensus closure walk for every anchoring block; republishing cos
 `validate_palw_exec_payload_v2` additionally requires, at or below the fence: `palw_probabilistic_constraints_v1` (the verification
 route, 10.1) and the declaration of `palw_audit_2026_09_11` (A-2's tolerance of undecodable lifecycle payloads, which keeps a tag-130
 carrier block-valid on a fleet that mixes builds — the X8R review, record section 10).
+
+### 10.9 X8R round 3 (2026-10-10): the user's revision applied, G14 completion (GAP-60 to GAP-63) and ADR-0176 D2
+
+Like 10.1–10.8, this subsection records the implementation's choices and is **not normative**; sections 1–9 and the two 2026-10-10
+sections win. It maps the revision onto the code, closes the G14 completion matrix's EXEC-slice gaps, and names what lane BUDGET must
+provide. Nothing here arms a fence or moves a shipped id.
+
+**The revision, row by row.**
+
+| Revision item | Where the code stands |
+| --- | --- |
+| EXEC weight / DAA / blue score / selected parent = 0, settlement included (§1, ADR-0176 D3) | unchanged: P1, P3, P9 pin it; no settlement path writes weight |
+| One root settlement, unique work (§4) | unchanged: `JobWorkUse`, the one `Settled` marker, `sum(paid) == allocation`; now net of the bound claims' route rewards (D2 below) |
+| ADR-0177 non-interference | the slice route demands only claim-specific material (one committed position of one kernel claim); no model bytes, no availability condition. The outsider computes with its own model copy; G14 for a slice is conditional on the verifier having acquired the registered model |
+| ADR-0176 D2: no double rights from root/slice splitting | the D2 rule and hooks below |
+| Rule E (ADR-0178) | EXEC carriers contribute no fork-choice term, so rule E reads nothing from this lane; the root REAL claim is an ordinary REAL claim to it |
+
+**GAP-62 — the initial boundary is linked to the REAL claim's output (the prefix binding).** Before this round the initial boundary was
+the root bond's unchecked declaration. Now, wherever the kernel route is in force, the declaration names a **prefix claim**: a
+kernel-route program claim, by the root bond's kernel bond, of the root class's bound kernel class, whose job carries the **prefix job
+nonce** `H("misaka-palw/exec-v2/prefix-job-nonce/v1"; root claim ‖ prefix work ‖ canonical job ‖ plan root)`. The fold checks, from
+chain state alone (refused by name, nothing written):
+
+1. the job's prompt is the prompt the REAL claim's execution anchor names (`palw_attempt_prompt_ids_v1` at the class's canonical
+   prefill — the IR class record's facts);
+2. the claim's generated tokens are the REAL claim's committed output: `palw_attempt_output_root_v1(ctx, generated) ==
+   claim.output_root`, `ctx` the canonical attempt context J5a/J5b derive (`palw_tir_attempt_context_v1`);
+3. the initial boundary is `token_state(prompt ‖ generated)` (`InitialBoundaryNotLinked` otherwise);
+4. the claim has not failed.
+
+So a wrong initial boundary cannot enter the chain at all, and the REAL claim's own output is now public material that the kernel route
+adjudicates: an outsider with the model convicts a lying prefix claim exactly as a slice's, and the conviction (or a default of its
+withheld material, or a forfeit after its `Final`) voids the whole session — every slice, the root (`Voided { from_index: 0 }`) and the
+REAL claim (`WorkSliceProvenFalse` / `WorkSliceDefaulted`, the prefix being the session's first verified piece). A pending prefix holds
+the root's `Final` like a pending slice. This is the slice binding of 10.1 applied to the root's own work, so it adds no court, seed or
+DA protocol. **Limit:** it binds the REAL claim's *output*; the REAL claim's V2 step trace is still adjudicated on its own route.
+That is G14C's GAP-81, and this binding is the shape GAP-81's option "bind the V2 claim 1:1 to a kernel claim of the same job" would
+take.
+
+**ADR-0176 D2 — one work, one right, one budget.** A session's work is paid once, from the root claim's single allocation `A`: the
+root executor's reward leg that its REAL `Final` releases (BUDGET clips it before any split, §2.6 of its design). The kernel claims
+that verify the prefix and the slices are verification vehicles. Each draws `Q` from its own producer's window, because a claim is a
+claim (D2's `m·N` claims), but no reward right of its own. Their route `Final` reward is an advance on the same work's share of `A`.
+At settlement, with `e_i` a piece's work share (capped as in 10.5) and `r_i` the route reward paid on its bound claim:
+
+```text
+slice executor's leg  = e_i − min(e_i, r_i)        (aggregated per bond)
+root executor's leg   = A − Σ r_i (prefix included) − Σ slice legs
+Σ legs + root leg + Σ r_i = A                      (when Σ r_i ≤ A; nothing minted, the withheld Σ r_i is never paid twice)
+```
+
+A piece whose share is at least its route reward is paid exactly its share in total; a piece whose share is smaller keeps its route
+reward and the root executor bears the difference. EXEC weight stays 0; carriers pay no worker share (`B` = 0 per carrier).
+
+**Hooks for lane BUDGET (`palw_bond_budget_v1`; the engine is BUDGET's, not built here).**
+
+| Hook | Called / read where | What the engine does |
+| --- | --- | --- |
+| H-3 (BUDGET's name) | an `EXEC_SLICE` carrier | nothing: the lane mints nothing, so no carrier calls `bond_budget_consume_block_v1` |
+| H-3a `palw_bond_budget_bind_vehicle_v1(kernel_claim, root_claim)` | the declaration (the prefix claim) and slice admission (the slice's claim); the read `PalwChainStateV2::exec_v2_root_of_kernel_claim_v1` answers it at any time | re-attributes the bound kernel claim's `R` (and `F`, 0 today) to the root claim's reservation: its route `FinalReward` is consumed from the ROOT's `R` (Clip), never from a fresh reservation on the executor's bond; its own `Q` and `d + W` stay as they are (D4). A route reward paid before the binding was charged to the executor's own budget; the settlement still nets it from `A`, so the right is never doubled |
+| H-3b | the root claim's `Final` | the reward is clipped before the split; `settle_at_final_v2` splits the clipped amount and nets the bound claims' route rewards, so `consume(root, R, A, Clip)` covers the whole session |
+
+**GAP-61 — superseded by the Lead's GAP-81 decision; the seam is re-scoped, not replaced.** OPVB's reward gate is now per claim
+verification route (`opv/bootstrap-beacon` `c3221bc34`, unbuilt at this writing): the gate's `Onboarded` grants a V2-root claim nothing
+beyond the old rules, and only kernel-route claims earn the new rewards, each through `opv_gate_v1`. A session's REAL root is a V2
+claim, so its admission is the legacy channel's (registry lifecycle, Panel room, seating, bond share — Panel seat readiness), never the
+gate's. The composed real-node run cannot prove seat readiness (possession proofs) on its harness, so `exec_v2_test_admit_class_v1`
+stays and now stands for that channel's admission; it still lives only in `cfg(test)` builds. The per-route split is already the
+session's: the root earns on the legacy channel, every prefix and slice claim is a kernel-route claim the route gates and adjudicates,
+and the legs are a re-division of the root's legacy-channel allocation (D2 above). No code of this lane calls the gate; when OPVB
+integrates, `PalwRewardGateV1::channel()` names the channel each leg draws from.
+
+**GAP-60 — the slice DA default on the real node.** A slice whose kernel claim's committed position is withheld is demanded by an
+outside bond from the fresh verifier's finding; at the demand's deadline the route defaults the claim (`Unavailable`), and the
+same block's sync defaults the slice, voids its suffix, the root and the REAL claim (`WorkSliceDefaulted`) and charges the root bond
+nothing. Rule 4 (continuity) is exercised on the node too: a slice whose kernel job's prompt does not continue the stream is carried,
+anchored and refused `PredecessorMismatch`, crediting nothing.

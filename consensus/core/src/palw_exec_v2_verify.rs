@@ -30,6 +30,8 @@ use misaka_palw_kernel::lifecycle::ClaimStateV1;
 pub const PALW_EXEC_V2_SLICE_JOB_NONCE_DOMAIN_V1: &[u8] = b"misaka-palw/exec-v2/slice-job-nonce/v1";
 /// The domain of a token state.
 pub const PALW_EXEC_V2_TOKEN_STATE_DOMAIN_V1: &[u8] = b"misaka-palw/exec-v2/token-state/v1";
+/// The domain of the prefix job nonce (GAP-62, X8R round 3).
+pub const PALW_EXEC_V2_PREFIX_JOB_NONCE_DOMAIN_V1: &[u8] = b"misaka-palw/exec-v2/prefix-job-nonce/v1";
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
     blake2b_simd::Params::new().hash_length(64).key(domain).to_state()
@@ -67,6 +69,113 @@ pub fn palw_exec_v2_slice_job_nonce_v1(slice: &PalwWorkSliceV1) -> Hash64 {
     state.update(slice.canonical_job_id.as_byte_slice());
     state.update(slice.plan_root.as_byte_slice());
     finish(state)
+}
+
+/// **The nonce of the kernel job that carries a root's own prefix** (GAP-62): `H(domain; root claim ‖ prefix work ‖ canonical job ‖
+/// plan root)`, in a domain of its own, so the prefix's job is this root's and no other root's, and never a slice's.
+pub fn palw_exec_v2_prefix_job_nonce_v1(
+    root_claim_id: &Hash64,
+    prefix_work: u64,
+    canonical_job_id: &Hash64,
+    plan_root: &Hash64,
+) -> Hash64 {
+    let mut state = keyed(PALW_EXEC_V2_PREFIX_JOB_NONCE_DOMAIN_V1);
+    state.update(root_claim_id.as_byte_slice());
+    state.update(&prefix_work.to_le_bytes());
+    state.update(canonical_job_id.as_byte_slice());
+    state.update(plan_root.as_byte_slice());
+    finish(state)
+}
+
+/// **The REAL claim's public job** (GAP-62): the prompt its execution anchor `identity` names at the IR class's canonical prefill, and
+/// the job context its output root is committed under — exactly J5a/J5b's canonical attempt context
+/// ([`crate::palw_tir_attempt_v1::palw_tir_attempt_context_v1`], the prefill draw) with the anchor's prompt root in the class's form
+/// under the network's `network_form`. Everything here is a function of chain data. `None` for an unrecorded identity, a context too
+/// narrow for a canonical job, or a prompt past the prompt-id tree.
+pub fn palw_exec_v2_real_job_v1(
+    facts: &crate::palw_tir_attempt_v1::PalwTirJobFactsV1,
+    identity: &Hash64,
+    network_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Option<(Vec<u32>, crate::palw_v2::PalwJobContextV2)> {
+    use crate::palw_tir_attempt_v1::{palw_tir_attempt_canonical_of_v1, palw_tir_attempt_context_v1, palw_tir_attempt_prompt_root_v1};
+    if *identity == Hash64::default() {
+        return None;
+    }
+    let canonical = palw_tir_attempt_canonical_of_v1(facts.max_context)?;
+    let prompt = crate::palw_attempt_rules_v1::palw_attempt_prompt_ids_v1(identity, u64::from(facts.token_bound), canonical.0);
+    let prompt_root = palw_tir_attempt_prompt_root_v1(facts, identity, canonical.0, network_form)?;
+    Some((prompt, palw_tir_attempt_context_v1(facts, identity, canonical, prompt_root)))
+}
+
+/// What the fold read for a root's prefix binding (GAP-62): the declaration's facts and the REAL claim's public job.
+#[derive(Clone, Copy, Debug)]
+pub struct PalwExecV2PrefixInputsV1<'a> {
+    pub root_claim_id: Hash64,
+    pub prefix_work: u64,
+    pub canonical_job_id: Hash64,
+    pub plan_root: Hash64,
+    pub initial_state_root: Hash64,
+    /// The prompt the REAL claim's anchor names ([`palw_exec_v2_real_job_v1`]).
+    pub real_prompt: &'a [u32],
+    /// The context the REAL claim's output root is committed under.
+    pub real_context: &'a crate::palw_v2::PalwJobContextV2,
+    /// The REAL claim's committed output root.
+    pub real_output_root: Hash64,
+}
+
+/// **The prefix binding** (GAP-62, X8R round 3): does the kernel claim `row` (its job `job` as the route holds it) carry exactly the REAL
+/// claim's run, for the root class's kernel `binding`, executed by the root bond (kernel digest `root_kernel_bond`), judged at `daa`?
+///
+/// 1. a single-program claim of the bound kernel class, by the root bond, of a job carrying the prefix job nonce, not failed;
+/// 2. its job's prompt is the prompt the REAL claim's anchor names;
+/// 3. its generated tokens are the REAL claim's committed output: `palw_attempt_output_root_v1(ctx, generated) == output_root`;
+/// 4. the declared initial boundary is `token_state(prompt ‖ generated)`.
+///
+/// So the initial boundary is linked to the REAL claim's output from public material alone, and the REAL claim's run is a claim the
+/// route adjudicates: a lie in it is an outsider's conviction of the prefix claim, a withheld position its default. Each mismatch is
+/// named; a caller writes nothing on a refusal.
+pub fn palw_exec_v2_prefix_binding_v1(
+    inputs: &PalwExecV2PrefixInputsV1<'_>,
+    binding: &KernelBindingRowV1,
+    row: &ClaimRowV1,
+    job: Option<&KernelJobV1>,
+    root_kernel_bond: &[u8; 64],
+    daa: u64,
+) -> Result<(), crate::palw_work_slice_v2::PalwWorkRootRefusalV2> {
+    use crate::palw_work_slice_v2::PalwWorkRootRefusalV2::{
+        InitialBoundaryNotLinked, PrefixClaimFailed, PrefixKindUnsupported, PrefixNotBound,
+    };
+    let ClaimBodyV1::Program { claim, .. } = &row.body else {
+        return Err(PrefixKindUnsupported);
+    };
+    if matches!(palw_exec_v2_claim_outcome_v1(row, daa), PalwSliceVerificationV1::ProvenFalse | PalwSliceVerificationV1::Defaulted) {
+        return Err(PrefixClaimFailed);
+    }
+    if Hash64::from_bytes(row.class_binding_id) != binding.kernel_class {
+        return Err(PrefixNotBound("class"));
+    }
+    if row.producer != *root_kernel_bond || claim.producer_bond != *root_kernel_bond {
+        return Err(PrefixNotBound("executor"));
+    }
+    let job = job.ok_or(PrefixNotBound("job"))?;
+    if claim.job_id != row.job_id || job.id() != row.job_id || job.class_binding_id != row.class_binding_id {
+        return Err(PrefixNotBound("job"));
+    }
+    let nonce =
+        palw_exec_v2_prefix_job_nonce_v1(&inputs.root_claim_id, inputs.prefix_work, &inputs.canonical_job_id, &inputs.plan_root);
+    if Hash64::from_bytes(job.nonce) != nonce {
+        return Err(PrefixNotBound("job nonce"));
+    }
+    if job.prompt != inputs.real_prompt {
+        return Err(PrefixNotBound("prompt"));
+    }
+    if crate::palw_attempt_rules_v1::palw_attempt_output_root_v1(inputs.real_context, &claim.generated) != inputs.real_output_root {
+        return Err(PrefixNotBound("output"));
+    }
+    if inputs.initial_state_root != palw_exec_v2_token_state_root_v1(&[&job.prompt, &claim.generated]) {
+        return Err(InitialBoundaryNotLinked);
+    }
+    Ok(())
 }
 
 /// **What a kernel claim's row says of its slice.** Read every block the row changes (and once at admission).
@@ -116,8 +225,13 @@ pub fn palw_exec_v2_claim_outcome_v1(row: &ClaimRowV1, daa: u64) -> PalwSliceVer
 ///   until the earlier executors' horizons passed kept their whole legs. The liability the cap stands for is the one that existed while
 ///   the claim could still be convicted; its later release changes neither the risk nor the work.
 pub fn palw_exec_v2_leg_cap_v1(row: &ClaimRowV1, claim_reward: u64) -> u64 {
-    let reward = if row.rewarded { claim_reward } else { 0 };
-    row.reserved.saturating_sub(reward)
+    row.reserved.saturating_sub(palw_exec_v2_route_reward_v1(row, claim_reward))
+}
+
+/// **The route's own `Final` reward paid on a kernel claim** (`claim_reward` when the route rewarded it, else 0) — what ADR-0176 D2's
+/// netting at the root's settlement subtracts from the same work's share of the root's one allocation (X8R round 3).
+pub fn palw_exec_v2_route_reward_v1(row: &ClaimRowV1, claim_reward: u64) -> u64 {
+    if row.rewarded { claim_reward } else { 0 }
 }
 
 /// **The verification binding** (admission rule 5, amendment 1): does the kernel claim `row` (the claim `slice.evidence_root` names, its
@@ -286,6 +400,10 @@ pub struct PalwExecV2RootObservationV1 {
     pub root_bond: String,
     pub extra_executors: Vec<String>,
     pub slices: Vec<PalwExecV2SliceObservationV1>,
+    /// GAP-62 (appended): the prefix claim that carries the REAL claim's run, its stage, and its lifecycle as the route holds it.
+    pub prefix_claim: String,
+    pub prefix_stage: String,
+    pub prefix_verification_state: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -338,6 +456,23 @@ fn bond_name(bond: &crate::palw_state_v2::PalwBondKeyV2) -> String {
     format!("{}:{}", bond.0.transaction_id, bond.0.index)
 }
 
+/// A kernel claim's lifecycle as op 240 names it: `Convicted`, `ForfeitedAfterFinal` (a Final claim that forfeited inside its horizon),
+/// else the route's state.
+fn claim_state_name(
+    route: Option<&crate::palw_kernel_route_v1::PalwKernelRouteStateV1>,
+    claim: &Hash64,
+    tip_daa: u64,
+) -> Option<String> {
+    route
+        .and_then(|r| r.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(claim))))
+        .and_then(|bytes| borsh::from_slice::<ClaimRowV1>(bytes).ok())
+        .map(|claim| match (claim.convicted, &claim.life.state, palw_exec_v2_claim_outcome_v1(&claim, tip_daa)) {
+            (true, _, _) => "Convicted".to_string(),
+            (false, ClaimStateV1::Final { .. }, PalwSliceVerificationV1::Defaulted) => "ForfeitedAfterFinal".to_string(),
+            (false, state, _) => format!("{state:?}"),
+        })
+}
+
 /// The statement a `Verified` slice carries.
 pub const PALW_EXEC_V2_VERIFIED_STATEMENT_V1: &str = "a Verified slice is one whose kernel-route claim reached Final with no conviction or \
 default; it is not a proof of physical execution time";
@@ -380,16 +515,7 @@ pub fn palw_exec_v2_observation_v1(
                 carrier: row.carrier.to_string(),
                 accepted_daa: row.accepted_daa,
                 verification_claim: row.evidence_root.to_string(),
-                verification_state: route
-                    .and_then(|r| {
-                        r.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&row.evidence_root)))
-                    })
-                    .and_then(|bytes| borsh::from_slice::<ClaimRowV1>(bytes).ok())
-                    .map(|claim| match (claim.convicted, &claim.life.state, palw_exec_v2_claim_outcome_v1(&claim, tip_daa)) {
-                        (true, _, _) => "Convicted".to_string(),
-                        (false, ClaimStateV1::Final { .. }, PalwSliceVerificationV1::Defaulted) => "ForfeitedAfterFinal".to_string(),
-                        (false, state, _) => format!("{state:?}"),
-                    }),
+                verification_state: claim_state_name(route, &row.evidence_root, tip_daa),
             })
             .collect();
         observed.push(PalwExecV2RootObservationV1 {
@@ -410,6 +536,12 @@ pub fn palw_exec_v2_observation_v1(
             root_bond: bond_name(&root.root_bond),
             extra_executors: root.extra_executors.iter().map(bond_name).collect(),
             slices,
+            prefix_claim: root.prefix_claim.to_string(),
+            prefix_stage: format!("{:?}", root.prefix),
+            prefix_verification_state: match root.prefix {
+                crate::palw_work_slice_v2::PalwWorkPrefixStageV2::Unbound => None,
+                _ => claim_state_name(route, &root.prefix_claim, tip_daa),
+            },
         });
     }
     PalwExecV2ObservationV1 {
@@ -501,6 +633,16 @@ mod tests {
         let mut other = base.clone();
         other.plan_root = Hash64::from_u64_word(0xF0);
         assert_ne!(palw_exec_v2_slice_job_nonce_v1(&other), nonce, "plan");
+        // A prefix job is never a slice job (its own domain), and moves with each field it binds.
+        let prefix = palw_exec_v2_prefix_job_nonce_v1(&base.root_claim_id, 100, &base.canonical_job_id, &base.plan_root);
+        assert_ne!(prefix, nonce, "the prefix's job is no slice's");
+        assert_ne!(palw_exec_v2_prefix_job_nonce_v1(&Hash64::from_u64_word(1), 100, &base.canonical_job_id, &base.plan_root), prefix);
+        assert_ne!(palw_exec_v2_prefix_job_nonce_v1(&base.root_claim_id, 101, &base.canonical_job_id, &base.plan_root), prefix);
+        assert_ne!(palw_exec_v2_prefix_job_nonce_v1(&base.root_claim_id, 100, &Hash64::from_u64_word(1), &base.plan_root), prefix);
+        assert_ne!(
+            palw_exec_v2_prefix_job_nonce_v1(&base.root_claim_id, 100, &base.canonical_job_id, &Hash64::from_u64_word(1)),
+            prefix
+        );
         // The executor, the results and the evidence are the claim's to bind, not the job's.
         let mut other = base.clone();
         other.result_state_root = Hash64::from_u64_word(0xF1);

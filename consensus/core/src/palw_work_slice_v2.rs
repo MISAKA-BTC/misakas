@@ -109,8 +109,14 @@ pub struct PalwWorkRootDeclarationV2 {
     /// The plan: `boundaries[0]` is the root's own admitted prefix (the claim's canonical work), `boundaries[i]..boundaries[i+1]`
     /// is slice `i`, `boundaries.last()` is `total_work`. Strictly increasing.
     pub boundaries: Vec<u64>,
-    /// The state root at the end of the prefix: slice 0's predecessor.
+    /// The state root at the end of the prefix: slice 0's predecessor. **GAP-62 (X8R round 3):** where the kernel route is in force
+    /// it is not the root bond's to choose — it must be `token_state(prompt ‖ generated)` of [`Self::prefix_claim`], whose prompt is
+    /// the REAL claim's anchored prompt and whose run is the REAL claim's committed output.
     pub initial_state_root: Hash64,
+    /// **GAP-62: the prefix claim** — the kernel-route program claim, by the root bond, that carries the REAL claim's own run (the
+    /// prefix `[0, boundaries[0])`) as public, adjudicable material (`palw_exec_v2_prefix_binding_v1`). Unread where no kernel route
+    /// is in force (the arithmetic chains), where the prefix stays the REAL claim's own route's.
+    pub prefix_claim: Hash64,
     /// The DA and evidence policy the slices' commitments are held to.
     pub evidence_policy_root: Hash64,
     /// Authorised executors besides the root bond: strictly ascending, at most [`PALW_EXEC_V2_MAX_EXTRA_EXECUTORS`].
@@ -136,6 +142,7 @@ impl PalwWorkRootDeclarationV2 {
             state.update(&boundary.to_le_bytes());
         }
         state.update(self.initial_state_root.as_byte_slice());
+        state.update(self.prefix_claim.as_byte_slice());
         state.update(self.evidence_policy_root.as_byte_slice());
         state.update(&(self.extra_executors.len() as u64).to_le_bytes());
         for bond in &self.extra_executors {
@@ -278,6 +285,26 @@ pub enum PalwWorkRootRefusalV2 {
     /// Amendment 1: the session's plan root is the bound kernel class's verification plan.
     #[error("the root's plan root is not its class's kernel verification plan")]
     PlanNotKernels,
+    /// **GAP-62 (X8R round 3): the REAL claim's public job cannot be derived** — its class has no IR record (facts), its context is too
+    /// narrow for a canonical job, or its job identity is unrecorded — so no prefix claim can be checked against it.
+    #[error("the root claim's anchored prompt and job context cannot be derived, so its prefix cannot be bound")]
+    PrefixNotDerivable,
+    /// GAP-62: the declaration names no kernel claim the route holds.
+    #[error("the declaration's prefix claim is not held by the kernel route")]
+    PrefixClaimMissing,
+    /// GAP-62: the prefix claim is a pipeline claim (pipeline-class sessions await a segment state, as their slices do).
+    #[error("the prefix claim is not a single-program kernel claim")]
+    PrefixKindUnsupported,
+    /// GAP-62: the prefix claim was convicted, defaulted or timed out.
+    #[error("the prefix claim has failed (convicted, defaulted or timed out)")]
+    PrefixClaimFailed,
+    /// GAP-62: the prefix claim does not carry the REAL claim's run — the named field (class, executor, job, job nonce, prompt,
+    /// output) differs.
+    #[error("the prefix claim does not carry the root claim's run: its {0} differs")]
+    PrefixNotBound(&'static str),
+    /// GAP-62: the declared initial boundary is not `token_state(prompt ‖ generated)` of the prefix claim.
+    #[error("the initial boundary is not the token state of the REAL claim's prompt and committed output")]
+    InitialBoundaryNotLinked,
 }
 
 /// **Validate a plan**: `boundaries` is a strictly increasing list of at least two values whose first is the (positive) root
@@ -364,6 +391,42 @@ pub struct PalwWorkRootV2 {
     /// Accepted but unverified slices.
     pub pending: u32,
     pub phase: PalwWorkRootPhaseV2,
+    /// **GAP-62: the prefix claim** (the declaration's), and its stage. `Unbound` where no kernel route was in force at the declaration.
+    pub prefix_claim: Hash64,
+    pub prefix: PalwWorkPrefixStageV2,
+}
+
+/// **The stage of a root's own prefix** (GAP-62, X8R round 3): the REAL claim's run, carried by the root bond's prefix claim on the
+/// kernel route and followed exactly as a slice follows its claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwWorkPrefixStageV2 {
+    /// No kernel route was in force at the declaration: nothing binds the prefix, which stays the REAL claim's own route's (the
+    /// arithmetic chains of the fold tests and the pipeline tests below the route).
+    Unbound,
+    /// The prefix claim is live and undecided: the root's `Final` waits.
+    Pending,
+    /// The prefix claim reached `Final`; `route_reward` is the route's own `Final` reward on it (netted from the root's allocation at
+    /// settlement: ADR-0176 D2, one work, one right).
+    Verified { verified_daa: u64, route_reward: u64 },
+    /// The prefix claim was convicted: the REAL claim's run is proven false and the whole session is void.
+    ProvenFalse { daa: u64 },
+    /// The prefix claim defaulted (withheld material, a timeout, a forfeit after `Final`): the whole session is void.
+    Defaulted { daa: u64 },
+}
+
+impl PalwWorkPrefixStageV2 {
+    /// Does the prefix let the root reach its `Final`?
+    pub fn admits_final(&self) -> bool {
+        matches!(self, Self::Unbound | Self::Verified { .. })
+    }
+
+    /// The route reward the prefix's claim was paid (0 unless verified).
+    pub fn route_reward(&self) -> u64 {
+        match self {
+            Self::Verified { route_reward, .. } => *route_reward,
+            _ => 0,
+        }
+    }
 }
 
 impl PalwWorkRootV2 {
@@ -395,6 +458,7 @@ impl PalwWorkRootV2 {
             && self.next_index == self.slice_count()
             && self.accepted_work == self.slice_work_total()
             && self.verified_work == self.accepted_work
+            && self.prefix.admits_final()
     }
 
     /// Is the root still able to accept slices?
@@ -412,7 +476,10 @@ pub enum PalwWorkSliceStageV2 {
     /// paid for it at the root's settlement — the reservation its kernel claim held when it verified, less the route's own `Final`
     /// reward on that claim ([`crate::palw_exec_v2_verify::palw_exec_v2_leg_cap_v1`], spec §10.5 as revised by the X8R round-2
     /// review): fixed when the slice verifies, so no later release of the reservation and no timing of the root's `Final` moves it.
-    Verified { verified_daa: u64, leg_cap: u64 },
+    ///
+    /// `route_reward` (X8R round 3, ADR-0176 D2) is the route's `Final` reward paid on that claim, snapshotted with the cap: the
+    /// settlement nets it from the slice's share of the root's one allocation, so the work is paid once.
+    Verified { verified_daa: u64, leg_cap: u64, route_reward: u64 },
     /// Void: the root failed from this slice back (a false predecessor voids its dependents), or the root expired.
     Voided { voided_daa: u64 },
     /// **Amendment 1: its kernel claim was convicted** — the slice is proven false; it and every later slice of its root are void.
@@ -488,6 +555,8 @@ pub struct PalwSliceAdmissionV2 {
     pub work: u64,
     pub verified_at: Option<u64>,
     pub leg_cap: u64,
+    /// The route's `Final` reward on the claim when it is already Final at admission (0 otherwise).
+    pub route_reward: u64,
 }
 
 /// **The named refusals of slice admission, in the spec's order** (§3 rules 1–6). A refused carrier writes nothing.
@@ -733,6 +802,7 @@ mod tests {
             total_work: 100,
             boundaries: vec![10, 40, 70, 100],
             initial_state_root: h(5),
+            prefix_claim: h(11),
             evidence_policy_root: h(6),
             extra_executors: vec![bond(8), bond(9)],
             expiry_daa: 5_000,
@@ -788,6 +858,7 @@ mod tests {
             ("total", Box::new(|d| d.total_work = 101)),
             ("boundaries", Box::new(|d| d.boundaries[1] = 41)),
             ("initial", Box::new(|d| d.initial_state_root = h(99))),
+            ("prefix claim", Box::new(|d| d.prefix_claim = h(99))),
             ("policy", Box::new(|d| d.evidence_policy_root = h(99))),
             ("executors", Box::new(|d| d.extra_executors.push(bond(10)))),
             ("expiry", Box::new(|d| d.expiry_daa += 1)),
@@ -859,6 +930,8 @@ mod tests {
             verified_work: 0,
             pending: 0,
             phase: PalwWorkRootPhaseV2::Open,
+            prefix_claim: d.prefix_claim,
+            prefix: PalwWorkPrefixStageV2::Unbound,
         }
     }
 
@@ -881,6 +954,17 @@ mod tests {
         assert!(!root.ready_for_final(), "partly verified is not ready");
         root.verified_work = 90;
         assert!(root.ready_for_final());
+        // GAP-62: a bound prefix must be verified too.
+        for (stage, ready) in [
+            (PalwWorkPrefixStageV2::Pending, false),
+            (PalwWorkPrefixStageV2::ProvenFalse { daa: 4 }, false),
+            (PalwWorkPrefixStageV2::Defaulted { daa: 4 }, false),
+            (PalwWorkPrefixStageV2::Verified { verified_daa: 4, route_reward: 7 }, true),
+            (PalwWorkPrefixStageV2::Unbound, true),
+        ] {
+            root.prefix = stage;
+            assert_eq!(root.ready_for_final(), ready, "{stage:?}");
+        }
         root.phase = PalwWorkRootPhaseV2::Voided { from_index: 1, voided_daa: 5 };
         assert!(!root.ready_for_final(), "a void root never settles");
         root.phase = PalwWorkRootPhaseV2::Settled { settled_daa: 5 };
@@ -950,7 +1034,7 @@ mod tests {
         assert_eq!(borsh::from_slice::<PalwExecV2StateV1>(&bytes).unwrap(), state);
         // Stage and phase discriminants are pinned: they are in the state root.
         assert_eq!(borsh::to_vec(&PalwWorkSliceStageV2::Pending).unwrap()[0], 0);
-        assert_eq!(borsh::to_vec(&PalwWorkSliceStageV2::Verified { verified_daa: 1, leg_cap: 0 }).unwrap()[0], 1);
+        assert_eq!(borsh::to_vec(&PalwWorkSliceStageV2::Verified { verified_daa: 1, leg_cap: 0, route_reward: 0 }).unwrap()[0], 1);
         assert_eq!(borsh::to_vec(&PalwWorkSliceStageV2::Voided { voided_daa: 1 }).unwrap()[0], 2);
         assert_eq!(borsh::to_vec(&PalwWorkRootPhaseV2::Open).unwrap()[0], 0);
         assert_eq!(borsh::to_vec(&PalwWorkRootPhaseV2::Complete).unwrap()[0], 1);
