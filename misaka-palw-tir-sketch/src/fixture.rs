@@ -136,6 +136,12 @@ pub const FX_EF: u32 = 8;
 
 /// **The dense + MoE fixture** (module note): schedule `[dense, moe]`.
 pub fn dense_moe_v1(seed: u64) -> TirSketchFixtureV1 {
+    dense_moe_windowed_v1(seed, HISTORY_BOUND_V1_SMALL)
+}
+
+/// [`dense_moe_v1`] whose attention keeps a sliding window of `window` rows (`dense_moe_v1` is `window = HISTORY_BOUND_V1_SMALL`):
+/// past `window` positions every `Hist` window slides by one row a position.
+pub fn dense_moe_windowed_v1(seed: u64, window: u32) -> TirSketchFixtureV1 {
     let (v, d, hq, hkv, dh, f, e, ef) = (FX_V, FX_D, FX_HQ, FX_HKV, FX_DH, FX_F, FX_E, FX_EF);
     let mut m = Model::new(v);
     let tok = m.p("tok_embd", DType::I8, &[v, d], false, -128, 127);
@@ -179,8 +185,8 @@ pub fn dense_moe_v1(seed: u64) -> TirSketchFixtureV1 {
         let x = b.narrow_a16(row, lift, p2, z, -32767, 32767, DType::I16);
         b.finish(&[x])
     };
-    let kc = m.pb.hist_state("k_cache", DType::I16, &[hkv, dh], HISTORY_BOUND_V1_SMALL, true);
-    let vc = m.pb.hist_state("v_cache", DType::I16, &[hkv, dh], HISTORY_BOUND_V1_SMALL, true);
+    let kc = m.pb.hist_state("k_cache", DType::I16, &[hkv, dh], window, true);
+    let vc = m.pb.hist_state("v_cache", DType::I16, &[hkv, dh], window, true);
     let dense = {
         let mut b = m.pb.block("dense", carry.clone());
         let x = Ref::CarryIn(0);

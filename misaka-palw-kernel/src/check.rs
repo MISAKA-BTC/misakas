@@ -1,4 +1,4 @@
-//! **The deterministic plan checker** (RFC-0005 §K.4 step 2, RFC-0011 §16.2–§16.3).
+//! **The deterministic plan checker** (`docs/design/palw/versioned-kernels.md` §K.4 step 2, RFC-0011 §16.2–§16.3).
 //!
 //! Everything a plan states is re-derived here from the program and the descriptor and compared:
 //!
@@ -16,7 +16,7 @@
 //!    the descriptor's target, and the declaration may not exceed it;
 //! 8. last, the descriptor is **Active** at the DAA (else `KERNEL_NOT_ACTIVE`, which therefore always means "expressible, not active").
 //!
-//! Static admission does not assert that future outputs are correct (RFC-0005 §K.4).
+//! Static admission does not assert that future outputs are correct (Kernel design §K.4).
 
 use misaka_palw_tir::program::TirProgramV1;
 use misaka_palw_tir::{DType, Prim};
@@ -213,7 +213,7 @@ pub fn check_plan_with_v1(
         return Err(O::IncompleteCoverage { what: "the state boundaries are not one per state, as declared".into() });
     }
     // 6. Budgets and ceilings.
-    let budgets = derive_budgets(program, &expected);
+    let budgets = derive_budgets(descriptor, program, &expected, plan.max_positions);
     if plan.budgets != budgets {
         return Err(O::IncompleteCoverage { what: "the declared budgets are not the derived ones".into() });
     }

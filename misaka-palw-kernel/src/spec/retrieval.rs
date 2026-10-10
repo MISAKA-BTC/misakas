@@ -350,10 +350,21 @@ impl RetrievalFaultV1 {
 
 /// An item opened at `id` against the snapshot: authenticated, and of the snapshot's shape.
 fn authentic(root: &RetrievalRootV1, id: u64, item: &RetrievalItemV1, path: &[Digest]) -> Result<(), String> {
-    let s = &root.snapshot;
-    if item.key.len() != s.dim as usize || item.payload.len() > s.max_payload as usize {
+    if !well_shaped(root, item) {
         return Err("the opened item is not of the snapshot's shape".into());
     }
+    authenticated(root, id, item, path)
+}
+
+/// Of the snapshot's shape: a key of length `D`, a payload of at most `P`.
+fn well_shaped(root: &RetrievalRootV1, item: &RetrievalItemV1) -> bool {
+    item.key.len() == root.snapshot.dim as usize && item.payload.len() <= root.snapshot.max_payload as usize
+}
+
+/// **The leaf at `id` is this item's**, whatever its shape (GAP-52): a registrant can commit a leaf that is no well-formed item, and
+/// the courts must still judge a claim that names it.
+fn authenticated(root: &RetrievalRootV1, id: u64, item: &RetrievalItemV1, path: &[Digest]) -> Result<(), String> {
+    let s = &root.snapshot;
     if path.len() > depth_v1(s.items) as usize || !merkle_verify_v1(item.leaf(id), id, s.items, path, &s.merkle_root) {
         return Err("the opening does not authenticate against the snapshot root".into());
     }
@@ -361,7 +372,9 @@ fn authentic(root: &RetrievalRootV1, id: u64, item: &RetrievalItemV1, path: &[Di
 }
 
 /// **The retrieval court.** `Ok(())`: convicted; `Err(why)`: dismissed (not authentic, or no fault). Reads the class root, the job's
-/// query and the claimed result (all on chain) and the filing — nothing else.
+/// query and the claimed result (all on chain) and the filing — nothing else. **Total over the snapshot (GAP-52):** the item at an id
+/// is opened by its leaf alone; one that is not of the snapshot's shape is no item the rule can retrieve, so a claim that names it is
+/// wrong (`WrongItem` convicts) and it beats nothing (`MissedBetter` dismisses).
 pub fn judge_retrieval_fault_v1(
     root: &RetrievalRootV1,
     query: &[i32],
@@ -371,7 +384,10 @@ pub fn judge_retrieval_fault_v1(
     match fault {
         RetrievalFaultV1::WrongItem { index, item, path } => {
             let e = result.get(*index as usize).ok_or("no such entry")?;
-            authentic(root, e.id, item, path)?;
+            authenticated(root, e.id, item, path)?;
+            if !well_shaped(root, item) {
+                return Ok(());
+            }
             let opened_wrong = key_digest_v1(&item.key) != e.key_digest || payload_digest_v1(&item.payload) != e.payload_digest;
             let score_wrong = root.score(query, &item.key)? != e.score;
             if opened_wrong || score_wrong { Ok(()) } else { Err("the entry is the snapshot's item with its score: no fault".into()) }
@@ -380,7 +396,10 @@ pub fn judge_retrieval_fault_v1(
             if result.iter().any(|e| e.id == *id) {
                 return Err("the item is in the result (a wrong entry is a WrongItem filing)".into());
             }
-            authentic(root, *id, item, path)?;
+            authenticated(root, *id, item, path)?;
+            if !well_shaped(root, item) {
+                return Err("a malformed item is no item the rule retrieves: it beats nothing".into());
+            }
             let last = result.last().ok_or("an empty result")?;
             let better = root.kappa(root.score(query, &item.key)?, *id) > root.kappa(last.score, last.id);
             if better { Ok(()) } else { Err("the item does not beat the last entry: no fault".into()) }
@@ -424,6 +443,35 @@ pub fn classify_slice_response_v1(root: &RetrievalRootV1, t: u64, bytes: &[u8]) 
         values.push(vec![Some(TensorWireV1::of(&key_tensor(&item.key))), Some(TensorWireV1::of(&payload_tensor(&item.payload)))]);
     }
     Ok(ServedPositionV1 { values, inputs: Vec::new() })
+}
+
+/// **The answer to an entry demand** (stage `0xC0 + s`, GAP-52): the item the claim's entry names, and its path.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct EntryResponseV1 {
+    pub item: RetrievalItemV1,
+    pub path: Vec<Digest>,
+}
+
+/// **Classify an entry demand's response**: the item at the entry's id, authenticated by its leaf against the snapshot root — of any
+/// shape (a malformed one is served too: then `WrongItem` convicts from it, the producer could not have retrieved it). Served as one
+/// value pair `[key, payload]` like a slice item. `malformed` for undecodable bytes or an item past the parse bounds, `fake_opening`
+/// for one that does not reach the root at the entry's id.
+pub fn classify_entry_response_v1(
+    root: &RetrievalRootV1,
+    entry: &RetrievedV1,
+    bytes: &[u8],
+) -> Result<ServedPositionV1, &'static str> {
+    let r: EntryResponseV1 = borsh::from_slice(bytes).map_err(|_| "malformed")?;
+    if r.item.key.len() > MAX_RETRIEVAL_DIM_V1 as usize || r.item.payload.len() > MAX_RETRIEVAL_PAYLOAD_V1 as usize {
+        return Err("malformed");
+    }
+    if authenticated(root, entry.id, &r.item, &r.path).is_err() {
+        return Err("fake_opening");
+    }
+    Ok(ServedPositionV1 {
+        values: vec![vec![Some(TensorWireV1::of(&key_tensor(&r.item.key))), Some(TensorWireV1::of(&payload_tensor(&r.item.payload)))]],
+        inputs: Vec::new(),
+    })
 }
 
 /// The items of a served slice (what an outsider reads back from the ledger).
@@ -654,5 +702,73 @@ mod tests {
         assert_eq!(classify_slice_response_v1(&root, 2, &borsh::to_vec(&r).unwrap()), Err("malformed"));
         assert_eq!(classify_slice_response_v1(&root, 3, &bytes), Err("malformed"), "no slice 3");
         assert_eq!(classify_slice_response_v1(&root, 2, &[1, 2, 3]), Err("malformed"));
+    }
+
+    /// **GAP-52**: a registrant commits a leaf that is no well-formed item (a key of another length). A claim that names it is
+    /// convicted from the opened item alone (`WrongItem`), the item never "beats" an entry (`MissedBetter` dismissed), and an entry
+    /// demand serves it (authenticated by its leaf) so any bond can file that conviction; a forged path is a fake opening.
+    #[test]
+    fn a_malformed_snapshot_leaf_is_judged_and_an_entry_demand_serves_the_claims_own_item() {
+        let mut all = items(9, 4);
+        all[5] = RetrievalItemV1 { key: vec![100, 100, 100], payload: vec![1] }; // D = 4: malformed, and a huge score if it scored
+        let leaves: Vec<Digest> = all.iter().enumerate().map(|(i, it)| it.leaf(i as u64)).collect();
+        let snapshot = SnapshotV1 { items: 9, dim: 4, max_payload: 2, slice_items: 4, merkle_root: merkle_root_v1(&leaves).unwrap() };
+        let root = RetrievalRootV1 {
+            extension: [0; 64],
+            snapshot,
+            index: IndexV1::Flat,
+            rule: RetrievalRuleV1::TopKCountingV1 { k: 2, score_bits: 20 },
+        };
+        let q = vec![1, 1, 1, 1];
+        let path = |id: usize| merkle_path_v1(&leaves, id);
+        // The honest result over the well-formed items.
+        let mut scored: Vec<(i128, u64, i64)> = all
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != 5)
+            .map(|(i, it)| {
+                let sc = root.score(&q, &it.key).unwrap();
+                (root.kappa(sc, i as u64), i as u64, sc)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        let entry = |id: u64, score: i64| RetrievedV1 {
+            id,
+            score,
+            key_digest: key_digest_v1(&all[id as usize].key),
+            payload_digest: payload_digest_v1(&all[id as usize].payload),
+        };
+        let honest: Vec<RetrievedV1> = scored[..2].iter().map(|(_, id, sc)| entry(*id, *sc)).collect();
+        // A lying claim puts the malformed item first with a top score (its digests are the leaf's own).
+        let top = (1i64 << 20) - 1;
+        let lie = vec![entry(5, top), honest[0]];
+        check_result_v1(&root, &lie).unwrap();
+        let wrong = RetrievalFaultV1::WrongItem { index: 0, item: all[5].clone(), path: path(5) };
+        judge_retrieval_fault_v1(&root, &q, &lie, &wrong).expect("a claim naming a malformed item is convicted");
+        // Against the honest result the malformed item is no better entry, and an honest entry is no wrong one.
+        let missed = RetrievalFaultV1::MissedBetter { id: 5, item: all[5].clone(), path: path(5) };
+        assert!(judge_retrieval_fault_v1(&root, &q, &honest, &missed).is_err(), "a malformed item beats nothing");
+        let fine =
+            RetrievalFaultV1::WrongItem { index: 0, item: all[honest[0].id as usize].clone(), path: path(honest[0].id as usize) };
+        assert!(judge_retrieval_fault_v1(&root, &q, &honest, &fine).is_err());
+        // The entry demand: the claim's own item, served whatever its shape; a forged path is not.
+        let bytes = borsh::to_vec(&EntryResponseV1 { item: all[5].clone(), path: path(5) }).unwrap();
+        let served = classify_entry_response_v1(&root, &lie[0], &bytes).expect("served: the leaf is its");
+        assert_eq!(items_of_served_v1(&served).unwrap(), vec![all[5].clone()], "public from now on");
+        let forged = borsh::to_vec(&EntryResponseV1 { item: all[5].clone(), path: path(4) }).unwrap();
+        assert_eq!(classify_entry_response_v1(&root, &lie[0], &forged), Err("fake_opening"));
+        assert_eq!(classify_entry_response_v1(&root, &lie[0], &[1, 2]), Err("malformed"));
+        // A leaf with NO item behind it (a digest nobody can open): no response classifies — withheld by construction, the
+        // producer's default at the deadline; and no court can open it either way, so only the entry demand reaches a terminal.
+        let mut junk_leaves = leaves.clone();
+        junk_leaves[5] = [7; 64];
+        let junk_root = RetrievalRootV1 {
+            snapshot: SnapshotV1 { merkle_root: merkle_root_v1(&junk_leaves).unwrap(), ..root.snapshot },
+            ..root.clone()
+        };
+        let try_open = borsh::to_vec(&EntryResponseV1 { item: all[5].clone(), path: merkle_path_v1(&junk_leaves, 5) }).unwrap();
+        assert_eq!(classify_entry_response_v1(&junk_root, &lie[0], &try_open), Err("fake_opening"));
+        let wrong = RetrievalFaultV1::WrongItem { index: 0, item: all[5].clone(), path: merkle_path_v1(&junk_leaves, 5) };
+        assert!(judge_retrieval_fault_v1(&junk_root, &q, &lie, &wrong).is_err(), "no court opens a junk leaf: the DA path decides");
     }
 }

@@ -31,7 +31,6 @@ members = [
     "misaka-palw",
     "misaka-palw-host-security",
     "misaka-palw-shadow",
-    "misaka-palw-pow-driver",
     "misaka-palw-agent",
     "misaka-palw-gateway",
     "misaka-palw-fp-submit",
@@ -157,7 +156,6 @@ default-members = [
     "misaka-palw",
     "misaka-palw-host-security",
     "misaka-palw-shadow",
-    "misaka-palw-pow-driver",
     "misaka-palw-agent",
     "misaka-palw-gateway",
     "misaka-palw-fp-submit",
@@ -330,7 +328,6 @@ misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka-palw" }
 misaka-palw-host-security = { version = "1.1.0", path = "misaka-palw-host-security" }
 misaka-palw-shadow = { version = "1.1.0", path = "misaka-palw-shadow" }
-misaka-palw-pow-driver = { version = "1.1.0", path = "misaka-palw-pow-driver" }
 
 # external
 aes = "0.8.3"

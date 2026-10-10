@@ -100,7 +100,7 @@ node_args() {
 start_node() {
   local i="$1" hub="$2"
   local args=(); while IFS= read -r a; do args+=("$a"); done < <(node_args "$i" "$hub")
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
+  "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
   echo $!
 }
 wait_until() {  # $1 predicate, $2 seconds, $3 what

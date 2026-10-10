@@ -67,8 +67,12 @@ pub const PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1: u8 = 4;
 pub const PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1: bool = true;
 /// DA-6: `r`, the refuted-session cost as a fraction of the stage's reward base, in basis points —
 /// the reporter reward's `r` (R-1, `PALW_RCORE_REPORTER_REWARD_BPS_V1`), so the refuted cost never
-/// exceeds the reward a correct accusation earns.
+/// exceeds the reward a correct accusation earns. The historical 1,000 bps: every session opened
+/// below `Params::palw_reporter_share_v2`.
 pub const PALW_DA_REFUTED_COST_BPS_V1: u128 = crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V1 as u128;
+/// DA-6's `r` past `Params::palw_reporter_share_v2` (ADR-0032's 2026-10-10 amendment): 4,900 bps, the
+/// amended R-1 share, for a session opened at or past the fence. Rounded UP, as at 1,000 bps.
+pub const PALW_DA_REFUTED_COST_BPS_V2: u128 = crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V2 as u128;
 
 // ---------------------------------------------------------------------------------------------
 // Domains and the one new ML-DSA-87 context (ADR §6 row 31; COMPLETE_V5's second addition)
@@ -137,9 +141,20 @@ pub enum PalwDaUnitV1 {
     /// execution, by the claim's binding proving so. One demand serves a segment's boundary rows where a
     /// `TirStepLeaf` per position could not be demanded within a seat's four sessions (RFC-0006 §3, decision 4).
     TirStepRun { first: u64, count: u32 },
+    /// **Lane LG14-B (RFC-0014 §4–§5, past `Params::palw_legacy_held_da_v2`; appended, so no earlier tag moves): a unit of a legacy
+    /// V2 claim's public descent** — an interior node of its step or checkpoint tree, or a leaf's committed half (CKW)
+    /// ([`crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2`]). Demanded only by tag 157 and answered only by tag 158; a tag-55
+    /// answer, a tag-67 or a tag-83 demand naming it is refused by form, and dropped by name below the fence (A-2). Written into
+    /// state only past the fence.
+    LegacyHeldV2(crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2),
 }
 
 impl PalwDaUnitV1 {
+    /// Is this a unit only `palw_legacy_held_da_v2` makes legal (LG14-B)?
+    pub fn is_legacy_held_v2(&self) -> bool {
+        matches!(self, Self::LegacyHeldV2(_))
+    }
+
     /// The unit an event accusation's packed index names (`palw_da_event_index_parts_v1`).
     pub fn event_of_index(index: u32) -> Self {
         let (row, tile) = crate::palw_state_v2::palw_da_event_index_parts_v1(index);
@@ -619,10 +634,24 @@ pub fn palw_da_resume_claim_v1(
 // DA-6: what a session costs
 // ---------------------------------------------------------------------------------------------
 
-/// **DA-6: a session's exposure** — `min(⌈r × S_P(stage)⌉, min_collateral_sompi)`, `r` = 4,900 bps,
-/// `reward_base` being [`palw_da_stage_reward_base_v1`]'s.
+/// **DA-6: a session's exposure at the historical share** — `min(⌈r × S_P(stage)⌉, min_collateral_sompi)`,
+/// `r` = 1,000 bps ([`PALW_DA_REFUTED_COST_BPS_V1`]), `reward_base` being [`palw_da_stage_reward_base_v1`]'s:
+/// a session opened below `Params::palw_reporter_share_v2`. The fold prices a session with
+/// [`palw_da_session_exposure_at_bps_v1`] at the share in force at its open.
 pub fn palw_da_session_exposure_v1(reward_base: u128, min_collateral_sompi: u64) -> u128 {
-    reward_base.saturating_mul(PALW_DA_REFUTED_COST_BPS_V1).div_ceil(10_000).min(u128::from(min_collateral_sompi))
+    palw_da_session_exposure_at_bps_v1(reward_base, min_collateral_sompi, PALW_DA_REFUTED_COST_BPS_V1 as u16)
+}
+
+/// **DA-6 at ADR-0032's amended share** ([`PALW_DA_REFUTED_COST_BPS_V2`], 4,900 bps): a session opened at or past
+/// `Params::palw_reporter_share_v2`. Still capped at `min_collateral_sompi`.
+pub fn palw_da_session_exposure_v2(reward_base: u128, min_collateral_sompi: u64) -> u128 {
+    palw_da_session_exposure_at_bps_v1(reward_base, min_collateral_sompi, PALW_DA_REFUTED_COST_BPS_V2 as u16)
+}
+
+/// **DA-6 at `share_bps`** — `min(⌈share_bps × S_P(stage) / 10,000⌉, min_collateral_sompi)`; the share is clamped to
+/// 10,000 bps. Rounded up (never free), unlike R-1's reward, which rounds down.
+pub fn palw_da_session_exposure_at_bps_v1(reward_base: u128, min_collateral_sompi: u64, share_bps: u16) -> u128 {
+    reward_base.saturating_mul(u128::from(share_bps.min(10_000))).div_ceil(10_000).min(u128::from(min_collateral_sompi))
 }
 
 /// **DA-6's `S_P(stage)`: the producer's nominal debit a default at `stage` triggers**, which is the
@@ -654,8 +683,12 @@ pub fn palw_da_producer_action_v1(collateral: u64, g: u128) -> u128 {
 /// placing a step leaf in a segment needs the claim's committed step-leaf count, which no record the
 /// fold keeps after the accusation carries (a partial seat is therefore never charged for a held
 /// unit — an under-charge of a colluding partial seat, named, never an over-charge of an honest one).
-pub fn palw_da_unit_covered_by_v1(_unit: &PalwDaUnitV1, attested: crate::palw_verification_v2::PalwSegmentMaskV2, segments: u16) -> bool {
-    segments > 0 && attested.is_full(segments)
+///
+/// **LG14-B: a legacy held unit is covered by no mask.** DA-7's S4 rests on a covering signer being able to answer the unit itself
+/// (`PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`), and a seat's automatic answering builds no descent node or committed witness — so a
+/// default of one is the producer's alone (S1, or S3 and the vesting row after `Final`), never a signer's.
+pub fn palw_da_unit_covered_by_v1(unit: &PalwDaUnitV1, attested: crate::palw_verification_v2::PalwSegmentMaskV2, segments: u16) -> bool {
+    !unit.is_legacy_held_v2() && segments > 0 && attested.is_full(segments)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1258,22 +1291,63 @@ mod tests {
         assert_eq!(palw_da_pause_credit_v1(100, 150, 150), 100, "no pause, no credit");
     }
 
-    /// **DA-6: `min(⌈r · S_P(stage)⌉, min_collateral)`**, at ADR-0032's amended 49% share:
-    /// `Live`/`Licensed` on the commitment (3,201.0 MSK → 1,568.49 MSK), `FinalRow` on the
-    /// producer's S3 action `min(25% · C, 3 G)` (13k producer: 3,250 → 1,592.50), capped at `min_collateral`.
+    /// **DA-6: `min(⌈r · S_P(stage)⌉, min_collateral)`**, the floor's ADR figures: `Live`/`Licensed`
+    /// on the commitment (3,201.0 MSK → 320.10 MSK), `FinalRow` on the producer's S3 action
+    /// `min(25% · C, 3 G)` (13k producer: 3,250 → 325.00), the cap at `min_collateral`.
     #[test]
     fn a_session_costs_r_times_its_stage_base_and_never_more_than_the_floor() {
         const MSK: u128 = 100_000_000;
         let floor = 13_000 * 100_000_000u64;
         let live = palw_da_stage_reward_base_v1(PalwDaStageV1::Live, 320_100_000_000, floor, u128::MAX / 4);
-        assert_eq!(PALW_DA_REFUTED_COST_BPS_V1, 4_900, "DA-6 follows PALW's reporter share");
-        assert_eq!(palw_da_session_exposure_v1(live, floor), 156_849_000_000, "1,568.49 MSK");
+        assert_eq!(palw_da_session_exposure_v1(live, floor), 32_010_000_000, "320.10 MSK");
         let final_row = palw_da_stage_reward_base_v1(PalwDaStageV1::FinalRow, 0, floor, 10_000 * MSK);
         assert_eq!(final_row, 3_250 * MSK, "min(25% x 13,000, 3G)");
-        assert_eq!(palw_da_session_exposure_v1(final_row, floor), 159_250_000_000);
+        assert_eq!(palw_da_session_exposure_v1(final_row, floor), 325 * MSK);
         assert_eq!(palw_da_producer_action_v1(939_000 * 100_000_000, 100 * MSK), 300 * MSK, "3G binds");
         assert_eq!(palw_da_session_exposure_v1(1_000_000 * MSK, floor), u128::from(floor), "capped at min_collateral");
         assert_eq!(palw_da_session_exposure_v1(1, floor), 1, "rounded up: never free");
+        assert_eq!(PALW_DA_REFUTED_COST_BPS_V1, 1_000, "below palw_reporter_share_v2 DA-6 follows the historical 10% share");
+    }
+
+    /// **DA-6 past `palw_reporter_share_v2` (ADR-0032's amended 49% share)** — the amendment's own figures:
+    /// `Live`/`Licensed` on the commitment (3,201.0 MSK → 1,568.49 MSK), `FinalRow` on the producer's S3 action
+    /// `min(25% · C, 3 G)` (13k producer: 3,250 → 1,592.50), capped at `min_collateral`, rounded up. The share is the
+    /// one the fold reads at the session's open (`reporter_reward_bps_at`).
+    #[test]
+    fn past_the_share_fence_a_session_costs_49_percent_of_its_stage_base() {
+        const MSK: u128 = 100_000_000;
+        let floor = 13_000 * 100_000_000u64;
+        assert_eq!(PALW_DA_REFUTED_COST_BPS_V2, 4_900, "DA-6 follows PALW's amended reporter share");
+        let live = palw_da_stage_reward_base_v1(PalwDaStageV1::Live, 320_100_000_000, floor, u128::MAX / 4);
+        assert_eq!(palw_da_session_exposure_v2(live, floor), 156_849_000_000, "1,568.49 MSK");
+        let final_row = palw_da_stage_reward_base_v1(PalwDaStageV1::FinalRow, 0, floor, 10_000 * MSK);
+        assert_eq!(palw_da_session_exposure_v2(final_row, floor), 159_250_000_000, "1,592.50 MSK");
+        assert_eq!(palw_da_session_exposure_v2(1_000_000 * MSK, floor), u128::from(floor), "capped at min_collateral");
+        assert_eq!(palw_da_session_exposure_v2(1, floor), 1, "rounded up: never free");
+        assert_eq!(palw_da_session_exposure_v2(3, floor), 2, "⌈1.47⌉");
+        // The fold's mirror picks the share by the session's open: 10% below the fence, 49% at and past it.
+        let sp = crate::palw_state_v2::PalwStateParamsV2::new(
+            100,
+            10,
+            10,
+            20,
+            500,
+            1000,
+            Hash64::from_bytes([1; 64]),
+            4,
+            1000,
+            100,
+            1000,
+            0,
+        )
+        .unwrap()
+        .with_reporter_share_v2_from_daa(Some(500));
+        assert_eq!(
+            palw_da_session_exposure_at_bps_v1(live, floor, sp.reporter_reward_bps_at(499)),
+            palw_da_session_exposure_v1(live, floor)
+        );
+        assert_eq!(palw_da_session_exposure_at_bps_v1(live, floor, sp.reporter_reward_bps_at(500)), 156_849_000_000);
+        assert_eq!(palw_da_session_exposure_at_bps_v1(live, floor, 20_000), live.min(u128::from(floor)), "a share is clamped to 100%");
     }
 
     /// **C7: only a full mask covers a unit** — a V1/V2 `Valid` and the full seat cover every unit; a

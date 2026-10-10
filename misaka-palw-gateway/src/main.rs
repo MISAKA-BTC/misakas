@@ -49,8 +49,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use misaka_palw::host_security::{
-    ALLOW_PUBLIC_GATEWAY_ENV, Confinement, ConfinementBackend, check_public_bind, establish_confinement, harden_worker_command,
-    listen_is_loopback, public_gateway_acknowledged, reachable_signing_secrets, worker_working_dir,
+    Confinement, ConfinementBackend, check_loopback_bind, establish_confinement, harden_worker_command, reachable_signing_secrets,
+    worker_working_dir,
 };
 
 use kaspa_consensus_core::palw_freeprompt_v3::{
@@ -157,7 +157,7 @@ struct Identity {
 //
 // SA-8 is the reason the per-source rate is last in this list and not first: sources share
 // addresses behind proxies, so a per-IP rate is a courtesy. The BINDING limits are the single job
-// slot, the bounded in-flight queue, and the daily public-job budget tied to exposure.
+// slot, the bounded in-flight queue, and the daily claim budget tied to exposure.
 // ---------------------------------------------------------------------------------------------
 
 /// A chat body larger than this is refused before it is parsed. 1 MiB of chat is already ~30x the
@@ -190,8 +190,8 @@ fn in_flight_cap(processes: usize) -> usize {
 /// Default per-source bounds (RFC-0001 §2.7): open connections and jobs in flight for one address.
 const DEFAULT_MAX_CONNECTIONS_PER_SOURCE: u32 = 8;
 const DEFAULT_MAX_JOBS_PER_SOURCE: u32 = 4;
-/// The public-job budget window.
-const PUBLIC_BUDGET_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+/// The claim budget window.
+const CLAIM_BUDGET_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 /// The per-source window (SA-8: secondary).
 const PER_SOURCE_WINDOW: Duration = Duration::from_secs(60 * 60);
 /// **ADR-0078 SA-4: the read route's own per-source rate, over [`PER_SOURCE_WINDOW`].**
@@ -257,9 +257,8 @@ struct Config {
     /// means "read it from the chain" — with `--rpc` that is the honest source, and without one a
     /// gateway that does not know what the bond can lose ANSWERS but does not commit.
     bond_exposure_room_sompi: u64,
-    /// The fraction of the room public jobs may spend per window, so the operator's OWN claims are
-    /// never starved by strangers'.
-    public_job_budget_permille: u64,
+    /// The fraction of the bond exposure room local claims may reserve per window.
+    claim_budget_permille: u64,
     /// What one claim reserves on the bond, in sompi, as the operator declared it. Zero means
     /// "read it from the chain".
     claim_exposure_sompi: u64,
@@ -426,31 +425,31 @@ impl ExposurePrice {
     }
 }
 
-/// ADR-0077 SA-1(a): what public jobs have spent of the operator's exposure in this window, and
-/// whether the next one may commit. A public prompt becomes the OPERATOR's claim — it reserves
+/// Local claims' reserved exposure in this window, and
+/// whether the next one may commit. A local inference becomes the operator's claim — it reserves
 /// `claim_exposure` on the bond and forfeits it if the pipeline is faulty — so the spend is
 /// bounded here, at the entrance, rather than discovered at the transition (SA-7).
-struct PublicJobBudget {
+struct ClaimBudget {
     window_started: Instant,
     spent_sompi: u64,
     committed_jobs: u64,
     answered_without_commit: u64,
 }
 
-impl PublicJobBudget {
+impl ClaimBudget {
     fn new() -> Self {
         Self { window_started: Instant::now(), spent_sompi: 0, committed_jobs: 0, answered_without_commit: 0 }
     }
 
     fn daily_budget(config: &Config, price: ExposurePrice) -> u64 {
-        price.room_sompi.saturating_mul(config.public_job_budget_permille) / 1_000
+        price.room_sompi.saturating_mul(config.claim_budget_permille) / 1_000
     }
 
-    /// May the next public job COMMIT? Answering is never refused on budget grounds — the user
+    /// May the next local job commit? Answering is never refused on budget grounds — the user
     /// gets their answer either way, which is what makes "answer, never commit" a mode rather
     /// than an outage.
     fn may_commit(&mut self, config: &Config, price: ExposurePrice) -> Result<(), String> {
-        if self.window_started.elapsed() >= PUBLIC_BUDGET_WINDOW {
+        if self.window_started.elapsed() >= CLAIM_BUDGET_WINDOW {
             self.window_started = Instant::now();
             self.spent_sompi = 0;
         }
@@ -470,22 +469,19 @@ impl PublicJobBudget {
         }
         let budget = Self::daily_budget(config, price);
         // **A claim larger than the whole window is not a window that got spent.** Said as "spent
-        // (0 of N)" it read like a busy day; it is a setting under which no public job can EVER
+        // (0 of N)" it read like a busy day; it is a setting under which no local job can ever
         // commit — the 2026-09-20 economy drill: past the ADR-0145 bundle the entrance priced one
         // claim at the compute era's 147,880,590 sompi against a 200‰ budget of 110,000,868.
         if price.claim_sompi > budget {
             return Err(format!(
-                "one claim reserves {} sompi and this window's whole public-job budget is {} ({}‰ of the bond's room {}): \
-                 no public job can commit at this setting — raise --public-job-budget-permille (the Studio pool runs 1000) \
+                "one claim reserves {} sompi and this window's whole claim budget is {} ({}‰ of the bond's room {}): \
+                 no local job can commit at this setting — raise --claim-budget-permille (the Studio pool runs 1000) \
                  or the bond's room",
-                price.claim_sompi, budget, config.public_job_budget_permille, price.room_sompi
+                price.claim_sompi, budget, config.claim_budget_permille, price.room_sompi
             ));
         }
         if self.spent_sompi.saturating_add(price.claim_sompi) > budget {
-            return Err(format!(
-                "the public-job budget for this window is spent ({} of {} sompi); the operator's own claims are not starved by strangers'",
-                self.spent_sompi, budget
-            ));
+            return Err(format!("the claim budget for this window is spent ({} of {} sompi)", self.spent_sompi, budget));
         }
         Ok(())
     }
@@ -641,11 +637,17 @@ struct ResidentWorker {
 }
 
 impl ResidentWorker {
-    fn spawn(confinement: &Confinement, worker: &Path, workdir: &Path, trace_out: &Path, extra_args: &[String]) -> Result<Self, String> {
+    fn spawn(
+        confinement: &Confinement,
+        worker: &Path,
+        workdir: &Path,
+        trace_out: &Path,
+        extra_args: &[String],
+    ) -> Result<Self, String> {
         let mut command = confinement.command(worker);
         command.args(["--mode", "v3-serve", "--trace-out", &trace_out.display().to_string()]);
         command.args(extra_args);
-        // ADR-0079 Decision 5: the process that parses a stranger's prompt starts with nothing — no
+        // ADR-0079 Decision 5: the process that parses the user's prompt starts with nothing — no
         // operator environment, no PATH, and a working directory that is not the operator's home.
         harden_worker_command(&mut command, workdir);
         let mut child = command
@@ -1547,8 +1549,9 @@ fn committed_constraint_v1(
     let Some(format) = &admitted.format else { return Ok(None) };
     let automaton = match (&format.kind, &format.schema) {
         (FormatKind::JsonObject, _) => misaka_palw_constraint::compile::compile_json_object_v1(),
-        (FormatKind::JsonSchema, Some(schema)) => misaka_palw_constraint::compile::compile_v1(schema)
-            .map_err(|e| format!("this response_format's schema is outside the first constraint subset and cannot be committed: {e}"))?,
+        (FormatKind::JsonSchema, Some(schema)) => misaka_palw_constraint::compile::compile_v1(schema).map_err(|e| {
+            format!("this response_format's schema is outside the first constraint subset and cannot be committed: {e}")
+        })?,
         (FormatKind::JsonSchema, None) => return Err("a json_schema format without its schema".to_string()),
     };
     if sampling.1 != kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY {
@@ -1569,7 +1572,7 @@ fn handle_chat(
     config: &Config,
     identity: &Identity,
     worker: &dyn JobRunner,
-    budget: &Mutex<PublicJobBudget>,
+    budget: &Mutex<ClaimBudget>,
     facts: &chain::ChainFacts,
     chain_source: &chain::ChainSource,
     chat: &ChatRequest,
@@ -1585,7 +1588,7 @@ fn handle_chat(
         prepare_request(config, identity, manifest, facts, admitted, sampling)?;
     expire_stale_commitments(&config.outbox, anchor_daa, COMMITMENT_ANCHOR_TTL_DAA);
 
-    // ADR-0077 SA-1 + Decision 3: a stranger's prompt becomes the OPERATOR's claim. Decide BEFORE
+    // ADR-0077 SA-1 + Decision 3: the user's local inference becomes their claim. Decide BEFORE
     // the inference whether this one may spend exposure — the answer is produced either way; only
     // the commitment is withheld, which is what makes "answer, never commit" a mode and not an
     // outage, and what makes an uncertified class an answer rather than a refusal.
@@ -2262,7 +2265,14 @@ fn answer_batch_candidates(
     let (base_seed, temperature_q) = admitted.sampling;
     let mut prepared = Vec::with_capacity(admitted.candidates as usize);
     for i in 0..admitted.candidates {
-        prepared.push(prepare_request(config, identity, manifest, facts, admitted, (surface::candidate_seed_v1(&base_seed, i), temperature_q))?);
+        prepared.push(prepare_request(
+            config,
+            identity,
+            manifest,
+            facts,
+            admitted,
+            (surface::candidate_seed_v1(&base_seed, i), temperature_q),
+        )?);
     }
     let requests: Vec<PalwFpWorkerRequestV3> = prepared.iter().map(|p| p.request.clone()).collect();
     let eog: BTreeSet<u32> = manifest.eog_token_ids.iter().copied().collect();
@@ -2286,7 +2296,18 @@ fn answer_batch_candidates(
     let mut bodies = Vec::with_capacity(answers.len());
     for ((answer, prepared), stream) in answers.into_iter().zip(&prepared).zip(streams.iter_mut()) {
         let mut sink = BufferedSink;
-        bodies.push(answer_only_body(config, worker, chat, admitted, &prepared.request, &prepared.plan, why_not_committed, stream, answer, &mut sink)?);
+        bodies.push(answer_only_body(
+            config,
+            worker,
+            chat,
+            admitted,
+            &prepared.request,
+            &prepared.plan,
+            why_not_committed,
+            stream,
+            answer,
+            &mut sink,
+        )?);
     }
     Ok(Some(bodies))
 }
@@ -2302,7 +2323,7 @@ fn handle_chat_candidates(
     config: &Config,
     identity: &Identity,
     worker: &dyn JobRunner,
-    budget: &Mutex<PublicJobBudget>,
+    budget: &Mutex<ClaimBudget>,
     facts: &chain::ChainFacts,
     chain_source: &chain::ChainSource,
     chat: &ChatRequest,
@@ -2333,9 +2354,8 @@ fn handle_chat_candidates(
                     let mut sink = BufferedSink;
                     handle_chat(config, identity, worker, budget, facts, chain_source, chat, admitted, (seed, temperature_q), &mut sink, ctx)
                 })
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("a candidate's job panicked".to_string()))).collect()
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("a candidate's job panicked".to_string()))).collect()
         }),
     };
     let mut bodies = Vec::with_capacity(results.len());
@@ -2451,7 +2471,7 @@ fn main() {
     let mut artifact_inline_max: usize = 4 << 20;
     let mut max_prompt_bytes: usize = HARD_MAX_PROMPT_BYTES;
     let mut bond_exposure_room_sompi: u64 = 0;
-    let mut public_job_budget_permille: u64 = 200;
+    let mut claim_budget_permille: u64 = 200;
     let mut claim_exposure_sompi: u64 = 0;
     let mut answer_never_commit = false;
     let mut privacy_mode: u8 = PALW_FP_PRIVACY_PUBLIC_DA;
@@ -2492,8 +2512,8 @@ fn main() {
             "--bond-exposure-room-sompi" => {
                 bond_exposure_room_sompi = value("--bond-exposure-room-sompi").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
-            "--public-job-budget-permille" => {
-                public_job_budget_permille = value("--public-job-budget-permille").parse().unwrap_or_else(|e| die(format!("{e}")))
+            "--claim-budget-permille" => {
+                claim_budget_permille = value("--claim-budget-permille").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             "--claim-exposure-sompi" => {
                 claim_exposure_sompi = value("--claim-exposure-sompi").parse().unwrap_or_else(|e| die(format!("{e}")))
@@ -2537,12 +2557,14 @@ fn main() {
             "--max-connections-per-source" => {
                 max_connections_per_source = value("--max-connections-per-source").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
-            "--max-jobs-per-source" => max_jobs_per_source = value("--max-jobs-per-source").parse().unwrap_or_else(|e| die(format!("{e}"))),
+            "--max-jobs-per-source" => {
+                max_jobs_per_source = value("--max-jobs-per-source").parse().unwrap_or_else(|e| die(format!("{e}")))
+            }
             "--per-source-jobs-per-window" => {
                 per_source_jobs_per_window = value("--per-source-jobs-per-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--sidecar <file>] [--no-cancel-on-disconnect] [--finality-depth n] [--evidence-provider <dir|http://…> ... [--evidence-min-copies n]] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
+                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--claim-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--sidecar <file>] [--no-cancel-on-disconnect] [--finality-depth n] [--evidence-provider <dir|http://…> ... [--evidence-min-copies n]] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
             )),
         }
     }
@@ -2568,7 +2590,7 @@ fn main() {
         workdir,
         max_prompt_bytes: max_prompt_bytes.clamp(1, HARD_MAX_PROMPT_BYTES),
         bond_exposure_room_sompi,
-        public_job_budget_permille: public_job_budget_permille.min(1_000),
+        claim_budget_permille: claim_budget_permille.min(1_000),
         claim_exposure_sompi,
         answer_never_commit,
         privacy_mode,
@@ -2591,7 +2613,7 @@ fn main() {
     }
 
     // -----------------------------------------------------------------------------------------
-    // ADR-0079 Decision 4 / S5 — this process parses a stranger's bytes, so it holds no key. It
+    // ADR-0079 Decision 4 / S5 — this process parses client input, so it holds no key. It
     // refuses to boot if a signing secret is reachable in its OWN view: the ML-DSA signature
     // belongs to the signer sidecar, and a seed dropped next to the identity file "for now" is
     // how that stops being true. `--derive-seed` must therefore point OUTSIDE both directories.
@@ -2609,20 +2631,16 @@ fn main() {
     }
 
     // -----------------------------------------------------------------------------------------
-    // ADR-0079 Decision 10 / S6 — the public entrance is acknowledged, or it does not start. And
-    // a public bind on a host whose confinement backend is `none` does not start at all: that is
-    // the one place where a stranger chooses the model's input.
-    // -----------------------------------------------------------------------------------------
+    // ADR-0144: inference and claim submission are local to the operator.
     // The backend installs and PROVES its own denials here — before the bind guard asks what is in
-    // force, because a guard that read a configured value would be reading a promise.
+    // force; the report describes the enforced host posture.
     let (confinement, confinement_notes) = establish_confinement(&config.workdir, &[config.workdir.clone(), config.outbox.clone()]);
     for note in &confinement_notes {
         eprintln!("[misaka-palw-gateway] confinement: {note}");
     }
     let backend = confinement.backend();
     config.confinement = confinement;
-    let acknowledged = public_gateway_acknowledged();
-    if let Err(e) = check_public_bind(&config.listen, acknowledged, backend) {
+    if let Err(e) = check_loopback_bind(&config.listen) {
         die(e);
     }
 
@@ -2681,7 +2699,7 @@ fn main() {
     eprintln!(
         "[misaka-palw-gateway] listening on {} ({}) — worker manifest {}…, class {}…, n_ctx {}, template {}",
         config.listen,
-        if listen_is_loopback(&config.listen) { "loopback" } else { "PUBLIC, acknowledged" },
+        "loopback",
         &hex(worker.manifest().runtime_manifest_hash)[..16],
         &hex(identity.class_id)[..16],
         worker.manifest().n_ctx,
@@ -2702,13 +2720,13 @@ fn main() {
     );
     eprintln!(
         "[misaka-palw-gateway] confinement backend {} | {} job slot(s), {} may queue, {MAX_CONNECTIONS} connections | \
-         prompt ≤ {} bytes, body ≤ {MAX_REQUEST_BODY_BYTES} bytes, decode ≤ {} | public-job budget {}‰",
+         prompt ≤ {} bytes, body ≤ {MAX_REQUEST_BODY_BYTES} bytes, decode ≤ {} | claim budget {}‰",
         backend.name(),
         worker.processes(),
         in_flight_cap(worker.processes()) - worker.processes(),
         config.max_prompt_bytes,
         config.max_decode_cap,
-        config.public_job_budget_permille,
+        config.claim_budget_permille,
     );
 
     let config = Arc::new(config);
@@ -2720,13 +2738,16 @@ fn main() {
     // eater and a memory attack; past `MAX_IN_FLIGHT_JOBS` the answer is a 503, not a wait.
     let in_flight = Arc::new(AtomicUsize::new(0));
     let connections = Arc::new(AtomicUsize::new(0));
-    let budget = Arc::new(Mutex::new(PublicJobBudget::new()));
+    let budget = Arc::new(Mutex::new(ClaimBudget::new()));
     let sources = Arc::new(Mutex::new(SourceRates::default()));
     // RFC-0001 §2.7: per-source open connections and jobs in flight.
     let gate = Arc::new(pool::SourceGate::new(config.max_connections_per_source, config.max_jobs_per_source));
     let services = Arc::new(Services::open(&config.outbox));
 
     let listener = TcpListener::bind(&config.listen).unwrap_or_else(|e| die(format!("cannot bind {}: {e}", config.listen)));
+    if !listener.local_addr().unwrap_or_else(|e| die(format!("cannot read listener address: {e}"))).ip().is_loopback() {
+        die("the PALW gateway must bind to a loopback address (ADR-0144)".into());
+    }
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         if connections.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
@@ -2740,7 +2761,6 @@ fn main() {
         let connections = Arc::clone(&connections);
         let gate = Arc::clone(&gate);
         let services = Arc::clone(&services);
-        let acknowledged_bind = acknowledged;
         // The per-source connection share: counted here, before the thread, so a source over its
         // share costs a 503 and not a thread.
         let peer = stream.peer_addr().map(|a| a.ip()).ok();
@@ -2762,7 +2782,6 @@ fn main() {
                 &budget,
                 &sources,
                 backend,
-                acknowledged_bind,
                 &gate,
                 &services,
             );
@@ -2937,10 +2956,9 @@ fn serve_connection(
     worker: &dyn JobRunner,
     chain_source: &chain::ChainSource,
     in_flight: &AtomicUsize,
-    budget: &Mutex<PublicJobBudget>,
+    budget: &Mutex<ClaimBudget>,
     sources: &Mutex<SourceRates>,
     backend: ConfinementBackend,
-    acknowledged_bind: bool,
     gate: &pool::SourceGate,
     services: &Services,
 ) {
@@ -2957,7 +2975,7 @@ fn serve_connection(
             let facts = chain_source.read();
             let price = ExposurePrice::resolve(config, &facts);
             let snapshot = budget.lock().expect("the budget lock is never poisoned");
-            let daily = PublicJobBudget::daily_budget(config, price);
+            let daily = ClaimBudget::daily_budget(config, price);
             respond(
                 stream,
                 "200 OK",
@@ -2972,7 +2990,7 @@ fn serve_connection(
                 // ADR-0077 Decision 3 adds the CHAIN's four answers by name — `registered`,
                 // `fp_certified`, `bond_active`, `exposure_room` — because "why did my answer not
                 // become a claim" must be a thing an operator reads rather than infers. SA-1(d)
-                // adds the loss bound, for the same reason and the other direction: a stranger's
+                // adds the loss bound, for the same reason and the other direction: a client's
                 // prompt spends the operator's exposure, and the amount is a number here.
                 &serde_json::json!({
                     "status": "ok",
@@ -2998,10 +3016,7 @@ fn serve_connection(
                     "can_submit": chain_source.can_submit(),
                     "posture": {
                         "listen": config.listen,
-                        "public_bind": !listen_is_loopback(&config.listen),
-                        "acknowledgement_variable": ALLOW_PUBLIC_GATEWAY_ENV,
-                        "acknowledgement_required": !listen_is_loopback(&config.listen),
-                        "acknowledgement_given": acknowledged_bind,
+                        "local_only": true,
                         "confinement_backend": backend.name(),
                         "holds_key_material": false,
                     },
@@ -3025,10 +3040,10 @@ fn serve_connection(
                         "free_prompt_exposure_ceiling_permille": FREE_PROMPT_EXPOSURE_CEILING_PERMILLE,
                         "claim_exposure_sompi": price.claim_sompi,
                         "bond_exposure_room_sompi": price.room_sompi,
-                        "public_job_budget_permille": config.public_job_budget_permille,
-                        "public_job_budget_window_sompi": daily,
-                        "public_job_budget_spent_sompi": snapshot.spent_sompi,
-                        "public_job_budget_window_secs": PUBLIC_BUDGET_WINDOW.as_secs(),
+                        "claim_budget_permille": config.claim_budget_permille,
+                        "claim_budget_window_sompi": daily,
+                        "claim_budget_spent_sompi": snapshot.spent_sompi,
+                        "claim_budget_window_secs": CLAIM_BUDGET_WINDOW.as_secs(),
                         "answer_never_commit": config.answer_never_commit,
                         "committed_jobs": snapshot.committed_jobs,
                         "answered_without_commit": snapshot.answered_without_commit,
@@ -3358,9 +3373,12 @@ mod tests {
         kaspa_consensus_core::palw_fp_constraint_job_v1::palw_constraint_of_bytes_v1(&bytes).expect("the bytes are an admitted constraint");
         let advisory = admit(&dormant, serde_json::json!({})).expect("admitted");
         assert_eq!(committed_constraint_v1(&advisory, &dormant, advisory.sampling).unwrap(), None, "dormant: advisory, as before");
-        let plain = surface::parse_and_admit(&serde_json::to_vec(&serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }] })).unwrap(), &armed)
-            .map(|(_, a)| a)
-            .unwrap();
+        let plain = surface::parse_and_admit(
+            &serde_json::to_vec(&serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }] })).unwrap(),
+            &armed,
+        )
+        .map(|(_, a)| a)
+        .unwrap();
         assert_eq!(committed_constraint_v1(&plain, &armed, plain.sampling).unwrap(), None, "no format asked");
         let with_stop = admit(&armed, serde_json::json!({ "stop": ["END"] })).expect("admitted");
         let err = committed_constraint_v1(&with_stop, &armed, with_stop.sampling).unwrap_err();
@@ -3434,7 +3452,7 @@ mod tests {
             workdir: std::env::temp_dir(),
             max_prompt_bytes: HARD_MAX_PROMPT_BYTES,
             bond_exposure_room_sompi: 1_000_000,
-            public_job_budget_permille: 200,
+            claim_budget_permille: 200,
             claim_exposure_sompi: 50_000,
             answer_never_commit: false,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
@@ -3484,17 +3502,10 @@ mod tests {
     /// UNCONDITIONALLY when the confinement backend in force is `none` — which is the state this
     /// tree ships in, so this is the rule that is actually load-bearing today.
     #[test]
-    fn a_public_bind_is_refused_and_the_message_names_the_pattern() {
-        assert!(check_public_bind("127.0.0.1:8790", false, ConfinementBackend::None).is_ok(), "loopback is the default and is fine");
-
-        let err = check_public_bind("0.0.0.0:8790", false, ConfinementBackend::MacosSandboxExec).unwrap_err();
-        assert!(err.contains(ALLOW_PUBLIC_GATEWAY_ENV));
-        assert!(err.to_lowercase().contains("reverse proxy"));
-
-        // The state a host with no requested backend ships in. The acknowledgement does not help.
-        let err = check_public_bind("0.0.0.0:8790", true, ConfinementBackend::None).unwrap_err();
-        assert!(err.contains("does NOT override"));
-        assert_eq!(Confinement::none().backend(), ConfinementBackend::None, "and this is what `none` looks like");
+    fn the_gateway_has_no_public_bind_mode() {
+        assert!(check_loopback_bind("127.0.0.1:8790").is_ok());
+        assert!(check_loopback_bind("0.0.0.0:8790").is_err());
+        assert!(check_loopback_bind("[::]:8790").is_err());
     }
 
     /// **No wildcard CORS** — the house rule `SECURITY.md` already states for the mining bridge,
@@ -3554,12 +3565,12 @@ mod tests {
     /// **ADR-0077 SA-1 / SA-8.** The binding limits are the single slot, the bounded queue and the
     /// budget — and the budget refuses to COMMIT while still allowing the answer.
     #[test]
-    fn the_public_job_budget_bounds_the_operators_exposure() {
+    fn the_claim_budget_bounds_the_operators_exposure() {
         let config = bounded_config();
         let price = declared_price(&config);
-        let mut budget = PublicJobBudget::new();
+        let mut budget = ClaimBudget::new();
         // 200 permille of a 1,000,000-sompi room is 200,000; a 50,000-sompi claim fits four times.
-        assert_eq!(PublicJobBudget::daily_budget(&config, price), 200_000);
+        assert_eq!(ClaimBudget::daily_budget(&config, price), 200_000);
         for _ in 0..4 {
             budget.may_commit(&config, price).expect("within the window budget");
             budget.charge(price);
@@ -3570,24 +3581,24 @@ mod tests {
 
         // SA-1(c): the operator may mark the source class "answer, never commit".
         let never = Config { answer_never_commit: true, ..bounded_config() };
-        let err = PublicJobBudget::new().may_commit(&never, declared_price(&never)).unwrap_err();
+        let err = ClaimBudget::new().may_commit(&never, declared_price(&never)).unwrap_err();
         assert!(err.contains("answer, never commit"));
 
         // A claim that fits the room but not the whole window's budget is a setting that can never
         // commit, and says so — not "spent (0 of …)", which read like a busy day.
         let never_fits = Config { claim_exposure_sompi: 300_000, ..bounded_config() };
-        let err = PublicJobBudget::new().may_commit(&never_fits, declared_price(&never_fits)).unwrap_err();
-        assert!(err.contains("no public job can commit at this setting") && err.contains("200‰"), "got {err}");
+        let err = ClaimBudget::new().may_commit(&never_fits, declared_price(&never_fits)).unwrap_err();
+        assert!(err.contains("no local job can commit at this setting") && err.contains("200‰"), "got {err}");
 
         // SA-7: a claim that would exceed the bond's room is refused HERE, at the entrance.
         let over = Config { claim_exposure_sompi: 2_000_000, ..bounded_config() };
-        let err = PublicJobBudget::new().may_commit(&over, declared_price(&over)).unwrap_err();
+        let err = ClaimBudget::new().may_commit(&over, declared_price(&over)).unwrap_err();
         assert!(err.contains("refused at the entrance"), "got {err}");
 
         // An unconfigured room with no chain to read it from is an unknown, and an unknown does
         // not spend.
         let unknown = Config { bond_exposure_room_sompi: 0, ..bounded_config() };
-        assert!(PublicJobBudget::new().may_commit(&unknown, declared_price(&unknown)).is_err());
+        assert!(ClaimBudget::new().may_commit(&unknown, declared_price(&unknown)).is_err());
     }
 
     /// **ADR-0077 Decision 3 + SA-7.** With no declaration the exposure numbers come from the
@@ -3599,7 +3610,7 @@ mod tests {
         let undeclared = Config { bond_exposure_room_sompi: 0, claim_exposure_sompi: 0, ..bounded_config() };
         let price = ExposurePrice::resolve(&undeclared, &chain_facts);
         assert_eq!((price.room_sompi, price.claim_sompi), (900_000, 3_000), "the chain owns these numbers");
-        PublicJobBudget::new().may_commit(&undeclared, price).expect("a bond with room may commit");
+        ClaimBudget::new().may_commit(&undeclared, price).expect("a bond with room may commit");
 
         // A declaration wins, in both directions — it is the operator's own ceiling on the loss.
         let declared = Config { bond_exposure_room_sompi: 10_000, claim_exposure_sompi: 0, ..bounded_config() };
@@ -3608,7 +3619,7 @@ mod tests {
         // SA-7 on the chain's numbers: a claim larger than the room never leaves the entrance.
         let tight = chain::ChainFacts { exposure_room_sompi: 1_000, claim_exposure_sompi: 50_000, ..Default::default() };
         let price = ExposurePrice::resolve(&undeclared, &tight);
-        let err = PublicJobBudget::new().may_commit(&undeclared, price).unwrap_err();
+        let err = ClaimBudget::new().may_commit(&undeclared, price).unwrap_err();
         assert!(err.contains("refused at the entrance"), "got {err}");
     }
 

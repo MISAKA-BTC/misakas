@@ -1,5 +1,7 @@
 # RFC01–12 / ADR consistency audit — kernel-only model extension
 
+> **2026-10-10 navigation:** RFC05 now retains only its VM withdrawal reason. The selected §§K.0–K.8 design is in [versioned-kernels.md](../../design/palw/versioned-kernels.md); references below describe the audited revision, not a retained VM appendix.
+
 Date: 2026-10-06. Source baseline: `40dbbc889d4503ad1644bd98f98f38ce864692dc`
 on `misakas/main`; audit edits are documentation only. No registration, implementation,
 consensus activation, benchmark or security proof is asserted here.

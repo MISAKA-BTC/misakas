@@ -3208,81 +3208,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         request: GetPalwKernelClaimRequest,
     ) -> RpcResult<GetPalwKernelClaimResponse> {
         // A malformed claim id is an error before any state is read, on every network.
-        let claim = parse_hash64(request.claim_id.trim(), "claim id")?;
+        let claim = kaspa_rpc_core::convert::palw_kernel::palw_kernel_claim_request_v1(&request)?;
         if palw_v2_bundle(&self.config.params).is_none() {
             return Ok(GetPalwKernelClaimResponse { claim_id: claim.to_string(), ..Default::default() });
         }
+        // One builder, shared with the real-node G14 harness (`kaspa_rpc_core::convert::palw_kernel`).
         let session = self.consensus_manager.consensus().unguarded_session();
-        let tip_daa = session.get_virtual_daa_score();
-        let kernel_claim = claim.as_bytes();
-        let read = session
-            .spawn_blocking(move |c| c.palw_kernel_route_v1().map(|route| route.claim_read_v1(&kernel_claim)))
-            .await;
-        let Some(read) = read else {
-            return Ok(GetPalwKernelClaimResponse { claim_id: claim.to_string(), tip_daa, ..Default::default() });
-        };
-        let Some(read) = read.map_err(RpcError::General)? else {
-            return Ok(GetPalwKernelClaimResponse { available: true, claim_id: claim.to_string(), tip_daa, ..Default::default() });
-        };
-        let hex = |bytes: &[u8]| faster_hex::hex_string(bytes);
-        Ok(GetPalwKernelClaimResponse {
-            available: true,
-            found: true,
-            tip_daa,
-            claim_id: claim.to_string(),
-            kind: read.kind.to_string(),
-            state: read.state,
-            final_daa: read.final_daa.unwrap_or(0),
-            convicted: read.convicted,
-            rewarded: read.rewarded,
-            reserved_sompi: read.reserved,
-            committed_daa: read.committed_daa,
-            liability_until: read.liability_until.unwrap_or(0),
-            producer_bond: hex(&read.producer_bond),
-            job_id: hex(&read.job_id),
-            class_id: hex(&read.class_id),
-            public_record: hex(&read.public_record),
-            record_header: hex(&read.record_header),
-            served: read
-                .served
-                .iter()
-                .map(|(stage, position, bytes)| RpcPalwKernelServed { stage: *stage as u32, position: *position, bytes: hex(bytes) })
-                .collect(),
-            demands: read
-                .demands
-                .iter()
-                .map(|d| RpcPalwKernelDemand {
-                    stage: d.stage as u32,
-                    position: d.position,
-                    demanders: d.demanders,
-                    filed_daa: d.filed_daa,
-                    deadline_daa: d.deadline_daa,
-                    last_rejection: d.last_rejection.clone().unwrap_or_default(),
-                })
-                .collect(),
-            seats: read
-                .seats
-                .iter()
-                .map(|(bond, kernel_bond)| RpcPalwKernelSeat {
-                    bond: format!("{}:{}", bond.0.transaction_id, bond.0.index),
-                    kernel_bond: hex(kernel_bond),
-                })
-                .collect(),
-            quorum: read.quorum as u32,
-            assignment_deadline_daa: read.assignment_deadline_daa,
-            receipts_counted: read.receipts_counted,
-            ledger_root: read.ledger_root.to_string(),
-            aux_root: read.aux_root.to_string(),
-            mode: read.mode.to_string(),
-            opv: read.opv.is_some(),
-            opv_admitted_daa: read.opv.as_ref().map(|o| o.admitted_daa).unwrap_or(0),
-            opv_verifier_start_cutoff_daa: read.opv.as_ref().map(|o| o.verifier_start_cutoff_daa).unwrap_or(0),
-            opv_final_floor_daa: read.opv.as_ref().map(|o| o.final_floor_daa).unwrap_or(0),
-            opv_hard_deadline_daa: read.opv.as_ref().map(|o| o.hard_deadline_daa).unwrap_or(0),
-            opv_reservation_sompi: read.opv.as_ref().map(|o| o.reservation).unwrap_or(0),
-            opv_max_gain_sompi: read.opv.as_ref().map(|o| o.max_gain).unwrap_or(0),
-            final_statement: read.opv.as_ref().map(|o| o.statement.to_string()).unwrap_or_default(),
-        })
+        session.spawn_blocking(move |c| kaspa_rpc_core::convert::palw_kernel::palw_kernel_claim_response_v1(c, claim)).await
     }
 
     async fn get_palw_kernel_rows_call(
@@ -3291,54 +3223,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         request: GetPalwKernelRowsRequest,
     ) -> RpcResult<GetPalwKernelRowsResponse> {
         // The cursor is parsed before a byte of chain state is read.
-        let after = if request.has_cursor {
-            let table = u8::try_from(request.after_table).map_err(|_| RpcError::General("afterTable must fit a u8".to_string()))?;
-            let text = request.after_key.trim();
-            if text.len() % 2 != 0 {
-                return Err(RpcError::General("afterKey must be an even number of hex digits".to_string()));
-            }
-            let mut key = vec![0u8; text.len() / 2];
-            faster_hex::hex_decode(text.as_bytes(), &mut key).map_err(|e| RpcError::General(format!("afterKey is not hex: {e}")))?;
-            Some((table, key))
-        } else {
-            None
-        };
+        let (after, max_bytes) = kaspa_rpc_core::convert::palw_kernel::palw_kernel_rows_request_v1(&request)?;
         if palw_v2_bundle(&self.config.params).is_none() {
             return Ok(GetPalwKernelRowsResponse::default());
         }
-        let max_bytes = match request.max_bytes {
-            0 => PALW_KERNEL_ROWS_RPC_BYTES,
-            n => (n as usize).min(PALW_KERNEL_ROWS_RPC_BYTES_MAX),
-        };
         let session = self.consensus_manager.consensus().unguarded_session();
-        let tip_daa = session.get_virtual_daa_score();
-        let Some((route, page)) = session
-            .spawn_blocking(move |c| c.palw_kernel_route_v1().map(|route| {
-                let page = route.rows_page_v1(after, max_bytes);
-                (route, page)
-            }))
-            .await
-        else {
-            return Ok(GetPalwKernelRowsResponse { tip_daa, ..Default::default() });
-        };
-        let hex = |bytes: &[u8]| faster_hex::hex_string(bytes);
-        let header = borsh::to_vec(&route.header).map_err(|e| RpcError::General(e.to_string()))?;
-        let (more, next_table, next_key) = match &page.next {
-            Some((table, key)) => (true, *table as u32, hex(key)),
-            None => (false, 0, String::new()),
-        };
-        Ok(GetPalwKernelRowsResponse {
-            available: true,
-            tip_daa,
-            ledger_root: route.ledger_root().to_string(),
-            aux_root: route.aux_root().to_string(),
-            header: hex(&header),
-            rows: page.rows.iter().map(|(table, key, row)| RpcPalwKernelRow { table: *table as u32, key: hex(key), row: hex(row) }).collect(),
-            more,
-            next_table,
-            next_key,
-            total_rows: page.total_rows,
-        })
+        session.spawn_blocking(move |c| kaspa_rpc_core::convert::palw_kernel::palw_kernel_rows_response_v1(c, after, max_bytes)).await
     }
 
     async fn get_palw_kernel_finals_call(
@@ -3349,42 +3239,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         if palw_v2_bundle(&self.config.params).is_none() {
             return Ok(GetPalwKernelFinalsResponse::default());
         }
-        let limit = match request.limit {
-            0 => PALW_KERNEL_FINALS_RPC_ROWS,
-            n => (n as usize).min(PALW_KERNEL_FINALS_RPC_ROWS_MAX),
-        };
+        let limit = kaspa_rpc_core::convert::palw_kernel::palw_kernel_finals_request_v1(&request);
         let session = self.consensus_manager.consensus().unguarded_session();
-        let tip_daa = session.get_virtual_daa_score();
-        let Some((ledger_root, finals)) = session
-            .spawn_blocking(move |c| c.palw_kernel_route_v1().map(|route| (route.ledger_root(), route.finals_read_v1())))
-            .await
-        else {
-            return Ok(GetPalwKernelFinalsResponse { tip_daa, ..Default::default() });
-        };
-        let finals = finals.map_err(RpcError::General)?;
-        let hex = |bytes: &[u8]| faster_hex::hex_string(bytes);
-        let total = finals.len() as u64;
-        // Newest first: a beacon reads the latest Finals.
-        let rows = finals
-            .iter()
-            .rev()
-            .take(limit)
-            .map(|f| RpcPalwKernelFinal {
-                claim_id: hex(&f.receipt.claim),
-                mode: f.receipt.mode.name().to_string(),
-                final_path: f.final_path.to_string(),
-                source_profile_id: hex(&f.receipt.source_profile_id),
-                canonical_work_id: hex(&f.receipt.canonical_work_id),
-                execution_commitment: hex(&f.receipt.execution_commitment),
-                accepted_daa: f.receipt.accepted_daa,
-                final_daa: f.receipt.final_daa,
-                da_satisfied: f.receipt.da_satisfied,
-                standing: format!("{:?}", f.receipt.standing),
-                work_final_event: f.event.as_deref().map(hex).unwrap_or_default(),
-                statement: f.statement.to_string(),
-            })
-            .collect();
-        Ok(GetPalwKernelFinalsResponse { available: true, tip_daa, finals: rows, total, ledger_root: ledger_root.to_string() })
+        session.spawn_blocking(move |c| kaspa_rpc_core::convert::palw_kernel::palw_kernel_finals_response_v1(c, limit)).await
     }
 
     async fn get_palw_onboarding_call(
@@ -3451,57 +3308,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         request: GetPalwConformanceEvidenceRequest,
     ) -> RpcResult<GetPalwConformanceEvidenceResponse> {
         // A malformed class id is an error before any state is read, on every network.
-        let class = parse_hash64(request.class_id.trim(), "class id")?;
+        let class = kaspa_rpc_core::convert::palw_kernel::palw_conformance_evidence_request_v1(&request)?;
         if palw_v2_bundle(&self.config.params).is_none() {
             return Ok(GetPalwConformanceEvidenceResponse { class_id: class.to_string(), ..Default::default() });
         }
         let session = self.consensus_manager.consensus().unguarded_session();
-        let tip_daa = session.get_virtual_daa_score();
-        let Some(read) = session.spawn_blocking(move |c| c.palw_conformance_evidence_v1(class)).await else {
-            return Ok(GetPalwConformanceEvidenceResponse { available: true, class_id: class.to_string(), tip_daa, ..Default::default() });
-        };
-        use kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1;
-        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
-        let (gate, gate_code, gate_reason) = match read.gate {
-            PalwOnboardingGateV1::NotKernelBound => ("NotKernelBound", "", ""),
-            PalwOnboardingGateV1::Ready => ("Ready", "", ""),
-            PalwOnboardingGateV1::Held { code, why } => ("Held", code, why),
-        };
-        let a = read.attempt.as_ref();
-        let posted = a.and_then(|a| a.evidence);
-        Ok(GetPalwConformanceEvidenceResponse {
-            available: true,
-            found: true,
-            tip_daa,
-            class_id: class.to_string(),
-            lifecycle_state: a.map(|a| a.record.state.code().to_string()).unwrap_or_default(),
-            last_failure: a.and_then(|a| a.record.last_failure).map(|f| f.code().to_string()).unwrap_or_default(),
-            attempt_end: a.and_then(|a| a.last_end).map(|(e, _)| e.name().to_string()).unwrap_or_default(),
-            attempts: a.map(|a| a.record.attempts()).unwrap_or(0),
-            attempt_limit: a.map(|a| a.record.attempt_limit).unwrap_or(read.policy.retry_limit.saturating_add(1)),
-            challenge_policy_id: hex(&read.policy.id()),
-            challenge_policy: hex(&borsh::to_vec(&read.policy).unwrap_or_default()),
-            statement_root: a.map(|a| hex(&a.commitment.statement_root())).unwrap_or_default(),
-            committed_daa: a.map(|a| a.committed_daa).unwrap_or(0),
-            challenge_epoch: a.map(|a| a.challenge_epoch).unwrap_or(0),
-            beacon_state: read.beacon.to_string(),
-            beacon_have: read.beacon_have,
-            beacon_need: read.beacon_need,
-            lock_position: read.lock_position.unwrap_or(0),
-            beacon_output: read.beacon_output.map(|o| o.to_string()).unwrap_or_default(),
-            evidence_posted: posted.is_some(),
-            evidence_id: posted.map(|e| e.evidence_id.to_string()).unwrap_or_default(),
-            evidence_daa: posted.map(|e| e.posted_daa).unwrap_or(0),
-            window_end_daa: posted.map(|e| e.window_end_daa).unwrap_or(0),
-            gate: gate.to_string(),
-            gate_code: gate_code.to_string(),
-            gate_reason: gate_reason.to_string(),
-            attempt_row: read.attempt_row.as_deref().map(hex).unwrap_or_default(),
-            evidence_row: read.evidence_row.as_deref().map(hex).unwrap_or_default(),
-            program: read.program.as_deref().map(hex).unwrap_or_default(),
-            ledger_root: read.ledger_root.to_string(),
-            aux_root: read.aux_root.to_string(),
-        })
+        session.spawn_blocking(move |c| kaspa_rpc_core::convert::palw_kernel::palw_conformance_evidence_response_v1(c, class)).await
     }
 
     // ------------------------------------------------------------------------------------------
@@ -5210,12 +5022,7 @@ impl AsyncService for RpcCoreService {
     }
 }
 
-/// `getPalwKernelRows`'s default page budget (key and row bytes) and the most a caller may ask.
-/// `getPalwKernelFinals`'s default page of Finals and the most a caller may ask.
-const PALW_KERNEL_FINALS_RPC_ROWS: usize = 64;
-const PALW_KERNEL_FINALS_RPC_ROWS_MAX: usize = 1024;
-const PALW_KERNEL_ROWS_RPC_BYTES: usize = 1 << 20;
-const PALW_KERNEL_ROWS_RPC_BYTES_MAX: usize = 8 << 20;
+/// `getPalwKernelRows` / `getPalwKernelFinals` page bounds: `kaspa_rpc_core::convert::palw_kernel` (shared with the G14 harness).
 
 /// `getPalwCapacityShadow`'s default page of bond and claim rows, and the most a caller may ask.
 const PALW_CAPACITY_SHADOW_RPC_ROWS: usize = 500;

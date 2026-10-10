@@ -105,7 +105,9 @@ pub fn arm_capacity_weight_cap(p: &mut Params, at: u64) {
 pub fn arm_capacity_audit_door(p: &mut Params, at: u64) {
     use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1};
     let fences = p.palw_fences_v1();
-    let later = |name: &str| fences.iter().find(|(n, _)| *n == name).expect("a fence").1.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at);
+    let later = |name: &str| {
+        fences.iter().find(|(n, _)| *n == name).expect("a fence").1.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at)
+    };
     for name in ["palw_reorg_strict_economic_win", "palw_panel_seed_execution", "palw_operator_anchor"] {
         if later(name) {
             (PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).expect("listed").set)(p, Some(ForkActivation::new(at)));
@@ -227,8 +229,9 @@ pub fn registry_fold(p: &Params, daa: u64) -> Option<kaspa_consensus_core::palw_
     for (id, w) in palw_rc_typed_class_works_v1() {
         works.entry(id).or_insert(w);
     }
-    let floor = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
-        .expect("floor profile");
+    let floor =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("floor profile");
     let (pf, dc) = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL;
     let job = kaspa_consensus_core::palw_base0_profile::rc_job_context(&floor, pf, dc);
     if let Some(w) = palw_model_work_from_carriage_v1(&floor, &job) {
@@ -283,8 +286,16 @@ pub fn ctx(block: u64, daa: u64, blue: u64, subsidy: u64) -> PalwBlockContextV2 
 /// `process_genesis` folds it.
 pub fn genesis_state(p: &Params) -> PalwChainStateV2 {
     let b = bundle(p);
-    let (s, _, _) = fold(p, &b.state, &PalwChainStateV2::genesis(), &ctx(0xB10C_0000, 0, 0, 0), &b.genesis_objects, PalwBlockWorkV3::None, Hash64::default())
-        .expect("the t12 genesis list folds");
+    let (s, _, _) = fold(
+        p,
+        &b.state,
+        &PalwChainStateV2::genesis(),
+        &ctx(0xB10C_0000, 0, 0, 0),
+        &b.genesis_objects,
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+    )
+    .expect("the t12 genesis list folds");
     s
 }
 
@@ -410,7 +421,13 @@ pub fn junk_attempt(
 pub fn valid_receipts(claim: Hash64, seats: &[PalwBondKeyV2]) -> Vec<PalwSeatReceiptV2> {
     seats
         .iter()
-        .map(|s| PalwSeatReceiptV2 { claim, verdict: PalwReceiptVerdictV2::Valid, seat_bond: *s, signed_daa: 0, signature: Vec::new() })
+        .map(|s| PalwSeatReceiptV2 {
+            claim,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: *s,
+            signed_daa: 0,
+            signature: Vec::new(),
+        })
         .collect()
 }
 
@@ -471,9 +488,11 @@ pub fn admitted_per_attempt_on(p: &Params, parent: &PalwChainStateV2, class: Has
     let b = bundle(p);
     let sp = &b.state;
     let rich = 1_000_000_000_000_000u64; // 10,000,000 MSK: enough to back any genesis class's claim
-    let (s, _, _) = fold(p, sp, parent, &ctx(0xAD00_0001, 1_000, 1, 0), &[bond_obj(PROBE, rich)], PalwBlockWorkV3::None, Hash64::default())
-        .expect("the probe bond registers");
-    let (env, key, id) = junk_attempt(class, bond_key(PROBE), pubkey_of(PROBE), &operator_pubkey_of(PROBE), pwu, 0xAD_5EED, 0xAD_0000_5EED);
+    let (s, _, _) =
+        fold(p, sp, parent, &ctx(0xAD00_0001, 1_000, 1, 0), &[bond_obj(PROBE, rich)], PalwBlockWorkV3::None, Hash64::default())
+            .expect("the probe bond registers");
+    let (env, key, id) =
+        junk_attempt(class, bond_key(PROBE), pubkey_of(PROBE), &operator_pubkey_of(PROBE), pwu, 0xAD_5EED, 0xAD_0000_5EED);
     let (s2, _, skips) = fold(p, sp, &s, &ctx(0xAD00_0002, 1_001, 2, subsidy), &[], PalwBlockWorkV3::Attempt(&env), key)
         .expect("the probe attempt folds");
     assert!(skips.is_empty(), "a 10,000,000 MSK bond backs one attempt: {skips:?}");

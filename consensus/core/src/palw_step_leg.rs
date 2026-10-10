@@ -2479,6 +2479,16 @@ fn step_tile_fault(
     None
 }
 
+/// **The canonical value count of the tile at `coord`** (`None` past the node's tiles) — the rule `step_tile_fault` holds a
+/// committed tile to, public for the legacy leaf recompute (LG14-B, tag 159), which builds the canonical tile itself.
+pub fn palw_expected_tile_values_v1(
+    profile: &PalwShapeProfileV3,
+    context: &PalwJobContextV2,
+    coord: &PalwStepCoordinateV1,
+) -> Option<u32> {
+    expected_tile_values(profile, context, coord)
+}
+
 fn expected_tile_values(profile: &PalwShapeProfileV3, context: &PalwJobContextV2, coord: &PalwStepCoordinateV1) -> Option<u32> {
     let (node, _layer) = profile.resolve_node_slot(coord.node_slot)?;
     let kv_len = if coord.call_index == 0 {

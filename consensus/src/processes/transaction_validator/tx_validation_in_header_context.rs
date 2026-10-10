@@ -59,7 +59,26 @@ impl TransactionValidator {
         self.check_palw_fp_evaluation_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_gen_claim_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_prefix_state_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_constraint_in_context(tx, ctx_daa_score)
+        self.check_palw_fp_constraint_in_context(tx, ctx_daa_score)?;
+        self.check_palw_lifecycle_kind_in_context(tx, ctx_daa_score)
+    }
+
+    /// **A-2 uniformity, the height-indexed half of the lifecycle door.** Isolation judges a lifecycle kind the live testnet-12 build
+    /// cannot decode as that build judges its bytes (tolerated where the ruleset declares the audit fence, refused as undecodable
+    /// where it does not), because it holds no height. Here, at the containing block's DAA, such a kind whose owning fence is in force
+    /// meets its own stateless rule (its may-ride arm: a signature, a size bound, an envelope's contents) and a refusal is the
+    /// block's; below the fence nothing is asked, so a block the live build accepts is accepted here. Inert on every shipped preset:
+    /// no owning fence is armed anywhere.
+    fn check_palw_lifecycle_kind_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+            return Ok(());
+        }
+        kaspa_consensus_core::palw_lifecycle_objects_v2::validate_palw_lifecycle_tx_in_context_v1(
+            &tx.payload,
+            &self.palw_lifecycle_kind_fences,
+            ctx_daa_score,
+        )
+        .map_err(TxRuleError::InvalidPalwLifecyclePayload)
     }
 
     /// **RFC-0004 A6, the height-indexed half of the evaluation door.** Isolation admits an evaluation

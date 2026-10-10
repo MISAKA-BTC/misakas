@@ -1,5 +1,7 @@
 # RFC/ADR mission alignment audit — 2026-10-07
 
+> **2026-10-10改定:** RFC05 の VM と RFC14 §16 の MISAKA Torrent は不採用理由だけの記述へ整理した。以下の snapshot・inventory は監査当時の版を記録する。現行の採用方針は各 RFC と索引を参照する。
+
 ## 結果
 
 [ADR-0173](../0173-public-verifier-dispute-completeness-is-misaka-purpose.md)で、**普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeし、objective convictionまで完結すること**をMISAKAの中核目標として採択した。

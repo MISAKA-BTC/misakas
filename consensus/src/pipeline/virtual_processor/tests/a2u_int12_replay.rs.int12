@@ -1,0 +1,124 @@
+//! **The A2U chains, replayed through the live testnet-12 build itself** (int-12, `rcore/int-12` @ `0b1c11b87`).
+//!
+//! NOT compiled in a newer tree (the `.int12` suffix keeps cargo away): `scripts/a2u-int12-replay.sh` places it in a source tree of
+//! `0b1c11b87` as `consensus/src/pipeline/virtual_processor/tests/a2u_int12_replay.rs`, declares the module, and runs it there
+//! against the files the newer build's pin test wrote (`t12_a2u_new_kinds_uniform.rs`, `A2U_INT12_REPLAY_OUT=<dir>`).
+//!
+//! For each file it rebuilds the ruleset with int-12's OWN harness and fence lists, and demands, of the live build's code:
+//!
+//! * the same genesis;
+//! * every block of the newer build's chain accepted, UTXO-valid, and recording the same PALW state root (block by block — a header
+//!   commits its parent's root, so a root the newer build computed differently would already fail the next header here);
+//! * every refused block refused with the same words, and the same pruning-proof refusal;
+//! * the same final view: the sink, the PALW state root and the virtual UTXO multiset.
+//!
+//! So a newer build's reading of every kind, form and formula below its fence is checked against the live build's, not against a
+//! newer build's idea of it — the mixed fleet, in one test.
+use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
+use crate::model::stores::virtual_state::VirtualStateStoreReader;
+use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::api::ConsensusApi;
+use kaspa_consensus_core::block::Block;
+use kaspa_consensus_core::blockstatus::BlockStatus;
+use kaspa_consensus_core::config::params::{ForkActivation, Params};
+use kaspa_consensus_core::header::Header;
+use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+use kaspa_consensus_core::tx::Transaction;
+use kaspa_hashes::Hash64;
+use std::sync::Arc;
+
+/// The newer build's dump (`t12_a2u_new_kinds_uniform.rs`'s `Dump`).
+type Dump = (
+    u8,
+    BlockHash,
+    Vec<(Header, Vec<Transaction>)>,
+    Vec<(Header, Vec<Transaction>, String)>,
+    String,
+    Vec<(BlockHash, Hash64)>,
+    (BlockHash, Hash64, Hash64),
+);
+
+/// The live release compressed, with int-12's own lists — the newer pin test's `arm_the_release`.
+fn arm_the_release(params: &mut Params) {
+    use kaspa_consensus_core::config::params::{
+        PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1,
+        PALW_T12_TIR_FLAG_DAY_FENCES_V1, palw_t12_arm_int11_flag_day_at_v1,
+    };
+    for (list, at) in [
+        (PALW_T12_POST_LAUNCH_FENCES_V1, 20),
+        (PALW_T12_POST_LAUNCH_FENCES_V2, 24),
+        (PALW_T12_POST_LAUNCH_FENCES_V3, 28),
+        (PALW_T12_TIR_FLAG_DAY_FENCES_V1, 32),
+        (PALW_T12_TIR_FENCE2_FENCES_V1, 36),
+    ] {
+        for fence in list {
+            (fence.set)(params, Some(ForkActivation::new(at)));
+        }
+    }
+    palw_t12_arm_int11_flag_day_at_v1(params, Some(40));
+}
+
+fn view(chain: &T12Chain) -> (BlockHash, Hash64, Hash64) {
+    let (_, state) = chain.tip_state();
+    let multiset = chain.vp().virtual_stores.read().state.get().unwrap().multiset.clone().finalize();
+    (chain.sink(), state.state_root(), multiset)
+}
+
+async fn replay_one(path: &str) {
+    let (ruleset, genesis, blocks, refused, proof_refusal, roots, final_view): Dump =
+        borsh::from_slice(&std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"))).expect("a newer build's A2U dump");
+    let (mut config, _, premine, floats) = t12_with_harness_cards();
+    match ruleset {
+        0 => {}
+        1 => {
+            arm_the_release(&mut config.params);
+            config.params.validate_palw_v2().expect("the live release, compressed, is a runnable ruleset on int-12");
+        }
+        other => panic!("{path}: unknown ruleset {other}"),
+    }
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!("testnet-12 is V2") };
+    let bundle = bundle.clone();
+    assert_eq!(config.params.genesis.hash, genesis, "{path}: the same genesis");
+    let node = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    for (i, (header, txs)) in blocks.into_iter().enumerate() {
+        let hash = header.hash;
+        node.ctx
+            .consensus
+            .validate_and_insert_block(Block::new(header, txs))
+            .virtual_state_task
+            .await
+            .unwrap_or_else(|e| panic!("{path}: block {i} ({hash}) is refused by the live build: {e}"));
+        assert_eq!(node.ctx.consensus.block_status(hash), BlockStatus::StatusUTXOValid, "{path}: block {i} ({hash})");
+        let root = node.vp().palw_state_v2_store.read().state_root_of(hash).expect("a chain block's delta");
+        assert_eq!((hash, root), roots[i], "{path}: block {i}: the live build's PALW state root");
+    }
+    for (header, txs, why) in refused {
+        let hash = header.hash;
+        let proof: Vec<Vec<Arc<Header>>> = {
+            let mut levels = vec![Vec::new(); config.params.max_block_level as usize + 1];
+            levels[0].push(Arc::new(header.clone()));
+            levels
+        };
+        let err = node
+            .ctx
+            .consensus
+            .validate_and_insert_block(Block::new(header, txs))
+            .virtual_state_task
+            .await
+            .expect_err("refused by the live build");
+        assert_eq!(err.to_string(), why, "{path}: {hash}: the live build's refusal");
+        let proof_err = node.ctx.consensus.validate_pruning_proof_standalone(&proof).expect_err("refused").to_string();
+        assert_eq!(proof_err, proof_refusal, "{path}: {hash}: the live build's pruning-proof refusal");
+    }
+    assert_eq!(view(&node), final_view, "{path}: the sink, the PALW state root and the UTXO multiset");
+    eprintln!("[a2u-int12] {path}: ruleset {ruleset}: {} blocks, every verdict, root and refusal is the live build's", roots.len());
+}
+
+#[tokio::test]
+async fn a2u_int12_replays_the_newer_builds_chains() {
+    kaspa_core::log::try_init_logger("warn");
+    let files = std::env::var("A2U_INT12_REPLAY_IN").expect("A2U_INT12_REPLAY_IN=<file>[,<file>…]");
+    for file in files.split(',').filter(|f| !f.is_empty()) {
+        replay_one(file).await;
+    }
+}

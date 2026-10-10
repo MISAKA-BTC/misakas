@@ -45,9 +45,11 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 
 - [PALW bond/time production and reward premise — ADR-0176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md) — claim capacity may grow while bond-attributed blocks, rewards and Final weight stay bounded; probabilistic checks, public prosecution and collectible liability remain necessary. Design accepted; implementation/activation pending.
 - [RFC-0015 §8](rfc/0015-panel-free-permissionless-verification.md) — shared reservation, common DAA hold, claim-right subdivision and Final-weight accounting for the new design.
+- [Round / EXEC additional acceptance conditions (2026-10-10)](palw-round-exec-additional-acceptance-2026-10-10.md) — adopted design gates for compute-proportional tickets, bond budgets, shared-window neutrality and economics; implementation and activation pending
 - [ADR index](adr/README.md)
 - [PQ specification](kaspa-pq-spec.md)
 - [ML-DSA-87 design](kaspa-pq-design-mldsa87.md)
+- [PALW versioned Kernel design](design/palw/versioned-kernels.md)
 - [PALW registry map](palw-registry-map.md)
 - [PALW extension envelope](palw-extension-envelope.md)
 

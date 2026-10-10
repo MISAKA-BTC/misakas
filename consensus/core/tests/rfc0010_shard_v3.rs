@@ -48,7 +48,8 @@ use kaspa_consensus_core::palw_tir_class_v1::PalwTirAdmissionCarriageV1;
 use kaspa_consensus_core::palw_tir_court_v1::{build_tir_cone_refutation_v1, check_tir_cone_refutation_v1};
 use kaspa_consensus_core::palw_tir_one_move_v1::{palw_tir_one_move_accusation_v1, palw_tir_one_move_verdict_v1};
 use kaspa_consensus_core::palw_tir_shard_v1::{
-    PalwSeatReceiptV4, PalwTirShardPartV1, palw_tir_shard_assignment_v1, palw_tir_shard_outsider_mask_v1, palw_tir_shard_ready_class_v1,
+    PalwSeatReceiptV4, PalwTirShardPartV1, palw_tir_shard_assignment_v1, palw_tir_shard_outsider_mask_v1,
+    palw_tir_shard_ready_class_v1,
 };
 use kaspa_consensus_core::palw_tir_shard_watch_v1::{PALW_TIR_SHARD_WATCH_NO_SEAT_V1, palw_tir_shard_watch_duties_v1};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
@@ -124,7 +125,12 @@ fn params() -> PalwStateParamsV2 {
         .with_tir_shard_from_daa(Some(SHARD_AT))
         .with_worker_carve_permille(620)
         .unwrap()
-        .with_panel_v3(Some(PalwPanelV3ParamsV1 { from_daa: V3_AT, policy: engine_policy(), network: h64(0x4E37), ruleset: h64(0x5255) }))
+        .with_panel_v3(Some(PalwPanelV3ParamsV1 {
+            from_daa: V3_AT,
+            policy: engine_policy(),
+            network: h64(0x4E37),
+            ruleset: h64(0x5255),
+        }))
 }
 
 fn bond(n: u64, capable: &[Hash64]) -> PalwConsensusObjectV2 {
@@ -207,8 +213,12 @@ impl Run {
             final_path: FinalPathV1::PanelIndependent,
         };
         if let Some(inputs) = self.extras.panel_v3.as_mut() {
-            inputs.beacon_source =
-                PalwPanelV3BeaconSourceV1::Reference { events: vec![event.clone()], eligible_profiles: BTreeSet::from([profile]) };
+            inputs.beacon_source = PalwPanelV3BeaconSourceV1::Reference {
+                events: vec![event.clone()],
+                eligible_profiles: BTreeSet::from([profile]),
+                works: Vec::new(),
+                sealed: Vec::new(),
+            };
         }
         let request = BeaconRequestV1 {
             network: mirror.network,
@@ -219,7 +229,8 @@ impl Run {
             deadline_daa: release + mirror.policy.beacon_wait_daa,
         };
         let context = panel_beacon_context_v1(&request, &challenge_policy(), BTreeSet::from([profile]));
-        let WorkBeaconStateV1::Locked(beacon) = collect_work_beacon_v1(&context, &[event], release + 5).expect("a valid policy") else {
+        let WorkBeaconStateV1::Locked(beacon) = collect_work_beacon_v1(&context, &[event], release + 5).expect("a valid policy")
+        else {
             panic!("the reference source locks a beacon");
         };
         BeaconProofV1 { epoch, output: Hash64::from_bytes(beacon.output), proof: borsh::to_vec(beacon.beacon()).unwrap() }
@@ -245,7 +256,12 @@ fn sealed(f: &Fixture, x: &Execution, shard0: &[u64], shard1: &[u64]) -> (Run, H
             capability_proof: false,
             floor_class: h64(1),
             approved_beacons: vec![challenge_policy()],
-            beacon_source: PalwPanelV3BeaconSourceV1::Reference { events: Vec::new(), eligible_profiles: BTreeSet::new() },
+            beacon_source: PalwPanelV3BeaconSourceV1::Reference {
+                events: Vec::new(),
+                eligible_profiles: BTreeSet::new(),
+                works: Vec::new(),
+                sealed: Vec::new(),
+            },
         }),
         ..Default::default()
     };
@@ -291,7 +307,11 @@ fn sealed(f: &Fixture, x: &Execution, shard0: &[u64], shard1: &[u64]) -> (Run, H
     });
     run.at(1, &objects, None);
     assert!(run.s.panel_v3().is_some(), "the engine exists past the fence");
-    run.at(SHARD_AT, &[PalwConsensusObjectV2::TirShardPlanDeclared { class_id: f.class_id, s_l: 2, s_p: 1, signature: vec![1; 8] }], None);
+    run.at(
+        SHARD_AT,
+        &[PalwConsensusObjectV2::TirShardPlanDeclared { class_id: f.class_id, s_l: 2, s_p: 1, signature: vec![1; 8] }],
+        None,
+    );
     let network_domain = h64(999);
     let producer = bond_key(PRODUCER).0;
     let env = PalwAttemptEnvelopeV2 {
@@ -496,15 +516,21 @@ fn a_bond_outside_every_seat_convicts_a_v3_sharded_lie_from_public_material() {
     }
     // A seat of shard 0 watches only shard 1; the producer watches nothing of its own claim.
     let seat0 = seats[1];
-    assert_eq!(palw_tir_shard_watch_duties_v1(&run.s, &run.p, &seat0).iter().map(|d| d.tir_shard.unwrap().shard).collect::<Vec<_>>(), vec![1]);
+    assert_eq!(
+        palw_tir_shard_watch_duties_v1(&run.s, &run.p, &seat0).iter().map(|d| d.tir_shard.unwrap().shard).collect::<Vec<_>>(),
+        vec![1]
+    );
     assert!(palw_tir_shard_watch_duties_v1(&run.s, &run.p, &bond_key(PRODUCER)).is_empty());
     // From the claim's public material (the capture the liar served) alone: the cone close, the watcher's bond the accuser.
     let refutation = refute(&f, &lie, leaf);
     let record = run.s.claim(&claim).unwrap().clone();
-    let mut accusation =
-        palw_tir_one_move_accusation_v1(claim, &record, watcher, PalwCourtVerdictV2::ExecutorGuilty, PalwCourtVerdictProofV2::TirCone {
-            refutation: Box::new(refutation),
-        });
+    let mut accusation = palw_tir_one_move_accusation_v1(
+        claim,
+        &record,
+        watcher,
+        PalwCourtVerdictV2::ExecutorGuilty,
+        PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) },
+    );
     accusation.signature = vec![9; 8];
     let court = PalwCourtParamsV2::new(LADDER, 20, 2).expect("a court");
     assert_eq!(

@@ -1,6 +1,6 @@
 [package]
 name = "misaka-palw-kernel"
-description = "ADR-0172 / RFC-0005 §§K.0–K.8 / RFC-0011 §16 / RFC-0004 §0: the versioned-kernel route to model extensibility — KernelDescriptorV1 and the class binding, the bounded typed VerificationPlanV1 and its deterministic checker, the structured registration outcomes (ELIGIBLE_AT, FRONTEND_REQUIRED, KERNEL_EXTENSION_REQUIRED, KERNEL_NOT_ACTIVE, …) and RFC-0011's coverage buckets, and the first K2 reference kernel: post-commit public Freivalds over GF(2^127 − 1) for MatMul, exact recompute for the cheap families, authenticated state continuity, and public fault proofs any bond can file. Dormant and off consensus: no fence, tag, delta or wire id."
+description = "ADR-0172 / versioned-kernels §§K.0–K.8 / RFC-0011 §16 / RFC-0004 §0: the versioned-kernel route to model extensibility — KernelDescriptorV1 and the class binding, the bounded typed VerificationPlanV1 and its deterministic checker, the structured registration outcomes (ELIGIBLE_AT, FRONTEND_REQUIRED, KERNEL_EXTENSION_REQUIRED, KERNEL_NOT_ACTIVE, …) and RFC-0011's coverage buckets, and the first K2 reference kernel: post-commit public Freivalds over GF(2^127 − 1) for MatMul, exact recompute for the cheap families, authenticated state continuity, and public fault proofs any bond can file. Dormant and off consensus: no fence, tag, delta or wire id."
 publish = false
 rust-version.workspace = true
 version.workspace = true
