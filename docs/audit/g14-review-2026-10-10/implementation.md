@@ -521,3 +521,33 @@ class admissionは既存fixture seam、commitmentsは入力検査用syntheticで
 最終sourceのshipping repinとfresh harvest再読込はexit 0、**361 ok・差分なし**。pinを書き換えていない。[repin](evidence/block-prompt-repin-final.log)、[harvest tests](evidence/block-prompt-repin-harvest-tests.log)、[harvest lib](evidence/block-prompt-repin-harvest-lib.log)、[再読込](evidence/block-prompt-repin-replay-final.log)。
 
 次の提出阻害を発見した。`kaspad/src/palw_panel.rs::build_lifecycle_tx_priced_v1`はcompute-mass relay feeだけを使い、protocol rentを含めない。重いwhole proofの必要rent 13,107,150 sompiを満たさずprocessorで落ちるcarrierを作り得る。`palw_fee_funding_floor_v1`も2倍のstandard relay feeだけを基準にするため、重いproofの必要額未満でrefillを止め得る。fee builderとfunding policyの修正を次の優先事項とする。今回のテストはrentを明示的に支払っており、nodeの現builderの提出到達性を立証していない。G14全域の残条件（最大context/session、恒久prune FP job、prefix/state・全family、full service、人口／model peak・期限、累積scope）は引き続き未達。
+
+## carrierのrentを支払いobjectごとにfundingを選ぶ
+
+`f08e22a15`を基点に、前節のnode carrier料金不足を修正した。共通の実署名builderを`kaspad/src/palw_carrier_fees.rs::build_lifecycle_carrier_v2`へ分離し、service wrapperは現在のvirtual DAAと自身のreplacement floorを渡す。同じprotocol価格関数、rent／model-linesの徴収clock、object owning kind、offence-attribution、batch receipt、public-filer mirrorを読む。inactive rent／unknown proof formに追加rentを課さない。rentはcoinbaseでburnされるため、rentとactual compute-mass relay feeの**合計**を払う。rentだけ払ってminerのcarriage feeを消す価格にしない。署名長を含むprobeでmassを計算し、必要額とlocked outputsを照合後にactual ML-DSA-87で署名する。locked outputsの加算とfee合計もchecked arithmeticへ変更した。
+
+priority queue（reporterとpublic filerが提出するcourt queue）とcommon carrierは、現在のobjectの必要額を見てfundingを選び直す。必要額はrent＋最大standard relay fee＋正のchangeで、旧float floor以上とする。2M Whole／FP proofはrent 13,107,150 sompi、選択基準19,107,151 sompi。通常moveの12,000,000 sompi floorは引き上げない。既存のremembered候補とpaged scanへ同じobject固有のminimumを渡し、mature coinbase、unlocked、mempool未使用、登録payout scriptの検査を維持する。unconfirmed chainがある間は別inputへ移らず、stuck-carrier replacementも元のinputを維持する。
+
+大きなproofのfundingが見つからない場合も、小さい有効floatを消してcheap moveを止めない。同じpriority passでは、失敗したminimum以上のscanを繰り返さない。必要な担保・料金そのものを免除する変更ではない。資金が不足するobjectは署名前に拒否され、queueへ残る。最大populationでのscan時間や責任期間内包含をこのpolicyだけから保証しない。
+
+新しい5 V-unitはproduction signer自身を呼び、kind-3／kind-4、旧Whole／FP proofのpayload保持・fee/change、ML-DSA-87のactual P2PKH spendをPQ-only script engineで検査する。kind-3 Windowedのbatch fence前後、FP proofのpublic-filer fence前後、rent clock／offence-attribution前後、replacement price、locked output位置、料金不足／外国script／overflowの署名前拒否を含む。funding fixtureは、旧floorを満たす12M residueから、600-DAA matureの19,107,151 sompiへ選択を進め、599-DAA coinbase、本人／他のlocked bond、mempool使用中、必要額未満を除く。後続cheap moveでは旧floorのresidueを再び認める。
+
+これらのevidenceはpricing reader向けにdecode可能なsynthetic binding/job/receiptであり、model executionやevidenceのobjective admissibilityを立証しない。actual transaction spendの署名は本物だが、chainに存在するfunding outpoint、live API経由のUTXO scan、service tick→reporter→mempool→template→実block包含→coinbase／convictionを一続きに検証したものではない。そのV-node検証、ordinary mature public bond、全familyの正規eligibility、restart／IBD／reorg、期限内包含は引き続き完成条件である。
+
+| 最終sourceの検証 | 結果 |
+| --- | --- |
+| `cargo test -p kaspad --lib palw_carrier_fees --locked` | **5 V-unit PASS**。新しいactual署名・rent／fundingの検査 |
+| `p2_6_da_accusation_policy` | **14 V-unit PASS**。既存funding／drain／DA queue policy |
+| `readiness_memory_and_stuck_carrier_tests` | **12 V-unit PASS**。既存slot／replacement／readiness policy |
+| `fee_lineage_tests` | **2 V-unit PASS**。configured／remembered候補の順序とrestart lineage |
+| `reporter_filer::tests` | **21 V-unit PASS**。既存reporter door |
+| `palw_fraud_filer` | **20 V-unit PASS**。input／worker／memory／reorg |
+| `palw_filer_held::e2e` | **27 PASS**。既存LG14-B／canonical FP入力／held controllerのV-foldとV-unit |
+| `accepted_objects_walk_tests` | **7 V-unit PASS**。公開accepted-history reader adapter |
+| `cargo check -p kaspad --bin kaspad --locked` | **成功**。通常feature（EVMを含む）のnode binary |
+
+合計 **108 unique PASS**。nodeはdefault feature、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`。binary直実行は最終sourceをcargoでbuildした同じ`kaspad_lib-7d8fbaae022c6e79`を使う。既存unused/dead-code警告は残る。[新しいfee試験](evidence/carrier-rent-node-final.log)、[funding](evidence/carrier-rent-funding-final.log)、[replacement](evidence/carrier-rent-replacement-final.log)、[lineage](evidence/carrier-rent-lineage-final.log)、[reporter](evidence/carrier-rent-reporter-final.log)、[filer](evidence/carrier-rent-filer-final.log)、[held／FP](evidence/carrier-rent-held-final.log)、[reader](evidence/carrier-rent-reader-final.log)、[binary check](evidence/carrier-rent-binary-final.log)。
+
+初回compileはfixtureのsampling seedへ整数を渡して失敗し、正しい32-byte arrayへ修正した。[初回compile log](evidence/carrier-rent-node-initial.log)。初回のclock試験は、testnet-12のmodel-lines clockもrent徴収を有効にすることを見落とし、certification rentだけをoffにした期待がFAILした。fixtureでmodel-linesをoffにして対象clockを隔離し、productionのOR条件やburn価格を緩めていない。[初回clock試験](evidence/carrier-rent-node-fence-initial.log)。最終PASSだけを計上した。
+
+最終sourceのshipping repinとfresh harvest再読込はexit 0、**361 ok・差分なし**。[repin](evidence/carrier-rent-repin-final.log)、[harvest tests](evidence/carrier-rent-repin-harvest-tests.log)、[harvest lib](evidence/carrier-rent-repin-harvest-lib.log)、[再読込](evidence/carrier-rent-repin-replay-final.log)。価格定数、consensus source、rooted state、wire、activation height、shipping pinを変更していない。G14全域は引き続き未達で、ADR-0177 D7の登録モデル保有前提を維持する。

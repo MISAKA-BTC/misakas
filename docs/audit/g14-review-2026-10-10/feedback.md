@@ -15,7 +15,7 @@
 2. **累積scopeとcourtの両立:** 64要素hiding tileと累積scopeを実際のresponse/court/reward gateへ接続する。`cumulative_scope_allows_v1`のstubとF-C4R4-17は残る。scope報告関数の成功だけでreward eligibilityを認めない。
 3. **DAと包含の期限:** 最大Respond、全chunk、adaptiveな探索round、proof処理が責任期間内に収まる条件を実nodeで立証する。9B/8kの1 positionは2,029 partsであり、現行の固定20 DAAだけでは十分性を示せない。
    whole-root検査のonce-per-claim課金とcacheの対応は、blockの受入・rehearsal・最終foldを同じthread-local scopeで包み、課金済みrootを退避しない修正を追加した。別threadによる旧process cacheの退避を挟むgate・受入・fold試験で、262,143 idsの再計算を1回に抑えた。5本のcarrierの合計transient massは357,140だが、各carrierの重量測定は同じfixture funding outpointを使うため、実block包含の証明ではない。初回の多数claim反例案はmass上限を超えて棄却した。最大人口・実node・期限内包含の検証は残る。
-   **新たな提出阻害:** nodeの`build_lifecycle_tx_priced_v1`はcompute-massのrelay feeだけを使い、protocol rentを含めない。2M whole proofの必要rentは13,107,150 sompiとなり、署名・queue済みでもprocessorで受理されない場合がある。fee funding floorにも重いproofを含める必要がある。これは次の優先修正であり、現在の公開filerをfull-service完成と判定しない理由になる。
+   **carrier料金とfundingの修正:** nodeの共通署名builderをfence-aware rent＋relay carriage feeへ変更した。公開filerのpriority queueとcommon carrierはobject固有の最低額で成熟・unlocked・mempool未使用のUTXOを選び直す。2M proofのrent 13,107,150 sompiに対し選択基準は19,107,151 sompiであり、通常moveの12,000,000 sompi floorは維持する。新しい実署名・料金／fundingの5 V-unitと関連回帰、計108 PASS。これは料金不足による提出阻害の修正であり、full-serviceの採掘・包含、ordinary mature bond、全familyの終局を立証するものではない。
 4. **共謀者による負荷と包含:** claim共通のlive 64・生涯256 reservation上限を除き、本人のretained record 64件と担保余力へ帰属させた。他bondの予約数で新verifierを拒否しない。旧閾値を超える予約から公開input→conviction/defaultへ進むV-foldを追加したが、owner数に比例する最大state／response負荷と期限内包含の実node測定は残る。
 5. **正規eligibilityと測定:** 各active familyをtest-only admissionなしで登録し、fresh verifier自身のnode/RPC、最大profileの実測RAM・時間、restart/IBD/reorgを確認する。shape計算や小型fixtureだけで代替しない。legacy readerの途中走査の取りこぼしは修正したが、対応外unitの恒久prune後の取得・再要求とfresh-node追及の実node試験は残る（下記）。
 

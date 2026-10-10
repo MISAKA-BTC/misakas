@@ -63,6 +63,9 @@ use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
 use kaspa_utils::triggers::SingleTrigger;
 
+#[path = "palw_carrier_fees.rs"]
+mod palw_carrier_fees;
+
 /// **ADR-0152 R-3 (P2-8): the reporter's commit–reveal filer**, and the capture arm's
 /// `ExecutorRefuted` and J1 auto that feed it — a child of this module, so each call site below is
 /// one line (see its own header).
@@ -5515,6 +5518,32 @@ impl PalwPanelService {
         }
     }
 
+    /// Select funding for THIS queued object, leaving the ordinary float floor unchanged. A
+    /// heavy proof may outgrow a remembered residue; with no carrier in flight, retry the normal
+    /// mature/unlocked/unspent scan at its own minimum. A stuck-carrier replacement keeps its input.
+    async fn ensure_carrier_funding_v2(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        object: &PalwConsensusObjectV2,
+        current_daa: u64,
+        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
+        inflight: usize,
+    ) -> Option<u64> {
+        if inflight != 0 || self.carrier_replacement.lock().unwrap().is_some() {
+            return None;
+        }
+        let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, object, current_daa);
+        if funding.as_ref().is_none_or(|(_, entry)| entry.amount < minimum) {
+            if let Some(next) = self.resolve_fee_funding(session, minimum).await {
+                *funding = Some(next);
+            } else {
+                // Keep a smaller usable float for later cheap moves; no sticky global floor.
+                return Some(minimum);
+            }
+        }
+        None
+    }
+
     /// **Carry one lifecycle object on `funding`**, chaining the change as every lane does (RFC-0006's parts, plan declaration and
     /// shard possession proofs). `true` when the mempool took it; on a refusal the funding is dropped for this tick.
     async fn carry_object_v1(
@@ -5526,6 +5555,7 @@ impl PalwPanelService {
         funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
         inflight: &mut usize,
     ) -> bool {
+        let _ = self.ensure_carrier_funding_v2(session, object, current_daa, funding, *inflight).await;
         let Some((funding_outpoint, funding_entry)) = funding.clone() else { return false };
         match self.build_lifecycle_tx(object, funding_outpoint, &funding_entry) {
             Ok(tx) => {
@@ -5910,7 +5940,7 @@ impl PalwPanelService {
     /// The fee outpoint to spend next: the persisted rolling one if it is still unspent, else the
     /// configured one, else whatever the chain holds under this bond's payout script. Returns the
     /// entry with it, which is also the unspent check.
-    async fn resolve_fee_funding(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Option<(TransactionOutpoint, UtxoEntry)> {
+    async fn resolve_fee_funding(&self, session: &kaspa_consensusmanager::ConsensusProxy, minimum: u64) -> Option<(TransactionOutpoint, UtxoEntry)> {
         // **"In the UTXO set" and "I can spend it" are different questions — ask the second one.**
         //
         // The virtual UTXO set is the CONFIRMED one: an output a carrier of ours is spending right
@@ -5931,6 +5961,7 @@ impl PalwPanelService {
         // permanently excluded here — the panel then owns money it has forbidden itself to see, and
         // says `no fee UTXO resolves` forever. Measured on testnet-11 the same day: node 0 stalled
         // with one live 96.85 MSK output under its own key and 6,343 identical warnings.
+        let minimum = minimum.max(palw_fee_funding_floor_v1());
         let is_free = |o: &TransactionOutpoint| !self.flow_context.mining_manager().outpoint_is_spent_in_mempool(o);
         // **No configured outpoint means two different things, and this used to answer both the
         // same way.**
@@ -6010,6 +6041,9 @@ impl PalwPanelService {
                 if !usable(outpoint, &entry) || !palw_fee_funding_pays_v1(entry.amount) {
                     continue;
                 }
+                if entry.amount < minimum {
+                    continue;
+                }
                 return Some((*outpoint, entry));
             }
         }
@@ -6052,7 +6086,7 @@ impl PalwPanelService {
         let mut cursor: Option<TransactionOutpoint> = None;
         // What the scan SAW, so a failure can say which of its reasons it was.
         let mut scanned = 0usize;
-        let mut scan = PalwFeeFundingScanV1::default();
+        let mut scan = PalwFeeFundingScanV1 { minimum, ..Default::default() };
         loop {
             let chunk = session.async_get_virtual_utxos(cursor, 1024, cursor.is_some()).await;
             if chunk.is_empty() {
@@ -6076,7 +6110,7 @@ impl PalwPanelService {
                 scan.offer(outpoint, entry, &usable, &is_free);
             }
         }
-        let PalwFeeFundingScanV1 { found, under_script, busy, unripe, dust } = scan;
+        let PalwFeeFundingScanV1 { found, under_script, busy, unripe, dust, .. } = scan;
         if let Some((outpoint, entry)) = found {
             if let Some(consented) = self.config.fee_outpoint.as_deref() {
                 // T12-046: the operator named WHICH output funds carriers; this one is not it nor its
@@ -6114,7 +6148,7 @@ impl PalwPanelService {
             } else {
                 candidates.iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect::<Vec<_>>().join(", ")
             },
-            palw_fee_funding_floor_v1()
+            minimum
         );
         None
     }
@@ -6655,8 +6689,18 @@ impl PalwPanelService {
         // them the one due first (EDF; the licences' turn and the one-in-flight rule are the tick's
         // slots', untouched).
         palw_court_queue_edf_v1(court_pending, court_due);
+        let mut failed_minimum: Option<u64> = None;
         let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
         for (session_id, round, mine_is_responder, object) in std::mem::take(court_pending) {
+            let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, current_daa);
+            // A failed full scan also excludes a higher minimum in this pass. Do not scan the
+            // same unavailable heavy budget for every queued proof; cheap moves may still use
+            // the smaller float we retained. A successful submission ends the free slot.
+            if failed_minimum.is_none_or(|failed| minimum < failed) {
+                if let Some(failed) = self.ensure_carrier_funding_v2(session, &object, current_daa, funding, *inflight).await {
+                    failed_minimum = Some(failed);
+                }
+            }
             let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| *inflight < MAX_INFLIGHT_CARRIERS) else {
                 // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
                 // dropped here is a dispute that never happens.
@@ -6841,8 +6885,8 @@ impl PalwPanelService {
     }
 
     /// Build and sign the funded 0x4b carrier for one lifecycle object. The same 1-in/1-out shape
-    /// every overlay transaction in this codebase uses; the fee is the node's own relay minimum
-    /// for the transaction's real mass, so our own mempool cannot refuse what we built.
+    /// every overlay transaction in this codebase uses; it pays the object's fence-aware burned rent
+    /// plus the relay minimum for its actual compute mass, and signs only after checking funding.
     fn build_lifecycle_tx(
         &self,
         object: &PalwConsensusObjectV2,
@@ -6880,112 +6924,12 @@ impl PalwPanelService {
         replaces_feerate: Option<f64>,
     ) -> Result<Transaction, String> {
         let kp = self.keypair.as_ref().ok_or("no signing key")?;
-        // **Refuse before signing, and name the field.**
-        //
-        // The one input is signed with this node's key, so a funding output that does not pay to
-        // this key's own script produces a carrier that cannot be spent by anybody who could have
-        // built it. The mempool's word for that is `script ran, but verification failed` — the
-        // script engine's generic verdict, which names a signature and so sends every reader to
-        // `--palw-producer-key` and `--palw-producer-pay-address`, the two things a first
-        // registration has already got right. Checking it here is free, it happens before the
-        // ML-DSA-87 signature is computed, and it can say WHICH of the two scripts it is holding.
-        //
-        // It sits in the shared builder rather than in the registration path because every
-        // carrier — receipt, class, court — spends the same way and fails the same way.
-        let signable = signable_script(kp.verification_key.as_ref());
-        if funding.script_public_key != signable {
-            let addr = |spk: &kaspa_consensus_core::tx::ScriptPublicKey| {
-                kaspa_txscript::extract_script_pub_key_address(spk, self.consensus_config.prefix())
-                    .map(|a| a.to_string())
-                    .unwrap_or_else(|_| "an address this node cannot render".to_string())
-            };
-            return Err(format!(
-                "the funding output pays to {} and --palw-producer-key signs for {} — this node cannot spend it. \
-                 Nothing was signed. Fund the key's own address, or point --palw-producer-key at the key that owns \
-                 this output; a state dir carried over from a run with a different key is the usual source of a \
-                 remembered outpoint belonging to neither.",
-                addr(&funding.script_public_key),
-                addr(&signable)
-            ));
-        }
-        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
-            .map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
-        let params = &self.consensus_config.params;
-        let mass_calculator = MassCalculator::new(
-            params.mass_per_tx_byte,
-            params.mass_per_script_pub_key_byte,
-            params.mass_per_sig_op,
-            params.storage_mass_parameter,
-        );
-
-        // Two passes: the fee depends on the mass, and the mass on the (fixed-size) signature. A
-        // dummy signature of the real length prices the transaction, then the real one replaces it.
-        let locked: u64 = extra_outputs.iter().map(|o| o.value).sum();
-        let build = |fee: u64, signature_script: Vec<u8>| -> Result<Transaction, String> {
-            // The collateral is spent as well as the fee, and saying so by name is the difference
-            // between "fund the address again" and an operator wondering why a bond they have the
-            // money for will not register.
-            let needed = fee.saturating_add(locked);
-            if funding.amount <= needed {
-                return Err(format!(
-                    "funding UTXO holds {} sompi; this carrier needs {fee} fee + {locked} locked — fund the address again",
-                    funding.amount
-                ));
-            }
-            let mut input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
-            input.signature_script = signature_script;
-            let mut outputs = extra_outputs.to_vec();
-            outputs.push(TransactionOutput::new(funding.amount - needed, funding.script_public_key.clone()));
-            Ok(Transaction::new(TX_VERSION, vec![input], outputs, 0, SUBNETWORK_ID_PALW_LIFECYCLE.clone(), 0, payload.clone()))
-        };
-
-        let dummy_sig_script = {
-            let sig = vec![0u8; kaspa_txscript::MLDSA87_SIG_LEN + 1];
-            kaspa_txscript::script_builder::ScriptBuilder::new()
-                .add_data(&sig)
-                .and_then(|b| b.add_data(kp.verification_key.as_ref()))
-                .map(|b| b.drain())
-                .map_err(|e| format!("sig script shape: {e}"))?
-        };
-        let priced = build(1, dummy_sig_script)?;
-        let masses = mass_calculator.calc_non_contextual_masses(&priced);
-        let fee = relay_fee_for_compute_mass(masses.compute_mass);
-        // V01's panel side: a carrier on the input of our own stuck tip carrier replaces it, so it
-        // pays above it (`PalwCarrierReplacementV1::floor_for`: that input only, while the tick's
-        // opening stands).
+        let daa = self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score();
         let replaces_feerate = replaces_feerate
             .or_else(|| self.carrier_replacement.lock().unwrap().as_ref().and_then(|opening| opening.floor_for(&funding_outpoint)));
-        let fee = match replaces_feerate {
-            // The pool compares feerates over the widest mass it knows — storage mass included.
-            Some(rate) => {
-                let storage = mass_calculator
-                    .calc_contextual_masses(&MutableTransaction::with_entries(priced.clone(), vec![funding.clone()]).as_verifiable())
-                    .map(|c| c.storage_mass)
-                    .unwrap_or(0);
-                palw_replacement_fee_v1(fee, rate, masses.max().max(storage))
-            }
-            None => fee,
-        };
-
-        let unsigned = build(fee, vec![])?;
-        let mtx = MutableTransaction::with_entries(unsigned, vec![funding.clone()]);
-        let reused = Mldsa87SigHashReusedValuesUnsync::new();
-        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused);
-        let mut sig_data =
-            libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0u8; 32])
-                .map_err(|e| format!("ML-DSA-87 sign: {e:?}"))?
-                .as_ref()
-                .to_vec();
-        sig_data.push(SIG_HASH_ALL.to_u8());
-        let signature_script = kaspa_txscript::script_builder::ScriptBuilder::new()
-            .add_data(&sig_data)
-            .and_then(|b| b.add_data(kp.verification_key.as_ref()))
-            .map(|b| b.drain())
-            .map_err(|e| format!("sig script: {e}"))?;
-        let mut tx = mtx.tx;
-        tx.inputs[0].signature_script = signature_script;
-        tx.finalize();
-        Ok(tx)
+        palw_carrier_fees::build_lifecycle_carrier_v2(
+            &self.consensus_config, kp, object, funding_outpoint, funding, extra_outputs, replaces_feerate, daa,
+        )
     }
 
     /// Wait out one pass of a panel loop, or stop because the node is shutting down.
@@ -7894,7 +7838,7 @@ impl PalwPanelService {
                     continue;
                 }
             };
-            let Some((funding_outpoint, funding)) = self.resolve_fee_funding(&session).await else {
+            let Some((funding_outpoint, funding)) = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await else {
                 // Quote the relay's floor, not just the chain's: what a bond NEEDS and what a
                 // carrier can HOLD are different numbers, and an operator funding this address is
                 // about to discover which one is larger.
@@ -8696,7 +8640,7 @@ impl PalwPanelService {
                             self.consensus_config.params.palw_model_registry.map(|f| f.daa_score()).unwrap_or(0)
                         )
                     });
-                } else if let Some((funding_outpoint, funding_entry)) = self.resolve_fee_funding(&session).await {
+                } else if let Some((funding_outpoint, funding_entry)) = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await {
                     if let Some(object) = class_registration.clone() {
                         match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                             Ok(tx) => {
@@ -13051,7 +12995,7 @@ impl PalwPanelService {
                 // — and dropped the moment a submission is refused, because that is the signal that
                 // the chain we were extending is not one the mempool will accept.
                 if chained_funding.is_none() {
-                    chained_funding = self.resolve_fee_funding(&session).await;
+                    chained_funding = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await;
                     inflight = 0;
                 } else if let Some((tip, _)) = chained_funding.clone() {
                     if session.get_virtual_utxo_entry(tip).is_some() {
@@ -13071,7 +13015,7 @@ impl PalwPanelService {
                                 tip.index,
                                 palw_fee_funding_floor_v1()
                             );
-                            chained_funding = self.resolve_fee_funding(&session).await;
+                            chained_funding = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await;
                         }
                     } else if !self
                         .flow_context
@@ -14354,7 +14298,8 @@ pub(crate) fn palw_fee_funding_usable_v1(
 /// is exhausted: the funder never picks one (`resolve_fee_funding`) and the tick re-resolves the
 /// moment its chain's tip, with nothing in flight, falls under it — one carrier is in flight at a
 /// time, so no carrier is ever built from a tip under the floor, and one at or above it pays any
-/// standard carrier: no carrier fails for want of funds.
+/// standard carrier without protocol rent. Queued rent-bearing objects request their own higher
+/// minimum before building; replacement surcharges and locked outputs are checked by the signer.
 pub(crate) fn palw_fee_funding_floor_v1() -> u64 {
     relay_fee_for_compute_mass(MAXIMUM_STANDARD_TRANSACTION_MASS).saturating_mul(2)
 }
@@ -14374,6 +14319,8 @@ pub(crate) fn palw_fee_chain_drained_v1(chained: Option<&(TransactionOutpoint, U
 /// **The recovery scan's verdict on this bond's outputs** (`resolve_fee_funding`), and what it saw.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PalwFeeFundingScanV1 {
+    /// Requested by the current object, in addition to the ordinary float floor.
+    pub(crate) minimum: u64,
     /// The largest output that funds a carrier so far.
     pub(crate) found: Option<(TransactionOutpoint, UtxoEntry)>,
     /// Usable outputs under the payout script.
@@ -14408,7 +14355,7 @@ impl PalwFeeFundingScanV1 {
             self.busy += 1;
             return;
         }
-        if !palw_fee_funding_pays_v1(entry.amount) {
+        if !palw_fee_funding_pays_v1(entry.amount) || entry.amount < self.minimum {
             self.dust += 1;
             return;
         }
@@ -23644,7 +23591,7 @@ mod p2_6_da_accusation_policy {
         let drained =
             mined + source[mined..].find("if palw_fee_chain_drained_v1(chained_funding.as_ref()) {").expect("the drain rule");
         let resolved =
-            drained + source[drained..].find("chained_funding = self.resolve_fee_funding(&session).await;").expect("resolved afresh");
+            drained + source[drained..].find("chained_funding = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await;").expect("resolved afresh");
         assert!(!source[mined..resolved].contains("} else if"), "inside the mined-tip branch");
         assert!(resolved - mined < 1_500);
     }

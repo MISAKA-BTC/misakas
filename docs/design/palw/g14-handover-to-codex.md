@@ -32,7 +32,7 @@
 
 G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
 
-whole-rootの課金済みrootが共有FIFOから退避され再計算される問題へ、受入・rehearsal・最終foldを覆うblock memoを追加した。別threadの退避を挟んでも262,143 idsを1回だけ計算するV-foldを確認し、関連86件と通常binary check、shipping 361 pinが通過した。実採掘・包含は未検証。次の優先項目はnodeのfunded lifecycle carrier builderがprotocol rentを料金へ含めない問題であり、funding floorも重いproofの提出額を扱えるようにする。詳細・反例の限界・生logは監査記録末尾を参照。
+whole-rootの課金済みrootが共有FIFOから退避され再計算される問題へ、受入・rehearsal・最終foldを覆うblock memoを追加した。別threadの退避を挟んでも262,143 idsを1回だけ計算するV-foldを確認し、関連86件と通常binary check、shipping 361 pinが通過した。追加修正でfunded lifecycle signerはprotocol rent＋relay feeを支払い、priority/common submitterはobjectごとの必要額でfundingを選び直す。新5 V-unitを含む108件と通常binary check、shipping pinも通過した。次はfresh-node自身のservice／RPCからmempool・採掘・包含・終局までの経路、ordinary mature bond、全family／公開jobの残条件を閉じる。実採掘・包含の完走はまだ立証していない。詳細・試験の限界・生logは監査記録末尾を参照。
 
 共謀者による予約人数の先取り対策として、claim共通の64-live／256-lifetime capを除き、closed replay guardを含む各bond自身のretained record 64件へ上限を移した。旧閾値を超えた新bondのsession/defaultと、小型PanelDAの公開input→own replay→conviction/defaultをV-foldで確認した。133件の関連回帰とshipping pin 361件は通過。owner数に比例する最大state／response負荷、fresh-node包含と全familyは未完。詳細は[監査記録](../../audit/g14-review-2026-10-10/implementation.md)末尾を参照。
 
