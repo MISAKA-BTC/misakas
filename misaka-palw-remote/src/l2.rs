@@ -3,7 +3,10 @@
 //! Three things, kept apart:
 //!
 //! 1. **Values bound to a root.** Past `Params::palw_fork_choice_commitment_v1` a header commits `H(fork-choice leaf ‖ ADR-0043 root)`;
-//!    an opening ([`PalwForkChoiceOpeningV1`]) gives the comparator's inputs in 258 bytes, checked here against the root.
+//!    an opening ([`PalwForkChoiceOpeningV1`]) gives the comparator's inputs in 356 bytes, checked here against the root. The leaf's
+//!    weight-allocation slot (ADR-0176 D3) names the versioned bond-budget allocation the weights are read through; this build reads
+//!    only "none in force", and a conflict where `palw_bond_budget_v1` may be in force STOPs. No leaf or opening carries a
+//!    model-availability condition (ADR-0177).
 //! 2. **Transition validity of the root.** Re-executing the fold is a full node's work (`FULL_NODE`). Here the root comes from an
 //!    **attestation** ([`ForkChoiceAttestationV1`]) by an issuer the user chose before talking to any node — the user's "trusted
 //!    checkpoint" — and is cross-checked against the attested block's chain child whenever a peer shows one. The issuer's trust is named
@@ -31,7 +34,8 @@ use kaspa_consensus_core::palw_fork_authority_v2::{
 };
 use kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1;
 use kaspa_consensus_core::palw_fork_choice_commitment_v1::{
-    PALW_FORK_CHOICE_LEAF_VERSION_V1, PalwDnsGateFactV1, PalwForkChoiceLeafV1, PalwForkChoiceOpeningV1, PalwForkChoicePointV1,
+    PALW_FORK_CHOICE_LEAF_VERSION_V1, PALW_WEIGHT_ALLOCATION_NONE_V1, PalwDnsGateFactV1, PalwForkChoiceLeafV1,
+    PalwForkChoiceOpeningV1, PalwForkChoicePointV1,
 };
 use kaspa_consensus_core::palw_panel_v2::{PalwPanelParamsV2, palw_minted_seats_can_reach_quorum_v1};
 use kaspa_hashes::Hash64;
@@ -60,11 +64,16 @@ pub struct ForkChoiceRulesV1 {
     pub dns_gate: Option<ForkActivation>,
     /// `palw_dns_retirement`: past it the DNS gate never runs.
     pub dns_retired: Option<ForkActivation>,
-    /// **A comparator whose inputs the v1 leaf does not carry** — ADR-0175 rule E (`palw_fork_choice_rule_e_v1`, lane FINX). Where it
+    /// **A comparator whose inputs the v1 leaf does not carry** — ADR-0178 rule E (`palw_fork_choice_rule_e_v1`, lane FINX). Where it
     /// may be in force at the fork point or a tip, a conflict cannot be weighed from v1 openings and STOPs; a single chain is unaffected.
     /// Its leaf (v2) ships under that fence. `None` in [`Self::of`] until that fence is in this tree: the integration that brings it
     /// sets this field from it.
     pub rule_e: Option<ForkActivation>,
+    /// **ADR-0176 D3: `palw_bond_budget_v1`** (lane BUDGET, dormant). Where it is in force, Final weight is bounded per bond and the
+    /// comparator reads the budget-capped weights of the leaf's allocation slot; this build reads no allocation version, so a
+    /// conflict there STOPs and a version-0 slot at a point past it is refused. `None` in [`Self::of`] until that fence is in this
+    /// tree: the integration that brings it sets this field from it (and the slot version it reads).
+    pub bond_budget: Option<ForkActivation>,
     pub finality_depth: u64,
     pub panel: Option<PalwPanelParamsV2>,
 }
@@ -83,6 +92,7 @@ impl ForkChoiceRulesV1 {
             dns_gate: params.dns_params.as_ref().and(params.dns_bft_gate.as_ref()).map(|g| g.activation),
             dns_retired: params.palw_dns_retirement.as_ref().map(|r| r.activation),
             rule_e: None,
+            bond_budget: None,
             finality_depth: params.finality_depth(),
             panel,
         }
@@ -214,22 +224,57 @@ pub enum L2VerdictV1 {
         issued_at_daa: u64,
         /// The candidates the comparator refused, by tip.
         refused: Vec<Hash64>,
+        /// How the DNS BFT gate, which runs ahead of the comparator, was accounted for.
+        dns_gate: L2DnsGateV1,
     },
     Unverified(String),
+}
+
+/// **How the DNS BFT gate was accounted for** in a verdict (printed on the trust line). The gate refuses only a candidate that abandons a
+/// confirmed DNS-final anchor while the overlay is in its `Active` stage; live testnet-12's overlay is in `Bootstrap`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum L2DnsGateV1 {
+    /// One chain: nothing for the gate to refuse.
+    NotNeeded,
+    /// The gate cannot run at any weighed DAA (no overlay, not yet active, or retired).
+    NotRunning,
+    /// Every weighed candidate's issuer attested the overlay outside its `Active` stage or with nothing confirmed (testnet-12:
+    /// `Bootstrap`): the gate refuses nothing, and the comparator decided.
+    NeverRefuses,
+    /// A confirmed `Active`-stage anchor stands on every candidate's verified selected chain (or below the checkpoint, binding all
+    /// alike): the gate refuses none of them, and the comparator decided.
+    AnchorOnEveryCandidate,
+}
+
+impl L2DnsGateV1 {
+    fn line(&self) -> &'static str {
+        match self {
+            L2DnsGateV1::NotNeeded => "",
+            L2DnsGateV1::NotRunning => "; the DNS BFT gate cannot run here",
+            L2DnsGateV1::NeverRefuses => {
+                "; DNS BFT gate: attested outside its Active stage or with nothing confirmed (Bootstrap) — it refuses nothing, the \
+                 comparator decided"
+            }
+            L2DnsGateV1::AnchorOnEveryCandidate => {
+                "; DNS BFT gate: its confirmed anchor stands on every candidate — it refuses none, the comparator decided"
+            }
+        }
+    }
 }
 
 impl L2VerdictV1 {
     /// **The trust this verdict rests on, in one line** — printed with the mode label on every output.
     pub fn trust_line(&self) -> String {
         match self {
-            L2VerdictV1::Established { attested, attested_daa, issuer, issued_at_daa, refused, .. } => format!(
+            L2VerdictV1::Established { attested, attested_daa, issuer, issued_at_daa, refused, dns_gate, .. } => format!(
                 "L2 fork choice: VERIFIED against a root attested by issuer '{issuer}' (block {attested}, DAA {attested_daa}, issued at DAA \
-                 {issued_at_daa}); the issuer's re-execution is the trust, the values were opened and compared by this client{}",
+                 {issued_at_daa}); the issuer's re-execution is the trust, the values were opened and compared by this client{}{}",
                 if refused.is_empty() {
                     String::new()
                 } else {
                     format!("; {} competing tip(s) refused by the comparator", refused.len())
-                }
+                },
+                dns_gate.line()
             ),
             L2VerdictV1::Unverified(why) => format!("L2 fork choice: NOT verified — {why}"),
         }
@@ -267,6 +312,8 @@ pub enum L2StopV1 {
     SelectedChainUnverified { tip: Hash64, why: String },
     #[error("the peers show competing tips while a comparator whose inputs the v1 leaf does not carry may be in force: {0}")]
     LeafV1Insufficient(&'static str),
+    #[error("the peers show competing tips while a bond-budget allocation may be in force (ADR-0176 D3): {0}")]
+    BondBudgetAllocation(&'static str),
     #[error("the peers show competing tips while the DNS BFT gate may run, and {0}")]
     DnsGateMayDecide(&'static str),
     #[error("the competing tips part {depth} blue below {tip}, at or past the finality depth {finality}: a sealed split")]
@@ -521,6 +568,17 @@ pub fn verify_fork_choice_v1(input: &L2InputV1<'_>, verify: &dyn Fn(&[u8], &[u8]
             }
         }
         match ev.opening.verify(&att.committed_root, &fork_point(&point), input.rules.commitment) {
+            // ADR-0176 D3: past `palw_bond_budget_v1` every reader reads the versioned allocation; a leaf that names none there is not
+            // the node's (it would be weighed by uncapped weights).
+            Ok(_)
+                if ForkChoiceRulesV1::active(input.rules.bond_budget, point.daa_score)
+                    && ev.opening.leaf.weight_allocation.version == PALW_WEIGHT_ALLOCATION_NONE_V1 =>
+            {
+                refusals.push(format!(
+                    "the opening of {} names no bond-budget allocation at a point where palw_bond_budget_v1 is in force",
+                    att.block
+                ))
+            }
             Ok(order) => weighed.push(Weighed { order, opening: ev.opening, att: att.clone() }),
             Err(e) => refusals.push(format!("the opening of {} does not hold: {e}", att.block)),
         }
@@ -537,7 +595,7 @@ pub fn verify_fork_choice_v1(input: &L2InputV1<'_>, verify: &dyn Fn(&[u8], &[u8]
         ));
     }
 
-    let established = |chain: &VerifiedChainV1, w: &Weighed, refused: Vec<Hash64>| L2VerdictV1::Established {
+    let established = |chain: &VerifiedChainV1, w: &Weighed, refused: Vec<Hash64>, dns_gate: L2DnsGateV1| L2VerdictV1::Established {
         chosen: chain.clone(),
         attested: w.att.block,
         attested_daa: w.att.block_daa,
@@ -546,6 +604,7 @@ pub fn verify_fork_choice_v1(input: &L2InputV1<'_>, verify: &dyn Fn(&[u8], &[u8]
         issuer: w.att.issuer(),
         issued_at_daa: w.att.issued_at_daa,
         refused,
+        dns_gate,
     };
 
     // One chain: the newest attested block on it, within the lag bound.
@@ -562,7 +621,15 @@ pub fn verify_fork_choice_v1(input: &L2InputV1<'_>, verify: &dyn Fn(&[u8], &[u8]
                 input.limits.max_attested_lag_daa
             ));
         }
-        return Ok(established(chain, w, Vec::new()));
+        return Ok(established(chain, w, Vec::new(), L2DnsGateV1::NotNeeded));
+    }
+
+    // ADR-0176 D3: where a bond-budget allocation may be in force the comparator reads its budget-capped weights, which this build
+    // does not read — named before anything is weighed. (The fence only moves forward, so a tip's DAA is the latest it can start.)
+    if candidates.iter().any(|c| ForkChoiceRulesV1::active(input.rules.bond_budget, c.tip.daa_score)) {
+        return Err(L2StopV1::BondBudgetAllocation(
+            "this build reads no allocation version; the weights the node compares there are the allocation's",
+        ));
     }
 
     // Competing tips: each must be weighed AT its tip.
@@ -580,18 +647,21 @@ pub fn verify_fork_choice_v1(input: &L2InputV1<'_>, verify: &dyn Fn(&[u8], &[u8]
     let tip_daas: Vec<u64> = at_tip.iter().map(|(c, _)| c.tip.daa_score).collect();
     let checkpoint_daa = candidates[0].points[0].daa_score;
     let mut anchors: Vec<Hash64> = Vec::new();
+    let mut dns_gate = L2DnsGateV1::NotRunning;
     if tip_daas.iter().any(|d| input.rules.dns_gate_may_run(*d)) {
+        dns_gate = L2DnsGateV1::NeverRefuses;
         for (_, w) in &at_tip {
             let Some(fact) = w.att.dns_gate else {
                 return Err(L2StopV1::DnsGateMayDecide("an attestation carries no DNS gate facts"));
             };
-            if let (true, Some((anchor, anchor_daa))) = (fact.stage_active, fact.confirmed_anchor)
-                && anchor_daa >= checkpoint_daa
-            {
-                if !at_tip.iter().all(|(c, _)| c.contains(&anchor)) {
-                    return Err(L2StopV1::DnsGateMayDecide("a confirmed DNS-final anchor stands on one side only"));
+            if let (true, Some((anchor, anchor_daa))) = (fact.stage_active, fact.confirmed_anchor) {
+                dns_gate = L2DnsGateV1::AnchorOnEveryCandidate;
+                if anchor_daa >= checkpoint_daa {
+                    if !at_tip.iter().all(|(c, _)| c.contains(&anchor)) {
+                        return Err(L2StopV1::DnsGateMayDecide("a confirmed DNS-final anchor stands on one side only"));
+                    }
+                    anchors.push(anchor);
                 }
-                anchors.push(anchor);
             }
         }
     }
@@ -632,7 +702,7 @@ pub fn verify_fork_choice_v1(input: &L2InputV1<'_>, verify: &dyn Fn(&[u8], &[u8]
     // A comparator the v1 leaf cannot feed decides here: the openings do not carry its inputs.
     if daas.iter().any(|d| ForkChoiceRulesV1::active(input.rules.rule_e, *d)) {
         return Err(L2StopV1::LeafV1Insufficient(
-            "ADR-0175 rule E reads fork-relative inputs; its leaf (v2) ships under its own fence",
+            "ADR-0178 rule E reads inputs the v1 leaf does not carry; its leaf (v2) ships under its fence",
         ));
     }
 
@@ -676,7 +746,7 @@ pub fn verify_fork_choice_v1(input: &L2InputV1<'_>, verify: &dyn Fn(&[u8], &[u8]
         }
     }
     let refused = walked.iter().enumerate().filter(|(i, _)| i != win).map(|(_, c)| c.chain.tip_hash()).collect();
-    Ok(established(winner.chain, winner.weighed, refused))
+    Ok(established(winner.chain, winner.weighed, refused, dns_gate))
 }
 
 /// **L3 under L2**: the ADR-0043 root a collection proof at `proof_header` is checked against.

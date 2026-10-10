@@ -6,7 +6,9 @@ use crate::checkpoint::{Checkpoint, CheckpointError, SignedCheckpointV1, verify_
 use crate::verify::{
     CheckpointTrustV1, ModeLabelV1, TrustedCheckpointV1, VerifyLimitsV1, mode_label_v1, signing_gate_v1, verify_header_chain_v1,
 };
-use kaspa_consensus_core::palw_fork_choice_commitment_v1::{PalwForkChoiceErrorV1, palw_fork_choice_envelope_root_v1};
+use kaspa_consensus_core::palw_fork_choice_commitment_v1::{
+    PalwForkChoiceErrorV1, PalwWeightAllocationSlotV1, palw_fork_choice_envelope_root_v1,
+};
 use kaspa_consensus_core::palw_state_proof_v1::{prove_bonds_v1, verify_bond_v1};
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwConsensusObjectV2 as Obj, PalwStateParamsV2, apply_palw_transition_v2,
@@ -65,6 +67,7 @@ fn leaf_of(x: &Header, (frontier, safe, immature, bonds): Keys) -> PalwForkChoic
         safe_weight: safe,
         bounded_immature: immature,
         bonds_len: bonds,
+        weight_allocation: PalwWeightAllocationSlotV1::NONE,
     }
 }
 
@@ -152,6 +155,7 @@ fn rules() -> ForkChoiceRulesV1 {
         dns_gate: None,
         dns_retired: None,
         rule_e: None,
+        bond_budget: None,
         finality_depth: 600,
         panel: None,
     }
@@ -422,11 +426,17 @@ fn the_dns_gate_in_bootstrap_lets_the_comparator_decide_and_a_one_sided_anchor_s
     let gated = ForkChoiceRulesV1 { dns_gate: Some(ForkActivation::new(0)), ..rules() };
     let with = |fact: PalwDnsGateFactV1| [attest_at(ta, 106, Some(fact)), attest_at(tb, 106, Some(fact))];
     let bootstrap = PalwDnsGateFactV1 { stage_active: false, confirmed_anchor: None };
-    assert_eq!(chosen_tip(&run(&views, &with(bootstrap), &gated, &lim, &f.o).unwrap()), ta.header.hash, "Bootstrap: the comparator");
+    let v = run(&views, &with(bootstrap), &gated, &lim, &f.o).unwrap();
+    assert_eq!(chosen_tip(&v), ta.header.hash, "Bootstrap: the comparator");
+    // The mode output names how the gate was accounted for, beside the issuer.
+    assert!(matches!(&v, L2VerdictV1::Established { dns_gate: L2DnsGateV1::NeverRefuses, .. }), "{v:?}");
+    assert!(v.trust_line().contains("Bootstrap") && v.trust_line().contains("issuer 'k1'"), "{}", v.trust_line());
     let active_none = PalwDnsGateFactV1 { stage_active: true, confirmed_anchor: None };
     assert_eq!(chosen_tip(&run(&views, &with(active_none), &gated, &lim, &f.o).unwrap()), ta.header.hash, "nothing confirmed");
     let common = PalwDnsGateFactV1 { stage_active: true, confirmed_anchor: Some((f.c.header.hash, 100)) };
-    assert_eq!(chosen_tip(&run(&views, &with(common), &gated, &lim, &f.o).unwrap()), ta.header.hash, "an anchor both contain");
+    let v = run(&views, &with(common), &gated, &lim, &f.o).unwrap();
+    assert_eq!(chosen_tip(&v), ta.header.hash, "an anchor both contain");
+    assert!(matches!(&v, L2VerdictV1::Established { dns_gate: L2DnsGateV1::AnchorOnEveryCandidate, .. }), "{v:?}");
     let old = PalwDnsGateFactV1 { stage_active: true, confirmed_anchor: Some((h(0x0D), 50)) };
     assert_eq!(chosen_tip(&run(&views, &with(old), &gated, &lim, &f.o).unwrap()), ta.header.hash, "an anchor below the checkpoint");
     let one_sided = PalwDnsGateFactV1 { stage_active: true, confirmed_anchor: Some((f.b[2].header.hash, 102)) };
@@ -434,10 +444,14 @@ fn the_dns_gate_in_bootstrap_lets_the_comparator_decide_and_a_one_sided_anchor_s
     assert!(matches!(run(&views, &[attest(ta, 106), attest(tb, 106)], &gated, &lim, &f.o), Err(L2StopV1::DnsGateMayDecide(_))));
     // Retired: the gate never runs, the facts are not needed.
     let retired = ForkChoiceRulesV1 { dns_retired: Some(ForkActivation::new(0)), ..gated };
-    assert_eq!(chosen_tip(&run(&views, &[attest(ta, 106), attest(tb, 106)], &retired, &lim, &f.o).unwrap()), ta.header.hash);
+    let v = run(&views, &[attest(ta, 106), attest(tb, 106)], &retired, &lim, &f.o).unwrap();
+    assert_eq!(chosen_tip(&v), ta.header.hash);
+    assert!(matches!(&v, L2VerdictV1::Established { dns_gate: L2DnsGateV1::NotRunning, .. }), "{v:?}");
     // A single chain needs no gate facts at all (nothing to refuse).
     let single = [view("p1", &f.c, &f.a, f.now), view("p4", &f.c, &f.a, f.now)];
-    assert_eq!(chosen_tip(&run(&single, &[attest(ta, 103)], &gated, &lim, &f.o).unwrap()), ta.header.hash);
+    let v = run(&single, &[attest(ta, 103)], &gated, &lim, &f.o).unwrap();
+    assert_eq!(chosen_tip(&v), ta.header.hash);
+    assert!(matches!(&v, L2VerdictV1::Established { dns_gate: L2DnsGateV1::NotNeeded, .. }), "{v:?}");
 }
 
 /// An issuer the chain contradicts (the attested block's child commits another root) is refused by name; an opening that does not
@@ -559,7 +573,7 @@ fn a_path_through_a_merged_block_with_a_forged_root_is_refused() {
     assert_eq!(chosen_tip(&run(&conflict, &ev2, &rules(), &lim, &served_b).unwrap()), t.header.hash);
 }
 
-/// **A comparator the v1 leaf cannot feed** (ADR-0175 rule E, its fence in force at the fork point or a tip): a conflict STOPs — the
+/// **A comparator the v1 leaf cannot feed** (ADR-0178 rule E, its fence in force at the fork point or a tip): a conflict STOPs — the
 /// openings do not carry its inputs — while a single chain, which needs no comparator, is still verified.
 #[test]
 fn a_comparator_whose_inputs_the_leaf_does_not_carry_stops_a_conflict() {
@@ -574,6 +588,37 @@ fn a_comparator_whose_inputs_the_leaf_does_not_carry_stops_a_conflict() {
     assert!(matches!(run(&views, &[attest(ta, 106), attest(tb, 106)], &late, &lim, &f.o), Err(L2StopV1::LeafV1Insufficient(_))));
     let single = [view("p1", &f.c, &f.a, f.now), view("p4", &f.c, &f.a, f.now)];
     assert_eq!(chosen_tip(&run(&single, &[attest(ta, 103)], &e, &lim, &f.o).unwrap()), ta.header.hash);
+}
+
+/// **ADR-0176 D3 — one versioned allocation for every reader.** Where `palw_bond_budget_v1` may be in force the comparator reads the
+/// leaf slot's budget-capped weights; this build reads no allocation version, so a conflict there STOPs by name, a single chain whose
+/// attested leaf names no allocation at such a point is not verified, and a leaf naming an allocation this build does not read is
+/// refused even when the issuer signed its root. Unarmed (every network today), nothing changes.
+#[test]
+fn a_bond_budget_allocation_is_read_by_one_versioned_slot_or_the_client_stops() {
+    let f = fork();
+    let (ta, tb) = (f.a.last().unwrap(), f.b.last().unwrap());
+    let lim = L2LimitsV1::default();
+    let views = [view("p1", &f.c, &f.a, f.now), view("p2", &f.c, &f.b, f.now)];
+    let ev = [attest(ta, 106), attest(tb, 106)];
+    assert_eq!(chosen_tip(&run(&views, &ev, &rules(), &lim, &f.o).unwrap()), ta.header.hash, "unarmed: the comparator decides");
+    let budget = ForkChoiceRulesV1 { bond_budget: Some(ForkActivation::new(106)), ..rules() };
+    assert!(matches!(run(&views, &ev, &budget, &lim, &f.o), Err(L2StopV1::BondBudgetAllocation(_))));
+    // A single chain past the fence: its attested leaf names no allocation — not the node's leaf there, so L2 is not established.
+    let single = [view("p1", &f.c, &f.a, f.now), view("p4", &f.c, &f.a, f.now)];
+    let at_101 = ForkChoiceRulesV1 { bond_budget: Some(ForkActivation::new(101)), ..rules() };
+    let v = run(&single, &[attest(ta, 103)], &at_101, &lim, &f.o).unwrap();
+    assert!(matches!(&v, L2VerdictV1::Unverified(why) if why.contains("names no bond-budget allocation")), "{v:?}");
+    // Below the fence the same chain is verified.
+    assert_eq!(chosen_tip(&run(&single, &[attest(ta, 103)], &budget, &lim, &f.o).unwrap()), ta.header.hash);
+    // A leaf that names allocation version 1, under a root the issuer signed: refused (this build does not read version 1), never
+    // weighed by the fold's weights.
+    let mut tip = ta.clone();
+    tip.leaf.weight_allocation =
+        PalwWeightAllocationSlotV1 { version: 1, allocation_root: h(0xA0), capped_safe_weight: 1, capped_bounded_immature: 0 };
+    let a2: Vec<Blk> = f.a[..f.a.len() - 1].iter().cloned().chain(std::iter::once(tip.clone())).collect();
+    let v = run(&[view("p1", &f.c, &a2, f.now), view("p4", &f.c, &a2, f.now)], &[attest(&tip, 103)], &at_101, &lim, &f.o).unwrap();
+    assert!(matches!(&v, L2VerdictV1::Unverified(why) if why.contains("allocation version 1")), "{v:?}");
 }
 
 /// The robust evaluation is the node's own functions: a strict economic winner dominates under every variant; a hash-only winner

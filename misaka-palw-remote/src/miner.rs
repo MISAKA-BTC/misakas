@@ -243,8 +243,8 @@ pub struct MinerState {
     positions: BTreeMap<Hash64, (Hash64, Block)>,
     /// The security class the last step ran in — every output prints it.
     pub last_mode: Option<ModeLabelV1>,
-    /// With an attested fork choice: the L2 line printed beside the mode — the issuer whose attestation the verdict rests on, or why L2
-    /// is not verified.
+    /// The L2 line printed beside the mode — what the fork choice rests on (the attestation's issuer, or the trusted checkpoint), or why
+    /// L2 is not verified. `None` on the user's own full node.
     pub last_l2: Option<String>,
 }
 
@@ -424,8 +424,9 @@ pub fn remote_mode_v1(
     job: &NodeJobFactsV1,
 ) -> Result<RemoteModeV1, MinerHalt> {
     let Some(v) = &trust.verification else {
-        let label = mode_label_v1(trust.own_full_node, false, false, &L2StatusV1::Unverified("the quorum alone proves nothing"));
-        return Ok(RemoteModeV1 { label, l2_line: None });
+        let l2 = L2StatusV1::Unverified("the quorum alone proves nothing");
+        let label = mode_label_v1(trust.own_full_node, false, false, &l2);
+        return Ok(RemoteModeV1 { label, l2_line: (!trust.own_full_node).then(|| l2.line()) });
     };
     let now = (v.now_ms)();
     let mut views: Vec<VerifiedChainV1> = Vec::new();
@@ -457,7 +458,7 @@ pub fn remote_mode_v1(
     let class = class_on_chain_v1(&chain, &ch, &classes, &job.class_id)?;
     check_job_facts_v1(job, &class, &bond)?;
     let l2 = l2_status_v1(&v.checkpoint, &chain, Some(bh.hash), &v.limits);
-    Ok(RemoteModeV1 { label: mode_label_v1(trust.own_full_node, true, true, &l2), l2_line: None })
+    Ok(RemoteModeV1 { label: mode_label_v1(trust.own_full_node, true, true, &l2), l2_line: Some(l2.line()) })
 }
 
 /// **[`remote_mode_v1`] with an attested fork choice** (RFC-0009 L2, [`crate::l2`]).
@@ -1147,6 +1148,7 @@ mod tests {
                     safe_weight: 0,
                     bounded_immature: 0,
                     bonds_len: 1,
+                    weight_allocation: kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwWeightAllocationSlotV1::NONE,
                 },
                 inner_root: inner,
             };
@@ -1300,6 +1302,7 @@ mod tests {
                 dns_gate: None,
                 dns_retired: None,
                 rule_e: None,
+                bond_budget: None,
                 finality_depth: 600,
                 panel: None,
             },
@@ -1356,6 +1359,8 @@ mod tests {
         let out = vrun(&[&a, &b], &vcfg(pk(&signer), &checkpoint, None), &mut state, &mut exec, &signer);
         assert!(matches!(&out, Err(MinerHalt::Gate(g)) if g.label == ModeLabelV1::HeaderVerifiedForkChoiceUnverified), "{out:?}");
         assert_eq!(exec.calls.get(), 0);
+        // The mode output says why L2 is not verified (the checkpoint rule's reason), not only the label.
+        assert!(state.last_l2.as_deref().is_some_and(|l| l.contains("NOT verified")), "{:?}", state.last_l2);
         let accept = Some(ModeLabelV1::HeaderVerifiedForkChoiceUnverified);
         let out = vrun(&[&a, &b], &vcfg(pk(&signer), &checkpoint, accept), &mut state, &mut exec, &signer).unwrap();
         assert!(matches!(out, StepOutcome::Published(_)), "{out:?}");

@@ -9,18 +9,20 @@
 //! * an op-202 collection proof at a header past the fence opens under the ADR-0043 root inside the envelope (unwrapped with the parent's
 //!   opening), and no longer under the header's root directly;
 //! * a remote client (`misaka-palw-remote::l2`) verifies the headers from a checkpoint (L1), opens the tip's keys from an attested root
-//!   (L2) and proves a bond at a header the attestation covers (L3): `VERIFIED_REMOTE`, with the issuer named.
+//!   (L2) and proves a bond at a header the attestation covers (L3): `VERIFIED_REMOTE`, with the issuer named;
+//! * every leaf's ADR-0176 D3 weight-allocation slot is "none in force" (no bond-budget allocation exists in this tree), and the node's
+//!   DNS BFT gate facts are testnet-12's non-refusing state (the overlay outside `Active`, nothing confirmed — live t12 is in Bootstrap).
 
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_fork_choice_commitment_v1::{
-    PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1, PalwForkChoiceOpeningV1, PalwForkChoicePointV1,
+    PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1, PalwForkChoiceOpeningV1, PalwForkChoicePointV1, PalwWeightAllocationSlotV1,
 };
 use kaspa_consensus_core::palw_state_proof_v1::verify_bond_v1;
 use kaspa_hashes::Hash64;
 use misaka_palw_remote::l2::{
-    ForkChoiceAttestationV1, ForkChoiceEvidenceV1, ForkChoiceRulesV1, L2InputV1, L2LimitsV1, L2VerdictV1, PeerViewV1,
+    ForkChoiceAttestationV1, ForkChoiceEvidenceV1, ForkChoiceRulesV1, L2DnsGateV1, L2InputV1, L2LimitsV1, L2VerdictV1, PeerViewV1,
     l3_root_under_l2_v1, verify_fork_choice_v1,
 };
 use misaka_palw_remote::verify::{
@@ -48,11 +50,17 @@ async fn the_fork_choice_commitment_crosses_its_fence_and_a_remote_client_verifi
     let served = chain.ctx.consensus.palw_fork_choice_openings_v1(&hashes).expect("the node serves openings");
     assert_eq!(served.sink, *hashes.last().unwrap());
     let entries: Vec<_> = served.entries.iter().map(|(b, e)| (*b, e.clone().expect("every chain block is weighable"))).collect();
+    // The gate facts an issuer copies into its attestation: testnet-12's overlay is not Active and has confirmed nothing, so its gate
+    // refuses nothing and a client's comparator decides a conflict.
+    eprintln!("[l2fc] DNS gate facts served: {:?}", served.dns_gate);
+    assert!(config.params.dns_params.is_none() || served.dns_gate.is_some(), "a network with the overlay serves its gate facts");
+    assert!(served.dns_gate.is_none_or(|g| !g.stage_active && g.confirmed_anchor.is_none()), "{:?}", served.dns_gate);
 
     // Below the fence the flat root, from it the envelope — and the chain child commits exactly what op 203 serves.
     let (mut below, mut past) = (0, 0);
     for (i, (block, e)) in entries.iter().enumerate() {
         assert_eq!(e.opening.leaf.block, *block);
+        assert_eq!(e.opening.leaf.weight_allocation, PalwWeightAllocationSlotV1::NONE, "no bond-budget allocation in this tree");
         assert_eq!(e.committed_form, e.opening.leaf.daa_score >= FENCE, "the form is the post-state's point's");
         if e.committed_form {
             past += 1;
@@ -137,6 +145,7 @@ async fn the_fork_choice_commitment_crosses_its_fence_and_a_remote_client_verifi
     assert!(matches!(&verdict, L2VerdictV1::Established { chosen, .. } if chosen.tip_hash() == tip.hash), "{verdict:?}");
     assert_eq!(mode_label_v1(false, true, true, &verdict.status()), ModeLabelV1::VerifiedRemote);
     assert!(verdict.trust_line().contains("issuer 'own-node'"));
+    assert!(matches!(&verdict, L2VerdictV1::Established { dns_gate: L2DnsGateV1::NotNeeded, .. }), "one chain: nothing to refuse");
     // The proof's header is below the attested tip: the walk from the tip down to its parent checks it is the tip's selected chain.
     let root = l3_root_under_l2_v1(&verdict, &header, &served_openings, &rules).expect("a covered header");
     assert_eq!(root, parent_opening.inner_root);

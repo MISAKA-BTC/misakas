@@ -613,6 +613,21 @@ pub enum L2StatusV1 {
     Unverified(&'static str),
 }
 
+impl L2StatusV1 {
+    /// **The L2 line printed beside the mode label**: what the fork choice rests on, or why it is not verified.
+    pub fn line(&self) -> String {
+        match self {
+            L2StatusV1::EstablishedAtTrustedCheckpoint => {
+                "L2 fork choice: established at the user's trusted checkpoint, which is the \
+                decision point (the verified tip is within its lag bound); the checkpoint's issuer is the trust"
+                    .to_string()
+            }
+            L2StatusV1::EstablishedByAttestation { trust } => trust.clone(),
+            L2StatusV1::Unverified(why) => format!("L2 fork choice: NOT verified — {why}"),
+        }
+    }
+}
+
 pub fn l2_status_v1(
     checkpoint: &TrustedCheckpointV1,
     chain: &VerifiedChainV1,

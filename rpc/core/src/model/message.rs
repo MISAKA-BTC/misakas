@@ -12684,8 +12684,9 @@ impl Deserializer for GetPalwStateProofResponse {
 
 /// **RFC-0009 L2: `getPalwForkChoiceOpening` (op 203)** — the fork-choice openings of blocks' post-states, and the node's sink and tips.
 ///
-/// For each block the node returns its header, the 194-byte fork-choice leaf of its post-state (`PalwForkChoiceLeafV1`, borsh), the
-/// ADR-0043 root the leaf is enveloped with, and the root the post-state is committed as. A client believes none of it until
+/// For each block the node returns its header, the 292-byte fork-choice leaf of its post-state (`PalwForkChoiceLeafV1`, borsh, the
+/// ADR-0176 D3 weight-allocation slot included — every reader reads that one versioned allocation), the ADR-0043 root the leaf is
+/// enveloped with, and the root the post-state is committed as. A client believes none of it until
 /// `PalwForkChoiceOpeningV1::verify` holds against a root it trusts (an attestation, a chain child's header); `sink` and `tips` are what
 /// this node shows — a peer hiding a tip is caught by another peer. **Op 203 is new: a node built before it drops the WebSocket on it.**
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -12718,7 +12719,7 @@ pub struct RpcPalwForkChoiceEntry {
     pub available: bool,
     pub reason: String,
     pub header: Option<RpcHeader>,
-    /// The borsh fork-choice leaf (194 bytes).
+    /// The borsh fork-choice leaf (292 bytes, the weight-allocation slot included).
     pub leaf: Vec<u8>,
     /// The ADR-0043 root the leaf is enveloped with (128 hex).
     pub inner_root: String,
