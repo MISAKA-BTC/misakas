@@ -373,6 +373,9 @@ fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, Str
     let bounds =
         crate::gate::class_prosecution_bounds_v1(&d, &r.plan, &program, &ProfileMaterialV1::kernel_route(true), &l.policy.prosecution)
             .map_err(|g| format!("a stored class is no longer publicly prosecutable: {g:?}"))?;
+    // G14-B: what registration derived (a segmented class registers only under OPV, so the network's OPV clock is its clock).
+    let liability_daa = crate::ledger::class_liability_daa_v1(&l.policy, l.opv.policy.as_ref(), &d, &program, &r.plan, &bounds)
+        .map_err(|g| format!("a stored class's pursuit no longer fits: {g:?}"))?;
     Ok(ClassRowV1 {
         descriptor: d,
         program_bytes: r.program_bytes.clone(),
@@ -382,6 +385,7 @@ fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, Str
         network_domain: l.policy.network_domain,
         ruleset_digest: l.policy.ruleset_digest,
         bounds,
+        liability_daa,
     })
 }
 

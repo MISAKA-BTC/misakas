@@ -258,6 +258,9 @@ pub struct ClassRowV1 {
     pub ruleset_digest: Digest,
     /// The code-derived gate's bounds (registration refuses a class without them).
     pub bounds: ProsecutionBoundsV1,
+    /// **G14-B: this class's claims' liability horizon** — `max(policy liability_daa, what its worst-case public pursuit needs)`
+    /// ([`crate::budget::class_pursuit_v1`]; segmented classes; the policy's for the others). Derived, never stored.
+    pub liability_daa: u64,
 }
 
 impl ClassRowV1 {
@@ -1507,6 +1510,9 @@ impl KernelLedgerV1 {
         if let Some(p) = opv {
             self.opv_class_economics(&p, &bounds).map_err(rule)?;
         }
+        // G14-B: the class's worst-case public pursuit ends inside its liability horizon, or the class is refused by name.
+        let liability_daa = class_liability_daa_v1(&self.policy, opv.as_ref(), &d, &program, plan, &bounds)
+            .map_err(|g| rule(format!("not publicly prosecutable: {g:?}")))?;
         self.classes.insert(
             class,
             ClassRowV1 {
@@ -1518,6 +1524,7 @@ impl KernelLedgerV1 {
                 network_domain: self.policy.network_domain,
                 ruleset_digest: self.policy.ruleset_digest,
                 bounds,
+                liability_daa,
             },
         );
         if mode.is_optimistic() {
@@ -2074,6 +2081,35 @@ impl KernelLedgerV1 {
     }
 
     /// The prosecution bounds of a registered class of any kind (single program, pipeline, typed).
+    /// **G14-B: a claim's liability horizon** (DAA after its Final or pre-Final default): its class's derived horizon
+    /// ([`ClassRowV1::liability_daa`]), the policy's for every other kind of claim.
+    pub fn claim_liability_daa_v1(&self, claim: &Digest) -> u64 {
+        self.claims
+            .get(claim)
+            .and_then(|r| self.classes.get(&r.class_binding_id))
+            .map_or(self.policy.liability_daa, |c| c.liability_daa)
+    }
+
+    /// **G14-B: the response window of a demand on `(claim, stage, position)`** — the base court deadline plus one DAA for every chunk
+    /// past the first the demanded material takes on the route (`crate::budget::response_window_daa_v1`): a segmented position's
+    /// parts from the class layout (an inline response keeps the base deadline). Never what the producer sends.
+    pub fn demand_window_daa_v1(&self, claim: &Digest, position: u32) -> u64 {
+        let base = self.policy.court_deadline_daa;
+        let Some(row) = self.claims.get(claim) else { return base };
+        let chunks = match &row.body {
+            ClaimBodyV1::Segmented { .. } => self
+                .classes
+                .get(&row.class_binding_id)
+                .and_then(|c| crate::budget::seg_position_chunks_v1(&c.program, position).ok())
+                .map_or(1, |(chunks, _)| chunks),
+            // An inline (K2-TIR v1–v3, typed) response is ONE object, at most `ROUTE_CHUNKS_PER_OBJECT_V1` chunks by the consumer's
+            // carrier fit; it keeps the base deadline (G14-B open item: the gate's response bound is a worst case far above the real
+            // responses, and counting it would move every inline deadline — see `budget::inline_response_chunks_v1`).
+            _ => 1,
+        };
+        crate::budget::response_window_daa_v1(base, chunks)
+    }
+
     pub fn bounds_of(&self, class: &Digest) -> Option<ProsecutionBoundsV1> {
         self.classes
             .get(class)
@@ -2405,8 +2441,10 @@ impl KernelLedgerV1 {
         }
         let is_final = matches!(row.life.state, ClaimStateV1::Final { .. });
         // Before Final, only while the challenge window is open (so no demand extends Final past window + deadline + grace); after
-        // Final, within the liability horizon (material for a post-Final proof), without touching the lifecycle.
-        let path = self.policy.court_deadline_daa.saturating_add(self.policy.proof_grace_daa);
+        // Final, within the liability horizon (material for a post-Final proof), without touching the lifecycle. G14-B: the deadline
+        // counts the chunks of the class's worst response.
+        let window = self.demand_window_daa_v1(claim, position);
+        let path = window.saturating_add(self.policy.proof_grace_daa);
         let window_open = match &row.life.state {
             // The demand's whole path (its deadline, then the grace after a service) must fit in the horizon, or a late demand
             // would serve material nobody could still prosecute with.
@@ -2447,7 +2485,7 @@ impl KernelLedgerV1 {
         }
         // One session per stage position: the count is bounded by the claim's positions, and no demand can crowd out another.
         self.bonds.get_mut(demander).expect("checked").reserved += need;
-        let deadline = daa + self.policy.court_deadline_daa;
+        let deadline = daa + window;
         self.demands.insert(k, DemandRowV1 { demanders: vec![(*demander, need)], filed_daa: daa, deadline_daa: deadline, last: None });
         if !is_final {
             let row = self.claims.get_mut(claim).expect("checked");
@@ -2633,6 +2671,7 @@ impl KernelLedgerV1 {
             let burn = penalty - held - share * d.demanders.len() as u64;
             self.burned += burn;
             let producer = self.claims.get(&claim).map(|r| r.producer);
+            let liability_daa = self.claim_liability_daa_v1(&claim);
             if let Some(row) = self.claims.get_mut(&claim) {
                 let was_final = matches!(row.life.state, ClaimStateV1::Final { .. });
                 row.reserved -= taken - held;
@@ -2642,7 +2681,7 @@ impl KernelLedgerV1 {
                     // stays held, and a valid proof filed by `daa + liability_daa` still convicts it — keeping one proof out of the
                     // chain for a demand's deadline must not turn a provable fraud into a cheap default. If no valid proof arrives
                     // the outcome stays the default (availability, never fraud) and the reservation is released at the horizon.
-                    row.liability_until = Some(daa.saturating_add(self.policy.liability_daa));
+                    row.liability_until = Some(daa.saturating_add(liability_daa));
                 }
                 if let Some(b) = self.bonds.get_mut(&row.producer) {
                     b.reserved = b.reserved.saturating_sub(taken - held);
@@ -2685,8 +2724,9 @@ impl KernelLedgerV1 {
             };
             match (&before, &after) {
                 (b, ClaimStateV1::Final { .. }) if !matches!(b, ClaimStateV1::Final { .. }) => {
+                    let liability_daa = self.claim_liability_daa_v1(&id);
                     let row = self.claims.get_mut(&id).expect("listed");
-                    row.liability_until = Some(daa + self.policy.liability_daa);
+                    row.liability_until = Some(daa + liability_daa);
                     // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. ADR-0176 hook
                     // (`palw_bond_budget_v1`, not built): this payout also re-checks and consumes the producer bond's reservation.
                     let (job, convicted) = (row.job_id, row.convicted);
@@ -2812,10 +2852,35 @@ impl KernelLedgerV1 {
     }
 }
 
+/// **G14-B: a single-program class's liability horizon** — a segmented (K2-TIR-v4/v5) class's worst-case public pursuit
+/// ([`crate::budget::class_pursuit_v1`]: its search rounds, the chunk-counted windows of its largest position, its filing) under the
+/// OPV clock, refused by name past the ceiling; every other class rides one demand round and keeps the policy's horizon.
+pub(crate) fn class_liability_daa_v1(
+    policy: &LedgerPolicyV1,
+    opv: Option<&crate::opv::OpvPolicyV1>,
+    d: &KernelDescriptorV1,
+    program: &TirProgramV1,
+    plan: &VerificationPlanV1,
+    bounds: &ProsecutionBoundsV1,
+) -> Result<u64, crate::gate::ProsecutionGapV1> {
+    if !crate::descriptor::is_segmented_v1(d) {
+        return Ok(policy.liability_daa);
+    }
+    let Some(opv) = opv else {
+        return Err(crate::gate::ProsecutionGapV1::Unbounded {
+            what: "PURSUIT_SCHEDULE: a segmented class has no OPV clock to finish a pursuit on",
+            required: 1,
+            limit: 0,
+        });
+    };
+    crate::budget::class_pursuit_v1(d, program, plan, bounds.max_filing_bytes, bounds.max_response_bytes, policy, opv)
+        .map(|p| p.liability_daa)
+}
+
 /// The wire overhead around the payload of a `FileProof` (version, tag, accuser, claim, proof variant, length), of a `Respond`
 /// (version, tag, claim, stage, position, length) and of the evidence object a `CommitClaim` carries beside the commitments.
-const FILE_PROOF_OVERHEAD_V1: u128 = 1 + 1 + 64 + 64 + 1 + 4;
-const RESPOND_OVERHEAD_V1: u128 = 1 + 1 + 64 + 1 + 4 + 4;
+const FILE_PROOF_OVERHEAD_V1: u128 = crate::budget::FILE_PROOF_ENVELOPE_BYTES_V1 as u128;
+const RESPOND_OVERHEAD_V1: u128 = crate::budget::RESPOND_ENVELOPE_BYTES_V1 as u128;
 const COMMIT_OVERHEAD_V1: u128 = 1 << 16;
 
 /// **A class is prosecutable only if its worst filing, its largest response and its commitments fit the carriers** — the encoded-size

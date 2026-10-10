@@ -797,3 +797,5 @@ This section supersedes §13's untested `own()` plumbing proposal. The review br
 flag already prevents a class from earning was incorrect. Cumulative scope for the older route, adaptive deadlines and maximum
 chunked response inclusion remain open. These small-value court tests do not establish full G14 or authorize activation.
 - `palw_onboarding_v1::onboarding_gate_v1` was fixed here (`dbc6b24d6`).
+
+**G14-B (2026-10-11):** segmented demand deadlines now count the route chunks of the position's parts, deep segmented classes get a derived liability horizon, and a class whose worst-case pursuit cannot end inside a 436-DAA lifetime is refused by name (`misaka_palw_kernel::budget`). Every real-shape v4 profile is refused at one chunk a DAA; see `g14-completion-matrix.md` §2c.

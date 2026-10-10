@@ -104,6 +104,8 @@ impl KernelLedgerV1 {
                     network_domain: self.policy.network_domain,
                     ruleset_digest: self.policy.ruleset_digest,
                     bounds: base,
+                    // A typed root's rule program is a single-program (v1) class: one demand round, the policy's horizon (G14-B).
+                    liability_daa: self.policy.liability_daa,
                 };
                 (SpecClassKindV1::Memory { rule: Box::new(rule), root: m.clone(), writers }, bounds)
             }

@@ -741,6 +741,44 @@ pub fn palw_fraud_filer_learn_v1(
     }
 }
 
+// ---- G14-B: can a reserved pursuit FINISH before the claim's hard deadline? ------------------------------------------------------
+
+/// **G14-B: the sessions the largest legacy pursuit needs** — one per input unit a fresh verifier must acquire before it can replay
+/// (the PanelDA input bootstrap: a unit is [`crate::palw_legacy_held_da_v2::PALW_LEGACY_PROMPT_CHUNK_IDS_V2`] prompt ids), the LG14-B
+/// descent's node rounds over a step tree of `leaf_count` leaves (`⌈height / 9⌉`), the binding read and the terminal. Every one is a
+/// reserved session, one open at a time (DA-1), on the reservation's own budget of [`PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1`].
+pub fn palw_legacy_pursuit_sessions_v1(input_ids_to_acquire: u64, leaf_count: u64) -> u64 {
+    input_ids_to_acquire
+        .div_ceil(crate::palw_legacy_held_da_v2::PALW_LEGACY_PROMPT_CHUNK_IDS_V2)
+        .saturating_add(u64::from(crate::palw_legacy_held_da_v2::palw_legacy_descent_rounds_v2(leaf_count)))
+        .saturating_add(2)
+}
+
+/// **G14-B: the reserved pursuit's clock**, from a claim's lattice windows (DAA after its acceptance): a session opens only while
+/// `now + W_disclose ≤ trace_retention` (`da_admission_v1`), so by the hard deadline `retention − W_disclose`; a stalling producer
+/// answers each on the last DAA of its `W_disclose` ([`crate::palw_state_v2::palw_da_disclose_window_daa_v1`] =
+/// `window_challenge()`, the UNSHORTENED field); the filing lands by the retention's end. `first_step` (the reservation's inclusion
+/// and the verifier's own replay), `turnaround` and `prove` are the verifier's — unmeasured, parameters.
+pub fn palw_legacy_pursuit_clock_v1(
+    window_bind: u64,
+    window_receipt: u64,
+    window_challenge: u64,
+    window_court: u64,
+    first_step_daa: u64,
+    turnaround_daa: u64,
+    prove_daa: u64,
+) -> misaka_palw_kernel::budget::SessionClockV1 {
+    let retention = window_bind.saturating_add(window_receipt).saturating_add(window_challenge).saturating_add(window_court);
+    misaka_palw_kernel::budget::SessionClockV1 {
+        open_span_daa: retention.saturating_sub(window_challenge),
+        close_span_daa: retention,
+        session_window_daa: window_challenge,
+        first_step_daa,
+        turnaround_daa,
+        prove_daa,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,6 +786,43 @@ mod tests {
 
     fn bond(n: u64) -> PalwBondKeyV2 {
         PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(n), 0))
+    }
+
+    /// **G14-B (FINDING): on testnet-12's lattice a stalling producer holds a reserved pursuit to FOUR sessions.** Each reserved
+    /// session's answer window is `W_disclose = window_challenge()` = 1,200 DAA (the unshortened field), and sessions open only until
+    /// the hard deadline `retention − W_disclose` = 4,200 DAA after acceptance; one open at a time (DA-1). Even with the most favourable
+    /// verifier (first session 2 DAA after acceptance, 1-DAA turnarounds) the fifth session cannot open. The 8k held profile needs
+    /// 4 input units + 5 descent rounds (2^40 leaves) + 2 = 11 sessions; the 2M profile 1,031, past the 34-session budget itself. At
+    /// the APPLIED short window (120 DAA) the same lattice carries 34 sessions; at the court's 42-DAA turn, many more.
+    #[test]
+    fn g14b_a_stalling_producer_holds_the_reserved_pursuit_to_four_sessions_on_the_t12_lattice() {
+        use crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1 as W;
+        use misaka_palw_kernel::budget::session_pursuit_schedule_v1;
+        let clock = |challenge: u64| {
+            let mut c = palw_legacy_pursuit_clock_v1(W.window_bind, W.window_receipt, W.window_challenge, W.window_court, 2, 1, 1);
+            c.session_window_daa = challenge;
+            c
+        };
+        let live = clock(W.window_challenge);
+        assert_eq!((W.window_bind, W.window_receipt, W.window_challenge, W.window_court), (600, 600, 1_200, 3_000));
+        assert_eq!((live.open_span_daa, live.close_span_daa, live.session_window_daa), (4_200, 5_400, 1_200));
+        let held_8k = palw_legacy_pursuit_sessions_v1(8_192, 1 << 40);
+        let held_2m = palw_legacy_pursuit_sessions_v1(2_097_152, 1 << 40);
+        assert_eq!((held_8k, held_2m), (11, 1_031));
+        assert!(held_2m > u64::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1), "the 2M input alone is past the reservation's budget");
+        let s = session_pursuit_schedule_v1(&live, held_8k as u32);
+        assert!(!s.fits, "{s:?}");
+        assert_eq!(s.max_sessions, 4);
+        assert!(session_pursuit_schedule_v1(&live, 4).fits && !session_pursuit_schedule_v1(&live, 5).fits);
+        assert!(!session_pursuit_schedule_v1(&live, u32::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1)).fits);
+        // The window that would carry the whole budget: the applied short challenge window does (35 sessions fit).
+        let short = clock(crate::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1);
+        assert_eq!(short.session_window_daa, 120);
+        let budget = session_pursuit_schedule_v1(&short, u32::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1));
+        assert!(budget.fits && budget.max_sessions == 35, "{budget:?}");
+        assert!(session_pursuit_schedule_v1(&short, held_8k as u32).fits);
+        // The court's turn deadline carries far more.
+        assert!(session_pursuit_schedule_v1(&clock(W.court_turn_deadline), 34).max_sessions >= 34);
     }
 
     #[test]

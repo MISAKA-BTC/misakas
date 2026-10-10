@@ -1315,4 +1315,76 @@ mod tests {
         assert_eq!(bound(&S::TimedOut { daa: 111 }, None), None, "a claim that ended without passing takes nothing more");
         assert_eq!(bound(&S::Convicted { daa: 30 }, None), None);
     }
+
+    /// **G14-B: the kernel's carriage terms are this lane's, and a maximal `Respond` (one full 1 MiB part) rides it in exactly the chunks
+    /// the kernel's chunk-counting deadline counts** — reassembled from tag-113 chunks arriving one a block, inside the group's TTL and
+    /// inside the demand's chunk-counted window, while the old fixed window (the base court deadline) could not hold it.
+    #[test]
+    fn g14b_a_maximal_respond_rides_the_chunk_lane_in_the_chunks_the_kernel_counts() {
+        use crate::palw_state_v2::{PALW_OBJECT_CHUNK_MAX_BYTES, PALW_OBJECT_CHUNK_MAX_COUNT, PalwConsensusObjectV2 as Obj};
+        use misaka_palw_kernel::budget as b;
+        use misaka_palw_kernel::route::KernelRouteObjectV1 as K;
+        // The mirrors (the kernel cannot import this crate).
+        assert_eq!(b::ROUTE_CHUNK_BYTES_V1, PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+        assert_eq!(b::ROUTE_CHUNKS_PER_OBJECT_V1, PALW_OBJECT_CHUNK_MAX_COUNT as u64);
+        assert_eq!(
+            b::ROUTE_OBJECT_WRAPPER_BYTES_V1,
+            (PALW_OBJECT_CHUNK_MAX_BYTES * PALW_OBJECT_CHUNK_MAX_COUNT as usize - PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1) as u64
+        );
+        assert_eq!(b::ROUTE_CHUNK_TTL_MAX_DAA_V1, PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1);
+        assert_eq!(b::LIFETIME_CEILING_DAA_V1, crate::palw_bond_budget_v1::PALW_BOND_BUDGET_W_MAX_DAA_V1);
+        // One full chunk a block: two would exceed what testnet-12's block mass admits in transaction bytes.
+        let block_bytes =
+            crate::config::params::palw_t12_shipped_params().max_block_mass / crate::constants::TRANSIENT_BYTE_TO_MASS_FACTOR;
+        assert!(block_bytes >= PALW_OBJECT_CHUNK_MAX_BYTES as u64 && block_bytes < 2 * PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+        assert_eq!(b::ROUTE_DAA_PER_CHUNK_V1, 1);
+
+        // A maximal part, in its Respond, in its signed carrier object (an ML-DSA-87 signature's length).
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let mut state = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
+        let producer = chunk_bond(0);
+        let claim = [7u8; 64];
+        let part = misaka_palw_kernel::seg_da::SEG_PART_BYTES_V4 as usize;
+        let respond = K::Respond { claim, stage: 0, position: 8191, bytes: vec![0xA5; part] };
+        let inner = Obj::KernelRouteV1 { bytes: respond.encode(), signer: producer, signature: vec![5; 4627] };
+        let target = PalwKernelChunkTargetV1::Claim(claim);
+        let chunks = palw_kernel_chunks_v1(&inner, producer, target, PALW_OBJECT_CHUNK_MAX_BYTES).unwrap();
+        let counted = b::route_object_chunks_v1(part as u128 + b::RESPOND_ENVELOPE_BYTES_V1 as u128);
+        assert_eq!(chunks.len() as u64, counted, "the lane's real chunking is the kernel's count");
+        assert_eq!(counted, 11);
+        assert!(palw_kernel_chunk_inner_matches_target_v1(&inner, &target));
+        // The demand opens at t0; its chunk-counted window is the base deadline plus one DAA a further chunk.
+        let t0 = 1_000u64;
+        let window = b::response_window_daa_v1(p.court_deadline_daa, counted);
+        assert_eq!(window, p.court_deadline_daa + 10);
+        // The producer reacts as late as a one-carrier answer may (the base deadline), then one chunk a block.
+        let opened = t0 + p.court_deadline_daa;
+        let expires = opened + PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1;
+        let mut group = PalwKernelChunkGroupV1 {
+            target,
+            count: chunks[0].count,
+            opened_daa: opened,
+            expires_daa: expires,
+            deposit: 11,
+            parts: BTreeMap::new(),
+        };
+        let mut completed_at = None;
+        for (i, c) in chunks.iter().enumerate() {
+            let daa = opened + i as u64;
+            assert!(daa <= expires, "every chunk inside the group's TTL");
+            if let Some(object) = state.chunk_completion_v1(c) {
+                assert_eq!(object, inner, "the assembled object is the Respond, byte for byte");
+                completed_at = Some(daa);
+                break;
+            }
+            group.parts.insert(c.index, c.bytes.clone());
+            state.aux.insert(
+                (PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&producer, &c.group)),
+                borsh::to_vec(&group).unwrap(),
+            );
+        }
+        let completed_at = completed_at.expect("the last chunk completes the group");
+        assert_eq!(completed_at, t0 + window, "it lands on the chunk-counted deadline's last DAA");
+        assert!(completed_at > t0 + p.court_deadline_daa, "the fixed window would have defaulted an honest producer by size alone");
+    }
 }

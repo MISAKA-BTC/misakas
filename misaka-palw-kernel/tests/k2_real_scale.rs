@@ -1020,3 +1020,305 @@ fn k2s_every_tile_and_part_constant_fits_the_node_carrier() {
     assert!(PROMPT_TILE_IDS_V1 * 4 + 64 * 16 < misaka_palw_kernel::route::MAX_POST_PROMPT_TILE_BYTES_V1);
     assert!(misaka_palw_kernel::route::MAX_POST_PROMPT_TILE_BYTES_V1 < CARRIER);
 }
+
+// ---- G14-B: maximum-profile budgets and deadlines (`misaka_palw_kernel::budget`) ----------------------------------------------------
+
+/// The first MatMul of the program: `(occurrence, node)`.
+fn first_matmul(program: &TirProgramV1) -> (u16, u16) {
+    program
+        .occurrences()
+        .iter()
+        .enumerate()
+        .find_map(|(s, (b, _))| {
+            program.blocks[*b as usize]
+                .nodes
+                .iter()
+                .position(|nd| matches!(nd.prim, misaka_palw_tir::Prim::MatMul))
+                .map(|n| (s as u16, n as u16))
+        })
+        .unwrap()
+}
+
+/// **G14-B, the profile table**: every shipped real-shape class at its maximum context through the v4 gate and the pursuit schedule
+/// (search rounds × chunk-counted response windows + the filing's chunks against the liability horizon), at ceilings across `W`'s
+/// range. The gate's verdict is the schedule's; the 9B-8k class is refused BY NAME at every ceiling: one position is 2,294 parts, its
+/// window alone outlasts any horizon in the range.
+#[test]
+fn g14b_every_shipped_profile_is_admitted_with_its_derived_horizon_or_refused_by_name() {
+    use misaka_palw_kernel::budget::*;
+    let (l, opv) = (policy(), opv_example());
+    let clock = PursuitClockV1::of_opv(&l, &opv);
+    let v4 = k2_tir_v4_descriptor();
+    let material = ProfileMaterialV1::kernel_route(true);
+    let ceilings = [280u64, 300, 358, 400, 436];
+    // The sketch's history-bearing dense + MoE class held at 8,192 positions, by its window (K2S GAP-31's node fixture is 1,024).
+    for window in [16u32, 64, 128, 256, 512, 1024] {
+        let fx = misaka_palw_tir_sketch::fixture::dense_moe_windowed_v1(7, window);
+        let root = program_root_v1(&fx.program.encode());
+        let Ok(plan) = plan_for_tir_program_v1(&v4, &fx.program, root, 8192) else {
+            eprintln!("[g14b] dense-MoE window {window} @8192: no v4 plan");
+            continue;
+        };
+        let bounds = match public_prosecution_complete_v4(&v4, &plan, &fx.program, &material, &ROUTE) {
+            Ok((b, _)) => b,
+            Err(g) => {
+                eprintln!("[g14b] dense-MoE window {window} @8192: refused by the v4 gate {g:?}");
+                continue;
+            }
+        };
+        let (chunks, parts) = seg_position_chunks_v1(&fx.program, 8191).unwrap();
+        let window_daa = response_window_daa_v1(l.court_deadline_daa, chunks);
+        let filing_chunks = route_object_chunks_v1(bounds.max_filing_bytes as u128 + FILE_PROOF_ENVELOPE_BYTES_V1 as u128);
+        let s = seg_pursuit_schedule_v1(&clock, seg_search_rounds_v1(8192), window_daa, filing_chunks);
+        let verdicts: Vec<(u64, bool)> = ceilings
+            .iter()
+            .map(|c| {
+                let ok = class_pursuit_with_ceiling_v1(
+                    &v4,
+                    &fx.program,
+                    &plan,
+                    bounds.max_filing_bytes,
+                    bounds.max_response_bytes,
+                    &l,
+                    &opv,
+                    *c,
+                )
+                .is_ok();
+                assert_eq!(ok, s.final_daa + l.liability_daa.max(s.liability_needed_daa) <= *c, "dense-MoE window {window} at {c}");
+                (*c, ok)
+            })
+            .collect();
+        eprintln!(
+            "[g14b] dense-MoE window {window} @8192: last position {parts} parts / {chunks} chunks -> window {window_daa} DAA; filing \
+             {filing_chunks} chunks; Final +{}; liability needed {} DAA; lifetime {} DAA; admitted at lifetime ceilings {verdicts:?}",
+            s.final_daa,
+            s.liability_needed_daa,
+            s.final_daa + l.liability_daa.max(s.liability_needed_daa)
+        );
+    }
+    for name in ["mamba-370m.json", "granite-3.1-1b-a400m.json", "qwen3.5-0.8b.json", "smollm2-1.7b.json", "huihui-qwen3.5-9b-8k.json"]
+    {
+        let Some((program, ctx)) = fixture_program(name) else {
+            eprintln!("[g14b] {name}: fixture absent");
+            continue;
+        };
+        let root = program_root_v1(&program.encode());
+        let plan = match plan_for_tir_program_v1(&v4, &program, root, ctx) {
+            Ok(p) => p,
+            Err((f, why)) => {
+                eprintln!("[g14b] {name} @{ctx}: no v4 plan ({}: {why})", f.name());
+                continue;
+            }
+        };
+        let bounds = match public_prosecution_complete_v4(&v4, &plan, &program, &material, &ROUTE) {
+            Ok((b, _)) => b,
+            Err(g) => {
+                eprintln!("[g14b] {name} @{ctx}: refused by the v4 gate {g:?}");
+                continue;
+            }
+        };
+        let (chunks, parts) = seg_position_chunks_v1(&program, ctx - 1).unwrap();
+        let window = response_window_daa_v1(l.court_deadline_daa, chunks);
+        let rounds = seg_search_rounds_v1(ctx);
+        let filing_chunks = route_object_chunks_v1(bounds.max_filing_bytes as u128 + FILE_PROOF_ENVELOPE_BYTES_V1 as u128);
+        let s = seg_pursuit_schedule_v1(&clock, rounds, window, filing_chunks);
+        let pursuit = |c: u64| {
+            class_pursuit_with_ceiling_v1(&v4, &program, &plan, bounds.max_filing_bytes, bounds.max_response_bytes, &l, &opv, c)
+        };
+        let verdicts: Vec<(u64, bool)> = ceilings.iter().map(|c| (*c, pursuit(*c).is_ok())).collect();
+        eprintln!(
+            "[g14b] {name} @{ctx}: last position {parts} parts / {chunks} route chunks -> response window {window} DAA; {rounds} rounds; \
+             filing {} B in {filing_chunks} chunks; Final +{} ({} pre-Final rounds), last demand +{}, filed +{}; liability needed {} DAA; \
+             admitted at ceilings {verdicts:?}",
+            bounds.max_filing_bytes, s.final_daa, s.pre_final_rounds, s.last_demand_daa, s.filed_daa, s.liability_needed_daa
+        );
+        for (c, ok) in &verdicts {
+            assert_eq!(
+                *ok,
+                s.final_daa + l.liability_daa.max(s.liability_needed_daa) <= *c,
+                "{name}: the gate's verdict is the schedule's at {c}"
+            );
+        }
+        if let Ok(p) = pursuit(LIFETIME_CEILING_DAA_V1) {
+            assert_eq!(p.liability_daa, l.liability_daa.max(s.liability_needed_daa));
+            assert_eq!((p.rounds, p.response_chunks, p.response_window_daa, p.filing_chunks), (rounds, chunks, window, filing_chunks));
+        }
+        if name.starts_with("huihui") {
+            assert!(ctx == 8192 && parts > 2_000, "the 9B-8k last position is thousands of parts: {parts}");
+            assert!(window > 436, "one position's own window outlasts every horizon in W's range: {window}");
+            for c in ceilings {
+                let g = pursuit(c).unwrap_err();
+                assert!(format!("{g:?}").contains("PURSUIT_SCHEDULE"), "refused by name at {c}: {g:?}");
+            }
+        }
+    }
+}
+
+/// **G14-B, the worst-case schedule on the ledger** (V-ref: every block through `apply_block`). A liar's segmented claim at 8,192
+/// positions; a public verifier runs the deepest search the class admits (ten probes and the court's round, 11 demands) while the
+/// producer answers every demand on the LAST DAA of its window; the claim reaches Final as early as the lifecycle lets it, and the
+/// verifier waits out the dead zone between a served demand and Final. Every demand is admitted, every answer lands, and the filing
+/// convicts inside the class's derived horizon — exactly at the times `budget::seg_pursuit_schedule_v1` derives. At the policy's own
+/// 200 the deepest round could not even have opened.
+#[test]
+fn g14b_the_worst_case_pursuit_completes_on_the_ledger_inside_the_class_horizon() {
+    use misaka_palw_kernel::budget::*;
+    let fx = wide128_v1(7);
+    let mut w = W::new(fx.program, fx.params, 8192);
+    let (l, opv) = (policy(), opv_example());
+    let clock = PursuitClockV1::of_opv(&l, &opv);
+    let class_liability = w.l.classes[&w.class].liability_daa;
+    let prompt: Vec<u32> = (0..2100u32).map(|i| (i * 7 + 1) % 32).collect();
+    let job = w.tiled_job(&prompt, 2);
+    let (s, n) = first_matmul(&w.program);
+    let lie_at = 1200u32;
+    let liar = produce(&w, job, &prompt, Some((lie_at, s, n)));
+    let ev = commit(&mut w, &liar);
+    assert!(ev.iter().any(|e| matches!(e, E::ClaimCommitted { .. })), "{ev:?}");
+    let (c, id) = (w.daa, liar.claim.id());
+    let window = w.l.demand_window_daa_v1(&id, lie_at);
+    assert_eq!(window, l.court_deadline_daa, "a 1,104-byte position is one carrier");
+    let view = w.l.seg_claim_view_v1(&id).unwrap();
+    let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &liar, &artifact(&w), &liar.tokens, &[lie_at]) else {
+        panic!("the lie is not found")
+    };
+    let filing = fault.to_bytes();
+    let filing_chunks = route_object_chunks_v1(filing.len() as u128 + FILE_PROOF_ENVELOPE_BYTES_V1 as u128);
+    let rounds = seg_search_rounds_v1(8192);
+    let plan = seg_pursuit_schedule_v1(&clock, rounds, window, filing_chunks);
+    assert_eq!(class_liability, l.liability_daa.max(plan.liability_needed_daa), "registration derived this class's horizon");
+    assert!(plan.liability_needed_daa > l.liability_daa, "the deepest search does not fit the policy's own 200");
+    // Ten probe positions in the lie's segment, then the court's two positions together.
+    let probes = [1024u32, 1536, 1280, 1152, 1088, 1120, 1136, 1144, 1148, 1150];
+    let serve = |w: &W, p: u32| {
+        let part = position_part_v1(&w.program, p, &liar.values[p as usize], liar.c.position_path(p).1, 0).unwrap();
+        obj(PROD, O::Respond { claim: id, stage: 0, position: p, bytes: borsh::to_vec(&part).unwrap() })
+    };
+    let mut t = c + clock.first_step_daa;
+    let (mut last_demand, mut last_served, mut final_daa) = (0u64, 0u64, None);
+    for round in 0..rounds as usize {
+        let positions = if round < probes.len() { vec![probes[round]] } else { vec![lie_at - 1, lie_at] };
+        w.beat_to(t - 1);
+        // In the dead zone (window closed, Final not yet reached) a demand is refused; the verifier retries the next block.
+        let opened = loop {
+            let demands =
+                positions.iter().map(|p| obj(OUT, O::FileDemand { demander: OUT, claim: id, stage: 0, position: *p })).collect();
+            let ev = w.block(demands);
+            let refused = refusal(&ev);
+            if let ClaimStateV1::Final { final_daa: f } = w.l.claims[&id].life.state {
+                final_daa.get_or_insert(f);
+            }
+            match refused {
+                None => break w.daa,
+                Some(why) => {
+                    assert!(why.contains("challenge window is closed"), "round {round} at {}: {why}", w.daa);
+                    assert!(w.daa <= final_daa.unwrap_or(u64::MAX), "after Final the demand opens (round {round} at {})", w.daa);
+                }
+            }
+        };
+        let deadline = positions.iter().map(|p| w.l.demands[&(id, 0, *p)].deadline_daa).max().unwrap();
+        assert_eq!(deadline, opened + window);
+        // The producer stalls: every answer on the last DAA of its window.
+        w.beat_to(deadline - 1);
+        let answers = positions.iter().map(|p| serve(&w, *p)).collect();
+        let ev = w.block(answers);
+        assert_eq!(ev.iter().filter(|e| matches!(e, E::Served { .. })).count(), positions.len(), "round {round}: {ev:?}");
+        if let ClaimStateV1::Final { final_daa: f } = w.l.claims[&id].life.state {
+            final_daa.get_or_insert(f);
+        }
+        (last_demand, last_served) = (opened, w.daa);
+        t = w.daa + clock.turnaround_daa;
+    }
+    let final_daa = final_daa.expect("Final during the pursuit");
+    let until = w.l.claims[&id].liability_until.unwrap();
+    assert_eq!(until, final_daa + class_liability, "the class's derived horizon");
+    // The filing's chunks land after localization, assembly and inclusion.
+    let file_at = last_served + clock.prove_daa + (filing_chunks - 1) * ROUTE_DAA_PER_CHUNK_V1;
+    assert!(file_at <= until, "the filing lands inside the horizon: {file_at} <= {until}");
+    w.beat_to(file_at - 1);
+    let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(filing) })]);
+    assert!(ev.iter().any(|e| matches!(e, E::Convicted { claim, accuser, .. } if *claim == id && *accuser == OUT)), "{ev:?}");
+    // Exactly the derived schedule.
+    assert_eq!(
+        (final_daa - c, last_demand - c, file_at - c, until - final_daa),
+        (plan.final_daa, plan.last_demand_daa, plan.filed_daa, plan.liability_needed_daa.max(l.liability_daa))
+    );
+    // At the policy's own horizon the last round's whole path would not have fit.
+    assert!(last_demand + window + l.proof_grace_daa > final_daa + l.liability_daa);
+    eprintln!(
+        "[g14b] wide128 @8192 on the ledger: {rounds} rounds, Final +{}, last demand +{}, served +{}, filed +{} <= horizon +{} (class \
+         liability {class_liability}, policy {})",
+        final_daa - c,
+        last_demand - c,
+        last_served - c,
+        file_at - c,
+        until - c,
+        l.liability_daa
+    );
+}
+
+/// **G14-B, the maximal response's terminal**: a position of two parts (a full 1 MiB part and the rest) is demanded; its window counts
+/// the route chunks of both parts, not the base deadline. A producer that sends one chunk a block, starting as late as it can, lands
+/// the last part on the window's last DAA and is SERVED; under the old fixed window it would have defaulted by size alone. A producer
+/// that withholds still defaults at the counted deadline: the declared layout fixes the window, the producer's answer cannot move it.
+#[test]
+fn g14b_a_maximal_response_lands_inside_its_chunk_counted_window_and_withholding_still_defaults() {
+    use misaka_palw_kernel::budget::*;
+    let (program, params) = fat_v1(3);
+    let mut w = W::new(program, params, 64);
+    let l = policy();
+    let prompt: Vec<u32> = vec![3, 9, 14];
+    let job = w.tiled_job(&prompt, 2);
+    let honest = produce(&w, job, &prompt, None);
+    commit(&mut w, &honest);
+    let id = honest.claim.id();
+    let sizes = misaka_palw_kernel::seg_da::position_part_bytes_v1(&w.program, 1).unwrap();
+    let parts: Vec<Vec<u8>> = (0..sizes.len() as u32)
+        .map(|i| borsh::to_vec(&position_part_v1(&w.program, 1, &honest.values[1], honest.c.position_path(1).1, i).unwrap()).unwrap())
+        .collect();
+    let per_part: Vec<u64> =
+        parts.iter().map(|b| route_object_chunks_v1(b.len() as u128 + RESPOND_ENVELOPE_BYTES_V1 as u128)).collect();
+    for (actual, bound) in parts.iter().zip(&sizes) {
+        assert!(
+            actual.len() as u64 <= *bound && *bound <= misaka_palw_kernel::seg_da::SEG_PART_BYTES_V4,
+            "the layout's bound covers the part: {} <= {bound}",
+            actual.len()
+        );
+    }
+    let (chunks, n) = seg_position_chunks_v1(&w.program, 1).unwrap();
+    assert_eq!(n as usize, parts.len());
+    assert!(per_part.iter().sum::<u64>() <= chunks, "the declared count bounds the real chunks: {per_part:?} vs {chunks}");
+    assert_eq!(per_part[0], 11, "a full part is eleven chunks: {per_part:?}");
+    let window = response_window_daa_v1(l.court_deadline_daa, chunks);
+    assert_eq!(w.l.demand_window_daa_v1(&id, 1), window);
+    let ev = w.block(vec![obj(OUT, O::FileDemand { demander: OUT, claim: id, stage: 0, position: 1 })]);
+    let opened = w.daa;
+    assert!(ev.iter().any(|e| matches!(e, E::DemandOpened { position: 1, deadline, .. } if *deadline == opened + window)), "{ev:?}");
+    // One chunk a block, from as late as possible: part i lands when its last chunk does.
+    let mut land = opened + window;
+    let mut at: Vec<u64> = vec![0; parts.len()];
+    for i in (0..parts.len()).rev() {
+        at[i] = land;
+        land -= per_part[i];
+    }
+    assert!(at[parts.len() - 1] > opened + l.court_deadline_daa, "the old fixed window would have defaulted this producer");
+    for (i, bytes) in parts.iter().enumerate() {
+        w.beat_to(at[i] - 1);
+        let ev = w.block(vec![obj(PROD, O::Respond { claim: id, stage: 0, position: 1, bytes: bytes.clone() })]);
+        assert!(refusal(&ev).is_none() && !ev.iter().any(|e| matches!(e, E::ProducerDefault { .. })), "part {i}: {ev:?}");
+        assert_eq!(ev.iter().any(|e| matches!(e, E::Served { position: 1, .. })), i + 1 == parts.len(), "part {i}: {ev:?}");
+    }
+    assert!(!w.l.claims[&id].convicted && !matches!(w.l.claims[&id].life.state, ClaimStateV1::Unavailable { .. }));
+    // The same position on a second claim, withheld: the default comes at the counted deadline, not later.
+    let job2 = w.tiled_job(&[4, 1, 15], 2);
+    let other = produce(&w, job2, &[4, 1, 15], None);
+    commit(&mut w, &other);
+    let id2 = other.claim.id();
+    let ev = w.block(vec![obj(OUT, O::FileDemand { demander: OUT, claim: id2, stage: 0, position: 1 })]);
+    assert!(refusal(&ev).is_none(), "{ev:?}");
+    let opened = w.daa;
+    let ev = w.beat_to(opened + window - 1);
+    assert!(!ev.iter().any(|e| matches!(e, E::ProducerDefault { .. })), "no default before the counted deadline");
+    let ev = w.block(Vec::new());
+    assert!(ev.iter().any(|e| matches!(e, E::ProducerDefault { claim, .. } if *claim == id2)), "{ev:?}");
+}
