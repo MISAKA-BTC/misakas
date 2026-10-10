@@ -10,10 +10,10 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | --- | --- | --- |
 | Current specification | RFC02 now separates current requirements from historical primitive-count, replay, availability and seating notes; §II.14 incorporates all six review requirements | Keep formal specification and implementation aligned as versioned features land |
 | Direct canonical TIR | SDK `tests/direct_tir_registration.rs` exercises byte-based admission and provenance-independent identity; the generic frontend now reproduces the same program/inventory/class ID through common admission | Same-binary real-checkpoint registration, independent conformance/claim/Final/redemption and all §II.11.4 mutations |
-| Declarative frontend pack | Implemented content-addressed primitive/state grammar, strict config/source bindings, bounded integer/IEEE and inline virtual/tensors/blocks imports, pinned metadata, raw whole/split GGUF acquisition including public indexes, aggregate budgets, supplied unknown IDs and tokenizer identity, replayable receipts and staged SDK build/verify with source SHAs and all three engines; [format contract](tir-frontend-pack-v1.md) | HF-reference/beacon runtime-pack integration, all advertised tasks/components and real-node §II.11.4 acceptance |
+| Declarative frontend pack | Implemented content-addressed primitive/state grammar, strict config/source bindings, bounded integer/IEEE and inline virtual/tensors/blocks imports, pinned metadata, raw whole/split GGUF acquisition including public indexes, aggregate budgets, supplied unknown IDs and tokenizer identity, replayable receipts, predeclared HF-reference logit gates, staged SDK build/verify with source SHAs and all three engines, and common exact-class/beacon commit/run/verify; [format contract](tir-frontend-pack-v1.md) | Real HF-source fidelity, all advertised tasks/components and same-binary real-node §II.11.4 acceptance |
 | Compiler expansion bounds | Shared work/allocation/depth budget now also protects general frontend variables/program/bindings; strict key tracking survives nested scopes; structural/constant bounds precede canonical encoding and weight reads | Maintain coverage as descriptor and versioned graph/dimension features land; existing bounds do not prove whole-node load safety |
 | Bounded dimensions and sparse/state semantics | v1 has fixed/Hist dimensions and fixed-axis TopK; v2 stage programs exist | Versioned length commitments; efficient sparse/routing/state relations; complete evaluator/checker/court/evidence binding; long-context and boundary trials |
-| Fidelity and reproducibility | ModelSpec runtime pack has source/frontend/artifact checks, executor vectors and logit fidelity; generic companion pins source SHA/compiler/executor revisions and reproduces canonical bytes/inventory while reporting SOURCE_EQUIVALENCE_UNVERIFIED | Pre-run thresholds and checkpoint-scoped routing, task quality, long-context and saturation measurements; generic frontend HF-reference/beacon evidence; named failures rather than broad PASS |
+| Fidelity and reproducibility | ModelSpec runtime pack has source/frontend/artifact checks, executor vectors and logit fidelity; generic companion pins source SHA/compiler/executor revisions, reproduces canonical bytes/inventory, measures pinned HF-reference logits under predeclared revision/task/context/tolerances, and follows common beacon commitment/replay while retaining SOURCE_EQUIVALENCE_UNVERIFIED | Real HF-source provenance and checkpoint-scoped routing, task quality, long-context and runtime saturation measurements; real-node beacon evidence; named failures rather than broad PASS |
 | Performance and resource contract | TIR admission derives operation/state/cone costs; runtime and court limits are distributed | Shared complete resource vector across registration/claim/proof/court; aggregate load enforcement; real-size execution/evidence/hash/storage/delivery ratios |
 | Work/economic conservation | Existing canonical work, RFC8/BUDGET and ADR176 paths must be audited at their call sites | Root/slice/rider/model-copy uniqueness, shared capital/window accounting, no splitting or excess-PWU rights gain, role-swap tests |
 | Public dispute completeness | Kernel and TIR court modules exist; this alone proves no detection or end-to-end gate | Fresh outsider from public material through all relation classes, bounded terminal court, invalid-proof flood and honest liveness trials |
@@ -340,3 +340,54 @@ RFC02 remains **not complete**. HF-reference/beacon integration, versioned lengt
 extensions, complete shared resource/economic accounting, real-size fidelity/performance/load
 measurements, complete RFC03 tasks, fresh-outsider G14 and independent Final/redemption, and
 A6/A8 coverage remain required by the original completion contract.
+
+
+## Verified increment — generic fidelity and shared beacon tools, 2026-10-10
+
+Independent frontend companions now bind an existing class and use the same artifact/layout,
+static kernel admission, post-commit work beacon, selected checks and fresh evidence verifier
+as a ModelSpec pack. Format adapters supply provenance only; no ModelSpec, model name or feature
+registry is synthesized. An independent integer-import recipe has a typed absent calibration ID.
+The compiler/executors/profile/frontend pins and exact class inputs are checked; a changed recipe,
+raw-source SHA, reference/policy, implementation, vector or layout invalidates the commitment.
+Explicit plan positions now refuse zero and values beyond class context/program history.
+
+`attach-frontend-fidelity` adds public reference logits and a versioned policy to a **new**
+companion, after its revision/task/context/units/thresholds are fixed and validated before the
+measurement. It pins reference metadata/payload, coverage, policy and portable libm-v1 fit.
+The source rebuild independently repeats the fit before artifact publication. Named gates are
+slope, correlation, top-1, KL, maximum absolute error, RMSE and import-time weight saturation.
+No pass flag certifies source identity, routing, runtime state saturation or full-task quality.
+The reference provider's label is informational; generated fixture logits are not real HF evidence.
+
+The shared HF reader now bounds acquisition, rejects malformed tokens/ragged rows, unsafe paths,
+zero vocabulary, overflow, nonfinite values, truncated floats and unread payload tails. Portable
+fit arithmetic is independent of integer execution; `libm` uses its already-locked 0.2.8 release.
+These local producer limits do not close long-context streamed fidelity or consensus resources.
+
+**74 targeted tests pass**: 36 generic frontend, ten Direct-TIR/SDK, ten existing ModelSpec
+runtime-pack and 18 common beacon regressions. Independent safetensors and arbitrary-name split
+GGUF fixtures attach reference data, rebuild from a peer, bind exact class identity, commit before
+synthetic randomness, interrupt/resume the shared checks and reproduce evidence in a fresh CLI
+process. Source/reference/policy/compiler/implementation/layout/vector substitutions, fake fidelity
+flags/measurements and forged beacon results refuse. A missing class layout refuses before a
+commitment; a different program and failed coverage/tolerance create no output pack. No-rerun
+remains not a pass, and failed fidelity rebuilds preserve the prior published artifact.
+
+```sh
+cargo test --locked -p misaka-palw-tir-lower --test frontend_pack
+cargo test --locked -p misaka-palw-sdk \
+  --test direct_tir_registration --test runtime_pack --test runtime_pack_beacon
+cargo clippy --locked -p misaka-palw-sdk --lib
+```
+
+Formatter, local Markdown target and diff checks pass. Existing unrelated compiler/clippy warnings
+remain; changed recipe/fidelity/binding modules introduce none. These tests use deliberately
+synthetic reference logits and beacon facts, unapproved challenge policy and hypothetically armed
+kernels. They prove the tool interfaces, not real-checkpoint fidelity or node eligibility.
+
+RFC02 remains **not complete**. Required evidence still includes real checkpoints and long-context
+fidelity/routing/state/task quality; versioned bounded dimensions/sparse/state relations; complete
+shared execution/proof/verifier/court/retention/delivery and aggregate-load resource accounting;
+work/economic conservation; complete RFC03 modalities; fresh-outsider G14 and independent
+Final/redemption; and A6/A8 measured coverage. The full original completion contract remains active.

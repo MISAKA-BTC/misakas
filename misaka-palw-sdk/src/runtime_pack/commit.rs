@@ -107,6 +107,14 @@ pub struct ImplementationSetV1 {
 impl ImplementationSetV1 {
     /// The implementations THIS binary is, matched to the pack's own record of the math and the primitive set.
     pub fn of_this_build(pack: &RuntimePackV1) -> Self {
+        Self::of_recipe(
+            pack.converter.math.mode.clone(),
+            super::manifest::LOWERING_VERSION_V1.into(),
+            pack.executor.prim_set_id.clone(),
+        )
+    }
+
+    fn of_recipe(math_mode: String, lowering: String, prim_set_id: String) -> Self {
         let entries = IMPL_REVISIONS
             .iter()
             .map(|(role, name, digest)| ImplEntryV1 {
@@ -116,13 +124,7 @@ impl ImplementationSetV1 {
                 source_digest: digest.to_string(),
             })
             .collect();
-        Self {
-            entries,
-            math_mode: pack.converter.math.mode.clone(),
-            lowering: super::manifest::LOWERING_VERSION_V1.into(),
-            prim_set_id: pack.executor.prim_set_id.clone(),
-            check_protocol: CHECK_PROTOCOL_V1.into(),
-        }
+        Self { entries, math_mode, lowering, prim_set_id, check_protocol: CHECK_PROTOCOL_V1.into() }
     }
 
     pub fn root(&self) -> Digest {
@@ -310,6 +312,90 @@ fn sidecars_ok(dir: &Path, pack: &RuntimePackV1) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// Format-specific provenance is acquired before the common artifact/layout/admission path.
+struct PackCommitInputs {
+    digest: String,
+    inventory_root: String,
+    tokenizer_id: String,
+    declared: Vec<super::manifest::DeclaredClass>,
+    implementations: ImplementationSetV1,
+    source_root: Digest,
+    calibration: RootV1,
+}
+impl PackCommitInputs {
+    fn read(dir: &Path) -> Result<Self, Refusal> {
+        let legacy = dir.join(PACK_FILE).exists();
+        let frontend = dir.join(super::primitive::PACK_FILE).exists();
+        if legacy == frontend {
+            return Err(Refusal::new("PACK_MISMATCH", "exactly one supported pack manifest is required"));
+        }
+        if frontend {
+            let pack = super::primitive::PrimitiveRuntimePackV1::read(dir).map_err(|e| Refusal::new("PACK_MISMATCH", e))?;
+            pack.check_recipe(dir).map_err(|e| Refusal::new("PACK_MISMATCH", e))?;
+            let text = |key: &str| -> Result<String, Refusal> {
+                let value = pack.artifact[key].as_str().ok_or_else(|| Refusal::new("PACK_MISMATCH", format!("no artifact {key}")))?;
+                unhex64(value).map_err(|e| Refusal::new("PACK_MISMATCH", e))?;
+                Ok(value.into())
+            };
+            let digest = pack.digest().map_err(|e| Refusal::new("PACK_MISMATCH", e))?;
+            let source_root = tool_root(b"misaka.palw.runtime-pack.frontend-source.v1", &digest);
+            return Ok(Self {
+                inventory_root: text("inventory_root")?,
+                tokenizer_id: text("tokenizer_id")?,
+                declared: pack.declared.clone(),
+                implementations: ImplementationSetV1::of_recipe(
+                    "integer-import-explicit-v1".into(),
+                    format!("{}:{}", misaka_palw_tir_lower::frontend_pack::FORMAT, pack.build.compiler_source_digest),
+                    hex(&misaka_palw_tir::prim::PRIM_SET_ID_V1),
+                ),
+                digest,
+                source_root,
+                // This recipe performs explicit imports; it does not claim ModelSpec calibration.
+                calibration: RootV1::Absent,
+            });
+        }
+        let text = std::fs::read_to_string(dir.join(PACK_FILE)).map_err(|e| Refusal::new("PACK_MISMATCH", e.to_string()))?;
+        let pack = RuntimePackV1::parse(&text).map_err(|e| Refusal::new("PACK_MISMATCH", e))?;
+        sidecars_ok(dir, &pack)?;
+        let source_root = tool_root(
+            DOMAIN_SOURCE,
+            &SourceProvenanceV1 {
+                format: pack.model.format.clone(),
+                config_digest: pack.model.config_digest.clone(),
+                files: pack.model.files.iter().map(|f| (f.path.clone(), f.bytes, f.sha256.clone())).collect(),
+                spec_digest: pack.frontend.spec_digest.clone(),
+                adapter: (pack.frontend.adapter.kind.clone(), pack.frontend.adapter.id.clone(), pack.frontend.adapter.hash.clone()),
+                builtin_pack_hash: pack.frontend.builtin_pack_hash.clone(),
+                quant_descriptors: pack.quant.descriptors.iter().map(|q| (q.name.clone(), q.digest.clone())).collect(),
+            },
+        );
+        let calibration = tool_root(
+            DOMAIN_CALIBRATION,
+            &CalibrationIdentityV1 {
+                stats_digest: pack.profile.calibration.stats_digest.clone(),
+                sites: pack.profile.calibration.sites as u64,
+                source: super::manifest::blake2b256_hex(pack.profile.calibration.source.to_string().as_bytes()),
+                headroom_bits: [
+                    pack.profile.policy.headroom16.to_bits(),
+                    pack.profile.policy.headroom32.to_bits(),
+                    pack.profile.policy.headroom_resid.to_bits(),
+                ],
+                max_window: pack.profile.max_window,
+                context: pack.profile.context.map(|c| c as u64),
+            },
+        );
+        Ok(Self {
+            digest: pack.digest(),
+            inventory_root: pack.result.inventory_root.clone(),
+            tokenizer_id: pack.result.tokenizer_id.clone(),
+            implementations: ImplementationSetV1::of_this_build(&pack),
+            declared: pack.declared,
+            source_root,
+            calibration: RootV1::Present(calibration),
+        })
+    }
+}
+
 /// **Bind a commitment.** Reads the pack at `pack_dir` and the declared-class file `artifact`, re-derives every root from the
 /// artifact, judges static admission, and returns the commitment (provenance fields empty: the chain observes those).
 pub fn bind_commitment(
@@ -320,26 +406,19 @@ pub fn bind_commitment(
 ) -> Result<BoundCommitment, Refusal> {
     params.policy.validate().map_err(|e| Refusal::new("POLICY_INVALID", e.to_string()))?;
     params.scope.validate(&params.policy).map_err(|e| Refusal::new("SCOPE_INVALID", e))?;
-    let text = std::fs::read_to_string(pack_dir.join(PACK_FILE))
-        .map_err(|e| Refusal::new("PACK_MISMATCH", format!("{}: {e}", pack_dir.join(PACK_FILE).display())))?;
-    let pack = RuntimePackV1::parse(&text).map_err(|e| Refusal::new("PACK_MISMATCH", e))?;
-    sidecars_ok(pack_dir, &pack)?;
+    let pack = PackCommitInputs::read(pack_dir)?;
 
     log("deriving the artifact's roots (streamed: one pass for the inventory root, one for the file digest)".into());
     let m = PalwTirManifestV1::derive_streamed(artifact).map_err(|e| Refusal::new("PACK_MISMATCH", e))?;
     let artifact_root: Digest = *m.inventory_root.as_byte_slice();
     let program_root: Digest = *m.graph_ir_root.as_byte_slice();
-    if hex(&artifact_root) != pack.result.inventory_root {
+    if hex(&artifact_root) != pack.inventory_root {
         return Err(Refusal::new(
             "PACK_MISMATCH",
-            format!(
-                "the artifact's inventory root is {}, the pack says {}",
-                &hex(&artifact_root)[..16],
-                &pack.result.inventory_root[..16]
-            ),
+            format!("the artifact's inventory root is {}, the pack says {}", &hex(&artifact_root)[..16], &pack.inventory_root[..16]),
         ));
     }
-    if hex(&m.tokenizer_id) != pack.result.tokenizer_id {
+    if hex(&m.tokenizer_id) != pack.tokenizer_id {
         return Err(Refusal::new("PACK_MISMATCH", "the artifact's tokenizer id is not the pack's"));
     }
 
@@ -401,6 +480,9 @@ pub fn bind_commitment(
         ));
     }
     let positions = params.plan_positions.unwrap_or_else(|| d.max_context.min(program.history_bound).max(1));
+    if positions == 0 || positions > d.max_context || positions > program.history_bound {
+        return Err(Refusal::new("SCOPE_INVALID", "plan positions must fit the declared class and program history bound"));
+    }
     if params.scope.vectors_per_repetition > 0 {
         let longest = params.scope.max_prompt_len as u64 + params.scope.decode_tokens as u64;
         if longest > positions as u64 {
@@ -424,34 +506,8 @@ pub fn bind_commitment(
     log("static semantic admission (reference kernels, hypothetically armed)".into());
     let admission = static_admission(program, program_root, positions)?;
 
-    let implementation_set = ImplementationSetV1::of_this_build(&pack);
-    let source_root = tool_root(
-        DOMAIN_SOURCE,
-        &SourceProvenanceV1 {
-            format: pack.model.format.clone(),
-            config_digest: pack.model.config_digest.clone(),
-            files: pack.model.files.iter().map(|f| (f.path.clone(), f.bytes, f.sha256.clone())).collect(),
-            spec_digest: pack.frontend.spec_digest.clone(),
-            adapter: (pack.frontend.adapter.kind.clone(), pack.frontend.adapter.id.clone(), pack.frontend.adapter.hash.clone()),
-            builtin_pack_hash: pack.frontend.builtin_pack_hash.clone(),
-            quant_descriptors: pack.quant.descriptors.iter().map(|q| (q.name.clone(), q.digest.clone())).collect(),
-        },
-    );
-    let calibration = tool_root(
-        DOMAIN_CALIBRATION,
-        &CalibrationIdentityV1 {
-            stats_digest: pack.profile.calibration.stats_digest.clone(),
-            sites: pack.profile.calibration.sites as u64,
-            source: super::manifest::blake2b256_hex(pack.profile.calibration.source.to_string().as_bytes()),
-            headroom_bits: [
-                pack.profile.policy.headroom16.to_bits(),
-                pack.profile.policy.headroom32.to_bits(),
-                pack.profile.policy.headroom_resid.to_bits(),
-            ],
-            max_window: pack.profile.max_window,
-            context: pack.profile.context.map(|c| c as u64),
-        },
-    );
+    let implementation_set = pack.implementations;
+    let source_root = pack.source_root;
     let binding = tool_root(
         DOMAIN_BINDING,
         &InputStateBindingV1 {
@@ -491,7 +547,7 @@ pub fn bind_commitment(
         constraint_root: RootV1::Absent,
         implementation_set_root: implementation_set.root(),
         test_scope_root: params.scope.root(),
-        calibration_id: RootV1::Present(calibration),
+        calibration_id: pack.calibration,
         input_and_state_binding_root: RootV1::Present(binding),
         resource_profile_id: resource,
         commitment_object_id: None,
@@ -501,7 +557,7 @@ pub fn bind_commitment(
     Ok(BoundCommitment {
         commitment,
         params: params.clone(),
-        pack_digest: pack.digest(),
+        pack_digest: pack.digest,
         admission,
         class_id: class_id_bytes,
         artifact_bytes: m.artifact_bytes,

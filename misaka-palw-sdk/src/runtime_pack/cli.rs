@@ -26,10 +26,12 @@ USAGE:
     palw-class pack verify <pack dir> [--model <dir | .gguf>] [--artifact <file>] [--rebuild]
                            [--no-ref2] [--no-exec] [--no-declared] [--stream|--no-stream] [--strict] [--json]
     palw-class pack show   <pack dir> [--json]
-    palw-class pack build-frontend --model <safetensors dir> --frontend-pack <file> --out <artifact> --pack <dir>
+    palw-class pack build-frontend --model <safetensors dir | GGUF file/set/index> --frontend-pack <file> --out <artifact> --pack <dir>
                            --vectors <tokens.json> [--decode N] [--revision <rev>] [--block-bytes N]
-    palw-class pack verify-frontend --model <safetensors dir> --artifact <file> --pack <dir> --rebuild-out <file>
+    palw-class pack verify-frontend --model <safetensors dir | GGUF file/set/index> --artifact <file> --pack <dir> --rebuild-out <file>
                            [--block-bytes N]
+    palw-class pack attach-frontend-fidelity --pack <existing dir> --artifact <base artifact>
+                           --hf-reference <reference> --fidelity-policy <policy.json> --out <new dir>
     palw-class pack bind-class --pack <existing dir> --artifact <declared.palwtir> --network <network> --out <new dir>
     palw-class pack index  --artifact <file.palwtir> [--out <file>] [--root <hex128>]
     palw-class pack commit-conformance --pack <dir> --artifact <declared class file> --state <dir> --network <net>
@@ -53,7 +55,13 @@ network. `verify` checks every claim it can from what is at hand and says PASS, 
 --model and --rebuild it rebuilds the artifact from the public source and the pack's profile and compares roots;
 with --artifact it checks that file. VERIFIED only when nothing failed and nothing was skipped. Exit 0 verified
 (or, without --strict, nothing failed), 2 failed, 1 an error.
-`bind-class` pins an existing declared artifact's exact layout into a NEW pack without recalibration or admission search.
+`attach-frontend-fidelity` accepts an independent frontend companion, its base artifact, public HF reference
+sidecars and a strict versioned fidelity policy. The policy's revision, task, context, logit units and thresholds
+are validated BEFORE measurement; failed coverage or tolerance writes no output pack. The new companion pins
+policy/reference bytes and portable libm-v1 metrics; `verify-frontend` independently repeats the fit before
+publishing its rebuild. This is a reference-logit gate, not a source-equivalence certificate, routing/state
+fidelity, task quality or live Final. The reference provider's label is informational.
+`bind-class` supports either manifest format and pins an existing declared artifact's exact layout into a NEW pack without recalibration or admission search.
 It changes the pack digest, not the class/artifact identity. It does not certify admission, readiness or mining;
 run `pack verify` and live `misaka model preflight` separately. Old packs remain untouched.
 `index` reads the artifact once and stores the Merkle index (one 64-byte hash per 32 KiB leaf) beside it, `<artifact>.merkleidx` (RFC-0013
@@ -63,8 +71,8 @@ artifact) and otherwise makes the streamed pass it always made.
 
 Beacon conformance (RFC-0013 §9; the policy is an UNAPPROVED test policy; nothing here is consensus):
 `commit-conformance` binds the pack into a ConformanceCommitmentV1 (artifact/program/tokenizer/exact-layout roots re-derived from the
-artifact, the VerificationPlan root of the kernel that would run it — judged hypothetically armed —, the policy, the calibration,
-the implementation set and the sampled-check scope) and refuses before any randomness if static admission fails or the scope cannot
+artifact, the VerificationPlan root of the kernel that would run it — judged hypothetically armed —, the policy, the calibration
+(typed absence for independent integer-import recipes), the implementation set and the sampled-check scope) and refuses before any randomness if static admission fails or the scope cannot
 meet the policy. `run-conformance` takes the canonical beacon facts (misaka.palw.beacon-facts.v1; the node RPC that serves them does
 not exist yet — `synthetic-facts` writes SYNTHETIC ones for exercising the pipeline), derives the beacon and the challenge with the
 shared contract only, runs the selected checks and writes BeaconConformanceEvidenceV1. `verify-conformance` recomputes everything in
@@ -165,6 +173,24 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             println!("{}", pack.report()?);
             Ok(0)
         }
+        "attach-frontend-fidelity" => {
+            let dir = PathBuf::from(take_flag(&mut args, "--pack").ok_or(PACK_USAGE)?);
+            let artifact = PathBuf::from(take_flag(&mut args, "--artifact").ok_or(PACK_USAGE)?);
+            let reference = PathBuf::from(take_flag(&mut args, "--hf-reference").ok_or(PACK_USAGE)?);
+            let policy = PathBuf::from(take_flag(&mut args, "--fidelity-policy").ok_or(PACK_USAGE)?);
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or(PACK_USAGE)?);
+            if let Some(extra) = args.first() {
+                return Err(format!("unexpected argument `{extra}`"));
+            }
+            let pack = super::frontend_fidelity::attach(&dir, &artifact, &reference, &policy, &out)?;
+            println!(
+                "{}",
+                serde_json::json!({"pack_digest":pack.digest()?, "reference_logits":"WITHIN_PREDECLARED_TOLERANCE",
+                "source_equivalence":pack.source_equivalence,"routing_fidelity":"UNVERIFIED","runtime_state_saturation":"UNVERIFIED",
+                "task_quality":"UNVERIFIED","full_task":"UNVERIFIED","live_final":"UNVERIFIED"})
+            );
+            Ok(0)
+        }
         "commit-conformance" => conformance_cli::commit(&mut args, &log),
         "run-conformance" => conformance_cli::run_cmd(&mut args, &log),
         "verify-conformance" => conformance_cli::verify_cmd(&mut args, &log),
@@ -202,8 +228,17 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             if let Some(extra) = args.first() {
                 return Err(format!("unexpected argument `{extra}`"));
             }
-            let pack = super::bind::bind_class(&dir, &artifact, &network, &out)?;
-            println!("{}", pack.digest());
+            let legacy = dir.join(PACK_FILE).exists();
+            let frontend = dir.join(super::primitive::PACK_FILE).exists();
+            if legacy == frontend {
+                return Err("exactly one supported pack manifest is required".into());
+            }
+            let digest = if frontend {
+                super::bind::bind_frontend_class(&dir, &artifact, &network, &out)?.digest()?
+            } else {
+                super::bind::bind_class(&dir, &artifact, &network, &out)?.digest()
+            };
+            println!("{digest}");
             log("bound exact identity only; verify this pack and check live admission before registering".into());
             Ok(0)
         }

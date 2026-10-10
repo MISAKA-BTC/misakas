@@ -2014,8 +2014,13 @@ tokenizer identity. Standard split names and a public index allow independent pa
 part numbers, shared declarations, primary metadata and global tensor uniqueness are checked.
 Aggregate header/allocation/count budgets, checked extents and snapshot revalidation protect
 this producer-side reader across every part and index. SDK artifact publication follows all receipt/inventory/conformance/source
-checks. These fixtures do not close §II.11.4: source-fidelity/beacon pack integration and
-real-checkpoint independent-seat
+checks. Independent companions now attach public reference logits under predeclared revision/task/
+context/units/error criteria, and verify independently repeats a portable fit. The existing exact-class
+binding and beacon commit/run/fresh-verify tools accept both formats through one artifact/layout/
+static-admission/challenge/evidence path; independent imports use typed absent calibration.
+Reference-logit gates stay separate from source identity, routing/state fidelity and task quality.
+These synthetic fixtures do not close §II.11.4: real-checkpoint source fidelity, real-node beacon and
+independent-seat
 claim/Final/redemption evidence remain open in the [implementation ledger](../design/palw/tir/rfc0002-implementation.md).
 
 ### II.11.3 Direct-TIR escape hatch and exact boundary of permissionlessness

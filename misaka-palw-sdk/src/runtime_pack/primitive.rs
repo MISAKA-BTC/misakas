@@ -4,7 +4,7 @@
 use super::{
     build::{sha256_file, source_files},
     conformance::{self, ConformanceJob, ImplSet},
-    manifest::{ConformanceVector, ImplRec, SourceFile},
+    manifest::{ConformanceVector, DeclaredClass, ImplRec, SourceFile},
 };
 use crate::tir_manifest::PalwTirManifestV1;
 use misaka_palw_tir_lower::{
@@ -32,11 +32,14 @@ impl VerifiedFrontendPack {
     }
     pub fn report(&self) -> Result<Value, String> {
         Ok(json!({"pack_digest":self.0.digest()?,"rebuild":"PASS","integer_conformance":"PASS",
-            "source_equivalence":self.0.source_equivalence,"full_task":"UNVERIFIED","live_final":"UNVERIFIED"}))
+            "source_equivalence":self.0.source_equivalence,
+            "reference_logits":if self.0.fidelity.is_some() { "WITHIN_PREDECLARED_TOLERANCE" } else { "UNVERIFIED" },
+            "routing_fidelity":"UNVERIFIED","runtime_state_saturation":"UNVERIFIED","task_quality":"UNVERIFIED",
+            "full_task":"UNVERIFIED","live_final":"UNVERIFIED"}))
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PrimitiveRuntimePackV1 {
     pub format: String,
@@ -51,6 +54,11 @@ pub struct PrimitiveRuntimePackV1 {
     pub conformance: Vec<ConformanceVector>,
     /// This schema has no HF equivalence certificate; it cannot assert one by a user boolean.
     pub source_equivalence: String,
+    /// Exact layouts bound from existing class artifacts, without ModelSpec or admission search.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub declared: Vec<DeclaredClass>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fidelity: Option<super::frontend_fidelity::FidelityRecord>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -91,13 +99,56 @@ impl PrimitiveRuntimePackV1 {
         if pack.format != FORMAT || pack.source_equivalence != crate::tir_registration::SOURCE_EQUIVALENCE_UNVERIFIED {
             return Err("FRONTEND_PACK_SCHEMA: format or unsupported fidelity assertion".into());
         }
+        if pack.source_files.len() > 65_536 || pack.declared.len() > 256 {
+            return Err("FRONTEND_PACK_SCHEMA: source/class count".into());
+        }
+        let mut last = None;
+        for f in &pack.source_files {
+            super::manifest::safe_name(&f.path)?;
+            if f.path.len() > 1024
+                || last.is_some_and(|name: &str| name >= f.path.as_str())
+                || f.sha256.len() != 64
+                || !f.sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err("FRONTEND_PACK_SCHEMA: sorted distinct source paths and SHA-256 required".into());
+            }
+            last = Some(f.path.as_str());
+        }
         Ok(pack)
+    }
+
+    /// Check the pinned recipe/tool inputs without fetching a checkpoint. This is not a rebuild
+    /// or a fidelity verdict; callers must name the checks they actually performed.
+    pub fn check_recipe(&self, dir: &Path) -> Result<(), String> {
+        if self.admission_profile != admission_profile() {
+            return Err("FRONTEND_PROFILE_MISMATCH: compiler resource profile differs".into());
+        }
+        if self.implementation_revisions != revisions() || self.implementations != ImplSet::default().records() {
+            return Err("FRONTEND_IMPLEMENTATION_MISMATCH: executor/checker sources differ".into());
+        }
+        if self.build.compiler_source_digest != misaka_palw_tir_lower::frontend_pack::compiler_digest() {
+            return Err("FRONTEND_COMPILER_MISMATCH: compiler sources differ".into());
+        }
+        let frontend = FrontendPack::read(&dir.join(FRONTEND_FILE)).map_err(|e| e.to_string())?;
+        if frontend.hash() != self.build.pack_hash {
+            return Err("FRONTEND_BUILD_MISMATCH: frontend digest differs".into());
+        }
+        let jobs: Vec<_> = self
+            .conformance
+            .iter()
+            .map(|v| ConformanceJob { label: v.label.clone(), prompt: v.prompt.clone(), decode: v.decode })
+            .collect();
+        jobs_checked(&jobs)?;
+        if let Some(record) = &self.fidelity {
+            record.check_pins(dir, self)?;
+        }
+        Ok(())
     }
 }
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
-fn read(path: &Path, max: usize) -> Result<Vec<u8>, String> {
+pub(crate) fn read(path: &Path, max: usize) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
         .map_err(|e| format!("{}: {e}", path.display()))?
@@ -198,7 +249,7 @@ fn jobs_checked(jobs: &[ConformanceJob]) -> Result<(), String> {
     }
     Ok(())
 }
-fn manifest(artifact: &Path) -> Result<Value, String> {
+pub(crate) fn manifest(artifact: &Path) -> Result<Value, String> {
     serde_json::from_str(&PalwTirManifestV1::derive_streamed(artifact)?.to_json()).map_err(|e| e.to_string())
 }
 
@@ -264,6 +315,8 @@ pub fn build(
         admission_profile: admission_profile(),
         conformance: vectors,
         source_equivalence: crate::tir_registration::SOURCE_EQUIVALENCE_UNVERIFIED.into(),
+        declared: Vec::new(),
+        fidelity: None,
     };
     std::fs::write(pack_dir.join(FRONTEND_FILE), text).map_err(|e| e.to_string())?;
     std::fs::write(pack_dir.join(PACK_FILE), serde_json::to_vec_pretty(&pack).map_err(|e| e.to_string())?)
@@ -284,13 +337,11 @@ pub fn verify(
     let pack = PrimitiveRuntimePackV1::read(pack_dir)?;
     let mut protected = pack.source_files.iter().map(|f| source_dir(model).join(&f.path)).collect::<Vec<_>>();
     protected.extend([artifact_path.to_path_buf(), pack_dir.join(FRONTEND_FILE), pack_dir.join(PACK_FILE)]);
+    if pack.fidelity.is_some() {
+        protected.extend([pack_dir.join(super::hfref::HF_REFERENCE_FILE), pack_dir.join(super::hfref::HF_REFERENCE_LOGITS_FILE)]);
+    }
     distinct_output(rebuilt, &protected).map_err(|e| e.to_string())?;
-    if pack.admission_profile != admission_profile() {
-        return Err("FRONTEND_PROFILE_MISMATCH: compiler resource profile differs".into());
-    }
-    if pack.implementation_revisions != revisions() {
-        return Err("FRONTEND_IMPLEMENTATION_MISMATCH: executor/checker sources differ".into());
-    }
+    pack.check_recipe(pack_dir)?;
     let jobs: Vec<_> = pack
         .conformance
         .iter()
@@ -320,6 +371,9 @@ pub fn verify(
     let (vectors, _) = conformance::run_streamed(&pending.0, &jobs, ImplSet::default(), &|_| {})?;
     if vectors != pack.conformance {
         return Err("FRONTEND_CONFORMANCE_MISMATCH: tokens, logits or commits differ".into());
+    }
+    if let Some(record) = &pack.fidelity {
+        record.verify(pack_dir, &pack, &pending.0)?;
     }
     if files(model)? != pack.source_files {
         return Err("FRONTEND_SOURCE_CHANGED: source files changed during verification".into());

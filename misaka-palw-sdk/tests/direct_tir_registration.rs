@@ -601,6 +601,11 @@ fn frontend_sdk(saved: usize) {
     assert_eq!(tir_class_admission_offline_v1(&net, bundle, &class, a.inventory_root), Ok(()));
     assert_eq!(class.class_id(&a.inventory_root), class.class_id(&b.inventory_root));
 
+    if saved == 0 || saved == 6 {
+        let fidelity_dir = frontend_fidelity(&dir, &pack_dir, &peer, &artifact);
+        frontend_beacon(&dir, &fidelity_dir, &peer, &artifact, &p, &params, &class);
+    }
+
     // Public source hashes, frontend identity, integer vectors and fidelity labels are all checked.
     std::fs::write(peer.join("config.json"), "{}").unwrap();
     assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("FRONTEND_SOURCE_MISMATCH"));
@@ -637,4 +642,368 @@ fn frontend_sdk(saved: usize) {
     assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("FRONTEND_BUILD_MISMATCH"));
     assert!(primitive::build(&model, &frontend, &artifact, &pack_dir, &[], None, 32).unwrap_err().contains("jobs required"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Exercise the public protocol with an independently submitted graph and raw/split sources.
+/// Facts are explicitly synthetic: this proves shared tool behavior, not a node or approved policy.
+fn frontend_beacon(
+    dir: &std::path::Path,
+    pack_dir: &std::path::Path,
+    model: &std::path::Path,
+    base: &std::path::Path,
+    program: &TirProgramV1,
+    params: &MapParams,
+    class: &PalwTirClassV1,
+) {
+    use misaka_palw_sdk::runtime_pack::{beacon_run::*, commit::*, conformance::ImplSet, facts::MemoryFactSource, primitive};
+    use serde_json::{Value, json};
+    let class_file = dir.join("beacon-class.palwtir");
+    let container = misaka_palw_tir_artifact::PalwTirContainerV1::open(base).unwrap();
+    misaka_palw_tir_artifact::write_container_v1(
+        &class_file,
+        program,
+        borsh::to_vec(&class.layout).unwrap(),
+        container.header.tokenizer_id,
+        container.header.meta,
+        &mut |j, l| Ok(params.tensors[&(j, l)].to_le_bytes()),
+    )
+    .unwrap();
+    let mut policy = misaka_palw_challenge::reference_policy_v1(3, 2, 40, 5, 3);
+    policy.security_bits = 8;
+    let mut scope = ConformanceScopeV1::new(2, 3, 1, 8);
+    scope.vector_fault_ppm = 1_000_000;
+    scope.leaf_fault_ppm = 500_000;
+    let opts = CommitParamsV1::new(
+        "testnet-12",
+        misaka_palw_challenge::hash::named_id("independent-genesis"),
+        misaka_palw_challenge::hash::named_id("independent-ruleset"),
+        policy,
+        scope,
+    );
+    assert_eq!(bind_commitment(pack_dir, &class_file, &opts, &|_| {}).unwrap_err().code, "LAYOUT_REQUIRED");
+    let wrong_class_file = dir.join("wrong-beacon-class.palwtir");
+    let mut wrong_program = program.clone();
+    let misaka_palw_tir::Prim::Clamp { hi, .. } = &mut wrong_program.blocks.last_mut().unwrap().nodes.last_mut().unwrap().prim else {
+        panic!()
+    };
+    *hi -= 1;
+    misaka_palw_tir_artifact::write_container_v1(
+        &wrong_class_file,
+        &wrong_program,
+        borsh::to_vec(&class.layout).unwrap(),
+        container.header.tokenizer_id,
+        "{}".into(),
+        &mut |j, l| Ok(params.tensors[&(j, l)].to_le_bytes()),
+    )
+    .unwrap();
+    let wrong_out = dir.join("wrong-bound-frontend");
+    assert!(misaka_palw_sdk::runtime_pack::bind::bind_frontend_class(pack_dir, &wrong_class_file, "testnet-12", &wrong_out).is_err());
+    assert!(!wrong_out.exists());
+    let bound_dir = dir.join("bound-frontend-pack");
+    let pack = misaka_palw_sdk::runtime_pack::bind::bind_frontend_class(pack_dir, &class_file, "testnet-12", &bound_dir).unwrap();
+    assert_eq!(pack.declared.len(), 1);
+    primitive::verify(&bound_dir, model, base, &dir.join("bound-rebuilt"), 32).unwrap();
+    assert!(misaka_palw_sdk::runtime_pack::bind::bind_frontend_class(pack_dir, &class_file, "testnet-12", &bound_dir).is_err());
+    let state = dir.join("frontend-beacon-state");
+    let (b, _) = commit_conformance(&bound_dir, &class_file, &state, &opts, &|_| {}).unwrap();
+    assert_eq!(b.class_id, *class.class_id(&PalwTirManifestV1::derive_streamed(base).unwrap().inventory_root).as_byte_slice());
+    assert_eq!(b.commitment.calibration_id, misaka_palw_challenge::RootV1::Absent);
+    assert!(b.admission.hypothetically_armed);
+    assert_eq!(b.admission.shipped_outcome, "KERNEL_NOT_ACTIVE");
+    for positions in [0, class.layout.max_context + 1, u32::MAX] {
+        let mut bad = opts.clone();
+        bad.plan_positions = Some(positions);
+        assert_eq!(bind_commitment(&bound_dir, &class_file, &bad, &|_| {}).unwrap_err().code, "SCOPE_INVALID");
+    }
+    let facts = synthetic_facts(&b.commitment, &opts.policy, 100, "independent-frontend");
+    let source = MemoryFactSource(facts.clone());
+    let root = hex(&b.commitment.statement_root());
+    let mut run = RunInput {
+        pack_dir: &bound_dir,
+        artifact: &class_file,
+        state_dir: &state,
+        commitment: &root,
+        source: &source,
+        impls: ImplSet::default(),
+        max_checks: Some(2),
+        fault: None,
+    };
+    assert!(matches!(run_conformance(&run, &|_| {}).unwrap(), RunOutcome::Interrupted { done: 2, .. }));
+    run.max_checks = None;
+    let RunOutcome::Evidence { evidence, dir: evidence_dir, local, provenance, .. } = run_conformance(&run, &|_| {}).unwrap() else {
+        panic!("expected completed evidence")
+    };
+    assert!(local.is_ok());
+    assert!(matches!(provenance, misaka_palw_sdk::runtime_pack::facts::FactsProvenanceV1::Synthetic { .. }));
+    let ev = evidence_dir.join("evidence.borsh");
+    let mut verify = VerifyInput {
+        pack_dir: &bound_dir,
+        artifact: &class_file,
+        state_dir: &state,
+        commitment: &root,
+        evidence: &ev,
+        source: &source,
+        rerun: true,
+        impls: ImplSet::default(),
+    };
+    assert!(verify_conformance(&verify, &|_| {}).unwrap().is_pass());
+    verify.rerun = false;
+    assert!(matches!(verify_conformance(&verify, &|_| {}).unwrap(), Verdict::NotReproduced { .. }));
+    verify.rerun = true;
+    let mut forged = evidence;
+    forged.reference_result_root[0] ^= 1;
+    let false_ev = evidence_dir.join("forged.borsh");
+    std::fs::write(&false_ev, borsh::to_vec(&forged).unwrap()).unwrap();
+    verify.evidence = &false_ev;
+    assert!(!verify_conformance(&verify, &|_| {}).unwrap().is_pass());
+    verify.evidence = &ev;
+    // All provenance, compiler, implementation, vector and exact-layout changes invalidate the
+    // pre-beacon commitment. Neither an edited flag nor an alternate manifest selects a weaker path.
+    let file = bound_dir.join(primitive::PACK_FILE);
+    let original = std::fs::read(&file).unwrap();
+    for (pointer, value) in [
+        ("/revision", json!("different-revision")),
+        ("/source_files/0/sha256", json!("11".repeat(32))),
+        ("/build/pack_hash", json!("00".repeat(64))),
+        ("/build/compiler_source_digest", json!("00".repeat(64))),
+        ("/implementation_revisions/0/source_digest", json!("00".repeat(64))),
+        ("/declared/0/exact_layout/commit_tiles/0", json!(1)),
+        ("/conformance/0/logits_digest", json!("00".repeat(32))),
+        ("/source_equivalence", json!("VERIFIED")),
+        ("/fidelity/policy/max_abs", json!(format!("{:016x}", 100f64.to_bits()))),
+        ("/fidelity/reference/measured/rmse", json!(format!("{:016x}", 99f64.to_bits()))),
+    ] {
+        let mut changed: Value = serde_json::from_slice(&original).unwrap();
+        *changed.pointer_mut(pointer).unwrap() = value;
+        std::fs::write(&file, changed.to_string()).unwrap();
+        assert_eq!(verify_conformance(&verify, &|_| {}).unwrap_err().code, "COMMITMENT_STALE", "{pointer}");
+    }
+    std::fs::write(&file, &original).unwrap();
+    let front = bound_dir.join(primitive::FRONTEND_FILE);
+    let original_front = std::fs::read(&front).unwrap();
+    let mut changed: Value = serde_json::from_slice(&original_front).unwrap();
+    changed["id"] = json!("substituted");
+    std::fs::write(&front, changed.to_string()).unwrap();
+    assert_eq!(verify_conformance(&verify, &|_| {}).unwrap_err().code, "COMMITMENT_STALE");
+    std::fs::write(&front, original_front).unwrap();
+    std::fs::write(bound_dir.join("pack.json"), "{}").unwrap();
+    assert_eq!(bind_commitment(&bound_dir, &class_file, &opts, &|_| {}).unwrap_err().code, "PACK_MISMATCH");
+    std::fs::remove_file(bound_dir.join("pack.json")).unwrap();
+    assert!(verify_conformance(&verify, &|_| {}).unwrap().is_pass());
+
+    // A new process uses the same bind/commit/run/verify commands as a ModelSpec pack.
+    let cli_bound = dir.join("cli-bound-frontend");
+    let bin = env!("CARGO_BIN_EXE_palw-class");
+    let output = std::process::Command::new(bin)
+        .args(["pack", "bind-class", "--pack"])
+        .arg(pack_dir)
+        .arg("--artifact")
+        .arg(&class_file)
+        .args(["--network", "testnet-12", "--out"])
+        .arg(&cli_bound)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), pack.digest().unwrap());
+    let facts_file = dir.join("frontend-facts.json");
+    std::fs::write(
+        &facts_file,
+        serde_json::to_vec_pretty(&misaka_palw_sdk::runtime_pack::facts::facts_to_json(&facts, &opts.policy.id())).unwrap(),
+    )
+    .unwrap();
+    let output = std::process::Command::new(bin)
+        .args(["pack", "verify-conformance", "--pack"])
+        .arg(&cli_bound)
+        .arg("--artifact")
+        .arg(&class_file)
+        .arg("--state")
+        .arg(&state)
+        .arg("--commitment")
+        .arg(&root)
+        .arg("--facts")
+        .arg(&facts_file)
+        .arg("--evidence")
+        .arg(&ev)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("PASS") && stdout.contains("SYNTHETIC"), "{stdout}");
+}
+
+/// A deliberately synthetic reference exercises the logit interface and strict predeclared
+/// criteria. It provides no evidence of fidelity to a real HF model, routing or task quality.
+fn frontend_fidelity(
+    dir: &std::path::Path,
+    pack_dir: &std::path::Path,
+    model: &std::path::Path,
+    artifact: &std::path::Path,
+) -> std::path::PathBuf {
+    use misaka_palw_sdk::runtime_pack::{frontend_fidelity::*, hfref::*, manifest::LogitsSection, primitive};
+    use serde_json::{Value, json};
+    let art = misaka_palw_tir_exec::node::TirArtifactV1::open(artifact).unwrap();
+    let scale = 1.0 / 256.0;
+    let sequences: Vec<_> = [vec![1, 2, 3, 4], vec![9, 2, 6, 1]]
+        .into_iter()
+        .map(|tokens| {
+            let logits = program_logits_streamed(&art, &tokens, scale).unwrap().into_iter().flatten().map(|v| v as f32).collect();
+            HfSequence { tokens, logits }
+        })
+        .collect();
+    let reference = HfReference {
+        producer: json!({"fixture_reference":true,"source":"same integer program; no real HF model"}),
+        vocab: 16,
+        sequences,
+    };
+    let ref_dir = dir.join("synthetic-reference");
+    std::fs::create_dir(&ref_dir).unwrap();
+    reference.write(&ref_dir).unwrap();
+    let policy = FidelityPolicy {
+        schema: SCHEMA.into(),
+        checkpoint_revision: "fixture-revision".into(),
+        task: "text-generation".into(),
+        context: 8,
+        minimum_sequences: 2,
+        minimum_positions: 8,
+        fit_math: "libm-v1".into(),
+        logits: LogitsSection { convention: "legacy-greedy-only".into(), scale, tolerance: default_tolerance() },
+        max_abs: 1e-5,
+        rmse_max: 1e-5,
+        max_import_saturated_values: 0,
+    };
+    let policy_file = dir.join("fidelity-policy.json");
+    let policy_bytes = serde_json::to_vec_pretty(&policy).unwrap();
+    std::fs::write(&policy_file, &policy_bytes).unwrap();
+    let out = dir.join("frontend-fidelity-pack");
+    let pack = attach(pack_dir, artifact, &ref_dir, &policy_file, &out).unwrap();
+    assert_eq!(pack.source_equivalence, SOURCE_EQUIVALENCE_UNVERIFIED);
+    assert_eq!(pack.fidelity.as_ref().unwrap().policy_digest, policy.digest().unwrap());
+    let rebuild = dir.join("fidelity-rebuilt");
+    let verified = primitive::verify(&out, model, artifact, &rebuild, 32).unwrap();
+    assert_eq!(verified.report().unwrap()["reference_logits"], "WITHIN_PREDECLARED_TOLERANCE");
+    assert_eq!(verified.report().unwrap()["task_quality"], "UNVERIFIED");
+    assert!(
+        primitive::verify(&out, model, artifact, &out.join(HF_REFERENCE_FILE), 32).unwrap_err().contains("FRONTEND_OUTPUT_CONFLICT")
+    );
+    let prior = b"prior published artifact";
+    std::fs::write(&rebuild, prior).unwrap();
+    let manifest = out.join(primitive::PACK_FILE);
+    let original = std::fs::read(&manifest).unwrap();
+    let mut false_fit: Value = serde_json::from_slice(&original).unwrap();
+    false_fit["fidelity"]["reference"]["measured"]["rmse"] = json!(format!("{:016x}", 99f64.to_bits()));
+    std::fs::write(&manifest, false_fit.to_string()).unwrap();
+    assert!(primitive::verify(&out, model, artifact, &rebuild, 32).unwrap_err().contains("FRONTEND_FIDELITY_MISMATCH"));
+    assert_eq!(std::fs::read(&rebuild).unwrap(), prior);
+    std::fs::write(&manifest, &original).unwrap();
+    let raw_path = out.join(HF_REFERENCE_LOGITS_FILE);
+    let raw = std::fs::read(&raw_path).unwrap();
+    let mut changed = raw.clone();
+    changed[0] ^= 1;
+    std::fs::write(&raw_path, changed).unwrap();
+    assert!(primitive::verify(&out, model, artifact, &rebuild, 32).unwrap_err().contains("FRONTEND_FIDELITY_MISMATCH"));
+    assert_eq!(std::fs::read(&rebuild).unwrap(), prior);
+    std::fs::write(&raw_path, raw).unwrap();
+    for (pointer, value) in [
+        ("/checkpoint_revision", json!("wrong-revision")),
+        ("/task", json!("wrong-task")),
+        ("/fit_math", json!("std")),
+        ("/context", json!(0)),
+        ("/logits/scale_bits", json!(format!("{:016x}", f64::NAN.to_bits()))),
+    ] {
+        let mut bad: Value = serde_json::from_slice(&policy_bytes).unwrap();
+        *bad.pointer_mut(pointer).unwrap() = value;
+        std::fs::write(&policy_file, bad.to_string()).unwrap();
+        let bad_out = dir.join("bad-fidelity-policy");
+        assert!(
+            attach(pack_dir, artifact, &dir.join("nonexistent-reference"), &policy_file, &bad_out)
+                .unwrap_err()
+                .contains("FRONTEND_FIDELITY_POLICY"),
+            "{pointer}"
+        );
+        assert!(!bad_out.exists());
+    }
+    let mut bad = policy.clone();
+    bad.minimum_positions = 100;
+    std::fs::write(&policy_file, serde_json::to_vec(&bad).unwrap()).unwrap();
+    let bad_out = dir.join("bad-fidelity-coverage");
+    assert!(attach(pack_dir, artifact, &ref_dir, &policy_file, &bad_out).unwrap_err().contains("FRONTEND_FIDELITY_COVERAGE"));
+    assert!(!bad_out.exists());
+    std::fs::write(&policy_file, &policy_bytes).unwrap();
+    let mut false_reference = reference.clone();
+    for s in &mut false_reference.sequences {
+        for logit in &mut s.logits {
+            *logit += 10.0;
+        }
+    }
+    false_reference.write(&ref_dir).unwrap();
+    let bad_out = dir.join("bad-fidelity-logits");
+    assert!(attach(pack_dir, artifact, &ref_dir, &policy_file, &bad_out).unwrap_err().contains("FRONTEND_FIDELITY_FAILED"));
+    assert!(!bad_out.exists());
+    reference.write(&ref_dir).unwrap();
+    assert_eq!(std::fs::read(&manifest).unwrap(), original);
+    let cli_out = dir.join("cli-fidelity-pack");
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_palw-class"))
+        .args(["pack", "attach-frontend-fidelity", "--pack"])
+        .arg(pack_dir)
+        .arg("--artifact")
+        .arg(artifact)
+        .arg("--hf-reference")
+        .arg(&ref_dir)
+        .arg("--fidelity-policy")
+        .arg(&policy_file)
+        .arg("--out")
+        .arg(&cli_out)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["pack_digest"], pack.digest().unwrap());
+    assert_eq!(report["source_equivalence"], SOURCE_EQUIVALENCE_UNVERIFIED);
+    assert!(!std::fs::read_dir(dir).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".frontend-pack-")));
+    out
+}
+
+#[test]
+fn hf_reference_refuses_malformed_shapes_tokens_paths_extents_and_nonfinite_logits() {
+    use misaka_palw_sdk::runtime_pack::hfref::*;
+    use serde_json::json;
+    let dir = std::env::temp_dir().join(format!("palw-hf-reference-refusals-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir(&dir).unwrap();
+    let good = json!({"schema":HF_REFERENCE_SCHEMA_V1,"producer":{"fixture":true},"vocab":2,
+        "logits_file":HF_REFERENCE_LOGITS_FILE,"sequences":[{"tokens":[0,1]}]});
+    std::fs::write(dir.join(HF_REFERENCE_FILE), good.to_string()).unwrap();
+    let bits: Vec<u8> = [0f32, 1., 2., 3.].into_iter().flat_map(f32::to_le_bytes).collect();
+    std::fs::write(dir.join(HF_REFERENCE_LOGITS_FILE), &bits).unwrap();
+    assert!(HfReference::load(&dir).is_ok());
+    for (pointer, value) in [
+        ("/vocab", json!(0)),
+        ("/vocab", json!(u64::MAX)),
+        ("/logits_file", json!("../secret")),
+        ("/sequences/0/tokens", json!([0, "1"])),
+        ("/sequences/0/tokens", json!([0, 2])),
+        ("/sequences", json!([])),
+    ] {
+        let mut bad = good.clone();
+        *bad.pointer_mut(pointer).unwrap() = value;
+        std::fs::write(dir.join(HF_REFERENCE_FILE), bad.to_string()).unwrap();
+        assert!(HfReference::load(&dir).is_err(), "{pointer}");
+    }
+    std::fs::write(dir.join(HF_REFERENCE_FILE), good.to_string()).unwrap();
+    for raw in [
+        bits[..bits.len() - 1].to_vec(),
+        [bits.clone(), vec![0]].concat(),
+        [f32::NAN.to_le_bytes().to_vec(), bits[4..].to_vec()].concat(),
+    ] {
+        std::fs::write(dir.join(HF_REFERENCE_LOGITS_FILE), raw).unwrap();
+        assert!(HfReference::load(&dir).is_err());
+    }
+    std::fs::remove_file(dir.join(HF_REFERENCE_FILE)).unwrap();
+    std::fs::write(dir.join("logits.json"), json!({"tokens":[0,1,0],"logits_full":[[0,1],[2],[3,4,5]]}).to_string()).unwrap();
+    assert!(HfReference::load(&dir).is_err(), "ragged rows cannot cancel their total lengths");
+    std::fs::remove_file(dir.join("logits.json")).unwrap();
+    std::fs::write(dir.join("hf.json"), json!({"vocab":2,"sequences":[[0,1]]}).to_string()).unwrap();
+    std::fs::write(dir.join("hf-logits.f32"), [bits.clone(), bits].concat()).unwrap();
+    assert!(HfReference::load(&dir).is_err(), "audit data cannot leave unread logits");
+    let _ = std::fs::remove_dir_all(dir);
 }

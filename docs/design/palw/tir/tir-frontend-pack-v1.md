@@ -309,4 +309,82 @@ from `SOURCE_EQUIVALENCE_UNVERIFIED`, full task and live Final. A pack cannot su
 to promote equivalence. Artifacts are staged until receipt, inventory, conformance and final source
 SHA checks pass; late failure preserves the prior published artifact and removes the temporary.
 Output guards cover source/sidecar aliases, including Unix symlinks and hard links.
-HF-reference/beacon pack integration remains part of RFC02 completion.
+The common HF-reference/beacon tool integration is specified below. Real-checkpoint fidelity,
+full-task support, approved policy and real-node acceptance remain part of RFC02 completion.
+
+
+## Reference-logit fidelity and the common beacon protocol
+
+An independent frontend companion can now carry public HF-reference data and a strict,
+predeclared empirical policy. This is a separate named check from integer execution, source
+identity, complete task quality, routing, runtime state saturation and live Final.
+
+```sh
+palw-class pack attach-frontend-fidelity --pack ./pack --artifact model.palwtir \
+  --hf-reference ./hf-reference --fidelity-policy policy.json --out ./fidelity-pack
+palw-class pack verify-frontend --pack ./fidelity-pack --model ./checkpoint \
+  --artifact model.palwtir --rebuild-out peer.palwtir
+palw-class pack bind-class --pack ./fidelity-pack --artifact declared.palwtir \
+  --network testnet-12 --out ./bound-pack
+# The existing commit/run/verify-conformance commands accept this bound companion directly.
+```
+
+`attach-frontend-fidelity` acquires and validates policy **before** loading reference logits or
+executing a position, then writes a new directory only after coverage and tolerance pass. There
+is no allow-out-of-tolerance flag. The policy schema is `misaka.palw.tir-frontend-fidelity.v1`,
+with exactly these fields:
+
+| Field | Rule |
+| --- | --- |
+| `schema`, `fit_math` | This schema and `libm-v1`; the fit uses portable software exp/log |
+| `checkpoint_revision`, `task` | Nonempty revision equal to the companion's pinned revision, task equal to its declared scope |
+| `context` | Positive measurement ceiling within program history bound; every supplied sequence fits it |
+| `minimum_sequences`, `minimum_positions` | Positive coverage floors fixed before measurement |
+| `logits` | Existing runtime-pack `LogitsSection`: convention, exact `scale_bits` and slope/correlation/top-1/KL tolerances |
+| `max_abs`, `rmse_max` | Additional finite, nonnegative logit-error ceilings |
+| `max_import_saturated_values` | Import-time weight saturation ceiling, checked against the conversion receipt |
+
+Every noninteger policy/fit number uses the existing 16 lowercase IEEE-binary64 hex-bit encoding.
+Scales are finite and positive, slope bounds ordered and positive, correlation/top-1 floors in
+[0,1], and KL/error ceilings finite and nonnegative. `q24-natural-v1` fixes scale exactly 2^-24;
+`legacy-greedy-only` records the tool's explicit scale. An unmeasurable/degenerate/nonfinite fit
+refuses. A context ceiling is **not** evidence that its maximum length was measured: sequence
+lengths, counts and position totals are public in the reference sidecar. These basic gates do not
+close the required real-context/routing/task-quality evaluation.
+
+The new companion carries the exact policy and digest, canonical reference metadata and float32
+payload pinned by byte count/BLAKE2b-256, producer information and measured metrics. The source
+provider's label is informational; copied logits cannot certify their derivation from HF. The
+shared reader accepts existing sidecars/audit/fixture formats, with 2 MiB JSON, 256 MiB binary,
+256 sequences, 4096 total positions and 64M logit-value acquisition ceilings. These are local
+producer-tool limits, not consensus model/context limits. Noninteger/out-of-range tokens, ragged
+rows, zero vocabularies, extent overflow, nonfinite values, truncated floats, extra unread logits
+and unsafe payload paths refuse. Long-context streamed fidelity remains required by RFC02.
+
+`verify-frontend` checks the policy/reference pins and independently repeats the portable fit
+against its staged source rebuild before publication. False fit/coverage records and altered
+policy/reference bytes refuse; late failure preserves the prior artifact. A success reports
+`reference_logits: WITHIN_PREDECLARED_TOLERANCE`. Source equivalence, routing fidelity, runtime
+state saturation, task quality, full task and live Final remain explicitly unverified.
+
+`bind-class` supports both manifest formats without choosing a new layout or synthesizing a
+ModelSpec. It checks the source inventory/tokenizer and computation (only the existing logits
+scheme declaration may differ), then pins the declared artifact digest, exact layout and class ID
+in a new companion. Any fidelity sidecars are preserved. Missing layouts, foreign programs,
+changed weights/tokenizers and output-directory reuse refuse.
+
+The existing `commit-conformance`, `run-conformance` and `verify-conformance` commands share one
+artifact/layout/static-admission/challenge/evidence path for both companion formats. Exactly one
+manifest is required; there is no fallback from a malformed frontend companion to ModelSpec.
+Frontend/compiler/executor/profile pins are checked before commitment. Independent recipes use
+a typed absent calibration ID, since explicit imports do not claim ModelSpec calibration. The
+source root binds the entire recipe, reference/policy/fit, revision, raw-source SHAs, descriptors
+and declared layouts; the implementation set also pins the compiler. Every artifact/tokenizer/
+class/layout/kernel/plan root is recomputed. Explicit plan positions cannot exceed class context
+or program history and cannot be zero.
+
+A changed recipe, reference, scope, policy, implementation or artifact requires a new pre-beacon
+commitment. Interrupted checks resume only under matching bindings; forged results fail fresh
+reruns, and `--no-rerun` is never a pass. The shared tests use **synthetic** work facts and an
+**unapproved** policy under hypothetically armed kernels. This is tool-protocol evidence, not
+real node history, an approved soundness bound, an outsider G14 conviction or Final/redemption.

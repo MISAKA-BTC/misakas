@@ -6302,6 +6302,7 @@ dependencies = [
  "kaspa-txscript",
  "libc",
  "libcrux-ml-dsa",
+ "libm",
  "misaka-palw-base0",
  "misaka-palw-challenge",
  "misaka-palw-gen",
