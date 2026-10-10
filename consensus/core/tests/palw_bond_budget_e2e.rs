@@ -329,6 +329,10 @@ fn a_budgeted_tape_rewinds_and_replays_to_the_same_chain() {
 fn round_draws_reserve_each_bonds_allocation_and_replay() {
     let pol = PalwBondBudgetPolicyV1 {
         round_rights: PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 5 },
+        // Room for an admitted attempt in every block: each one is its span's seed anchor (ADR-0130), and a matured snapshot is
+        // seeded only at a span whose predecessor recorded one.
+        claims_per_unit: 1_000,
+        block_units_per_unit: 1_000 * PALW_BUDGET_BLOCK_UNIT_V1,
         ..policy(1_000_000, 100_000, 100, 1_000_000, false)
     };
     let mut sim = Sim::new(budget_params(250, pol.clone(), None), Class::Floor, &[(90, 1_000_000), (91, 1_000_000)]);
@@ -354,8 +358,9 @@ fn round_draws_reserve_each_bonds_allocation_and_replay() {
     // Every schedule is checked when it is first seen (a span's schedule leaves once its Round settles).
     let mut seen: BTreeMap<u64, u64> = BTreeMap::new();
     let mut drawn = 0u64;
-    for k in 0..120u64 {
-        sim.block(start + 10 * (k + 1), vec![], Some((90 + (k % 2), 0x7_1000 + k)));
+    let mut anchored = 0u64;
+    for k in 0..400u64 {
+        anchored += u64::from(sim.block(start + k + 1, vec![], Some((90 + (k % 2), 0x7_1000 + k))).is_some());
         for (span, schedule) in sim.c.s.round_schedules() {
             if seen.contains_key(span) {
                 continue;
@@ -375,7 +380,7 @@ fn round_draws_reserve_each_bonds_allocation_and_replay() {
         }
     }
     println!(
-        "round draws on the real fold: {} schedules seeded, {drawn} tickets; pending snapshots left {}",
+        "round draws on the real fold: {anchored} attempts admitted, {} schedules seeded, {drawn} tickets; pending snapshots left {}",
         seen.len(),
         sim.c.s.round_pending_snapshots().len()
     );
