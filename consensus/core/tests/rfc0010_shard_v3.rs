@@ -438,8 +438,24 @@ fn a_sharded_class_is_drawn_per_shard_by_the_permissionless_panel_and_licensed_b
         assert!(run.s.slashable_lock(seat.bond, claim).is_some(), "seat {} locked its scaled price", id_of(&seat.bond));
     }
     // The engine releases the claim on the next block (it left its Panel).
+    let entropy = run.record(&claim).entropy_output.expect("the certified output is retained per claim");
     run.step(&[]);
     assert!(matches!(run.record(&claim).phase, ClaimPhaseV3::Released { .. }));
+    assert_eq!(run.record(&claim).entropy_output, Some(entropy));
+    assert!(run.s.panel_v3().unwrap().beacon_rows().is_empty(), "the shared epoch output is pruned");
+    // Run::at already checks the real delta's apply/undo and whole-carriage restore on this release.
+    // Even root-optional restoration must validate a terminal binding's retained derivation material.
+    let parent_root = run.s.state_root();
+    for missing in [false, true] {
+        let mut carriage = PalwStateCarriageV2::from_state(&run.s);
+        let engine = carriage.panel_v3.as_mut().unwrap();
+        let mut record = engine.claim(&claim).unwrap().clone();
+        record.entropy_output = if missing { None } else { Some(h64(0xBAD)) };
+        engine.put_claim_row(claim, Some(record));
+        assert!(carriage.clone().into_state(&run.p, None).is_err(), "structural refusal without a supplied root");
+        assert!(carriage.into_state(&run.p, Some(parent_root)).is_err(), "the committed root remains authoritative");
+    }
+    assert_eq!(run.s.state_root(), parent_root);
 }
 
 #[test]

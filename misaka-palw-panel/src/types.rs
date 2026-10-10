@@ -3,7 +3,10 @@ use kaspa_hashes::Hash64;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Historical experimental carriage marker; current loaders explicitly refuse it.
 pub const WIRE_VERSION_V1: u16 = 1;
+/// Dormant engine carriage with a per-claim retained entropy output. V1 is not silently upgraded.
+pub const WIRE_VERSION_V2: u16 = 2;
 pub const CLASS_ROLE_V1: u8 = 1;
 pub const OUTSIDER_ROLE_V1: u8 = 2;
 pub const MAX_CANDIDATES_V1: u32 = 4096;
@@ -20,7 +23,7 @@ pub const MAX_STRATIFIED_SEATS_V1: u32 = 256;
 /// **A stratified draw** (RFC-0006's per-shard Panel under RFC-0010's permissionless rule): the claim's Panel is `count` strata,
 /// each `[outsider?] ++ class_seats` seats, stored stratum-major. Generic — the engine knows nothing of shards: stratum `s`'s class
 /// seats come from the candidates the host marked as members of `s` (`PanelSnapshotV1::strata_members`), its outsider from the
-/// OUTSIDER-role population. Frozen at admission; `None` on a record is the flat draw, byte for byte the old rules.
+/// OUTSIDER-role population. Frozen at admission; `None` on a record preserves the flat draw rules (the current carriage is version 2).
 ///
 /// The rules (`stage_assign`, re-checked by the carriage validation):
 /// * stratum `s` is drawn from its own seed `H("misaka-palw/panel-v3/stratum-seed" ‖ seed ‖ s)` with the flat draw's tickets;
@@ -350,6 +353,9 @@ pub struct ClaimRecordV3 {
     pub occurrence_index: u32,
     pub seal: Option<ClaimSealV1>,
     pub snapshot: Option<PanelSnapshotV1>,
+    /// Certified epoch output copied at readiness, retained after the shared epoch row is pruned.
+    /// This is derivation material, not a new certificate or an import trust anchor.
+    pub entropy_output: Option<Hash64>,
     pub used_operators: Vec<Hash64>,
     pub binding_history: Vec<PanelBoundV3>,
     pub phase: ClaimPhaseV3,

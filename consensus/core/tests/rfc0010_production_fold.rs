@@ -1043,6 +1043,9 @@ fn a_tampered_snapshot_does_not_reload_and_the_engine_refuses_it() {
         (own, reloaded)
     };
     let cases: Vec<(&str, Box<dyn Fn(&mut kaspa_consensus_core::palw_permissionless_panel_v1::ClaimRecordV3)>)> = vec![
+        ("the seal id replaced", Box::new(|r| r.seal.as_mut().unwrap().id = Hash64::from_u64_word(0xFA01))),
+        ("the accepted subject replaced", Box::new(|r| r.claim.immutable_fields = Hash64::from_u64_word(0xFA02))),
+        ("entropy inserted before readiness", Box::new(|r| r.entropy_output = Some(Hash64::from_u64_word(0xFA03)))),
         (
             "a candidate removed",
             Box::new(|r| {

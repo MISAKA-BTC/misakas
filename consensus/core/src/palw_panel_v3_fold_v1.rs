@@ -465,7 +465,7 @@ fn active_mirror(builder: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> O
 
 fn create_engine(parent: &PalwChainStateV2, mirror: &PalwPanelV3ParamsV1) -> Result<PermissionlessPanelStateV1, PalwStateV2Error> {
     PermissionlessPanelStateV1::from_cursor(PanelCursorV1 {
-        version: eng::WIRE_VERSION_V1,
+        version: eng::WIRE_VERSION_V2,
         network: mirror.network,
         ruleset: mirror.ruleset,
         policy: mirror.policy,

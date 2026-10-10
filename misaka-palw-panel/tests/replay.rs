@@ -282,7 +282,7 @@ fn replay_reorg_and_pruning_carriage_reproduce_identical_roots() {
     assert_eq!(child, replayed);
     assert_eq!(parent.root(), before); // reorg selects the retained parent
     let json = serde_json::to_value(&child.0).unwrap();
-    assert_eq!(json["version"], 1);
+    assert_eq!(json["version"], 2);
     assert!(json["claims"].as_object().unwrap().values().next().unwrap()["phase"]["Bound"]["panelSeedV3"].is_string());
     assert_eq!(
         PermissionlessPanelStateV1::import(&bytes, h(999), h(700), h(701), policy()).unwrap_err(),
@@ -432,4 +432,32 @@ fn new_admission_in_the_binder_cannot_compete_with_preexisting_due_claims() {
     assert!(e.bindings.contains_key(&h(9000)));
     assert_eq!(s.claim(&h(1)).unwrap().phase, ClaimPhaseV3::PendingSeal);
     assert!(s.claim(&h(1)).unwrap().snapshot.is_none());
+}
+
+/// A legal wide flat binding duplicates its seats in phase/history and stores derived reservations.
+/// The import envelope must include all of those encodings, not just one binding's seat vector.
+#[test]
+fn a_valid_wide_panel_checkpoint_fits_the_import_envelope() {
+    let mut config = policy();
+    config.seat_count = MAX_CANDIDATES_V1 as u16;
+    config.max_candidates = MAX_CANDIDATES_V1;
+    config.max_retries = 0;
+    config.max_pending = 1;
+    config.max_pending_per_bond = 1;
+    config.max_assignments_per_block = 1;
+    config.max_admissions_per_block = 1;
+    config.max_tracked_claims = 1;
+    config.max_beacons_per_block = 1;
+    config.validate().unwrap();
+    let view = View::new(u64::from(MAX_CANDIDATES_V1));
+    let mut admitted = claim(10);
+    admitted.producer = bond(900_000);
+    admitted.producer_operator = h(900_000);
+    admitted.producer_key = h(900_001);
+    let ready = certified(config, &view, vec![admitted]);
+    let bound = ready.fold(&step(h(4), 5, 13, vec![], vec![]), &view).unwrap().0;
+    assert_eq!(binding(&bound, 10).seats.len(), MAX_CANDIDATES_V1 as usize);
+    let bytes = borsh::to_vec(&bound).unwrap();
+    let restored = PermissionlessPanelStateV1::import(&bytes, bound.root(), h(700), h(701), config).expect("a valid bound checkpoint fits");
+    assert_eq!(restored, bound);
 }

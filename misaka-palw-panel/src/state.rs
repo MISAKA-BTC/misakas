@@ -36,7 +36,7 @@ impl PermissionlessPanelStateV1 {
     ) -> Result<Self, PanelErrorV1> {
         policy.validate()?;
         Ok(Self {
-            version: WIRE_VERSION_V1,
+            version: WIRE_VERSION_V2,
             network,
             ruleset,
             policy,
@@ -105,7 +105,7 @@ impl PermissionlessPanelStateV1 {
     /// An empty state at `cursor` (its policy must validate, its version be this one).
     pub fn from_cursor(cursor: PanelCursorV1) -> Result<Self, PanelErrorV1> {
         cursor.policy.validate()?;
-        if cursor.version != WIRE_VERSION_V1 {
+        if cursor.version != WIRE_VERSION_V2 {
             return Err(PanelErrorV1::InvalidCarriage);
         }
         Ok(Self {
@@ -199,9 +199,14 @@ impl PermissionlessPanelStateV1 {
         policy.validate()?;
         // A stratified binding holds up to `MAX_STRATIFIED_SEATS_V1` seats, whatever the flat `seat_count` is.
         let seats = (policy.seat_count as u64).max(MAX_STRATIFIED_SEATS_V1 as u64);
+        // Per candidate <= 349 bytes (including stratum bits). Each historical seat is 68 bytes
+        // plus a 64-byte used operator; each binding's fixed fields are 358 bytes. The current
+        // Bound phase repeats its seats (68), and each live reservation entry is another 84 bytes.
+        // The fixed row allowance includes subject/seal/snapshot/entropy, collection prefixes,
+        // phase metadata, claim/work keys and at most one retained shared epoch per claim.
         let limit = 4096u64
             + policy.max_tracked_claims as u64
-                * (8192 + policy.max_candidates as u64 * 400 + (policy.max_retries as u64 + 1) * seats * 100);
+                * (4096 + policy.max_candidates as u64 * 400 + (policy.max_retries as u64 + 1) * (132 * seats + 400) + 152 * seats);
         if bytes.len() as u64 > limit {
             return Err(PanelErrorV1::ResourceLimit);
         }
@@ -210,7 +215,7 @@ impl PermissionlessPanelStateV1 {
             return Err(PanelErrorV1::InvalidCarriage);
         }
         let state = Self::try_from_slice(bytes).map_err(|_| PanelErrorV1::InvalidCarriage)?;
-        if state.version != WIRE_VERSION_V1
+        if state.version != WIRE_VERSION_V2
             || state.network != network
             || state.ruleset != ruleset
             || state.policy != policy
@@ -418,39 +423,7 @@ impl PermissionlessPanelStateV1 {
                 strata_members,
             };
             snapshot.root = snapshot.computed_root();
-            // Signature and claim lookup id are deliberately absent. Acceptance order is assigned
-            // by the fold, never supplied by a miner and never broken by a grindable claim hash.
-            let mut id = digest(
-                "misaka-palw/panel-v3/seal",
-                &(
-                    network,
-                    ruleset,
-                    record.claim.work_id,
-                    (
-                        record.claim.class_id,
-                        record.claim.producer,
-                        record.claim.producer_operator,
-                        record.claim.producer_key,
-                        record.claim.immutable_fields,
-                        record.claim.required_exposure,
-                    ),
-                    record.accepted_block,
-                    record.accepted_daa,
-                    record.accepted_height,
-                    record.acceptance_order,
-                    record.occurrence_index,
-                    tip,
-                    height,
-                    daa,
-                    release,
-                    epoch,
-                    snapshot.root,
-                ),
-            );
-            // A stratified seal names its strata (the snapshot root already covers the populations).
-            if let Some(strata) = &record.strata {
-                id = digest("misaka-palw/panel-v3/seal-strata", &(id, *strata));
-            }
+            let id = claim_seal_id(network, ruleset, record, &snapshot, release, epoch);
             record.seal = Some(ClaimSealV1 {
                 id,
                 accepted_block: record.accepted_block,
@@ -518,9 +491,9 @@ impl PermissionlessPanelStateV1 {
             } // Entire contribution window closes first.
             if let Some(output) = self.beacons.get(&seal.beacon_epoch) {
                 let snapshot = record.snapshot.as_ref().ok_or(PanelErrorV1::InvalidCarriage)?;
+                record.entropy_output = Some(*output);
                 let seed = panel_seed_v3(network, ruleset, seal, snapshot, *output);
-                let beacon_id =
-                    digest("misaka-palw/panel-v3/beacon", &(network, ruleset, policy.beacon_scheme, seal.beacon_epoch, output));
+                let beacon_id = digest("misaka-palw/panel-v3/beacon", &(network, ruleset, policy.beacon_scheme, seal.beacon_epoch, output));
                 record.phase = ClaimPhaseV3::EntropyReady {
                     ready_daa: ready,
                     assignment_point: add(ready, policy.assignment_delay_daa)?,
@@ -769,6 +742,7 @@ impl PermissionlessPanelStateV1 {
                 occurrence_index: index,
                 seal: None,
                 snapshot: None,
+                entropy_output: None,
                 used_operators: Vec::new(),
                 binding_history: Vec::new(),
                 phase: ClaimPhaseV3::PendingSeal,
@@ -831,7 +805,8 @@ impl PermissionlessPanelStateV1 {
 
     fn validate(&self) -> Result<(), PanelErrorV1> {
         self.policy.validate()?;
-        if self.claims.len() > self.policy.max_tracked_claims as usize
+        if self.version != WIRE_VERSION_V2
+            || self.claims.len() > self.policy.max_tracked_claims as usize
             || self.work_ids.len() != self.claims.len()
             || self.claims.values().filter(|r| !r.phase.terminal()).count() > self.policy.max_pending as usize
             || self.beacons.len() > self.policy.max_pending as usize
@@ -855,14 +830,33 @@ impl PermissionlessPanelStateV1 {
                 || r.claim.required_exposure == 0
                 || r.seal.is_some() != r.snapshot.is_some()
                 || r.strata.is_some_and(|strata| strata.validate().is_err())
+                || (r.entropy_output.is_some() && r.seal.is_none())
+                || (!r.binding_history.is_empty() && r.entropy_output.is_none())
             {
                 return Err(PanelErrorV1::InvalidCarriage);
             }
             match &r.phase {
-                ClaimPhaseV3::PendingSeal if r.seal.is_some() || !r.binding_history.is_empty() => {
+                ClaimPhaseV3::PendingSeal if r.seal.is_some() || !r.binding_history.is_empty() || r.entropy_output.is_some() => {
                     return Err(PanelErrorV1::InvalidCarriage);
                 }
                 ClaimPhaseV3::Sealed | ClaimPhaseV3::EntropyReady { .. } | ClaimPhaseV3::Bound(_) if r.seal.is_none() => {
+                    return Err(PanelErrorV1::InvalidCarriage);
+                }
+                _ => {}
+            }
+            match &r.phase {
+                ClaimPhaseV3::Sealed if r.entropy_output.is_some() || !r.binding_history.is_empty() => {
+                    return Err(PanelErrorV1::InvalidCarriage);
+                }
+                ClaimPhaseV3::EntropyReady { .. } if r.entropy_output.is_none() || !r.binding_history.is_empty() => {
+                    return Err(PanelErrorV1::InvalidCarriage);
+                }
+                ClaimPhaseV3::Bound(_) if r.entropy_output.is_none() => {
+                    return Err(PanelErrorV1::InvalidCarriage);
+                }
+                ClaimPhaseV3::Voided { reason: NonFraudReasonV1::NoCapablePanel | NonFraudReasonV1::PanelUnavailable, .. }
+                    if r.entropy_output.is_none() =>
+                {
                     return Err(PanelErrorV1::InvalidCarriage);
                 }
                 _ => {}
@@ -885,9 +879,12 @@ impl PermissionlessPanelStateV1 {
                     || seal.acceptance_order != r.acceptance_order
                     || seal.occurrence_index != r.occurrence_index
                     || seal.checkpoint_height != add(r.accepted_height, self.policy.seal_depth_blocks)?
-                    || seal.anchor_slot
-                        != seal.beacon_epoch.checked_mul(self.policy.beacon_period_daa).ok_or(PanelErrorV1::Overflow)?
+                    || seal.anchor_slot != seal.beacon_epoch.checked_mul(self.policy.beacon_period_daa).ok_or(PanelErrorV1::Overflow)?
                     || seal.checkpoint_daa >= seal.anchor_slot
+                    || seal.beacon_epoch != add(seal.checkpoint_daa / self.policy.beacon_period_daa, 1)?
+                    || seal.checkpoint_height > self.height
+                    || seal.checkpoint_daa > self.daa
+                    || seal.id != claim_seal_id(self.network, self.ruleset, r, snapshot, seal.anchor_slot, seal.beacon_epoch)
                 {
                     return Err(PanelErrorV1::InvalidCarriage);
                 }
@@ -911,9 +908,35 @@ impl PermissionlessPanelStateV1 {
                 if !strata_members_hold(r.strata.as_ref(), &snapshot.candidates, &snapshot.strata_members) {
                     return Err(PanelErrorV1::InvalidCarriage);
                 }
+                // Retained per-claim output lets terminal histories remain checkable after epoch pruning.
+                let entropy = r.entropy_output.map(|output| {
+                    (
+                        panel_seed_v3(self.network, self.ruleset, seal, snapshot, output),
+                        digest(
+                            "misaka-palw/panel-v3/beacon",
+                            &(self.network, self.ruleset, self.policy.beacon_scheme, seal.beacon_epoch, output),
+                        ),
+                    )
+                });
+                if let Some(output) = r.entropy_output {
+                    let shared = self.beacons.get(&seal.beacon_epoch);
+                    if (!r.phase.terminal() && shared != Some(&output)) || shared.is_some_and(|value| *value != output) {
+                        return Err(PanelErrorV1::InvalidCarriage);
+                    }
+                }
+                if let ClaimPhaseV3::EntropyReady { ready_daa, assignment_point, seed, beacon_id } = &r.phase {
+                    if entropy != Some((*seed, *beacon_id))
+                        || *ready_daa != add(seal.anchor_slot, self.policy.beacon_wait_daa)?
+                        || *assignment_point != add(*ready_daa, self.policy.assignment_delay_daa)?
+                        || self.daa <= *ready_daa
+                    {
+                        return Err(PanelErrorV1::InvalidCarriage);
+                    }
+                }
                 let seat_count = r.strata.map_or(self.policy.seat_count as usize, |strata| strata.seat_count());
                 for (index, binding) in r.binding_history.iter().enumerate() {
-                    if binding.retry_index as usize != index
+                    if entropy != Some((binding.panel_seed_v3, binding.beacon_id))
+                        || binding.retry_index as usize != index
                         || binding.seats.len() != seat_count
                         || binding.claim_seal_id != seal.id
                         || binding.panel_snapshot_root != snapshot.root
@@ -947,6 +970,46 @@ impl PermissionlessPanelStateV1 {
         }
         Ok(())
     }
+}
+
+/// Canonical accepted subject, pre-entropy checkpoint and frozen population. Lookup id/signature are absent.
+/// Shared by sealing and restoration, so matching edited copies cannot replace a derived commitment.
+fn claim_seal_id(
+    network: Hash64,
+    ruleset: Hash64,
+    record: &ClaimRecordV3,
+    snapshot: &PanelSnapshotV1,
+    anchor_slot: u64,
+    beacon_epoch: u64,
+) -> Hash64 {
+    let flat = digest(
+        "misaka-palw/panel-v3/seal",
+        &(
+            network,
+            ruleset,
+            record.claim.work_id,
+            (
+                record.claim.class_id,
+                record.claim.producer,
+                record.claim.producer_operator,
+                record.claim.producer_key,
+                record.claim.immutable_fields,
+                record.claim.required_exposure,
+            ),
+            record.accepted_block,
+            record.accepted_daa,
+            record.accepted_height,
+            record.acceptance_order,
+            record.occurrence_index,
+            snapshot.checkpoint,
+            snapshot.checkpoint_height,
+            snapshot.checkpoint_daa,
+            anchor_slot,
+            beacon_epoch,
+            snapshot.root,
+        ),
+    );
+    record.strata.map_or(flat, |strata| digest("misaka-palw/panel-v3/seal-strata", &(flat, strata)))
 }
 
 /// **A snapshot's stratum bits agree with its claim's strata**: none for a flat claim; for a stratified one, one bitmap per candidate,
