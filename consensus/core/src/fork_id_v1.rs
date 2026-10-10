@@ -777,6 +777,8 @@ mod tests {
             "palw_probabilistic_constraints_v1" => params.palw_probabilistic_constraints_v1 = Some(at),
             // RFC-0004 Part II's dormant typed-roots fence: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_typed_roots_v1" => params.palw_typed_roots_v1 = Some(at),
+            // RFC-0009 L2's dormant fork-choice commitment fence: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_fork_choice_commitment_v1" => params.palw_fork_choice_commitment_v1 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
             "palw_panel_free_v1" => params.palw_panel_free_v1 = Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(at)),
             "palw_signed_registration_v1" => params.palw_signed_registration_v1 = Some(at),

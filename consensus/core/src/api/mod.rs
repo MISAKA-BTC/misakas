@@ -1528,6 +1528,18 @@ pub trait ConsensusApi: Send + Sync {
         Err("this consensus serves no PALW state proof".to_string())
     }
 
+    /// **RFC-0009 L2: the fork-choice openings of `blocks`' post-states** (op 203), with this node's sink and DAG tips. Empty `blocks`: the
+    /// sink and every tip. At most [`crate::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1`] blocks; each
+    /// entry is the opening or the reason this node cannot weigh that block (no V2 ruleset, a block it never held as a chain block, a
+    /// block too far behind the sink). The client checks every opening against a root it trusts; nothing here is believed as served.
+    fn palw_fork_choice_openings_v1(
+        &self,
+        blocks: &[BlockHash],
+    ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let _ = blocks;
+        Err("this consensus serves no fork-choice opening".to_string())
+    }
+
     /// Import: persist the pruning point's DNS/PoS-v2 overlay snapshot.
     fn import_pruning_point_overlay_snapshot(
         &self,

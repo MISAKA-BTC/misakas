@@ -2718,6 +2718,16 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_state_proof_v1_impl(block, collection)
     }
 
+    fn palw_fork_choice_openings_v1(
+        &self,
+        blocks: &[BlockHash],
+    ) -> Result<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let sink = self.get_sink();
+        let mut tips = self.get_tips();
+        tips.sort();
+        self.virtual_processor.palw_fork_choice_openings_v1_impl(blocks, sink, tips)
+    }
+
     fn import_pruning_point_overlay_snapshot(
         &self,
         pruning_point: BlockHash,

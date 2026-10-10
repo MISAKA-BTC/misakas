@@ -12682,6 +12682,135 @@ impl Deserializer for GetPalwStateProofResponse {
     }
 }
 
+/// **RFC-0009 L2: `getPalwForkChoiceOpening` (op 203)** — the fork-choice openings of blocks' post-states, and the node's sink and tips.
+///
+/// For each block the node returns its header, the 292-byte fork-choice leaf of its post-state (`PalwForkChoiceLeafV1`, borsh, the
+/// ADR-0176 D3 weight-allocation slot included — every reader reads that one versioned allocation), the ADR-0043 root the leaf is
+/// enveloped with, and the root the post-state is committed as. A client believes none of it until
+/// `PalwForkChoiceOpeningV1::verify` holds against a root it trusts (an attestation, a chain child's header); `sink` and `tips` are what
+/// this node shows — a peer hiding a tip is caught by another peer. **Op 203 is new: a node built before it drops the WebSocket on it.**
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwForkChoiceOpeningRequest {
+    /// 128 hex each, at most 16. Empty: the sink and every tip.
+    pub block_hashes: Vec<String>,
+}
+
+impl Serializer for GetPalwForkChoiceOpeningRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(Vec<String>, &self.block_hashes, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwForkChoiceOpeningRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { block_hashes: load!(Vec<String>, reader)? })
+    }
+}
+
+/// One block's opening, or why the node cannot weigh it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwForkChoiceEntry {
+    pub block_hash: String,
+    pub available: bool,
+    pub reason: String,
+    pub header: Option<RpcHeader>,
+    /// The borsh fork-choice leaf (292 bytes, the weight-allocation slot included).
+    pub leaf: Vec<u8>,
+    /// The ADR-0043 root the leaf is enveloped with (128 hex).
+    pub inner_root: String,
+    /// The root the post-state is committed as (128 hex) — the envelope past the fence, the ADR-0043 root below it.
+    pub committed_root: String,
+    /// True past the fence (the committed root is the envelope).
+    pub committed_form: bool,
+}
+
+impl Serializer for RpcPalwForkChoiceEntry {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.block_hash, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(String, &self.reason, writer)?;
+        serialize!(Option<RpcHeader>, &self.header, writer)?;
+        store!(Vec<u8>, &self.leaf, writer)?;
+        store!(String, &self.inner_root, writer)?;
+        store!(String, &self.committed_root, writer)?;
+        store!(bool, &self.committed_form, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwForkChoiceEntry {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            block_hash: load!(String, reader)?,
+            available: load!(bool, reader)?,
+            reason: load!(String, reader)?,
+            header: deserialize!(Option<RpcHeader>, reader)?,
+            leaf: load!(Vec<u8>, reader)?,
+            inner_root: load!(String, reader)?,
+            committed_root: load!(String, reader)?,
+            committed_form: load!(bool, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwForkChoiceOpeningResponse {
+    /// False with `reason` when the node serves no opening at all (no V2 ruleset, too many blocks named).
+    pub available: bool,
+    pub reason: String,
+    /// The node's sink and DAG tips (128 hex each).
+    pub sink: String,
+    pub tips: Vec<String>,
+    pub entries: Vec<RpcPalwForkChoiceEntry>,
+    /// The node's DNS BFT gate facts (an issuer copies them into its attestation): whether the overlay is in its `Active` stage, and the
+    /// confirmed DNS-final anchor (128 hex, empty with none) and its DAA. `dnsOverlay` false: the network runs no overlay.
+    pub dns_overlay: bool,
+    pub dns_stage_active: bool,
+    pub dns_confirmed_anchor: String,
+    pub dns_confirmed_anchor_daa: u64,
+}
+
+impl Serializer for GetPalwForkChoiceOpeningResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(String, &self.reason, writer)?;
+        store!(String, &self.sink, writer)?;
+        store!(Vec<String>, &self.tips, writer)?;
+        serialize!(Vec<RpcPalwForkChoiceEntry>, &self.entries, writer)?;
+        store!(bool, &self.dns_overlay, writer)?;
+        store!(bool, &self.dns_stage_active, writer)?;
+        store!(String, &self.dns_confirmed_anchor, writer)?;
+        store!(u64, &self.dns_confirmed_anchor_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwForkChoiceOpeningResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            reason: load!(String, reader)?,
+            sink: load!(String, reader)?,
+            tips: load!(Vec<String>, reader)?,
+            entries: deserialize!(Vec<RpcPalwForkChoiceEntry>, reader)?,
+            dns_overlay: load!(bool, reader)?,
+            dns_stage_active: load!(bool, reader)?,
+            dns_confirmed_anchor: load!(String, reader)?,
+            dns_confirmed_anchor_daa: load!(u64, reader)?,
+        })
+    }
+}
+
 /// **RFC-0008 v2: `getPalwExecV2Status` (op 240)** — the EXEC v2 lane's observation of the tip: counts, the named work roots (or, when
 /// none is named, the first ones in id order) with every slice and the state of its kernel-route verification claim, the refusal record
 /// of `block_hash` when one is named, and the lane's health. Read-only: no rule reads it. **Op 240 is new: a node built before it drops

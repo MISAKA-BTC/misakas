@@ -2959,6 +2959,11 @@ pub struct Params {
     /// Some-only in both fingerprints, collapsed from `Some(never())`, and refused when armed ([`Self::validate_palw_typed_roots_v1`])
     /// until the single full-activation release names a height for it with the others.
     pub palw_typed_roots_v1: Option<ForkActivation>,
+    /// **RFC-0009 L2: the fork-choice commitment's fence** ([`crate::palw_fork_choice_commitment_v1`]): a post-state whose point stands
+    /// at or past it is committed in headers as `BLAKE2b(fork-choice leaf ‖ ADR-0043 root)`, so a light client opens the comparator's
+    /// inputs in 258 bytes. **Dormant with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only in
+    /// both fingerprints, collapsed from `Some(never())`, and refused when armed ([`Self::validate_palw_fork_choice_commitment_v1`]).
+    pub palw_fork_choice_commitment_v1: Option<ForkActivation>,
     /// **ECON's M\*-49 verifier pay and the held default share** ([`crate::palw_verifier_pay_v1`], G14R, readiness §3f): past this
     /// height the kernel route's jobs escrow a per-check fee paid to drawn verifiers first out of the unchanged 49 %, and a pre-Final
     /// default's demander share is held to the liability horizon. **Dormant**: `None` on every preset, Some-only hashed, collapsed from
@@ -4215,6 +4220,8 @@ impl Params {
         self.validate_palw_probabilistic_constraints_v1()?;
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
         self.validate_palw_typed_roots_v1()?;
+        // **RFC-0009 L2's dormant fence** (`crate::palw_fork_choice_commitment_v1`): refused when armed.
+        self.validate_palw_fork_choice_commitment_v1()?;
         // **M*-49's dormant fence** (`crate::palw_verifier_pay_v1`): refused when armed.
         self.validate_palw_verifier_pay_v1()?;
         // **RFC-0015's dormant fence** (`crate::palw_panel_free_v1`): refused when armed.
@@ -6589,6 +6596,10 @@ impl Params {
         // The typed-roots fence, likewise.
         if self.palw_typed_roots_v1 == Some(ForkActivation::never()) {
             self.palw_typed_roots_v1 = None;
+        }
+        // The fork-choice commitment fence, likewise.
+        if self.palw_fork_choice_commitment_v1 == Some(ForkActivation::never()) {
+            self.palw_fork_choice_commitment_v1 = None;
         }
         // The verifier-pay fence, likewise.
         if self.palw_verifier_pay_v1 == Some(ForkActivation::never()) {
@@ -10344,6 +10355,7 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
             palw_typed_roots_v1,
+            palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
@@ -10624,6 +10636,7 @@ impl Params {
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
+            ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
             ("palw_verifier_pay_v1", *palw_verifier_pay_v1),
             ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
@@ -10920,6 +10933,11 @@ impl Params {
         // The typed-roots fence, NAMED likewise.
         if let Some(at) = self.palw_typed_roots_v1 {
             h.write(b"palw_typed_roots_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The fork-choice commitment fence, NAMED likewise.
+        if let Some(at) = self.palw_fork_choice_commitment_v1 {
+            h.write(b"palw_fork_choice_commitment_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // The verifier-pay fence, NAMED likewise.
@@ -11658,6 +11676,7 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
             palw_typed_roots_v1,
+            palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
@@ -12425,6 +12444,10 @@ impl Params {
         if let Some(activation) = palw_typed_roots_v1.as_mut() {
             fork(activation, visit);
         }
+        // The fork-choice commitment fence. Some-only.
+        if let Some(activation) = palw_fork_choice_commitment_v1.as_mut() {
+            fork(activation, visit);
+        }
         // The verifier-pay fence. Some-only.
         if let Some(activation) = palw_verifier_pay_v1.as_mut() {
             fork(activation, visit);
@@ -12997,6 +13020,7 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
             palw_typed_roots_v1,
+            palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
@@ -13813,6 +13837,11 @@ impl Params {
         // The typed-roots fence, Some-only for the same reason.
         if let Some(activation) = palw_typed_roots_v1 {
             h.write(b"palw_typed_roots_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // The fork-choice commitment fence, Some-only for the same reason.
+        if let Some(activation) = palw_fork_choice_commitment_v1 {
+            h.write(b"palw_fork_choice_commitment_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // The verifier-pay fence, Some-only for the same reason.
@@ -14660,6 +14689,7 @@ impl Params {
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
+            palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1: self.palw_verifier_pay_v1,
             palw_panel_free_v1: self.palw_panel_free_v1.clone(),
             palw_signed_registration_v1: self.palw_signed_registration_v1,
@@ -15764,6 +15794,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
@@ -16064,6 +16095,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
@@ -16346,6 +16378,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
@@ -23970,6 +24003,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,

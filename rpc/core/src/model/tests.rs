@@ -2665,6 +2665,47 @@ mod mockery {
     }
     test!(GetPalwStateProofResponse);
 
+    // RFC-0009 L2: op 203 and its parts round-trip.
+    impl Mock for GetPalwForkChoiceOpeningRequest {
+        fn mock() -> Self {
+            GetPalwForkChoiceOpeningRequest { block_hashes: vec![mock_hex(), mock_hex()] }
+        }
+    }
+    test!(GetPalwForkChoiceOpeningRequest);
+
+    impl Mock for RpcPalwForkChoiceEntry {
+        fn mock() -> Self {
+            RpcPalwForkChoiceEntry {
+                block_hash: mock_hex(),
+                available: mock(),
+                reason: "a reason".to_string(),
+                header: mock(),
+                leaf: vec![7; 194],
+                inner_root: mock_hex(),
+                committed_root: mock_hex(),
+                committed_form: mock(),
+            }
+        }
+    }
+    test!(RpcPalwForkChoiceEntry);
+
+    impl Mock for GetPalwForkChoiceOpeningResponse {
+        fn mock() -> Self {
+            GetPalwForkChoiceOpeningResponse {
+                available: mock(),
+                reason: "a reason".to_string(),
+                sink: mock_hex(),
+                tips: vec![mock_hex()],
+                entries: mock(),
+                dns_overlay: mock(),
+                dns_stage_active: mock(),
+                dns_confirmed_anchor: mock_hex(),
+                dns_confirmed_anchor_daa: mock(),
+            }
+        }
+    }
+    test!(GetPalwForkChoiceOpeningResponse);
+
     // RFC-0010 (lane C2): op 220 round-trips.
     // RFC-0008 v2 (lane X8R): op 240 round-trips.
     impl Mock for GetPalwExecV2StatusRequest {

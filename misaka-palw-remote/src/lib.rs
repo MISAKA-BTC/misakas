@@ -29,6 +29,7 @@ pub mod bondreg;
 pub mod bundle;
 pub mod checkpoint;
 pub mod evidence;
+pub mod l2;
 pub mod miner;
 pub mod proof;
 /// Lane DA16: the public material transport — artifacts (both roots of a binding) and claim material (kernel positions, V2 held units).

@@ -115,6 +115,7 @@ impl Router {
                 GetPalwActivationPool,
                 GetPalwCapacityShadow,
                 GetPalwStateProof,
+                GetPalwForkChoiceOpening,
                 GetPalwPanelV3Status,
                 GetPalwExecV2Status,
                 GetPalwKernelClaim,

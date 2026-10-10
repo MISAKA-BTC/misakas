@@ -287,6 +287,9 @@ pub mod palw_facts;
 pub mod palw_false_valid_filing_v1;
 pub mod palw_fork_authority_v2;
 pub mod palw_fork_choice;
+/// RFC-0009 L2: the fork-choice leaf a header commits past `palw_fork_choice_commitment_v1` (dormant, refused when armed) — the
+/// comparator's inputs as an O(1) opening of the committed root.
+pub mod palw_fork_choice_commitment_v1;
 pub mod palw_fp_admission_v3;
 pub mod palw_fp_beacon_v3;
 pub mod palw_fp_devnet_v3;
