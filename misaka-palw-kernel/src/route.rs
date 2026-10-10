@@ -51,6 +51,13 @@ pub const TAG_REGISTER_CLASS_V2: u8 = 13;
 pub const TAG_REGISTER_PIPELINE_CLASS_V2: u8 = 14;
 /// GAP-R7: an accuser's seal of its proof (seal, then reveal; the earliest seal of the convicting bytes is paid the bounty).
 pub const TAG_SEAL_PROOF_V1: u8 = 15;
+// 16–18: K2-TIR-v4 (lane K2S, allocated 2026-10-08).
+/// K2-TIR-v4: a segmented claim (`docs/design/palw/k2-real-scale.md`).
+pub const TAG_COMMIT_SEGMENTED_CLAIM_V1: u8 = 16;
+/// K2-TIR-v4: a job whose prompt is posted in tiles.
+pub const TAG_POST_TILED_JOB_V1: u8 = 17;
+/// K2-TIR-v4: one prompt tile of a tiled job.
+pub const TAG_POST_PROMPT_TILE_V1: u8 = 18;
 /// RFC-0004 Part II: a typed-root object (registration, job, claim — versioned inside [`crate::spec::SpecObjectV1`]).
 pub const TAG_SPEC_V1: u8 = 19;
 // 16–18 are K2S's (K2-TIR-v4); 21 and 22 were reserved beside 20 and are released.
@@ -79,6 +86,11 @@ pub const MAX_SEAL_PROOF_BYTES_V1: usize = 256;
 pub const MAX_COMMIT_CLAIM_SALTED_BYTES_V1: usize = MAX_COMMIT_PIPELINE_CLAIM_BYTES_V1 + SALTED_REVEAL_OVERHEAD_V1;
 /// What a salt adds to the commit it carries: the salt and the commit's own discriminant inside [`SaltedCommitV1`].
 pub const SALTED_REVEAL_OVERHEAD_V1: usize = 64 + 1;
+/// A segmented claim: the claim, the evidence object and ≤ 2,048 segment roots (2^21 positions).
+pub const MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1: usize = 4 << 20;
+pub const MAX_POST_TILED_JOB_BYTES_V1: usize = 1024;
+/// One tile of 4,096 ids and its path.
+pub const MAX_POST_PROMPT_TILE_BYTES_V1: usize = 64 << 10;
 /// The `Spec` object's one ceiling: its largest sub-object's ([`crate::spec::MAX_SPEC_CLAIM_BYTES_V1`]); each sub-object's own is
 /// checked by the ledger.
 pub const MAX_SPEC_BYTES_V1: usize = MAX_COMMIT_CLAIM_BYTES_V1;
@@ -100,6 +112,8 @@ pub enum ProsecutionV1 {
     Decode(DecodeFaultV1) = 1,
     /// A pipeline fault's canonical bytes ([`crate::pipeline_public::PipelineFaultWireV1`]: stage, edge or decode).
     Pipeline(Vec<u8>) = 2,
+    /// K2-TIR-v4: a segmented fault's canonical bytes ([`crate::element::SegFaultV1`]: element, malformed or decode).
+    Segmented(Vec<u8>) = 3,
     /// RFC-0004 Part II: a typed claim's fault (borsh [`crate::spec::SpecFaultV1`]: a memory step, a retrieval item, a composite stage
     /// or edge).
     Spec(Vec<u8>) = 4,
@@ -107,7 +121,7 @@ pub enum ProsecutionV1 {
 
 /// **The commit a salted reveal carries** (inner kind 20): the commit objects' own fields, under their own discriminants (5, 6 and
 /// 19, the commit tags — pinned by a test). A separate,
-/// non-recursive enum — a reveal can never carry another reveal. (K2S appends its segmented commit here at integration.)
+/// non-recursive enum — a reveal can never carry another reveal. (K2S's segmented commit is 16.)
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
@@ -119,6 +133,9 @@ pub enum SaltedCommitV1 {
     /// RFC-0004 Part II: a typed-root claim, as `Spec { CommitClaim }` (kind 19) carries it — typed classes are OPV-only, so past
     /// the fence every typed claim reveals salted. It needs `palw_typed_roots_v1` too (the ledger's schedule, the node's gate).
     Spec { claim: crate::spec::SpecClaimV1 } = 19,
+    /// K2-TIR-v4/v5: a segmented claim, as `CommitSegmentedClaim` (kind 16) carries it — its classes are OPV-only, so past the fence
+    /// every segmented claim reveals salted.
+    Segmented { claim: KernelClaimV1, evidence: crate::seg::SegmentedEvidenceV2, segment_roots: Vec<Digest> } = 16,
 }
 
 impl SaltedCommitV1 {
@@ -128,6 +145,7 @@ impl SaltedCommitV1 {
             Self::Claim { .. } => TAG_COMMIT_CLAIM_V1,
             Self::Pipeline { .. } => TAG_COMMIT_PIPELINE_CLAIM_V1,
             Self::Spec { .. } => TAG_SPEC_V1,
+            Self::Segmented { .. } => TAG_COMMIT_SEGMENTED_CLAIM_V1,
         }
     }
 
@@ -137,6 +155,7 @@ impl SaltedCommitV1 {
             Self::Claim { claim, .. } => claim.producer_bond,
             Self::Pipeline { claim, .. } => claim.producer_bond,
             Self::Spec { claim } => claim.producer(),
+            Self::Segmented { claim, .. } => claim.producer_bond,
         }
     }
 }
@@ -248,6 +267,22 @@ pub enum KernelRouteObjectV1 {
         claim: Digest,
         seal: Digest,
     } = 15,
+    /// **K2-TIR-v4**: commit a segmented claim (signed by `claim.producer_bond`): the evidence object and ONE ROOT PER SEGMENT of
+    /// 1,024 positions — never the node commitments, which are served material.
+    CommitSegmentedClaim {
+        claim: KernelClaimV1,
+        evidence: crate::seg::SegmentedEvidenceV2,
+        segment_roots: Vec<Digest>,
+    } = 16,
+    /// **K2-TIR-v4**: post a job whose prompt is committed by its tile root; its tiles follow as `PostPromptTile`s.
+    PostTiledJob {
+        job: crate::seg::TiledJobV1,
+    } = 17,
+    /// **K2-TIR-v4**: post one tile of a tiled job's prompt (any bond). A claim commits only once every tile is posted.
+    PostPromptTile {
+        job: Digest,
+        tile: crate::seg::PromptTileOpeningV1,
+    } = 18,
     /// **RFC-0004 Part II**: a typed-root object. Accepted only while the ledger's schedule has the typed-roots extension `K2-TR-v1`
     /// Active (the consumer's `palw_typed_roots_v1` fence); a claim is signed by its producer.
     Spec {
@@ -371,6 +406,9 @@ impl KernelRouteObjectV1 {
             Self::RegisterPipelineClassV2 { .. } => TAG_REGISTER_PIPELINE_CLASS_V2,
             Self::SealProof { .. } => TAG_SEAL_PROOF_V1,
             Self::CommitClaimSalted { .. } => TAG_COMMIT_CLAIM_SALTED_V1,
+            Self::CommitSegmentedClaim { .. } => TAG_COMMIT_SEGMENTED_CLAIM_V1,
+            Self::PostTiledJob { .. } => TAG_POST_TILED_JOB_V1,
+            Self::PostPromptTile { .. } => TAG_POST_PROMPT_TILE_V1,
             Self::Spec { .. } => TAG_SPEC_V1,
         }
     }
@@ -460,6 +498,9 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_REGISTER_PIPELINE_CLASS_V2 => "RegisterPipelineClassV2",
         TAG_SEAL_PROOF_V1 => "SealProof",
         TAG_COMMIT_CLAIM_SALTED_V1 => "CommitClaimSalted",
+        TAG_COMMIT_SEGMENTED_CLAIM_V1 => "CommitSegmentedClaim",
+        TAG_POST_TILED_JOB_V1 => "PostTiledJob",
+        TAG_POST_PROMPT_TILE_V1 => "PostPromptTile",
         TAG_SPEC_V1 => "Spec",
         _ => "Unknown",
     }
@@ -484,6 +525,9 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_REGISTER_PIPELINE_CLASS_V2 => MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1,
         TAG_SEAL_PROOF_V1 => MAX_SEAL_PROOF_BYTES_V1,
         TAG_COMMIT_CLAIM_SALTED_V1 => MAX_COMMIT_CLAIM_SALTED_BYTES_V1,
+        TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
+        TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
+        TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
         TAG_SPEC_V1 => MAX_SPEC_BYTES_V1,
         _ => return None,
     })
@@ -538,9 +582,9 @@ mod tests {
             assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
             assert_ne!(o.name(), "Unknown");
         }
-        let tags: Vec<u8> = (1..=15).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1]).collect();
+        let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
-        assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(16).is_none());
+        assert!(max_encoded_bytes_of_tag(0).is_none());
         assert!((21..=22).all(|t| max_encoded_bytes_of_tag(t).is_none()), "21 and 22 are not used");
         assert!(max_encoded_bytes_of_tag(TAG_SPEC_V1).is_some() && name_of_tag(TAG_SPEC_V1) == "Spec", "RFC-0004 Part II's tag 19");
     }

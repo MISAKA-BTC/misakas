@@ -342,6 +342,11 @@ pub fn palw_kernel_demand_unit_v1(ledger: &KernelLedgerV1, claim: &[u8; 64], sta
         });
         return slice.filter(|r| (position as u64) < r.snapshot.slices()).map(|_| CourtUnitKindV1::TypedSnapshotSlice);
     }
+    // K2S (DA16b §7.8 item 5): a segmented claim's stage-0 position is a kernel position too, so the fold's admission and tally
+    // cover segmented demands (its body keeps no node commitments, so `position` cannot answer for it).
+    if let ClaimBodyV1::Segmented { evidence, .. } = &row.body {
+        return (stage == 0 && position < evidence.positions).then_some(CourtUnitKindV1::KernelPosition);
+    }
     row.body.position(stage, position).map(|_| CourtUnitKindV1::KernelPosition)
 }
 

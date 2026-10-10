@@ -233,6 +233,53 @@ fn k2_route(program: &misaka_palw_tir::program::TirProgramV1, positions: u32) {
             Err(gaps) => println!("      public_prosecution_complete_v1: REFUSED — {gaps:?}"),
         }
     }
+    // Lane K2S: K2-TIR-v4 (`docs/design/palw/k2-real-scale.md`) — segmented commitments, element courts, per-prosecution bounds.
+    let v4 = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor();
+    let armed = KernelScheduleV1::default().with(v4.digest(), KernelStatusV1::Active { since_daa: 0 });
+    match plan_for_tir_program_v1(&v4, program, root, positions) {
+        Err((family, why)) => println!("    K2-TIR-v4 @{positions}: KERNEL_EXTENSION_REQUIRED ({}: {why})", family.name()),
+        Ok(plan) => {
+            match check_plan_v1(&armed, &v4, program, root, &plan, 0) {
+                Ok(a) => println!("    K2-TIR-v4 @{positions}: check_plan_v1 (armed) PASS — eps <= 2^-{}", a.error_bits),
+                Err(o) => println!(
+                    "    K2-TIR-v4 @{positions}: check_plan_v1 {} — {}",
+                    o.code(),
+                    o.to_string().chars().take(400).collect::<String>()
+                ),
+            }
+            match misaka_palw_kernel::gate::public_prosecution_complete_v4(
+                &v4,
+                &plan,
+                program,
+                &ProfileMaterialV1::kernel_route(true),
+                &policy.prosecution,
+            ) {
+                Ok((g, seg)) => {
+                    println!(
+                        "      public_prosecution_complete_v4: PASS — per prosecution public {} B, worst element court {} B / work {}, filing {} B, response {} B, RAM {} B, sessions {}, retained on chain {} B; position material {} B in {} parts, {} values/position, {} segments, claim material (producer DA) {} B",
+                        g.max_public_bytes,
+                        g.max_opening_bytes,
+                        g.max_court_work,
+                        g.max_filing_bytes,
+                        g.max_response_bytes,
+                        g.max_verifier_ram,
+                        g.max_concurrent_sessions,
+                        g.max_retained_state,
+                        seg.position_material_bytes,
+                        seg.parts_per_position,
+                        seg.node_count,
+                        seg.segments,
+                        seg.claim_material_bytes
+                    );
+                    match misaka_palw_kernel::ledger::carrier_fit_v1(&g, carrier, carrier, carrier) {
+                        Ok(()) => println!("      carrier_fit_v1 ({carrier} B): PASS"),
+                        Err(e) => println!("      carrier_fit_v1 ({carrier} B): REFUSED — {e}"),
+                    }
+                }
+                Err(gaps) => println!("      public_prosecution_complete_v4: REFUSED — {gaps:?}"),
+            }
+        }
+    }
 }
 
 #[test]

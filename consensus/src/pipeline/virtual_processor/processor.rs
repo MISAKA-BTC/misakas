@@ -13786,6 +13786,55 @@ impl VirtualStateProcessor {
         borsh::from_slice::<Obj>(&whole).ok()
     }
 
+    /// **G14 GAP 10 (lane K2S): the kernel route's acceptance gate at the mempool and the template.** A `0x4b` carrier of a
+    /// `KernelRouteV1` is put through [`Self::palw_kernel_route_object_is_signed`] (the fence, an Active signer, ML-DSA-87, the kernel's
+    /// strict decode, the OPV fence) and a `KernelConstraintReceiptV1` through the receipt arm's checks, both at the tip; `Some(why)`
+    /// refuses it. `None` for every other transaction, and for an object chunk (judged on the assembled whole by the fold, as before).
+    pub(super) fn palw_mempool_kernel_route_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+            return None;
+        }
+        let object = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
+            .objects
+            .into_iter()
+            .next()
+            .map(|carried| carried.object)?;
+        if !matches!(object, Obj::KernelRouteV1 { .. } | Obj::KernelConstraintReceiptV1 { .. }) {
+            return None;
+        }
+        if !self.palw_kernel_route_at(virtual_daa_score) {
+            return Some("palw_probabilistic_constraints_v1 is not in force at this tip (G14)".to_string());
+        }
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        match object {
+            Obj::KernelRouteV1 { bytes, signer, signature } => {
+                if bytes.len() > kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 {
+                    return Some(format!("a {}-byte kernel route object past the carrier", bytes.len()));
+                }
+                self.palw_kernel_route_object_is_signed(&state, virtual_daa_score, &bytes, &signer, &signature).err()
+            }
+            Obj::KernelConstraintReceiptV1 { receipt, signature } => {
+                let record = match state.kernel_route().and_then(|k| k.bond_key_of(&receipt.seat_bond)).and_then(|key| state.bond(&key)) {
+                    Some(record) => record,
+                    None => return Some("a kernel receipt is signed by a bond the route never assigned".to_string()),
+                };
+                if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                    return Some("a kernel receipt is signed by a bond that is not Active".to_string());
+                }
+                (!Self::verify_mldsa87_with_context_bool(
+                    &record.pubkey,
+                    &receipt.signing_message(),
+                    &signature,
+                    misaka_palw_kernel::receipt::CONSTRAINT_RECEIPT_MLDSA87_CONTEXT_V1,
+                ))
+                .then(|| "a kernel receipt carries a signature the seat's key does not verify".to_string())
+            }
+            _ => None,
+        }
+    }
+
     /// **G14 (tag 113, C4 F-C4R3-03): is this chunk of the route's own lane signed by the Active bond that opens its group?**
     fn palw_kernel_chunk_is_signed(
         &self,
@@ -19708,6 +19757,10 @@ impl VirtualStateProcessor {
         if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(&mutable_tx.tx, virtual_daa_score) {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
         }
+        // **G14 GAP 10:** a kernel route carrier the acceptance gate refuses is refused here too (and at the template).
+        if let Some(refusal) = self.palw_mempool_kernel_route_refusal(&mutable_tx.tx, virtual_daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(refusal));
+        }
         Ok(())
     }
 
@@ -19845,6 +19898,9 @@ impl VirtualStateProcessor {
         // manager evicts it rather than leading a template with it. `None` below R-core+.
         if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(tx, virtual_state.daa_score) {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
+        }
+        if let Some(refusal) = self.palw_mempool_kernel_route_refusal(tx, virtual_state.daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(refusal));
         }
         Ok(calculated_fee)
     }

@@ -2366,12 +2366,20 @@ async fn g14_opv_registration_is_dropped_without_the_fence_the_admission_or_the_
         param_commitments: fx.pc.clone(),
     };
 
-    // (a) A network that declares no OPV policy: dropped by name (the fence), the legacy class is the only one.
+    // (a) A network that declares no OPV policy: refused by name (the fence) — since G14 GAP 10 already at the mempool, which runs the
+    // acceptance gate; the legacy class is the only one.
     let mut w = World::new().await;
     assert!(w.net.api().unwrap().header.opv.is_none());
     let before = w.net.api().unwrap().rows.clone();
     let o = w.net.route(2, &opv_register(&w.fx, VerificationModeV1::OptimisticPublicVerification, w.fx.plan.clone()));
-    w.net.send(vec![(2, o)]).await;
+    let tx = w.net.carrier(2, &o);
+    match w.net.mempool(&tx) {
+        Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(why)) => {
+            assert!(why.contains("palw_panel_free_v1"), "{why}")
+        }
+        other => panic!("the mempool runs the acceptance gate: {other:?}"),
+    }
+    w.net.chain.heartbeat(w.net.ttpb(), Vec::new()).await;
     assert_eq!(w.net.ledger().classes.len(), 1, "no OPV class on a network without the policy");
     assert_eq!(w.net.api().unwrap().rows, before, "and the route's rows are untouched (the historical root form)");
 
@@ -3294,6 +3302,9 @@ mod c4r3;
 // Onboarding P0 (OB-P0): conformance evidence on chain (tag 109) — the beacon from FUTURE Panel-independent Finals, the evidence judged
 // in the fold, an optimistic window with outsider refutations, the lifecycle to ACTIVE_REWARDABLE: `g14_kernel_route_e2e/conformance.rs`.
 mod conformance;
+// Lane K2S (K2-TIR-v4, `docs/design/palw/k2-real-scale.md`): segmented claims, element courts, per-position DA, prompt tiles, the
+// mempool's acceptance gate (GAP 10) and the cached ledger (GAP 8): `g14_kernel_route_e2e/real_scale.rs`.
+mod real_scale;
 // Lane DA16: the public-material transport and the provider court (tags 150–153) — an outsider confirms or refutes a binding from the
 // bytes, providers' defaults, a common-mode outage, a false computation still the miner's, reorg and replay: `g14_kernel_route_e2e/da16.rs`.
 mod da16;

@@ -247,10 +247,10 @@ fn ten_bonds_of_a_tenth_never_beat_the_whole() {
 #[test]
 fn the_allocation_clips_reward_only_on_the_real_fold() {
     let allocation = PalwModelAllocationPolicyV1 {
-        version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V1,
+        version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V2,
         epoch_daa: 50,
         seasoning_epochs: 1,
-        curve: PalwAllocationCurveV1 { points: vec![(0, 0), (1_000_000 * MSK, 1_000_000)] },
+        curve: PalwAllocationCurveV1 { alpha_halves: 2 },
         max_models_per_bond: 4,
     };
     let run = |alloc: Option<PalwModelAllocationPolicyV1>, assign: bool| -> (u64, Vec<u64>, u128) {
@@ -287,6 +287,66 @@ fn the_allocation_clips_reward_only_on_the_real_fold() {
     assert!(even.iter().any(|r| *r > 0));
     assert!(none.iter().all(|r| *r == 0), "unassigned: Σ A = 0, nothing: {none:?}");
     assert_eq!((w_off, w_even), (w_none, w_none), "the allocation never moves weight");
+}
+
+/// **ADR-0177 as revised (2026-10-10): `A_m = S_m^α` on the real fold.** One bond's capital split 2:1 between the floor and a second
+/// registered class: at `α = 1` the floor's share of the epoch's realized budget is twice the other's, at the interim `α = 1.5`
+/// `2^1.5 ≈ 2.83` times, at `α = 2` four times (exact up to the floors), Σ never above what accrued, the claims and their weight unchanged by `α`, and the tape — assignment, epoch roll,
+/// claims — rewound and replayed is the same chain (a reorg's and a resync's fold).
+#[test]
+fn alpha_one_one_and_a_half_and_two_divide_the_budget_by_s_to_the_alpha_on_the_real_fold_and_replay() {
+    let run = |halves: u8| -> (u64, u64, u64, u128) {
+        let allocation = PalwModelAllocationPolicyV1 {
+            version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V2,
+            epoch_daa: 50,
+            seasoning_epochs: 1,
+            curve: PalwAllocationCurveV1 { alpha_halves: halves },
+            max_models_per_bond: 4,
+        };
+        let mut sim = Sim::new(
+            budget_params(250, policy(1_000_000, 4_000, 1, 1_000_000, false), Some(allocation)),
+            Class::Floor,
+            &[(90, 1_000_000)],
+        );
+        let floor = genesis_classes(&sim.c.p)[0].0;
+        let (k8, _) = model_classes(&sim.c.p);
+        let fork_at = sim.tape.len();
+        let mut assignments = vec![(floor, 600_000 * MSK), (k8, 300_000 * MSK)];
+        assignments.sort();
+        sim.step(vec![PalwConsensusObjectV2::BondCapitalAssignedV1 {
+            bond: bond_key(90),
+            assignments,
+            sequence: 1,
+            signature: vec![1],
+        }]);
+        sim.block(H + 101, vec![], None);
+        let ids: Vec<Hash64> = (0..3u64).filter_map(|k| sim.claim(90, 0x6_0000 + k)).collect();
+        assert_eq!(ids.len(), 3, "alpha never refuses a claim");
+        // Each model's share of the epoch's realized budget: what it still has plus what its claims reserved.
+        let epoch = budget(&sim).header.allocation.expect("an allocation epoch");
+        let share = |m: &Hash64| budget(&sim).model_available(m) + budget(&sim).model_row(m).map_or(0, |row| row.reserved_sompi);
+        let (big, small) = (share(&floor), share(&k8));
+        assert!(big + small <= epoch.accrued_sompi, "within the realized budget");
+        let weight: u128 = ids.iter().map(|id| budget(&sim).claim_row(id).unwrap().reserved.final_weight).sum();
+        budget(&sim).check_consistency().expect("the engine's invariants");
+        let tip = sim.c.s.clone();
+        let off = sim.rewind_to(fork_at);
+        sim.replay(&off);
+        assert_eq!(sim.c.s, tip, "alpha = {halves}/2: the replay is the chain");
+        (big, small, epoch.accrued_sompi, weight)
+    };
+    let (b1, s1, acc1, w1) = run(2);
+    let (b15, s15, acc15, w15) = run(3);
+    let (b2, s2, acc2, w2) = run(4);
+    println!("alpha = 1: {b1} : {s1} of {acc1}; alpha = 1.5: {b15} : {s15}; alpha = 2: {b2} : {s2} of {acc2}");
+    assert!(s1 > 0 && s15 > 0 && s2 > 0);
+    // 2^1.5 = 2.8284…: the ratio up to the floors and the weights' own floor (both relative errors far below 10^-4 here).
+    assert!((b15 as u128 * 10_000).abs_diff(s15 as u128 * 28_284) <= s15 as u128 * 2 + 10_000, "alpha = 1.5: 2.83:1 ({b15} : {s15})");
+    assert_eq!((acc15, w15), (acc1, w1));
+    assert!(b1.abs_diff(2 * s1) <= 2, "alpha = 1: 2:1 ({b1} : {s1})");
+    assert!(b2.abs_diff(4 * s2) <= 4, "alpha = 2: 4:1 ({b2} : {s2})");
+    assert_eq!(acc1, acc2, "the budget is the same; alpha moves only its division");
+    assert_eq!(w1, w2, "alpha never moves weight");
 }
 
 /// **Replay determinism**: a tape with riders, a court and a Final, rewound to its middle and re-folded input for input, is the same

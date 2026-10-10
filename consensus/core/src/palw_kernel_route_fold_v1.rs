@@ -84,7 +84,12 @@ impl TransitionBuilder<'_> {
     /// from 32). The route's header must exist.
     pub(super) fn write_kernel_row(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) {
         let Some(kernel) = self.state.kernel_route.as_mut() else { return };
-        let map = if table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 { &mut kernel.rows } else { &mut kernel.aux };
+        let ledger_table = table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1;
+        if ledger_table {
+            // A ledger row changes: the cached ledger is no longer the rows' (the flush sets it again once it has written them).
+            kernel.ledger_cache.clear();
+        }
+        let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
         let old = match &new {
             Some(bytes) => map.insert((table, key.clone()), bytes.clone()),
             None => map.remove(&(table, key.clone())),
@@ -101,11 +106,11 @@ impl TransitionBuilder<'_> {
             return;
         }
         match self.state.kernel_route.as_mut() {
-            Some(kernel) => kernel.header = new.clone(),
-            None => {
-                self.state.kernel_route =
-                    Some(PalwKernelRouteStateV1 { header: new.clone(), rows: LedgerRowsV1::new(), aux: Default::default() })
+            Some(kernel) => {
+                kernel.header = new.clone();
+                kernel.ledger_cache.clear();
             }
+            None => self.state.kernel_route = Some(PalwKernelRouteStateV1::with_header(new.clone())),
         }
         self.entries.push(PalwDeltaEntryV2::KernelRouteHeader { old, new: Some(new) });
     }
@@ -235,6 +240,23 @@ pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
     Ok(ledger)
 }
 
+/// **The rows `load_ledger`'s ledger has, without serializing it** (GAP 8): the state's ledger rows with the two consumer-derived
+/// tables the load sets (the attested artifacts and the admitted OPV classes) replaced by the ledger's own — exactly
+/// `ledger.to_rows()` straight after `load_ledger`.
+fn loaded_rows(builder: &TransitionBuilder<'_>, ledger: &KernelLedgerV1) -> LedgerRowsV1 {
+    use misaka_palw_kernel::rows::{TABLE_ATTESTED_V1, TABLE_OPV_ADMITTED_V1};
+    let mut rows = builder.state.kernel_route.as_ref().map(|k| k.rows.clone()).unwrap_or_default();
+    rows.retain(|(table, _), _| *table != TABLE_ATTESTED_V1 && *table != TABLE_OPV_ADMITTED_V1);
+    for root in &ledger.attested_artifacts {
+        rows.insert((TABLE_ATTESTED_V1, key_bytes(root)), Vec::new());
+    }
+    for class in &ledger.opv.admitted {
+        rows.insert((TABLE_OPV_ADMITTED_V1, key_bytes(class)), Vec::new());
+    }
+    debug_assert!(rows == ledger.to_rows(), "the loaded rows are the loaded ledger's");
+    rows
+}
+
 /// What the derived-eligibility gate decides for one kernel object.
 enum OpvGateV1 {
     /// Apply the object as it is.
@@ -313,6 +335,13 @@ fn opv_gate_v1(
                 _ => OpvGateV1::Pass,
             }
         }
+        // K2-TIR-v4/v5 (OPV-only): a segmented claim commits only while its class is eligible, as every other OPV claim.
+        KernelRouteObjectV1::CommitSegmentedClaim { claim, .. } => {
+            match ledger.tiled_jobs.get(&claim.job_id).map(|j| j.job.class_binding_id) {
+                Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
+                _ => OpvGateV1::Pass,
+            }
+        }
         // Past the fence every reveal is salted (G14-R4's claim seal v2, inner kind 20): the same gate on the carried commit. A typed
         // `Spec` claim passes here — its class's eligibility path is RFC-0004 Part II's (GAP-B16).
         KernelRouteObjectV1::CommitClaimSalted { commit, .. } => {
@@ -320,6 +349,7 @@ fn opv_gate_v1(
             let class = match commit {
                 C::Claim { claim, .. } => ledger.jobs.get(&claim.job_id).map(|j| j.class_binding_id),
                 C::Pipeline { claim, .. } => ledger.pipeline_jobs.get(&claim.job_id).map(|j| j.class_binding_id),
+                C::Segmented { claim, .. } => ledger.tiled_jobs.get(&claim.job_id).map(|j| j.job.class_binding_id),
                 // A typed claim is re-gated by its class's DERIVED eligibility (G14C): a class whose component lost eligibility (its
                 // binding refuted, its kernel retired, denied) takes no new claim.
                 C::Spec { claim } => return if spec_claim_eligible(claim) { OpvGateV1::Pass } else { OpvGateV1::Drop },
@@ -337,7 +367,8 @@ fn opv_gate_v1(
     }
 }
 
-/// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them.
+/// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them. The ledger is then
+/// cached on the route state (GAP 8) as the rows' own ledger, so the next object of the chain loads it without rebuilding it.
 pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &LedgerRowsV1) {
     for ((table, key), old_new) in diff_rows(before, &ledger.to_rows()).into_iter().map(|(k, _old, new)| (k, new)) {
         builder.write_kernel_row(table, key, old_new);
@@ -347,6 +378,9 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
     if header.scalars != scalars {
         builder.write_kernel_header(PalwKernelRouteHeaderV1 { scalars, ..header });
     }
+    let kernel = builder.state.kernel_route.as_mut().expect("a route that flushes exists");
+    let cached = ledger.clone().as_rebuilt_from_v1(&kernel.rows);
+    kernel.ledger_cache.set(cached);
 }
 
 /// **Apply a ledger's settlement instructions to the real bonds** (module doc).
@@ -497,7 +531,7 @@ pub(super) fn apply_kernel_route_object_v1(
         return Ok(());
     }
     let mut ledger = load_ledger(builder, ctx)?;
-    let before = ledger.to_rows();
+    let before = loaded_rows(builder, &ledger);
     match opv_gate_v1(builder, ctx, &ledger, &object) {
         OpvGateV1::Drop => return Ok(()),
         OpvGateV1::Admit(classes) => {
@@ -673,7 +707,7 @@ pub(super) fn apply_kernel_receipt_v1(
         return Ok(());
     }
     let mut ledger = load_ledger(builder, ctx)?;
-    let before = ledger.to_rows();
+    let before = loaded_rows(builder, &ledger);
     let Some(row) = ledger.claims.get(&claim) else { return Ok(()) };
     let ClaimBodyV1::Program { evidence, .. } = &row.body else { return Ok(()) };
     let Some(class) = ledger.classes.get(&row.class_binding_id) else { return Ok(()) };
@@ -743,13 +777,14 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
                 | r::TABLE_PROOF_SEALS_V1
                 | r::TABLE_JOB_ESCROWS_V1
                 | r::TABLE_SERVED_DEMAND_BONDS_V1
+                | r::TABLE_SEG_PROGRESS_V1
         )
     });
     if !busy {
         return Ok(());
     }
     let mut ledger = load_ledger(builder, ctx)?;
-    let before = ledger.to_rows();
+    let before = loaded_rows(builder, &ledger);
     // Every bond the ledger holds is re-synced from the real chain before it is settled against.
     let held: Vec<misaka_palw_kernel::hash::Digest> = ledger.bonds.keys().copied().collect();
     for kid in held {

@@ -252,6 +252,25 @@ Publication is the means by which other miners can join; equal capital is treate
 - Unchanged: Q/B/R/F individual caps, the total budget, distinct capital and the common hold. Block issuance, beacon, Final
   weight and fork choice are not scaled by bond aggregation.
 - The verification-attestation gate (ECON round 2) may continue as a dormant subsidy condition. It is not a p = 0 resolution.
+- **α = 1.5 is the interim policy value (user, 2026-10-10, on ECON round 3).** It passes 52/54 cells against the fixed 2× bar and
+  never caps in the 4–30× range. Concentration is 1.4–1.8× reward share per capital share; after migration the top model has 55% of
+  capital and 81% of rewards. The value is unapproved for production.
+
+## 3h. The Probabilistic–Economic Security Gate (user, 2026-10-10)
+
+`docs/design/palw/probabilistic-economic-security-gate.md` is a release gate across RFC-0007, RFC-0011, RFC-0014 and RFC-0015.
+It applies before any profile becomes ActiveRewardable and before any reward, consensus-weight or Panel=0 fence is armed.
+
+- **Four conditions:** every rewarded relation has a verification path; a proven lower bound on detecting the hardest fault;
+  one non-Panel verifier completes objective adjudication; and a negative EV for the coalition of producer, every Panel seat
+  and related bonds, `E = (1−p)G − pL − C < 0`, with L counted as collectable net of the 49% self-return.
+- **Six test families** T1–T6 and **lane specs** A–F, with ECON, PESG-B, G14 (codex), MEAS and BUDGET as owners.
+- **Three counter-examples, any one of which blocks activation:** a single-site fault that is almost never detected;
+  collateral or profit that escapes before the slash; honest verifiers who cannot participate economically.
+- **Safety bounds independent of economics:** maximum unsettled work weight, maximum external loss, no payout before Final,
+  and the d+W hold kept separate from liability collateral.
+- **Verdicts are PASS / FAIL / UNKNOWN only.** An unknown G, p or L is never PASS.
+- The 128-bit checker soundness `ε_check` and the real conviction probability `p_convict` are never conflated.
 
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 

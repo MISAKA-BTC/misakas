@@ -166,7 +166,7 @@ fn verifier_ram_bound_v1(program: &TirProgramV1, plan: &VerificationPlanV1, comm
 
 /// Courts this code implements, every one over public authenticated material.
 fn public_court(c: CourtIdV1) -> bool {
-    matches!(c, CourtIdV1::InstanceRecompute | CourtIdV1::MatMulScalar | CourtIdV1::EdgeRecompute)
+    matches!(c, CourtIdV1::InstanceRecompute | CourtIdV1::MatMulScalar | CourtIdV1::EdgeRecompute | CourtIdV1::ElementRecompute)
 }
 
 fn known_checker(c: CheckerIdV1) -> bool {
@@ -414,4 +414,132 @@ pub fn public_pipeline_prosecution_complete_v1(
         }
     }
     if gaps.is_empty() { Ok(total) } else { Err(gaps) }
+}
+
+/// **K2-TIR-v4's per-prosecution quantities** beside [`ProsecutionBoundsV1`] (`docs/design/palw/k2-real-scale.md` §6): what one position's
+/// material is, how many parts it is served in, the committed values a position, and the whole claim's material — the producer's DA
+/// obligation, reported and bounded by the descriptor, never what a prosecution reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SegBoundsV4 {
+    pub position_material_bytes: u128,
+    pub parts_per_position: u32,
+    pub node_count: u64,
+    pub claim_material_bytes: u128,
+    pub segments: u32,
+}
+
+/// A segmented filing's fixed allowance beyond the court's bytes.
+pub const SEG_FILING_HEADER_BYTES_V4: u64 = 4096;
+/// What a segmented claim keeps on chain beside its segment roots: the claim, the evidence object and the claim row's fields.
+pub const SEG_CLAIM_FIXED_BYTES_V4: u128 = 4096;
+
+/// **`PUBLIC_PROSECUTION_COMPLETE` for a K2-TIR-v4 plan**: the same family / checker / court / material gaps as
+/// [`public_prosecution_complete_v1`], and the bounds of ONE prosecution — two positions' material and the artifact, one demand round
+/// and one filing, two sessions, the worst element court — with what the chain keeps per claim (the segment roots).
+pub fn public_prosecution_complete_v4(
+    descriptor: &KernelDescriptorV1,
+    plan: &VerificationPlanV1,
+    program: &misaka_palw_tir::program::TirProgramV1,
+    material: &ProfileMaterialV1,
+    policy: &ProsecutionPolicyV1,
+) -> Result<(ProsecutionBoundsV1, SegBoundsV4), Vec<ProsecutionGapV1>> {
+    use ProsecutionGapV1 as G;
+    let mut gaps = Vec::new();
+    if plan.descriptor_digest != descriptor.digest() || !crate::descriptor::is_segmented_v1(descriptor) {
+        gaps.push(G::WrongDescriptor);
+    }
+    if !material.is_public() {
+        gaps.push(G::PrivateMaterial);
+    }
+    for rel in &plan.relations {
+        let (block, node) = (rel.block, rel.node);
+        match descriptor.support(rel.family) {
+            None => gaps.push(G::NoCourt { block, node }),
+            Some(s) => {
+                if !known_checker(rel.checker) || rel.checker != s.checker {
+                    gaps.push(G::UnknownChecker { block, node });
+                }
+                if rel.court != CourtIdV1::ElementRecompute || rel.court != s.court {
+                    gaps.push(G::PrivateCourt { block, node, court: rel.court });
+                }
+            }
+        }
+    }
+    let node_count: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
+    let last = plan.max_positions.saturating_sub(1);
+    let (position_bytes, parts) = match crate::seg_da::position_material_v1(program, last) {
+        Ok(v) => v,
+        Err(why) => {
+            gaps.push(G::Unbounded { what: "position material (the program does not lay out)", required: 1, limit: 0 });
+            let _ = why;
+            (u128::MAX / 4, u32::MAX)
+        }
+    };
+    let b = &plan.budgets;
+    let positions = plan.max_positions as u128;
+    let segments = crate::seg::segment_count_v1(plan.max_positions);
+    let node_lists = 2 * node_count as u128 * 64;
+    let filing = b.worst_court_bytes.saturating_add(SEG_FILING_HEADER_BYTES_V4);
+    let bounds = ProsecutionBoundsV1 {
+        max_public_bytes: position_bytes
+            .saturating_mul(2)
+            .saturating_add(b.artifact_bytes)
+            .saturating_add(node_lists)
+            .saturating_add(filing as u128),
+        max_opening_bytes: b.worst_court_bytes,
+        max_filing_bytes: filing,
+        max_response_bytes: crate::seg_da::SEG_PART_BYTES_V4 as u128,
+        max_localization_rounds: 2,
+        max_court_work: b.worst_court_work,
+        max_verifier_ram: b.artifact_bytes.saturating_add(position_bytes.saturating_mul(2)),
+        // The segmented commitment (segment roots + the fixed claim part) is what a CommitSegmentedClaim carries; codex's
+        // review (2026-10-10) separated it from the retained state. v4's retained state and RAM have NOT been re-derived
+        // with codex's conservative accounting (served responses, prosecution metadata, 16 B decoded elements): open, G14 (codex).
+        max_retained_state: (segments as u128).saturating_mul(64).saturating_add(SEG_CLAIM_FIXED_BYTES_V4),
+        max_commit_bytes: (segments as u128).saturating_mul(64).saturating_add(SEG_CLAIM_FIXED_BYTES_V4),
+        max_concurrent_sessions: 2,
+        deadline_daa: policy.court_deadline_daa,
+    };
+    let seg = SegBoundsV4 {
+        position_material_bytes: position_bytes,
+        parts_per_position: parts,
+        node_count,
+        claim_material_bytes: position_bytes.saturating_mul(positions),
+        segments,
+    };
+    let l = &descriptor.limits;
+    for (what, required, limit) in [
+        ("public bytes (one prosecution)", bounds.max_public_bytes, policy.max_public_bytes),
+        ("opening bytes (one element court)", bounds.max_opening_bytes as u128, l.max_court_bytes as u128),
+        ("court work", bounds.max_court_work as u128, l.max_court_work as u128),
+        ("verifier RAM", bounds.max_verifier_ram, policy.max_verifier_ram),
+        ("retained state (on chain, per claim)", bounds.max_retained_state, policy.max_retained_state),
+        ("concurrent sessions (one prosecution)", bounds.max_concurrent_sessions as u128, policy.max_sessions_per_claim as u128),
+        ("parts per position", parts as u128, crate::seg_da::SEG_MAX_PARTS_V4 as u128),
+        ("claim material (the producer's DA obligation)", seg.claim_material_bytes, l.max_claim_evidence_bytes),
+    ] {
+        if required >= u128::MAX / 2 || required > limit {
+            gaps.push(G::Unbounded { what, required, limit });
+        }
+    }
+    if policy.court_deadline_daa == 0 || plan.max_positions == 0 {
+        gaps.push(G::Unbounded { what: "deadline or sessions (zero: nobody can prosecute)", required: 1, limit: 0 });
+    }
+    if gaps.is_empty() { Ok((bounds, seg)) } else { Err(gaps) }
+}
+
+/// **The gate of a single-program class, whatever its descriptor**: [`public_prosecution_complete_v4`] for a segmented (K2-TIR-v4)
+/// plan, [`public_prosecution_complete_v1`] otherwise.
+pub fn class_prosecution_bounds_v1(
+    descriptor: &KernelDescriptorV1,
+    plan: &VerificationPlanV1,
+    program: &misaka_palw_tir::program::TirProgramV1,
+    material: &ProfileMaterialV1,
+    policy: &ProsecutionPolicyV1,
+) -> Result<ProsecutionBoundsV1, Vec<ProsecutionGapV1>> {
+    if crate::descriptor::is_segmented_v1(descriptor) {
+        public_prosecution_complete_v4(descriptor, plan, program, material, policy).map(|(b, _)| b)
+    } else {
+        public_prosecution_complete_v1(descriptor, program, plan, material, policy)
+    }
 }

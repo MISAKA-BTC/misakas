@@ -316,6 +316,12 @@ pub enum ClaimBodyV1 {
         evidence: PipelineEvidenceV1,
         stages: Vec<StageCommitmentsV1>,
     } = 1,
+    /// **K2-TIR-v4**: a segmented claim — the evidence object and one root per segment; node commitments are served material.
+    Segmented {
+        claim: KernelClaimV1,
+        evidence: crate::seg::SegmentedEvidenceV2,
+        segment_roots: Vec<Digest>,
+    } = 2,
     /// RFC-0004 Part II: a typed claim (memory, retrieval, composite).
     Spec(Box<crate::spec::SpecClaimBodyV1>) = 3,
 }
@@ -325,7 +331,7 @@ impl ClaimBodyV1 {
     pub fn position(&self, stage: u8, position: u32) -> Option<(&[Vec<Digest>], &[Digest])> {
         match self {
             Self::Program { commitments, .. } if stage == 0 => Some((commitments.get(position as usize)?, &[])),
-            Self::Program { .. } => None,
+            Self::Program { .. } | Self::Segmented { .. } => None,
             Self::Pipeline { stages, .. } => {
                 let s = stages.get(stage as usize)?;
                 let inputs = s.inputs.get(position as usize).map(Vec::as_slice).unwrap_or(&[]);
@@ -340,6 +346,7 @@ impl ClaimBodyV1 {
         match self {
             Self::Program { commitments, .. } => vec![(0, commitments.len() as u32)],
             Self::Pipeline { stages, .. } => stages.iter().enumerate().map(|(i, s)| (i as u8, s.commitments.len() as u32)).collect(),
+            Self::Segmented { evidence, .. } => vec![(0, evidence.positions)],
             Self::Spec(b) => b.stages(),
         }
     }
@@ -407,7 +414,7 @@ pub struct SealRowV1 {
 }
 
 impl ClaimRowV1 {
-    fn terminal_for_demands(&self) -> bool {
+    pub(crate) fn terminal_for_demands(&self) -> bool {
         self.convicted || matches!(self.life.state, ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. })
     }
 
@@ -420,7 +427,7 @@ impl ClaimRowV1 {
 /// The response classes a rejected response can have, as stored codes (`1 + index`).
 pub const RESPONSE_CLASS_NAMES_V1: [&str; 6] = ["malformed", "wrong_bytes", "wrong_root", "fake_opening", "partial", "oversized"];
 
-fn response_class_code(name: &str) -> u8 {
+pub(crate) fn response_class_code(name: &str) -> u8 {
     RESPONSE_CLASS_NAMES_V1.iter().position(|n| *n == name).map(|i| i as u8 + 1).unwrap_or(0)
 }
 
@@ -747,6 +754,10 @@ pub struct KernelLedgerV1 {
     pub burned: u64,
     /// RFC-0015: the OPV policy, classes and claim rows. Dormant (no policy) = the historical ledger, root included.
     pub opv: OpvStateV1,
+    /// K2-TIR-v4: jobs whose prompt is posted in tiles, and which tiles are posted (ledger table 20).
+    pub tiled_jobs: BTreeMap<Digest, crate::seg::TiledJobRowV1>,
+    /// K2-TIR-v4: the progress of every position demand of a segmented claim, and the served positions (ledger table 21).
+    pub seg_progress: BTreeMap<DemandKeyV1, crate::seg_da::SegProgressV1>,
     /// RFC-0004 Part II: typed-root classes, their jobs and the memory lines (tables 22–24; empty = the historical ledger).
     pub typed: crate::spec::TypedStateV1,
     /// **RFC-0009 §4.2 (lane DA16): claims whose material obligation the consumer moved to bonded providers.** Consumer-derived from
@@ -789,7 +800,7 @@ pub fn single_class_id_v1(
     class_id_for_mode_v1(&single_class_binding_v1(descriptor_digest, program_bytes, plan, pc).class_binding_id(), mode)
 }
 
-fn settle(out: &mut Vec<LedgerEventV1>, bond: Digest, amount: u64, kind: SettlementKindV1, claim: Option<Digest>) {
+pub(crate) fn settle(out: &mut Vec<LedgerEventV1>, bond: Digest, amount: u64, kind: SettlementKindV1, claim: Option<Digest>) {
     if amount > 0 {
         out.push(LedgerEventV1::Settlement(SettlementInstructionV1 { bond, amount, kind, claim }));
     }
@@ -822,6 +833,8 @@ impl KernelLedgerV1 {
             job_posters: BTreeMap::new(),
             burned: 0,
             opv: OpvStateV1::default(),
+            tiled_jobs: BTreeMap::new(),
+            seg_progress: BTreeMap::new(),
             typed: crate::spec::TypedStateV1::default(),
             provider_liable: BTreeSet::new(),
             budget: BlockBudgetV1::default(),
@@ -1032,6 +1045,10 @@ impl KernelLedgerV1 {
                         self.apply_salted_spec_claim(claim, salt, &mut out)?;
                         claim.id()
                     }
+                    SaltedCommitV1::Segmented { claim, evidence, segment_roots } => {
+                        self.commit_segmented_claim(claim, evidence, segment_roots, Some(salt), &mut out)?;
+                        claim.id()
+                    }
                 };
                 out.push(LedgerEventV1::ClaimCommitted { claim: id });
             }
@@ -1042,6 +1059,18 @@ impl KernelLedgerV1 {
             KernelRouteObjectV1::Respond { claim, stage, position, bytes } => {
                 self.respond(&auth.signer_bond, claim, *stage, *position, bytes, &mut out)?
             }
+            KernelRouteObjectV1::CommitSegmentedClaim { claim, evidence, segment_roots } => {
+                self.commit_segmented_claim(claim, evidence, segment_roots, None, &mut out)?;
+                out.push(LedgerEventV1::ClaimCommitted { claim: claim.id() });
+            }
+            KernelRouteObjectV1::PostTiledJob { job } => {
+                // GAP-5 (user-pays escrow): a tiled job funds its Final reward and pays its fee exactly as `PostJob` does.
+                self.job_escrow_affordable(name, &auth.signer_bond)?;
+                self.post_tiled_job(job)?;
+                out.push(LedgerEventV1::JobPosted { job: job.id() });
+                self.open_job_escrow(&auth.signer_bond, job.id(), &mut out);
+            }
+            KernelRouteObjectV1::PostPromptTile { job, tile } => self.post_prompt_tile(job, tile)?,
             KernelRouteObjectV1::RequestExit { bond } => match self.bonds.get_mut(bond) {
                 Some(b) if b.exit_requested.is_none() => {
                     b.exit_requested = Some(self.daa);
@@ -1050,7 +1079,11 @@ impl KernelLedgerV1 {
                 _ => return Err(KernelRefusalV1::rule(name, "no such bond, or already exiting")),
             },
             KernelRouteObjectV1::SealClaim { producer, job, seal } => {
-                if !self.jobs.contains_key(job) && !self.pipeline_jobs.contains_key(job) && !self.typed.jobs.contains_key(job) {
+                if !self.jobs.contains_key(job)
+                    && !self.pipeline_jobs.contains_key(job)
+                    && !self.tiled_jobs.contains_key(job)
+                    && !self.typed.jobs.contains_key(job)
+                {
                     return Err(KernelRefusalV1::rule(name, "no such job"));
                 }
                 match self.bonds.get(producer) {
@@ -1185,6 +1218,7 @@ impl KernelLedgerV1 {
         let named = match obj {
             O::CommitClaim { claim, .. } => Some((claim.producer_bond, "producer")),
             O::CommitPipelineClaim { claim, .. } => Some((claim.producer_bond, "producer")),
+            O::CommitSegmentedClaim { claim, .. } => Some((claim.producer_bond, "producer")),
             O::CommitClaimSalted { commit, .. } => Some((commit.producer(), "producer")),
             O::FileProof { accuser, .. } => Some((*accuser, "accuser")),
             O::FileDemand { demander, .. } => Some((*demander, "demander")),
@@ -1300,7 +1334,7 @@ impl KernelLedgerV1 {
     }
 
     /// Charge one adjudication (and `court_work`) to the block, or refuse the object as over budget. Nothing is charged on a refusal.
-    fn charge(&mut self, name: &'static str, court_work: u64) -> Result<(), KernelRefusalV1> {
+    pub(crate) fn charge(&mut self, name: &'static str, court_work: u64) -> Result<(), KernelRefusalV1> {
         let b = self.budget;
         // C4 F-C4R3-05 (round 2): a share of the block is reserved for proofs; everything else stops short of it.
         let runs = if name == "FileProof" {
@@ -1380,6 +1414,13 @@ impl KernelLedgerV1 {
         let name: &'static str = if mode.is_optimistic() { "RegisterClassV2" } else { "RegisterClass" };
         let rule = |why: String| KernelRefusalV1::rule(name, why);
         let d = self.known_descriptor(descriptor).map_err(rule)?;
+        if crate::descriptor::is_segmented_v1(&d) && !mode.is_optimistic() {
+            return Err(rule(
+                "a K2-TIR-v4 (segmented) class registers only under OptimisticPublicVerification: a Panel cannot cover a claim whose \
+                 material is terabytes"
+                    .into(),
+            ));
+        }
         let root = program_root_v1(program_bytes);
         let binding = single_class_binding_v1(d.digest(), program_bytes, plan, pc);
         // The mode is part of the class identity: the same program under another mode is another class (RFC-0015 §4.1).
@@ -1397,18 +1438,46 @@ impl KernelLedgerV1 {
         }
         self.charge(name, 0)?;
         let program = TirProgramV1::decode_canonical(program_bytes).map_err(|e| rule(format!("program: {e}")))?;
-        check_plan_v1(&self.schedule, &d, &program, root, plan, self.daa).map_err(|o| rule(o.to_string()))?;
+        // K2-TIR-v5: the program's last two params are the job's input (`crate::seg_encoder`), never the artifact; one position; its
+        // ranges proven with the inputs' intervals (the ids below the token bound, the count at most `L`).
+        let artifact_params = if crate::descriptor::is_encoder_v1(&d) {
+            let e = crate::seg_encoder::encoder_binding_v1(&program).map_err(rule)?;
+            if plan.max_positions != 1 {
+                return Err(rule("a K2-TIR-v5 (encoder) plan is of one position".into()));
+            }
+            crate::seg_encoder::prove_encoder_ranges_v1(&program, &e).map_err(|why| rule(format!("FRONTEND_REQUIRED: {why}")))?;
+            crate::check::check_plan_with_v1(
+                &self.schedule,
+                &d,
+                &program,
+                root,
+                plan,
+                self.daa,
+                crate::check::RangeRuleV1::ProvenByV2,
+            )
+            .map_err(|o| rule(o.to_string()))?;
+            e.first_input as usize
+        } else {
+            check_plan_v1(&self.schedule, &d, &program, root, plan, self.daa).map_err(|o| rule(o.to_string()))?;
+            program.params.len()
+        };
         check_commitment_set(
             pc,
-            &used_param_instances(&program, program.params.len()),
-            &declared_param_instances(&program.params, program.schedule.layers.len()),
+            &used_param_instances(&program, artifact_params),
+            &declared_param_instances(&program.params[..artifact_params], program.schedule.layers.len()),
         )
         .map_err(rule)?;
         // The artifact is public by the consumer's attestation (checked above), not by a registrant's flag. PUBLIC_PROSECUTION_COMPLETE
         // is derived from code for every class of every mode; an OPV class has no Panel to fall back on, so there is no exception.
-        let bounds =
-            public_prosecution_complete_v1(&d, &program, plan, &ProfileMaterialV1::kernel_route(true), &self.policy.prosecution)
-                .map_err(|g| rule(format!("not publicly prosecutable: {g:?}")))?;
+        // A K2-TIR-v4 plan is bounded per prosecution (`crate::gate::public_prosecution_complete_v4`).
+        let bounds = crate::gate::class_prosecution_bounds_v1(
+            &d,
+            plan,
+            &program,
+            &ProfileMaterialV1::kernel_route(true),
+            &self.policy.prosecution,
+        )
+        .map_err(|g| rule(format!("not publicly prosecutable: {g:?}")))?;
         if bounds.max_court_work > self.policy.max_court_work_per_block {
             return Err(rule("the class's worst court does not fit one block's court budget: nobody could prosecute it".into()));
         }
@@ -1546,7 +1615,7 @@ impl KernelLedgerV1 {
     }
 
     /// Reserve a new claim's collateral and start its lifecycle. Every refusal is decided before the first mutation.
-    fn admit(
+    pub(crate) fn admit(
         &mut self,
         id: Digest,
         producer: Digest,
@@ -1634,7 +1703,7 @@ impl KernelLedgerV1 {
 
     /// A claim of an OPV class needs its producer's live-claim caps and free collateral to allow it: decided before the adjudication
     /// budget is spent and before any evidence is verified (a producer at its cap cannot make the ledger verify claims it must refuse).
-    fn opv_claim_capacity(&self, class: &Digest, producer: &Digest, job: &Digest) -> Result<(), String> {
+    pub(crate) fn opv_claim_capacity(&self, class: &Digest, producer: &Digest, job: &Digest) -> Result<(), String> {
         if !self.opv.classes.contains(class) {
             return Ok(());
         }
@@ -1650,7 +1719,7 @@ impl KernelLedgerV1 {
     }
 
     /// A claim of an OPV class commits only while the fence is reached (a cheap check; nothing is charged).
-    fn opv_claim_gate(&self, class: &Digest) -> Result<(), String> {
+    pub(crate) fn opv_claim_gate(&self, class: &Digest) -> Result<(), String> {
         if self.opv.classes.contains(class) && !self.optimistic_allowed() {
             return Err("the palw_panel_free_v1 fence is not reached".into());
         }
@@ -1730,7 +1799,7 @@ impl KernelLedgerV1 {
     /// salted — at least `claim_seal_delay_daa` old. Past `palw_panel_free_v1` a seal accepted at or after the fence opens only
     /// salted (OPV-BOOT GAP-B1a): an unsalted reveal of it would let a sealer choose, after seeing the honest salts, between
     /// "revealed but not a beacon source" and a veto.
-    fn reveal_ready(&self, job: &Digest, producer: &Digest, id: &Digest, salt: Option<&Digest>) -> Result<(), String> {
+    pub(crate) fn reveal_ready(&self, job: &Digest, producer: &Digest, id: &Digest, salt: Option<&Digest>) -> Result<(), String> {
         if self.job_claims.get(job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job) {
             return Err("another claim already holds the job (one claim per job)".into());
         }
@@ -1965,6 +2034,8 @@ impl KernelLedgerV1 {
             ClaimBodyV1::Program { .. } => {
                 self.classes.get(&row.class_binding_id).map(|c| derived_mask_v1(&c.program)).unwrap_or_default()
             }
+            // Every committed value of a segmented claim (derived windows included) is served on demand.
+            ClaimBodyV1::Segmented { .. } => Vec::new(),
             ClaimBodyV1::Pipeline { .. } => self
                 .pipeline_classes
                 .get(&row.class_binding_id)
@@ -2001,6 +2072,7 @@ impl KernelLedgerV1 {
                 let trace = EvidenceV1::new(commitments.clone());
                 verify_decode_fault_v1(job, c, &trace, class.logits_at(), fault).map(|_| ()).map_err(|d| format!("{d:?}"))
             }
+            (ClaimBodyV1::Segmented { .. }, ProsecutionV1::Segmented(bytes)) => self.seg_adjudicate(claim, bytes),
             (ClaimBodyV1::Pipeline { .. }, ProsecutionV1::Pipeline(bytes)) => {
                 let (record, header, binding) = self.pipeline_public_record(claim).ok_or("no public record")?;
                 let mode = self.mode_of_class(&header.class_binding_id);
@@ -2223,7 +2295,7 @@ impl KernelLedgerV1 {
     }
 
     /// Return every demand bond of `d` (the demand is over).
-    fn refund(&mut self, claim: &Digest, d: &DemandRowV1, out: &mut Vec<LedgerEventV1>) {
+    pub(crate) fn refund(&mut self, claim: &Digest, d: &DemandRowV1, out: &mut Vec<LedgerEventV1>) {
         for (bond, amount) in &d.demanders {
             if let Some(b) = self.bonds.get_mut(bond) {
                 b.reserved = b.reserved.saturating_sub(*amount);
@@ -2242,6 +2314,8 @@ impl KernelLedgerV1 {
                 self.refund(claim, &d, out);
             }
         }
+        // A segmented claim's served positions whose demand bonds wait for their grace: the claim is decided, so they return now.
+        refunded += self.seg_release_held(claim, out);
         if refunded > 0 {
             out.push(LedgerEventV1::DemandsMoot { claim: *claim, refunded });
         }
@@ -2258,6 +2332,9 @@ impl KernelLedgerV1 {
         const NAME: &str = "FileDemand";
         let rule = |why: &str| KernelRefusalV1::rule(NAME, why);
         let daa = self.daa;
+        if matches!(self.claims.get(claim).map(|r| &r.body), Some(ClaimBodyV1::Segmented { .. })) {
+            return self.seg_file_demand(demander, claim, stage, position, out);
+        }
         let Some(row) = self.claims.get(claim) else { return Err(rule("no such claim")) };
         if row.terminal_for_demands() {
             return Err(rule("the claim is already decided"));
@@ -2357,6 +2434,10 @@ impl KernelLedgerV1 {
         if self.bonds.get(signer).is_none_or(|b| b.free() < fee) {
             return Err(KernelRefusalV1::rule(NAME, "the signer's free collateral does not cover a rejected response's fee"));
         }
+        // K2-TIR-v4: a segmented claim's demand is answered in parts, with the same fee for a rejected one.
+        if matches!(self.claims.get(claim).map(|r| &r.body), Some(ClaimBodyV1::Segmented { .. })) {
+            return self.seg_respond(signer, claim, position, bytes, out);
+        }
         let row = self.claims.get(claim).expect("a demand names a committed claim");
         let by_producer = row.producer == *signer;
         let limit = self.bounds_of(&row.class_binding_id).map(|b| b.max_response_bytes).unwrap_or(0);
@@ -2427,6 +2508,8 @@ impl KernelLedgerV1 {
     /// Deadlines, windows, Final, liability release.
     fn tick_into(&mut self, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
+        // K2-TIR-v4: served positions whose proof grace ended settle their demanders' bonds; stale progress rows go.
+        self.seg_tick(out);
         // Unrevealed seals expire (a junk seal holds nothing and lives a bounded time).
         let ttl = self.policy.seal_ttl_daa;
         // An unrevealed claim seal expires and FORFEITS its deposit (slashed, burned): withholding a sealed reveal is never free.
@@ -2530,7 +2613,8 @@ impl KernelLedgerV1 {
                 (b, ClaimStateV1::Final { .. }) if !matches!(b, ClaimStateV1::Final { .. }) => {
                     let row = self.claims.get_mut(&id).expect("listed");
                     row.liability_until = Some(daa + self.policy.liability_daa);
-                    // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued.
+                    // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. ADR-0176 hook
+                    // (`palw_bond_budget_v1`, not built): this payout also re-checks and consumes the producer bond's reservation.
                     let (job, convicted) = (row.job_id, row.convicted);
                     let mut paid = Vec::new();
                     let reward = if convicted { 0 } else { self.pay_from_job_escrow(&job, &id, producer, &mut paid) };
@@ -2677,7 +2761,9 @@ pub fn carrier_fit_v1(b: &ProsecutionBoundsV1, filing_cap: usize, response_cap: 
 /// Why a filing is past the class's envelope, if it is (checked before any court runs).
 fn oversized(proof: &ProsecutionV1, b: &ProsecutionBoundsV1) -> Option<String> {
     let (len, limit) = match proof {
-        ProsecutionV1::Kernel(bytes) | ProsecutionV1::Pipeline(bytes) => (bytes.len() as u128, b.max_filing_bytes as u128),
+        ProsecutionV1::Kernel(bytes) | ProsecutionV1::Pipeline(bytes) | ProsecutionV1::Segmented(bytes) => {
+            (bytes.len() as u128, b.max_filing_bytes as u128)
+        }
         ProsecutionV1::Decode(f) => (f.logits.bytes.len() as u128, b.max_response_bytes),
         // A typed fault opens at most one kernel instance, one item or one logits vector.
         ProsecutionV1::Spec(bytes) => (bytes.len() as u128, (b.max_filing_bytes as u128).max(b.max_response_bytes)),
@@ -2835,6 +2921,9 @@ impl OutsiderV1<'_> {
     pub fn check(&self) -> Result<OutsiderFindingV1, String> {
         let l = self.ledger;
         let row = l.claims.get(&self.claim).ok_or("no such claim")?;
+        if matches!(row.body, ClaimBodyV1::Segmented { .. }) {
+            return Err("a segmented claim is checked position by position (crate::element::check_positions_v1)".into());
+        }
         let missing = self.missing(row);
         if !missing.is_empty() {
             return Ok(OutsiderFindingV1::Demand(missing));
@@ -2842,6 +2931,7 @@ impl OutsiderV1<'_> {
         match &row.body {
             ClaimBodyV1::Program { claim, .. } => self.check_program(row, claim),
             ClaimBodyV1::Pipeline { .. } => self.check_pipeline(row),
+            ClaimBodyV1::Segmented { .. } => unreachable!("dispatched above"),
             ClaimBodyV1::Spec(_) => Err("a typed claim: check it with crate::spec::outsider::SpecOutsiderV1".into()),
         }
     }

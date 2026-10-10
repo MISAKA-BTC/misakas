@@ -621,10 +621,11 @@ impl PalwKernelRouteStateV1 {
             .classes
             .get(&binding.kernel_class.as_bytes())
             .ok_or_else(|| I::NotG14Complete("the bound class is not in the ledger".into()))?;
-        let proven = misaka_palw_kernel::gate::public_prosecution_complete_v1(
+        // The class's own gate (K2-TIR-v4 for segmented descriptors, v1 otherwise), with the program the bounds are priced from.
+        let proven = misaka_palw_kernel::gate::class_prosecution_bounds_v1(
             &row.descriptor,
-            &row.program,
             &row.plan,
+            &row.program,
             &misaka_palw_kernel::public::ProfileMaterialV1::kernel_route(true),
             &ledger.policy.prosecution,
         )

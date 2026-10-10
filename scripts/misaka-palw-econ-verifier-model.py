@@ -1292,9 +1292,161 @@ def section12() -> None:
 
 
 # =====================================================================================================================================
+# §13 PESG §4 A (attacker profit bounds) and §4 E (economic attacks; the honest watcher's books), T4/T5 — verdicts PASS/FAIL/UNKNOWN
+# =====================================================================================================================================
+
+UNKNOWN = None  # a quantity with no proven bound; any EV that reads it is UNKNOWN
 
 
-SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11, 12: section12}
+def verdict_ev(p_min, g, l_coll, c) -> str:
+    """PESG §4 A: EV = (1 − p)G − pL − C < 0 for the worst case. UNKNOWN in → UNKNOWN out; p = 0 with G > C → FAIL."""
+    if g is UNKNOWN or l_coll is UNKNOWN:
+        return "UNKNOWN"
+    if p_min is UNKNOWN:
+        return "UNKNOWN"
+    ev = (1 - p_min) * g - p_min * l_coll - c
+    return "PASS" if ev < 0 else "FAIL"
+
+
+def p_required(g: float, l_coll: float, c: float) -> float:
+    """The least p at which EV < 0: p > (G − C)/(G + L)."""
+    return max(0.0, (g - c) / (g + l_coll))
+
+
+# MEAS §4 D (pesg-d-conviction-probability.md): per class, the measured/derived status of p_min (no class has a proven p_min).
+PESG_CLASSES = [
+    # name, reservation K (BILI), p_min, why
+    ("Qwen2.5-0.5B (P ≤ 32)", 1_000.0, UNKNOWN, "N5: p_check UNKNOWN (PESG-B); N1 P_run UNKNOWN; N4 gather lie p_evidence = 0 (M)"),
+    ("Qwen2.5-0.5B, gather lie", 1_000.0, 0.0, "N4: 272 MB evidence > 67 MB wire ceiling (M)"),
+    ("Qwen3.5-0.8B / Llama-1B / GLM-1.5B / SmolLM2-1.7B", 1_000.0, UNKNOWN, "no run (RAM ≥ 12–28 GB); N5, N1"),
+    ("9B-8k (deterrence-only reservation, A)", 40_157.0, 0.0, "N2: the reference verifier reaches 5 of 8,192 positions in the window"),
+    ("any class, closed model", 1_000.0, 0.0, "N3: p = 0 (ADR-0177 D7)"),
+]
+
+PESG_PROFILES = {
+    # profile: (collected-loss multiplier on the producer's reservation, extra collected from proven Panel scopes, note)
+    "Panel=0 (OPV)": (0.51, 0.0, "producer only; no seat collateral exists"),
+    "Panel=1 (one seat colluding)": (0.51, UNKNOWN, "plus the seat's lock only where its FalseValid scope is proven; seat lock values unset"),
+    "current Panel route (R-core V2)": (0.51, UNKNOWN, "0.51·(ΣS − G_res) after Final (R-1); seat locks per signed scope"),
+}
+
+
+def g_claim(t: Terms, with_compute: float, model_leg: float) -> dict:
+    """G_max per claim: reward R (the producer's and seats' legs, D-2), work credit w, the model leg it can draw, the compute it
+    saves, the declared external bound X; fork-choice weight value and EVM/external effects are UNKNOWN unless §6 bounds them."""
+    return {"reward R": float(t.R), "work credit w": float(t.w), "model leg": model_leg, "compute saved": with_compute,
+            "external X (declared)": float(t.X), "fork-choice weight": UNKNOWN, "EVM / external settlement": UNKNOWN}
+
+
+def section13() -> None:
+    head(13, "PESG §4 A / §4 E (ECON), T4 / T5")
+    t = INTERIM_49
+    # ---- A: per claim, per class and profile ------------------------------------------------------------------------------------
+    g = g_claim(t, with_compute=float(t.R), model_leg=0.0)
+    known = sum(v for v in g.values() if v is not UNKNOWN)
+    show("INTERIM", "G_max per claim, known parts (R, w, model leg 0 until armed, compute saved ≈ R, X)", f"{known:g} BILI")
+    show("DERIVED", "G_max per claim, unknown parts", "fork-choice weight value, EVM/external settlement → G_max UNKNOWN until §6 bounds them")
+    c_attack = float(t.f_adm) + 0.04  # admission fee + seal/reveal carriers (ASSUMED 0.02 each)
+    print("  -- A: EV per class × profile (worst case; G with only its known parts, then with the unknown parts)")
+    for prof, (mult, seat, note) in PESG_PROFILES.items():
+        for name, k_res, pmin, why in PESG_CLASSES:
+            l_coll = mult * k_res
+            l_with_seats = l_coll if seat == 0.0 else UNKNOWN
+            v_known = verdict_ev(pmin, known, l_coll, c_attack)
+            v_full = verdict_ev(pmin, UNKNOWN, l_with_seats, c_attack)
+            preq = p_required(known, l_coll, c_attack)
+            show("DERIVED", f"{prof:32} {name:44}", f"L {l_coll:,.0f}; p_req > {preq:.2%}; p_min {('UNKNOWN' if pmin is UNKNOWN else pmin)}"
+                 f" → EV(known G) {v_known}; EV(full G) {v_full}")
+    check(verdict_ev(0.0, known, 510.0, c_attack) == "FAIL", "p = 0 makes every forging EV positive")
+    # ---- A per window with the ADR-0176 ceilings --------------------------------------------------------------------------------
+    print("  -- A per bond and window (ADR-0176): G_W ≤ λ·R_max(C, W) + X_W; L_W ≤ 0.51·min(ΣK, C)")
+    for r_per_u in (4.0, 40.0):
+        cap = 13.0 * r_per_u  # R_max for a 13,000-BILI bond
+        g_w = cap  # λ = 1 worst case, X_W = 0 known part
+        l_w = 0.51 * 13_000
+        show("DERIVED", f"r = {r_per_u:g} BILI per 1,000 per W (POLICY unset): G_W {g_w:g}, L_W {l_w:,.0f}",
+             f"p_req > {p_required(g_w, l_w, 0):.2%}; EV {verdict_ev(UNKNOWN, g_w, l_w, 0)} (p_min UNKNOWN)")
+    show("DERIVED", "exposure (interim)", "3 live claims per producer, 32 in all; reservation from free collateral (no reuse, N11); "
+         "unpaid reward = escrow R until Final; exit ≥ liability 200 + exit delay 30 DAA; reorg restores (N13)")
+    # ---- E: the five attacks ----------------------------------------------------------------------------------------------------
+    print("  -- E: economic attacks (M*-49 and the held demander share adopted)")
+    e_rows = []
+    fake = -0.1  # INTERIM dismissed_proof_fee (0.1 BILI, scaled by court work, F-C4R4-05): a fake detection against an honest claim is dismissed; the filer pays (scaled by court work, F-C4R4-05)
+    farm = float(loop_net(t, "direct", True)) - float(t.f_adm)
+    e_rows.append(("E1 self-Sybil fake detection, honest claim", f"EV {fake:g} (dismissed, fee)", "PASS"))
+    e_rows.append(("E1 self-fraud + self-detection (bounty farm)", f"EV {farm:g} (−51% − fee)", "PASS"))
+    each, rest = mstar49_split(t.K, t.a, 2 * t.G, 1)
+    e_rows.append(("E2 seal the proof first (liar's earliest seal)",
+                   f"drawn honest sealer {float(each):g} first, liar's seal {float(rest):g}; coalition ≤ 49%", "PASS"))
+    _, honest_share = b_split(490, 0, 1)
+    e_rows.append(("E3 dilute bounties (Sybil watchers)", "drawn slots by stake (T2): Sybil-neutral; non-drawn filers paid nothing", "PASS"))
+    e_rows.append(("E3' dilute DA-default demanders", "held share (O2): paid only without a conviction, split equally among demanders"
+                   " → a Sybil demander still halves an honest one's share; drawn demands are paid by F instead", "PASS (verifier pay), residual named"))
+    e_rows.append(("E4 replace seals repeatedly", "S1 (9429128f8): every re-seal forfeits d at its position (F-ECON-1/2 closed)", "PASS"))
+    e_rows.append(("E5 one deposit, many attempts", "F-ECON-3: one withheld seal vetoes N_c concurrent attempts (MEASURED);"
+                   " d = 1 < d* = 28.6; S3/S4 not built", "FAIL (interim); UNKNOWN once S3/S4 and d_src = d* are built"))
+    for name, how, v in e_rows:
+        show("DERIVED", f"{name:48}", f"{how} → {v}")
+    # ---- E: the honest watcher's books, fault-free periods included ------------------------------------------------------------
+    print("  -- E / T5: the honest watcher's books under M*-49 (MEAS costs, ASSUMED prices)")
+    check_cpu_h = 154.1 / 3600  # M: the observed max honest check, Qwen2.5-0.5B, P = 3
+    fetch_mb = 3 * 60.0  # M: 60 MB per position
+    filing_kb = 31.5  # M
+    for cpu_price in (0.1, 1.0, 10.0):  # ASSUMED BILI per CPU-hour (no market price exists)
+        f_min = cpu_price * check_cpu_h * 1.35 + 0.001 * fetch_mb + 0.02 + 0.1 + 50.0 / 100  # wall factor 1.35 (M); carrier; demand burn; acquisition
+        show("DERIVED", f"CPU price {cpu_price:g} BILI/h: F_min per check (check, fetch, carrier, demand burn, acquisition/100)", f"{f_min:.3f} BILI")
+    # Fault-free books per unit of watcher stake: income F·d, cost F_min·d + r_w (capital), d = draws per unit stake per epoch.
+    f_min = 1.0 * check_cpu_h * 1.35 + 0.001 * fetch_mb + 0.02 + 0.1 + 0.5
+    for draws in (0.001, 0.01, 0.1):
+        r_w = 0.0005  # ASSUMED capital cost per BILI of stake per epoch
+        f_need = f_min + r_w / draws
+        show("DERIVED", f"fault-free epoch, {draws:g} draws per BILI of stake: F needed to cover the stake's capital cost too",
+             f"F ≥ F_min + r_w/draws = {f_need:.3f} BILI (F = F_min alone loses {r_w:g} per BILI per epoch)")
+    show("DERIVED", "C9 (new): F = F_min is not enough in fault-free periods", "the fee must also carry the watcher stake's capital cost r_w·S_pool/(q·m·N)")
+    # Sybil farming of the fee.
+    sigma = 0.25
+    m_slots, fee = 2, 5.59
+    show("DERIVED", "fee farming by splitting stake", "draws ∝ stake (T2): expected fee income unchanged → PASS")
+    show("DERIVED", "fee farming by self-posted jobs", f"posts m·F = {m_slots * fee:.2f}, gets back σ·m·F = {sigma * m_slots * fee:.2f} at σ = {sigma}"
+         f" → loses {(1 - sigma) * m_slots * fee:.2f} per checked claim → PASS")
+    show("DERIVED", "fee farming by attesting without checking (T6)", "earns F at cost ≈ 0 → UNKNOWN until T6 (forced errors / bound attestations)")
+    # ---- §5 counter-examples B and C --------------------------------------------------------------------------------------------
+    print("  -- PESG §5 counter-examples found")
+    cex = [
+        ("B1", "post-Final reward kept: a post-Final conviction does not claw back R (kernel route); counted in G (R_risk = 0)", "PASS (accounted)"),
+        ("B2", "exit before the liability ends: reservation held to the horizon; exit delay; N11", "PASS (cited tests)"),
+        ("B3", "collateral reused across concurrent claims / at d + W: reservation from free collateral; BUDGET's reward-path wiring H-1..H-5 open", "UNKNOWN"),
+        ("B4", "EVM / bridge / market export before Final: no §6 bound exists", "UNKNOWN"),
+        ("B5", "fork-choice weight gained before conviction: bounded by F_max once BUDGET connects; value of weight unknown", "UNKNOWN"),
+        ("B6", "model leg paid at Final, then a post-Final conviction: not clawed back → in G", "PASS (accounted)"),
+        ("B7", "self-return of the 49% (default + conviction): F-C4R4-15 one pool, held demander share", "PASS"),
+        ("C1", "no pay on honest claims (M0)", "PASS under M*-49 (adopted); UNKNOWN until built"),
+        ("C2", "the liar's earliest seal takes the bounty", "PASS under M*-49 drawn-first; UNKNOWN until built"),
+        ("C3", "closed model: no honest party can check (MEAS N3)", "FAIL"),
+        ("C4", "cannot check in time / RAM (MEAS N2: 0.5B beyond ≈ 130 positions on 32 GiB; 9B-8k)", "FAIL"),
+        ("C5", "evidence over the wire ceiling (MEAS N4: gather lie, 272 MB)", "FAIL"),
+        ("C6", "served-demand burn on an honest drawn demand (A-DEM)", "UNKNOWN until built"),
+        ("C7", "pool capture: the coalition's stake share σ in a model's pool", "UNKNOWN (σ unobservable)"),
+        ("C8", "lazy verifier (T6)", "UNKNOWN"),
+        ("C9", "F = F_min leaves the watcher stake's capital cost unpaid in fault-free periods", "FAIL at F = F_min; PASS with the r_w term"),
+        ("C10", "DA load of checking every claim: 149 MB/s and 117 cores at 100 claims/DAA for one bond (MEAS)", "PASS only with sampling (q < 1)"),
+    ]
+    for cid, what, v in cex:
+        show("DERIVED", f"{cid:4} {what}", v)
+    # ---- §6 safety bounds the economics needs ------------------------------------------------------------------------------------
+    print("  -- PESG §6: values the economics needs (for BUDGET)")
+    show("DERIVED", "W (d + W)", f"{t.hold_max} ≤ W ≤ {SPAN_BOUND // 150} DAA at the interim terms (§5b); liability hold H_L = {t.hold_max} kept separate")
+    show("DERIVED", "open claims per bond", "≤ ⌊C/K⌋ (fully backed reservations, §2.5)")
+    show("DERIVED", "reward per bond per W", "(r + w·v_F + expected fees)/u ≤ p_min·(1 − a)·W/(H_L·λ) (Theorem Y); p_min UNKNOWN → no safe r > 0 yet")
+    show("DERIVED", "max unsettled weight per bond", "F_max(C, W) = ⌊C·w/u⌋, with w·v_F inside the Theorem Y budget; v_F (weight's value) UNKNOWN → FINX/BUDGET")
+    show("DERIVED", "max external loss", "0 before Final; after Final ≤ 0.51 × the collateral still held for the claim's liability, minus G's other parts")
+    show("DERIVED", "no payout before Final", "every leg (escrow, model leg, Round subsidy) at Final; bounty at conviction from collected slash")
+
+
+# =====================================================================================================================================
+
+
+SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11, 12: section12, 13: section13}
 
 
 def main() -> int:

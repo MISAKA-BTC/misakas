@@ -170,14 +170,19 @@ detached signing through `misaka model onboard`).
 5. ~~**The Final reward is unfunded.**~~ **Funded (G14-R4, user-pays escrow)**: the poster pre-funds an escrow at posting (plus a
    non-refundable fee); the job's first Final pays the producer out of it, once (§8). RFC-0015's `work_credit_per_claim` is still not
    released by anything — it must come from the same escrow before it is.
-6. **Pipeline claims have no Panel on the real node** (legacy mode) and the pipeline header has no wire form: `getPalwKernelClaim` returns
-   an empty `recordHeader` for it. OPV pipeline classes need no Panel.
+6. **Pipeline claims have no Panel on the real node** (legacy mode). OPV pipeline classes need no Panel. ~~The pipeline header has no wire
+   form.~~ **Closed by K2S** (`k2-real-scale.md` §8): `recordHeader` = borsh `(PipelineHeaderV1, PipelineClassV1)`; no pipeline claim runs on
+   the real-node E2E yet.
 7. **Interim seats are grindable.** G14 does not rest on them: every seat colluding is the tested case.
-8. **Per-object cost is O(rows).** Each kernel object rebuilds the ledger from the rows. A production fold needs a cached ledger per block.
+8. ~~**Per-object cost is O(rows).** Each kernel object rebuilds the ledger from the rows.~~ **Closed by K2S** (`k2-real-scale.md` §8): a
+   cached ledger per block (no decode, no program decode, no gate after the block's first load); the residual (a clone, a serialization and
+   a diff per object; one rebuild per block) is recorded there.
 9. **Verdict / settlement events are not stored**; `getPalwKernelClaim` serves the state they decided and replay reproduces them.
-10. **The mempool does not run the acceptance gate** (as for every `0x4b` object); a chunk group's opener pays the slot rent.
+10. ~~**The mempool does not run the acceptance gate.**~~ **Closed by K2S** (`k2-real-scale.md` §8): the mempool and the template run it
+    (`TxRuleError::PalwKernelRouteRefused`); chunks are judged at the completing chunk, and a chunk group's opener pays the slot rent.
 11. ~~The phase-1 reorg test runs without the strict-win fence.~~ **Fixed (G14-R4, `39e4ea441`)**: the registration replay-and-reorg
     case arms strict-win (a shallow tie is GHOSTDAG's) and makes the deep reorg back a strict economic win (an attempt on A's tail).
+
 12. `getPalwOnboarding` and the other new ops are exercised over the grpc conversion and the model round trips, not through a running RPC
     service (the integration crate compiles with them; the daemon test asserts the not-found / malformed paths).
 
