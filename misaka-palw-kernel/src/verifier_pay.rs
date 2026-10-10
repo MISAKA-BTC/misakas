@@ -26,8 +26,9 @@ use std::collections::BTreeMap;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::hash::Digest;
-use crate::ledger::{KernelLedgerV1, KernelRefusalV1, LedgerEventV1, SettlementInstructionV1};
+use crate::ledger::{KernelLedgerV1, KernelRefusalV1, LedgerEventV1};
 use crate::lifecycle::ClaimStateV1;
+use crate::settle::SettlementInstructionV1;
 use crate::settle::SettlementKindV1;
 
 /// Table 27's key kinds.
