@@ -43400,7 +43400,6 @@ impl PalwStateCarriageV2 {
             panel_v3: state.panel_v3.clone(),
             kernel_route: state.kernel_route.clone(),
             legacy_disputes: state.legacy_disputes.clone(),
-        }
             bond_budget: state.bond_budget.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
@@ -61185,7 +61184,6 @@ pub(crate) mod tests {
             (161, PalwDeltaEntryV2::KernelRouteHeader { old: None, new: None }),
             // Lane LG14-A (200–204), declared explicitly.
             (200, PalwDeltaEntryV2::LegacyDispute { key, old: None, new: None }),
-                }
             // Lane BUDGET (the bond budget, 190–199), declared explicitly.
             (190, PalwDeltaEntryV2::BondBudgetRow { table: 1, key: Vec::new(), old: None, new: None }),
             (191, PalwDeltaEntryV2::BondBudgetHeader { old: None, new: None }),
