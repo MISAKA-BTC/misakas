@@ -782,6 +782,7 @@ mod tests {
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             // DA16's provider court: a bare height, refused when armed by `validate_palw_v2` (which the probe does not run).
             "palw_provider_court_v1" => params.palw_provider_court_v1 = Some(at),
+            "palw_legacy_held_da_v2" => params.palw_legacy_held_da_v2 = Some(at),
             // ADR-0032's amended reporter share (lane INTF): a bare height, refused when armed by `validate_palw_v2` (which the probe
             // does not run).
             "palw_reporter_share_v2" => params.palw_reporter_share_v2 = Some(at),

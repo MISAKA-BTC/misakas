@@ -47,6 +47,11 @@
 //! * **The acceptance layer's gates** on testnet-12's court: signature, domain, ladder, bytes, verdict.
 use super::*;
 use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
+
+/// **LG14-B: the same fixture and fold, prosecuted by a fresh outsider from public material** (no `ServedView`): the three [C12]
+/// gaps closed behind the dormant `palw_legacy_held_da_v2`, test-armed.
+#[path = "palw_legacy_held_e2e.rs"]
+mod legacy_held;
 use crate::palw_panel::held_court::{
     PalwHeldCourtV1, PalwHeldHostV1, PalwHeldMaterialV1, PalwHeldMoveV1, palw_held_move_of_duty_v1, palw_held_moves_v1,
     palw_held_start_builds_v1,

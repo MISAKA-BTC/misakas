@@ -1,5 +1,7 @@
 # Post-commit challenge alignment — 2026-10-08
 
+> **2026-10-10 navigation:** RFC05 now retains only its VM withdrawal reason. The selected §§K.0–K.8 design is in [versioned-kernels.md](../../design/palw/versioned-kernels.md); references below describe the audited revision, not a retained VM appendix.
+
 Status: documentation alignment and static validation scope only. Baseline: public main
 `51c94d36e80f87b74b0d5e166872b3fe6bb30d7c`. Inputs: the user's 2026-10-08 Kernel/model conformance and
 PALW-work beacon design notes, plus the existing RFC/ADR texts. No crypto proof, runtime implementation,

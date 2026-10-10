@@ -58,6 +58,13 @@ Today **no fence is armable**. Integration continues; no new fence for rewards, 
 4e. K2 v4 (real-scale) detection policy: the drawn share q of claims re-executed after commit, and how P_run (the chance a drawn
     watcher actually runs and files) is derived. Per-claim detection is q·P_run; until these are set, v4 classes do not earn.
     Source: `k2-real-scale.md` §11 (SG-06). This is Q-01 made concrete.
+4f. ADR-0175 clarifications (INTF audit, 2026-10-10; text proposals for the user, no code change needed):
+    - RFC-0004 §II.3's "promoted … with its root recorded on the line" means a new independent registration (`CandidateSelected`).
+    - ADR-0175 should state that a Memory registration fixes its update rule and initial memory state, while the line's current
+      state evolves as independent material.
+    The full-activation release must arm `palw_model_immutable_v1`. `palw_improvement_v1` is already ARMED on t12, so the
+    ordering is a release-checklist item, not a validation rule. `palw_typed_roots_v1` (dormant) requires
+    `palw_model_immutable_v1` at or below it.
 5. The activation height of the single release, once every row above is clear.
 
 ## 3a. User rulings on the Panel=0 parameters (2026-10-08 ~20:30)
@@ -193,6 +200,21 @@ behind new dormant fences, because the route is ARMED on testnet-12 and the live
 - LG14-B: hierarchical commitment and independent localization, the three canonical 8k held/fused DA gaps [C12], and the
   consistent-garbage-trace (row 0) / borrowed-trace / state / routing / checkpoint / output cases.
 Until both lanes' fences are verified, legacy classes are "not Panel=0, not new-reward eligible".
+
+## 3e. Round / EXEC additional acceptance conditions (user, 2026-10-10)
+
+The user adopted `docs/palw-round-exec-additional-acceptance-2026-10-10.md`:
+- compute-proportional Round tickets from verified CanonicalWork and a shared window (120 is a window's capacity, not a per-claim grant);
+- the bond's remaining Round rights capped BEFORE the draw's candidate set (`T_candidate <= min(T_earned, BondRemainingRoundRights)`);
+- no amplification by bond/operator/claim splitting, resubmission or root/slice repackaging;
+- no status priority for operators, genesis bonds or registration order;
+- small/large model economics evaluated before and after the cap;
+- fee-only Rounds bound either by B_max or by an explicit execution cap.
+
+Eight gates: BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, SLICE, RECOVERY, ECON. All are UNVERIFIED, and they block the
+unified EXEC and the new economic rules. Owners: BUDGET (BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, RECOVERY's budget half),
+X8R (SLICE, EXEC's RECOVERY), ECON (ECON). POLICY for the user: whether fee-only Rounds count against B_max or get their own
+execution cap, and whether market fee income counts in R_max.
 
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 

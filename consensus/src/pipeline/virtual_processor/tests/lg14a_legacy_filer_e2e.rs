@@ -362,7 +362,7 @@ impl Lg {
             // Another nonce bucket: another anchor, another job, another inference (ADR-0072).
             self.nonce += 1;
             template.block.header.nonce =
-                (0x4C47_0000 + self.nonce) << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
+                (0x47_0000 + self.nonce) << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
             let facts =
                 self.chain.ctx.consensus.palw_producer_facts_v2(self.bundle.base_class_id, Some(bond.0)).expect("the floor's facts");
             let header = &template.block.header;
@@ -827,6 +827,23 @@ async fn lg14a_a_non_seat_newcomer_convicts_a_computation_lie_before_final() {
         arrive(&z, block, "A's block").await;
         assert_eq!(root_at(&z, hash), root_at(&lg.chain, hash), "the replaying node's root at {hash}");
     }
+    // RFC-0014 §6.3 on the node started after the claim: ops 204-206, through the ops' own parsers and builders and the RPC's JSON wire
+    // form, serve the same public documents as the producer's node.
+    use kaspa_rpc_core::convert::palw_legacy as rpc;
+    let (fresh_node, main_node) = (z.ctx.consensus.consensus_clone(), lg.chain.ctx.consensus.consensus_clone());
+    let wire = |response: &kaspa_rpc_core::GetPalwLegacyDisputeResponse| -> kaspa_rpc_core::GetPalwLegacyDisputeResponse {
+        serde_json::from_str(&serde_json::to_string(response).expect("to the wire")).expect("off the wire")
+    };
+    let ask = kaspa_rpc_core::GetPalwLegacyDisputeRequest { claim_id: id.to_string() };
+    let claim = rpc::palw_legacy_dispute_request_v1(&ask).expect("a well-formed id");
+    let fresh = wire(&rpc::palw_legacy_dispute_response_v1(fresh_node.as_ref(), claim));
+    assert!(fresh.available && fresh.json.contains("Voided"), "op 204 on the fresh node: {}", fresh.json);
+    assert_eq!(fresh, wire(&rpc::palw_legacy_dispute_response_v1(main_node.as_ref(), claim)), "one document on both nodes");
+    let status_ask = kaspa_rpc_core::GetPalwFraudFilerStatusRequest { bond: palw_bond_text_v1(&newcomer) };
+    let bond = rpc::palw_fraud_filer_status_request_v1(&status_ask).expect("a well-formed bond");
+    let status = rpc::palw_fraud_filer_status_response_v1(fresh_node.as_ref(), bond);
+    assert!(status.available && status.json.contains("\"live\":[]"), "op 206: nothing live after the conviction: {}", status.json);
+    assert!(rpc::palw_legacy_dispute_request_v1(&kaspa_rpc_core::GetPalwLegacyDisputeRequest { claim_id: "zz".into() }).is_err());
 }
 
 /// **G14 C5, the DA default**: the producer withholds the first divergent leaf (a unit it owes): the reserved session defaults at

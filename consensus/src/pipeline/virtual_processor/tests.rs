@@ -16847,6 +16847,8 @@ mod lg14a_legacy_filer_e2e;
 mod r4x_typed_roots_e2e;
 // RFC-0002 Phase F's second IR fence: the IR step-leaf DA demand at the gate.
 mod t12_tir_da_step_gate;
+// LG14-B (RFC-0014 §4–§5 on the legacy V2 route): tags 157–159 dropped by name below `palw_legacy_held_da_v2`, signed past it.
+mod t12_legacy_held_da_gate;
 // RFC-0004 A4/A5: the material objects' and the candidate's signatures at the gate, and a licence
 // through the walk and the fold, with real card and rights-holder signatures.
 mod t12_improve_material_gate;
@@ -16936,6 +16938,9 @@ mod t12_f2_lock_redate_crossing;
 // ADR-0152 §8.2 / T53 (P2-12): what a testnet-12 drill chain produces — a registration and its
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;
+// A-2 uniformity (the A2U review): every lifecycle kind and header form the live testnet-12 build cannot decode is, below its owning
+// fence, judged as that build judges it — the same verdicts, skips, refusals, roots and UTXO set on an unarmed and an armed-far node.
+mod t12_a2u_new_kinds_uniform;
 
 // RFC-0012: the private zero-DNS acceptance matrix (lane X12). It drives the EVM lane (deposits, sells, withdrawals), so it builds
 // with the `evm` feature only, like `p2_evm_twin`.

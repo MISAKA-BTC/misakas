@@ -191,9 +191,10 @@ impl PalwFraudFilerBookV1 {
         let fresh: BTreeSet<Hash64> = candidates.iter().map(|c| c.claim_id).collect();
         self.cases.retain(|claim, case| fresh.contains(claim) || case.pursued());
         for candidate in candidates {
+            let room = self.cases.len() < PALW_FRAUD_FILER_MAX_CASES_V1;
             match self.cases.get_mut(&candidate.claim_id) {
                 Some(case) => case.candidate = candidate,
-                None if self.cases.len() < PALW_FRAUD_FILER_MAX_CASES_V1 => {
+                None if room => {
                     self.cases.insert(candidate.claim_id, PalwFraudFilerCaseV1::new(candidate));
                 }
                 None => {}
@@ -419,11 +420,17 @@ impl PalwPanelService {
             {
                 continue;
             }
-            let view = session.palw_legacy_dispute_v1(claim);
-            let reservable = view
-                .as_ref()
-                .and_then(|view| session.palw_legacy_dispute_reservation_check_v1(palw_fraud_filer_reservation_v1(view, bond_key)))
-                .is_some_and(|check| check.is_ok());
+            let (view, reservable) = session
+                .clone()
+                .spawn_blocking(move |c| {
+                    let view = c.palw_legacy_dispute_v1(claim);
+                    let reservable = view
+                        .as_ref()
+                        .and_then(|view| c.palw_legacy_dispute_reservation_check_v1(palw_fraud_filer_reservation_v1(view, bond_key)))
+                        .is_some_and(|check: Result<u128, String>| check.is_ok());
+                    (view, reservable)
+                })
+                .await;
             for _ in 0..4 {
                 let Some(case) = book.cases.get(&claim) else { break };
                 let step = palw_fraud_filer_step_v1(role, view.as_ref(), &bond_key, reservable, case, |unit| {

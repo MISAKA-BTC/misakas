@@ -2991,6 +2991,13 @@ pub struct Params {
     /// ([`Self::validate_palw_provider_court_v1`]) with the kernel route it ships beside.
     pub palw_provider_court_v1: Option<ForkActivation>,
 
+    /// **Lane LG14-B (RFC-0014 §4–§5 on the legacy V2 Panel route, user decision GAP-80): public descent and the held/fused DA
+    /// units** ([`crate::palw_legacy_held_da_v2`]). Past this height any bond may demand an interior node of a V2 claim's step or
+    /// checkpoint tree (its frontier and opening), or the committed half of one leaf's refutation (`KernelWitness`), and may convict
+    /// a non-fused step by recomputing its leaf hash from its committed inputs and its own model copy (tags 157–159). **Dormant, with
+    /// no activation height**: `None` on every preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from
+    /// `Some(never())`, refused when armed ([`Self::validate_palw_legacy_held_da_v2`]).
+    pub palw_legacy_held_da_v2: Option<ForkActivation>,
     /// **Lane INTF (ADR-0032's 2026-10-10 amendment): the PALW reporter share, 10% → 49%** ([`crate::palw_reporter_share_v2`]).
     /// Below this height R-1's reward and DA-6's refuted cost are 1,000 bps (`PALW_RCORE_REPORTER_REWARD_BPS_V1`, the share every
     /// conviction and session on every shipped network was priced at); at or past it 4,900 bps (`PALW_RCORE_REPORTER_REWARD_BPS_V2`).
@@ -3755,25 +3762,11 @@ pub struct Params {
     /// (devnet/simnet keep fast local PoW). Genesis (the parentless trusted root) is exempt.
     pub pow_blake2b_sha3_activation: ForkActivation,
 
-    /// MISAKA Phase 4 PoW: activation of the **PALW deterministic pinned-LLM** Layer-1
-    /// (`POW_ALGO_ID_PALW_LLM = 4`). Past this DAA score every block header MUST declare
-    /// `algo_id = 4` and its PoW digest is the Layer-0 finalizer over one deterministic
-    /// Qwen3.5-2B inference transcript (see `pow_layer0::POW_ALGO_ID_PALW_LLM`); it supersedes
-    /// BLAKE2b-SHA3 where both are active. `always()` ⇒ PALW from genesis (devnet — the
-    /// 0.1-bps LLM-PoW network); `never()` ⇒ inert (mainnet/testnet/simnet until their own
-    /// fork ADR). Genesis (the parentless trusted root) is exempt. Validating nodes need the
-    /// pinned worker (`PALW_WORKER` + `MISAKA_PALW_GGUF`) or the explicit fixture mode
-    /// (`MISAKA_PALW_POW_FIXTURE=1`).
+    /// Reserved legacy algo-4 activation. Never armed by current network presets;
+    /// the inference PoW implementation is removed. Retained as fingerprint input.
     pub pow_palw_activation: ForkActivation,
 
-    /// MISAKA Phase 4b PoW: activation of the **PALW-via-Ollama** Layer-1
-    /// (`POW_ALGO_ID_PALW_OLLAMA = 5`), superseding every other algo where active. Same seed /
-    /// prompt / grinding closure as Phase 4; the runtime is a host-local Ollama server running
-    /// the pinned Qwen model (the runtime an Ubuntu VPS fleet operates), and the tag commits to
-    /// the greedy response bytes + token counts (Ollama exposes no per-decode logits).
-    /// `always()` ⇒ from genesis (testnet-10 — the public PALW network); `never()` elsewhere
-    /// (devnet keeps the stronger algo-4 worker tag). Nodes need `MISAKA_PALW_OLLAMA_MODEL`
-    /// (+ optional `MISAKA_PALW_OLLAMA_URL`) or the devnet-only fixture env.
+    /// Reserved legacy algo-5 activation, retained as fingerprint input only.
     pub pow_palw_ollama_activation: ForkActivation,
 
     /// kaspa-pq: PQ-only enforcement mode for this network (ADR-0019 /
@@ -4209,11 +4202,14 @@ impl Params {
         // **RFC-0006 per-segment pricing** (`crate::palw_tir_shard_segment_v2`): refused when armed.
         self.validate_palw_tir_shard_segment_v2()?;
         self.validate_palw_provider_court_v1()?;
+        self.validate_palw_legacy_held_da_v2()?;
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;
         // **Lane LG14-A's public filer** (`crate::palw_legacy_public_filer_v1`): refused when armed.
         self.validate_palw_legacy_public_filer_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
+        // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
+        self.validate_palw_lifecycle_kind_fences_v1()?;
         // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_inherit_v1()?;
         // **palw_fp_prefix_state** (`crate::palw_fp_prefix_v1`).
@@ -6580,6 +6576,10 @@ impl Params {
         // The provider court's fence (DA16), likewise.
         if self.palw_provider_court_v1 == Some(ForkActivation::never()) {
             self.palw_provider_court_v1 = None;
+        }
+        // The legacy held DA fence (LG14-B), likewise.
+        if self.palw_legacy_held_da_v2 == Some(ForkActivation::never()) {
+            self.palw_legacy_held_da_v2 = None;
         }
         // ADR-0032's amended reporter share (lane INTF), likewise.
         if self.palw_reporter_share_v2 == Some(ForkActivation::never()) {
@@ -10295,6 +10295,7 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_legacy_held_da_v2,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit,
@@ -10571,6 +10572,7 @@ impl Params {
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_tir_shard_segment_v2", *palw_tir_shard_segment_v2),
             ("palw_provider_court_v1", *palw_provider_court_v1),
+            ("palw_legacy_held_da_v2", *palw_legacy_held_da_v2),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
             ("palw_legacy_public_filer_v1", *palw_legacy_public_filer_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
@@ -10877,9 +10879,19 @@ impl Params {
             h.write(b"palw_tir_shard_segment_v2");
             h.write(at.daa_score().to_le_bytes());
         }
+        // ADR-0175's immutable registrations, NAMED likewise (its `for_each_fence` arm is Some-only).
+        if let Some(at) = self.palw_model_immutable_v1 {
+            h.write(b"palw_model_immutable_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
         // The provider court's fence (DA16), NAMED likewise.
         if let Some(at) = self.palw_provider_court_v1 {
             h.write(b"palw_provider_court_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The legacy held DA fence (LG14-B), NAMED likewise.
+        if let Some(at) = self.palw_legacy_held_da_v2 {
+            h.write(b"palw_legacy_held_da_v2");
             h.write(at.daa_score().to_le_bytes());
         }
         // ADR-0032's amended reporter share (lane INTF), NAMED likewise, with the share it arms beside it (the SA-4 rule:
@@ -11575,6 +11587,7 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_legacy_held_da_v2,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit,
@@ -12099,13 +12112,12 @@ impl Params {
                 visit(&mut absent);
             }
         }
-        // ADR-0088 Decision 11. A pure fence with no payload, the same shape.
-        match palw_model_immutable_v1.as_mut() {
-            Some(activation) => fork(activation, visit),
-            None => {
-                absent = u64::MAX;
-                visit(&mut absent);
-            }
+        // ADR-0175's immutable registrations: Some-only, NAMED in the schedule id, like every fence added
+        // after the presets' schedule ids were pinned. (As merged from `pre` this arm visited a `u64::MAX`
+        // sentinel when absent, the older D2 shape, and so moved the schedule id of every preset —
+        // testnet-12's live `1678e073…` included — though no preset sets the fence; lane INTF.)
+        if let Some(activation) = palw_model_immutable_v1.as_mut() {
+            fork(activation, visit);
         }
         match palw_model_lines.as_mut() {
             Some(activation) => fork(activation, visit),
@@ -12349,6 +12361,10 @@ impl Params {
         }
         // The provider court's fence (DA16). Some-only.
         if let Some(activation) = palw_provider_court_v1.as_mut() {
+            fork(activation, visit);
+        }
+        // The legacy held DA fence (LG14-B). Some-only.
+        if let Some(activation) = palw_legacy_held_da_v2.as_mut() {
             fork(activation, visit);
         }
         // ADR-0032's amended reporter share (lane INTF). Some-only.
@@ -12895,6 +12911,7 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_legacy_held_da_v2,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit,
@@ -13726,6 +13743,11 @@ impl Params {
             h.write(b"palw_provider_court_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The legacy held DA fence (LG14-B), Some-only for the same reason.
+        if let Some(activation) = palw_legacy_held_da_v2 {
+            h.write(b"palw_legacy_held_da_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0032's amended reporter share (lane INTF), Some-only for the same reason — and the share it arms beside the
         // height, so a 10% and a 49% build never announce one ruleset (the amendment's handshake rule) while every preset
         // that leaves the fence dormant (testnet-12's live ruleset included) fingerprints byte-identically to int-12.
@@ -14534,6 +14556,7 @@ impl Params {
             palw_signed_registration_v1: self.palw_signed_registration_v1,
             palw_tir_shard_segment_v2: self.palw_tir_shard_segment_v2,
             palw_provider_court_v1: self.palw_provider_court_v1,
+            palw_legacy_held_da_v2: self.palw_legacy_held_da_v2,
             palw_reporter_share_v2: self.palw_reporter_share_v2,
             palw_legacy_public_filer_v1: self.palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
@@ -15634,6 +15657,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_legacy_held_da_v2: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
@@ -15930,6 +15954,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_legacy_held_da_v2: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
@@ -16208,6 +16233,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_legacy_held_da_v2: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
@@ -23844,6 +23870,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_legacy_held_da_v2: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
@@ -23906,8 +23933,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
-    // proof-of-work.** This was `always()` — devnet as the algo-4 pinned-Qwen (or
-    // `MISAKA_PALW_POW_FIXTURE=1`) V1 network — but `validate_palw_v2` refuses a V1 PoW fence
+    // proof-of-work.** `validate_palw_v2` refuses a V1 PoW fence
     // beside a V2 ruleset, and `devnet_shipped_params` installs the V2 bundle on this base.
     // The const alone is therefore the BASE identity (hash-only), exactly the shape
     // `palw_rc_base_params` has for testnet-11; what a node actually runs is

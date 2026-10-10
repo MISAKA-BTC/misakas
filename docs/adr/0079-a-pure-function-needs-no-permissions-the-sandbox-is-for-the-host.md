@@ -25,7 +25,7 @@ URL"), ADR-0069 (E2E adjudicability is the price of weight), ADR-0072 Decision 8
 inside the priced bytes is pinned, or it is the challenge), ADR-0075 (certification is a consensus
 object), ADR-0077 (the gateway, the worker, the seat's interval openings), ADR-0078 (the
 transformer discipline, the kind table, the four modes), and `SECURITY.md`'s existing operator
-posture (loopback by default; a public bind is an explicit, acknowledged act).
+posture (loopback only).
 
 **Refuses, by name, and §7 gives each its reason:** a `security_policy_hash` anywhere inside the
 priced bytes (ADR-0072 Decision 8), a multi-engine runtime registry (ADR-0053), a tolerance-based
@@ -65,9 +65,8 @@ mapping above be *readable*, so that the next reader does not propose it again.
 *chain* from a lying executor. Not one of them protects the *operator's machine* from the three
 things a practical local-LLM node now touches:
 
-* **a prompt from a stranger.** ADR-0077's gateway is a public entrance that parses attacker-chosen
-  text and hands it to a model. Its default bind is loopback (`127.0.0.1:8790`), but nothing in the
-  binary refuses a public bind, and nothing rate-limits one.
+* **prompt input.** The local gateway parses model input and hands it to a worker. It binds only
+  to loopback (`127.0.0.1:8790`); public serving is withdrawn under ADR-0144.
 * **an artifact from a stranger.** ADR-0056 admission is permissionless; ADR-0067 Decision 5's
   interpreter arm exists so a node can serve a class whose graph no binary in the fleet has a row
   for. Its fence is written as a correctness fence. It is also a security fence and was never
@@ -119,7 +118,7 @@ This gives the ADR its shape, and its two refusals:
 ```text
        the stranger's bytes                       the operator's machine
    ┌──────────────────────────┐            ┌──────────────────────────────────┐
-   │ prompt (public HTTP)     │────────────▶│ gateway   no keys, bounded, loopback-by-default
+   │ prompt (local HTTP)      │────────────▶│ gateway   no keys, bounded, loopback-only
    │ class profile (chain)    │            │    │                             │
    │ model artifact (operator)│            │    ▼  one framed pipe            │
    │ DSL → toolchain (0078)   │            │ supervisor  no keys, one slot, rlimits
@@ -177,7 +176,7 @@ different doc comments; this decision makes it one rule with one enforcement poi
 
 | process | parses | holds | enforcement |
 |---|---|---|---|
-| `misaka-palw-gateway` | public HTTP text | the executor **public** key only — "the ML-DSA signature belongs to the signer sidecar" | refuses to boot if a signing secret is reachable in its own view |
+| `misaka-palw-gateway` | local HTTP text | the executor **public** key only — "the ML-DSA signature belongs to the signer sidecar" | refuses non-loopback binds and reachable signing secrets |
 | `misaka-palw-agent` (a process supervisor, **not** an LLM agent) | one framed Borsh request on a `0600` unix socket | nothing — "It holds no validator keys" | asserted at boot |
 | `misaka-palw-worker` | a job frame and a pinned artifact | nothing | Decision 5's confinement |
 | the DA opening server (ADR-0077 Decision 8) | opening requests from any seat | the capture, read-only | shape-checked before anything is read (`check_opening_request_shape`) |
@@ -201,8 +200,7 @@ Two parts, both cheap, one portable and one not:
   the outbox, nothing else); macOS gets a `sandbox-exec` profile with the same shape; any platform
   without a backend runs with the environment discipline alone and **prints which backend is in
   force at boot**, in the same line that prints the class and the manifest. A node whose backend is
-  `none` may still mine — the court does not care — but Decision 10 refuses to let it be a public
-  entrance.
+  `none` may still mine; Decision 10 limits every gateway to loopback.
 
 **Decision 6 — every job has a memory ceiling and a wall-clock deadline, and exceeding either is a
 failed job, never a dead node.** The supervisor already kills on timeout; it gains `RLIMIT_AS` (and
@@ -247,19 +245,7 @@ from metadata.** Size, mtime, filename, a sidecar `.json`, or a previous run's a
 same defect. The full read *is* the check, and the registered-class path's step 4 — a *computed*
 digest equal to the registered root — is the same rule for classes this build has no row for.
 
-**Decision 10 — the public entrance is bounded, acknowledged, and never the seat.** Extending
-`SECURITY.md`'s existing pattern rather than inventing a second one:
-
-* Default bind stays loopback. A non-loopback `--listen` **fails at startup** unless
-  `MISAKA_PALW_ALLOW_PUBLIC_GATEWAY=1` is set, and the failure message names the intended pattern —
-  an authenticating reverse proxy in front of a loopback-bound gateway.
-* No wildcard CORS, and no secret-shaped field in any response DTO, both already the house rule.
-* Bounds, all of them already-existing knobs made mandatory rather than default: request body,
-  prompt tokens, `max_decode_cap`, one job slot, and a per-source request rate. Exceeding a bound is
-  a 4xx, not a queue.
-* A gateway bound publicly on a host whose confinement backend is `none` (Decision 5) refuses to
-  start. That is the one place where the missing backend is fatal, and it is fatal because it is the
-  only place where a stranger chooses the input.
+**Decision 10 — loopback only.** 公開 gateway は採用しない。ADR-0144 の利用者自身のローカル推論という範囲から外れるため。gateway は非 loopback の待受を拒否し、公開待受を許可する環境変数・第三者入力の報酬用入口は削除する。
 
 **Decision 11 — a stranger's *graph* stays behind ADR-0067 Decision 5's fence, and that fence is
 hereby also a security fence.** Its arming conditions are already written (a profile-space fuzzer to
@@ -304,13 +290,11 @@ Decision 2 is why.
   syscall batch at worker start, microseconds against a multi-second inference. The `RLIMIT_AS`
   call: nothing. The full-read model gate is unchanged — it already costs a 1.2 GB read per job
   process, and the persistent-agent path already amortizes it.
-* **Operator friction, and it is deliberate.** Three things that work today stop working: a public
-  `--listen` without the acknowledgement variable, a public gateway on a host with no confinement
-  backend, and a worker that was reading something out of the ambient environment. Each fails at
-  startup with the fix in the message.
+* **Operator friction.** A public `--listen` fails at startup. Workers receive only the allowed
+  environment values.
 * **Platform coverage.** Linux gets the full backend. macOS gets a partial one. Windows gets the
   environment discipline and an honest `none`, which is consistent with the tree's existing Windows
-  posture and is the reason Decision 10 gates the *public entrance* rather than mining.
+  posture. Decision 10 applies to the local gateway's listen address.
 * **What this does not buy.** Nothing here makes a dishonest executor honest, and nothing here is
   visible to a peer. A node that lies about its posture is exactly as convictable as before —
   through its roots — and exactly as unconvictable for its posture, which is the honest state of a
@@ -331,8 +315,7 @@ S4  Roots are identical with the confinement enabled and disabled, on the same i
     operation yields JobFailed with the denial named and never a different number.  (Decision 3)
 S5  No process that parses network or public input holds key material: the gateway refuses to boot
     if a signing secret is reachable in its view; the supervisor asserts it holds none.
-S6  A non-loopback gateway bind fails at startup without MISAKA_PALW_ALLOW_PUBLIC_GATEWAY=1, and
-    fails unconditionally when the confinement backend is `none`.
+S6  A non-loopback gateway bind fails unconditionally at startup (ADR-0144).
 S7  Untrusted prompt text never tokenizes to a control token (parse_special = false), pinned by
     the existing template test, with a corpus that includes every special-token literal.
 S8  Artifact identity is never derived from metadata: the model gate recomputes the digest from
@@ -362,10 +345,7 @@ S12 `misaka node security-report` reports the backend actually in force — a te
 | R-08 | ADR-0078 Q-05's confinement gate for external toolchains | S11 green; the `code` row does not ship without it |
 | R-09 | §7's mapping table folded into `docs/` as the answer to "where is the model registry" | a reader finds the field, not a proposal to add it |
 
-**Done when** a node can be a public LLM entrance on a host that also holds a bond, and the operator
-can state — from a report the node prints, not from a promise — that the model process has no
-network, no environment, no filesystem beyond two directories, no key material, and a ceiling; while
-the chain holds not one byte about any of it.
+**Done when** the local host and loopback worker report and enforce their network, environment, filesystem, key and resource boundaries. Public commercial serving as a PALW-reward goal is withdrawn: it is outside ADR-0144 P1's useful local inference purpose.
 
 ## 7. Disposition of the proposal, item by item
 
@@ -416,7 +396,6 @@ reason gets re-proposed.
 
 | name | kind | meaning |
 |---|---|---|
-| `MISAKA_PALW_ALLOW_PUBLIC_GATEWAY` | env, operator | acknowledges a non-loopback gateway bind; absent ⇒ startup refusal (Decision 10) |
 | `PALW_WORKER_MAX_RSS_BYTES` | constant + operator override | per-job address-space ceiling; exceeding it is `JobFailed` (Decision 6) |
 | `PALW_WORKER_ENV_ALLOWLIST` | constant, in-tree | the exact environment a worker child receives (Decision 5) |
 | `misaka node security-report` | command | the local posture report (Decision 13) |
@@ -460,7 +439,7 @@ S7's corpus pins it.
 default; `security-report` prints paths and posture, never key material or prompts.
 
 **SA-8 — Decision 10's per-source rate is not the bound.** Sources share addresses behind proxies;
-the binding limits are one job slot, a bounded in-flight queue, and a daily public-job budget tied
+the binding limits are one job slot, a bounded in-flight queue, and a daily local-claim budget tied
 to exposure (ADR-0077 SA-1).
 
 ## ADR-0144 alignment (2026-09-21)
@@ -473,9 +452,7 @@ runs the user's own model.
   signer sidecar, the local security-report, the chain never takes the host's word. That is the
   loopback worker's posture, and it is in scope.
 * **Withdrawn as a PALW-reward Done-when.** "A node can be a public LLM entrance on a host that also
-  holds a bond" describes a commercial serving product. Decision 10's bind guard stays: a
-  non-loopback bind is an acknowledged operator act, refused without
-  `MISAKA_PALW_ALLOW_PUBLIC_GATEWAY`, and never the seat. It is not a PALW product requirement.
+  holds a bond" describes a commercial serving product. Decision 10 now refuses all non-loopback binds; the public opt-in is removed.
 * **§8 unchanged, now read against P1.** Multi-tenant gateway isolation (one gateway, many paying
   users) remains deliberately not decided, and under 0144 it is out of the reward path even if an
   operator later builds it.

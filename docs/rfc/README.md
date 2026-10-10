@@ -77,7 +77,7 @@ remain open. [ADR171](../adr/0171-probabilistic-constraint-checks-and-court-on-d
 [ADR172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) and
 [ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md) bind this direction.
 
-RFC02/05 bind immutable class/Kernel/policy identity; RFC11 §17 separates Static Admission, Beacon Conformance and
+RFC02 and the [Kernel design](../design/palw/versioned-kernels.md) bind immutable class/Kernel/policy identity; RFC11 §17 separates Static Admission, Beacon Conformance and
 Active Eligibility; RFC13 §9 records commitments/evidence/resume; RFC14 §3.4 and RFC15 §1.1 extend G14 challenge replay
 and exact escalation. RFC03/04/06/09/10/12 keep generation/hold-out/Panel/ticket/settlement authority distinct; RFC08
 inherits the shared policy while keeping EXEC weight/DAA zero and main heartbeat/BASE-0/liveness unchanged.
@@ -91,8 +91,13 @@ RFC01–12's model extension: active versioned kernels and bounded declarative p
 VM fallback. [RFC11 §15.9](0011-permissionless-model-and-long-context-onboarding.md) defines the
 MatMul-first probabilistic-check research/benchmark basis; TEE validity trust and BFT orchestrator
 authority are excluded. The [consistency audit](evidence/0012-kernel-only-design-audit.md) lists
-all twelve RFCs and relevant ADR dispositions. Older replay rules and RFC05's withdrawn VM appendix
-are historical/conformance records, not new implementation instructions. No activation is implied.
+all twelve RFCs and relevant ADR dispositions. RFC05 retains only the VM withdrawal reason;
+selected Kernel schemas and gates are in the [Kernel design](../design/palw/versioned-kernels.md). No activation is implied.
+
+## Withdrawn designs
+
+不採用・撤回済みの案は理由と後継文書へのリンクだけを残し、仕様・実装手順・見積もりは削除する。旧版は Git 履歴で参照できる。
+RFC05 の VM、RFC14 §16 の MISAKA Torrent、ADR0023 の三 lane 案は実装対象外。DNS validator の旧設計は [RFC12](0012-palw-only-consensus-and-native-evm-settlement.md) の移行方針に従い、移行前の規則と将来の採用方針を区別する。
 
 ## ADRs that read as proposals
 
@@ -102,4 +107,3 @@ numbers. Reopening one means filing a new RFC that cites it.
 | ADR | Why it reads as an RFC |
 | --- | --- |
 | [0141](../adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md) | "Decides nothing and changes no rule". It asks whether an inference can be the ticket without a hash lottery |
-| [0023](../adr/0023-base-three-lane-execution.md) | "Proposed — design freeze … Nothing is implemented". The Base three-lane execution design |

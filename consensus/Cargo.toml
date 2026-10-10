@@ -89,6 +89,9 @@ misaka-palw-sdk.workspace = true
 # builder through the independent DA providers (directory + the 127.0.0.1 reference server) — the miner is offline. Library only (no `rpc`).
 # C4 round 3: the node-less path of the user's mandatory test 3 relays the producer's signed carrier through RFC-0009's relay library.
 misaka-palw-remote.workspace = true
+# G14C (GAP-03): the canonical G14 harness reads the kernel route through the RPC ops' own builders (`kaspa_rpc_core::convert::palw_kernel`,
+# which the RPC service calls) and carries each answer through the RPC's JSON wire form. rpc-core depends on consensus-core only.
+kaspa-rpc-core.workspace = true
 
 [[bench]]
 name = "parallel_muhash"

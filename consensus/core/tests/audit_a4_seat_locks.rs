@@ -49,7 +49,7 @@ fn the_seat_lock_each_t12_class_demands_against_the_collateral_that_is_posted() 
     let escrow = T12_BLOCK_SUBSIDY_SOMPI / 1_000 * carve;
 
     println!("\n=== Q3: is the ADR-0033 credit lane alive on t12? ===");
-    println!("  params.palw_credit = {:?}  <- decide_credit_v1 / panel_seats_at_anchor_v3 are DEAD here", params.palw_credit.is_some());
+    println!("  params.palw_credit = {:?}  <- the retired V1 credit parameter is unset", params.palw_credit.is_some());
     assert!(params.palw_credit.is_none(), "t12 carries no PalwCreditParamsV1");
 
     println!("\n=== posted collateral per genesis bond: {POSTED_COLLATERAL_SOMPI} sompi = {:.2} MSK ===", POSTED_COLLATERAL_SOMPI as f64 / 1e8);

@@ -202,8 +202,7 @@ pub struct PalwClassRegistrationV1 {
     /// Deliberately adjacent to `replay_cost` below and deliberately **not** derived from it.
     /// `replay_cost` is measured wall-clock: host-dependent, hardware-dependent, self-reported,
     /// and correct for sizing dispute windows. This is a counted consequence of the registered
-    /// model shape, the pinned kernel graph and the frozen decode budget
-    /// ([`crate::pow_layer0::POW_L1_PALW_N_PREDICT_V1`]), which is why one number per class is
+    /// model shape, the pinned kernel graph and the class's frozen decode budget, which is why one number per class is
     /// enough: every ticket in a class has the same job shape. Using a millisecond figure here
     /// would put a host's clock into fork-choice weight — ADR-0038 Decision D's "static
     /// intra-class, never wall-clock" is exactly this line.
@@ -389,7 +388,7 @@ impl PalwClassRegistrationV1 {
     ///
     /// THE single definition of that amount. Two rules need it and must not be able to
     /// disagree: the per-block crediting ceiling that actually pays it out
-    /// ([`crate::palw_credit::PalwCreditParamsV1::one_job_ceiling_sompi`], which delegates
+    /// (the retired V1 credit gate, which delegates
     /// here) and the §4e leverage inequality that decides whether the bond covers it
     /// ([`max_leverage_holds_v1`]). They previously each did their own arithmetic and the
     /// inequality's was smaller, so the check licensed a mint it had not measured.
@@ -404,7 +403,7 @@ impl PalwClassRegistrationV1 {
     /// external facts a registration cannot know by itself.
     ///
     /// Deliberately does NOT check `adjudication_depth`, and that asymmetry with
-    /// [`crate::palw_credit::PalwCreditParamsV1::active_for`] is the point rather than an
+    /// the retired V1 credit gate is the point rather than an
     /// oversight. Two reasons: this function still has no non-test caller, so it could not be an
     /// enforcement point even if it wanted to be; and `BareV2` is already forced to
     /// `StructuralOnly` by the coherence check in `validate`, so a depth conjunct here would make

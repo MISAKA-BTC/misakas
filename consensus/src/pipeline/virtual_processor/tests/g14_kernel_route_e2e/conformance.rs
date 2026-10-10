@@ -27,7 +27,7 @@ use kaspa_consensus_core::palw_onboarding_v1::{
 use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
 use misaka_palw_challenge::{
     ConformanceCommitmentV1, OnboardingFailureV1 as F, OnboardingStateV1 as S, RootV1, SubjectKindV1, WorkBeaconStateV1,
-    WorkFinalEventV1, challenge_seed_v1, collect_work_beacon_v1,
+    challenge_seed_v1, collect_attributed_work_beacon_v1,
 };
 use misaka_palw_sdk::onboarding_chain::{
     EnvelopeSigner, PublicConformanceReadsV1, SignedRegistrationRequestV1, conformance_evidence_object_v1, fresh_verify_from_reads_v1,
@@ -35,6 +35,8 @@ use misaka_palw_sdk::onboarding_chain::{
 
 const REGISTRANT: usize = 1;
 const OUTSIDER: usize = 3;
+/// A bond that refutes wrongly first (C4 F-C4R4-11: it is judged once per window, so the convicting refutation is another bond's).
+const JUNK_REFUTER: usize = 5;
 /// Producers of the source class's OPV claims (and of the outsider's kernel claim), rotated: a producer holds at most three live OPV
 /// claims, and a claim's reservation lives to Final + liability.
 const PRODUCERS: [usize; 6] = [0, 2, 4, 5, 6, 7];
@@ -47,12 +49,23 @@ fn test_scope() -> ConformanceScopeV1 {
     s
 }
 
-/// The onboarding network with RFC-0015's OPV fence admitting the beacon's source class and the candidate's kernel class (both
-/// armed WITHOUT their validation, as everywhere in this file).
-fn conformance_config(admitted: Vec<Hash64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+/// The onboarding network with RFC-0015's OPV fence (armed WITHOUT its validation, as everywhere in this file). The beacon's source
+/// class and the candidate's kernel class are treated as eligible through the processor's `cfg(test)` seam: these conformance
+/// MECHANICS predate derived eligibility; the bootstrap that derives it is `opv_bootstrap.rs`.
+///
+/// The fence also arms G14-for-rewards (`palw_reward_gate_v1`), whose E6 compares the passed attempt's EFFECTIVE bits with
+/// `min_effective_bits`: the interim sampled policy is 2 bits (0 effective), so these mechanics run with the DRILL floor `floor`
+/// (0 here; [`Cw::over_floor`] states another) — the ruled 128 is asserted where it decides (`g14_rewards_*`).
+fn conformance_config(eligible: Vec<Hash64>, floor: u16) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, premine, floats) = kernel_config_onboarding();
+    opv_test_eligible(&eligible);
     let mut params = config.params.clone();
-    params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), admitted));
+    let mut fence = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new());
+    fence.min_effective_bits = floor;
+    // GAP-70: on the drill floor a sampled conformance is also allowed to gate (refused by validation on any real network); on the
+    // ruled floor the release terms hold — only the complete check gates rewards.
+    fence.sampled_conformance_gates_reward = floor == 0;
+    params.palw_panel_free_v1 = Some(fence);
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences");
     (Config::new(params), bundle, premine, floats)
 }
@@ -103,13 +116,19 @@ impl Cw {
     }
 
     async fn over(make: impl FnOnce(&Config) -> TestConsensus) -> Cw {
+        Cw::over_floor(make, 0).await
+    }
+
+    /// [`Cw::over`] on a network whose OPV fence states the effective-bits floor `floor` (the ruled value is 128).
+    async fn over_floor(make: impl FnOnce(&Config) -> TestConsensus, floor: u16) -> Cw {
         use super::super::g14_registration_e2e::Tensors;
         use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_operands_v1;
         let src = fixture();
         let f = onb_fixture(11);
         let src_class = opv_class_id(&src.program, &src.plan, &src.pc);
         let kernel_class = opv_class_id(&f.program, &f.plan, &f.pc);
-        let mut net = Net::over_cfg(conformance_config(vec![Hash64::from_bytes(src_class), Hash64::from_bytes(kernel_class)]), make);
+        let mut net =
+            Net::over_cfg(conformance_config(vec![Hash64::from_bytes(src_class), Hash64::from_bytes(kernel_class)], floor), make);
         net.beat_to(1).await;
         // ---- the beacon's source: a pre-existing OPV class (its artifact attested by the harness hook, §3) ----
         let d = k2_tir_v2_descriptor();
@@ -241,11 +260,9 @@ impl Cw {
             let generated = greedy(fx, &ledger, &class, &job.prompt, job.max_new_tokens as usize);
             let produced = produce(fx, &ledger, &class, job, self.net.kid(producer), generated, |_| {});
             let id = produced.claim.id();
-            seals.push((
-                producer,
-                self.net.route(producer, &K::SealClaim { producer: self.net.kid(producer), job: job.id(), seal: claim_seal_v1(&id) }),
-            ));
-            reveals.push((producer, produced.object));
+            let (seal, reveal) = seal_and_reveal(&ledger, self.net.kid(producer), &produced.object);
+            seals.push((producer, self.net.route(producer, &seal)));
+            reveals.push((producer, reveal));
             ids.push(id);
         }
         self.net.send(seals).await;
@@ -265,7 +282,8 @@ impl Cw {
             let read = self.read();
             // Locked at the sink (what the next block's fold sees), not only at the virtual's DAA the read is taken at.
             let policy = palw_onboarding_challenge_policy_v1();
-            let at_sink = collect_work_beacon_v1(&self.attempt().beacon_context(&policy), &self.events(), self.net.daa()).unwrap();
+            let at_sink =
+                collect_attributed_work_beacon_v1(&self.attempt().beacon_context(&policy), &self.events(), self.net.daa()).unwrap();
             if let (WorkBeaconStateV1::Locked(b), "LOCKED") = (at_sink, read.beacon) {
                 return b.lock_position;
             }
@@ -279,8 +297,8 @@ impl Cw {
         self.net.chain.ctx.consensus.palw_conformance_evidence_v1(self.v2_class).expect("the class is known")
     }
 
-    /// The Final facts the route serves (op 212's source), decoded.
-    fn events(&self) -> Vec<WorkFinalEventV1> {
+    /// The Final facts the route serves (op 212's source), decoded: attributed events (the producer stands behind each).
+    fn events(&self) -> Vec<misaka_palw_challenge::AttributedWorkV1> {
         self.net
             .api()
             .expect("the route")
@@ -296,7 +314,8 @@ impl Cw {
         let attempt = self.attempt();
         let policy = palw_onboarding_challenge_policy_v1();
         let ctx = attempt.beacon_context(&policy);
-        let WorkBeaconStateV1::Locked(beacon) = collect_work_beacon_v1(&ctx, &self.events(), self.net.daa()).unwrap() else {
+        let WorkBeaconStateV1::Locked(beacon) = collect_attributed_work_beacon_v1(&ctx, &self.events(), self.net.daa()).unwrap()
+        else {
             panic!("the beacon is locked")
         };
         let seed = challenge_seed_v1(&ctx, &attempt.commitment.subject(), &beacon).expect("a seed");
@@ -410,6 +429,7 @@ impl Cw {
             attempt_row: read.attempt_row.clone().expect("the attempt row"),
             evidence_row: read.evidence_row.clone(),
             events: events.clone(),
+            sealed_sources: Vec::new(),
             tip_daa: self.net.daa(),
             program: read.program.clone().expect("the class's program"),
         };
@@ -428,6 +448,7 @@ impl Cw {
             policy: &policy,
             ctx: &ctx,
             events: &events,
+            sealed: &[],
             tip_daa: self.net.daa(),
             program: &program,
             post: post.as_ref(),
@@ -455,6 +476,11 @@ impl Fixture {
     }
 }
 
+/// An attempt row without its judged-refuter set (C4 F-C4R4-11): what a dismissed refutation leaves unchanged.
+fn decided(a: &ConformanceAttemptRowV1) -> ConformanceAttemptRowV1 {
+    ConformanceAttemptRowV1 { refuters_judged: Vec::new(), ..a.clone() }
+}
+
 fn state(cw: &Cw) -> (S, Option<F>, u32) {
     let a = cw.attempt();
     (a.record.state, a.record.last_failure, a.record.attempts())
@@ -477,8 +503,8 @@ async fn g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_
     let attempt = cw.attempt();
     assert_eq!(
         (attempt.challenge_epoch, attempt.excluded_profiles.len()),
-        (0, 2),
-        "the candidate and its own kernel class are excluded"
+        (0, 3),
+        "the candidate, its own kernel class and that class under the other mode are excluded (OPV-BOOT)"
     );
     assert_eq!(attempt.eligible_profiles, vec![Hash64::from_bytes(cw.src_class)], "the source class, frozen at the commitment");
     // The gate names its first unmet condition (here the binding's horizon); the conformance record's own hold is the contract's
@@ -491,7 +517,8 @@ async fn g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_
     cw.source_claims(2).await;
     let lock = cw.until_locked().await;
     assert!(cw.read().beacon_output.is_some());
-    let sources: Vec<WorkFinalEventV1> = cw.events().into_iter().filter(|e| e.source_profile_id == cw.src_class).collect();
+    let sources: Vec<misaka_palw_challenge::WorkFinalEventV1> =
+        cw.events().into_iter().map(|w| w.event).filter(|e| e.source_profile_id == cw.src_class).collect();
     assert_eq!(sources.len(), 2);
     assert!(
         sources.iter().all(|e| e.final_path == misaka_palw_challenge::FinalPathV1::PanelIndependent
@@ -678,8 +705,12 @@ async fn g14_conformance_forged_evidence_is_refuted_withheld_evidence_defaults_a
     assert_eq!(fresh.leaf_faults, vec![2], "the fresh verifier finds the forged leaf (check 2 = the first leaf)");
     let honest_leaf = cw.leaf_fault(&selection, 1);
     let attempt = cw.attempt();
-    cw.refute(OUTSIDER, honest_leaf).await;
-    assert_eq!(cw.attempt(), attempt, "the true leaf proves nothing");
+    // (C4 F-C4R4-11: one judged refutation per bond per window — the mistaken refuter is another bond than the one that convicts.)
+    cw.refute(JUNK_REFUTER, honest_leaf).await;
+    assert_eq!(decided(&cw.attempt()), decided(&attempt), "the true leaf proves nothing");
+    let rows = cw.net.api().unwrap().aux.clone();
+    cw.refute(JUNK_REFUTER, cw.leaf_fault(&selection, 0)).await;
+    assert_eq!(cw.net.api().unwrap().aux, rows, "a bond's second refutation of the same evidence is refused before any charge");
     cw.refute(OUTSIDER, cw.leaf_fault(&selection, 0)).await;
     assert_eq!(state(&cw), (S::RegisteredDormant, Some(F::ConformanceFailed), 1));
     assert!(matches!(cw.attempt().last_end, Some((ConformanceAttemptEndV1::Refuted, _))));
@@ -722,8 +753,8 @@ async fn g14_conformance_forged_evidence_is_refuted_withheld_evidence_defaults_a
     let claim = cw.claims_of(&cand, cw.kernel_class, std::slice::from_ref(&job)).await[0];
     // a refutation naming the claim before it is Final proves nothing
     let attempt = cw.attempt();
-    cw.refute(OUTSIDER, ConformanceFaultV1::VectorTokens { check: 0, kernel_claim: Hash64::from_bytes(claim) }).await;
-    assert_eq!(cw.attempt(), attempt, "an unfinalized claim states nothing");
+    cw.refute(JUNK_REFUTER, ConformanceFaultV1::VectorTokens { check: 0, kernel_claim: Hash64::from_bytes(claim) }).await;
+    assert_eq!(decided(&cw.attempt()), decided(&attempt), "an unfinalized claim states nothing");
     let ttpb = cw.net.ttpb();
     while !matches!(cw.net.claim_state(&claim), ClaimStateV1::Final { .. }) {
         assert!(cw.net.daa() < posted.window_end_daa, "the kernel claim must reach Final inside the evidence's window");
@@ -763,8 +794,8 @@ async fn g14_conformance_forged_evidence_is_refuted_withheld_evidence_defaults_a
 
 /// **Hostile evidence never panics, never passes, and is never judged for free.** A refutation with a junk opening (absurd leaf count,
 /// wrong coordinates, ragged bytes) and one naming a check that does not exist are dismissed — each charging the block's adjudication
-/// budget; five in one block: the four-adjudication test block judges four and the fifth is not charged. Evidence carrying an outcome
-/// the seed never selected, or two outcomes for one check, is a forgery: CONFORMANCE_FAILED, counted. The chain carries on.
+/// budget; five in one block: the four-adjudication test block judges two (two runs are reserved for proofs, C4 F-C4R4-10) and the
+/// rest are not charged. Evidence carrying an outcome the seed never selected, or two outcomes for one check, is a forgery: CONFORMANCE_FAILED, counted. The chain carries on.
 #[tokio::test]
 async fn g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_and_never_stops_the_chain() {
     kaspa_core::log::try_init_logger("warn");
@@ -796,11 +827,28 @@ async fn g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_a
         let card = [OUTSIDER, 0, 2, 4, 5][junk.len()];
         junk.push((card, cw.evidence_object(card, ConformanceEvidenceActionV1::Refute { evidence_id, fault: Box::new(fault) })));
     }
+    let fee = cw.net.api().unwrap().header.policy.dismissed_proof_fee;
+    // What left each bond as a slash or burn (rewards and releases move `collateral` too; `slashed` only rises by a slash or a burn).
+    let slashed = |cw: &Cw, card: usize| cw.net.chain.tip_state().1.bond(&cw.net.bond(card)).expect("the bond").slashed;
+    let before: Vec<u64> = junk.iter().map(|(card, _)| slashed(&cw, *card)).collect();
+    let cards: Vec<usize> = junk.iter().map(|(card, _)| *card).collect();
     cw.net.send(junk).await;
-    assert_eq!(cw.attempt(), posted, "every junk refutation is dismissed");
+    assert_eq!(decided(&cw.attempt()), decided(&posted), "every junk refutation is dismissed");
     let (blue, adjudications, _work): (u64, u32, u64) =
         borsh::from_slice(&cw.budget_row().expect("the budget row")).expect("a budget row decodes");
+    // A refutation is a proof: it may spend the runs reserved for proofs (C4 F-C4R4-11) — and one that proves nothing pays for it.
     assert_eq!(adjudications, 4, "four junk refutations spent the four-adjudication block; the fifth found it spent");
+    let judged = cw.attempt().refuters_judged;
+    assert_eq!(judged.len(), 4, "four judged, each once for its bond");
+    for (i, card) in cards.iter().enumerate() {
+        let paid = slashed(&cw, *card) - before[i];
+        let was_judged = judged.contains(&cw.net.bond(*card));
+        assert_eq!(
+            paid,
+            if was_judged { fee } else { 0 },
+            "card {card}: a dismissed refutation pays dismissed_proof_fee; an unjudged one nothing"
+        );
+    }
     assert!(blue > 0);
     cw.net.beat_to(posted.evidence.unwrap().window_end_daa + 1).await;
     assert_eq!(state(&cw).0, S::G14Eligible, "the honest evidence passed through the junk");
@@ -959,3 +1007,261 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
     let z = cw.net.replay().await;
     cw.net.assert_same(&z, "a node replaying the whole chain");
 }
+
+/// **G14C (GAP-03): ops 231 and 212, served by a node started after the evidence was posted, carry everything the SDK's fresh
+/// verifier needs.** The attempt row, the evidence row and the program arrive as op 231 serves them, the Final facts as op 212 serves
+/// them — each op's own builder over a node that synced by IBD, through the RPC's JSON wire form (`canonical.rs`'s [`Rpc`]) — and
+/// the SDK's verifier over those bytes reaches the verdict the world's own reads reach.
+#[tokio::test]
+async fn g14_canonical_ops_231_and_212_served_by_an_ibd_node_rebuild_the_conformance_verdict() {
+    use super::canonical::{Rpc, ibd_node};
+    kaspa_core::log::try_init_logger("warn");
+    let unhex = |text: &str| {
+        let mut out = vec![0u8; text.len() / 2];
+        faster_hex::hex_decode(text.as_bytes(), &mut out).expect("the RPC serves hex");
+        out
+    };
+    let mut cw = Cw::new().await;
+    cw.commit(0x22).await;
+    cw.source_claims(2).await;
+    cw.until_locked().await;
+    let post = cw.post(|_, _| {});
+    cw.send_post(post.clone(), Some(1024)).await;
+    assert!(cw.attempt().evidence.is_some(), "the evidence is posted");
+
+    let node = ibd_node(&cw.net).await;
+    let rpc = Rpc::of(&node.chain);
+    let read = rpc.conformance(cw.v2_class);
+    assert!(read.available && read.found && read.evidence_posted, "op 231 serves the posted attempt: {read:?}");
+    let mut events: Vec<WorkFinalEventV1> = rpc
+        .finals()
+        .finals
+        .iter()
+        .filter(|f| !f.work_final_event.is_empty())
+        .map(|f| borsh::from_slice(&unhex(&f.work_final_event)).expect("a beacon event"))
+        .collect();
+    events.reverse(); // op 212 serves the newest first; the route's canonical order is the reverse
+    let bytes = |e: &[WorkFinalEventV1]| e.iter().map(|x| borsh::to_vec(x).unwrap()).collect::<Vec<_>>();
+    assert_eq!(bytes(&events), bytes(&cw.events()), "op 212's facts are the route's");
+    let reads = PublicConformanceReadsV1 {
+        attempt_row: unhex(&read.attempt_row),
+        evidence_row: Some(unhex(&read.evidence_row)),
+        events,
+        tip_daa: read.tip_daa,
+        program: unhex(&read.program),
+    };
+    assert_eq!(
+        reads.evidence_row.as_deref().map(|b| borsh::from_slice::<ConformanceEvidencePostV1>(b).unwrap()),
+        Some(post),
+        "op 231 serves the posted material"
+    );
+    let report = fresh_verify_from_reads_v1(&reads, None).expect("the SDK verifier runs over the RPC's bytes");
+    let (verdict, agrees) = cw.fresh();
+    assert_eq!(
+        (report.verdict.beacon_output, report.verdict.seed, &report.verdict.posted),
+        (verdict.beacon_output, verdict.seed, &verdict.posted),
+        "the same beacon, seed and verdict as the world's own reads"
+    );
+    assert_eq!(report.agrees, agrees);
+    assert_eq!(report.verdict.posted, Some(Ok(())), "bound, rebuilt exactly, a pass");
+}
+// ---- G14-for-rewards (`docs/PRINCIPLES.md` §6; `palw_opv_bootstrap_v1::palw_reward_gate_v1`) ----------------------------------
+
+impl Cw {
+    /// The producer facts a REAL attempt's pre-check reads for `class`, for card `card`'s bond.
+    fn facts(&self, class: Hash64, card: usize) -> kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2 {
+        self.net.chain.ctx.consensus.palw_producer_facts_v2(class, Some(self.net.bond(card).0)).expect("producer facts")
+    }
+
+    /// The conformance path to its end: commit, two future OPV Finals of the source class lock the beacon, the evidence (chunked),
+    /// the window closes unrefuted, the artifact binding reaches Final, and one more block runs the activation step.
+    async fn pass_conformance(&mut self) {
+        self.commit(0x22).await;
+        self.source_claims(2).await;
+        self.until_locked().await;
+        let post = self.post(|_, _| {});
+        self.send_post(post, Some(1024)).await;
+        let posted = self.attempt().evidence.expect("the fold accepted the evidence");
+        self.net.beat_to(posted.window_end_daa + 1).await;
+        assert!(
+            matches!(self.attempt().record.state, S::G14Eligible | S::ActiveRewardable),
+            "CONFORMANCE_PASSED: {:?}",
+            self.attempt().record.state
+        );
+        let binding = self.net.api().unwrap().artifact_binding_v1(&self.v2_class, &self.kernel_root).unwrap();
+        self.net.beat_to(binding.final_daa.max(self.net.daa()) + 2).await;
+    }
+
+    /// **The onboarded (Cw) class's V2-root claims stay on the legacy channel** (the Lead's GAP-81 decision, 2026-10-10: the new
+    /// rewards are per CLAIM verification route). Runs [`Self::pass_conformance`] on a drill network ([`Cw::over`]: floor 0, a
+    /// sampled conformance allowed to gate — GAP-70's drill), then asserts that passing the onboarding/G14 path gives the class's
+    /// V2-root claims NOTHING beyond the old rules:
+    /// - the gate does not refuse it (it is onboarded);
+    /// - no share beyond the one it registered with (no grant from the gate);
+    /// - `producer`'s REAL-attempt pre-check is decided by the old rules: no Panel seat proves readiness here, so it is refused —
+    ///   no G14 bypass of the registry lifecycle, the Panel room, the verify deadline, seating or the bond-share split.
+    /// Returns the class and the old rules' refusal.
+    pub(super) async fn onboarded_v2_claims_on_the_legacy_channel(&mut self, producer: usize) -> (Hash64, String) {
+        let asked = match &self.net.chain.tip_state().1.class(&self.v2_class).unwrap().status {
+            PalwClassStatusV2::Registered { pending_share_permille, .. } => *pending_share_permille,
+            other => panic!("registered before its conformance: {other:?}"),
+        };
+        self.pass_conformance().await;
+        let state = self.net.chain.tip_state().1;
+        assert!(
+            state.class_share_permille(&self.v2_class).unwrap_or(0) <= asked,
+            "no share beyond the one it registered with ({asked}‰): {:?}",
+            state.class_share_permille(&self.v2_class)
+        );
+        let facts = self.facts(self.v2_class, producer);
+        let refusal = facts.class_admission_refusal.clone().unwrap_or_default();
+        assert!(!refusal.contains("earns no reward"), "an onboarded class is not refused by the gate: {refusal}");
+        let key = TestConsensus::palw_v2_registry_keypair(producer as u64).verification_key.as_ref().to_vec();
+        assert!(
+            facts.ready_to_produce(&key).is_err(),
+            "a V2-root REAL attempt of the onboarded class is decided by the old rules, which no seat satisfies here"
+        );
+        (self.v2_class, refusal)
+    }
+}
+
+/// **GAP-81: a V2 claim of a kernel-bound class never earns the new reward.** Before its conformance the class is refused by the
+/// gate (`earns no reward`). After it (the drill terms) the class is onboarded, its kernel sibling is derived-eligible for OPV, and
+/// yet its V2-root REAL attempt gets nothing the old rules do not give: no share grant and no bypass — the pre-check is refused by
+/// the old rules. Its new reward is only its kernel-route claims' (the kernel class's OPV claims, gated per claim). A replay agrees.
+#[tokio::test]
+async fn g14_rewards_a_v2_claim_of_a_kernel_bound_class_never_earns_the_new_reward() {
+    use kaspa_consensus_core::palw_opv_bootstrap_v1::{OpvClassFactsV1, OpvEligibilityViewV1, PalwRewardChannelV1};
+    kaspa_core::log::try_init_logger("warn");
+    let mut cw = Cw::new().await;
+    let refusal = cw.facts(cw.v2_class, PRODUCERS[0]).class_admission_refusal.unwrap_or_default();
+    assert!(refusal.contains("earns no reward"), "before its conformance the class earns nothing: {refusal}");
+    let (_, old_rules) = cw.onboarded_v2_claims_on_the_legacy_channel(PRODUCERS[0]).await;
+    assert!(!old_rules.contains("earns no reward"), "what refuses it is the old rules, never the gate: {old_rules}");
+    // The class's new reward channel is its kernel class's OPV claims: derived-eligible on the drill terms (the binding's own path).
+    let route = cw.net.api().expect("the route");
+    let ledger = route.ledger().unwrap();
+    let binding = route.kernel_binding_v1(&cw.v2_class).expect("kernel-bound");
+    let facts = OpvClassFactsV1::of_registered(&ledger, &binding.kernel_class.as_bytes()).expect("the kernel class stands");
+    let policy = route.header.opv.expect("the OPV policy");
+    let view =
+        OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: 0, sampled_gates_reward: true, test_eligible: &[] };
+    assert!(
+        route.v2_class_reward_eligibility_v1(&ledger, &cw.v2_class, cw.net.daa(), &view).is_ok(),
+        "E1-E7 hold for its kernel class"
+    );
+    assert_eq!(
+        facts.opv_id,
+        binding.kernel_class.as_bytes(),
+        "bound to its OPV kernel class: that class's claims are the new channel"
+    );
+    // The two channels name their budgets; a V2 root draws the legacy one whatever the class passed.
+    assert_eq!(PalwRewardChannelV1::ALL, [PalwRewardChannelV1::LegacyPanelRoute, PalwRewardChannelV1::KernelRoute]);
+    let z = cw.net.replay().await;
+    cw.net.assert_same(&z, "replay");
+}
+
+/// **On the release terms a sampled conformance earns nothing** (the ruled floor of 128 effective bits, and GAP-70: only the complete
+/// check gates rewards): the conformance passes (the record is G14_ELIGIBLE, the onboarding gate Ready) — a non-reward signal — but
+/// E6 refuses (`POLICY_NOT_VERIFIED`, GAP-70) — the class stays Registered, holds no share, and every claim of it is refused.
+#[tokio::test]
+async fn g14_rewards_on_the_release_terms_a_sampled_conformance_earns_nothing() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut cw = Cw::over_floor(|c| TestConsensus::new(c), 128).await;
+    cw.pass_conformance().await;
+    assert_eq!(cw.gate(), PalwOnboardingGateV1::Ready, "the onboarding gate alone would activate it");
+    assert_eq!(cw.attempt().record.state, S::G14Eligible, "never ACTIVE_REWARDABLE");
+    let state = cw.net.chain.tip_state().1;
+    assert!(matches!(state.class(&cw.v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }), "held Registered");
+    assert_eq!(state.class_share_permille(&cw.v2_class), None, "no share");
+    let refusal = cw.facts(cw.v2_class, PRODUCERS[0]).class_admission_refusal.unwrap_or_default();
+    assert!(refusal.contains("POLICY_NOT_VERIFIED") && refusal.contains("GAP-70"), "E6, GAP-70: {refusal}");
+}
+
+/// **A class that never began onboarding never earns**: registered on a network with the gate armed, it passes its activation DAA
+/// and stays Registered (no share), and its claims are refused `NOT_ONBOARDED` — whatever seats it gathers.
+#[tokio::test]
+async fn g14_rewards_a_class_that_never_began_onboarding_never_activates() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut cw = Cw::new().await;
+    let f = onb_fixture(13);
+    let o = cw.net.v2_registration(&f, OUTSIDER, cw.net.daa() + 3);
+    let Obj::ClassRegisteredTirV1 { class_id, activation_daa, .. } = &o else { unreachable!() };
+    let (class, activation) = (*class_id, *activation_daa);
+    cw.net.send(vec![(OUTSIDER, o)]).await;
+    cw.net.beat_to(activation + 3).await;
+    let state = cw.net.chain.tip_state().1;
+    assert!(matches!(state.class(&class).unwrap().status, PalwClassStatusV2::Registered { .. }), "past its activation, still held");
+    assert_eq!(state.class_share_permille(&class), None);
+    let refusal = cw.facts(class, OUTSIDER).class_admission_refusal.unwrap_or_default();
+    assert!(refusal.contains("NOT_ONBOARDED"), "{refusal}");
+}
+
+/// **The two reward channels never mix** (the user's ruling of 2026-10-09, replacing a grandfathering flag). A class registered and
+/// Active BEFORE the fence keeps earning through the OLD Panel route, whose verification stays in force in full: the reward gate does
+/// not touch it (no G14 refusal — and no G14 bypass either). Its NEW, OPV rewards still require the gate: its program under OPV is
+/// not eligible (`NOT_ONBOARDED`) and its OPV registration is refused. In the other direction, a class registered past the fence that
+/// never onboarded earns nothing through the Panel route's rules: it stays Registered and its claims are refused `NOT_ONBOARDED`.
+#[tokio::test]
+async fn g14_rewards_a_legacy_panel_route_class_keeps_the_old_route_and_never_earns_opv_without_the_gate() {
+    use kaspa_consensus_core::palw_opv_bootstrap_v1::{OpvClassFactsV1, OpvEligibilityViewV1, OpvIneligibleV1};
+    kaspa_core::log::try_init_logger("warn");
+    let (config, bundle, premine, floats) = kernel_config_onboarding();
+    let mut params = config.params.clone();
+    params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(60), Vec::new()));
+    let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new);
+    net.beat_to(1).await;
+    let refusal = |net: &Net, class: Hash64, card: usize| {
+        net.chain
+            .ctx
+            .consensus
+            .palw_producer_facts_v2(class, Some(net.bond(card).0))
+            .expect("facts")
+            .class_admission_refusal
+            .unwrap_or_default()
+    };
+    // ---- a legacy Panel-route class: registered and Active before the fence ----
+    let legacy = onb_fixture(15);
+    let o = net.v2_registration(&legacy, REGISTRANT, net.daa() + 3);
+    let Obj::ClassRegisteredTirV1 { class_id, activation_daa, .. } = &o else { unreachable!() };
+    let (legacy_class, activation) = (*class_id, *activation_daa);
+    assert!(activation < 60);
+    net.send(vec![(REGISTRANT, o)]).await;
+    net.beat_to(activation + 1).await;
+    assert!(matches!(net.chain.tip_state().1.class(&legacy_class).unwrap().status, PalwClassStatusV2::Active));
+    net.beat_to(61).await;
+    let r = refusal(&net, legacy_class, REGISTRANT);
+    assert!(!r.contains("earns no reward"), "the legacy class keeps the OLD Panel route, in full (no G14 refusal): {r}");
+    // ---- its NEW (OPV) rewards still need the gate ----
+    let d = k2_tir_v2_descriptor();
+    let register = K::RegisterClassV2 {
+        mode: VerificationModeV1::OptimisticPublicVerification,
+        descriptor: d.digest(),
+        program_bytes: legacy.program.encode(),
+        plan: legacy.plan.clone(),
+        param_commitments: legacy.pc.clone(),
+    };
+    let o = net.route(REGISTRANT, &register);
+    net.send(vec![(REGISTRANT, o)]).await;
+    let facts = OpvClassFactsV1::of_registration(d.digest(), &legacy.program.encode(), &legacy.plan, &legacy.pc);
+    assert!(!net.ledger().opv.classes.contains(&facts.opv_id), "its OPV registration is refused");
+    let route = net.api().expect("the route");
+    let ledger = route.ledger().unwrap();
+    let policy = route.header.opv.expect("the OPV policy");
+    let view =
+        OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: 0, sampled_gates_reward: true, test_eligible: &[] };
+    assert_eq!(route.opv_eligibility_v1(&ledger, &facts, net.daa(), &view), Err(OpvIneligibleV1::NotOnboarded), "OPV needs the gate");
+    // ---- a class past the fence: the Panel route's rules alone open nothing ----
+    let fresh = onb_fixture(16);
+    let o = net.v2_registration(&fresh, OUTSIDER, net.daa() + 3);
+    let Obj::ClassRegisteredTirV1 { class_id, activation_daa, .. } = &o else { unreachable!() };
+    let (fresh_class, activation) = (*class_id, *activation_daa);
+    net.send(vec![(OUTSIDER, o)]).await;
+    net.beat_to(activation + 3).await;
+    assert!(matches!(net.chain.tip_state().1.class(&fresh_class).unwrap().status, PalwClassStatusV2::Registered { .. }));
+    let r = refusal(&net, fresh_class, OUTSIDER);
+    assert!(r.contains("NOT_ONBOARDED"), "a post-fence class earns only through the G14 path: {r}");
+}
+
+// C4 round 4 (independent adversarial review): the onboarding court's share of the block's adjudication budget.
+mod c4r4;

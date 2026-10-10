@@ -317,6 +317,9 @@ pub enum PalwFilerPhaseV1 {
     Dismissed,
     /// The claim ended before the pursuit could (a neutral void, retirement) or the pursuit ran past its deadline.
     Expired,
+    /// The verifier's own replica cannot judge the claim (its tree is inconsistent or unavailable where the descent needs it): it
+    /// files nothing.
+    Unjudged,
 }
 
 /// The widest `StepRange` a held demand may name (`crate::palw_held_da_v1::PALW_HELD_DA_MAX_RANGE_LEAVES_V1`): the bisection's last
@@ -334,6 +337,10 @@ pub enum PalwLegacyProbeV1 {
     /// `DefaultAccusedHeld { StepLeaf { leaf } }` at the located first divergent leaf: the producer's answer convicts itself (the
     /// one-move verdict reads the committed inputs), its silence defaults (DA-7).
     Terminal { leaf: u64 },
+    /// LG14-B's tag 157: a demand of one legacy held unit (an interior node of the claim's step or checkpoint tree, or a leaf's
+    /// committed kernel witness) — the public descent's probe where `palw_legacy_held_da_v2` is in force. Answered by tag 158, whose
+    /// authenticated frontier the descent (`crate::palw_legacy_held_da_v2::palw_legacy_descent_next_v2`) reads.
+    HeldNode { unit: crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2 },
 }
 
 /// **The legacy bisection** (the localizer for non-fused leaves, RFC-0014 §4.2 over the existing held units): the first committed
@@ -441,23 +448,8 @@ pub fn palw_fraud_filer_next_v1(
     bisect: &PalwLegacyBisectV1,
     demandable: impl Fn(u64) -> bool,
 ) -> PalwFilerActionV1 {
-    if let Some(outcome) = facts.outcome {
-        return PalwFilerActionV1::Done(outcome);
-    }
-    if facts.ended {
-        return PalwFilerActionV1::Done(PalwFilerPhaseV1::Expired);
-    }
-    if !mismatch {
-        return PalwFilerActionV1::Done(PalwFilerPhaseV1::Honest);
-    }
-    if !facts.reserved && role != PalwFilerRoleV1::Watchdog && role != PalwFilerRoleV1::Seat {
-        return if facts.reservable { PalwFilerActionV1::Reserve } else { PalwFilerActionV1::Wait };
-    }
-    if facts.session_open || !facts.accusable {
-        return PalwFilerActionV1::Wait;
-    }
-    if !facts.binding_known {
-        return PalwFilerActionV1::Demand(PalwLegacyProbeV1::Binding { row: 0, tile: 0 });
+    if let Some(action) = palw_fraud_filer_prelude_v1(role, facts, mismatch) {
+        return action;
     }
     match bisect.located() {
         Some(leaf) if demandable(leaf) => PalwFilerActionV1::Demand(PalwLegacyProbeV1::Terminal { leaf }),
@@ -466,6 +458,54 @@ pub fn palw_fraud_filer_next_v1(
             Some((first, count)) => PalwFilerActionV1::Demand(PalwLegacyProbeV1::Range { first, count }),
             None => PalwFilerActionV1::Wait,
         },
+    }
+}
+
+/// The steps every localizer shares: the outcome, the end, the local verdict, the reservation, one session at a time, the binding read.
+fn palw_fraud_filer_prelude_v1(role: PalwFilerRoleV1, facts: &PalwFilerClaimFactsV1, mismatch: bool) -> Option<PalwFilerActionV1> {
+    if let Some(outcome) = facts.outcome {
+        return Some(PalwFilerActionV1::Done(outcome));
+    }
+    if facts.ended {
+        return Some(PalwFilerActionV1::Done(PalwFilerPhaseV1::Expired));
+    }
+    if !mismatch {
+        return Some(PalwFilerActionV1::Done(PalwFilerPhaseV1::Honest));
+    }
+    if !facts.reserved && role != PalwFilerRoleV1::Watchdog && role != PalwFilerRoleV1::Seat {
+        return Some(if facts.reservable { PalwFilerActionV1::Reserve } else { PalwFilerActionV1::Wait });
+    }
+    if facts.session_open || !facts.accusable {
+        return Some(PalwFilerActionV1::Wait);
+    }
+    if !facts.binding_known {
+        return Some(PalwFilerActionV1::Demand(PalwLegacyProbeV1::Binding { row: 0, tile: 0 }));
+    }
+    None
+}
+
+/// **The common filer's step over LG14-B's public descent** (where `palw_legacy_held_da_v2` is in force): the same prelude as
+/// [`palw_fraud_filer_next_v1`] — so the reservation holds the claim's ends (Final included) for the whole descent, and its sessions
+/// ride the reservation's own budget — then the descent's next move (`palw_legacy_descent_next_v2` over the verifier's own tree and
+/// the authenticated frontiers): a held node demanded (tag 157), the first divergent leaf's terminal (a non-fused leaf's `StepLeaf`
+/// demand; a fused leaf is the held dissection's, `HeldRoute`, which a reservation keeps open past `Final`), or nothing to file.
+pub fn palw_fraud_filer_next_descent_v1(
+    role: PalwFilerRoleV1,
+    facts: &PalwFilerClaimFactsV1,
+    mismatch: bool,
+    descent: crate::palw_legacy_held_da_v2::PalwLegacyDescentStepV2,
+    demandable: impl Fn(u64) -> bool,
+) -> PalwFilerActionV1 {
+    use crate::palw_legacy_held_da_v2::PalwLegacyDescentStepV2 as D;
+    if let Some(action) = palw_fraud_filer_prelude_v1(role, facts, mismatch) {
+        return action;
+    }
+    match descent {
+        D::Agrees => PalwFilerActionV1::Done(PalwFilerPhaseV1::Honest),
+        D::Demand(unit) => PalwFilerActionV1::Demand(PalwLegacyProbeV1::HeldNode { unit }),
+        D::FirstDivergentLeaf(leaf) if demandable(leaf) => PalwFilerActionV1::Demand(PalwLegacyProbeV1::Terminal { leaf }),
+        D::FirstDivergentLeaf(leaf) => PalwFilerActionV1::HeldRoute { leaf },
+        D::OwnTreeInconsistent { .. } | D::OwnTreeUnavailable { .. } => PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged),
     }
 }
 
@@ -480,6 +520,7 @@ impl PalwLegacyProbeV1 {
             Self::Binding { row, tile } => PalwDaUnitV1::Event { row, tile },
             Self::Range { first, count } => PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first, count }),
             Self::Terminal { leaf } => PalwDaUnitV1::Held(PalwHeldMissingV1::StepLeaf { leaf }),
+            Self::HeldNode { unit } => PalwDaUnitV1::LegacyHeldV2(unit),
         }
     }
 }
@@ -559,6 +600,23 @@ pub fn palw_fraud_filer_demand_object_v1(
         }
         PalwLegacyProbeV1::Range { first, count } => PalwHeldMissingV1::StepRange { first, count },
         PalwLegacyProbeV1::Terminal { leaf } => PalwHeldMissingV1::StepLeaf { leaf },
+        PalwLegacyProbeV1::HeldNode { unit } => {
+            use crate::palw_legacy_held_da_v2::{
+                PALW_LEGACY_HELD_DEMAND_MLDSA87_CONTEXT_V2, PALW_LEGACY_HELD_VERSION_V2, PalwLegacyHeldDemandV2,
+                palw_legacy_held_demand_message_v2,
+            };
+            let binding = binding.ok_or_else(|| "no binding read off the chain yet".to_string())?.clone();
+            if binding.committed_execution_root != *claim_execution_root {
+                return Err("the binding is not the claim's".to_string());
+            }
+            let mut demand =
+                PalwLegacyHeldDemandV2 { version: PALW_LEGACY_HELD_VERSION_V2, claim, unit, accuser, binding, signature: Vec::new() };
+            let message = palw_legacy_held_demand_message_v2(network_domain.as_byte_slice(), &demand);
+            demand.signature = sign(message.as_byte_slice(), PALW_LEGACY_HELD_DEMAND_MLDSA87_CONTEXT_V2)
+                .filter(|signature| !signature.is_empty())
+                .ok_or_else(|| "no signing key for the accuser".to_string())?;
+            return Ok(PalwConsensusObjectV2::LegacyHeldDemandedV2 { demand: Box::new(demand) });
+        }
     };
     let binding = binding.ok_or_else(|| "no binding read off the chain yet".to_string())?.clone();
     crate::palw_da_rcore_v1::palw_da_held_accusation_object_v1(
@@ -768,6 +826,29 @@ mod tests {
         early.sync_palw_legacy_public_filer_v1();
         assert!(
             matches!(early.validate_palw_legacy_public_filer_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_rcore_plus"))
+        );
+    }
+
+    /// **LG14-B's descent through the common engine**: the same reservation-first prelude, then the descent's move — a held node, the
+    /// non-fused terminal, the fused leaf's held route, or nothing to file.
+    #[test]
+    fn the_descent_rides_the_same_engine() {
+        use crate::palw_legacy_held_da_v2::{PalwLegacyDescentStepV2 as D, PalwLegacyHeldUnitV2};
+        let unreserved = PalwFilerClaimFactsV1 { reservable: true, accusable: true, binding_known: true, ..Default::default() };
+        let node = PalwLegacyHeldUnitV2::StepNode { level: 3, index: 1 };
+        let next = |facts: &PalwFilerClaimFactsV1, step| {
+            palw_fraud_filer_next_descent_v1(PalwFilerRoleV1::PublicBond, facts, true, step, |l| l != 7)
+        };
+        assert_eq!(next(&unreserved, D::Demand(node)), PalwFilerActionV1::Reserve, "the reservation holds the descent's claim first");
+        let reserved = PalwFilerClaimFactsV1 { reserved: true, ..unreserved.clone() };
+        assert_eq!(next(&reserved, D::Demand(node)), PalwFilerActionV1::Demand(PalwLegacyProbeV1::HeldNode { unit: node }));
+        assert_eq!(next(&reserved, D::FirstDivergentLeaf(5)), PalwFilerActionV1::Demand(PalwLegacyProbeV1::Terminal { leaf: 5 }));
+        assert_eq!(next(&reserved, D::FirstDivergentLeaf(7)), PalwFilerActionV1::HeldRoute { leaf: 7 });
+        assert_eq!(next(&reserved, D::OwnTreeUnavailable { level: 0, index: 0 }), PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged));
+        assert_eq!(
+            PalwLegacyProbeV1::HeldNode { unit: node }.unit(),
+            crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(node),
+            "the unit the fold records as answered"
         );
     }
 

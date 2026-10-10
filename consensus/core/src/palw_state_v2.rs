@@ -8557,6 +8557,17 @@ pub enum PalwConsensusObjectV2 {
     /// `signing_message()` under the receipt context, checked at acceptance. Admitted structurally by the kernel
     /// (`admit_receipt_v1`) against the claim's INTERIM assignment. **Tag 111, declared explicitly.**
     KernelConstraintReceiptV1 { receipt: Box<misaka_palw_kernel::receipt::PalwConstraintReceiptV1>, signature: Vec<u8> } = 111,
+    /// **G14 (tag 113, C4 F-C4R3-03): one chunk of a prosecution object in the kernel route's OWN chunk lane** — a `FileProof` or a
+    /// position `Respond` (tag 110) or an onboarding refutation (tag 105) too large for one carrier. The certification lane's
+    /// `ObjectChunk` table is ONE network-wide table of eight groups that eight junk chunks hold for 4,000 DAA; here a group is
+    /// keyed by the bond that SIGNS its chunks (`signature`: the opener's ML-DSA-87 over
+    /// [`crate::palw_kernel_route_v1::palw_kernel_chunk_message_v1`]), each bond holds at most
+    /// [`crate::palw_kernel_route_v1::PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1`] groups backed by a deposit forfeited if the group never
+    /// completes, and a group never outlives its target's deadline — so no set of bonds can hold another's prosecution off the chain.
+    /// The assembled object's own signature is checked at the completing chunk; the object is then applied by its own arm. Rows in
+    /// the route's aux table 41. Dropped by name below `palw_probabilistic_constraints_v1`. **Tag 113, declared explicitly** (the
+    /// lead's allocation of 2026-10-08; 112 unallocated).
+    KernelRouteChunkV1 { chunk: Box<crate::palw_kernel_route_v1::PalwKernelChunkV1>, signature: Vec<u8> } = 113,
     // Tags 104–108 are lane D's onboarding objects (phase 3; the lead's allocation of 2026-10-08), 109 P0's evidence. Dropped by name below
     // `palw_probabilistic_constraints_v1` (the envelope, 108, below `palw_signed_registration_v1`); rows in the route's aux tables.
     /// **G14 phase 3 (tag 104): the registrant of an existing V2 class states that its artifact has kernel root `kernel_param_root`**
@@ -8613,8 +8624,8 @@ pub enum PalwConsensusObjectV2 {
     // Tags 150–153 are lane DA16's provider court (RFC-0009's reservation; the lead's allocation of 2026-10-09). Dropped by name below
     // `palw_provider_court_v1`; rows in the kernel route's aux tables 43–45. Every signature: the signer's ML-DSA-87 over
     // [`crate::palw_provider_court_v1::palw_provider_court_message_v1`] (kind = the tag, payload = the Borsh of the other fields).
-    /// **(tag 150): a provider's bonded lease** of a subject's public material until `serve_until_daa`, reserving `reserved` of its
-    /// free collateral. **Tag 150.**
+    /// **(tag 150): a provider's bonded lease** of a kernel claim's committed material until `serve_until_daa`, reserving `reserved` of
+    /// its free collateral. A lease of the withdrawn `Artifact` subject (ADR-0177 D1) decodes and is refused past the fence. **Tag 150.**
     ProviderLeaseV1 {
         subject: crate::palw_provider_court_v1::ProviderSubjectV1,
         reserved: u64,
@@ -8633,7 +8644,8 @@ pub enum PalwConsensusObjectV2 {
         challenger: PalwBondKeyV2,
         signature: Vec<u8>,
     } = 151,
-    /// **(tag 152): the provider's answer** — the unit, verified against the chain's own root. Large answers ride `ObjectChunk`s.
+    /// **(tag 152): the provider's answer** — the claim position, verified against the claim's commitments. Large answers ride
+    /// `ObjectChunk`s.
     /// **Tag 152.**
     ProviderAnswerV1 {
         subject: crate::palw_provider_court_v1::ProviderSubjectV1,
@@ -8654,6 +8666,20 @@ pub enum PalwConsensusObjectV2 {
     DisputeReservedV1 { reservation: Box<crate::palw_legacy_public_filer_v1::PalwDisputeReservationV1>, signature: Vec<u8> } = 154,
     /// **(tag 155): the reserver ends its own reservation**; its deposit is held until the claim resolves. **Tag 155.**
     DisputeReleasedV1 { claim: Hash64, reserver: PalwBondKeyV2, signature: Vec<u8> } = 155,
+    // ---- Lane LG14-B (RFC-0014 §4–§5 on the legacy V2 route, user decision GAP-80): tags 157–159, dormant behind
+    // `palw_legacy_held_da_v2`; dropped by name below it (A-2). See [`crate::palw_legacy_held_da_v2`]. ----
+    /// **(tag 157): a demand of one legacy held unit** — an interior node of a V2 claim's step or checkpoint tree, or a leaf's
+    /// committed half (CKW) — with the claim's binding. Opens an R-core+ DA session naming exactly that unit (no draws), under every
+    /// gate, budget, clock and record of DA-1…DA-8. Signed by the accuser's bond. **Tag 157.**
+    LegacyHeldDemandedV2 { demand: Box<crate::palw_legacy_held_da_v2::PalwLegacyHeldDemandV2> } = 157,
+    /// **(tag 158): the answer to every open session that demands a legacy held unit** — checked by hash arithmetic against the
+    /// claim's roots (membership alone for a CKW, never an execution) and the identity rule; the producer or a bond liable on the
+    /// claim (X7) discloses and signs it. **Tag 158.**
+    LegacyHeldAnsweredV2 { answer: Box<crate::palw_legacy_held_da_v2::PalwLegacyHeldAnswerCarriageV2> } = 158,
+    /// **(tag 159): a non-fused step convicted by its committed leaf hash** — the one-move court's kernel over the committed inputs
+    /// and the accuser's own model rows, without the output preimage. A direct objective proof: it lands whatever session or court
+    /// is open on the claim. Signed by the accuser's bond. **Tag 159.**
+    LegacyLeafRecomputedV2 { accusation: Box<crate::palw_legacy_held_da_v2::PalwLegacyLeafRecomputeV2> } = 159,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -8682,6 +8708,22 @@ pub fn palw_object_is_provider_court_v1(object: &PalwConsensusObjectV2) -> bool 
     )
 }
 
+/// **Is this object the legacy held DA's (tags 157–159, lane LG14-B) — or an int-12 object carrying its appended unit?** A variant
+/// an older build cannot decode and skips (A-2): below `Params::palw_legacy_held_da_v2` the acceptance walk drops it by name before
+/// any slot, rent or budget is charged for it, and the fold refuses it as the second lock — a tag-55 answer, a tag-67 IR demand or a
+/// tag-83 pipeline demand naming `PalwDaUnitV1::LegacyHeldV2` included, so the appended unit never enters state below the fence.
+pub fn palw_object_is_legacy_held_da_v2(object: &PalwConsensusObjectV2) -> bool {
+    match object {
+        PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
+        | PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }
+        | PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => true,
+        PalwConsensusObjectV2::MaterialDisclosedV2 { unit, .. } => unit.is_legacy_held_v2(),
+        PalwConsensusObjectV2::DefaultAccusedTirStep { accusation } => accusation.unit.is_legacy_held_v2(),
+        PalwConsensusObjectV2::DefaultAccusedPipelineStep { accusation } => accusation.unit.is_legacy_held_v2(),
+        _ => false,
+    }
+}
+
 /// **Is this object the signed registration envelope (tag 108)?**
 pub fn palw_object_is_signed_registration_v1(object: &PalwConsensusObjectV2) -> bool {
     matches!(object, PalwConsensusObjectV2::SignedRegistrationV1 { .. })
@@ -8694,11 +8736,16 @@ pub fn palw_object_is_panel_v3_v1(object: &PalwConsensusObjectV2) -> bool {
     matches!(object, PalwConsensusObjectV2::PanelBeaconProofV3 { .. })
 }
 
-/// **Is this object a kernel route object (tag 110 or 111)** — a variant an older build cannot decode and skips (A-2)? Below
+/// **Is this object a kernel route object (tag 110, 111 or 113)** — a variant an older build cannot decode and skips (A-2)? Below
 /// `Params::palw_probabilistic_constraints_v1` the acceptance walk drops it by name before any slot, rent or budget is charged
 /// for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_kernel_route_v1(object: &PalwConsensusObjectV2) -> bool {
-    matches!(object, PalwConsensusObjectV2::KernelRouteV1 { .. } | PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. })
+    matches!(
+        object,
+        PalwConsensusObjectV2::KernelRouteV1 { .. }
+            | PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. }
+            | PalwConsensusObjectV2::KernelRouteChunkV1 { .. }
+    )
 }
 
 /// **Is this object an RFC-0007 audit-mesh move** (tag 102 or 103) — a variant an older build cannot decode and skips (A-2)? Below
@@ -11003,6 +11050,13 @@ pub enum PalwStateV2Error {
          held dissection where its class is answerable, and not at all where it is not (ADR-0152 §4-ter)"
     )]
     DaUnitNeedsDissection { claim: Hash64, leaf: u64 },
+    /// LG14-B: a legacy held object (tags 157–159), or an int-12 object carrying the appended unit, below
+    /// `palw_legacy_held_da_v2` — the second lock behind the acceptance walk's drop by name (A-2).
+    #[error("the legacy held DA (tags 157–159) is dormant: palw_legacy_held_da_v2 is not in force at this block (LG14-B)")]
+    LegacyHeldDaDormant,
+    /// LG14-B: a legacy held demand, answer or leaf recompute the fold refuses.
+    #[error("claim {claim}: the legacy held DA refuses this object: {why} (LG14-B)")]
+    LegacyHeldDaRefused { claim: Hash64, why: String },
     #[error(
         "the accusation on claim {claim} carries a binding that answers another job or class ({why}); its filer \
          sends ExecutorRefuted instead (DA-3, J-5)"
@@ -11118,6 +11172,10 @@ pub enum PalwStateV2Error {
     /// a lister with no bond).
     #[error("an adapter class listing is refused: {0}")]
     AdapterClassRefused(String),
+    /// **G14-for-rewards** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`, past the OPV fence): the class has not passed the
+    /// onboarding/G14 path, so it earns no reward and no consensus work weight — no claim of it is admitted on any lane.
+    #[error("class {class} earns no reward or consensus work weight: {code} ({why})")]
+    ClassNotRewardable { class: Hash64, code: &'static str, why: String },
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
@@ -17425,6 +17483,17 @@ impl PalwFoldReadV1<'_> {
     /// ([`Self::check_model_market_admits`]) both ask it, so a claim and a position cannot disagree
     /// about whether the chain serves a model (the 2026-09-23 Position route matrix, P-B3: they did —
     /// a buy filled on a class whose every claim the registry refused).
+    /// **G14-for-rewards at this read** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`): `Unarmed` below the OPV fence.
+    pub(crate) fn reward_gate_v1(&self, class_id: &Hash64, daa: u64) -> crate::palw_opv_bootstrap_v1::PalwRewardGateV1 {
+        crate::palw_opv_bootstrap_v1::palw_reward_gate_v1(
+            self.state,
+            &self.params.base_class_id(),
+            self.extras.kernel_route.as_ref(),
+            class_id,
+            daa,
+        )
+    }
+
     fn class_lifecycle_refusal(&self, class_id: &Hash64) -> Option<String> {
         self.extras.model_registry.as_ref()?;
         if *class_id == self.params.base_class_id() {
@@ -17633,6 +17702,14 @@ impl PalwFoldReadV1<'_> {
             now_daa,
             incoming == PalwGatedClaimV1::Attempt,
         )?;
+        // **G14-for-rewards** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`, past the OPV fence): a post-fence class that never passed
+        // the onboarding/G14 path takes no claim on any lane. Every claim this gate sees is a V2-root claim, and a V2 root is not
+        // convictable by the kernel route, so an ONBOARDED class's claims get nothing beyond the old rules below — the registry
+        // lifecycle, the Panel verify deadline and the Panel room are all asked (the Lead's GAP-81 decision: the new rewards are per
+        // CLAIM verification route; only kernel-route claims earn them). Unarmed, exempt or onboarded: the rules below, byte for byte.
+        if let crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { code, why } = self.reward_gate_v1(class_id, now_daa) {
+            return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
+        }
         let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
         let whole = incoming.whole_claims(self.params.fp_quanta_per_canonical_job as u64);
         if let Some(state) = self.class_lifecycle_refusal(class_id) {
@@ -24774,7 +24851,7 @@ impl<'a> TransitionBuilder<'a> {
 
     /// **A registered class's row, opened from its carriage** (ADR-0135 Decisions 2 and 3): the
     /// work is read off the graph, the profile derived from it, and the class starts PREFETCHING
-    /// (or REGISTERED, never admitting, where the graph derives no work — the VM boundary).
+    /// (or REGISTERED, never admitting, where the graph derives no supported kernel work).
     /// ADR-0135 manifest V2: the registrant's byte count lands on the class's registry row. The
     /// signature is the acceptance layer's (like a readiness proof's); here the rule is who may
     /// speak for the class and what the row does with the number.
@@ -27976,7 +28053,7 @@ impl<'a> TransitionBuilder<'a> {
     /// and the charge for being WRONG is intact and symmetric — `slash_dissenting_seats` takes the
     /// `reserved` from a `Withheld` seat when the quorum licenses, and from a `Valid` seat when the
     /// quorum defaults the producer. What is missing is the other side of the ledger: **nothing in
-    /// this transition ever PAYS a `PalwPanelSeatV2`.** ADR-0033's `PalwPaidAttesterV1` pays the
+    /// this transition ever PAYS a `PalwPanelSeatV2`.** ADR-0033's retired V1 attester accounting pays the
     /// V1 credit lane's attesters, `palw_credit` is `None` on every shipped preset, and the block's
     /// escrowed carve is released to the worker, not to the panel. So answering carries a downside
     /// and no upside, and the seat that maximises its own outcome files nothing — after which the
@@ -30665,7 +30742,8 @@ fn open_da_session_rcore_v1(
                     | PalwDaUnitV1::TirRowNode { .. }
                     | PalwDaUnitV1::TirStepRun { .. }
                     | PalwDaUnitV1::PipelineStepLeaf { .. }
-                    | PalwDaUnitV1::PipelineStepNode { .. } => false,
+                    | PalwDaUnitV1::PipelineStepNode { .. }
+                    | PalwDaUnitV1::LegacyHeldV2(_) => false,
                 })
                 .collect()
         }
@@ -30680,6 +30758,10 @@ fn open_da_session_rcore_v1(
         ) => Vec::new(),
         // Pipeline-claim data availability: a pipeline step unit, named only — no draws.
         (PalwDaUnitV1::PipelineStepLeaf { .. } | PalwDaUnitV1::PipelineStepNode { .. }, None) => Vec::new(),
+        // LG14-B (tag 157): a legacy held unit, named only — no draws. Its bound is the binding tag 157's arm checked
+        // (`open_da_session_legacy_held_v2`), and the drawn units' purpose (an answer the producer cannot pick) is the descent's own:
+        // the verifier names the next unit from the last answer.
+        (PalwDaUnitV1::LegacyHeldV2(_), None) => Vec::new(),
         _ => return Err(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "an accusation's unit and binding disagree in kind" }),
     };
     let mut units = Vec::with_capacity(1 + drawn.len());
@@ -30780,6 +30862,144 @@ fn open_da_session_tir_step_v1(
     open_da_session_rcore_v1(builder, ctx, claim_id, accusation.accuser, accusation.unit, None)
 }
 
+/// **LG14-B (tag 157): a legacy held demand opens an R-core+ DA session** — an interior node of a V2 claim's step or checkpoint
+/// tree, or one leaf's committed half (CKW) ([`crate::palw_legacy_held_da_v2`]).
+///
+/// The fence; the version; R-core+ in force; a V2 claim (an IR class's claim descends by its own `TirStepNode`); the unit bounded by
+/// the binding the demand carries, authenticated against the claim's `execution_root`, and in the court's scope (no model copy,
+/// ADR-0177 D2); the identity rule over that binding (J-5: a binding of another job is filed as `ExecutorRefuted`, never demanded
+/// against). Then exactly [`open_da_session_rcore_v1`] — DA-8's budgets, DA-6's exposure, a seat's pause — naming the one unit.
+fn open_da_session_legacy_held_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    demand: &crate::palw_legacy_held_da_v2::PalwLegacyHeldDemandV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_legacy_held_da_v2::{PALW_LEGACY_HELD_VERSION_V2, palw_legacy_held_check_demand_v2};
+    if !builder.extras.legacy_held_da_v2_active {
+        return Err(PalwStateV2Error::LegacyHeldDaDormant);
+    }
+    let claim_id = demand.claim;
+    let refused = |why: String| PalwStateV2Error::LegacyHeldDaRefused { claim: claim_id, why };
+    if demand.version != PALW_LEGACY_HELD_VERSION_V2 {
+        return Err(refused(format!("version {}; this build reads version {PALW_LEGACY_HELD_VERSION_V2}", demand.version)));
+    }
+    if !builder.params.rcore_plus_active_at(ctx.daa_score) {
+        return Err(refused("a legacy held demand opens an R-core+ session, and R-core+ is not in force".to_string()));
+    }
+    let (execution_root, class_id) = {
+        let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
+        (claim.execution_root, claim.class_id)
+    };
+    if builder.state.tir_classes.contains_key(&class_id) {
+        return Err(refused("an IR claim's tree is descended by TirStepNode, on the IR route".to_string()));
+    }
+    palw_legacy_held_check_demand_v2(&execution_root, &demand.unit, &demand.binding).map_err(|e| refused(e.to_string()))?;
+    if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &demand.binding) {
+        return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
+    }
+    open_da_session_rcore_v1(builder, ctx, claim_id, demand.accuser, crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(demand.unit), None)
+}
+
+/// **LG14-B (tag 158): the answer to every open session that demands a legacy held unit.** DA-4's admission
+/// ([`da_answer_admitted_v1`]: the court, the claim, a discloser liable on it (X7), a demanded unit not yet answered), then the answer
+/// by hash arithmetic against the claim's roots at the claim's ladder ([`crate::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v2`]
+/// — membership alone for a CKW: retrieval, never adjudication), then the identity rule (J-5), then DA-4's record
+/// ([`da_answer_recorded_v1`]: the unit answered, every session whose units are all answered refuted). A wrong answer is refused and
+/// the obligation stands until its deadline (DA-7's default, never a fraud verdict).
+fn apply_legacy_held_answer_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    carriage: &crate::palw_legacy_held_da_v2::PalwLegacyHeldAnswerCarriageV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_legacy_held_da_v2::{PALW_LEGACY_HELD_VERSION_V2, palw_legacy_held_check_answer_v2};
+    if !builder.extras.legacy_held_da_v2_active {
+        return Err(PalwStateV2Error::LegacyHeldDaDormant);
+    }
+    let claim_id = carriage.claim;
+    let refused = |why: String| PalwStateV2Error::LegacyHeldDaRefused { claim: claim_id, why };
+    if carriage.version != PALW_LEGACY_HELD_VERSION_V2 {
+        return Err(refused(format!("version {}; this build reads version {PALW_LEGACY_HELD_VERSION_V2}", carriage.version)));
+    }
+    let unit = crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(carriage.unit);
+    let (claim, record, in_run) = da_answer_admitted_v1(builder, ctx, claim_id, &unit, carriage.discloser)?;
+    let network = builder.extras.held_context_ladder.unwrap_or(crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
+    let ladder = builder.state.class_step_ladder_v1(&claim.class_id, network);
+    palw_legacy_held_check_answer_v2(&claim.execution_root, &carriage.unit, &carriage.binding, &carriage.answer, ladder)
+        .map_err(|e| refused(e.to_string()))?;
+    if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &carriage.binding) {
+        return Err(refused(why));
+    }
+    da_answer_recorded_v1(builder, claim_id, record, unit, false, in_run, ctx.daa_score)
+}
+
+/// **LG14-B (tag 159): a non-fused step convicted by its committed leaf hash** — the one-move court's gates in its order (the
+/// fence, a claim not voided, a V2 class, the executor and the roots the claim's, an accuser that is not the producer, an Active
+/// bond at or above the floor), then the verdict ([`crate::palw_legacy_held_da_v2::palw_legacy_leaf_recompute_verdict_v2`]) bound to
+/// the claim and its class's registered artifact root. `ExecutorGuilty` takes the court-verdict conviction funnel
+/// (`convict_by_court_verdict_v1`: live → voided `CourtFraud`, every session on it closed; `Final` → reversed, S3/U3) — before or
+/// after `Final`, whatever session or court is open (a direct objective proof, RFC-0014 §7.4). `FalseAccusation` costs the accuser
+/// the one-move court's charge.
+fn apply_legacy_leaf_recompute_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    accusation: &crate::palw_legacy_held_da_v2::PalwLegacyLeafRecomputeV2,
+) -> Result<(), PalwStateV2Error> {
+    if !builder.extras.legacy_held_da_v2_active {
+        return Err(PalwStateV2Error::LegacyHeldDaDormant);
+    }
+    let claim_id = accusation.claim;
+    let refused = |why: String| PalwStateV2Error::LegacyHeldDaRefused { claim: claim_id, why };
+    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    if matches!(claim.phase, PalwClaimPhaseV2::Voided { .. }) {
+        return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "LegacyLeafRecomputedV2" });
+    }
+    if builder.state.tir_classes.contains_key(&claim.class_id) {
+        return Err(refused("an IR claim's step is tried by the IR one-move court".to_string()));
+    }
+    if accusation.executor_bond != claim.bond {
+        return Err(PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(claim_id));
+    }
+    if accusation.execution_root != claim.execution_root || accusation.trace_root != claim.trace_root {
+        return Err(PalwStateV2Error::ShardCourtRootsDiffer(claim_id));
+    }
+    let accuser = accusation.accuser_bond;
+    if accuser == claim.bond {
+        return Err(PalwStateV2Error::ShardCourtAccuserIsTheProducer(accuser));
+    }
+    let accuser_record = builder.state.bonds.get(&accuser).ok_or(PalwStateV2Error::MissingBond(accuser))?.clone();
+    if !matches!(accuser_record.status, PalwBondStatusV2::Active) {
+        return Err(PalwStateV2Error::BondNotActive(accuser));
+    }
+    let floor = builder.params.min_collateral_sompi();
+    if accuser_record.collateral < floor {
+        return Err(PalwStateV2Error::BondBelowFloor { bond: accuser, collateral: accuser_record.collateral, floor });
+    }
+    let network = builder
+        .extras
+        .shard_court_ladder
+        .or(builder.extras.held_context_ladder)
+        .unwrap_or(crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
+    let ladder = builder.state.class_step_ladder_v1(&claim.class_id, network);
+    let artifact_root = builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
+    let bound_to =
+        crate::palw_shard_court_v1::PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: claim.class_id, artifact_root };
+    match crate::palw_legacy_held_da_v2::palw_legacy_leaf_recompute_verdict_v2(accusation, &bound_to, ladder)
+        .map_err(|e| refused(e.to_string()))?
+    {
+        crate::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty => {
+            builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?;
+        }
+        crate::palw_shard_court_v1::PalwShardCourtVerdictV1::FalseAccusation => {
+            let charge = crate::palw_shard_court_v1::palw_shard_court_false_accusation_charge_v1(claim.reserved, floor);
+            builder.slash_seat(accuser, charge, floor)?;
+        }
+        crate::palw_shard_court_v1::PalwShardCourtVerdictV1::NeedsDissection => {
+            return Err(refused("a fused-attention leaf is tried by its held dissection".to_string()));
+        }
+    }
+    Ok(())
+}
+
 /// **ADR-0152 DA-4 (M3): `MaterialDisclosedV2` — an answer to every open session that demands the
 /// unit.**
 ///
@@ -30801,26 +31021,9 @@ fn apply_da_answer_v1(
     answer: &crate::palw_da_rcore_v1::PalwDaAnswerV1,
     discloser: PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
-    use crate::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_in_run_rows_v1, palw_da_unit_answered_v1};
-    if !builder.da_court {
-        return Err(PalwStateV2Error::DaCourtDormant);
-    }
-    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
-    let record = builder.state.da_claims.get(&claim_id).cloned().ok_or(PalwStateV2Error::DaUnitNotDemanded(claim_id))?;
-    // X7: the producer, or a bond still liable on the claim — the predicate Phase 2's responder reads
-    // (`palw_da_discloser_liable_v1`; P2-7).
+    use crate::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+    let (claim, record, in_run) = da_answer_admitted_v1(builder, ctx, claim_id, &unit, discloser)?;
     let now = ctx.daa_score;
-    let liable = builder.read().da_discloser_liable_v1(&claim_id, &claim, &discloser, now);
-    if !liable {
-        return Err(PalwStateV2Error::DaDiscloserNotLiable { claim: claim_id, discloser });
-    }
-    if !builder.state.da_sessions_of(&claim_id).any(|(_, session)| session.units.contains(&unit)) {
-        return Err(PalwStateV2Error::DaUnitNotDemanded(claim_id));
-    }
-    let in_run = palw_da_in_run_rows_v1(&claim, builder.extras.fp_da_pins_active);
-    if palw_da_unit_answered_v1(&record, &unit, in_run) {
-        return Err(PalwStateV2Error::DaUnitAlreadyAnswered(claim_id));
-    }
     let malformed = |why| PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why };
     // An IR answer's binding is verified at the claim's class's ladder past the second IR fence (the
     // release's 2^22 below it).
@@ -31030,8 +31233,29 @@ fn apply_da_answer_v1(
             if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &carriage.binding) {
                 return Err(PalwStateV2Error::HeldDaRefused { claim: claim_id, why });
             }
-            // ADR-0111 Decision 4: a leaf's evidence is adjudicated by the one-move verdict.
-            if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &carriage.disclosure {
+            // **LG14-B × ADR-0177 D2 (DA16b §7.5 item 1): past `palw_legacy_held_da_v2` a `StepLeaf` answer owes its CLAIM part only**
+            // — the committed half of the leaf's refutation, checked by membership (`check_execution_step_committed_half_v1`), and NO
+            // artifact rows: model bytes are never compelled. It is retrieval, not adjudication; the accuser supplies the rows from its
+            // own copy in the one-move filing (`ShardCourtAccused`, or tag 159), so every terminal stays reachable and silence is still
+            // the producer's default. Below the fence, int-12's adjudicated answer, byte for byte.
+            if builder.extras.legacy_held_da_v2_active
+                && let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &carriage.disclosure
+            {
+                if !evidence.artifact_openings.is_empty() {
+                    return Err(PalwStateV2Error::HeldDaRefused {
+                        claim: claim_id,
+                        why: "past palw_legacy_held_da_v2 a StepLeaf answer owes no model rows (ADR-0177 D2): the accuser supplies them"
+                            .to_string(),
+                    });
+                }
+                crate::palw_step_refute::check_execution_step_committed_half_v1(
+                    &evidence.refutation,
+                    evidence.prompt_ids_opening.as_ref(),
+                    ladder,
+                )
+                .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: format!("the leaf's committed half: {e}") })?;
+            } else if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &carriage.disclosure {
+                // ADR-0111 Decision 4: a leaf's evidence is adjudicated by the one-move verdict.
                 let artifact_root =
                     builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
                 // t12 (`palw_audit_2026_09_23`): the verdict `MaterialDisclosedHeld` asks, at the same
@@ -31080,6 +31304,56 @@ fn apply_da_answer_v1(
         // Refused by the form check above; spelled again so the match stands on its own.
         _ => return Err(malformed("an event unit is answered by an event disclosure, a held unit by a held carriage")),
     };
+    da_answer_recorded_v1(builder, claim_id, record, unit, flat, in_run, now)
+}
+
+/// **DA-4's admission of an answer, before its form is read** — the court in force, the claim and its record, the discloser liable
+/// on the claim (X7: the producer, or a bond still liable — `palw_da_discloser_liable_v1`, the predicate Phase 2's responder reads),
+/// the unit demanded by an open session and not yet answered. Returns the claim, its DA record and the in-run row bound. One prelude
+/// for [`apply_da_answer_v1`] (tag 55) and the legacy held answer (tag 158, LG14-B), so an answer is admitted one way.
+fn da_answer_admitted_v1(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    unit: &crate::palw_da_rcore_v1::PalwDaUnitV1,
+    discloser: PalwBondKeyV2,
+) -> Result<(PalwClaimStateV2, crate::palw_da_rcore_v1::PalwDaClaimV1, u32), PalwStateV2Error> {
+    use crate::palw_da_rcore_v1::{palw_da_in_run_rows_v1, palw_da_unit_answered_v1};
+    if !builder.da_court {
+        return Err(PalwStateV2Error::DaCourtDormant);
+    }
+    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    let record = builder.state.da_claims.get(&claim_id).cloned().ok_or(PalwStateV2Error::DaUnitNotDemanded(claim_id))?;
+    // X7: the producer, or a bond still liable on the claim — the predicate Phase 2's responder reads
+    // (`palw_da_discloser_liable_v1`; P2-7).
+    let now = ctx.daa_score;
+    let liable = builder.read().da_discloser_liable_v1(&claim_id, &claim, &discloser, now);
+    if !liable {
+        return Err(PalwStateV2Error::DaDiscloserNotLiable { claim: claim_id, discloser });
+    }
+    if !builder.state.da_sessions_of(&claim_id).any(|(_, session)| session.units.contains(unit)) {
+        return Err(PalwStateV2Error::DaUnitNotDemanded(claim_id));
+    }
+    let in_run = palw_da_in_run_rows_v1(&claim, builder.extras.fp_da_pins_active);
+    if palw_da_unit_answered_v1(&record, unit, in_run) {
+        return Err(PalwStateV2Error::DaUnitAlreadyAnswered(claim_id));
+    }
+    Ok((claim, record, in_run))
+}
+
+/// **DA-4's record of an accepted answer** — the unit joins `answered` (a `Flat` event answer sets `flat_answered`), and every
+/// session whose units are then all answered is refuted (DA-6: its exposure held in `refuted_held`) and closes. One tail for tag 55
+/// and tag 158 (LG14-B).
+fn da_answer_recorded_v1(
+    builder: &mut TransitionBuilder<'_>,
+    claim_id: Hash64,
+    record: crate::palw_da_rcore_v1::PalwDaClaimV1,
+    unit: crate::palw_da_rcore_v1::PalwDaUnitV1,
+    flat: bool,
+    in_run: u32,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_da_rcore_v1::palw_da_unit_answered_v1;
     let mut answered = record;
     answered.answered.insert(unit);
     answered.flat_answered |= flat;
@@ -32109,6 +32383,16 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
             && let crate::palw_onboarding_v1::PalwOnboardingGateV1::Held { .. } =
                 route.onboarding_gate_v1(&class_id, &class.artifact_root, ctx.daa_score)
         {
+            continue;
+        }
+        // **G14-for-rewards** (past the OPV fence): a post-fence class that never passed the onboarding/G14 path stays Registered and
+        // earns nothing (`docs/PRINCIPLES.md` §6: registered, never rewarded). An ONBOARDED class activates under the old rules — the
+        // onboarding gate above and the share it registered with: its V2-root claims ride the legacy channel and never earn the new
+        // rewards (the Lead's GAP-81 decision). Its new rewards are its kernel-route claims', gated per claim (`opv_gate_v1`).
+        if matches!(
+            builder.read().reward_gate_v1(&class_id, ctx.daa_score),
+            crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { .. }
+        ) {
             continue;
         }
         // **A grant that cannot be made freezes the CLASS, not the chain.**
@@ -34404,7 +34688,10 @@ fn apply_class_registration_v1(
             u16::try_from(committed).expect("committed is bounded by 1000 above"),
         )?;
     }
-    let weightless = *activation_daa > ctx.daa_score;
+    // **G14-for-rewards**: past the OPV fence no class is written Active (and granted share) at its registration — it activates in
+    // `activate_due_classes`, through the reward gate (`palw_opv_bootstrap_v1::palw_reward_gate_v1`).
+    let reward_gated = builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()).is_some_and(|o| o.reward_gate.is_some());
+    let weightless = *activation_daa > ctx.daa_score || reward_gated;
     if !weightless {
         // ADR-0045 Decision 3: the share table mutates HERE and at the activation edge,
         // and nowhere else. The first class funds the liveness floor whole; every later
@@ -34524,6 +34811,29 @@ fn apply_class_registration_v1(
         builder.write_activation_pool(*class_id, crate::palw_activation_pool_v1::PalwActivationPoolV1::opened_at(ctx.daa_score));
     }
     Ok(())
+}
+
+/// **A-2 uniformity in the fold: is the owning fence of `object`'s kind in force at this block**, read off what the fold is handed —
+/// the same answers `PalwLifecycleKindFencesV1` resolves from `Params` for the acceptance layer: the kernel route's extras exist exactly
+/// where `palw_probabilistic_constraints_v1` is in force (`palw_kernel_route_extras_at`), and the Panel mirror's height is
+/// `palw_permissionless_panel_v1`'s. The signed-expiry envelope (tag 108) is never folded — the acceptance walk unwraps it — so the fold
+/// reads it as never in force: a chunk group assembling to one is undecodable bytes here, and is refused either way.
+fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2, object: &PalwConsensusObjectV2) -> bool {
+    use crate::palw_lifecycle_objects_v2::{
+        PalwLifecycleKindFenceV1 as F, PalwLifecycleKindOwnerV1 as K, palw_lifecycle_kind_owner_v1,
+    };
+    match palw_lifecycle_kind_owner_v1(object) {
+        K::Int12 => true,
+        K::Fence(F::ProbabilisticConstraintsV1) => builder.extras.kernel_route.is_some(),
+        K::Fence(F::PermissionlessPanelV1) => builder.params.panel_v3().is_some_and(|mirror| ctx.daa_score >= mirror.from_daa),
+        K::Fence(F::SignedRegistrationV1) => false,
+        // Lane DA16: the route's extras carry the court's activation exactly where `palw_provider_court_v1` is in force here.
+        K::Fence(F::ProviderCourtV1) => builder.extras.kernel_route.as_ref().is_some_and(|route| route.provider_court.is_some()),
+        // Lane LG14-B: the extras flag the processor resolves from `palw_legacy_held_da_v2` at the block.
+        K::Fence(F::LegacyHeldDaV2) => builder.extras.legacy_held_da_v2_active,
+        // Lane LG14-A: the bundle's mirror of `palw_legacy_public_filer_v1` (synced from `Params`).
+        K::Fence(F::LegacyPublicFilerV1) => builder.params.legacy_public_filer_active_at(ctx.daa_score),
+    }
 }
 
 fn apply_object(
@@ -35013,6 +35323,10 @@ fn apply_object(
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { receipt, signature } => {
             palw_kernel_route_fold_v1::apply_kernel_receipt_v1(builder, ctx, receipt, signature)?;
         }
+        // (tag 113, C4 F-C4R3-03): a chunk of a prosecution object in the route's own chunk lane.
+        PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, signature: _ } => {
+            palw_kernel_route_fold_v1::apply_kernel_route_chunk_v1(builder, ctx, chunk)?;
+        }
         // **G14 lane D phase 3 (tags 104–107): model onboarding** — rows in the route's aux tables (`palw_onboarding_fold_v1`).
         PalwConsensusObjectV2::ArtifactBoundV1 { v2_class, kernel_param_root, signer, signature: _ } => {
             palw_onboarding_fold_v1::apply_artifact_bound_v1(builder, ctx, v2_class, kernel_param_root, signer)?;
@@ -35051,6 +35365,17 @@ fn apply_object(
         PalwConsensusObjectV2::DisputeReleasedV1 { claim, reserver, signature: _ } => {
             palw_legacy_public_filer_fold_v1::apply_dispute_released_v1(builder, ctx, *claim, *reserver)?;
         }
+        // **Lane LG14-B (tags 157–159): the legacy V2 route's public descent, its held DA units and the leaf recompute** — dormant
+        // behind `palw_legacy_held_da_v2` (each arm refuses below it: the second lock; `crate::palw_legacy_held_da_v2`).
+        PalwConsensusObjectV2::LegacyHeldDemandedV2 { demand } => {
+            open_da_session_legacy_held_v2(builder, ctx, demand)?;
+        }
+        PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } => {
+            apply_legacy_held_answer_v2(builder, ctx, answer)?;
+        }
+        PalwConsensusObjectV2::LegacyLeafRecomputedV2 { accusation } => {
+            apply_legacy_leaf_recompute_v2(builder, ctx, accusation)?;
+        }
         // (tag 108): the acceptance walk replaces the envelope by the registration it wraps, so the fold never meets one.
         PalwConsensusObjectV2::SignedRegistrationV1 { .. } => {
             return Err(PalwStateV2Error::KernelRouteRefused(
@@ -35065,7 +35390,11 @@ fn apply_object(
             let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
             // ADR-0119 Decision 4: the CLAIM's ladder — a held class's recorded one, else the network's.
             let ladder = builder.state.class_step_ladder_v1(&claim.class_id, ladder);
-            if claim.phase.is_terminal() {
+            // Lane LG14-A × LG14-B (RFC-0014 §7.3): a `Final` claim the accuser's own live dispute reservation holds is still pursued —
+            // the fused terminal after `Final` (the held dissection's one move). The table is empty below the fence: unchanged there.
+            let reserved_final = matches!(claim.phase, PalwClaimPhaseV2::Final { .. })
+                && builder.state.legacy_dispute_reservation_v1(&claim_id, &accusation.accuser_bond).is_some();
+            if claim.phase.is_terminal() && !reserved_final {
                 return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "ShardCourtAccused" });
             }
             if accusation.executor_bond != claim.bond {
@@ -36104,6 +36433,13 @@ fn apply_object(
                 }
                 let inner: PalwConsensusObjectV2 =
                     borsh::from_slice(&whole).map_err(|e| PalwStateV2Error::ChunkedObjectUndecodable(e.to_string()))?;
+                // **A-2 uniformity: an inner kind whose owning fence is not in force at this block is bytes the live build cannot
+                // decode** — refused exactly as it refuses them, in its words, before any kind rule reads it.
+                if !palw_fold_kind_in_force_v1(builder, ctx, &inner) {
+                    return Err(PalwStateV2Error::ChunkedObjectUndecodable(
+                        crate::palw_lifecycle_objects_v2::palw_lifecycle_unknown_tag_reason_v1(&whole),
+                    ));
+                }
                 if !palw_chunked_object_kind_admitted_v1(&inner) {
                     return Err(PalwStateV2Error::ChunkedObjectKindNotAllowed);
                 }
@@ -38668,6 +39004,11 @@ pub struct PalwTransitionExtrasV1 {
     /// execution-proving conviction voiding or reversing the claim. `false` by `Default`, which
     /// refuses the V2 kind as dormant and leaves the fold byte for byte what it was.
     pub offence_attribution_active: bool,
+    /// **Lane LG14-B: `Params::palw_legacy_held_da_v2` resolved at the block's DAA.** Past it tags 157–159 fold: the legacy V2
+    /// route's public descent units and committed witnesses open and answer R-core+ DA sessions, and a non-fused step is convicted
+    /// by its leaf hash ([`crate::palw_legacy_held_da_v2`]). `false` by `Default` and on every shipped network, where the fold
+    /// refuses them (the second lock) and is byte for byte what it was.
+    pub legacy_held_da_v2_active: bool,
     /// **ADR-0152-adjacent: `Params::palw_activation_pool` resolved at the block's DAA** (user
     /// decision 2026-09-25) — the pool's terms where R1, R2 and the pool are in force, `None`
     /// elsewhere. `None` by `Default`, which keeps the old reclamation and the old span step byte for
@@ -71218,6 +71559,7 @@ pub(crate) mod tests {
                 audit_2026_09_23_active: false,
                 settled_anchor_depth: None,
                 offence_attribution_active: false,
+                legacy_held_da_v2_active: false,
                 activation_pool: None,
                 seat_da_answer_landed: false,
                 share_growth_final_active: false,
@@ -71477,6 +71819,7 @@ pub(crate) mod tests {
                 audit_2026_09_23_active: false,
                 settled_anchor_depth: None,
                 offence_attribution_active: false,
+                legacy_held_da_v2_active: false,
                 activation_pool: None,
                 seat_da_answer_landed: false,
                 share_growth_final_active: false,

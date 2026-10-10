@@ -198,6 +198,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         // G14 lane D (tags 110, 111): kernel route traffic is in the fee market; no halt waits on it.
         | O::KernelRouteV1 { .. }
         | O::KernelConstraintReceiptV1 { .. }
+        | O::KernelRouteChunkV1 { .. }
         // G14 phase 3 (tags 104-108): onboarding traffic is registry traffic like a candidate's.
         | O::ArtifactBoundV1 { .. }
         | O::ArtifactBindingChallengedV1 { .. }
@@ -215,6 +216,11 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         // halt's obligation (the policy stays H-1's enumeration).
         | O::DisputeReservedV1 { .. }
         | O::DisputeReleasedV1 { .. }
+        // LG14-B (tags 157–159, dormant): fee-market traffic, never an H-1 carrier — below their fence they ride unjudged (A-2), and
+        // an H-1 carrier is asked of the gate at the template.
+        | O::LegacyHeldDemandedV2 { .. }
+        | O::LegacyHeldAnsweredV2 { .. }
+        | O::LegacyLeafRecomputedV2 { .. }
         | O::LineageHeadRolledBack { .. }
         | O::ImprovementPoolFunded { .. }
         // RFC-0007 Part I (tags 91, 92): a vertex is verification traffic, in the fee market beside the licence it replaces; the

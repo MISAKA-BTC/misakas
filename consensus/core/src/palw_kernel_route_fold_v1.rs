@@ -21,7 +21,10 @@
 //! instructions need no write (V2 reads the ledger's own reservation); a slash is a real [`TransitionBuilder::slash_bond`] of exactly
 //! the slashed amount (the synced collateral guarantees it never clamps, so the split to accuser, demanders and the burn conserves); an
 //! accuser's reward, a demander's share and a Final reward are payouts in the coinbase queue under the kernel's payout prefix; a kernel
-//! `Withdraw` is the route forgetting the bond, not a V2 exit.
+//! `Withdraw` is the route forgetting the bond, not a V2 exit. **GAP-5** (user-pays escrow): a Final reward is never new money — a
+//! posted job's escrow is a reservation on its poster's bond, the job's first Final debits it (a real `slash_bond`, burned at release)
+//! and pays the producer exactly that, and the fold pays a `FinalReward` only out of the `PayJobEscrow` debit before it in the same
+//! batch: Σ kernel payouts ≤ Σ kernel debits, with no coinbase rule involved.
 //!
 //! # Seats (INTERIM)
 //!
@@ -54,7 +57,12 @@ fn key_bytes(d: &misaka_palw_kernel::hash::Digest) -> Vec<u8> {
 /// signature has verified under the seat bond's registered key, so the kernel's structural admission is asked with this.
 struct SignatureAlreadyVerified;
 impl ReceiptSignatureVerifier for SignatureAlreadyVerified {
-    fn verify(&self, _seat_bond: &misaka_palw_kernel::hash::Digest, _message: &misaka_palw_kernel::hash::Digest, _signature: &[u8]) -> bool {
+    fn verify(
+        &self,
+        _seat_bond: &misaka_palw_kernel::hash::Digest,
+        _message: &misaka_palw_kernel::hash::Digest,
+        _signature: &[u8],
+    ) -> bool {
         true
     }
 }
@@ -118,7 +126,9 @@ impl TransitionBuilder<'_> {
     /// kernel's own reservation and never above the collateral (module doc).
     fn kernel_synced_collateral(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u64 {
         let Some(record) = self.state.bonds.get(bond) else { return 0 };
-        let kernel = self.state.kernel_reserved(bond);
+        // The LEDGER's own reservation: a chunk group's deposit (also the route's, also in `committed`) is outside the ledger, so the
+        // ledger is synced net of it like any other non-kernel reservation and never lends it to a claim.
+        let kernel = self.state.kernel_route.as_ref().map(|k| k.ledger_reserved_of(bond) as u128).unwrap_or(0);
         let committed = self.committed_at(bond, now_daa);
         let non_kernel = committed.saturating_sub(kernel);
         let free = (record.collateral as u128).saturating_sub(non_kernel);
@@ -128,7 +138,11 @@ impl TransitionBuilder<'_> {
     /// Record that the route has seen `bond` (its kernel digest maps back to it).
     fn note_kernel_bond(&mut self, bond: &PalwBondKeyV2) -> misaka_palw_kernel::hash::Digest {
         let kid = palw_kernel_bond_id_v1(bond);
-        self.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, key_bytes(&kid), Some(borsh::to_vec(bond).expect("a bond key serializes")));
+        self.write_kernel_row(
+            PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1,
+            key_bytes(&kid),
+            Some(borsh::to_vec(bond).expect("a bond key serializes")),
+        );
         kid
     }
 }
@@ -137,7 +151,8 @@ impl TransitionBuilder<'_> {
 #[allow(clippy::type_complexity)]
 fn route_policies(
     builder: &TransitionBuilder<'_>,
-) -> Result<(misaka_palw_kernel::ledger::LedgerPolicyV1, Option<misaka_palw_kernel::opv::OpvPolicyV1>, Option<u64>), PalwStateV2Error> {
+) -> Result<(misaka_palw_kernel::ledger::LedgerPolicyV1, Option<misaka_palw_kernel::opv::OpvPolicyV1>, Option<u64>), PalwStateV2Error>
+{
     let Some(extras) = builder.extras.kernel_route.as_ref() else {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     };
@@ -187,19 +202,14 @@ pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
     // The artifact roots the route may attest: the test hook's list (empty outside a test) and every Matured or Final onboarding
     // binding — the least-trust source (`palw_onboarding_v1`).
     let mut attested = extras.attested_artifacts.clone();
-    let admitted: Vec<Hash64> = extras.opv.as_ref().map(|o| o.admitted_classes.clone()).unwrap_or_default();
-    let opv_declared = extras.opv.is_some();
     if let Some(route) = builder.state.kernel_route.as_ref() {
         attested.extend(route.onboarding_attested_roots_v1(ctx.daa_score));
     }
     let mut ledger = builder.state.kernel_route.as_ref().expect("created above").ledger().map_err(refused)?;
     ledger.begin_block(ctx.daa_score).map_err(|r| refused(r.to_string()))?;
     // The budget bounds the BLOCK: what the block's earlier objects already spent comes back (they were folded one at a time).
-    if let Some((blue_score, adjudications, court_work)) = builder
-        .state
-        .kernel_route
-        .as_ref()
-        .and_then(|k| k.aux_row::<(u64, u32, u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
+    if let Some((blue_score, adjudications, court_work)) =
+        builder.state.kernel_route.as_ref().and_then(|k| k.aux_row::<(u64, u32, u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
         && blue_score == ctx.blue_score
     {
         ledger.restore_budget(misaka_palw_kernel::ledger::BlockBudgetV1 { adjudications, court_work });
@@ -220,13 +230,107 @@ pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
             .map(|c| c.as_bytes())
             .collect();
     }
-    // The network policy's admissions (consensus, not a registrant's choice); idempotent, so an admitted class is one row.
-    if opv_declared {
-        for class in admitted {
-            ledger.admit_optimistic_class(class.as_bytes()).map_err(|r| refused(r.to_string()))?;
-        }
-    }
+    // RFC-0015 admission is no longer a list read here: a class is admitted to the mode at its own registration, and only while
+    // DERIVED-eligible (`opv_gate_v1`), so the ledger's admitted rows are exactly the classes that were eligible when they registered.
     Ok(ledger)
+}
+
+/// What the derived-eligibility gate decides for one kernel object.
+enum OpvGateV1 {
+    /// Apply the object as it is.
+    Pass,
+    /// Admit these (mode-bound) ids to the mode first: the registration of an eligible class.
+    Admit(Vec<misaka_palw_kernel::hash::Digest>),
+    /// Drop the object, nothing written: an OPV registration or claim of a class that is not eligible at this block.
+    Drop,
+}
+
+/// **The derived OPV eligibility at the kernel route's door** (`docs/design/palw/opv-beacon-bootstrap.md` §5.3): a registration under
+/// `OptimisticPublicVerification` is admitted only for a class `opv_eligibility_v1` derives eligible now (or that the test seam names),
+/// and every claim of an OPV class commits only while its class is eligible. A claim keeps what it was admitted with; a class that
+/// loses eligibility (its binding refuted, its kernel retired, the network's deny-list) takes no new claim.
+fn opv_gate_v1(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    ledger: &KernelLedgerV1,
+    object: &KernelRouteObjectV1,
+) -> OpvGateV1 {
+    use crate::palw_opv_bootstrap_v1::{OpvClassFactsV1, OpvEligibilityViewV1};
+    let (Some(opv), Some(route)) =
+        (builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()), builder.state.kernel_route.as_ref())
+    else {
+        return OpvGateV1::Pass;
+    };
+    let view = OpvEligibilityViewV1::of(opv);
+    let eligible =
+        |class: &misaka_palw_kernel::hash::Digest| route.opv_class_eligibility_v1(ledger, class, ctx.daa_score, &view).is_ok();
+    match object {
+        KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } if mode.is_optimistic() => {
+            let facts = OpvClassFactsV1::of_registration(*descriptor, program_bytes, plan, param_commitments);
+            match route.opv_eligibility_v1(ledger, &facts, ctx.daa_score, &view) {
+                Ok(_) => OpvGateV1::Admit(vec![facts.opv_id]),
+                // Not admitted: the kernel refuses the registration by its own rule ("not admitted"), budget and all.
+                Err(_) => OpvGateV1::Pass,
+            }
+        }
+        KernelRouteObjectV1::RegisterPipelineClassV2 { mode, .. } if mode.is_optimistic() => {
+            // No onboarding path exists for a pipeline (GAP-B4): only the test seam names one. Its ids are admitted ahead and the
+            // kernel matches the registration's own id against them (a refused registration flushes nothing).
+            OpvGateV1::Admit(view.test_eligible.iter().filter(|id| !view.denied.contains(id)).map(|id| id.as_bytes()).collect())
+        }
+        // RFC-0004 Part II (R4X): a typed-root class registers only under OPV. A `Weights` spec IS today's single-program registration
+        // (the same id, by the same function), so it takes the same derived eligibility; a `Memory` / `Retrieval` / `Composite` class
+        // has no onboarding path yet (GAP-B16), so — like a pipeline — only the test seam can name it, and never past the deny-list.
+        KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::RegisterClass { spec } }
+            if spec.mode.is_optimistic() =>
+        {
+            use misaka_palw_kernel::spec::SpecShapeV1;
+            match (spec.shape(), spec.class_id()) {
+                (Ok(SpecShapeV1::Weights(w)), _) => {
+                    let facts = OpvClassFactsV1::of_registration(w.descriptor, &w.program_bytes, &w.plan, &w.param_commitments);
+                    match route.opv_eligibility_v1(ledger, &facts, ctx.daa_score, &view) {
+                        Ok(_) => OpvGateV1::Admit(vec![facts.opv_id]),
+                        Err(_) => OpvGateV1::Pass,
+                    }
+                }
+                (Ok(_), Ok(class)) => {
+                    let id = Hash64::from_bytes(class);
+                    if view.test_eligible.contains(&id) && !view.denied.contains(&id) {
+                        OpvGateV1::Admit(vec![class])
+                    } else {
+                        OpvGateV1::Pass
+                    }
+                }
+                // A malformed spec: the kernel refuses it by its own rule.
+                _ => OpvGateV1::Pass,
+            }
+        }
+        KernelRouteObjectV1::CommitClaim { claim, .. } => match ledger.jobs.get(&claim.job_id).map(|j| j.class_binding_id) {
+            Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
+            _ => OpvGateV1::Pass,
+        },
+        KernelRouteObjectV1::CommitPipelineClaim { claim, .. } => {
+            match ledger.pipeline_jobs.get(&claim.job_id).map(|j| j.class_binding_id) {
+                Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
+                _ => OpvGateV1::Pass,
+            }
+        }
+        // Past the fence every reveal is salted (G14-R4's claim seal v2, inner kind 20): the same gate on the carried commit. A typed
+        // `Spec` claim passes here — its class's eligibility path is RFC-0004 Part II's (GAP-B16).
+        KernelRouteObjectV1::CommitClaimSalted { commit, .. } => {
+            use misaka_palw_kernel::route::SaltedCommitV1 as C;
+            let class = match commit {
+                C::Claim { claim, .. } => ledger.jobs.get(&claim.job_id).map(|j| j.class_binding_id),
+                C::Pipeline { claim, .. } => ledger.pipeline_jobs.get(&claim.job_id).map(|j| j.class_binding_id),
+                C::Spec { .. } => None,
+            };
+            match class {
+                Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
+                _ => OpvGateV1::Pass,
+            }
+        }
+        _ => OpvGateV1::Pass,
+    }
 }
 
 /// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them.
@@ -251,11 +355,21 @@ pub(super) fn apply_settlements(
     events: &[LedgerEventV1],
     strict: bool,
 ) -> Result<(), PalwStateV2Error> {
+    // GAP-5: what this batch actually debited from posters' escrows — the only source a Final reward is paid from. A `FinalReward`
+    // with no spent escrow behind it is never paid (there is no unfunded reward path).
+    let mut escrow_debited: u64 = 0;
     for event in events {
         let LedgerEventV1::Settlement(s) = event else { continue };
         let key = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&s.bond));
         match s.kind {
-            SettlementKindV1::SlashFraud | SettlementKindV1::SlashDefault | SettlementKindV1::SlashFiling => {
+            SettlementKindV1::SlashFraud
+            | SettlementKindV1::SlashDefault
+            | SettlementKindV1::SlashFiling
+            | SettlementKindV1::AdmissionFee
+            | SettlementKindV1::JobFee
+            | SettlementKindV1::PayJobEscrow
+            | SettlementKindV1::ForfeitSealDeposit
+            | SettlementKindV1::ForfeitDemandBond => {
                 let Some(key) = key else {
                     if strict {
                         return Err(refused("a slash names a bond the route never saw"));
@@ -270,11 +384,26 @@ pub(super) fn apply_settlements(
                 if debit != s.amount && strict {
                     return Err(refused(format!("a slash of {} took {debit}: the synced collateral did not cover it", s.amount)));
                 }
+                if s.kind == SettlementKindV1::PayJobEscrow {
+                    escrow_debited = escrow_debited.saturating_add(debit);
+                }
             }
+            // ADR-0176 HOOK `budget-final` on the node (lane BUDGET): a payout is paid only inside the R / F reservation the claim
+            // made at acceptance — this arm is where the consumer re-checks it, beside the escrow check below.
             SettlementKindV1::AccuserReward | SettlementKindV1::DemanderShare | SettlementKindV1::FinalReward => {
+                let amount = if s.kind == SettlementKindV1::FinalReward {
+                    let funded = s.amount.min(escrow_debited);
+                    escrow_debited -= funded;
+                    if funded != s.amount && strict {
+                        return Err(refused("a Final reward with no spent escrow behind it (GAP-5: nothing is issued)"));
+                    }
+                    funded
+                } else {
+                    s.amount
+                };
                 let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
                 match payee {
-                    Some(payload) => match builder.add_kernel_payout(payload, s.amount) {
+                    Some(payload) => match builder.add_kernel_payout(payload, amount) {
                         Ok(()) => {}
                         Err(e) if strict => return Err(e),
                         Err(_) => {}
@@ -289,6 +418,10 @@ pub(super) fn apply_settlements(
             | SettlementKindV1::ReleaseClaim
             | SettlementKindV1::ReserveDemand
             | SettlementKindV1::ReleaseDemand
+            | SettlementKindV1::ReserveJobEscrow
+            | SettlementKindV1::ReleaseJobEscrow
+            | SettlementKindV1::ReserveSealDeposit
+            | SettlementKindV1::ReleaseSealDeposit
             | SettlementKindV1::Burn
             | SettlementKindV1::Withdraw => {}
         }
@@ -361,17 +494,39 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     let mut ledger = load_ledger(builder, ctx)?;
     let before = ledger.to_rows();
+    match opv_gate_v1(builder, ctx, &ledger, &object) {
+        OpvGateV1::Drop => return Ok(()),
+        OpvGateV1::Admit(classes) => {
+            for class in classes {
+                ledger.admit_optimistic_class(class).map_err(|r| refused(r.to_string()))?;
+            }
+        }
+        OpvGateV1::Pass => {}
+    }
     let kid = palw_kernel_bond_id_v1(signer);
     ledger.sync_bond(kid, builder.kernel_synced_collateral(signer, ctx.daa_score));
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
     // an earlier object of this block (or another lane's slash) can never leave the ledger believing the bond holds more than it does.
-    if let KernelRouteObjectV1::FileProof { claim, .. } | KernelRouteObjectV1::FileDemand { claim, .. } | KernelRouteObjectV1::Respond { claim, .. } =
-        &object
+    if let KernelRouteObjectV1::FileProof { claim, .. }
+    | KernelRouteObjectV1::FileDemand { claim, .. }
+    | KernelRouteObjectV1::Respond { claim, .. } = &object
         && let Some(producer) = ledger.claims.get(claim).map(|row| row.producer)
         && let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&producer))
     {
         ledger.sync_bond(producer, builder.kernel_synced_collateral(&key, ctx.daa_score));
     }
+    // DA16 / ADR-0177 D2: past `palw_provider_court_v1` a demand names a claim-specific unit or nothing, within its requester's tally.
+    let scope = match &object {
+        KernelRouteObjectV1::FileDemand { claim, stage, position, .. }
+            if builder.extras.kernel_route.as_ref().is_some_and(|k| k.provider_court.is_some()) =>
+        {
+            match super::palw_provider_court_fold_v1::court_scope_admit_demand_v1(builder, &ledger, signer, claim, *stage, *position) {
+                Ok(scope) => scope,
+                Err(_) => return Ok(()),
+            }
+        }
+        _ => None,
+    };
     let events = match ledger.apply_object(&object, &AuthV1 { signer_bond: kid }) {
         Ok(events) => events,
         Err(_refusal) => {
@@ -425,6 +580,9 @@ pub(super) fn apply_kernel_route_object_v1(
     apply_settlements(builder, &events, true)?;
     persist_budget(builder, ctx, &ledger);
     flush(builder, &ledger, &before);
+    if let Some((subject, row)) = scope {
+        super::palw_provider_court_fold_v1::write_court_scope_row_v1(builder, &subject, &row);
+    }
     Ok(())
 }
 
@@ -443,10 +601,15 @@ fn persist_budget(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2,
 /// **Charge one adjudication (and `court_work`) of THIS block's budget to an onboarding object** (tag 109's judgement): the same
 /// budget, row and caps the kernel's own objects spend (`load_ledger` restores it for the next kernel object of the block), so the
 /// block is bounded across both. `Ok(false)`: the budget is spent and nothing is charged (the object is dismissed, the block stands).
+///
+/// `may_spend_reserve` (C4 F-C4R4-10 / -11): every onboarding object stops short of the runs the kernel reserves for proofs
+/// (`prosecution_reserved_runs`, as every kernel object but a `FileProof` does) — except a conformance REFUTATION, which is a proof:
+/// it may spend them, and one that proves nothing pays `dismissed_proof_fee`, as a dismissed `FileProof` does.
 pub(super) fn charge_route_budget_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     court_work: u64,
+    may_spend_reserve: bool,
 ) -> Result<bool, PalwStateV2Error> {
     let (policy, _, _) = route_policies(builder)?;
     let (adjudications, work) = match builder
@@ -458,7 +621,12 @@ pub(super) fn charge_route_budget_v1(
         Some((blue_score, a, w)) if blue_score == ctx.blue_score => (a, w),
         _ => (0, 0),
     };
-    if adjudications >= policy.max_adjudications_per_block || work.saturating_add(court_work) > policy.max_court_work_per_block {
+    let runs = if may_spend_reserve {
+        policy.max_adjudications_per_block
+    } else {
+        policy.max_adjudications_per_block.saturating_sub(policy.prosecution_reserved_runs())
+    };
+    if adjudications >= runs || work.saturating_add(court_work) > policy.max_court_work_per_block {
         return Ok(false);
     }
     builder.write_kernel_row(
@@ -467,6 +635,13 @@ pub(super) fn charge_route_budget_v1(
         Some(borsh::to_vec(&(ctx.blue_score, adjudications + 1, work.saturating_add(court_work))).expect("a budget serializes")),
     );
     Ok(true)
+}
+
+/// The route's ledger policy at this block (the fee a dismissed proof pays, for an onboarding refutation).
+pub(super) fn route_ledger_policy_v1(
+    builder: &TransitionBuilder<'_>,
+) -> Result<misaka_palw_kernel::ledger::LedgerPolicyV1, PalwStateV2Error> {
+    Ok(route_policies(builder)?.0)
 }
 
 /// **Tag 111: a seat's constraint receipt.** Its signature verified at acceptance; the fold admits it structurally against the claim's
@@ -538,20 +713,33 @@ pub(super) fn apply_kernel_receipt_v1(
     Ok(())
 }
 
-/// **The block's closing step**: the kernel's `tick` (demand deadlines, windows, Final, liability release) and its settlements.
-/// A no-op for a route with no claim and no demand.
+/// **The block's closing step**: the kernel's `tick` (demand deadlines, windows, Final, liability release, seal expiry, escrow
+/// return, the served demands' bonds) and its settlements. A no-op for a route with nothing the tick can move.
 pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     if builder.extras.kernel_route.is_none() {
         return Ok(());
     }
     // The onboarding bindings whose refutation horizon ends release their reservation, whatever the ledger is doing.
     super::palw_onboarding_fold_v1::tick_onboarding_v1(builder, ctx);
+    // The route's chunk groups past their TTL are dropped and their deposits forfeited, whatever the ledger is doing.
+    forfeit_expired_chunk_groups_v1(builder, ctx);
     // DA16: the provider court's deadlines (a provider that did not answer is charged), expired leases, lapses — before the kernel's tick,
     // so a claim whose last provider was charged this block is void before its demands are swept.
     super::palw_provider_court_fold_v1::tick_provider_court_v1(builder, ctx)?;
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
+    // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
+    // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.
     let busy = kernel.rows.keys().any(|(table, _)| {
-        matches!(*table, misaka_palw_kernel::rows::TABLE_CLAIMS_V1 | misaka_palw_kernel::rows::TABLE_DEMANDS_V1)
+        use misaka_palw_kernel::rows as r;
+        matches!(
+            *table,
+            r::TABLE_CLAIMS_V1
+                | r::TABLE_DEMANDS_V1
+                | r::TABLE_SEALS_V1
+                | r::TABLE_PROOF_SEALS_V1
+                | r::TABLE_JOB_ESCROWS_V1
+                | r::TABLE_SERVED_DEMAND_BONDS_V1
+        )
     });
     if !busy {
         return Ok(());
@@ -589,4 +777,140 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // DA16: a demand on a transferred claim that nobody answered is its providers' failure — charge them (never the producer).
     super::palw_provider_court_fold_v1::settle_provider_liable_defaults_v1(builder, ctx, &events)?;
     Ok(())
+}
+
+// ---- tag 113: the route's own chunk lane (C4 F-C4R3-03) ------------------------------------------------------------------------
+
+/// **Tag 113: one chunk of a prosecution object in the route's own chunk lane** (C4 F-C4R3-03).
+///
+/// The certification lane's `ObjectChunk` table is ONE network-wide table of eight groups, opened by unsigned chunks for a flat rent
+/// and held for 4,000 DAA: eight junk chunks (1.6 KAS) held every chunked prosecution off the chain past the lie's window and its
+/// whole liability horizon. Here:
+///
+/// * a group is keyed `(opener, group)` and every chunk is SIGNED by the opener's Active bond (checked at acceptance), so a bond's
+///   room is its own — no bond, and no set of bonds, can occupy another's;
+/// * a bond holds at most [`PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1`] open groups, each backed by a deposit of
+///   [`PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1`] per declared part from its FREE collateral (V2's committed-collateral ledger and
+///   both withdrawal gates read it), returned when the group completes and forfeited when it expires — junk pays, honesty is refunded;
+/// * a group lives at most [`PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1`] and never past its target's deadline (a proof group that cannot
+///   complete before the claim's horizon is worthless), and one whose target can no longer use it is refused at its first chunk;
+/// * the completing chunk assembles the object (its bytes must hash to the group id), which must be a prosecution of the group's
+///   target ([`palw_kernel_chunk_inner_matches_target_v1`]); the object is then applied by its own arm, exactly as if carried bare.
+///
+/// Every refusal is an error: the walk's rehearsal drops the chunk and the block stands. The lane is the kernel route's; other lanes'
+/// chunked objects keep the certification lane, unchanged.
+pub(super) fn apply_kernel_route_chunk_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    chunk: &PalwKernelChunkV1,
+) -> Result<(), PalwStateV2Error> {
+    if builder.extras.kernel_route.is_none() {
+        return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
+    }
+    if chunk.count == 0 || chunk.count > PALW_OBJECT_CHUNK_MAX_COUNT {
+        return Err(PalwStateV2Error::ChunkCountOutOfRange { count: chunk.count, max: PALW_OBJECT_CHUNK_MAX_COUNT });
+    }
+    if chunk.index >= chunk.count {
+        return Err(PalwStateV2Error::ChunkIndexOutOfRange { index: chunk.index, count: chunk.count });
+    }
+    if chunk.bytes.is_empty() || chunk.bytes.len() > PALW_OBJECT_CHUNK_MAX_BYTES {
+        return Err(PalwStateV2Error::ChunkTooLarge { bytes: chunk.bytes.len(), max: PALW_OBJECT_CHUNK_MAX_BYTES });
+    }
+    if !builder.state.bonds.get(&chunk.opener).is_some_and(|b| matches!(b.status, PalwBondStatusV2::Active)) {
+        return Err(refused("a kernel chunk's opener is not an Active bond"));
+    }
+    // A target lives in the route's state (a claim's rows, a binding's aux row): no route, nothing to prosecute.
+    let Some(route) = builder.state.kernel_route.as_ref() else {
+        return Err(refused("no kernel route state: a kernel chunk has no target"));
+    };
+    let key = palw_kernel_chunk_group_key_v1(&chunk.opener, &chunk.group);
+    let mut group = match route.chunk_group_v1(&chunk.opener, &chunk.group) {
+        Some(stored) => {
+            if stored.count != chunk.count || stored.target != chunk.target {
+                return Err(PalwStateV2Error::ChunkGroupIncoherent { group: chunk.group });
+            }
+            if stored.parts.contains_key(&chunk.index) {
+                return Err(PalwStateV2Error::ChunkDuplicate { group: chunk.group, index: chunk.index });
+            }
+            if ctx.daa_score > stored.expires_daa {
+                return Err(refused("a kernel chunk group past its TTL takes no more parts (its deposit is forfeited)"));
+            }
+            stored
+        }
+        None => {
+            // The opener's own room: a bound per bond, never a network-wide table.
+            if route.chunk_groups_of_v1(&chunk.opener) >= PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1 {
+                return Err(refused(format!(
+                    "the opener already holds {PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1} open kernel chunk groups (the per-bond limit)"
+                )));
+            }
+            // Never longer than the target can use it.
+            let Some(deadline) = route.chunk_target_deadline_v1(&chunk.target, ctx.daa_score).filter(|d| *d >= ctx.daa_score) else {
+                return Err(refused("a kernel chunk group's target can no longer use it (decided, unknown, or past its horizon)"));
+            };
+            let deposit = PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1.saturating_mul(u64::from(chunk.count));
+            let collateral = builder.state.bonds.get(&chunk.opener).map(|b| b.collateral as u128).unwrap_or(0);
+            if collateral.saturating_sub(builder.committed_at(&chunk.opener, ctx.daa_score)) < deposit as u128 {
+                return Err(refused("the opener's free collateral does not cover the kernel chunk group's deposit"));
+            }
+            PalwKernelChunkGroupV1 {
+                target: chunk.target,
+                count: chunk.count,
+                opened_daa: ctx.daa_score,
+                expires_daa: ctx.daa_score.saturating_add(PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1).min(deadline),
+                deposit,
+                parts: BTreeMap::new(),
+            }
+        }
+    };
+    group.parts.insert(chunk.index, chunk.bytes.clone());
+    if group.parts.len() < group.count as usize {
+        builder.write_kernel_row(
+            PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1,
+            key,
+            Some(borsh::to_vec(&group).expect("a group serializes")),
+        );
+        return Ok(());
+    }
+    // Complete: the object it carried is applied HERE, by the arm a directly carried one goes through.
+    let mut whole = Vec::with_capacity(group.parts.values().map(Vec::len).sum());
+    for i in 0..group.count {
+        whole.extend_from_slice(&group.parts[&i]);
+    }
+    let computed = palw_object_chunk_group_id_v1(&whole);
+    if computed != chunk.group {
+        return Err(PalwStateV2Error::ChunkGroupHashMismatch { group: chunk.group, computed });
+    }
+    let inner: PalwConsensusObjectV2 =
+        borsh::from_slice(&whole).map_err(|e| PalwStateV2Error::ChunkedObjectUndecodable(e.to_string()))?;
+    if !palw_kernel_chunk_inner_matches_target_v1(&inner, &chunk.target) {
+        return Err(refused("the assembled object is not a prosecution of its group's target"));
+    }
+    // OPV-BOOT #1: conformance evidence rides only a group its class's registrant opened — every action but a Refute (anyone's), so
+    // a registrant's action added later (OPV-BOOT's PostComplete) is the registrant's here too, never anyone's by default.
+    if let PalwConsensusObjectV2::ConformanceEvidenceV1 { v2_class, action, .. } = &inner
+        && !matches!(action.as_ref(), crate::palw_conformance_evidence_v1::ConformanceEvidenceActionV1::Refute { .. })
+        && builder.state.classes.get(v2_class).and_then(|c| c.registrant_bond) != Some(chunk.opener)
+    {
+        return Err(refused("conformance evidence other than a Refute rides only a group its class's registrant opened"));
+    }
+    // The group delivered: its row (and with it the deposit) goes before the object is applied.
+    builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, key, None);
+    super::apply_object(builder, ctx, &inner)
+}
+
+/// **The closing step's chunk sweep**: every group past its TTL is dropped and its opener's deposit forfeited (a real slash, burned
+/// at release). Lenient (it runs after the rehearsal): a deposit the bond can no longer pay is taken as far as it goes.
+fn forfeit_expired_chunk_groups_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
+    let Some(route) = builder.state.kernel_route.as_ref() else { return };
+    let expired: Vec<(PalwBondKeyV2, Hash64, u64)> = route
+        .chunk_groups_v1()
+        .into_iter()
+        .filter(|(_, _, g)| ctx.daa_score > g.expires_daa)
+        .map(|(opener, group, g)| (opener, group, g.deposit))
+        .collect();
+    for (opener, group, deposit) in expired {
+        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&opener, &group), None);
+        let _ = builder.slash_bond(opener, deposit as u128);
+    }
 }

@@ -1,4 +1,4 @@
-//! **`VerificationPlanV1` — data in a bounded, typed grammar** (ADR-0172 §2, RFC-0005 §K.2–K.4).
+//! **`VerificationPlanV1` — data in a bounded, typed grammar** (ADR-0172 §2, `docs/design/palw/versioned-kernels.md` §K.2–K.4).
 //!
 //! A plan names, for every node of the program, the implemented relation it is checked by: the
 //! primitive, its family, the descriptor's checker, the repetitions, and the dimensions that price it;
