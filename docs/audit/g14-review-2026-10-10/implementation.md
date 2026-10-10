@@ -409,3 +409,38 @@ node側合計 **71 PASS**。[held](evidence/reacquire-held-verified.log)、[file
 coreの最終source回帰はlifecycle/A2U **31 PASS**、共通filer **10 PASS**、legacy dispute fold **7 PASS**。新tag 156を含むfence-off twinは、None／never／未到達heightでrootとdeltaの互換性を確認した。[lifecycle](evidence/reacquire-core-lifecycle-final.log)、[filer](evidence/reacquire-core-filer-final.log)、[dispute fold](evidence/reacquire-core-dispute-final.log)。nodeの71件と合わせ、この範囲の回帰は **119 PASS**。全G14達成とは判定しない。
 
 最終sourceの `scripts/t12-repin.sh --shipping --drift-only` はexit 0、**361 ok・差分なし**。network／genesis／ruleset等のshipping pinを書き換えていない。[repin](evidence/reacquire-repin-final.log)、[fresh harvest tests](evidence/reacquire-repin-harvest-tests.log)、[fresh harvest lib](evidence/reacquire-repin-harvest-lib.log)。
+
+
+## PanelDA User入力の公開court bootstrap
+
+前節の再取得修正`6a8da1fb8`を基点に、入力未取得のため独立replay開始前に止まるlegacy FP経路を追加した。registered modelを持つoutsiderが、Pendingのまま公開予約を取り、row-0 bindingとinput unitを取得できる。Merkleは既存32-id tileを64個まとめた2,048-id chunkを開示し、global count/index、既存input outer rootと部分木pathを認証する。末尾のragged subtreeも同じodd-node promotionで検証する。Flatはchunk 0だけで入力全体を既存hashへ照合する。network formとregistered profileの選択は共有関数に固定し、carrierからformを推測しない。
+
+新unitはnever-armedなtags 157/158の末尾へappendした`PromptIds { chunk }`であり、`ClaimInput / Demanded`、model bytesなしである。tag 156の再取得でもこのunitを扱う。A2のwire pinは156=`0x7e5d332147511ca1`、157=`0xc7acaf87a3fefb35`、158=`0x380636cbf4ee26ab`へ更新した。他のtag、既存int-12 variant、activation heightを変更していない。公開回答のfoldとhistory reader、producer capture responder、共通署名builderは明示的なnetwork formを使う。
+
+要求／再取得のprocessor admissionでは、回答body＋bindingの上限を、court close ceilingと100,000-byte single-carrier body allowanceの小さい方へ照合する。DA workerはtag 158を1本で運ぶため、multi-chunk court上限だけでは不十分である。回答processorと署名builderも実サイズを同じ範囲へ制限し、署名前に拒否する。このためoversized Flat入力をhonest producerへの回答不能な義務にしない。これはその入力のG14到達性を立証したものではなく、chunk化／許可profileとsession予算の受入条件は残る。
+
+入力accumulatorのcopy、hash/proof temporary、workerとの引継ぎにhost memory ticketを持ち、入力待ちではreplay回数を消費しない。取得途中のcaseはpursuedだがheld replay slotを使わず、別Pending claimを実行できる。実worker結果をcaseへ戻す共通handoffにinput accumulatorとretry時刻を含めた。binding学習時にfallback localizerの範囲も初期化する。reorgはinput／bindingを破棄し、job／acceptance変更はcaseをresetする。成功したown replay又はsettlementでbootstrap ticketを解放する。
+
+新しい小型V-fold試験では、PanelDAのidsをFP transactionから除き、変更したprivacyを含むjobをproducerが実際に再実行してcommitする。outsiderはPendingから公開回答だけを学び、自身のfresh registered-model backendで再計算し、既存production judge／localizer／terminalを通る。全Panel Valid後のFinal前後のCourtFraud、Final後のinput-only ProducerWithholding、公開carrierコピー喪失後の番号付き再取得→conviction、honest replayの無告発を確認した。全foldでdelta再適用／巻戻し、carriage reloadを検査する。signature verification／class admission callbackは既存test doubleで、PanelDA privacy fenceもtest-armedである。実DB pruning、登録後のordinary bond、fresh-node startup／RPC／mempool／template／実block包含を一続きに立証したV-nodeとは数えない。
+
+| 検証 | 結果・範囲 |
+| --- | --- |
+| core `palw_legacy_held_da_v2` | **9 V-unit PASS**。1～8,192 ids、tile／chunk境界、ragged subtree、改ざん／欠落／別chunk／過剰proof、Flat whole hash、network form、scope。synthetic bindingのproof検査であり、その全sizeの正規class admissionや実model実行ではない |
+| core `palw_lifecycle_objects_v2` | **31 V-unit PASS**。A2／A2U、既存wire pin、guarded owner、fence-off互換性 |
+| core `palw_legacy_public_filer_v1` | **10 V-unit PASS**。公開localizer／予約の既存回帰 |
+| node `palw_filer_held::e2e` | **26 PASS**。LG14-B 12 V-fold＋2 V-unit、既存held replay 12件。新PanelDA入力bootstrapの4分岐と再取得を含む |
+| node `palw_fraud_filer` | **20 V-unit PASS**。新input認証／worker handoff／memory ticketと、入力待ち／reorgの試験を含む |
+| node `accepted_objects_walk_tests` | **7 V-unit PASS**。fake ConsensusApiから選択PromptIdsをexplicit formで認証し、corruptコピーを捨て、欠けた旧suffixより前の新tip回答を読む |
+| node `p2_7_disclosure_policy` | **8 V-unit PASS**。actual producer DA worker／署名builderから新input unitを作る既存dense fixtureを追加 |
+| node `tir_court_e2e` | **19 PASS**。共通署名builderのform引継ぎを含む既存IR回帰 |
+| node `reporter_filer::tests` | **21 V-unit PASS**。既存reporter doorの回帰 |
+
+core `lg14a_legacy_dispute_fold`は **7 V-fold PASS**。actual ML-DSA-87署名を用いるprocessor `t12_legacy_held_da_gate`は **1 V-unit PASS**で、Flat／Merkle両形式のcoherent fixture、新input demand／answer、改ざん署名・below-fence拒否、court／single-carrier上限を検査した。通常featureの `cargo check -p kaspad --bin kaspad --locked`も成功した。上表と合わせ、この修正範囲の回帰は **159 PASS**。
+
+[core input](evidence/fp-input-bootstrap-core-final.log)、[lifecycle](evidence/fp-input-bootstrap-lifecycle-final.log)、[core filer](evidence/fp-input-bootstrap-core-filer-final.log)、[dispute fold](evidence/fp-input-bootstrap-core-dispute-final.log)、[held](evidence/fp-input-bootstrap-held-final.log)、[node filer](evidence/fp-input-bootstrap-filer-final.log)、[reader](evidence/fp-input-bootstrap-reader-final.log)、[DA worker](evidence/fp-input-bootstrap-da-worker-final.log)、[IR](evidence/fp-input-bootstrap-ir-final.log)、[reporter](evidence/fp-input-bootstrap-reporter-final.log)、[signature gate](evidence/fp-input-bootstrap-processor-gate-final.log)、[binary check](evidence/fp-input-bootstrap-binary-final.log)。nodeはdefault feature（EVMを含む）、signature gateは `--features evm`、coreはdefault feature。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`。nodeのbinary直実行は、最終sourceのfiler 20件をcargoでbuildした同じkaspad_lib binaryを使った。既存unused／dead-code警告は残る。
+
+最終sourceの `scripts/t12-repin.sh --shipping --drift-only` はexit 0、**361 ok・差分なし**。同じfresh harvestの再読込もexit 0。shipping pinを書き換えていない。[repin](evidence/fp-input-bootstrap-repin-final.log)、[harvest tests](evidence/fp-input-bootstrap-repin-harvest-tests.log)、[harvest lib](evidence/fp-input-bootstrap-repin-harvest-lib.log)、[log再検証](evidence/fp-input-bootstrap-repin-replay-final.log)。
+
+最初のPanelDA fixtureは、accepted-payload extractionのPanelDA fence引数を既存PublicDA試験同様のfalseにしており、正しくstateless拒否された。fixtureだけを明示的にtest-armし、productionのfenceを緩めていない。gate試験では、Merkle networkの大きな入力もchunkは小さいという性質をFlatのwhole-inputと取り違えた期待を訂正した。FlatとMerkleのcoherentなgenesis形式を別々に通す。初回gate buildはdisk不足で失敗し、自分の古いbuild cacheを整理して再実行した。最終PASSだけを結果へ計上する。
+
+G14全域は未達。34-session予算に入力取得も含むため、8kは4 input unitだが最大contextや任意回数のrestartを保証しない。accepted FP commitment自体の恒久prune、canonical FP bad root、prefix-state、非base0／全familyの正規eligibility、全枠飽和、最大profileのRAM／時間、fresh-node serviceと責任期間内包含、累積scope等は残る。ADR-0177 D7の登録モデル保有前提を維持し、model distribution義務とactivation heightは追加しない。

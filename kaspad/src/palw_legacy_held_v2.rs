@@ -365,8 +365,13 @@ pub fn palw_legacy_held_capture_answer_v2(
     }
     let (context_hash, _, checkpoint_profile_hash) = kaspa_consensus_core::palw_step_leg::verify_binding_v1(binding)
         .map_err(|e| format!("the legacy held binding does not verify: {e}"))?;
-    kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_demand_v2(&roots.execution_root, unit, binding)
+    kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_demand_v3(&roots.execution_root, unit, binding, form)
         .map_err(|e| format!("the legacy held unit cannot be compelled: {e}"))?;
+    if let PalwLegacyHeldUnitV2::PromptIds { chunk } = *unit {
+        let answer = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_prompt_answer_v2(binding, prompt_ids, chunk, form)
+            .map_err(|e| e.to_string())?;
+        return Ok((binding.clone(), answer));
+    }
     let step_tree = match &retention {
         Base0RetentionV1::Folded(m) => PalwLegacyTreeV2::from_fold_v1(backend, capture, prompt_ids, &m.step_tree)?,
         Base0RetentionV1::Dense((binding, tiles, ..)) => PalwLegacyTreeV2::leaves_v1(
@@ -414,12 +419,13 @@ pub fn palw_legacy_held_capture_answer_v2(
         return Err("the legacy held retention does not reproduce the claim's checkpoint tree".into());
     }
     let answer = palw_legacy_held_answer_v2(unit, &step_tree, &checkpoint_tree, backend, capture, prompt_ids, roots, form)?;
-    kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v2(
+    kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
         &roots.execution_root,
         unit,
         binding,
         &answer,
         binding.step_leaf_count,
+        form,
     )
     .map_err(|e| format!("the built legacy held answer does not authenticate: {e}"))?;
     Ok((binding.clone(), answer))
@@ -440,11 +446,24 @@ pub fn palw_legacy_held_answer_v2(
     roots: PalwClaimRootsV1,
     form: PalwPromptIdsFormV1,
 ) -> Result<PalwLegacyHeldAnswerV2, String> {
+    fn step_tree_binding(capture: &[u8]) -> Result<PalwStepBindingV2, String> {
+        Ok(misaka_palw_base0::produce::base0_material_decode_any_v1(capture)
+            .map_err(|e| format!("missing input binding: {e:?}"))?
+            .binding()
+            .clone())
+    }
     fn node_answer(tree: &PalwLegacyTreeV2<'_>, level: u8, index: u64) -> Result<PalwLegacyHeldAnswerV2, String> {
         palw_legacy_node_answer_from_oracle_v2(tree.leaf_count(), level, index, &|l, i| tree.own_node(l, i), &|i| tree.leaf_hash(i))
             .ok_or_else(|| format!("node ({level}, {index}) is not in this retention's tree"))
     }
     match *unit {
+        PalwLegacyHeldUnitV2::PromptIds { chunk } => kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_prompt_answer_v2(
+            &step_tree_binding(capture)?,
+            prompt_ids,
+            chunk,
+            form,
+        )
+        .map_err(|e| e.to_string()),
         PalwLegacyHeldUnitV2::StepNode { level, index } => node_answer(step_tree, level, index),
         PalwLegacyHeldUnitV2::CheckpointNode { level, index } => node_answer(checkpoint_tree, level, index),
         PalwLegacyHeldUnitV2::KernelWitness { leaf } => {

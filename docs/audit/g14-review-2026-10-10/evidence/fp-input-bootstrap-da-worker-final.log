@@ -1,0 +1,13 @@
+
+running 8 tests
+test palw_panel::p2_7_disclosure_policy::a_claims_units_are_answered_from_one_load_and_one_flat_answers_its_run ... ok
+test palw_panel::p2_7_disclosure_policy::a_free_prompt_answer_needs_the_claims_recorded_job_pin ... ok
+test palw_panel::p2_7_disclosure_policy::a_da_answer_is_built_from_a_verified_or_re_made_capture_never_a_decodable_one ... ok
+test palw_panel::p2_7_disclosure_policy::an_attempt_claims_capture_is_kept_verified_or_re_made_from_its_block ... ok
+test palw_panel::p2_7_disclosure_policy::the_producer_answers_at_once_and_a_covering_signer_after_its_turn ... ok
+test palw_panel::p2_7_disclosure_policy::the_queue_key_is_the_claim_and_the_unit ... ok
+test palw_panel::p2_7_disclosure_policy::the_tick_answers_da_sessions_and_keeps_what_it_answers_from ... ok
+test palw_panel::p2_7_disclosure_policy::legacy_held_due_units_use_tag158_from_verified_dense_material ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 590 filtered out; finished in 1.61s
+

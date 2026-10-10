@@ -117,6 +117,8 @@ pub enum PalwLegacyHeldUnitV2 {
     CheckpointNode { level: u8, index: u64 },
     /// The committed half of step leaf `leaf`'s refutation (CKW).
     KernelWitness { leaf: u64 },
+    /// One authenticated input chunk; no execution or model operand is disclosed.
+    PromptIds { chunk: u32 },
 }
 
 /// **Which committed tree a descent walks.**
@@ -158,7 +160,7 @@ impl PalwLegacyHeldUnitV2 {
         match *self {
             Self::StepNode { level, index } => Some((PalwLegacyTreeV2::Step, level, index)),
             Self::CheckpointNode { level, index } => Some((PalwLegacyTreeV2::Checkpoint, level, index)),
-            Self::KernelWitness { .. } => None,
+            Self::KernelWitness { .. } | Self::PromptIds { .. } => None,
         }
     }
 }
@@ -182,6 +184,8 @@ pub enum PalwLegacyHeldAnswerV2 {
     Node { frontier: Vec<Hash64>, siblings: Vec<Hash64> },
     /// A CKW.
     KernelWitness(Box<PalwCommittedKernelWitnessV2>),
+    /// Merkle input: ids of one aligned subtree and its outer path. Flat input: all ids, no tree/path.
+    PromptIds { ids: Vec<u32>, tree_root: Option<Hash64>, siblings: Vec<Hash64> },
 }
 
 /// **Tag 157's payload: a demand of one legacy held unit**, with the claim's binding (authenticated against its `execution_root`,
@@ -366,6 +370,142 @@ pub fn palw_legacy_node_answer_from_oracle_v2(
     Some(PalwLegacyHeldAnswerV2::Node { frontier, siblings })
 }
 
+/// An input unit covers 64 adjacent 32-token tiles, authenticated with one subtree path.
+pub const PALW_LEGACY_PROMPT_CHUNK_DEPTH_V2: u8 = 6;
+pub const PALW_LEGACY_PROMPT_CHUNK_IDS_V2: u64 =
+    (1 << PALW_LEGACY_PROMPT_CHUNK_DEPTH_V2) * crate::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN as u64;
+
+/// The canonical bounds; the ruleset and registered profile choose the form, never the responder.
+pub fn palw_legacy_prompt_chunk_bounds_v2(
+    binding: &PalwStepBindingV2,
+    chunk: u32,
+    network: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<(u64, u64), PalwLegacyHeldError> {
+    use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1, palw_prompt_ids_form_of_class_v1};
+    let count = u64::from(binding.job_context.declared_prefill_tokens);
+    if count == 0 {
+        return Err(PalwLegacyHeldError::OutsideTheCommitment("the input has no ids"));
+    }
+    let first = if palw_prompt_ids_form_of_class_v1(network, &binding.shape_profile) == PalwPromptIdsFormV1::Flat {
+        if chunk != 0 {
+            return Err(PalwLegacyHeldError::OutsideTheCommitment("a flat input has one whole-id unit"));
+        }
+        0
+    } else {
+        u64::from(chunk) * PALW_LEGACY_PROMPT_CHUNK_IDS_V2
+    };
+    if first >= count {
+        return Err(PalwLegacyHeldError::OutsideTheCommitment("the input ends before this chunk"));
+    }
+    let len = if palw_prompt_ids_form_of_class_v1(network, &binding.shape_profile) == PalwPromptIdsFormV1::Flat {
+        count
+    } else {
+        (count - first).min(PALW_LEGACY_PROMPT_CHUNK_IDS_V2)
+    };
+    Ok((first, len))
+}
+
+/// A conservative answer body bound used BEFORE opening a session. Binding and carrier overhead are priced by the processor.
+pub fn palw_legacy_prompt_answer_bound_v2(
+    binding: &PalwStepBindingV2,
+    chunk: u32,
+    network: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<u64, PalwLegacyHeldError> {
+    let (_, count) = palw_legacy_prompt_chunk_bounds_v2(binding, chunk, network)?;
+    Ok(1 + 4 + 4 * count + 1 + 64 + 4 + 64 * crate::palw_step_leg::PALW_STEP_LEG_MAX_OPENING_SIBLINGS as u64)
+}
+
+/// An honest responder builds this from its retained INPUT, independently of the execution capture.
+pub fn palw_legacy_prompt_answer_v2(
+    binding: &PalwStepBindingV2,
+    ids: &[u32],
+    chunk: u32,
+    network: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<PalwLegacyHeldAnswerV2, PalwLegacyHeldError> {
+    use crate::palw_prompt_ids_v1::{
+        PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, palw_prompt_ids_form_of_class_v1, prompt_ids_tile_leaf_v1,
+        prompt_token_ids_commitment_v1,
+    };
+    let (first, count) = palw_legacy_prompt_chunk_bounds_v2(binding, chunk, network)?;
+    let form = palw_prompt_ids_form_of_class_v1(network, &binding.shape_profile);
+    let total = u64::from(binding.job_context.declared_prefill_tokens);
+    if ids.len() as u64 != total
+        || prompt_token_ids_commitment_v1(form, ids).map_err(|e| PalwLegacyHeldError::InputNotCommitted(e.to_string()))?
+            != binding.job_context.prompt_token_ids_hash
+    {
+        return Err(PalwLegacyHeldError::InputNotCommitted("retained ids are not this job's input".into()));
+    }
+    if form == PalwPromptIdsFormV1::Flat {
+        return Ok(PalwLegacyHeldAnswerV2::PromptIds { ids: ids.to_vec(), tree_root: None, siblings: Vec::new() });
+    }
+    let leaves: Vec<_> =
+        ids.chunks(PALW_PROMPT_IDS_TILE_LEN as usize).enumerate().map(|(i, t)| prompt_ids_tile_leaf_v1(total, i as u64, t)).collect();
+    let root =
+        crate::palw_step_leg::step_merkle_root_v1(&leaves).map_err(|e| PalwLegacyHeldError::InputNotCommitted(e.to_string()))?;
+    let level = PALW_LEGACY_PROMPT_CHUNK_DEPTH_V2.min(palw_tir_step_tree_height_v1(leaves.len() as u64));
+    let siblings = if level == 0 {
+        Vec::new()
+    } else {
+        crate::palw_tir_court_v1::palw_step_node_parts_at_depth_v1(PALW_LEGACY_PROMPT_CHUNK_DEPTH_V2, &leaves, level, u64::from(chunk))
+            .ok_or(PalwLegacyHeldError::OutsideTheCommitment("the prompt subtree is missing"))?
+            .1
+    };
+    Ok(PalwLegacyHeldAnswerV2::PromptIds {
+        ids: ids[first as usize..(first + count) as usize].to_vec(),
+        tree_root: Some(root),
+        siblings,
+    })
+}
+
+fn palw_legacy_prompt_check_v2(
+    binding: &PalwStepBindingV2,
+    chunk: u32,
+    ids: &[u32],
+    root: Option<Hash64>,
+    siblings: &[Hash64],
+    network: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<(), PalwLegacyHeldError> {
+    use crate::palw_prompt_ids_v1::{
+        PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, palw_prompt_ids_form_of_class_v1, prompt_ids_outer_root_v1,
+        prompt_ids_tile_count_v1, prompt_ids_tile_leaf_v1,
+    };
+    let bad = |why: &str| PalwLegacyHeldError::InputNotCommitted(why.into());
+    let (first, count) = palw_legacy_prompt_chunk_bounds_v2(binding, chunk, network)?;
+    if ids.len() as u64 != count || siblings.len() > crate::palw_step_leg::PALW_STEP_LEG_MAX_OPENING_SIBLINGS {
+        return Err(bad("the input chunk has another length or too many siblings"));
+    }
+    let total = u64::from(binding.job_context.declared_prefill_tokens);
+    if palw_prompt_ids_form_of_class_v1(network, &binding.shape_profile) == PalwPromptIdsFormV1::Flat {
+        if root.is_some()
+            || !siblings.is_empty()
+            || crate::palw_v2::prompt_token_ids_hash_v2(ids) != binding.job_context.prompt_token_ids_hash
+        {
+            return Err(bad("the flat input does not reproduce the job's hash"));
+        }
+        return Ok(());
+    }
+    let root = root.ok_or_else(|| bad("the Merkle input has no tree root"))?;
+    if prompt_ids_outer_root_v1(total, &root) != binding.job_context.prompt_token_ids_hash {
+        return Err(bad("the prompt tree is not this job's root"));
+    }
+    let tiles = prompt_ids_tile_count_v1(total).ok_or_else(|| bad("the prompt has too many tiles"))?;
+    let base = first / u64::from(PALW_PROMPT_IDS_TILE_LEN);
+    let nodes: Vec<_> = ids
+        .chunks(PALW_PROMPT_IDS_TILE_LEN as usize)
+        .enumerate()
+        .map(|(i, t)| step_merkle_leaf_v1(base + i as u64, &prompt_ids_tile_leaf_v1(total, base + i as u64, t)))
+        .collect();
+    let level = PALW_LEGACY_PROMPT_CHUNK_DEPTH_V2.min(palw_tir_step_tree_height_v1(tiles));
+    if level == 0 {
+        if nodes.as_slice() != [root] || !siblings.is_empty() {
+            return Err(bad("the single prompt tile does not open"));
+        }
+        return Ok(());
+    }
+    palw_step_node_reaches_at_depth_v1(PALW_LEGACY_PROMPT_CHUNK_DEPTH_V2, tiles, &root, level, u64::from(chunk), &nodes, siblings)
+        .map_err(|why| bad(why))
+}
+
 // ---- checks (hash arithmetic; the fold's and the filer's one spelling) ----------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -386,6 +526,8 @@ pub enum PalwLegacyHeldError {
     NodeNotCommitted(&'static str),
     #[error("the witness is not the claim's committed half: {0}")]
     WitnessNotCommitted(String),
+    #[error("the input does not authenticate: {0}")]
+    InputNotCommitted(String),
     #[error("the recompute is malformed: {0}")]
     Recompute(String),
 }
@@ -423,6 +565,15 @@ pub fn palw_legacy_held_check_demand_v2(
     unit: &PalwLegacyHeldUnitV2,
     binding: &PalwStepBindingV2,
 ) -> Result<(), PalwLegacyHeldError> {
+    palw_legacy_held_check_demand_v3(claim_execution_root, unit, binding, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+}
+
+pub fn palw_legacy_held_check_demand_v3(
+    claim_execution_root: &Hash64,
+    unit: &PalwLegacyHeldUnitV2,
+    binding: &PalwStepBindingV2,
+    network: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<(), PalwLegacyHeldError> {
     use PalwLegacyHeldError::OutsideTheCommitment as outside;
     authenticated(binding, claim_execution_root)?;
     match *unit {
@@ -435,6 +586,9 @@ pub fn palw_legacy_held_check_demand_v2(
             if index >= width {
                 return Err(outside("the level has no such node"));
             }
+        }
+        PalwLegacyHeldUnitV2::PromptIds { chunk } => {
+            palw_legacy_prompt_chunk_bounds_v2(binding, chunk, network)?;
         }
         PalwLegacyHeldUnitV2::KernelWitness { leaf } => {
             if leaf >= binding.step_leaf_count {
@@ -464,7 +618,25 @@ pub fn palw_legacy_held_check_answer_v2(
     answer: &PalwLegacyHeldAnswerV2,
     max_step_leaf_count: u64,
 ) -> Result<(), PalwLegacyHeldError> {
-    palw_legacy_held_check_demand_v2(claim_execution_root, unit, binding)?;
+    palw_legacy_held_check_answer_v3(
+        claim_execution_root,
+        unit,
+        binding,
+        answer,
+        max_step_leaf_count,
+        crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+    )
+}
+
+pub fn palw_legacy_held_check_answer_v3(
+    claim_execution_root: &Hash64,
+    unit: &PalwLegacyHeldUnitV2,
+    binding: &PalwStepBindingV2,
+    answer: &PalwLegacyHeldAnswerV2,
+    max_step_leaf_count: u64,
+    network: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<(), PalwLegacyHeldError> {
+    palw_legacy_held_check_demand_v3(claim_execution_root, unit, binding, network)?;
     match (unit, answer) {
         (
             PalwLegacyHeldUnitV2::StepNode { level, index } | PalwLegacyHeldUnitV2::CheckpointNode { level, index },
@@ -499,6 +671,9 @@ pub fn palw_legacy_held_check_answer_v2(
                 max_step_leaf_count,
             )
             .map_err(|e| PalwLegacyHeldError::WitnessNotCommitted(e.to_string()))
+        }
+        (PalwLegacyHeldUnitV2::PromptIds { chunk }, PalwLegacyHeldAnswerV2::PromptIds { ids, tree_root, siblings }) => {
+            palw_legacy_prompt_check_v2(binding, *chunk, ids, *tree_root, siblings, network)
         }
         _ => Err(PalwLegacyHeldError::AnswerIsAnotherUnit),
     }
@@ -582,6 +757,9 @@ pub const fn palw_legacy_held_unit_scope_v2(unit: &PalwLegacyHeldUnitV2) -> Palw
     match unit {
         PalwLegacyHeldUnitV2::StepNode { .. } | PalwLegacyHeldUnitV2::CheckpointNode { .. } => {
             PalwLegacyHeldScopeV2 { material: "ClaimWitness", supplier: "Demanded", model_bytes: false }
+        }
+        PalwLegacyHeldUnitV2::PromptIds { .. } => {
+            PalwLegacyHeldScopeV2 { material: "ClaimInput", supplier: "Demanded", model_bytes: false }
         }
         PalwLegacyHeldUnitV2::KernelWitness { .. } => {
             PalwLegacyHeldScopeV2 { material: "ClaimTrace", supplier: "Demanded", model_bytes: false }
@@ -833,6 +1011,135 @@ mod tests {
 
     fn h(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
+    }
+
+    /// Input proofs use global counts/indices, including the final ragged subtree; no execution or model oracle is used.
+    #[test]
+    fn prompt_chunks_authenticate_lengths_indices_and_ragged_subtrees() {
+        use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        let template = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, None).binding;
+        for n in [1usize, 31, 32, 33, 2047, 2048, 2049, 4097, 8192] {
+            let ids: Vec<u32> = (0..n).map(|i| ((i * 37 + 11) % 128) as u32).collect();
+            let mut b = template.clone();
+            b.job_context.declared_prefill_tokens = n as u32;
+            b.job_context.max_context_tokens = (n as u32 + 1).max(32);
+            b.job_context.prompt_token_ids_hash = prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &ids).unwrap();
+            b.committed_execution_root = crate::palw_step_leg::binding_commitment_root_v1(&b);
+            let chunks = n.div_ceil(PALW_LEGACY_PROMPT_CHUNK_IDS_V2 as usize);
+            let mut recovered = Vec::new();
+            for chunk in 0..chunks as u32 {
+                let unit = PalwLegacyHeldUnitV2::PromptIds { chunk };
+                let answer = palw_legacy_prompt_answer_v2(&b, &ids, chunk, PalwPromptIdsFormV1::Flat).unwrap();
+                let check = |a: &PalwLegacyHeldAnswerV2| {
+                    palw_legacy_held_check_answer_v3(
+                        &b.committed_execution_root,
+                        &unit,
+                        &b,
+                        a,
+                        b.step_leaf_count,
+                        PalwPromptIdsFormV1::Flat,
+                    )
+                };
+                check(&answer).unwrap(); // held profile selects Merkle even on a Flat network
+                assert!(
+                    borsh::to_vec(&answer).unwrap().len() as u64
+                        <= palw_legacy_prompt_answer_bound_v2(&b, chunk, PalwPromptIdsFormV1::Flat).unwrap()
+                );
+                let PalwLegacyHeldAnswerV2::PromptIds { ids: part, tree_root, siblings } = &answer else { unreachable!() };
+                recovered.extend_from_slice(part);
+                let mut corrupt = part.clone();
+                corrupt[0] ^= 1;
+                assert!(
+                    check(&PalwLegacyHeldAnswerV2::PromptIds { ids: corrupt, tree_root: *tree_root, siblings: siblings.clone() })
+                        .is_err()
+                );
+                assert!(
+                    check(&PalwLegacyHeldAnswerV2::PromptIds {
+                        ids: part[..part.len() - 1].to_vec(),
+                        tree_root: *tree_root,
+                        siblings: siblings.clone()
+                    })
+                    .is_err()
+                );
+                assert!(
+                    check(&PalwLegacyHeldAnswerV2::PromptIds {
+                        ids: part.clone(),
+                        tree_root: Some(h(99)),
+                        siblings: siblings.clone()
+                    })
+                    .is_err()
+                );
+                let mut extra = siblings.clone();
+                extra.push(h(1));
+                assert!(
+                    check(&PalwLegacyHeldAnswerV2::PromptIds { ids: part.clone(), tree_root: *tree_root, siblings: extra }).is_err()
+                );
+                if !siblings.is_empty() {
+                    let mut bad = siblings.clone();
+                    bad[0] = h(1);
+                    assert!(
+                        check(&PalwLegacyHeldAnswerV2::PromptIds { ids: part.clone(), tree_root: *tree_root, siblings: bad }).is_err()
+                    );
+                }
+                if chunks > 1 {
+                    assert!(
+                        palw_legacy_held_check_answer_v3(
+                            &b.committed_execution_root,
+                            &PalwLegacyHeldUnitV2::PromptIds { chunk: (chunk + 1) % chunks as u32 },
+                            &b,
+                            &answer,
+                            b.step_leaf_count,
+                            PalwPromptIdsFormV1::Flat
+                        )
+                        .is_err()
+                    );
+                }
+                let scope = palw_legacy_held_unit_scope_v2(&unit);
+                assert_eq!(scope.material, "ClaimInput");
+                assert!(!scope.model_bytes);
+            }
+            assert_eq!(recovered, ids);
+            assert!(
+                palw_legacy_held_check_demand_v3(
+                    &b.committed_execution_root,
+                    &PalwLegacyHeldUnitV2::PromptIds { chunk: chunks as u32 },
+                    &b,
+                    PalwPromptIdsFormV1::Flat
+                )
+                .is_err()
+            );
+            let mut corrupt = ids.clone();
+            corrupt[0] ^= 1;
+            assert!(palw_legacy_prompt_answer_v2(&b, &corrupt, 0, PalwPromptIdsFormV1::Flat).is_err());
+        }
+    }
+
+    #[test]
+    fn flat_input_is_one_whole_hash_checked_unit_and_network_merkle_is_explicit() {
+        use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        let template = crate::palw_checkpoint_court_v1::tests::held_fixture(false, 20, None).binding;
+        for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
+            let ids: Vec<u32> = (0..4097).map(|i| i % 128).collect();
+            let mut b = template.clone();
+            b.job_context.declared_prefill_tokens = ids.len() as u32;
+            b.job_context.max_context_tokens = ids.len() as u32 + 1;
+            b.job_context.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &ids).unwrap();
+            b.committed_execution_root = crate::palw_step_leg::binding_commitment_root_v1(&b);
+            let a = palw_legacy_prompt_answer_v2(&b, &ids, 0, form).unwrap();
+            let unit = PalwLegacyHeldUnitV2::PromptIds { chunk: 0 };
+            palw_legacy_held_check_answer_v3(&b.committed_execution_root, &unit, &b, &a, b.step_leaf_count, form).unwrap();
+            if form == PalwPromptIdsFormV1::Flat {
+                assert!(
+                    matches!(&a, PalwLegacyHeldAnswerV2::PromptIds { ids: part, tree_root: None, siblings } if part == &ids && siblings.is_empty())
+                );
+                assert!(palw_legacy_prompt_answer_v2(&b, &ids, 1, form).is_err());
+            } else {
+                assert!(
+                    palw_legacy_held_check_answer_v2(&b.committed_execution_root, &unit, &b, &a, b.step_leaf_count).is_err(),
+                    "network form cannot be guessed"
+                );
+            }
+        }
     }
 
     /// A whole tree as a node oracle (level 0 = leaf nodes).

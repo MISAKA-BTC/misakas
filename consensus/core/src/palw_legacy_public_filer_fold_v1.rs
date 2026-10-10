@@ -436,8 +436,13 @@ pub(super) fn apply_dispute_reacquired_v1(
             if !builder.extras.legacy_held_da_v2_active || builder.state.tir_classes.contains_key(&claim.class_id) {
                 return Err(refused("this claim has no legacy held reacquisition route"));
             }
-            crate::palw_legacy_held_da_v2::palw_legacy_held_check_demand_v2(&claim.execution_root, unit, binding)
-                .map_err(|e| refused(e.to_string()))?;
+            crate::palw_legacy_held_da_v2::palw_legacy_held_check_demand_v3(
+                &claim.execution_root,
+                unit,
+                binding,
+                builder.extras.prompt_ids_form_v1(),
+            )
+            .map_err(|e| refused(e.to_string()))?;
             if let Some(why) = builder.da_binding_answers_another_job_v1(now, &claim_id, binding) {
                 return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
             }

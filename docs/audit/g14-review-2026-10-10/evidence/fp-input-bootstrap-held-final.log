@@ -1,0 +1,31 @@
+
+running 26 tests
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_garbage_gather_is_convicted_by_the_leaf_recompute_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_mid_layer_matmul_lie_is_convicted_from_openings_the_outsider_builds ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_public_binding_convicts_the_wrong_job_without_an_answered_session_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_lie_in_one_fused_tile_is_localized_and_convicted_by_a_fresh_outsider ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_an_honest_claim_survives_a_malicious_outsider ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_restarted_outsider_reacquires_answered_units_without_replaying_old_accusations ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_below_the_fence_every_legacy_object_is_refused_and_the_state_is_untouched ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_large_prompt_relabel_convicts_after_colluding_valid_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_public_binding_proves_large_prompt_relabel_and_refuses_honest_or_unbound_inputs ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_public_fp_bootstrap_own_replay_localizes_and_convicts_after_colluding_valid ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_state ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_public_tiled_tokens_prove_output_mismatch_and_refuse_an_honest_or_unbound_twin ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_the_node_filer_convicts_model_copy_and_matmul_faults_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_withheld_descent_and_witness_units_default_never_convict ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_an_honest_8k_claim_produces_no_dissection ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_a_garbage_fused_leaf_is_dissected_by_the_seats_node_and_its_producer_convicted ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_gap_a_a_canonical_8k_attempt_is_past_the_whole_capture_cap ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_gap_b_a_fresh_seat_cannot_bisect_a_lying_held_fold ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_an_opening_the_folds_verdict_refuses_is_not_missing_material ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_gap_c_a_fresh_seat_cannot_build_the_opening_of_a_lying_held_fold ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_missing_material_falls_back_to_the_step_leaf_demand_never_both ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_the_opening_is_due_by_the_folds_final_on_testnet_12s_windows ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_the_opening_meets_the_acceptance_layers_gates_on_testnet_12s_court ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_the_openings_builds_run_under_the_held_figure_not_the_dense_one ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_twin_without_the_held_route_nothing_is_opened ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::t54g_one_dissection_per_claim_and_leaf_and_a_restart_rebuilds_it_from_the_chain ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 572 filtered out; finished in 25.20s
+

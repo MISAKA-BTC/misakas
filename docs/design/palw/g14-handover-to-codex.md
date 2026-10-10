@@ -28,6 +28,8 @@
 
 - free-promptの公開accepted commitmentからjob/inputを認証し、fresh modelの独立replayへ接続した。FPにvesting rowがなくFinal後のreservationとDA admissionが止まる経路も、既存public-filer fence内で共通predicateとliability保持へ修正した。PanelDA withheld inputのbootstrap、bad canonical root、公開prefix-state、full service／全family・最大profileは残る。検証結果とfixtureの範囲は[FP修正記録](../../audit/g14-review-2026-10-10/implementation.md#公開fp-commitmentinputからの独立再実行とpost-final-fpの追及)を参照。
 
+- PanelDA User入力の公開court bootstrapを追加した。producer側のinput retentionだけを回答に使い、verifierは公開認証済みchunkを学習後、自身の登録modelで再計算する。worker handoffで入力accumulatorを失わないよう修正し、reorgでinputを破棄する。最大contextの34-session適合、FP commitment自体の再取得、full-service包含は残る。検証結果と範囲は監査記録末尾を参照。
+
 G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
 
 ## 統合ブランチ

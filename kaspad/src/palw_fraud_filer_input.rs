@@ -151,6 +151,64 @@ pub(in crate::palw_panel) fn palw_fraud_filer_fp_input_v1(
     Ok(PalwFraudFilerFpInputV1 { job: job.clone(), prompt_ids: ids })
 }
 
+/// Public input acquisition before any replay. Its retained ids and hashing temporaries hold a host memory ticket.
+#[derive(Clone)]
+pub(in crate::palw_panel) struct PalwFraudFilerFpBootstrapV1 {
+    pub(in crate::palw_panel) payload: Arc<PalwFpCommitmentTxPayloadV3>,
+    pub(in crate::palw_panel) form: PalwPromptIdsFormV1,
+    pub(in crate::palw_panel) ids: Vec<u32>,
+    pub(in crate::palw_panel) chunk: u32,
+    pub(in crate::palw_panel) _reservation: Option<Arc<crate::palw_memory_ledger::PalwMemoryReservationV1>>,
+}
+
+impl PalwFraudFilerFpBootstrapV1 {
+    pub(in crate::palw_panel) fn ready(&self) -> bool {
+        self.ids.len() == self.payload.commitment.job.prompt_tokens as usize
+    }
+    pub(in crate::palw_panel) fn learn(
+        &mut self,
+        binding: &PalwStepBindingV2,
+        unit: PalwLegacyHeldUnitV2,
+        answer: &PalwLegacyHeldAnswerV2,
+    ) -> Result<(), String> {
+        let PalwLegacyHeldUnitV2::PromptIds { chunk } = unit else {
+            return Err("bootstrap consumes only input chunks".into());
+        };
+        if chunk != self.chunk {
+            return Err("bootstrap needs the next contiguous input chunk".into());
+        }
+        if binding.job_context.declared_prefill_tokens != self.payload.commitment.job.prompt_tokens
+            || kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context)
+                != kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&self.payload.commitment)
+        {
+            return Err("the input binding is not the recorded FP job".into());
+        }
+        kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
+            &self.payload.commitment.execution_root,
+            &unit,
+            binding,
+            answer,
+            binding.step_leaf_count,
+            self.form,
+        )
+        .map_err(|e| e.to_string())?;
+        let PalwLegacyHeldAnswerV2::PromptIds { ids, .. } = answer else {
+            return Err("the input answer has another kind".into());
+        };
+        let (first, _) = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_prompt_chunk_bounds_v2(binding, chunk, self.form)
+            .map_err(|e| e.to_string())?;
+        if first != self.ids.len() as u64 {
+            return Err("the input would skip or overlap a chunk".into());
+        }
+        self.ids.extend_from_slice(ids);
+        self.chunk = self.chunk.checked_add(1).ok_or("the input chunk counter overflowed")?;
+        if self.ready() {
+            palw_fp_prompt_ids_admit_v1(&self.payload.commitment.job, &self.ids, self.form).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(in crate::palw_panel) mod tests {
     use super::*;
@@ -168,6 +226,137 @@ pub(in crate::palw_panel) mod tests {
             prompt_token_ids: ids,
             signature: vec![],
         }
+    }
+
+    #[test]
+    fn input_bootstrap_authenticates_the_job_and_worker_state_before_replay() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1, PalwMemoryReservationKeyV1};
+        use crate::palw_panel::palw_fraud_filer::{PalwFraudFilerCaseV1, PalwFraudFilerVerdictV1};
+        use kaspa_consensus_core::palw_legacy_public_filer_v1::PalwLegacyProbeV1;
+        let backend = crate::palw_panel::seat_s_tests::floor_backend();
+        let form = backend.prompt_ids_form();
+        let (mut job, ids) = crate::palw_panel::seat_s_tests::floor_fp_job(&backend);
+        job.privacy_mode = PALW_FP_PRIVACY_PANEL_DA;
+        let run = backend.execute_free_prompt(&job, &ids.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();
+        let binding = misaka_palw_base0::produce::base0_material_decode_any_v1(&run.outcome.material).unwrap().binding().clone();
+        let payload = Arc::new(PalwFpCommitmentTxPayloadV3 {
+            version: job.version,
+            commitment: palw_fp_commitment_from_context_v3(&job, &binding.job_context, &run, 9999).unwrap(),
+            prompt_token_ids: vec![],
+            signature: vec![],
+        });
+        let mut input = PalwFraudFilerFpBootstrapV1 { payload, form, ids: vec![], chunk: 0, _reservation: None };
+        let unit = PalwLegacyHeldUnitV2::PromptIds { chunk: 0 };
+        let answer = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_prompt_answer_v2(&binding, &ids, 0, form).unwrap();
+        assert!(!input.ready());
+        assert!(input.learn(&binding, PalwLegacyHeldUnitV2::PromptIds { chunk: 1 }, &answer).is_err());
+        let mut wrong_job = binding.clone();
+        wrong_job.job_context.job_id = Hash64::default();
+        assert!(input.learn(&wrong_job, unit, &answer).is_err());
+        let mut corrupt = answer.clone();
+        let PalwLegacyHeldAnswerV2::PromptIds { ids: part, .. } = &mut corrupt else { unreachable!() };
+        part[0] ^= 1;
+        assert!(input.learn(&binding, unit, &corrupt).is_err());
+        assert!(input.ids.is_empty());
+        assert_eq!(input.chunk, 0);
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(4096), || None);
+        input._reservation = Some(Arc::new(
+            ledger
+                .reserve(PalwMemoryReservationKeyV1 { role: "input-test", class_id: job.class_id, job: Hash64::default() }, 2048)
+                .unwrap(),
+        ));
+        let mut case = PalwFraudFilerCaseV1::new(crate::palw_panel::palw_fraud_filer::tests::candidate_for_input_test());
+        case.fp_bootstrap = Some(input);
+        case.binding = Some(binding.clone());
+        case.input_retry_at = 100;
+        let mut learned = case.clone();
+        learned
+            .learn(
+                PalwLegacyProbeV1::HeldNode { unit },
+                &PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((binding.clone(), answer.clone()))),
+            )
+            .unwrap();
+        assert!(!case.fp_bootstrap.as_ref().unwrap().ready(), "the worker has a separate state copy");
+        case.accept_learned_v1(learned);
+        assert!(case.fp_bootstrap.as_ref().unwrap().ready(), "the actual worker handoff includes the input");
+        assert_eq!(case.fp_bootstrap.as_ref().unwrap().ids, ids);
+        assert_eq!(case.input_retry_at, 0);
+        assert_eq!(case.runs, 0);
+        assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Pending));
+        assert!(case.fp_bootstrap.as_mut().unwrap().learn(&binding, unit, &answer).is_err(), "no duplicate chunk append");
+        assert_eq!(ledger.reserved_bytes(), 2048);
+        drop(case);
+        assert_eq!(ledger.reserved_bytes(), 0, "the shared worker ticket is released with the case");
+        let large_ids = vec![0u32; 30_000];
+        let mut large_binding = binding.clone();
+        large_binding.job_context.declared_prefill_tokens = large_ids.len() as u32;
+        large_binding.job_context.max_context_tokens = large_ids.len() as u32 + 7;
+        large_binding.job_context.prompt_token_ids_hash =
+            prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::Flat, &large_ids).unwrap();
+        large_binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&large_binding);
+        let large_answer = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_prompt_answer_v2(
+            &large_binding,
+            &large_ids,
+            0,
+            PalwPromptIdsFormV1::Flat,
+        )
+        .unwrap();
+        let large = PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((large_binding, large_answer)));
+        assert!(
+            crate::palw_panel::palw_da_built_answer_object_v1(
+                &job.network_domain,
+                Hash64::default(),
+                PalwDaUnitV1::LegacyHeldV2(unit),
+                large,
+                kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond),
+                PalwPromptIdsFormV1::Flat,
+                u64::MAX,
+                |_, _| panic!("single-carrier ceiling refused before signing")
+            )
+            .unwrap_err()
+            .contains("single carrier")
+        );
+        let built = PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((binding, answer)));
+        let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond);
+        assert!(
+            crate::palw_panel::palw_da_built_answer_object_v1(
+                &job.network_domain,
+                Hash64::default(),
+                PalwDaUnitV1::LegacyHeldV2(unit),
+                built.clone(),
+                bond,
+                form,
+                u64::MAX,
+                |_, _| Some(vec![1])
+            )
+            .is_ok()
+        );
+        assert!(
+            crate::palw_panel::palw_da_built_answer_object_v1(
+                &job.network_domain,
+                Hash64::default(),
+                PalwDaUnitV1::LegacyHeldV2(unit),
+                built.clone(),
+                bond,
+                PalwPromptIdsFormV1::Flat,
+                u64::MAX,
+                |_, _| panic!("wrong form refused before signing")
+            )
+            .is_err()
+        );
+        assert!(
+            crate::palw_panel::palw_da_built_answer_object_v1(
+                &job.network_domain,
+                Hash64::default(),
+                PalwDaUnitV1::LegacyHeldV2(unit),
+                built,
+                bond,
+                form,
+                0,
+                |_, _| panic!("size refused before signing")
+            )
+            .is_err()
+        );
     }
 
     #[test]

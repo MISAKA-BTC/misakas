@@ -13659,6 +13659,20 @@ impl VirtualStateProcessor {
                     if payload.len() as u64 > court.max_close_bytes() {
                         return Err("public reacquisition exceeds the ruleset's close carriage ceiling".into());
                     }
+                    if let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(
+                        kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { chunk },
+                    ) = request.unit
+                    {
+                        let binding = request.binding.as_ref().ok_or("input reacquisition needs its binding")?;
+                        let bound = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_prompt_answer_bound_v2(
+                            binding, chunk, self.palw_prompt_ids_form_at(point.daa_score),
+                        ).map_err(|e| e.to_string())?;
+                        let binding_bytes = borsh::to_vec(binding).map_err(|e| e.to_string())?.len() as u64;
+                        let limit = court.max_close_bytes().min(kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+                        if bound.saturating_add(binding_bytes) > limit {
+                            return Err("the reacquired input response cannot fit the court/carrier ceiling".into());
+                        }
+                    }
                     self.palw_legacy_dispute_signature_ok(
                         state, point.daa_score,
                         kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_DISPUTE_REACQUIRE_TAG_V1,
@@ -13683,6 +13697,16 @@ impl VirtualStateProcessor {
                     let domain = self.palw_network_domain_v2();
                     let message = l::palw_legacy_held_demand_message_v2(domain.as_byte_slice(), demand);
                     let bytes = borsh::to_vec(&demand.binding).map(|b| b.len() as u64).unwrap_or(u64::MAX);
+                    if let l::PalwLegacyHeldUnitV2::PromptIds { chunk } = demand.unit {
+                        let bound = l::palw_legacy_prompt_answer_bound_v2(
+                            &demand.binding, chunk, self.palw_prompt_ids_form_at(point.daa_score),
+                        ).map_err(|e| e.to_string())?;
+                        let court = self.palw_court_params_v2.as_ref().ok_or("input disclosure needs V2 court parameters")?;
+                        let limit = court.max_close_bytes().min(kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+                        if bound.saturating_add(bytes) > limit {
+                            return Err("the input response and binding cannot fit the court/carrier ceiling".into());
+                        }
+                    }
                     self.palw_legacy_held_signature_ok(
                         state,
                         point.daa_score,
@@ -13698,7 +13722,13 @@ impl VirtualStateProcessor {
                     use kaspa_consensus_core::palw_legacy_held_da_v2 as l;
                     let domain = self.palw_network_domain_v2();
                     let message = l::palw_legacy_held_answer_message_v2(domain.as_byte_slice(), answer);
-                    let bytes = l::palw_legacy_held_answer_bytes_v2(&answer.answer);
+                    let mut bytes = l::palw_legacy_held_answer_bytes_v2(&answer.answer);
+                    if matches!(answer.unit, l::PalwLegacyHeldUnitV2::PromptIds { .. }) {
+                        bytes = bytes.saturating_add(borsh::to_vec(&answer.binding).map_err(|e| e.to_string())?.len() as u64);
+                        if bytes > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64 {
+                            return Err("the input answer cannot fit a single carrier".into());
+                        }
+                    }
                     self.palw_legacy_held_signature_ok(
                         state,
                         point.daa_score,

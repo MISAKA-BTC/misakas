@@ -2546,6 +2546,7 @@ pub(crate) fn palw_da_built_answer_object_v1(
     unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
     answer: PalwDaBuiltAnswerV1,
     discloser: PalwBondKeyV2,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     max_close_bytes: u64,
     sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
 ) -> Result<PalwConsensusObjectV2, String> {
@@ -2565,15 +2566,22 @@ pub(crate) fn palw_da_built_answer_object_v1(
                 return Err("a legacy held answer cannot answer a tag-55 unit".into());
             };
             let (binding, answer) = *answer;
-            kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v2(
+            kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
                 &binding.committed_execution_root,
                 &unit,
                 &binding,
                 &answer,
                 binding.step_leaf_count,
+                form,
             )
             .map_err(|e| format!("the legacy held answer is not this unit: {e}"))?;
-            let bytes = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_answer_bytes_v2(&answer);
+            let mut bytes = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_answer_bytes_v2(&answer);
+            if matches!(unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }) {
+                bytes = bytes.saturating_add(borsh::to_vec(&binding).map_err(|e| e.to_string())?.len() as u64);
+                if bytes > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64 {
+                    return Err("the input answer cannot fit a single carrier".into());
+                }
+            }
             if bytes > max_close_bytes {
                 return Err(format!("legacy held answer has {bytes} bytes, above close ceiling {max_close_bytes}"));
             }
@@ -16711,6 +16719,7 @@ impl PalwPanelService {
         } else {
             None
         };
+        let answer_form = facts.form;
         let built = offload_shared(backend, move |b| {
             let _held_for_the_answers = reserved;
             palw_da_claim_answers_v1(
@@ -16746,6 +16755,7 @@ impl PalwPanelService {
                     duty.unit,
                     answer,
                     duty.discloser,
+                    answer_form,
                     self.config.court.max_close_bytes(),
                     |message, context| self.sign(message, context),
                 )
@@ -19025,6 +19035,7 @@ mod accepted_objects_walk_tests {
                 PalwDaUnitV1::LegacyHeldV2(unit),
                 PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((binding, answer))),
                 PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
+                backend.prompt_ids_form(),
                 u64::MAX,
                 |_, _| Some(vec![1]),
             )
@@ -19092,6 +19103,32 @@ mod accepted_objects_walk_tests {
         assert_eq!(fresh.anchor, hash(9), "a stalled old walk revisits the new tip");
         assert!(fresh.next.is_some(), "still no completed watermark across missing history");
         assert_eq!(delivered.len(), 1, "the reacquired copy is readable although its original carrier is gone");
+        // A non-held profile on a Merkle network needs the explicit network form for the new input unit.
+        let input_unit = PalwLegacyHeldUnitV2::PromptIds { chunk: 0 };
+        let input_object = make(input_unit);
+        let mut bad_input = input_object.clone();
+        let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = &mut bad_input else { unreachable!() };
+        let PalwLegacyHeldAnswerV2::PromptIds { ids, .. } = &mut answer.answer else { unreachable!() };
+        ids[0] ^= 1;
+        let txs: Vec<_> = [bad_input, input_object].into_iter().map(|object| Transaction::new(
+            TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap(),
+        )).collect();
+        chain.acceptance.insert(hash(9), Arc::new(vec![MergesetBlockAcceptanceData {
+            block_hash: hash(9), accepted_transactions: (0..txs.len()).map(|i| AcceptedTxEntry {
+                transaction_id: Default::default(), index_within_block: i as u32,
+            }).collect(),
+        }]));
+        chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), txs));
+        let input_selected = BTreeMap::from([(claim, input_unit)]);
+        let (_, _, input_answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_with_form_v1(
+            &chain, 100, 100, None, 100, &wanted, &input_selected, backend.prompt_ids_form(),
+        ).unwrap();
+        assert_eq!(input_answers.len(), 1, "only the valid reacquired input is cached before the missing suffix");
+        assert_eq!(input_answers[0].0, (claim, PalwDaUnitV1::LegacyHeldV2(input_unit)));
+        assert!(super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, None, 100, &wanted, &input_selected,
+        ).unwrap().2.is_empty(), "a carrier does not choose a Merkle ruleset on a Flat network");
         chain.blocks.insert(hash(2), saved);
         let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = good else { unreachable!() };
         assert_eq!(found[0].1, PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
@@ -23076,7 +23113,7 @@ mod p2_7_disclosure_policy {
         let held = built.answers[2].clone().expect("asked").expect("the prompt tile opens from the capture's job");
         let bond = facts.executor_bond;
         for (unit, answer) in [(units[0], first), (units[2], held)] {
-            palw_da_built_answer_object_v1(&Hash64::from_u64_word(0xD0), facts.claim_id, unit, answer, bond, u64::MAX, |_, _| {
+            palw_da_built_answer_object_v1(&Hash64::from_u64_word(0xD0), facts.claim_id, unit, answer, bond, facts.form, u64::MAX, |_, _| {
                 Some(vec![1])
             })
             .expect("the form the fold takes");
@@ -23099,6 +23136,7 @@ mod p2_7_disclosure_policy {
             .find(|leaf| !kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_ckw_leaf_is_model_copy_v2(binding, *leaf))
             .expect("a computation leaf, not a model-copy gather");
         let mut units = vec![
+            PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk: 0 }),
             PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::StepNode { level: height, index: 0 }),
             PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::KernelWitness { leaf: witness_leaf }),
         ];
@@ -23136,6 +23174,7 @@ mod p2_7_disclosure_policy {
                 *unit,
                 answer.clone(),
                 facts.executor_bond,
+                facts.form,
                 u64::MAX,
                 |_, context| {
                     assert_eq!(context, PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
@@ -23145,7 +23184,7 @@ mod p2_7_disclosure_policy {
             .expect("the signed tag-158 object can ride");
             assert!(matches!(object, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }));
             assert!(
-                palw_da_built_answer_object_v1(&domain, facts.claim_id, *unit, answer.clone(), facts.executor_bond, 0, |_, _| panic!(
+                palw_da_built_answer_object_v1(&domain, facts.claim_id, *unit, answer.clone(), facts.executor_bond, facts.form, 0, |_, _| panic!(
                     "ceiling checked before signing"
                 ))
                 .is_err()
@@ -23157,6 +23196,7 @@ mod p2_7_disclosure_policy {
                     *unit,
                     answer.clone(),
                     facts.executor_bond,
+                    facts.form,
                     u64::MAX,
                     |_, _| None
                 )
@@ -23169,6 +23209,7 @@ mod p2_7_disclosure_policy {
                     PalwDaUnitV1::Event { row: 0, tile: 0 },
                     answer,
                     facts.executor_bond,
+                    facts.form,
                     u64::MAX,
                     |_, _| panic!("wrong unit checked before signing")
                 )
