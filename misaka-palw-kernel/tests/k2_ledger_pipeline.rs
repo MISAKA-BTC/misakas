@@ -297,6 +297,106 @@ fn vlm_job() -> PipelineJob {
 }
 
 #[test]
+fn f_b1_a_pipeline_prefix_cannot_complete_a_fixed_reward_job() {
+    for delivered in [1, 3, 4] {
+        let mut w = World::new(vlm_pipeline(), 400, Some(DecodeRuleV1::Greedy));
+        let job = w.post(2, &vlm_job(), 3, 1);
+        let generated = w.generate(&job, delivered);
+        let produced = w.produce(&job, generated, RANDOM, |_| {});
+        let id = produced.claim.id();
+        let ev = w.block(10, vec![produced.tx, T::PanelCovered { claim: id }]);
+        if delivered == 3 {
+            assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
+        } else {
+            assert!(refused(&ev).is_some_and(|why| why.contains("WrongGenerationLength")), "{ev:?}");
+            assert!(!w.l.claims.contains_key(&id));
+        }
+    }
+}
+
+struct NoProducerValues;
+impl PublicSourceV1 for NoProducerValues {
+    fn node(&self, _: u8, _: u32, _: u16, _: u16) -> Option<Tensor> {
+        panic!("no producer node values")
+    }
+    fn input(&self, _: u8, _: u32, _: u16) -> Option<Tensor> {
+        panic!("no producer input values")
+    }
+}
+
+fn replay_outsider(w: &World, claim: Digest) -> OutsiderFindingV1 {
+    let fresh = KernelLedgerV1::from_rows(&w.genesis, w.l.scalars(), &w.l.to_rows()).unwrap();
+    OutsiderV1 { ledger: &fresh, claim, material: &NoProducerValues, artifact: &w.params.0, salt: [0; 64] }
+        .check_computation()
+        .unwrap()
+}
+
+#[test]
+fn pipeline_replay_localizes_stage_edge_random_image_and_decode_without_any_producer_values() {
+    for case in 0..6 {
+        let text = case >= 4;
+        let mut w = World::new(if text { vlm_pipeline() } else { toy_pipeline() }, 400, text.then_some(DecodeRuleV1::Greedy));
+        let job = w.post(2, &if text { vlm_job() } else { toy_job() }, if text { 3 } else { 0 }, 1);
+        let mut generated = if text { w.generate(&job, 3) } else { vec![] };
+        if case == 5 {
+            generated[0] = (generated[0] + 1) % w.programs[1].token_bound;
+        }
+        let view = stage_view_v1(&w.programs[1]);
+        let p = w.produce(&job, generated, RANDOM, |t| match case {
+            1 => {
+                let x = &mut t.stages[1].values.last_mut().unwrap()[view.post_occurrence as usize][0];
+                x.data[0] += if x.dtype.contains(x.data[0] + 1) { 1 } else { -1 };
+            }
+            2 => t.stages[1].inputs[0][IN_COND as usize].data[0] += 1,
+            3 => t.stages[1].inputs[2][IN_JITTER as usize].data[3] ^= 1,
+            4 => t.stages[0].inputs[0][0].data[0] = (t.stages[0].inputs[0][0].data[0] + 1) % 256,
+            _ => {}
+        });
+        let id = p.claim.id();
+        let setup_trace = p.trace.clone();
+        w.block(10, vec![p.tx, T::PanelCovered { claim: id }]);
+        let f = replay_outsider(&w, id);
+        if case == 0 {
+            assert_eq!(f, OutsiderFindingV1::Clean);
+            let (record, header, binding) = w.l.pipeline_public_record(&id).unwrap();
+            let fresh = misaka_palw_kernel::pipeline_public::FreshPipelineVerifierV1::from_public_bytes(
+                &record.to_bytes(),
+                &w.l.known,
+                header,
+                &binding,
+            )
+            .unwrap();
+            let upstream_view = stage_view_v1(&w.programs[0]);
+            let upstream = setup_trace.stages[0]
+                .values
+                .iter()
+                .map(|pos| TensorWireV1::of(&pos[upstream_view.post_occurrence as usize][upstream_view.output_node as usize]))
+                .collect::<Vec<_>>();
+            let accuse = PipelineFaultWireV1::EdgeCommitment { stage: 1, input: IN_COND, position: 0, upstream: upstream.clone() };
+            assert!(fresh.try_proof(&accuse.to_bytes()).unwrap_err().contains("NoFault"));
+            let mut forged = upstream;
+            forged[0].bytes[0] ^= 1;
+            let accuse = PipelineFaultWireV1::EdgeCommitment { stage: 1, input: IN_COND, position: 0, upstream: forged };
+            assert!(fresh.try_proof(&accuse.to_bytes()).unwrap_err().contains("NotAuthentic"));
+            continue;
+        }
+        match (case, fault(&f)) {
+            (1, PipelineFaultWireV1::Stage { stage: 1, .. }) => {}
+            (2, PipelineFaultWireV1::EdgeCommitment { stage: 1, input: IN_COND, .. }) => {}
+            (3, PipelineFaultWireV1::EdgeCommitment { stage: 1, input: IN_JITTER, position: 2, .. }) => {}
+            (4, PipelineFaultWireV1::EdgeCommitment { stage: 0, .. }) => {}
+            (5, PipelineFaultWireV1::Decode { index: 0, .. }) => {}
+            (_, other) => panic!("case {case}: {other:?}"),
+        }
+        assert!(w.l.demands.is_empty() && w.l.served.is_empty());
+        let OutsiderFindingV1::Prosecute(proof) = f else { unreachable!() };
+        assert!(borsh::to_vec(&proof).unwrap().len() as u64 <= w.l.bounds_of(&w.class).unwrap().max_filing_bytes);
+        let ev = w.block(11, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+        assert_eq!(convicted(&ev), Some(false), "case {case}: {ev:?}");
+    }
+}
+
+#[test]
 fn a_text_to_image_pipeline_with_r_finalizes_honest_and_a_stage_lie_an_edge_lie_or_a_false_draw_of_r_is_convicted() {
     let mut w = World::new(toy_pipeline(), 100, None);
     let job = w.post(2, &toy_job(), 0, 1);

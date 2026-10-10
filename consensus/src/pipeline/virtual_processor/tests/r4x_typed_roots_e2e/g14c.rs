@@ -15,6 +15,17 @@ use super::*;
 use crate::pipeline::virtual_processor::processor::{kernel_route_test_opv_eligible_v1, kernel_route_test_opv_ineligible_v1};
 use kaspa_consensus_core::palw_opv_bootstrap_v1::OpvClassFactsV1;
 
+struct NoProducerTrace;
+impl PublicSourceV1 for NoProducerTrace {
+    fn node(&self, _: u8, _: u32, _: u16, _: u16) -> Option<Tensor> { panic!("no producer trace is available") }
+}
+
+fn fresh_replay(net: &Net, claim: Digest, artifact: &dyn PublicArtifactV1, snapshots: &dyn SnapshotSourceV1) -> OutsiderFindingV1 {
+    let ledger = net.ledger(); // reconstructed from this node's public RPC reads
+    SpecOutsiderV1 { ledger: &ledger, claim, material: &NoProducerTrace, artifact, snapshots, salt: [0; 64] }
+        .check_computation().expect("the model-holding outsider concludes")
+}
+
 /// `memory_spec`'s shape over another `memory_v1` seed (a class no other test registers or seams).
 fn memory_spec_of(seed: u64) -> (TirSketchFixtureV1, ComputationSpecV1) {
     let fx = memory_v1(seed);
@@ -178,7 +189,7 @@ async fn r4x_g14c_a_memory_lie_that_finalized_is_convicted_from_a_pruned_node_an
     assert_eq!(m.head(), *lie.claim.step_roots.last().unwrap(), "nobody prosecuted in the window: the lie moved the line");
 
     let mut node = pruned_node(&mut m.net).await;
-    let fault = fault_of(fresh(&node, c, &Da::memory(&lie, Some(&m.m0())), &m.fx.params, &(), 0x44));
+    let fault = fault_of(fresh_replay(&node, c, &m.fx.params, &()));
     assert!(matches!(fault, SpecFaultV1::MemoryStep { step: 1, .. }), "localised to step 1 from the node's own reads: {fault:?}");
     let outsider = 6;
     node.file(outsider, c, fault).await;
@@ -215,7 +226,7 @@ async fn r4x_g14c_a_lie_in_the_model_stage_of_a_composite_is_convicted_at_that_s
     let payloads: Vec<Vec<u32>> = result.iter().map(|e| data.items[e.id as usize].payload.clone()).collect();
     let prompt: Vec<u32> = job.prompt.iter().copied().chain(payloads.iter().flatten().copied()).collect();
     let (s_at, n_at) = matmul_of(&model_fx.program);
-    let (model_stage, trace) = produce_model_stage_v1(&model, &row, &jid, 1, prompt, 2, &net.kid(0), &model_fx.params, 2, |t| {
+    let (model_stage, _trace) = produce_model_stage_v1(&model, &row, &jid, 1, prompt, 2, &net.kid(0), &model_fx.params, 2, |t| {
         bump(&mut t.values[1][s_at][n_at], 1)
     })
     .unwrap();
@@ -226,10 +237,8 @@ async fn r4x_g14c_a_lie_in_the_model_stage_of_a_composite_is_convicted_at_that_s
             SpecClaimV1::Composite(CompositeClaimV1 { job_id: jid, producer_bond: net.kid(0), stages: vec![tool_stage, model_stage] }),
         )
         .await;
-    let mut da = Da::default();
-    da.stage(1, 0, &trace);
     let artifact = vec![model_fx.params.clone(), model_fx.params.clone()];
-    let fault = fault_of(fresh(&net, c, &da, &artifact, &Mirror(&data, 0..0), 0x62));
+    let fault = fault_of(fresh_replay(&net, c, &artifact, &Mirror(&data, 0..0)));
     assert!(!matches!(fault, SpecFaultV1::Retrieval { .. }), "the honest tool stage is not accused: {fault:?}");
     net.file(6, c, fault).await;
     assert!(net.ledger().claims[&c].convicted, "convicted at the model stage");

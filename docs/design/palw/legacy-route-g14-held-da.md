@@ -368,3 +368,31 @@ legacy-held pursuit (sessions, units, answered, the answer bytes' block) belongs
 - **ADR-0177 D2 for the legacy units (DA16b §7.5).** Done for item 1: past the fence a held `StepLeaf` answer owes no artifact rows
   and is checked by membership only. Items 2 and 3 remain: dissection root-claim parameter openings, and readiness (the latter is a
   user decision).
+
+## 13. Codex node responder follow-up (2026-10-10)
+
+The production DA duty path now dispatches legacy units through `palw_da_claim_answers_v1` →
+`palw_legacy_held_capture_answer_v2` → `palw_da_built_answer_object_v1`. It uses the existing verified-material loader and memory
+reservation, produces step/checkpoint frontiers and CKW from dense or folded base0-codec retention, authenticates with the consensus
+predicate, enforces the close ceiling, signs in the tag-158 context and checks the lifecycle ride rule. Obsolete tag-158 answers
+leave the queue when their unit is no longer owed. Existing tag-55 answers still use their original builder.
+
+DA policy **8 V-unit PASS**, LG14-B **6 V-fold PASS**, IR regression **19 PASS**, existing dispatch pin **1 PASS**, filer **7 V-unit
+PASS**. The honest-fold fixture now builds step/checkpoint/CKW through the actual node worker and carrier builder before applying
+the transition. The dense fixture also verifies planted-material recovery, model-copy refusal, wrong claim/unit, missing signing
+key and close ceiling. Commands, fixture corrections and logs are in the [audit implementation record](../../audit/g14-review-2026-10-10/implementation.md).
+
+This supersedes §11's unwired-producer item only. The outsider filer's descent, public tag-158 history reads and terminal wiring
+remain open, as do production-service V-node execution, non-base0 codecs, per-family admission and maximum-profile RAM/time and
+deadline evidence. The fence and consensus encoding are unchanged.
+
+
+## Public PanelDA input before replay (Codex, 2026-10-10)
+
+A User/PanelDA FP transaction authenticates the job and input commitment but carries no ids. A public verifier with the registered model must be able to acquire that input before its own execution exists. LG14-B therefore appends `PromptIds { chunk: u32 }` to its never-armed demand/answer enums (tags 157/158). It is `ClaimInput / Demanded`, with no model bytes. The registered profile selects the held input form; other profiles use the network's explicit form. A response cannot select a different ruleset.
+
+For Merkle input, each chunk contains up to 2,048 contiguous ids (64 existing 32-id tiles). Tile hashes bind the global token count and tile index. A depth-6 subtree opening authenticates the chunk against the job's existing outer input root; the final ragged subtree uses the existing odd-node promotion rule. Flat input has only chunk 0, containing the entire input and reproducing the existing flat hash. Before opening or reacquiring the unit, processor admission bounds its answer plus binding by the smaller of the court close ceiling and the 100,000-byte single-carrier body allowance. The current DA worker sends tag 158 in one transaction, so the multi-chunk court ceiling alone is insufficient. An oversized Flat input cannot be made into an impossible obligation against an honest producer.
+
+The filer starts a Pending input acquisition case under a host memory reservation, reserves the ordinary public pursuit, obtains the row-0 binding, then requests contiguous input chunks. Only authenticated public answers enter the accumulator. It compares the binding's job pin to the accepted FP job and admits the fully assembled input again before replay. No replay attempt is spent while waiting. The existing DA session applies on silence; an answer refutes the session and makes the input public. The verifier subsequently executes its own model, compares all three roots and uses the existing objective terminal. Historical missing copies use the numbered tag-156 reacquisition protocol. Reorg discards the acquired ids and public binding; a changed acceptance/job resets the case. Successful replay or settlement releases the bootstrap ticket.
+
+This is bounded by the existing 34-session pursuit budget: an 8k input needs four input units, plus binding and localization. It does not establish enough budget for every admitted context, arbitrary repeated restarts, or all non-base0 localization routes. Missing accepted FP commitment bytes, prefix-state acquisition, largest-population response/inclusion bounds, maximum-profile memory/time, cumulative court scope and full fresh-node inclusion remain separate gaps. The registration/model possession premise remains ADR-0177 D7; no model distribution obligation is introduced. Activation remains refused by the existing validator.

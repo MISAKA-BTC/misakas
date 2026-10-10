@@ -1938,7 +1938,7 @@ impl KernelLedgerV1 {
         }
         match stream_stage(&class.pipeline) {
             Some(si) => {
-                if claim.generated.is_empty() || claim.generated.len() as u64 > job.max_new_tokens as u64 {
+                if !crate::job::generation_length_matches_v1(job.max_new_tokens, claim.generated.len()) {
                     return fault(F::WrongGenerationLength);
                 }
                 let bound = class.programs[class.pipeline.stages[si].program as usize].token_bound;
@@ -2919,7 +2919,7 @@ impl MaterialV1 for StageMaterial<'_> {
         let want = self.commitments.by_instance.get(&(index, layer))?;
         let t = self.o.artifact.param(self.program, index, layer)?;
         // A tensor the registered commitment does not open to is unavailable, not trusted.
-        (tensor_commitment(&t) == *want).then_some(t)
+        (crate::verify::canonical_tensor_v1(&t) && tensor_commitment(&t) == *want).then_some(t)
     }
     fn stage_input(&self, k: u16, position: u32) -> Option<Tensor> {
         self.o.input(self.stage, position, k)
@@ -2927,6 +2927,64 @@ impl MaterialV1 for StageMaterial<'_> {
 }
 
 impl OutsiderV1<'_> {
+    /// Deterministically check a program or pipeline claim's computation and decode from public commitments, job and the acquired
+    /// registered artifact. No producer node values are requested, even when every position is withheld. Missing/incorrect
+    /// artifact bytes are a verifier acquisition error, never producer misconduct. DA duties are checked separately by `check`.
+    pub fn check_computation(&self) -> Result<OutsiderFindingV1, String> {
+        let row = self.ledger.claims.get(&self.claim).ok_or("no such claim")?;
+        if matches!(&row.body, ClaimBodyV1::Pipeline { .. }) {
+            return self.check_pipeline_mode(row, true);
+        }
+        if matches!(&row.body, ClaimBodyV1::Segmented { .. }) {
+            return Err(
+                "a segmented claim: use check_segmented_computation with public position paths/parts and authenticated job ids".into(),
+            );
+        }
+        let ClaimBodyV1::Program { claim, .. } = &row.body else {
+            return Err("a typed claim: replay with crate::spec::outsider::SpecOutsiderV1".into());
+        };
+        let class = self.ledger.classes.get(&row.class_binding_id).ok_or("no such class")?;
+        let job = self.ledger.jobs.get(&row.job_id).ok_or("no such job")?;
+        let (record, header) = self.ledger.public_record(&self.claim).ok_or("no public record")?;
+        let fresh = FreshVerifierV1::from_public_bytes(&record.to_bytes(), &self.ledger.known, header)?;
+        let material = StageMaterial { o: self, stage: 0, program: 0, commitments: &class.param_commitments };
+        match fresh.reexecute(&material)? {
+            crate::verify::ReexecutionV1::Fault(proof) => {
+                Ok(OutsiderFindingV1::Prosecute(ProsecutionV1::Kernel(crate::public::FaultProofWireV1::of(&proof).to_bytes())))
+            }
+            crate::verify::ReexecutionV1::Match { logits, .. } => {
+                for r in 0..claim.generated.len() {
+                    let t = logits.get(claim.select_position(job, r) as usize).ok_or("no replay decode position")?;
+                    if job.decode.select(t) != Some(claim.generated[r]) {
+                        return Ok(OutsiderFindingV1::Prosecute(ProsecutionV1::Decode(DecodeFaultV1 {
+                            index: r as u32,
+                            logits: TensorWireV1::of(t),
+                        })));
+                    }
+                }
+                Ok(OutsiderFindingV1::Clean)
+            }
+        }
+    }
+
+    /// Stream a segmented claim's replay from this ledger's public class/job/claim rows and the acquired registered model.
+    /// Position material is the public stream or authenticated parts read from blocks, never producer private state.
+    pub fn check_segmented_computation(
+        &self,
+        positions: &dyn crate::element::SegMaterialV1,
+        tokens: &[u32],
+    ) -> Result<OutsiderFindingV1, String> {
+        let view = self.ledger.seg_claim_view_v1(&self.claim).ok_or("no segmented claim")?;
+        let artifact = |index, layer| self.artifact.param(0, index, layer);
+        let r = crate::seg_detect::reexecute_claim_v1(&view.context(), positions, &artifact, tokens);
+        match r.finding {
+            crate::element::SegFindingV1::Clean => Ok(OutsiderFindingV1::Clean),
+            crate::element::SegFindingV1::Fault(f) => Ok(OutsiderFindingV1::Prosecute(ProsecutionV1::Segmented(f.to_bytes()))),
+            crate::element::SegFindingV1::Demand(ps) => Ok(OutsiderFindingV1::Demand(ps.into_iter().map(|p| (0, p)).collect())),
+            crate::element::SegFindingV1::Inconsistent(why) => Err(why),
+        }
+    }
+
     fn node(&self, stage: u8, p: u32, s: u16, n: u16) -> Option<Tensor> {
         if let Some(sp) = self.ledger.served.get(&(self.claim, stage, p)) {
             return sp.values.get(s as usize)?.get(n as usize)?.as_ref()?.decode().ok();
@@ -3016,6 +3074,10 @@ impl OutsiderV1<'_> {
     }
 
     fn check_pipeline(&self, row: &ClaimRowV1) -> Result<OutsiderFindingV1, String> {
+        self.check_pipeline_mode(row, false)
+    }
+
+    fn check_pipeline_mode(&self, row: &ClaimRowV1, commitments_only: bool) -> Result<OutsiderFindingV1, String> {
         let l = self.ledger;
         let class = l.pipeline_classes.get(&row.class_binding_id).ok_or("no such class")?;
         let (record, header, binding) = l.pipeline_public_record(&self.claim).ok_or("no record")?;
@@ -3034,7 +3096,7 @@ impl OutsiderV1<'_> {
             })
             .collect();
         let refs: Vec<&dyn MaterialV1> = mats.iter().map(|m| m as &dyn MaterialV1).collect();
-        match fresh.check_salted(&refs, self.salt) {
+        match if commitments_only { fresh.reexecute(&refs)? } else { fresh.check_salted(&refs, self.salt) } {
             PipelineFindingV1::Pass => Ok(OutsiderFindingV1::Clean),
             PipelineFindingV1::Fault(w) => Ok(OutsiderFindingV1::Prosecute(ProsecutionV1::Pipeline(w.to_bytes()))),
             PipelineFindingV1::Unavailable(what) => Err(format!("unavailable with every value in hand: {what}")),

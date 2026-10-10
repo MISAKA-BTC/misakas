@@ -5276,6 +5276,7 @@ dependencies = [
  "kaspa-hashes",
  "kaspa-index-processor",
  "kaspa-mining",
+ "kaspa-muhash",
  "kaspa-notify",
  "kaspa-p2p-flows",
  "kaspa-p2p-lib",

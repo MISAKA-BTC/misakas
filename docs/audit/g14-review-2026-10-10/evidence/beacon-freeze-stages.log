@@ -1,0 +1,76 @@
+   Compiling syn v2.0.110
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling serde_derive v1.0.228
+   Compiling wasm-bindgen-backend v0.2.100
+   Compiling wasm-bindgen-macro-support v0.2.100
+   Compiling wasm-bindgen-macro v0.2.100
+   Compiling serde_json v1.0.151
+   Compiling zerocopy-derive v0.7.35
+   Compiling zerocopy v0.7.35
+   Compiling wasm-bindgen v0.2.100
+   Compiling ppv-lite86 v0.2.20
+   Compiling thiserror-impl v1.0.64
+   Compiling semver v1.0.23
+   Compiling thiserror v1.0.64
+   Compiling log v0.4.22
+   Compiling anyhow v1.0.103
+   Compiling digest v0.10.7
+   Compiling camino v1.1.9
+   Compiling js-sys v0.3.77
+   Compiling cargo-platform v0.1.8
+   Compiling cargo_metadata v0.18.1
+   Compiling rustc_version v0.4.1
+   Compiling syn_derive v0.1.8
+   Compiling parse-variants-derive v1.0.0
+   Compiling futures-macro v0.3.31
+   Compiling num-traits v0.2.19
+   Compiling futures-util v0.3.31
+   Compiling parse-variants v1.0.3
+   Compiling borsh-derive v1.5.1
+   Compiling vergen v8.3.2
+   Compiling sha2 v0.10.8
+   Compiling workflow-core v0.18.0
+   Compiling borsh v1.5.1
+   Compiling rand_chacha v0.9.0
+   Compiling futures-executor v0.3.31
+   Compiling workflow-macro-tools v0.18.0
+   Compiling rand_chacha v0.3.1
+   Compiling web-sys v0.3.77
+   Compiling kv-log-macro v1.0.7
+   Compiling faster-hex v0.9.0
+   Compiling smallvec v1.13.2
+   Compiling tokio-macros v2.4.0
+   Compiling workflow-log v0.18.0
+   Compiling tokio v1.42.1
+   Compiling parking_lot_core v0.9.10
+   Compiling async-std v1.13.0
+   Compiling chrono v0.4.38
+   Compiling rand v0.8.6
+   Compiling workflow-core-macros v0.18.0
+   Compiling futures v0.3.31
+   Compiling rand v0.9.4
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/utils)
+   Compiling serde-wasm-bindgen v0.6.5
+   Compiling uuid v1.18.1
+   Compiling workflow-wasm-macros v0.18.0
+   Compiling parking_lot v0.12.3
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/hashes)
+   Compiling workflow-panic-hook v0.18.0
+   Compiling wasm-bindgen-futures v0.4.50
+   Compiling workflow-wasm v0.18.0
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-panel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.11s
+     Running tests/stages.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/stages-fd50e6e3e4afa91a)
+
+running 7 tests
+test advance_refuses_a_step_that_carries_admissions_or_outputs_and_accept_beacon_is_transactional ... ok
+test a_refused_admission_costs_only_that_claim_and_the_per_block_cap_is_refused_not_fatal ... ok
+test the_hosts_receipt_clock_pauses_and_rebases_the_engines_timeout ... ok
+test the_cursor_and_the_keyed_rows_reproduce_the_committed_state ... ok
+test an_empty_or_over_cap_derivation_freezes_nothing_and_a_malformed_row_is_refused ... ok
+test an_epochs_source_set_is_frozen_once_at_its_commitment_and_dropped_after_its_window ... ok
+test the_staged_fold_is_the_whole_fold_at_every_phase_of_a_claims_life ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

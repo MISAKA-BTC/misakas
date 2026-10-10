@@ -1,0 +1,15 @@
+
+running 10 tests
+test palw_legacy_public_filer_v1::tests::every_role_takes_the_same_road ... ok
+test palw_legacy_public_filer_v1::tests::the_contiguous_localizer_finds_the_first_divergent_leaf ... ok
+test palw_legacy_public_filer_v1::tests::the_demand_builder_names_the_probes_unit ... ok
+test palw_legacy_public_filer_v1::tests::the_descent_rides_the_same_engine ... ok
+test palw_legacy_public_filer_v1::tests::the_facts_read_off_the_public_view ... ok
+test palw_legacy_public_filer_v1::tests::a_rejected_carrier_cannot_poison_the_localizers_public_material ... ok
+test palw_legacy_public_filer_v1::tests::the_fence_is_hashed_some_only ... ok
+test palw_legacy_public_filer_v1::tests::the_message_binds_every_field ... ok
+test palw_legacy_public_filer_v1::tests::the_record_counts_reservers_and_exposure ... ok
+test palw_legacy_public_filer_v1::tests::the_fence_is_dormant_on_every_preset_and_refused_when_armed ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 3605 filtered out; finished in 0.08s
+

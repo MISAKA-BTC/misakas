@@ -3,12 +3,46 @@
 評価日: 2026-10-10 JST。対象: `claude/g14-public-prosecution-integration-9bee39`、push後の `34b6c3f5ef13a0639ac1a5a97d3455f8a5a66ada`。
 以下の初回レビューのソース参照・FAIL数値はこのcommitに固定する。その後の修正は、新しい統合HEAD `323ea161a5b627431fb831b358e8d1f88457261d`を基点に`codex/g14-prosecution-bounds`で実施した。修正内容と最新の検証結果は[実装修正記録](implementation.md)を参照。
 
-## 判定
+## 現在の判定（Codex修正後）
+
+**G14全域はまだ未達。修正済みの小型・segmented court経路と、未完成の本番到達性を分けて評価する。** ユーザー確認により、正しい登録モデルを保有するverifierを前提とし、ADR-0177を維持する。
+
+`codex/g14-prosecution-bounds`では、公開materialから独立に再実行するcourt、canonical tensor検査、RAM/state/filing上限、small-value commitment court、固定報酬jobの生成長束縛を修正した。さらに`g14/legacy-filer`を統合し、単独の不正leafを見逃すmidpoint探索と、未認証carrierによる公開応答cache汚染を修正した。core・実node試験の件数、再試験、未実行の範囲は[実装修正記録](implementation.md)にまとめている。
+
+次の条件が閉じるまで「producer + 全Panel共謀でも1 verifierで全対象違反を終局まで追及できる」とは判定しない。
+
+**fresh serviceの追加検証（2026-10-11）:** ordinary bondを実署名・collateral付きで新規登録し、通常1,000 DAA maturityを待ったPanel外verifierが、空DBで公開block 2,051件を再検証した後、実service自身の読み取りと登録floor modelのreplayから公開reservation／binding要求を提出できた。PQ mempool→production template→実block foldを通り、DAA 2236で`ProducerWithholding`／`DaDefault`、producer制裁と予約解放、正常service終了へ到達した。実service試験1件と関連回帰69件の **70 PASS**、通常binary check成功、shipping **361 pin差分なし**。producer秘密stateは渡していない。終了時にmodel／DBを保持する3 gossip callbackの循環参照を`Weak`へ修正した。これはfloor canonical attemptのbinding非応答1 caseで、算術不正のexact conviction、全family、socket RPC、ネットワークIBD／pruned import、restart／reorg、最大profileの期限保証を満たしたという判定ではない。下記のfresh service未検証という旧記述は、この1 caseについて更新する。例外と失敗・再試験logは[実装修正記録](implementation.md#新規公開bondとfresh-dbから実serviceでda不応答を追及する2026-10-11)を参照。
+
+1. **legacyの全対象違反と本番完走:** base0-codecの独立replayを持つ共通filerに、認証済みtag-158公開履歴、subtree descent、model-copyを開示しないtag-159 leaf recompute、CKWからfused courtを開く接続を追加した。controllerのfold試験はFinal前後のgather/matmul conviction、fused conviction、node/CKW非応答defaultを通過。公開bindingに基づくjob/trace identity、step/checkpoint countのshape違反、公開token pinに基づくoutput不正をkind-4 reporter経路へ追加した。executionとtraceが一致してもoutputだけが違えば追及する。別jobの実fold convictionはFinal前後を検証し、output/count builderとcache妨害はunitで検証した。大型canonical promptの入力不正も既存PromptNotAnchoredへ自動変換する。PublicDA／認証できるcanonical inputのFP startupを公開accepted commitmentへ接続した。PanelDAの公開court input bootstrapも追加した。ordinary V3/V4 canonical FPのcount/root不正は、認証済み公開jobとbindingからreplay前に直接証明する経路を追加した。最大入力のsession／carrier予算、別job意味論のprefix-state等のbootstrap、checkpoint/traceの残る局所化、全familyの正規eligibility、fresh-nodeのservice tick完走は残る。step treeの一致だけでMismatchをHonestへ変えない。unsupported-codecの小型fallbackは34-session枠を超えるclaimをUnjudgedとする。
+2. **累積scopeとcourtの両立:** 64要素hiding tileと累積scopeを実際のresponse/court/reward gateへ接続する。`cumulative_scope_allows_v1`のstubとF-C4R4-17は残る。scope報告関数の成功だけでreward eligibilityを認めない。
+3. **DAと包含の期限:** 最大Respond、全chunk、adaptiveな探索round、proof処理が責任期間内に収まる条件を実nodeで立証する。9B/8kの1 positionは2,029 partsであり、現行の固定20 DAAだけでは十分性を示せない。
+   whole-root検査のonce-per-claim課金とcacheの対応は、blockの受入・rehearsal・最終foldを同じthread-local scopeで包み、課金済みrootを退避しない修正を追加した。別threadによる旧process cacheの退避を挟むgate・受入・fold試験で、262,143 idsの再計算を1回に抑えた。5本のcarrierの合計transient massは357,140だが、各carrierの重量測定は同じfixture funding outpointを使うため、実block包含の証明ではない。初回の多数claim反例案はmass上限を超えて棄却した。最大人口・実node・期限内包含の検証は残る。
+   **carrier料金とfundingの修正:** nodeの共通署名builderをfence-aware rent＋relay carriage feeへ変更した。公開filerのpriority queueとcommon carrierはobject固有の最低額で成熟・unlocked・mempool未使用のUTXOを選び直す。2M proofのrent 13,107,150 sompiに対し選択基準は19,107,151 sompiであり、通常moveの12,000,000 sompi floorは維持する。新しい実署名・料金／fundingの5 V-unitと関連回帰、計108 PASS。これは料金不足による提出阻害の修正であり、full-serviceの採掘・包含、ordinary mature bond、全familyの終局を立証するものではない。
+4. **共謀者による負荷と包含:** claim共通のlive 64・生涯256 reservation上限を除き、本人のretained record 64件と担保余力へ帰属させた。他bondの予約数で新verifierを拒否しない。旧閾値を超える予約から公開input→conviction/defaultへ進むV-foldを追加したが、owner数に比例する最大state／response負荷と期限内包含の実node測定は残る。
+5. **正規eligibilityと測定:** 各active familyをtest-only admissionなしで登録し、fresh verifier自身のnode/RPC、最大profileの実測RAM・時間、restart/IBD/reorgを確認する。shape計算や小型fixtureだけで代替しない。legacy readerの途中走査の取りこぼしは修正したが、対応外unitの恒久prune後の取得・再要求とfresh-node追及の実node試験は残る（下記）。
+
+**FP startupとFinal後の追及:** free-promptを無条件にUnjudgedとする経路を、accepted transaction・claim hash・記録済みjob pinの照合と独立replayへ変更した。producer captureは実行せず、hostのmemory budgetにはjobのdecode ceilingを使う。FPにはvesting rowがないためFinal後の発見・reservation・DA admissionが止まっていた抜けも、休眠public-filer fence内の共通predicateとliability保持で修正した。PanelDAのinput prefixが読めることを、strangerへの取得保証とは扱わない。試験範囲と残条件は[FP修正記録](implementation.md#公開fp-commitmentinputからの独立再実行とpost-final-fpの追及)を参照。
+
+**Reorgのjob更新:** 受理blockが変わっても旧jobの判定が残る抜けを修正した。candidate snapshotが変わればPendingへ戻し、遅延した旧replay結果を捨てる。実行中のblocking workerは予約とhandleを保持してdrainし、その間は次のreplayを開始しない。探索履歴と未送信carrierもbranch/jobの変更に合わせて破棄する。新4件を含むfiler 14 V-unitで確認したが、実nodeの競合branch→新job再実行→convictionの一続きの検証は残る。
+
+有効化heightは変更していない。X8R統合のfence番号に合わせ、EXEC v2を6、LegacyPublicFilerを7とした。以下は比較用に保持した初回レビューであり、解決済みのcompile・資源バグを現HEADの未解決事項として再掲するものではない。
+
+**FP PublicDA追加時点のLG14-B outsider接続の検証:** LG14-B **10 V-fold＋2 V-unit PASS**（held replay全体では24 PASS）、共通filer **15 V-unit＋FP input/replay 3 V-unit PASS**、公開history API adapter **7 V-unit PASS**、reporter **21 V-unit PASS**。X8R統合後のlifecycle/A2U **31 V-unit PASS**、shipping pin検査 **361 ok・差分なし**。producer DA policyとIRの回帰も確認した。学習対象のtag 158を1つに絞り、frontierをdescent round数で制限し、重複・未選択・改ざんcarrierではcacheを増やさない。過去に回答済みの次unitを選ぶとbackfillを再開する。従来fixtureはsupplied public jobからown replayを注入する。新しいFP fixtureはactual accepted-tx extraction／FP foldとproduction replay helperを使い、Final直後とliability期限直前の追及、期限を跨ぐDA要求、Final後の非応答defaultを確認した。ただしmldsa signature verification callbackとclass admissionはtest fixtureであり、Consensus API readerは別のV-unitで検査する。実nodeのstartup・memory ledger・mempool包含まで立証したものではない。held-court後半のhistory readerにも、固定件数のpagination、最古の認証済みfilingの選択、選択chunkの認証とbackfill、branch確認を追加した。reader／held controllerのfixture回帰は確認したが、fresh nodeのfull service完走と責任期間内の恒久保持は別の受入条件である。
+
+**C2履歴readerの修正:** 以前はDAA差をblock件数へ変換し、途中で打ち切った走査も要求floorまで読んだと記録していた。公開済みunitが`AwaitAnswer`に留まる経路を、再開cursor・開始tipの固定・完了範囲の記録・新しい追及のbackfill・branch変更時の読み直しで修正した。認証済みの利用対象unitだけを重複なくcacheする。node-policyの **11 V-unit PASS**（filer 7、Consensus API adapterのreader 4）がある。これはfresh-node追及のV-node試験ではない。恒久的にpruneされた回答は今回の修正でも取得できず、完了扱いをせず再試行する。現行consensusは既回答unitの再要求も拒否するため、保持・取得・再要求の経路と期限を別途完成させる必要がある。詳細とlogは[修正記録](implementation.md)の履歴pagination節を参照。
+
+**回答済み公開DAの再取得:** 当初のpagination修正だけでは恒久的にpruneされた回答を取得できなかった。追加修正では、休眠tag 156の署名付きsession番号・期限を用いて、Event／Held／LG14-Bの回答済みunitに新しい公開義務を開く。historical回答を消さず、古い署名の再送を拒否する。古いsuffixが欠けても新tipの再公開を読む。上記の「既回答unitの再要求も拒否する」という記述は、この対応unitについては追加修正前の状況である。TIR／pipeline、FP job commitment自体、最大入力のbootstrap予算、全枠飽和とfull-nodeの期限内包含は未達であり、これを全familyのC2/C7/C8達成とは数えない。最終検証は[修正記録](implementation.md)末尾を参照。
+
+**PanelDA入力のbootstrap（今回の追加）:** 公開FP commitmentだけではUser入力が手に入らず、全Panelの配布拒否で再計算前に止まる経路を修正した。公開予約→row-0 binding→認証済みinput chunk→自身のmodel replayへ接続し、不応答は既存DA defaultとする。Merkle入力は2,048 token単位、Flat入力はwhole hash照合とし、court上限と1本のcarrier上限の小さい方を超える義務は要求時に拒否する。登録モデル保有前提は維持する。34-session予算で全contextを扱えること、FP commitment自体の恒久prune、全family・fresh-node serviceの包含は別の未達条件である。今回の関連回帰は **159 PASS**、通常node binary checkは成功。検証結果と範囲は[修正記録](implementation.md)末尾を参照。
+
+**予約の共通人数上限の修正（今回の追加）:** 64-live／256-lifetimeの先取りによる締出しを除き、closed replay guardを含む1 bondのretained recordを64に制限した。本人のreleaseでは予算を回復させず、recordのsettlement／retirementで回収する。RPCにも保持件数を追加した。これは固定global RAM上限又は全familyの包含保証を立証したものではない。最終検証は[修正記録](implementation.md)末尾を参照。
+
+## 初回レビューの判定
 
 **方向は妥当だが、提示されたG14を満たすコード設計としてはまだ十分ではない。**
 class/program/plan/commitmentのbinding、Panel投票と独立したexact court、claim固有のdemandと客観的timeout、Final後の責任期間、再生可能なledgerという骨格は適切である。milestone 3には計算不正・output不正の実node経路の前進がある。しかし、最新統合HEADはコンパイルできず、public-prosecution gateが返すRAM・保持stateの上限は実データで破れる。courtの存在や小さいfixtureのPASSだけでは、すべての許可profileについて「有限資源・許可scope・期限内包含を経て終局に達する」ことを証明できない。
 
-この判定と次の不具合説明は初回レビュー時点のもの。再現済み不具合には修正を実装したが、G14全域の完成判定は引き続き保留する。これはdormant実装の完成度評価である。現行のactivation validatorはarmingを拒否する。以下の資源テストは上限式の反例であり、稼働ネットワークへのDoS実証ではない。
+この判定と次の不具合説明は初回レビュー時点のもの。最新3730cc90fを統合したCodex branchはcompileでき、公開commitmentからのexact再計算、segmented版のRAM/state計上、bounded demand参加者を実装・検証した。最新結果と残条件は[実装修正記録](implementation.md)の末尾にある。G14全域の完成判定は引き続き保留する。これはdormant実装の完成度評価である。現行のactivation validatorはarmingを拒否する。以下の資源テストは上限式の反例であり、稼働ネットワークへのDoS実証ではない。
 
 ## まずG14の主張を正確にする
 

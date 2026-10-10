@@ -1,0 +1,15 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.36s
+     Running tests/k2_real_scale.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_real_scale-cefa5ee20d4c5c8f)
+
+running 1 test
+[k2s] 9B-8k K2-TIR-v2: 838 relations, worst court 2034245636 B; gate refuses: [Unbounded { what: "public bytes", required: 12625164403592, limit: 1099511627776 }, Unbounded { what: "court work", required: 178957868080, limit: 68719476736 }, Unbounded { what: "verifier RAM", required: 11652568349141744, limit: 68719476736 }, Unbounded { what: "retained state", required: 12608414277632, limit: 4294967296 }, Unbounded { what: "concurrent sessions", required: 8192, limit: 1024 }]
+[k2s] GAP 8: a 9B-8k class row rebuilds in 1.595625ms (program decode, 32640 B) + 7.637136208s (the v4 gate), this build (debug: true)
+[k2s] 9B-8k K2-TIR-v4: eps <= 2^-150; nodes/position 13323; segments 8; position material 2084251848 B in 2029 parts; claim material (producer DA) 17074191138816 B; per prosecution: public 21288122497 B, RAM 67191831824 B, sessions 2, rounds 12; worst element court 1026494 B / work 1281900032 (block 3 node 35); response 1048576 B; retained on chain 275829248 B
+test k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers has been running for over 60 seconds
+[k2s] 9B @262144: gate refuses [Unbounded { what: "retained state (on chain, per claim)", required: 8825393152, limit: 4294967296 }]
+[k2s] 9B @2097152: check_plan BOUNDS_EXCEEDED — BOUNDS_EXCEEDED: positions 2097152 > limit 262144
+test k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 68.75s
+

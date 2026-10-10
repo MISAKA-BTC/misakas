@@ -537,10 +537,11 @@ impl VirtualStateProcessor {
                     // prices as `0e8ec984e` reads it — undecodable, so no prompt rent — or this
                     // burn, and so the coinbase, would differ between the two builds.
                     .map(|carried| {
-                        kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(
+                        kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v3(
                             &carried.object,
                             self.palw_offence_attribution_at(pov_daa_score),
                             self.palw_state_params_v2.as_ref().is_some_and(|params| params.capacity_batch_active_at(pov_daa_score)),
+                            self.palw_legacy_public_filer_at(pov_daa_score),
                         )
                     })
                     .unwrap_or(0)

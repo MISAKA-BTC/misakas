@@ -1,0 +1,53 @@
+
+running 1 test
+[service-public] heartbeat advance 128 -> 1004
+[service-public] heartbeat advance 253 -> 1004
+[service-public] heartbeat advance 378 -> 1004
+[service-public] heartbeat advance 503 -> 1004
+[service-public] heartbeat advance 628 -> 1004
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_carries_reserved_da_to_objective_default has been running for over 60 seconds
+[service-public] heartbeat advance 753 -> 1004
+[service-public] heartbeat advance 878 -> 1004
+[service-public] heartbeat advance 1003 -> 1004
+[service-public] ordinary bond registered before DAA 3, maturity 1000, now 1004
+[service-public] fresh database validated 2051 public blocks at DAA 1025
+2026-10-11 03:03:04.226+09:00 [INFO ] [palw-panel] starting (bond=(7114f092bc0636065fe3c89afd5990bc40b3f135d488f8586864200832cf82a518979cc2063477c11f1a1d2794ea97c5edb6c63d36a7257ec0808a954bcbc571, 0), submitter=funded, register=off)
+2026-10-11 03:03:06.349+09:00 [INFO ] [palw-panel] claim 838e589bf44aa1ca71b4867210cf2af73bc77ffd9d8ae86252d320ade0ee22d1fc54763587c00c6bc7ebcb30adf6ee89f1383d87b7bb46edbe551380b6deef7d: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)
+2026-10-11 03:03:06.351+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+2026-10-11 03:03:08.354+09:00 [ERROR] [palw-panel] claim 838e589bf44aa1ca71b4867210cf2af73bc77ffd9d8ae86252d320ade0ee22d1fc54763587c00c6bc7ebcb30adf6ee89f1383d87b7bb46edbe551380b6deef7d: this node's replay of the claim's job does NOT reproduce its execution root (replayed 65af0b7ea14791e06415e588ae1ffd6ea88975e003bf4c96aa90242694c5f6a5c860a4f0fae1ffd0140cf1717ac25fb384b9c70ae369fbbfa4428b1663ff9efe) — every seat of its panel let it pass or none looked; pursuing it as a public bond (LG14-A, RFC-0014 §6)
+2026-10-11 03:03:08.471+09:00 [INFO ] [palw-panel] claim c4e59d0baba3525bb622fae2e7eebf44e442536ce8cea3d0811c71bf3ab748bb298e17f3d943febc30d293c37366b397249ee9aeae2b35eede0b391e8fb39882: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)
+2026-10-11 03:03:08.486+09:00 [INFO ] [palw-panel] claim 838e589bf44aa1ca71b4867210cf2af73bc77ffd9d8ae86252d320ade0ee22d1fc54763587c00c6bc7ebcb30adf6ee89f1383d87b7bb46edbe551380b6deef7d: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 03:03:08.510+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session 838e589bf44aa1ca71b4867210cf2af73bc77ffd9d8ae86252d320ade0ee22d1fc54763587c00c6bc7ebcb30adf6ee89f1383d87b7bb46edbe551380b6deef7d round 4294967285 in tx a64dffc65fa2d5871c992957bfe123b28b9bcb4d06d294e774a8fe7a3c1f2a303d95317cbb947c00fd3c389aff8be838270de8206ea76bbe02f14e49a5812b09
+[service-public] real mempool carrier Discriminant(154), 4896 bytes
+2026-10-11 03:03:10.514+09:00 [INFO ] [palw-panel] claim 838e589bf44aa1ca71b4867210cf2af73bc77ffd9d8ae86252d320ade0ee22d1fc54763587c00c6bc7ebcb30adf6ee89f1383d87b7bb46edbe551380b6deef7d: the fraud filer's item (round 4294967285) was carried at DAA 1025 (LG14-A)
+2026-10-11 03:03:10.515+09:00 [ERROR] [palw-panel] claim c4e59d0baba3525bb622fae2e7eebf44e442536ce8cea3d0811c71bf3ab748bb298e17f3d943febc30d293c37366b397249ee9aeae2b35eede0b391e8fb39882: this node's replay of the claim's job does NOT reproduce its execution root (replayed 8661241d9e1ad026a5aab3c5c550fc05792ef8fdf2d1993e1146d55fa10ee01ab87d831d0e886c7a8a6fd121102661d3de8a2ebf2ee635d20e511dadbfd79fea) — every seat of its panel let it pass or none looked; pursuing it as a public bond (LG14-A, RFC-0014 §6)
+2026-10-11 03:03:10.535+09:00 [INFO ] [palw-panel] claim 838e589bf44aa1ca71b4867210cf2af73bc77ffd9d8ae86252d320ade0ee22d1fc54763587c00c6bc7ebcb30adf6ee89f1383d87b7bb46edbe551380b6deef7d: the fraud filer queues Demand(Binding { row: 0, tile: 0 }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 03:03:10.544+09:00 [INFO ] [palw-panel] claim c4e59d0baba3525bb622fae2e7eebf44e442536ce8cea3d0811c71bf3ab748bb298e17f3d943febc30d293c37366b397249ee9aeae2b35eede0b391e8fb39882: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 03:03:10.601+09:00 [INFO ] [palw-panel] submitted DefaultAccused for court session 838e589bf44aa1ca71b4867210cf2af73bc77ffd9d8ae86252d320ade0ee22d1fc54763587c00c6bc7ebcb30adf6ee89f1383d87b7bb46edbe551380b6deef7d round 4294967284 in tx 1a78afe828493e7f377b8beb7bb6c26690e23c1d570eb66167de61c6440b5b967634599bf5043c0399511c6d1020f47ed77d809572780e019d9c556aa047a6e7
+2026-10-11 03:03:12.611+09:00 [INFO ] [palw-panel] claim 838e589bf44aa1ca71b4867210cf2af73bc77ffd9d8ae86252d320ade0ee22d1fc54763587c00c6bc7ebcb30adf6ee89f1383d87b7bb46edbe551380b6deef7d: the fraud filer's item (round 4294967284) was carried at DAA 1034 (LG14-A)
+2026-10-11 03:03:12.632+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session c4e59d0baba3525bb622fae2e7eebf44e442536ce8cea3d0811c71bf3ab748bb298e17f3d943febc30d293c37366b397249ee9aeae2b35eede0b391e8fb39882 round 4294967285 in tx af5dac832b243683e0456e6bc32eb45b37ed8c7a6807e3df379a5ca8d9001166ad95842ba6d8d76ca52e760e87f191f0a82ea8f221bc5d2e7134706469cfe3ef
+2026-10-11 03:03:14.633+09:00 [INFO ] [palw-panel] claim c4e59d0baba3525bb622fae2e7eebf44e442536ce8cea3d0811c71bf3ab748bb298e17f3d943febc30d293c37366b397249ee9aeae2b35eede0b391e8fb39882: the fraud filer's item (round 4294967285) was carried at DAA 1043 (LG14-A)
+[service-public] DA advance 1136, deadlines [2235]
+[service-public] DA advance 1236, deadlines [2235]
+2026-10-11 03:04:06.809+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 1336, deadlines [2235]
+[service-public] DA advance 1436, deadlines [2235]
+[service-public] DA advance 1536, deadlines [2235]
+2026-10-11 03:05:07.009+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 1636, deadlines [2235]
+[service-public] DA advance 1736, deadlines [2235]
+[service-public] DA advance 1836, deadlines [2235]
+2026-10-11 03:06:07.286+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 1936, deadlines [2235]
+[service-public] DA advance 2036, deadlines [2235]
+[service-public] DA advance 2136, deadlines [2235]
+2026-10-11 03:07:07.517+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+2026-10-11 03:07:30.143+09:00 [WARN ] PALW: block 27c0e90b205b047b461c783b71c1213792ab7a47967c1fd6df3cbf6f08b3c34d26334bba8d88ca282eaf02cd8e6ec0801d2e7ed1e34689af14f421c607871e09 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[service-public] DA advance 2236, deadlines []
+[service-public] objective DA default at 2236 after 3 mined service batches, no producer material
+2026-10-11 03:07:30.283+09:00 [INFO ] [palw-panel] stopping
+[service-public] actual service start/exit joined, callback owner released
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_carries_reserved_da_to_objective_default ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 604 filtered out; finished in 504.08s
+

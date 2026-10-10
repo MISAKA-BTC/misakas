@@ -214,6 +214,165 @@ fn artifact(w: &W) -> impl Fn(u16, Option<u16>) -> Option<Tensor> + '_ {
 }
 
 #[test]
+fn f_b1_a_segmented_prefix_cannot_complete_a_fixed_reward_job() {
+    for required in [1, 2, 3] {
+        let fx = wide128_v1(7);
+        let mut w = W::new(fx.program, fx.params, 32);
+        let prompt = [1, 3, 5];
+        let job = w.tiled_job(&prompt, required);
+        let produced = produce(&w, job, &prompt, None); // Two correct tokens and an otherwise authentic trace.
+        let id = produced.claim.id();
+        let ev = commit(&mut w, &produced);
+        if required == 2 {
+            assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
+        } else {
+            assert!(refusal(&ev).is_some_and(|why| why.contains("WrongGenerationLength")), "{ev:?}");
+            assert!(!w.l.claims.contains_key(&id));
+        }
+    }
+}
+
+#[test]
+fn k2s_the_gate_rederives_the_plan_and_prices_decoded_working_memory_and_all_progress() {
+    use misaka_palw_kernel::gate::ProsecutionGapV1 as G;
+    let fx = wide128_v1(7);
+    let d = k2_tir_v4_descriptor();
+    let root = program_root_v1(&fx.program.encode());
+    let p = plan_for_tir_program_v1(&d, &fx.program, root, 32).unwrap();
+    let material = ProfileMaterialV1::kernel_route(true);
+    let (bounds, seg) = public_prosecution_complete_v4(&d, &p, &fx.program, &material, &ROUTE).unwrap();
+    let mut forged = p.clone();
+    forged.budgets.worst_court_bytes = 0;
+    assert_eq!(public_prosecution_complete_v4(&d, &forged, &fx.program, &material, &ROUTE), Err(vec![G::WrongProgram]));
+    let mut invalid = fx.program.clone();
+    invalid.schedule.pre = u8::MAX;
+    assert_eq!(public_prosecution_complete_v4(&d, &p, &invalid, &material, &ROUTE), Err(vec![G::WrongProgram]));
+    let old_wire_ram = p.budgets.artifact_bytes + 2 * seg.position_material_bytes;
+    assert!(bounds.max_verifier_ram > old_wire_ram);
+    let low_ram = ProsecutionPolicyV1 { max_verifier_ram: old_wire_ram, ..ROUTE };
+    assert!(
+        public_prosecution_complete_v4(&d, &p, &fx.program, &material, &low_ram)
+            .unwrap_err()
+            .iter()
+            .any(|g| matches!(g, G::Unbounded { what: "verifier RAM", .. }))
+    );
+    let low_state = ProsecutionPolicyV1 { max_retained_state: bounds.max_retained_state - 1, ..ROUTE };
+    assert!(
+        public_prosecution_complete_v4(&d, &p, &fx.program, &material, &low_state)
+            .unwrap_err()
+            .iter()
+            .any(|g| matches!(g, G::Unbounded { what: "retained state (on chain, per claim)", .. }))
+    );
+    assert_eq!(bounds.max_localization_rounds, 12);
+    assert!(bounds.max_retained_state > bounds.max_commit_bytes + 32 * 64 * 40);
+}
+
+#[test]
+fn k2s_full_shared_demand_and_join_limits_do_not_block_an_outside_proof_or_default() {
+    use misaka_palw_kernel::gate::MAX_DEMANDERS_PER_SESSION_V1;
+    for convict in [true, false] {
+        let fx = wide128_v1(7);
+        let mut w = W::new(fx.program, fx.params, 32);
+        let prompt = [1, 2, 3, 4, 5];
+        let job = w.tiled_job(&prompt, 2);
+        let (s, n) = w
+            .program
+            .occurrences()
+            .iter()
+            .enumerate()
+            .find_map(|(s, (b, _))| {
+                w.program.blocks[*b as usize]
+                    .nodes
+                    .iter()
+                    .position(|n| matches!(n.prim, misaka_palw_tir::Prim::MatMul))
+                    .map(|n| (s as u16, n as u16))
+            })
+            .unwrap();
+        let p = produce(&w, job, &prompt, convict.then_some((4, s, n)));
+        commit(&mut w, &p);
+        let id = p.claim.id();
+        let demand = |bond, position| obj(bond, O::FileDemand { demander: bond, claim: id, stage: 0, position });
+        let ev = w.block((0..4).map(|q| demand(OUT, q)).chain([demand(ANY, 4)]).collect());
+        assert!(refusal(&ev).is_none(), "{ev:?}");
+        let before = w.l.bonds[&OUT].reserved;
+        let ev = w.block(vec![demand(OUT, 4)]);
+        assert!(refusal(&ev).is_some_and(|r| r.contains("open sessions")), "joining bypasses the four-session limit: {ev:?}");
+        assert_eq!(w.l.bonds[&OUT].reserved, before);
+        let ev = w.block(vec![demand(OUT, 0)]);
+        assert!(refusal(&ev).is_none(), "a repeated join is idempotent: {ev:?}");
+        let spammers: Vec<_> = (0..MAX_DEMANDERS_PER_SESSION_V1 as u64)
+            .map(|i| misaka_palw_kernel::hash::id(b"g14/seg-participants", &i.to_le_bytes()))
+            .collect();
+        let ev = w.block(
+            spammers
+                .iter()
+                .map(|b| LedgerTxV1::SyncBond { bond: *b, collateral: 1_000_000 })
+                .chain(spammers[..MAX_DEMANDERS_PER_SESSION_V1 - 1].iter().map(|b| demand(*b, 4)))
+                .collect(),
+        );
+        assert!(refusal(&ev).is_none(), "{ev:?}");
+        assert_eq!(w.l.demands[&(id, 0, 4)].demanders.len(), MAX_DEMANDERS_PER_SESSION_V1);
+        let outside = *spammers.last().unwrap();
+        let ev = w.block(vec![demand(outside, 4)]);
+        assert!(refusal(&ev).is_some_and(|r| r.contains("maximum collateral participants")), "{ev:?}");
+        assert_eq!(w.l.bonds[&outside].reserved, 0);
+        let state_bytes = borsh::to_vec(&w.l.claims[&id]).unwrap().len()
+            + w.l.demands.iter().filter(|((c, _, _), _)| *c == id).map(|(k, v)| borsh::to_vec(&(k, v)).unwrap().len()).sum::<usize>()
+            + w.l
+                .seg_progress
+                .iter()
+                .filter(|((c, _, _), _)| *c == id)
+                .map(|(k, v)| borsh::to_vec(&(k, v)).unwrap().len())
+                .sum::<usize>();
+        assert!(state_bytes as u128 <= w.l.classes[&w.class].bounds.max_retained_state);
+        if convict {
+            let view = w.l.seg_claim_view_v1(&id).unwrap();
+            let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &p, &artifact(&w), &p.tokens, &[4]) else {
+                panic!("the public lie was not found")
+            };
+            let ev = w.block(vec![obj(
+                outside,
+                O::FileProof { accuser: outside, claim: id, proof: ProsecutionV1::Segmented(fault.to_bytes()) },
+            )]);
+            assert!(
+                ev.iter().any(|e| matches!(e, E::Convicted { claim, accuser, .. } if *claim == id && *accuser == outside)),
+                "{ev:?}"
+            );
+        } else {
+            let ev = w.beat_to(w.daa + 25);
+            assert!(ev.iter().any(|e| matches!(e, E::ProducerDefault { claim, .. } if *claim == id)), "{ev:?}");
+            assert!(!w.l.claims[&id].convicted);
+        }
+        assert!(spammers.iter().all(|b| w.l.bonds[b].reserved == 0));
+    }
+}
+
+#[test]
+fn k2s_raw_tensor_aliases_of_public_bytes_cannot_authenticate() {
+    let fx = wide128_v1(7);
+    let mut w = W::new(fx.program, fx.params, 32);
+    let prompt = [1, 2, 3];
+    let job = w.tiled_job(&prompt, 2);
+    let mut p = produce(&w, job, &prompt, None);
+    commit(&mut w, &p);
+    let view = w.l.seg_claim_view_v1(&p.claim.id()).unwrap();
+    let j = w.program.params.iter().position(|p| p.dtype == DType::I8).unwrap() as u16;
+    let bad_artifact = |index, layer| {
+        let mut t = artifact(&w)(index, layer)?;
+        if index == j {
+            t.data[0] += 256;
+        }
+        Some(t)
+    };
+    assert!(matches!(check_positions_v1(&view.context(), &p, &bad_artifact, &p.tokens, &[0]), SegFindingV1::Inconsistent(_)));
+    let t = p.values[0].iter_mut().flatten().find(|t| t.dtype == DType::I8).unwrap();
+    let authentic = misaka_palw_kernel::merkle3::tensor_commitment_v3(t);
+    t.data[0] += 256;
+    assert_eq!(authentic, misaka_palw_kernel::merkle3::tensor_commitment_v3(t));
+    assert_eq!(check_positions_v1(&view.context(), &p, &artifact(&w), &p.tokens, &[0]), SegFindingV1::Demand(vec![0]));
+}
+
+#[test]
 fn k2s_a_tiled_prompt_past_4096_ids_commits_as_a_multi_segment_claim_and_an_honest_one_finalizes() {
     let fx = wide128_v1(7);
     let mut w = W::new(fx.program, fx.params, 8192);
@@ -375,6 +534,82 @@ fn counted(inner: &Produced) -> Counted<'_> {
     Counted { inner, bytes: Cell::new(0), positions: RefCell::new(Vec::new()), probes: Cell::new(0) }
 }
 
+#[test]
+fn k2s_fresh_streaming_replay_uses_only_registered_model_and_authenticated_public_material() {
+    use misaka_palw_kernel::ledger::{OutsiderFindingV1, OutsiderV1, PublicSourceV1};
+    struct NoPrivate;
+    impl PublicSourceV1 for NoPrivate {
+        fn node(&self, _: u8, _: u32, _: u16, _: u16) -> Option<Tensor> {
+            panic!("private producer values")
+        }
+    }
+    impl SegMaterialV1 for NoPrivate {
+        fn position(&self, _: u32) -> Option<Vec<Vec<Tensor>>> {
+            panic!("honest replay needs no position values")
+        }
+        fn position_siblings(&self, _: u32) -> Option<Vec<Digest>> {
+            panic!("honest replay needs no producer paths")
+        }
+    }
+    for lie in [false, true] {
+        let fx = wide128_v1(7);
+        let acquired_model = fx.params.clone();
+        let mut w = W::new(fx.program, fx.params, 64);
+        let prompt: Vec<u32> = (0..63).map(|p| (p * 7 + 1) % 32).collect();
+        let job = w.tiled_job(&prompt, 2);
+        let (s, n) = w
+            .program
+            .occurrences()
+            .iter()
+            .enumerate()
+            .find_map(|(s, (b, _))| {
+                w.program.blocks[*b as usize]
+                    .nodes
+                    .iter()
+                    .position(|n| matches!(n.prim, misaka_palw_tir::Prim::MatMul))
+                    .map(|n| (s as u16, n as u16))
+            })
+            .unwrap();
+        let public_stream = produce(&w, job, &prompt, lie.then_some((61, s, n)));
+        commit(&mut w, &public_stream);
+        let id = public_stream.claim.id();
+        let fresh = KernelLedgerV1::from_rows(&w.l, w.l.scalars(), &w.l.to_rows()).unwrap();
+        let verifier = OutsiderV1 { ledger: &fresh, claim: id, material: &NoPrivate, artifact: &acquired_model, salt: [0; 64] };
+        let view = fresh.seg_claim_view_v1(&id).unwrap();
+        let bad_artifact = |index, layer| {
+            let mut t = acquired_model.tensors.get(&(index, layer))?.clone();
+            if t.dtype == DType::I8 {
+                t.data[0] += 256; // same wire hash, outside its canonical range
+            }
+            Some(t)
+        };
+        assert!(
+            misaka_palw_kernel::seg_detect::prepare_reexecution_v1(&view.context(), &bad_artifact, &public_stream.tokens)
+                .unwrap_err()
+                .contains("registered model")
+        );
+        if !lie {
+            assert_eq!(verifier.check_segmented_computation(&NoPrivate, &public_stream.tokens).unwrap(), OutsiderFindingV1::Clean);
+        } else {
+            let public = counted(&public_stream);
+            let OutsiderFindingV1::Prosecute(proof) = verifier.check_segmented_computation(&public, &public_stream.tokens).unwrap()
+            else {
+                panic!("a fault whose position was not announced must be localized")
+            };
+            let mut read = public.positions.borrow().clone();
+            read.sort_unstable();
+            read.dedup();
+            assert_eq!(read, vec![60, 61]);
+            assert!(public.probes.get() <= 10);
+            let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof })]);
+            assert!(ev.iter().any(|e| matches!(e, E::Convicted { claim, .. } if *claim == id)), "{ev:?}");
+        }
+        let mut wrong_ids = public_stream.tokens.clone();
+        wrong_ids[0] = (wrong_ids[0] + 1) % 32;
+        assert!(verifier.check_segmented_computation(&NoPrivate, &wrong_ids).unwrap_err().contains("authenticated public job"));
+    }
+}
+
 impl SegMaterialV1 for Counted<'_> {
     fn position(&self, p: u32) -> Option<Vec<Vec<Tensor>>> {
         let v = self.inner.position(p)?;
@@ -384,6 +619,9 @@ impl SegMaterialV1 for Counted<'_> {
     }
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
         self.inner.position_siblings(p)
+    }
+    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+        self.inner.commitments(p)
     }
     fn position_path(&self, p: u32) -> Option<(Digest, Vec<Digest>)> {
         self.probes.set(self.probes.get() + 1);
@@ -451,8 +689,7 @@ fn k2s_a_reexecuting_verifier_finds_any_lie_with_certainty_reading_two_positions
     read.dedup();
     assert_eq!(read, vec![2999, 3000], "two positions of material, whatever the context");
     let SegFindingV1::Fault(fault) = r.finding else { panic!("the lie is not found: {:?}", r.finding) };
-    let SegFaultV1::Element(e) = fault.as_ref() else { panic!("an element fault") };
-    assert_eq!((e.position, e.occurrence, e.node), (3000, s, n));
+    assert_eq!(fault.at(), Some((3000, s, n)), "{fault:?}");
     let bytes = fault.to_bytes();
     eprintln!(
         "[k2s] SG-06 re-execution check: {} positions, divergent position {:?} after {} position paths, material read {} B \
@@ -499,7 +736,7 @@ fn fat_v1(seed: u8) -> (TirProgramV1, MapParams) {
     };
     let fat = {
         let mut b = pb.block("fat", carry.clone());
-        let wide = b.broadcast(Ref::CarryIn(0), &[Dim::Fixed(40_000), Dim::Fixed(8)]);
+        let wide = b.iota(DType::I32, &[Dim::Fixed(40_000), Dim::Fixed(8)], 0, 0, 1);
         let s = b.reduce_sum(wide, 0, DType::I64);
         let s = b.reshape_fixed(s, &[8]);
         let c = b.clamp(s, -(1 << 20), 1 << 20, DType::I32);
@@ -523,6 +760,65 @@ fn fat_v1(seed: u8) -> (TirProgramV1, MapParams) {
         tensors.insert((j as u16, None), Tensor::new(d.dtype, d.shape.iter().map(|x| *x as usize).collect(), data).unwrap());
     }
     (program, MapParams { tensors })
+}
+
+#[test]
+fn k2s_small_model_values_are_never_served_and_a_model_holder_convicts_from_commitments() {
+    use misaka_palw_kernel::seg_da::{AssembledPositionV1, ChunkBodyV1};
+    struct PublicParts(std::collections::BTreeMap<u32, AssembledPositionV1>);
+    impl SegMaterialV1 for PublicParts {
+        fn position(&self, p: u32) -> Option<Vec<Vec<Tensor>>> {
+            self.0.get(&p).map(|x| x.0.clone())
+        }
+        fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
+            self.0.get(&p).map(|x| x.1.clone())
+        }
+        fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+            self.0.get(&p).map(|x| x.2.clone())
+        }
+    }
+    for fx in [wide128_v1(7), misaka_palw_tir_sketch::fixture::dense_moe_windowed_v1(7, 4)] {
+        let mut w = W::new(fx.program, fx.params, 16);
+        let scope = misaka_palw_kernel::seg_scope::seg_scope_report_v1(&w.program);
+        assert!(scope.masked > 0 && scope.court_scope_complete(), "{scope:?}");
+        let mask = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&w.program);
+        let prompt = [1, 3, 5, 7, 9];
+        let job = w.tiled_job(&prompt, 2);
+        let lying = produce(&w, job, &prompt, Some((3, 0, 0)));
+        commit(&mut w, &lying);
+        let id = lying.claim.id();
+        let view = w.l.seg_claim_view_v1(&id).unwrap();
+        let mut public = PublicParts(Default::default());
+        assert_eq!(
+            check_positions_v1(
+                &view.context(),
+                &public,
+                &|_, _| panic!("a missing response must not trigger replay"),
+                &lying.tokens,
+                &[3]
+            ),
+            SegFindingV1::Demand(vec![2, 3])
+        );
+        for p in 0..view.positions {
+            let mut encoded = Vec::new();
+            for part in 0..position_parts_v1(&w.program, p).unwrap().len() as u32 {
+                let response = position_part_v1(&w.program, p, &lying.values[p as usize], lying.c.position_path(p).1, part).unwrap();
+                for c in &response.chunks {
+                    assert_eq!(matches!(c.body, ChunkBodyV1::Withheld), mask[c.occurrence as usize][c.node as usize]);
+                }
+                encoded.push(borsh::to_vec(&response).unwrap());
+            }
+            public.0.insert(p, assemble_position_v1(&w.program, &view.segment_roots, view.positions, p, &encoded).unwrap());
+        }
+        // No producer value (including the wrong value) is an input to the verifier: only wire responses and its registered model.
+        let r = misaka_palw_kernel::seg_detect::reexecute_claim_v1(&view.context(), &public, &artifact(&w), &lying.tokens);
+        assert_eq!(r.divergent, Some(3));
+        let SegFindingV1::Fault(fault) = r.finding else { panic!("{:?}", r.finding) };
+        assert!(matches!(fault.as_ref(), SegFaultV1::WholeValue(_)));
+        assert_eq!(fault.at(), Some((3, 0, 0)));
+        let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(fault.to_bytes()) })]);
+        assert!(ev.iter().any(|e| matches!(e, E::Convicted { claim, accuser, .. } if *claim == id && *accuser == OUT)), "{ev:?}");
+    }
 }
 
 #[test]
@@ -558,8 +854,16 @@ fn k2s_a_position_is_served_in_parts_and_its_demand_bonds_wait_for_the_grace() {
     assert_eq!(w.l.bonds[&OUT].reserved, 0, "settled at the grace's end");
     // A fresh verifier rebuilds the position from the served parts alone and checks it.
     let view = w.l.seg_claim_view_v1(&id).unwrap();
-    let (values, siblings) = assemble_position_v1(&w.program, &view.segment_roots, view.positions, 1, &served).unwrap();
-    assert_eq!(values, honest.values[1]);
+    let (values, siblings, commitments) = assemble_position_v1(&w.program, &view.segment_roots, view.positions, 1, &served).unwrap();
+    assert_eq!(commitments, honest.commitments(1).unwrap(), "every node commitment, withheld values' included");
+    let withheld = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&w.program);
+    for (s, occ) in values.iter().enumerate() {
+        for (n, t) in occ.iter().enumerate() {
+            if !withheld[s][n] {
+                assert_eq!(t, &honest.values[1][s][n], "a served value is the committed one");
+            }
+        }
+    }
     assert_eq!(siblings, honest.c.position_path(1).1);
 }
 
@@ -605,7 +909,6 @@ fn k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers() {
     };
     assert_eq!(ctx, 8192);
     let root = program_root_v1(&program.encode());
-    let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
     let material = ProfileMaterialV1::kernel_route(true);
     // K2-TIR-v2 (as measured by COV-P1P2): the whole-claim gate refuses, and so do the carriers.
     let v2 = k2_tir_v2_descriptor();
@@ -642,8 +945,17 @@ fn k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers() {
     let worst = {
         let mut best = (0u64, 0u8, 0u16);
         let nc = seg.node_count;
+        let withheld = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&program);
         for r in &plan.relations {
-            let (b, _) = misaka_palw_kernel::element::element_court_cost_v1(&program, r.block as usize, r.node as usize, nc, ctx);
+            let (b, _) = misaka_palw_kernel::element::element_court_cost_masked_v1(
+                &program,
+                r.block as usize,
+                r.node as usize,
+                nc,
+                ctx,
+                None,
+                &withheld,
+            );
             if b > best.0 {
                 best = (b, r.block, r.node);
             }
@@ -673,7 +985,9 @@ fn k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers() {
     );
     assert!(bounds.max_filing_bytes < CARRIER as u64);
     assert_eq!(bounds.max_concurrent_sessions, 2);
-    assert!(bounds.max_retained_state < 8192);
+    assert!(bounds.max_retained_state > bounds.max_commit_bytes + 8192 * 64 * 40);
+    assert!(bounds.max_retained_state < ROUTE.max_retained_state);
+    assert_eq!(bounds.max_localization_rounds, 12);
     // The full source context, informational: the same program at the class's history bound (the outcome is printed, not asserted).
     for positions in [262_144u32, 2_097_152] {
         match plan_for_tir_program_v1(&v4, &program, root, positions) {

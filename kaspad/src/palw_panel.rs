@@ -63,6 +63,13 @@ use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
 use kaspa_utils::triggers::SingleTrigger;
 
+#[cfg(test)]
+#[path = "palw_service_public_e2e.rs"]
+mod palw_service_public_e2e;
+
+#[path = "palw_carrier_fees.rs"]
+mod palw_carrier_fees;
+
 /// **ADR-0152 R-3 (P2-8): the reporter's commit–reveal filer**, and the capture arm's
 /// `ExecutorRefuted` and J1 auto that feed it — a child of this module, so each call site below is
 /// one line (see its own header).
@@ -78,6 +85,12 @@ mod palw_filer_replay;
 /// panel accuses it of withholding — a child module, so it reads the court queue's seams.
 #[path = "palw_operator_da.rs"]
 mod palw_operator_da;
+
+/// Lane LG14-A (RFC-0014 §6): the common fraud filer — any carrying bond's pursuit, as a non-seat, of a claim its own replay refutes:
+/// a dispute reservation, then reserved DA demands that localize the first divergent step to a terminal the fold adjudicates (node
+/// policy; a clean no-op below `palw_legacy_public_filer_v1`, which no shipped preset arms).
+#[path = "palw_fraud_filer.rs"]
+mod palw_fraud_filer;
 
 /// ADR-0160 F-Q (stage 2, rcore/cap-s1): the operator's audit duty — an operator node in a credited
 /// claim's audit pool replays it and posts a receipt batch when it reproduces (a child module, so it
@@ -2457,7 +2470,7 @@ pub(crate) fn palw_da_unit_answer_v1(
                 "pipeline step node ({stage}, {level}, {index}): answered by the pipeline responder, not the capture path (RFC-0004 Phase F)"
             ));
         }
-        // LG14-B (dormant): a legacy held unit is answered by tag 158, built by `palw_legacy_held_responder`, never by tag 55.
+        // The claim worker dispatches these units to the tag-158 builder before entering the tag-55 builder.
         PalwDaUnitV1::LegacyHeldV2(unit) => {
             return Err(format!(
                 "{unit:?}: a legacy held unit is answered by tag 158 (LG14-B's responder), not by MaterialDisclosedV2"
@@ -2497,6 +2510,103 @@ pub(crate) fn palw_da_unit_answer_v1(
     Ok(palw_da_held_answer_v1(facts.claim_id, missing, binding, disclosure))
 }
 
+/// A DA worker's unsigned answer. Legacy held answers have their own tag and signing context, never a tag-55 encoding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PalwDaBuiltAnswerV1 {
+    Rcore(kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1),
+    LegacyHeldV2(
+        Box<(
+            kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+            kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2,
+        )>,
+    ),
+}
+
+fn palw_da_legacy_answer_v2(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+    material: &PalwDaCaptureV1,
+    unit: &kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2,
+) -> Result<PalwDaBuiltAnswerV1, String> {
+    let (capture, prompt, roots) = match (material, &facts.lane) {
+        (PalwDaCaptureV1::FreePrompt(payload), PalwDaLaneV1::FreePrompt { .. }) => {
+            (payload.capture.as_slice(), payload.material.prompt_token_ids.clone(), facts.roots_v1(Some(&payload.material.job)))
+        }
+        (PalwDaCaptureV1::Attempt(capture), PalwDaLaneV1::Attempt { job, .. }) => {
+            let (_, prompt) = job.as_ref().ok_or("the claim's block is not in this node's store")?;
+            let prompt = prompt
+                .iter()
+                .map(|id| u32::try_from(*id).map_err(|_| format!("prompt id {id} does not fit a u32")))
+                .collect::<Result<Vec<_>, _>>()?;
+            (capture.as_slice(), prompt, facts.roots_v1(None))
+        }
+        _ => return Err("the legacy held capture is not in the claim's lane".into()),
+    };
+    crate::palw_legacy_held_v2::palw_legacy_held_capture_answer_v2(backend, capture, &prompt, roots, facts.form, unit)
+        .map(|answer| PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new(answer)))
+}
+
+/// The DA service's common signed-carrier builder, with the close ceiling and lifecycle ride checks for both tags.
+pub(crate) fn palw_da_built_answer_object_v1(
+    network_domain: &Hash64,
+    claim: Hash64,
+    unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
+    answer: PalwDaBuiltAnswerV1,
+    discloser: PalwBondKeyV2,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    max_close_bytes: u64,
+    sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Result<PalwConsensusObjectV2, String> {
+    match answer {
+        PalwDaBuiltAnswerV1::Rcore(answer) => kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_object_v1(
+            network_domain,
+            claim,
+            unit,
+            answer,
+            discloser,
+            max_close_bytes,
+            sign,
+        )
+        .map_err(|e| e.to_string()),
+        PalwDaBuiltAnswerV1::LegacyHeldV2(answer) => {
+            let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) = unit else {
+                return Err("a legacy held answer cannot answer a tag-55 unit".into());
+            };
+            let (binding, answer) = *answer;
+            kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
+                &binding.committed_execution_root,
+                &unit,
+                &binding,
+                &answer,
+                binding.step_leaf_count,
+                form,
+            )
+            .map_err(|e| format!("the legacy held answer is not this unit: {e}"))?;
+            let mut bytes = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_answer_bytes_v2(&answer);
+            if matches!(unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }) {
+                bytes = bytes.saturating_add(borsh::to_vec(&binding).map_err(|e| e.to_string())?.len() as u64);
+                if bytes > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64 {
+                    return Err("the input answer cannot fit a single carrier".into());
+                }
+            }
+            if bytes > max_close_bytes {
+                return Err(format!("legacy held answer has {bytes} bytes, above close ceiling {max_close_bytes}"));
+            }
+            let object = crate::palw_legacy_held_v2::palw_legacy_held_answer_object_v2(
+                network_domain,
+                claim,
+                unit,
+                binding,
+                answer,
+                discloser,
+                sign,
+            )?;
+            kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(|e| e.to_string())?;
+            Ok(object)
+        }
+    }
+}
+
 /// **One claim's R-core answers, built off the loop** (P2-7): what [`palw_da_claim_answers_v1`] returns.
 #[derive(Debug)]
 pub(crate) struct PalwDaClaimAnswersV1 {
@@ -2505,7 +2615,7 @@ pub(crate) struct PalwDaClaimAnswersV1 {
     /// One entry a unit asked, in order: `None` for an event unit a `Flat` of this claim already
     /// answers (IMPL-16) — one queued or sent before, or one built here — so no carrier is paid for
     /// an answer the fold refuses `DaUnitAlreadyAnswered`.
-    pub answers: Vec<Option<Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String>>>,
+    pub answers: Vec<Option<Result<PalwDaBuiltAnswerV1, String>>>,
 }
 
 /// **P2-7: every due unit of one claim answered from ONE load of its material** — loaded and checked
@@ -2533,9 +2643,14 @@ pub(crate) fn palw_da_claim_answers_v1(
             answers.push(None);
             continue;
         }
-        let answer = palw_da_unit_answer_v1(backend, facts, &material, *unit, tir);
-        flat |= matches!(answer, Ok(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })))
-            || matches!(&answer, Ok(PalwDaAnswerV1::TirEvent(disclosure)) if disclosure.is_flat());
+        let answer = match unit {
+            kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) => {
+                palw_da_legacy_answer_v2(backend, facts, &material, unit)
+            }
+            _ => palw_da_unit_answer_v1(backend, facts, &material, *unit, tir).map(PalwDaBuiltAnswerV1::Rcore),
+        };
+        flat |= matches!(&answer, Ok(PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. }))))
+            || matches!(&answer, Ok(PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::TirEvent(disclosure))) if disclosure.is_flat());
         answers.push(Some(answer));
     }
     Ok(PalwDaClaimAnswersV1 { remade, answers })
@@ -5407,6 +5522,32 @@ impl PalwPanelService {
         }
     }
 
+    /// Select funding for THIS queued object, leaving the ordinary float floor unchanged. A
+    /// heavy proof may outgrow a remembered residue; with no carrier in flight, retry the normal
+    /// mature/unlocked/unspent scan at its own minimum. A stuck-carrier replacement keeps its input.
+    async fn ensure_carrier_funding_v2(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        object: &PalwConsensusObjectV2,
+        current_daa: u64,
+        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
+        inflight: usize,
+    ) -> Option<u64> {
+        if inflight != 0 || self.carrier_replacement.lock().unwrap().is_some() {
+            return None;
+        }
+        let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, object, current_daa);
+        if funding.as_ref().is_none_or(|(_, entry)| entry.amount < minimum) {
+            if let Some(next) = self.resolve_fee_funding(session, minimum).await {
+                *funding = Some(next);
+            } else {
+                // Keep a smaller usable float for later cheap moves; no sticky global floor.
+                return Some(minimum);
+            }
+        }
+        None
+    }
+
     /// **Carry one lifecycle object on `funding`**, chaining the change as every lane does (RFC-0006's parts, plan declaration and
     /// shard possession proofs). `true` when the mempool took it; on a refusal the funding is dropped for this tick.
     async fn carry_object_v1(
@@ -5418,6 +5559,7 @@ impl PalwPanelService {
         funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
         inflight: &mut usize,
     ) -> bool {
+        let _ = self.ensure_carrier_funding_v2(session, object, current_daa, funding, *inflight).await;
         let Some((funding_outpoint, funding_entry)) = funding.clone() else { return false };
         match self.build_lifecycle_tx(object, funding_outpoint, &funding_entry) {
             Ok(tx) => {
@@ -5802,7 +5944,7 @@ impl PalwPanelService {
     /// The fee outpoint to spend next: the persisted rolling one if it is still unspent, else the
     /// configured one, else whatever the chain holds under this bond's payout script. Returns the
     /// entry with it, which is also the unspent check.
-    async fn resolve_fee_funding(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Option<(TransactionOutpoint, UtxoEntry)> {
+    async fn resolve_fee_funding(&self, session: &kaspa_consensusmanager::ConsensusProxy, minimum: u64) -> Option<(TransactionOutpoint, UtxoEntry)> {
         // **"In the UTXO set" and "I can spend it" are different questions — ask the second one.**
         //
         // The virtual UTXO set is the CONFIRMED one: an output a carrier of ours is spending right
@@ -5823,6 +5965,7 @@ impl PalwPanelService {
         // permanently excluded here — the panel then owns money it has forbidden itself to see, and
         // says `no fee UTXO resolves` forever. Measured on testnet-11 the same day: node 0 stalled
         // with one live 96.85 MSK output under its own key and 6,343 identical warnings.
+        let minimum = minimum.max(palw_fee_funding_floor_v1());
         let is_free = |o: &TransactionOutpoint| !self.flow_context.mining_manager().outpoint_is_spent_in_mempool(o);
         // **No configured outpoint means two different things, and this used to answer both the
         // same way.**
@@ -5902,6 +6045,9 @@ impl PalwPanelService {
                 if !usable(outpoint, &entry) || !palw_fee_funding_pays_v1(entry.amount) {
                     continue;
                 }
+                if entry.amount < minimum {
+                    continue;
+                }
                 return Some((*outpoint, entry));
             }
         }
@@ -5944,7 +6090,7 @@ impl PalwPanelService {
         let mut cursor: Option<TransactionOutpoint> = None;
         // What the scan SAW, so a failure can say which of its reasons it was.
         let mut scanned = 0usize;
-        let mut scan = PalwFeeFundingScanV1::default();
+        let mut scan = PalwFeeFundingScanV1 { minimum, ..Default::default() };
         loop {
             let chunk = session.async_get_virtual_utxos(cursor, 1024, cursor.is_some()).await;
             if chunk.is_empty() {
@@ -5968,7 +6114,7 @@ impl PalwPanelService {
                 scan.offer(outpoint, entry, &usable, &is_free);
             }
         }
-        let PalwFeeFundingScanV1 { found, under_script, busy, unripe, dust } = scan;
+        let PalwFeeFundingScanV1 { found, under_script, busy, unripe, dust, .. } = scan;
         if let Some((outpoint, entry)) = found {
             if let Some(consented) = self.config.fee_outpoint.as_deref() {
                 // T12-046: the operator named WHICH output funds carriers; this one is not it nor its
@@ -6006,7 +6152,7 @@ impl PalwPanelService {
             } else {
                 candidates.iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect::<Vec<_>>().join(", ")
             },
-            palw_fee_funding_floor_v1()
+            minimum
         );
         None
     }
@@ -6547,8 +6693,18 @@ impl PalwPanelService {
         // them the one due first (EDF; the licences' turn and the one-in-flight rule are the tick's
         // slots', untouched).
         palw_court_queue_edf_v1(court_pending, court_due);
+        let mut failed_minimum: Option<u64> = None;
         let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
         for (session_id, round, mine_is_responder, object) in std::mem::take(court_pending) {
+            let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, current_daa);
+            // A failed full scan also excludes a higher minimum in this pass. Do not scan the
+            // same unavailable heavy budget for every queued proof; cheap moves may still use
+            // the smaller float we retained. A successful submission ends the free slot.
+            if failed_minimum.is_none_or(|failed| minimum < failed) {
+                if let Some(failed) = self.ensure_carrier_funding_v2(session, &object, current_daa, funding, *inflight).await {
+                    failed_minimum = Some(failed);
+                }
+            }
             let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| *inflight < MAX_INFLIGHT_CARRIERS) else {
                 // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
                 // dropped here is a dispute that never happens.
@@ -6733,8 +6889,8 @@ impl PalwPanelService {
     }
 
     /// Build and sign the funded 0x4b carrier for one lifecycle object. The same 1-in/1-out shape
-    /// every overlay transaction in this codebase uses; the fee is the node's own relay minimum
-    /// for the transaction's real mass, so our own mempool cannot refuse what we built.
+    /// every overlay transaction in this codebase uses; it pays the object's fence-aware burned rent
+    /// plus the relay minimum for its actual compute mass, and signs only after checking funding.
     fn build_lifecycle_tx(
         &self,
         object: &PalwConsensusObjectV2,
@@ -6772,112 +6928,12 @@ impl PalwPanelService {
         replaces_feerate: Option<f64>,
     ) -> Result<Transaction, String> {
         let kp = self.keypair.as_ref().ok_or("no signing key")?;
-        // **Refuse before signing, and name the field.**
-        //
-        // The one input is signed with this node's key, so a funding output that does not pay to
-        // this key's own script produces a carrier that cannot be spent by anybody who could have
-        // built it. The mempool's word for that is `script ran, but verification failed` — the
-        // script engine's generic verdict, which names a signature and so sends every reader to
-        // `--palw-producer-key` and `--palw-producer-pay-address`, the two things a first
-        // registration has already got right. Checking it here is free, it happens before the
-        // ML-DSA-87 signature is computed, and it can say WHICH of the two scripts it is holding.
-        //
-        // It sits in the shared builder rather than in the registration path because every
-        // carrier — receipt, class, court — spends the same way and fails the same way.
-        let signable = signable_script(kp.verification_key.as_ref());
-        if funding.script_public_key != signable {
-            let addr = |spk: &kaspa_consensus_core::tx::ScriptPublicKey| {
-                kaspa_txscript::extract_script_pub_key_address(spk, self.consensus_config.prefix())
-                    .map(|a| a.to_string())
-                    .unwrap_or_else(|_| "an address this node cannot render".to_string())
-            };
-            return Err(format!(
-                "the funding output pays to {} and --palw-producer-key signs for {} — this node cannot spend it. \
-                 Nothing was signed. Fund the key's own address, or point --palw-producer-key at the key that owns \
-                 this output; a state dir carried over from a run with a different key is the usual source of a \
-                 remembered outpoint belonging to neither.",
-                addr(&funding.script_public_key),
-                addr(&signable)
-            ));
-        }
-        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
-            .map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
-        let params = &self.consensus_config.params;
-        let mass_calculator = MassCalculator::new(
-            params.mass_per_tx_byte,
-            params.mass_per_script_pub_key_byte,
-            params.mass_per_sig_op,
-            params.storage_mass_parameter,
-        );
-
-        // Two passes: the fee depends on the mass, and the mass on the (fixed-size) signature. A
-        // dummy signature of the real length prices the transaction, then the real one replaces it.
-        let locked: u64 = extra_outputs.iter().map(|o| o.value).sum();
-        let build = |fee: u64, signature_script: Vec<u8>| -> Result<Transaction, String> {
-            // The collateral is spent as well as the fee, and saying so by name is the difference
-            // between "fund the address again" and an operator wondering why a bond they have the
-            // money for will not register.
-            let needed = fee.saturating_add(locked);
-            if funding.amount <= needed {
-                return Err(format!(
-                    "funding UTXO holds {} sompi; this carrier needs {fee} fee + {locked} locked — fund the address again",
-                    funding.amount
-                ));
-            }
-            let mut input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
-            input.signature_script = signature_script;
-            let mut outputs = extra_outputs.to_vec();
-            outputs.push(TransactionOutput::new(funding.amount - needed, funding.script_public_key.clone()));
-            Ok(Transaction::new(TX_VERSION, vec![input], outputs, 0, SUBNETWORK_ID_PALW_LIFECYCLE.clone(), 0, payload.clone()))
-        };
-
-        let dummy_sig_script = {
-            let sig = vec![0u8; kaspa_txscript::MLDSA87_SIG_LEN + 1];
-            kaspa_txscript::script_builder::ScriptBuilder::new()
-                .add_data(&sig)
-                .and_then(|b| b.add_data(kp.verification_key.as_ref()))
-                .map(|b| b.drain())
-                .map_err(|e| format!("sig script shape: {e}"))?
-        };
-        let priced = build(1, dummy_sig_script)?;
-        let masses = mass_calculator.calc_non_contextual_masses(&priced);
-        let fee = relay_fee_for_compute_mass(masses.compute_mass);
-        // V01's panel side: a carrier on the input of our own stuck tip carrier replaces it, so it
-        // pays above it (`PalwCarrierReplacementV1::floor_for`: that input only, while the tick's
-        // opening stands).
+        let daa = self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score();
         let replaces_feerate = replaces_feerate
             .or_else(|| self.carrier_replacement.lock().unwrap().as_ref().and_then(|opening| opening.floor_for(&funding_outpoint)));
-        let fee = match replaces_feerate {
-            // The pool compares feerates over the widest mass it knows — storage mass included.
-            Some(rate) => {
-                let storage = mass_calculator
-                    .calc_contextual_masses(&MutableTransaction::with_entries(priced.clone(), vec![funding.clone()]).as_verifiable())
-                    .map(|c| c.storage_mass)
-                    .unwrap_or(0);
-                palw_replacement_fee_v1(fee, rate, masses.max().max(storage))
-            }
-            None => fee,
-        };
-
-        let unsigned = build(fee, vec![])?;
-        let mtx = MutableTransaction::with_entries(unsigned, vec![funding.clone()]);
-        let reused = Mldsa87SigHashReusedValuesUnsync::new();
-        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused);
-        let mut sig_data =
-            libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0u8; 32])
-                .map_err(|e| format!("ML-DSA-87 sign: {e:?}"))?
-                .as_ref()
-                .to_vec();
-        sig_data.push(SIG_HASH_ALL.to_u8());
-        let signature_script = kaspa_txscript::script_builder::ScriptBuilder::new()
-            .add_data(&sig_data)
-            .and_then(|b| b.add_data(kp.verification_key.as_ref()))
-            .map(|b| b.drain())
-            .map_err(|e| format!("sig script: {e}"))?;
-        let mut tx = mtx.tx;
-        tx.inputs[0].signature_script = signature_script;
-        tx.finalize();
-        Ok(tx)
+        palw_carrier_fees::build_lifecycle_carrier_v2(
+            &self.consensus_config, kp, object, funding_outpoint, funding, extra_outputs, replaces_feerate, daa,
+        )
     }
 
     /// Wait out one pass of a panel loop, or stop because the node is shutting down.
@@ -7786,7 +7842,7 @@ impl PalwPanelService {
                     continue;
                 }
             };
-            let Some((funding_outpoint, funding)) = self.resolve_fee_funding(&session).await else {
+            let Some((funding_outpoint, funding)) = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await else {
                 // Quote the relay's floor, not just the chain's: what a bond NEEDS and what a
                 // carrier can HOLD are different numbers, and an operator funding this address is
                 // about to discover which one is larger.
@@ -7990,10 +8046,12 @@ impl PalwPanelService {
             // ADR-0084 Decision 2: the material when it fits the transport, the claim's answer
             // envelope when it does not — decided here, by the party holding the directory, so
             // the transport is never handed what it would refuse.
-            let me = self.clone();
+            // The service owns this gossip center through FlowContext. A strong callback owner
+            // would retain the service, its model holdings and both databases after shutdown.
+            let me = std::sync::Arc::downgrade(self);
             self.flow_context
                 .palw_gossip()
-                .set_material_resolver(std::sync::Arc::new(move |claim| me.serve_material_or_answer(claim)));
+                .set_material_resolver(std::sync::Arc::new(move |claim| me.upgrade()?.serve_material_or_answer(claim)));
             // The directory this node serves from, published to the wallet-facing RPC so a
             // submitter on this host stages where this panel reads (ADR-0084 Decision 5) — and
             // CREATED here, before it is named: a submitter refuses a directory that does not
@@ -8263,6 +8321,8 @@ impl PalwPanelService {
         let mut operator_da = palw_operator_da::PalwOperatorDaBookV1::new(palw_operator_da::palw_operator_registrations_v1(
             &self.consensus_config.params,
         ));
+        // Lane LG14-A: the common fraud filer's book — a cache of the chain and this node's replays; nothing persists (§6.3).
+        let mut fraud_filer = palw_fraud_filer::PalwFraudFilerBookV1::default();
         // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
         let mut audit_duty = palw_audit_duty::PalwAuditDutyV1::new();
         audit_duty.replays.configure_slots(self.config.seat_replay_slots);
@@ -8586,7 +8646,7 @@ impl PalwPanelService {
                             self.consensus_config.params.palw_model_registry.map(|f| f.daa_score()).unwrap_or(0)
                         )
                     });
-                } else if let Some((funding_outpoint, funding_entry)) = self.resolve_fee_funding(&session).await {
+                } else if let Some((funding_outpoint, funding_entry)) = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await {
                     if let Some(object) = class_registration.clone() {
                         match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                             Ok(tx) => {
@@ -10104,17 +10164,64 @@ impl PalwPanelService {
                     materials: &materials,
                     open_claims: &open_claims,
                 };
+                let anchors = held_court.history_anchors_v1(&held_duties);
+                let branches = session
+                    .clone()
+                    .spawn_blocking(move |c| {
+                        let tip = c.get_sink();
+                        anchors
+                            .into_iter()
+                            .map(|(sid, claim, anchor)| {
+                                let same = if anchor == tip {
+                                    Ok(true)
+                                } else {
+                                    c.is_chain_ancestor_of(anchor, tip).map_err(|e| e.to_string())
+                                };
+                                (sid, claim, same)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .await;
+                let mut history_unavailable = HashSet::new();
+                for (sid, claim, same) in branches {
+                    match same {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            held_court.invalidate_history_v1(sid, claim);
+                            court_pending.retain(|(queued, _, responder, _)| *queued != sid || *responder);
+                        }
+                        Err(why) => {
+                            history_unavailable.insert(sid);
+                            court_pending.retain(|(queued, _, responder, _)| *queued != sid || *responder);
+                            warn!("[{PALW_PANEL}] session {sid}: held history branch unavailable: {why}; challenger moves wait");
+                        }
+                    }
+                }
+                held_duties.retain(|d| !history_unavailable.contains(&d.session_id));
                 for read in held_court.chain_reads_v1(&held_host, &held_duties, current_daa) {
-                    let span = current_daa.saturating_sub(read.not_before_daa).saturating_add(64).min(1 << 16) as usize;
-                    let (sid, claim, not_before) = (read.session_id, read.claim_id, read.not_before_daa);
-                    let objects = session
+                    if history_unavailable.contains(&read.session_id) {
+                        continue;
+                    }
+                    let previous = held_court.history_walk_v1(read.session_id);
+                    let Some((duty, needed)) = held_court.history_filter_v1(&held_duties, read.session_id) else { continue };
+                    let opening_cap = held_court::PalwHeldHostV1::opening_cap(&held_host, &duty.class_id, current_daa);
+                    let page = session
                         .clone()
-                        .spawn_blocking(move |c| attn_held_objects_from_chain_v1(c, sid, claim, not_before, span))
+                        .spawn_blocking(move |c| {
+                            attn_held_objects_page_from_chain_v1(c, read, previous, &duty, &needed, opening_cap, 40_000)
+                        })
                         .await;
-                    held_court.note_chain_v1(sid, objects, current_daa);
+                    match page {
+                        Ok(page) => held_court.note_history_page_v1(read.session_id, read.claim_id, page, current_daa),
+                        Err(why) => warn!(
+                            "[{PALW_PANEL}] session {}: held public history unavailable: {why}; cursor unchanged",
+                            read.session_id
+                        ),
+                    }
                 }
                 let busy = |key: &(Hash64, u32, bool)| {
-                    court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == *key)
+                    history_unavailable.contains(&key.0)
+                        || court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == *key)
                         || court_moved.get(key).is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                 };
                 let tick = held_court::palw_held_moves_v1(&held_host, &mut held_court, &held_duties, current_daa, busy);
@@ -10300,7 +10407,7 @@ impl PalwPanelService {
             // Past `palw_rcore_plus` an accusation opens a session in `da_sessions` and never touches
             // the claim's phase (DA-1), so the loop above finds nothing there, and the v1 answers it
             // built are refused (`DaV1AnswerRetired`). Here each unit an open session demands of this
-            // node is answered with one `MaterialDisclosedV2` (`palw_da_answer_object_v1`): as the
+            // node is answered with a tag-55 or legacy tag-158 object (`palw_da_built_answer_object_v1`): as the
             // claim's PRODUCER at once, or as a COVERING SIGNER — a live lock whose mask covers the
             // unit, the fold's own predicate, so exactly the units a default would charge it S4 for —
             // once the producer has had its turn (`palw_disclosure_due_v1`). The material is what
@@ -10329,6 +10436,9 @@ impl PalwPanelService {
                 disclosure.duties.iter().map(|duty| (duty.claim_id, duty.unit)).collect();
             court_pending.retain(|(_, _, _, object)| match object {
                 PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, .. } => owed.contains(&(*claim, *unit)),
+                PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } => {
+                    owed.contains(&(answer.claim, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(answer.unit)))
+                }
                 _ => true,
             });
             if da_armed && !disclosure.duties.is_empty() {
@@ -12824,6 +12934,26 @@ impl PalwPanelService {
             )
             .await;
 
+            // --- lane LG14-A: the common fraud filer (`palw_fraud_filer`; RFC-0014 §6) ---
+            //
+            // Past `palw_legacy_public_filer_v1`, any carrying bond replays the claims it can and, where its replay refutes one, reserves
+            // it and localizes the lie through reserved DA demands to a terminal the fold adjudicates — as a non-seat (a claim this bond
+            // seats is the seat's duties'). Identity arms it; no flag does. A clean no-op below the fence.
+            self.fraud_filer_tick_v1(
+                &session,
+                &mut fraud_filer,
+                &mut reporter_filer,
+                current_daa,
+                network_domain,
+                bond_key,
+                seat_replays.has_room(false),
+                &materials,
+                &mut court_pending,
+                &mut court_due,
+                &mut court_moved,
+            )
+            .await;
+
             // --- ADR-0160 F-Q (stage 2): the operator's audit duty (`palw_audit_duty`) ---
             //
             // Past `palw_capacity_audit_door` a credited claim reaches Final only through `k_aud` receipts
@@ -12871,7 +13001,7 @@ impl PalwPanelService {
                 // — and dropped the moment a submission is refused, because that is the signal that
                 // the chain we were extending is not one the mempool will accept.
                 if chained_funding.is_none() {
-                    chained_funding = self.resolve_fee_funding(&session).await;
+                    chained_funding = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await;
                     inflight = 0;
                 } else if let Some((tip, _)) = chained_funding.clone() {
                     if session.get_virtual_utxo_entry(tip).is_some() {
@@ -12891,7 +13021,7 @@ impl PalwPanelService {
                                 tip.index,
                                 palw_fee_funding_floor_v1()
                             );
-                            chained_funding = self.resolve_fee_funding(&session).await;
+                            chained_funding = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await;
                         }
                     } else if !self
                         .flow_context
@@ -14174,7 +14304,8 @@ pub(crate) fn palw_fee_funding_usable_v1(
 /// is exhausted: the funder never picks one (`resolve_fee_funding`) and the tick re-resolves the
 /// moment its chain's tip, with nothing in flight, falls under it — one carrier is in flight at a
 /// time, so no carrier is ever built from a tip under the floor, and one at or above it pays any
-/// standard carrier: no carrier fails for want of funds.
+/// standard carrier without protocol rent. Queued rent-bearing objects request their own higher
+/// minimum before building; replacement surcharges and locked outputs are checked by the signer.
 pub(crate) fn palw_fee_funding_floor_v1() -> u64 {
     relay_fee_for_compute_mass(MAXIMUM_STANDARD_TRANSACTION_MASS).saturating_mul(2)
 }
@@ -14194,6 +14325,8 @@ pub(crate) fn palw_fee_chain_drained_v1(chained: Option<&(TransactionOutpoint, U
 /// **The recovery scan's verdict on this bond's outputs** (`resolve_fee_funding`), and what it saw.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PalwFeeFundingScanV1 {
+    /// Requested by the current object, in addition to the ordinary float floor.
+    pub(crate) minimum: u64,
     /// The largest output that funds a carrier so far.
     pub(crate) found: Option<(TransactionOutpoint, UtxoEntry)>,
     /// Usable outputs under the payout script.
@@ -14228,7 +14361,7 @@ impl PalwFeeFundingScanV1 {
             self.busy += 1;
             return;
         }
-        if !palw_fee_funding_pays_v1(entry.amount) {
+        if !palw_fee_funding_pays_v1(entry.amount) || entry.amount < self.minimum {
             self.dust += 1;
             return;
         }
@@ -14380,6 +14513,10 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
         PalwConsensusObjectV2::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
         PalwConsensusObjectV2::DaTransferV1 { .. } => "DaTransferV1",
+        // Lane LG14-A (tags 154–155): the legacy route's dispute reservation.
+        PalwConsensusObjectV2::DisputeReservedV1 { .. } => "DisputeReservedV1",
+        PalwConsensusObjectV2::DisputeReleasedV1 { .. } => "DisputeReleasedV1",
+        PalwConsensusObjectV2::DisputeReacquiredV1 { .. } => "DisputeReacquiredV1",
         // LG14-B (tags 157–159): the legacy route's public descent and held DA units, dormant.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. } => "LegacyHeldDemandedV2",
         PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
@@ -14518,6 +14655,48 @@ pub(crate) fn walk_accepted_lifecycle_objects_v1(
     }
 }
 
+/// Read one bounded page of accepted lifecycle history from `start`. `Some(next)` is the first selected-chain block not read;
+/// `None` means the floor or the chain's root was reached. Missing retained data is an error, never a completed range. Callers
+/// keep the page's original tip while resuming, so blocks arriving during backfill are read by the subsequent walk.
+pub(crate) fn walk_accepted_lifecycle_page_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    start: Hash64,
+    not_before_daa: u64,
+    max_chain_blocks: usize,
+    visit: &mut dyn FnMut(PalwConsensusObjectV2),
+) -> Result<Option<Hash64>, String> {
+    let mut cursor = start;
+    for _ in 0..max_chain_blocks {
+        let header = consensus.get_header(cursor).map_err(|e| format!("history header {cursor}: {e}"))?;
+        if header.daa_score < not_before_daa {
+            return Ok(None);
+        }
+        let acceptance = consensus.get_block_acceptance_data(cursor).map_err(|e| format!("history acceptance {cursor}: {e}"))?;
+        for merged in acceptance.iter().rev() {
+            if merged.accepted_transactions.is_empty() {
+                continue;
+            }
+            let block = consensus.get_block(merged.block_hash).map_err(|e| format!("history block {}: {e}", merged.block_hash))?;
+            for entry in merged.accepted_transactions.iter().rev() {
+                let tx = block.transactions.get(entry.index_within_block as usize).ok_or_else(|| {
+                    format!("history block {} has no accepted transaction {}", merged.block_hash, entry.index_within_block)
+                })?;
+                if tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
+                    && let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload)
+                {
+                    visit(payload.object);
+                }
+            }
+        }
+        let ghostdag = consensus.get_ghostdag_data(cursor).map_err(|e| format!("history selected parent {cursor}: {e}"))?;
+        if ghostdag.selected_parent == cursor {
+            return Ok(None);
+        }
+        cursor = ghostdag.selected_parent;
+    }
+    Ok(Some(cursor))
+}
+
 /// **Will the court open this root claim's output tile at `daa`?** (ADR-0119 Decision 4.)
 ///
 /// The court opens a fused site's rows under `palw_attn_opening_cap_v1`: the structural `2^22`
@@ -14588,32 +14767,66 @@ fn tir_root_claims_from_chain_v1(
     found
 }
 
-/// **The held route's chain reads, beside [`attn_root_filings_from_chain_v1`]** (ADR-0152 §4-ter
-/// N3, C2; 4-ter.3 step 6): through the same walk, every lifecycle object accepted since the
+/// **The held route's paged chain reads, beside [`attn_root_filings_from_chain_v1`]** (ADR-0152 §4-ter
+/// N3, C2; 4-ter.3 step 6): through the strict paged walk, every lifecycle object accepted since the
 /// session's opening that is a held root claim for `session_id` (`CourtAttnRootClaimedHeld`, tag 57:
 /// the accused's binding, tile, anchor and slice sub-roots — `PalwAttnHeldFilingV1::from_object_v1(&object)`
 /// reads them) or the producer's disclosure of a held unit of `claim_id` (R-core+'s
-/// `MaterialDisclosedV2`, the v1 court's `MaterialDisclosedHeld`), OLDEST first. Nothing here is taken
-/// on its word: the walk returns objects the fold refused too, and the route checks each the fold's
-/// way before it reads it (`palw_held_filing_of_duty_v1`, `palw_held_step6_disclosed_v1`).
-fn attn_held_objects_from_chain_v1(
+/// `MaterialDisclosedV2`, the v1 court's `MaterialDisclosedHeld`). The map retains only the oldest authenticated root and one answer
+/// per selected chunk; the route publishes it after completing the anchored backfill. Partial suffixes never select the first
+/// standing filing. Refused objects in accepted carriers cannot enter the cache; consumers re-check the current duty when using it.
+fn attn_held_objects_page_from_chain_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
-    session_id: Hash64,
-    claim_id: Hash64,
-    not_before_daa: u64,
+    read: held_court::PalwHeldChainReadV1,
+    previous: Option<held_court::PalwHeldHistoryWalkV1>,
+    duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2,
+    needed: &[held_court::PalwHeldStep6UnitV1],
+    opening_cap: u64,
     max_chain_blocks: usize,
-) -> Vec<PalwConsensusObjectV2> {
-    let mut found = Vec::new();
-    walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| {
-        if palw_held_chain_object_is_the_sessions_v1(&object, &session_id, &claim_id) {
-            found.push(object);
+) -> Result<held_court::PalwHeldHistoryPageV1, String> {
+    let tip = consensus.get_sink();
+    let same_branch = match previous {
+        Some(walk) if walk.anchor != tip => {
+            consensus.is_chain_ancestor_of(walk.anchor, tip).map_err(|e| format!("held history branch: {e}"))?
         }
-    });
-    found.reverse();
-    found
+        _ => true,
+    };
+    let selection = held_court::palw_held_history_selection_v1(duty, needed, opening_cap);
+    let changed = previous.is_some_and(|walk| walk.selection != selection);
+    let continuing = previous.filter(|walk| same_branch && !changed && walk.next.is_some());
+    // A branch change may remove a formerly cached root filing. Re-read down to the earlier completed/active floor too,
+    // even when the present request is only for a later disclosure.
+    let floor = continuing.map_or_else(
+        || {
+            if same_branch && !changed {
+                read.not_before_daa
+            } else {
+                previous.map_or(read.not_before_daa, |walk| walk.floor.min(read.not_before_daa))
+            }
+        },
+        |walk| walk.floor,
+    );
+    let anchor = continuing.map_or(tip, |walk| walk.anchor);
+    let start = continuing.and_then(|walk| walk.next).unwrap_or(tip);
+    let mut found = BTreeMap::new();
+    let next = walk_accepted_lifecycle_page_v1(consensus, start, floor, max_chain_blocks, &mut |object| {
+        if read.session_id == duty.session_id
+            && read.claim_id == duty.claim_id
+            && let Some(key) = held_court::palw_held_history_object_key_v1(&object, duty, needed, opening_cap)
+        {
+            // The walk is newest first; the last valid root is the oldest in this page. Repeats and decoys do not grow the map.
+            found.insert(key, object);
+        }
+    })?;
+    Ok(held_court::PalwHeldHistoryPageV1 {
+        walk: held_court::PalwHeldHistoryWalkV1 { floor, anchor, next, selection },
+        reset: !same_branch,
+        rewind: changed || !same_branch,
+        objects: found,
+    })
 }
 
-/// Whether an accepted lifecycle object is one [`attn_held_objects_from_chain_v1`] returns for the
+/// Whether an accepted lifecycle object is one [`attn_held_objects_page_from_chain_v1`] returns for the
 /// session and its claim — the predicate alone, so a fixture chain filters with it too.
 pub(crate) fn palw_held_chain_object_is_the_sessions_v1(
     object: &PalwConsensusObjectV2,
@@ -14845,9 +15058,10 @@ impl PalwPanelService {
     /// depends on. The bond is what bounds the requester (collateral, and a per-bond rate);
     /// membership would bound nothing further.
     fn opening_authorizer(self: &Arc<Self>, network_domain: Hash64) -> kaspa_p2p_flows::palw_gossip::PalwOpeningAuthorizer {
-        let me = self.clone();
+        let me = std::sync::Arc::downgrade(self);
         std::sync::Arc::new(move |request: &kaspa_p2p_flows::palw_gossip::PalwOpeningRequestV1<'_>| {
             use kaspa_p2p_flows::palw_gossip::{OPENING_REQUEST_FRESHNESS_DAA, PalwServeRefusalV1};
+            let me = me.upgrade().ok_or(PalwServeRefusalV1::NotServing)?;
             let session = me.consensus_manager.consensus().unguarded_session();
             let here = session.get_virtual_daa_score();
             if request.requested_daa.abs_diff(here) > OPENING_REQUEST_FRESHNESS_DAA {
@@ -15226,9 +15440,9 @@ impl PalwPanelService {
     /// registers neither serves nothing and refuses nobody.
     pub fn install_fp_interval_serving(self: &Arc<Self>, network_domain: Hash64) {
         self.flow_context.palw_gossip().set_opening_authorizer(self.opening_authorizer(network_domain));
-        let me = self.clone();
+        let me = std::sync::Arc::downgrade(self);
         self.flow_context.palw_gossip().set_interval_opening_resolver(std::sync::Arc::new(move |claim, index, leaf| {
-            me.open_retained_interval(claim, index, leaf)
+            me.upgrade()?.open_retained_interval(claim, index, leaf)
         }));
     }
 
@@ -16366,7 +16580,7 @@ impl PalwPanelService {
         }
     }
 
-    /// **ADR-0152 DA-4 / X7 (P2-7): the `MaterialDisclosedV2`s that answer one claim's due units**,
+    /// **ADR-0152 DA-4 / X7 (P2-7): the tag-55 or legacy tag-158 objects that answer one claim's due units**,
     /// `duties` (one claim's, soonest deadline first), each signed by its duty's discloser — this
     /// node's bond: the producer, or a covering signer.
     ///
@@ -16385,7 +16599,7 @@ impl PalwPanelService {
     /// The producer answers on the executor's kept instance (its walk, as the v1 held answer does); a
     /// covering signer on a fresh one through the one resolve door, which neither releases nor keeps
     /// the executor's (the review's LOW). Each object is built by the ONE builder the real-claim tests
-    /// carry through the gate and the fold (`palw_da_answer_object_v1`), inside the ruleset's close
+    /// carry through the gate and the fold (`palw_da_built_answer_object_v1`), inside the ruleset's close
     /// ceiling (DA-8). One entry a duty, in order: `Ok(None)` for a unit a `Flat` answers.
     async fn rcore_da_answers_v1(
         &self,
@@ -16459,6 +16673,7 @@ impl PalwPanelService {
         } else {
             None
         };
+        let answer_form = facts.form;
         let built = offload_shared(backend, move |b| {
             let _held_for_the_answers = reserved;
             palw_da_claim_answers_v1(
@@ -16488,17 +16703,17 @@ impl PalwPanelService {
             .map(|(duty, answer)| match answer {
                 None => Ok(None),
                 Some(Err(why)) => Err(why),
-                Some(Ok(answer)) => kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_object_v1(
+                Some(Ok(answer)) => palw_da_built_answer_object_v1(
                     &network_domain,
                     duty.claim_id,
                     duty.unit,
                     answer,
                     duty.discloser,
+                    answer_form,
                     self.config.court.max_close_bytes(),
                     |message, context| self.sign(message, context),
                 )
-                .map(Some)
-                .map_err(|e| e.to_string()),
+                .map(Some),
             })
             .collect())
     }
@@ -18481,9 +18696,16 @@ mod accepted_objects_walk_tests {
         parents: HashMap<BlockHash, BlockHash>,
         acceptance: HashMap<BlockHash, Arc<AcceptanceData>>,
         blocks: HashMap<BlockHash, Block>,
+        targets: HashMap<Hash64, kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1>,
     }
 
     impl kaspa_consensus_core::api::ConsensusApi for Chain {
+        fn palw_fraud_filer_target_v1(
+            &self,
+            claim: Hash64,
+        ) -> Option<kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1> {
+            self.targets.get(&claim).cloned()
+        }
         fn get_sink(&self) -> BlockHash {
             self.sink
         }
@@ -18506,6 +18728,18 @@ mod accepted_objects_walk_tests {
         }
         fn get_block(&self, hash: BlockHash) -> ConsensusResult<Block> {
             self.blocks.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
+        }
+        fn is_chain_ancestor_of(&self, low: BlockHash, mut high: BlockHash) -> ConsensusResult<bool> {
+            loop {
+                if low == high {
+                    return Ok(true);
+                }
+                let parent = *self.parents.get(&high).ok_or(ConsensusError::HeaderNotFound(high))?;
+                if parent == high {
+                    return Ok(false);
+                }
+                high = parent;
+            }
         }
     }
 
@@ -18530,6 +18764,484 @@ mod accepted_objects_walk_tests {
             }
             _ => panic!("only the test's objects ride this chain"),
         }
+    }
+
+    fn append(chain: &mut Chain, n: u64, daa: u64, parent: u64) {
+        let mut header = Header::from_precomputed_hash(hash(n), vec![hash(parent)]);
+        header.daa_score = daa;
+        chain.headers.insert(hash(n), Arc::new(header.clone()));
+        chain.parents.insert(hash(n), hash(parent));
+        chain.blocks.insert(hash(n), Block::new(header, vec![lifecycle(n)]));
+        chain.acceptance.insert(
+            hash(n),
+            Arc::new(vec![MergesetBlockAcceptanceData {
+                block_hash: hash(n),
+                accepted_transactions: vec![AcceptedTxEntry { transaction_id: Default::default(), index_within_block: 0 }],
+            }]),
+        );
+        chain.sink = hash(n);
+    }
+
+    fn repeated_daa_chain() -> Chain {
+        let mut chain = Chain::default();
+        for n in 1..=8 {
+            append(&mut chain, n, 100 + n / 4, n.saturating_sub(1).max(1));
+        }
+        chain
+    }
+
+    #[test]
+    fn the_fp_bootstrap_reads_only_the_recorded_accepted_commitment_and_pins_every_job_field() {
+        use super::palw_fraud_filer::{input::tests::payload, palw_fraud_filer_fp_payload_v1 as read};
+        use kaspa_consensus_core::palw_offence_attribution_v1::{PalwClaimSourceKindV1, PalwOffenceTargetV1};
+        let payload = payload();
+        let c = &payload.commitment;
+        let claim = payload.claim_id();
+        let target = PalwOffenceTargetV1 {
+            claim_id: claim,
+            class_id: c.job.class_id,
+            artifact_root: hash(333),
+            executor_bond: PalwBondKeyV2(c.job.executor_bond),
+            execution_root: c.execution_root,
+            lane: Some(PalwClaimSourceKindV1::FreePrompt),
+            segment_count: Some(2),
+            phase: None,
+            job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(c),
+            trace_root: c.trace_root,
+            output_root: c.output_root,
+        };
+        let mut candidate = kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1 {
+            claim_id: claim,
+            producer: target.executor_bond,
+            accepted_daa: 101,
+            seat: false,
+            job: kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1 {
+                accepted_block: hash(2),
+                class_id: c.job.class_id,
+                artifact_root: Some(target.artifact_root),
+                execution_root: c.execution_root,
+                trace_root: c.trace_root,
+                output_root: c.output_root,
+                work_leaves: c.work_leaves,
+                free_prompt: true,
+                held_to_final: false,
+            },
+        };
+        let commitment_tx = |p: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3| {
+            Transaction::new(
+                TX_VERSION,
+                vec![],
+                vec![],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+                0,
+                borsh::to_vec(p).unwrap(),
+            )
+        };
+        let mut foreign = payload.clone();
+        foreign.commitment.job.job_nonce[0] ^= 1;
+        let txs = vec![commitment_tx(&payload), commitment_tx(&foreign), commitment_tx(&payload)];
+        let mut chain = Chain::default();
+        chain.blocks.insert(hash(1), Block::new(Header::from_precomputed_hash(hash(1), vec![]), txs.clone()));
+        chain.targets.insert(claim, target.clone());
+        let accept = |indices: &[usize]| {
+            Arc::new(vec![MergesetBlockAcceptanceData {
+                block_hash: hash(1),
+                accepted_transactions: indices
+                    .iter()
+                    .map(|i| AcceptedTxEntry { transaction_id: txs[*i].id(), index_within_block: *i as u32 })
+                    .collect(),
+            }])
+        };
+        chain.acceptance.insert(hash(2), accept(&[1]));
+        assert!(
+            read(&chain, &candidate, c.job.network_domain).unwrap_err().contains("not present"),
+            "unaccepted exact decoys are ignored"
+        );
+        chain.acceptance.insert(hash(2), accept(&[1, 2]));
+        assert_eq!(
+            read(&chain, &candidate, c.job.network_domain).unwrap().claim_id(),
+            claim,
+            "reads an accepted mergeset block, not the fold point's txs"
+        );
+        assert!(read(&chain, &candidate, hash(999)).is_err());
+        candidate.job.work_leaves += 1;
+        assert!(read(&chain, &candidate, c.job.network_domain).is_err());
+        candidate.job.work_leaves -= 1;
+        chain.targets.get_mut(&claim).unwrap().job_identity = hash(987);
+        assert!(read(&chain, &candidate, c.job.network_domain).is_err());
+        chain.targets.insert(claim, target.clone());
+        chain.targets.get_mut(&claim).unwrap().lane = Some(PalwClaimSourceKindV1::Attempt);
+        assert!(read(&chain, &candidate, c.job.network_domain).is_err());
+        chain.targets.insert(claim, target.clone());
+        let saved = chain.acceptance.remove(&hash(2)).unwrap();
+        assert!(read(&chain, &candidate, c.job.network_domain).unwrap_err().contains("acceptance"));
+        chain.acceptance.insert(hash(2), saved);
+        let saved = chain.blocks.remove(&hash(1)).unwrap();
+        assert!(read(&chain, &candidate, c.job.network_domain).unwrap_err().contains("block"));
+        chain.blocks.insert(hash(1), saved);
+        let mut bad = (*accept(&[2])).clone();
+        bad[0].accepted_transactions[0].transaction_id = hash(888);
+        chain.acceptance.insert(hash(2), Arc::new(bad));
+        assert!(read(&chain, &candidate, c.job.network_domain).unwrap_err().contains("transaction id"));
+        chain.acceptance.insert(hash(2), accept(&[2]));
+        assert_eq!(read(&chain, &candidate, c.job.network_domain).unwrap().claim_id(), claim);
+    }
+
+    #[test]
+    fn paged_history_reads_every_block_even_when_daa_does_not_count_the_blocks() {
+        let chain = repeated_daa_chain();
+        let mut old = Vec::new();
+        // The old filer used DAA difference as the block cap: three blocks cannot cover this eight-block interval.
+        walk_accepted_lifecycle_objects_v1(&chain, 100, 102 - 100 + 1, &mut |o| old.push(claim_of(&o)));
+        assert_eq!(old, vec![8, 7, 6]);
+        let mut seen = Vec::new();
+        let mut cursor = Some(chain.sink);
+        let mut pages = 0;
+        while let Some(start) = cursor {
+            cursor = walk_accepted_lifecycle_page_v1(&chain, start, 100, 3, &mut |o| seen.push(claim_of(&o))).unwrap();
+            pages += 1;
+        }
+        assert_eq!(pages, 3);
+        assert_eq!(seen, vec![8, 7, 6, 5, 4, 3, 2, 1], "no gap or duplicate at page boundaries");
+    }
+
+    #[test]
+    fn a_missing_header_acceptance_block_or_parent_never_completes_a_history_page() {
+        let mut chain = repeated_daa_chain();
+        let read = |chain: &Chain| walk_accepted_lifecycle_page_v1(chain, hash(8), 100, 3, &mut |_| {});
+        let header = chain.headers.remove(&hash(8)).unwrap();
+        assert!(read(&chain).unwrap_err().contains("history header"));
+        chain.headers.insert(hash(8), header);
+        let accepted = chain.acceptance.remove(&hash(8)).unwrap();
+        assert!(read(&chain).unwrap_err().contains("history acceptance"));
+        chain.acceptance.insert(hash(8), accepted);
+        let block = chain.blocks.remove(&hash(8)).unwrap();
+        assert!(read(&chain).unwrap_err().contains("history block"));
+        chain.blocks.insert(hash(8), block);
+        let parent = chain.parents.remove(&hash(8)).unwrap();
+        assert!(read(&chain).unwrap_err().contains("history selected parent"));
+        chain.parents.insert(hash(8), parent);
+        assert_eq!(read(&chain).unwrap(), Some(hash(5)), "the same page can be retried once data is restored");
+    }
+
+    #[test]
+    fn the_filer_resumes_at_its_original_tip_and_restarts_backfill_after_a_reorg() {
+        use super::palw_fraud_filer::palw_fraud_filer_read_page_v1 as page;
+        let mut chain = repeated_daa_chain();
+        let wanted = BTreeMap::new();
+        let legacy_wanted = BTreeMap::new();
+        let (first, reset, _) = page(&chain, 100, 100, None, 3, &wanted, &legacy_wanted).unwrap();
+        assert!(!reset);
+        assert_eq!((first.anchor, first.anchor_daa, first.next), (hash(8), 102, Some(hash(5))));
+        append(&mut chain, 9, 150, 8);
+        let (second, reset, _) = page(&chain, 100, 100, Some(first), 3, &wanted, &legacy_wanted).unwrap();
+        assert!(!reset);
+        assert_eq!((second.anchor, second.anchor_daa, second.next), (hash(8), 102, Some(hash(2))));
+        let (complete, _, _) = page(&chain, 100, 100, Some(second), 3, &wanted, &legacy_wanted).unwrap();
+        assert_eq!((complete.anchor_daa, complete.next), (102, None), "arrivals do not move the in-progress watermark");
+        let (recent, reset, _) = page(&chain, 100, 140, Some(complete), 3, &wanted, &legacy_wanted).unwrap();
+        assert!(!reset);
+        assert_eq!((recent.anchor, recent.floor, recent.next), (hash(9), 140, None));
+        // Another branch forks below the completed incremental floor. Its old answers must be read, not skipped at DAA 140.
+        append(&mut chain, 20, 150, 3);
+        let (fork, reset, _) = page(&chain, 100, 140, Some(recent), 2, &wanted, &legacy_wanted).unwrap();
+        assert!(reset);
+        assert_eq!((fork.anchor, fork.floor, fork.next), (hash(20), 100, Some(hash(2))));
+    }
+
+    #[test]
+    fn the_filer_reads_only_the_requested_authenticated_legacy_unit_from_public_history() {
+        use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1};
+        use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+        use kaspa_consensus_core::palw_legacy_held_da_v2::{PalwLegacyHeldAnswerV2, PalwLegacyHeldUnitV2};
+        let backend = super::seat_s_tests::floor_backend();
+        let anchor = Hash64::from_u64_word(0xCAFE);
+        let (job, ids) = backend.job_for_anchor(anchor).unwrap();
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, true);
+        let run = backend.execute(&job, &ids).unwrap();
+        let ids: Vec<u32> = ids.into_iter().map(|id| id.try_into().unwrap()).collect();
+        let binding = misaka_palw_base0::produce::base0_material_decode_any_v1(&run.material).unwrap().binding().clone();
+        let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count);
+        let selected = PalwLegacyHeldUnitV2::StepNode { level: height, index: 0 };
+        let roots = PalwClaimRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            anchor,
+            attempt_draw: Some(true),
+            output_root: None,
+            job_pin: None,
+        };
+        let claim = Hash64::from_u64_word(0xC1);
+        let make = |unit| {
+            let (binding, answer) = crate::palw_legacy_held_v2::palw_legacy_held_capture_answer_v2(
+                &backend,
+                &run.material,
+                &ids,
+                roots,
+                backend.prompt_ids_form(),
+                &unit,
+            )
+            .unwrap();
+            palw_da_built_answer_object_v1(
+                &Hash64::from_u64_word(0xD0),
+                claim,
+                PalwDaUnitV1::LegacyHeldV2(unit),
+                PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((binding, answer))),
+                PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
+                backend.prompt_ids_form(),
+                u64::MAX,
+                |_, _| Some(vec![1]),
+            )
+            .unwrap()
+        };
+        let good = make(selected);
+        let unused = make(PalwLegacyHeldUnitV2::StepNode { level: height - 1, index: 0 });
+        let mut corrupt = good.clone();
+        let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = &mut corrupt else { unreachable!() };
+        let PalwLegacyHeldAnswerV2::Node { frontier, .. } = &mut answer.answer else { unreachable!() };
+        frontier[0] = Hash64::from_u64_word(0xBAD);
+        let mut chain = repeated_daa_chain();
+        // A carrier can be accepted even when its lifecycle object was refused. Wrong bytes occur first in the newest-first read;
+        // valid but unselected units and repeats must neither poison the selected answer nor enlarge this case's cache.
+        let objects = vec![good.clone(), unused, good.clone(), corrupt];
+        let txs = objects
+            .into_iter()
+            .map(|object| {
+                let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+                Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload)
+            })
+            .collect::<Vec<_>>();
+        let count = txs.len();
+        chain.blocks.insert(hash(2), Block::new(chain.headers[&hash(2)].as_ref().clone(), txs));
+        chain.acceptance.insert(
+            hash(2),
+            Arc::new(vec![MergesetBlockAcceptanceData {
+                block_hash: hash(2),
+                accepted_transactions: (0..count)
+                    .map(|i| AcceptedTxEntry { transaction_id: Default::default(), index_within_block: i as u32 })
+                    .collect(),
+            }]),
+        );
+        let wanted = BTreeMap::from([(claim, run.execution_root)]);
+        let selected_units = BTreeMap::from([(claim, selected)]);
+        let mut previous = None;
+        let mut found = Vec::new();
+        loop {
+            let (walk, reset, answers) =
+                super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, previous, 3, &wanted, &selected_units)
+                    .unwrap();
+            assert!(!reset);
+            found.extend(answers);
+            previous = Some(walk);
+            if walk.next.is_none() {
+                break;
+            }
+        }
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, (claim, PalwDaUnitV1::LegacyHeldV2(selected)));
+        chain.acceptance.remove(&hash(1));
+        let (partial, _, readable) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, None, 100, &wanted, &selected_units,
+        ).unwrap();
+        assert_eq!(partial.next, Some(partial.anchor), "missing old history never completes the floor");
+        assert_eq!(readable.len(), 1, "authenticated answers before the prune boundary are retained");
+        let saved = chain.blocks.remove(&hash(2)).unwrap();
+        append(&mut chain, 9, 160, 8);
+        let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: good.clone() }).unwrap());
+        chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), vec![tx]));
+        let (fresh, _, delivered) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, Some(partial), 100, &wanted, &selected_units,
+        ).unwrap();
+        assert_eq!(fresh.anchor, hash(9), "a stalled old walk revisits the new tip");
+        assert!(fresh.next.is_some(), "still no completed watermark across missing history");
+        assert_eq!(delivered.len(), 1, "the reacquired copy is readable although its original carrier is gone");
+        // A non-held profile on a Merkle network needs the explicit network form for the new input unit.
+        let input_unit = PalwLegacyHeldUnitV2::PromptIds { chunk: 0 };
+        let input_object = make(input_unit);
+        let mut bad_input = input_object.clone();
+        let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = &mut bad_input else { unreachable!() };
+        let PalwLegacyHeldAnswerV2::PromptIds { ids, .. } = &mut answer.answer else { unreachable!() };
+        ids[0] ^= 1;
+        let txs: Vec<_> = [bad_input, input_object].into_iter().map(|object| Transaction::new(
+            TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap(),
+        )).collect();
+        chain.acceptance.insert(hash(9), Arc::new(vec![MergesetBlockAcceptanceData {
+            block_hash: hash(9), accepted_transactions: (0..txs.len()).map(|i| AcceptedTxEntry {
+                transaction_id: Default::default(), index_within_block: i as u32,
+            }).collect(),
+        }]));
+        chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), txs));
+        let input_selected = BTreeMap::from([(claim, input_unit)]);
+        let (_, _, input_answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_with_form_v1(
+            &chain, 100, 100, None, 100, &wanted, &input_selected, backend.prompt_ids_form(),
+        ).unwrap();
+        assert_eq!(input_answers.len(), 1, "only the valid reacquired input is cached before the missing suffix");
+        assert_eq!(input_answers[0].0, (claim, PalwDaUnitV1::LegacyHeldV2(input_unit)));
+        assert!(super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, None, 100, &wanted, &input_selected,
+        ).unwrap().2.is_empty(), "a carrier does not choose a Merkle ruleset on a Flat network");
+        chain.blocks.insert(hash(2), saved);
+        let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = good else { unreachable!() };
+        assert_eq!(found[0].1, PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
+        let wrong_root = BTreeMap::from([(claim, Hash64::from_u64_word(0xBAD))]);
+        assert!(
+            super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, None, 100, &wrong_root, &selected_units,)
+                .unwrap()
+                .2
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_held_reader_reaches_old_filings_before_publishing_and_restarts_on_a_fork() {
+        use super::held_court::{PalwHeldChainReadV1, PalwHeldCourtV1, PalwHeldHistoryObjectKeyV1};
+        let (duty, oldest, decoy, unit, chunk) = super::held_court_e2e::held_history_fixture_v1();
+        let mut later = oldest.clone();
+        let PalwConsensusObjectV2::CourtAttnRootClaimedHeld { signature, .. } = &mut later else { unreachable!() };
+        *signature = vec![0xAC; 8];
+        let mut chain = repeated_daa_chain();
+        let insert = |chain: &mut Chain, block: u64, objects: Vec<PalwConsensusObjectV2>| {
+            let txs = objects
+                .into_iter()
+                .map(|object| {
+                    Transaction::new(
+                        TX_VERSION,
+                        vec![],
+                        vec![],
+                        0,
+                        SUBNETWORK_ID_PALW_LIFECYCLE,
+                        0,
+                        borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let count = txs.len();
+            chain.blocks.insert(hash(block), Block::new(chain.headers[&hash(block)].as_ref().clone(), txs));
+            chain.acceptance.insert(
+                hash(block),
+                Arc::new(vec![MergesetBlockAcceptanceData {
+                    block_hash: hash(block),
+                    accepted_transactions: (0..count)
+                        .map(|i| AcceptedTxEntry { transaction_id: Default::default(), index_within_block: i as u32 })
+                        .collect(),
+                }]),
+            );
+        };
+        insert(&mut chain, 2, vec![oldest.clone()]);
+        insert(&mut chain, 6, vec![chunk.clone(), chunk.clone()]);
+        insert(&mut chain, 8, vec![later.clone(), later.clone(), decoy.clone()]);
+        let read = PalwHeldChainReadV1 { session_id: duty.session_id, claim_id: duty.claim_id, not_before_daa: 100 };
+        let mut held = PalwHeldCourtV1::default();
+        let page = |chain: &Chain, previous| {
+            attn_held_objects_page_from_chain_v1(
+                chain,
+                read,
+                previous,
+                &duty,
+                &[],
+                kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1,
+                3,
+            )
+        };
+        let first = page(&chain, None).unwrap();
+        assert_eq!(first.objects.len(), 1, "only an authenticated standing root is accumulated, regardless of repeats/decoys");
+        assert_eq!(first.walk.next, Some(hash(5)));
+        held.note_history_page_v1(duty.session_id, duty.claim_id, first, 102);
+        assert!(held.history_walk_v1(duty.session_id).unwrap().next.is_some());
+        assert!(
+            held.filing_v1(&duty, kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1).is_none(),
+            "a partial suffix is not a filing"
+        );
+        // A new tip does not move the in-progress anchor or skip the original chain's older filing.
+        append(&mut chain, 9, 150, 8);
+        let original_anchor = held.history_walk_v1(duty.session_id).unwrap().anchor;
+        let second = page(&chain, held.history_walk_v1(duty.session_id)).unwrap();
+        assert_eq!(second.walk.anchor, original_anchor);
+        assert_eq!(second.walk.next, Some(hash(2)));
+        let selected = attn_held_objects_page_from_chain_v1(
+            &chain,
+            read,
+            held.history_walk_v1(duty.session_id),
+            &duty,
+            &[unit],
+            kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1,
+            3,
+        )
+        .unwrap();
+        assert!(selected.rewind && !selected.reset, "a newly selected old answer invalidates the walk's previously filtered prefix");
+        assert_eq!(selected.walk.anchor, hash(9));
+        assert_eq!(selected.walk.next, Some(hash(6)));
+        let chunk_page = attn_held_objects_page_from_chain_v1(
+            &chain,
+            read,
+            Some(selected.walk),
+            &duty,
+            &[unit],
+            kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1,
+            3,
+        )
+        .unwrap();
+        assert_eq!(chunk_page.objects.len(), 1);
+        assert_eq!(
+            chunk_page.objects[&PalwHeldHistoryObjectKeyV1::Chunk { checkpoint: unit.checkpoint, chunk: unit.chunk_index }],
+            chunk,
+            "repeated old selected chunk is read once from an authenticated carrier"
+        );
+        held.note_history_page_v1(duty.session_id, duty.claim_id, second, 150);
+        let third = page(&chain, held.history_walk_v1(duty.session_id)).unwrap();
+        assert_eq!(third.objects[&PalwHeldHistoryObjectKeyV1::Root], oldest);
+        assert_eq!(third.walk.next, None);
+        held.note_history_page_v1(duty.session_id, duty.claim_id, third, 150);
+        assert_eq!(
+            held.filing_v1(&duty, kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1).unwrap().0,
+            held_court::palw_held_object_digest_v1(&oldest),
+            "the oldest authenticated filing stands once the read reaches its floor"
+        );
+        // The completed anchor belongs to the old branch; a later-only request must still re-read the older filing on a fork.
+        append(&mut chain, 20, 160, 3);
+        held.invalidate_history_v1(duty.session_id, duty.claim_id);
+        assert!(
+            held.filing_v1(&duty, kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1).is_none(),
+            "a cached old-branch filing cannot drive a challenger move"
+        );
+        let fork = attn_held_objects_page_from_chain_v1(
+            &chain,
+            PalwHeldChainReadV1 { not_before_daa: 140, ..read },
+            held.history_walk_v1(duty.session_id),
+            &duty,
+            &[],
+            kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1,
+            3,
+        )
+        .unwrap();
+        assert!(fork.reset);
+        assert_eq!(fork.walk.floor, 100);
+        assert_eq!(fork.objects[&PalwHeldHistoryObjectKeyV1::Root], oldest);
+        let mut missing = chain;
+        missing.acceptance.remove(&hash(20));
+        assert!(page(&missing, held.history_walk_v1(duty.session_id)).unwrap_err().contains("history acceptance"));
+        let cap = kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1;
+        assert!(
+            held_court::palw_held_history_object_key_v1(&chunk, &duty, &[], cap).is_none(),
+            "a valid unselected chunk is not cached"
+        );
+        assert_eq!(
+            held_court::palw_held_history_object_key_v1(&chunk, &duty, &[unit], cap),
+            Some(PalwHeldHistoryObjectKeyV1::Chunk { checkpoint: unit.checkpoint, chunk: unit.chunk_index })
+        );
+        let mut corrupt = chunk;
+        let PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure } = &mut corrupt else { unreachable!() };
+        let kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1::StateChunk { chunk, .. } = &mut disclosure.disclosure else {
+            unreachable!()
+        };
+        chunk.chunk_bytes[0] ^= 1;
+        assert!(
+            held_court::palw_held_history_object_key_v1(&corrupt, &duty, &[unit], cap).is_none(),
+            "a selected chunk must authenticate"
+        );
     }
 
     /// **ADR-0093 Decision 7's read: accepted objects only, newest first, down to the height.**
@@ -19139,7 +19851,7 @@ mod court_responder_coverage_pin {
             "which builds through the core's held builder"
         );
         let rcore = body("async fn rcore_da_answers_v1(");
-        for reached in ["palw_da_claim_answers_v1(", "palw_da_answer_object_v1("] {
+        for reached in ["palw_da_claim_answers_v1(", "palw_da_built_answer_object_v1("] {
             assert!(rcore.contains(reached), "R-core's answer reaches {reached}");
         }
         let unit = top("pub(crate) fn palw_da_unit_answer_v1(");
@@ -22332,7 +23044,7 @@ mod p2_7_disclosure_policy {
     /// the same capture by the one held builder; an answer is the form the ONE object builder takes.
     #[test]
     fn a_claims_units_are_answered_from_one_load_and_one_flat_answers_its_run() {
-        use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, palw_da_answer_object_v1};
+        use kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1;
         use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
         use kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1;
         let (backend, facts, job, ids, capture) = fp_claim();
@@ -22347,7 +23059,7 @@ mod p2_7_disclosure_policy {
         let built = answer(&backend, &facts, vec![honest], &units, false).0.expect("loaded once");
         assert_eq!(built.answers.len(), 3);
         let first = built.answers[0].clone().expect("asked").expect("opens");
-        if matches!(first, PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })) {
+        if matches!(first, PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. }))) {
             assert_eq!(built.answers[1], None, "the Flat built for row 0 answers row 1 of a two-row run");
         } else {
             assert!(built.answers[1].is_some(), "no Flat, so row 1 is answered on its own");
@@ -22355,9 +23067,113 @@ mod p2_7_disclosure_policy {
         let held = built.answers[2].clone().expect("asked").expect("the prompt tile opens from the capture's job");
         let bond = facts.executor_bond;
         for (unit, answer) in [(units[0], first), (units[2], held)] {
-            palw_da_answer_object_v1(&Hash64::from_u64_word(0xD0), facts.claim_id, unit, answer, bond, u64::MAX, |_, _| Some(vec![1]))
-                .expect("the form the fold takes");
+            palw_da_built_answer_object_v1(&Hash64::from_u64_word(0xD0), facts.claim_id, unit, answer, bond, facts.form, u64::MAX, |_, _| {
+                Some(vec![1])
+            })
+            .expect("the form the fold takes");
         }
+    }
+
+    /// An actual dense claim's retained capture answers all legacy unit forms through the production worker and carrier builder.
+    /// A planted capture is remade first; wrong-unit, unsigned and over-ceiling carriers never leave this node.
+    #[test]
+    fn legacy_held_due_units_use_tag158_from_verified_dense_material() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_capture_encode_v1, palw_fp_material_encode_v1};
+        use kaspa_consensus_core::palw_legacy_held_da_v2::{PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2, PalwLegacyHeldUnitV2};
+        let (backend, facts, job, ids, capture) = fp_claim();
+        let retention = misaka_palw_base0::produce::base0_material_decode_any_v1(&capture).expect("this family's capture");
+        assert!(matches!(retention, misaka_palw_base0::produce::Base0RetentionV1::Dense(_)), "the floor keeps dense tiles");
+        let binding = retention.binding();
+        let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count);
+        let c_height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(u64::from(binding.checkpoint_count));
+        let witness_leaf = (0..binding.step_leaf_count)
+            .find(|leaf| !kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_ckw_leaf_is_model_copy_v2(binding, *leaf))
+            .expect("a computation leaf, not a model-copy gather");
+        let mut units = vec![
+            PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk: 0 }),
+            PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::StepNode { level: height, index: 0 }),
+            PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::KernelWitness { leaf: witness_leaf }),
+        ];
+        if c_height >= 1 {
+            units.push(PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::CheckpointNode { level: c_height, index: 0 }));
+        }
+        let honest = palw_fp_capture_encode_v1(&job, &ids, &capture);
+        let refused = answer(
+            &backend,
+            &facts,
+            vec![honest.clone()],
+            &[PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::KernelWitness { leaf: 0 })],
+            false,
+        )
+        .0
+        .expect("the honest capture is loaded");
+        assert!(
+            matches!(&refused.answers[0], Some(Err(why)) if why.contains("registered model")),
+            "model-copy CKW remains out of scope"
+        );
+        let built = answer(&backend, &facts, vec![honest.clone()], &units, true).0.expect("one verified load");
+        assert!(!built.remade);
+        let garbage = palw_fp_capture_encode_v1(&job, &ids, b"planted material");
+        let (remade, kept) = answer(&backend, &facts, vec![garbage], &units, true);
+        let remade = remade.expect("the public job can remake the producer's retention");
+        assert!(remade.remade);
+        assert_eq!(kept.as_deref(), Some(honest.as_slice()));
+        assert_eq!(remade.answers, built.answers);
+        let domain = Hash64::from_u64_word(0xD0);
+        for (unit, answer) in units.iter().zip(&built.answers) {
+            let answer = answer.clone().expect("Flat never covers a legacy unit").expect("the committed unit opens");
+            let object = palw_da_built_answer_object_v1(
+                &domain,
+                facts.claim_id,
+                *unit,
+                answer.clone(),
+                facts.executor_bond,
+                facts.form,
+                u64::MAX,
+                |_, context| {
+                    assert_eq!(context, PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
+                    Some(vec![1])
+                },
+            )
+            .expect("the signed tag-158 object can ride");
+            assert!(matches!(object, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }));
+            assert!(
+                palw_da_built_answer_object_v1(&domain, facts.claim_id, *unit, answer.clone(), facts.executor_bond, facts.form, 0, |_, _| panic!(
+                    "ceiling checked before signing"
+                ))
+                .is_err()
+            );
+            assert!(
+                palw_da_built_answer_object_v1(
+                    &domain,
+                    facts.claim_id,
+                    *unit,
+                    answer.clone(),
+                    facts.executor_bond,
+                    facts.form,
+                    u64::MAX,
+                    |_, _| None
+                )
+                .is_err()
+            );
+            assert!(
+                palw_da_built_answer_object_v1(
+                    &domain,
+                    facts.claim_id,
+                    PalwDaUnitV1::Event { row: 0, tile: 0 },
+                    answer,
+                    facts.executor_bond,
+                    facts.form,
+                    u64::MAX,
+                    |_, _| panic!("wrong unit checked before signing")
+                )
+                .is_err()
+            );
+        }
+        let mut wrong_claim = facts.clone();
+        wrong_claim.execution_root = Hash64::from_u64_word(0xBAD);
+        let (refused, kept) = answer(&backend, &wrong_claim, vec![honest, palw_fp_material_encode_v1(&job, &ids)], &units, false);
+        assert!(refused.is_err() && kept.is_none(), "no copy or remake answers another claim's commitment");
     }
 
     /// **An attempt claim's material: kept and verified, or re-made from its block's job** — which is
@@ -22782,7 +23598,7 @@ mod p2_6_da_accusation_policy {
         let drained =
             mined + source[mined..].find("if palw_fee_chain_drained_v1(chained_funding.as_ref()) {").expect("the drain rule");
         let resolved =
-            drained + source[drained..].find("chained_funding = self.resolve_fee_funding(&session).await;").expect("resolved afresh");
+            drained + source[drained..].find("chained_funding = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await;").expect("resolved afresh");
         assert!(!source[mined..resolved].contains("} else if"), "inside the mined-tip branch");
         assert!(resolved - mined < 1_500);
     }

@@ -1,0 +1,16 @@
+t12-repin: tree f08e22a159c7 + uncommitted changes; logs in /private/tmp/misaka-g14-review-20261010/carrier-rent-repin-harvest; --shipping
+  $ cargo test --locked -p kaspa-consensus-core --no-fail-fast --test t12_repin_values --test palw_offence_attribution_is_t12_only --test evm_bridge_ledger_is_t12_only --test rcore_m5_v22_golden --test panel_room_t11_dormant_parity --test t12_two_clock_ring --test palw_offence_attribution_t11_verdicts --test palw_same_fingerprint_same_verdict --test palw_readiness_horizon_is_t12_only --test palw_exec_maturity_is_t12_only --test palw_clock_lead_cap_is_t12_only --test t12_mainnet_values_moved_only_these --test palw_tir_fences_are_dormant -- --nocapture --test-threads=1 print_every_value_the_pins_hold the_fence_moves_testnet12s_fingerprint_and_nothing_else_did the_ledger_is_the_only_thing_that_moved_testnet12 t41_the_v22_golden_vectors_empty_and_inhabited t41_the_v22_record_encodings_are_pinned below_the_audit_fence_the_panel_room_folds_as_the_parent_did a_dormant_network_ticks_at_final_and_never_touches_the_ring t11_the_v1_fold_is_the_fold_it_was the_stored_corpus_gets_the_verdicts_this_build_pinned the_horizon_moves_testnet12s_fingerprint_and_nothing_else_did the_maturity_moves_testnet12s_fingerprint_and_nothing_else_did the_cap_moves_testnet12s_fingerprint_and_a_never_collapses the_three_mainnet_values_are_the_only_thing_that_moved_testnet12 every_shipped_ruleset_keeps_its_three_ids   > /private/tmp/misaka-g14-review-20261010/carrier-rent-repin-harvest/harvest-tests.log
+  $ cargo test --locked -p kaspa-consensus-core --lib -- --exact palw_state_v2::tests::the_version_22_state_root_golden_vectors palw_state_v2::tests::held_forfeits_v1::the_held_forfeits_block_and_tail_come_after_r_core_plus_and_the_activation_pool palw_state_v2::tests::held_forfeits_v1::the_held_forfeit_entry_applies_reverts_and_the_placeholders_are_refused --nocapture   > /private/tmp/misaka-g14-review-20261010/carrier-rent-repin-harvest/harvest-lib.log
+
+pin                                                                  scope       status        pinned             computed          
+
+summary: 29 history, 3 label, 361 ok
+  computed from.testnet-12.params_id      5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6
+  computed genesis.testnet-12.hash        a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23
+  computed testnet-12.premine_txid        5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669
+  computed from.testnet-12.schedule_id    1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9
+  computed rule_manifest.digest           9def81a1c56c02d5d1f9d24c5ddbe78d6f7598b31928ab6f388a2a074f14b4d4d4cf8c2245666bc13b9c91688c106efe428e8643075b68b40c4820adb4201d8d
+  gate the_held_forfeits_block_and_tail_come_after_r_core_plus_and_the_activation_pool: ok
+  gate the_held_forfeit_entry_applies_reverts_and_the_placeholders_are_refused: ok
+
+DRY RUN: no drift — every checked pin is this build's value, every gate in this tree passed, no literal is unregistered.

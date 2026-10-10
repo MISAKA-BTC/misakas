@@ -1,0 +1,26 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 15s
+     Running tests/lg14a_legacy_dispute_fold.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/lg14a_legacy_dispute_fold-62fcbf1650c0e06f)
+
+running 7 tests
+test lg14a_a_direct_proof_is_judged_over_an_open_court ... ok
+test lg14a_a_reservation_holds_the_bind_and_receipt_timeouts ... ok
+test lg14a_a_reserved_session_rides_its_own_budget ... ok
+test lg14a_a_reservation_holds_final_to_the_hard_deadline_then_lapses_and_burns_at_retirement ... ok
+test lg14a_the_admission_refuses_by_name ... ok
+test lg14a_a_default_refunds_every_deposit ... ok
+test lg14a_unarmed_the_fold_refuses_the_objects_and_is_byte_identical ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

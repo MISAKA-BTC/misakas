@@ -388,6 +388,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::ProviderChallengeV1 { .. }
         | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
         | PalwConsensusObjectV2::DaTransferV1 { .. } => Ok(()),
+        // Lane LG14-A (tags 154–155): the dispute reservation and its release ride at every height with NO stateless refusal — the live
+        // int-12 build cannot decode them and tolerates their bytes, so refusing any shape here would mark invalid a block it accepts
+        // (A-2). The fence, the signature, the bond and the rules are the acceptance layer's and the fold's.
+        PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } | PalwConsensusObjectV2::DisputeReacquiredV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -1139,11 +1143,13 @@ pub enum PalwLifecycleKindFenceV1 {
     /// tensor commitment and the court's proofs and accusations carry). No new object tag: the guarded arm of [`palw_lifecycle_kind_owner_v1`] reads the predicate
     /// [`crate::palw_task_heads_v1::palw_object_needs_task_heads_v1`].
     TaskHeadsV1 = 7,
+    /// `Params::palw_legacy_public_filer_v1` — lane LG14-A's dispute reservation and its release (tags 154–156).
+    LegacyPublicFilerV1 = 8,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1152,6 +1158,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::ModelBondAllocationV1,
         Self::ExecPayloadV2,
         Self::TaskHeadsV1,
+        Self::LegacyPublicFilerV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1165,6 +1172,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::ModelBondAllocationV1 => "palw_model_bond_allocation_v1",
             Self::ExecPayloadV2 => "palw_exec_payload_v2",
             Self::TaskHeadsV1 => "palw_task_heads_v1",
+            Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
         }
     }
 }
@@ -1333,6 +1341,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
+        // Lane LG14-A: the dispute reservation and its release (154, 155).
+        O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } | O::DisputeReacquiredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
     }
 }
 
@@ -1461,6 +1471,9 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (151, "ProviderChallengeV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
     (152, "ProviderAnswerV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
     (153, "DaTransferV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
+    (154, "DisputeReservedV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
+    (155, "DisputeReleasedV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
+    (156, "DisputeReacquiredV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
     (157, "LegacyHeldDemandedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (158, "LegacyHeldAnsweredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (159, "LegacyLeafRecomputedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
@@ -1544,6 +1557,7 @@ impl crate::config::params::Params {
                     }
                     // RFC-0008 v2: only on a `ConsensusV2` network (`palw_exec_payload_v2_fence` folds the mode in).
                     PalwLifecycleKindFenceV1::ExecPayloadV2 => self.palw_exec_payload_v2_fence(),
+                    PalwLifecycleKindFenceV1::LegacyPublicFilerV1 => self.palw_legacy_public_filer_v1,
                 },
             )
         })
@@ -1767,6 +1781,14 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1",
         PalwInt12WireChangeV1::CarriedReread { fence: "palw_task_heads_v1", digest: 0x12222f873f5f85a5 },
     ),
+    // codex LG14-A follow-up (canonical FP input, 2026-10-11): `PalwPromptProofV1::FpCanonicalWhole` (tag 2) appended inside the
+    // opaque `evidence` bytes of an ObjectiveOffence (tag 51). The live build decodes the object and refuses the evidence it cannot
+    // decode; below `palw_legacy_public_filer_v1` this build decodes it and refuses it by `palw_prompt_proof_fence_v1`
+    // (ContradictionNotAdmitted) — a refusal either way (re-read). Stage equality is to be confirmed by its lane (codex).
+    (
+        "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1",
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0x14f2c2b7896b15f4 },
+    ),
     (
         "consensus/core/src/palw_state_v2.rs::PalwVoidReasonV2",
         PalwInt12WireChangeV1::NotCarried("a claim row's terminal reason, written by the fold; no carried object names one"),
@@ -1916,6 +1938,8 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // under this fence) re-pins `PALW_A2_NEW_KIND_WIRE_V1` in the same commit and keeps this row's fence, or adds a row for another.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 150, hi: 153 }, "palw_provider_court_v1", "DA16 provider court", true),
     // LG14-B: the legacy V2 route's descent demand, its answer and the leaf recompute (RFC-0014 §4–§5).
+    // LG14-A: reservation, release and nonce-bound public DA reacquisition (RFC-0014 §6–§7).
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 154, hi: 156 }, "palw_legacy_public_filer_v1", "LG14-A dispute reservation", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 159 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
@@ -1977,6 +2001,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" },
         "palw_task_heads_v1",
         "HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1" },
+        "palw_legacy_public_filer_v1",
+        "codex LG14-A: PalwPromptProofV1::FpCanonicalWhole (2) inside an ObjectiveOffence's evidence bytes (tag 51), refused below the fence (re-read)",
         true,
     ),
     a2_row(
@@ -2047,6 +2077,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "INTF (ADR-0032 amendment)",
         false,
     ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "legacy dispute reservations (delta 200, tail 0xE2, root block legacy_disputes/v1)" },
+        "palw_legacy_public_filer_v1",
+        "LG14-A",
+        true,
+    ),
     // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
     a2_row(
         PalwA2SlotV1::Int12RefusedByName {
@@ -2082,6 +2118,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (130, 139, "EXEC payload v2 (X8R)", &["palw_exec_payload_v2"]),
     (140, 149, "BUDGET (ADR-0176/0177)", &["palw_bond_budget_v1", "palw_model_bond_allocation_v1"]),
     (150, 153, "DA16 provider court", &["palw_provider_court_v1"]),
+    (154, 156, "LG14-A dispute reservation", &["palw_legacy_public_filer_v1"]),
     (157, 159, "LG14-B legacy held DA", &["palw_legacy_held_da_v2"]),
 ];
 
@@ -4202,8 +4239,11 @@ pub(crate) mod tests {
             (151, 0x6a81242ebaeba7fd),
             (152, 0xc48f175fa3456d1e),
             (153, 0x74bac59d2cf50cd4),
-            (157, 0x342660230d2d6514),
-            (158, 0x2d33651174652aca),
+            (154, 0x047359d4d8ba0a7b),
+            (155, 0x6d9c4e7671a9cac7),
+            (156, 0x7e5d332147511ca1),
+            (157, 0xc7acaf87a3fefb35),
+            (158, 0x380636cbf4ee26ab),
             (159, 0x0395636b651f74fa),
         ];
 

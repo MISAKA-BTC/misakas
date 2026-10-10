@@ -1,0 +1,7 @@
+
+running 2 tests
+test palw_panel::fee_lineage_tests::t12_046_the_fee_file_keeps_the_lineage_newest_first ... ok
+test palw_panel::fee_lineage_tests::t12_046_a_named_fee_outpoint_is_tried_before_the_remembered_lineage ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 602 filtered out; finished in 0.04s
+

@@ -94,7 +94,7 @@ impl KernelLedgerV1 {
                 let writers = check_memory_root_v1(m, &program, &w.param_commitments)?;
                 let base = public_prosecution_complete_v1(&d, &program, &w.plan, &ProfileMaterialV1::kernel_route(true), policy)
                     .map_err(|g| format!("the update rule is not publicly prosecutable: {g:?}"))?;
-                let bounds = memory_bounds_v1(&base, &program, &w.plan, m, policy)?;
+                let bounds = memory_bounds_v1(&base, &d, &program, &w.plan, m, policy)?;
                 let rule = ClassRowV1 {
                     descriptor: d,
                     program_bytes: w.program_bytes.clone(),

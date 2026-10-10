@@ -165,6 +165,12 @@ impl FreshVerifierV1 {
         verify_scope_v1(&ctx, served, scope)
     }
 
+    /// Independently compute the first differing commitment from public inputs and the authenticated registered artifact.
+    /// No node value or producer trace is read from `artifact`.
+    pub fn reexecute(&self, artifact: &dyn MaterialV1) -> Result<crate::verify::ReexecutionV1, String> {
+        crate::verify::reexecute_claim_v1(&self.ctx(), artifact)
+    }
+
     /// The structural checks every court runs first ([`crate::verify::claim_structure_v1`]): what a chain refuses at inclusion.
     pub fn structure(&self) -> Result<(), String> {
         crate::verify::claim_structure_v1(&self.ctx())
@@ -195,7 +201,7 @@ pub struct FaultProofWireV1 {
     pub position: u32,
     pub occurrence: u16,
     pub node: u16,
-    /// 0 malformed, 1 recompute, 2 matmul scalar.
+    /// 0 malformed, 1 recompute, 2 matmul scalar, 3 misderived, 4 commitment mismatch.
     pub kind: u8,
     pub scalar: (u64, u64, u64),
     pub output: TensorWireV1,
@@ -212,6 +218,7 @@ impl FaultProofWireV1 {
             FaultKindV1::Recompute => (1, (0, 0, 0)),
             FaultKindV1::MatMulScalar { slice, i, j } => (2, (slice, i, j)),
             FaultKindV1::Misderived => (3, (0, 0, 0)),
+            FaultKindV1::CommitmentMismatch => (4, (0, 0, 0)),
         };
         Self {
             position: p.position,
@@ -236,6 +243,7 @@ impl FaultProofWireV1 {
             1 => FaultKindV1::Recompute,
             2 => FaultKindV1::MatMulScalar { slice: self.scalar.0, i: self.scalar.1, j: self.scalar.2 },
             3 => FaultKindV1::Misderived,
+            4 if self.scalar == (0, 0, 0) && self.openings.is_none() => FaultKindV1::CommitmentMismatch,
             k => return Err(format!("unknown fault kind {k} (never success)")),
         };
         let all = |v: &[TensorWireV1]| v.iter().map(TensorWireV1::decode).collect::<Result<Vec<_>, _>>();

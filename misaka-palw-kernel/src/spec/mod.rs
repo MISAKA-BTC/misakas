@@ -436,6 +436,7 @@ fn slot_bytes(program: &TirProgramV1, root: &MemoryRootV1) -> u128 {
 /// **Memory bounds** (design §2.6) from the rule's per-step bounds `base`.
 pub fn memory_bounds_v1(
     base: &ProsecutionBoundsV1,
+    descriptor: &KernelDescriptorV1,
     program: &TirProgramV1,
     plan: &VerificationPlanV1,
     root: &MemoryRootV1,
@@ -445,7 +446,7 @@ pub fn memory_bounds_v1(
     let steps = root.max_steps as u128;
     let evidence = 64 * 16 + 64 * (plan.max_positions as u128) * 2;
     let b = ProsecutionBoundsV1 {
-        max_public_bytes: base.max_public_bytes.saturating_add(m),
+        max_public_bytes: base.max_public_bytes.saturating_mul(steps).saturating_add(m),
         max_opening_bytes: base.max_opening_bytes,
         max_filing_bytes: base.max_filing_bytes.saturating_add(64),
         max_response_bytes: base.max_response_bytes.max(m.saturating_add(WIRE_HEADER_BYTES_V1 as u128)),
@@ -455,7 +456,9 @@ pub fn memory_bounds_v1(
             .saturating_add(64 * root.slots.len() as u128)
             .saturating_add(m),
         max_localization_rounds: 2,
-        max_court_work: base.max_court_work,
+        max_court_work: (base.max_court_work as u128)
+            .saturating_add(steps.saturating_mul(base.max_commit_bytes.saturating_add(evidence)).saturating_mul(16))
+            .min(u64::MAX as u128) as u64,
         max_verifier_ram: base.max_verifier_ram.saturating_add(m.saturating_mul(16)),
         // Every step's commitments and evidence, the boundary roots, the pre-state's commitments and the carried post-state (`M`).
         max_retained_state: steps
@@ -470,6 +473,12 @@ pub fn memory_bounds_v1(
     bounded("verifier RAM", b.max_verifier_ram, policy.max_verifier_ram)?;
     bounded("retained state", b.max_retained_state, policy.max_retained_state)?;
     bounded("concurrent sessions", b.max_concurrent_sessions as u128, policy.max_sessions_per_claim as u128)?;
+    bounded(
+        "exact memory localization work",
+        crate::plan::reexecution_bounds_v1(program, plan).0.saturating_mul(steps),
+        descriptor.limits.max_claim_verifier_work,
+    )?;
+    bounded("memory court work", b.max_court_work as u128, descriptor.limits.max_court_work as u128)?;
     Ok(b)
 }
 
@@ -493,14 +502,20 @@ pub fn retrieval_bounds_v1(
     let response = (s.slice_items as u128).saturating_mul(opening + 16).saturating_add(WIRE_HEADER_BYTES_V1 as u128);
     let retained = k * 144 + 64;
     let b = ProsecutionBoundsV1 {
-        max_public_bytes: response.saturating_add(retained),
+        max_public_bytes: retrieval_claim_material_bytes_v1(root).saturating_add(retained),
         max_opening_bytes: opening.min(u64::MAX as u128) as u64,
         max_filing_bytes: (opening + FILING_HEADER_BYTES_V1 as u128).min(u64::MAX as u128) as u64,
         max_response_bytes: response,
         max_commit_bytes: retained,
         max_localization_rounds: 2,
         max_court_work: (s.dim as u64).saturating_add(depth_v1(s.items) as u64).saturating_add(k as u64).saturating_add(16),
-        max_verifier_ram: response.saturating_add(opening).saturating_mul(16),
+        // The outsider authenticates and scans the entire snapshot before it knows a better excluded item. Include items,
+        // the rebuilt Merkle tree, score sorting, temporary clones and the one-slice decode buffer.
+        max_verifier_ram: retrieval_claim_material_bytes_v1(root)
+            .saturating_add(response)
+            .saturating_add(opening)
+            .saturating_add((s.items as u128).saturating_mul(256))
+            .saturating_mul(16),
         max_retained_state: crate::gate::retained_state_bound_v1(retained, response, s.slices().min(u32::MAX as u64) as u32),
         max_concurrent_sessions: s.slices().min(u32::MAX as u64) as u32,
         deadline_daa: policy.court_deadline_daa,
@@ -511,12 +526,20 @@ pub fn retrieval_bounds_v1(
     bounded("verifier RAM", b.max_verifier_ram, policy.max_verifier_ram)?;
     bounded("retained state", b.max_retained_state, policy.max_retained_state)?;
     bounded("concurrent sessions", b.max_concurrent_sessions as u128, policy.max_sessions_per_claim as u128)?;
+    bounded("exact retrieval localization work", retrieval_reexecution_work_v1(root), descriptor.limits.max_claim_verifier_work)?;
     Ok(b)
 }
 
 /// **What detecting a missed item costs** (the outsider's choice, never what G14 bounds): the whole snapshot.
 pub fn retrieval_claim_material_bytes_v1(root: &RetrievalRootV1) -> u128 {
     (root.snapshot.items as u128).saturating_mul(item_bytes(root))
+}
+
+fn retrieval_reexecution_work_v1(root: &RetrievalRootV1) -> u128 {
+    retrieval_claim_material_bytes_v1(root)
+        .saturating_mul(64)
+        .saturating_add((root.snapshot.items as u128).saturating_mul(root.snapshot.dim as u128).saturating_mul(128))
+        .saturating_add((root.snapshot.items as u128).saturating_mul(depth_v1(root.snapshot.items) as u128).saturating_mul(64))
 }
 
 /// **Composite bounds** (design §4): Σ over stages for public bytes, RAM, retained state and sessions; max for the rest; the edge
@@ -540,10 +563,15 @@ pub fn composite_bounds_v1(
         max_concurrent_sessions: 0,
         deadline_daa: policy.court_deadline_daa,
     };
+    let mut replay_work = 0u128;
     for (st, c) in root.stages.iter().zip(components) {
         let b = match c {
-            ComponentV1::Model(m) => m.bounds,
+            ComponentV1::Model(m) => {
+                replay_work = replay_work.saturating_add(crate::plan::reexecution_bounds_v1(&m.program, &m.plan).0);
+                m.bounds
+            }
             ComponentV1::Retrieval(r) => {
+                replay_work = replay_work.saturating_add(retrieval_reexecution_work_v1(r));
                 let mut b = retrieval_bounds_v1(r, descriptor, policy)?;
                 if let StageInputV1::Query(composite::QuerySourceV1::StageLogits { .. }) = st.input {
                     // The edge filing opens one i32 logits vector of the snapshot's key length.
@@ -567,6 +595,7 @@ pub fn composite_bounds_v1(
     bounded("verifier RAM", t.max_verifier_ram, policy.max_verifier_ram)?;
     bounded("retained state", t.max_retained_state, policy.max_retained_state)?;
     bounded("concurrent sessions", t.max_concurrent_sessions as u128, policy.max_sessions_per_claim as u128)?;
+    bounded("exact composite localization work", replay_work, descriptor.limits.max_claim_verifier_work)?;
     Ok(t)
 }
 

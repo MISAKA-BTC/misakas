@@ -73,8 +73,13 @@ fn a_binding() -> PalwStepBindingV2 {
 #[tokio::test]
 async fn t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their_bond_past_it() {
     let (config, _, premine, floats) = t12_with_harness_cards();
-    for armed in [false, true] {
+    for (armed, merkle) in [(false, true), (true, true), (true, false)] {
         let mut params = config.params.clone();
+        if !merkle {
+            params.palw_prompt_ids_merkle = None;
+            let PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else { unreachable!() };
+            bundle.trace_format_version = 3; // coherent Flat genesis form, solely for this gate fixture
+        }
         if armed {
             params.palw_legacy_held_da_v2 = Some(ForkActivation::new(0));
             assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fence; only this harness bypasses it");
@@ -154,7 +159,26 @@ async fn t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their
         };
         let gate = |object: &Obj| vp.palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(object));
         let walk = |objects: Vec<Obj>| vp.palw_v2_accepted_objects_for_tests(&state, &bundle.state, &point, objects, block);
-        let signed = [demand(claim, 2, 2), answer(claim, 3, 3), recompute(claim, 2, 2)];
+        let input_demand = |tokens: u32| {
+            let Obj::LegacyHeldDemandedV2 { mut demand } = demand(claim, 2, 2) else { unreachable!() };
+            demand.unit = PalwLegacyHeldUnitV2::PromptIds { chunk: 0 };
+            demand.binding.job_context.declared_prefill_tokens = tokens;
+            let message = palw_legacy_held_demand_message_v2(domain.as_byte_slice(), &demand);
+            demand.signature = signer(2)(message.as_byte_slice(), PALW_LEGACY_HELD_DEMAND_MLDSA87_CONTEXT_V2);
+            Obj::LegacyHeldDemandedV2 { demand }
+        };
+        let Obj::LegacyHeldAnsweredV2 { answer: mut input_answer } = answer(claim, 3, 3) else { unreachable!() };
+        input_answer.unit = PalwLegacyHeldUnitV2::PromptIds { chunk: 0 };
+        input_answer.answer = PalwLegacyHeldAnswerV2::PromptIds { ids: vec![0; 4], tree_root: None, siblings: vec![] };
+        let message = palw_legacy_held_answer_message_v2(domain.as_byte_slice(), &input_answer);
+        input_answer.signature = signer(3)(message.as_byte_slice(), PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
+        let signed = [
+            demand(claim, 2, 2),
+            answer(claim, 3, 3),
+            recompute(claim, 2, 2),
+            input_demand(4),
+            Obj::LegacyHeldAnsweredV2 { answer: input_answer },
+        ];
         // An int-12 answer (tag 55) that names the appended unit rides the same rule.
         let carrying = Obj::MaterialDisclosedV2 {
             claim,
@@ -179,6 +203,16 @@ async fn t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their
         }
         for object in &signed {
             gate(object).unwrap_or_else(|e| panic!("signed by the bond it names, past the fence: {e}"));
+        }
+        if !merkle {
+            for tokens in [100_000, u32::MAX] {
+                assert!(
+                    gate(&input_demand(tokens)).unwrap_err().contains("input response and binding cannot fit"),
+                    "a Flat unit beyond the single-carrier or court ceiling is refused before opening a DA session"
+                );
+            }
+        } else {
+            gate(&input_demand(100_000)).expect("Merkle answers stay bounded regardless of the total input count");
         }
         let other = Hash64::from_bytes([0x5D; 64]);
         let tamper = |object: &Obj, f: &dyn Fn(&mut Obj)| {

@@ -724,3 +724,76 @@ throughput option once K2-TIR-v5 carries G14.
   label and its rival are two leaves of the output, a multi-label decision is one element per label, a regression decision is the
   value, and a best span is the two logit rows of the span. That is DESIGN, and it needs an allocation (a claim field and a
   `SegFaultV1` variant). Until then a Head class's earning rests on the verified output alone.
+
+## 13. Status at handover (2026-10-10, lane K2S → codex)
+
+Branch `k2/real-scale`. Integration merged K2S at `8fae728a2` (integration `52868f3b9`), and this branch has merged `52868f3b9` back.
+
+**Verified** (k2s-e6/e7; logs `~/Downloads/MISAKA-wt-b/k2s-e6-*.log`, `k2s-e7-*.log`), at `8fae728a2`:
+- the encoder-court fix (§3.1): the leaf wire form at the dtype's width, complete pricing, the decode court priced;
+- the node module `g14_kernel_route_e2e/real_scale.rs`:
+  - the coalition test;
+  - GAP-30: the lie types (input, borrowed, garbage, decode), post-Final conviction, spam, simultaneous filers and duplicates, and reorg, restart and pruned import across tables 20/21;
+  - GAP-31: the dense-MoE class held at 8,192 positions;
+  - GAP-40: K2-TIR-v5 tiny BERT;
+- GAP-32 (`SaltedCommitV1::Segmented`), the A2U rows, and segmented `KernelPosition` units;
+- the canonical harness: 23/23.
+
+**Implemented, NOT compiled or tested — WIP commit after `52868f3b9`: DA16b option (c)** (§4.2, the Lead's decision):
+- `misaka-palw-kernel/src/seg_scope.rs`: the withheld mask (model-dependent and a whole-value court ≤ 1 MiB, closed-form price), `whole_value_court_cost_v1`, `seg_scope_report_v1` (`court_scope_complete()`: the explicit not-reward-bearing flag);
+- `seg_da`: `ChunkSpecV1::Withheld` / `ChunkBodyV1::Withheld = 2`; withheld values served as their node opening alone; `assemble_position_v1` now returns `(values, siblings, commitments)`; `position_material_v1` excludes withheld bytes;
+- `element.rs`:
+  - `SegFaultV1::WholeValue = 3` (`WholeValueFaultV1`, `WholeOperandV1`, `WholeTensorV1`), with its court in `verify_seg_fault_v1` and its prover `build_whole_value_fault`;
+  - `SegMaterialV1::{commitments, own}`, where `own` is the verifier's re-execution;
+  - loading replaces a withheld value by the verifier's own value when the commitments match, and records `unmatched` / `diverges` otherwise;
+  - `check_positions_v1` first checks a divergent predecessor;
+  - pricing takes the maximum of the element court and the whole-value court (`element_court_cost_masked_v1`), and `derive_budgets` computes the mask once;
+- tests updated: the kernel `element::tests` and `k2_real_scale` (own values, `fault.at()`); the SDK and node tests have their fault assertions rewritten to `fault.at()` / `fault.token()`.
+
+**Next steps, in order:**
+1. **Finish (c)'s test plumbing.**
+   - Node (`real_scale.rs`): `SegClaim` gains `own`, the honest trace over the BOUND prompt (for an input or borrowed lie, trace `bound ‖ g0`, not `traced`; for the held test, the kept positions).
+   - `SegDa` / `FromBlocks` implement `own()`; `FromBlocks` stores and serves the commitments of the new 3-tuple (`served_parts_from_blocks` callers and `serve_and_read`).
+   - SDK `Produced` gets `own` as well.
+   - Then ONE `--no-run` build: kernel `--lib` and `--test k2_real_scale`, SDK `k2s_encoder_court`, consensus `--lib`. Run the element tests, then `g14_kernel_route_e2e`.
+   - Add the Lead's tests: wide128 (d = 16, every model-dependent value withheld) and dense-MoE rows of 4 (windows at 1,024 withheld; at 2^18 clear, so the report says not complete).
+   - Expect pricing and number shifts: the class bounds grow by the whole-value courts. Re-measure §7 and §12.2 (the SDK geometry tests: 28 min).
+2. **(a) flat 64-element hiding tiles** for model-dependent values whose (c) court exceeds 1 MiB (every 9B/BGE activation). This is a v3 leaf-rule change for masked values plus leaf-hash DA, and the column-opening cost (≈ 64×) is charged in the price. Until it lands, `seg_scope_report_v1(..).court_scope_complete()` is false for those classes: they are not reward-bearing.
+3. **Chunked carriage on tag 113** (`KernelRouteChunkV1`) for `Respond` parts and v5 registrations. The tests use generic `ObjectChunk`s at 100,000 B today. Make the court deadline count the chunks a terminal needs, and add a maximal-`Respond` terminal-before-deadline test.
+
+**Traps:**
+- `seg_withheld_mask_v1` runs in `PreparedV1::new` and in every `position_parts_v1`. It is closed-form, but measure it on the 9B.
+- A withheld value without `own()` is `Inconsistent`, never a verdict.
+- The A2U pins for 109/113 and `TakeoverToken` belong to the integration head (the Lead's).
+
+## 14. Codex completion of the small-value court (2026-10-10)
+
+This section supersedes §13's untested `own()` plumbing proposal. The review branch merges WIP `4a6f20aaf` on top of integration
+`3730cc90f` and the public-replay/resource fixes. The evidence and remaining gaps are in
+[`docs/audit/g14-review-2026-10-10/implementation.md`](../../audit/g14-review-2026-10-10/implementation.md).
+
+* `SegMaterialV1` supplies public material and commitments only. It cannot supply trusted verifier-owned values. The checker derives
+  those internally from the authenticated job and the verifier's registered model (ADR-0177 D7). A source cannot make a fraudulent
+  claim appear clean by supplying the same fraudulent tensor as both public and supposedly independent material.
+* The root descent locates the first differing position. Its court authenticates the public positions before a second prefix replay;
+  missing or partial DA responses do not trigger repeated model execution. This replay retains only the selected withheld values.
+  Checking a later position whose predecessor differs returns a localization error instead of reading an unpriced arbitrary prefix.
+* A `WholeValue` filing is accepted only for a node whose whole-value court is priced. Its work includes the contraction of every
+  matrix-product output, repeated TopK work and output commitment hashing. Both the 1 MiB filing bound and a work ceiling determine
+  the withheld mask. A small proof cannot invoke a whole-value execution on a large unpriced node.
+* Fully opened element-proof construction authenticates every supplied value against the claim's root; it does not need a model
+  replay per proof and does not return a correctness verdict. Correctness checking always uses the independent model replay.
+* The node's block reader preserves `(values, siblings, commitments)` from the DA assembler. Whole-value courts use commitments for
+  omitted values, not hashes of the assembler's zero placeholders. The small wide128 and windowed dense/MoE fixtures serve no clear
+  model-dependent values, yet a model holder localizes an unknown fault and files a conviction.
+* RAM includes simultaneously held public positions, the current/previous replay positions, appended history rows, retained selected
+  values and court temporaries. A one-position encoder has no previous position. The shape-only 9B/8k bound is 67,191,831,824 B under
+  the 68,719,476,736 B ceiling; this is not an actual model execution or measured allocator peak. BGE-base at 512 tokens requires
+  69,698,109,792 B by this implementation's conservative formula and is refused. The SDK's configuration report distinguishes
+  supported configurations from resource refusals, and separates claim-carrier bytes from all retained progress/participant state.
+
+**Still open:** large model-dependent values continue to be served clear; flat hiding tiles are not implemented.
+`seg_scope_report_v1().court_scope_complete()` is a report, not a wired reward-eligibility gate. In particular §13's wording that the
+flag already prevents a class from earning was incorrect. Cumulative scope for the older route, adaptive deadlines and maximum
+chunked response inclusion remain open. These small-value court tests do not establish full G14 or authorize activation.
+- `palw_onboarding_v1::onboarding_gate_v1` was fixed here (`dbc6b24d6`).

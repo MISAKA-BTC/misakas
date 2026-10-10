@@ -1,0 +1,34 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-kernel)
+warning: unused variable: `nodes`
+   --> misaka-palw-kernel/tests/k2_real_scale.rs:713:9
+    |
+713 |     let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_nodes`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-kernel` (test "k2_real_scale") generated 1 warning (run `cargo fix --test "k2_real_scale" -p misaka-palw-kernel` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.54s
+     Running tests/k2_real_scale.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_real_scale-cefa5ee20d4c5c8f)
+
+running 10 tests
+test k2s_every_tile_and_part_constant_fits_the_node_carrier ... ok
+test k2s_the_gate_rederives_the_plan_and_prices_decoded_working_memory_and_all_progress ... ok
+test k2s_raw_tensor_aliases_of_public_bytes_cannot_authenticate ... ok
+[k2s] 9B-8k K2-TIR-v2: 838 relations, worst court 2034245636 B; gate refuses: [Unbounded { what: "public bytes", required: 12625164403592, limit: 1099511627776 }, Unbounded { what: "court work", required: 178957868080, limit: 68719476736 }, Unbounded { what: "verifier RAM", required: 11652568349141744, limit: 68719476736 }, Unbounded { what: "retained state", required: 12608414277632, limit: 4294967296 }, Unbounded { what: "concurrent sessions", required: 8192, limit: 1024 }]
+test k2s_full_shared_demand_and_join_limits_do_not_block_an_outside_proof_or_default ... ok
+test k2s_a_withheld_position_is_demanded_then_defaults_never_a_conviction ... ok
+[k2s] wide128 @8192: filing 3023 B (bound 22202), public bytes per prosecution 12676507, position material 1104 B, parts 1
+test k2s_a_lie_in_one_segment_is_localized_to_one_element_and_convicted_with_bounded_bytes ... ok
+test k2s_a_position_is_served_in_parts_and_its_demand_bonds_wait_for_the_grace ... ok
+test k2s_a_tiled_prompt_past_4096_ids_commits_as_a_multi_segment_claim_and_an_honest_one_finalizes ... ok
+[k2s] SG-06 re-execution check: 4501 positions, divergent position Some(3000) after 7 position paths, material read 2208 B (positions [2999, 3000]), filing 3151 B
+test k2s_a_reexecuting_verifier_finds_any_lie_with_certainty_reading_two_positions ... ok
+[k2s] GAP 8: a 9B-8k class row rebuilds in 1.64225ms (program decode, 32640 B) + 7.8814035s (the v4 gate), this build (debug: true)
+[k2s] 9B-8k K2-TIR-v4: eps <= 2^-150; nodes/position 13323; segments 8; position material 2341827961 B in 2294 parts; claim material (producer DA) 19184254656512 B; per prosecution: public 21843011715 B, RAM 55528466948 B, sessions 2, rounds 12; worst element court 170432 B / work 35511 (block 3 node 41); response 1048576 B; retained on chain 276099584 B
+test k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers has been running for over 60 seconds
+[k2s] 9B @262144: gate refuses [Unbounded { what: "retained state (on chain, per claim)", required: 8834043904, limit: 4294967296 }]
+[k2s] 9B @2097152: check_plan BOUNDS_EXCEEDED — BOUNDS_EXCEEDED: positions 2097152 > limit 262144
+test k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 68.04s

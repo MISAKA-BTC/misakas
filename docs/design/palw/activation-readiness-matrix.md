@@ -15,6 +15,8 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 
 Today **no fence is armable**. Integration continues; no new fence for rewards, consensus weight or Panel=0 is armed.
 
+**Codex G14 input-proof update:** the common legacy filer now generates `PromptNotAnchored Whole` from a public authenticated binding and the recorded anchor for canonical prompts past 4,096 ids. Direct-proof hashing runs on a blocking worker under a host-memory reservation; the existing heavy gate and rent remain in force. Synthetic 65k/2M-context input checks and actual attribution after all Panel seats signed Valid, before/after Final, pass (LG14-B: 9 V-fold + 2 V-unit). This is not maximum-model execution, normal production eligibility or fresh-node service/mempool completion. See the [audit record](../../audit/g14-review-2026-10-10/implementation.md).
+
 ## 1. Fences
 
 | Fence (RFC) | Today | Blockers | Owner / next step |
@@ -201,6 +203,13 @@ behind new dormant fences, because the route is ARMED on testnet-12 and the live
   consistent-garbage-trace (row 0) / borrowed-trace / state / routing / checkpoint / output cases.
 Until both lanes' fences are verified, legacy classes are "not Panel=0, not new-reward eligible".
 
+Codex review branch update (2026-10-10): the common filer now hands public binding identity/shape faults and authenticated
+output token pins to the existing kind-4 reporter door, before subtree descent. It compares execution, trace AND output roots
+before clearing a replay as honest. Wrong-job conviction before/after Final is V-fold; output/count proof builders and pin-cache
+poisoning rejection are V-unit. This does not complete long-prompt input proof wiring, checkpoint/trace localization, public
+free-prompt startup, post-retirement discovery, all-family eligibility or the full service V-node run. The latest scope/logs are
+in `docs/audit/g14-review-2026-10-10/implementation.md`. Fences remain dormant.
+
 ## 3e. Round / EXEC additional acceptance conditions (user, 2026-10-10)
 
 The user adopted `docs/palw-round-exec-additional-acceptance-2026-10-10.md`:
@@ -283,9 +292,10 @@ on a real 5-position claim (3,570 placements per mode, isolated and self-consist
 | Sampled conformance; legacy V2 under full collusion | ~0 / 0 | FAIL |
 | v4 route B on a `q`-sample of claims | `q·(1−ε_src)` at best; the draw is not wired | UNKNOWN |
 
-New blocking finding **F-B1**: generation length is bound by no rule (`job.rs` accepts 1..`max_new_tokens`, reward is per claim),
-so a 1-token claim earns the full reward with no court able to convict it. It is a T1 FAIL for v1–v4 and pipelines until the job
-fixes the length or pay is per verified position. Also open: N1 (conformance logits and commit digests have no court),
+**F-B1 is fixed in the Codex review branch**: `generation_length_matches_v1` requires exactly the job's positive
+`max_new_tokens` at admission for generative v1–v4 and pipelines. A short correct prefix is refused before reward eligibility;
+non-generative zero-output routes keep their own rule. The historical wire name is unchanged, but this dormant semantic
+tightening still requires consensus review. This closes the length-binding counterexample only. Also open: N1 (conformance logits and commit digests have no court),
 F-B3 (grinding uses the exact escape `1−(1−ε_sel)^G`), F-B4 (interim Panel seeds can be ground from the claim id),
 F-B5 (legacy samplers are slightly biased) and F-B6 (sampled conformance has no power against sparse faults).
 

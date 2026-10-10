@@ -55,7 +55,8 @@ impl DecodeRuleV1 {
 pub struct KernelJobV1 {
     pub class_binding_id: Digest,
     pub prompt: Vec<u32>,
-    /// At most this many generated tokens (at least one is always delivered).
+    /// Exactly this many generated tokens. The wire field keeps its historical name; Greedy has no committed EOS/stop rule.
+    /// A shorter claim cannot satisfy the job and collect its fixed reward (PESG F-B1).
     pub max_new_tokens: u32,
     pub decode: DecodeRuleV1,
     /// The requester's nonce: two identical requests are two jobs.
@@ -127,7 +128,7 @@ pub enum BindingFaultV1 {
     WrongInput,
     /// The evidence covers another number of positions than prompt + generated − 1.
     WrongLength,
-    /// No token, or more than the job allows.
+    /// The delivered length differs from the job's required generation length.
     WrongGenerationLength,
     /// A delivered token is past the class's token bound.
     TokenOutOfRange,
@@ -150,7 +151,7 @@ pub fn binding_fault_v1(
     if evidence.header.class_binding_id != job.class_binding_id {
         return Some(F::WrongClass);
     }
-    if claim.generated.is_empty() || claim.generated.len() as u64 > job.max_new_tokens as u64 {
+    if !generation_length_matches_v1(job.max_new_tokens, claim.generated.len()) {
         return Some(F::WrongGenerationLength);
     }
     if claim.generated.iter().any(|t| *t >= token_bound) {
@@ -164,6 +165,12 @@ pub fn binding_fault_v1(
         return Some(F::WrongInput);
     }
     None
+}
+
+/// The fixed-work generation contract used by every generative kernel route. Until a stop/EOS rule is committed and verified,
+/// completing fewer tokens is not an alternative completion of the same fixed-reward job. Non-generative jobs use their own rule.
+pub fn generation_length_matches_v1(required: u32, delivered: usize) -> bool {
+    required > 0 && u64::try_from(delivered).ok() == Some(u64::from(required))
 }
 
 /// **A decode fault**: delivered token `r` is not the decode rule applied to the committed logits that select it.

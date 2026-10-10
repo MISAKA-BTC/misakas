@@ -16839,6 +16839,9 @@ mod t12_tir_registration_cap;
 mod g14_registration_e2e;
 // G14 lane D phase 2: the kernel route folded into PalwChainStateV2 -- a covered lie convicted by a fresh outsider through the real node path.
 mod g14_kernel_route_e2e;
+// Lane LG14-A: the legacy V2 route under G14 -- a bond registered after genesis reserves, localizes and convicts a lie every seat
+// signed Valid (before and after Final), defaults a withheld unit, is dismissed on an honest claim, survives restart / reorg / replay.
+mod lg14a_legacy_filer_e2e;
 // RFC-0004 Part II: computation specifications with typed roots on the real node -- Weights byte for byte, Memory, Retrieval,
 // Composite, each lie convicted by an outsider and each withholding a default.
 mod r4x_typed_roots_e2e;

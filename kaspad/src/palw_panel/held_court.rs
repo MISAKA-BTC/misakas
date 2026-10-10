@@ -61,6 +61,7 @@ use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
 use kaspa_consensus_core::palw_court_v2::{PalwAttnDisputeSiteV2, PalwCourtVerdictProofV2};
 use kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2;
+use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1;
 use kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2;
 
@@ -894,6 +895,9 @@ struct PalwHeldSessionV1 {
     /// Every demanded chunk is disclosed on chain: no more disclosure reads.
     disclosed_all: bool,
     rows: Option<PalwHeldRowsV1>,
+    history: Option<PalwHeldHistoryWalkV1>,
+    /// Oldest authenticated root and selected chunk answers; a partial suffix cannot choose the first standing root filing.
+    history_pending: BTreeMap<PalwHeldHistoryObjectKeyV1, PalwConsensusObjectV2>,
 }
 
 /// **Step 6 that outlives its session** (the forger's race): a consistent forger's own node files
@@ -920,6 +924,81 @@ pub(crate) struct PalwHeldChainReadV1 {
     pub session_id: Hash64,
     pub claim_id: Hash64,
     pub not_before_daa: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PalwHeldHistoryWalkV1 {
+    pub floor: u64,
+    pub anchor: Hash64,
+    pub next: Option<Hash64>,
+    pub selection: Hash64,
+}
+
+#[derive(Debug)]
+pub(crate) struct PalwHeldHistoryPageV1 {
+    pub walk: PalwHeldHistoryWalkV1,
+    pub reset: bool,
+    pub rewind: bool,
+    /// Oldest authenticated filing and one authenticated answer per selected chunk, bounded independently of carriers.
+    pub objects: BTreeMap<PalwHeldHistoryObjectKeyV1, PalwConsensusObjectV2>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum PalwHeldHistoryObjectKeyV1 {
+    Root,
+    Chunk { checkpoint: u32, chunk: u32 },
+}
+
+pub(crate) fn palw_held_history_selection_v1(duty: &PalwCourtDutyV2, needed: &[PalwHeldStep6UnitV1], cap: u64) -> Hash64 {
+    let mut units: Vec<_> = needed.iter().map(|u| (u.checkpoint, u.chunk_index)).collect();
+    units.sort_unstable();
+    units.dedup();
+    let bytes =
+        borsh::to_vec(&(duty.execution_root, duty.class_id, duty.artifact_root, duty.terminal_index, cap, units)).expect("borsh");
+    let digest = blake2b_simd::Params::new().hash_length(64).key(b"misaka-node/held-history-selection/v1").hash(&bytes);
+    Hash64::from_bytes(digest.as_bytes().try_into().expect("64 bytes"))
+}
+
+/// Authenticate before accumulating a page. An accepted carrier may contain a refused object, and arbitrary disclosures about
+/// this claim do not belong to this session's cache. Only its first standing filing and its selected step-6 chunks can be read.
+pub(crate) fn palw_held_history_object_key_v1(
+    object: &PalwConsensusObjectV2,
+    duty: &PalwCourtDutyV2,
+    needed: &[PalwHeldStep6UnitV1],
+    opening_cap: u64,
+) -> Option<PalwHeldHistoryObjectKeyV1> {
+    if matches!(object, PalwConsensusObjectV2::CourtAttnRootClaimedHeld { .. }) {
+        return palw_held_filing_of_duty_v1(std::slice::from_ref(object), duty, opening_cap).map(|_| PalwHeldHistoryObjectKeyV1::Root);
+    }
+    use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+    use kaspa_consensus_core::palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1};
+    let carriage = match object {
+        PalwConsensusObjectV2::MaterialDisclosedV2 {
+            claim,
+            unit: PalwDaUnitV1::Held(missing),
+            answer: PalwDaAnswerV1::Held(carriage),
+            ..
+        } if *claim == duty.claim_id && *missing == carriage.missing => carriage,
+        PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure } if disclosure.claim == duty.claim_id => disclosure,
+        _ => return None,
+    };
+    let PalwHeldMissingV1::StateChunk { checkpoint, chunk } = carriage.missing else { return None };
+    if !needed.iter().any(|unit| unit.checkpoint == checkpoint && unit.chunk_index == chunk)
+        || !matches!(carriage.disclosure, PalwHeldDisclosureV1::StateChunk { .. })
+        || carriage.binding.shape_profile.shape_profile_id() != duty.class_id
+    {
+        return None;
+    }
+    kaspa_consensus_core::palw_held_da_v1::palw_held_da_check_disclosure_v1(
+        &duty.execution_root,
+        &carriage.missing,
+        &carriage.binding,
+        &carriage.disclosure,
+        opening_cap,
+        PalwPromptIdsFormV1::MerkleV1,
+    )
+    .ok()?;
+    Some(PalwHeldHistoryObjectKeyV1::Chunk { checkpoint, chunk })
 }
 
 /// An item the route queues: its `court_pending` key, the DAA it is due by, and the object.
@@ -965,6 +1044,8 @@ impl PalwHeldCourtV1 {
             demanded: HashMap::new(),
             disclosed_all: false,
             rows: None,
+            history: None,
+            history_pending: BTreeMap::new(),
         });
         entry.named_daa = entry.named_daa.max(current_daa);
         entry
@@ -1067,6 +1148,10 @@ impl PalwHeldCourtV1 {
         let mut reads = Vec::new();
         for duty in duties.iter().filter(|duty| !duty.i_am_responder && duty.dissection.is_some()) {
             let session = self.sessions.get(&duty.session_id);
+            if let Some(walk) = session.and_then(|s| s.history).filter(|walk| walk.next.is_some()) {
+                reads.push(PalwHeldChainReadV1 { session_id: duty.session_id, claim_id: duty.claim_id, not_before_daa: walk.floor });
+                continue;
+            }
             let objects = session.map(|s| s.objects.as_slice()).unwrap_or(&[]);
             if palw_held_filing_of_duty_v1(objects, duty, host.opening_cap(&duty.class_id, current_daa)).is_none() {
                 if session.and_then(|s| s.looked_daa).is_none_or(|at| current_daa >= at.saturating_add(HELD_CHAIN_RELOOK_DAA)) {
@@ -1088,6 +1173,14 @@ impl PalwHeldCourtV1 {
                 continue;
             }
             let session = self.sessions.get(session_id);
+            if let Some(walk) = session.and_then(|s| s.history).filter(|walk| walk.next.is_some()) {
+                reads.push(PalwHeldChainReadV1 {
+                    session_id: *session_id,
+                    claim_id: pursuit.duty.claim_id,
+                    not_before_daa: walk.floor,
+                });
+                continue;
+            }
             if let Some(record) = pursuit.record.as_ref() {
                 let objects = session.map(|s| s.objects.as_slice()).unwrap_or(&[]);
                 if palw_held_filing_of_duty_v1(objects, &pursuit.duty, host.opening_cap(&pursuit.duty.class_id, current_daa)).is_none()
@@ -1121,9 +1214,80 @@ impl PalwHeldCourtV1 {
     /// session already holds (a disclosure read starts at the demand, past the root claims).
     pub(crate) fn note_chain_v1(&mut self, session_id: Hash64, objects: Vec<PalwConsensusObjectV2>, current_daa: u64) {
         let session = self.session_mut(session_id, current_daa);
-        let known: HashSet<Hash64> = session.objects.iter().map(palw_held_object_digest_v1).collect();
-        session.objects.extend(objects.into_iter().filter(|object| !known.contains(&palw_held_object_digest_v1(object))));
+        let mut known: HashSet<Hash64> = session.objects.iter().map(palw_held_object_digest_v1).collect();
+        session.objects.extend(objects.into_iter().filter(|object| known.insert(palw_held_object_digest_v1(object))));
         session.looked_daa = Some(current_daa);
+    }
+
+    pub(crate) fn history_walk_v1(&self, session_id: Hash64) -> Option<PalwHeldHistoryWalkV1> {
+        self.sessions.get(&session_id).and_then(|s| s.history)
+    }
+
+    pub(crate) fn history_anchors_v1(&self, duties: &[PalwCourtDutyV2]) -> Vec<(Hash64, Hash64, Hash64)> {
+        let mut claims: BTreeMap<_, _> = duties.iter().map(|d| (d.session_id, d.claim_id)).collect();
+        claims.extend(self.pursuits.iter().map(|(sid, p)| (*sid, p.duty.claim_id)));
+        claims.into_iter().filter_map(|(sid, claim)| self.history_walk_v1(sid).map(|walk| (sid, claim, walk.anchor))).collect()
+    }
+
+    /// A cached filing also needs its branch checked when no new disclosure read is due. Keep its old floor for backfill,
+    /// discard its challenger build and suppress the previous branch's queued moves before the next planner runs.
+    pub(crate) fn invalidate_history_v1(&mut self, session_id: Hash64, claim: Hash64) {
+        self.evidence.retain(|key, _| key.0 != claim || key.2);
+        if let Some(session) = self.sessions.get_mut(&session_id) {
+            session.objects.clear();
+            session.history_pending.clear();
+            session.rows = None;
+            session.disclosed_all = false;
+            session.looked_daa = None;
+            if let Some(walk) = &mut session.history {
+                walk.next = Some(walk.anchor);
+            }
+        }
+    }
+
+    pub(crate) fn filing_v1(&self, duty: &PalwCourtDutyV2, opening_cap: u64) -> Option<(Hash64, PalwAttnHeldFilingV1)> {
+        let objects = self.sessions.get(&duty.session_id).map(|s| s.objects.as_slice()).unwrap_or(&[]);
+        palw_held_filing_of_duty_v1(objects, duty, opening_cap)
+    }
+
+    pub(crate) fn history_filter_v1(
+        &self,
+        duties: &[PalwCourtDutyV2],
+        session_id: Hash64,
+    ) -> Option<(PalwCourtDutyV2, Vec<PalwHeldStep6UnitV1>)> {
+        let pursuit = self.pursuits.get(&session_id);
+        let duty = duties.iter().find(|d| d.session_id == session_id).or_else(|| pursuit.map(|p| &p.duty))?.clone();
+        let mut units: Vec<_> = self.sessions.get(&session_id).map(|s| s.demanded.keys().copied().collect()).unwrap_or_default();
+        if let Some(pursuit) = pursuit {
+            units.extend(pursuit.units.iter().copied().filter(|unit| !units.contains(unit)).collect::<Vec<_>>());
+        }
+        Some((duty, units))
+    }
+
+    /// Publish a completed anchored walk's earliest standing root and selected chunk answers. A partial suffix remains private;
+    /// missing data leaves the walk unchanged. On another branch, old filings and challenger evidence must be read and built again.
+    pub(crate) fn note_history_page_v1(&mut self, session_id: Hash64, claim_id: Hash64, page: PalwHeldHistoryPageV1, daa: u64) {
+        if page.reset {
+            self.evidence.retain(|key, _| key.0 != claim_id || key.2);
+        }
+        let session = self.session_mut(session_id, daa);
+        if page.rewind {
+            session.history_pending.clear();
+        }
+        if page.reset {
+            session.objects.clear();
+            session.history_pending.clear();
+            session.looked_daa = None;
+            session.rows = None;
+            session.disclosed_all = false;
+        }
+        session.history = Some(page.walk);
+        // Each next page is older, so replacing the root retains the earliest filing across the whole anchored walk.
+        session.history_pending.extend(page.objects);
+        if page.walk.next.is_none() {
+            let objects = std::mem::take(&mut session.history_pending).into_values().collect();
+            self.note_chain_v1(session_id, objects, daa);
+        }
     }
 
     /// Note `duty` as wanting its evidence built, unless it is building, built, or failed inside a
@@ -1702,8 +1866,7 @@ pub(crate) fn palw_held_start_builds_v1<H: PalwHeldHostV1>(host: &H, held: &mut 
         } else if rows {
             held.evidence.get(&key).and_then(|entry| entry.filing.clone())
         } else {
-            let objects = held.sessions.get(&duty.session_id).map(|s| s.objects.clone()).unwrap_or_default();
-            palw_held_filing_of_duty_v1(&objects, &duty, host.opening_cap(&duty.class_id, current_daa))
+            held.filing_v1(&duty, host.opening_cap(&duty.class_id, current_daa))
         };
         if !duty.i_am_responder && filing.is_none() {
             trace!("[{PALW_PANEL}] session {}: no standing held root claim of the accused's on chain yet", duty.session_id);
@@ -2278,7 +2441,7 @@ mod tests {
         assert!(begin < route && route < pushed && pushed < dense_resolve && dense_resolve < dense, "routed before the dense builder");
         assert!(production[pushed..pushed + 120].contains("continue;"), "the held route ends the duty's iteration");
         assert!(dense < reads && reads < moves && moves < dated && dated < started, "read, move, date, build — after the loop");
-        let reader = production.find("fn attn_held_objects_from_chain_v1(").expect("the held reader");
+        let reader = production.find("fn attn_held_objects_page_from_chain_v1(").expect("the held paged reader");
         assert!(reader > production.find("fn attn_root_filings_from_chain_v1(").expect("the anchored reader"), "beside it");
         assert!(production.contains("PalwAttnHeldFilingV1::from_object_v1(object)"), "the sub-roots read off the object");
         let carry = &production[production.find("    async fn carry_priority_v1(").expect("the priority lane")..];
