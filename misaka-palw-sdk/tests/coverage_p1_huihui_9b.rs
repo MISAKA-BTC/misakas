@@ -176,7 +176,6 @@ fn k2_route(program: &misaka_palw_tir::program::TirProgramV1, positions: u32) {
     use misaka_palw_kernel::public::ProfileMaterialV1;
     let bytes = program.encode();
     let root = misaka_palw_kernel::public::program_root_v1(&bytes);
-    let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
     let policy = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default());
     let carrier = kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1;
     for (name, d) in [("K2-TIR-v1", k2_tir_v1_descriptor()), ("K2-TIR-v2", k2_tir_v2_descriptor())] {
@@ -207,7 +206,7 @@ fn k2_route(program: &misaka_palw_tir::program::TirProgramV1, positions: u32) {
             ),
             Err(o) => println!("      check_plan_v1 (armed): {} — {}", o.code(), o.to_string().chars().take(500).collect::<String>()),
         }
-        match public_prosecution_complete_v1(&d, &plan, nodes, &ProfileMaterialV1::kernel_route(true), &policy.prosecution) {
+        match public_prosecution_complete_v1(&d, program, &plan, &ProfileMaterialV1::kernel_route(true), &policy.prosecution) {
             Ok(g) => {
                 println!(
                     "      public_prosecution_complete_v1: PASS — public {} B, opening {} B, filing {} B, response {} B, court work {}, verifier RAM {} B, retained {} B, sessions {}",
@@ -232,6 +231,53 @@ fn k2_route(program: &misaka_palw_tir::program::TirProgramV1, positions: u32) {
                 }
             }
             Err(gaps) => println!("      public_prosecution_complete_v1: REFUSED — {gaps:?}"),
+        }
+    }
+    // Lane K2S: K2-TIR-v4 (`docs/design/palw/k2-real-scale.md`) — segmented commitments, element courts, per-prosecution bounds.
+    let v4 = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor();
+    let armed = KernelScheduleV1::default().with(v4.digest(), KernelStatusV1::Active { since_daa: 0 });
+    match plan_for_tir_program_v1(&v4, program, root, positions) {
+        Err((family, why)) => println!("    K2-TIR-v4 @{positions}: KERNEL_EXTENSION_REQUIRED ({}: {why})", family.name()),
+        Ok(plan) => {
+            match check_plan_v1(&armed, &v4, program, root, &plan, 0) {
+                Ok(a) => println!("    K2-TIR-v4 @{positions}: check_plan_v1 (armed) PASS — eps <= 2^-{}", a.error_bits),
+                Err(o) => println!(
+                    "    K2-TIR-v4 @{positions}: check_plan_v1 {} — {}",
+                    o.code(),
+                    o.to_string().chars().take(400).collect::<String>()
+                ),
+            }
+            match misaka_palw_kernel::gate::public_prosecution_complete_v4(
+                &v4,
+                &plan,
+                program,
+                &ProfileMaterialV1::kernel_route(true),
+                &policy.prosecution,
+            ) {
+                Ok((g, seg)) => {
+                    println!(
+                        "      public_prosecution_complete_v4: PASS — per prosecution public {} B, worst element court {} B / work {}, filing {} B, response {} B, RAM {} B, sessions {}, retained on chain {} B; position material {} B in {} parts, {} values/position, {} segments, claim material (producer DA) {} B",
+                        g.max_public_bytes,
+                        g.max_opening_bytes,
+                        g.max_court_work,
+                        g.max_filing_bytes,
+                        g.max_response_bytes,
+                        g.max_verifier_ram,
+                        g.max_concurrent_sessions,
+                        g.max_retained_state,
+                        seg.position_material_bytes,
+                        seg.parts_per_position,
+                        seg.node_count,
+                        seg.segments,
+                        seg.claim_material_bytes
+                    );
+                    match misaka_palw_kernel::ledger::carrier_fit_v1(&g, carrier, carrier, carrier) {
+                        Ok(()) => println!("      carrier_fit_v1 ({carrier} B): PASS"),
+                        Err(e) => println!("      carrier_fit_v1 ({carrier} B): REFUSED — {e}"),
+                    }
+                }
+                Err(gaps) => println!("      public_prosecution_complete_v4: REFUSED — {gaps:?}"),
+            }
         }
     }
 }

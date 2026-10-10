@@ -47,7 +47,9 @@ pub fn opv_example() -> OpvPolicyV1 {
             assumed_detection_permille: 500,
             max_live_claims_per_producer: 3,
             max_live_claims_total: 5,
+            fresh_producer_slots: 2,
             default_burn_permille: 100,
+            admission_fee: 3,
         },
         carrier: CarrierCapsV1 { filing_cap: 1 << 26, response_cap: 1 << 27, commit_cap: 1 << 27 },
     }
@@ -107,7 +109,15 @@ impl World {
             params: fx.params,
         };
         let mut txs: Vec<LedgerTxV1> = Vec::new();
-        for (b, c) in [(PRODUCER, 5000), (OUTSIDER, 1000), (SPAM1, 1000), (SPAM2, 1000), (HONEST, 3000), (SQUATTER, 3000)] {
+        for (b, c) in [
+            (PRODUCER, 5000),
+            (OUTSIDER, 1000),
+            (SPAM1, 1000),
+            (SPAM2, 1000),
+            (HONEST, 3000),
+            (SQUATTER, 3000),
+            (super::chain::POSTER, super::chain::POSTER_COLLATERAL),
+        ] {
             txs.push(LedgerTxV1::SyncBond { bond: b, collateral: c });
         }
         txs.extend(register_in(&w, VerificationModeV1::OptimisticPublicVerification, PRODUCER));
@@ -184,6 +194,7 @@ impl World {
                 super::ledger_world::bond(OUTSIDER, 1000),
                 super::ledger_world::bond(SPAM1, 1000),
                 super::ledger_world::bond(SPAM2, 1000),
+                super::ledger_world::bond(super::chain::POSTER, super::chain::POSTER_COLLATERAL),
                 w.register(),
             ],
         );

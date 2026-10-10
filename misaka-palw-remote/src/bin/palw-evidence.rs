@@ -9,7 +9,8 @@
 //!   palw-evidence redemption-publish --file <RDA4 bundle> --providers <list> [--min-verified N]       (the miner, once, before switching off)
 //!   palw-evidence redemption-sync    --providers <list> --into <dir> [--network-domain <hex>] [--now-daa N]   (a builder: fills --palw-redemption-auth-dir)
 //!
-//!   (DA16, the public artifact — every leaf checked against the CHAIN's roots: the class id and artifact root you pass)
+//!   (DA16, the public artifact — every leaf checked against the CHAIN's roots: the class id and artifact root you pass. NON-CONSENSUS,
+//!   optional off-chain tooling since ADR-0177: no court or lease backs it, and the chain never reads its result)
 //!   palw-evidence artifact-fetch  --network-domain <hex> --class <hex> --artifact-root <hex> [--kernel-root <hex>] --providers <list> --into <dir>
 //!   palw-evidence artifact-verify --network-domain <hex> --class <hex> --artifact-root <hex> --kernel-root <hex> --providers <list>
 //!   palw-evidence artifact-status --network-domain <hex> --class <hex> --artifact-root <hex> --providers <list>

@@ -1351,7 +1351,10 @@ mod tests {
         let candidates = palw_improve_tamper_spec_v1("output/candidate").expect("a spec");
         let parents = palw_improve_tamper_spec_v1("output/parent").expect("a spec");
         assert_eq!(members(None, PalwImproveLieV1::Idle).len(), 3, "no lie: the whole item batches");
-        assert!(members(Some(&candidates), PalwImproveLieV1::Idle).is_empty(), "a candidate's task is the lie's: none of them batches");
+        assert!(
+            members(Some(&candidates), PalwImproveLieV1::Idle).is_empty(),
+            "a candidate's task is the lie's: none of them batches"
+        );
         assert_eq!(members(Some(&parents), PalwImproveLieV1::Idle).len(), 3, "a lie about parents leaves candidates alone");
         let pending = PalwImproveLieV1::Pending { job: Hash64::default() };
         assert_eq!(members(Some(&candidates), pending).len(), 3, "a lie in flight: the rest batch");

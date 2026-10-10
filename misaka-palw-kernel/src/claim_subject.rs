@@ -77,6 +77,19 @@ impl KernelLedgerV1 {
                     claim_commitment_root_v1(claim, &evidence.root()),
                 ))
             }
+            // K2-TIR-v4: no state roots (continuity is by wiring); the input is the prompt's tile root and the fed ids.
+            ClaimBodyV1::Segmented { evidence, .. } => {
+                let class = self.classes.get(&row.class_binding_id)?;
+                Some(base(
+                    class.descriptor.digest(),
+                    class.plan.root(),
+                    program_root_v1(&class.program_bytes),
+                    class.param_commitments.root(),
+                    evidence.job_input_root,
+                    RootV1::Absent,
+                    claim_commitment_root_v1(claim, &evidence.root()),
+                ))
+            }
             ClaimBodyV1::Pipeline { evidence, .. } => {
                 let class = self.pipeline_classes.get(&row.class_binding_id)?;
                 let artifacts = object_id(CLAIM_SUBJECT_ARTIFACTS_DOMAIN_V1, &class.binding.artifact_roots);

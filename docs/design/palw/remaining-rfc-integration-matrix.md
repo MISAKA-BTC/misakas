@@ -82,19 +82,49 @@ wire/fence impact · test · real-node result · status.
 | existing (pre) | positional ≤ 82, declared 83–95, 100–103 | … ≤ 150 (150 = lane MU seat root readiness) | 0x87–0xDA (see `PALW_CARRIAGE_*`), 0xE0, 0xE1, 0xE4, 0xE6, 0xEA, 0xEB | — |
 | RFC-0009 provider court (DA16) | **150–153 used** (lease, challenge, answer, transfer) | 140–141 **released** | 0xE9 **released** (rows ride kernel route aux 43–45, delta 160, tail 0xEC) | `palw_provider_court_v1` (dormant) |
 | Kernel route (A, G14) | 110–119 (110–112 used; **113 reserved for G14-R4** accusation seal, 2026-10-08) | 160–169 | 0xEC (aux tables: 36–38 onboarding, 39–40 OB-P0, **41–42 G14-R4** G14 chunk table) | `palw_probabilistic_constraints_v1` (refused) |
-| RFC-0010 V3 production fold (C2) | 120–129 (120 = `PanelBeaconProofV3`) | 170–179 (170–173 used) | 0xED | `palw_permissionless_panel_v1` (refused); `PalwVoidReasonV2` 120–129 (120–122 used; 0–10 implicit unchanged) |
-| EXEC payload v2 (A, later) | 130–139 | 180–189 | 0xEE | `palw_exec_payload_v2` (not yet declared) |
+| RFC-0010 V3 production fold (C2) | 120–129 (120 = `PanelBeaconProofV3`) | 170–179 (170–174 used; 174 `PanelV3EpochSources`, R10F) | 0xED | `palw_permissionless_panel_v1` (refused); `PalwVoidReasonV2` 120–129 (120–122 used; 0–10 implicit unchanged) |
+| EXEC payload v2 (X8/X8R) | 130–139 (130 used: `ExecWorkRootOpenedV2`) | 180–189 (180 `ExecV2Row`, tables 1–4; 181 `ExecV2Verdict`, the refusal-record note) | 0xEE | `palw_exec_payload_v2` (declared; refused: `PALW_EXEC_PAYLOAD_V2_ARMABLE = false`, armable only on a salted t12 drill); `PalwVoidReasonV2` 130–139 (130 `WorkRootExpired`, 131 `WorkSliceProvenFalse`, 132 `WorkSliceDefaulted`) |
 | Onboarding objects (D phase 3) | 104–108 used (104 ArtifactBound, 105 refutation, 106 KernelBound, 107 ConformanceCommitted, 108 SignedRegistrationV1), 109 **used by OB-P0** `ConformanceEvidenceV1` (2026-10-08 18:10; aux tables 39 attempts / 40 evidence material used with it) | none (rows in the kernel route's aux tables 36–38, journalled by deltas 160/161) | none (tail 0xEC) | `palw_signed_registration_v1` (108; refused) |
-| RPC ops | C1 202–209 (202 used; 203 getPalwForkChoiceOpening (L2FC), 204–209 free), D 210–219 (210, 211, 212 used) and 230–239 (230 used; 231 used by OB-P0 `getPalwConformanceEvidence`, 232 unused), C2 220–229 (220 used), X8R 240–249 (RFC-0008 v2) | — | — | — |
+| RPC ops | C1 202–209 (202 used; 203 getPalwForkChoiceOpening (L2FC), 204–209 free), D 210–219 (210, 211, 212 used) and 230–239 (230 used; 231 used by OB-P0 `getPalwConformanceEvidence`, 232 unused), C2 220–229 (220 used), X8R 240–249 (RFC-0008 v2; 240 used: `getPalwExecV2Status`, gRPC 1294/1295) | — | — | — |
 | Other fences (dormant) | `palw_provider_court_v1` (DA16), `palw_fork_choice_commitment_v1` (L2FC), `palw_tir_shard_segment_v2` (SHARD), `palw_typed_roots_v1` (R4X), `palw_task_heads_v1` (HFX) | — | — | — |
 | Kernel route inner kinds / ledger tables (inside tag 110) | inner discriminants: 12 SealClaim, 13/14 OPV mode, **15 G14-R4 accuser seal**, **16 CommitSegmentedClaim, 17 PostTiledJob, 18 PostPromptTile (K2S)**, **19 Spec (R4X, RFC-0004 Part II)**, **20 CommitClaimSalted (G14R, `claim_seal_v2`, OPV beacon v3 GAP-B1a; fence `palw_panel_free_v1`; inner `SaltedCommitV1` 5 Claim / 6 Pipeline / 16 Segmented (K2S, at merge) / 19 Spec (also needs `palw_typed_roots_v1`); table 26 prune horizon pending the v3 policy constants)** — 21 and up free; `ProsecutionV1` 3 Segmented (K2S), 4 Spec (R4X); `ClaimBodyV1` 2 Segmented (K2S), 3 Spec (R4X); kernel ledger tables 1–14 used, **15–19 G14-R4** (18 `job_posters`, F-C4R4-08), **20–21 K2S**, **22–24 R4X**, **25 `claim_beacon_salts`, 26 `forfeited_claim_seals` (G14R, seal v2; one root extension)** (hashed only when non-empty); kernel route aux tables 36–38 onboarding, 39–40 OB-P0, 41–42 G14-R4, **43–45 DA16**; LedgerEventV1 21–24 G14-R4 (24 ServedDemandBondsBurned), 30 ProviderLiableDefault + 31 ProviderLapsed (DA16); SettlementKindV1 14–21 G14-R4 (21 ForfeitDemandBond); fence `palw_typed_roots_v1` (R4X, dormant, refused) | — | — | — |
 | Bond budget + model allocation (BUDGET, ADR-0176/0177, 2026-10-10) | **140–149** (verify unused before first use) | **190–199** | **0xEF** | `palw_bond_budget_v1`, `palw_model_bond_allocation_v1` (dormant, refused when armed); RPC **250–259**; V2 root block `bond_budget/v1` |
 | Reporter share migration (INTF, ADR-0032 2026-10-10) | — | — | — | `palw_reporter_share_v2` (dormant; Some-only hashed) |
 | Immutable registrations (pre, ADR-0175) | — (refuses existing lifecycle tags past it) | — | — | `palw_model_immutable_v1` (dormant) |
+| `PalwVoidReasonV2` | C2 120–122; X8R 130–132 (explicit; 130 was X8's implicit 11) | — | — | — |
+| Legacy V2 Panel route G14, filer/reservation (LG14-A, RFC-0014 §6–§7, 2026-10-10) | **154–156** | **200–204** | **0xE2** | `palw_legacy_public_filer_v1` (dormant, refused); RPC **204–206** |
+| Legacy V2 Panel route G14, held/fused DA + localization (LG14-B, RFC-0014 §4–§5, 2026-10-10) | **157–159** | **205–209** | **0xE3** | `palw_legacy_held_da_v2` (dormant, refused); RPC **207–209** |
+| Kernel `LedgerEventV1` (2026-10-10) | 21–23 G14R, **24 G14R** (approved 10-10), 30–31 DA16 | — | — | — |
+| Verifier pay (G14R, palw_verifier_pay_v1, 2026-10-10) | kernel inner kinds **21** (verifier attestation), **22** (beacon-source opt-in) | — | — | ledger table 27, `LedgerEventV1` 25–26 |
 | `PalwVoidReasonV2` | C2 120–122; X8 one variant (assign an explicit number ≥ 130 at merge) | — | — | — |
 
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the
 skeleton first; lanes build on that commit.
+
+**A-2 uniformity rule (A2U, 2026-10-08/09; `a2-uniformity-new-kinds.md`).** Every allocation in this table that the live testnet-12
+build (int-12) cannot read as a newer build does — an object tag, a kernel inner kind or nested variant, a header form, a coinbase
+trailer, a form appended or re-read inside an int-12 kind, an FP job form, a header formula, a state encoding — has a row in the
+central kind→fence table `PALW_A2_KIND_FENCE_TABLE_V1` naming its fence; A2U keeps it, and a lane's merge flips its row to landed (the
+table test holds the code to the row). A new object kind also needs a row in `PALW_LIFECYCLE_NEW_KINDS_V1` and an arm in
+`palw_lifecycle_kind_owner_v1`; a new header form or trailer a `PalwHeaderFormFenceV1` variant; a change inside a type int-12 decodes a
+classification in `PALW_INT12_WIRE_CHANGES_V1`. **Below its owning fence a kind or form rides unjudged**: it is read exactly as int-12
+reads its bytes — the same verdict (0x4b: tolerated and skipped; 0x4a and header forms: refused), the same skip, nothing charged,
+counted or written. Never refuse it at isolation on 0x4b. Its own rule (may-ride, shape, size) is asked only past the fence, in the
+header context, the acceptance walk and the fold. Merge gate: the A2U tests, the mixed-verdict pin test on both rulesets, and the replay
+of its chains through int-12 itself (`scripts/a2u-int12-replay.sh`). The live build's lists are frozen.
+
+**A-2 additions (A2U, 2026-10-10).** (a) The object-tag column above is mirrored in `PALW_A2_TAG_ALLOCATIONS_V1` with each allocation's
+fences; a tag row outside its allocation or naming another lane's fence fails (`every_tag_row_is_inside_its_allocation`) — a new
+allocation is a Lead commit to both. (b) Every landed post-int-12 kind's wire form is pinned (`PALW_A2_NEW_KIND_WIRE_V1`, in the A2U
+test module) and so are int-12's 100 variants (`PALW_A2_INT12_VARIANTS_WIRE_V1`): a lane that creates or changes a kind re-pins it in
+the same commit, keeping the change under its row's fence. **BUDGET (140–149):** in the commit that creates each kind — the variant,
+its owner arm (a `PalwLifecycleKindFenceV1` variant per fence), its `PALW_LIFECYCLE_NEW_KINDS_V1` entry, an `ObjectTags` row naming
+`palw_bond_budget_v1` or `palw_model_bond_allocation_v1`, its pin, and its `StateEncoding` rows flipped to landed. **DA16 (150–153
+re-scope):** the commit removing the `Artifact` lease subject re-pins 150–153 and keeps `palw_provider_court_v1` (or adds a row for
+another fence). (c) Kinds int-12 decodes that a fence judges anew (ADR-0175 `palw_model_immutable_v1`: 27, 28, 29, 81, 37 with
+`EARLY_VERSION` refused by name; 3, 26, 39, 61, 68, 70, 91 folded by state) have `Int12RefusedByName` / `Int12FoldPastFence` rows: past
+the fence the object is not applied and its block stands — never an isolation or header-context refusal. (d) `palw_reporter_share_v2`
+(INTF) has a pending `StateEncoding` row: on `b8ae9412b` the 49% share is unfenced while testnet-12 arms R-core+ at genesis.
 
 ## 3. Waves
 
@@ -186,7 +216,7 @@ skeleton first; lanes build on that commit.
 
 * 2026-10-08 — C2 milestone 1 (`rfc10/c2-panel` 5e294cdcc, d6f93e68b, 8f8410b0f; not yet integrated): V3 engine staged
   (advance / accept_beacon / admit); beacon adapter = borsh `WorkBeaconV1` verified by `verify_work_beacon_v1`; production fold —
-  `PalwChainStateV2.panel_v3` Some-only root block `panel_v3/v1`, deltas 170–173, tail 0xED, tag 120 (bad proof dropped, block
+  `PalwChainStateV2.panel_v3` Some-only root block `panel_v3/v1`, deltas 170–174, tail 0xED, tag 120 (bad proof dropped, block
   stands), void reasons 120–122; one exposure ledger via `reserve_seat_duties_with` (V3 binding writes the V2 Panel record anchored
   at the V3 seed, duty rows and seat `reserved_exposure`); a non-seat DA accusation + default convicts a V3-bound claim
   (ProducerWithholding, producer slashed). Open: V3 receipt/retry expiry vs non-seat DA default (G14 pre-emption — Lead asked for a

@@ -1,4 +1,4 @@
-//! **K2-TIR-v2: the multi-modulus dense relation, and kernel coexistence** (RFC-0005 §K.3/§K.5, RFC-0011 §15.7, §16.3–§16.5).
+//! **K2-TIR-v2: the multi-modulus dense relation, and kernel coexistence** (Kernel design §K.3/§K.5, RFC-0011 §15.7, §16.3–§16.5).
 //!
 //! An `i128` accumulator whose ranges are proven is `KERNEL_EXTENSION_REQUIRED` under K2-TIR-v1 and expressible under K2-TIR-v2;
 //! a lie that aliases to zero modulo `2^127 − 1` is caught by the second modulus and convicted by the exact court; v1 and v2

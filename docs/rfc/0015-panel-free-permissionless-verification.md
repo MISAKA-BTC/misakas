@@ -608,6 +608,9 @@ coinbase配分からblock頻度/ticket/DAA/難易度を自動変更せず、変�
 正しいmodelを得られないverifierの`p`は0にもなり、capや資本増加だけで不正の期待損失を証明しない。
 達成できない条件と未立証事項を報告し、未確定の倍率式を安全性保証として使わない。
 
+**2026-10-10改定（bond集約優位）:** ADR-0177の改定により、評価対象は「公開対閉鎖の優位」から「bond集約による配分優位」へ変わる。
+`A_m = S_m^α`（`α > 1`）を候補とする。個別bond上限・総予算・共通期間は不変である。大口資本の優位は残余リスクとし、`p=0`は独立gateとする。
+
 #### 8.5.4 completion / activation
 
 同一chain/claim/proofでpeer/取得結果を変えても合意結果が変わらない試験、claim固有court scope、
@@ -783,6 +786,8 @@ RFC14 §16.8/ADR177 §3のnon-interference、資本重複排除、model/network/
 正しいmodelを得たfresh verifierによるclaim固有courtと計算反証を実証する。
 旧7/5/15%・監査/lease・FPR全量公開/代替Seeder/公開費gateは撤回する。
 G14 PASSでも自動有効化しない。モデル非公開時の経済優位は未立証であり、旧claimと発行上限を保持する。
+
+**2026-10-10追加（ユーザー指示）:** 本RFCの有効化には、[PALW確率・経済安全性ゲート](../design/palw/probabilistic-economic-security-gate.md)（四条件、T1–T6、A–F、三つの反例、経済的抑止と独立の被害有界化）のPASSを追加で要求する。PASS / FAIL / UNKNOWNのうちUNKNOWNはPASSにしない。
 
 ## 14. 本RFCで決めない値と現状
 

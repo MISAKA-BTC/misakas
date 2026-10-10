@@ -203,7 +203,7 @@ fi
 if [ "${SKIP_CARGO:-0}" = "1" ]; then
   skip "the in-tree structural validators (SKIP_CARGO=1)"
 elif command -v "$CARGO" >/dev/null; then
-  if (cd "$REPO_ROOT" && MISAKA_PALW_POW_FIXTURE=1 "$CARGO" test -p misaka-palw-derive --test artifact_structure) > "$WORK_DIR/artifact_structure.log" 2>&1; then
+  if (cd "$REPO_ROOT" && "$CARGO" test -p misaka-palw-derive --test artifact_structure) > "$WORK_DIR/artifact_structure.log" 2>&1; then
     ok "the in-tree structural validators: $(grep -E '^test result:' "$WORK_DIR/artifact_structure.log" | tail -1)"
   else
     bad "the in-tree structural validators FAILED: see $WORK_DIR/artifact_structure.log"
@@ -381,7 +381,7 @@ else
   # is what keeps the skip above honest — it bounds the gap to the wRPC read and the
   # reconstruction of the object from what a node returned, rather than leaving it unbounded.
   if [ "${SKIP_CARGO:-0}" != "1" ] && command -v "$CARGO" >/dev/null; then
-    if (cd "$REPO_ROOT" && MISAKA_PALW_POW_FIXTURE=1 "$CARGO" test -p misaka-cli --bin misaka palw_derived) > "$WORK_DIR/cli-derived.log" 2>&1; then
+    if (cd "$REPO_ROOT" && "$CARGO" test -p misaka-cli --bin misaka palw_derived) > "$WORK_DIR/cli-derived.log" 2>&1; then
       ok "the chainless half of derived-verify (its compare(), over this corpus): $(grep -E '^test result:' "$WORK_DIR/cli-derived.log" | tail -1)"
     else
       bad "misaka-cli's derived-verify arithmetic FAILED: see $WORK_DIR/cli-derived.log"
@@ -418,7 +418,7 @@ if [ "${SKIP_CROSS:-0}" = "1" ]; then
 elif [ ! -x "$CROSS_BIN" ]; then
   # Said with the command rather than reported as held: "X3 could not be run here" and "X3 holds"
   # are different sentences and the launch note must not confuse them.
-  skip "the second architecture: no $CROSS_BIN. Build it: rustup target add $CROSS_TARGET && MISAKA_PALW_POW_FIXTURE=1 cargo build -p misaka-palw-derive --bins --target $CROSS_TARGET"
+  skip "the second architecture: no $CROSS_BIN. Build it: rustup target add $CROSS_TARGET && cargo build -p misaka-palw-derive --bins --target $CROSS_TARGET"
 else
   [ -f "$REPO_ROOT/target/$CROSS_TARGET/debug/palw-evm-runner" ] || die "palw-evm-runner was not built for $CROSS_TARGET — the code and contract rows would be refused there and derived here, which reads as a divergence"
   "$CROSS_BIN" drill --report "$WORK_DIR/x3/cross.json" > "$WORK_DIR/x3/cross.log" 2>&1 && XRC=0 || XRC=$?
@@ -485,7 +485,7 @@ else
   else
     skip "the token column: MISAKA_PALW_TOKENIZER is unset, so only bytes are measured"
   fi
-  if (cd "$REPO_ROOT" && MISAKA_PALW_POW_FIXTURE=1 "$CARGO" test -p misaka-palw-derive --test answer_width -- $WIDTH_ENV --nocapture) > "$WORK_DIR/answer_width.log" 2>&1; then
+  if (cd "$REPO_ROOT" && "$CARGO" test -p misaka-palw-derive --test answer_width -- $WIDTH_ENV --nocapture) > "$WORK_DIR/answer_width.log" 2>&1; then
     grep -E "narrowest [0-9]|^tokenizer /" "$WORK_DIR/answer_width.log" | sed 's/^/  /'
     ok "the width table: $(grep -E '^test result:' "$WORK_DIR/answer_width.log" | tail -1)"
   else

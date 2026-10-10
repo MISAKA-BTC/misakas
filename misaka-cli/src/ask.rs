@@ -6,18 +6,14 @@
 //! receipt line. They run `misaka ask --verify <receipt>` with the same prompt and either get the
 //! same answer byte-for-byte or find out they did not.
 //!
-//! What makes that possible is that the request is pinned, not merely repeated: greedy decoding,
-//! CPU backend, fixed context — the same options the legacy tag path uses, held in one place
-//! (`misaka_palw_pow_driver::palw_generate`, the crate that owns every model-reaching call after
-//! ADR-0042 Decision 4 moved them out of kaspa-pow) so this command and block validation cannot
-//! drift apart.
+//! The receipt pins greedy decoding, CPU execution and a fixed context. The CLI's
+//! Ollama client owns the request independently of the retired inference PoW driver.
 //!
 //! The one knob that changes the answer and therefore lives in the receipt is `--tokens`
 //! (`num_predict`): a longer budget is a different computation, not merely more of the same one.
 
 use crate::{CliError, CliResult, exit};
-use kaspa_consensus_core::pow_layer0::PowLayer0Error;
-use misaka_palw_pow_driver::{DEFAULT_OLLAMA_URL, PALW_OLLAMA_MODEL_ENV, PALW_OLLAMA_URL_ENV, palw_generate};
+use crate::ollama::{DEFAULT_OLLAMA_URL, OllamaError, PALW_OLLAMA_MODEL_ENV, PALW_OLLAMA_URL_ENV, generate};
 use std::io::Read;
 
 /// Receipt format tag. Bump if any field or the digest derivation changes.
@@ -214,13 +210,12 @@ pub fn run(args: AskArgs) -> CliResult {
     }
 
     let started = std::time::Instant::now();
-    // `think` is only meaningful for the templated path; the raw diagnostic mode sends the
-    // consensus request unchanged.
+    // `think` is only meaningful for the templated path; the raw diagnostic mode omits it.
     let think_opt = if templated { Some(think) } else { None };
-    let (answer, prompt_eval, eval) = palw_generate(&url, &model, &prompt, tokens, templated, think_opt).map_err(|e| match e {
+    let (answer, prompt_eval, eval) = generate(&url, &model, &prompt, tokens, templated, think_opt).map_err(|e| match e {
         // "cannot reach / not configured" is an operator-fixable connection problem; a runtime
         // that ran and misbehaved is not.
-        PowLayer0Error::PalwUnavailable(m) => CliError::new(exit::CONNECTION, m),
+        OllamaError::Unavailable(m) => CliError::new(exit::CONNECTION, m),
         other => CliError::generic(other.to_string()),
     })?;
     let elapsed = started.elapsed();
@@ -242,9 +237,8 @@ pub fn run(args: AskArgs) -> CliResult {
         println!("  receipt answer={want}");
         println!("  this run answer={}", &answer_digest[..16]);
         println!(
-            "\nEither the receipt did not come from this network's pinned model, or this host is not in\n\
-             its determinism class (different model blob, Ollama build, or CPU architecture — the same\n\
-             thing kaspad checks at startup)."
+            "\nCompare the model blob, Ollama build, CPU architecture and inference settings\n\
+             with the runtime that produced the receipt."
         );
         return Err(CliError::generic("receipt not reproduced"));
     }

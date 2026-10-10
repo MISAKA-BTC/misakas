@@ -418,19 +418,3 @@ fn the_class_identity_types_are_mutually_unconvertible() {
 // =================================================================================================
 // 9. What is NOT reachable from here
 // =================================================================================================
-
-/// **Item 2, the negative half — verified by the fact that this test cannot call them.**
-///
-/// `decide_credit_v1` IS pub, but its `PalwCreditParamsV1` needs a `PalwClassRegistrationV1`, and
-/// the only two builders for that in-tree are `pub(crate)`:
-///   * `palw_registry::tests::fleet_registration()`   (palw_registry.rs:557, `pub(crate) fn`)
-///   * `palw_registry::tests::base0_registration()`   (palw_registry.rs:627, `pub(crate) fn`)
-/// An integration test must therefore construct `PalwClassRegistrationV1` field by field (~25
-/// fields including a full `PalwShapeProfileV3`), or the credit audit must live in an in-file
-/// `#[cfg(test)] mod tests` inside `consensus/core/src/palw_credit.rs`.
-#[test]
-fn the_credit_path_has_no_pub_fixture() {
-    println!("\n  decide_credit_v1: pub, but PalwClassRegistrationV1 has only pub(crate) builders.");
-    println!("  -> credit audits go in consensus/core/src/palw_credit.rs's own #[cfg(test)] mod,");
-    println!("     or build PalwClassRegistrationV1 by hand.");
-}

@@ -3016,7 +3016,7 @@ mod resolver_tests {
 
     /// **The V1 credit path's impossible case is a refusal, not a panic.**
     ///
-    /// `palw_class_facts_for_block` (consensus/src/pipeline/virtual_processor/utxo_validation.rs)
+    /// the retired V1 class resolver (consensus/src/pipeline/virtual_processor/utxo_validation.rs)
     /// builds its `weight_bearing` through this helper and propagates `None` with `?`. `None` is
     /// `ClassUnresolved` there — the same answer the line above it already gives a block naming an
     /// unregistered class — so a share the domain set is not supposed to be able to hold costs the

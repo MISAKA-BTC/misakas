@@ -1,5 +1,7 @@
 # PALW 致命的欠陥監査
 
+> Cleanup, 2026-10-10: 旧 V1 credit 判定・class resolver と algo 4/5 runtime は削除済み。以下は当時の監査記録であり、現行の実装状態を示さない。
+
 **対象**: `misakas-palw-adr0038-9cfcbf99.zip` / `palw-only-v4` / README 記載 commit `9cfcbf99`（2026-08-19）  
 **範囲**: PALW のみ。EVM、DNS finality、一般的な Kaspa/GHOSTDAG 実装は、PALW と直接交差する箇所以外は対象外。  
 **手法**: ADR、コンセンサス型、block admission、PoW、panel、receipt、court、fork choice、class DAA の静的・経路監査。

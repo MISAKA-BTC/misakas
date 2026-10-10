@@ -147,7 +147,7 @@ start_node() {
   [ "$i" -gt 0 ] && args+=(--connect="127.0.0.1:$P2P_BASE")
   [ -n "$HEARTBEAT_NODE" ] && [ "$i" = "$HEARTBEAT_NODE" ] && args+=(--palw-heartbeat-miner-address="$addr")
   if [ -n "$MINER_BIN" ] && [ "$i" -eq "$MINER_NODE" ]; then args+=(--rpclisten="127.0.0.1:$GRPC_PORT"); else args+=(--nogrpc); fi
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
+  "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
   echo $!
 }
 

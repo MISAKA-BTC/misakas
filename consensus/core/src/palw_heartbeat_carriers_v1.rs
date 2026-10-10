@@ -198,6 +198,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         // G14 lane D (tags 110, 111): kernel route traffic is in the fee market; no halt waits on it.
         | O::KernelRouteV1 { .. }
         | O::KernelConstraintReceiptV1 { .. }
+        | O::KernelRouteChunkV1 { .. }
         // G14 phase 3 (tags 104-108): onboarding traffic is registry traffic like a candidate's.
         | O::ArtifactBoundV1 { .. }
         | O::ArtifactBindingChallengedV1 { .. }
@@ -211,12 +212,22 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::ProviderChallengeV1 { .. }
         | O::ProviderAnswerV1 { .. }
         | O::DaTransferV1 { .. }
+        // LG14-B (tags 157–159, dormant): fee-market traffic, never an H-1 carrier — below their fence they ride unjudged (A-2), and
+        // an H-1 carrier is asked of the gate at the template.
+        | O::LegacyHeldDemandedV2 { .. }
+        | O::LegacyHeldAnsweredV2 { .. }
+        | O::LegacyLeafRecomputedV2 { .. }
+        // Lane BUDGET (tag 140): a capital assignment is registry traffic in the fee market; no halt waits on it.
+        | O::BondCapitalAssignedV1 { .. }
         | O::LineageHeadRolledBack { .. }
         | O::ImprovementPoolFunded { .. }
         // RFC-0007 Part I (tags 91, 92): a vertex is verification traffic, in the fee market beside the licence it replaces; the
         // equivocation evidence is a conviction needing no court, but like the round lane's it is outside H-1's enumeration.
         | O::VerificationVertexV1 { .. }
         | O::VertexEquivocationV1 { .. }
+        // RFC-0008 v2 (tag 130): a work-session root declaration is registry traffic in the fee market — it earns nothing and is
+        // no conviction or court move a halt must let through.
+        | O::ExecWorkRootOpenedV2 { .. }
         // RFC-0007 Part IV.1 (tags 93, 94): trap commitments and reveals are mesh traffic in the fee market.
         | O::TrapCommittedV1 { .. }
         | O::TrapRevealedV1 { .. }

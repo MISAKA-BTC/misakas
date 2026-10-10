@@ -52,6 +52,11 @@ pub struct CoinbaseManager {
     /// This score is required here long-term (and not only for the actual forking), in
     /// order to correctly determine the subsidy month from the live DAA score of the network
     crescendo_activation_daa_score: u64,
+
+    /// **RFC-0008 v2: is `palw_exec_payload_v2` armed on this network** ([`Self::with_exec_v2_armed`])? Only then does the payload
+    /// reader allow an anchor trailer past the length cap and the template re-shaper carry a trailer to a new miner's data. `false` —
+    /// every shipped preset — keeps both byte-identical to the build before RFC-0008 v2 (the X8R review).
+    exec_v2_armed: bool,
 }
 
 /// Struct used to streamline payload parsing
@@ -99,7 +104,14 @@ impl CoinbaseManager {
             subsidy_by_month_table_before,
             subsidy_by_month_table_after,
             crescendo_activation_daa_score: ttpb_history.activation().daa_score(),
+            exec_v2_armed: false,
         }
+    }
+
+    /// RFC-0008 v2: arm the anchor-trailer readings (`Params::palw_exec_payload_v2_fence().is_some()`).
+    pub fn with_exec_v2_armed(mut self, armed: bool) -> Self {
+        self.exec_v2_armed = armed;
+        self
     }
 
     #[cfg(test)]
@@ -521,6 +533,18 @@ impl CoinbaseManager {
             ));
         }
 
+        // RFC-0008 v2: a template's anchor trailer belongs to the block, not to the miner's tag — it commits the EXEC blocks the
+        // template's state already accepts — so it survives the miner replacing its own data. Only where the fence is armed: elsewhere
+        // the bytes are the previous miner's tag, which the build before RFC-0008 v2 dropped with the rest of it (the X8R review).
+        let trailer = if self.exec_v2_armed {
+            kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(&payload)
+                .ok()
+                .and_then(|(_, anchor)| anchor)
+                .map(|anchor| anchor.trailer())
+        } else {
+            None
+        };
+
         // Keep only blue score and subsidy. Note that truncate does not modify capacity, so
         // the usual case where the payloads are the same size will not trigger a reallocation
         payload.truncate(LENGTH_OF_BLUE_SCORE + LENGTH_OF_SUBSIDY);
@@ -530,8 +554,24 @@ impl CoinbaseManager {
                 .chain(miner_data.script_public_key.script().iter().copied())    // Script public key
                 .chain(miner_data.extra_data.as_ref().iter().copied()), // Extra data
         );
+        if let Some(trailer) = trailer {
+            payload.extend_from_slice(&trailer);
+        }
 
         Ok(payload)
+    }
+
+    /// **RFC-0008 v2: the payload length rule at a height.** The cap is `max_coinbase_payload_len`, as ever; where the EXEC v2
+    /// payload is in force a payload that carries a well-formed anchor trailer may exceed it by the trailer's own length (the
+    /// anchor does not fit in the bytes the miner's script and tag leave).
+    pub fn check_payload_len_at(&self, payload: &[u8], exec_v2_active: bool) -> CoinbaseResult<()> {
+        if payload.len() <= self.max_coinbase_payload_len {
+            return Ok(());
+        }
+        let anchored = exec_v2_active
+            && kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(payload)
+                .is_ok_and(|(prefix, anchor)| anchor.is_some() && prefix.len() <= self.max_coinbase_payload_len);
+        if anchored { Ok(()) } else { Err(CoinbaseError::PayloadLenAboveMax(payload.len(), self.max_coinbase_payload_len)) }
     }
 
     pub fn deserialize_coinbase_payload<'a>(&self, payload: &'a [u8]) -> CoinbaseResult<CoinbaseData<&'a [u8]>> {
@@ -539,8 +579,17 @@ impl CoinbaseManager {
             return Err(CoinbaseError::PayloadLenBelowMin(payload.len(), MIN_PAYLOAD_LENGTH));
         }
 
-        if payload.len() > self.max_coinbase_payload_len {
-            return Err(CoinbaseError::PayloadLenAboveMax(payload.len(), self.max_coinbase_payload_len));
+        // RFC-0008 v2: a payload ending in the anchor trailer's magic may exceed the cap by at most the trailer. Whether that is LEGAL
+        // at a height is the body stage's question ([`Self::check_payload_len_at`]); this reader is lenient so that every site that
+        // reads an already-validated coinbase can read an anchoring one — on a network that arms the fence. Elsewhere the cap is the
+        // cap, exactly as before (the X8R review).
+        let cap = if self.exec_v2_armed && payload.ends_with(&kaspa_consensus_core::palw_exec_v2_anchor::PALW_EXEC_V2_ANCHOR_MAGIC) {
+            self.max_coinbase_payload_len + kaspa_consensus_core::palw_exec_v2_anchor::PALW_EXEC_V2_ANCHOR_MAX_TRAILER_BYTES
+        } else {
+            self.max_coinbase_payload_len
+        };
+        if payload.len() > cap {
+            return Err(CoinbaseError::PayloadLenAboveMax(payload.len(), cap));
         }
 
         let mut parser = PayloadParser::new(payload);

@@ -282,6 +282,14 @@ pub enum TxRuleError {
     #[error("an H-1 lifecycle carrier the fold would refuse: {0}")]
     PalwH1CarrierRefused(String),
 
+    /// **G14 GAP 10 (lane K2S): a kernel route carrier the acceptance gate refuses at this node's tip** — the
+    /// `palw_probabilistic_constraints_v1` fence, an Active signer, its ML-DSA-87 signature, the kernel's strict decode and the OPV
+    /// fence of a non-legacy registration (a direct `KernelRouteV1`), or a seat receipt's signature (`KernelConstraintReceiptV1`).
+    /// Refused at admission (after the UTXO context, so only a funded carrier costs a signature check) and again at every template; a
+    /// node policy (the fold drops the same objects), never a block rule.
+    #[error("a kernel route carrier the acceptance gate refuses: {0}")]
+    PalwKernelRouteRefused(String),
+
     /// **MSK-26A (2026-09 pre-freeze security review): a DNS slashing / precommit evidence whose
     /// attestation signatures do not verify against the accused bond's registered validator key at
     /// this node's tip.** A NODE policy, not a consensus rule: the block-validity own-body genuineness

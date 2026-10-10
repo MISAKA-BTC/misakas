@@ -1,5 +1,7 @@
 //! **The fold arms of the provider court (tags 150–153) and its closing tick** — child module of `palw_state_v2`, like the kernel route's
-//! and the onboarding's folds. See [`crate::palw_provider_court_v1`] for the design and [`crate::palw_public_material_v1`] for the units.
+//! and the onboarding's folds. See [`crate::palw_provider_court_v1`] for the design and [`crate::palw_court_scope_v1`] for what a court
+//! may demand. Since ADR-0177 the court's only subject is a kernel claim and its only unit a committed claim position; an object naming
+//! the withdrawn `Artifact` subject is refused first, before any row, bond or class is read.
 //! Rows live in the kernel route's aux tables 43–45, written through the route's one journaled writer; reservations are mirrored into
 //! V2's committed-collateral ledger (`PalwChainStateV2::provider_court_reserved`).
 //!
@@ -10,11 +12,8 @@
 use super::palw_kernel_route_fold_v1::{apply_settlements, charge_route_budget_v1, ensure_route_header, flush, load_ledger};
 use super::*;
 use crate::palw_provider_court_v1::*;
-use crate::palw_public_material_v1::{
-    ArtifactFactsV1, PublicUnitAnswerV1, PublicUnitV1, artifact_unit_in_scope_v1, verify_artifact_answer_v1,
-};
+use crate::palw_public_material_v1::{PublicUnitAnswerV1, PublicUnitV1};
 use misaka_palw_kernel::ledger::{ClaimRowV1, LedgerEventV1};
-use misaka_palw_kernel::lifecycle::ClaimStateV1;
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(why.into())
@@ -36,6 +35,16 @@ fn route_of<'a>(
     builder.state.kernel_route.as_ref().ok_or_else(|| refused("the kernel route has no state"))
 }
 
+/// **ADR-0177 D1**: the withdrawn artifact subject is refused at every height past the fence (no row, no reservation, no charge).
+fn claim_subject(subject: &ProviderSubjectV1) -> Result<Hash64, PalwStateV2Error> {
+    match subject {
+        ProviderSubjectV1::KernelClaim { claim } => Ok(*claim),
+        ProviderSubjectV1::Artifact { .. } => Err(refused(
+            "model availability is not a consensus matter (ADR-0177 D1): the provider court leases, challenges and charges claim material only",
+        )),
+    }
+}
+
 /// An Active bond's operator.
 fn active_operator(builder: &TransitionBuilder<'_>, bond: &PalwBondKeyV2) -> Result<Hash64, PalwStateV2Error> {
     match builder.state.bonds.get(bond) {
@@ -49,27 +58,6 @@ fn active_operator(builder: &TransitionBuilder<'_>, bond: &PalwBondKeyV2) -> Res
 fn free_collateral(builder: &TransitionBuilder<'_>, bond: &PalwBondKeyV2, now: u64) -> u128 {
     let collateral = builder.state.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
     collateral.saturating_sub(builder.committed_at(bond, now))
-}
-
-/// The chain's facts of an artifact subject: the V2 IR class's program and its registered root — of a live (Registered or Active)
-/// class when `live` (a lease, a challenge), of any class the chain still holds otherwise (an answer: a challenge filed while the class
-/// was live is answerable while its record exists).
-fn artifact_program(
-    builder: &TransitionBuilder<'_>,
-    v2_class: &Hash64,
-    live: bool,
-) -> Result<(misaka_palw_tir::TirProgramV1, Hash64), PalwStateV2Error> {
-    let state = builder.state.classes.get(v2_class).ok_or_else(|| refused("no such V2 class"))?;
-    if live && !matches!(state.status, PalwClassStatusV2::Registered { .. } | PalwClassStatusV2::Active) {
-        return Err(refused("only a Registered or Active class's artifact is leased"));
-    }
-    let tir = builder
-        .state
-        .tir_class_v1(v2_class)
-        .ok_or_else(|| refused("only an IR class has an inventory a unit can be checked against"))?;
-    let program = misaka_palw_tir::TirProgramV1::decode_canonical(tir.program.as_slice())
-        .map_err(|_| refused("the class's stored program does not decode"))?;
-    Ok((program, state.artifact_root))
 }
 
 /// A kernel claim's stored row (decoded alone, no ledger rebuild).
@@ -122,6 +110,7 @@ pub(super) fn apply_provider_lease_v1(
     provider: &PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
     court_at(builder)?;
+    let claim = claim_subject(subject)?;
     ensure_route_header(builder, ctx)?;
     let now = ctx.daa_score;
     let operator = active_operator(builder, provider)?;
@@ -132,22 +121,14 @@ pub(super) fn apply_provider_lease_v1(
     if serve_until_daa < now.saturating_add(PALW_PROVIDER_RESPONSE_WINDOW_DAA_V1) {
         return Err(refused("a lease shorter than one challenge's response window promises nothing a challenge could test"));
     }
-    match subject {
-        ProviderSubjectV1::Artifact { v2_class, .. } => {
-            artifact_program(builder, v2_class, true)?;
-        }
-        ProviderSubjectV1::KernelClaim { claim } => {
-            let row = claim_row(builder, claim)?;
-            if !row.holds_job() {
-                return Err(refused("the claim is already decided: its material obliges nobody any more"));
-            }
-            let producer = route_of(builder)?
-                .bond_key_of(&row.producer)
-                .ok_or_else(|| refused("the claim's producer is a bond the route never saw"))?;
-            if builder.state.bonds.get(&producer).map(|b| b.operator_id) == Some(operator) {
-                return Err(refused("a claim's producer cannot be its own provider: its own lease moves no responsibility"));
-            }
-        }
+    let row = claim_row(builder, &claim)?;
+    if !row.holds_job() {
+        return Err(refused("the claim is already decided: its material obliges nobody any more"));
+    }
+    let producer =
+        route_of(builder)?.bond_key_of(&row.producer).ok_or_else(|| refused("the claim's producer is a bond the route never saw"))?;
+    if builder.state.bonds.get(&producer).map(|b| b.operator_id) == Some(operator) {
+        return Err(refused("a claim's producer cannot be its own provider: its own lease moves no responsibility"));
     }
     let route = route_of(builder)?;
     if route.provider_lease_v1(subject, provider).is_some() {
@@ -163,8 +144,11 @@ pub(super) fn apply_provider_lease_v1(
     Ok(())
 }
 
-/// The unit of a kernel-claim subject is a position the claim commits, on a claim not yet decided.
+/// The unit of a kernel-claim subject is a position the claim commits, on a claim not yet decided — and claim-specific, never model
+/// bytes (the court scope's one predicate decides; every artifact unit is refused by it).
 fn claim_unit_in_scope(builder: &TransitionBuilder<'_>, claim: &Hash64, unit: &PublicUnitV1) -> Result<(), PalwStateV2Error> {
+    use crate::palw_court_scope_v1::{palw_court_demand_allowed_v1, palw_public_unit_kind_v1};
+    palw_court_demand_allowed_v1(palw_public_unit_kind_v1(unit)).map_err(|e| refused(e.why()))?;
     let PublicUnitV1::ClaimPosition { stage, position } = *unit else {
         return Err(refused("a claim's unit is one of its committed positions"));
     };
@@ -187,6 +171,7 @@ pub(super) fn apply_provider_challenge_v1(
     challenger: &PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
     court_at(builder)?;
+    let claim = claim_subject(subject)?;
     ensure_route_header(builder, ctx)?;
     let now = ctx.daa_score;
     if now > valid_until_daa {
@@ -208,14 +193,7 @@ pub(super) fn apply_provider_challenge_v1(
     if deadline > lease.serve_until_daa {
         return Err(refused("the lease ends before an answer would be due"));
     }
-    match subject {
-        ProviderSubjectV1::Artifact { v2_class, kernel_param_root } => {
-            let (program, artifact_root) = artifact_program(builder, v2_class, true)?;
-            let facts = ArtifactFactsV1 { program: &program, artifact_root, kernel_param_root: *kernel_param_root };
-            artifact_unit_in_scope_v1(&facts, unit).map_err(refused)?;
-        }
-        ProviderSubjectV1::KernelClaim { claim } => claim_unit_in_scope(builder, claim, unit)?,
-    }
+    claim_unit_in_scope(builder, &claim, unit)?;
     let route = route_of(builder)?;
     if route.provider_challenge_v1(subject, provider, unit).is_some() {
         return Err(refused("a challenge of this unit of this lease is already open (or answered and not yet past its deadline)"));
@@ -237,9 +215,9 @@ pub(super) fn apply_provider_challenge_v1(
     Ok(())
 }
 
-/// **Tag 152: the provider's answer.** Verified against the chain's own root; a valid one by the deadline clears the challenge (the
-/// challenger's fee is burned, its bond returns; the row stays as a tombstone until the deadline). A wrong one is refused: it neither
-/// clears nor defaults — the clock decides.
+/// **Tag 152: the provider's answer.** Verified against the claim's commitments by the kernel's own classification; a valid one by the
+/// deadline clears the challenge (the challenger's fee is burned, its bond returns; the row stays as a tombstone until the deadline). A
+/// wrong one is refused: it neither clears nor defaults — the clock decides.
 pub(super) fn apply_provider_answer_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -249,6 +227,7 @@ pub(super) fn apply_provider_answer_v1(
     answer: &PublicUnitAnswerV1,
 ) -> Result<(), PalwStateV2Error> {
     court_at(builder)?;
+    let claim = claim_subject(subject)?;
     ensure_route_header(builder, ctx)?;
     let now = ctx.daa_score;
     let row =
@@ -259,23 +238,15 @@ pub(super) fn apply_provider_answer_v1(
     if now > row.deadline_daa {
         return Err(refused("the answer is past the challenge's deadline"));
     }
-    if !charge_route_budget_v1(builder, ctx, 0)? {
+    // An answer is a response, not a proof: like a kernel `Respond` it stops short of the runs reserved for proofs (F-C4R4-10).
+    if !charge_route_budget_v1(builder, ctx, 0, false)? {
         return Err(refused("the block's adjudication budget is spent: answer in a later block before the deadline"));
     }
-    match subject {
-        ProviderSubjectV1::Artifact { v2_class, kernel_param_root } => {
-            let (program, artifact_root) = artifact_program(builder, v2_class, false)?;
-            let facts = ArtifactFactsV1 { program: &program, artifact_root, kernel_param_root: *kernel_param_root };
-            verify_artifact_answer_v1(&facts, unit, answer).map_err(refused)?;
-        }
-        ProviderSubjectV1::KernelClaim { claim } => {
-            let (PublicUnitV1::ClaimPosition { stage, position }, PublicUnitAnswerV1::ClaimPosition { bytes }) = (unit, answer) else {
-                return Err(refused("a claim's unit is answered by its position's response"));
-            };
-            let ledger = route_of(builder)?.ledger().map_err(refused)?;
-            ledger.classify_served_position_v1(&claim.as_bytes(), *stage, *position, bytes).map_err(refused)?;
-        }
-    }
+    let (PublicUnitV1::ClaimPosition { stage, position }, PublicUnitAnswerV1::ClaimPosition { bytes }) = (unit, answer) else {
+        return Err(refused("a claim's unit is answered by its position's response"));
+    };
+    let ledger = route_of(builder)?.ledger().map_err(refused)?;
+    ledger.classify_served_position_v1(&claim.as_bytes(), *stage, *position, bytes).map_err(refused)?;
     write_challenge(builder, subject, provider, unit, Some(&ProviderChallengeRowV1 { bond: 0, answered: true, ..row }));
     // A challenge the provider answered was not free court work: its fee is burned out of the challenger's (now released) bond.
     builder.slash_bond(row.challenger, PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1 as u128)?;
@@ -365,17 +336,17 @@ fn charge_lease(
     Ok(slashed)
 }
 
-/// **Could the provider still have answered?** A challenge whose subject the chain no longer holds (its class record gone) was
-/// unanswerable at its deadline through nobody's fault: it settles moot (the challenger's bond back, no fee, no charge).
+/// **Could the provider still have answered?** A challenge whose claim the chain no longer holds was unanswerable at its deadline
+/// through nobody's fault: it settles moot (the challenger's bond back, no fee, no charge). (A withdrawn artifact subject never has a row.)
 fn subject_answerable(builder: &TransitionBuilder<'_>, subject: &ProviderSubjectV1) -> bool {
     match subject {
-        ProviderSubjectV1::Artifact { v2_class, .. } => artifact_program(builder, v2_class, false).is_ok(),
         ProviderSubjectV1::KernelClaim { claim } => claim_row(builder, claim).is_ok(),
+        ProviderSubjectV1::Artifact { .. } => false,
     }
 }
 
-/// **Is a kernel-claim subject's claim Final now?** After Final every charge of its material is burned whole — no challenger or demander
-/// share: a share would let a producer's own Sybil challengers recoup part of what withholding costs (the kernel's own post-Final rule).
+/// **Is a kernel-claim subject's claim Final now?** After Final every charge of its material is burned whole (the kernel's post-Final
+/// rule: a post-Final default pays nobody).
 fn subject_post_final(builder: &TransitionBuilder<'_>, subject: &ProviderSubjectV1) -> bool {
     let ProviderSubjectV1::KernelClaim { claim } = subject else { return false };
     builder
@@ -383,11 +354,11 @@ fn subject_post_final(builder: &TransitionBuilder<'_>, subject: &ProviderSubject
         .kernel_route
         .as_ref()
         .and_then(|k| k.kernel_claim_row_v1(claim))
-        .is_some_and(|row| matches!(row.life.state, ClaimStateV1::Final { .. }))
+        .is_some_and(|row| matches!(row.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. }))
 }
 
-/// **After a charge: no live lease left ⇒ the subject lapses.** An artifact pair's lapse is recorded (a binding bound before it attests
-/// nothing); a TRANSFERRED claim lapses in the kernel — void, never convicted (`KernelLedgerV1::provider_lapse`).
+/// **After a charge: no live lease left ⇒ the subject lapses**, recorded on its row; a TRANSFERRED claim lapses in the kernel — void,
+/// never convicted (`KernelLedgerV1::provider_lapse`).
 fn lapse_if_uncovered(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -416,8 +387,9 @@ fn lapse_if_uncovered(
 }
 
 /// **The court's closing step** (before the kernel's tick; nothing at all below the fence): every challenge past its deadline
-/// unanswered charges its lease and pays its challenger (before Final: 500‰ of the slash; after Final of its claim: nothing — burned
-/// whole); an answered one's tombstone goes; a subject left with no live lease lapses; leases past their term are released.
+/// unanswered charges its lease and returns its challenger's bond; before Final the challenger is paid the PALW reporter share of the
+/// charge (49%, [`palw_provider_reporter_share_v1`]) and the rest is burned, after Final all of it is burned (module doc); an answered
+/// one's tombstone goes; a subject left with no live lease lapses; leases past their term are released.
 pub(super) fn tick_provider_court_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     if court_at(builder).is_err() {
         return Ok(());
@@ -438,7 +410,7 @@ pub(super) fn tick_provider_court_v1(builder: &mut TransitionBuilder<'_>, ctx: &
         let post_final = subject_post_final(builder, &subject);
         let slashed = charge_lease(builder, &subject, &provider)?;
         if slashed > 0 && !post_final {
-            let reward = slashed.saturating_mul(PALW_PROVIDER_CHALLENGER_REWARD_PERMILLE_V1) / 1000;
+            let reward = palw_provider_reporter_share_v1(slashed);
             if let Some(payout) = builder.state.bonds.get(&row.challenger).map(|b| b.payout_payload) {
                 builder.add_kernel_payout(payout, reward)?;
             }
@@ -458,8 +430,10 @@ pub(super) fn tick_provider_court_v1(builder: &mut TransitionBuilder<'_>, ctx: &
 }
 
 /// **The kernel's `ProviderLiableDefault` receipts of this block** (after its tick): a demand on a transferred claim that nobody answered
-/// is the failure of every lease live behind it — each is charged; before Final the demanders share up to `default_penalty` of the
-/// charge (after Final it is burned whole, as the producer path does); the claim (already void in the kernel) lapses.
+/// is the failure of every lease live behind it — each is charged; before Final the demanders share the reporter share (49%) of up to
+/// `default_penalty` of the charge, the rest burned (after Final it is burned whole, as the producer path does); the claim (already void
+/// in the kernel) lapses. The coalition's floor: it loses Σ leases (≥ the claim's reservation ≥ the penalty) less at most 49% of the
+/// penalty — never less than the producer path's ≥ 51% of its penalty.
 pub(super) fn settle_provider_liable_defaults_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -477,7 +451,7 @@ pub(super) fn settle_provider_liable_defaults_v1(
         }
         if !post_final && !demanders.is_empty() {
             let penalty = route_of(builder)?.header.policy.default_penalty;
-            let share = pool.min(penalty) / demanders.len() as u64;
+            let share = palw_provider_reporter_share_v1(pool.min(penalty)) / demanders.len() as u64;
             for kid in demanders {
                 let payee =
                     route_of(builder)?.bond_key_of(kid).and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
@@ -489,4 +463,34 @@ pub(super) fn settle_provider_liable_defaults_v1(
         lapse_if_uncovered(builder, ctx, &subject)?;
     }
     Ok(())
+}
+
+/// **The court scope's admission of a kernel `FileDemand`** (ADR-0177 D2, [`crate::palw_court_scope_v1`]; called by the kernel route's
+/// fold past `palw_provider_court_v1` only). The demanded unit must be claim-specific — a typed snapshot slice or the registered `M0`
+/// memory is model content, refused at any count — and the requester's OPERATOR may name at most
+/// `PALW_COURT_SCOPE_MAX_UNITS_PER_REQUESTER_V1` distinct units of one claim (no other requester's allowance is touched, so no
+/// producer, seat or Sybil can exhaust an honest prosecutor's: G14's starvation-freedom). `Ok(Some(row))`: admitted, with the claim's
+/// subject row carrying the unit (the caller writes it once the kernel accepts the demand); `Ok(None)`: no unit the ledger knows (the
+/// kernel refuses it on its own); `Err`: the object is dropped.
+pub(super) fn court_scope_admit_demand_v1(
+    builder: &TransitionBuilder<'_>,
+    ledger: &misaka_palw_kernel::ledger::KernelLedgerV1,
+    signer: &PalwBondKeyV2,
+    claim: &misaka_palw_kernel::hash::Digest,
+    stage: u8,
+    position: u32,
+) -> Result<Option<(ProviderSubjectV1, ProviderSubjectRowV1)>, PalwStateV2Error> {
+    use crate::palw_court_scope_v1::{palw_court_demand_allowed_v1, palw_court_scope_record_v1, palw_kernel_demand_unit_v1};
+    let Some(unit) = palw_kernel_demand_unit_v1(ledger, claim, stage, position) else { return Ok(None) };
+    palw_court_demand_allowed_v1(unit).map_err(|e| refused(e.why()))?;
+    let operator = active_operator(builder, signer)?;
+    let subject = ProviderSubjectV1::KernelClaim { claim: Hash64::from_bytes(*claim) };
+    let mut row = route_of(builder)?.provider_subject_v1(&subject).unwrap_or_default();
+    palw_court_scope_record_v1(&mut row.requested, operator, (stage, position)).map_err(refused)?;
+    Ok(Some((subject, row)))
+}
+
+/// Write the court scope's tally (the claim's subject row) once the kernel accepted the demand it admitted.
+pub(super) fn write_court_scope_row_v1(builder: &mut TransitionBuilder<'_>, subject: &ProviderSubjectV1, row: &ProviderSubjectRowV1) {
+    write_subject(builder, subject, row);
 }

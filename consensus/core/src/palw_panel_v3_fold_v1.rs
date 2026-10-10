@@ -6,13 +6,14 @@
 //! ```text
 //!   block N, in the order the chain's own transition runs it
 //!   ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-//!   2f  advance_v1       engine.advance   releases, seals against the PARENT checkpoint, readiness, due draws
+//!   2f  advance_v1       engine.advance   releases, seals against the PARENT checkpoint, the epoch's source set frozen at its
+//!                                          commitment (the first block reaching `release_daa`), readiness, due draws
 //!                         ├─ binding      → the V2 panel record (anchor = V3 seed), duty row, reserved exposure, PanelBound
 //!                         └─ non-fraud end → V2 void (SealUnavailable / BeaconUnavailable / NoCapablePanel / PanelUnavailable)
 //!   3   objects          a certified epoch output (tag 120) is queued
 //!   4b″ take_block_v1    engine.accept_beacon per queued output (one that does not verify is dropped — the block stands)
 //!                         engine.admit        the claims the block created under the V3 rule, in V2 acceptance order
-//!                         the engine's journal (delta 170–173) is pushed
+//!                         the engine's journal (delta 170–174) is pushed
 //! ```
 //!
 //! **One exposure ledger.** A V3 binding writes the V2 duty row and the V2 `reserved_exposure` of each seat through the very
@@ -44,7 +45,10 @@ use crate::palw_permissionless_panel_v1::{
     PalwPanelV3ParamsV1, panel_admitted_claim_v1, panel_bond_key_v1, panel_snapshot_candidates_v1, panel_stratified_candidates_v1,
 };
 use misaka_palw_challenge::hash::Digest;
-use misaka_palw_challenge::{FinalPathV1, PostCommitChallengePolicyV1, WorkFinalEventV1, WorkSourceKindV1};
+use misaka_palw_challenge::{
+    AttributedWorkV1, FinalPathV1, PostCommitChallengePolicyV1, RootV1, SealedSourceV3, SourceAttributionV1, WorkFinalEventV1,
+    WorkSourceKindV1,
+};
 use misaka_palw_panel as eng;
 use misaka_palw_panel::{
     AdmittedClaimV1, BeaconProofV1, BeaconRequestV1, BondIdV1, ClaimPhaseV3, ConsensusViewV1, NonFraudReasonV1, PanelCursorV1,
@@ -54,12 +58,22 @@ use misaka_palw_panel::{
 /// Where the beacon's source events come from.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum PalwPanelV3BeaconSourceV1 {
-    /// **The branch's own settlements** — the only value any processor resolves. Every Final the V2 lattice can write passed
-    /// through a Panel licence, so none is a Panel-independent source, and the chain's G14-complete profile set is empty.
+    /// **The branch's own settlements** — the only value any processor resolves. Every Final the V2 lattice writes passed through a
+    /// Panel licence (never a source of a Panel draw); the kernel route's OPV Finals are `PanelIndependent`, and its claim seals are
+    /// the v3 beacon's facts (RFC-0010 × RFC-0015, GAP-B3: the non-circular bootstrap of `opv-beacon-bootstrap.md` §4 — complete-check
+    /// classes reach Final without a beacon, and their Finals seed every later draw, the Panel's included).
     #[default]
     Chain,
-    /// A fixed history, for reference replays and tests of the verification path. Never resolved from a running node.
-    Reference { events: Vec<WorkFinalEventV1>, eligible_profiles: BTreeSet<Digest> },
+    /// A fixed history, for reference replays and tests of the verification path. Never resolved from a running node. Its
+    /// `eligible_profiles` is also what the freeze stage freezes for an epoch under this source (so a test drives the freeze), but
+    /// a `Reference` history's own reads return its fields as given — only `Chain` reads the frozen set.
+    Reference {
+        events: Vec<WorkFinalEventV1>,
+        eligible_profiles: BTreeSet<Digest>,
+        /// Attributed works for a distinct source rule (empty: `events` attributed to nobody) and v3's sealed sources.
+        works: Vec<AttributedWorkV1>,
+        sealed: Vec<SealedSourceV3>,
+    },
 }
 
 /// **What the permissionless Panel's draw reads that the pure transition cannot see**, resolved by the host at the PRE-ENTROPY
@@ -134,13 +148,58 @@ impl<'a> ChainPanelBeaconHistoryV1<'a> {
     ) -> Self {
         Self { state, base_class, engine, source, tip_position }
     }
+
+    /// The kernel route's attributed OPV Finals (`PanelIndependent`). A route whose rows do not rebuild contributes nothing: the
+    /// fold refuses such a state on its own path, and a beacon that cannot be derived never locks (non-fraud `BeaconUnavailable`).
+    fn route_works(&self) -> Vec<AttributedWorkV1> {
+        self.state.kernel_route.as_ref().and_then(|route| route.beacon_events_v1().ok()).unwrap_or_default()
+    }
+}
+
+/// A V2 settlement event as an attributed work: the V2 lattice records no consumer, and its producer is the claim's bond; every
+/// such event is `PanelLicensed`, which the contract refuses for a Panel draw whatever its attribution.
+fn attributed_v2(event: WorkFinalEventV1) -> AttributedWorkV1 {
+    AttributedWorkV1 { event, attribution: SourceAttributionV1 { producer_id: [0u8; 64], consumer_id: RootV1::Absent } }
 }
 
 impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
+    /// The V2 lattice's Finals (all `PanelLicensed`) and the kernel route's OPV Finals (`PanelIndependent`).
     fn final_events(&self) -> Vec<WorkFinalEventV1> {
         match self.source {
-            PalwPanelV3BeaconSourceV1::Chain => palw_panel_v3_final_events_v1(self.state, self.base_class),
+            PalwPanelV3BeaconSourceV1::Chain => {
+                let mut events = palw_panel_v3_final_events_v1(self.state, self.base_class);
+                events.extend(self.route_works().into_iter().map(|work| work.event));
+                events
+            }
             PalwPanelV3BeaconSourceV1::Reference { events, .. } => events.clone(),
+        }
+    }
+
+    fn attributed_works(&self) -> Vec<AttributedWorkV1> {
+        match self.source {
+            PalwPanelV3BeaconSourceV1::Chain => {
+                let mut works: Vec<AttributedWorkV1> =
+                    palw_panel_v3_final_events_v1(self.state, self.base_class).into_iter().map(attributed_v2).collect();
+                works.extend(self.route_works());
+                works
+            }
+            PalwPanelV3BeaconSourceV1::Reference { events, works, .. } => {
+                if works.is_empty() {
+                    events.iter().cloned().map(attributed_v2).collect()
+                } else {
+                    works.clone()
+                }
+            }
+        }
+    }
+
+    /// The kernel route's claim seals (G14-R4's tables 25–26) as v3 sources; none below the route's fence.
+    fn sealed_sources(&self) -> Vec<SealedSourceV3> {
+        match self.source {
+            PalwPanelV3BeaconSourceV1::Chain => {
+                self.state.kernel_route.as_ref().and_then(|route| route.beacon_sealed_sources_v1().ok()).unwrap_or_default()
+            }
+            PalwPanelV3BeaconSourceV1::Reference { sealed, .. } => sealed.clone(),
         }
     }
 
@@ -148,11 +207,23 @@ impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
         self.tip_position
     }
 
-    /// **Empty on the chain**: a profile is eligible only when Active AND G14-complete in the epoch's commitment state, and the
-    /// code-derived `PUBLIC_PROSECUTION_COMPLETE` gate is not linked into consensus — no class is G14-complete here.
-    fn eligible_profiles(&self) -> BTreeSet<Digest> {
+    /// **The epoch's source set, FROZEN at its commitment position** — never re-derived. The engine's freeze stage wrote it once, in
+    /// the first block whose DAA reached `commitment_position` (`release_daa`), from what [`palw_panel_v3_epoch_sources_v1`] derived
+    /// at the pre-entropy checkpoint (the derived OPV-eligible set, `opv_eligible_set_v1`: Active kernel, conformance passed,
+    /// G14-complete, live DA, bounded, a verified policy, not denied). A profile denied, lapsed or newly eligible after that block
+    /// does not change it; a reorg across the freeze block reverts and re-freezes it with the branch (delta 174). No engine, or no
+    /// frozen set for the epoch (none derived, an empty or over-cap derivation, the window closed): no eligible profile.
+    ///
+    /// The residual this closes (RFC-0010, the codex audit): the set used to be re-derived from the ledger the VERIFYING block held,
+    /// so a profile whose eligibility facts changed between the commitment and the lock changed the mixed set and let a producer
+    /// steer it. The onboarding commitment freezes its set in its row the same way (`palw_onboarding_fold_v1`).
+    fn eligible_profiles(&self, commitment_position: u64) -> BTreeSet<Digest> {
         match self.source {
-            PalwPanelV3BeaconSourceV1::Chain => BTreeSet::new(),
+            PalwPanelV3BeaconSourceV1::Chain => self
+                .engine
+                .and_then(|engine| engine.frozen_sources_at(commitment_position))
+                .map(|row| row.profiles.iter().map(|id| id.as_bytes()).collect())
+                .unwrap_or_default(),
             PalwPanelV3BeaconSourceV1::Reference { eligible_profiles, .. } => eligible_profiles.clone(),
         }
     }
@@ -168,6 +239,28 @@ impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+/// **What the freeze stage freezes for an epoch committed at `release_daa`**, derived from `checkpoint` (the block's selected parent:
+/// the pre-entropy checkpoint, never this block's objects). Under `Chain`: the kernel route's derived OPV-eligible set at
+/// `release_daa` under the block's OPV extras (deny-list, floor, test seam) — empty without the route, its OPV extras, or a ledger
+/// that rebuilds. Under `Reference`: the reference's own set.
+pub fn palw_panel_v3_epoch_sources_v1(
+    checkpoint: &PalwChainStateV2,
+    source: &PalwPanelV3BeaconSourceV1,
+    opv: Option<&crate::palw_kernel_route_v1::PalwKernelOpvExtrasV1>,
+    release_daa: u64,
+) -> Vec<Hash64> {
+    match source {
+        PalwPanelV3BeaconSourceV1::Chain => {
+            let (Some(route), Some(opv)) = (checkpoint.kernel_route.as_ref(), opv) else { return Vec::new() };
+            let Ok(ledger) = route.ledger() else { return Vec::new() };
+            route.opv_eligible_set_v1(&ledger, release_daa, &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv))
+        }
+        PalwPanelV3BeaconSourceV1::Reference { eligible_profiles, .. } => {
+            eligible_profiles.iter().map(|id| Hash64::from_bytes(*id)).collect()
+        }
     }
 }
 
@@ -259,8 +352,8 @@ impl<'a, 'b> FoldView<'a, 'b> {
 impl ConsensusViewV1 for FoldView<'_, '_> {
     /// The public population frozen at the PRE-ENTROPY CHECKPOINT: the parent state, never this block's registrations, top-ups,
     /// readiness proofs or objects. Sanitised so that the engine's structural checks cannot fail the block: an exclusion,
-    /// an immature or under-collateralised bond is simply not a candidate, and a population above the cap keeps its highest
-    /// collateral (ties by bond id) — weight is proportional to collateral, so the dropped tail carries the least of it.
+    /// an immature or under-collateralised bond is simply not a candidate. A population above the cap follows the same
+    /// no-panel path as the flat adapter; it never ranks individual bond sizes to discard smaller public participants.
     fn candidates(&self, claim: &AdmittedClaimV1) -> Result<Vec<SeatCandidateV1>, PanelErrorV1> {
         let policy = self.mirror.policy;
         let checkpoint_daa = self.engine.daa();
@@ -276,17 +369,13 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
         // A claim the checkpoint does not hold seals an empty population (and ends non-fraud), never a failed block.
         .unwrap_or_default();
         rows.retain(|seat| self.admissible(seat, claim));
-        if rows.len() > policy.max_candidates as usize {
-            rows.sort_by(|a, b| b.collateral.cmp(&a.collateral).then(a.bond.cmp(&b.bond)));
-            rows.truncate(policy.max_candidates as usize);
-        }
         Ok(rows)
     }
 
     /// **The population of a claim drawn per shard** (RFC-0006 × RFC-0010), at the same checkpoint and sanitised exactly as
     /// [`Self::candidates`]: per shard, the bonds that proved the shard's readiness (`palw_tir_shard_ready_class_v1` — the same
     /// eligibility lane A's per-shard draw reads), each with its stratum bits; and, for an outsider-judged claim, the base
-    /// class's population as OUTSIDER role. A population above the cap keeps its highest collateral, the bits kept aligned.
+    /// class's population as OUTSIDER role. Above the capacity bound no partial population is selected.
     fn stratified_candidates(
         &self,
         claim: &AdmittedClaimV1,
@@ -305,10 +394,6 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
         )
         .unwrap_or_default();
         rows.retain(|(seat, _)| self.admissible(seat, claim));
-        if rows.len() > policy.max_candidates as usize {
-            rows.sort_by(|(a, _), (b, _)| b.collateral.cmp(&a.collateral).then(a.bond.cmp(&b.bond)));
-            rows.truncate(policy.max_candidates as usize);
-        }
         Ok(rows.into_iter().unzip())
     }
 
@@ -339,6 +424,16 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
             self.tip_position,
         );
         beacon::verify_panel_beacon_for_engine_v1(&self.inputs.approved_beacons, &history, request, proof)
+    }
+
+    /// The epoch's source set at its commitment, derived from the PARENT (the pre-entropy checkpoint) — frozen by the engine.
+    fn epoch_sources(&self, release_daa: u64) -> Vec<Hash64> {
+        palw_panel_v3_epoch_sources_v1(
+            self.parent,
+            &self.inputs.beacon_source,
+            self.builder.extras.kernel_route.as_ref().and_then(|route| route.opv.as_ref()),
+            release_daa,
+        )
     }
 
     /// The V2 claim has left its Panel's receipts (licensed, final, voided, retired): the engine releases its reservation.
@@ -378,7 +473,11 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
 
 /// The mirror, iff the V3 rule governs claims at this block (the fence in force, R-core+ in force).
 fn active_mirror(builder: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Option<PalwPanelV3ParamsV1> {
-    builder.params.panel_v3().copied().filter(|mirror| ctx.daa_score >= mirror.from_daa && builder.params.rcore_plus_active_at(ctx.daa_score))
+    builder
+        .params
+        .panel_v3()
+        .copied()
+        .filter(|mirror| ctx.daa_score >= mirror.from_daa && builder.params.rcore_plus_active_at(ctx.daa_score))
 }
 
 fn create_engine(parent: &PalwChainStateV2, mirror: &PalwPanelV3ParamsV1) -> Result<PermissionlessPanelStateV1, PalwStateV2Error> {
@@ -435,7 +534,11 @@ pub(super) fn advance_v1(
     apply_deferred_ends_v1(builder, ctx)
 }
 
-fn apply_events(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, events: &PanelFoldEventsV1) -> Result<(), PalwStateV2Error> {
+fn apply_events(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    events: &PanelFoldEventsV1,
+) -> Result<(), PalwStateV2Error> {
     for (id, reason) in &events.non_fraud_voids {
         end_claim(builder, ctx, id, v2_reason_of(*reason), true)?;
     }
@@ -510,7 +613,8 @@ fn bind_v2(
     let mut seats = Vec::with_capacity(binding.seats.len());
     for seat in &binding.seats {
         let bond = panel_bond_key_v1(*seat);
-        let operator_id = builder.state.bonds.get(&bond).map(|record| record.operator_id).ok_or(PalwStateV2Error::MissingBond(bond))?;
+        let operator_id =
+            builder.state.bonds.get(&bond).map(|record| record.operator_id).ok_or(PalwStateV2Error::MissingBond(bond))?;
         seats.push(PalwPanelSeatV2 { bond, operator_id });
     }
     let strata = builder.state.panel_v3.as_ref().and_then(|engine| engine.claim(claim_id)).and_then(|record| record.strata);
@@ -526,7 +630,10 @@ fn bind_v2(
         // The previous round's seats leave duty with their exposure; the redraw deals different ones.
         builder.release_seat_duties(claim_id)?;
     }
-    builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: binding.panel_seed_v3, seats: seats.clone(), bound_daa: ctx.daa_score }));
+    builder.write_panel(
+        *claim_id,
+        Some(PalwPanelStateV2 { anchor: binding.panel_seed_v3, seats: seats.clone(), bound_daa: ctx.daa_score }),
+    );
     builder.reserve_seat_duties_with(*claim_id, &seats, binding.exposure as u128, ctx.daa_score)?;
     if let Some(strata) = strata {
         // RFC-0006's per-shard record: the plan frozen, the outsider flag, each seat's share — the armed machinery runs from here.
@@ -593,17 +700,15 @@ fn admission_of(
     // from the shard's ready bonds, the shard's outsider first exactly when the claim is outsider-judged (each shard's part names
     // its outsider). Never flat: a flat Panel cannot license by parts. The per-seat exposure is priced over every seat of the
     // stratified Panel.
-    if let Some(plan) = super::palw_tir_shard_fold_v1::plan_of_class_v1(&builder.state, builder.params, &claim.class_id, ctx.daa_score) {
-        let strata = PanelStrataV1 {
-            count: plan.s_l,
-            class_seats: crate::palw_tir_shard_v1::PALW_TIR_SHARD_SEATS_PER_SHARD_V1,
-            outsider,
-        };
+    if let Some(plan) = super::palw_tir_shard_fold_v1::plan_of_class_v1(&builder.state, builder.params, &claim.class_id, ctx.daa_score)
+    {
+        let strata =
+            PanelStrataV1 { count: plan.s_l, class_seats: crate::palw_tir_shard_v1::PALW_TIR_SHARD_SEATS_PER_SHARD_V1, outsider };
         strata.validate().map_err(|_| "the class's plan has no stratified Panel")?;
         let prices = builder.read().rcore_bind_prices(claim_id, claim, strata.seat_count(), ctx.daa_score);
         let exposure = u64::try_from(prices.eligibility).map_err(|_| "the per-seat exposure does not fit")?;
-        let admitted =
-            panel_admitted_claim_v1(&builder.state, *claim_id, exposure).map_err(|_| "the claim has no admissible immutable fields")?;
+        let admitted = panel_admitted_claim_v1(&builder.state, *claim_id, exposure)
+            .map_err(|_| "the claim has no admissible immutable fields")?;
         return Ok((admitted, Some(strata)));
     }
     // The outsider seat is part of the licence (`palw_licence_names_its_outsider_v1`): the policy must draw one exactly when V2
@@ -613,7 +718,8 @@ fn admission_of(
     }
     let prices = builder.read().rcore_bind_prices(claim_id, claim, mirror.policy.seat_count as usize, ctx.daa_score);
     let exposure = u64::try_from(prices.eligibility).map_err(|_| "the per-seat exposure does not fit")?;
-    let admitted = panel_admitted_claim_v1(&builder.state, *claim_id, exposure).map_err(|_| "the claim has no admissible immutable fields")?;
+    let admitted =
+        panel_admitted_claim_v1(&builder.state, *claim_id, exposure).map_err(|_| "the claim has no admissible immutable fields")?;
     Ok((admitted, None))
 }
 
@@ -666,7 +772,7 @@ pub(super) fn take_block_v1(
 // The journal: the engine's keyed decomposition
 // ---------------------------------------------------------------------------------------------
 
-/// The delta entries (170–173) of the engine's change from the parent state to this one.
+/// The delta entries (170–174) of the engine's change from the parent state to this one.
 fn journal(old: Option<&PermissionlessPanelStateV1>, new: Option<&PermissionlessPanelStateV1>) -> Vec<PalwDeltaEntryV2> {
     let mut entries = Vec::new();
     let Some(new) = new else { return entries };
@@ -685,7 +791,11 @@ fn journal(old: Option<&PermissionlessPanelStateV1>, new: Option<&Permissionless
     let empty_work = BTreeSet::new();
     let old_work = old.map(|engine| engine.work_id_rows()).unwrap_or(&empty_work);
     for key in old_work.symmetric_difference(new.work_id_rows()) {
-        entries.push(PalwDeltaEntryV2::PanelV3WorkId { key: *key, old: old_work.contains(key), new: new.work_id_rows().contains(key) });
+        entries.push(PalwDeltaEntryV2::PanelV3WorkId {
+            key: *key,
+            old: old_work.contains(key),
+            new: new.work_id_rows().contains(key),
+        });
     }
     let empty_beacons = BTreeMap::new();
     let old_beacons = old.map(|engine| engine.beacon_rows()).unwrap_or(&empty_beacons);
@@ -693,6 +803,14 @@ fn journal(old: Option<&PermissionlessPanelStateV1>, new: Option<&Permissionless
         let (before, after) = (old_beacons.get(key).copied(), new.beacon_rows().get(key).copied());
         if before != after {
             entries.push(PalwDeltaEntryV2::PanelV3Beacon { key: *key, old: before, new: after });
+        }
+    }
+    let empty_sources = BTreeMap::new();
+    let old_sources = old.map(|engine| engine.epoch_source_rows()).unwrap_or(&empty_sources);
+    for key in old_sources.keys().chain(new.epoch_source_rows().keys()).collect::<BTreeSet<_>>() {
+        let (before, after) = (old_sources.get(key), new.epoch_source_rows().get(key));
+        if before != after {
+            entries.push(PalwDeltaEntryV2::PanelV3EpochSources { key: *key, old: before.cloned(), new: after.cloned() });
         }
     }
     entries
@@ -720,11 +838,17 @@ pub(super) fn apply_cursor_entry_v1(
     match (install, state.panel_v3.as_mut()) {
         (Some(cursor), Some(engine)) => engine.set_cursor(cursor.clone()),
         (Some(cursor), None) => {
-            state.panel_v3 =
-                Some(PermissionlessPanelStateV1::from_cursor(cursor.clone()).map_err(|_| mismatch("the Panel V3 cursor does not build an engine"))?);
+            state.panel_v3 = Some(
+                PermissionlessPanelStateV1::from_cursor(cursor.clone())
+                    .map_err(|_| mismatch("the Panel V3 cursor does not build an engine"))?,
+            );
         }
         (None, Some(engine)) => {
-            if !engine.claim_rows().is_empty() || !engine.work_id_rows().is_empty() || !engine.beacon_rows().is_empty() {
+            if !engine.claim_rows().is_empty()
+                || !engine.work_id_rows().is_empty()
+                || !engine.beacon_rows().is_empty()
+                || !engine.epoch_source_rows().is_empty()
+            {
                 return Err(mismatch("the Panel V3 engine is removed while it still holds rows"));
             }
             state.panel_v3 = None;
@@ -782,6 +906,22 @@ pub(super) fn apply_beacon_entry_v1(
     Ok(())
 }
 
+pub(super) fn apply_epoch_sources_entry_v1(
+    state: &mut PalwChainStateV2,
+    key: u64,
+    old: &Option<eng::EpochSourceSetV1>,
+    new: &Option<eng::EpochSourceSetV1>,
+    revert: bool,
+) -> Result<(), PalwStateV2Error> {
+    let (expected, install) = if revert { (new, old) } else { (old, new) };
+    let engine = state.panel_v3.as_mut().ok_or_else(|| mismatch("a Panel V3 frozen source set without an engine"))?;
+    if engine.epoch_source_rows().get(&key) != expected.as_ref() {
+        return Err(mismatch("a Panel V3 frozen source set does not match the delta's expectation"));
+    }
+    engine.put_epoch_source_row(key, install.clone());
+    Ok(())
+}
+
 /// After a delta's rows are applied or reverted: re-derive the engine's reservations (its one derived field).
 pub(super) fn refresh_derived_v1(state: &mut PalwChainStateV2) -> Result<(), PalwStateV2Error> {
     if let Some(engine) = state.panel_v3.as_mut() {
@@ -803,7 +943,8 @@ impl PalwChainStateV2 {
         let bad = |why: String| PalwStateV2Error::CarriageInconsistent(format!("permissionless Panel: {why}"));
         let Some(engine) = &self.panel_v3 else {
             if let Some((id, _)) = self.claims.iter().find(|(_, claim)| {
-                matches!(claim.phase, PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. }) && params.panel_v3_rule_at(claim.accepted_daa)
+                matches!(claim.phase, PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. })
+                    && params.panel_v3_rule_at(claim.accepted_daa)
             }) {
                 return Err(bad(format!("claim {id} was accepted under the rule but no engine exists")));
             }
@@ -841,12 +982,17 @@ impl PalwChainStateV2 {
                         return Err(bad(format!("claim {id}'s panel record is not its binding")));
                     }
                     let row = self.panel_duties.get(id).ok_or_else(|| bad(format!("claim {id} is bound but holds no duty row")))?;
-                    if row.seat_exposure != binding.exposure as u128 || row.seats.keys().copied().collect::<BTreeSet<_>>() != seats.iter().copied().collect() {
+                    if row.seat_exposure != binding.exposure as u128
+                        || row.seats.keys().copied().collect::<BTreeSet<_>>() != seats.iter().copied().collect()
+                    {
                         return Err(bad(format!("claim {id}'s duty row is not its binding")));
                     }
                     // RFC-0006 × RFC-0010: a claim drawn per shard licenses by parts — it holds its per-shard record, of its strata.
                     if let Some(strata) = record.strata
-                        && !self.tir_shard_claims.get(id).is_some_and(|shard| shard.s_l == strata.count && shard.outsider == strata.outsider)
+                        && !self
+                            .tir_shard_claims
+                            .get(id)
+                            .is_some_and(|shard| shard.s_l == strata.count && shard.outsider == strata.outsider)
                     {
                         return Err(bad(format!("claim {id} was drawn per shard but holds no per-shard record of its strata")));
                     }

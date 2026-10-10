@@ -1,4 +1,4 @@
-//! **Constraint families, not model-brand kernels** (RFC-0005 §K.3).
+//! **Constraint families, not model-brand kernels** (`docs/design/palw/versioned-kernels.md` §K.3).
 //!
 //! Every PALW-TIR v1 primitive belongs to exactly one family. A kernel descriptor lists the families it
 //! implements, each with ONE checker and ONE terminal court; a plan cannot choose a weaker checker, and
@@ -124,6 +124,9 @@ pub enum CourtIdV1 {
     MatMulScalar = 2,
     /// One stage input at one position: its binding recomputed from public job facts and the authenticated upstream values.
     EdgeRecompute = 3,
+    /// **K2-TIR-v4**: one output element of one committed value, recomputed from one Merkle leaf per input dependency line
+    /// ([`crate::element`]) — bounded by the tile, never by the tensor.
+    ElementRecompute = 4,
 }
 
 #[cfg(test)]

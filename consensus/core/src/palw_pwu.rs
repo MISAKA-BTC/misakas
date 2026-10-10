@@ -35,8 +35,7 @@
 //!
 //! It is the **normative operation count of one canonical inference** under the class's frozen
 //! kernel graph — a countable consequence of the registered model shape, the pinned kernel
-//! graph, and the frozen decode budget ([`crate::pow_layer0::POW_L1_PALW_N_PREDICT_V1`], whose
-//! own doc records that changing it is a hard fork). Every ticket in a class has the same job
+//! graph, and the class's frozen decode budget. Every ticket in a class has the same job
 //! shape, so this is one number per class, fixed when the class registers.
 //!
 //! It must **not** be:

@@ -11,7 +11,7 @@
 //!
 //! Everything here is **computed and logged only**: no consensus validation, fork choice,
 //! acceptance or credit path reads any of it. The credit predicate stays ADR-0033's
-//! `decide_credit_v1`, untouched; ADR-0034 §7 explicitly rejects any
+//! the retired V1 credit gate; ADR-0034 §7 explicitly rejects any
 //! `FINALIZED_WITHOUT_REPLAY`-shaped path, so this module deliberately exposes **no**
 //! crediting API at all — randomness and risk may schedule work and scale redundancy, never
 //! make an unchecked job safe.
@@ -838,10 +838,7 @@ pub fn escalated_panel_width_v1(base_q: u16, escalation_round: u32) -> usize {
 /// the lowest ticket holds the seat — ticket order, so still input-order-invariant.
 ///
 /// Deterministic in every input and invariant under candidate order. An empty eligible set
-/// yields an empty panel, never a shrunk quorum. Stage-0 note: `decide_credit_v1` does NOT
-/// read this panel yet — it derives the ADR-0028 class panel until the Stage-1 wiring
-/// substitutes this one (ADR-0028 §2 as amended by ADR-0034 §7); until that wiring lands,
-/// the routed exclusions gate scheduling telemetry only, and no credit path consumes them.
+/// yields an empty panel, never a shrunk quorum. This helper does not mint credit.
 pub fn select_routed_replay_panel_v1(
     commitment_root: &Hash64,
     executor_id: &Hash64,

@@ -1,13 +1,13 @@
-//! **Lane DA16 on the real node: the public-material transport and the provider court (tags 150–153, `palw_provider_court_v1`).**
+//! **Lane DA16 on the real node: the claim-material provider court (tags 150–153, `palw_provider_court_v1`) and, off chain, the
+//! public-material transport.**
 //!
 //! ```text
-//! artifact:  providers publish the bytes (misaka-palw-remote::public_material) → 150 leases of the PAIR (class, kernel root)
-//!            → 104 binds only over ≥ 2 live leases serving through its horizon → an outsider fetches cold, every leaf against the
-//!            CHAIN's root → CONFIRMED, or KERNEL_ROOT_DIFFERS → 151 forces the bound side out of the pair's provider → 152 (read off the
-//!            chain) → 105 refutes; an unanswered 151 slashes the provider; every lease charged → the pair LAPSES → attests nothing
+//! artifact:  NOT a consensus matter (ADR-0177): 104 binds with no provider; an `Artifact` lease / challenge / answer is refused; the
+//!            transport (misaka-palw-remote::public_material) is optional tooling — an outsider confirms a binding from the bytes, or
+//!            refutes a false one (tag 105) from its OWN copy and the binder's OWN published tree
 //! claim:     150 leases of a kernel claim → 153 moves its DA responsibility (irreversible) → an unanswered demand is the PROVIDERS'
-//!            default (never the producer's); every lease charged on 151s → the claim lapses (void, never convicted); served bytes
-//!            still convict a false computation (the miner's, through the kernel's unchanged FileProof)
+//!            default (never the producer's); every lease charged on 151s → the claim lapses (void, never convicted; each charge
+//!            burned whole); served bytes still convict a false computation (the miner's, through the kernel's unchanged FileProof)
 //! ```
 //!
 //! The fences are test-armed through the harness's `Config` seam, WITHOUT their validation (which refuses every height), as everywhere
@@ -16,9 +16,9 @@
 use super::*;
 use kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1;
 use kaspa_consensus_core::palw_provider_court_v1::{
-    PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1, PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1, PALW_PROVIDER_CHALLENGER_REWARD_PERMILLE_V1,
-    PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, PALW_PROVIDER_COURT_TABLE_LEASES_V1, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1,
-    ProviderCourtReadV1, ProviderSubjectV1, palw_kernel_claim_horizon_bound_v1, palw_provider_court_message_v1,
+    PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1, PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1, PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1,
+    PALW_PROVIDER_COURT_TABLE_LEASES_V1, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, ProviderCourtReadV1, ProviderSubjectV1,
+    palw_kernel_claim_horizon_bound_v1, palw_provider_court_message_v1, palw_provider_reporter_share_v1,
 };
 use kaspa_consensus_core::palw_public_material_v1::{
     ArtifactFactsV1, ArtifactManifestV1, BindingCheckV1, PublicUnitAnswerV1, PublicUnitV1, answer_artifact_unit_v1,
@@ -26,7 +26,8 @@ use kaspa_consensus_core::palw_public_material_v1::{
 };
 use misaka_palw_remote::evidence::fs::FsProvider;
 use misaka_palw_remote::public_material::{
-    MaterialProvider, check_binding_v1, fetch_artifact_v1, fetch_claim_position_v1, publish_artifact_v1, publish_claim_positions_v1,
+    MaterialProvider, artifact_leaf_path, check_binding_v1, fetch_artifact_unit_v1, fetch_artifact_v1, fetch_claim_position_v1,
+    publish_artifact_v1, publish_claim_positions_v1,
 };
 
 const REGISTRANT: usize = 1;
@@ -100,30 +101,6 @@ impl Net {
     fn court_reserved(&self, card: usize) -> u128 {
         self.chain.tip_state().1.provider_court_reserved(&self.bond(card))
     }
-
-    /// **What an outsider reads off the selected chain**: every provider-court answer a block carried for `(subject, provider, unit)`,
-    /// in chain order (the reader judges each again; a refused one is in a block too).
-    fn answers_on_chain(&self, subject: &ProviderSubjectV1, provider: usize, unit: &PublicUnitV1) -> Vec<PublicUnitAnswerV1> {
-        use kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2;
-        let provider = self.bond(provider);
-        let mut out = Vec::new();
-        for block in chain_blocks(&self.chain, self.chain.sink()) {
-            for tx in block.transactions.iter() {
-                if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
-                    continue;
-                }
-                let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload) else { continue };
-                if let Obj::ProviderAnswerV1 { subject: s, provider: p, unit: u, answer, .. } = payload.object
-                    && s == *subject
-                    && p == provider
-                    && u == *unit
-                {
-                    out.push(*answer);
-                }
-            }
-        }
-        out
-    }
 }
 
 /// The V2 inventory leaves of `f`'s weights (what a publisher places).
@@ -167,129 +144,81 @@ async fn register_v2(net: &mut Net, f: &OnbFixture) -> Hash64 {
     v2_class
 }
 
-// ---- the artifact ------------------------------------------------------------------------------------------------------------
+// ---- the artifact: not a consensus matter (ADR-0177) ------------------------------------------------------------------------
 
-/// **An honest binding: bonded availability first, then an outsider confirms it from the bytes.** A binding is refused until two
-/// providers of distinct operators lease the pair through its horizon; an outsider fetches the artifact cold from the providers it
-/// chose (one serving a corrupted leaf), checks every leaf against the CHAIN's root and confirms the binding; on chain, a challenged
-/// leaf and the kernel commitments are answered (a wrong answer first is refused and changes nothing), the challenger pays only the
-/// fee, and a replaying node agrees.
+/// The aux rows of the court's tables 43–45 the route holds.
+fn court_rows(net: &Net) -> usize {
+    net.api().map(|r| r.aux.keys().filter(|(t, _)| (PALW_PROVIDER_COURT_TABLE_LEASES_V1..=45).contains(t)).count()).unwrap_or(0)
+}
+
+/// **ADR-0177 non-interference: model availability never gates a binding, and the artifact subject is withdrawn.** Past the provider
+/// court's fence, tag 104 binds with no provider at all and matures into an attested root; an `Artifact` lease, a challenge of it and an
+/// answer are each refused (no row in tables 43–45, nothing reserved, nothing charged); and whether any provider serves the bytes (here
+/// every directory is deleted before maturity) changes nothing the chain holds. The transport stays as optional, non-consensus tooling:
+/// an outsider fetches the artifact cold from the providers it chose (one lying about a leaf, one empty) and confirms the binding from
+/// the bytes against the CHAIN's roots, off chain. A replaying node agrees.
 #[tokio::test]
-async fn da16_an_outsider_confirms_an_honest_binding_from_the_bytes_its_bonded_providers_serve() {
+async fn da16_model_availability_never_gates_a_binding_and_the_artifact_subject_is_refused() {
     kaspa_core::log::try_init_logger("warn");
-    let (truth, wrong) = (onb_fixture(11), onb_fixture(12));
+    let truth = onb_fixture(11);
     let leaves = onb_leaves(&truth);
     let mut net = Net::over_cfg(court_onboarding_config(), TestConsensus::new);
     net.beat_to(1).await;
-    let (p1, p2, outsider) = (2usize, 3usize, 4usize);
+    let (p1, outsider) = (2usize, 4usize);
     let v2_class = register_v2(&mut net, &truth).await;
     let kernel_root = Hash64::from_bytes(truth.pc.root());
     let subject = ProviderSubjectV1::Artifact { v2_class, kernel_param_root: kernel_root };
 
-    // ---- the providers place the bytes (read back), the manifest last ----
+    // ---- the binding: no lease, no provider — bound ----
+    let o = net.artifact_bound(REGISTRANT, v2_class, kernel_root);
+    net.send(vec![(REGISTRANT, o)]).await;
+    let binding = net.api().unwrap().artifact_binding_v1(&v2_class, &kernel_root).expect("bound with no provider at all");
+
+    // ---- the withdrawn subject: a lease, a challenge, an answer — each refused, whatever it names ----
+    let serve_until = net.daa() + 400;
+    let lease = net.court_lease(p1, subject, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, serve_until);
+    net.send(vec![(p1, lease)]).await;
+    let challenge = net.court_challenge(outsider, subject, p1, PublicUnitV1::ArtifactLeaf { index: 0 });
+    let commitments = answer_artifact_unit_v1(&truth.program, &leaves, &PublicUnitV1::KernelCommitments).unwrap();
+    let answer = net.court_answer(p1, subject, PublicUnitV1::KernelCommitments, commitments);
+    net.send(vec![(outsider, challenge), (p1, answer)]).await;
+    assert_eq!(court_rows(&net), 0, "no row: model availability is not a consensus matter (ADR-0177 D1)");
+    assert_eq!((net.court_reserved(p1), net.court_reserved(outsider)), (0, 0), "nothing reserved, nothing to charge");
+    assert_eq!((net.slashed(p1), net.slashed(outsider)), (0, 0));
+
+    // ---- the transport, off chain: providers place the bytes; an outsider confirms the binding from them ----
     let dirs = Dirs::new("honest", 3);
     let manifest =
         ArtifactManifestV1::of(net.domain, truth.class.clone(), truth.artifact_root, kernel_root, &leaves, net.daa() + 1_000);
-    let commitments = answer_artifact_unit_v1(&truth.program, &leaves, &PublicUnitV1::KernelCommitments).unwrap();
-    publish_artifact_v1(&dirs.refs()[..2], &manifest, &leaves, &[(PublicUnitV1::KernelCommitments, commitments)], 2)
-        .expect("two verified copies");
-
-    // ---- no availability, no binding (the route has no row at all yet) ----
-    let o = net.artifact_bound(REGISTRANT, v2_class, kernel_root);
-    net.send(vec![(REGISTRANT, o)]).await;
-    assert!(net.api().and_then(|r| r.artifact_binding_v1(&v2_class, &kernel_root)).is_none(), "no lease: the binding is refused");
-    let serve_until = net.daa() + 400;
-    let o = net.court_lease(p1, subject, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, serve_until);
-    net.send(vec![(p1, o)]).await;
-    assert_eq!(net.court_reserved(p1), u128::from(PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1), "V2 sees the lease's reservation");
-    // Under the floor, a second lease by the same provider, a lease too short to be challenged: refused.
-    let low = net.court_lease(p2, subject, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1 - 1, serve_until);
-    let twice = net.court_lease(p1, subject, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, serve_until);
-    let short = net.court_lease(outsider, subject, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, net.daa() + 5);
-    net.send(vec![(p2, low), (p1, twice), (outsider, short)]).await;
-    assert_eq!(net.court(&subject).leases.len(), 1, "only the first lease stands");
-    let o = net.artifact_bound(REGISTRANT, v2_class, kernel_root);
-    net.send(vec![(REGISTRANT, o)]).await;
-    assert!(
-        net.api().unwrap().artifact_binding_v1(&v2_class, &kernel_root).is_none(),
-        "one lease is not two operators: still refused"
-    );
-    let o = net.court_lease(p2, subject, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, serve_until);
-    net.send(vec![(p2, o)]).await;
-    let o = net.artifact_bound(REGISTRANT, v2_class, kernel_root);
-    net.send(vec![(REGISTRANT, o)]).await;
-    let binding = net.api().unwrap().artifact_binding_v1(&v2_class, &kernel_root).expect("bound over two live leases");
-    assert!(serve_until >= binding.final_daa, "the leases cover the binding's whole refutation horizon");
-
-    // ---- an outsider, cold: the chain's facts only, providers it chose (one of them lies about a leaf, one holds nothing) ----
+    publish_artifact_v1(&dirs.refs()[..2], &manifest, &leaves, &[], 2).expect("two verified copies");
     let mut lie = leaves[1].clone();
     lie.bytes[0] ^= 0x5A;
-    dirs.providers[1]
-        .put(&misaka_palw_remote::public_material::artifact_leaf_path(&truth.artifact_root, 1), &borsh::to_vec(&lie).unwrap())
-        .unwrap();
-    let state = net.chain.tip_state().1;
-    let chain_root = state.class(&v2_class).unwrap().artifact_root;
-    let bound_root = net.api().unwrap().artifact_bindings_of_v1(&v2_class)[0].0;
+    dirs.providers[1].put(&artifact_leaf_path(&truth.artifact_root, 1), &borsh::to_vec(&lie).unwrap()).unwrap();
+    let chain_root = net.chain.tip_state().1.class(&v2_class).unwrap().artifact_root;
     let order: Vec<&dyn MaterialProvider> = vec![dirs.refs()[2], dirs.refs()[1], dirs.refs()[0]];
-    let fetched = fetch_artifact_v1(&order, net.domain, v2_class, chain_root, Some(bound_root), Hash64::from_bytes([7; 64]))
+    let fetched = fetch_artifact_v1(&order, net.domain, v2_class, chain_root, Some(kernel_root), Hash64::from_bytes([7; 64]))
         .expect("every leaf from some provider, each checked alone");
     assert_eq!(fetched.leaves, leaves, "whoever served them, the bytes are the class's");
-    assert_eq!(check_binding_v1(&fetched, bound_root).unwrap(), BindingCheckV1::Confirmed, "the binding is CONFIRMED from the bytes");
-    assert!(
-        fetch_artifact_v1(&order, net.domain, v2_class, chain_root, Some(Hash64::from_bytes(wrong.pc.root())), Hash64::default())
-            .is_err(),
-        "a manifest naming another kernel root than asked is never admissible"
-    );
+    assert_eq!(check_binding_v1(&fetched, kernel_root).unwrap(), BindingCheckV1::Confirmed, "CONFIRMED from the bytes, off chain");
 
-    // ---- on chain: two challenges, one wrong answer (refused), two right ones ----
-    let leaf_unit = PublicUnitV1::ArtifactLeaf { index: 0 };
-    let c1 = net.court_challenge(outsider, subject, p1, leaf_unit);
-    let c1_replay = c1.clone();
-    let c2 = net.court_challenge(outsider, subject, p2, PublicUnitV1::KernelCommitments);
-    let out_of_scope = net.court_challenge(outsider, subject, p1, PublicUnitV1::ArtifactLeaf { index: leaves.len() as u32 });
-    let own = net.court_challenge(p2, subject, p2, leaf_unit);
-    net.send(vec![(outsider, c1), (outsider, c2), (outsider, out_of_scope), (p2, own)]).await;
-    let read = net.court(&subject);
-    assert_eq!(read.challenges.len(), 2, "out of scope / by the provider's own operator: refused");
-    assert_eq!(net.court_reserved(outsider), 2 * u128::from(PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1), "two challenge bonds held");
-    let facts = fetched.facts();
-    let wrong_answer = PublicUnitAnswerV1::KernelCommitments { commitments: wrong.pc.clone() };
-    assert!(verify_artifact_answer_v1(&facts, &PublicUnitV1::KernelCommitments, &wrong_answer).is_err());
-    let o = net.court_answer(p2, subject, PublicUnitV1::KernelCommitments, wrong_answer);
-    net.send(vec![(p2, o)]).await;
-    assert!(net.court(&subject).challenges.iter().all(|(_, _, row)| !row.answered), "a wrong answer clears nothing");
-    let leaf_answer = answer_artifact_unit_v1(&fetched.program, &fetched.leaves, &leaf_unit).unwrap();
-    let commitments_answer = answer_artifact_unit_v1(&fetched.program, &fetched.leaves, &PublicUnitV1::KernelCommitments).unwrap();
-    let a1 = net.court_answer(p1, subject, leaf_unit, leaf_answer);
-    let a2 = net.court_answer(p2, subject, PublicUnitV1::KernelCommitments, commitments_answer);
-    let before = net.collateral(outsider);
-    net.send(vec![(p1, a1), (p2, a2)]).await;
-    assert!(net.court(&subject).challenges.iter().all(|(_, _, row)| row.answered && row.bond == 0), "both answered");
-    assert_eq!(net.court_reserved(outsider), 0, "the challenge bonds returned");
-    assert_eq!(net.collateral(outsider), before - 2 * PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1, "the challenger paid only the fees");
-    // A replay of the answered challenge (anyone may carry the signed bytes again) never re-opens it: the tombstone holds it until
-    // the deadline, its own signed expiry after.
-    let answered = net.court(&subject);
-    net.send(vec![(outsider, c1_replay.clone())]).await;
-    assert_eq!(net.court(&subject), answered, "a replay before the deadline meets the tombstone");
-    let deadline = answered.challenges.iter().map(|(_, _, r)| r.deadline_daa).max().unwrap();
-    net.beat_to(deadline + 1).await;
-    assert!(net.court(&subject).challenges.is_empty(), "tombstones go at the deadline; nothing was charged");
-    assert!(net.court(&subject).leases.iter().all(|(_, l)| !l.charged));
-    net.send(vec![(outsider, c1_replay)]).await;
-    assert!(net.court(&subject).challenges.is_empty(), "a replay after the deadline is past its own signed expiry");
-    assert_eq!(net.collateral(outsider), before - 2 * PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1, "and cost its signer nothing more");
+    // ---- every provider gone: the binding matures and attests exactly as it would have ----
+    drop(dirs);
+    net.beat_to(binding.matures_daa).await;
+    assert_eq!(net.api().unwrap().onboarding_attested_roots_v1(net.daa()), vec![kernel_root], "attested: nobody served anything");
+    assert_eq!(court_rows(&net), 0);
     let z = net.replay().await;
     net.assert_same(&z, "replay");
 }
 
-/// **A false binding is refuted from the bytes and the bound side the court forces out.** The binder binds OTHER weights' kernel
-/// commitments to its class, over two leases of the pair. The outsider fetches the V2 bytes cold, sees the roots differ, and forces the
-/// bound side out of the pair's provider one unit at a time (commitments, a run of row leaves, one row), each answer read OFF THE CHAIN
-/// and checked against the chain's roots; it localizes a differing row and refutes through tag 105 (the binder is slashed). The other
-/// provider does not answer and is slashed (the challenger paid); the provider that answered is cleared — it served what it promised.
+/// **A false binding is refuted from the verifier's OWN bytes and the binder's OWN published tree — no provider, no court demand.** The
+/// binder binds OTHER weights' kernel commitments to its class (no lease exists or is needed). The outsider holds the true bytes (its own
+/// copy, fetched off chain and checked against the CHAIN's artifact root), sees the roots differ, and reads the bound side from what the
+/// binder itself published, each unit checked against the BOUND root by the court's own function (commitments, a run of row leaves, one
+/// row); it localizes a differing row and refutes through tag 105: the binder is slashed and the refuter paid. (Had the binder published
+/// nothing, no court could force its tree out any more — ADR-0177 forbids model-bytes demands; design doc §7.7 proposes the hash-only
+/// binding demand that closes it.)
 #[tokio::test]
-async fn da16_a_false_binding_is_refuted_from_the_bytes_and_the_bound_side_the_court_forces_out() {
+async fn da16_a_false_binding_is_refuted_from_the_verifiers_own_bytes_and_the_binders_published_tree() {
     use kaspa_consensus_core::palw_onboarding_v1::{
         PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1 as RESERVED, PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1 as REWARD,
     };
@@ -298,70 +227,55 @@ async fn da16_a_false_binding_is_refuted_from_the_bytes_and_the_bound_side_the_c
     let (leaves, wrong_leaves) = (onb_leaves(&truth), onb_leaves(&wrong));
     let mut net = Net::over_cfg(court_onboarding_config(), TestConsensus::new);
     net.beat_to(1).await;
-    // The binder's friends lease the false pair; the outsider is another operator.
-    let (serving, silent, outsider) = (2usize, 5usize, 4usize);
+    let outsider = 4usize;
     let v2_class = register_v2(&mut net, &truth).await;
     let false_root = Hash64::from_bytes(wrong.pc.root());
-    let subject = ProviderSubjectV1::Artifact { v2_class, kernel_param_root: false_root };
-    let dirs = Dirs::new("false", 2);
-    let manifest =
-        ArtifactManifestV1::of(net.domain, truth.class.clone(), truth.artifact_root, false_root, &leaves, net.daa() + 1_000);
-    publish_artifact_v1(&dirs.refs(), &manifest, &leaves, &[], 2).expect("the V2 bytes are placed (they are the class's)");
-    let serve_until = net.daa() + 400;
-    let (l1, l2) = (
-        net.court_lease(serving, subject, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, serve_until),
-        net.court_lease(silent, subject, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, serve_until),
-    );
-    net.send(vec![(serving, l1), (silent, l2)]).await;
     let before_binder = net.collateral(REGISTRANT);
     let o = net.artifact_bound(REGISTRANT, v2_class, false_root);
     net.send(vec![(REGISTRANT, o)]).await;
-    assert!(net.api().unwrap().artifact_binding_v1(&v2_class, &false_root).is_some(), "bound over two live leases");
+    assert!(net.api().unwrap().artifact_binding_v1(&v2_class, &false_root).is_some(), "bound: no availability condition");
 
-    // ---- the outsider: the V2 bytes cold, the roots differ ----
+    // ---- the outsider's own copy of the class's bytes (any source; checked against the chain's root): the roots differ ----
+    let copy = Dirs::new("false-truth", 1);
+    let true_manifest =
+        ArtifactManifestV1::of(net.domain, truth.class.clone(), truth.artifact_root, false_root, &leaves, net.daa() + 1_000);
+    publish_artifact_v1(&copy.refs(), &true_manifest, &leaves, &[], 1).expect("the outsider's copy");
     let chain_root = net.chain.tip_state().1.class(&v2_class).unwrap().artifact_root;
-    let fetched = fetch_artifact_v1(&dirs.refs(), net.domain, v2_class, chain_root, Some(false_root), Hash64::default()).unwrap();
+    let fetched = fetch_artifact_v1(&copy.refs(), net.domain, v2_class, chain_root, Some(false_root), Hash64::default()).unwrap();
     let BindingCheckV1::KernelRootDiffers { true_commitments } = check_binding_v1(&fetched, false_root).unwrap() else {
         panic!("a false binding is never confirmed")
     };
     assert_eq!(true_commitments, truth.pc);
     let facts = ArtifactFactsV1 { program: &fetched.program, artifact_root: chain_root, kernel_param_root: false_root };
 
-    // ---- the bound side, forced out of the serving provider (its answers come from the bound bytes), read off the chain ----
-    let force = |net: &mut Net, unit: PublicUnitV1| {
-        let challenge = net.court_challenge(outsider, subject, serving, unit);
-        let answer = net.court_answer(serving, subject, unit, answer_artifact_unit_v1(&wrong.program, &wrong_leaves, &unit).unwrap());
-        (challenge, answer)
+    // ---- the bound side, from the binder's OWN publication (voluntary, off chain), each unit checked against the bound root ----
+    let binder = Dirs::new("false-binder", 1);
+    let publish = |unit: PublicUnitV1| {
+        let answer = answer_artifact_unit_v1(&wrong.program, &wrong_leaves, &unit).unwrap();
+        publish_artifact_v1(&binder.refs(), &true_manifest, &leaves, &[(unit, answer)], 1).expect("the binder's tree");
     };
-    let (c, a) = force(&mut net, PublicUnitV1::KernelCommitments);
-    let silent_challenge = net.court_challenge(outsider, subject, silent, PublicUnitV1::KernelCommitments);
-    net.send(vec![(outsider, c), (outsider, silent_challenge)]).await;
-    let silent_deadline = net.court(&subject).challenges.iter().find(|(p, _, _)| *p == net.bond(silent)).unwrap().2.deadline_daa;
-    net.send(vec![(serving, a)]).await;
-    let read = |net: &Net, unit: &PublicUnitV1| {
-        net.answers_on_chain(&subject, serving, unit)
-            .into_iter()
-            .find(|answer| verify_artifact_answer_v1(&facts, unit, answer).is_ok())
-            .expect("the provider's answer is on the chain and checks against the chain's roots")
-    };
-    let PublicUnitAnswerV1::KernelCommitments { commitments: bound } = read(&net, &PublicUnitV1::KernelCommitments) else {
-        unreachable!()
-    };
+    let read = |unit: &PublicUnitV1| fetch_artifact_unit_v1(&binder.refs(), &facts, unit, Hash64::default()).expect("checked");
+    publish(PublicUnitV1::KernelCommitments);
+    let PublicUnitAnswerV1::KernelCommitments { commitments: bound } = read(&PublicUnitV1::KernelCommitments) else { unreachable!() };
     let (param, layer) = differing_instances_v1(&true_commitments, &bound)[0];
     let rows = misaka_palw_kernel::merkle::LayoutV1::of(&truth.params.tensors[&(param, layer)].shape).rows;
     let run_unit = PublicUnitV1::KernelRowNodes { param, layer, level: 0, first: 0, count: rows as u32 };
-    let (c, a) = force(&mut net, run_unit);
-    net.send(vec![(outsider, c)]).await;
-    net.send(vec![(serving, a)]).await;
-    let PublicUnitAnswerV1::KernelRowNodes { run, .. } = read(&net, &run_unit) else { unreachable!() };
+    publish(run_unit);
+    let PublicUnitAnswerV1::KernelRowNodes { run, .. } = read(&run_unit) else { unreachable!() };
     let row = differing_rows_v1(&truth.params.tensors[&(param, layer)], &run)[0];
     let row_unit = PublicUnitV1::KernelRow { param, layer, row };
-    let (c, a) = force(&mut net, row_unit);
-    net.send(vec![(outsider, c)]).await;
-    net.send(vec![(serving, a)]).await;
-    let PublicUnitAnswerV1::KernelRow { opening, .. } = read(&net, &row_unit) else { unreachable!() };
+    publish(row_unit);
+    let PublicUnitAnswerV1::KernelRow { opening, .. } = read(&row_unit) else { unreachable!() };
+    assert!(
+        verify_artifact_answer_v1(
+            &facts,
+            &row_unit,
+            &PublicUnitAnswerV1::KernelRow { commitments: bound.clone(), opening: opening.clone() }
+        )
+        .is_ok()
+    );
 
-    // ---- tag 105 from the true bytes and the forced row ----
+    // ---- tag 105 from the true bytes and the binder's row ----
     let proof =
         row_refutation_v1(&fetched.program, &fetched.leaves, chain_root, &bound, param, layer, &opening).expect("a refutation");
     let o = net.artifact_challenged(outsider, v2_class, false_root, proof);
@@ -376,91 +290,7 @@ async fn da16_a_false_binding_is_refuted_from_the_bytes_and_the_bound_side_the_c
     assert_eq!(net.collateral(REGISTRANT), before_binder - RESERVED, "the BINDER lost its reservation");
     assert!(net.slashed(REGISTRANT) >= burn + RESERVED);
     assert_eq!(net.owed(outsider), RESERVED * REWARD / 1000, "the refuter's reward is queued (the next coinbase pays it)");
-
-    // ---- the silent provider is slashed at its deadline; the serving one is not ----
-    let (serving_before, silent_before) = (net.collateral(serving), net.collateral(silent));
-    net.beat_to(silent_deadline + 1).await;
-    let lease = PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1;
-    assert_eq!(net.collateral(silent), silent_before - lease, "the provider that did not answer lost its lease's reservation");
-    assert_eq!(net.collateral(serving), serving_before, "the provider that served the false tree served what it promised");
-    let court = net.court(&subject);
-    assert_eq!(court.row.as_ref().unwrap().charged, vec![net.bond(silent)], "charged once, only the silent one");
-    assert_eq!(
-        net.owed(outsider),
-        lease * PALW_PROVIDER_CHALLENGER_REWARD_PERMILLE_V1 / 1000,
-        "and paid 500‰ of the provider's charge"
-    );
-    assert_eq!(net.court_reserved(outsider), 0);
-    let z = net.replay().await;
-    net.assert_same(&z, "replay");
-}
-
-/// **An unanswered challenge slashes the provider; every provider charged ⇒ the pair LAPSES and the binding attests nothing.** The
-/// binding matures over two leases (its root is attested); a challenge of each lease goes unanswered; each provider is charged once
-/// (its reservation slashed, the challenger paid 500‰, the bond back), its other open challenge on the subject settles moot; with no
-/// live lease left the pair lapses and the root stops being attested. The registrant re-binds over fresh leases; a replay agrees.
-#[tokio::test]
-async fn da16_unanswered_challenges_slash_the_providers_and_a_lapsed_pair_attests_nothing_until_rebound() {
-    kaspa_core::log::try_init_logger("warn");
-    let truth = onb_fixture(11);
-    let mut net = Net::over_cfg(court_onboarding_config(), TestConsensus::new);
-    net.beat_to(1).await;
-    let (p1, p2, outsider, p3, p4) = (2usize, 3usize, 4usize, 5usize, 6usize);
-    let v2_class = register_v2(&mut net, &truth).await;
-    let kernel_root = Hash64::from_bytes(truth.pc.root());
-    let subject = ProviderSubjectV1::Artifact { v2_class, kernel_param_root: kernel_root };
-    let lease = mega(150);
-    let serve_until = net.daa() + 400;
-    let (l1, l2) = (net.court_lease(p1, subject, lease, serve_until), net.court_lease(p2, subject, lease, serve_until));
-    net.send(vec![(p1, l1), (p2, l2)]).await;
-    let o = net.artifact_bound(REGISTRANT, v2_class, kernel_root);
-    net.send(vec![(REGISTRANT, o)]).await;
-    let binding = net.api().unwrap().artifact_binding_v1(&v2_class, &kernel_root).unwrap();
-    net.beat_to(binding.matures_daa).await;
-    assert_eq!(net.api().unwrap().onboarding_attested_roots_v1(net.daa()), vec![kernel_root], "Matured: the root is attested");
-
-    // ---- p1 fails one challenge (a second one of its lease settles moot); p2 still serves: no lapse ----
-    let (before1, before2, before_out) = (net.collateral(p1), net.collateral(p2), net.collateral(outsider));
-    let c1 = net.court_challenge(outsider, subject, p1, PublicUnitV1::ArtifactLeaf { index: 0 });
-    let c1b = net.court_challenge(outsider, subject, p1, PublicUnitV1::KernelCommitments);
-    net.send(vec![(outsider, c1), (outsider, c1b)]).await;
-    let deadline = net.court(&subject).challenges[0].2.deadline_daa;
-    net.beat_to(deadline + 1).await;
-    assert_eq!(net.collateral(p1), before1 - lease, "charged: the reservation slashed");
-    assert_eq!(net.slashed(p1), lease);
-    assert_eq!(net.court_reserved(p1), 0, "and no longer held");
-    let reward = lease * PALW_PROVIDER_CHALLENGER_REWARD_PERMILLE_V1 / 1000;
-    assert_eq!(net.owed(outsider), reward, "charged ONCE: one reward, the other challenge moot");
-    assert_eq!(net.collateral(outsider), before_out, "both challenge bonds back, no fee");
-    assert!(net.court(&subject).challenges.is_empty());
-    assert_eq!(net.court(&subject).row.unwrap().lapsed_daa, None, "p2 still serves");
-    assert_eq!(net.api().unwrap().onboarding_attested_roots_v1(net.daa()), vec![kernel_root]);
-    // A charged provider cannot lease the subject again.
-    let again = net.court_lease(p1, subject, lease, serve_until);
-    net.send(vec![(p1, again)]).await;
-    assert!(net.court(&subject).leases.iter().any(|(p, l)| *p == net.bond(p1) && l.charged), "still the charged row");
-
-    // ---- p2 fails too: the pair lapses, the binding attests nothing, the class's gate holds it ----
-    let c2 = net.court_challenge(outsider, subject, p2, PublicUnitV1::ArtifactLeaf { index: 1 });
-    net.send(vec![(outsider, c2)]).await;
-    let deadline = net.court(&subject).challenges[0].2.deadline_daa;
-    net.beat_to(deadline + 1).await;
-    assert_eq!(net.collateral(p2), before2 - lease);
-    let court = net.court(&subject);
-    assert!(court.row.as_ref().unwrap().lapsed_daa.is_some(), "no live lease left: the pair LAPSED");
-    assert!(net.api().unwrap().onboarding_attested_roots_v1(net.daa()).is_empty(), "a lapsed pair attests nothing");
-    assert!(net.api().unwrap().provider_pair_lapsed_since_v1(&v2_class, &kernel_root, binding.bound_daa));
-
-    // ---- the registrant re-binds over fresh leases ----
-    let serve_until = net.daa() + 400;
-    let (l3, l4) = (net.court_lease(p3, subject, lease, serve_until), net.court_lease(p4, subject, lease, serve_until));
-    net.send(vec![(p3, l3), (p4, l4)]).await;
-    let o = net.artifact_bound(REGISTRANT, v2_class, kernel_root);
-    net.send(vec![(REGISTRANT, o)]).await;
-    let rebound = net.api().unwrap().artifact_binding_v1(&v2_class, &kernel_root).unwrap();
-    assert!(rebound.bound_daa > binding.bound_daa, "a fresh binding row over the fresh leases");
-    net.beat_to(rebound.matures_daa).await;
-    assert_eq!(net.api().unwrap().onboarding_attested_roots_v1(net.daa()), vec![kernel_root], "attested again");
+    assert_eq!(court_rows(&net), 0, "no provider court row anywhere");
     let z = net.replay().await;
     net.assert_same(&z, "replay");
 }
@@ -569,6 +399,9 @@ async fn da16_a_transferred_claims_unanswered_demand_charges_every_provider_neve
     let da = lie.published(&w.fx, &[lie.at]);
     assert_eq!(w.fresh(0x31).check(lie.id, &da, &w.fx.params), OutsiderFindingV1::Demand(vec![(0, lie.at.0)]));
     w.demand(outsider, &lie.id, lie.at.0).await;
+    // The court scope's tally (ADR-0177 D2): the demanded unit is claim-specific and counted against the requester's OPERATOR only.
+    let operator = w.net.chain.tip_state().1.bond(&w.net.bond(outsider)).unwrap().operator_id;
+    assert_eq!(w.net.court(&subject).row.unwrap().requested, vec![(operator, vec![(0, lie.at.0)])], "one unit, one requester");
     let deadline = w.net.ledger().demands[&(lie.id, 0, lie.at.0)].deadline_daa;
     w.net.beat_to(deadline).await;
 
@@ -586,7 +419,12 @@ async fn da16_a_transferred_claims_unanswered_demand_charges_every_provider_neve
         assert_eq!(w.net.court_reserved(*p), 0);
     }
     let penalty = w.policy().default_penalty;
-    assert_eq!(w.net.owed(outsider), penalty, "the demander takes the default penalty out of the providers' charge");
+    let paid = palw_provider_reporter_share_v1(penalty);
+    assert_eq!(paid, penalty * 4_900 / 10_000, "ADR-0032's 49% of the penalty-sized part of the charge");
+    // Conservation: the providers' charge (2 × 600 BILI) is collected whole; the demander is paid 49% of the penalty out of it; the
+    // rest is burned — nothing minted.
+    assert_eq!(w.net.owed(outsider), paid, "the demander's share comes out of the providers' charge");
+    assert!(paid < 2 * mega(600));
     assert_eq!(w.net.kernel_reserved(outsider), 0, "its demand bond returns");
     let row = w.net.court(&subject).row.unwrap();
     assert!(row.lapsed_daa.is_some() && row.charged.len() == 2, "every provider charged once; the claim's material lapsed");
@@ -597,28 +435,37 @@ async fn da16_a_transferred_claims_unanswered_demand_charges_every_provider_neve
 }
 
 /// **A common-mode outage voids the claim and never convicts it.** Both providers of a transferred claim fail a challenge of a committed
-/// position: each is charged (each challenger paid 500‰ of its charge before Final), no live lease is left, and the claim LAPSES —
-/// `Unavailable { producer_defaulted: false }`, no reward, never convicted, no `SlashFraud`/`SlashDefault` of the miner, whose
-/// reservation comes back whole. A replaying node agrees.
+/// position (one of them two challenges: charged ONCE, its other challenge settles moot). Each is charged once — its reservation
+/// slashed; before Final its challenger is paid the PALW reporter share (49%, ADR-0032: the floor a self-reported conviction leaves, so
+/// a self-lapse is no cheaper escape) and the rest is burned (conservation: share + burn = the slash) — the challengers get their bonds
+/// back, no live lease is left, and the claim LAPSES: `Unavailable { producer_defaulted: false }`, no reward, never convicted, no
+/// `SlashFraud`/`SlashDefault` of the miner, whose reservation comes back whole. A replaying node agrees.
 #[tokio::test]
 async fn da16_a_common_mode_provider_outage_voids_the_claim_without_a_miner_slash() {
     kaspa_core::log::try_init_logger("warn");
     let (mut w, claim, providers, outsider, seats) = transferred_claim(false).await;
     let subject = ProviderSubjectV1::KernelClaim { claim: Hash64::from_bytes(claim.id) };
     let (producer_before, p_before) = (w.net.collateral(0), providers.map(|p| w.net.collateral(p)));
-    let unit = PublicUnitV1::ClaimPosition { stage: 0, position: 1 };
-    // Two challengers (any bonds of other operators), in one block: one deadline.
-    let second = seats[0];
-    let (c0, c1) =
-        (w.net.court_challenge(outsider, subject, providers[0], unit), w.net.court_challenge(second, subject, providers[1], unit));
-    w.net.send(vec![(outsider, c0), (second, c1)]).await;
-    // A position the claim does not commit is no unit of it (refused, not a default by construction).
+    let (unit, unit2) = (PublicUnitV1::ClaimPosition { stage: 0, position: 1 }, PublicUnitV1::ClaimPosition { stage: 0, position: 2 });
+    // Two challengers (any bonds of other operators — here a seat too: seats have no power here), in one block: one deadline.
+    let (second, third) = (seats[0], seats[1]);
+    let (out_before, second_before, third_before) = (w.net.collateral(outsider), w.net.collateral(second), w.net.collateral(third));
+    let (c0, c0b, c1) = (
+        w.net.court_challenge(outsider, subject, providers[0], unit),
+        w.net.court_challenge(third, subject, providers[0], unit2),
+        w.net.court_challenge(second, subject, providers[1], unit),
+    );
+    w.net.send(vec![(outsider, c0), (third, c0b), (second, c1)]).await;
+    // A position the claim does not commit is no unit of it (refused, not a default by construction); an artifact unit is model bytes.
     let none = w.net.court_challenge(outsider, subject, providers[0], PublicUnitV1::ClaimPosition { stage: 0, position: 9_999 });
-    w.net.send(vec![(outsider, none)]).await;
-    assert_eq!(w.net.court(&subject).challenges.len(), 2);
+    let model = w.net.court_challenge(outsider, subject, providers[0], PublicUnitV1::ArtifactLeaf { index: 0 });
+    w.net.send(vec![(outsider, none), (outsider, model)]).await;
+    assert_eq!(w.net.court(&subject).challenges.len(), 3);
+    assert_eq!(w.net.court_reserved(third), u128::from(PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1), "a challenge bond held");
     let deadlines: Vec<u64> = w.net.court(&subject).challenges.iter().map(|(_, _, r)| r.deadline_daa).collect();
-    assert_eq!(deadlines[0], deadlines[1], "filed in one block");
-    w.net.beat_to(deadlines[0] + 1).await;
+    assert!(deadlines.iter().all(|d| *d == deadlines[0]), "filed in one block");
+    let last = deadlines[0];
+    w.net.beat_to(last + 1).await;
 
     assert!(
         matches!(w.net.claim_state(&claim.id), ClaimStateV1::Unavailable { producer_defaulted: false, .. }),
@@ -627,15 +474,27 @@ async fn da16_a_common_mode_provider_outage_voids_the_claim_without_a_miner_slas
     );
     assert!(!w.net.ledger().claims[&claim.id].convicted, "never convicted");
     assert_eq!((w.net.collateral(0), w.net.slashed(0), w.net.kernel_reserved(0)), (producer_before, 0, 0), "the miner pays nothing");
+    let share = palw_provider_reporter_share_v1(mega(600));
+    assert_eq!(share, mega(600) * 4_900 / 10_000, "ADR-0032's 49%");
     for (i, p) in providers.iter().enumerate() {
-        assert_eq!(w.net.collateral(*p), p_before[i] - mega(600), "provider {p} charged");
+        assert_eq!(w.net.collateral(*p), p_before[i] - mega(600), "provider {p} charged ONCE");
+        assert_eq!(w.net.slashed(*p), mega(600), "the whole reservation is collected");
     }
-    let share = mega(600) * PALW_PROVIDER_CHALLENGER_REWARD_PERMILLE_V1 / 1000;
-    assert_eq!((w.net.owed(outsider), w.net.owed(second)), (share, share), "500‰ of each charge to its challenger, before Final");
+    // Conservation: each slash is paid out as one share to its challenger and the rest burned — nothing minted, nothing kept.
+    assert_eq!((w.net.owed(outsider), w.net.owed(second)), (share, share), "one share per charge");
+    assert_eq!(w.net.owed(third), 0, "never two: the moot challenge pays none");
+    assert!(share < mega(600) && mega(600) - share == mega(600) * 5_100 / 10_000, "the burned remainder");
     assert_eq!((w.net.court_reserved(outsider), w.net.court_reserved(second)), (0, 0), "the challenge bonds returned");
-    let lapsed = w.net.court(&subject).row.unwrap();
-    assert!(lapsed.lapsed_daa.is_some() && lapsed.charged.len() == 2);
-    w.net.beat_to(deadlines[0] + 100).await;
+    assert_eq!(
+        (w.net.collateral(outsider), w.net.collateral(second), w.net.collateral(third)),
+        (out_before, second_before, third_before),
+        "no fee: nobody answered"
+    );
+    assert_eq!(w.net.court_reserved(third), 0, "the moot challenge's bond returned");
+    let lapsed = w.net.court(&subject);
+    assert!(lapsed.row.as_ref().unwrap().lapsed_daa.is_some() && lapsed.row.as_ref().unwrap().charged.len() == 2);
+    assert!(lapsed.challenges.is_empty(), "the moot challenge went with the charge");
+    w.net.beat_to(last + 100).await;
     assert!(!w.net.ledger().claims[&claim.id].rewarded, "void: no reward ever");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
@@ -734,12 +593,14 @@ async fn da16_a_false_computation_on_a_transferred_claim_still_convicts_the_mine
 
     // A provider-court challenge of the lying position, answered from the transport by the provider (the kernel's own check).
     let unit = PublicUnitV1::ClaimPosition { stage: 0, position: lie.at.0 };
+    let out_before = w.net.collateral(outsider);
     let c = w.net.court_challenge(outsider, subject, providers[1], unit);
     w.net.send(vec![(outsider, c)]).await;
     let bytes = fetch_claim_position_v1(&[dirs.refs()[1]], &w.net.ledger(), id, 0, lie.at.0, Hash64::default()).expect("served");
     let a = w.net.court_answer(providers[1], subject, unit, PublicUnitAnswerV1::ClaimPosition { bytes: bytes.clone() });
     w.net.send(vec![(providers[1], a)]).await;
     assert!(w.net.court(&subject).challenges.iter().all(|(_, _, r)| r.answered), "answered: cleared");
+    assert_eq!(w.net.collateral(outsider), out_before - PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1, "an answered challenge costs its fee");
 
     // The kernel's demand stays THE material demand; a provider answers it with the transport's bytes.
     let da = lie.published(&w.fx, &[lie.at]);
@@ -807,3 +668,6 @@ async fn da16_below_the_fence_court_objects_are_dropped_and_an_older_claim_stays
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
+
+// C4R4 round 4b (F-C4R4-19): ADR-0177 non-interference, un-ignored after the re-scope.
+mod c4r4;

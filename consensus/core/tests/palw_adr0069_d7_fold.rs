@@ -14,7 +14,7 @@
 //! ahead — because only the second one can cross the rule while a claim of its is alive, and that
 //! crossing is where the accounting either holds together or does not.
 //!
-//! Run: `MISAKA_PALW_POW_FIXTURE=1 cargo test -p kaspa-consensus-core --test palw_adr0069_d7_fold`
+//! Run: `cargo test -p kaspa-consensus-core --test palw_adr0069_d7_fold`
 
 use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2};
 use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2};

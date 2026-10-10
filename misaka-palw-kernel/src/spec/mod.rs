@@ -52,8 +52,14 @@ pub const TYPED_STATE_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-typed-
 
 /// Demand stage of a memory claim's pre-state (position 0: one value per slot).
 pub const MEMORY_PRE_STATE_STAGE_V1: u8 = 0x40;
-/// Demand stage of stage `s`'s snapshot slices: `0x80 + s` (a plain retrieval class is stage 0).
+/// Demand stage of stage `s`'s snapshot slices: `0x80 + s` (a plain retrieval class is stage 0). The snapshot is registered model
+/// content: past `palw_provider_court_v1` the consumer refuses these demands (ADR-0177 D2; consensus-core `palw_court_scope_v1`).
 pub const SNAPSHOT_STAGE_BASE_V1: u8 = 0x80;
+/// **Demand stage of stage `s`'s retrieved ENTRIES: `0xC0 + s`** (lane DA16, GAP-52; position = the entry's index): the claim's own
+/// output — the item it says it retrieved, opened against the snapshot root. A claim-specific unit: what the claim stated, not the
+/// snapshot. An entry no one can open (a leaf with no well-formed item behind it) is its producer's default; a served one is public,
+/// and a wrong or malformed one convicts through `WrongItem`.
+pub const RETRIEVAL_ENTRY_STAGE_BASE_V1: u8 = 0xC0;
 
 /// The normative text of the typed-roots extension (its digest is the descriptor's identity; a new meaning is a new descriptor).
 pub const K2_TR_V1_SEMANTICS: &[u8] = b"misaka-palw-kernel K2-TR-v1: RFC-0004 Part II typed roots over K2-TIR-v1/v2 classes. \
@@ -443,15 +449,20 @@ pub fn memory_bounds_v1(
         max_opening_bytes: base.max_opening_bytes,
         max_filing_bytes: base.max_filing_bytes.saturating_add(64),
         max_response_bytes: base.max_response_bytes.max(m.saturating_add(WIRE_HEADER_BYTES_V1 as u128)),
+        max_commit_bytes: steps
+            .saturating_mul(base.max_commit_bytes.saturating_add(evidence))
+            .saturating_add(64 * (steps + 1))
+            .saturating_add(64 * root.slots.len() as u128)
+            .saturating_add(m),
         max_localization_rounds: 2,
         max_court_work: base.max_court_work,
-        max_verifier_ram: base.max_verifier_ram.saturating_add(m),
+        max_verifier_ram: base.max_verifier_ram.saturating_add(m.saturating_mul(16)),
         // Every step's commitments and evidence, the boundary roots, the pre-state's commitments and the carried post-state (`M`).
         max_retained_state: steps
             .saturating_mul(base.max_retained_state.saturating_add(evidence))
             .saturating_add(64 * (steps + 1))
             .saturating_add(64 * root.slots.len() as u128)
-            .saturating_add(m),
+            .saturating_add(crate::gate::retained_state_bound_v1(0, m, 1)),
         max_concurrent_sessions: (root.max_steps as u64 * plan.max_positions as u64 + 1).min(u32::MAX as u64) as u32,
         deadline_daa: policy.court_deadline_daa,
     };
@@ -486,10 +497,11 @@ pub fn retrieval_bounds_v1(
         max_opening_bytes: opening.min(u64::MAX as u128) as u64,
         max_filing_bytes: (opening + FILING_HEADER_BYTES_V1 as u128).min(u64::MAX as u128) as u64,
         max_response_bytes: response,
+        max_commit_bytes: retained,
         max_localization_rounds: 2,
         max_court_work: (s.dim as u64).saturating_add(depth_v1(s.items) as u64).saturating_add(k as u64).saturating_add(16),
-        max_verifier_ram: response.saturating_add(opening),
-        max_retained_state: retained,
+        max_verifier_ram: response.saturating_add(opening).saturating_mul(16),
+        max_retained_state: crate::gate::retained_state_bound_v1(retained, response, s.slices().min(u32::MAX as u64) as u32),
         max_concurrent_sessions: s.slices().min(u32::MAX as u64) as u32,
         deadline_daa: policy.court_deadline_daa,
     };
@@ -497,6 +509,7 @@ pub fn retrieval_bounds_v1(
     bounded("court work", b.max_court_work as u128, descriptor.limits.max_court_work as u128)?;
     bounded("public bytes", b.max_public_bytes, policy.max_public_bytes)?;
     bounded("verifier RAM", b.max_verifier_ram, policy.max_verifier_ram)?;
+    bounded("retained state", b.max_retained_state, policy.max_retained_state)?;
     bounded("concurrent sessions", b.max_concurrent_sessions as u128, policy.max_sessions_per_claim as u128)?;
     Ok(b)
 }
@@ -519,6 +532,7 @@ pub fn composite_bounds_v1(
         max_opening_bytes: 0,
         max_filing_bytes: 0,
         max_response_bytes: 0,
+        max_commit_bytes: 0,
         max_localization_rounds: 2,
         max_court_work: 0,
         max_verifier_ram: 0,
@@ -546,6 +560,7 @@ pub fn composite_bounds_v1(
         t.max_court_work = t.max_court_work.max(b.max_court_work);
         t.max_verifier_ram = t.max_verifier_ram.saturating_add(b.max_verifier_ram);
         t.max_retained_state = t.max_retained_state.saturating_add(b.max_retained_state);
+        t.max_commit_bytes = t.max_commit_bytes.saturating_add(b.max_commit_bytes);
         t.max_concurrent_sessions = t.max_concurrent_sessions.saturating_add(b.max_concurrent_sessions);
     }
     bounded("public bytes", t.max_public_bytes, policy.max_public_bytes)?;
