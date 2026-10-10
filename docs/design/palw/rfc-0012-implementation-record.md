@@ -186,7 +186,7 @@ shown. No params / schedule / identity id moves, and `palw_dns_retirement_v1` is
 | C3 | Market orders across the fence with ADR-0162 armed (a TEST copy) | none | `rfc12_c3_a` (80 MSK lock, 50 MSK buy, two one-unit sells) | **PASS as restated (7.2)**: the buy is refused at the call, the sells settle `Refused EXCEEDS_POSITION`, the ledger conserves on every block. **A FILL is a GAP**: ADR-0162 trades only an approved class, and no t12 genesis class is approved (status `Active`, lifecycle `Prefetching`) |
 | C4 | Re-measure D1 with the other lanes armed | fixture: `ExtrasEdit`, `live_life_with`, `try_step_with`, `try_step_for` | `d1_g` (tripwire) | **PASS** against the merged tree (baseline and `palw_model_court_window` armed: F_off 123, the last reversing conviction and the last DA accusation at `Final + claim_retirement`, the latest default `W_disclose + 1` later). OPV / permissionless panel / kernel route / RFC-0008 slices / K2 classes are not armable in the fixture: **redo at integration** |
 | C5 | The maturity rule v2 | - | - | SKIPPED (no D1 other than v1 chosen) |
-| C6 | A class's own court window extends retention | `palw_native_settlement_v1.rs`: `live_retention` in `native_facts_and_skips_v1` | `d1_h` | **PASS** |
+| C6 | A class's own court window extends retention | `palw_native_settlement_v1.rs`: `live_retention` in `native_facts_and_skips_v1` | `d1_h`; current admission/retirement coverage in §9 | **Historical reader PASS**; `d1_h` planted the extension, and did not prove admission after Final. Current `CourtOpened` refuses terminal claims |
 | C7 | Preset and release wiring; the recorded 2026-10-09 acquisition-fence prerequisite is superseded under ADR-0177; current complete-params validation and claim-specific security gates apply (§8) | none (checklist only) | - | READY-TO-APPLY CHECKLIST (policy proposal 12.8, step 3) |
 | C8 | Explorer renders `nativeReadiness` | `contrib/misakascan-t12/app.js` | `tests/native-settlement.cjs` | **PASS** |
 | C9 | Release-build cost at 100k+ blocks | none | `rfc0012_c9_release_cost.rs` (two `#[ignore]`d tests) | DESIGNED; compiles; NOT RUN (by order: fleet-class hardware, release profile) |
@@ -285,3 +285,42 @@ the test now uses its own bounded heartbeat loop. The final runs above compile a
 `git diff --check` and rustfmt checks of the new small test and matrix pass. No production gate, wire id, preset,
 network identity or monetary/comparator behavior is changed. Multi-process/private certified-effect security,
 100k release costs, market fills and the other RFC6/7/8/12 gates are not marked complete by this regression.
+
+## 9. Model-court maturity: actual admission versus synthetic reader input (2026-10-11)
+
+The old C6 explanation described a legacy court admitted at `Final + 2,900`. Inspection of the current fold
+contradicts that premise: `CourtOpened`, `ShardCourtAccused`, `TirShardCourtAccused` and `GenShardCourtAccused`
+refuse terminal claims before their court-opening branches. Wave 2's `d1_h` wrote an extension into a Final
+carriage by hand. It is retained and renamed `rfc0012_d1_h_reader_uses_later_live_retention_in_a_synthetic_snapshot`:
+its PASS means the reader takes the later live value, not that a court can open after Final. The production
+reader's comment and policy proposal C6 / §10.2 are corrected. No executable production behavior changes.
+
+`rfc0012_court_maturity` branches from the existing fixture's real licensed snapshot. It installs a 9,000-DAA
+class-window registry row by delta, then applies ordinary `CourtOpened` and a responder disclosure through the
+fold. The court extends trace retention, remains open across the original Final boundary, and closes when the
+challenger misses its own turn. The responder is not slashed; the challenger is. Final resumes through the
+ordinary deadline sweep, and its actual delta preserves the extended retention even after the claim retires.
+The same test checks opening delta apply/undo and carriage restore. A separate case confirms the specific
+`WrongPhase { edge: "CourtOpened" }` refusal at Final + 2,900 without changing retention.
+
+Scope: linear floor-only fold, signature acceptance seams, a registry row installed by delta, and a REAL-class
+relabel applied only to extracted evidence. The court, its deadlines, Final and retention extension are not
+planted. This is not a live native computation, a signed node admission, a class-registration proof, a full
+release-fence configuration, a post-Final kernel prosecution or a certified-effect attack. Those gates remain open.
+
+Final validation (Rust 1.93.0, macOS aarch64, jobs 2, dev/test debug 0, incremental 0):
+
+`cargo test --locked -p kaspa-consensus-core --test rfc0012_court_maturity --test rfc0012_safe_maturity_attacks --test rfc0012_native_evidence_fold --test rfc0012_evidence_window -- --nocapture --test-threads=1`
+
+**17 passed, 0 failed, 0 ignored**: court maturity 2 (2.41 s), maturity attacks 8 (33.22 s), native evidence fold 6
+(3.20 s), evidence window 1 (0.01 s); build 16.23 s. Log `/tmp/rfc12-court-evidence-regression.log`.
+Observed C6: original Final DAA 1,124; court opening 1,123; responder answers at inclusive deadline 1,165;
+challenger deadline 1,207; Final resumes at 1,209; retention and fact maturity remain 10,123 after retirement.
+Certificate arithmetic counts none at baseline retention or at 10,122, and counts that fact at 10,123.
+
+The first new test run failed its declared Final-crossing premise: a court opened just after licensing ended
+before the original Final. Opening was moved to the last pre-Final DAA, and the crossing assertion retained.
+The failure is recorded in `/tmp/rfc12-court-maturity.log`, not counted as success. The corrected standalone run
+passed 2 tests (2.45 s), then the final command above recompiled all four targets and passed the current code.
+`git diff --check` and rustfmt checks of the reader and small test files pass. No full node, release benchmark,
+multi-process transport or new class security approval is claimed.

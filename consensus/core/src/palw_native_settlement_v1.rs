@@ -288,12 +288,10 @@ pub fn native_facts_and_skips_v1(
 ) -> (Vec<MatureUsefulWorkV1>, SkippedEvidenceV1) {
     let (accepting_daa, accepting_blue) = accepting;
     let mut skipped = SkippedEvidenceV1::default();
-    // **The trace retention a claim holds NOW.** The record in the block's delta is the claim as it stood in that block, and a class
-    // that committed its own court window (`palw_model_court_window`) extends a claim's retention to a court's deadline when a court
-    // opens on it - possibly after `Final` (palw_state_v2.rs, `CourtOpened`). A fact matured on the frozen value would count work whose
-    // producer still owes the trace to a running court and whose claim can still be convicted. So where the sink still holds the claim,
-    // its live retention counts too; where it does not (retired), the recorded value stands. Without a class window the two are equal,
-    // so this changes nothing on any network that does not arm that fence.
+    // **The trace retention a claim holds NOW.** Read the later of the live and recorded obligation. Current legacy `CourtOpened`
+    // and named-leaf accusations refuse terminal claims: a class-window extension is admitted before Final, holds that Final and
+    // is captured in its eventual delta. The recorded extension then survives retirement. The live maximum is defensive reader
+    // behavior, not proof that a court can open after Final. Open DA / computation sessions are independently excluded below.
     let live_retention = |id: &Hash64, recorded: &PalwClaimStateV2| -> Option<u64> {
         let current = rules.state.claim(id).unwrap_or(recorded);
         let retained = native_effective_retention_v1(rules.state, rules.params, id, current)?.max(recorded.trace_retention_daa);

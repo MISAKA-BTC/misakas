@@ -664,16 +664,13 @@ fn rfc0012_d1_g_the_horizons_hold_under_every_lane_configuration_the_fixture_can
 // C6 - a class's own court window extends a claim's retention; the maturity must follow it
 // =====================================================================================================================
 
-/// **EXPECTED (C6).** A class that committed its own court window (`palw_model_court_window`) has the claim's `trace_retention_daa` EXTENDED
-/// to a court's deadline when a court opens on it (`CourtOpened`, palw_state_v2.rs:30818) - possibly AFTER `Final`. The record in the delta of
-/// the block that finalized the claim is frozen at that block, so a fact matured on it counted the work at the old instant while a court
-/// still ran and the producer still owed the trace. This is the caution (1) of section 10.2, now closed: `native_facts_of_block_v1`
-/// reads the claim's retention from the sink state too, and a fact is mature at the LATER of the two. Shown here with the extension a
-/// court opened at `Final + 2,900` on a 9,000-DAA class window writes (applied to the claim record by hand, as that code does): the fact
-/// is mature at the extended retention, not at v1's 5,400 after acceptance; and a state where the claim is gone (retired) or unextended
-/// gives the recorded instant, byte for byte what it gave before.
+/// Defensive reader test: a SYNTHETIC Final snapshot with later live retention holds its recorded fact immature.
+/// The extension is written by hand; current `CourtOpened` refuses terminal claims, so this is not admission or post-Final
+/// court evidence. `rfc0012_court_maturity` exercises an admitted pre-Final court, its Final hold/resumption and the actual
+/// Final delta's preservation of extended retention after retirement. This test separately pins the reader's live maximum
+/// and the fallback to the recorded value when a claim is absent.
 #[test]
-fn rfc0012_d1_h_a_court_opened_after_final_on_a_class_with_its_own_window_holds_the_work_immature() {
+fn rfc0012_d1_h_reader_uses_later_live_retention_in_a_synthetic_snapshot() {
     use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
     let l = live_life();
     let finalized = native_delta_evidence_v1(&l.final_delta);
@@ -694,7 +691,7 @@ fn rfc0012_d1_h_a_court_opened_after_final_on_a_class_with_its_own_window_holds_
     let recorded = l.retention_daa.max(l.final_daa + l.sp.claim_retirement_daa());
     assert_eq!(matured_in(&l.at_final), recorded, "unextended: the recorded instant");
     assert_eq!(matured_in(&l.after_retirement), recorded, "retired: the recorded instant");
-    // A court opened at Final + 2,900 on a 9,000-DAA class window.
+    // Synthetic reader input, not an admitted court at Final + 2,900.
     let (window, opened) = (9_000u64, l.final_daa + 2_900);
     let mut carriage = PalwStateCarriageV2::from_state(&l.at_final);
     let claim = carriage.claims.get_mut(&l.id).expect("the claim is in state at Final");
