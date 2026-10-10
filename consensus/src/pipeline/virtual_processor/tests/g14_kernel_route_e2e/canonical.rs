@@ -339,7 +339,7 @@ impl Rpc {
         let mut header: Option<PalwKernelRouteHeaderV1> = None;
         let mut roots: Option<(String, String)> = None;
         let (mut rows, mut aux) = (LedgerRowsV1::new(), BTreeMap::new());
-        let (mut seen, mut total, mut pages) = (0u64, 0u64, 0u32);
+        let (mut seen, mut total, mut pages) = (0u64, None, 0u32);
         loop {
             let request_wire = Self::wire(request.clone());
             let (after, max_bytes) = palw_kernel_rows_request_v1(&request_wire).expect("a well-formed cursor");
@@ -356,7 +356,7 @@ impl Rpc {
                 Some(prev) => assert_eq!(prev, &r, "one snapshot across pages"),
                 None => roots = Some(r),
             }
-            total = page.total_rows;
+            total = Some(page.total_rows);
             for row in &page.rows {
                 seen += 1;
                 let table = u8::try_from(row.table).expect("a table fits a u8");
@@ -377,7 +377,7 @@ impl Rpc {
                 max_bytes: ROWS_PAGE_BYTES,
             };
         }
-        assert_eq!(seen, total, "every row exactly once, over {pages} page(s)");
+        assert_eq!(Some(seen), total, "every row exactly once, over {pages} page(s)");
         let state = PalwKernelRouteStateV1 { header: header.expect("a first page"), rows, aux };
         let (ledger_root, aux_root) = roots.expect("a first page");
         assert_eq!(state.ledger_root().to_string(), ledger_root, "the served rows root to the served ledger root");
@@ -763,7 +763,7 @@ async fn non_interference(mode: Mode) {
     let fresh_r = rpc_r.verifier(&lie.id, 0x21);
     let root = registered_root(&fresh_r, &lie.id);
     let rows_before = rpc_r.route();
-    assert_eq!(acquire(&[ModelPeer::Refuses], &root), None, "R cannot acquire the model");
+    assert!(acquire(&[ModelPeer::Refuses], &root).is_none(), "R cannot acquire the model");
     assert_eq!(rpc_r.route(), rows_before, "a refusal leaves the route's rows as they were");
     let rpc_s = Rpc::of(&s.chain);
     for c in [&honest.id, &lie.id] {

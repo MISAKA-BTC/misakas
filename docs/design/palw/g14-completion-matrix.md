@@ -572,3 +572,12 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
 
 * 2026-10-10 — created (G14C milestone 1). Read only: no build was run for this milestone. Every level is taken from the recorded
   runs in §1.
+* 2026-10-10 — milestone 2 (G14C, run `g14c-m2`, on `b8ae9412b` plus this branch): **verified** — the canonical harness
+  `g14_kernel_route_e2e/canonical.rs`, 10 tests (`g14_canonical_*`, Panel-licensed with every seat signing and OPV): a bond registered
+  after the claim through a real `BondRegistered` carrier from its own node (IBD and pruned-import starts), reads through the shared
+  RPC builders of ops 210–212 (`kaspa_rpc_core::convert::palw_kernel`, which the RPC service now calls), conviction before and after
+  Final, DA default, wrong challenge dismissed, and ADR-0177 non-interference; plus `conformance::g14_canonical_ops_231_and_212_…`
+  (op 231 + 212 from an IBD node rebuild the SDK verdict). 11/11 pass; rpc-core 127 pass; rpc-service checks. Re-run of the rest of
+  `g14_`/`r4x_` at `b8ae9412b`: 76 pass, 4 ignored (the known FAILs), 1 failed — `g14_registration_replay_on_a_second_node_and_across_a_reorg`,
+  the known GAP-11 race (fixed on `g14/r4-fixes` by `39e4ea441`). GAP-01..04 move to verified at node level for F1 (the socket hop of
+  GAP-03 stays a drill: a kaspad with the route armed is refused by validation).
