@@ -26,7 +26,7 @@
 
 - integration `589d9aa3e`のremote-miner drill adapterを`7bd999b17`でmergeし、RPC binaryのcheckを通した。共通filerでは受理block/job/role変更時に旧判定・探索・queueを破棄し、起動時snapshotと違う旧replay結果を適用しない。blocking workerは予約を保持してdrainし、book clear後も終わるまで次のworkerを開始しない。filer 14 V-unit、LG14-B 9 V-fold＋2 V-unit、public reader 6 V-unit PASS。full nodeのreorg完走は未検証。
 
-- free-promptの公開accepted commitmentからjob/inputを認証し、fresh modelの独立replayへ接続した。FPにvesting rowがなくFinal後のreservationとDA admissionが止まる経路も、既存public-filer fence内で共通predicateとliability保持へ修正した。PanelDA withheld inputのbootstrap、bad canonical root、公開prefix-state、full service／全family・最大profileは残る。検証結果とfixtureの範囲は[FP修正記録](../../audit/g14-review-2026-10-10/implementation.md#公開fp-commitmentinputからの独立再実行とpost-final-fpの追及)を参照。
+- free-promptの公開accepted commitmentからjob/inputを認証し、fresh modelの独立replayへ接続した。FPにvesting rowがなくFinal後のreservationとDA admissionが止まる経路も、既存public-filer fence内で共通predicateとliability保持へ修正した。PanelDA User inputのbootstrapとordinary V3/V4 canonical FP count/rootのreplay前の直接証明を追加済み。公開prefix-state／別job意味論、full service／全family・最大profileは残る。検証結果とfixtureの範囲は[FP修正記録](../../audit/g14-review-2026-10-10/implementation.md#公開fp-commitmentinputからの独立再実行とpost-final-fpの追及)を参照。
 
 - PanelDA User入力の公開court bootstrapを追加した。producer側のinput retentionだけを回答に使い、verifierは公開認証済みchunkを学習後、自身の登録modelで再計算する。worker handoffで入力accumulatorを失わないよう修正し、reorgでinputを破棄する。最大contextの34-session適合、FP commitment自体の再取得、full-service包含は残る。検証結果と範囲は監査記録末尾を参照。
 

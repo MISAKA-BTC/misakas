@@ -235,7 +235,9 @@ pub enum PalwPanelContradictionV1 {
     /// anchor names, on a class whose canonical prompt is past J5b's inline bound (4,096 ids)** — the
     /// 2M row's 262,143. One tile opened against the binding's prompt root (`Tile`), or the whole
     /// root recomputed (`Whole`, charged against the block's heavy budget before it is computed —
-    /// the only route for a prompt root with no preimage). Claim-proving; forfeiture by claim.
+    /// the only route for a prompt root with no preimage). Past the dormant public-filer fence,
+    /// `FpCanonicalWhole` additionally proves a canonical FP job's count/root false from its
+    /// authenticated public job and binding. Claim-proving; forfeiture by claim.
     PromptNotAnchored { binding: crate::palw_step_leg::PalwStepBindingV2, proof: PalwPromptProofV1 } = 13,
 }
 
@@ -261,6 +263,10 @@ pub enum PalwPromptProofV1 {
     Tile(crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1) = 0,
     /// The anchor's whole prompt root, recomputed — heavy, budgeted per block.
     Whole = 1,
+    /// A canonical free-prompt job, authenticated by the claim's recorded job pin and this
+    /// binding's context. A wrong canonical count is cheap; a whole-root recompute is budgeted.
+    /// Admitted only past the dormant public-filer fence. Existing Tile/Whole bytes stay fixed.
+    FpCanonicalWhole { job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3> } = 2,
 }
 
 impl PalwPanelContradictionV1 {
@@ -1439,7 +1445,8 @@ mod tests {
         assert_eq!(borsh::to_vec(&PalwPromptProofV1::Whole).unwrap(), vec![1]);
         let tile = crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&[1], 0).unwrap();
         assert_eq!(borsh::to_vec(&PalwPromptProofV1::Tile(tile)).unwrap()[0], 0);
-        assert!(borsh::from_slice::<PalwPromptProofV1>(&[2]).is_err(), "no third prompt proof");
+        assert!(borsh::from_slice::<PalwPromptProofV1>(&[2]).is_err(), "the FP proof needs its complete public job");
+        assert!(borsh::from_slice::<PalwPromptProofV1>(&[3]).is_err(), "no fourth prompt proof");
     }
 
     /// The consumed-offence record's two v22 appends ride last, after `execution_root`, in order.

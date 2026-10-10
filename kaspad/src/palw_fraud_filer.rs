@@ -601,7 +601,11 @@ impl PalwFraudFilerBookV1 {
             .values()
             .filter(|case| {
                 matches!(case.verdict, PalwFraudFilerVerdictV1::Pending)
-                    && case.fp_bootstrap.as_ref().is_none_or(|input| input.ready())
+                    && case.fp_bootstrap.as_ref().is_none_or(|input| {
+                        input.ready()
+                            || input.payload.commitment.job.prompt_mode
+                                == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
+                    })
                     && !case.candidate.seat
                     && current_daa >= case.input_retry_at
             })
@@ -822,7 +826,10 @@ pub(super) fn palw_fraud_filer_bootstrap_step_v1(
     let Some(input) = case.fp_bootstrap.as_ref() else {
         return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait);
     };
-    if input.ready() {
+    if input.ready()
+        || (case.binding.is_some()
+            && input.payload.commitment.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL)
+    {
         return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait);
     }
     let probe = if case.binding.is_none() {
@@ -929,8 +936,21 @@ pub(super) fn palw_fraud_filer_public_filing_v1(
     answer: &PalwDaBuiltAnswerV1,
     file_by: Option<u64>,
 ) -> Result<Option<PalwConvictionFilingV1>, String> {
+    palw_fraud_filer_public_filing_with_fp_v2(target, rules, answer, file_by, None)
+}
+
+/// The public FP job is authenticated by the core proof's claim/binding checks. No input ids or
+/// successful replay is required to prosecute a self-consistent bad canonical count/root.
+pub(super) fn palw_fraud_filer_public_filing_with_fp_v2(
+    target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+    rules: kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1,
+    answer: &PalwDaBuiltAnswerV1,
+    file_by: Option<u64>,
+    fp_job: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
+) -> Result<Option<PalwConvictionFilingV1>, String> {
     use kaspa_consensus_core::palw_offence_attribution_v1::{
-        palw_binding_identity_fault_v1, palw_output_fault_v1, palw_prompt_not_anchored_admit_v1, palw_prompt_not_anchored_fault_v1,
+        palw_binding_identity_fault_v1, palw_fp_canonical_prompt_admit_v1, palw_output_fault_v1, palw_prompt_not_anchored_admit_v1,
+        palw_prompt_not_anchored_fault_v1,
     };
     use kaspa_consensus_core::palw_offence_v1::{PalwPanelContradictionV1, PalwPromptProofV1};
     use kaspa_consensus_core::palw_step_refute::{PalwDecodeTokenPinV1, PalwTiledDecodeTokensV1, PalwTraceEventDisclosureV1};
@@ -947,10 +967,23 @@ pub(super) fn palw_fraud_filer_public_filing_v1(
         binding: binding.clone(),
         evidence: kaspa_consensus_core::palw_step_leg::PalwStepEvidenceV1::Shape,
     };
+    let fp_proof = fp_job.and_then(|job| {
+        let prefill = palw_fp_canonical_prompt_admit_v1(target, binding, job, rules).ok()?;
+        if binding.job_context.declared_prefill_tokens == prefill
+            && u64::from(prefill) > kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1
+        {
+            return None;
+        }
+        Some(PalwPromptProofV1::FpCanonicalWhole { job: Box::new(job.clone()) })
+    });
     let contradiction = if palw_binding_identity_fault_v1(target, binding, rules, true).map_err(|e| e.to_string())?.is_some() {
         PalwPanelContradictionV1::IdentityMismatch { binding: binding.clone() }
     } else if kaspa_consensus_core::palw_step_leg::check_step_refutation_capped_v1(&structural, binding.step_leaf_count).is_ok() {
         PalwPanelContradictionV1::StepStructural(structural)
+    } else if let Some(proof) = fp_proof
+        && palw_prompt_not_anchored_fault_v1(target, binding, &proof, rules).map_err(|e| e.to_string())?
+    {
+        PalwPanelContradictionV1::PromptNotAnchored { binding: binding.clone(), proof }
     } else if palw_prompt_not_anchored_admit_v1(target, binding, rules)
         .is_ok_and(|prefill| u64::from(prefill) <= kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1)
         && palw_prompt_not_anchored_fault_v1(target, binding, &PalwPromptProofV1::Whole, rules).map_err(|e| e.to_string())?
@@ -1246,6 +1279,8 @@ impl PalwPanelService {
                     da_signer_liability: params.palw_rcore_plus_active_at(current_daa),
                 };
                 let file_by = view.as_ref().map(|v| v.hard_deadline_daa.saturating_sub(2));
+                let fp_job =
+                    book.cases.get(&claim).and_then(|c| c.fp_bootstrap.as_ref()).map(|input| input.payload.commitment.job.clone());
                 // The longest canonical prompt needs a whole-root recompute. Reserve its temporary ids/tree and proof buffers,
                 // then do all direct-proof hashing off the service loop. Pressure delays this pursuit rather than settling it.
                 let prefill = match answer {
@@ -1256,6 +1291,18 @@ impl PalwPanelService {
                             rules,
                         )
                         .ok()
+                        .or_else(|| {
+                            fp_job.as_ref().and_then(|job| {
+                                kaspa_consensus_core::palw_offence_attribution_v1::palw_fp_canonical_prompt_admit_v1(
+                                    target,
+                                    event.binding(),
+                                    job,
+                                    rules,
+                                )
+                                .ok()
+                                .filter(|n| *n == event.binding().job_context.declared_prefill_tokens)
+                            })
+                        })
                         .map(u64::from)
                         .unwrap_or(0)
                         .min(kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1)
@@ -1285,7 +1332,7 @@ impl PalwPanelService {
                 let answer = answer.clone();
                 let proof = tokio::task::spawn_blocking(move || {
                     let _reserved = reserved;
-                    palw_fraud_filer_public_filing_v1(&target, rules, &answer, file_by)
+                    palw_fraud_filer_public_filing_with_fp_v2(&target, rules, &answer, file_by, fp_job.as_ref())
                 })
                 .await
                 .unwrap_or_else(|e| Err(format!("the public proof worker failed: {e}")));
@@ -1591,6 +1638,55 @@ impl PalwPanelService {
         }
     }
 
+    /// Retain the authenticated public FP job under a small input ticket. In particular, canonical
+    /// input proofs must be reachable before a full replay ticket or a backend ceiling context exists.
+    fn fraud_filer_hold_fp_input_v1(
+        &self,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3,
+        form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> bool {
+        let Some(case) = book.cases.get_mut(&claim) else { return false };
+        if case.fp_bootstrap.is_some() {
+            return true;
+        }
+        // Canonical bootstrap retains only the public job. Its ids are derived under the full
+        // replay ticket or the separate direct-proof ticket, never accumulated here. A producer's
+        // inflated count must not require that many input bytes just to prove the count false.
+        let n = if payload.commitment.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL {
+            0
+        } else {
+            u64::from(payload.commitment.job.prompt_tokens)
+        };
+        let bytes = n
+            .saturating_mul(16)
+            .saturating_add(n.div_ceil(32).saturating_mul(256))
+            .saturating_add(2 * self.config.court.max_close_bytes());
+        let Ok(ticket) = crate::palw_memory_ledger::host_ledger_v1().reserve(
+            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                role: "public-fp-input",
+                class_id: payload.commitment.job.class_id,
+                job: claim,
+            },
+            bytes,
+        ) else {
+            return false;
+        };
+        case.fp_bootstrap = Some(input::PalwFraudFilerFpBootstrapV1 {
+            payload: Arc::new(payload),
+            form,
+            ids: Vec::new(),
+            chunk: 0,
+            _reservation: Some(Arc::new(ticket)),
+        });
+        book.walked_from = None;
+        book.walked_to = None;
+        book.walk = None;
+        book.read_at = None;
+        true
+    }
+
     /// Start an attempt derived from its header, or an FP job/input authenticated against its accepted commitment and recorded pin.
     /// Run the verifier's own model under the full-seat memory reservation, retaining only its own capture. Missing public history
     /// or input waits without spending a run; a backend that cannot execute the job remains explicitly unjudged.
@@ -1635,8 +1731,26 @@ impl PalwPanelService {
                     return;
                 }
             };
+            if payload.commitment.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
+                && matches!(
+                    payload.commitment.job.version,
+                    kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION
+                        | kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION
+                )
+                && self.consensus_config.params.palw_legacy_held_da_v2_active_at(current_daa)
+                && !self.fraud_filer_hold_fp_input_v1(book, claim, payload.clone(), prompt_form)
+            {
+                book.cases.get_mut(&claim).expect("held above").input_retry_at =
+                    current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+                return;
+            }
             // Budget the declared ceiling, even if the producer claims an early stop. Only the verifier's run decides its context.
             let Some(ctx) = backend.fp_job_context_v1(&payload.commitment.job) else {
+                if book.cases.get(&claim).is_some_and(|c| c.fp_bootstrap.is_some()) {
+                    book.cases.get_mut(&claim).expect("held above").input_retry_at =
+                        current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+                    return;
+                }
                 return unjudged(book, "this backend cannot derive the FP job's ceiling context".into());
             };
             (ctx, Vec::new(), Some(payload))
@@ -1665,6 +1779,8 @@ impl PalwPanelService {
             }) {
                 Ok((reserved, _)) => reserved,
                 Err(why) => {
+                    book.cases.get_mut(&claim).expect("held above").input_retry_at =
+                        current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
                     crate::palw_backends::note_throttled_v1("panel-fraud-filer-ledger", || {
                         format!("[{PALW_PANEL}] claim {claim}: the fraud filer's replay waits: {why} (LG14-A)")
                     });
@@ -1687,36 +1803,19 @@ impl PalwPanelService {
                     if let Some(case) = book.cases.get_mut(&claim) {
                         case.input_retry_at = current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
                     }
-                    if payload.commitment.job.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA
-                        && payload.commitment.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER
+                    if ((payload.commitment.job.prompt_mode
+                        == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
+                        && matches!(
+                            payload.commitment.job.version,
+                            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION
+                                | kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION
+                        ))
+                        || (payload.commitment.job.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA
+                            && payload.commitment.job.prompt_mode
+                                == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER))
                         && self.consensus_config.params.palw_legacy_held_da_v2_active_at(current_daa)
-                        && book.cases.get(&claim).is_some_and(|c| c.fp_bootstrap.is_none())
                     {
-                        let n = u64::from(payload.commitment.job.prompt_tokens);
-                        let bytes = n
-                            .saturating_mul(16)
-                            .saturating_add(n.div_ceil(32).saturating_mul(256))
-                            .saturating_add(2 * self.config.court.max_close_bytes());
-                        if let Ok(ticket) = crate::palw_memory_ledger::host_ledger_v1().reserve(
-                            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
-                                role: "public-fp-input",
-                                class_id: job.class_id,
-                                job: claim,
-                            },
-                            bytes,
-                        ) {
-                            book.cases.get_mut(&claim).expect("held above").fp_bootstrap = Some(input::PalwFraudFilerFpBootstrapV1 {
-                                payload: Arc::new(payload),
-                                form: prompt_form,
-                                ids: Vec::new(),
-                                chunk: 0,
-                                _reservation: Some(Arc::new(ticket)),
-                            });
-                            book.walked_from = None;
-                            book.walked_to = None;
-                            book.walk = None;
-                            book.read_at = None;
-                        }
+                        self.fraud_filer_hold_fp_input_v1(book, claim, payload, prompt_form);
                     }
                     debug!("[{PALW_PANEL}] claim {claim}: the fraud filer's authenticated public FP input waits: {why}");
                     return;

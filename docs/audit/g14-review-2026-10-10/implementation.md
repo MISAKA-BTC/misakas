@@ -473,3 +473,27 @@ coreの新attack fixtureは、genesis後にcoalition bondと新verifier bondを�
 最終sourceの `scripts/t12-repin.sh --shipping --drift-only` はexit 0、**361 ok・差分なし**。fresh harvest再読込もexit 0。pinを書き換えていない。[repin](evidence/reservation-isolation-repin-final.log)、[harvest tests](evidence/reservation-isolation-repin-harvest-tests.log)、[harvest lib](evidence/reservation-isolation-repin-harvest-lib.log)、[log再検証](evidence/reservation-isolation-repin-replay-final.log)。
 
 G14全域は未達であり、owner数に比例する最大response負荷、fresh-node service、全family、最大contextの34-session予算、未取得FP job／canonical input／prefix-state、累積scopeと期限内包含が残る。
+
+## canonical FPの入力admission失敗から公開証拠へ進む
+
+`b483440c8`を基点に、canonical FP jobが不正なprompt count/rootを自己整合的にcommitした場合の追及停止を修正した。既存のidentity検査はFP job pinの一致を検査するが、公開jobそのもののcanonical inputを検査しない。own-modelで導出した入力がjobの宣言と合わなければ、nodeはreplayの前に止まり、attempt専用の`PromptNotAnchored`にも進めなかった。
+
+既存contradiction 13のproof enumへ`FpCanonicalWhole { job } = 2`を追加した。jobを公開claimの記録済みpin、認証済みbinding contextのjob hash／seed／count／hash／tokenizer／context ceiling、classとexecutorへ照合する。正しいjob bytesであることを確認してから、登録classのcanonical countと`fp_canonical_anchor_v1(job)`から導くrootを比較する。producerのids、capture、secret stateを証拠builderへ渡さない。count不正はwhole rootを計算せずに判定する。root不正は既存heavy budget内で計算する。
+
+kind-3／kind-4はpublic-filer fence前にこの追加proofを明示的に拒否する。processorとfoldのheavy課金も同じfenceを読む。非認証jobとcount不正はheavy slotを使わず、root判定は既存per-claim memoと262,144-id budgetへ帰属する。nodeは一時ids/treeとproof bufferをhost ledgerへ予約し、hashingをworkerへ移す。rentは宣言countを保守的に価格へ含める。既存Tile/Wholeのwire tag、state layout、activation heightとshipping pinを変えない。旧V1 readerは従来どおりcontradiction 13を拒否する。
+
+追加proofのrentもpublic-filer fenceを読む。旧`palw_offence_heavy_prompt_ids_v1`／`palw_object_rent_ceiling_v2`は、この旧buildが知らないFP proof tag 2を0で価格づけする。新しいfence-aware価格関数をprocessorの受入処理とUTXOのcoinbase rent burnに同じDAAで接続した。fence前のunknown proofに新しいrentをburnしてcoinbaseが食い違うことを防ぐ。kind-3／kind-4、fence前後とoffence-attribution未有効の価格をcore unitで確認した。実coinbaseのraw FP proof carrierによるchain-path検証はfresh-node受入条件へ残す。
+
+nodeはcanonical input admissionの失敗でも、認証済みaccepted FP payloadをPending bootstrapとして保持し、公開bindingのreservation／demandへ進める。保持はaccepted jobの認証直後、小さいinput用host ticketで行い、backendのceiling context導出やfull replayのメモリ予約より前に置く。full replayのメモリ待ちだけで直接証明を止めない。canonical Pendingは入力ids未保持でもreplay retry対象へ残し、メモリが使えるようになれば正しいjobの独立replayへ進める。bindingを得たらproducerのprompt idsを要求せず、公開jobとbindingからkind-4 reporter filingへ進む。binding非応答は既存`ProducerWithholding`に進む。ordinary V3／V4 canonical jobを対象とし、PublicDA／PanelDAを認める。prefix/eval/tensor-tail等の別job意味論をこのproofへ混ぜない。
+
+G14全域は未達。最大contextのinput session予算、恒久pruneされたaccepted FP jobの取得、prefix/state等のbootstrap、全familyの正規eligibility、checkpoint/trace局所化、fresh-node full-service／包含／restart／IBD／reorg、最大population/profileの実測RAM・期限、累積scopeは残る。登録モデル保有を前提とするADR-0177 D7と、activationのfail-closed方針を維持する。
+
+heavy課金は現行のonce-per-claimを引き継ぐ。ソース上、whole-root memoは8 entryのFIFOであり、より多い小promptのclaimを交互に提出すると退避済みrootを再計算し得る。claim集合の課金済みflagだけではその実workを束縛しない。今回の単独claimのroot判定PASSを、多claim下の実CPU上限又はproof spamへの期限内包含の証明と扱わない。この予算／memo退避の反例を実際のblockで検証して閉じることは、次の残課題である。
+
+最終sourceの検証は **103 PASS**。coreの`palw_offence`は40 V-unitで、新proofのV3／V4、floor Flat／Merkle、2M prompt、honest input、root／count不正、job nonce／anchor／class／executor／tokenizer／count／hash／mode差替え、別claim／lane、kind-3／kind-4、fence前の拒否とheavy課金を検査する。nodeのLG14-Bは15件で、このうち新しい入力試験は6 caseを1 testとして数える。実際に受理されたFP claimを全PanelのValidでlicenseし、公開bindingのreservation／demand／answerとproduction controller／proof builder、actual fold adjudicator、delta reapply／revert／carriage loadを通す。root／count不正のFinal前後conviction、binding非応答のDA default、correct-input twinの非提出、replay回数0とcanonical Pendingのretryを確認した。入力専用のsynthetic step／checkpoint rootとclass／signature callbackを使うV-foldであり、モデル全体の実行やfresh-node full-serviceの証明ではない。
+
+残るnode回帰はfiler/input 20 V-unit、public reader 7 V-unit、reporter 21 V-unit。通常feature（EVMを含む）の`cargo check -p kaspad --bin kaspad --locked`も成功した。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`を使用し、nodeのbinary直実行は最終sourceをcargoでbuildした同じkaspad_lib binary、coreは最終shipping harvestがbuildしたcore lib-test binaryを用いた。[core](evidence/canonical-fp-core-final.log)、[LG14-B](evidence/canonical-fp-node-held-final.log)、[filer/input](evidence/canonical-fp-node-filer-final.log)、[reader](evidence/canonical-fp-reader-final.log)、[reporter](evidence/canonical-fp-reporter-final.log)、[binary check](evidence/canonical-fp-binary-final.log)。unused/dead-code警告は残る。
+
+最終sourceの`--shipping --drift-only`は **361 ok、差分なし、exit 0**。fresh harvestのlog再読込もexit 0。shipping pinを変更していない。[repin](evidence/canonical-fp-repin-final.log)、[harvest tests](evidence/canonical-fp-repin-harvest-tests.log)、[harvest lib](evidence/canonical-fp-repin-harvest-lib.log)、[再読込](evidence/canonical-fp-repin-replay-final.log)。
+
+初回node試験のcorrect-input twinはfixtureのlegacy prompt generator／network-wide Flat formを使い、classのCoreV1／Merkle formと合わずFAILした。fixtureを正しいfamily ruleとclass formへ修正し、productionの検証predicateやfenceを緩めていない。[初回log](evidence/canonical-fp-node-initial.log)。最終PASSだけを上記へ計上した。

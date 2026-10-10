@@ -9633,10 +9633,21 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
 /// prices what the base prices (the lane-verify review: the form's rent was burned by upgraded nodes
 /// only, a coinbase two builds disagreed on).
 pub fn palw_object_rent_ceiling_v2(object: &PalwConsensusObjectV2, offence_attribution: bool, batch_licence: bool) -> u64 {
+    palw_object_rent_ceiling_v3(object, offence_attribution, batch_licence, false)
+}
+
+/// Fence-aware pricing for the canonical FP proof appended to contradiction 13. The public-filer
+/// fence must be read at the same DAA by the acceptance walk and the UTXO coinbase calculation.
+pub fn palw_object_rent_ceiling_v3(
+    object: &PalwConsensusObjectV2,
+    offence_attribution: bool,
+    batch_licence: bool,
+    legacy_public_filer: bool,
+) -> u64 {
     if offence_attribution
         && let PalwConsensusObjectV2::ObjectiveOffence { kind, evidence, .. } = object
     {
-        let ids = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_ids_v1(*kind, evidence, batch_licence);
+        let ids = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_ids_at_v2(*kind, evidence, batch_licence, legacy_public_filer);
         if ids > 0 {
             return palw_relay_fee_for_mass_v1(ids.saturating_mul(crate::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1));
         }
@@ -24133,7 +24144,7 @@ impl<'a> TransitionBuilder<'a> {
         evidence_id: Hash64,
         evidence: &[u8],
     ) -> Result<(), PalwStateV2Error> {
-        let Some(charge) = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_v1(
+        let Some(charge) = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_at_v2(
             &self.state,
             accused,
             kind,
@@ -24141,6 +24152,7 @@ impl<'a> TransitionBuilder<'a> {
             self.identity_rules_v1(now_daa),
             // ADR-0160 F-B: below the batch fence a `Windowed` kind-3 is the base's undecodable junk.
             self.params.capacity_batch_active_at(now_daa),
+            crate::palw_offence_attribution_v1::PalwSessionRuleV1::at(self.params.legacy_public_filer_active_at(now_daa)),
         ) else {
             return Ok(());
         };

@@ -430,7 +430,8 @@ pub struct PalwIdentityRulesV1 {
 pub enum PalwSessionRuleV1 {
     /// int-12's rule: an open court on the claim refuses the proof.
     RefusedUnderSession,
-    /// Past the fence: the proof lands; the sessions end with the conviction.
+    /// Past the fence: the proof lands; the sessions end with the conviction. This same dormant
+    /// fence admits the canonical FP prompt proof appended to contradiction 13.
     DirectProofFirst,
 }
 
@@ -1438,6 +1439,8 @@ pub fn palw_logits_not_step_output_fault_v1(
 /// (`palw_attempt_prompt_root_v1`, 13.6 ms at 2M, remembered per claim) is not the binding's — the
 /// caller charges the prefill against the block's heavy budget BEFORE this runs, once per claim
 /// ([`palw_offence_heavy_prompt_charge_v1`]).
+/// `FpCanonicalWhole` instead authenticates the public FP job before comparing its count and
+/// anchor-derived root. Its count fault is cheap; its root check uses the same heavy budget.
 pub fn palw_prompt_not_anchored_fault_v1(
     target: &PalwOffenceTargetV1,
     binding: &crate::palw_step_leg::PalwStepBindingV2,
@@ -1446,6 +1449,16 @@ pub fn palw_prompt_not_anchored_fault_v1(
 ) -> Result<bool, PalwOffenceVerifyError> {
     use crate::palw_attempt_rules_v1::{palw_attempt_prompt_ids_range_v1, palw_attempt_prompt_root_memo_v1};
     use crate::palw_offence_v1::PalwPromptProofV1 as P;
+    if let P::FpCanonicalWhole { job } = proof {
+        let prefill = palw_fp_canonical_prompt_admit_v1(target, binding, job, rules)?;
+        if binding.job_context.declared_prefill_tokens != prefill {
+            return Ok(true);
+        }
+        let anchor = crate::palw_freeprompt_v3::fp_canonical_anchor_v1(job);
+        let root = palw_attempt_prompt_root_memo_v1(&binding.shape_profile, &anchor, prefill, rules.prompt_ids_form)
+            .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+        return Ok(binding.job_context.prompt_token_ids_hash != root);
+    }
     let prefill = palw_prompt_not_anchored_admit_v1(target, binding, rules)?;
     let (profile, ctx, identity) = (&binding.shape_profile, &binding.job_context, target.job_identity);
     match proof {
@@ -1464,7 +1477,67 @@ pub fn palw_prompt_not_anchored_fault_v1(
                 .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
             Ok(ctx.prompt_token_ids_hash != root)
         }
+        P::FpCanonicalWhole { .. } => unreachable!("handled before attempt admission"),
     }
+}
+
+/// Authenticate the public canonical FP job BEFORE deriving any ids. The context's pin is the
+/// claim's recorded pin; its job id hashes the complete public job, including anchor and nonce.
+/// A self-consistent bad count/root is then judged against the family's canonical prompt.
+pub fn palw_fp_canonical_prompt_admit_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    rules: PalwIdentityRulesV1,
+) -> Result<u32, PalwOffenceVerifyError> {
+    use crate::palw_freeprompt_v3::*;
+    palw_claims_own_binding_v1(target, binding)?;
+    let ctx = &binding.job_context;
+    if target.job_identity == Hash64::default() {
+        return Err(PalwOffenceVerifyError::IdentityNotRecorded);
+    }
+    if target.lane != Some(PalwClaimSourceKindV1::FreePrompt)
+        || job.prompt_mode != PALW_FP_PROMPT_MODE_CANONICAL
+        || !matches!(job.version, PALW_FP_V3_VERSION | PALW_FP_V4_VERSION)
+        || !matches!(job.privacy_mode, PALW_FP_PRIVACY_PUBLIC_DA | PALW_FP_PRIVACY_PANEL_DA)
+    {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("a supported canonical free-prompt job is required"));
+    }
+    if crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(ctx) != target.job_identity
+        || fp_job_id_v3(job) != ctx.job_id
+        || crate::palw_fp_execution_v3::palw_fp_execution_seed_v3(job) != ctx.execution_seed
+        || job.class_id != target.class_id
+        || job.executor_bond != target.executor_bond.0
+        || job.prompt_tokens != ctx.declared_prefill_tokens
+        || job.prompt_token_ids_hash != ctx.prompt_token_ids_hash
+        || job.tokenizer_id != ctx.tokenizer_id
+        || job.max_context_tokens != ctx.max_context_tokens
+    {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+            "the public FP job does not authenticate to this claim's binding",
+        ));
+    }
+    crate::palw_attempt_rules_v1::palw_attempt_canonical_v1(&binding.shape_profile, target.class_id == rules.base_class_id)
+        .map(|canonical| canonical.0)
+        .ok_or(PalwOffenceVerifyError::IdentityNotDerivable)
+}
+
+fn palw_prompt_proof_fence_v1(
+    contradiction: &PalwPanelContradictionV1,
+    sessions: PalwSessionRuleV1,
+) -> Result<(), PalwOffenceVerifyError> {
+    if sessions != PalwSessionRuleV1::DirectProofFirst
+        && matches!(
+            contradiction,
+            PalwPanelContradictionV1::PromptNotAnchored {
+                proof: crate::palw_offence_v1::PalwPromptProofV1::FpCanonicalWhole { .. },
+                ..
+            }
+        )
+    {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("canonical FP prompt proof is below the public-filer fence"));
+    }
+    Ok(())
 }
 
 /// **Everything `PromptNotAnchored` (13) asks before it reads a prompt id** — the cheap half, which
@@ -1513,6 +1586,17 @@ pub fn palw_prompt_not_anchored_admit_v1(
 /// payload whose receipt is `Windowed` reads as undecodable ([`palw_false_valid_evidence_decode_v1`]),
 /// as it does on `0e8ec984e`, so it prices nothing.
 pub fn palw_offence_heavy_prompt_ids_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8], windowed_admitted: bool) -> u64 {
+    palw_offence_heavy_prompt_ids_at_v2(kind, evidence, windowed_admitted, false)
+}
+
+/// The appended FP proof is the old build's undecodable bytes below the public-filer fence.
+/// Pricing it there would burn a new rent and change the coinbase on a dormant network.
+pub fn palw_offence_heavy_prompt_ids_at_v2(
+    kind: crate::palw_offence_v1::PalwOffenceKindV1,
+    evidence: &[u8],
+    windowed_admitted: bool,
+    legacy_public_filer: bool,
+) -> u64 {
     use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPromptProofV1};
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
         return 0;
@@ -1523,9 +1607,12 @@ pub fn palw_offence_heavy_prompt_ids_v1(kind: crate::palw_offence_v1::PalwOffenc
         _ => None,
     };
     match contradiction {
-        Some(PalwPanelContradictionV1::PromptNotAnchored { binding, proof: PalwPromptProofV1::Whole }) => {
-            u64::from(binding.job_context.declared_prefill_tokens)
-        }
+        Some(PalwPanelContradictionV1::PromptNotAnchored {
+            binding,
+            proof: PalwPromptProofV1::Whole,
+        }) => u64::from(binding.job_context.declared_prefill_tokens),
+        Some(PalwPanelContradictionV1::PromptNotAnchored { binding, proof: PalwPromptProofV1::FpCanonicalWhole { .. } })
+            if legacy_public_filer => u64::from(binding.job_context.declared_prefill_tokens),
         _ => 0,
     }
 }
@@ -1565,6 +1652,28 @@ pub fn palw_offence_heavy_prompt_charge_v1(
     rules: PalwIdentityRulesV1,
     windowed_admitted: bool,
 ) -> Option<PalwHeavyPromptChargeV1> {
+    palw_offence_heavy_prompt_charge_at_v2(
+        state,
+        accused,
+        kind,
+        evidence,
+        rules,
+        windowed_admitted,
+        PalwSessionRuleV1::RefusedUnderSession,
+    )
+}
+
+/// Fence-aware heavy accounting, shared by the block acceptance walk and fold. A canonical FP
+/// count fault recomputes nothing; an unauthenticated job or a below-fence proof is charged nothing.
+pub fn palw_offence_heavy_prompt_charge_at_v2(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    kind: crate::palw_offence_v1::PalwOffenceKindV1,
+    evidence: &[u8],
+    rules: PalwIdentityRulesV1,
+    windowed_admitted: bool,
+    sessions: PalwSessionRuleV1,
+) -> Option<PalwHeavyPromptChargeV1> {
     use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPromptProofV1};
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
         return None;
@@ -1592,14 +1701,25 @@ pub fn palw_offence_heavy_prompt_charge_v1(
         }
         _ => return None,
     };
-    let PalwPanelContradictionV1::PromptNotAnchored { binding, proof: PalwPromptProofV1::Whole } = contradiction else {
+    palw_prompt_proof_fence_v1(&contradiction, sessions).ok()?;
+    let PalwPanelContradictionV1::PromptNotAnchored { binding, proof } = contradiction else {
         return None;
     };
     let target = palw_offence_target_v1(state, &claim_id)?;
     if executor_only && *accused != target.executor_bond {
         return None;
     }
-    let prefill = palw_prompt_not_anchored_admit_v1(&target, &binding, rules).ok()?;
+    let prefill = match proof {
+        PalwPromptProofV1::Whole => palw_prompt_not_anchored_admit_v1(&target, &binding, rules).ok()?,
+        PalwPromptProofV1::FpCanonicalWhole { job } => {
+            let n = palw_fp_canonical_prompt_admit_v1(&target, &binding, &job, rules).ok()?;
+            if binding.job_context.declared_prefill_tokens != n {
+                return None;
+            }
+            n
+        }
+        PalwPromptProofV1::Tile(_) => return None,
+    };
     Some(PalwHeavyPromptChargeV1 { claim_id: target.claim_id, prompt_ids: u64::from(prefill) })
 }
 
@@ -1753,6 +1873,7 @@ pub fn palw_check_panel_false_valid_at_v2(
     }
     let payload: PalwPanelFalseValidEvidenceV2 =
         borsh::from_slice(evidence).map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+    palw_prompt_proof_fence_v1(&payload.contradiction, sessions)?;
     if payload.version != PALW_PANEL_FALSE_VALID_VERSION_V2 {
         return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
     }
@@ -2130,6 +2251,7 @@ pub fn palw_check_executor_refuted_at_v1(
     }
     let payload: PalwExecutorRefutedEvidenceV1 =
         borsh::from_slice(evidence).map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+    palw_prompt_proof_fence_v1(&payload.contradiction, sessions)?;
     if payload.version != PALW_EXECUTOR_REFUTED_VERSION_V1 {
         return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
     }
@@ -3205,6 +3327,165 @@ mod tests {
             trace_manifest_root: Hash64::default(),
             trace_chunk_count: 1,
             trace_retention_daa: 0,
+        }
+    }
+
+    /// A producer commits a self-consistent canonical FP job with a bad count or root, and every
+    /// seat says Valid. Public job + own binding suffice, including the largest shipped prompt.
+    #[test]
+    fn canonical_fp_prompt_proof_authenticates_job_convicts_count_and_root_and_keeps_the_fence() {
+        use crate::palw_fp_execution_v3::{
+            PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_job_pin_v1, palw_fp_run_facts_for_executed_v1,
+        };
+        use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPromptProofV1 as P};
+        for (base, form, v4) in [
+            (true, Form::Flat, false), (true, Form::MerkleV1, true),
+            (false, Form::MerkleV1, false), (false, Form::MerkleV1, true),
+        ] {
+            let template = if base {
+                floor_binding_for_tests_v1(&h64(0xCF), form)
+            } else {
+                crate::palw_attempt_rules_v1::model_binding_for_tests_v1(&h64(0xCF), 2_097_152, form)
+            };
+            let class_id = template.shape_profile.shape_profile_id();
+            let rules = PalwIdentityRulesV1 {
+                prompt_ids_form: form,
+                base_class_id: if base { class_id } else { h64(0xBA5E) },
+                da_signer_liability: false,
+            };
+            let canonical = crate::palw_attempt_rules_v1::palw_attempt_canonical_v1(&template.shape_profile, base).unwrap().0;
+            let facts = PalwFpClassFactsV3 {
+                model_profile_id: Hash64::default(),
+                runtime_manifest_hash: Hash64::default(),
+                runtime_class_id: Hash64::default(),
+                shape_profile_id: class_id,
+                cu_ruleset_id: Hash64::default(),
+            };
+            for fault in [0, 1, 2] {
+                let mut job = fp_job(h64(0xCF1));
+                if v4 {
+                    job = job.into_v4(crate::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+                }
+                job.class_id = class_id;
+                job.executor_bond = seat(99).0;
+                job.prompt_mode = crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL;
+                job.max_context_tokens = template.shape_profile.n_ctx;
+                job.prompt_tokens = canonical + u32::from(fault == 2);
+                job.prompt_token_ids_hash = crate::palw_attempt_rules_v1::palw_attempt_prompt_root_v1(
+                    &template.shape_profile,
+                    &crate::palw_freeprompt_v3::fp_canonical_anchor_v1(&job),
+                    canonical,
+                    form,
+                )
+                .unwrap();
+                if fault == 1 {
+                    job.prompt_token_ids_hash = h64(0xBAD);
+                }
+                let ctx =
+                    palw_fp_job_context_v3(&job, &facts, &palw_fp_run_facts_for_executed_v1(&job, 3), b"misaka-palw-rc").unwrap();
+                let binding = moved(&template, |b| b.job_context = ctx);
+                let mut row = claim_row(PalwClaimPhaseV2::Provisional, binding.committed_execution_root);
+                row.source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: Default::default() };
+                row.class_id = class_id;
+                row.trace_root = binding.full_logits_trace_root;
+                row.job_identity = palw_fp_job_pin_v1(&fp_commitment(job.clone(), 3));
+                let mut state = PalwChainStateV2::genesis();
+                state.set_false_valid_rows_for_tests(h64(CLAIM), Some(row), Some(five_seat_panel()), None, 0);
+                let target = palw_offence_target_v1(&state, &h64(CLAIM)).unwrap();
+                let proof = P::FpCanonicalWhole { job: Box::new(job.clone()) };
+                assert_eq!(borsh::to_vec(&proof).unwrap()[0], 2);
+                assert_eq!(palw_fp_canonical_prompt_admit_v1(&target, &binding, &job, rules), Ok(canonical));
+                assert_eq!(palw_prompt_not_anchored_fault_v1(&target, &binding, &proof, rules), Ok(fault != 0));
+                let contradiction = PalwPanelContradictionV1::PromptNotAnchored { binding: binding.clone(), proof };
+                let executor = borsh::to_vec(&PalwExecutorRefutedEvidenceV1 {
+                    version: PALW_EXECUTOR_REFUTED_VERSION_V1,
+                    claim_id: target.claim_id,
+                    contradiction: contradiction.clone(),
+                    prompt_ids_opening: None,
+                    reporter_reveal: vec![],
+                })
+                .unwrap();
+                let panel = bytes(&evidence(full(1), contradiction.clone()));
+                for mode in [PalwSessionRuleV1::RefusedUnderSession, PalwSessionRuleV1::DirectProofFirst] {
+                    let expected = if mode == PalwSessionRuleV1::DirectProofFirst && fault != 2 {
+                        Some(PalwHeavyPromptChargeV1 { claim_id: target.claim_id, prompt_ids: u64::from(canonical) })
+                    } else {
+                        None
+                    };
+                    for (kind, accused, bytes) in [(K::ExecutorRefuted, seat(99), &executor), (K::PanelFalseValidV2, seat(1), &panel)]
+                    {
+                        let active = mode == PalwSessionRuleV1::DirectProofFirst;
+                        let declared = u64::from(binding.job_context.declared_prefill_tokens);
+                        assert_eq!(palw_offence_heavy_prompt_ids_v1(kind, bytes, false), 0, "the old price cannot know FP proof tag 2");
+                        assert_eq!(palw_offence_heavy_prompt_ids_at_v2(kind, bytes, false, active), if active { declared } else { 0 });
+                        let object = crate::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {
+                            kind, accused, evidence_id: h64(0xCF33), evidence: bytes.clone(),
+                        };
+                        assert_eq!(crate::palw_state_v2::palw_object_rent_ceiling_v2(&object, true, false), 0, "below the new fence the coinbase burns exactly the old rent");
+                        let rent = crate::palw_state_v2::palw_object_rent_ceiling_v3(&object, true, false, active);
+                        assert_eq!(rent, if active {
+                            crate::palw_state_v2::palw_relay_fee_for_mass_v1(declared * crate::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1)
+                        } else { 0 });
+                        assert_eq!(crate::palw_state_v2::palw_object_rent_ceiling_v3(&object, false, false, active), 0);
+                        assert_eq!(
+                            palw_offence_heavy_prompt_charge_at_v2(&state, &accused, kind, bytes, rules, false, mode),
+                            expected
+                        );
+                    }
+                    let ex = palw_check_executor_refuted_at_v1(&state, &seat(99), &executor, true, false, rules, mode);
+                    let pv = palw_check_panel_false_valid_at_v2(&state, &seat(1), &panel, true, false, rules, None, mode);
+                    if mode == PalwSessionRuleV1::RefusedUnderSession {
+                        assert!(matches!(ex, Err(E::ContradictionNotAdmitted(_))), "no court is open; the fence still refuses");
+                        assert!(matches!(pv, Err(E::ContradictionNotAdmitted(_))));
+                    } else if fault == 0 {
+                        assert!(matches!(ex, Err(E::PromptHolds)));
+                        assert!(matches!(pv, Err(E::PromptHolds)));
+                    } else {
+                        assert_eq!(ex.unwrap().forfeit, PalwForfeitScopeV1::ByClaim);
+                        assert_eq!(pv.unwrap().forfeit, PalwForfeitScopeV1::ByClaim);
+                    }
+                }
+                assert!(palw_offence_heavy_prompt_charge_v1(&state, &seat(99), K::ExecutorRefuted, &executor, rules, false).is_none());
+                for edit in [
+                    Box::new(|j: &mut crate::palw_freeprompt_v3::PalwFreePromptJobV3| j.job_nonce[0] ^= 1)
+                        as Box<dyn Fn(&mut crate::palw_freeprompt_v3::PalwFreePromptJobV3)>,
+                    Box::new(|j| j.anchor_block = h64(1)),
+                    Box::new(|j| j.class_id = h64(2)),
+                    Box::new(|j| j.executor_bond = seat(8).0),
+                    Box::new(|j| j.tokenizer_id = h64(3)),
+                    Box::new(|j| j.prompt_tokens += 1),
+                    Box::new(|j| j.prompt_token_ids_hash = h64(4)),
+                    Box::new(|j| j.prompt_mode = crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER),
+                ] {
+                    let mut forged = job.clone();
+                    edit(&mut forged);
+                    assert!(palw_fp_canonical_prompt_admit_v1(&target, &binding, &forged, rules).is_err());
+                    let mut payload: PalwExecutorRefutedEvidenceV1 = borsh::from_slice(&executor).unwrap();
+                    payload.contradiction = PalwPanelContradictionV1::PromptNotAnchored {
+                        binding: binding.clone(),
+                        proof: P::FpCanonicalWhole { job: Box::new(forged) },
+                    };
+                    assert!(
+                        palw_offence_heavy_prompt_charge_at_v2(
+                            &state,
+                            &seat(99),
+                            K::ExecutorRefuted,
+                            &borsh::to_vec(&payload).unwrap(),
+                            rules,
+                            false,
+                            PalwSessionRuleV1::DirectProofFirst
+                        )
+                        .is_none(),
+                        "junk must not consume another proof's heavy slot"
+                    );
+                }
+                let mut foreign = target.clone();
+                foreign.execution_root = h64(5);
+                assert_eq!(palw_fp_canonical_prompt_admit_v1(&foreign, &binding, &job, rules), Err(E::PanelFalseValidWorkMismatch));
+                foreign = target.clone();
+                foreign.lane = Some(PalwClaimSourceKindV1::Attempt);
+                assert!(palw_fp_canonical_prompt_admit_v1(&foreign, &binding, &job, rules).is_err());
+            }
         }
     }
 

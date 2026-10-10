@@ -8881,7 +8881,9 @@ impl VirtualStateProcessor {
                 && self.palw_offence_attribution_at(point.daa_score)
             {
                 if rent_armed {
-                    let owed = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(&object, true, batch_licence);
+                    let owed = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v3(
+                        &object, true, batch_licence, self.palw_legacy_public_filer_at(point.daa_score),
+                    );
                     if carrier_fee < owed {
                         info!(
                             "Block {block}: a whole-prompt PromptNotAnchored was dropped, and the block stands: its carrier paid \
@@ -8890,13 +8892,14 @@ impl VirtualStateProcessor {
                         continue;
                     }
                 }
-                if let Some(charge) = kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_v1(
+                if let Some(charge) = kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_at_v2(
                     &folded,
                     accused,
                     *kind,
                     evidence,
                     self.palw_identity_rules_v1(point.daa_score),
                     batch_licence,
+                    self.palw_session_rule_at(point.daa_score),
                 ) && !heavy_prompt_claims.contains(&charge.claim_id)
                 {
                     let (heavy, budget) = (charge.prompt_ids, kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1);

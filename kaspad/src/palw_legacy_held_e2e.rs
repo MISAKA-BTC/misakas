@@ -1798,6 +1798,206 @@ fn public_prompt_binding(
     binding
 }
 
+/// Synthetic, shape-correct FP commitments isolate the input admission gap. The accepted job
+/// and authenticated public event are the outsider's only inputs; it has no successful replica.
+#[tokio::test]
+async fn lg14b_canonical_fp_bad_input_reaches_public_conviction_before_replay_and_after_final() {
+    use crate::palw_panel::palw_fraud_filer::{
+        PalwFraudFilerBookV1, PalwFraudFilerCaseV1, PalwFraudFilerFpBootstrapV1, PalwFraudFilerStepV1, PalwFraudFilerVerdictV1,
+        palw_fraud_filer_fp_input_v1, palw_fraud_filer_public_filing_with_fp_v2,
+    };
+    use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PROMPT_MODE_CANONICAL, PalwFpCommitmentTxPayloadV3, PalwFpStopReasonV3, PalwFreePromptCommitmentV3,
+    };
+    use kaspa_consensus_core::palw_legacy_public_filer_v1::{
+        PalwFilerActionV1, PalwLegacyProbeV1, palw_dispute_reserved_object_v1, palw_fraud_filer_demand_object_v1,
+        palw_fraud_filer_reservation_v1,
+    };
+    use kaspa_consensus_core::palw_offence_attribution_v1::{
+        PalwExecutorRefutedEvidenceV1, PalwIdentityRulesV1, palw_offence_target_v1,
+    };
+    use kaspa_consensus_core::palw_offence_v1::{PalwPanelContradictionV1, PalwPromptProofV1};
+    use kaspa_consensus_core::palw_step_refute::{logits_event_disclosure_v1, tiled_logits_trace_root_v1};
+    let f = Fixture::new(false);
+    let form = kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(f.d.backend.prompt_ids_form(), &f.profile);
+    let canonical = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_canonical_v1(&f.profile, false).unwrap();
+    // The normal registry fixes this formula; the older fixture's custom 64/8 declaration is a test callback exception.
+    let own = Qwen25A16Backend::new(f.artifact.clone(), NETWORK.to_vec(), f.profile.clone(), canonical)
+        .unwrap()
+        .with_step_ladder_cap(LADDER)
+        .with_prompt_ids_form(form)
+        .with_attempt_rules(kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1);
+    for (fault, after_final, withhold) in
+        [(1, false, false), (1, true, false), (2, false, false), (2, true, false), (1, false, true), (0, false, false)]
+    {
+        let mut job = f.d.fp_job.clone();
+        job.prompt_mode = PALW_FP_PROMPT_MODE_CANONICAL;
+        job.prompt_tokens = canonical.0 + u32::from(fault == 2);
+        job.decode_token_limit = canonical.1;
+        job.max_context_tokens = job.prompt_tokens + canonical.1;
+        job.prompt_token_ids_hash = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_prompt_root_v1(
+            &f.profile,
+            &kaspa_consensus_core::palw_freeprompt_v3::fp_canonical_anchor_v1(&job),
+            canonical.0,
+            form,
+        )
+        .unwrap();
+        if fault == 1 {
+            job.prompt_token_ids_hash = h64(0xCFBAD);
+        }
+        let facts = PalwFpClassFactsV3 {
+            model_profile_id: f.canonical.model_profile_id,
+            runtime_manifest_hash: f.canonical.runtime_manifest_hash,
+            runtime_class_id: f.canonical.runtime_class_id,
+            shape_profile_id: f.profile.shape_profile_id(),
+            cu_ruleset_id: f.canonical.cu_ruleset_id,
+        };
+        let ctx = palw_fp_job_context_v3(&job, &facts, &palw_fp_run_facts_for_executed_v1(&job, canonical.1), NETWORK).unwrap();
+        let rows = vec![vec![0i32; f.profile.vocab_size as usize]; canonical.1 as usize];
+        let generated = vec![0u32; canonical.1 as usize];
+        let mut binding = public_prompt_binding(&f.profile, h64(0xCF10), h64(0xCF10), form);
+        binding.job_context = ctx.clone();
+        binding.activation_leg_root = kaspa_consensus_core::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&ctx);
+        binding.step_leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&f.profile, &ctx, LADDER).unwrap();
+        binding.checkpoint_count = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1(
+            &f.profile,
+            &ctx,
+            binding.checkpoint_profile.checkpoint_interval,
+        );
+        if binding.checkpoint_count == 0 {
+            binding.checkpoint_merkle_root = kaspa_consensus_core::palw_step_leg::checkpoint_empty_root_v2(&ctx.context_hash());
+        }
+        binding.full_logits_trace_root = tiled_logits_trace_root_v1(&ctx, &rows, &generated).unwrap();
+        binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&binding);
+        let event = logits_event_disclosure_v1(&binding, &rows, &generated, 0, 0).unwrap();
+        let payload = PalwFpCommitmentTxPayloadV3 {
+            version: job.version,
+            commitment: PalwFreePromptCommitmentV3 {
+                job: job.clone(),
+                trace_root: binding.full_logits_trace_root,
+                output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&ctx, &generated),
+                schedule_root: kaspa_consensus_core::palw_v2::expected_schedule_commitment_v2(
+                    &ctx.context_hash(),
+                    job.prompt_tokens,
+                    canonical.1,
+                )
+                .0,
+                execution_root: binding.committed_execution_root,
+                decode_tokens_executed: canonical.1,
+                stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+                work_leaves: binding.step_leaf_count,
+                trace_manifest_root: h64(0xCF11),
+                trace_chunk_count: 1,
+                trace_retention_daa: 999_999,
+            },
+            prompt_token_ids: vec![],
+            signature: vec![0x6B; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        let input = palw_fraud_filer_fp_input_v1(&own, &payload, form, &[]);
+        assert_eq!(input.is_ok(), fault == 0, "fault {fault}: {input:?}");
+        let d = Produced {
+            ctx,
+            execution_root: binding.committed_execution_root,
+            trace_root: binding.full_logits_trace_root,
+            ..produce(&f.artifact, &f.profile, false)
+        };
+        let (s, claim) = rc_licensed_job(&d, &f.canonical, &f.profile, f.root, None, Some(&payload));
+        let mut w = World { s, daa: 104, chain: Vec::new() };
+        if after_final {
+            for _ in 0..2_000 {
+                if matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Final { .. }) {
+                    break;
+                }
+                w.quiet();
+            }
+            assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Final { .. }));
+        }
+        let candidate =
+            w.s.palw_fraud_filer_candidates_v1(&rc_params(), &bond_key(OUTSIDER), w.daa)
+                .into_iter()
+                .find(|c| c.claim_id == claim)
+                .unwrap();
+        let mut case = PalwFraudFilerCaseV1::new(candidate);
+        case.fp_bootstrap =
+            Some(PalwFraudFilerFpBootstrapV1 { payload: Arc::new(payload), form, ids: vec![], chunk: 0, _reservation: None });
+        assert!(case.pursued());
+        let mut retry = PalwFraudFilerBookV1::default();
+        retry.cases.insert(claim, case);
+        assert_eq!(retry.held_runs(), 0);
+        assert_eq!(
+            retry.next_replay(),
+            Some(claim),
+            "a canonical bootstrap still retries honest replay when memory becomes available"
+        );
+        let mut case = retry.cases.remove(&claim).unwrap();
+        let before = bonds_collateral(&w.s);
+        let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap();
+        assert!(matches!(service_filer_step(&w, &case).unwrap(), PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve)));
+        w.block(vec![palw_dispute_reserved_object_v1(h64(999), palw_fraud_filer_reservation_v1(&view, bond_key(OUTSIDER)), |_| {
+            SIG.to_vec()
+        })])
+        .unwrap();
+        let probe = PalwLegacyProbeV1::Binding { row: 0, tile: 0 };
+        assert!(
+            matches!(service_filer_step(&w, &case).unwrap(), PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(p)) if p == probe)
+        );
+        w.block(vec![
+            palw_fraud_filer_demand_object_v1(&h64(999), claim, &d.execution_root, probe, None, bond_key(OUTSIDER), form, |_, _| {
+                Some(SIG.to_vec())
+            })
+            .unwrap(),
+        ])
+        .unwrap();
+        if withhold {
+            for _ in 0..2_000 {
+                if matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { .. }) {
+                    break;
+                }
+                w.quiet();
+            }
+            assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
+        } else {
+            w.block(vec![PalwConsensusObjectV2::MaterialDisclosedV2 {
+                claim,
+                unit: probe.unit(),
+                answer: PalwDaAnswerV1::Event(event),
+                discloser: bond_key(PRODUCER),
+                signature: SIG.to_vec(),
+            }])
+            .unwrap();
+            assert!(matches!(service_filer_step(&w, &case).unwrap(), PalwFraudFilerStepV1::Learn(p) if p == probe));
+            let answer = service_public_answer(&w.chain, claim, probe.unit(), d.execution_root).unwrap();
+            case.learn(probe, &answer).unwrap();
+            assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Pending));
+            assert_eq!(case.runs, 0);
+            assert!(
+                matches!(service_filer_step(&w, &case).unwrap(), PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait)),
+                "canonical input needs no served ids"
+            );
+            let target = palw_offence_target_v1(&w.s, &claim).unwrap();
+            let rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: h64(1), da_signer_liability: true };
+            let filing = palw_fraud_filer_public_filing_with_fp_v2(&target, rules, &answer, None, Some(&job)).unwrap();
+            if fault == 0 {
+                assert!(filing.is_none());
+                assert_eq!(bonds_collateral(&w.s), before);
+                continue;
+            }
+            let filing = filing.expect("bad canonical input reaches an objective proof before replay");
+            let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &filing.object else { panic!("kind 4") };
+            let proof: PalwExecutorRefutedEvidenceV1 = borsh::from_slice(evidence).unwrap();
+            assert!(matches!(
+                proof.contradiction,
+                PalwPanelContradictionV1::PromptNotAnchored { proof: PalwPromptProofV1::FpCanonicalWhole { .. }, .. }
+            ));
+            w.block(vec![filing.object]).expect("actual objective input conviction");
+            assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+        }
+        assert!(bonds_collateral(&w.s).0 < before.0);
+        assert_eq!(bonds_collateral(&w.s).1, before.1);
+    }
+}
+
 /// The committed input is another anchor's prompt. Neither the prompt ids nor a producer capture are needed by this filer.
 /// Synthetic bindings at the maximum context test the input-proof route, not execution of a maximum-size model.
 #[tokio::test]
