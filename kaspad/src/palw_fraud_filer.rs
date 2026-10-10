@@ -11,13 +11,13 @@
 //!    own hard deadline, so no timeout outruns the pursuit;
 //! 2. **read the binding** — a reserved `DefaultAccused` of event `(0, 0)`, whose answer carries the claim's step binding (the fold
 //!    authenticates it against the claim's `execution_root`);
-//! 3. **localize** — reserved `StepRange` demands halve the interval holding the first committed leaf that differs from this node's
-//!    own run, until one range of ≤ 1,024 leaves locates it;
+//! 3. **localize** — reserved `StepRange` demands compare consecutive ranges of ≤ 1,024 leaves with this node's own run until the
+//!    first difference is located. Ladders exceeding the reservation's session cap are Unjudged by this fallback;
 //! 4. **terminal** — a reserved `StepLeaf` demand of that leaf: the producer's evidence is adjudicated (guilty: `CourtFraud`), its
 //!    silence defaults (DA-7). A fused leaf is the held dissection's (lane LG14-B), said and left.
 //!
 //! **Shared progress** (§7.4): a unit the chain already answered — this node's before a restart, or anybody's — is read off the
-//! accepted blocks, never demanded again; only answers whose unit the fold marked answered are read.
+//! accepted blocks, never demanded again; the unit must be marked answered and the consumed bytes must authenticate to the claim.
 //!
 //! **Restart** (§6.3): the book is a cache, nothing is persisted. The candidates and every case's chain facts come from the tip, the
 //! answers from the accepted blocks (walked back to the oldest pursued claim's acceptance after a start), and the honest run from a
@@ -28,7 +28,7 @@
 //! its own claims are never pursued.
 //!
 //! **Load.** One replay in flight, started only while the seat's own replay slots have room for a light replay; a mismatch's capture is
-//! kept for its bisection, at most [`PALW_FRAUD_FILER_HELD_RUNS_V1`] at once (the rest wait their turn); one item on the court queue a
+//! kept for its localization, at most [`PALW_FRAUD_FILER_HELD_RUNS_V1`] at once (the rest wait their turn); one item on the court queue a
 //! case, each sent at most [`PALW_FRAUD_FILER_SENDS_V1`] times; the chain read once a DAA. Every item rides the priority lane dated
 //! now: a reservation and a demand are what keep the claim's ends held and the producer's answer window running.
 //!
@@ -56,7 +56,7 @@ pub(super) const PALW_FRAUD_FILER_RESERVE_ROUND_V1: u32 = u32::MAX - 10;
 pub(super) const PALW_FRAUD_FILER_DEMAND_ROUND_V1: u32 = u32::MAX - 11;
 /// The host ledger's role for this filer's replays.
 pub(super) const PALW_FRAUD_FILER_REPLAY_ROLE_V1: &str = "fraud-filer";
-/// Mismatched runs held in memory at once (each keeps its capture for the bisection's own ranges).
+/// Mismatched runs held in memory at once (each keeps its capture for the localizer's own ranges).
 pub(super) const PALW_FRAUD_FILER_HELD_RUNS_V1: usize = 2;
 /// Replays one claim gets: the run, and one more after a failure that was this host's.
 pub(super) const PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1: u8 = 2;
@@ -272,7 +272,14 @@ impl PalwFraudFilerBookV1 {
         self.walked_from = Some(self.walked_from.map_or(floor, |from| from.min(floor)));
         self.walked_to = Some(tip_daa);
         for (key, answer) in answers {
-            if self.cases.get(&key.0).is_some_and(PalwFraudFilerCaseV1::pursued) {
+            if self.cases.get(&key.0).is_some_and(|case| {
+                case.pursued()
+                    && kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(
+                        &key.1,
+                        &answer,
+                        &case.candidate.job.execution_root,
+                    )
+            }) {
                 self.answers.entry(key).or_insert(answer);
             }
         }

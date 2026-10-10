@@ -168,3 +168,35 @@ integration `0b73fd33f`を`c4966e5df`で取り込んだ。新しいverifier-pay�
 F-B1の実node回帰も1 PASS。正しいproducer署名とsalted sealを持つ1-token claimを、2-token jobに対して実際のmempool→template→blockに載せた。mempoolの構造・署名検査は通過するが、block foldは短縮claimを記録しない。同じjobの正しい2-token claimは記録されFinalへ到達する。最初のbatchは「mempoolが意味検査まで行う」というtest側の誤った期待で1件失敗し、既存13件はPASS。その期待を実装の責任境界に合わせて修正した1件を再実行した。
 
 [実nodeの修正済み回帰](evidence/length-node-binding.log)、[初回batch（13 PASSとtest期待の失敗）](evidence/length-node.log)。
+
+
+## legacy public filerの追加監査
+
+`g14/legacy-filer`の`51d026bc9`を`e9eee4911`で統合した。初回実node試験は **1 PASS / 7 FAIL** を再現した。
+
+中央の1 leafが一致したときに未確認の前半を正しいと扱う局所化は不健全だった。単独の不正leafの後で正しい値に戻るtraceを見逃す。旧unit testも`leaf < lie`という単調な不一致だけを生成していた。小型claimのfallbackを連続範囲比較に変更し、離れた位置の回答では未確認prefixを進めないようにした。最大要求数は`ceil(leaves / 1024) + 2`であり、34-session枠に収まらない大型claimはUnjudgedとする。大型claimには既存LG14-Bの認証済みsubtree descentを本番filerへ接続する必要があり、ここを完成と見なしていない。
+
+公開応答のreaderにも認証を追加した。`answered(unit)`という台帳の状態だけでは、同じunitを名乗る過去のすべてのcarrierのbytesは認証されない。不正な応答が先にcacheを埋めると、後から正しい応答が来てもverifierが追及を止める危険がある。bindingをclaimのrootへ再認証し、rangeの位置・長さ・Merkle pathを検証してから保存・比較する。不正なbytesではlocalizerを更新せず、verifierの再計算も起動しない。
+
+Final待機とreorg試験も修正した。前者は実際のrearmed deadlineを待つ。後者は両branchが同じFinal workを持つpost-Final reservationでundo/restoreを試験する。未Finalのheld branchは、Final済みの別branchに対して経済的に劣るため、heartbeatを増やしても本番のstrict-economic-win規則では復帰できない。この規則を緩めてtestを通していない。
+
+追加の残条件として、claim共通のlive reservation上限64・生涯上限256がある。1つのSybil reservationを置く試験だけでは、共謀者が枠を埋めた場合にも新しいoutsiderがDA局所化を開始できるとは証明できない。proof優先は、未取得のmaterialを取得する経路の代用にはならない。詳細は[legacy設計ノート§13](../../design/palw/legacy-route-g14-filer.md)に記録した。
+
+### legacy修正の検証記録
+
+| 検証 | 結果と範囲 |
+| --- | --- |
+| core localizer / filer | **10 PASS**。単独の不正leaf、離れた複数の不正、正しいsuffix、不正carrierを拒否した後の正しい応答を含む |
+| kaspad共通filer | **5 PASS**。default feature（EVMを含む）の`--lib palw_fraud_filer`。容量整理後の再実行 |
+| reservation fold | **7 PASS** |
+| 実node E2E | 最終batch **7 PASS / 1 FAIL**。reorg harnessが本番の浅いtie-window（2 DAA）を超えた1件を修正し、個別再実行 **1 PASS**。単一batchの8/8成功とは記載しない |
+| A2U | **3 PASS**。未有効化のfenceとADR-0175を維持 |
+| shipping repin drift-only | **差分なし**。検査対象のpinとgateがすべて通過 |
+
+実nodeの7件は、Final前のconviction、Final後のconviction、非応答のDA default、honest dismissal、別bondのreservation併存、restart、未有効化の対照試験である。DA default試験は、他の正当な回答義務を満たした後で対象sessionの実際のdeadlineを実blockで超える。reorg再試験は両branchのFinal workを等しく保ち、必要なblue workを最小限だけ増やして本番tie-window内でundo/restoreする。
+
+[初回再現（1/7）](evidence/legacy-baseline-node.log)、[core](evidence/legacy-auth-core.log)、[fold](evidence/legacy-final-fold.log)、[最終node batch](evidence/legacy-final-node-after-cache-clean.log)、[修正済みreorg](evidence/legacy-final-reorg.log)、[A2U](evidence/legacy-final-a2u.log)、[repin](evidence/legacy-repin.log)、[repin test詳細](evidence/legacy-repin-harvest-tests.log)、[repin lib詳細](evidence/legacy-repin-harvest-lib.log)。
+
+途中のbuildとnode runはディスク容量不足でも停止した。作業専用targetの再生成可能なincremental/codegen cacheを整理して再実行した結果が上記であり、容量不足をコードのPASSまたはFAILとは扱わない。未実装の大型探索・fused court・reservation飽和・包含期限を、これらの小型fixtureのPASSで閉じない。
+
+[kaspad filer再実行](evidence/legacy-final-filer-lib-retry.log)。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p kaspad --lib palw_fraud_filer --locked`は5件すべて成功した。残存warningはこの検証で修正対象としていない。

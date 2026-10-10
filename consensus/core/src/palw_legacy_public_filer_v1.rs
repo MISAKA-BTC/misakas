@@ -63,8 +63,8 @@ pub const PALW_DISPUTE_RESERVERS_PER_CLAIM_TOTAL_V1: usize = 256;
 /// Live reservations one bond holds at once, across claims.
 pub const PALW_DISPUTE_LIVE_RESERVATIONS_PER_BOND_V1: usize = 64;
 /// Reserved DA sessions one reservation may open on its claim (one open at a time: DA-1): the legacy localizer's worst case over the
-/// widest step ladder (2^40 leaves, [`PalwLegacyBisectV1::max_demands`]) — the binding read, the halving to one range, the range, the
-/// terminal. LG14-B's frontier descent needs `⌈40 / 9⌉ + 2`.
+/// legacy contiguous scan fits only when `PalwLegacyBisectV1::max_demands` is within this cap. Large ladders require LG14-B's
+/// authenticated frontier descent (`⌈40 / 9⌉ + 2` at 2^40 leaves); a midpoint leaf does not authenticate the preceding prefix.
 pub const PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1: u8 = 34;
 
 // ---- the wire -------------------------------------------------------------------------------------------------------------------
@@ -322,8 +322,8 @@ pub enum PalwFilerPhaseV1 {
     Unjudged,
 }
 
-/// The widest `StepRange` a held demand may name (`crate::palw_held_da_v1::PALW_HELD_DA_MAX_RANGE_LEAVES_V1`): the bisection's last
-/// probe discloses the whole remaining interval's leaf hashes at once.
+/// The widest `StepRange` a held demand may name (`crate::palw_held_da_v1::PALW_HELD_DA_MAX_RANGE_LEAVES_V1`): each probe discloses
+/// at most this many consecutive leaf hashes.
 pub const PALW_LEGACY_BISECT_FINAL_RANGE_V1: u64 = crate::palw_held_da_v1::PALW_HELD_DA_MAX_RANGE_LEAVES_V1 as u64;
 
 /// **One probe of the legacy localizer**: a unit the engine demands through a reserved DA session.
@@ -343,12 +343,10 @@ pub enum PalwLegacyProbeV1 {
     HeldNode { unit: crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2 },
 }
 
-/// **The legacy bisection** (the localizer for non-fused leaves, RFC-0014 §4.2 over the existing held units): the first committed
-/// step leaf whose hash differs from the honest run's. Invariant: every leaf in `[0, lo)` matched the honest run, and some leaf in
-/// `[lo, hi)` does not (`hi = n` at the start: the committed root differs, so some leaf does). The step order is topological for the
-/// forward pass, so the first divergent leaf is a step whose inputs all agree with the honest run — the one the one-move verdict
-/// convicts when it is disclosed. Width-1 ranges halve the interval until it fits one range of
-/// [`PALW_LEGACY_BISECT_FINAL_RANGE_V1`] leaves, which locates the leaf. LG14-B's frontier descent replaces the halving where it lands.
+/// **The legacy contiguous localizer** (historical API name retained). Invariant: every leaf in `[0, lo)` was individually
+/// compared with the verifier's own authenticated replay, and a mismatch remains in `[lo, hi)`. Leaf equality is NOT monotone:
+/// a producer can change just one tile and leave every later tile intact. A matching midpoint cannot discard the prefix.
+/// Read consecutive bounded ranges instead. Large ladders need LG14-B's authenticated subtree descent to fit the session cap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwLegacyBisectV1 {
     pub lo: u64,
@@ -366,24 +364,22 @@ impl PalwLegacyBisectV1 {
         (self.hi > self.lo && self.hi - self.lo == 1).then_some(self.lo)
     }
 
-    /// The next range to demand: the whole interval once it fits one range, else the middle leaf. `None` once located (or empty).
+    /// The next consecutive range; none once located (or empty).
     pub fn next_range(&self) -> Option<(u64, u32)> {
         if self.hi <= self.lo || self.located().is_some() {
             return None;
         }
-        let width = self.hi - self.lo;
-        if width <= PALW_LEGACY_BISECT_FINAL_RANGE_V1 {
-            return Some((self.lo, width as u32));
-        }
-        // The middle at `(width − 1) / 2`: a mismatch leaves `⌈width / 2⌉`, a match `⌊width / 2⌋`, so `max_demands` is exact.
-        Some((self.lo + (width - 1) / 2, 1))
+        Some((self.lo, (self.hi - self.lo).min(PALW_LEGACY_BISECT_FINAL_RANGE_V1) as u32))
     }
 
     /// Record what the chain disclosed for `[first, first + matches.len())`: whether each committed leaf hash is the honest run's.
     /// Read in leaf order: a match moves `lo` past it, the first mismatch closes `hi` on it.
     pub fn record_range(&mut self, first: u64, matches: &[bool]) {
+        if first > self.lo {
+            return; // An isolated middle leaf says nothing about the unchecked prefix.
+        }
         for (offset, matches_honest) in matches.iter().enumerate() {
-            let leaf = first + offset as u64;
+            let Some(leaf) = first.checked_add(offset as u64) else { break };
             if leaf < self.lo || leaf >= self.hi {
                 continue;
             }
@@ -396,11 +392,9 @@ impl PalwLegacyBisectV1 {
         }
     }
 
-    /// Demands the localizer spends at most over `leaves`: the binding read, the halving, the final range, the terminal.
-    pub fn max_demands(leaves: u64) -> u32 {
-        let wide = leaves.div_ceil(PALW_LEGACY_BISECT_FINAL_RANGE_V1).max(1);
-        let halvings = u64::BITS - wide.saturating_sub(1).leading_zeros();
-        halvings + 3
+    /// Worst-case demands: the binding read, every consecutive range, the terminal. This is linear, not a bisection bound.
+    pub fn max_demands(leaves: u64) -> u64 {
+        leaves.div_ceil(PALW_LEGACY_BISECT_FINAL_RANGE_V1).saturating_add(2)
     }
 }
 
@@ -451,12 +445,15 @@ pub fn palw_fraud_filer_next_v1(
     if let Some(action) = palw_fraud_filer_prelude_v1(role, facts, mismatch) {
         return action;
     }
+    if PalwLegacyBisectV1::max_demands(bisect.hi) > u64::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1) {
+        return PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged); // This ladder needs the authenticated subtree route.
+    }
     match bisect.located() {
         Some(leaf) if demandable(leaf) => PalwFilerActionV1::Demand(PalwLegacyProbeV1::Terminal { leaf }),
         Some(leaf) => PalwFilerActionV1::HeldRoute { leaf },
         None => match bisect.next_range() {
             Some((first, count)) => PalwFilerActionV1::Demand(PalwLegacyProbeV1::Range { first, count }),
-            None => PalwFilerActionV1::Wait,
+            None => PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged),
         },
     }
 }
@@ -632,8 +629,41 @@ pub fn palw_fraud_filer_demand_object_v1(
     .map_err(|e| e.to_string())
 }
 
+/// Authenticate the material the legacy localizer reads before caching it. An included carrier can contain an answer the fold
+/// rejected; `answered(unit)` does not authenticate every historical carrier naming that unit. No producer secret is needed.
+pub fn palw_fraud_filer_answer_authenticates_v1(
+    unit: &crate::palw_da_rcore_v1::PalwDaUnitV1,
+    answer: &crate::palw_da_rcore_v1::PalwDaAnswerV1,
+    claim_execution_root: &Hash64,
+) -> bool {
+    use crate::palw_da_rcore_v1::{PalwDaAnswerV1 as A, PalwDaUnitV1 as U};
+    use crate::palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1};
+    let binding_ok = |b: &crate::palw_step_leg::PalwStepBindingV2| {
+        b.committed_execution_root == *claim_execution_root && crate::palw_step_leg::verify_binding_v1(b).is_ok()
+    };
+    match (unit, answer) {
+        (U::Event { .. }, A::Event(d)) => binding_ok(d.binding()), // Only its authenticated binding is consumed.
+        (U::Held(missing @ PalwHeldMissingV1::StepRange { first, count }), A::Held(c)) => {
+            if c.missing != *missing || !binding_ok(&c.binding) || *count == 0 || u64::from(*count) > PALW_LEGACY_BISECT_FINAL_RANGE_V1
+            {
+                return false;
+            }
+            let PalwHeldDisclosureV1::StepRange { opening } = &c.disclosure else { return false };
+            opening.first_leaf_index == *first
+                && opening.leaf_hashes.len() == *count as usize
+                && crate::palw_step_leg::step_range_opening_root_capped_v1(
+                    c.binding.step_leaf_count,
+                    opening,
+                    c.binding.step_leaf_count,
+                )
+                .is_ok_and(|root| root == c.binding.step_merkle_root)
+        }
+        _ => false, // Terminals are adjudicated by the fold, not learned by this reader.
+    }
+}
+
 /// **Read one authenticated answer into the case**: the binding (checked against the claim's committed `execution_root`, the root
-/// the fold authenticated it against) restarts the bisection over its step leaves; a range's committed leaf hashes are compared with
+/// the fold authenticated it against) restarts the localizer over its step leaves; a range's committed leaf hashes are compared with
 /// the filer's own (`own_range(first, count)`, from its own run — never the producer's material). A terminal's answer is the fold's
 /// to adjudicate: nothing to read.
 pub fn palw_fraud_filer_learn_v1(
@@ -646,6 +676,9 @@ pub fn palw_fraud_filer_learn_v1(
 ) -> Result<(), String> {
     use crate::palw_da_rcore_v1::PalwDaAnswerV1;
     use crate::palw_held_da_v1::PalwHeldDisclosureV1;
+    if !palw_fraud_filer_answer_authenticates_v1(&probe.unit(), answer, claim_execution_root) {
+        return Err("the answer does not authenticate the requested unit against the claim".into());
+    }
     match (probe, answer) {
         (PalwLegacyProbeV1::Binding { .. }, PalwDaAnswerV1::Event(disclosure)) => {
             let read = disclosure.binding().clone();
@@ -685,28 +718,85 @@ mod tests {
         PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(n), 0))
     }
 
-    /// The localizer finds the first divergent leaf of every lie within `max_demands`, whatever the claim's size.
     #[test]
-    fn the_bisection_locates_the_first_divergent_leaf() {
-        for n in [1u64, 2, 3, 7, 1_024, 1_025, 4_097, 300_000, 1 << 27] {
+    fn a_rejected_carrier_cannot_poison_the_localizers_public_material() {
+        use crate::palw_da_rcore_v1::{PalwDaAnswerV1, palw_da_held_answer_v1};
+        use crate::palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1};
+        use crate::palw_step_leg::{PalwStepRangeOpeningV1, step_merkle_range_siblings_v1};
+        let fx = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, None);
+        let root = fx.binding.committed_execution_root;
+        let probe = PalwLegacyProbeV1::Range { first: 0, count: 4 };
+        let answer = palw_da_held_answer_v1(
+            Hash64::from_u64_word(42),
+            PalwHeldMissingV1::StepRange { first: 0, count: 4 },
+            fx.binding.clone(),
+            PalwHeldDisclosureV1::StepRange {
+                opening: PalwStepRangeOpeningV1 {
+                    first_leaf_index: 0,
+                    leaf_hashes: fx.leaves[..4].to_vec(),
+                    siblings: step_merkle_range_siblings_v1(&fx.leaves, 0, 4).unwrap(),
+                },
+            },
+        );
+        assert!(palw_fraud_filer_answer_authenticates_v1(&probe.unit(), &answer, &root));
+        let mut binding = Some(fx.binding.clone());
+        let initial = PalwLegacyBisectV1::new(fx.binding.step_leaf_count);
+        let mut localizer = initial;
+        for what in 0..3 {
+            let mut bad = answer.clone();
+            let PalwDaAnswerV1::Held(c) = &mut bad else { unreachable!() };
+            let PalwHeldDisclosureV1::StepRange { opening } = &mut c.disclosure else { unreachable!() };
+            match what {
+                0 => opening.leaf_hashes[0] = Hash64::from_u64_word(0xBAD),
+                1 => opening.first_leaf_index = 1,
+                _ => c.binding.step_merkle_root = Hash64::from_u64_word(0xBAD),
+            }
+            assert!(!palw_fraud_filer_answer_authenticates_v1(&probe.unit(), &bad, &root));
+            assert!(
+                palw_fraud_filer_learn_v1(probe, &bad, &root, &mut binding, &mut localizer, |_, _| {
+                    panic!("unauthenticated bytes must not trigger replay or update the localizer")
+                })
+                .is_err()
+            );
+            assert_eq!(localizer, initial);
+            assert_eq!(binding, Some(fx.binding.clone()));
+        }
+        // A later authentic answer can still advance the same case, locating a sparse mismatch in the verifier's own run.
+        palw_fraud_filer_learn_v1(probe, &answer, &root, &mut binding, &mut localizer, |_, _| {
+            let mut own = fx.leaves[..4].to_vec();
+            own[2] = Hash64::from_u64_word(0xBAD);
+            Ok(own)
+        })
+        .unwrap();
+        assert_eq!(localizer.located(), Some(2));
+    }
+
+    /// Sparse lies, unrelated matching suffixes and multiple disjoint lies must not be skipped.
+    #[test]
+    fn the_contiguous_localizer_finds_the_first_divergent_leaf() {
+        for n in [1u64, 2, 3, 7, 1_024, 1_025, 4_097, 32_768] {
             for lie in [0, n / 3, n / 2, n - 1] {
-                let mut bisect = PalwLegacyBisectV1::new(n);
-                let mut demands = 1; // the binding read
-                while bisect.located().is_none() {
-                    let (first, count) = bisect.next_range().expect("a range inside");
-                    let matches: Vec<bool> = (first..first + u64::from(count)).map(|leaf| leaf < lie).collect();
-                    bisect.record_range(first, &matches);
+                for suffix_lie in [false, true] {
+                    let mut bisect = PalwLegacyBisectV1::new(n);
+                    let mut demands = 1u64;
+                    while bisect.located().is_none() {
+                        let (first, count) = bisect.next_range().expect("a range inside");
+                        let matches: Vec<bool> = (first..first + u64::from(count))
+                            .map(|leaf| leaf != lie && !(suffix_lie && leaf > lie && leaf % 7 == 0))
+                            .collect();
+                        bisect.record_range(first, &matches);
+                        demands += 1;
+                    }
                     demands += 1;
+                    assert_eq!(bisect.located(), Some(lie), "n {n}, lie {lie}");
+                    assert!(demands <= PalwLegacyBisectV1::max_demands(n));
                 }
-                demands += 1; // the terminal
-                assert_eq!(bisect.located(), Some(lie), "n {n}, lie {lie}");
-                assert!(demands <= PalwLegacyBisectV1::max_demands(n), "n {n}, lie {lie}: {demands} demands");
             }
         }
-        assert!(
-            PalwLegacyBisectV1::max_demands(1u64 << 40) <= u32::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1),
-            "the widest ladder fits"
-        );
+        let mut unproven = PalwLegacyBisectV1::new(4_097);
+        unproven.record_range(2_048, &[true]);
+        assert_eq!(unproven, PalwLegacyBisectV1::new(4_097), "a matching midpoint proves no prefix");
+        assert_eq!(PalwLegacyBisectV1::max_demands(1u64 << 40), (1u64 << 40).div_ceil(PALW_LEGACY_BISECT_FINAL_RANGE_V1) + 2);
     }
 
     /// The engine's step: every role reaches the same terminal from the same facts; only a bond reserves; the binding is read first;
@@ -738,7 +828,7 @@ mod tests {
         let wide = PalwLegacyBisectV1::new(1 << 20);
         assert_eq!(
             palw_fraud_filer_next_v1(PalwFilerRoleV1::PublicBond, &reserved, true, &wide, |_| true),
-            PalwFilerActionV1::Demand(PalwLegacyProbeV1::Range { first: (1 << 19) - 1, count: 1 })
+            PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged)
         );
         assert_eq!(
             palw_fraud_filer_next_v1(PalwFilerRoleV1::PublicBond, &reserved, false, &located, |_| true),

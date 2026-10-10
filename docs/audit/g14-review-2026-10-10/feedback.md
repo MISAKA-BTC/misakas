@@ -3,7 +3,23 @@
 評価日: 2026-10-10 JST。対象: `claude/g14-public-prosecution-integration-9bee39`、push後の `34b6c3f5ef13a0639ac1a5a97d3455f8a5a66ada`。
 以下の初回レビューのソース参照・FAIL数値はこのcommitに固定する。その後の修正は、新しい統合HEAD `323ea161a5b627431fb831b358e8d1f88457261d`を基点に`codex/g14-prosecution-bounds`で実施した。修正内容と最新の検証結果は[実装修正記録](implementation.md)を参照。
 
-## 判定
+## 現在の判定（Codex修正後）
+
+**G14全域はまだ未達。修正済みの小型・segmented court経路と、未完成の本番到達性を分けて評価する。** ユーザー確認により、正しい登録モデルを保有するverifierを前提とし、ADR-0177を維持する。
+
+`codex/g14-prosecution-bounds`では、公開materialから独立に再実行するcourt、canonical tensor検査、RAM/state/filing上限、small-value commitment court、固定報酬jobの生成長束縛を修正した。さらに`g14/legacy-filer`を統合し、単独の不正leafを見逃すmidpoint探索と、未認証carrierによる公開応答cache汚染を修正した。core・実node試験の件数、再試験、未実行の範囲は[実装修正記録](implementation.md)にまとめている。
+
+次の条件が閉じるまで「producer + 全Panel共謀でも1 verifierで全対象違反を終局まで追及できる」とは判定しない。
+
+1. **大型legacyの本番接続:** authenticated subtree descent、checkpoint・traceの不一致、model-copyを開示しないleaf recompute、fused courtを、登録モデルと公開readから共通filerで完走させる。小型fallbackの連続scanは34-session枠を超えるclaimをUnjudgedとする。
+2. **累積scopeとcourtの両立:** 64要素hiding tileと累積scopeを実際のresponse/court/reward gateへ接続する。`cumulative_scope_allows_v1`のstubとF-C4R4-17は残る。scope報告関数の成功だけでreward eligibilityを認めない。
+3. **DAと包含の期限:** 最大Respond、全chunk、adaptiveな探索round、proof処理が責任期間内に収まる条件を実nodeで立証する。9B/8kの1 positionは2,029 partsであり、現行の固定20 DAAだけでは十分性を示せない。
+4. **共謀者による枠の占有:** claim共通のlive 64・生涯256 reservation枠を先取りされても、outsiderが必要materialを取得できる設計が必要。別bondのreservationが1件ある試験は、全枠飽和への耐性ではない。
+5. **正規eligibilityと測定:** 各active familyをtest-only admissionなしで登録し、fresh verifier自身のnode/RPC、最大profileの実測RAM・時間、restart/IBD/reorgを確認する。shape計算や小型fixtureだけで代替しない。
+
+有効化fenceは変更していない。以下は比較用に保持した初回レビューであり、解決済みのcompile・資源バグを現HEADの未解決事項として再掲するものではない。
+
+## 初回レビューの判定
 
 **方向は妥当だが、提示されたG14を満たすコード設計としてはまだ十分ではない。**
 class/program/plan/commitmentのbinding、Panel投票と独立したexact court、claim固有のdemandと客観的timeout、Final後の責任期間、再生可能なledgerという骨格は適切である。milestone 3には計算不正・output不正の実node経路の前進がある。しかし、最新統合HEADはコンパイルできず、public-prosecution gateが返すRAM・保持stateの上限は実データで破れる。courtの存在や小さいfixtureのPASSだけでは、すべての許可profileについて「有限資源・許可scope・期限内包含を経て終局に達する」ことを証明できない。

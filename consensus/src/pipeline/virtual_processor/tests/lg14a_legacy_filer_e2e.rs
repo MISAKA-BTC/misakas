@@ -623,7 +623,17 @@ impl Verifier {
             return None;
         }
         lg.recent_objects(512).into_iter().find_map(|object| match object {
-            Obj::MaterialDisclosedV2 { claim, unit: answered, answer, .. } if claim == self.claim && answered == *unit => Some(answer),
+            Obj::MaterialDisclosedV2 { claim, unit: answered, answer, .. }
+                if claim == self.claim
+                    && answered == *unit
+                    && kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(
+                        unit,
+                        &answer,
+                        &lg.view(self.claim).execution_root,
+                    ) =>
+            {
+                Some(answer)
+            }
             _ => None,
         })
     }
@@ -697,7 +707,20 @@ impl Verifier {
             PalwFilerActionV1::Wait => {
                 // A demand of ours is open: the producer owes the answer.
                 if !lg.producer_answers(produced, withhold).await {
-                    lg.beat(1).await;
+                    let bond = lg.bond(self.card);
+                    let deadline = lg
+                        .view(self.claim)
+                        .sessions
+                        .iter()
+                        .filter(|(accuser, session)| *accuser == bond && session.units.iter().any(withhold))
+                        .map(|(_, session)| session.deadline_daa)
+                        .min();
+                    if let Some(deadline) = deadline {
+                        // Mine through the actual deadline. A step cap is not a DAA clock (the harness may need two blocks per DAA).
+                        lg.beat_to(deadline + 2).await;
+                    } else {
+                        lg.beat(1).await;
+                    }
                 }
                 None
             }
@@ -756,7 +779,14 @@ impl Verifier {
                 return verdict;
             }
         }
-        panic!("the pursuit of {} reached no verdict in {cap} steps ({} demands)", self.claim, self.demands);
+        panic!(
+            "the pursuit of {} reached no verdict in {cap} steps ({} demands), localizer {:?}, facts {:?}, view {:?}",
+            self.claim,
+            self.demands,
+            self.bisect,
+            self.facts(lg),
+            lg.view(self.claim)
+        );
     }
 }
 
@@ -775,7 +805,7 @@ async fn licensed_claim(lg: &mut Lg, lie: bool) -> (Produced, Vec<usize>, u64) {
 
 /// **G14 C1 / C5 / C7 / C8, before Final**: a non-seat bond registered after genesis convicts a self-consistent computation lie that
 /// every seat signed `Valid`. It reserves before the panel is bound (the bind, receipt and challenge clocks are then held), reads the
-/// claim's binding off the producer's answer, halves the step tree with width-1 ranges to one range, reads that range, and demands the
+/// claim's binding off the producer's answer, compares consecutive authenticated ranges with its own replay, and demands the
 /// first divergent leaf — whose disclosure convicts the producer in the fold. The claim never reaches `Final` though its challenge
 /// window passes many times over; every deposit and refuted exposure is returned; a node replaying the chain reaches the same roots.
 #[tokio::test]
@@ -804,6 +834,8 @@ async fn lg14a_a_non_seat_newcomer_convicts_a_computation_lie_before_final() {
     let seats = lg.bind(id).await;
     let licensed = lg.license(id, &seats).await;
     assert_eq!(lg.view(id).deadline_daa, None, "held: no Final deadline");
+    lg.beat_to(licensed + lg.bundle.state.window_challenge_at(licensed) + 2).await;
+    assert!(matches!(lg.view(id).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the reservation holds Final past its floor");
     let verdict = v.pursue(&mut lg, &produced, &|_| false, 400).await;
     let view = lg.view(id);
     eprintln!(
@@ -932,8 +964,9 @@ async fn lg14a_an_honest_claims_challenge_is_dismissed() {
     lg.send(vec![(NEWCOMER, object)]).await;
     let record = lg.view(id).record.expect("the deposit is held");
     assert_eq!(record.dismissed_held, vec![(bond, deposit)]);
-    lg.beat(3).await;
-    assert!(matches!(lg.view(id).phase, PalwClaimPhaseV2::Final { .. }), "the honest claim reaches Final once released");
+    let deadline = lg.view(id).deadline_daa.expect("release rearms the claim's own Final deadline");
+    lg.beat_to(deadline + 2).await;
+    assert!(matches!(lg.view(id).phase, PalwClaimPhaseV2::Final { .. }), "the honest claim reaches Final at its deadline");
     assert_eq!(lg.collateral(EXECUTOR), producer_before, "the honest producer is not charged");
     assert!(lg.exposure(NEWCOMER) >= deposit, "the wrong challenger's deposit is held until retirement");
 }
@@ -1021,14 +1054,18 @@ async fn lg14a_the_pursuit_survives_a_node_restart() {
     assert_eq!(verdict, PalwFilerPhaseV1::Convicted, "convicted after the restart");
 }
 
-/// **G14 C8, reorg**: a heavier branch from before the reservation never saw it — on it the claim is held by nothing and reaches
-/// `Final`; switching back returns the reservation, the hold and the pursuit exactly (the roots of a fresh replay of each branch).
+/// **G14 C8, reorg**: an admissible shallow fork omits a post-Final reservation; switching back restores its exact rows and hold.
+/// Both forks are judged under the shipped strict-economic-win rule, with roots checked against independent replay.
 #[tokio::test]
 async fn lg14a_a_reorg_undoes_and_returns_the_reservation_exactly() {
     kaspa_core::log::try_init_logger("warn");
     let mut lg = Lg::new(true);
     let (produced, _, licensed) = licensed_claim(&mut lg, true).await;
     let id = produced.claim_id;
+    // Reserve in the post-Final stage. Both branches retain the same Final work, so a shallow GHOSTDAG win may reorg either
+    // way. A pre-Final held branch is an economic LOSS against an unheld Final branch and cannot return by heartbeat mining.
+    lg.beat_to(licensed + lg.bundle.state.window_challenge_at(licensed) + 3).await;
+    assert!(matches!(lg.view(id).phase, PalwClaimPhaseV2::Final { .. }));
     let fork = lg.chain.sink();
     let mut v = Verifier::check(&lg, NEWCOMER, id);
     v.step(&mut lg, &produced, &|_| false).await; // the reservation
@@ -1049,11 +1086,13 @@ async fn lg14a_a_reorg_undoes_and_returns_the_reservation_exactly() {
     }
     b.ctx.simulated_time = fork_timestamp;
     let ttpb = lg.ttpb();
-    let floor = licensed + lg.bundle.state.window_challenge_at(licensed) + 3;
+    let a_work = lg.chain.ctx.consensus.get_block(lg.chain.sink()).unwrap().header.blue_work;
     let mut b_blocks = Vec::new();
-    while b.daa_of(b.sink()) < floor {
+    while b.ctx.consensus.get_block(b.sink()).unwrap().header.blue_work <= a_work {
         b_blocks.push(b.heartbeat(ttpb, Vec::new()).await);
     }
+    let shallow = kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1;
+    assert!(b.daa_of(b.sink()) - b.daa_of(fork) <= shallow, "B must remain inside the real shallow-tie window");
     for block in &b_blocks {
         arrive(&z, block.clone(), "B's block").await;
     }
@@ -1061,17 +1100,19 @@ async fn lg14a_a_reorg_undoes_and_returns_the_reservation_exactly() {
     assert_eq!(z.tip_state().1.state_root(), b.tip_state().1.state_root(), "Z on B: B's own root");
     assert!(z.tip_state().1.legacy_dispute_v1(&id).is_none(), "no reservation on B");
     assert!(matches!(z.tip_state().1.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "unheld on B: Final");
-    // A out-works B again: the reservation returns.
+    // A wins the same shallow economic tie by GHOSTDAG blue work; the reservation returns.
     let old_len = chain_blocks(&lg.chain, lg.chain.sink()).len();
-    let target = b.daa_of(b.sink()) + 4;
-    lg.beat_to(target).await;
+    let b_work = b.ctx.consensus.get_block(b.sink()).unwrap().header.blue_work;
+    while lg.chain.ctx.consensus.get_block(lg.chain.sink()).unwrap().header.blue_work <= b_work {
+        lg.beat(1).await;
+    }
     for block in chain_blocks(&lg.chain, lg.chain.sink()).into_iter().skip(old_len) {
         arrive(&z, block, "A's later block").await;
     }
     assert_eq!(z.sink(), lg.chain.sink(), "Z back on A");
     assert_eq!(z.tip_state().1.state_root(), lg.chain.tip_state().1.state_root(), "A's root, with the reservation");
     assert!(z.tip_state().1.legacy_dispute_v1(&id).is_some_and(|r| r.holds()), "held again");
-    assert!(matches!(z.tip_state().1.claim(&id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+    assert!(matches!(z.tip_state().1.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
 }
 
 /// **The unarmed twin (live int-12's rules)**: the same reservation carrier is a valid transaction — the live build tolerates its

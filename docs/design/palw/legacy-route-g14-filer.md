@@ -387,3 +387,44 @@ through `kaspa_rpc_core::convert::palw_legacy`; candidates / status reads.
 **Traps**: A2U fence index — LG14-A is `LegacyPublicFilerV1 = 6` (BUDGET took 5). Court-queue rounds `u32::MAX − 10/− 11` and proto
 payloads 1222–1227 are this lane's choice, unallocated by the Lead. Every merge so far damaged brace pairs at conflict tails
 (carriage encoder/decoder, `palw_legacy_held_signature_ok`): check `git diff integration -- <file> | grep '^-'` after merging.
+
+
+## 13. Codex audit of the merged filer (2026-10-10)
+
+`e9eee4911` integrates `g14/legacy-filer` at `51d026bc9` into the reviewed kernel branch. The pre-fix node batch reproduced
+**1 PASS / 7 FAIL**; §12's implementation claims are not end-to-end verification claims.
+
+The legacy midpoint algorithm was unsound for sparse faults. Comparing a single leaf at the middle does not authenticate the
+prefix it skipped: an adversary may change one earlier tile and leave the midpoint and all later tiles intact. The old unit test
+used only a monotone predicate (`leaf < lie`), so it never exercised this case. `PalwLegacyBisectV1` now scans consecutive bounded
+ranges (the historical API name is retained) and ignores disconnected range observations. The worst-case count is
+`ceil(leaves / 1024) + 2`, including the binding read and terminal. A ladder that exceeds the 34-session reservation cap is
+explicitly Unjudged by this fallback; the code no longer promises a logarithmic bound for an unauthenticated prefix. The tests
+cover isolated faults, matching suffixes, and multiple disjoint faults. LG14-B's authenticated subtree descent remains the
+required route for larger ladders; this repair does not establish that the production filer has connected it.
+
+The material reader also authenticates bytes before caching or learning them. A block may carry a `MaterialDisclosedV2` that the
+fold rejected, followed by a genuine answer to the same unit. A tip's `answered(unit)` flag does not authenticate every historical
+carrier with that name. The binding must recompute to the claim's execution root; a range must have the requested index/count
+and its Merkle path must reach that binding's step root. Invalid responses cannot poison the first-entry cache, advance the
+localizer, or trigger own-model replay. A later valid response is still usable.
+
+Harness corrections are distinct from protocol changes: the dismissal test waits for the actual rearmed Final deadline;
+reservation-hold coverage deliberately waits past the unheld Final floor before pursuing, rather than expecting the localizer to
+be slow; and a reorg restore test uses the post-Final reservation stage, where both branches retain equal Final work and a shallow
+GHOSTDAG win is admissible. A pre-Final held branch cannot displace an unheld Final branch merely by mining more heartbeats under
+the production strict-economic-win rule. These corrections do not relax that rule or arm a fence.
+
+Remaining review items include the production LG14-B tree/CKW/fused-terminal connection, a fresh verifier prosecuting through its
+own served RPC, complete measured deadline/inclusion bounds, and reservation saturation. `64` simultaneous and `256` lifetime
+reservers are hard claim-wide caps: the single-Sybil E2E does not prove that an outsider can obtain a reservation after a coalition
+fills them. Direct-proof priority alone does not supply missing localization material. No G14-wide or activation PASS follows
+from fixing the small-range fallback.
+
+Verification of the repair: core filer **10 PASS**, reservation fold **7 PASS**, real-node batch **7 PASS / 1 FAIL**, followed by
+**1 PASS** for the corrected reorg case. The other seven node scenarios cover pre-Final and post-Final conviction, DA default,
+honest dismissal, a second reservation, restart, and the unarmed twin. A2U is **3 PASS** and shipping repin reports no drift. The
+reorg correction stays inside the production two-DAA shallow tie window; it does not relax fork choice. These are separate runs,
+not a single all-green eight-case batch. Disk-full build/run interruptions are recorded separately from code failures. Logs and
+the test boundaries are in [the audit implementation record](../../audit/g14-review-2026-10-10/implementation.md). The default-feature
+`kaspad --lib palw_fraud_filer` suite also passes **5/5** after the task's regenerable build cache was cleaned.
