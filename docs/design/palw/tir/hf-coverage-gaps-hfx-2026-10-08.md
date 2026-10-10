@@ -187,3 +187,79 @@ with the collateral that goes with them (PRINCIPLES §6, conditions 1, 5 and 6) 
 here (the Lead routes it to K2S, the tiled-prompt court's owner). Until it is decided, the `Head` profile closes the listing's
 "no profile" verdict (`MODALITY_PROFILE_MISSING` → `PROFILE_NOT_ARMED`) and nothing else: no head or encoder repository becomes
 shape-ready by it. This is the largest precise gap this lane found.
+
+## 7. Successor 3 (2026-10-10): what the generic features moved, measured (RFC-0011 §18's three numbers)
+
+Evidence: `docs/rfc/evidence/0011-hf-census-hfx-2026-10-10.json` (machine-readable); the snapshot `2026-10-03T131904Z`, tree
+`b9af66ce0` + the ModernBERT heads (`7de284872`). **Method (m7).** The m4 rows with the 347 sample and cohort rows the day's changes can move
+re-judged by the final tree at both rulesets (offline: the snapshot's saved listing and headers; the base tokenizers offered from
+`tokenizer-bases.jsonl`), post-stratified exactly as COV-P4; plus two stratified **head-task cohorts** — NLU heads (text-classification,
+token-classification, question-answering, fill-mask, zero-shot-classification, text-ranking: 6 × 60) and image classification (80) —
+sampled by a seeded blake2b key from each task's complete-looking, ungated repositories (a `config.json` and a safetensors file), fetched
+anonymously by range (metadata and safetensors headers only, 360 + 80 repositories), judged at ruleset B and **reported beside, never
+inside, the three numbers**: before this, a head-task repository was decided by the listing (`PROFILE_NOT_ARMED`) and the census never
+fetched one, so nobody could say how many lower, admit or fit a kernel route.
+
+### 7.1 The three numbers (ruleset B = A: today's tree makes them one ruleset for every judged class)
+
+| | m4 (tree `2f0c42240`) | **m7 (this tree)** |
+| --- | ---: | ---: |
+| 1. shape-ready / `D_all` (3,117,871), one-sided 95 % LB | 19.18 % (LB 18.43 %), 598,000 | **19.37 % (LB 18.63 %), 604,069** |
+| … over `D_complete` (est. 1,606,334) | 37.23 % (LB 35.76 %) | **37.61 % (LB 36.15 %)** |
+| 2. registered full task, full advertised context / `D_complete` | **0** (LB 0.00 %) | **0** (LB 0.00 %) |
+| 3. mined and a funded `Final` / `D_complete` | **0** — every fence stays unarmed | **0** — until the full-activation release arms them |
+
+Numbers 2 and 3 are counts of evidence under ADR-0175 (`registrations.py`): the one H1 record (a private devnet, 512 of 32,768 positions)
+is excluded for both reasons. **Number 1 moved +0.19 point** — 14 of the 347 re-judged rows now reach shape-ready: 11 of the 40 sampled MLX rows (`MLX_QUANT_V1`) and 3 fine-tunes that ship no
+tokenizer and bind their base's (`Options::base_tokenizer`); the encoder-family features below move NO shape-ready count, because the generative route's position-sized bounds refuse
+every encoder class (§6) — which is why they are reported against the kernel route instead. The 90 % bar is on number 2; nothing in this
+lane claims it.
+
+### 7.2 The kernel-route column (HYPOTHETICAL; K2-TIR-v5 is `Implemented`, never active; its fences — tag 110, OPV — are dormant everywhere)
+
+K2S's finding (`k2-real-scale.md` §12) is that a bidirectional encoder is ONE position over a padded token axis for the generative route and
+many element-sized courts for K2-TIR-v5. The preflight now judges the same program there: the descriptor's plan, `check_plan_with_v1`
+(ranges proven from the inputs' intervals), the per-prosecution gate under `palw_kernel_route_policy_v1`'s ceilings, the carrier fit —
+shipped `KERNEL_NOT_ACTIVE`, hypothetical `ELIGIBLE_AT` or the first refusal by name. An image classifier's pipeline is judged under
+K2-TIR-v3 (the media-pipeline family) the same way.
+
+| head-task frame (complete-looking repositories) | N | lowers shape-only | K2 route `ELIGIBLE_AT` | generative `Head` admission (fence armed hypothetically) |
+| --- | ---: | ---: | ---: | ---: |
+| NLU heads (6 tasks) | 104,224 | 66,346 (63.7 %, SE 4.6 pt) | **64,666 (62.0 %)** | 1,819 (1.7 %) |
+| … text-classification / token-classification | 74,541 / 14,604 | 63.3 % / 70.0 % | 61.7 % / 68.3 % | 1.7 % / 0 |
+| … question-answering / fill-mask | 5,114 / 8,613 | 81.7 % / 45.0 % | 81.7 % / 43.3 % | 6.7 % / 0 |
+| … zero-shot-classification / text-ranking | 341 / 1,011 | 55.0 % / 66.7 % | 45.0 % / 65.0 % | 5.0 % / 21.7 % |
+| image classification | 17,931 | 12,103 (67.5 %, SE 5.3 pt) | **12,103 (67.5 %)** | 0 (real sizes are refused by the generative ceilings) |
+
+Added to the shape-ready count and to the sampled embedding / encoder rows whose K2 route is eligible (+18,379), the kernel-route scenario
+is **≈ 699,000 repositories = 22.4 % of `D_all` = 43.5 % of `D_complete`** — a scenario, not number 1: number 1 stays 19.37 %.
+
+### 7.3 What stops the head-task frame now (weighted over the NLU frame, 104,224)
+
+| share | stop | note |
+| ---: | --- | --- |
+| 62.0 % | lowers, K2 eligible | |
+| 19.8 % | `TOKENIZER_MISSING` | the author pushed no tokenizer file at all; a base-binding offer exists (`--tokenizer-bases`) but only ≈ 5 % of the missing-tokenizer repositories name a resolvable base with the same vocabulary — measured on 94 sampled repositories (5 offers; `tokenizer_bases.py`). A registrant must supply a tokenizer; no heuristic guesses one. |
+| 5.3 % | `ARCH_REFUSED` | ALBERT / DeBERTa MLM heads, mT5 `fill-mask`, BART seq-cls (`bart-large-mnli`), custom code |
+| 1.7 % | `ESM` heads | protein language models (rotary + their own norm placement) |
+| 1.6 % | lowers, K2 `PROSECUTION_BOUND` | a long-context or wide encoder over the prosecution ceilings |
+| 1.2 % each | `TENSOR_SHAPE(classifier.out.w)`, `TENSOR_SHAPE(embed.table)`, `RetrievalRouterModel` | the configuration disagrees with the checkpoint (transformers itself would refuse to load it), a custom class |
+| 0.9 % / 0.7 % / 0.5 % | `SHAPE_OVER_CAP` (8k encoders), `_mlx_family`, `pooler_fc_size` | |
+
+The image frame's blockers: **timm repositories** (a `config.json` with no `architectures`: tensor names are timm's, not transformers') are
+20 % of the sampled image classifiers (16 of 80 are `ARCH_REFUSED` for want of `architectures`; 3 more are ViTs carrying leftover MAE-decoder keys); Swin, SigLIP, DeiT, Iwin classifiers have
+no adapter. A timm reader (per-family tensor-name tables) is
+the largest vision gap (8,239 `image-classification` repositories have no `architectures`).
+
+### 7.4 Still open (honest)
+
+* the 90 % bar: number 2 is 0 — nothing is registered; number 1 is 37.6 % of `D_complete` on the generative route. Closing the gap is
+  (a) arming the kernel route for encoders / heads and the Head profile (the full-activation release), (b) the 97,360 `pytorch_model.bin`
+  repositories (blocked on the user's network-policy decision; the offline parser exists), (c) tokenizers that do not exist, (d) timm /
+  Swin / BEiT / DeiT / ConvNeXtV2 / EfficientNet and the detection / segmentation heads, (e) ESM, Electra, EuroBERT, the masked-LM heads of
+  ALBERT / DeBERTa / ModernBERT, (f) gguf-split, ONNX, TensorFlow / Flax readers (§4), audio (§3);
+* the `Head` profile as a *running task*: the `gen_class` declaration tool, the worker and the gateway do not build or run `Head` jobs
+  (§5); no `Head` class exists on any chain; reward and consensus work weight are NOT claimed (PRINCIPLES §6);
+* a `PAIR` class (zero-shot NLI / cross-encoder over a BERT-type model) is still the `SEQUENCE` class over the concatenated ids;
+* `tests/real_configs.rs::every_real_config_has_a_named_expectation` fails on the integration head: `glm-5.3.json` (FR-09's commit
+  `e8d37a0bf`) has no expectation row — not this lane's.

@@ -17,6 +17,19 @@ No Head class is registered anywhere, and none earns reward or consensus work we
 - consensus に見えるもの(profile tag 6、offers の追記 variant、job body の追記 variant、fence `palw_task_heads_v1`)は
   **休眠 fence の後ろ**(Lead 承認済み、2026-10-08)。fence 未満では int-12 が復号できないバイトとして扱う(A-2、§5.1)。
 
+## 0b. 日本語での追補(2026-10-10 HFX 後継)
+
+- 本 lane の 3 つの数(`hf-coverage-gaps-hfx-2026-10-08.md` §7): shape-ready / D_all = **19.37 %**(LB 18.63 %)、D_complete 比 37.61 %。
+  登録済み(完全タスク・完全文脈)= **0**、採掘 + Final = **0**(どの fence も未 arm のため。全面有効化まで 0)。
+- 新規の generic 機能: ENC_PAIR_SEGMENTS_V1(BERT 型 segment id をプログラム内で計算)、`OutputSpec::MaskedLm`(fill-mask、タスクで読みを選択)、
+  画像分類 head(ViT / ResNet / ConvNeXt / MobileNet)と shape-only の画像クラス、ALBERT / DeBERTa-v2 / CamemBERT / ModernBERT の task head、
+  legacy `LayerNorm.gamma` の prefix 下の解決、module buffer(I64 `position_ids`)を量子化 blocker にしない修正、base tokenizer の束縛。
+- **K2-TIR-v5 の route を preflight が encoder クラスに対して報告**(shipped = `KERNEL_NOT_ACTIVE`、仮定上 `ELIGIBLE_AT`)。number 1 には**混ぜない**。
+  head タスク標本枠(NLU 104,224 / 画像分類 17,931)で、shape-only に lower できる割合 63.7 % / 67.5 %、K2 経路に載る割合 62.0 % / 67.5 %、
+  generative の `Head` 審査を通る割合 1.7 % / 0 %。K2 経路を仮に数えると ≈ 699,000 件(D_all の 22.4 %、D_complete の 43.5 %)— シナリオであり、90 % 基準は number 2。
+- A-2: `palw_task_heads_v1` は `PalwLifecycleKindFenceV1::TaskHeadsV1` として登録(`PALW_INT12_WIRE_CHANGES_V1` の 3 行、guarded owner arm、node の `t12_a2u` probe)。
+  どの fence も arm していない。testnet-12 の params `5ee7fd8e…` / schedule `1678e073…` は不変。
+
 ## 0a. The user's design changes of 2026-10-10, applied here
 
 * **ADR-0175 — a registration is immutable.** A `Head` class's id binds `borsh(offers)` (§2): the task, the problem, the label map
