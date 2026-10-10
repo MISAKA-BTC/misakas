@@ -1116,9 +1116,185 @@ def section11() -> None:
 
 
 # =====================================================================================================================================
+# §12 ADR-0177's revised goal (2026-10-10): strongly favour models that gather more effective locked miner bond; A_m = S_m^α
+# =====================================================================================================================================
 
 
-SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11}
+@dataclass(frozen=True)
+class AggCosts:
+    """Variable costs per BILI of model-leg payment (ASSUMED until measured) — they define d."""
+
+    kappa: float = 0.5  # compute a verified claim needs per BILI of model-leg payment (the claim-work requirement)
+    phi_pub: float = 0.5  # share of that compute the public model's users already pay through escrow
+    phi_closed: float | None = None  # the same for the closed model; None = the same user market as the public one (users need no
+    # weights to post jobs); 0 = it self-posts its jobs
+    overhead: float = 0.05  # per-claim fees per BILI paid (admission fee, carriers)
+    access: float = 0.02  # a joiner's cost to obtain, store and serve the public model, per BILI paid
+
+
+@dataclass(frozen=True)
+class AggNet:
+    """ASSUMED network: total model capital 100 units, model budget 1 per epoch (average yield 0.01 per unit), 20 other models."""
+
+    total: float = 100.0
+    n_other: int = 20
+    y_cap: float = 0.02  # the per-bond cap R_max / C per epoch (ADR-0176), here 2× the average yield
+    r: float = 0.0025  # capital cost per unit per epoch (a quarter of the average yield)
+
+
+def agg_rho(alpha: float, s_m: float, caps: list[float]) -> float:
+    """Per-unit allocation of model m: S_m^(α−1) / Σ_j S_j^α (budget 1)."""
+    return s_m ** (alpha - 1) / sum(x**alpha for x in caps)
+
+
+def agg_world(alpha: float, s_pub: float, s_closed: float, net: AggNet) -> tuple[float, float, float]:
+    rest = net.total - s_pub - s_closed
+    caps = [s_pub, s_closed] + [rest / net.n_other] * net.n_other
+    return agg_rho(alpha, s_pub, caps), agg_rho(alpha, s_closed, caps), sum(x**alpha for x in caps)
+
+
+def margins(c: AggCosts) -> dict:
+    """Net margin per BILI of model-leg payment. d (the cost divisor of the user's sketch) = closed margin / public margin."""
+    phi_c = c.phi_pub if c.phi_closed is None else c.phi_closed
+    pub = 1 - c.overhead - c.kappa * (1 - c.phi_pub) - c.access
+    closed_h = 1 - c.overhead - c.kappa * (1 - phi_c)  # region H: the closed owner computes honestly
+    closed_z = 1 - c.overhead + c.kappa * phi_c  # region Z (p = 0): it forges, and keeps its users' escrow if any
+    return {"pub": pub, "H": closed_h, "Z": closed_z, "d_H": closed_h / pub, "d_Z": closed_z / pub}
+
+
+AGG_BAR = {
+    "range": (4.0, 30.0),  # S_public / S_closed, with S_closed = 1% of all model capital
+    "multiplier": 2.0,  # per-unit-capital NET profit of joining the large public model ≥ 2× self-mining the small closed one
+    "basis": "net profit (after compute, fees, access and capital cost), region H, wherever the public model is below the cap",
+    "cost grid": "κ ∈ {0.3, 0.5, 0.7}, φ_pub ∈ {0, 0.5, 1}, overhead 0.05, access ∈ {0.02, 0.05}",
+}
+
+
+def agg_profit(alpha: float, ratio_pc: float, c: AggCosts, net: AggNet, region: str) -> dict:
+    s_c = 0.01 * net.total
+    s_p = ratio_pc * s_c
+    rp, rc, _ = agg_world(alpha, s_p, s_c, net)
+    mg = margins(c)
+    pay_p, pay_c = min(rp, net.y_cap), min(rc, net.y_cap)
+    prof_p = pay_p * mg["pub"] - net.r
+    prof_c = pay_c * mg[region] - net.r
+    return {"alloc": rp / rc, "payment": pay_p / pay_c, "net": ratio(prof_p, prof_c), "capped": rp >= net.y_cap,
+            "withheld": (rp - net.y_cap) * s_p if rp > net.y_cap else 0.0, "prof_p": prof_p, "prof_c": prof_c}
+
+
+def agg_saturation(alpha: float, net: AggNet, s_c: float = 1.0) -> float | None:
+    """The public capital at which its per-unit allocation reaches the per-bond cap (the advantage stops growing there)."""
+    for i in range(1, 1000):
+        s_p = i * 0.1
+        if s_p + s_c >= net.total:
+            return None
+        if agg_world(alpha, s_p, s_c, net)[0] >= net.y_cap:
+            return s_p
+    return None
+
+
+def agg_flows(alpha: float, net: AggNet, c: AggCosts, step: float = 0.5, moving: float = 50.0) -> tuple[float, float, float]:
+    """Participant movement: `moving` units of capital leave equal small models one step at a time for the model where a unit
+    earns the most (capped payment × public margin). Returns (top model's capital share, its reward share, withheld budget share)."""
+    n = net.n_other + 2
+    caps = [net.total / n] * n
+    mg = margins(c)["pub"]
+    for _ in range(int(moving / step)):
+        tot = sum(x**alpha for x in caps)
+        best = max(range(n), key=lambda j: (round(min((caps[j] + step) ** (alpha - 1) / tot, net.y_cap) * mg, 12), -j))
+        movers = [j for j in range(n) if j != best and caps[j] >= step]
+        if not movers:
+            break
+        src = min(movers, key=lambda j: (round(min(caps[j] ** (alpha - 1) / tot, net.y_cap), 12), -j))
+        here = min(caps[src] ** (alpha - 1) / tot, net.y_cap)
+        there = min((caps[best] + step) ** (alpha - 1) / tot, net.y_cap)
+        if there <= here:
+            break
+        caps[src] -= step
+        caps[best] += step
+    tot = sum(x**alpha for x in caps)
+    alloc_ = [x**alpha / tot for x in caps]
+    paid = [min(a, net.y_cap * x) for a, x in zip(alloc_, caps)]
+    top = max(range(n), key=lambda j: caps[j])
+    return caps[top] / net.total, paid[top] / sum(paid), 1 - sum(paid)
+
+
+def section12() -> None:
+    head(12, "ADR-0177 revised goal: bond aggregation favoured, A_m = S_m^α (readiness §3g)")
+    for k, v in AGG_BAR.items():
+        show("PROPOSED", f"bar, {k}", v)
+    net, base = AggNet(), AggCosts()
+    mg = margins(base)
+    show("DERIVED", "d (closed margin / public margin per BILI paid) at the baseline costs", f"d_H {mg['d_H']:.3f} (honest closed), "
+         f"d_Z {mg['d_Z']:.3f} (closed forging at p = 0)")
+    for phi in (0.0, 0.5, 1.0):
+        m2 = margins(replace(base, phi_pub=phi))
+        show("DERIVED", f"d with users paying φ_pub = {phi} of the compute", f"d_H {m2['d_H']:.3f}, d_Z {m2['d_Z']:.3f}")
+    alphas = (1.0, 1.25, 1.5, 2.0, 3.0)
+    verdict = {}
+    for a in alphas:
+        sat = agg_saturation(a, net)
+        print(f"  -- α = {a}: the public model reaches the per-bond cap at S_public ≈ {sat if sat is None else round(sat, 1)} "
+              f"(of {net.total:g}; S_closed = 1)")
+        cells = fails = 0
+        failing = set()
+        for rpc in (4.0, 10.0, 30.0):
+            rh, rz = agg_profit(a, rpc, base, net, "H"), agg_profit(a, rpc, base, net, "Z")
+            show("DERIVED", f"S_pub/S_closed = {rpc:>4g}: allocation / payment / net (H) / net (Z)",
+                 f"{rh['alloc']:7.2f} / {rh['payment']:6.2f} / {rh['net']:6.2f} / {rz['net']:6.2f}" + ("  capped" if rh["capped"] else ""))
+        for kappa in (0.3, 0.5, 0.7):
+            for phi in (0.0, 0.5, 1.0):
+                for acc in (0.02, 0.05):
+                    c = replace(base, kappa=kappa, phi_pub=phi, access=acc)
+                    for rpc in (4.0, 10.0, 30.0):
+                        r_ = agg_profit(a, rpc, c, net, "H")
+                        if r_["capped"]:
+                            continue
+                        cells += 1
+                        if not (r_["prof_p"] > 0 and r_["net"] >= AGG_BAR["multiplier"]):
+                            fails += 1
+                            failing.add((kappa, phi, rpc))
+        verdict[a] = (cells, fails, failing)
+    for a, (cells, fails, failing) in verdict.items():
+        why = sorted({(k_, p_) for k_, p_, _ in failing})
+        show("DERIVED", f"verdict α = {a}: cells below the cap passing / judged", f"{cells - fails} / {cells}"
+             + (f"; failing (κ, φ_pub): {why}" if why else "  → PASS"))
+    check(verdict[1.0][1] == verdict[1.0][0], "α = 1 never gives a 2× net advantage")
+    check(all(k_ == 0.7 and p_ == 0.0 for k_, p_, _ in verdict[2.0][2]),
+          "α = 2 passes everywhere below the cap except where users pay no compute and κ = 0.7 (public mining is unprofitable)")
+    # Where the caps take the advantage away.
+    for a in (1.5, 2.0, 3.0):
+        r_ = agg_profit(a, 30.0, base, net, "H")
+        show("DERIVED", f"α = {a}, ratio 30: capped {r_['capped']}, payment ratio {r_['payment']:.2f} (allocation {r_['alloc']:.1f}),"
+                        f" budget withheld by the cap", f"{r_['withheld']:.1%}")
+    # Concentration (accepted residual risk): reward share against capital share; the operator's initial-capital advantage.
+    for a in (1.5, 2.0, 3.0):
+        prem = [concentration_premium(power(a), x, net.total, net.n_other) for x in (0.05, 0.1, 0.2, 0.33)]
+        show("DERIVED", f"α = {a}: reward share / capital share of one holder at x = 0.05 / 0.1 / 0.2 / 0.33 (before caps)",
+             " / ".join(f"{p:.2f}" for p in prem))
+    for x0 in (0.02, 0.05, 0.10):
+        a = 2.0
+        fa = (x0 * net.total) ** a
+        fh = net.n_other * ((1 - x0) * net.total / net.n_other) ** a
+        share = fa / (fa + fh)
+        capped_share = min(share, net.y_cap * x0 * net.total)
+        show("DERIVED", f"α = 2: an operator's model with {x0:.0%} of capital (others spread over 20 models): reward share",
+             f"{share:.1%} before the cap ({share / x0:.1f}× its capital share), {capped_share:.1%} under the cap")
+    for a in (1.5, 2.0):
+        top_c, top_r, wh = agg_flows(a, net, base)
+        show("DERIVED", f"α = {a}: participant movement (50 units migrate): top model capital / reward share / budget withheld",
+             f"{top_c:.0%} / {top_r:.0%} / {wh:.0%}")
+    # p = 0, every owner closes: what remains.
+    show("DERIVED", "region Z (every owner closes, p = 0): model-leg fraud revenue", "the whole paid model budget, every epoch, for any α "
+         "(the curve only moves it toward larger capital); plus closed models' users' escrow")
+    show("DERIVED", "region Z: consensus impact", "Final weight on forged claims up to each bond's F_max(C, W): capital-proportional, "
+         "not scaled by α (ADR-0177 revision); the curve is not the resolution")
+
+
+# =====================================================================================================================================
+
+
+SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11, 12: section12}
 
 
 def main() -> int:
