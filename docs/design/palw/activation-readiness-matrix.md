@@ -252,6 +252,9 @@ Publication is the means by which other miners can join; equal capital is treate
 - Unchanged: Q/B/R/F individual caps, the total budget, distinct capital and the common hold. Block issuance, beacon, Final
   weight and fork choice are not scaled by bond aggregation.
 - The verification-attestation gate (ECON round 2) may continue as a dormant subsidy condition. It is not a p = 0 resolution.
+- **α = 1.5 is the interim policy value (user, 2026-10-10, on ECON round 3).** It passes 52/54 cells against the fixed 2× bar and
+  never caps in the 4–30× range. Concentration is 1.4–1.8× reward share per capital share; after migration the top model has 55% of
+  capital and 81% of rewards. The value is unapproved for production.
 
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
