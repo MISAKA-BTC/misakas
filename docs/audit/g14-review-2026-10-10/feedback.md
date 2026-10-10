@@ -53,10 +53,12 @@
 
 第一段階の追加として、PublicDAユーザーpromptのFP Job V3/V4は、通常の公開family証明・graph登録・価格計算・署名済みclaim受理から、fresh DBの実serviceによるproducerと全5名のValid signerの徴収・commit/revealまで通った。登録floor classのjob identity不正に限る。classの新規モデル登録、canonical prompt省略モード、PanelDAの通常pricing、全FP job/state意味論又はF9–F16全体の完了を示すものではない。詳細と失敗を含む[追加記録](implementation.md#publicda-fp-v3v4の通常受理から実serviceで全valid署名者を追及する2026-10-11)を参照。
 
+**公開job保存の追加（2026-10-11）:** 公開filer fence以降の通常FP／evaluation受理でoriginal commitment bodyをrooted stateへ保存し、元accepted transaction/bodyが失われてもConsensus APIのclaim viewからfull claim hash・job pinを照合して再取得する。公開inputのbootstrapは既存binding／PromptIds courtを利用する。core 74件、node unit 48件、通常FP V4 service 1件がPASS。LG14-Bを休眠のままにしていたfixtureを修正し、元commitmentのbody・acceptance rowを削除したV3でも実serviceからproducerと全5 Valid signerの徴収・commit/revealまで1件PASS（344.67秒）を確認した。合計124 unique PASS、fresh shipping 361 pin差分なし。これはjob identity不正の試験で、全PromptIds chunkの取得や算術faultの局所化を保証するものではない。metadata保存前に恒久消失したjob、evaluation tail/prefix-state、network prune／restart／reorg、全familyと最大profileは未達。詳細は[実装・試験記録](implementation.md#元fp履歴消失後の公開job-bootstrap2026-10-11)。
+
 ユーザー指定どおり、正しい登録モデルを保有するverifierを前提として、次の順で進める。各段階で通常経路の受入試験を追加し、後段の資源・回復条件まで通る前にG14全域を完成扱いしない。
 
-1. **全familyの入口:** F9–F16等の登録・eligibilityを正規経路で通し、test-only admissionで埋めた空白を閉じる。
-2. **公開入力の取得:** job／input／初期stateのbootstrapと、恒久pruneされたFP jobの認証済み再取得を完成させる。producer秘密stateを参照しない。
+1. **公開materialの取得:** job／input／初期stateのbootstrapと、恒久pruneされたFP jobの認証済み再取得を完成させる。producer秘密stateを参照しない。
+2. **全familyの入口:** F9–F16等の登録・eligibilityを正規経路で通し、test-only admissionで埋めた空白を閉じる。
 3. **全違反の終局:** checkpoint／traceの局所化を完成させ、算術・input・output・state違反を実serviceからproof／commit／reveal／convictionへ通す。producerと全liable Valid signerの徴収も確認する。
 4. **scopeとDA gate:** `cumulative_scope_allows_v1`のstubと64要素hiding tileをresponse／court／reward判定へ接続し、ADR-0177の非再構成制約と追及到達性を同時に満たす。
 5. **最大profileと期限:** 34-session予算、全chunk、adaptive round、material／proofの上限を最大contextで検証し、責任期間内に終局できる条件を決める。

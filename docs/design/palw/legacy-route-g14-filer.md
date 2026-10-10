@@ -11,7 +11,8 @@ E2E and attack tests passed on a recorded run of this branch), **armable** (also
 activation conditions). Nothing here is armable.
 
 Allocations (Lead): fence `palw_legacy_public_filer_v1`; object tags 154–156; deltas 200–204; carriage tail `0xE2`; RPC ops
-204–206. Used: tags 154–155, delta 200, tail `0xE2`, RPC 204–206. Tag 156 and deltas 201–204 stay reserved (§9).
+204–206. Used: tags 154–156, deltas 200–201, tails `0xE2` / `0xF0`, RPC 204–206. Deltas 202–204 stay reserved.
+Tag 156 is the numbered reacquisition follow-up; delta 201 and tail `0xF0` retain accepted public FP job metadata (Codex, 2026-10-11).
 
 ## 0. The bar, and why the legacy route fails it today
 
@@ -280,12 +281,27 @@ descends. The operator module's producer/signer filter is a discovery preference
 
 ## 8. Wire, state, A-2 and byte identity
 
-- **Objects**: tags 154 and 155 (§3.1). Tag 156 reserved.
+- **Objects**: tags 154–156 (§3.1 and the numbered reacquisition follow-up).
 - **State**: `legacy_disputes: BTreeMap<claim, PalwDisputeClaimV1 { opened_daa, hard_deadline_daa, live: BTreeMap<bond,
   PalwDisputeReservationRowV1>, closed: BTreeSet<bond>, dismissed_held: Vec<(bond, u128)> }>`, written through one journaled writer
-  (delta 200 `LegacyDispute`, deltas 201–204 reserved), carried in tail `0xE2` and rooted in a Some-only block
+  (delta 200 `LegacyDispute`, deltas 202–204 reserved), carried in tail `0xE2` and rooted in a Some-only block
   (`legacy_disputes/v1`) — both only when non-empty, which nothing below the fence can make it. Two derived indexes are rebuilt at
   load and checked against the map: `(hard_deadline, claim)` for the sweep and `(reserver, claim)` for the exposure ledger.
+- **Accepted FP job metadata (2026-10-11).** `fp_public_jobs: BTreeMap<claim, Vec<u8>>` retains canonical Borsh of the original
+  accepted FP commitment, without prompt ids, transaction signature or execution capture. Both ordinary and improvement-evaluation
+  extractors attach this original body in a native-only `#[borsh(skip)]` field; a lifecycle carrier cannot supply the native FP
+  commitment object. Both folds check the full claim hash, class, producer, execution/trace/output roots, work leaves and job pin
+  before the first write. The one writer journals delta **201**; a non-empty map adds root block `public_fp_jobs/v1` and carriage
+  tail **0xF0**. Claim deletion drops the metadata through the same writer; phase changes keep it for subsequent public proofs and
+  all-Valid prosecutions. Carriage consistency rejects foreign/malformed/orphan bodies and metadata below the fence; duplicate or
+  empty tails are refused. The existing op-204 view exposes `publicFpJob` as optional hex, omitted when absent.
+  The filer prefers the retained accepted transaction and falls back to this public state body when history is unavailable,
+  independently rechecking domain, hash and recorded target. An absent PublicDA prompt is acquired by the existing authenticated
+  LG14-B `PromptIds` units before independent model execution. No DA unit or answer wire form was added.
+  This writer runs only for commitments accepted at or past the never-armed public-filer fence. Pre-fence commitments are not
+  backfilled; their permanent-history-loss migration remains open. Snapshot body retention alone does not close network IBD,
+  restart/reorg of the live service, all FP extensions, initial-state bootstrap or maximum-context/population bounds. Metadata
+  storage increases with retained claim count and accepted job-body size; no maximum-profile resource result is claimed here.
 - **A-2.** Below the fence an object of tags 154–155 is the live int-12 build's undecodable payload:
   - isolation: its may-ride arm is unconditionally `Ok` (no stateless refusal at any height), so a block carrying one is valid
     here exactly where int-12 tolerates its bytes;

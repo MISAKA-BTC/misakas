@@ -660,3 +660,45 @@ V3は既存presetを使用する。V4だけはfixture内で通常のdecode-rules
 上記 **56 unique PASS**。最終sourceを`cargo test -p kaspad --lib palw_service_public_e2e --locked --no-run`でdefault feature（EVMを含む）buildし、同じ`kaspad_lib-a562e45711087c1e`をexact name又はmodule filterで実行した。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`、既存unused/dead-code警告は残る。wrong module filterで0件だった実行、途中sourceのattempt PASSは成功件数に含めない。[build](evidence/service-fp-build-final.log)、[V3](evidence/service-fp-v3-node-final.log)、[V4](evidence/service-fp-v4-node-final.log)、[attempt](evidence/service-fp-attempt-node-final.log)、[DA default](evidence/service-fp-da-node-final.log)、[filer](evidence/service-fp-filer-final.log)、[False Valid](evidence/service-fp-false-valid-final.log)、[reporter](evidence/service-fp-reporter-final.log)。fixture-only変更の今回にshipping repin／production binary checkは再実行していない。直前のproduction修正に対する77 PASS／361 pin検証は前節の記録である。
 
 変更はtest fixtureと監査記録だけで、production、consensus規則、wire、activation、shipping pinは変更していない。この追加だけではF9–F16全familyのPASSにならない。pipelineの正規onboardingとstage間入力binding、Retrieval snapshotのconformance、FP V5／Gen・evaluation・prefix-state等の通常入口と公開bootstrap、恒久prune後のFP job再取得、全算術/input/output/state違反、累積scopeと64要素hiding tile、最大profile・人口・期限内包含、restart/reorg/IBD/socket RPCは引き続き未達。ADR-0177 D7の登録モデル保有前提とshipping activation拒否を維持する。
+
+
+## 元FP履歴消失後の公開job bootstrap（2026-10-11）
+
+元のFP commitmentのaccepted transaction/bodyをpruneすると、従来のfilerは宣言されたnonce・job条件を再取得できずpendingのままになる。公開filer fence以降に通常抽出・受理されたFP commitmentのoriginal bodyを、claimと同じ寿命のrooted mapへ保存する修正を追加した。prompt IDs・署名・producer captureは保存しない。全commitment hash、class、executor bond、execution/trace/output roots、work、job pinを最終claimと照合してから最初のwriteへ進む。ordinary FPとevaluation foldは同じ検査・writerを使う。
+
+新規deltaはLG14-A予約域の201、非empty carriage tailは0xF0、root blockは`public_fp_jobs/v1`。phaseの更新で保存内容を失わず、claim retirementでjournal経由で削除する。carriageはduplicate/empty tail、orphan body、宣言不一致、root不一致を拒否する。delta apply/revertを検査する。RPC 204の既存observationへ任意のhex `publicFpJob`を追加する。元履歴が読める場合はaccepted transactionの認証済みPublicDA IDsを使い、消失時はrooted bodyを読み、必要なIDsは既存のbinding/PromptIds courtから取得する。署名の空な再構成payloadを受入transactionとして使用しない。
+
+`FreePromptCommitted.public_job`はnative-onlyの`borsh(skip)`で、carrier bytesを変更しない。凍結int-12 pin `0xd1982421da455cca`を据え置き、指定した正確なskipped fieldだけを宣言比較から除く検査と、manifest rootが異なるoriginal body同士のserialized-object parityを追加した。既存の「manifest rootはどこにも保存しない」回帰は、original bodyへの保存を確認しつつDA義務・carrier wireを変えない検査へ更新した。manifest-openingを新たに強制する変更ではない。
+
+canonical FP prompt証拠tag 2の既存follow-upにもA2の分類漏れがあった。tag 51の証拠はopaque Vecで旧buildもcarrier自体をdecodeするため、`CarriedReread`として分類し、既存のacceptance/foldの`palw_prompt_proof_fence_v1`を適用する。途中で試したtop-level guarded ownerはnon-audit rulesetのisolationを変えるため採用しなかった。3 evidence envelopeのisolationを旧規則に保つ回帰を追加した。途中のbuildをsource変更により中断したlogも保存し、最終成功として数えない。
+
+新しいactual-service fixtureは、通常PublicDA FP V3受理・全5 Valid signer・新規成熟outsider・2,065 public blocksを検証したfresh DBから、元commitment block bodyとacceptance rowを実storeから削除する。削除後の直接Consensus API readは、rooted jobを復元し、prompt IDsと署名が空であることを確認する。その後は実serviceだけがpublic materialから追及する。初回は、入力retryをDAAで待つserviceに対してfixtureが対象予約前のblock生成を止めていたため、360秒のservice期限で失敗した。対象予約前も通常heartbeatを生成するようfixtureを修正した。停止時sampleにdeadlockの確証はなく、終了したprocessを「実行中」と扱わない。
+
+予約前heartbeat修正後も、試験は対象claimの申立てまで進まず失敗した。fixtureがLG14-Aだけをtest-armし、入力bootstrapに必要なLG14-Bを休眠のままにしていたためで、履歴消失caseに限り両方を有効にする。shipping validatorの拒否は維持する。この設定修正後のactual-serviceは344.67秒で成功し、元履歴消失後もproducerと全5名のValid signerの正の徴収・commit/revealへ到達した。追加diagnosticと再buildは、共有diskの容量不足で終了したため試験不合格／build失敗として別に保存する。自分のprivate targetの完了済み生成objectだけを整理してbuildを再実行した。
+
+現在確認したproduction sourceの回帰はcore 74 PASS（A2 33、FP抽出16、evaluation 21、metadata/native wire/delta/canonical proof各1）、node unit 48 PASS（filer/input 20、accepted readers 7、reporter 21）。通常PublicDA FP V4 actual-serviceは1 PASS（332.83 s）でproducerと全5 Valid signerの正の徴収・commit/revealを確認した。これらの回帰とは別に、修正した履歴消失V3 serviceを1件実行してPASSを確認した。buildは`cargo test -p kaspa-consensus-core -p kaspad --lib --no-run --locked`、binary checkは`cargo check -p kaspad --bin kaspad --locked`で成功した。両方とも`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`、private targetを使用した。fixtureのLG14-B設定変更後も`cargo test -p kaspad --lib --no-run --locked`のbuildが成功した（5m45s、artifact lock待ちを含む）。fresh shipping gateを再実行し、361 pinすべて差分なし、gate成功、未登録literalなしを確認した。最初のshipping harvestは容量不足で2 integration binaryのcompileに失敗し、exit 4となったため、成功として数えない。履歴消失試験の初回指定で`--ignored`を付けた実行は0件だったため除外し、exact nameからそのflagを外して1件を実行しPASSを確認した。
+
+[core build](evidence/public-fp-metadata-build-final3.log)、[binary check](evidence/public-fp-metadata-binary-final.log)、[A2](evidence/public-fp-metadata-a2-final.log)、[FP抽出](evidence/public-fp-metadata-extraction-final.log)、[evaluation](evidence/public-fp-metadata-eval-final.log)、[metadata](evidence/public-fp-metadata-metadata-final.log)、[native wire](evidence/public-fp-metadata-native-wire-final.log)、[delta](evidence/public-fp-metadata-delta-wire-final.log)、[canonical proof](evidence/public-fp-metadata-canonical-proof-final.log)、[filer/input](evidence/public-fp-metadata-filer-final.log)、[reader](evidence/public-fp-metadata-readers-final.log)、[reporter](evidence/public-fp-metadata-reporter-final.log)、[通常V4 service](evidence/public-fp-metadata-v4-node-final.log)、[LG14-B設定修正前の失敗](evidence/public-fp-metadata-pruned-node-before-held-fence-fix.log)、[容量不足build](evidence/public-fp-metadata-node-build-disk-full.log)、[容量不足diagnostic](evidence/public-fp-metadata-pruned-node-debug-disk-full.log)。
+
+[修正後node build](evidence/public-fp-metadata-node-build-held-final.log)、[node binary SHA-256](evidence/public-fp-metadata-node-held-final.sha256)、[0件のfilter指定](evidence/public-fp-metadata-pruned-held-zero-filter.log)、[容量不足shipping harvest](evidence/public-fp-metadata-repin-disk-full.log)、[失敗したintegration build](evidence/public-fp-metadata-repin-tests-disk-full.log)、[再実行shipping gate](evidence/public-fp-metadata-repin-final.log)、[fresh integration harvest](evidence/public-fp-metadata-repin-tests-final.log)、[fresh lib harvest](evidence/public-fp-metadata-repin-lib-final.log)。
+
+| 今回の公開job metadata検証 | 結果 |
+| --- | --- |
+| core: A2／抽出／evaluation／metadata／wire／proof | 74 PASS |
+| node unit: filer/input／accepted reader／reporter | 48 PASS |
+| 通常PublicDA FP V4 actual service | 1 PASS、332.83 s |
+| 元commitment body・acceptance row消失後のFP V3 actual service | 1 PASS、344.67 s、DAA 1256 |
+| fresh shipping harvest | 361 pin差分なし、gate成功 |
+| 通常node binary check | PASS |
+| SDK library check（native fieldを使う別crate） | PASS、25.57 s |
+| consensus library test build（native constructorのcompile） | PASS、no-run |
+
+合計 **124 unique PASS**（pin数は試験件数に加算しない）。履歴消失caseのproducer collateralは`93906321001040 → 93906210966308`、kind-4の追加徴収は0で二重徴収をしない。全5 Valid signerは正の徴収、outsider自身のcommit/reveal、対象予約の解放、service正常exit/join、callback owner解放をassertした。元履歴を削除した後の公開bindingが宣言jobと異なることを証明してconvictionするため、このcaseは全PromptIds chunkの取得成功又は算術faultの局所化を立証しない。入力bootstrapのbinding要求を実serviceが開始できることは確認したが、input全体の取得・最大予算は別の受入試験が必要である。
+
+[履歴消失後のactual service](evidence/public-fp-metadata-pruned-held-final.log)、[core／node unitと通常V4を実行したbinaryのSHA-256](evidence/public-fp-metadata-core-node-before-held-fixture.sha256)。unit／通常V4はfixtureのLG14-B toggle追加前、履歴消失caseはtoggle追加後のnode binaryを使用した。production codeは同一で、上記2つのhash記録を混同しない。core test executableは`kaspa_consensus_core-6db2961b3177b804`、nodeは`kaspad_lib-a562e45711087c1e`、private targetは`/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target`である。
+
+この修正はpost-fence job保存と元履歴消失を扱う。metadata保存前に恒久消失した既存jobの移行、evaluation tail/prefix-state等の完全bootstrap、network pruned import、restart/reorg、socket RPC/P2P、全familyの正規onboarding、全算術/input/output/state違反、cumulative scope/64要素hiding、最大profile・population・包含期限は引き続き必要である。全G14の完成判定やproduction activationを変更しない。ADR-0177 D7を維持する。
+
+今回のnative object field変更を使うSDKにも`cargo check -p misaka-palw-sdk --locked`を実施し成功した。[SDK check](evidence/public-fp-metadata-sdk-check-final.log)。
+
+`cargo test -p kaspa-consensus --lib --no-run --locked`も成功し、変更したconsensus test用constructorを含む別crateのコンパイルを確認した。test実行件数には加算しない。[consensus test build](evidence/public-fp-metadata-consensus-build-final.log)。

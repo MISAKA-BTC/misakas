@@ -174,6 +174,7 @@ impl Rig {
             let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &inj_params, &cx(1, 1, 1), &reg, None).unwrap();
             let commit = Obj::FreePromptCommitted {
                 job_pin: kaspa_hashes::Hash64::default(),
+                public_job: None,
                 eval: None,
                 claim: claim_id,
                 class_id: base_class,

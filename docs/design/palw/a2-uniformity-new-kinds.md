@@ -496,3 +496,28 @@ this branch with either has ONE textual conflict (the kernel gate, item 4). Line
    kind or header form, and change no other int-12 wire type.
 
 After the merge: the A2U core tests, the pin test on both rulesets, and the int-12 replay of the dumps (§5) — the merge gate (§6.6).
+
+## Accepted public FP metadata follow-up (Codex, 2026-10-11)
+
+The central `PALW_A2_KIND_FENCE_TABLE_V1` adds a landed `StateEncoding` row for accepted public FP job metadata under
+`palw_legacy_public_filer_v1`: delta 201 (inside LG14-A's reserved 200–204), non-empty carriage tail 0xF0 and root block
+`public_fp_jobs/v1`. Ordinary and improvement-evaluation accepted commitments carry the original body only as native skipped
+metadata; this does not change an int-12 object encoding or add a lifecycle kind. Empty maps add no root bytes or carriage tail,
+and no writer runs below the dormant fence. Original accepted commitment hash/roots/pin and carriage consistency checks
+authenticate every retained body. Claim retirement removes its metadata through the journaled writer.
+
+The detailed verification and remaining scope are recorded in the Codex G14 audit implementation record; the row is not evidence
+that G14 is complete or that the public-filer shipping guard may be opened.
+
+The frozen int-12 variant pin remains `0xd1982421da455cca`. Its source-declaration comparator excludes only
+`FreePromptCommitted.public_job` with the exact approved `#[borsh(skip)]` declaration; missing skip, another type,
+and duplicate fields fail. Runtime extraction compares serialized objects whose original manifest roots differ,
+while proving both original bodies are retained. This is a native-only equivalence classification, not a frozen pin refresh.
+
+The earlier canonical FP prompt follow-up also adds the missing landed `Int12Inner` classification for
+`PalwPromptProofV1::FpCanonicalWhole` under `palw_legacy_public_filer_v1`. This is `CarriedReread`: old builds already
+decode tag 51's opaque evidence bytes and accept non-empty evidence at isolation. They fail to interpret the new
+inner proof later. Isolation stays int-12-owned for all three evidence envelopes, regardless of undecodable tolerance;
+`palw_prompt_proof_fence_v1` retains the old verdict at acceptance/fold below the public-filer fence. The explicit
+opaque-carrier parity test and the canonical prompt count/root/fence test cover both stages. A guarded top-level
+owner arm would incorrectly change isolation on non-audit rulesets and was removed before release.

@@ -92,7 +92,7 @@ fn card_payout_spk(card: usize) -> ScriptPublicKey {
 fn signed(card: usize, message: &[u8], context: &[u8]) -> Vec<u8> {
     libcrux_ml_dsa::ml_dsa_87::sign(&key(card).signing_key, message, context, [0x5A; 32]).unwrap().as_ref().to_vec()
 }
-fn fixture_config(fp_v4: bool) -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
+fn fixture_config(fp_v4: bool, fp_input_bootstrap: bool) -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
     let mut params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
     let PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else { unreachable!() };
     let mut row = 0;
@@ -139,6 +139,11 @@ fn fixture_config(fp_v4: bool) -> (Config, PalwConsensusParamsV2, Vec<Funding>, 
     params.validate_palw_v2().expect("fixture keys and the ordinary decode-rules fence validate");
     params.palw_legacy_public_filer_v1 = Some(ForkActivation::new(0));
     params.sync_palw_legacy_public_filer_v1();
+    if fp_input_bootstrap {
+        // Reacquiring omitted/pruned IDs uses LG14-B's binding/PromptIds bootstrap.
+        // Both dormant halves of the public route are test-armed; production validation stays closed.
+        params.palw_legacy_held_da_v2 = Some(ForkActivation::new(0));
+    }
     assert!(params.validate_palw_v2().is_err(), "the shipping activation guard remains closed");
     let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!() };
     let bundle = bundle.clone();
@@ -511,17 +516,23 @@ async fn fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign
     fresh_public_service(PublicCase::ForeignFpV3Job).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned() {
+    fresh_public_service(PublicCase::PrunedForeignFpV3Job).await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublicCase {
     Withholding,
     ForeignJob,
     ForeignFpJob,
     ForeignFpV3Job,
+    PrunedForeignFpV3Job,
 }
 
 impl PublicCase {
     fn is_fp(self) -> bool {
-        matches!(self, Self::ForeignFpJob | Self::ForeignFpV3Job)
+        matches!(self, Self::ForeignFpJob | Self::ForeignFpV3Job | Self::PrunedForeignFpV3Job)
     }
 }
 
@@ -613,7 +624,8 @@ fn foreign_fp_job(
 
 async fn fresh_public_service(case: PublicCase) {
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
-    let (config, bundle, premine, mut floats) = fixture_config(case == PublicCase::ForeignFpJob);
+    let (config, bundle, premine, mut floats) =
+        fixture_config(case == PublicCase::ForeignFpJob, case == PublicCase::PrunedForeignFpV3Job);
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
     if case.is_fp() {
@@ -832,6 +844,34 @@ async fn fresh_public_service(case: PublicCase) {
     if case.is_fp() {
         let candidate = chain.tc.palw_fraud_filer_candidates_v1(bond).into_iter().find(|c| c.claim_id == claim).unwrap();
         assert!(candidate.job.free_prompt, "public discovery identifies the ordinarily admitted FP lane");
+        let public_job = chain.view(claim).public_fp_job.expect("the ordinary accepted extractor retained authenticated job metadata");
+        let stored: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3 = borsh::from_slice(&public_job).unwrap();
+        assert_eq!(kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&stored), claim);
+        if case == PublicCase::PrunedForeignFpV3Job {
+            use kaspa_consensus::model::stores::acceptance_data::AcceptanceDataStore;
+            use kaspa_consensus::model::stores::block_transactions::BlockTransactionsStore;
+            let commitment_block = chain.history.iter().find(|b| b.transactions.iter().any(|t| {
+                t.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+                    && borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3>(&t.payload)
+                        .is_ok_and(|p| p.claim_id() == claim)
+            })).unwrap().hash();
+            // Delete real DB rows and caches, rather than substituting a read API. This tests lost history,
+            // independently of the still-open network pruned-import/recovery requirement.
+            chain.tc.block_transactions_store.delete(commitment_block).unwrap();
+            chain.tc.acceptance_data_store.delete(candidate.job.accepted_block).unwrap();
+            assert!(chain.tc.get_block(commitment_block).is_err());
+            assert!(chain.tc.get_block_acceptance_data(candidate.job.accepted_block).is_err());
+            let reacquired = super::palw_fraud_filer::palw_fraud_filer_fp_payload_v1(chain.tc.as_ref().as_ref(), &candidate, chain.network_domain)
+                .expect("public rooted metadata starts prosecution despite missing original accepted block history");
+            assert_eq!(reacquired.commitment, stored);
+            assert!(reacquired.prompt_token_ids.is_empty());
+            assert!(reacquired.signature.is_empty());
+            assert!(chain.tc.palw_fraud_filer_candidates_v1(bond).iter().any(|c| c.claim_id == claim && !c.seat),
+                "ordinary candidate discovery survives missing commitment history");
+            assert!(chain.config.params.palw_legacy_held_da_v2_active_at(chain.daa()),
+                "the input bootstrap's own dormant fence is active in this fixture");
+            eprintln!("[service-public] original FP commitment body and acceptance rows pruned; only rooted public job metadata remains");
+        }
     }
     let producer_capital = chain.tc.palw_operator_da_standing_v1(chain.view(claim).producer).unwrap().collateral;
     let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))));
@@ -1172,6 +1212,10 @@ async fn fresh_public_service(case: PublicCase) {
             for _ in 0..10 {
                 pool_heartbeat(&mut chain, &manager, &pool).await;
             }
+        } else {
+            // Public history/input retries are paced in DAA. Keep the ordinary chain
+            // producing before the target reserves, including while another claim is pursued.
+            pool_heartbeat(&mut chain, &manager, &pool).await;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

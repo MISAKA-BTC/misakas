@@ -1824,9 +1824,8 @@ impl PalwPanelService {
                             kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION
                                 | kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION
                         ))
-                        || (payload.commitment.job.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA
-                            && payload.commitment.job.prompt_mode
-                                == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER))
+                        || payload.commitment.job.prompt_mode
+                            == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER)
                         && self.consensus_config.params.palw_legacy_held_da_v2_active_at(current_daa)
                     {
                         self.fraud_filer_hold_fp_input_v1(book, claim, payload, prompt_form);
@@ -1899,6 +1898,7 @@ pub(super) mod tests {
             accepted_daa: 100,
             trace_retention_daa: 5_000,
             job_identity: Hash64::default(),
+            public_fp_job: None,
             work_leaves: 0,
             deadline_daa: None,
             hard_deadline_daa: 3_800,

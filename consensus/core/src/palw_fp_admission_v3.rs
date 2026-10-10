@@ -365,6 +365,7 @@ mod tests {
         let (s1, _) = apply_palw_transition_v2(&genesis, &p, &ctx(1, 100, 1), &registrations(initial_target), None).unwrap();
         let commit = PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            public_job: None,
             eval: None,
             claim: h64(0xFC),
             class_id: h64(1),
@@ -464,6 +465,7 @@ mod tests {
         // Committed but not certified.
         let commit = PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            public_job: None,
             eval: None,
             claim: h64(0xFC),
             class_id: h64(1),

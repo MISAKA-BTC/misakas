@@ -18698,9 +18698,13 @@ mod accepted_objects_walk_tests {
         acceptance: HashMap<BlockHash, Arc<AcceptanceData>>,
         blocks: HashMap<BlockHash, Block>,
         targets: HashMap<Hash64, kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1>,
+        views: HashMap<Hash64, kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1>,
     }
 
     impl kaspa_consensus_core::api::ConsensusApi for Chain {
+        fn palw_legacy_dispute_v1(&self, claim: Hash64) -> Option<kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1> {
+            self.views.get(&claim).cloned()
+        }
         fn palw_fraud_filer_target_v1(
             &self,
             claim: Hash64,
@@ -18886,6 +18890,37 @@ mod accepted_objects_walk_tests {
         chain.acceptance.insert(hash(2), Arc::new(bad));
         assert!(read(&chain, &candidate, c.job.network_domain).unwrap_err().contains("transaction id"));
         chain.acceptance.insert(hash(2), accept(&[2]));
+        assert_eq!(read(&chain, &candidate, c.job.network_domain).unwrap().claim_id(), claim);
+        // Adapter evidence only: the real-node fixture deletes real block/acceptance DB rows.
+        let metadata = borsh::to_vec(c).unwrap();
+        let view = kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1 {
+            claim_id: claim, class_id: target.class_id, producer: target.executor_bond,
+            phase: kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional, execution_root: target.execution_root, trace_root: target.trace_root,
+            accepted_daa: candidate.accepted_daa, trace_retention_daa: 9999, job_identity: target.job_identity,
+            public_fp_job: Some(metadata), work_leaves: c.work_leaves, deadline_daa: None, hard_deadline_daa: 9990,
+            record: None, sessions: vec![], answered: vec![], flat_answered_rows: 0, open_courts: 0,
+            executor_refuted: false, court_convicted: false, da_defaulted: false,
+        };
+        chain.views.insert(claim, view.clone());
+        assert_eq!(read(&chain, &candidate, c.job.network_domain).unwrap().prompt_token_ids, payload.prompt_token_ids,
+            "retained accepted PublicDA ids are preferred");
+        chain.acceptance.clear(); chain.blocks.clear();
+        let recovered = read(&chain, &candidate, c.job.network_domain).unwrap();
+        assert_eq!(recovered.commitment, *c);
+        assert!(recovered.prompt_token_ids.is_empty() && recovered.signature.is_empty());
+        assert!(read(&chain, &candidate, hash(999)).is_err());
+        let row = chain.views.get_mut(&claim).unwrap(); row.accepted_daa += 1;
+        assert!(read(&chain, &candidate, c.job.network_domain).is_err());
+        chain.views.insert(claim, view.clone());
+        chain.views.get_mut(&claim).unwrap().producer = PalwBondKeyV2(TransactionOutpoint::new(hash(444), 0));
+        assert!(read(&chain, &candidate, c.job.network_domain).is_err());
+        chain.views.insert(claim, view.clone());
+        chain.views.get_mut(&claim).unwrap().public_fp_job = Some(borsh::to_vec(&foreign.commitment).unwrap());
+        assert!(read(&chain, &candidate, c.job.network_domain).is_err(), "a foreign job cannot substitute for the accepted commitment");
+        chain.views.insert(claim, view.clone());
+        chain.views.get_mut(&claim).unwrap().public_fp_job.as_mut().unwrap().push(0);
+        assert!(read(&chain, &candidate, c.job.network_domain).is_err(), "no noncanonical trailing bytes");
+        chain.views.insert(claim, view);
         assert_eq!(read(&chain, &candidate, c.job.network_domain).unwrap().claim_id(), claim);
     }
 

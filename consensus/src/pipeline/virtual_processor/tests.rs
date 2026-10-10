@@ -14324,6 +14324,7 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &inj_params, &cx(1, 1, 1), &reg, None).unwrap();
         let commit = Obj::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            public_job: None,
             eval: None,
             claim: claim_id,
             class_id: base_class,
@@ -14615,6 +14616,7 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &inj_params, &cx(1, 1, 1), &reg, None).unwrap();
         let commit = Obj::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            public_job: None,
             eval: None,
             claim: claim_id,
             class_id: base_class,

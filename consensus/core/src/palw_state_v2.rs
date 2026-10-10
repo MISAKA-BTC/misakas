@@ -7549,6 +7549,10 @@ pub enum PalwConsensusObjectV2 {
         /// extractor's, which recomputes it from the commitment.
         #[borsh(skip)]
         job_pin: Hash64,
+        /// Public commitment metadata retained by the never-armed public-filer state. The extractor
+        /// supplies the original signed commitment; this native-only field changes no carrier bytes.
+        #[borsh(skip)]
+        public_job: Option<Box<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,
         /// **RFC-0004 A6: an evaluation claim's job and payload tail** (FP job version 9), built by the
         /// extractor from the evaluation payload it decoded and checked; `None` for every other
         /// commitment. **`#[borsh(skip)]`** as `job_pin` is: the object's Borsh encoding is exactly
@@ -12011,6 +12015,9 @@ pub struct PalwChainStateV2 {
     /// block (`legacy_disputes/v1`), carriage tail `0xE2`, delta 200 — all only when non-empty, which nothing below
     /// `palw_legacy_public_filer_v1` (armed on no network) can make it.
     legacy_disputes: BTreeMap<Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
+    /// Accepted public FP commitment metadata, without prompt IDs or capture. Kept with the claim
+    /// past the never-armed public-filer fence, rooted and carried through pruning snapshots.
+    fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
@@ -12242,6 +12249,7 @@ impl PalwChainStateV2 {
             improvement_eval_jobs: BTreeMap::new(),
             panel_v3: None,
             legacy_disputes: BTreeMap::new(),
+            fp_public_jobs: BTreeMap::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -14693,6 +14701,10 @@ impl PalwChainStateV2 {
         }
         // **Lane LG14-A.** Its own block, Some-only: empty until the first reservation past `palw_legacy_public_filer_v1`, which no
         // network can arm, so a dormant network roots exactly as before.
+        if !self.fp_public_jobs.is_empty() {
+            state.update(b"public_fp_jobs/v1");
+            state.update(collection_root(b"public_fp_jobs", &self.fp_public_jobs).as_byte_slice());
+        }
         if !self.legacy_disputes.is_empty() {
             state.update(b"legacy_disputes/v1");
             state.update(collection_root(b"legacy_disputes", &self.legacy_disputes).as_byte_slice());
@@ -15544,6 +15556,7 @@ impl PalwChainStateV2 {
         self.assert_da_consistency_v1(params)?;
         // Lane LG14-A: the dispute records, their indexes and their caps.
         self.assert_legacy_disputes_consistency_v1(params)?;
+        self.assert_public_fp_jobs_consistency_v1(params)?;
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;
@@ -16960,7 +16973,9 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1>,
         new: Option<crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1>,
     } = 161,
-    /// **Lane LG14-A (delta number 200, declared explicitly; 200–204 are the lane's, 201–204 reserved): a claim's dispute record**
+    /// Lane LG14-A (delta 201): original accepted public FP commitment, retained until claim retirement.
+    PublicFpJob { key: Hash64, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 201,
+    /// **Lane LG14-A (delta number 200, declared explicitly; 200–204 are the lane's): a claim's dispute record**
     /// was written, rewritten or dropped. Dormant: `palw_legacy_public_filer_v1` is armed on no network, so no stored delta carries it.
     LegacyDispute {
         key: Hash64,
@@ -20406,6 +20421,9 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) {
+        if new.is_none() && self.state.fp_public_jobs.contains_key(&key) {
+            self.write_public_fp_job_v1(key, None);
+        }
         // ADR-0088 Decision 3: the claim's root goes with the claim.
         if new.is_none() && self.state.claim_roots.contains_key(&key) {
             self.write_claim_root(key, None);
@@ -38336,6 +38354,7 @@ fn apply_object(
             trace_retention_daa,
             consumed_prefix_state,
             job_pin,
+            public_job,
             eval,
         } => {
             if builder.state.claims.contains_key(claim_id) {
@@ -38382,6 +38401,7 @@ fn apply_object(
                         output_root,
                         execution_root,
                         job_pin,
+                        public_job: public_job.as_deref(),
                         eval,
                     },
                 );
@@ -38650,12 +38670,16 @@ fn apply_object(
                 job_identity: if builder.extras.offence_attribution_active { *job_pin } else { Hash64::default() },
                 rcore: PalwClaimRcoreV1::default(),
             };
+            let public_job_wire = builder.public_fp_job_wire_v1(claim_id, &claim, public_job.as_deref())?;
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
             let budget_plan = builder.plan_free_prompt_budget_v1(ctx, &claim, quanta)?;
             builder.reserve_for_claim(&claim)?;
             let fp_pwu = claim.pwu;
             builder.write_claim(*claim_id, Some(claim));
+            if let Some(wire) = public_job_wire {
+                builder.write_public_fp_job_v1(*claim_id, Some(wire));
+            }
             if let Some(plan) = budget_plan {
                 builder.commit_bond_budget_v1(ctx, *claim_id, plan)?;
             }
@@ -41865,6 +41889,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::CapacityLedger { key, old, new } => swap_write!(state.capacity_ledger, key, old, new),
         PalwDeltaEntryV2::SeatAvailability { key, old, new } => swap_write!(state.seat_availability, key, old, new),
         PalwDeltaEntryV2::SeatRootReadiness { key, old, new } => swap_write!(state.seat_root_readiness, key, old, new),
+        PalwDeltaEntryV2::PublicFpJob { key, old, new } => swap_write!(state.fp_public_jobs, key, old, new),
         PalwDeltaEntryV2::LegacyDispute { key, old, new } => swap_write!(state.legacy_disputes, key, old, new),
         // RFC-0010: the permissionless Panel engine's keyed decomposition (see `palw_panel_v3_fold_v1`).
         PalwDeltaEntryV2::PanelV3Cursor { old, new } => palw_panel_v3_fold_v1::apply_cursor_entry_v1(state, old, new, revert)?,
@@ -42303,6 +42328,8 @@ pub struct PalwStateCarriageV2 {
     pub kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>,
     /// Lane LG14-A: the legacy route's dispute records, in appended tail `0xE2`, present only when non-empty.
     pub legacy_disputes: BTreeMap<Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
+    /// Original accepted FP metadata, appended tail 0xF0; omitted when empty below the public-filer fence.
+    pub fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
     /// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's engine, in appended tail `0xEF`, present only when `Some`.
     pub bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
@@ -42460,6 +42487,8 @@ struct PalwStateCarriageV2Legacy<'a> {
 
 /// The tail byte that says the ADR-0087 collections follow.
 const PALW_CARRIAGE_MODEL_TAIL_V1: u8 = 0x87;
+/// Public FP job metadata, only past the never-armed public-filer fence.
+const PALW_CARRIAGE_PUBLIC_FP_JOBS_TAIL_V1: u8 = 0xF0;
 /// The tail byte that says the ADR-0088 collections follow (after ADR-0087's tail when both).
 const PALW_CARRIAGE_LINES_TAIL_V1: u8 = 0x88;
 /// The tail byte that says the ADR-0089 settlement list follows (last of the three).
@@ -43004,6 +43033,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             crate::palw_kernel_route_v1::PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1.serialize(writer)?;
             kernel.serialize(writer)?;
         }
+        if !self.fp_public_jobs.is_empty() {
+            PALW_CARRIAGE_PUBLIC_FP_JOBS_TAIL_V1.serialize(writer)?;
+            self.fp_public_jobs.serialize(writer)?;
+        }
         if !self.legacy_disputes.is_empty() {
             crate::palw_legacy_public_filer_v1::PALW_CARRIAGE_LEGACY_DISPUTES_TAIL_V1.serialize(writer)?;
             self.legacy_disputes.serialize(writer)?;
@@ -43207,6 +43240,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1> = None;
         let mut seen_kernel_route = false;
         let mut legacy_disputes = BTreeMap::new();
+        let mut fp_public_jobs = BTreeMap::new();
+        let mut seen_fp_public_jobs = false;
         let mut seen_legacy_disputes = false;
         let mut bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1> = None;
         let mut seen_bond_budget = false;
@@ -43483,6 +43518,13 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_kernel_route = true;
                     kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::deserialize_reader(reader)?);
                 }
+                PALW_CARRIAGE_PUBLIC_FP_JOBS_TAIL_V1 if !seen_fp_public_jobs => {
+                    seen_fp_public_jobs = true;
+                    fp_public_jobs = BTreeMap::deserialize_reader(reader)?;
+                    if fp_public_jobs.is_empty() {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an empty public FP jobs tail"));
+                    }
+                }
                 crate::palw_legacy_public_filer_v1::PALW_CARRIAGE_LEGACY_DISPUTES_TAIL_V1 if !seen_legacy_disputes => {
                     seen_legacy_disputes = true;
                     legacy_disputes = BTreeMap::deserialize_reader(reader)?;
@@ -43638,6 +43680,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             panel_v3,
             kernel_route,
             legacy_disputes,
+            fp_public_jobs,
             bond_budget,
             exec_v2,
         })
@@ -43758,6 +43801,7 @@ impl PalwStateCarriageV2 {
             panel_v3: state.panel_v3.clone(),
             kernel_route: state.kernel_route.clone(),
             legacy_disputes: state.legacy_disputes.clone(),
+            fp_public_jobs: state.fp_public_jobs.clone(),
             bond_budget: state.bond_budget.clone(),
             exec_v2: state.exec_v2.clone(),
             model_versions: state.model_versions.clone(),
@@ -43980,6 +44024,7 @@ impl PalwStateCarriageV2 {
             seat_root_readiness: self.seat_root_readiness,
             panel_v3: self.panel_v3,
             legacy_disputes: self.legacy_disputes,
+            fp_public_jobs: self.fp_public_jobs,
             kernel_route: self.kernel_route,
             bond_budget: self.bond_budget,
             exec_v2: self.exec_v2,
@@ -56798,8 +56843,9 @@ pub(crate) mod tests {
     fn a_free_prompt_commitments_job_pin_is_not_on_the_wire() {
         let plain = fp_commit(0x51, 8, 1);
         let mut pinned = plain.clone();
-        let PalwConsensusObjectV2::FreePromptCommitted { job_pin, .. } = &mut pinned else { unreachable!("the fixture") };
+        let PalwConsensusObjectV2::FreePromptCommitted { job_pin, public_job, .. } = &mut pinned else { unreachable!("the fixture") };
         *job_pin = h64(0x9199);
+        *public_job = Some(Box::new(public_fp_job_fixture()));
         assert_ne!(plain, pinned, "two objects in memory");
         let bytes = borsh::to_vec(&pinned).unwrap();
         assert_eq!(bytes, borsh::to_vec(&plain).unwrap(), "one encoding: the pin is not in it");
@@ -56807,9 +56853,135 @@ pub(crate) mod tests {
         assert_eq!(back, plain, "a decoded commitment's pin is 0, which never convicts");
     }
 
+    fn public_fp_job_fixture() -> crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 {
+        use crate::palw_freeprompt_v3::*;
+        PalwFreePromptCommitmentV3 {
+            job: PalwFreePromptJobV3 {
+                version: PALW_FP_V3_VERSION,
+                network_domain: h64(999),
+                class_id: h64(1),
+                executor_bond: bond_key(1).0,
+                executor_pubkey: vec![7; 4],
+                operator_id: h64(90),
+                anchor_block: h64(50),
+                anchor_daa: 100,
+                job_nonce: [1; 32],
+                tokenizer_id: h64(70),
+                prompt_token_ids_hash: h64(71),
+                prompt_tokens: 8,
+                decode_token_limit: 4,
+                max_context_tokens: 4096,
+                privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+                prompt_mode: PALW_FP_PROMPT_MODE_USER,
+                sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+                temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+                decode: None,
+                tail: None,
+            },
+            trace_root: h64(41),
+            output_root: h64(42),
+            execution_root: h64(43),
+            schedule_root: h64(44),
+            decode_tokens_executed: 3,
+            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+            work_leaves: 60,
+            trace_manifest_root: h64(45),
+            trace_chunk_count: 4,
+            trace_retention_daa: 999_999,
+        }
+    }
+
+    /// V-fold storage evidence: native accepted-job facts survive rooted carriage, reorg and retirement.
+    /// Ordinary signatures, pricing, service prosecution and pruned body reads are covered by the node fixture.
+    #[test]
+    fn public_fp_job_metadata_is_rooted_journaled_and_refuses_tampered_snapshots() {
+        use crate::palw_freeprompt_v3::fp_claim_id_v3;
+        let p = params().with_legacy_public_filer_from_daa(Some(0));
+        let (parent, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let body = public_fp_job_fixture();
+        let id = fp_claim_id_v3(&body);
+        let mut object = fp_commit(0xFC, 60, 3);
+        let PalwConsensusObjectV2::FreePromptCommitted { claim, job_pin, public_job, prompt_token_ids_hash, prompt_tokens, .. } = &mut object else { unreachable!() };
+        *prompt_token_ids_hash = body.job.prompt_token_ids_hash;
+        *prompt_tokens = body.job.prompt_tokens;
+        *claim = id;
+        *job_pin = crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&body);
+        *public_job = Some(Box::new(body.clone()));
+        let extras = PalwTransitionExtrasV1 { offence_attribution_active: true, ..Default::default() };
+        let fold = |p: &PalwStateParamsV2, object: &PalwConsensusObjectV2| {
+            apply_palw_transition_v2_with_extras(
+                &parent,
+                p,
+                &ctx(2, 101, 2),
+                std::slice::from_ref(object),
+                None,
+                false,
+                false,
+                false,
+                true,
+                &extras,
+            )
+        };
+        let (state, delta) = fold(&p, &object).unwrap();
+        state.assert_internal_consistency(&p).unwrap();
+        assert!(delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::PublicFpJob { key, old: None, new: Some(_) } if *key == id)));
+        let wire = borsh::to_vec(&body).unwrap();
+        let view = state.palw_legacy_dispute_view_v1(&p, &id).unwrap();
+        assert_eq!(view.public_fp_job.as_ref(), Some(&wire));
+        assert!(PalwLegacyDisputeObservationV1::of(&view).to_json().contains(&faster_hex::hex_string(&wire)));
+        let root = state.state_root();
+        let carriage = PalwStateCarriageV2::from_state(&state);
+        let bytes = borsh::to_vec(&carriage).unwrap();
+        let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+        let mut repeated_tail = vec![PALW_CARRIAGE_PUBLIC_FP_JOBS_TAIL_V1];
+        repeated_tail.extend(borsh::to_vec(&state.fp_public_jobs).unwrap());
+        let mut duplicated = bytes.clone();
+        duplicated.extend(repeated_tail);
+        assert!(borsh::from_slice::<PalwStateCarriageV2>(&duplicated).is_err(), "no duplicate metadata tail");
+        let mut empty_tail = borsh::to_vec(&PalwStateCarriageV2::from_state(&parent)).unwrap();
+        empty_tail.extend([PALW_CARRIAGE_PUBLIC_FP_JOBS_TAIL_V1, 0, 0, 0, 0]);
+        assert!(borsh::from_slice::<PalwStateCarriageV2>(&empty_tail).is_err(), "no empty metadata tail");
+        assert!(decoded.clone().into_state(&params(), None).is_err(), "no metadata on a dormant ruleset");
+        assert_eq!(decoded.clone().into_state(&p, Some(root)).unwrap(), state);
+        assert_eq!(apply_delta_v2(&parent, &delta, &p).unwrap(), state);
+        assert_eq!(revert_delta_v2(&state, &delta, &p).unwrap(), parent);
+        let mut bad = body.clone();
+        bad.job.job_nonce[0] ^= 1;
+        let mut altered = carriage.clone();
+        altered.fp_public_jobs.insert(id, borsh::to_vec(&bad).unwrap());
+        assert!(altered.into_state(&p, None).is_err(), "claim hash authenticates the whole original job even without an expected root");
+        let mut altered = carriage.clone();
+        altered.fp_public_jobs.insert(h64(987), wire.clone());
+        assert!(altered.into_state(&p, None).is_err(), "no job without a retained accepted claim");
+        let mut altered = carriage.clone();
+        altered.claims.get_mut(&id).unwrap().execution_root = h64(999);
+        assert!(altered.into_state(&p, None).is_err(), "roots cannot be swapped independently of the authenticated job");
+        let mut altered = carriage;
+        altered.fp_public_jobs.remove(&id);
+        assert!(altered.into_state(&p, Some(root)).is_err(), "a snapshot cannot silently drop rooted metadata");
+        let dormant = p.clone().with_legacy_public_filer_from_daa(None);
+        let (before_fence, old_delta) = fold(&dormant, &object).unwrap();
+        assert!(before_fence.fp_public_jobs.is_empty());
+        assert!(!old_delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::PublicFpJob { .. })));
+        let mut no_metadata = object.clone();
+        let PalwConsensusObjectV2::FreePromptCommitted { public_job, .. } = &mut no_metadata else { unreachable!() };
+        *public_job = None;
+        assert_eq!(before_fence, fold(&dormant, &no_metadata).unwrap().0, "below fence, metadata changes no state or root");
+        let mut corrupt = object;
+        let PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(job), .. } = &mut corrupt else { unreachable!() };
+        job.job.job_nonce[0] ^= 1;
+        assert!(fold(&p, &corrupt).is_err(), "inconsistent extracted facts refuse before writing any claim");
+        let mut writer = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
+        writer.write_claim(id, None);
+        assert!(!writer.state.fp_public_jobs.contains_key(&id), "retirement removes the retained metadata");
+        let removed = PalwStateDeltaV2 { point: ctx(3, 102, 3), entries: writer.entries };
+        assert_eq!(revert_delta_v2(&writer.state, &removed, &p).unwrap(), state, "undo restores claim and metadata together");
+    }
+
     fn fp_commit(claim_word: u64, pwu: u64, quanta: u32) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            public_job: None,
             eval: None,
             claim: h64(claim_word),
             class_id: h64(1),
@@ -57653,6 +57825,7 @@ pub(crate) mod tests {
     fn derived_commit_from(bond: u64, claim_word: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            public_job: None,
             eval: None,
             claim: h64(claim_word),
             class_id: derived_profile().shape_profile_id(),
@@ -58064,6 +58237,7 @@ pub(crate) mod tests {
         fn commit(class: Hash64, claim_word: u64, bond: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::FreePromptCommitted {
                 job_pin: kaspa_hashes::Hash64::default(),
+                public_job: None,
                 eval: None,
                 claim: h64(claim_word),
                 class_id: class,
@@ -58753,6 +58927,7 @@ pub(crate) mod tests {
                 ..
             } => PalwConsensusObjectV2::FreePromptCommitted {
                 job_pin: kaspa_hashes::Hash64::default(),
+                public_job: None,
                 eval: None,
                 claim,
                 class_id,
@@ -61125,6 +61300,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::KernelRouteHeader { .. } => "kernel_route_header",
                     // Lane LG14-A: its round trip is the dispute suite's.
                     PalwDeltaEntryV2::LegacyDispute { .. } => "legacy_dispute",
+                    PalwDeltaEntryV2::PublicFpJob { .. } => "public_fp_job",
                     // Lane BUDGET: their round trip is the bond budget's suite (`palw_bond_budget_fold_v1`).
                     PalwDeltaEntryV2::BondBudgetRow { .. } => "bond_budget_row",
                     PalwDeltaEntryV2::BondBudgetHeader { .. } => "bond_budget_header",
@@ -61549,6 +61725,7 @@ pub(crate) mod tests {
             (161, PalwDeltaEntryV2::KernelRouteHeader { old: None, new: None }),
             // Lane LG14-A (200–204), declared explicitly.
             (200, PalwDeltaEntryV2::LegacyDispute { key, old: None, new: None }),
+            (201, PalwDeltaEntryV2::PublicFpJob { key, old: None, new: None }),
             // Lane BUDGET (the bond budget, 190–199), declared explicitly.
             (190, PalwDeltaEntryV2::BondBudgetRow { table: 1, key: Vec::new(), old: None, new: None }),
             (191, PalwDeltaEntryV2::BondBudgetHeader { old: None, new: None }),
@@ -62214,6 +62391,7 @@ pub(crate) mod tests {
             kernel_route: _,
             // Lane LG14-A: one Some-only block, empty here.
             legacy_disputes: _,
+            fp_public_jobs: _,
             // Lane BUDGET: one Some-only block (`bond_budget/v1`), as the kernel route's; absent here.
             bond_budget: _,
             // RFC-0008 v2: one Some-only block of three, empty here.

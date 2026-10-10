@@ -1733,6 +1733,10 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         "consensus/core/src/palw_state_v2.rs::PalwDeltaEntryV2",
         PalwInt12WireChangeV1::NotCarried("the fold's journal (stored deltas), never a block's carriage"),
     ),
+    (
+        "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1",
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0x14f2c2b7896b15f4 },
+    ),
     // LG14-B: `LegacyHeldV2` appended; every int-12 kind carrying it is owned by `palw_legacy_held_da_v2` (guarded arms).
     (
         "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
@@ -1941,6 +1945,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::CoinbaseTrailer { magic: *b"PXA2" }, "palw_exec_payload_v2", "X8R anchor trailer", false),
     // ---- forms appended inside kinds int-12 decodes (tag 68 is ARMED on testnet-12: `palw_gen_v1`) ----
     a2_row(
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1" },
+        "palw_legacy_public_filer_v1",
+        "LG14-A: canonical FP whole prompt proof inside opaque tag-51 evidence; isolation remains int-12, palw_prompt_proof_fence_v1 / canonical_fp_prompt_proof_authenticates_job_convicts_count_and_root_and_keeps_the_fence hold interpretation at acceptance/fold",
+        true,
+    ),
+    a2_row(
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1" },
         "palw_legacy_held_da_v2",
         "LG14-B: PalwDaUnitV1::LegacyHeldV2 appended (carried by tags 55, 67, 83; written into da_sessions / da_claims only past the fence)",
@@ -2018,6 +2028,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::StateEncoding { what: "legacy dispute reservations (delta 200, tail 0xE2, root block legacy_disputes/v1)" },
         "palw_legacy_public_filer_v1",
         "LG14-A",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "accepted public FP job metadata (delta 201, tail 0xF0, root block public_fp_jobs/v1)" },
+        "palw_legacy_public_filer_v1",
+        "LG14-A (Codex public bootstrap)",
         true,
     ),
     // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
@@ -2433,6 +2449,7 @@ pub(crate) mod tests {
         };
         let fp = PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            public_job: None,
             eval: None,
             claim: h64(0xF1),
             class_id: h64(1),
@@ -3465,6 +3482,45 @@ pub(crate) mod tests {
             eprintln!("[a2u] rows awaiting their lane's merge:\n  {}", pending.join("\n  "));
         }
 
+        fn canonical_fp_prompt_objects() -> Vec<PalwConsensusObjectV2> {
+            let mut samples = Vec::new();
+            let contradiction = crate::palw_offence_v1::PalwPanelContradictionV1::PromptNotAnchored {
+                binding: zeros(),
+                proof: crate::palw_offence_v1::PalwPromptProofV1::FpCanonicalWhole { job: Box::new(zeros()) },
+            };
+            let mut v1: crate::palw_offence_v1::PalwPanelFalseValidEvidenceV1 = zeros();
+            v1.contradiction = contradiction.clone();
+            let mut v2: crate::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2 = zeros();
+            v2.contradiction = contradiction.clone();
+            use crate::palw_offence_v1::PalwOffenceKindV1 as K;
+            for (kind, evidence) in [(K::PanelFalseValid, borsh::to_vec(&v1).unwrap()),
+                (K::PanelFalseValidV2, borsh::to_vec(&v2).unwrap())] {
+                samples.push(PalwConsensusObjectV2::ObjectiveOffence { kind, accused: bond(), evidence_id: Hash64::default(), evidence });
+            }
+            samples.push(crate::palw_offence_attribution_v1::palw_executor_refuted_object_v1(
+                    bond(), Hash64::default(), contradiction, None));
+            samples
+        }
+
+        /// The old envelope already decodes opaque evidence, including an unknown prompt proof.
+        /// Its isolation rule asks only for non-empty evidence. Keep that rule on every ruleset;
+        /// the canonical proof's interpretation is fenced later by palw_prompt_proof_fence_v1.
+        #[test]
+        fn canonical_fp_evidence_keeps_the_old_opaque_carrier_isolation_rule() {
+            for object in canonical_fp_prompt_objects() {
+                assert_eq!(palw_lifecycle_kind_owner_v1(&object), PalwLifecycleKindOwnerV1::Int12);
+                let payload = payload_of(&object);
+                for tolerate in [false, true] {
+                    assert_eq!(validate_palw_lifecycle_tx(&payload, tolerate), Ok(()));
+                }
+                let unarmed = PalwLifecycleKindFencesV1::default();
+                let armed = unarmed.with(PalwLifecycleKindFenceV1::LegacyPublicFilerV1, Some(ForkActivation::new(1_000)));
+                for at in [999, 1_000] {
+                    assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, at), Ok(()));
+                }
+            }
+        }
+
         /// **An appended form inside a live-build kind is owned at the top level**: for every `CarriedAppended` change, a sample object
         /// carrying the new form (listed here by the lane that appends it) is owned by its fence — the guarded arm of
         /// [`palw_lifecycle_kind_owner_v1`] — so every site reads it as the live build does, undecodable, below the fence.
@@ -4159,6 +4215,28 @@ pub(crate) mod tests {
         /// `0b1c11b87`'s source on 2026-10-10 (every variant equal on this branch, `g14/r4-fixes` and `adv/c4r4`).
         const PALW_A2_INT12_VARIANTS_WIRE_V1: u64 = 0xd1982421da455cca;
 
+        /// The explicitly approved native-only field is excluded from the historical source
+        /// fingerprint only with its exact skipped declaration. Existing frozen declarations
+        /// stay pinned, and removing `borsh(skip)` or changing its type fails this check.
+        fn native_fp_metadata_wire_equivalent(decl: &str) -> Result<String, &'static str> {
+            const FIELD: &str = "#[borsh(skip)]public_job:Option<Box<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,";
+            if decl.matches("public_job:").count() != 1 || decl.matches(FIELD).count() != 1 {
+                return Err("public_job must be the single approved native-only skipped field");
+            }
+            Ok(decl.replacen(FIELD, "", 1))
+        }
+
+        #[test]
+        fn native_fp_metadata_equivalence_requires_the_exact_skipped_field() {
+            let field = "#[borsh(skip)]public_job:Option<Box<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,";
+            assert_eq!(native_fp_metadata_wire_equivalent(&format!("FreePromptCommitted{{{field}claim:Hash64}}")),
+                Ok("FreePromptCommitted{claim:Hash64}".into()));
+            for wrong in [field.replace("#[borsh(skip)]", ""), field.replace("Option<Box", "Vec<Box"),
+                format!("{field}{field}"), "claim:Hash64".into()] {
+                assert!(native_fp_metadata_wire_equivalent(&wrong).is_err());
+            }
+        }
+
         /// `PalwConsensusObjectV2`'s variants, squashed as the manifest reader reads them, by name.
         fn object_variant_decls(
             types: &std::collections::BTreeMap<String, (u64, String)>,
@@ -4182,7 +4260,10 @@ pub(crate) mod tests {
                     }
                     let name: String = segment.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
                     if !name.is_empty() {
-                        out.insert(name, segment.to_string());
+                        let declared = if name == "FreePromptCommitted" {
+                            native_fp_metadata_wire_equivalent(segment).expect("LG14-A native field changes no int-12 carrier bytes")
+                        } else { segment.to_string() };
+                        out.insert(name, declared);
                     }
                     start = i + 1;
                 }
