@@ -14,9 +14,9 @@ pub const PACK_USAGE: &str = "palw-class pack — runtime packs: build, verify a
 
 USAGE:
     palw-class pack build  --model <hf dir | .gguf> --out <artifact.palwtir> --pack <dir>
-                           (--calib <tokens.json> [--calib-seqs N] [--positions N] | --stats-in <stats.json>)
+                           (--calib <tokens.json> [--calib-seqs N] [--positions N] | --stats-in <stats.json> [--calib <tokens.json>: the sequences they were measured on])
                            [--name <name>] [--repo <id>] [--revision <rev>] [--context N]
-                           [--headroom16 F] [--headroom32 F] [--headroom-resid F] [--max-window N]
+                           [--headroom16 F] [--headroom32 F] [--headroom-resid F] [--max-window N] [--gdn-core-wide]
                            [--math libm-v1|std] [--quant-format <file>]... [--adapter <file>] [--tokenizer <file>]
                            [--hf-reference <audit dir | logits.json | hf-reference.json>]
                            [--slope-min F] [--slope-max F] [--corr-min F] [--top1-min F] [--kl-max F] [--allow-out-of-tolerance]
@@ -191,6 +191,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
                 req.policy.headroom_resid = v;
             }
             req.max_window = num(&mut args, "--max-window")?;
+            req.gdn_core_wide = take_bool(&mut args, "--gdn-core-wide");
             if let Some(m) = take_flag(&mut args, "--math") {
                 req.math = MathMode::parse(&m).ok_or_else(|| format!("--math {m}: libm-v1 or std"))?;
             }

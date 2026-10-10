@@ -65,6 +65,9 @@ struct Args {
     /// Headroom of the residual stream's single i32 scale over its calibrated absmax.
     #[arg(long, default_value_t = 4.0)]
     headroom_resid: f64,
+    /// `LowerOpts::gdn_core_wide`: deliver a gated-delta core on the wide rail's finer grid (default off: the programs as before).
+    #[arg(long)]
+    gdn_core_wide: bool,
     /// Stop after calibration (with `--stats-out`, a statistics dump).
     #[arg(long)]
     calibrate_only: bool,
@@ -174,7 +177,7 @@ fn tokens(path: &Option<PathBuf>, vocab: usize, count: usize, seed: u64) -> Resu
 fn run(a: &Args) -> Result<serde_json::Value, String> {
     let t0 = Instant::now();
     let log = |m: String| eprintln!("[{:>7.1}s] {m}", t0.elapsed().as_secs_f64());
-    let opts = LowerOpts { max_window: a.max_window, ..LowerOpts::default() };
+    let opts = LowerOpts { max_window: a.max_window, gdn_core_wide: a.gdn_core_wide, ..LowerOpts::default() };
     misaka_palw_tir_lower::detmath::set_mode(
         misaka_palw_tir_lower::detmath::MathMode::parse(&a.math).ok_or_else(|| format!("--math {}: libm-v1 or std", a.math))?,
     );

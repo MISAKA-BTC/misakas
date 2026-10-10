@@ -1381,6 +1381,7 @@ pub fn lower_cnn_opts(hl: &HlProgram, spec: &CnnSpec, opts: &LowerOpts) -> Resul
         table_chunk: 1 << 24,
         conv_weight_bits: opts.conv_weight_bits,
         out_major_rows: false,
+        gdn_core_wide: false,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];

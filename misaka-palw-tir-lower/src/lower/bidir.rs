@@ -381,6 +381,7 @@ pub fn lower_bidir_with(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg, extras:
         table_chunk: 1 << 24,
         conv_weight_bits: 8,
         out_major_rows: false,
+        gdn_core_wide: false,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];

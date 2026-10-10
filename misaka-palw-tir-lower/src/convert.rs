@@ -151,6 +151,8 @@ pub struct ConvertRequest {
     pub calibrated_context: Option<usize>,
     pub policy: QuantPolicy,
     pub max_window: Option<u32>,
+    /// [`LowerOpts::gdn_core_wide`]: recorded in the artifact's meta (only when set) and pinned by the runtime pack.
+    pub gdn_core_wide: bool,
     pub chunk_store: Option<std::path::PathBuf>,
     pub keep_chunks: bool,
     /// MiB of `f32` per block of rows, and the size from which a row-wise tensor is made by blocks.
@@ -185,6 +187,7 @@ impl ConvertRequest {
             calibrated_context: None,
             policy: QuantPolicy::default(),
             max_window: None,
+            gdn_core_wide: false,
             chunk_store: None,
             keep_chunks: false,
             block_mib: 16,
@@ -231,7 +234,7 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
     let t0 = std::time::Instant::now();
     // Before the model is opened: lowering evaluates RoPE frequencies and the like, in this mode.
     crate::detmath::set_mode(req.math);
-    let opts = LowerOpts { max_window: req.max_window, ..LowerOpts::default() };
+    let opts = LowerOpts { max_window: req.max_window, gdn_core_wide: req.gdn_core_wide, ..LowerOpts::default() };
     let reg = QuantRegistry::with_files(&req.quant_formats)?;
     let read = match &req.adapter {
         Some(p) => {
@@ -288,6 +291,40 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
             if recurrent && let Some(longest) = req.calibrated_context {
                 calibrated = Some((longest, req.context.unwrap_or(longest)));
             }
+            (stats, serde_json::json!(p.display().to_string()))
+        }
+        // **Pinned statistics AND the sequences they were measured on** (a recurrent model's long calibration, kept as `stats.json` +
+        // `calib-tokens.json`): the statistics are read, not re-measured, and the sequences only give the artifact the same
+        // `calibrated_context` / `calibration_length_rule` a run that measured them would record — the combination `pack verify --rebuild`
+        // already uses (pinned statistics, `calibrated_context` from the pack's sequences). The caller vouches that the statistics are the
+        // sequences' (the pack records them as "statistics supplied"; their digest is the pinned identity).
+        (Some(p), Some(c)) => {
+            let text = std::fs::read_to_string(p).map_err(|e| LowerError::Io(format!("{}: {e}", p.display())))?;
+            let (stats, exact) = stats_from_json(&text)?;
+            if !exact {
+                log(format!("WARNING: {} is in the legacy (decimal float) format — not bit-exact, not for a runtime pack", p.display()));
+            }
+            let mut seqs = c.sequences.clone();
+            if let Some(n) = req.calib_seqs {
+                seqs.truncate(n);
+            }
+            if let Some(n) = req.positions {
+                seqs.iter_mut().for_each(|q| q.truncate(n));
+            }
+            seqs.retain(|q| !q.is_empty());
+            let longest = seqs.iter().map(Vec::len).max();
+            let context = req.context.or(longest).unwrap_or(0);
+            if let Some(longest) = crate::fidelity::check_calibration_length(&prep.hl, &seqs, context)
+                .map_err(|e| LowerError::bad(format!("{e}; pass a context to declare the context served")))?
+            {
+                calibrated = Some((longest, context));
+            }
+            log(format!(
+                "calibration statistics from {} (pinned; the {} sequences / {} positions they were measured on give the calibrated context)",
+                p.display(),
+                seqs.len(),
+                seqs.iter().map(Vec::len).sum::<usize>()
+            ));
             (stats, serde_json::json!(p.display().to_string()))
         }
         (None, Some(c)) => {
@@ -364,6 +401,10 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
             // The platform is recorded only for `std`: libm-v1 does not depend on it.
             "math": if math == MathMode::Std { serde_json::json!({ "mode": "std", "platform": crate::detmath::platform() }) } else { serde_json::json!({ "mode": "libm-v1" }) },
         });
+        if req.gdn_core_wide {
+            // Only when set: an artifact built without the option keeps its meta byte for byte.
+            meta["gdn_core_wide"] = serde_json::json!(true);
+        }
         if let Some((longest, context)) = calibrated {
             meta["calibrated_context"] = serde_json::json!(longest);
             meta["calibration_length_rule"] = serde_json::json!({ "rule": "met", "longest": longest, "context": context });

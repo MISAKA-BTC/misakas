@@ -35,6 +35,8 @@ pub use kaspa_consensus_core::palw_conformance_evidence_v1::{
 };
 pub const DOMAIN_IMPL_SET: &[u8] = b"misaka.palw.runtime-pack.impl-set.v1";
 pub const DOMAIN_CALIBRATION: &[u8] = b"misaka.palw.runtime-pack.calibration-id.v1";
+/// A pack that pins `gdn_core_wide` hashes its calibration identity under this domain with the flag in it; every other pack keeps v1.
+pub const DOMAIN_CALIBRATION_V2: &[u8] = b"misaka.palw.runtime-pack.calibration-id.v2";
 pub const DOMAIN_BINDING: &[u8] = b"misaka.palw.runtime-pack.input-state-binding.v1";
 pub const DOMAIN_RESOURCE: &[u8] = b"misaka.palw.runtime-pack.resource-profile.v1";
 pub const DOMAIN_SOURCE: &[u8] = b"misaka.palw.runtime-pack.source-provenance.v1";
@@ -138,6 +140,12 @@ struct CalibrationIdentityV1 {
     headroom_bits: [u64; 3],
     max_window: Option<u32>,
     context: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+struct CalibrationIdentityV2 {
+    base: CalibrationIdentityV1,
+    gdn_core_wide: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -437,21 +445,23 @@ pub fn bind_commitment(
             quant_descriptors: pack.quant.descriptors.iter().map(|q| (q.name.clone(), q.digest.clone())).collect(),
         },
     );
-    let calibration = tool_root(
-        DOMAIN_CALIBRATION,
-        &CalibrationIdentityV1 {
-            stats_digest: pack.profile.calibration.stats_digest.clone(),
-            sites: pack.profile.calibration.sites as u64,
-            source: super::manifest::blake2b256_hex(pack.profile.calibration.source.to_string().as_bytes()),
-            headroom_bits: [
-                pack.profile.policy.headroom16.to_bits(),
-                pack.profile.policy.headroom32.to_bits(),
-                pack.profile.policy.headroom_resid.to_bits(),
-            ],
-            max_window: pack.profile.max_window,
-            context: pack.profile.context.map(|c| c as u64),
-        },
-    );
+    let calibration_v1 = CalibrationIdentityV1 {
+        stats_digest: pack.profile.calibration.stats_digest.clone(),
+        sites: pack.profile.calibration.sites as u64,
+        source: super::manifest::blake2b256_hex(pack.profile.calibration.source.to_string().as_bytes()),
+        headroom_bits: [
+            pack.profile.policy.headroom16.to_bits(),
+            pack.profile.policy.headroom32.to_bits(),
+            pack.profile.policy.headroom_resid.to_bits(),
+        ],
+        max_window: pack.profile.max_window,
+        context: pack.profile.context.map(|c| c as u64),
+    };
+    let calibration = if pack.profile.gdn_core_wide {
+        tool_root(DOMAIN_CALIBRATION_V2, &CalibrationIdentityV2 { base: calibration_v1, gdn_core_wide: true })
+    } else {
+        tool_root(DOMAIN_CALIBRATION, &calibration_v1)
+    };
     let binding = tool_root(
         DOMAIN_BINDING,
         &InputStateBindingV1 {

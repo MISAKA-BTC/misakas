@@ -1091,6 +1091,7 @@ pub fn lower_vision_with(hl: &HlProgram, s: &VisionSpec, out_major: bool) -> Res
         table_chunk: 1 << 24,
         conv_weight_bits: 8,
         out_major_rows: out_major,
+        gdn_core_wide: false,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];

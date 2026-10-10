@@ -418,6 +418,7 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
                 headroom_resid: request.policy.headroom_resid,
             },
             max_window: request.max_window,
+            gdn_core_wide: request.gdn_core_wide,
             context: request.context,
             calibration,
         },
