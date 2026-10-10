@@ -3,6 +3,19 @@
 ユーザーの指示により、G14（RFC-0014/0015 の公開告発の完成）は codex が担当する。この文書は、Claude 側 lane の到達点と未完了項目の一覧である。
 判定の上位基準は [PESG](probabilistic-economic-security-gate.md) の §4 C、そして [g14-completion-matrix.md](g14-completion-matrix.md) である。
 
+## Codex側の更新（2026-10-10）
+
+以下のLead引継ぎは当時のsnapshotである。Codex branch `codex/g14-prosecution-bounds`の現在の修正と検証は[監査記録](../../audit/g14-review-2026-10-10/implementation.md)、残る受入条件は[レビュー](../../audit/g14-review-2026-10-10/feedback.md)を参照する。
+
+- `f89431d82`までにK2S `4a6f20aaf`を統合し、small-value whole-value court、認証済みmaterialからの独立再実行、RAM/state/filingの上限を修正した。64要素hiding tileと累積scope、最大chunk数を含む期限は残る。shape上限計算は実modelのpeak測定ではない。
+- `74d59907f`で固定報酬jobの生成数を束縛し、短い正しい計算が満額を得るF-B1を修正した。kernel回帰と実nodeの受入拒否・完全実行Finalを検証済み。
+- `e9eee4911`でLG14-Aを統合し、`a4a62ec21`で単独の不正leafを見逃すmidpoint探索と未認証responseのcache汚染を修正した。core 10件、fold 7件、kaspad filer 5件、実nodeの最終batch 7件と修正後reorg 1件、A2U 3件がPASS。shipping repinは差分なし。実node8件が未解決のままという下記記述は旧snapshotの状態である。
+- LG14-Bの大型tree/fused court本番接続、fresh verifier自身の公開readからの完走、reservation全枠の占有対策、期限内包含は未達。小型fallbackは34-session枠を超えるclaimをUnjudgedとする。
+- G14Rのverifier-payとPESGはintegration `0b73fd33f`から統合済み。F-MEAS-07のnet徴収計算も現行`required_reservation`では自己還流分を控除する項を含み、下記の総額だけを数えるという記述は現HEADに当てはまらない。
+- integration `7d8c31270`のbeacon source-set freezeを`b6a90a0d0`で統合した。検証結果とscopeは監査記録へ記載する。
+
+G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
+
 ## 統合ブランチ
 
 `claude/g14-public-prosecution-integration-9bee39`（origin）。

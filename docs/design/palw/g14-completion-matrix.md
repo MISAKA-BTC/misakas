@@ -5,6 +5,9 @@ question for every reward-bearing plan family: **which G14 conditions are proven
 It does not replace `g14-integration-matrix.md`, `g14-node-e2e-record.md` or the lane records. Those keep their history. For the
 question of G14 completeness, this matrix supersedes their "Real node" columns.
 
+**Latest review refresh:** §2b records the Codex branch through `b6a90a0d0`; it overrides older status descriptions only for the
+specific cases it names. The milestone tables remain evidence history, not proof that every currently allowed profile is complete.
+
 ## 0. The bar
 
 **Scenario.** The producer and EVERY Panel seat collude: every seat signs `Valid` / receipts. One public bonded verifier outside
@@ -126,7 +129,24 @@ and the model allocation (BUDGET's rows 1–5, 7, 9–11, 19). **Not calling the
 Until those call the engine, every kernel-route, OPV, typed-root and EXEC reward stays non-reward-bearing (ADR-0176), independently
 of G14.
 
-## 3. Family matrices
+## 2b. Codex review refresh (`b6a90a0d0`, 2026-10-10)
+
+Detailed changes, commands, failures and reruns are in the [audit implementation record](../../audit/g14-review-2026-10-10/implementation.md).
+The **overall G14 result remains FAIL / incomplete**; no activation or new family-wide PASS follows from these repairs.
+
+| Scope | New evidence / correction | Still open |
+| --- | --- | --- |
+| F1–F4 generation binding | `74d59907f`: generative jobs require the exact positive `max_new_tokens` count. Short correct execution is rejected by the real block fold; the complete execution reaches Final. Kernel regression covers single, pipeline and segmented routes. | A future EOS/stop rule needs its own committed semantics; this is a dormant consensus meaning change. |
+| F3–F4 public replay and resources | `f89431d82`: authenticated public positions, independent registered-model replay, canonical tensor bytes, simultaneous RAM/state accounting, bounded whole-value courts for withheld small values. Kernel and real-node regressions pass. | 64-element hiding tiles, cumulative scope, large-profile admission, measured peak/time and maximum-response deadlines. The scope report is not a reward gate. |
+| F9–F16 common legacy machinery, tested on the floor fixture | `a4a62ec21`: isolated faults cannot be skipped by a matching midpoint; public answer bytes authenticate before caching/learning. Real-node final batch has 7 PASS and a corrected reorg rerun has 1 PASS, covering pre/post-Final conviction, withholding default, honest dismissal, another reservation, restart, reorg and an unarmed control. Core 10, fold 7, kaspad filer 5, A2U 3 PASS; repin clean before the beacon merge. | This is not a per-family F9–F16 result. Large-tree/CKW/fused responder and filer wiring, checkpoint/trace faults, and model-copy terminals remain. The linear fallback refuses ladders needing more than 34 sessions. |
+| C2 / C7 for legacy | A node started after the claim replays the chain and serves matching op-204/206 documents via the RPC builders and JSON roundtrip after conviction. | Prosecution from that fresh node's own reads before conviction, a socket RPC drill, and production-service execution. |
+| C6 / C8 under a coalition | Reserved sessions and direct-proof priority exist; one competing reservation is tested. | Claim-wide 64-live / 256-lifetime reservation saturation, all-response/chunk inclusion and adaptive deadline bounds. One competing reservation does not prove saturation resistance. |
+| Condition 9, beacon source set | `b6a90a0d0` merges `7d8c31270`: the eligible source set is frozen at the epoch commitment. Engine stages 7 and production fold 22 PASS; shipping repin after the merge is clean. | The new fixture supplies Reference eligibility and checks the Chain read; it does not replace real-model production eligibility or the external soundness gate. |
+
+ADR-0177 D7's registered-model possession premise is confirmed by the user. GAP-80 has also been decided: legacy is in scope;
+the old "awaiting user decision" descriptions below are historical. Required family coverage is not waived.
+
+## 3. Family matrices (milestone baseline)
 
 ### 3.1 F1 — K2-TIR v1/v2 single-program classes (Panel-licensed with every interim seat colluding, and OPV)
 

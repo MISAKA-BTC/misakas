@@ -200,3 +200,13 @@ Final待機とreorg試験も修正した。前者は実際のrearmed deadlineを
 途中のbuildとnode runはディスク容量不足でも停止した。作業専用targetの再生成可能なincremental/codegen cacheを整理して再実行した結果が上記であり、容量不足をコードのPASSまたはFAILとは扱わない。未実装の大型探索・fused court・reservation飽和・包含期限を、これらの小型fixtureのPASSで閉じない。
 
 [kaspad filer再実行](evidence/legacy-final-filer-lib-retry.log)。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p kaspad --lib palw_fraud_filer --locked`は5件すべて成功した。残存warningはこの検証で修正対象としていない。
+
+## beacon source-set freezeの統合
+
+upstream `7d8c31270`（実装`91eb1bfd4`）を`b6a90a0d0`で統合した。epochの`release_daa`を初めて越えるblockで、parentから導出したeligible source setを固定する。後の登録・deny・DA失効でverifierが異なるsetを再導出しない。固定setをengine root、carriage、delta 174へ含め、reorgとrestartで復元する。有効化fenceは維持する。
+
+`misaka-palw-panel --test stages`は **7 PASS**、`kaspa-consensus-core --test rfc0010_production_fold`は **22 PASS**。固定後の変更、reorg、restart、改ざん、期限後のprune、上限超過での拒否を含む。この追加fixtureの導出入力はReference setであり、読出しはChain経路を使う。実modelを正規OPV eligibilityへ登録してfreezeからdrawまで実nodeで通した試験ではない。
+
+[engine stages](evidence/beacon-freeze-stages.log)、[production fold](evidence/beacon-freeze-fold.log)。この統合はsource setの後変更という残件を修正するもので、G14のscope・追及期限・大型filerの残件を閉じるものではない。
+
+統合後の`--shipping --drift-only`も **差分なし**。検査対象の全pin・gateを通過した。[repin結果](evidence/beacon-repin.log)、[integration tests詳細](evidence/beacon-repin-harvest-tests.log)、[lib tests詳細](evidence/beacon-repin-harvest-lib.log)。
