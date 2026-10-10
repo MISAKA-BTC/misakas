@@ -451,13 +451,13 @@ reporter share.
 
 ## 8. Merging `g14/r4-fixes` and `adv/c4r4` with this branch (the Lead, 2026-10-10)
 
-Read at `g14/r4-fixes` @ `0ef5084d1` and `adv/c4r4` @ `e2dd4e0c1` (which contains all of `g14/r4-fixes`). A trial `git merge-tree` of
+Read at `g14/r4-fixes` @ `985463448` and `adv/c4r4` @ `162df6b16` (which contains all of `g14/r4-fixes`). A trial `git merge-tree` of
 this branch with either has ONE textual conflict (the kernel gate, item 4). Line numbers: `L` = this branch, `R4` = `g14/r4-fixes`,
 `C4` = `adv/c4r4`. Items 1–6 are needed by BOTH branches (adv/c4r4 inherits them through g14/r4-fixes); 7–8 are adv/c4r4's own.
 
 1. **Tag 113 owner** — `L consensus/core/src/palw_lifecycle_objects_v2.rs:1232`: add `| O::KernelRouteChunkV1 { .. }` to the
    `ProbabilisticConstraintsV1` arm of `palw_lifecycle_kind_owner_v1` (the compiler demands it: the match is exhaustive). The variant
-   is `R4/C4 consensus/core/src/palw_state_v2.rs:8473`.
+   is `R4 consensus/core/src/palw_state_v2.rs:8473` / `C4 :8532`.
 2. **Tag 113 tables** — `L …palw_lifecycle_objects_v2.rs:1360`: after the 111 entry add
    `(113, "KernelRouteChunkV1", PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1)` to `PALW_LIFECYCLE_NEW_KINDS_V1`;
    `L …:1752`: flip the tag-113 row's `landed` to `true`. (`every_kind_in_the_enum_has_exactly_one_owner`,
@@ -482,12 +482,17 @@ this branch with either has ONE textual conflict (the kernel gate, item 4). Line
 6. **No other site judges tag 113 below its fence once item 1 lands**: its may-ride arm (`R4/C4 …palw_lifecycle_objects_v2.rs:344`)
    then runs only in the header context past the fence; the objects-of-block walk skips it below, so the chunk gate
    (`R4 processor.rs:13227` / `C4 :13250`), the chunk lane's rows and deposit (`palw_kernel_route_v1.rs`) and the fold arm
-   (`R4 palw_state_v2.rs:34832` / `C4 :34890`) are reached only past it; `palw_object_is_kernel_route_v1` (`palw_state_v2.rs:8610`)
+   (`R4 palw_state_v2.rs:34832` / `C4 :34958`) are reached only past it; `palw_object_is_kernel_route_v1` (`palw_state_v2.rs:8610`)
    stays the second lock. The heartbeat-carrier classification (`palw_heartbeat_carriers_v1.rs:201`) is a mempool/template read.
 7. **adv/c4r4 only** — `C4 consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/conformance/c4r4.rs:160`: remove the
    `#[ignore = "FAIL C4R4 A-2: …"]` on `g14_c4r4_a2_a_tag_113_carrier_below_its_fence_is_judged_as_undecodable_bytes`; with item 1 it
    passes (isolation tolerates 113 at every height on an audit ruleset).
-8. **adv/c4r4 only** — nothing else: its other additions (OPVB's beacon v3, E1–E7, the bootstrap types) add no object tag, inner
-   kind or header form, and change no int-12 wire type.
+8. **adv/c4r4 only — INTF's `palw_reporter_share_v2`** (merged into it): `L …palw_lifecycle_objects_v2.rs:1859` flip the reporter-share
+   `StateEncoding` row to landed, and arm the fence in the pin test's node C —
+   `L consensus/src/pipeline/virtual_processor/tests/t12_a2u_new_kinds_uniform.rs:157`, beside `palw_tir_shard_segment_v2`:
+   `"palw_reporter_share_v2" => params.palw_reporter_share_v2 = Some(at),` (the harness panics on a landed row's unknown fence). Its
+   change to `PalwStateParamsV2` is already classified `NotCarried`.
+9. **adv/c4r4 only** — nothing else: its other additions (OPVB's beacon v3, E1–E7, the bootstrap types) add no object tag, inner
+   kind or header form, and change no other int-12 wire type.
 
 After the merge: the A2U core tests, the pin test on both rulesets, and the int-12 replay of the dumps (§5) — the merge gate (§6.6).
