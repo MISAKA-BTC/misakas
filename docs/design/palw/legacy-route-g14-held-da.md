@@ -342,3 +342,29 @@ legacy-held pursuit (sessions, units, answered, the answer bytes' block) belongs
 
   A single honest verifier's full re-execution is not cheap at real scale. That is §2's probabilistic-coverage question, not
   this lane's acquisition.
+
+## 12. Status (2026-10-10, on integration `2dd839709`)
+
+- **Verified, at V-unit and V-fold.** Consensus-core: 7 unit tests, plus the existing step-refute, DA and court suites, which the
+  refactors ride. kaspa-consensus: the gate test for tags 157–159, and A2U's mixed-verdict pin test on both rulesets.
+- **Verified, kaspad V-fold E2E** (6 `lg14b_*` tests plus T54g's 12). Three colluding seats license, and a fresh outsider uses only
+  chain objects, its own replica and the public job:
+  - the fused lie: descent → CKW → held dissection → `CourtHeldVerdict`;
+  - the garbage gather: tag 159, before and after Final;
+  - the mid-layer matmul: tag 159 from openings the outsider builds itself;
+  - withholding a descent node or the CKW → `ProducerWithholding`;
+  - an honest claim survives a malicious outsider and reaches Final;
+  - below the fence, every new object is refused and the state is untouched.
+
+  Every block's delta re-applies and reverts, and its carriage reloads (V-fold reorg / restart / IBD).
+- **Measured on the fixture:** 11,612 leaves, height 14, the verifier retaining level 12; 2 node rounds; 3 blocks replayed.
+- **Derived for the canonical 8k row:** 3 rounds; about 1.9 MB resident, against 6.75 GB of leaf hashes.
+- **Repin:** no drift.
+- **A2U:** registered.
+  - `ObjectTags{157,159}` with the allocation entry.
+  - `PalwDaUnitV1` classified as `CarriedAppended`, with guarded owner arms for tags 55, 67 and 83, plus a sample.
+  - The `Int12Inner` row, and the wire pins for tags 157–159.
+  - Pin 113 added: it was missing on integration.
+- **ADR-0177 D2 for the legacy units (DA16b §7.5).** Done for item 1: past the fence a held `StepLeaf` answer owes no artifact rows
+  and is checked by membership only. Items 2 and 3 remain: dissection root-claim parameter openings, and readiness (the latter is a
+  user decision).
