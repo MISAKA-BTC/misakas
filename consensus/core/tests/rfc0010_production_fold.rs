@@ -101,7 +101,12 @@ impl V3 {
             capability_proof: false,
             floor_class: floor,
             approved_beacons: vec![challenge_policy()],
-            beacon_source: PalwPanelV3BeaconSourceV1::Reference { events: Vec::new(), eligible_profiles: BTreeSet::new() },
+            beacon_source: PalwPanelV3BeaconSourceV1::Reference {
+                events: Vec::new(),
+                eligible_profiles: BTreeSet::new(),
+                works: Vec::new(),
+                sealed: Vec::new(),
+            },
         };
         Self { c, inputs }
     }
@@ -124,10 +129,18 @@ impl V3 {
     }
 
     /// One block at `daa`, folded and checked three ways (the delta re-applies and reverts, the carriage reloads).
-    fn step_at(&mut self, daa: u64, objects: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>, key: Hash64, subsidy: u64) -> PalwStateDeltaV2 {
+    fn step_at(
+        &mut self,
+        daa: u64,
+        objects: &[PalwConsensusObjectV2],
+        work: PalwBlockWorkV3<'_>,
+        key: Hash64,
+        subsidy: u64,
+    ) -> PalwStateDeltaV2 {
         let x = ctx(0xCA_0000 + daa, daa, daa, subsidy);
         let parent = self.c.s.clone();
-        let (child, delta, skips) = self.fold(&parent, &x, objects, work, key).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
+        let (child, delta, skips) =
+            self.fold(&parent, &x, objects, work, key).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
         assert!(skips.is_empty(), "nothing skipped at {daa}: {skips:?}");
         assert_eq!(apply_delta_v2(&parent, &delta, &self.c.sp).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
         assert_eq!(revert_delta_v2(&child, &delta, &self.c.sp).expect("reverts"), parent, "DAA {daa}: the delta reverts");
@@ -180,7 +193,12 @@ impl V3 {
         let mirror = *self.c.sp.panel_v3().expect("the mirror");
         let profile = [0x77u8; 64];
         let event = independent_event(profile, 0x42, release + 1, release + 2);
-        self.inputs.beacon_source = PalwPanelV3BeaconSourceV1::Reference { events: vec![event.clone()], eligible_profiles: BTreeSet::from([profile]) };
+        self.inputs.beacon_source = PalwPanelV3BeaconSourceV1::Reference {
+            events: vec![event.clone()],
+            eligible_profiles: BTreeSet::from([profile]),
+            works: Vec::new(),
+            sealed: Vec::new(),
+        };
         let request = BeaconRequestV1 {
             network: mirror.network,
             ruleset: mirror.ruleset,
@@ -191,7 +209,8 @@ impl V3 {
         };
         let context = panel_beacon_context_v1(&request, &challenge_policy(), BTreeSet::from([profile]));
         // The branch's tip when the carrying block is folded: its parent, two DAA before it.
-        let WorkBeaconStateV1::Locked(beacon) = collect_work_beacon_v1(&context, &[event], release + 5).expect("a valid policy") else {
+        let WorkBeaconStateV1::Locked(beacon) = collect_work_beacon_v1(&context, &[event], release + 5).expect("a valid policy")
+        else {
             panic!("the reference source locks a beacon");
         };
         BeaconProofV1 { epoch, output: Hash64::from_bytes(beacon.output), proof: borsh::to_vec(beacon.beacon()).unwrap() }
@@ -310,7 +329,10 @@ fn a_v3_claim_is_bound_as_an_ordinary_v2_panel_then_licensed_and_finalised_by_v2
         assert_eq!(w.c.s.reserved_exposure(seat), binding.exposure as u128, "the seat reserved the engine's exposure, once");
         assert!(row.contains_key(seat));
     }
-    assert_eq!(w.engine().reserved(&kaspa_consensus_core::palw_permissionless_panel_v1::BondIdV1::from(seats[0])), binding.exposure as u128);
+    assert_eq!(
+        w.engine().reserved(&kaspa_consensus_core::palw_permissionless_panel_v1::BondIdV1::from(seats[0])),
+        binding.exposure as u128
+    );
     // V2's own deadline machinery does not clock a V3 claim.
     assert_eq!(w.c.s.deadline_of(&id), None);
 
@@ -361,7 +383,11 @@ fn a_non_seat_public_bond_accuses_and_convicts_a_v3_bound_claim_exactly_as_it_wo
     let mut w = V3::new();
     let (id, bound_at) = w.run_to_bound(20);
     let seats = seats_of_panel(&w.c.s, &id);
-    let outsider = genesis_bonds(&w.c.p).iter().map(|(k, _, _)| *k).find(|k| *k != producer && !seats.contains(k)).expect("a bond outside the Panel");
+    let outsider = genesis_bonds(&w.c.p)
+        .iter()
+        .map(|(k, _, _)| *k)
+        .find(|k| *k != producer && !seats.contains(k))
+        .expect("a bond outside the Panel");
     let collateral_before = w.c.s.bond(&producer).unwrap().collateral;
     w.step_with(&[da_accuse(id, outsider, 3)]);
     assert!(w.c.s.da_session(&id, &outsider).is_some(), "the public bond's session is open");
@@ -430,9 +456,20 @@ fn a_legacy_duty_and_a_v3_duty_cannot_spend_the_same_collateral() {
     // Certify the epoch, then let the due draws run in acceptance order.
     let proof = w.proof_for(&first);
     w.step_at(release + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
-    w.step_at(release + 5, &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    w.step_at(
+        release + 5,
+        &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    );
     w.step_at(release + 10, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
-    assert!(matches!(w.record(&first).phase, ClaimPhaseV3::Bound(_)), "the first in acceptance order binds: {:?} / {:?}", w.record(&first).phase, w.record(&first).claim.required_exposure);
+    assert!(
+        matches!(w.record(&first).phase, ClaimPhaseV3::Bound(_)),
+        "the first in acceptance order binds: {:?} / {:?}",
+        w.record(&first).phase,
+        w.record(&first).claim.required_exposure
+    );
     assert_eq!(
         w.record(&second).phase,
         ClaimPhaseV3::Voided { daa: release + 10, reason: NonFraudReasonV1::NoCapablePanel },
@@ -464,7 +501,13 @@ fn a_legacy_duty_and_a_v3_duty_cannot_spend_the_same_collateral() {
     let release = w.record(&v3).seal.unwrap().anchor_slot;
     let proof = w.proof_for(&v3);
     w.step_at(release + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
-    w.step_at(release + 5, &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    w.step_at(
+        release + 5,
+        &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    );
     w.step_at(release + 10, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     assert_eq!(
         w.record(&v3).phase,
@@ -536,7 +579,13 @@ fn no_capable_panel_ends_a_claim_the_public_population_cannot_seat() {
     let release = w.record(&id).seal.unwrap().anchor_slot;
     let proof = w.proof_for(&id);
     w.step_at(release + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
-    w.step_at(release + 5, &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    w.step_at(
+        release + 5,
+        &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    );
     w.step_at(release + 10, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     assert_non_fraud_end(&w, &id, PalwVoidReasonV2::PermissionlessNoCapablePanel, NonFraudReasonV1::NoCapablePanel, &[]);
 }
@@ -602,7 +651,10 @@ fn a_bad_carried_proof_is_dropped_and_the_block_stands() {
     let garbage = BeaconProofV1 { proof: vec![1, 2, 3], ..good.clone() };
     w.step_at(release + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     // One block carries all three (the policy admits two per block; the third is not even queued) and stands.
-    let objects: Vec<_> = [forged_output, other_epoch, garbage].into_iter().map(|p| PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(p) }).collect();
+    let objects: Vec<_> = [forged_output, other_epoch, garbage]
+        .into_iter()
+        .map(|p| PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(p) })
+        .collect();
     let delta = w.step_at(release + 5, &objects, PalwBlockWorkV3::None, Hash64::default(), 0);
     assert!(w.engine().beacon_rows().is_empty(), "nothing verified, nothing retained");
     assert!(!delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::PanelV3Beacon { .. })));
@@ -615,7 +667,13 @@ fn a_bad_carried_proof_is_dropped_and_the_block_stands() {
     let release2 = none.record(&id2).seal.unwrap().anchor_slot;
     let good2 = none.proof_for(&id2);
     none.step_at(release2 + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
-    none.step_at(release2 + 5, &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(good2) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    none.step_at(
+        release2 + 5,
+        &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(good2) }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    );
     assert!(none.engine().beacon_rows().is_empty());
     none.step_at(release2 + 9, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     assert_non_fraud_end(&none, &id2, PalwVoidReasonV2::BeaconUnavailable, NonFraudReasonV1::BeaconUnavailable, &[]);
@@ -646,7 +704,7 @@ fn the_beacon_object_is_refused_by_name_below_the_fence() {
 /// no proof possible, the claim ends `BeaconUnavailable`, non-fraud.
 #[test]
 fn on_todays_chain_no_final_is_panel_independent_so_the_beacon_is_unavailable() {
-    use kaspa_consensus_core::palw_panel_beacon_v1::{PanelBeaconHistoryV1, panel_beacon_state_v1};
+    use kaspa_consensus_core::palw_panel_beacon_v1::{PanelBeaconHistoryV1, PanelBeaconStateV1, panel_beacon_state_v1};
     use kaspa_consensus_core::palw_state_v2::{ChainPanelBeaconHistoryV1, palw_panel_v3_final_events_v1};
     let mut w = V3::new();
     let (id, bound_at) = w.run_to_bound(46);
@@ -675,17 +733,19 @@ fn on_todays_chain_no_final_is_panel_independent_so_the_beacon_is_unavailable() 
     };
     let source = PalwPanelV3BeaconSourceV1::Chain;
     let history = ChainPanelBeaconHistoryV1::new(&w.c.s, Hash64::default(), w.c.s.panel_v3(), &source, bound_at + 2);
-    assert!(history.eligible_profiles().is_empty(), "no class is G14-complete in consensus");
+    assert!(history.eligible_profiles(0).is_empty(), "no class is G14-complete in consensus");
     let unavailable = panel_beacon_state_v1(std::slice::from_ref(&challenge), &history, &req, bound_at + 100).unwrap();
-    assert!(matches!(unavailable, WorkBeaconStateV1::Unavailable { have: 0, need: 1 }));
+    assert!(matches!(unavailable, PanelBeaconStateV1::Accumulator(WorkBeaconStateV1::Unavailable { have: 0, need: 1 })));
     let class = w.c.s.claim(&id).unwrap().class_id.as_bytes();
     let forced = PalwPanelV3BeaconSourceV1::Reference {
         events: palw_panel_v3_final_events_v1(&w.c.s, Hash64::default()),
         eligible_profiles: BTreeSet::from([class]),
+        works: Vec::new(),
+        sealed: Vec::new(),
     };
     let history = ChainPanelBeaconHistoryV1::new(&w.c.s, Hash64::default(), w.c.s.panel_v3(), &forced, bound_at + 2);
     let still = panel_beacon_state_v1(std::slice::from_ref(&challenge), &history, &req, bound_at + 100).unwrap();
-    assert!(matches!(still, WorkBeaconStateV1::Unavailable { have: 0, need: 1 }), "{still:?}");
+    assert!(matches!(still, PanelBeaconStateV1::Accumulator(WorkBeaconStateV1::Unavailable { have: 0, need: 1 })), "{still:?}");
 
     // The fold's consequence, with the chain as the source: no proof can exist, the claim ends BeaconUnavailable.
     let mut chain_source = V3::new();
@@ -706,7 +766,11 @@ fn an_open_court_session_holds_the_receipt_clock() {
     let (id, bound_at) = w.run_to_bound(48);
     let (producer, _, _) = floor_producer(&w.c.p);
     let seats = seats_of_panel(&w.c.s, &id);
-    let challenger = genesis_bonds(&w.c.p).iter().map(|(k, _, _)| *k).find(|k| *k != producer && !seats.contains(k)).expect("a bond outside the Panel");
+    let challenger = genesis_bonds(&w.c.p)
+        .iter()
+        .map(|(k, _, _)| *k)
+        .find(|k| *k != producer && !seats.contains(k))
+        .expect("a bond outside the Panel");
     w.step_with(&[court_opened(&w.c.s, id, challenger)]);
     assert!(w.c.s.open_courts_of(&id) > 0, "the court is open");
     // The window (3 DAA, one redraw) is long past at bound + 50; the session holds it.
@@ -729,7 +793,9 @@ fn an_open_court_session_holds_the_receipt_clock() {
 // Observation: what a client reads of a V3 claim (RPC op 220 serves exactly these records)
 // ---------------------------------------------------------------------------------------------------------------------------
 
-use kaspa_consensus_core::palw_permissionless_panel_v1::{panel_v3_claim_status_v1, panel_v3_overview_v1, PANEL_V3_OBSERVATION_VERSION_V1};
+use kaspa_consensus_core::palw_permissionless_panel_v1::{
+    PANEL_V3_OBSERVATION_VERSION_V1, panel_v3_claim_status_v1, panel_v3_overview_v1,
+};
 
 fn status(w: &V3, id: &Hash64) -> kaspa_consensus_core::palw_permissionless_panel_v1::PanelV3ClaimStatusV1 {
     panel_v3_claim_status_v1(&w.c.s, &w.c.sp, id).expect("the state holds the claim")
@@ -746,7 +812,10 @@ fn the_observation_follows_a_claim_from_acceptance_to_release() {
     assert!(!panel_v3_overview_v1(&w.c.s).active, "no engine below the fence");
     let id = w.floor_claim(60);
     let s = status(&w, &id);
-    assert_eq!((s.version, s.rule, s.v2_phase.as_str(), s.engine_phase), (PANEL_V3_OBSERVATION_VERSION_V1, "permissionlessV3", "provisional", Some("pendingSeal")));
+    assert_eq!(
+        (s.version, s.rule, s.v2_phase.as_str(), s.engine_phase),
+        (PANEL_V3_OBSERVATION_VERSION_V1, "permissionlessV3", "provisional", Some("pendingSeal"))
+    );
     assert!(s.seal.is_none() && s.snapshot.is_none() && s.beacon.is_none() && s.assignment.is_none() && s.terminal.is_none());
     assert_eq!(s.acceptance_order, Some(w.record(&id).acceptance_order));
 
@@ -759,14 +828,23 @@ fn the_observation_follows_a_claim_from_acceptance_to_release() {
     assert_eq!(snapshot.root, w.record(&id).snapshot.unwrap().root);
     assert!(snapshot.candidates > 0);
     let beacon = s.beacon.clone().expect("the epoch the seal named");
-    assert_eq!((beacon.epoch, beacon.release_daa, beacon.state, beacon.output), (seal.beacon_epoch, seal.anchor_slot, "collecting", None));
+    assert_eq!(
+        (beacon.epoch, beacon.release_daa, beacon.state, beacon.output),
+        (seal.beacon_epoch, seal.anchor_slot, "collecting", None)
+    );
     assert_eq!(beacon.deadline_daa, seal.anchor_slot + engine_policy().beacon_wait_daa);
 
     let release = seal.anchor_slot;
     let proof = w.proof_for(&id);
     let output = proof.output;
     w.step_at(release + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
-    w.step_at(release + 5, &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    w.step_at(
+        release + 5,
+        &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    );
     let beacon = status(&w, &id).beacon.expect("beacon");
     assert_eq!((beacon.state, beacon.output), ("certified", Some(output)), "the retained certified output is shown");
     w.step_at(release + 10, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
@@ -849,8 +927,19 @@ fn the_observation_json_is_pinned_and_a_legacy_claim_reads_as_lane_a() {
     assert_eq!(
         keys,
         [
-            "acceptanceOrder", "acceptedDaa", "assignment", "beacon", "claimId", "enginePhase", "retries", "rule", "seal", "snapshot",
-            "terminal", "v2Phase", "version"
+            "acceptanceOrder",
+            "acceptedDaa",
+            "assignment",
+            "beacon",
+            "claimId",
+            "enginePhase",
+            "retries",
+            "rule",
+            "seal",
+            "snapshot",
+            "terminal",
+            "v2Phase",
+            "version"
         ]
     );
     assert_eq!(json["version"], 1);
@@ -862,8 +951,21 @@ fn the_observation_json_is_pinned_and_a_legacy_claim_reads_as_lane_a() {
     assert_eq!(
         keys,
         [
-            "active", "bound", "certifiedEpochs", "daa", "entropyReady", "height", "pendingSeal", "policyId", "released", "retainedWorkIds",
-            "sealed", "tip", "trackedClaims", "version", "voided"
+            "active",
+            "bound",
+            "certifiedEpochs",
+            "daa",
+            "entropyReady",
+            "height",
+            "pendingSeal",
+            "policyId",
+            "released",
+            "retainedWorkIds",
+            "sealed",
+            "tip",
+            "trackedClaims",
+            "version",
+            "voided"
         ]
     );
 }
@@ -941,21 +1043,36 @@ fn a_tampered_snapshot_does_not_reload_and_the_engine_refuses_it() {
         (own, reloaded)
     };
     let cases: Vec<(&str, Box<dyn Fn(&mut kaspa_consensus_core::palw_permissionless_panel_v1::ClaimRecordV3)>)> = vec![
-        ("a candidate removed", Box::new(|r| {
-            r.snapshot.as_mut().unwrap().candidates.pop();
-        })),
-        ("a candidate's collateral raised", Box::new(|r| {
-            r.snapshot.as_mut().unwrap().candidates[0].collateral += 1;
-        })),
-        ("the root replaced", Box::new(|r| {
-            r.snapshot.as_mut().unwrap().root = Hash64::from_u64_word(5);
-        })),
-        ("the policy id replaced", Box::new(|r| {
-            r.snapshot.as_mut().unwrap().policy_id = Hash64::from_u64_word(6);
-        })),
-        ("the excluded producer replaced", Box::new(|r| {
-            r.snapshot.as_mut().unwrap().excluded_operator = Hash64::from_u64_word(7);
-        })),
+        (
+            "a candidate removed",
+            Box::new(|r| {
+                r.snapshot.as_mut().unwrap().candidates.pop();
+            }),
+        ),
+        (
+            "a candidate's collateral raised",
+            Box::new(|r| {
+                r.snapshot.as_mut().unwrap().candidates[0].collateral += 1;
+            }),
+        ),
+        (
+            "the root replaced",
+            Box::new(|r| {
+                r.snapshot.as_mut().unwrap().root = Hash64::from_u64_word(5);
+            }),
+        ),
+        (
+            "the policy id replaced",
+            Box::new(|r| {
+                r.snapshot.as_mut().unwrap().policy_id = Hash64::from_u64_word(6);
+            }),
+        ),
+        (
+            "the excluded producer replaced",
+            Box::new(|r| {
+                r.snapshot.as_mut().unwrap().excluded_operator = Hash64::from_u64_word(7);
+            }),
+        ),
     ];
     for (name, edit) in &cases {
         let (own, reloaded) = tamper(edit.as_ref());

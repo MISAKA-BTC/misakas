@@ -105,7 +105,12 @@ impl V3 {
             capability_proof: false,
             floor_class: floor,
             approved_beacons: vec![challenge_policy()],
-            beacon_source: PalwPanelV3BeaconSourceV1::Reference { events: Vec::new(), eligible_profiles: BTreeSet::new() },
+            beacon_source: PalwPanelV3BeaconSourceV1::Reference {
+                events: Vec::new(),
+                eligible_profiles: BTreeSet::new(),
+                works: Vec::new(),
+                sealed: Vec::new(),
+            },
         };
         Self { c, inputs }
     }
@@ -178,8 +183,12 @@ impl V3 {
         let mirror = *self.c.sp.panel_v3().expect("the mirror");
         let profile = [0x77u8; 64];
         let event = independent_event(profile, 0x42, release + 1, release + 2);
-        self.inputs.beacon_source =
-            PalwPanelV3BeaconSourceV1::Reference { events: vec![event.clone()], eligible_profiles: BTreeSet::from([profile]) };
+        self.inputs.beacon_source = PalwPanelV3BeaconSourceV1::Reference {
+            events: vec![event.clone()],
+            eligible_profiles: BTreeSet::from([profile]),
+            works: Vec::new(),
+            sealed: Vec::new(),
+        };
         let request = BeaconRequestV1 {
             network: mirror.network,
             ruleset: mirror.ruleset,
