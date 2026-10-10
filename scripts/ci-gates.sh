@@ -43,11 +43,6 @@ cd "$REPO_ROOT" || exit 125
 LOG_DIR="${CI_GATES_LOG_DIR:-$REPO_ROOT/target/ci-gates}"
 mkdir -p "$LOG_DIR" || exit 125
 
-# The PALW fixture tag family is model-free proof-of-work, honoured on devnet only
-# (`kaspa_pow::palw::fixture_permitted_on`). ci.yaml sets it for the same reason: CI has no 1.2 GB
-# LLM to replay. Exported once here so every gate below sees exactly what the CI job sees.
-export MISAKA_PALW_POW_FIXTURE="${MISAKA_PALW_POW_FIXTURE:-1}"
-
 # ---------------------------------------------------------------------------------------------
 # Gate table.  id | group | ci job it mirrors | one-line description
 #

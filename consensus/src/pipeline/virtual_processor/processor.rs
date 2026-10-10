@@ -832,11 +832,6 @@ pub struct VirtualStateProcessor {
     /// [`Self::palw_chunk_cap_charge_at`], which is the ONE place this is resolved.
     pub(super) palw_chunk_cap_charge: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
-    /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
-    /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
-    /// and validated identically. Cloned from `Params::palw_credit` at construction.
-    pub(super) palw_credit_params: Option<kaspa_consensus_core::palw_credit::PalwCreditParamsV1>,
-
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4). The lazy
     // chain-context EVM step + canonical head pointers. Inert until
     // `evm_activation_daa_score` is finite (`u64::MAX` on every current net).
@@ -1332,7 +1327,6 @@ impl VirtualStateProcessor {
             palw_slashing_evidence_utxo_genuine: params.palw_slashing_evidence_utxo_genuine,
             palw_lane_accept_parents_first: params.palw_lane_accept_parents_first_fence(),
             finality_depth: params.blockrate.finality_depth,
-            palw_credit_params: params.palw_credit.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),

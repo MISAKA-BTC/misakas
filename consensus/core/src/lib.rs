@@ -238,11 +238,7 @@ pub mod palw_context_ladder;
 /// shipped constant; it relates two numbers that had never appeared in one expression.
 pub mod palw_court_deadline;
 pub mod palw_court_v2;
-/// MISAKA PALW class registration (B12): the object every "pinned at registration" sentence
-/// across ADR-0026…0033 meant — measured identities, the derived credited ceiling, windows,
-/// commitment form and adjudication depth, with the validation that makes an incoherent
-/// registration unrepresentable. Land-stage, consensus-inert (ADR-0033's gate is its first
-/// consumer).
+/// Reserved encoding of the retired V1 credit parameters; no executable credit gate.
 pub mod palw_credit;
 pub mod palw_credit_batch;
 pub mod palw_decode_constraint_v1;

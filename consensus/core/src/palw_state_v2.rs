@@ -24677,7 +24677,7 @@ impl<'a> TransitionBuilder<'a> {
 
     /// **A registered class's row, opened from its carriage** (ADR-0135 Decisions 2 and 3): the
     /// work is read off the graph, the profile derived from it, and the class starts PREFETCHING
-    /// (or REGISTERED, never admitting, where the graph derives no work — the VM boundary).
+    /// (or REGISTERED, never admitting, where the graph derives no supported kernel work).
     /// ADR-0135 manifest V2: the registrant's byte count lands on the class's registry row. The
     /// signature is the acceptance layer's (like a readiness proof's); here the rule is who may
     /// speak for the class and what the row does with the number.
@@ -27875,7 +27875,7 @@ impl<'a> TransitionBuilder<'a> {
     /// and the charge for being WRONG is intact and symmetric — `slash_dissenting_seats` takes the
     /// `reserved` from a `Withheld` seat when the quorum licenses, and from a `Valid` seat when the
     /// quorum defaults the producer. What is missing is the other side of the ledger: **nothing in
-    /// this transition ever PAYS a `PalwPanelSeatV2`.** ADR-0033's `PalwPaidAttesterV1` pays the
+    /// this transition ever PAYS a `PalwPanelSeatV2`.** ADR-0033's retired V1 attester accounting pays the
     /// V1 credit lane's attesters, `palw_credit` is `None` on every shipped preset, and the block's
     /// escrowed carve is released to the worker, not to the panel. So answering carries a downside
     /// and no upside, and the seat that maximises its own outcome files nothing — after which the

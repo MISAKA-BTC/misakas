@@ -14,7 +14,8 @@
 
 use super::message::{GetPalwModelRegistryResponse, RpcPalwClassBlocking, RpcPalwModelLifecycle};
 
-/// The artifact's graph (or what was committed about it) is the problem: fixed by converting again, not by waiting.
+/// The artifact's graph or supported semantics are the problem: a new conversion/class is needed
+/// after any required kernel extension is activated.
 pub const STAGE_CONVERT: &str = "convert";
 /// The network has not admitted the class.
 pub const STAGE_REGISTER: &str = "register";
@@ -114,24 +115,28 @@ pub fn palw_registry_blocking(r: &GetPalwModelRegistryResponse, class: &RpcPalwM
     }
     match name {
         "Registered" => {
-            let (code, what) = if !class.ops_supported {
+            const CONVERT_AGAIN: &str = "a registered class cannot be repaired in place: convert the model again with a lowering the \
+                                        supported kernels express and register a new class";
+            let (code, what, next) = if !class.ops_supported {
                 (
-                    "VM_BOUNDARY",
-                    "the graph names an operation the canonical VM does not define at this runtime version: a VM upgrade, not a registration".to_string(),
+                    "KERNEL_EXTENSION_REQUIRED",
+                    "the graph names an operation unsupported by the tensor kernels at this runtime version".to_string(),
+                    "wait for a reviewed kernel extension to be implemented and activated, then lower the model and register a new class",
                 )
             } else if class.artifact_bytes == 0 {
-                ("NO_ARTIFACT", "the manifest commits no artifact bytes: there is nothing to prefetch or verify".to_string())
+                (
+                    "NO_ARTIFACT",
+                    "the manifest commits no artifact bytes: there is nothing to prefetch or verify".to_string(),
+                    CONVERT_AGAIN,
+                )
             } else {
-                ("NO_WORK", "no work is derived from the graph: nothing to verify, so the class never admits a claim".to_string())
+                (
+                    "NO_WORK",
+                    "no work is derived from the graph: nothing to verify, so the class never admits a claim".to_string(),
+                    CONVERT_AGAIN,
+                )
             };
-            Some(make(
-                class,
-                STAGE_CONVERT,
-                code,
-                what,
-                None,
-                "a registered class cannot be repaired in place: convert the model again with a lowering the VM expresses and register a new class",
-            ))
+            Some(make(class, STAGE_CONVERT, code, what, None, next))
         }
         "Candidate" => Some(make(
             class,
@@ -326,7 +331,8 @@ mod tests {
     fn each_state_names_its_stage_and_what_is_missing() {
         // Registered: the graph is the problem — convert.
         let b = block("Registered", |c| c.ops_supported = false).unwrap();
-        assert_eq!((b.stage.as_str(), b.code.as_str(), b.has_count), ("convert", "VM_BOUNDARY", false));
+        assert_eq!((b.stage.as_str(), b.code.as_str(), b.has_count), ("convert", "KERNEL_EXTENSION_REQUIRED", false));
+        assert!(b.next.contains("implemented and activated"), "{}", b.next);
         assert_eq!(block("Registered", |c| c.artifact_bytes = 0).unwrap().code, "NO_ARTIFACT");
         assert_eq!(block("Registered", |_| {}).unwrap().code, "NO_WORK");
         // Candidate: the network has not admitted it — register; the jury's quorum is a strict majority of a panel.

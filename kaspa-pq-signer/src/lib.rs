@@ -25,8 +25,8 @@ use kaspa_consensus_core::{
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, AUDIT_CHECKPOINT_MLDSA87_CONTEXT, HostId, PalwAttemptSignRecordV1, SignedEpochCheckOutcome,
         SignedEpochRecord, SignerAuditCheckpoint, SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata, SignerOutcome,
-        SignerPolicy, SignerRequest, SignerResponse, SigningPurpose, TAKEOVER_TOKEN_CONTEXT, UNBOND_REQUEST_CONTEXT,
-        compute_signer_audit_chain_entry, signature_fingerprint,
+        SignerPolicy, SignerRequest, SignerResponse, SigningPurpose, UNBOND_REQUEST_CONTEXT, compute_signer_audit_chain_entry,
+        signature_fingerprint,
     },
     palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
     palw_freeprompt_v3::{PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_MLDSA87_SPEND_CONTEXT},
@@ -260,7 +260,7 @@ pub struct SignerState {
     appends_since_checkpoint: u64,
     server_identity: HostId,
     /// Optional policy hook: purposes this signer refuses to sign (e.g. a validator-only signer can
-    /// deny `Transaction` so it only ever produces attestation/unbond/takeover signatures). Empty by
+    /// deny `Transaction` so it only ever produces attestation/unbond signatures). Empty by
     /// default — no behavior change unless the operator opts in.
     denied_purposes: Vec<SigningPurpose>,
     /// RFC-0009 stage C: whether this signer offers `SigningPurpose::PalwReceiptAuthV4` — the executor's V4 redemption authorization,
@@ -514,7 +514,9 @@ impl SignerState {
         let required_ctx: Option<&[u8]> = match req.purpose {
             SigningPurpose::Attestation => Some(ATTESTATION_MLDSA87_CONTEXT),
             SigningPurpose::Unbond => Some(UNBOND_REQUEST_CONTEXT),
-            SigningPurpose::TakeoverToken => Some(TAKEOVER_TOKEN_CONTEXT),
+            SigningPurpose::TakeoverToken => {
+                return Err(SignerError::PolicyViolation("takeover-token signing was removed (ADR-0014)".into()));
+            }
             // The PALW attempt context is reserved exactly like the overlay three: a purpose that
             // could borrow it would mint block-production signatures past the journal below.
             SigningPurpose::PalwAttemptV2 => Some(PALW_ATTEMPT_V2_MLDSA87_CONTEXT),
@@ -620,8 +622,9 @@ impl SignerState {
         let key = self.keys.get(&req.validator_id).expect("checked above");
         let digest: Vec<u8> = match &req.message_digest {
             SignerMessageDigest::Transaction(h) => h.as_bytes().to_vec(),
-            SignerMessageDigest::Attestation(h) | SignerMessageDigest::Unbond(h) | SignerMessageDigest::TakeoverToken(h) => {
-                h.as_bytes().to_vec()
+            SignerMessageDigest::Attestation(h) | SignerMessageDigest::Unbond(h) => h.as_bytes().to_vec(),
+            SignerMessageDigest::TakeoverToken(_) => {
+                return Err(SignerError::PolicyViolation("takeover-token signing was removed (ADR-0014)".into()));
             }
             SignerMessageDigest::PalwAttemptV2(h)
             | SignerMessageDigest::PalwFpCommitmentV3(h)
@@ -973,6 +976,24 @@ mod tests {
             context: ATTESTATION_MLDSA87_CONTEXT.to_vec(),
             message_digest: SignerMessageDigest::Attestation(msg),
             metadata: SignerMetadata::Attestation { epoch, target_hash: target, target_daa_score: daa },
+        }
+    }
+
+    #[test]
+    fn retired_takeover_purpose_is_refused_under_every_policy() {
+        for (n, policy) in [SignerPolicy::Permissive, SignerPolicy::AuditOnly, SignerPolicy::Strict].into_iter().enumerate() {
+            let k = key(0x22);
+            let vid = k.validator_id;
+            let mut s = SignerState::new(vec![k], policy, tmp_dir(&format!("retired-takeover-{n}")), Hash::default()).unwrap();
+            let req = SignerRequest {
+                request_id: 1,
+                validator_id: vid,
+                purpose: SigningPurpose::TakeoverToken,
+                context: kaspa_consensus_core::dns_finality::TAKEOVER_TOKEN_CONTEXT.to_vec(),
+                message_digest: SignerMessageDigest::TakeoverToken(Hash::default()),
+                metadata: SignerMetadata::None,
+            };
+            assert!(matches!(s.handle_request(&req, Hash::default(), 1000).result, Err(SignerError::PolicyViolation(_))));
         }
     }
 

@@ -1,6 +1,6 @@
 //! **ADR-0172 — model extensibility through versioned kernels, not a universal VM.**
 //!
-//! This crate is the reference implementation of the route RFC-0005 §§K.0–K.8, RFC-0011 §§15–16 and
+//! This crate is the reference implementation of the route `docs/design/palw/versioned-kernels.md` §§K.0–K.8, RFC-0011 §§15–16 and
 //! RFC-0004 §0 specify, for the semantics MISAKA already has: PALW-TIR v1 programs and RFC-0003 pipelines of TIR v2 programs.
 //! Three descriptors of one kernel line: K2-TIR-v1 (every TIR v1 family up to an `i64` accumulator), K2-TIR-v2 (the
 //! multi-modulus dense relation for `i128` accumulators) and K2-TIR-v3 (the media-pipeline family). The completion matrix is
@@ -11,7 +11,7 @@
 //!   post-commit public challenges (small checks) → Pass  |  Fault (a public fault proof)  |  Unavailable
 //! ```
 //!
-//! * [`descriptor`] — `KernelDescriptorV1` (RFC-0005 §K.2), the class binding `ModelKernelBindingV1`, and
+//! * [`descriptor`] — `KernelDescriptorV1` (Kernel design §K.2), the class binding `ModelKernelBindingV1`, and
 //!   the binary's schedule of descriptors (`Proposed → Implemented → LockedIn → Active → Deprecated`).
 //!   Registration selects only an `Active` descriptor; a code hash never authorizes anything.
 //! * [`family`] — the reusable constraint families (§K.3), never one kernel per model brand.
@@ -40,7 +40,7 @@
 //! * [`improve`] — RFC-0004 §0 on this route: the epoch's pinned kernel policy, candidate admission under a pinned kernel of the
 //!   parent's family, assurance-labelled evaluation results, and §7.5's integer promotion rule kept apart from the computational error.
 //! * [`assurance`] — RFC-0004 §0's labels for evaluation evidence and the promotion error budget.
-//! * [`pipeline`] — RFC-0005 §K.3's media-pipeline family (K2-TIR-v3): each pipeline stage a claim over its v1 view with
+//! * [`pipeline`] — the Kernel design §K.3's media-pipeline family (K2-TIR-v3): each pipeline stage a claim over its v1 view with
 //!   committed inputs, every edge (job values, canonical images, earlier stages' rows and finals, `R`) recomputed exactly, an
 //!   edge court, pipeline plans and evidence.
 //! * [`public`] — the 2026-10-07 amendments' measure: a fresh non-seat verifier built from a claim's published **bytes**, fault

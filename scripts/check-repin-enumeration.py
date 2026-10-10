@@ -91,7 +91,6 @@ FROZEN = [
     "consensus/core/src/palw_bisect.rs",
     "consensus/core/src/palw_carriage.rs",
     "consensus/core/src/palw_context_ladder.rs",
-    "consensus/core/src/palw_credit.rs",
     "consensus/core/src/palw_credit_batch.rs",
     "consensus/core/src/palw_decode_select_v2.rs",
     "consensus/core/src/palw_derived_v1.rs",
@@ -141,10 +140,6 @@ FROZEN = [
     # The previous published tree's transformer ids — what testnet-11's derivations name. History,
     # not a pin: a re-pin of the current tree (transformer_id_pin.rs, MOVES) never touches it.
     "misaka-palw-derive/tests/transformer_id_prior_tree.rs",
-    "misaka-palw-pow-driver/tests/palw_agent_concurrency.rs",
-    "misaka-palw-pow-driver/tests/palw_agent_equivalence.rs",
-    "misaka-palw-pow-driver/tests/palw_agent_fallback.rs",
-    "misaka-palw-pow-driver/tests/palw_agent_recovery.rs",
     "misaka-palw-reexecutor/src/lib.rs",
     "misaka-palw-shadow/src/main.rs",
     "misaka-palw/src/agent_client.rs",

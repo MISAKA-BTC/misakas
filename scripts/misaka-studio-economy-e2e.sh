@@ -46,7 +46,7 @@
 #                all sixteen leaves of this class serialize to 184,037 bytes and no carrier takes it)
 #   RAM_SCALE [0.3]  MIN_FREE_GB [4] (the run stops itself below it)  WORK_DIR  P2P_BASE  RPC_BASE
 #   PROMPT, MAX_TOKENS [16]  STEP_WAIT_DAA [400]  STALL_WAIT [1200]
-#   GATEWAY_PUBLIC_BUDGET_PERMILLE [1000] — the share of bond 0's room the gateway's jobs may reserve
+#   GATEWAY_CLAIM_BUDGET_PERMILLE [1000] — the share of bond 0's room the gateway's jobs may reserve
 #                per 24 h. The gateway's default (200) is for a gateway strangers use; here the
 #                operator IS the person chatting, as on the Studio pool (contrib/minerpool/run-fp.sh
 #                runs 1000). Past the bundle one claim reserves the compute era's exposure, and 200‰
@@ -79,7 +79,7 @@ P2P_BASE="${P2P_BASE:-17010}"
 RPC_BASE="${RPC_BASE:-18310}"
 GATEWAY_PORT="${GATEWAY_PORT:-18895}"
 STUDIO_PORT="${STUDIO_PORT:-18896}"
-GATEWAY_PUBLIC_BUDGET_PERMILLE="${GATEWAY_PUBLIC_BUDGET_PERMILLE:-1000}"
+GATEWAY_CLAIM_BUDGET_PERMILLE="${GATEWAY_CLAIM_BUDGET_PERMILLE:-1000}"
 PROMPT="${PROMPT:-In one sentence: what does a hash function do?}"
 MAX_TOKENS="${MAX_TOKENS:-16}"
 STEP_WAIT_DAA="${STEP_WAIT_DAA:-400}"
@@ -161,7 +161,7 @@ start_node() {
   local i="$1" producer="${2:-1}" addr=""
   [ "$producer" = 1 ] && addr="$(cat "$WORK_DIR/keys/bond-$i.address")"
   local args=(); while IFS= read -r a; do args+=("$a"); done < <(node_args "$i" "$addr" "$producer")
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
+  "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
   echo $!
 }
 alive() { for p in "${pids[@]}"; do [ -z "$p" ] || kill -0 "$p" 2>/dev/null || die "a process exited (see $WORK_DIR/*.log)"; done; }
@@ -331,7 +331,7 @@ MISAKA_PALW_ARTIFACT="$MISAKA_PALW_ARTIFACT" MISAKA_PALW_TOKENIZER="$MISAKA_PALW
 MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1 MISAKA_PALW_NETWORK_ID="devnet" \
 "$GATEWAY_BIN" --listen "127.0.0.1:$GATEWAY_PORT" --worker "$WORKER_BIN" --outbox "$WORK_DIR/outbox" \
   --identity "$WORK_DIR/identity.json" --rpc "127.0.0.1:$RPC_BASE" \
-  --public-job-budget-permille "$GATEWAY_PUBLIC_BUDGET_PERMILLE" >"$WORK_DIR/gateway.log" 2>&1 &
+  --claim-budget-permille "$GATEWAY_CLAIM_BUDGET_PERMILLE" >"$WORK_DIR/gateway.log" 2>&1 &
 pids+=($!)
 wait_for "curl -fsS 'http://127.0.0.1:$GATEWAY_PORT/health' -o '$WORK_DIR/gateway-health.json' 2>/dev/null" "the gateway's /health"
 # **The rail as a watcher, funded from what bond 0 has EARNED.** Its genesis fee float is node-0's

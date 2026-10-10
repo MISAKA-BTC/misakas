@@ -17,6 +17,8 @@ removed that too: the workers behind this gateway are now the FAMILY workers
 question left is no longer "can this reach a chain" but "does the chain certify THIS class", and
 that is a thing `/health` answers by name (Decision 3, below).
 
+**Local-only:** the gateway accepts only loopback binds (ADR-0144). Public bind opt-in and public-job reward routing have been removed.
+
 ## What this is
 
 ```
@@ -118,7 +120,7 @@ worker is not"). `palw-class ledger --network testnet-11` prints it beside the m
 | `--class-leaves <n>` | the class's `pwu_per_inference`, for the quanta display. Optional with `--rpc`: the chain's own row is read (`class_canonical_leaves` in `/health`) |
 | `--bond-exposure-room-sompi <n>` | SA-1: the operator's own ceiling on the loss. `0` = read it from the chain |
 | `--claim-exposure-sompi <n>` | what one claim reserves. `0` = read it from the chain |
-| `--public-job-budget-permille <n>` | the share of the room strangers' jobs may spend per day (default 200). A gateway whose only user is its operator — MISAKA Studio's own, the Studio pool's — runs 1000. Past the ADR-0145 bundle one claim reserves the compute era's exposure (ADR-0148), and 200‰ of a small bond's room can be smaller than ONE claim; the gateway then answers and says "no public job can commit at this setting" rather than "spent" |
+| `--claim-budget-permille <n>` | fraction of the operator’s bond exposure room local claims may reserve per day (default 200; max 1000) |
 | `--answer-never-commit` | SA-1(c): answer every prompt, commit none |
 | `--privacy public-da\|panel-da` | ADR-0077 D16: `panel-da` files commitments that carry no prompt on chain — the ids reach only the drawn seats over the authenticated pull. Refused per request where the chain has not armed `palw_panel_da` (`panel_da_armed` in the facts), before the inference. The gateway prints the disclosure sentence at boot: private from the public, not from the panel; a dispute publishes it |
 | `--per-source-jobs-per-window <n>` | SA-8's secondary per-IP quota |
@@ -161,7 +163,7 @@ below. The gateway holds NO key (ADR-0079 Decision 4) and therefore does neither
 
 **The unsigned commitment is written only when the job may become a claim.** ADR-0077 Decision 3
 and SA-1/SA-7: an unregistered or uncertified class, an unpriced lane, an inactive bond, no
-exposure room, the daily public-job budget, or `--answer-never-commit` each leave the answer intact
+exposure room, the daily local claim budget, or `--answer-never-commit` each leave the answer intact
 and the commitment unwritten, with `not_committed_because` naming which. A derivation
 (`"derive": …`) is refused the same way and for a harder reason: consensus rejects a
 `DerivedArtifactV1` whose claim never entered the state (`DerivedClaimMissing`), so deriving for an
