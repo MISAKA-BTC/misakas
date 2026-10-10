@@ -272,6 +272,23 @@ It applies before any profile becomes ActiveRewardable and before any reward, co
 - **Verdicts are PASS / FAIL / UNKNOWN only.** An unknown G, p or L is never PASS.
 - The 128-bit checker soundness `ε_check` and the real conviction probability `p_convict` are never conflated.
 
+**PESG-B result (lane B, merged 96b2060de; `docs/design/palw/pesg-b-detection-bounds.md`).** Exhaustive single-fault search
+on a real 5-position claim (3,570 placements per mode, isolated and self-consistent), run through the real verifiers and courts.
+
+| Profile | `p_check` lower bound | Verdict |
+|---|---|---|
+| v1 / v2 / v3 pipelines, whole-claim read with a private salt | 226 / 150 bits | PASS only if the whole-claim read fits `P_run` (MEAS) |
+| v5, retrieval, complete-check bootstrap; v4 route B on every claim | binding only | PASS (route B costs one re-execution per claim) |
+| v4 route A (sample `m` of `P` positions) | `m/P` (2^-10 at 9B-8k, m=8) | FAIL |
+| Sampled conformance; legacy V2 under full collusion | ~0 / 0 | FAIL |
+| v4 route B on a `q`-sample of claims | `q·(1−ε_src)` at best; the draw is not wired | UNKNOWN |
+
+New blocking finding **F-B1**: generation length is bound by no rule (`job.rs` accepts 1..`max_new_tokens`, reward is per claim),
+so a 1-token claim earns the full reward with no court able to convict it. It is a T1 FAIL for v1–v4 and pipelines until the job
+fixes the length or pay is per verified position. Also open: N1 (conformance logits and commit digests have no court),
+F-B3 (grinding uses the exact escape `1−(1−ε_sel)^G`), F-B4 (interim Panel seeds can be ground from the claim id),
+F-B5 (legacy samplers are slightly biased) and F-B6 (sampled conformance has no power against sparse faults).
+
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
 Waves, because the Mac (32 GiB, ~40 GB free disk) cannot build a dozen targets at once, and builds are batched (user rule): each lane
