@@ -4202,6 +4202,8 @@ impl Params {
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;
         self.validate_palw_permissionless_panel_v1()?;
+        // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
+        self.validate_palw_lifecycle_kind_fences_v1()?;
         // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_inherit_v1()?;
         // **palw_fp_prefix_state** (`crate::palw_fp_prefix_v1`).

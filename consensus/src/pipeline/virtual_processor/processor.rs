@@ -715,6 +715,13 @@ pub struct VirtualStateProcessor {
     /// **RFC-0009: `Params::palw_receipt_spend_v4`**, resolved off a `ConsensusV2` ruleset. `None` on every shipped preset — a `PFS4` header is
     /// then refused by name and no coinbase is ever split.
     pub(super) palw_receipt_spend_v4: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **A-2 uniformity: the header carriage forms' owning fences** (`Params::palw_header_form_fences_v1`), for the UTXO validator's
+    /// block admission: a form added after the live build is read as that build reads it below its fence.
+    pub(super) palw_header_forms: kaspa_consensus_core::pow_layer0::PalwHeaderFormFencesV1,
+    /// **A-2 uniformity: the lifecycle kinds' owning fences** (`Params::palw_lifecycle_kind_fences_v1`). A kind whose fence is not in
+    /// force at a block is the live build's undecodable payload there: the objects-of-block walk drops it before the acceptance walk,
+    /// a chunk group assembling to it is undecodable to the walk, and the UTXO walk burns no rent for it.
+    pub(super) palw_lifecycle_kind_fences: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleKindFencesV1,
     /// ADR-0152 v2 F2: `Params::palw_offence_attribution` (`Some(0)` on testnet-12 alone), resolved
     /// once in [`Self::palw_offence_attribution_at`]; the `ObjectiveOffence` gate and the fold's
     /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
@@ -1307,6 +1314,8 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
             palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),
+            palw_header_forms: params.palw_header_form_fences_v1(),
+            palw_lifecycle_kind_fences: params.palw_lifecycle_kind_fences_v1(),
             palw_offence_attribution: params.palw_offence_attribution_fence(),
             palw_activation_pool: params.palw_activation_pool_fence(),
             palw_rcore_plus: params.palw_rcore_plus_fence(),
@@ -8220,7 +8229,7 @@ impl VirtualStateProcessor {
             // **G14 lane D: a chunk group that carries a kernel route object is not a certification.** The grading cap and its work
             // budget are the family court's; the kernel route's own bounds are its fold's (and the carrier's fee).
             let completes_a_group = completes_a_group
-                && !Self::palw_kernel_chunk_inner(&folded, &object).is_some_and(|inner| {
+                && !self.palw_kernel_chunk_inner(&folded, &object, point.daa_score).is_some_and(|inner| {
                     kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(&inner)
                         || kaspa_consensus_core::palw_state_v2::palw_object_is_onboarding_v1(&inner)
                         || kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(&inner)
@@ -13041,8 +13050,9 @@ impl VirtualStateProcessor {
                 // **G14 lane D: a chunk that COMPLETES a group carrying a kernel route object** is where that object's signature is
                 // checked (the fold trusts the acceptance layer for it, as it does for every directly carried one): the assembled
                 // inner is judged exactly as the direct `KernelRouteV1` arm judges it, and an inner the fence or the signature
-                // refuses drops the completing chunk. Every other chunk is the transition's.
-                Obj::ObjectChunk { .. } => match Self::palw_kernel_chunk_inner(state, object) {
+                // refuses drops the completing chunk. Every other chunk is the transition's — and so is one whose inner kind's owning
+                // fence is not in force here, which the live build cannot decode (A2U: `palw_kernel_chunk_inner` answers `None`).
+                Obj::ObjectChunk { .. } => match self.palw_kernel_chunk_inner(state, object, point.daa_score) {
                     Some(Obj::KernelRouteV1 { bytes, signer, signature }) => {
                         self.palw_kernel_route_object_is_signed(state, point.daa_score, &bytes, &signer, &signature)?;
                     }
@@ -13598,7 +13608,22 @@ impl VirtualStateProcessor {
     /// this chunk), the assembled bytes hashing to the declared group id, and a borsh decode that consumes them. `None` for a chunk
     /// that completes nothing, for a group the transition would refuse on its face, and for bytes no object decodes from — the
     /// transition refuses those itself. Bounded by `PALW_OBJECT_CHUNK_MAX_BYTES × PALW_OBJECT_CHUNK_MAX_COUNT`.
-    fn palw_kernel_chunk_inner(
+    ///
+    /// **A-2 uniformity: `None` too for an inner kind whose owning fence is not in force at `daa_score`** — the live build cannot decode
+    /// those bytes, so to it the chunk completes a group of undecodable bytes: it is charged as such (the certification cap's
+    /// structural count, dormant D14) and the transition refuses it as `ChunkedObjectUndecodable`, the block standing.
+    pub(super) fn palw_kernel_chunk_inner(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        Self::palw_chunk_inner_any_kind(state, object)
+            .filter(|inner| self.palw_lifecycle_kind_fences.kind_in_force_at(inner, daa_score))
+    }
+
+    /// [`Self::palw_kernel_chunk_inner`] without the A-2 reading: the decoded inner whatever its kind.
+    fn palw_chunk_inner_any_kind(
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
@@ -13655,23 +13680,47 @@ impl VirtualStateProcessor {
             return Err("a kernel route object carries a signature its bond's key does not verify".to_string());
         }
         let object = misaka_palw_kernel::route::KernelRouteObjectV1::decode(bytes).map_err(|refusal| format!("{refusal}"))?;
-        // **RFC-0015: a registration under a non-legacy mode (tags 13 / 14) is dropped unless `palw_panel_free_v1` is in force.** The
-        // network declares the OPV policy or it does not; the ledger refuses the rest (admission, economics, carriers).
-        if matches!(
-            object,
-            misaka_palw_kernel::route::KernelRouteObjectV1::RegisterClassV2 { .. }
-                | misaka_palw_kernel::route::KernelRouteObjectV1::RegisterPipelineClassV2 { .. }
-        ) && !self.palw_kernel_opv_at(daa_score)
+        // **A-2 uniformity one level down (`PALW_KERNEL_ROUTE_INNER_KINDS_V1`): an inner kind owned by a fence beyond tag 110's is dropped
+        // unless that fence is in force** — below it a build without the kind refuses it at the kernel's decode, the block standing.
+        // RFC-0015's registrations under a verification mode (inner 13 / 14) are `palw_panel_free_v1`'s: the network declares the OPV
+        // policy or it does not; the ledger refuses the rest (admission, economics, carriers).
+        if let Some(fence) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_kernel_route_inner_fence_v1(&object)
+            && !self.palw_kernel_inner_fence_at(fence, daa_score)
         {
-            return Err("a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)".to_string());
-        }
-        // **RFC-0004 Part II: a typed-root object (inner kind 19) is dropped unless `palw_typed_roots_v1` is in force** (the route's
-        // schedule refuses it too: the second lock).
-        let typed = matches!(object, misaka_palw_kernel::route::KernelRouteObjectV1::Spec { .. });
-        if typed && !self.palw_kernel_typed_roots_at(daa_score) {
-            return Err("a typed-root object is refused: palw_typed_roots_v1 is not in force at this block (RFC-0004 Part II)".into());
+            return Err(match fence {
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => {
+                    "a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)"
+                        .to_string()
+                }
+                // RFC-0004 Part II: a typed-root object (inner kind 19) or a typed-root proof (`ProsecutionV1::Spec` inside a filing) is
+                // dropped unless `palw_typed_roots_v1` is in force (the route's schedule refuses it too: the second lock).
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
+                    "a typed-root object is refused: palw_typed_roots_v1 is not in force at this block (RFC-0004 Part II)".to_string()
+                }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
+                    "a salted typed-root claim is refused: palw_panel_free_v1 and palw_typed_roots_v1 are not both in force at this block"
+                        .to_string()
+                }
+            });
         }
         Ok(())
+    }
+
+    /// Is a kernel-route inner kind's own fence (`PalwKernelInnerFenceV1`) in force at `daa_score`?
+    fn palw_kernel_inner_fence_at(
+        &self,
+        fence: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1,
+        daa_score: u64,
+    ) -> bool {
+        match fence {
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => self.palw_kernel_opv_at(daa_score),
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
+                self.palw_kernel_typed_roots_at(daa_score)
+            }
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
+                self.palw_kernel_opv_at(daa_score) && self.palw_kernel_typed_roots_at(daa_score)
+            }
+        }
     }
 
     fn verify_mldsa87_with_context_bool(key: &[u8], message: &[u8], sig: &[u8], context: &[u8]) -> bool {
@@ -17266,6 +17315,21 @@ impl VirtualStateProcessor {
         for (carrier, reason) in &lifecycle.skipped {
             info!("[palw-lifecycle] carrier {carrier} produced no object: {reason}");
         }
+        // **A-2 uniformity: a kind whose owning fence is not in force at this block is the live build's undecodable payload here** —
+        // that build's walk skips its carrier, so this one drops it HERE, before the acceptance walk reads it: no slot, rent, budget,
+        // cap or refund is asked of it, nothing is folded, and the acceptance walk sees exactly the live build's object list
+        // (`PalwLifecycleKindFencesV1`, the A2U review).
+        let (lifecycle_objects, unread): (Vec<_>, Vec<_>) = lifecycle
+            .objects
+            .into_iter()
+            .partition(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, block_daa));
+        for carried in &unread {
+            info!(
+                "[palw-lifecycle] carrier {} produced no object: payload does not decode (A-2: its kind's owning fence is not in force \
+                 at this block, so it is read as the live build reads it)",
+                carried.carrier
+            );
+        }
         // The derived bindings go FIRST: a claim bound by this block may then be licensed by an
         // object the same block carries, which is the order a chain that is catching up needs.
         //
@@ -17325,7 +17389,7 @@ impl VirtualStateProcessor {
                 refund: None,
                 unrefundable: None,
             }))
-            .chain(lifecycle.objects.into_iter().map(|carried| {
+            .chain(lifecycle_objects.into_iter().map(|carried| {
                 let (refund, unrefundable) = refund_of(&carried);
                 PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), refund, unrefundable, object: carried.object }
             }))
