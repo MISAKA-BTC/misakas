@@ -126,14 +126,27 @@ impl LayoutV3 {
 }
 
 pub(crate) fn leaf_hash_v3(dtype: DType, axis: u8, line: u64, tile: u64, values: &[i128]) -> Digest {
+    leaf_hash_values_v3(dtype, axis, line, tile, values.len() as u64, values.iter().copied())
+}
+
+/// The unchanged v3 preimage, streamed through a fixed 4 KiB encoding buffer. BLAKE2 update boundaries have no wire meaning.
+/// A producer can hash contiguous rows or strided columns directly, without allocating index/value vectors for every leaf.
+fn leaf_hash_values_v3(dtype: DType, axis: u8, line: u64, tile: u64, count: u64, values: impl Iterator<Item = i128>) -> Digest {
     let mut s = keyed(TENSOR_LEAF_DOMAIN_V3);
-    s.update(&[dtype.tag(), axis])
-        .update(&line.to_le_bytes())
-        .update(&tile.to_le_bytes())
-        .update(&(values.len() as u64).to_le_bytes());
-    let w = dtype.width();
+    s.update(&[dtype.tag(), axis]).update(&line.to_le_bytes()).update(&tile.to_le_bytes()).update(&count.to_le_bytes());
+    let width = dtype.width();
+    let mut encoded = [0u8; 4096];
+    let mut used = 0;
     for v in values {
-        s.update(&v.to_le_bytes()[..w]);
+        if used + width > encoded.len() {
+            s.update(&encoded[..used]);
+            used = 0;
+        }
+        encoded[used..used + width].copy_from_slice(&v.to_le_bytes()[..width]);
+        used += width;
+    }
+    if used > 0 {
+        s.update(&encoded[..used]);
     }
     finish(s)
 }
@@ -258,8 +271,24 @@ fn tree_leaves(t: &Tensor, l: &LayoutV3, axis: u8) -> Vec<Digest> {
     let mut out = Vec::with_capacity((lines * tiles) as usize);
     for line in 0..lines {
         for tile in 0..tiles {
-            let idx = l.leaf_elements(axis, line, tile).expect("in range");
-            out.push(leaf_hash_v3(t.dtype, axis, line, tile, &values_of(t, &idx)));
+            let len = l.line_len(axis);
+            let (first, end) = (tile * TILE_V3, ((tile + 1) * TILE_V3).min(len));
+            let count = end - first;
+            let hash = if axis == AXIS_ROW || l.is_flat() {
+                let base = line * len;
+                leaf_hash_values_v3(
+                    t.dtype,
+                    axis,
+                    line,
+                    tile,
+                    count,
+                    t.data[(base + first) as usize..(base + end) as usize].iter().copied(),
+                )
+            } else {
+                let base = (line / l.n) * l.m * l.n + line % l.n;
+                leaf_hash_values_v3(t.dtype, axis, line, tile, count, (first..end).map(|i| t.data[(base + i * l.n) as usize]))
+            };
+            out.push(hash);
         }
     }
     out
@@ -534,6 +563,172 @@ mod tests {
     fn t(shape: &[usize]) -> Tensor {
         let n: usize = shape.iter().product();
         Tensor::new(DType::I32, shape.to_vec(), (0..n as i128).map(|v| v * 7 - 50).collect()).unwrap()
+    }
+
+    /// Original scalar-update oracle, intentionally independent of the new iterator/buffering implementation.
+    fn original_leaf(dtype: DType, axis: u8, line: u64, tile: u64, values: &[i128]) -> Digest {
+        let mut s = keyed(TENSOR_LEAF_DOMAIN_V3);
+        s.update(&[dtype.tag(), axis])
+            .update(&line.to_le_bytes())
+            .update(&tile.to_le_bytes())
+            .update(&(values.len() as u64).to_le_bytes());
+        for v in values {
+            s.update(&v.to_le_bytes()[..dtype.width()]);
+        }
+        finish(s)
+    }
+
+    #[test]
+    fn buffered_leaf_hashes_preserve_every_dtype_and_update_boundary() {
+        for dtype in DType::ALL {
+            for count in [0, 1, 127, 128, 255, 256, 257, 511, 512, 513, 4095, 4096, 4097] {
+                // Includes sign bits and bytes past each narrow width: hashing preserves the historical preimage exactly.
+                let values: Vec<i128> = (0..count).map(|i| (i128::MAX / 17).wrapping_mul(i as i128).wrapping_sub(511)).collect();
+                for axis in [AXIS_ROW, AXIS_COL] {
+                    assert_eq!(
+                        leaf_hash_v3(dtype, axis, 7, 3, &values),
+                        original_leaf(dtype, axis, 7, 3, &values),
+                        "{} axis {axis} count {count}",
+                        dtype.name()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn direct_row_and_column_hashing_preserves_original_roots_and_openings() {
+        for shape in [
+            vec![],
+            vec![0],
+            vec![4097],
+            vec![0, 3],
+            vec![3, 0],
+            vec![3, 4097],
+            vec![4097, 3],
+            vec![2, 3, 7],
+            vec![2, 1, 4097],
+            vec![2, 2, 3, 5],
+        ] {
+            for dtype in DType::ALL {
+                let len: usize = shape.iter().product();
+                let values = (0..len).map(|i| if dtype == DType::Idx { (i % 117) as i128 } else { (i % 117) as i128 - 58 }).collect();
+                let tensor = Tensor::new(dtype, shape.clone(), values).unwrap();
+                let layout = LayoutV3::of(&shape);
+                let oracle = |axis| {
+                    let (lines, tiles) =
+                        if axis == AXIS_ROW { (layout.rows, layout.row_tiles) } else { (layout.cols, layout.col_tiles) };
+                    let mut leaves = Vec::new();
+                    for line in 0..lines {
+                        for tile in 0..tiles {
+                            let indices = layout.leaf_elements(axis, line, tile).unwrap();
+                            leaves.push(original_leaf(dtype, axis, line, tile, &values_of(&tensor, &indices)));
+                        }
+                    }
+                    leaves
+                };
+                let trees = TreesV3::of(&tensor);
+                let (rows, cols) = (oracle(AXIS_ROW), oracle(AXIS_COL));
+                assert_eq!(trees.row_leaves, rows, "rows {} {shape:?}", dtype.name());
+                assert_eq!(trees.col_leaves, cols, "cols {} {shape:?}", dtype.name());
+                let old_root = commit_v3(
+                    dtype,
+                    &shape,
+                    &tree_root(rows, node_hash_v3, TENSOR_NODE_DOMAIN_V3),
+                    &tree_root(cols, node_hash_v3, TENSOR_NODE_DOMAIN_V3),
+                );
+                assert_eq!(tensor_commitment_v3(&tensor), old_root);
+                if len > 0 {
+                    for axis in [AXIS_ROW, AXIS_COL] {
+                        let opened = LeafOpeningV3::holding(&tensor, &trees, axis, (len / 2) as u64).unwrap();
+                        assert!(opened.authenticates(&old_root));
+                        let bytes = borsh::to_vec(&opened).unwrap();
+                        let decoded: LeafOpeningV3 = borsh::from_slice(&bytes).unwrap();
+                        assert!(decoded.authenticates(&old_root));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Local producer microbenchmark, not checkpoint throughput or consensus assurance. Criteria and geometries precede the run:
+    /// exact roots; <=10% median regression in every case; >=10% median speedup for history and wide-logit tensors.
+    #[test]
+    #[ignore = "manual producer hash benchmark; hardware timing, not a consensus gate"]
+    fn producer_hash_cost_against_original_scalar_updates() {
+        fn original_root(t: &Tensor) -> Digest {
+            let l = LayoutV3::of(&t.shape);
+            let original_tree = |axis| {
+                let (lines, tiles) = if axis == AXIS_ROW { (l.rows, l.row_tiles) } else { (l.cols, l.col_tiles) };
+                let mut leaves = Vec::with_capacity((lines * tiles) as usize);
+                for line in 0..lines {
+                    for tile in 0..tiles {
+                        let idx = l.leaf_elements(axis, line, tile).unwrap();
+                        leaves.push(original_leaf(t.dtype, axis, line, tile, &values_of(t, &idx)));
+                    }
+                }
+                leaves
+            };
+            // Match the original TreesV3 allocation/lifetime and root clones, not a reallocating or reduced-memory oracle.
+            let rows = original_tree(AXIS_ROW);
+            let cols = original_tree(AXIS_COL);
+            let r = tree_root(rows.clone(), node_hash_v3, TENSOR_NODE_DOMAIN_V3);
+            let c = tree_root(cols.clone(), node_hash_v3, TENSOR_NODE_DOMAIN_V3);
+            commit_v3(t.dtype, &t.shape, &r, &c)
+        }
+        let cases = [
+            ("history", DType::I16, vec![1024, 16], true),
+            ("wide-logits", DType::I32, vec![131072], true),
+            ("batched-strided", DType::I8, vec![2, 3, 257, 16], false),
+            ("wide-accumulator", DType::I128, vec![3, 4097], false),
+            ("short-row", DType::I16, vec![1, 8], false),
+        ];
+        for (name, dtype, shape, needs_gain) in cases {
+            let count: usize = shape.iter().product();
+            let tensor = Tensor::new(dtype, shape, (0..count).map(|i| (i % 117) as i128 - 58).collect()).unwrap();
+            let expected = original_root(&tensor);
+            assert_eq!(tensor_commitment_v3(&tensor), expected);
+            let repetitions = if count < 100 { 1024 } else { 8 };
+            let mut old = Vec::new();
+            let mut new = Vec::new();
+            for trial in 0..9 {
+                let mut measure = |fast| {
+                    let started = std::time::Instant::now();
+                    for _ in 0..repetitions {
+                        let root = if fast {
+                            tensor_commitment_v3(std::hint::black_box(&tensor))
+                        } else {
+                            original_root(std::hint::black_box(&tensor))
+                        };
+                        assert_eq!(std::hint::black_box(root), expected);
+                    }
+                    let ns = started.elapsed().as_nanos();
+                    if fast {
+                        new.push(ns);
+                    } else {
+                        old.push(ns);
+                    }
+                };
+                if trial % 2 == 0 {
+                    measure(false);
+                    measure(true);
+                } else {
+                    measure(true);
+                    measure(false);
+                }
+            }
+            old.sort_unstable();
+            new.sort_unstable();
+            let ratio = new[4] as f64 / old[4] as f64;
+            eprintln!(
+                "[producer-hash] {name} {:?} {} elements: original median {} ns, streamed median {} ns, ratio {ratio:.4}",
+                dtype, count, old[4], new[4]
+            );
+            assert!(ratio <= 1.10, "{name}: >10% median regression, {ratio}");
+            if needs_gain {
+                assert!(ratio <= 0.90, "{name}: <10% median speedup, {ratio}");
+            }
+        }
     }
 
     #[test]

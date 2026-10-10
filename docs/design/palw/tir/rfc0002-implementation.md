@@ -447,3 +447,57 @@ target and source diff checks pass. Imported historical raw logs retain their or
 (including trailing whitespace); their old results are not substituted for the runs above.
 
 The full RFC02 goal, §II.11.4 real-node acceptance and all original remaining requirements in this ledger remain active; RFC02 is **not complete**.
+
+
+## Producer commitment streaming — 2026-10-10
+
+The long-context node run above exposed producer commitment generation as a live hot path.
+v3 Merkle leaf construction now reads contiguous rows/strided columns directly and encodes their
+unchanged dtype-width little-endian preimage through a fixed **4 KiB** buffer. It no longer allocates
+an index vector plus an i128 value vector for every leaf (up to 96 KiB for 4096 values). Existing
+leaf headers, domains, widths, row/column order, odd-node tree rules, roots, openings and descriptor
+identities are unchanged. Opening APIs still materialize their requested payloads as before.
+
+An independent oracle retains the original scalar updates and index selection. All frozen dtypes,
+empty/scalar/batched/zero/strided/ragged shapes, byte-buffer and tile boundaries, complete dual roots,
+serialized leaf openings and range proofs match it exactly. The producer benchmark fixes its
+geometries/criteria before measurement: identical roots; no case with >10% median regression;
+history and wide-logits each with >=10% median speedup. It alternates old/new order over nine trials,
+eight commitments per trial (1024 for short rows), with the old allocation/lifetime/root clones
+retained. On this host's normal debug profile it passes:
+
+| Synthetic tensor | Old median batch (ms) | New median batch (ms) | New / old |
+| --- | ---: | ---: | ---: |
+| I16 history, 1024 × 16 | 14.193 | 11.260 | 0.7934 |
+| I32 logits, 131072 | 69.743 | 39.106 | 0.5607 |
+| I8 strided batch, 2 × 3 × 257 × 16 | 21.602 | 16.996 | 0.7868 |
+| I128 accumulator, 3 × 4097 | 29.515 | 25.414 | 0.8611 |
+| I16 short row, 1 × 8 | 7.239 | 6.535 | 0.9027 |
+
+These are local producer microbenchmarks, not checkpoint execution/proof/hash/retention/delivery
+ratios, a release-performance gate, or economics evidence. This does not solve history commitment
+reuse, prepared proof paths, full shared resources, real models, complete tasks or G14 deployment.
+
+**59 functional tests and the one manually invoked benchmark pass**: five Merkle tests (including
+all existing leaf/range/overflow cases), seven element-court tests, six adversarial tests, 13
+segmented public-replay/DA/court tests and 28 independent/ModelSpec SDK beacon regressions. The
+fresh verifier still convicts changed routing/history/output, dismisses honest elements, honors
+priced filing/carrier bounds and reconstructs identical class/artifact roots. The config-only
+9B-8k gate still passes its existing per-prosecution bounds; it remains geometry evidence.
+
+```sh
+cargo test --locked -p misaka-palw-kernel --lib merkle3
+cargo test --locked -p misaka-palw-kernel --lib element::tests
+cargo test --locked -p misaka-palw-kernel --test k2_real_scale --test k2_adversarial
+cargo test --locked -p misaka-palw-kernel --lib producer_hash_cost_against_original_scalar_updates \
+  -- --ignored --nocapture
+cargo test --locked -p misaka-palw-sdk --test direct_tir_registration --test runtime_pack_beacon
+cargo clippy --locked -p misaka-palw-kernel --lib
+```
+
+Clippy, changed-source formatter, source diff and local Markdown targets pass; six pre-existing
+kernel clippy warnings remain. The 15 node-fold cases above were run on `07b76fe2c` before this
+hash optimization. They are not claimed as an additional node run of the optimized producer;
+compatibility here rests on the original-preimage oracle and the listed court/SDK regressions.
+
+The original full RFC02 goal remains active and **not complete**.
