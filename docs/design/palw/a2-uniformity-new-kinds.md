@@ -1,7 +1,8 @@
 # A-2 uniformity for every kind the live build cannot decode (A2U, 2026-10-08)
 
-**Status:** implemented on `fix/a2-uniform-new-tags` (lane A2U), over the integration line at `35a9ae1c8`; the central kind→fence
-table (§3.5) holds every post-int-12 member, landed or allocated. No live id moves. Results: §7.
+**Status:** implemented on `fix/a2-uniform-new-tags` (lane A2U), over the integration line at `b8ae9412b` (the user's `pre`, SMALL,
+SHARD2, X12N merged 2026-10-10); the central kind→fence table (§3.5) holds every post-int-12 member, landed or allocated, and the
+live build's kinds a later fence judges anew (ADR-0175). No live id moves on this branch's own account (§2.3). Results: §7.
 **Finding:** X8R's review (2026-10-08). **Live build:** testnet-12 runs int-12, `rcore/int-12` @ `0b1c11b87`.
 
 ## 1. The class
@@ -87,6 +88,22 @@ Each of these was checked against int-12, and each gives the same verdict with n
 **int-12 itself is not affected.** Every member above is a verdict the *newer* build gives differently. int-12's own handling (A-2
 tolerance) is what the fix converges to.
 
+### 2.3 The merge of `b8ae9412b` (2026-10-10): what it adds to the class
+
+`git diff 648a9f481..b8ae9412b` was enumerated the same way (every changed declaration in the wire directories against the frozen
+manifest; every variant of `PalwConsensusObjectV2` against `0b1c11b87`'s source).
+
+| Change | Lane | Below its fence | Disposition |
+|---|---|---|---|
+| ADR-0175: tags 27, 28, 29, 81 and 37 (granting `EARLY_VERSION`) recognized and refused by name past `palw_model_immutable_v1`; tags 3, 26, 39, 61, 68, 70, 91 and the epoch sweep folded differently past it | `pre` | int-12's rule; the walk's drop and every fold branch ask the fence (`model_immutable_active` is `false`, the line id is `model_line_id_v1`) | rows `Int12RefusedByName` / `Int12FoldPastFence` (§3.5); the pin carries all five refused kinds, node C arms the fence far above, and a past-fence test shows the block standing (§4.2) |
+| `PalwPromotionOutcomeV1::CandidateSelected` (2) appended | `pre` | written only past the fence | `NotCarried` (an epoch row's decision) |
+| `SigningPurpose::PalwReceiptAuthV4` (8), `SignerMessageDigest::PalwReceiptAuthV4` | SMALL (RDA4) | offered only under `palw_receipt_spend_v4` | `NotCarried` (the node ↔ signer protocol) |
+| `PalwFpWorkerFrameV1::Cancelled` (8) | SMALL (RFC-0001 P1) | node-local | `NotCarried` (the worker ↔ gateway frame) |
+| R-1 reporter share 1,000 → 4,900 bps, **unfenced**, and written into the params fingerprint under `palw_rcore_plus` | `pre` (ADR-0032 amendment) | **not fenced on `b8ae9412b`**: testnet-12 arms R-core+ at genesis, so a build of this line pays a different reporter share than int-12 on a conviction and moves the t12 params id | INTF moves it behind `palw_reporter_share_v2` (the Lead's plan); the table holds the row (`StateEncoding`, pending) so INTF's merge is held to it. Not a split int-12 can cause; a split this line would cause if deployed as is |
+| SHARD2's part-C hold, X12N's live retention | SHARD, X12N | behind `palw_panel_unavailable_expiry` / DNS retirement, dormant on every preset | no row needed: the fences are older than the change and armed nowhere |
+
+No variant int-12 decodes changed its declaration on this line, `g14/r4-fixes` or `adv/c4r4` (now pinned: §3.4).
+
 ## 3. The fix: one central rule
 
 `consensus/core/src/palw_lifecycle_objects_v2.rs` holds the rule and its tables.
@@ -151,6 +168,10 @@ the object, the block standing. So an inner kind added later is read the same wa
   `palw_kernel_route_inner_fence_v1` ahead of the kind's own, as the top-level guarded arms work (§3.4).
 * `every_kernel_inner_kind_has_exactly_one_row` reconciles the table with `KernelRouteObjectV1`'s source, decoding each inner kind
   from a zero-filled body.
+* An object that needs TWO inner fences has a combined variant: `PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1` is in force only
+  where `palw_panel_free_v1` and `palw_typed_roots_v1` both are — G14R's salted reveal (inner 20) of a typed-root claim
+  (`SaltedCommitV1::Spec`, 19), answered by a guarded arm ahead of inner 20's own. (`g14/r4-fixes` judges it by hand-written gate
+  arms; its merge moves them into the table, §8.)
 
 Inner kinds added before tag 110's fence is first armed on a live network ride with it (`None`): G14-R4's 15 and K2S's 16–18 are
 such. Once tag 110 is live, every later inner kind needs a fence of its own. R4X's inner 19 `Spec` and its typed-root proof
@@ -194,6 +215,10 @@ The freeze:
   owner function maps to the named fence.
 * Every carried change needs its `Int12Inner` row in the central table (§3.5), with the same fence.
 
+* **The live build's variants themselves are pinned** (`PALW_A2_INT12_VARIANTS_WIRE_V1`): the manifest pins `PalwConsensusObjectV2`
+  as a whole, which every new kind changes (`ObjectEnum`), so a field added inline to one of int-12's 100 variants would have passed.
+  The pin is an FNV-1a over those 100 declarations; a change there is classified (an `Int12Inner` row), never re-pinned alone.
+
 Known limits of the freeze, each covered by the int-12 replay instead: a change inside a helper function a hand-written decoder calls;
 a `use` that rebinds a name to another type; a formula (a hash or a root) rather than a wire form.
 
@@ -204,8 +229,10 @@ manifest reports (§7).
 
 `PALW_A2_KIND_FENCE_TABLE_V1` (`palw_lifecycle_objects_v2.rs`) is the one table of every post-int-12 member, landed or allocated, and
 the fence below which it rides unjudged. A2U keeps it; the Lead allocates; a lane fills its row's code at merge. Each row names its
-fence as a `Params` field name, so a row can be written before its lane merges. An unallocated tag (112, 114–119, 121–129, 140–149)
-has no row, so a kind landing there fails the table test until the Lead allocates it.
+fence as a `Params` field name, so a row can be written before its lane merges. An unallocated tag (112, 114–119, 121–129) has no
+row, so a kind landing there fails the table test until the Lead allocates it. The Lead's tag allocations themselves are
+`PALW_A2_TAG_ALLOCATIONS_V1` (104–109, 110–119, 120–129, 130–139, **140–149 BUDGET** with `palw_bond_budget_v1` /
+`palw_model_bond_allocation_v1`, 150–153 DA16): every tag row lies inside one and names one of its fences, and so does every landed kind.
 
 | Slot | Members | Fence | Lane | In this tree |
 |---|---|---|---|---|
@@ -213,10 +240,11 @@ has no row, so a kind landing there fails the table test until the Lead allocate
 | object tag 108 | `SignedRegistrationV1` | `palw_signed_registration_v1` | RFC-0009 | yes |
 | object tag 109 | `ConformanceEvidenceV1` | `palw_probabilistic_constraints_v1` | OB-P0 | yes |
 | object tags 110–111 | 110 route, 111 receipt | `palw_probabilistic_constraints_v1` | G14 lane D | yes |
-| object tag 113 | `KernelRouteChunkV1` (the route's own chunk lane) | `palw_probabilistic_constraints_v1` | G14-R4 | no |
+| object tag 113 | `KernelRouteChunkV1` (the route's own chunk lane) — the Lead, 2026-10-10 | `palw_probabilistic_constraints_v1` | G14-R4 (`g14/r4-fixes`, `adv/c4r4`) | no (row first; §8) |
 | object tag 120 | `PanelBeaconProofV3` | `palw_permissionless_panel_v1` | RFC-0010 | yes |
 | object tags 130–139 | 130 `ExecWorkRootOpenedV2` | `palw_exec_payload_v2` | X8R | no |
-| object tags 150–153 | `ProviderLeaseV1`, `ProviderChallengeV1`, `ProviderAnswerV1`, `DaTransferV1` | `palw_provider_court_v1` (in force only where the kernel route's fence is too) | DA16 | yes (merged with integration `648a9f481`) |
+| object tags 140–149 | none yet — BUDGET adds one row per kind range, naming `palw_bond_budget_v1` or `palw_model_bond_allocation_v1`, in the commit that creates the kinds | (allocation) | BUDGET | no row |
+| object tags 150–153 | `ProviderLeaseV1`, `ProviderChallengeV1`, `ProviderAnswerV1`, `DaTransferV1` | `palw_provider_court_v1` (in force only where the kernel route's fence is too) | DA16 | yes (merged with integration `648a9f481`); wire pinned |
 | inner kinds 1–12 | the kernel route | `palw_probabilistic_constraints_v1` (tag 110's own) | G14 lane D | yes |
 | inner kinds 13–14 | OPV registrations | `palw_panel_free_v1` | RFC-0015 | yes |
 | inner kind 15 | `SealProof` | tag 110's own | G14-R4 | no |
@@ -225,6 +253,7 @@ has no row, so a kind landing there fails the table test until the Lead allocate
 | inner kind 20 | `CommitClaimSalted` (salted claim seal v2) | `palw_panel_free_v1` | G14R | no |
 | nested in inner kinds | `ProsecutionV1::Segmented` (3), `ClaimBodyV1::Segmented` (2) | tag 110's own | K2S | no |
 | nested in inner kinds | `ProsecutionV1::Spec` (4) inside `FileProof` (inner 7); `ClaimBodyV1::Spec` (3) is ledger state, never carried | `palw_typed_roots_v1` | R4X | yes (guarded arm) |
+| nested in inner kinds | `SaltedCommitV1::Spec` (19) inside `CommitClaimSalted` (inner 20) | `palw_typed_roots_v1` AND `palw_panel_free_v1` (`PanelFreeAndTypedRootsV1`) | G14R × R4X | no (the fence variant is) |
 | header form algo 7 `PFS4` | V4 receipt carriage | `palw_receipt_spend_v4` | RFC-0009 | yes |
 | header form algo 10 `PXE2` | EXEC envelope | `palw_exec_payload_v2` | X8R | no |
 | coinbase trailer `PXA2` | EXEC anchor | `palw_exec_payload_v2` | X8R | no |
@@ -232,8 +261,13 @@ has no row, so a kind landing there fails the table test until the Lead allocate
 | inside tag 68 (appended) | `PalwGenProfileOffersV1::Head` (3) | `palw_task_heads_v1` | HFX | no |
 | FP job form (0x4a) | `PalwGenBodyV1::Head` (2) | `palw_task_heads_v1` | HFX | no |
 | header formula | `palw_state_root = H(fork-choice leaf ‖ ADR-0043 root)` past the fence | `palw_fork_choice_commitment_v1` | L2FC | no |
-| state encoding | per-shard V3 draw (delta 171, tail `0xED`) | `palw_permissionless_panel_v1` | SHARD | no |
-| state encoding | per-segment pricing, the shard engine's encodings | `palw_tir_shard_segment_v2` | SHARD | no |
+| state encoding | per-shard V3 draw (delta 171, tail `0xED`) | `palw_permissionless_panel_v1` | SHARD | yes |
+| state encoding | per-segment pricing, the shard engine's encodings | `palw_tir_shard_segment_v2` | SHARD | yes |
+| state encoding | bond budget engine Q/B/R/F (deltas 190–199, tail `0xEF`, root block `bond_budget/v1`) | `palw_bond_budget_v1` | BUDGET | no |
+| state encoding | model coinbase by locked miner capital `f(S_m)` | `palw_model_bond_allocation_v1` | BUDGET | no |
+| state encoding | R-1 reporter share and DA-6 exposure: 1,000 bps below, 4,900 past | `palw_reporter_share_v2` | INTF | no (**unfenced on `b8ae9412b`**, §2.3) |
+| int-12 kinds refused by name past the fence | 27, 28, 29, 81; 37 granting `EARLY_VERSION` | `palw_model_immutable_v1` | ADR-0175 (`pre`) | yes |
+| int-12 kinds folded anew past the fence | 3, 26, 39, 61, 68, 70, 91 and the epoch sweep | `palw_model_immutable_v1` | ADR-0175 (`pre`) | yes |
 
 **The verdict int-12 gives depends on the carriage**, and "below the fence" means that verdict:
 
@@ -245,6 +279,10 @@ has no row, so a kind landing there fails the table test until the Lead allocate
 * Coinbase trailers: **opaque** miner bytes to int-12 — nothing read, nothing refused (X8R's reader is lenient only where the fence is
   armed, and the length rule is the body stage's at the height).
 * Formulas and state encodings: **byte-identical** below the fence, block by block (the int-12 replay checks every block's root).
+* Kinds int-12 decodes, judged anew past a fence (ADR-0175): **int-12's own rule** below it. Past it a recognized object is refused by
+  name in the acceptance walk (not applied, nothing charged) and the carrying block stands — never an isolation or header-context
+  refusal, which would turn a statement int-12 accepts into an invalid block at the fence for every peer that has not yet seen the
+  object's meaning change. `palw_int12_kind_refused_past_fence_v1` is the policy the rows are reconciled with.
 
 `every_landed_kind_sits_in_its_row_with_the_rows_fence` holds the table to the code: rows never overlap one another or int-12's tags;
 every landed top-level kind, inner kind, header form and carried change sits in exactly one row whose fence is the one the code
@@ -275,6 +313,15 @@ In `palw_lifecycle_objects_v2::tests::a2u`:
 * **`every_kernel_inner_kind_has_exactly_one_row`** (§3.3).
 * **`every_int12_wire_type_is_unchanged_or_classified`** (§3.4).
 * **`an_owning_fence_needs_the_audit_fence_declared`** checks the params validation.
+* **`every_tag_row_is_inside_its_allocation`** holds every tag row and every landed kind to the Lead's allocation and its fences
+  (`PALW_A2_TAG_ALLOCATIONS_V1`).
+* **`the_int12_kinds_refused_past_a_fence_are_the_rows`** asks every int-12 kind (near-zero, and tag 37 granting `EARLY_VERSION`) of
+  `palw_int12_kind_refused_past_fence_v1` and demands exactly the `Int12RefusedByName` rows; every `Int12*` row names int-12 tags and
+  a `Params` fence; no new kind is refused this way.
+* **`every_landed_kind_is_pinned_to_its_wire_form`** pins each landed post-int-12 kind's wire form (its variant and every type it
+  reaches by name: `PALW_A2_NEW_KIND_WIRE_V1`) and the live build's 100 variants (`PALW_A2_INT12_VARIANTS_WIRE_V1`). A lane that
+  creates or changes a kind re-pins it in the same commit — and confirms the change rides under its row's fence; the failure prints
+  the current pins.
 
 ### 4.2 The processor pin test: mixed verdicts over every new kind
 
@@ -289,6 +336,9 @@ carrier is a funded 0x4b transaction. The chain carries:
   adds is carried the moment its row exists; plus a hand-built well-formed, signed one of each;
 * every may-ride refusal a new kind has, a tag-254 reference payload, and a **re-read probe** (a tag-68 class whose profile byte is
   `Head = 6`);
+* **ADR-0175's five refused kinds**, signed (27, 28, 29, 81, and 37 granting `EARLY_VERSION`): int-12 decodes and judges them;
+* **every kernel-route inner kind inside tag 110**, generically over `PALW_KERNEL_ROUTE_INNER_KINDS_V1` (an inner kind a lane adds —
+  15, 16–18, 20 — is carried the moment its row exists);
 * three one-chunk groups of new kinds, and a two-chunk group that completes into a new kind;
 * **a mixed block**: a quorum's `ReceiptLicensed` (an int-12 kind that folds and licenses a real claim), the same licence again (an
   int-12 kind the walk refuses), and new kinds riding unjudged.
@@ -297,8 +347,14 @@ It asserts each carrier is in its block and each block is valid; the licence lic
 state and no completed group; the walk's chunk reader is "undecodable" below the fence and the kind past it; a `PFS4` header is
 refused on the header path **and** the pruning-proof path with a refusal int-12's own gate gives, and differently on a node where the
 form is in force. An unarmed node and a node with every owning fence armed far above the chain (armed through exhaustive matches over
-every fence list, so a new fence must be armed there to compile) then replay every block: the same statuses, refusals, PALW state root
-**at every block**, sink, UTXO multiset and pruning-proof refusal.
+every fence list, so a new fence must be armed there to compile, and through every LANDED row's fence by name — `palw_tir_shard_segment_v2`,
+`palw_model_immutable_v1` with the model lines it needs — so a row that lands with a fence the harness does not arm panics) then replay
+every block: the same statuses, refusals, PALW state root **at every block**, sink, UTXO multiset and pruning-proof refusal. That is
+the mixed-verdict pin for ADR-0175 too: an old build (unarmed) and a new build (immutable armed) agree on every block below the fence.
+
+`t12_a2u_adr0175_past_its_fence_a_definition_update_is_refused_and_its_block_stands` is the other side: with
+`palw_model_immutable_v1` (and model lines) at DAA 1 and its own validation passing, the five refused kinds ride in valid blocks, each
+carrier in its block, and no model line is written.
 
 ### 4.3 Adapted test
 
@@ -340,18 +396,98 @@ profile, a decoder helper's change: a lane re-runs the pin test and this replay 
    kind the live build cannot decode on 0x4b; put it in the kind's own rule, which the header context asks at its fence. On 0x4a the
    live verdict for unknown bytes is refusal, and below the fence a new form is refused.
 6. **Merge gate:** the A2U unit tests, the pin test on both rulesets, and the int-12 replay of its dumps (§5).
-7. The live-build lists (`PALW_LIFECYCLE_INT12_KINDS_V1`, the manifest) are frozen. They change only when a new release becomes the
-   live baseline, in their own reviewed commit.
+7. The live-build lists (`PALW_LIFECYCLE_INT12_KINDS_V1`, the manifest, `PALW_A2_INT12_VARIANTS_WIRE_V1`) are frozen. They change
+   only when a new release becomes the live baseline, in their own reviewed commit.
+8. **Allocations are checked.** A tag row lies inside the Lead's allocation (`PALW_A2_TAG_ALLOCATIONS_V1`) and names one of its
+   fences; a new allocation is a Lead commit to that table and the registry together.
+9. **A landed kind's wire form is pinned** (`PALW_A2_NEW_KIND_WIRE_V1`). Creating a kind adds its pin; changing one — a field, a nested
+   variant, a type it reaches — re-pins it in the same commit, and the change rides under the row's fence or gets a row of its own.
+10. **A kind int-12 decodes, judged anew past a fence** (ADR-0175's pattern) gets an `Int12RefusedByName` row (refused at acceptance
+   by name: reconciled with `palw_int12_kind_refused_past_fence_v1`) or an `Int12FoldPastFence` row (the fold, by state), and its
+   fence is armed in the pin test's node C. Past the fence the object is not applied and the block stands; never an isolation or
+   header-context refusal of a kind int-12 accepts.
+
+**The procedure for lane BUDGET (tags 140–149, ADR-0176/0177).** In the commit that creates each kind: the variant at its tag, an arm
+in `palw_lifecycle_kind_owner_v1` (a new `PalwLifecycleKindFenceV1` variant per fence — `BondBudgetV1` → `palw_bond_budget_v1`,
+`ModelBondAllocationV1` → `palw_model_bond_allocation_v1` — with its `params_field`, its resolution in
+`Params::palw_lifecycle_kind_fences_v1`, its arm in `palw_fold_kind_in_force_v1` and in the pin test's `arm_every_owning_fence`),
+its `PALW_LIFECYCLE_NEW_KINDS_V1` entry, an `ObjectTags` row inside 140–149 naming the fence (landed), its `PALW_A2_NEW_KIND_WIRE_V1`
+pin, and the `StateEncoding` rows (deltas 190–199, tail `0xEF`, the coinbase allocation) flipped to landed. Fails without them:
+`every_kind_in_the_enum_has_exactly_one_owner` (no NEW_KINDS entry), `every_landed_kind_sits_in_its_row_with_the_rows_fence` (no row,
+or the row's fence differs), `every_tag_row_is_inside_its_allocation` (a fence outside BUDGET's two), `every_landed_kind_is_pinned_to_
+its_wire_form` (no pin), the pin test (an unarmed fence).
+
+**The procedure for lane DA16's re-scope (150–153: the `Artifact` lease subject removed under `palw_provider_court_v1`).** The change
+is a wire change to landed kinds: the same commit re-pins 150–153 in `PALW_A2_NEW_KIND_WIRE_V1` (the test prints the values) and keeps
+the row's fence; if any part of the change rides another fence (say ADR-0177's), that part gets its own row and fence variant, and the
+kinds' owner arm answers it. Without the re-pin `every_landed_kind_is_pinned_to_its_wire_form` fails.
 
 **Worked example — merging G14-R4's tag 113 (`KernelRouteChunkV1`, in `g14/r4-fixes` and `adv/c4r4`).** On those branches, without
 this rule, isolation runs its may-ride arm (unsigned, or an index, count or part out of range → `ObjectMayNotRide`) at every height, so
-the upgraded node marks invalid a block int-12 tolerates — the split C4R4's `c4r4_a2_tag113` pins. At the merge with this branch:
-add `O::KernelRouteChunkV1 { .. }` to the `ProbabilisticConstraintsV1` arm of `palw_lifecycle_kind_owner_v1` (the compiler demands
-it), add `(113, "KernelRouteChunkV1", ProbabilisticConstraintsV1)` to `PALW_LIFECYCLE_NEW_KINDS_V1` and flip the tag-113 row to landed
-(the table tests demand both). Nothing else: isolation then tolerates it at every height, the header context asks its may-ride arm
-only past `palw_probabilistic_constraints_v1`, the objects-of-block walk skips it below (so the chunk gate, the chunk lane's rows and
-deposit, and the UTXO walk never see it), and the pin test carries it generically, well-formed and near-zero.
+the upgraded node marks invalid a block int-12 tolerates — the split C4R4's `c4r4_a2_tag113` pins. The exact list is §8.
 
 ## 7. Results
 
-(Filled in by the build record below.)
+Status vocabulary: **implemented** / **verified** / **armable** (user, 2026-10-09). Nothing here is armable; no fence is armed.
+
+**2026-10-10 (successor), over integration `b8ae9412b`, `scratchpad` milestones m5–m6** — every invocation through `buildslot.sh`:
+
+| What | Result | Level |
+|---|---|---|
+| Core A2U, lifecycle, `pow_layer0` and `immutable_models` tests (`palw_lifecycle_objects_v2:: pow_layer0:: immutable_models`) — incl. the new `every_tag_row_is_inside_its_allocation`, `the_int12_kinds_refused_past_a_fence_are_the_rows`, `every_landed_kind_is_pinned_to_its_wire_form`, the four new `NotCarried` classifications, `pre`'s own ADR-0175 tests | 68 passed, 0 failed | verified |
+| Wire pins bootstrapped once from the test itself (placeholders only; `PALW_A2_INT12_VARIANTS_WIRE_V1 = 0xd1982421da455cca`, 13 landed kinds), int-12's 100 variants first checked equal to `0b1c11b87`'s source | pinned | verified |
+| Pin test, launch ruleset: 49 chain blocks to DAA 22, 71 carriers (every new kind near-zero and hand-built, every malformed form, the reference, the re-read probe, ADR-0175's five refused kinds, every kernel inner kind inside tag 110, chunk groups, a founded line and its published version applied, the mixed block), 1 refused `PFS4` header; unarmed and armed-far nodes agree at every block | ok | verified |
+| Pin test, release ruleset: 704 chain blocks to DAA 351, 69 carriers, the same agreement | ok | verified |
+| ADR-0175 past its fence: the live rule applies the signed version (2 versions); with `palw_model_immutable_v1` the same publication is refused (1 version); the carrying block (6 definition updates) stands in both | ok | verified |
+| Replay through int-12 itself (`0b1c11b87`'s own tree and target): launch 49 blocks, release 704 blocks — every verdict, root and refusal is the live build's | ok | verified |
+
+A harness finding on the way, not a consensus one: arming `palw_model_lines` at node C's far height DISARMED testnet-12's live
+registry below it, and node C disqualified the block whose founded line the live rule had applied — the pin caught it. Node C now
+leaves a fence the ruleset already runs untouched.
+
+Rows awaiting their lanes (pending, by design): tag 113 / inner 15 / inner 20 / the salted-`Spec` nested row (G14R, §8), 16–18 and the
+`Segmented` nested row (K2S), 130–139 / `PXE2` / `PXA2` (X8R), the three HFX rows, L2FC's formula, BUDGET's two encodings, INTF's
+reporter share.
+
+## 8. Merging `g14/r4-fixes` and `adv/c4r4` with this branch (the Lead, 2026-10-10)
+
+Read at `g14/r4-fixes` @ `0ef5084d1` and `adv/c4r4` @ `e2dd4e0c1` (which contains all of `g14/r4-fixes`). A trial `git merge-tree` of
+this branch with either has ONE textual conflict (the kernel gate, item 4). Line numbers: `L` = this branch, `R4` = `g14/r4-fixes`,
+`C4` = `adv/c4r4`. Items 1–6 are needed by BOTH branches (adv/c4r4 inherits them through g14/r4-fixes); 7–8 are adv/c4r4's own.
+
+1. **Tag 113 owner** — `L consensus/core/src/palw_lifecycle_objects_v2.rs:1232`: add `| O::KernelRouteChunkV1 { .. }` to the
+   `ProbabilisticConstraintsV1` arm of `palw_lifecycle_kind_owner_v1` (the compiler demands it: the match is exhaustive). The variant
+   is `R4/C4 consensus/core/src/palw_state_v2.rs:8473`.
+2. **Tag 113 tables** — `L …palw_lifecycle_objects_v2.rs:1360`: after the 111 entry add
+   `(113, "KernelRouteChunkV1", PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1)` to `PALW_LIFECYCLE_NEW_KINDS_V1`;
+   `L …:1752`: flip the tag-113 row's `landed` to `true`. (`every_kind_in_the_enum_has_exactly_one_owner`,
+   `every_landed_kind_sits_in_its_row_with_the_rows_fence`.)
+3. **Inner kinds 15 and 20** — `L …:1542`: add `| K::SealProof { .. }` to the `None` arm of `palw_kernel_route_inner_fence_v1`;
+   `L …:1530` (the guarded arms, ahead of the kinds' own): add
+   `K::CommitClaimSalted { commit: misaka_palw_kernel::route::SaltedCommitV1::Spec { .. }, .. } => Some(PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1),`
+   and, at `L …:1543`, `K::CommitClaimSalted { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1)`. `L …:1563`: add the rows
+   `(15, "SealProof", None)` and `(20, "CommitClaimSalted", Some(PalwKernelInnerFenceV1::PanelFreeV1))` to
+   `PALW_KERNEL_ROUTE_INNER_KINDS_V1`. Flip to landed: `L …:1767` (inner 15), `L …:1777` (inner 20), `L …:1794` (the nested
+   `SaltedCommitV1::Spec` row). (`every_kernel_inner_kind_has_exactly_one_row`, the compiler.)
+4. **The kernel gate (the conflict)** — `consensus/src/pipeline/virtual_processor/processor.rs`, `palw_kernel_route_object_is_signed`:
+   keep THIS branch's side (`L :13657`ff., the table-driven `palw_kernel_route_inner_fence_v1` / `palw_kernel_inner_fence_at` check);
+   DROP the hand-written arms `R4 :13711–13742` / `C4 :13734–13765` (inner 13/14, inner 20 `CommitClaimSalted`, and the `typed`
+   check for `Spec` and `SaltedCommitV1::Spec`). They are the table's arms of item 3, with the same fences.
+5. **Wire pins** — after items 1–3, run `every_landed_kind_is_pinned_to_its_wire_form`: add the printed `(113, 0x…)` pin to
+   `PALW_A2_NEW_KIND_WIRE_V1` (`L …palw_lifecycle_objects_v2.rs:3947`, in the A2U test module) and re-pin
+   every landed kind whose reachable types the branch changed (it prints the full list). On `adv/c4r4` that includes the onboarding
+   kinds whose types OPVB changed (`ConformanceEvidenceActionV1`, `FreshInputV1`, `ApprovedTupleV1`, …: tags 107/109); each change
+   is under `palw_probabilistic_constraints_v1`, the rows' fence, so a re-pin is the whole fix. `PALW_A2_INT12_VARIANTS_WIRE_V1` must
+   NOT move (checked: no int-12 variant differs on either branch).
+6. **No other site judges tag 113 below its fence once item 1 lands**: its may-ride arm (`R4/C4 …palw_lifecycle_objects_v2.rs:344`)
+   then runs only in the header context past the fence; the objects-of-block walk skips it below, so the chunk gate
+   (`R4 processor.rs:13227` / `C4 :13250`), the chunk lane's rows and deposit (`palw_kernel_route_v1.rs`) and the fold arm
+   (`R4 palw_state_v2.rs:34832` / `C4 :34890`) are reached only past it; `palw_object_is_kernel_route_v1` (`palw_state_v2.rs:8610`)
+   stays the second lock. The heartbeat-carrier classification (`palw_heartbeat_carriers_v1.rs:201`) is a mempool/template read.
+7. **adv/c4r4 only** — `C4 consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/conformance/c4r4.rs:160`: remove the
+   `#[ignore = "FAIL C4R4 A-2: …"]` on `g14_c4r4_a2_a_tag_113_carrier_below_its_fence_is_judged_as_undecodable_bytes`; with item 1 it
+   passes (isolation tolerates 113 at every height on an audit ruleset).
+8. **adv/c4r4 only** — nothing else: its other additions (OPVB's beacon v3, E1–E7, the bootstrap types) add no object tag, inner
+   kind or header form, and change no int-12 wire type.
+
+After the merge: the A2U core tests, the pin test on both rulesets, and the int-12 replay of the dumps (§5) — the merge gate (§6.6).

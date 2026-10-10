@@ -108,6 +108,19 @@ counted or written. Never refuse it at isolation on 0x4b. Its own rule (may-ride
 header context, the acceptance walk and the fold. Merge gate: the A2U tests, the mixed-verdict pin test on both rulesets, and the replay
 of its chains through int-12 itself (`scripts/a2u-int12-replay.sh`). The live build's lists are frozen.
 
+**A-2 additions (A2U, 2026-10-10).** (a) The object-tag column above is mirrored in `PALW_A2_TAG_ALLOCATIONS_V1` with each allocation's
+fences; a tag row outside its allocation or naming another lane's fence fails (`every_tag_row_is_inside_its_allocation`) — a new
+allocation is a Lead commit to both. (b) Every landed post-int-12 kind's wire form is pinned (`PALW_A2_NEW_KIND_WIRE_V1`, in the A2U
+test module) and so are int-12's 100 variants (`PALW_A2_INT12_VARIANTS_WIRE_V1`): a lane that creates or changes a kind re-pins it in
+the same commit, keeping the change under its row's fence. **BUDGET (140–149):** in the commit that creates each kind — the variant,
+its owner arm (a `PalwLifecycleKindFenceV1` variant per fence), its `PALW_LIFECYCLE_NEW_KINDS_V1` entry, an `ObjectTags` row naming
+`palw_bond_budget_v1` or `palw_model_bond_allocation_v1`, its pin, and its `StateEncoding` rows flipped to landed. **DA16 (150–153
+re-scope):** the commit removing the `Artifact` lease subject re-pins 150–153 and keeps `palw_provider_court_v1` (or adds a row for
+another fence). (c) Kinds int-12 decodes that a fence judges anew (ADR-0175 `palw_model_immutable_v1`: 27, 28, 29, 81, 37 with
+`EARLY_VERSION` refused by name; 3, 26, 39, 61, 68, 70, 91 folded by state) have `Int12RefusedByName` / `Int12FoldPastFence` rows: past
+the fence the object is not applied and its block stands — never an isolation or header-context refusal. (d) `palw_reporter_share_v2`
+(INTF) has a pending `StateEncoding` row: on `b8ae9412b` the 49% share is unfenced while testnet-12 arms R-core+ at genesis.
+
 ## 3. Waves
 
 0. Scope/contracts — this matrix; `fcde1e3dc` (Panel-assignment subject + circularity rule).
