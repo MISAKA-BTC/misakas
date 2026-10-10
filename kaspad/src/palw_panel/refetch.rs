@@ -68,7 +68,8 @@ pub(crate) fn palw_weight_block_accept_v1(
         return Err("an answer past the lane's cap".into());
     }
     let proof: PalwArtifactMultiproofV1 = borsh::from_slice(bytes).map_err(|e| format!("not a multiproof: {e}"))?;
-    verify_artifact_multiproof_v1(&proof, artifact_root).map_err(|e| format!("the multiproof does not open against the artifact root: {e:?}"))?;
+    verify_artifact_multiproof_v1(&proof, artifact_root)
+        .map_err(|e| format!("the multiproof does not open against the artifact root: {e:?}"))?;
     let decl = program.params.get(address.param as usize).ok_or("the request names no param")?;
     let mut pieces = Vec::with_capacity(proof.opened.len());
     for (_, operand) in &proof.opened {
@@ -220,7 +221,9 @@ impl WeightRefetchV1 {
             // Round zero: the blocks the check named.
             let named: Vec<u32> = self.failure.blocks.clone();
             let Some(wanted) = Self::requests_for(entry, ordinal, named) else {
-                return RefetchStepV1::Done(TirEscalationV1::NotBlockAddressable("the failed node's weight has no block address".into()));
+                return RefetchStepV1::Done(TirEscalationV1::NotBlockAddressable(
+                    "the failed node's weight has no block address".into(),
+                ));
             };
             if wanted.is_empty() {
                 return RefetchStepV1::Done(TirEscalationV1::NotBlockAddressable("the failure names no block".into()));
@@ -250,7 +253,8 @@ impl WeightRefetchV1 {
                 TirEscalationV1::Unavailable { param: Some(j), .. } if self.round < REFETCH_ROUNDS_V1 => {
                     // A cone node's weight: ask for every block of the site that reads it, then run again.
                     let again = wanted_params.iter().find(|(p, _)| *p == j).copied();
-                    let site = (0..sites.len() as u32).find(|o| tir_block_address_v1(plan, &analysis, *o, 0).is_some_and(|a| a.param == j));
+                    let site =
+                        (0..sites.len() as u32).find(|o| tir_block_address_v1(plan, &analysis, *o, 0).is_some_and(|a| a.param == j));
                     match (again, site) {
                         (Some(_), Some(o)) => {
                             let blocks = tir_block_address_v1(plan, &analysis, o, 0).map(|a| a.blocks).unwrap_or(1);
@@ -273,7 +277,12 @@ impl WeightRefetchV1 {
         }
         if daa >= asked.saturating_add(REFETCH_PATIENCE_DAA_V1) {
             let first = self.wanted.iter().find(|(index, _)| !self.accepted.contains(index)).map(|(_, a)| a.block);
-            return RefetchStepV1::Done(TirEscalationV1::Unavailable { occurrence: self.failure.occurrence, node, block: first, param: None });
+            return RefetchStepV1::Done(TirEscalationV1::Unavailable {
+                occurrence: self.failure.occurrence,
+                node,
+                block: first,
+                param: None,
+            });
         }
         RefetchStepV1::Waiting
     }
@@ -288,7 +297,9 @@ pub(crate) enum WitnessStepV1 {
     /// Every chunk is in: the witness image (the chunks in order).
     Ready(Vec<u8>),
     /// A chunk nobody served by the patience: the manifest's chunk (`1 + index`), named.
-    Unavailable { chunk_index: u32 },
+    Unavailable {
+        chunk_index: u32,
+    },
 }
 
 /// **One claim's witness, fetched** (RFC-0007 §II.7): the seat asks the producer for each of the claim's witness chunks (the count the chain pinned
@@ -372,7 +383,8 @@ mod tests {
         let analysis = TirSketchAnalysisV1::of(&plan.program);
         let address = tir_block_address_v1(plan, &analysis, ordinal, 0).unwrap();
         let served = palw_weight_block_serve_v1(&entry, ordinal, 0).expect("a holder serves the block");
-        let pieces = palw_weight_block_accept_v1(&served, ir.root, &plan.program, &address).expect("it opens against the artifact root");
+        let pieces =
+            palw_weight_block_accept_v1(&served, ir.root, &plan.program, &address).expect("it opens against the artifact root");
         // The bytes are the artifact's own at those offsets.
         let whole = entry.artifact.tensor_bytes(address.param, address.layer).expect("the instance");
         for (start, bytes) in &pieces {
@@ -384,10 +396,16 @@ mod tests {
         );
         let mut forged: PalwArtifactMultiproofV1 = borsh::from_slice(&served).unwrap();
         forged.opened[0].1.bytes[0] ^= 1;
-        assert!(palw_weight_block_accept_v1(&borsh::to_vec(&forged).unwrap(), ir.root, &plan.program, &address).is_err(), "a flipped byte is refused");
+        assert!(
+            palw_weight_block_accept_v1(&borsh::to_vec(&forged).unwrap(), ir.root, &plan.program, &address).is_err(),
+            "a flipped byte is refused"
+        );
         let other = TirBlockAddressV1 { param: address.param.wrapping_add(1) % plan.program.params.len() as u16, ..address.clone() };
         if other.param != address.param {
-            assert!(palw_weight_block_accept_v1(&served, ir.root, &plan.program, &other).is_err(), "another tensor's leaves are refused");
+            assert!(
+                palw_weight_block_accept_v1(&served, ir.root, &plan.program, &other).is_err(),
+                "another tensor's leaves are refused"
+            );
         }
         assert!(palw_weight_block_serve_v1(&entry, ordinal, 1).is_none(), "a block past the count has no answer");
         assert!(palw_weight_block_serve_v1(&entry, u32::MAX >> 16, 0).is_none(), "nor a site past the sites");
@@ -432,18 +450,24 @@ mod tests {
         assert!(matches!(p.step(&entry, &none, 200, &conclude), RefetchStepV1::Ask(_)));
         assert!(matches!(p.step(&entry, &none, 200 + REFETCH_PATIENCE_DAA_V1 - 1, &conclude), RefetchStepV1::Waiting));
         match p.step(&entry, &none, 200 + REFETCH_PATIENCE_DAA_V1, &conclude) {
-            RefetchStepV1::Done(TirEscalationV1::Unavailable { occurrence: o, node: n, block: Some(0), .. }) => assert_eq!((o, n), (occurrence, node)),
+            RefetchStepV1::Done(TirEscalationV1::Unavailable { occurrence: o, node: n, block: Some(0), .. }) => {
+                assert_eq!((o, n), (occurrence, node))
+            }
             other => panic!("{other:?}"),
         }
 
         // A forged answer is no answer: it is the withheld case.
         let mut p = WeightRefetchV1::new(claim, ir.root, failure);
         let RefetchStepV1::Ask(asked) = p.step(&entry, &none, 300, &conclude) else { panic!() };
-        let mut forged: PalwArtifactMultiproofV1 = borsh::from_slice(&palw_weight_block_serve_v1(&entry, ordinal, 0).unwrap()).unwrap();
+        let mut forged: PalwArtifactMultiproofV1 =
+            borsh::from_slice(&palw_weight_block_serve_v1(&entry, ordinal, 0).unwrap()).unwrap();
         forged.opened[0].1.bytes[0] ^= 1;
         let mut pool = HashMap::new();
         pool.insert((claim, asked[0].0), vec![borsh::to_vec(&forged).unwrap()]);
-        assert!(matches!(p.step(&entry, &pool, 300 + REFETCH_PATIENCE_DAA_V1, &conclude), RefetchStepV1::Done(TirEscalationV1::Unavailable { .. })));
+        assert!(matches!(
+            p.step(&entry, &pool, 300 + REFETCH_PATIENCE_DAA_V1, &conclude),
+            RefetchStepV1::Done(TirEscalationV1::Unavailable { .. })
+        ));
     }
 
     /// **The tick path of a served witness**: the producer retains and serves the claim's witness chunks (the resolver arm's own function), the seat's

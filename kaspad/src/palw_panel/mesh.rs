@@ -29,7 +29,13 @@ const PALW_MESH_NOTE_DAA_V1: u64 = 120;
 
 /// **The `Audited` leaf of a finished audit**: the claim named by the DAA its audit was drawn at and a 16-byte prefix (or whole, if the
 /// operator asked for whole ids), the drawn ticket, and `0` for a match, `1` for a mismatch.
-pub(crate) fn palw_mesh_audit_leaf_v1(claim: &Hash64, drawn_daa: u64, ticket: u64, reproduced: bool, full_refs: bool) -> PalwVertexLeafV1 {
+pub(crate) fn palw_mesh_audit_leaf_v1(
+    claim: &Hash64,
+    drawn_daa: u64,
+    ticket: u64,
+    reproduced: bool,
+    full_refs: bool,
+) -> PalwVertexLeafV1 {
     let claim = if full_refs {
         PalwClaimRefV1::Full(*claim)
     } else {
@@ -104,7 +110,8 @@ impl super::PalwPanelService {
         mesh: &mut PalwMeshNodeV1,
     ) {
         // 1. A replay that has finished becomes a leaf.
-        let finished: Vec<Hash64> = mesh.running.iter().filter(|(_, (handle, _, _))| handle.is_finished()).map(|(claim, _)| *claim).collect();
+        let finished: Vec<Hash64> =
+            mesh.running.iter().filter(|(_, (handle, _, _))| handle.is_finished()).map(|(claim, _)| *claim).collect();
         for claim in finished {
             let Some((handle, drawn_daa, ticket)) = mesh.running.remove(&claim) else { continue };
             match handle.await {
@@ -113,7 +120,9 @@ impl super::PalwPanelService {
                     mesh.answered.insert(claim);
                     if reproduced {
                         mesh.audits_matched += 1;
-                        info!("[{PALW_PANEL}] audit of claim {claim}: this seat reproduces its execution — attesting a match (RFC-0007 Part IV.1)");
+                        info!(
+                            "[{PALW_PANEL}] audit of claim {claim}: this seat reproduces its execution — attesting a match (RFC-0007 Part IV.1)"
+                        );
                     } else {
                         mesh.audits_mismatched += 1;
                         warn!(
@@ -145,7 +154,10 @@ impl super::PalwPanelService {
                 Some(Ok(_)) => true,
                 Some(Err(why)) => {
                     if mesh.note_once(&duty.claim_id, current_daa) {
-                        warn!("[{PALW_PANEL}] audit of claim {}: the IR backend does not build for its class ({why}); nothing attested", duty.claim_id);
+                        warn!(
+                            "[{PALW_PANEL}] audit of claim {}: the IR backend does not build for its class ({why}); nothing attested",
+                            duty.claim_id
+                        );
                     }
                     false
                 }
@@ -162,9 +174,14 @@ impl super::PalwPanelService {
                 continue;
             }
             let Ok(backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { continue };
-            let Some((job, prompt)) =
-                self.attempt_job_for_claim(session, backend.as_ref(), network_domain, duty.accepted_block, duty.class_id, &duty.executor_bond)
-            else {
+            let Some((job, prompt)) = self.attempt_job_for_claim(
+                session,
+                backend.as_ref(),
+                network_domain,
+                duty.accepted_block,
+                duty.class_id,
+                &duty.executor_bond,
+            ) else {
                 continue;
             };
             let (execution_root, trace_root) = (duty.execution_root, duty.trace_root);
@@ -282,7 +299,8 @@ impl PalwTrapBookV1 {
         }
         let (index, plan) = self.plans.iter().enumerate().find(|(_, plan)| !plan.committed)?;
         let (claim, salt) = (plan.claim_id()?, plan.salt_bytes()?);
-        let object = PalwTrapCommittedV1::sign_v1(network_domain, setter, &claim, plan.fault_leaf, plan.tiles, &salt, |m, c| sign(m, c))?;
+        let object =
+            PalwTrapCommittedV1::sign_v1(network_domain, setter, &claim, plan.fault_leaf, plan.tiles, &salt, |m, c| sign(m, c))?;
         Some((index, object))
     }
 
@@ -305,8 +323,15 @@ impl PalwTrapBookV1 {
             if daa < audit_end || daa > row_end {
                 return None;
             }
-            let object =
-                PalwTrapRevealedV1::sign_v1(network_domain, setter, claim, plan.fault_leaf, plan.tiles, plan.salt_bytes()?, |m, c| sign(m, c))?;
+            let object = PalwTrapRevealedV1::sign_v1(
+                network_domain,
+                setter,
+                claim,
+                plan.fault_leaf,
+                plan.tiles,
+                plan.salt_bytes()?,
+                |m, c| sign(m, c),
+            )?;
             Some((index, object))
         })
     }
@@ -341,7 +366,9 @@ impl PalwTrapBookV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::palw_mesh_v1::{PALW_MESH_TRAP_COMMITTED_MLDSA87_CONTEXT_V1, PALW_MESH_TRAP_REVEALED_MLDSA87_CONTEXT_V1, PALW_TRAP_SLOT_DAA_V1};
+    use kaspa_consensus_core::palw_mesh_v1::{
+        PALW_MESH_TRAP_COMMITTED_MLDSA87_CONTEXT_V1, PALW_MESH_TRAP_REVEALED_MLDSA87_CONTEXT_V1, PALW_TRAP_SLOT_DAA_V1,
+    };
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
     fn setter(i: u8) -> PalwBondKeyV2 {
@@ -439,6 +466,9 @@ mod tests {
         assert_eq!(book.len(), 1);
         let me = setter(1);
         let sign = |_: &[u8], _: &[u8]| Some(vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]);
-        assert!(book.next_commit(Hash64::from_bytes([1; 64]), me, drawn_daa(&me), &sign).is_none(), "a plan with a bad claim or salt carries nothing");
+        assert!(
+            book.next_commit(Hash64::from_bytes([1; 64]), me, drawn_daa(&me), &sign).is_none(),
+            "a plan with a bad claim or salt carries nothing"
+        );
     }
 }

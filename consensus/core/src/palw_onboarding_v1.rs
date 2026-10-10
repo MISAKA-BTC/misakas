@@ -442,6 +442,8 @@ impl PalwKernelRouteStateV1 {
     /// [`Self::onboarding_identity_gate_v1`]: availability never holds a class. (The integration head `679a0d7f8` still called the
     /// removed `provider_pair_lapsed_since_v1` here and did not compile; lane K2S, 2026-10-10.)
     pub fn onboarding_gate_v1(&self, class: &Hash64, artifact_root: &Hash64, daa: u64) -> PalwOnboardingGateV1 {
+        // ADR-0177 / DA16b: the artifact-lapse hold is withdrawn with the `Artifact` lease subject (its lapse rows no longer exist), so
+        // the gate is its identity part. (The integration merge kept this caller of the removed `provider_pair_lapsed_since_v1`.)
         self.onboarding_identity_gate_v1(class, artifact_root, daa)
     }
 
