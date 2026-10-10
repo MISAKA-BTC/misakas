@@ -939,6 +939,7 @@ pub fn vision_features(s: &crate::lower::vision::VisionSpec) -> Vec<FeatureUse> 
     match &s.out {
         VisionOut::Rows => u.add("OUTPUT_ROWS_NORMED_V1", None, ""),
         VisionOut::ClipPooled { .. } => u.add("OUTPUT_EMBEDDING_V1", None, "the class row"),
+        VisionOut::Classify { labels } => u.add("OUTPUT_CLASSIFY_V1", None, format!("{labels} labels (the class row, then the classifier)")),
         VisionOut::SiglipHead => u.add("HEAD_POOL_ATTENTION_V1", None, ""),
         VisionOut::Merger { .. } | VisionOut::Projector { .. } => u.add("OUTPUT_EMBEDDING_V1", None, "rows"),
     }

@@ -574,6 +574,11 @@ impl JudgeCache {
             model::RoutedClass::Undeclarable { kind, adapter, why } => {
                 st.update(format!("undeclarable|{kind}|{adapter}|{why}").as_bytes());
             }
+            model::RoutedClass::Image(e) => {
+                st.update(&e.program.encode());
+                st.update(&e.pipeline.encode());
+                st.update(format!("|image|{}|{}|{}|{:?}", e.kind, e.rows, e.width, e.size).as_bytes());
+            }
             model::RoutedClass::Encoder(e) => {
                 st.update(&e.program.encode());
                 st.update(&e.pipeline.encode());
@@ -779,6 +784,10 @@ fn run_on_source_cached(
         // token axis, so the kernel route that can hold it is K2-TIR-v5's (element courts), reported beside the generative verdict.
         .or_else(|| match &analysis.routed {
             Some(model::RoutedClass::Encoder(shape)) => Some(kernel::encoder_route_of(&shape.program, kernel_daa)),
+            // An image classifier's pipeline is the media-pipeline family's (K2-TIR-v3), as a vision-chat model's tower is.
+            Some(model::RoutedClass::Image(shape)) => {
+                Some(kernel::pipeline_route_of(&shape.pipeline, std::slice::from_ref(&shape.program), kernel_daa))
+            }
             _ => None,
         });
     Ok(Report {

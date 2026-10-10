@@ -171,3 +171,26 @@ fn an_i64_position_ids_buffer_is_not_a_quantisation_blocker() {
         "the buffer changes no verdict"
     );
 }
+
+/// **A fine-tune without a tokenizer file binds its pinned base's** (HFX 2026-10-10; `TOKENIZER_MISSING`): the census (or a registrant)
+/// offers `Options::base_tokenizer`, and the preflight accepts it only when this model's own configuration declares the same
+/// vocabulary size — every id the tokenizer can emit then indexes a row of the embedding table. Without the offer, or with another
+/// vocabulary, the blocker stands.
+#[test]
+fn a_base_tokenizer_of_the_same_vocabulary_replaces_the_missing_tokenizer_blocker() {
+    use misaka_palw_sdk::preflight::BaseTokenizerV1;
+    let dir = fixture("hf-enc/bert");
+    let vocab = serde_json::from_slice::<serde_json::Value>(&std::fs::read(dir.join("config.json")).unwrap()).unwrap()["vocab_size"]
+        .as_u64()
+        .expect("the fixture declares vocab_size");
+    let missing = |r: &Report| r.blockers().iter().any(|b| b.code == "TOKENIZER_MISSING");
+    // The fixture directory carries no tokenizer file.
+    let bare = run(&dir, &judged(9_000)).expect("preflight");
+    assert!(missing(&bare), "{:?}", bare.blockers().iter().map(|b| &b.code).collect::<Vec<_>>());
+    let offer = |v: u64| Options { base_tokenizer: Some(BaseTokenizerV1 { base: "org/base-bert".into(), vocab_size: v }), ..judged(9_000) };
+    let bound = run(&dir, &offer(vocab)).expect("preflight");
+    assert!(!missing(&bound), "{:?}", bound.blockers().iter().map(|b| &b.code).collect::<Vec<_>>());
+    assert!(bound.notes.iter().any(|n| n.starts_with("TOKENIZER_BOUND_FROM_BASE") && n.contains("org/base-bert")), "{:?}", bound.notes);
+    let wrong = run(&dir, &offer(vocab + 1)).expect("preflight");
+    assert!(missing(&wrong), "another vocabulary is not the base's tokenizer for this table");
+}

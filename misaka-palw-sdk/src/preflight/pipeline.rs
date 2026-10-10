@@ -306,8 +306,8 @@ pub fn judge_pipeline(net: &PreflightNetwork, opts: &Options, routed: &RoutedCla
             admission.gate = "not asked".into();
             admission.gate_detail = Some(why.clone());
         }
-        // A bidirectional encoder's class is judged by `judge_encoder` (below the match).
-        RoutedClass::Encoder(_) => {}
+        // A bidirectional encoder's class is judged by `judge_encoder`, an image classifier's by `judge_image` (below the match).
+        RoutedClass::Encoder(_) | RoutedClass::Image(_) => {}
         RoutedClass::EncDec(st) => {
             let (armed_params, hypo) = match gen_params(net, height) {
                 Ok(x) => x,
@@ -552,6 +552,9 @@ pub fn judge_pipeline(net: &PreflightNetwork, opts: &Options, routed: &RoutedCla
     if let RoutedClass::Encoder(enc) = routed {
         return judge_encoder(out, net, opts, enc, height, daa_choice, gen_activation, judge_daa, tir_armed, what_if, admission);
     }
+    if let RoutedClass::Image(img) = routed {
+        return judge_image(out, net, opts, img, height, daa_choice, gen_activation, judge_daa, tir_armed, what_if, admission);
+    }
 
     finish(out, net, daa_choice, judge_daa, tir_armed, what_if, admission, conditions, register, mine, seat, notes, pipeline_info)
 }
@@ -629,9 +632,99 @@ fn encoder_class(enc: &misaka_palw_tir_lower::model::route::BidirClassShapeV1, c
     }
 }
 
-/// **Judge a bidirectional encoder's class** (HFX 2026-10-08): an embedding is an `Embedding`-profile class under `palw_gen_v1`; a
-/// head (a sequence classifier, a token or span head) is the dormant `Head` profile's — `FENCE_NOT_ARMED(palw_task_heads_v1)` on every
-/// ruleset of this build, with the admission that profile would run recorded beside it (`HEAD_PROFILE_HYPOTHETICAL: …`), never a pass.
+/// What an image classifier's class declares shape-only (recorded in every report that judges one).
+pub const IMAGE_CONVENTIONS_V1: &[&str] = &[
+    "the artifact root and the tokenizer id are placeholders (the inventory needs the weights)",
+    "the image slot is the configuration's canonical size (`image_size`; a convolutional network's config declares none, so 224x224), RGB u8, unit 1.0 (a scale changes constants, not the program's structure or cost)",
+    "the label map's root is a placeholder (a header carries no `id2label` the census keeps); the class is the `Head` profile's IMAGE task, hypothetically",
+    "the layout is the first of a short list the pipeline admission admits (commit tile 64/32/16/256 lanes, logits tile 256/1,024, history tile 32/16/8, widest checkpoint interval)",
+];
+
+/// The class of an image classifier under one layout: the `Head` profile's IMAGE task over one image slot, `[1, labels]`.
+fn image_class(img: &misaka_palw_tir_lower::model::route::ImageClassShapeV1, choice: &GenLayoutChoiceV1) -> PalwGenClassV1 {
+    use kaspa_consensus_core::palw_gen_class_v1::PalwGenImageOfferV1;
+    use kaspa_consensus_core::palw_task_heads_v1 as heads;
+    let programs = std::slice::from_ref(&img.program);
+    PalwGenClassV1 {
+        version: PALW_GEN_CLASS_VERSION_V1,
+        profile: PalwGenProfileV1::Head as u8,
+        pipeline: img.pipeline.encode(),
+        programs: vec![img.program.encode()],
+        layouts: gen_default_layouts_v1(&img.pipeline, programs, choice, choice.checkpoint_interval),
+        output: OutputSpecV1::embedding_i32(img.rows, img.width, 0, false),
+        offers: PalwGenOffersV1 {
+            steps: vec![],
+            scalars: vec![],
+            max_prompt_tokens: 0,
+            max_negative_tokens: 0,
+            images: vec![PalwGenImageOfferV1 { h: img.size.0, w: img.size.1, tile_len: 64, token_equivalents: 0 }],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::Head(heads::PalwGenHeadOffersV1 {
+                task: heads::PALW_HEAD_TASK_IMAGE_V1,
+                problem: heads::PALW_HEAD_PROBLEM_SINGLE_LABEL_V1,
+                labels: img.labels,
+                label_map_root: heads::palw_head_label_map_root_v1(&[]),
+                pair_separator: vec![],
+                entailment_label: None,
+                position_scalar: None,
+            }),
+        },
+        tokenizer_id: Hash64::from_bytes([0; 64]),
+    }
+}
+
+/// **Judge an image classifier's class** (HFX 2026-10-10): the `Head` profile's IMAGE task over one image slot, judged exactly as a
+/// bidirectional encoder's head is (the fence armed hypothetically at the judged height; the blocker below says it is armed nowhere).
+#[allow(clippy::too_many_arguments)]
+fn judge_image(
+    out: ChainOutput,
+    net: &PreflightNetwork,
+    opts: &Options,
+    img: &misaka_palw_tir_lower::model::route::ImageClassShapeV1,
+    height: u64,
+    daa_choice: String,
+    gen_activation: Option<u64>,
+    judge_daa: u64,
+    tir_armed: bool,
+    what_if: Option<String>,
+    admission: super::chain::AdmissionInfo,
+) -> ChainOutput {
+    let class_of = |choice: &GenLayoutChoiceV1| image_class(img, choice);
+    let d = DeclaredV1 {
+        kind: format!("image:{}", img.kind),
+        head_name: "image",
+        is_head: true,
+        program: &img.program,
+        positions: 1,
+        rows: img.rows,
+        width: img.width,
+        stage_name: "vision",
+        conventions: IMAGE_CONVENTIONS_V1,
+        class_of: &class_of,
+    };
+    judge_declared(out, net, opts, &d, height, daa_choice, gen_activation, judge_daa, tir_armed, what_if, admission)
+}
+
+/// A declared shape-only class as the one judge reads it (a bidirectional encoder's or an image model's).
+struct DeclaredV1<'a> {
+    /// The report's `PipelineInfo::kind` (`encoder:sequence`, `image:classifier`).
+    kind: String,
+    /// The head's name in words (`sequence`, `token`, `classifier`).
+    head_name: &'a str,
+    /// A `Head`-profile class (its fence is the dormant `palw_task_heads_v1`), else an `Embedding`-profile one.
+    is_head: bool,
+    program: &'a misaka_palw_tir::program_v2::TirProgramV2,
+    /// The declared context in positions (a padded token axis; 1 for an image).
+    positions: u32,
+    rows: u32,
+    width: u32,
+    stage_name: &'static str,
+    conventions: &'static [&'static str],
+    class_of: &'a dyn Fn(&GenLayoutChoiceV1) -> PalwGenClassV1,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn judge_encoder(
     out: ChainOutput,
@@ -643,16 +736,49 @@ fn judge_encoder(
     gen_activation: Option<u64>,
     judge_daa: u64,
     tir_armed: bool,
+    what_if: Option<String>,
+    admission: super::chain::AdmissionInfo,
+) -> ChainOutput {
+    use misaka_palw_tir_lower::model::route::BidirHeadV1;
+    let class_of = |choice: &GenLayoutChoiceV1| encoder_class(enc, choice);
+    let d = DeclaredV1 {
+        kind: format!("encoder:{}", enc.head.name()),
+        head_name: enc.head.name(),
+        is_head: enc.head != BidirHeadV1::Embedding,
+        program: &enc.program,
+        positions: enc.lmax,
+        rows: enc.rows,
+        width: enc.width,
+        stage_name: "encoder",
+        conventions: ENCODER_CONVENTIONS_V1,
+        class_of: &class_of,
+    };
+    judge_declared(out, net, opts, &d, height, daa_choice, gen_activation, judge_daa, tir_armed, what_if, admission)
+}
+
+/// **Judge a declared shape-only class** — a bidirectional encoder's (HFX 2026-10-08) or an image classifier's / backbone's (HFX 2026-10-10): an embedding is an `Embedding`-profile class under `palw_gen_v1`; a
+/// head (a sequence classifier, a token or span head) is the dormant `Head` profile's — `FENCE_NOT_ARMED(palw_task_heads_v1)` on every
+/// ruleset of this build, with the admission that profile would run recorded beside it (`HEAD_PROFILE_HYPOTHETICAL: …`), never a pass.
+#[allow(clippy::too_many_arguments)]
+fn judge_declared(
+    out: ChainOutput,
+    net: &PreflightNetwork,
+    opts: &Options,
+    enc: &DeclaredV1<'_>,
+    height: u64,
+    daa_choice: String,
+    gen_activation: Option<u64>,
+    judge_daa: u64,
+    tir_armed: bool,
     mut what_if: Option<String>,
     mut admission: super::chain::AdmissionInfo,
 ) -> ChainOutput {
-    use misaka_palw_tir_lower::model::route::BidirHeadV1;
     let bundle = &net.bundle;
     let mut register: Vec<Blocker> = Vec::new();
     let mut mine: Vec<Blocker> = Vec::new();
     let mut conditions: Vec<Condition> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
-    let head = enc.head != BidirHeadV1::Embedding;
+    let head = enc.is_head;
     let (mut armed_params, hypo) = match gen_params(net, height) {
         Ok(x) => x,
         Err(e) => {
@@ -679,7 +805,7 @@ fn judge_encoder(
                 "FENCE_NOT_ARMED",
                 format!(
                     "a {} head is a task of the `Head` profile (task-heads-profile-v1), behind {}, which no ruleset schedules: not registrable at any height",
-                    enc.head.name(),
+                    enc.head_name,
                     crate::census::tasks::HEAD_PROFILE_FENCE
                 ),
             )
@@ -711,7 +837,7 @@ fn judge_encoder(
     for (tile_len, output_tile, h_chunk, checkpoint) in LAYOUTS {
         let choice = GenLayoutChoiceV1 { tile_len, output_tile, h_chunk, checkpoint_interval: checkpoint };
         let tag = format!("layout ({tile_len},{output_tile:?},{h_chunk},{checkpoint})");
-        let class = encoder_class(enc, &choice);
+        let class = (enc.class_of)(&choice);
         let object = match palw_gen_post_genesis_registration_v1(
             class.clone(),
             Hash64::from_bytes([0; 64]),
@@ -785,13 +911,13 @@ fn judge_encoder(
                 source: "the court's max_step_leaf_count".into(),
             });
             admission.layout = Some(LayoutInfo {
-                max_context: enc.lmax,
+                max_context: enc.positions,
                 checkpoint_interval: class.layouts[0].checkpoint_interval,
                 h_tile: class.layouts[0].h_tile,
                 commit_tiles: class.layouts[0].commit_tiles.len(),
                 logits_tile: choice.output_tile,
                 searched: false,
-                widest_context: enc.lmax,
+                widest_context: enc.positions,
             });
             admission.numbers = Some(g);
             let (mut state, mut peak, mut tile) = (0u64, 0u64, 0u64);
@@ -807,10 +933,10 @@ fn judge_encoder(
             if head && !heads_armed_here {
                 notes.push(format!(
                     "{HEAD_PROFILE_HYPOTHETICAL_V1}: admitted ({} head, [{}, {}] at {} positions)",
-                    enc.head.name(),
+                    enc.head_name,
                     enc.rows,
                     enc.width,
-                    enc.lmax
+                    enc.positions
                 ));
             }
             shown_class = Some(class);
@@ -830,10 +956,10 @@ fn judge_encoder(
         }
     }
     let class = shown_class.unwrap_or_else(|| {
-        encoder_class(enc, &GenLayoutChoiceV1 { tile_len: 64, output_tile: Some(256), h_chunk: 32, checkpoint_interval: 64 })
+        (enc.class_of)(&GenLayoutChoiceV1 { tile_len: 64, output_tile: Some(256), h_chunk: 32, checkpoint_interval: 64 })
     });
     let pipeline_info = Some(PipelineInfo {
-        kind: format!("encoder:{}", enc.head.name()),
+        kind: enc.kind.clone(),
         profile: if head && !heads_armed_here {
             "Head (hypothetical: palw_task_heads_v1 armed for the judgment)".into()
         } else if head {
@@ -843,9 +969,9 @@ fn judge_encoder(
         },
         adapter: String::new(),
         source_len: 0,
-        target_len: enc.lmax,
+        target_len: enc.positions,
         stages: vec![PipelineStageInfo {
-            name: "encoder".into(),
+            name: enc.stage_name.into(),
             max_trip: 1,
             nodes: admission.nodes,
             commit_tile: class.layouts[0].commit_tiles.iter().copied().max().unwrap_or(0),
@@ -854,7 +980,7 @@ fn judge_encoder(
         }],
         source_token_floor: 0,
         admitted: admission.gate == "admitted",
-        conventions: ENCODER_CONVENTIONS_V1.iter().map(|s| s.to_string()).collect(),
+        conventions: enc.conventions.iter().map(|s| s.to_string()).collect(),
     });
     finish(out, net, daa_choice, judge_daa, tir_armed, what_if, admission, conditions, register, mine, seat, notes, pipeline_info)
 }

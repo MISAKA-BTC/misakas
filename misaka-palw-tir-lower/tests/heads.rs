@@ -41,6 +41,11 @@ const TOKEN_HEADS: &[(&str, &str, usize, u32)] = &[
     ("bert_qa", "bert-qa", 2, 0),
     ("roberta_qa", "roberta-qa", 2, 1),
     ("distilbert_qa", "distilbert-qa", 2, 0),
+    // HFX 2026-10-10: ALBERT and DeBERTa-v2.
+    ("albert_tokcls", "albert-tokcls", 4, 0),
+    ("albert_qa", "albert-qa", 2, 0),
+    ("deberta_v2_tokcls", "deberta-v2-tokcls", 4, 0),
+    ("deberta_v2_qa", "deberta-v2-qa", 2, 0),
 ];
 
 struct OneProgram<'a>(&'a dyn tir::ParamSource);

@@ -39,6 +39,7 @@ pack!(
     "clip-vision",
     "siglip-vision",
     "vit",
+    "vit-imgcls",
     "qwen2-vl-vision",
     "qwen2-vl-vision-in-vlm",
     "qwen2-5-vl-vision",
@@ -171,6 +172,12 @@ pack!(
     "roberta-qa",
     "distilbert-tokcls",
     "distilbert-qa",
+    "albert-seqcls",
+    "albert-tokcls",
+    "albert-qa",
+    "deberta-v2-seqcls",
+    "deberta-v2-tokcls",
+    "deberta-v2-qa",
 );
 
 /// The text of a built-in adapter, by id.

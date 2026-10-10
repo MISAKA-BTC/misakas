@@ -377,3 +377,114 @@ pub fn lower_bidir_class_shape_with_v1(
         pair_sep: extras.pair_sep,
     })
 }
+
+// ───────────────────────────── image classifiers (HFX 2026-10-10) ─────────────────────────────
+
+/// **An image classifier's class, shape-only**: the one-stage RFC-0003 pipeline a `…ForImageClassification` repository registers as —
+/// the vision tower (a ViT) or the convolutional network (a ResNet, ConvNeXt, MobileNet) over the job's canonical image
+/// (`Binding::JobImage`), ending in the checkpoint's classifier — lowered from the configuration alone. No weight is read: a program's
+/// structure does not depend on the weights or on the calibration. The tower's projections are stored out-major (a commit tile of
+/// output channels reads contiguous weight rows: the layout a stage's closes need to be carriable), the same integers either way.
+#[derive(Clone, Debug)]
+pub struct ImageClassShapeV1 {
+    /// `vision` (a ViT) or `cnn`.
+    pub kind: &'static str,
+    /// The adapter that read the configuration (`vit-imgcls`, `resnet`, …).
+    pub adapter: String,
+    pub program: misaka_palw_tir::program_v2::TirProgramV2,
+    pub pipeline: misaka_palw_tir::pipeline::TirPipelineV1,
+    /// The canonical image size the class declares (the configuration's).
+    pub size: (u32, u32),
+    /// The output `[1, labels]`.
+    pub rows: u32,
+    pub width: u32,
+    /// The classifier's labels.
+    pub labels: u32,
+}
+
+/// What an image configuration yields at the shape depth.
+#[derive(Clone, Debug)]
+pub enum ImageShapeV1 {
+    Class(Box<ImageClassShapeV1>),
+    /// A class this build does not declare from headers, and why (never a pass): an image BACKBONE (no classifier) is an
+    /// `Embedding`-profile class over an image slot.
+    NotDeclarable(String),
+}
+
+/// Read, lower and lift a vision tower or a convolutional network to its one-stage image-classifier class.
+pub fn lower_image_class_shape_v1(cfg: &Value) -> Result<ImageShapeV1, String> {
+    use crate::encoder;
+    use crate::hf_schema::{AdapterSource, is_cnn, is_vision_tower, read_cnn, read_vision};
+    use crate::lower::{cnn, vision};
+    use misaka_palw_tir::pipeline::{Binding, StageDecl, TirPipelineV1, TripRule};
+    let r = catch_unwind(AssertUnwindSafe(|| -> Result<ImageShapeV1, String> {
+        let opts = ReadOptions { adapter: AdapterChoice::Auto };
+        let (kind, adapter, program, size, labels): (&'static str, String, misaka_palw_tir::program_v2::TirProgramV2, (u32, u32), Option<usize>) =
+            if is_vision_tower(cfg) {
+                let r = read_vision(cfg, &opts).map_err(|f| f.error.to_string())?;
+                let labels = match r.spec.out {
+                    vision::VisionOut::Classify { labels } => Some(labels),
+                    _ => None,
+                };
+                let (hl, _) = vision::hl_program(&r.spec).map_err(|e| format!("hl: {e}"))?;
+                let lw = vision::lower_vision_with(&hl, &r.spec, true).map_err(|e| format!("lower: {e}"))?;
+                let p2 = encoder::vision_v2(&lw).map_err(|e| format!("v2: {e}"))?;
+                let id = match &r.adapter {
+                    AdapterSource::BuiltIn { id, .. } => id.clone(),
+                    other => format!("{other:?}"),
+                };
+                ("vision", id, p2, (r.spec.h, r.spec.w), labels)
+            } else if is_cnn(cfg) {
+                let r = read_cnn(cfg, &opts).map_err(|f| f.error.to_string())?;
+                let labels = r.spec.head.as_ref().map(|h| h.labels);
+                let (hl, _) = cnn::hl_program(&r.spec).map_err(|e| format!("hl: {e}"))?;
+                let lw = cnn::lower_cnn(&hl, &r.spec).map_err(|e| format!("lower: {e}"))?;
+                let p2 = encoder::vision_v2(&lw).map_err(|e| format!("v2: {e}"))?;
+                let id = match &r.adapter {
+                    AdapterSource::BuiltIn { id, .. } => id.clone(),
+                    other => format!("{other:?}"),
+                };
+                ("cnn", id, p2, (r.spec.h, r.spec.w), labels)
+            } else {
+                return Err("not a vision tower or a convolutional network".into());
+            };
+        let Some(labels) = labels else {
+            return Ok(ImageShapeV1::NotDeclarable(
+                "an image backbone (no classifier head) is an Embedding-profile class over an image slot, which this build does not declare from headers"
+                    .into(),
+            ));
+        };
+        let misaka_palw_tir::program_v2::OutputDecl::Final { node } = program.output else {
+            return Err("an image classifier's output is Final".into());
+        };
+        let shape = &program.blocks[program.schedule.post as usize].nodes[node as usize].out.shape;
+        let (rows, width) = match shape.as_slice() {
+            [misaka_palw_tir::Dim::Fixed(r), misaka_palw_tir::Dim::Fixed(w)] => (*r, *w),
+            s => return Err(format!("an image classifier's output is [1, labels], not {s:?}")),
+        };
+        if rows != 1 || width as usize != labels {
+            return Err(format!("an image classifier's output is [1, {labels}], not [{rows}, {width}]"));
+        }
+        let pipeline = TirPipelineV1 {
+            version: 1,
+            stages: vec![StageDecl {
+                name: "vision".into(),
+                program: 0,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![Binding::JobImage { index: 0 }],
+            }],
+            output_stage: 0,
+        };
+        misaka_palw_tir::pipeline::validate_pipeline(&pipeline, std::slice::from_ref(&program)).map_err(|e| format!("pipeline normal form: {e}"))?;
+        Ok(ImageShapeV1::Class(Box::new(ImageClassShapeV1 { kind, adapter, program, pipeline, size, rows, width, labels: labels as u32 })))
+    }));
+    match r {
+        Ok(v) => v,
+        Err(p) => Err(short_msg(
+            &p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default(),
+            300,
+        )),
+    }
+}

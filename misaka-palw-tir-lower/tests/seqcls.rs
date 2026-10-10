@@ -180,6 +180,10 @@ const ENCODERS: &[(&str, &str, usize, bool, u32)] = &[
     ("roberta_cls", "roberta-seqcls", 2, true, 1),
     ("xlmr_rerank", "roberta-seqcls", 1, true, 1),
     ("distilbert_cls", "distilbert-seqcls", 2, true, 0),
+    // HFX 2026-10-10: ALBERT's pooler, DeBERTa-v2's ContextPooler, CamemBERT under RoBERTa's head.
+    ("albert_cls", "albert-seqcls", 3, true, 0),
+    ("deberta_v2_cls", "deberta-v2-seqcls", 3, true, 0),
+    ("camembert_cls", "roberta-seqcls", 2, true, 1),
 ];
 
 #[test]

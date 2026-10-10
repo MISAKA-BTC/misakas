@@ -40,6 +40,12 @@ DISTIL = dict(vocab_size=V, dim=32, hidden_dim=64, n_layers=2, n_heads=4, max_po
 # [CLS] 2, [SEP] 3 (BERT family); <s> 0, </s> 2, <pad> 1 (RoBERTa family). A pair is `a [SEP] b` / `a </s></s> b`.
 BSEQ = [[2, 11, 25, 7, 3], [2, 40, 9, 17, 3, 33, 21, 8, 3]]
 RSEQ = [[0, 11, 25, 7, 2], [0, 40, 9, 17, 2, 2, 33, 21, 8, 2]]
+ALBERT = dict(ENC, embedding_size=16, max_position_embeddings=32, type_vocab_size=2, hidden_act="gelu_new", layer_norm_eps=1e-12,
+              pad_token_id=0, num_hidden_groups=1, inner_group_num=1)
+DEBERTA = dict(ENC, max_position_embeddings=32, type_vocab_size=0, hidden_act="gelu", layer_norm_eps=1e-7, pad_token_id=0,
+               relative_attention=True, position_buckets=8, max_relative_positions=-1, pos_att_type=["p2c", "c2p"], share_att_key=True,
+               norm_rel_ebd="layer_norm", position_biased_input=False, pooler_hidden_size=32, pooler_hidden_act="gelu", legacy=True)
+DSEQ2 = [[1, 11, 25, 7, 2], [1, 40, 9, 17, 2, 33, 21, 8, 2]]
 MASK_B = 4  # an id used as the mask token in the MLM fixtures (any id: the class reads the row at a position)
 
 # name -> (config class, model class, kwargs, sequences, head, pad, lmax, separator id for the pair-segment record)
@@ -50,6 +56,11 @@ CONFIGS = {
     "bert_qa": ("BertConfig", "BertForQuestionAnswering", dict(BERT), BSEQ, "qa", 0, 12, 3),
     "roberta_qa": ("RobertaConfig", "RobertaForQuestionAnswering", dict(ROBERTA), RSEQ, "qa", 1, 12, None),
     "distilbert_qa": ("DistilBertConfig", "DistilBertForQuestionAnswering", dict(DISTIL), BSEQ, "qa", 0, 12, None),
+    # HFX 2026-10-10: ALBERT and DeBERTa-v2 task heads (ALBERT: [CLS] 2, [SEP] 3; DeBERTa-v2: [CLS] 1, [SEP] 2).
+    "albert_tokcls": ("AlbertConfig", "AlbertForTokenClassification", dict(ALBERT, num_labels=4), BSEQ, "token", 0, 12, None),
+    "albert_qa": ("AlbertConfig", "AlbertForQuestionAnswering", dict(ALBERT), BSEQ, "qa", 0, 12, 3),
+    "deberta_v2_tokcls": ("DebertaV2Config", "DebertaV2ForTokenClassification", dict(DEBERTA, num_labels=4), DSEQ2, "token", 0, 12, None),
+    "deberta_v2_qa": ("DebertaV2Config", "DebertaV2ForQuestionAnswering", dict(DEBERTA), DSEQ2, "qa", 0, 12, None),
     "bert_mlm": ("BertConfig", "BertForMaskedLM", dict(BERT), [[2, 11, MASK_B, 7, 3], [2, 40, 9, 17, 33, MASK_B, 8, 3]], "mlm", 0, 12, None),
     "roberta_mlm": ("RobertaConfig", "RobertaForMaskedLM", dict(ROBERTA), [[0, 11, MASK_B, 7, 2], [0, 40, 9, 17, 33, MASK_B, 8, 2]], "mlm", 1,
                     12, None),

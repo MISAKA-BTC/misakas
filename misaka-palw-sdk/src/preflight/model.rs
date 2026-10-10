@@ -121,6 +121,9 @@ pub enum RoutedClass {
     /// §II.3, `palw_gen_v1`); a head's task profile is the dormant `Head` profile's (`task-heads-profile-v1.md`), judged as that
     /// profile would judge it and refused by name while its fence is not armed.
     Encoder(Box<misaka_palw_tir_lower::model::route::BidirClassShapeV1>),
+    /// **An image classifier's class** (HFX 2026-10-10): a vision tower or a convolutional network ending in its classifier, lowered
+    /// shape-only to a one-stage pipeline over the job's canonical image.
+    Image(Box<misaka_palw_tir_lower::model::route::ImageClassShapeV1>),
 }
 
 /// **Why a bidirectional encoder's class did not lower at `lmax` padded positions, as a blocker.** The IR's element cap (no node holds
@@ -377,6 +380,15 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
                             .evidence([format!("source and target of {ctx} positions: {}", short(&e))]),
                         ),
                     }
+                } else if kind == "vision" || kind == "cnn" {
+                    // An image classifier is declared shape-only (HFX 2026-10-10); a backbone is not.
+                    routed = Some(match misaka_palw_tir_lower::model::route::lower_image_class_shape_v1(config) {
+                        Ok(misaka_palw_tir_lower::model::route::ImageShapeV1::Class(shape)) => RoutedClass::Image(shape),
+                        Ok(misaka_palw_tir_lower::model::route::ImageShapeV1::NotDeclarable(why)) => {
+                            RoutedClass::Undeclarable { why, kind, adapter }
+                        }
+                        Err(why) => RoutedClass::Undeclarable { why: format!("the image class cannot be lowered shape-only: {why}"), kind, adapter },
+                    });
                 } else {
                     routed = Some(RoutedClass::Undeclarable {
                         why: format!(

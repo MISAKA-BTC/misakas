@@ -9,11 +9,13 @@
   "match": {
     "architectures": [
       "RobertaForQuestionAnswering",
-      "XLMRobertaForQuestionAnswering"
+      "XLMRobertaForQuestionAnswering",
+      "CamembertForQuestionAnswering"
     ],
     "model_types": [
       "roberta",
-      "xlm-roberta"
+      "xlm-roberta",
+      "camembert"
     ]
   },
   "vars": [

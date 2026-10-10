@@ -39,7 +39,11 @@ def main():
     ap.add_argument("--name", required=True)
     ap.add_argument("--tree", default="unstated")
     ap.add_argument("--listing", default="dall.listing-v2.jsonl.gz")
+    ap.add_argument("--tasks", help="comma-separated pipeline tags to stratify on (default: the NLU head tasks)")
     a = ap.parse_args()
+    global TASKS
+    if a.tasks:
+        TASKS = a.tasks.split(",")
     snap = Path(a.snapshot).expanduser()
     key = lambda repo: hashlib.blake2b(f"{a.seed}\0head-cohort\0{a.name}\0{repo}".encode(), digest_size=8).hexdigest()  # noqa: E731
     pop = {t: [] for t in TASKS}

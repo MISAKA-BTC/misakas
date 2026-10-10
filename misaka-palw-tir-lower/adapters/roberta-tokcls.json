@@ -9,11 +9,13 @@
   "match": {
     "architectures": [
       "RobertaForTokenClassification",
-      "XLMRobertaForTokenClassification"
+      "XLMRobertaForTokenClassification",
+      "CamembertForTokenClassification"
     ],
     "model_types": [
       "roberta",
-      "xlm-roberta"
+      "xlm-roberta",
+      "camembert"
     ]
   },
   "vars": [
