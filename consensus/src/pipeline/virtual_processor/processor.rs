@@ -256,6 +256,13 @@ pub(crate) fn kernel_route_test_opv_eligible_v1(class: kaspa_hashes::Hash64) {
     }
 }
 
+/// The seam's inverse (`cfg(test)`): a class taken off the list, so a test can make a component lose its eligibility after a typed
+/// class derived from it registered (lane G14C: the commit-time re-gate of typed claims).
+#[cfg(test)]
+pub(crate) fn kernel_route_test_opv_ineligible_v1(class: kaspa_hashes::Hash64) {
+    KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap().retain(|c| *c != class);
+}
+
 #[cfg(test)]
 fn kernel_route_test_opv_eligible_list_v1() -> Vec<kaspa_hashes::Hash64> {
     let mut list = KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap().clone();

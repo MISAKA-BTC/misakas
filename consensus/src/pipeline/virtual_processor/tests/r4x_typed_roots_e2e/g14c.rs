@@ -12,7 +12,7 @@
 
 use super::super::t12_round_lane_e2e::t12_reopened_chain;
 use super::*;
-use crate::pipeline::virtual_processor::processor::kernel_route_test_opv_eligible_v1;
+use crate::pipeline::virtual_processor::processor::{kernel_route_test_opv_eligible_v1, kernel_route_test_opv_ineligible_v1};
 use kaspa_consensus_core::palw_opv_bootstrap_v1::OpvClassFactsV1;
 
 /// `memory_spec`'s shape over another `memory_v1` seed (a class no other test registers or seams).
@@ -282,4 +282,59 @@ async fn r4x_g14c_the_memory_line_survives_a_node_restart_and_carries_on() {
     m.net.final_of(&c2).await;
     assert_eq!(m.head(), *p2.claim.step_roots.last().unwrap(), "the line moved after the restart");
     m.net.assert_replays().await;
+}
+
+/// **A typed class whose component loses its eligibility takes no new claim** (the commit-time re-gate): a memory class admitted
+/// through its rule program's eligibility, a job posted; the component then loses eligibility (taken off the seam — on a network,
+/// its artifact binding refuted or its kernel retired) and the honest claim's reveal is dropped; eligibility back, the same claim
+/// commits and reaches Final.
+#[tokio::test]
+async fn r4x_g14c_a_typed_class_whose_component_lost_eligibility_takes_no_new_claim() {
+    kaspa_core::log::try_init_logger("warn");
+    let (fx, spec) = memory_spec_of(33);
+    kernel_route_test_attest_artifact_v1(Hash64::from_bytes(ParamCommitmentsV1::of(&fx.params).root()), 0);
+    let component = component_of(&fx);
+    kernel_route_test_opv_eligible_v1(component);
+    let mut net = Net::new(true).await;
+    assert!(net.try_register(spec.clone()).await, "admitted through its component");
+    let class = spec.class_id().unwrap();
+    let job =
+        MemoryJobV1 { class, pre_root: net.ledger().typed.lines[&class].head_root, chunks: vec![vec![3, 17, 9]], nonce: [2; 64] };
+    net.post(SpecJobV1::Memory(job.clone())).await;
+    let l = net.ledger();
+    let SpecClassKindV1::Memory { rule, root, writers } = &l.typed.classes[&class].kind else { panic!() };
+    let m0 = vec![fx.params.tensors[&(1, Some(0))].clone()];
+    let p = produce_memory_v1(&class, rule, root, writers, &job, &net.kid(0), &fx.params, &m0, 2, |_, _| {}).unwrap();
+    let id = SpecClaimV1::Memory(p.claim.clone()).id();
+
+    // The component loses its eligibility: the reveal is dropped (nothing committed, the job still open).
+    kernel_route_test_opv_ineligible_v1(component);
+    let ledger = net.ledger();
+    let salt = misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt", &id);
+    let salted = ledger.salted_seals_from().is_some_and(|at| ledger.daa.saturating_add(1) >= at);
+    let seal = if salted { misaka_palw_kernel::ledger::claim_seal_v2(&id, &salt) } else { claim_seal_v1(&id) };
+    let o = net.route(0, &K::SealClaim { producer: net.kid(0), job: SpecClaimV1::Memory(p.claim.clone()).job_id(), seal });
+    net.send(vec![(0, o)]).await;
+    let reveal = |net: &mut Net| {
+        if salted {
+            net.route(
+                0,
+                &K::CommitClaimSalted {
+                    salt,
+                    commit: misaka_palw_kernel::ledger::SaltedCommitV1::Spec { claim: SpecClaimV1::Memory(p.claim.clone()) },
+                },
+            )
+        } else {
+            net.spec(0, SpecObjectV1::CommitClaim { claim: SpecClaimV1::Memory(p.claim.clone()) })
+        }
+    };
+    let o = reveal(&mut net);
+    net.send(vec![(0, o)]).await;
+    assert!(!net.ledger().claims.contains_key(&id), "a class whose component is no longer eligible takes no new claim");
+
+    // Eligibility back: the same claim commits (over a fresh seal) and finalizes.
+    kernel_route_test_opv_eligible_v1(component);
+    let c = net.commit(0, SpecClaimV1::Memory(p.claim.clone())).await;
+    assert_eq!(c, id);
+    net.final_of(&c).await;
 }
