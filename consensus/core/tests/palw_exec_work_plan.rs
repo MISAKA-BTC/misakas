@@ -1,6 +1,9 @@
 //! RFC8 WORK acceptance reference: independent position walk, partition conservation and job scope.
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalExecutionFactsV1, PalwCanonicalWorkVectorV1};
-use kaspa_consensus_core::palw_exec_work_plan_v1::{PalwExecWorkCostV1, PalwExecWorkPlanErrorV1, palw_exec_work_plan_v1};
+use kaspa_consensus_core::palw_exec_work_plan_v1::{
+    PalwExecWorkCostV1, PalwExecWorkPlanErrorV1, palw_exec_work_plan_from_boundaries_v1, palw_exec_work_plan_v1,
+    palw_exec_work_slice_scope_v1,
+};
 use kaspa_consensus_core::palw_tir_work_v1::{
     PalwTirWorkKindV1, palw_tir_canonical_work_v1, palw_tir_node_work_v1, palw_tir_work_kinds_v1,
 };
@@ -169,4 +172,80 @@ fn large_execution_cost_and_out_of_artifact_positions_are_bounded_without_a_posi
         palw_exec_work_plan_v1(&program, PalwExecWorkCostV1::AllNodesV1, program.history_bound, 1, 1, &[program.history_bound]),
         Err(PalwExecWorkPlanErrorV1::WorkBound)
     );
+}
+
+#[test]
+fn signed_cost_boundaries_authenticate_the_exact_decode_plan_for_every_architecture_and_cost_policy() {
+    for (name, program) in programs() {
+        for cost in [PalwExecWorkCostV1::AllNodesV1, PalwExecWorkCostV1::MinSelectArmsV2] {
+            let plan = palw_exec_work_plan_v1(&program, cost, 100, 5, 1, &[3, 5, 7]).unwrap();
+            assert_eq!(palw_exec_work_plan_from_boundaries_v1(&program, cost, 100, 5, 1, plan.boundaries()).unwrap(), plan, "{name}");
+            let mut fabricated = plan.boundaries().to_vec();
+            fabricated[1] += 1;
+            assert_eq!(
+                palw_exec_work_plan_from_boundaries_v1(&program, cost, 100, 5, 1, &fabricated),
+                Err(PalwExecWorkPlanErrorV1::DeclaredWork),
+                "{name}: a MAC coordinate between real execution ends is not a plan"
+            );
+            for (index, cell) in plan.slices().iter().enumerate() {
+                let boundaries = [plan.boundaries()[index], plan.boundaries()[index + 1]];
+                palw_exec_work_slice_scope_v1(&program, cost, 100, 5, 1, boundaries, cell.prompt_tokens() as usize, 2).unwrap();
+                assert!(
+                    palw_exec_work_slice_scope_v1(&program, cost, 100, 5, 1, boundaries, cell.prompt_tokens() as usize, 1).is_err()
+                );
+                assert!(
+                    palw_exec_work_slice_scope_v1(&program, cost, 100, 5, 1, boundaries, cell.prompt_tokens() as usize + 1, 2)
+                        .is_err()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn maximum_structural_size_context_and_slice_count_have_a_bounded_cost_inverse() {
+    use misaka_palw_tir::program::{Block, MAX_BLOCKS, MAX_LAYERS, MAX_NODES_PER_BLOCK, Node, Ref, Schedule};
+    use misaka_palw_tir::{DType, Prim, TensorType};
+    let mut program = misaka_palw_tir_sketch::fixture::dense_moe_v1(1).program;
+    program.params.clear();
+    program.consts.clear();
+    program.states.clear();
+    program.history_bound = misaka_palw_tir::program::HISTORY_BOUND_V1_HELD;
+    program.blocks = (0..MAX_BLOCKS)
+        .map(|index| Block {
+            name: format!("b{index}"),
+            carry_in: vec![],
+            carry_out: vec![],
+            nodes: vec![
+                Node {
+                    prim: Prim::Cast,
+                    inputs: vec![Ref::Input(0)],
+                    out: TensorType::scalar(DType::Idx),
+                    commit: true,
+                };
+                MAX_NODES_PER_BLOCK
+            ],
+        })
+        .collect();
+    program.schedule = Schedule {
+        pre: 0,
+        post: (MAX_BLOCKS - 1) as u8,
+        layers: (0..MAX_LAYERS).map(|index| (1 + index % (MAX_BLOCKS - 2)) as u8).collect(),
+    };
+    program.logits = 0;
+    let program = TirProgramV1::decode_canonical(&program.encode()).expect("all structural caps fit the byte cap");
+    let slice_count = kaspa_consensus_core::palw_exec_v2::PALW_EXEC_V2_MAX_SLICES_PER_ROOT;
+    let ends: Vec<_> = (1..=slice_count)
+        .map(|i| 1 + i * ((program.history_bound - 1) / slice_count) + i * ((program.history_bound - 1) % slice_count) / slice_count)
+        .collect();
+    let per_position = (MAX_LAYERS as u64 + 2) * MAX_NODES_PER_BLOCK as u64;
+    let boundaries: Vec<_> = std::iter::once(per_position).chain(ends.iter().map(|g| per_position * u64::from(*g))).collect();
+    for cost in [PalwExecWorkCostV1::AllNodesV1, PalwExecWorkCostV1::MinSelectArmsV2] {
+        let started = std::time::Instant::now();
+        let plan = palw_exec_work_plan_from_boundaries_v1(&program, cost, program.history_bound, 1, 1, &boundaries).unwrap();
+        println!("maximum-size cost inverse {cost:?}: {:?}", started.elapsed());
+        assert_eq!(plan.total_work(), per_position * u64::from(program.history_bound));
+        assert_eq!(plan.slices().len(), slice_count as usize);
+        assert_eq!(plan.slices().last().unwrap().positions().end, program.history_bound);
+    }
 }

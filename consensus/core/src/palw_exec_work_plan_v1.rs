@@ -1,7 +1,6 @@
 //! RFC-0008 WORK: derive credited continuation work from registered IR and absolute token positions.
 //!
-//! This is an executable design reference, not an active consensus caller. Root lottery PWU is a
-//! different quantity. A continuation may replay its prompt to reconstruct state; that replay is
+//! Root lottery PWU is a different quantity. A continuation may replay its prompt to reconstruct state; that replay is
 //! not new useful work. Every cell below uses the SAME whole-job facts, including the original
 //! prefill boundary and history window. The accepted class selects the existing work-cost version.
 
@@ -11,6 +10,20 @@ use crate::palw_tir_work_v1::{PalwTirWorkError, palw_tir_work_shape_with_v1};
 use crate::palw_work_slice_v2::PALW_EXEC_V2_MAX_ROOT_WORK;
 use misaka_palw_tir::TirProgramV1;
 use std::ops::Range;
+
+// §12.5's arithmetic proof depends on these validated IR / cost-table caps. A broader
+// format or a larger cost table must supply a new proof rather than silently using saturation.
+const _: () = {
+    use crate::palw_economic_compute_v1::PALW_ECONOMIC_COST_TABLE_V1 as COST;
+    use misaka_palw_tir::{program as p, types as t};
+    assert!(t::MAX_RANK <= 4 && t::MAX_DIM <= 1 << 24 && t::MAX_ELEMENTS <= 1 << 28);
+    assert!(misaka_palw_tir::validate::MAX_PARAM_ELEMENTS <= 1 << 40);
+    assert!(p::MAX_NODES_PER_BLOCK <= 512 && p::MAX_NODE_INPUTS <= 8 && p::MAX_LAYERS <= 1024);
+    assert!(p::MAX_BLOCKS <= 16 && p::MAX_PARAMS <= 4096);
+    assert!(p::HISTORY_BOUND_V1_SMALL <= 1 << 21 && p::HISTORY_BOUND_V1_HELD <= 1 << 21);
+    assert!(misaka_palw_tir::DType::I128.width() <= 16);
+    assert!(COST.matmul_mac <= 1 && COST.elementwise <= 1 && COST.transcendental <= 4);
+};
 
 /// Existing TIR work policies. Read this from the accepted class, never from a producer's plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +142,93 @@ fn components(v: PalwCanonicalWorkVectorV1) -> [u128; 10] {
         v.kv_read_bytes,
         v.kv_write_bytes,
     ]
+}
+
+fn checked_scalar(vector: PalwCanonicalWorkVectorV1) -> Result<u128, PalwExecWorkPlanErrorV1> {
+    let values = components(vector);
+    if values.contains(&u128::MAX) {
+        return Err(PalwExecWorkPlanErrorV1::WorkBound);
+    }
+    values[..7].iter().try_fold(0u128, |sum, value| sum.checked_add(*value)).ok_or(PalwExecWorkPlanErrorV1::WorkBound)
+}
+
+/// Authenticate the existing signed scalar plan without adding producer-authoritative token counts.
+/// Each boundary must be exactly the registered IR's cumulative cost at a unique decode length.
+/// Binary search is bounded by the class's (at most 2^21) context; it never enumerates positions.
+pub fn palw_exec_work_plan_from_boundaries_v1(
+    program: &TirProgramV1,
+    cost: PalwExecWorkCostV1,
+    class_max_positions: u32,
+    prompt_tokens: u32,
+    prefix_generated: u32,
+    boundaries: &[u64],
+) -> Result<PalwExecWorkPlanV1, PalwExecWorkPlanErrorV1> {
+    use PalwExecWorkPlanErrorV1::{DeclaredWork, EmptyPrefix, Positions};
+    if prompt_tokens == 0 || prefix_generated == 0 {
+        return Err(EmptyPrefix);
+    }
+    if boundaries.len() < 2
+        || boundaries.len() > PALW_EXEC_V2_MAX_SLICES_PER_ROOT as usize + 1
+        || boundaries[0] == 0
+        || boundaries.windows(2).any(|pair| pair[0] >= pair[1])
+        || *boundaries.last().unwrap() > PALW_EXEC_V2_MAX_ROOT_WORK
+    {
+        return Err(DeclaredWork);
+    }
+    let max_generated = class_max_positions.min(program.history_bound).checked_sub(prompt_tokens - 1).ok_or(Positions)?;
+    if prefix_generated >= max_generated {
+        return Err(Positions);
+    }
+    let shape = palw_tir_work_shape_with_v1(program, cost == PalwExecWorkCostV1::MinSelectArmsV2)?;
+    let cumulative = |generated| checked_scalar(shape.work_v1(&PalwCanonicalExecutionFactsV1::uncached(prompt_tokens, generated))?);
+    if cumulative(prefix_generated)? != boundaries[0] as u128 {
+        return Err(DeclaredWork);
+    }
+    let mut ends = Vec::with_capacity(boundaries.len() - 1);
+    let mut previous = prefix_generated;
+    for target in &boundaries[1..] {
+        let (mut lo, mut hi) = (previous.checked_add(1).ok_or(Positions)?, max_generated);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if cumulative(mid)? < *target as u128 {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo > max_generated || cumulative(lo)? != *target as u128 {
+            return Err(DeclaredWork);
+        }
+        ends.push(lo);
+        previous = lo;
+    }
+    let plan = palw_exec_work_plan_v1(program, cost, class_max_positions, prompt_tokens, prefix_generated, &ends)?;
+    plan.check_declared_work(*boundaries.last().unwrap(), boundaries)?;
+    Ok(plan)
+}
+
+/// Bind one actual kernel run to a root's two cumulative execution-cost boundaries. Its physical
+/// prompt length determines the absolute preceding decode length; the cost check authenticates it.
+pub fn palw_exec_work_slice_scope_v1(
+    program: &TirProgramV1,
+    cost: PalwExecWorkCostV1,
+    class_max_positions: u32,
+    original_prompt: u32,
+    prefix_generated: u32,
+    boundaries: [u64; 2],
+    actual_prompt: usize,
+    actual_generated: usize,
+) -> Result<(), PalwExecWorkPlanErrorV1> {
+    use PalwExecWorkPlanErrorV1::SliceShape;
+    let actual_prompt = u32::try_from(actual_prompt).map_err(|_| SliceShape)?;
+    let actual_generated = u32::try_from(actual_generated).map_err(|_| SliceShape)?;
+    let preceding = actual_prompt.checked_sub(original_prompt).filter(|g| *g >= prefix_generated).ok_or(SliceShape)?;
+    if actual_generated == 0 {
+        return Err(SliceShape);
+    }
+    let end = preceding.checked_add(actual_generated).ok_or(SliceShape)?;
+    let plan = palw_exec_work_plan_v1(program, cost, class_max_positions, original_prompt, preceding, &[end])?;
+    plan.check_declared_work(boundaries[1], &boundaries)
 }
 
 fn checked_accumulate(sum: &mut [u128; 10], vector: PalwCanonicalWorkVectorV1) -> Result<u64, PalwExecWorkPlanErrorV1> {

@@ -5946,7 +5946,7 @@ impl VirtualStateProcessor {
         let state_params = self.palw_state_params_v2.as_ref().ok_or("this network has no PALW state")?;
         let (_, state) =
             self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten().ok_or("no PALW tip on this node yet")?;
-        kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_slice_statement_v1(&state, root, index, claim, bond)
+        kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_slice_statement_v1(&state, state_params, root, index, claim, bond)
     }
 
     /// **RFC-0008 v2 amendment 1, §10.3: the relay prefilter of an `EXEC_SLICE` block** against the committed tip: the root is open, the

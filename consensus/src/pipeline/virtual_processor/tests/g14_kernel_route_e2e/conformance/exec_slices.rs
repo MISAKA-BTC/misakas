@@ -66,8 +66,6 @@ const ROOT_CARD: usize = 0;
 const EXECUTORS: [usize; 3] = [5, 6, 5];
 /// The outsider: no executor, not the registrant, not the root bond.
 const ACCUSER: usize = 7;
-/// Canonical work per slice.
-const SLICE_WORK: u64 = 1_000;
 /// Tokens each slice's kernel claim generates.
 const RUN: u32 = 2;
 
@@ -225,7 +223,7 @@ async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> Re
     RealRun { claim, prompt, run }
 }
 
-/// The session one REAL claim opens: three slices of `SLICE_WORK` after the claim's own admitted work, the binding's kernel plan, the
+/// The session one REAL claim opens: three `RUN`-token slices with registered IR costs, the binding's kernel plan, the
 /// prefix claim `prefix` and the initial boundary `initial` (GAP-62: `token_state(prompt ‖ REAL run)`, unless a test lies), executors
 /// `EXECUTORS`. Unsigned and uncarried: [`send_root`] carries it.
 fn declaration(cw: &Cw, real: &RealRun, prefix: Hash64, initial: Hash64) -> PalwWorkRootDeclarationV2 {
@@ -239,21 +237,40 @@ fn declaration_for_job(
     real: &RealRun,
     prefix: Hash64,
     initial: Hash64,
-    prefix_work: u64,
+    _legacy_lottery_weight: u64,
     job_identity: Hash64,
 ) -> PalwWorkRootDeclarationV2 {
     let binding = cw.net.api().unwrap().kernel_binding_v1(&cw.v2_class).expect("kernel-bound");
     let mut extra: Vec<PalwBondKeyV2> = EXECUTORS.iter().map(|card| cw.net.bond(*card)).collect();
     extra.sort();
     extra.dedup();
+    let state = cw.net.chain.tip_state().1;
+    let tir = state.tir_class_v1(&cw.v2_class).unwrap();
+    let program = misaka_palw_tir::TirProgramV1::decode_canonical(&tir.program).unwrap();
+    let registered = state.class(&cw.v2_class).unwrap().registered_daa;
+    let cost = if cw.net.config.params.palw_tir_fence2_active_at(registered) {
+        kaspa_consensus_core::palw_exec_work_plan_v1::PalwExecWorkCostV1::MinSelectArmsV2
+    } else {
+        kaspa_consensus_core::palw_exec_work_plan_v1::PalwExecWorkCostV1::AllNodesV1
+    };
+    let prefix_generated = real.run.len() as u32;
+    let plan = kaspa_consensus_core::palw_exec_work_plan_v1::palw_exec_work_plan_v1(
+        &program,
+        cost,
+        tir.facts.max_context,
+        real.prompt.len() as u32,
+        prefix_generated,
+        &[prefix_generated + RUN, prefix_generated + 2 * RUN, prefix_generated + 3 * RUN],
+    )
+    .unwrap();
     PalwWorkRootDeclarationV2 {
         root_claim_id: real.claim,
         canonical_job_id: job_identity,
         input_root: palw_exec_v2_token_state_root_v1(&[&real.prompt]),
         kernel_version: 1,
         plan_root: binding.plan_root,
-        total_work: prefix_work + 3 * SLICE_WORK,
-        boundaries: vec![prefix_work, prefix_work + SLICE_WORK, prefix_work + 2 * SLICE_WORK, prefix_work + 3 * SLICE_WORK],
+        total_work: plan.total_work(),
+        boundaries: plan.boundaries().to_vec(),
         initial_state_root: initial,
         prefix_claim: prefix,
         evidence_policy_root: Hash64::from_u64_word(0x34),
@@ -426,10 +443,19 @@ fn slice_key(
 /// under, the lane block, the anchoring block)`.
 async fn carry_slice_raw(cw: &mut Cw, root_claim: Hash64, index: u32, claim: &Claim) -> (BlockHash, Block, BlockHash) {
     let card = claim.producer;
-    let vp = cw.net.chain.vp();
-    let slice = vp
+    let slice = cw
+        .net
+        .chain
+        .vp()
         .palw_exec_v2_slice_statement_v1_impl(root_claim, index, Hash64::from_bytes(claim.id), cw.net.bond(card))
         .unwrap_or_else(|why| panic!("the slice statement for {index}: {why}"));
+    carry_slice_statement_raw(cw, slice, card).await
+}
+
+/// An adversary can sign a statement without asking the producer API to validate it first.
+async fn carry_slice_statement_raw(cw: &mut Cw, slice: PalwWorkSliceV1, card: usize) -> (BlockHash, Block, BlockHash) {
+    let index = slice.slice_index;
+    let vp = cw.net.chain.vp();
     let mut template = cw
         .net
         .chain
@@ -481,6 +507,33 @@ async fn carry_slice_raw(cw: &mut Cw, root_claim: Hash64, index: u32, claim: &Cl
     let anchoring = cw.net.chain.sink();
     assert!(cw.net.chain.tip_state().1.exec_v2_anchored_v1(&hash), "slice {index}'s carrier is anchored");
     (sink, lane_block, anchoring)
+}
+
+/// Commit the actual public job and output, retaining the root's planned range even when the
+/// execution scope is wrong. Only adversarial tests use this unchecked statement builder.
+fn untrusted_slice_statement(cw: &Cw, root_claim: Hash64, index: u32, kernel: &SliceClaim) -> PalwWorkSliceV1 {
+    let state = cw.net.chain.tip_state().1;
+    let root = state.exec_v2_root_v1(&root_claim).unwrap();
+    let ledger = cw.net.ledger();
+    let misaka_palw_kernel::ledger::ClaimBodyV1::Program { claim, .. } = &ledger.claims[&kernel.claim.id].body else {
+        panic!("a program claim");
+    };
+    PalwWorkSliceV1 {
+        root_claim_id: root_claim,
+        slice_index: index,
+        class_id: root.class_id,
+        canonical_job_id: root.canonical_job_id,
+        kernel_version: root.kernel_version,
+        plan_root: root.plan_root,
+        canonical_range: palw_work_plan_range_v2(&root.boundaries, index).unwrap(),
+        predecessor_state_root: palw_exec_v2_token_state_root_v1(&[&kernel.job.prompt]),
+        result_state_root: palw_exec_v2_token_state_root_v1(&[&kernel.job.prompt, &claim.generated]),
+        input_root: palw_exec_v2_token_state_root_v1(&[&kernel.job.prompt]),
+        output_root: palw_exec_v2_token_state_root_v1(&[&claim.generated]),
+        evidence_root: Hash64::from_bytes(kernel.claim.id),
+        da_root: Hash64::from_bytes(claim.evidence_root),
+        executor_bond: cw.net.bond(kernel.claim.producer),
+    }
 }
 
 /// [`carry_slice_raw`], and the fold admitted it. Returns `(the sink it was inserted under, the lane block)` for the replay.
@@ -702,7 +755,21 @@ async fn x8_g14_a_withheld_slice_is_demanded_by_an_outsider_and_defaults_its_suf
     let carried = carry_slice(&mut cw, root_claim, 0, &s.slices[0].claim).await;
     s.lane.push(carried);
     // ---- rule 4 at node ----
-    let (under, lane_block, anchoring) = carry_slice_raw(&mut cw, root_claim, 1, &s.extras[0].claim).await;
+    assert!(
+        cw.net
+            .chain
+            .vp()
+            .palw_exec_v2_slice_statement_v1_impl(
+                root_claim,
+                1,
+                Hash64::from_bytes(s.extras[0].claim.id),
+                cw.net.bond(s.extras[0].claim.producer)
+            )
+            .is_err(),
+        "the producer refuses the off-stream execution before publishing"
+    );
+    let raw = untrusted_slice_statement(&cw, root_claim, 1, &s.extras[0]);
+    let (under, lane_block, anchoring) = carry_slice_statement_raw(&mut cw, raw, s.extras[0].claim.producer).await;
     s.lane.push((under, lane_block.clone()));
     let state = cw.net.chain.tip_state().1;
     assert!(state.exec_v2_slice_v1(&root_claim, 1).is_none(), "the discontinuous slice is credited nothing");
@@ -754,6 +821,60 @@ async fn x8_g14_a_withheld_slice_is_demanded_by_an_outsider_and_defaults_its_suf
     assert_eq!(cw.net.collateral(ROOT_CARD), root_bond_collateral, "the root bond is not charged for another bond's default");
     let z = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&z, "replay");
+}
+
+#[tokio::test]
+async fn x8_g14_a_signed_tiny_run_is_refused_as_a_larger_work_cell_on_the_real_node() {
+    let mut cw = active_world().await;
+    let mut s = opened(
+        &mut cw,
+        false,
+        |_| false,
+        |cw, real, decl| {
+            let range = palw_work_plan_range_v2(&decl.boundaries, 0).unwrap();
+            vec![(
+                EXECUTORS[0],
+                KernelJobV1 {
+                    class_binding_id: cw.kernel_class,
+                    prompt: real.stream(),
+                    max_new_tokens: RUN - 1,
+                    decode: DecodeRuleV1::Greedy,
+                    nonce: palw_exec_v2_slice_job_nonce_v1(&slice_key(cw, real, decl, 0, range)).as_bytes(),
+                },
+            )]
+        },
+    )
+    .await;
+    let root_claim = s.real.claim;
+    let tiny = &s.extras[0];
+    assert!(
+        cw.net
+            .chain
+            .vp()
+            .palw_exec_v2_slice_statement_v1_impl(root_claim, 0, Hash64::from_bytes(tiny.claim.id), cw.net.bond(tiny.claim.producer))
+            .is_err(),
+        "the producer refuses the short kernel run"
+    );
+    let raw = untrusted_slice_statement(&cw, root_claim, 0, tiny);
+    let (under, lane_block, anchoring) = carry_slice_statement_raw(&mut cw, raw, tiny.claim.producer).await;
+    s.lane.push((under, lane_block.clone()));
+    let state = cw.net.chain.tip_state().1;
+    assert!(state.exec_v2_slice_v1(&root_claim, 0).is_none(), "the signed attack earns no work");
+    let root = state.exec_v2_root_v1(&root_claim).unwrap();
+    assert_eq!((root.next_index, root.accepted_work, root.verified_work), (0, 0, 0));
+    let read = cw.net.chain.ctx.consensus.palw_exec_v2_observation_v1(vec![root_claim], Some(anchoring)).unwrap();
+    assert!(
+        read.block
+            .unwrap()
+            .verdicts
+            .iter()
+            .any(|v| v.carrier == lane_block.header.hash.to_string() && v.code == PalwSliceRefusalV2::ExecutionScopeMismatch.code()),
+        "the validator refuses the execution scope by name"
+    );
+    let carried = carry_slice(&mut cw, root_claim, 0, &s.slices[0].claim).await;
+    s.lane.push(carried);
+    let z = replay_with_lane(&cw.net, &s.lane).await;
+    cw.net.assert_same(&z, "replay of refused tiny run and honest full cell");
 }
 
 /// **(d) GAP-62: the initial boundary is linked to the REAL output, and a lie in the REAL run is an outsider's conviction.**

@@ -275,6 +275,9 @@ pub fn palw_exec_v2_verification_binding_v1(
     if slice.predecessor_state_root != palw_exec_v2_token_state_root_v1(&[&job.prompt]) {
         return Err(VerificationClaimNotBound("predecessor"));
     }
+    if slice.input_root != palw_exec_v2_token_state_root_v1(&[&job.prompt]) {
+        return Err(VerificationClaimNotBound("input"));
+    }
     if slice.result_state_root != palw_exec_v2_token_state_root_v1(&[&job.prompt, &claim.generated]) {
         return Err(VerificationClaimNotBound("result"));
     }
@@ -304,6 +307,7 @@ pub fn palw_exec_v2_kernel_key_v1(id: &Hash64) -> Vec<u8> {
 /// carrier again; this only spares the executor a carrier it would refuse.
 pub fn palw_exec_v2_slice_statement_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
     root_claim_id: Hash64,
     index: u32,
     claim_id: Hash64,
@@ -338,6 +342,7 @@ pub fn palw_exec_v2_slice_statement_v1(
         .get(&(misaka_palw_kernel::rows::TABLE_JOBS_V1, borsh::to_vec(&row.job_id).expect("a digest serializes")))
         .and_then(|bytes| borsh::from_slice::<KernelJobV1>(bytes).ok())
         .ok_or("the kernel route holds no job for the claim")?;
+    state.exec_v2_check_kernel_work_v1(params, root, index, &row, &job)?;
     Ok(PalwWorkSliceV1 {
         root_claim_id,
         slice_index: index,
@@ -348,7 +353,7 @@ pub fn palw_exec_v2_slice_statement_v1(
         canonical_range,
         predecessor_state_root: palw_exec_v2_token_state_root_v1(&[&job.prompt]),
         result_state_root: palw_exec_v2_token_state_root_v1(&[&job.prompt, &claim.generated]),
-        input_root: root.initial_state_root,
+        input_root: palw_exec_v2_token_state_root_v1(&[&job.prompt]),
         output_root: palw_exec_v2_token_state_root_v1(&[&claim.generated]),
         evidence_root: claim_id,
         da_root: Hash64::from_bytes(claim.evidence_root),

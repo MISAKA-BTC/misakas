@@ -1173,6 +1173,8 @@ mod amendment_1 {
         row: ClaimRowV1,
         /// The session's stream so far: the anchored prompt and the run.
         stream: Vec<u32>,
+        boundaries: Vec<u64>,
+        input_root: Hash64,
     }
 
     impl Prefix {
@@ -1190,7 +1192,20 @@ mod amendment_1 {
             let (prompt, context) = palw_exec_v2_real_job_v1(&facts, &root_claim.job_identity, xx_declare().prompt_ids_form_v1())
                 .expect("the anchored job");
             s.claims.get_mut(&claim).unwrap().output_root = palw_attempt_output_root_v1(&context, &PREFIX_RUN);
-            let d = decl(claim);
+            let mut d = decl(claim);
+            let program = misaka_palw_tir::TirProgramV1::decode_canonical(&s.tir_class_v1(&class).unwrap().program).unwrap();
+            let plan = crate::palw_exec_work_plan_v1::palw_exec_work_plan_v1(
+                &program,
+                crate::palw_exec_work_plan_v1::PalwExecWorkCostV1::AllNodesV1,
+                facts.max_context,
+                prompt.len() as u32,
+                context.exact_decode_tokens,
+                &[3, 5, 7],
+            )
+            .unwrap();
+            d.boundaries = plan.boundaries().to_vec();
+            d.total_work = plan.total_work();
+            let input_root = palw_exec_v2_token_state_root_v1(&[&prompt]);
             let job = KernelJobV1 {
                 class_binding_id: digest(h64(KERNEL_CLASS)),
                 prompt: prompt.clone(),
@@ -1225,7 +1240,7 @@ mod amendment_1 {
             };
             let mut stream = prompt;
             stream.extend_from_slice(&PREFIX_RUN);
-            let prefix = Prefix { claim_id: Hash64::from_bytes(kclaim.id()), job, row, stream };
+            let prefix = Prefix { claim_id: Hash64::from_bytes(kclaim.id()), job, row, stream, boundaries: d.boundaries, input_root };
             prefix.install(s);
             prefix
         }
@@ -1248,6 +1263,9 @@ mod amendment_1 {
         /// The declaration that opens on this prefix: it names the claim and starts from `token_state(prompt ‖ run)`.
         fn decl(&self, claim: Hash64) -> PalwWorkRootDeclarationV2 {
             let mut d = decl(claim);
+            d.boundaries = self.boundaries.clone();
+            d.total_work = *self.boundaries.last().unwrap();
+            d.input_root = self.input_root;
             d.prefix_claim = self.claim_id;
             d.initial_state_root = palw_exec_v2_token_state_root_v1(&[&self.stream]);
             d
@@ -1314,6 +1332,7 @@ mod amendment_1 {
             let slice = &mut covered.slice;
             slice.evidence_root = claim_id;
             slice.predecessor_state_root = palw_exec_v2_token_state_root_v1(&[prompt]);
+            slice.input_root = slice.predecessor_state_root;
             slice.result_state_root = palw_exec_v2_token_state_root_v1(&[prompt, generated]);
             slice.output_root = palw_exec_v2_token_state_root_v1(&[generated]);
             slice.da_root = Hash64::from_bytes(claim.evidence_root);
@@ -1424,6 +1443,87 @@ mod amendment_1 {
 
     fn carry_all(p: &PalwStateParamsV2, s: &PalwChainStateV2, slices: &[KernelSlice]) -> PalwChainStateV2 {
         fold_slices(p, s, 50, 120, slices.iter().map(|k| k.covered.clone()).collect())
+    }
+
+    #[test]
+    fn a_self_consistent_tiny_kernel_run_cannot_claim_a_larger_ir_execution_cell() {
+        let (p, mut s, claim, honest) = session(1_000);
+        let tiny = KernelSlice::new(&s, claim, 0, honest[0].covered.slice.executor_bond, &honest[0].job.prompt, &[1], 1_000);
+        tiny.install(&mut s);
+        let binding = s.kernel_route.as_ref().unwrap().kernel_binding_v1(&tiny.covered.slice.class_id).unwrap();
+        // The old token/nonce/class/evidence binding accepts this self-consistent statement.
+        // Its committed run is shorter than the root's registered two-token cell.
+        crate::palw_exec_v2_verify::palw_exec_v2_verification_binding_v1(
+            &tiny.covered.slice,
+            &binding,
+            &tiny.row,
+            Some(&tiny.job),
+            &palw_kernel_bond_id_v1(&tiny.covered.slice.executor_bond),
+            120,
+        )
+        .unwrap();
+        let before = s.state_root();
+        assert_eq!(s.exec_v2_admit_slice_v1(&p, 120, &tiny.covered, 0), Err(PalwSliceRefusalV2::ExecutionScopeMismatch));
+        assert!(
+            crate::palw_exec_v2_verify::palw_exec_v2_slice_statement_v1(
+                &s,
+                &p,
+                claim,
+                0,
+                tiny.claim_id,
+                tiny.covered.slice.executor_bond
+            )
+            .is_err(),
+            "the producer uses the same execution scope"
+        );
+        assert_eq!(s.state_root(), before, "no accepted work or payout on refusal");
+        assert!(s.exec_v2_admit_slice_v1(&p, 120, &honest[0].covered, 0).is_ok(), "the full cell is the control");
+    }
+
+    #[test]
+    fn a_root_rejects_fabricated_ir_cost_and_an_input_hash_unrelated_to_its_real_job() {
+        let (p, mut s, claim) = world(Some(0));
+        with_route(&mut s, claim, Some(PLAN));
+        let prefix = Prefix::new(&mut s, claim, ClaimStateV1::Final { final_daa: 105 }, false);
+        let honest = prefix.decl(claim);
+        let mut wrong_cost = honest.clone();
+        wrong_cost.boundaries[1] += 1;
+        assert!(open(&p, &s, wrong_cost).err().unwrap().to_string().contains("execution work cannot be derived"));
+        let mut wrong_input = honest.clone();
+        wrong_input.input_root = h64(0xBAD);
+        assert!(open(&p, &s, wrong_input).err().unwrap().to_string().contains("canonical job"));
+        let opened = open(&p, &s, honest).unwrap();
+        assert_eq!(opened.claim(&claim).unwrap().pwu, PWU, "IR execution cost never changes REAL lottery weight");
+        assert_ne!(opened.exec_v2_root_v1(&claim).unwrap().prefix_work(), PWU, "the two units are separate");
+    }
+
+    #[test]
+    fn restart_rederives_the_real_binding_cost_key_and_retained_slice_execution_scope() {
+        let (p, s, claim, slices) = session(1_000);
+        let s = carry_all(&p, &s, &slices);
+        let refuses = |bad: PalwChainStateV2, expected: &str| {
+            let carriage = PalwStateCarriageV2::from_state(&bad);
+            let error = carriage.into_state(&p, Some(bad.state_root())).unwrap_err().to_string();
+            assert!(error.contains(expected), "{error}");
+        };
+        let mut bad = s.clone();
+        bad.exec_v2.roots.get_mut(&claim).unwrap().canonical_job_id = h64(0xBAD);
+        refuses(bad, "REAL binding");
+        let mut bad = s.clone();
+        let old = bad.exec_v2.roots.get(&claim).unwrap().job_work_id;
+        bad.exec_v2.jobs.remove(&old);
+        bad.exec_v2.jobs.insert(h64(0xBAD), claim);
+        bad.exec_v2.roots.get_mut(&claim).unwrap().job_work_id = h64(0xBAD);
+        refuses(bad, "useful-work key");
+        let mut bad = s.clone();
+        let kernel = bad.kernel_route.as_mut().unwrap();
+        let mut job = slices[0].job.clone();
+        job.prompt.pop();
+        kernel.rows.insert(
+            (misaka_palw_kernel::rows::TABLE_JOBS_V1, borsh::to_vec(&slices[0].row.job_id).unwrap()),
+            borsh::to_vec(&job).unwrap(),
+        );
+        refuses(bad, "execution scope");
     }
 
     fn kernel_block(
@@ -1603,7 +1703,9 @@ mod amendment_1 {
         let twin = run_to_terminal(&pt, license(&pt, &st, claim_t, 45, 111), claim_t, 70, 111);
         let twin_leg = twin.vesting_row(&claim_t).unwrap().producer.amount;
         assert_eq!(producer + leg_a + leg_b, twin_leg, "nothing minted, nothing lost");
-        assert_eq!(leg_b, (twin_leg as u128 * 240 / 800) as u64, "21's leg is under its cap");
+        let root = s.exec_v2_root_v1(&claim).unwrap();
+        let work_b = s.exec_v2_slice_v1(&claim, 1).unwrap().range.work().unwrap();
+        assert_eq!(leg_b, (twin_leg as u128 * work_b as u128 / root.total_work as u128) as u64, "21's leg is under its cap");
     }
 
     #[test]
@@ -1687,7 +1789,11 @@ mod amendment_1 {
             PalwWorkSliceStageV2::Verified { verified_daa: 120, leg_cap: 1_000, route_reward: 0 }
         ));
         let root = after.exec_v2_root_v1(&claim).unwrap();
-        assert_eq!((root.pending, root.verified_work), (0, 400 - PWU), "verified at once: never pending");
+        assert_eq!(
+            (root.pending, root.verified_work),
+            (0, slices[0].covered.slice.canonical_range.work().unwrap()),
+            "verified at once: never pending"
+        );
         let record: Vec<(Hash64, u8)> = delta
             .entries
             .iter()
@@ -1763,9 +1869,11 @@ mod amendment_1 {
         let s = run_to_terminal(&p, s, claim, 70, 143);
         assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Settled { .. }));
         let (producer, leg_a, leg_b, twin_leg) = paid_legs(&s, claim);
-        let share = |work: u64| (twin_leg as u128 * work as u128 / 800) as u64;
-        assert_eq!(leg_a, share(240) + share(160), "bond 20: slices 0 and 2, in full");
-        assert_eq!(leg_b, share(240), "bond 21: slice 1, in full — its released reservation kept nothing from it");
+        let root = s.exec_v2_root_v1(&claim).unwrap();
+        let work = |index| s.exec_v2_slice_v1(&claim, index).unwrap().range.work().unwrap();
+        let share = |work: u64| (twin_leg as u128 * work as u128 / root.total_work as u128) as u64;
+        assert_eq!(leg_a, share(work(0) + work(2)), "bond 20: slices 0 and 2, in full");
+        assert_eq!(leg_b, share(work(1)), "bond 21: slice 1, in full — its released reservation kept nothing from it");
         assert_eq!(producer + leg_a + leg_b, twin_leg, "nothing minted, nothing lost");
     }
 
@@ -1968,7 +2076,14 @@ mod amendment_1 {
     }
 
     fn prefix_clone(p: &Prefix) -> Prefix {
-        Prefix { claim_id: p.claim_id, job: p.job.clone(), row: p.row.clone(), stream: p.stream.clone() }
+        Prefix {
+            claim_id: p.claim_id,
+            job: p.job.clone(),
+            row: p.row.clone(),
+            stream: p.stream.clone(),
+            boundaries: p.boundaries.clone(),
+            input_root: p.input_root,
+        }
     }
 
     /// The prefix's claim re-made around `job` (same run, same producer).
@@ -1978,7 +2093,7 @@ mod amendment_1 {
         let ClaimBodyV1::Program { claim, .. } = &mut row.body else { unreachable!() };
         claim.job_id = job.id();
         let claim_id = Hash64::from_bytes(claim.id());
-        Prefix { claim_id, job, row, stream: p.stream.clone() }
+        Prefix { claim_id, job, row, stream: p.stream.clone(), boundaries: p.boundaries.clone(), input_root: p.input_root }
     }
 
     /// **GAP-62: a pending prefix holds the root's `Final`; its conviction (an outsider's proof of a lie in the REAL claim's run) voids
@@ -1994,7 +2109,7 @@ mod amendment_1 {
         let finals = slices.iter().map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect();
         let s = kernel_block(&p, &s, 60, 130, finals);
         let root = s.exec_v2_root_v1(&claim).unwrap();
-        assert_eq!((root.pending, root.verified_work), (0, 800 - PWU), "every slice verified");
+        assert_eq!((root.pending, root.verified_work), (0, root.total_work - root.prefix_work()), "every slice verified");
         assert!(!root.ready_for_final() && s.exec_v2_holds_final_v1(&claim), "the pending prefix holds the REAL claim's Final");
         assert!(deadline_of(&s, claim).is_none());
         // (a) the prefix verifies: the hold is released.
@@ -2060,10 +2175,12 @@ mod amendment_1 {
         }
         let s = run_to_terminal(&p, s, claim, 70, 131);
         let (producer, leg_a, leg_b, twin_leg) = paid_legs(&s, claim);
-        let share = |work: u64| (twin_leg as u128 * work as u128 / 800) as u64;
-        assert!(share(160) > R, "the fixture's shares exceed the route reward");
-        assert_eq!(leg_a, share(240) + share(160) - 2 * R, "bond 20: its two slices' shares less the two route rewards");
-        assert_eq!(leg_b, share(240) - R, "bond 21: its share less the route reward");
+        let root = s.exec_v2_root_v1(&claim).unwrap();
+        let work = |index| s.exec_v2_slice_v1(&claim, index).unwrap().range.work().unwrap();
+        let share = |work: u64| (twin_leg as u128 * work as u128 / root.total_work as u128) as u64;
+        assert!(share(root.prefix_work()) > R, "the fixture's shares exceed the route reward");
+        assert_eq!(leg_a, share(work(0) + work(2)) - 2 * R, "bond 20: its two slices' shares less the two route rewards");
+        assert_eq!(leg_b, share(work(1)) - R, "bond 21: its share less the route reward");
         assert_eq!(producer + leg_a + leg_b + 4 * R, twin_leg, "one allocation pays the session, route rewards included");
     }
 
@@ -2082,12 +2199,17 @@ mod amendment_1 {
             let (producer, leg_a, leg_b, twin_leg) = paid_legs(&s, claim);
             assert_eq!(twin_leg, allocation);
             assert_eq!(producer + leg_a + leg_b, allocation.saturating_sub(advance), "only the unspent budget can be paid");
-            assert_eq!(
-                leg_a,
-                (allocation.saturating_sub(advance) as u128 * (allocation / 2) as u128
-                    / ((allocation / 2) + (allocation as u128 * 240 / 800) as u64) as u128) as u64,
-                "a budget shortage is shared proportionally by executor, without bond-order priority",
-            );
+            let root = s.exec_v2_root_v1(&claim).unwrap();
+            let work = |index| s.exec_v2_slice_v1(&claim, index).unwrap().range.work().unwrap();
+            let share = |work: u64| (allocation as u128 * work as u128 / root.total_work as u128) as u64;
+            let (gross_a, gross_b) = (share(work(0) + work(2)), share(work(1)));
+            let remaining = allocation.saturating_sub(advance);
+            let expected_a = if gross_a + gross_b > remaining {
+                (remaining as u128 * gross_a as u128 / (gross_a + gross_b) as u128) as u64
+            } else {
+                gross_a
+            };
+            assert_eq!(leg_a, expected_a, "a budget shortage is shared proportionally by executor, without bond-order priority",);
         }
     }
 
@@ -2122,6 +2244,7 @@ mod amendment_1 {
             VerificationKindUnsupported,
             VerificationClaimNotBound("x"),
             VerificationClaimFailed,
+            ExecutionScopeMismatch,
         ];
         let codes: std::collections::BTreeSet<u8> = all.iter().map(|r| r.code()).collect();
         assert_eq!(codes.len(), all.len());

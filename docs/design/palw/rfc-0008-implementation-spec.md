@@ -513,10 +513,10 @@ EXEC_TX / EXEC_SLICE weight, blue score and DAA contribution stay 0; a slice's v
 
 ## 12. WORK design correction — execution cost is not lottery weight (2026-10-10 audit)
 
-This section resolves the unit ambiguity in §§3–4 and §10's prefix/range accounting. It is a design
-requirement for the next fenced implementation. `palw_exec_work_plan_v1` is its executable reference;
-the current `apply_root_declared_v2` / slice admission do **not** call it. WORK remains closed for
-activation until the caller, versioned plan material and recovery tests below exist.
+This section resolves the unit ambiguity in §§3–4 and §10's prefix/range accounting.
+`palw_exec_work_plan_v1` now feeds declaration acceptance, slice admission, node statement generation
+and root-plan restart consistency through `palw_exec_v2_fold`. These rules remain behind the dormant
+EXEC fence. The pruning / authorization history and release resource evidence below is still required for WORK.
 
 ### 12.1 Two quantities and a fixed cost basis
 
@@ -530,7 +530,7 @@ Use the existing ten-dimensional canonical TIR work vector. The reference carrie
 arithmetic dimensions in MAC-equivalents and its three traffic dimensions in bytes separately.
 It uses the existing arithmetic sum for range coordinates; this is **not** approval of a final
 economic price or a new byte-to-MAC coefficient. The accepted class fixes `AllNodesV1` or the
-existing `MinSelectArmsV2` policy at root admission; the producer cannot choose or switch it between
+existing `MinSelectArmsV2` policy from the class's registration DAA; the producer cannot choose or switch it between
 cells. Any future scalar price must have a versioned, checked, additive conversion of the whole
 vector and pass the existing cost/arbitrage gates. Do not round each cell before aggregating.
 
@@ -567,20 +567,37 @@ nonzero exact decode. A matching output commitment alone does not validate those
 The authenticated semantic job must commit the accepted class / immutable computation identity,
 canonical full inputs and any admitted cache state, the exact whole decode and execution/cost
 versions. Keep its useful-work identity independent of output values, slice cuts, executor/bond,
-carrier, root id and nonsemantic scheduling nonce. The current `job_work_id` hashes cuts and an
-output-dependent initial state, so it is not yet this identity. A new root or a different partition
-must not authorize fresh useful credit. Legitimate repeated jobs require existing admission/ticket
+carrier, root id and nonsemantic scheduling nonce. `job_work_id` now binds the immutable class,
+the REAL job authorization and its authenticated input. It excludes cuts, output state, verification
+metadata and continuation extent: one REAL job authorization opens at most one root, even if the
+producer requests more or fewer continuation tokens. Declaration acceptance derives its input
+commitment from the REAL job's public prompt. A new root or a different partition must not authorize
+fresh useful credit. Legitimate repeated jobs require existing admission/ticket
 authorization that binds fresh semantic work; neither a new root id nor an owner label proves it.
 
-Carry bounded, canonical generated-token ends and their authenticated job material in a versioned
-plan; bind its commitment to the root signature. Derive both the full vector and scalar boundaries
-from registered IR. Compare every carried cost against the derived result at declaration, slice
-admission and restart/replay. Reject missing material, unavailable cost version, changed shape,
+The existing signed cumulative-cost plan authenticates its generated-token ends without new wire
+fields. All credited arithmetic coefficients are nonnegative and each accepted prefix has positive
+cost. The committed logits node is never in a discounted Select arm, has positive arithmetic cost,
+and runs once for each emitted token. Every subsequent token runs the same recurring occurrences
+with nonnegative coefficients and nondecreasing capped history, so cumulative arithmetic cost is
+strictly increasing after the prefix. Binary search
+over the accepted context finds the unique decode end for each boundary; reject an off-grid value.
+The search is bounded by `min(class_max_positions, program.history_bound)`, at most `2^21` positions,
+and the plan by 128 suffixes. `palw_exec_work_plan_from_boundaries_v1` reconstructs the full vector and
+scalar plan once these ends are found. The signature already binds all boundaries and total cost.
+
+At slice admission and statement generation, the actual prompt and generated-token lengths derive
+the absolute preceding / ending decode positions. Their cumulative costs must equal the root's two
+boundaries. The slice's input commitment must match the actual prompt's token-state commitment;
+repeated prompt execution earns no extra range cost. Restart consistency repeats the registered-cost
+derivation and useful-work key from REAL inputs, and checks the actual lengths of retained slice jobs
+against that one reconstructed plan. This does not solve missing pruned dependency material.
+Reject missing admission material, unavailable cost version, changed shape,
 inflated costs, out-of-class positions, overflow, empty/non-increasing cuts and a zero-cost cell.
-No fallback to producer-declared work is permitted. The existing shape calculator saturates some
-intermediate arithmetic: the reference rejects saturated output dimensions and checked sum
-overflow, but a checked cost walk or a proof of every validated intermediate bound is still required
-before using it in consensus, especially the MinSelect subtraction path.
+No fallback to producer-declared work is permitted. The shape calculator retains its existing
+saturating arithmetic; §12.5 bounds its intermediates for these validated EXEC inputs. The planner
+also rejects saturated output dimensions and checked sum overflow. Wider formats or cost tables
+require a new proof and version before use.
 
 `JobWorkUse` must survive the earliest legal reuse window and pruning as authenticated history,
 with an explicit finite retention / expiry rule from the canonical job authorization. Define its
@@ -594,11 +611,59 @@ for all seven checked-in architecture fixtures; coarse/fine partitions preserve 
 under both existing cost policies. It also exercises prompt replay, a tiny run claiming a large
 cell, fabricated declared cost, invalid partitions/context bounds, out-of-artifact positions and a
 valid 1,024-layer IR whose execution exceeds the root cost bound without enumerating its positions.
-These are reference-function tests, not node acceptance or pruning evidence. The prefix exact-decode
-refusal has a fold regression that accepted the wrong shape before the fix.
+The signed-boundary roundtrip covers all seven architectures and both cost policies. The fold's
+tiny-run attack passes the prior nonce/class/token/evidence binding but is refused by the new cost
+scope; statement generation refuses it too. A signed tiny-run carrier also exercises node admission
+without relying on the producer helper. A declaration with off-grid cost or a fabricated input
+commitment is refused, while REAL lottery weight stays unchanged. The prefix exact-decode refusal
+has a fold regression that accepted the wrong shape before the fix. Test results for each layer are
+recorded in the design audit; these checks do not substitute for pruned history evidence. The
+structural-cap test combines 16 blocks, 512 nodes per block, 1,024 layers, `2^21` positions and 128
+suffixes, using small committable operations that fit the program byte cap. A separate valid
+Concat/Slice DAG represents `2^200` paths to one weight with only 400 structural nodes; its work
+derivation visits each node once rather than expanding those paths.
 
-The remaining WORK implementation is the authenticated plan format and cost-version snapshot;
-all declaration / slice / producer / replay callers; the partition-independent useful-work key
-and its bounded pruning rule; checked internal arithmetic; and node/restart/pruned replay attack
-tests. BUDGET and WINDOW remain separate blockers: correct costs alone do not stop early payout
+The remaining WORK work is the bounded pruning / authorization-expiry rule, release measurements
+for the most expensive graph shapes and root populations, and stronger pruned replay attack evidence.
+BUDGET and WINDOW remain separate blockers: correct costs alone do not stop early payout
 or retain post-Final collectible liability.
+
+### 12.5 Arithmetic and algorithm bounds for the registered v1 IR
+
+This proof applies to canonical normal-form programs accepted by `misaka-palw-tir::validate`,
+the two existing work policies, cost table v1, and EXEC's checked `P + G - 1 <= 2^21` position bound.
+The planner has compile-time guards on the structural limits and the cost-table entries below.
+It does not authorize larger histories, tensor formats or prices.
+
+At the shape calculator's samples `H = 1, 2, 3`, a computed tensor has at most `3 * 2^28` elements:
+normal form bounds it at its positive window, and it has at most one H dimension. Static params
+have at most `2^40` elements; every dimension is at most `2^24`, and every dtype is at most 16 bytes.
+MatMul therefore has fewer than `2^54` MACs. For TopK, `input_elements * k = input_axis *
+output_elements`, so its comparisons also number fewer than `2^54`, even when reading a large
+param. Reduction/elementwise/transcendental counts are smaller. At most eight operands contribute
+fewer than `2^47` bytes; all `node_cost` u64 products and sums are below u64 saturation.
+Multiplying MACs by the weight width and the v1 arithmetic prices (1, 1, 4) leaves each sampled
+work dimension below `2^58`.
+
+The nonnegative affine coefficients `c0`, `c1` satisfy `c0 + c1 = sample(1)`. Summing at most
+512 nodes gives each block coefficient sum below `2^67`. Select arm-only regions are disjoint or
+nested: all uses of a member must remain in that arm until its Select. An inner region is wholly
+inside an outer one that contains its Select. Ascending Select order discounts the inner region
+first; the region accumulator has already included those preceding members when subtracting the
+inner discount. Componentwise max removes no more than the credited arm union, and no addition
+exceeds the undiscounted block sum. Thus neither the region calculations nor block accumulation
+can saturate; discounting cannot increase a coefficient.
+
+For at most `N = 2^21` positions and `H <= 2^21`, `sum H <= 2^42`. The triangular products in
+`sum_h` are below `2^43`. A block dimension is below `2^67 * 2^42 = 2^109`, and fewer than
+`2^11` occurrences give a whole dimension below `2^120`. Even summing all ten dimensions is
+below `2^124`. Param inventory bytes are below `2^12 * 2^11 * 2^40 * 16 = 2^67`. All are within
+u128. The planner separately enforces the much smaller `2^48` arithmetic allocation limit;
+traffic bytes never enter that scalar without a separately approved conversion.
+
+The boundary inverse builds one shape, performs at most 21 binary decisions and one endpoint
+check per suffix, and then checks vector conservation. A vector evaluation visits at most 1,026
+occurrences; it never enumerates positions or tensor elements. Structural weight-view traversal
+uses a visited set, so shared Concat/Slice paths do not expand exponentially. The bounded
+structural-cap measurement is evidence for this algorithm, not proof that every allowed graph
+and 256-root restart fits the node's release latency budget.

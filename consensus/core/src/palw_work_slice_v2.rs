@@ -152,24 +152,12 @@ impl PalwWorkRootDeclarationV2 {
         finish(state)
     }
 
-    /// **The job's work identity** — the key of [`PalwExecV2StateV1::jobs`]. It binds the class, the canonical job, its input,
-    /// the initial boundary state, the whole plan and the kernel, and **not** the root claim, the executors or the branch, so
+    /// **The job's work identity** — the key of [`PalwExecV2StateV1::jobs`]. It binds the immutable class, canonical job,
+    /// authenticated input, independently of output, cuts, execution extent, verification plan or carrier, so
     /// copying a job into a new root cannot earn the same work twice in a canonical history. Repeated-job semantics come from
     /// the existing ticket rules: `canonical_job_id` is the REAL claim's own job identity, which differs per attempt.
     pub fn job_work_id(&self, class_id: &Hash64) -> Hash64 {
-        let mut state = keyed(PALW_EXEC_V2_JOB_WORK_DOMAIN);
-        state.update(class_id.as_byte_slice());
-        state.update(self.canonical_job_id.as_byte_slice());
-        state.update(self.input_root.as_byte_slice());
-        state.update(self.initial_state_root.as_byte_slice());
-        state.update(&self.kernel_version.to_le_bytes());
-        state.update(self.plan_root.as_byte_slice());
-        state.update(&(self.boundaries.len() as u64).to_le_bytes());
-        for boundary in &self.boundaries {
-            state.update(&boundary.to_le_bytes());
-        }
-        state.update(&self.total_work.to_le_bytes());
-        finish(state)
+        palw_exec_job_work_id_v1(class_id, &self.canonical_job_id, &self.input_root)
     }
 
     /// The shape a stateless reader can check: a valid plan and roots that are set.
@@ -196,6 +184,15 @@ impl PalwWorkRootDeclarationV2 {
         }
         Ok(())
     }
+}
+
+/// The useful-work key, also reconstructed from immutable REAL inputs during restart validation.
+pub fn palw_exec_job_work_id_v1(class: &Hash64, job: &Hash64, input: &Hash64) -> Hash64 {
+    let mut state = keyed(PALW_EXEC_V2_JOB_WORK_DOMAIN);
+    state.update(class.as_byte_slice());
+    state.update(job.as_byte_slice());
+    state.update(input.as_byte_slice());
+    finish(state)
 }
 
 /// The domain a root declaration's signed message is hashed under (network-bound; the id alone is not).
@@ -262,6 +259,8 @@ pub enum PalwWorkRootRefusalV2 {
     ClaimBindingMismatch,
     #[error("the root claim's canonical work cannot be derived, so no prefix can be bound")]
     ClaimWorkNotDerivable,
+    #[error("the plan's execution work cannot be derived exactly from the registered IR and REAL job")]
+    ExecutionWorkNotDerivable,
     #[error("the plan's prefix {declared} is not the root claim's admitted canonical work {admitted}")]
     PrefixMismatch { declared: u64, admitted: u64 },
     #[error("the plan's total work {0} is above the per-root bound")]
@@ -623,6 +622,8 @@ pub enum PalwSliceRefusalV2 {
     VerificationClaimNotBound(&'static str),
     #[error("5: the named kernel claim already failed (convicted, unavailable or timed out)")]
     VerificationClaimFailed,
+    #[error("5: the kernel run's execution scope differs from its registered IR work interval")]
+    ExecutionScopeMismatch,
 }
 
 impl PalwSliceRefusalV2 {
@@ -658,6 +659,7 @@ impl PalwSliceRefusalV2 {
             R::VerificationKindUnsupported => 25,
             R::VerificationClaimNotBound(_) => 26,
             R::VerificationClaimFailed => 27,
+            R::ExecutionScopeMismatch => 28,
         }
     }
 
@@ -692,6 +694,7 @@ impl PalwSliceRefusalV2 {
             25 => "verification_kind_unsupported",
             26 => "verification_claim_not_bound",
             27 => "verification_claim_failed",
+            28 => "execution_scope_mismatch",
             _ => "unknown",
         }
     }
@@ -906,7 +909,11 @@ mod tests {
         assert_ne!(a.job_work_id(&h(50)), c.job_work_id(&h(50)), "input");
         let mut d = decl();
         d.boundaries = vec![10, 50, 70, 100];
-        assert_ne!(a.job_work_id(&h(50)), d.job_work_id(&h(50)), "plan");
+        d.initial_state_root = h(900);
+        d.plan_root = h(901);
+        d.kernel_version = 900;
+        d.total_work = 900;
+        assert_eq!(a.job_work_id(&h(50)), d.job_work_id(&h(50)), "repartitioning or changing output/verification metadata is the same work");
         let mut e = decl();
         e.canonical_job_id = h(9);
         assert_ne!(a.job_work_id(&h(50)), e.job_work_id(&h(50)), "job");

@@ -48,6 +48,69 @@ fn refused(why: impl Into<String>) -> PalwStateV2Error {
 // ---------------------------------------------------------------------------------------------
 
 impl PalwChainStateV2 {
+    /// Cost policy is frozen by the immutable class's registration rules, not the slice's height.
+    fn exec_v2_work_inputs_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        class: &Hash64,
+        job: &Hash64,
+    ) -> Result<(misaka_palw_tir::TirProgramV1, crate::palw_exec_work_plan_v1::PalwExecWorkCostV1, u32, u32, u32), String> {
+        let tir = self.tir_class_v1(class).ok_or("the REAL job cannot be derived from registered IR")?;
+        let registered = self.classes.get(class).ok_or("the registered class is missing")?;
+        let program = misaka_palw_tir::TirProgramV1::decode_canonical(&tir.program).map_err(|e| e.to_string())?;
+        let canonical = crate::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(tir.facts.max_context)
+            .ok_or("the REAL job cannot be derived")?;
+        let context = crate::palw_tir_attempt_v1::palw_tir_attempt_context_v1(&tir.facts, job, canonical, Hash64::default());
+        let cost = if params.tir_fence2_active_at(registered.registered_daa) {
+            crate::palw_exec_work_plan_v1::PalwExecWorkCostV1::MinSelectArmsV2
+        } else {
+            crate::palw_exec_work_plan_v1::PalwExecWorkCostV1::AllNodesV1
+        };
+        Ok((program, cost, tir.facts.max_context, canonical.0, context.exact_decode_tokens))
+    }
+
+    /// The declaration's authenticated token plan, reconstructed entirely from chain data.
+    pub fn exec_v2_canonical_work_plan_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        class: &Hash64,
+        job: &Hash64,
+        boundaries: &[u64],
+    ) -> Result<crate::palw_exec_work_plan_v1::PalwExecWorkPlanV1, String> {
+        let (program, cost, max, prompt, prefix) = self.exec_v2_work_inputs_v1(params, class, job)?;
+        crate::palw_exec_work_plan_v1::palw_exec_work_plan_from_boundaries_v1(&program, cost, max, prompt, prefix, boundaries)
+            .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn exec_v2_check_kernel_work_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        root: &PalwWorkRootV2,
+        index: u32,
+        row: &misaka_palw_kernel::ledger::ClaimRowV1,
+        job: &misaka_palw_kernel::job::KernelJobV1,
+    ) -> Result<(), String> {
+        let (program, cost, max, prompt, prefix) = self.exec_v2_work_inputs_v1(params, &root.class_id, &root.canonical_job_id)?;
+        let misaka_palw_kernel::ledger::ClaimBodyV1::Program { claim, .. } = &row.body else {
+            return Err("not a program claim".into());
+        };
+        if job.max_new_tokens as usize != claim.generated.len() {
+            return Err("the maximum and actual decode differ".into());
+        }
+        let range = palw_work_plan_range_v2(&root.boundaries, index).ok_or("no such execution cell")?;
+        crate::palw_exec_work_plan_v1::palw_exec_work_slice_scope_v1(
+            &program,
+            cost,
+            max,
+            prompt,
+            prefix,
+            [range.start, range.end],
+            job.prompt.len(),
+            claim.generated.len(),
+        )
+        .map_err(|e| e.to_string())
+    }
+
     /// **The EXEC root a kernel claim is bound to, if any** (X8R round 3; ADR-0176 D2's hook H-3a for lane BUDGET): a root's prefix claim
     /// or an accepted slice's verification claim. BUDGET's engine reads it at a kernel claim's `Final` to draw the route reward from
     /// the ROOT's one reservation instead of a fresh one on the executor's bond. Bounded by the open-root and per-root slice bounds.
@@ -203,6 +266,14 @@ impl PalwChainStateV2 {
                     &crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&slice.executor_bond),
                     daa_score,
                 )?;
+                self.exec_v2_check_kernel_work_v1(
+                    params,
+                    root,
+                    slice.slice_index,
+                    &row,
+                    job.as_ref().ok_or(R::ExecutionScopeMismatch)?,
+                )
+                .map_err(|_| R::ExecutionScopeMismatch)?;
                 match palw_exec_v2_claim_outcome_v1(&row, daa_score) {
                     PalwSliceVerificationV1::Verified { final_daa } => Some((
                         final_daa,
@@ -235,20 +306,47 @@ impl PalwChainStateV2 {
 
     /// **The consistency of the work-slice ledgers** against each other and against the claims, checked with the rest of
     /// `assert_internal_consistency`. Empty tables are consistent by construction.
-    pub(super) fn assert_exec_v2_consistency_v1(&self) -> Result<(), PalwStateV2Error> {
+    pub(super) fn assert_exec_v2_consistency_v1(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
         let bad = |why: String| PalwStateV2Error::CarriageInconsistent(format!("exec v2: {why}"));
         if self.exec_v2.is_empty() {
             return Ok(());
         }
         for (claim_id, root) in &self.exec_v2.roots {
-            if !self.claims.contains_key(claim_id) {
-                return Err(bad(format!("root {claim_id} outlives its claim")));
+            let claim = self.claims.get(claim_id).ok_or_else(|| bad(format!("root {claim_id} outlives its claim")))?;
+            if claim.class_id != root.class_id
+                || claim.job_identity != root.canonical_job_id
+                || claim.bond != root.root_bond
+                || claim.accepted_block != root.anchor
+            {
+                return Err(bad(format!("root {claim_id}'s REAL binding differs from its claim")));
             }
             if self.exec_v2.jobs.get(&root.job_work_id) != Some(claim_id) {
                 return Err(bad(format!("root {claim_id} does not hold its job work identity")));
             }
             crate::palw_work_slice_v2::palw_work_plan_validate_v2(&root.boundaries, root.total_work)
                 .map_err(|e| bad(format!("root {claim_id}'s plan: {e}")))?;
+            let work_plan = if self.kernel_route.is_some() && root.prefix != PalwWorkPrefixStageV2::Unbound {
+                let plan = self
+                    .exec_v2_canonical_work_plan_v1(params, &root.class_id, &root.canonical_job_id, &root.boundaries)
+                    .map_err(|e| bad(format!("root {claim_id}'s registered execution cost: {e}")))?;
+                let facts = &self.tir_class_v1(&root.class_id).expect("the work plan requires registered IR").facts;
+                let canonical = crate::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(facts.max_context)
+                    .ok_or_else(|| bad(format!("root {claim_id} has no canonical prompt")))?;
+                let prompt = crate::palw_attempt_rules_v1::palw_attempt_prompt_ids_v1(
+                    &root.canonical_job_id,
+                    u64::from(facts.token_bound),
+                    canonical.0,
+                );
+                let input = crate::palw_exec_v2_verify::palw_exec_v2_token_state_root_v1(&[&prompt]);
+                if crate::palw_work_slice_v2::palw_exec_job_work_id_v1(&root.class_id, &root.canonical_job_id, &input)
+                    != root.job_work_id
+                {
+                    return Err(bad(format!("root {claim_id}'s useful-work key differs from its REAL inputs")));
+                }
+                Some(plan)
+            } else {
+                None
+            };
             if root.next_index > root.slice_count() {
                 return Err(bad(format!("root {claim_id} accepted past its plan")));
             }
@@ -266,6 +364,31 @@ impl PalwChainStateV2 {
                 }
                 if palw_work_plan_range_v2(&root.boundaries, *index) != Some(row.range) {
                     return Err(bad(format!("root {claim_id}'s slice {index} is not the plan's range")));
+                }
+                // Reuse the one reconstructed plan for all rows, rather than reparsing IR per
+                // slice. Pruned dependency retention remains WINDOW's separate obligation.
+                if let (Some(plan), Some(kernel)) = (&work_plan, &self.kernel_route) {
+                    if let Some(claim_bytes) =
+                        kernel.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&row.evidence_root)))
+                    {
+                        let kernel_claim: misaka_palw_kernel::ledger::ClaimRowV1 = borsh::from_slice(claim_bytes)
+                            .map_err(|e| bad(format!("root {claim_id}'s slice {index} kernel claim: {e}")))?;
+                        if let Some(job_bytes) = kernel.rows.get(&(
+                            misaka_palw_kernel::rows::TABLE_JOBS_V1,
+                            borsh::to_vec(&kernel_claim.job_id).expect("a digest serializes"),
+                        )) {
+                            let job: misaka_palw_kernel::job::KernelJobV1 = borsh::from_slice(job_bytes)
+                                .map_err(|e| bad(format!("root {claim_id}'s slice {index} kernel job: {e}")))?;
+                            let misaka_palw_kernel::ledger::ClaimBodyV1::Program { claim, .. } = &kernel_claim.body else {
+                                return Err(bad(format!("root {claim_id}'s slice {index} is not a program claim")));
+                            };
+                            if job.max_new_tokens as usize != claim.generated.len()
+                                || plan.check_slice_job(*index as usize, job.prompt.len(), claim.generated.len()).is_err()
+                            {
+                                return Err(bad(format!("root {claim_id}'s slice {index} has a different execution scope")));
+                            }
+                        }
+                    }
                 }
                 let work = row.range.work().ok_or_else(|| bad("an empty slice range".into()))?;
                 match row.stage {
@@ -469,12 +592,22 @@ pub(super) fn apply_root_declared_v2(
     if claim.job_identity == Hash64::default() || claim.job_identity != declaration.canonical_job_id {
         return Err(no(R::ClaimBindingMismatch));
     }
-    // The prefix is the work the chain admitted for the claim, derived and never declared.
-    let admitted = builder
+    // REAL lottery weight remains the claim's chain-position credit. Execution cells use IR cost.
+    let real_weight = builder
         .state
         .palw_claim_canonical_weight_v1(&claim, builder.extras.canonical_work_daa)
         .ok_or_else(|| no(R::ClaimWorkNotDerivable))?;
-    let admitted = u64::try_from(admitted).map_err(|_| no(R::Overflow))?;
+    let admitted = if builder.state.kernel_route.is_some() {
+        let plan = builder
+            .state
+            .exec_v2_canonical_work_plan_v1(builder.params, &claim.class_id, &claim.job_identity, &declaration.boundaries)
+            .map_err(|_| no(R::ExecutionWorkNotDerivable))?;
+        plan.check_declared_work(declaration.total_work, &declaration.boundaries).map_err(|_| no(R::ExecutionWorkNotDerivable))?;
+        plan.boundaries()[0]
+    } else {
+        // Arithmetic-only test histories have no kernel route and are never armable rulesets.
+        u64::try_from(real_weight).map_err(|_| no(R::Overflow))?
+    };
     if declaration.boundaries.first().copied() != Some(admitted) {
         return Err(no(R::PrefixMismatch { declared: declaration.boundaries.first().copied().unwrap_or(0), admitted }));
     }
@@ -488,6 +621,9 @@ pub(super) fn apply_root_declared_v2(
             let tir = builder.state.tir_class_v1(&claim.class_id).ok_or_else(|| no(R::PrefixNotDerivable))?;
             let (prompt, context) = palw_exec_v2_real_job_v1(&tir.facts, &claim.job_identity, builder.extras.prompt_ids_form_v1())
                 .ok_or_else(|| no(R::PrefixNotDerivable))?;
+            if declaration.input_root != crate::palw_exec_v2_verify::palw_exec_v2_token_state_root_v1(&[&prompt]) {
+                return Err(no(R::ClaimBindingMismatch));
+            }
             let row = kernel
                 .rows
                 .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&declaration.prefix_claim)))
