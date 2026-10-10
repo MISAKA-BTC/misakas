@@ -1406,7 +1406,7 @@ fn axis_cover(l: &LayoutV3, rank: usize, width: u64, axis: u8, reads: &BTreeSet<
         .map(|(a, b, _)| (a, b))
         .collect();
     let path = (crate::merkle::depth(l.leaves(axis)) + 1) * 64 + 8 * rank as u64 + 32;
-    let bytes = set.iter().map(|(line, tile)| l.leaf_elements(axis, *line, *tile).map_or(0, |v| v.len() as u64) * width + path).sum();
+    let bytes = set.iter().map(|(line, tile)| l.leaf_element_count(axis, *line, *tile).unwrap_or(0) * width + path).sum();
     (set, bytes)
 }
 
@@ -1587,6 +1587,53 @@ pub fn decode_court_cost_v1(program: &TirProgramV1, node_count: u64, max_positio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allocation_free_leaf_pricing_matches_index_vector_oracle_on_real_weight_shapes() {
+        let cases = [
+            (vec![], BTreeSet::from([0])),
+            (vec![0], BTreeSet::from([0])),
+            (vec![4097], BTreeSet::from([0, 4095, 4096, 4097])),
+            (vec![3, 8193], (0..8193).step_by(997).collect()),
+            (vec![2, 4097, 3], (0..24_582).step_by(997).collect()),
+            // The actual pilot's vocabulary projection: a full strided MatMul column.
+            (vec![1536, 151_936], (0..1536).map(|k| k * 151_936).collect()),
+            // The actual embedding shape: a Gather reads one complete 1,536-value row.
+            (vec![151_936, 1536], (0..1536).collect()),
+        ];
+        for (shape, reads) in cases {
+            let l = LayoutV3::of(&shape);
+            for dtype in DType::ALL {
+                for axis in [AXIS_ROW, AXIS_COL] {
+                    let leaves: BTreeSet<(u64, u64)> = reads
+                        .iter()
+                        .filter_map(|e| if axis == AXIS_ROW { l.row_leaf_of(*e) } else { l.col_leaf_of(*e) })
+                        .map(|(a, b, _)| (a, b))
+                        .collect();
+                    let path = (crate::merkle::depth(l.leaves(axis)) + 1) * 64 + 8 * shape.len() as u64 + 32;
+                    let original: u64 = leaves
+                        .iter()
+                        .map(|(line, tile)| l.leaf_elements(axis, *line, *tile).unwrap().len() as u64 * dtype.width() as u64 + path)
+                        .sum();
+                    assert_eq!(axis_cover(&l, shape.len(), dtype.width() as u64, axis, &reads), (leaves, original));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn allocation_free_pricing_preserves_the_exact_actual_32_position_plan_root() {
+        let bytes =
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"));
+        let program = TirProgramV1::decode_canonical(bytes).unwrap();
+        let descriptor = crate::descriptor::k2_tir_v4_descriptor();
+        let plan = crate::plan::plan_for_tir_program_v1(&descriptor, &program, crate::public::program_root_v1(bytes), 32).unwrap();
+        let hex: String = plan.root().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "0e31e5b93b6088bcb5b2b7a2e61faa9aecee0c9d62f9fe51a5d303367a3e762cec4b4a9b79c237bbb7e760b6d2679ecad9182f97088e29d4b3443d999fcd2dd2"
+        );
+    }
     use crate::seg::{SegmentedCommitmentsV1, prompt_root_of_ids_v1};
     use crate::trace::trace_v1;
     use misaka_palw_tir::MapParams;

@@ -125,6 +125,66 @@ impl SegmentedClaimRecordV1 {
         borsh::from_slice(bytes).map_err(|e| format!("not a segmented claim record: {e}"))
     }
 
+    /// Rebuild a public view for the exact claim an outsider requested. `header` must come
+    /// from the verifier's authenticated class/chain state; `claim_id` is the requested id,
+    /// not an id copied from this untrusted record. This verifies identity, not chain inclusion.
+    /// The last delivered id is not fed into the trace, so evidence/header checks alone do
+    /// not bind it. Recompute the claim id with the served producer before opening its logits.
+    pub fn view_for_claim(
+        &self,
+        header: &crate::evidence::EvidenceHeaderV1,
+        claim_id: &Digest,
+        producer_bond: &Digest,
+    ) -> Result<SegClaimViewV1, String> {
+        let claim = KernelClaimV1 {
+            job_id: self.job_id,
+            producer_bond: *producer_bond,
+            generated: self.generated.clone(),
+            evidence_root: self.evidence.root(),
+        };
+        if self.claim_id != *claim_id || claim.id() != *claim_id {
+            return Err("the public record is not the requested claim's body".into());
+        }
+        if self.param_commitments.windows(2).any(|w| (w[0].0, w[0].1) >= (w[1].0, w[1].1)) {
+            return Err("the public parameter map is not in unique canonical order".into());
+        }
+        let view = self.view(header)?;
+        if self.prompt_len == 0
+            || self.plan.max_positions > view.program.history_bound
+            || self.evidence.positions > self.plan.max_positions
+        {
+            return Err("the public context exceeds the class's bound".into());
+        }
+        if let Some(prompt) = &self.inline_prompt
+            && (prompt.len() as u64 != self.prompt_len as u64
+                || prompt.iter().any(|t| *t >= view.program.token_bound)
+                || prompt_root_of_ids_v1(prompt) != self.prompt_root)
+        {
+            return Err("the inline prompt is not the committed job input".into());
+        }
+        let fed = if let Some(encoder) = view.encoder {
+            if self.max_new_tokens != 0 || !self.generated.is_empty() || self.evidence.positions != 1 || self.prompt_len > encoder.l {
+                return Err("the public encoder job or output is malformed".into());
+            }
+            &[][..]
+        } else {
+            if !crate::job::generation_length_matches_v1(self.max_new_tokens, self.generated.len())
+                || self.generated.iter().any(|t| *t >= view.program.token_bound)
+            {
+                return Err("the public delivery does not match the job's exact generation length or vocabulary".into());
+            }
+            let fed = &self.generated[..self.generated.len() - 1];
+            if self.prompt_len as u64 + fed.len() as u64 != self.evidence.positions as u64 {
+                return Err("the public position count does not match the job and fed output".into());
+            }
+            fed
+        };
+        if job_input_root_v2(self.prompt_len, &self.prompt_root, fed) != self.evidence.job_input_root {
+            return Err("the public prompt or fed output is not the evidence's input".into());
+        }
+        Ok(view)
+    }
+
     /// The verifier's view, checked against the header the chain states (program root, artifact root, plan root, evidence).
     pub fn view(&self, header: &crate::evidence::EvidenceHeaderV1) -> Result<SegClaimViewV1, String> {
         let program = misaka_palw_tir::program::TirProgramV1::decode_canonical(&self.program_bytes).map_err(|e| e.to_string())?;

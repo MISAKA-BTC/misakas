@@ -22,6 +22,9 @@ use misaka_palw_kernel::seg_da::{assemble_position_v1, position_part_v1, positio
 use misaka_palw_kernel::seg_ledger::SegmentedClaimRecordV1;
 use std::cell::Cell;
 
+#[path = "real_scale_actual_native.rs"]
+mod actual_native;
+
 const SEG_MAX_POSITIONS: u32 = 8192;
 
 struct SegFixture {
@@ -122,9 +125,14 @@ impl Net {
     /// [`Net::send`] for objects of any size: one carrier when the object fits [`SEG_CARRIER_CAP`], else its generic `ObjectChunk`s
     /// (judged on the assembled whole), each card's in order.
     async fn send_all(&mut self, items: Vec<(usize, Obj)>) -> Block {
+        self.send_all_with_cap(items, SEG_CARRIER_CAP).await
+    }
+
+    /// A smaller transport chunk for objects whose storage mass also constrains carriage.
+    async fn send_all_with_cap(&mut self, items: Vec<(usize, Obj)>, cap: usize) -> Block {
         let mut out = Vec::new();
         for (card, o) in items {
-            match kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&o, SEG_CARRIER_CAP).expect("chunks") {
+            match kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&o, cap).expect("chunks") {
                 None => out.push((card, o)),
                 Some(chunks) => out.extend(chunks.into_iter().map(|c| (card, c))),
             }
@@ -198,7 +206,11 @@ impl SegWorld {
     }
 
     /// The K2-TIR-v4 class registered on `net` through the real path (a Panel registration of it is dropped first).
-    async fn register(mut net: Net, f: SegFixture) -> SegWorld {
+    async fn register(net: Net, f: SegFixture) -> SegWorld {
+        SegWorld::register_with_cap(net, f, SEG_CARRIER_CAP).await
+    }
+
+    async fn register_with_cap(mut net: Net, f: SegFixture, cap: usize) -> SegWorld {
         // The class is derived-eligible for OPV through the test seam (no onboarding binding on this node), as the parent's are.
         crate::pipeline::virtual_processor::processor::kernel_route_test_opv_eligible_v1(seg_class_id(&f));
         net.beat_to(1).await;
@@ -208,7 +220,7 @@ impl SegWorld {
         let panel =
             K::RegisterClass { descriptor, program_bytes: f.program.encode(), plan: f.plan.clone(), param_commitments: f.pc.clone() };
         let o = net.route(1, &panel);
-        net.send(vec![(1, o)]).await;
+        net.send_all_with_cap(vec![(1, o)], cap).await;
         assert!(net.api().is_none_or(|k| k.ledger().unwrap().classes.is_empty()), "no Panel route for a K2-TIR-v4 class");
         let register = K::RegisterClassV2 {
             mode: VerificationModeV1::OptimisticPublicVerification,
@@ -218,7 +230,7 @@ impl SegWorld {
             param_commitments: f.pc.clone(),
         };
         let o = net.route(1, &register);
-        net.send(vec![(1, o)]).await;
+        net.send_all_with_cap(vec![(1, o)], cap).await;
         let class = seg_class_id(&f).as_bytes();
         assert!(net.ledger().classes.contains_key(&class), "the K2-TIR-v4 class registered through the real path under OPV");
         SegWorld { net, f, class, jobs: 0 }
@@ -368,7 +380,10 @@ impl SegWorld {
         assert_eq!(read.kind, "segmented");
         assert_eq!(read.ledger_root, api.ledger_root());
         let header: EvidenceHeaderV1 = borsh::from_slice(&read.record_header).expect("the class header");
-        SegmentedClaimRecordV1::from_bytes(&read.public_record).expect("the record").view(&header).expect("the record is the claim's")
+        SegmentedClaimRecordV1::from_bytes(&read.public_record)
+            .expect("the record")
+            .view_for_claim(&header, claim, &read.producer_bond)
+            .expect("the record is the requested claim's")
     }
 }
 

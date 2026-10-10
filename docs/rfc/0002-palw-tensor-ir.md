@@ -2374,3 +2374,40 @@ independent source/task fidelity, original full context, outsider node G14 or Fi
 registration/public claim/prosecution/settlement and the remaining full-scope requirements are
 still required. Protocol, commands, measurements, raw evidence and hashes are in the
 [RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+
+
+### 14.11 Requested-claim identity and actual-weight node delivery path
+
+An outsider consuming a segmented public record must bind it to the **requested claim id**,
+not only the class header and trace roots. The final delivered id is not fed into the trace.
+`SegmentedClaimRecordV1::view_for_claim` recomputes the canonical claim id from its job,
+producer, all delivered ids and evidence root; it also checks canonical parameter ordering,
+prompt authentication, exact output length/vocabulary, context and evidence input binding.
+Its header must be anchored in authenticated class/chain state. This local identity check is
+not a substitute for chain inclusion or an authenticated RPC state proof.
+
+The actual-weight 32-position Qwen2.5 delivery witness now has a node integration test:
+registration data in 32,000-byte ordinary chunks, prompt tiles, salted claim carriers,
+production RPC op 210 JSON, outsider proof, block court, reservation slash, honest Final,
+coinbase redemption and a second node's replay. Activation validation, parameter attestation
+and OPV eligibility are still the parent's explicit test seams. Excluding the eligibility
+hook, the class is `NotOnboarded`; the stateful program cannot use the small-stateless complete
+check. The separate V2 inventory root is not registered or confused with the kernel root.
+These mechanics do not establish model onboarding, public DA acquisition or whole-claim G14.
+The full requirement and these gates remain in force.
+
+The segmented bootstrap currently has a cycle: only OPV can register v4/v5, OPV eligibility
+requires kernel binding/conformance, and kernel binding requires a registered class. A
+conformance-only candidate path must break this cycle **without granting executable claims,
+rewards, Final weight or beacon-source rights** before the existing independent gates pass.
+The legacy Panel bootstrap is not an allowed fallback for segmented classes. Sampled
+conformance remains a non-reward signal pending its digest/refutation courts; its signal or
+a test hook cannot substitute for release eligibility.
+
+Allocation-free v3 leaf counts are now used for court byte pricing. Rows and strided columns
+retain exactly their existing leaf coverage, wire sizes and tree-choice tie rule, and the
+actual 32-position plan root is unchanged. This eliminates transient index vectors created
+merely to count elements during repeated ledger reconstruction. No descriptor, price,
+commitment preimage, resource ceiling or activation flag changes. Final test evidence and
+remaining full-scope work are recorded in the
+[RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).

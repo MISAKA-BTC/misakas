@@ -1006,3 +1006,121 @@ actual-weight claim and public delivery witness through the mempool, blocks, pub
 court, and verify independent settlement. Fresh checking of state/weight/routing lies, longer
 contexts, all remaining shared features and complete tasks, aggregate resources, A6/A8 and
 economic gates remain required. Shipping activation fences remain off.
+
+
+### Requested-claim identity and actual-weight node delivery mechanics (2026-10-10)
+
+The segmented public-record API now has `view_for_claim(header, requested_id, producer)`.
+The verifier anchors `header` in its synced class state and supplies the requested claim id
+independently of the served record. The method rebuilds `KernelClaimV1` from the job, producer,
+**all delivered ids**, and evidence root and checks its canonical id. A header/trace-only check
+cannot authenticate the final delivered id, which is never fed back. This fixes the public
+client boundary without changing consensus bytes, hashes, descriptors, activation or economics.
+The method also refuses noncanonical/duplicate parameter entries, a substituted inline prompt,
+incorrect exact generation length or vocabulary, context bounds and evidence input bindings.
+It supports both segmented decoder and encoder records. It verifies identity and consistency,
+**not chain inclusion**: a JSON answer and its self-reported roots are not an authenticated state
+proof. The existing header-only `view` remains available for callers already inside trusted
+ledger state; callers of a requested public claim should use the stronger method.
+
+The new node test consumes the committed actual-weight 32-position bundle from §14.10. It
+loads no full weights, private producer capture or ModelSpec. Its exact program, plan and all
+1,636 parameter commitments are registered on the existing segmented route. Registration data
+uses ordinary 32,000-byte `ObjectChunk` payloads and the node's unchanged storage/compute mass
+ceilings. Job prompt tiles, salted claim seal/reveal and proof carriers go through the mempool,
+node template and block fold. RPC op 210's production response builder is serialized through
+JSON, then the outsider rebuilds the requested claim view against the synced class row. The
+17,924-byte recorded delivery witness is checked against this view, rather than the producer's
+offline `SegClaimContextV1` labels.
+
+Acceptance assertions cover a copied-position filing causing no conviction/slash, the genuine
+substituted-token proof convicting position 31 and slashing the claim reservation once,
+duplicate conviction causing no second slash, a weaker-rival filing against honest delivery
+being dismissed, honest Final and coinbase redemption once, and a second independent node
+replaying the blocks to the same tip, PALW state, route rows, per-block delta roots and both
+producer/accuser payout outcomes.
+
+**The existing test seams remain explicit.** Activation validation is bypassed by the parent
+harness; parameter-root attestation and OPV eligibility are `cfg(test)` hooks. With the hook
+excluded from the derived eligibility view, this actual class is `NotOnboarded`. Its stateful
+program is refused by the small-stateless `palw_complete_check_domain_v1` bootstrap. Its V2
+inventory root is a separate domain, remains unregistered in this mechanics test, and is not
+substituted for the kernel parameter root. This test therefore establishes the actual delivery
+witness's node court/settlement mechanics, not model onboarding, a DA acquisition service,
+shipping permissionless activation, source fidelity or whole-computation G14.
+
+One concrete registration gap is visible in the current code: segmented v4/v5 registration
+requires OPV; OPV registration requires derived eligibility; eligibility requires the class's
+`KernelBoundV1`/conformance row; `KernelBoundV1` requires an already registered kernel class.
+The legacy Panel pre-registration used by v2 cannot bootstrap a segmented class. A conformance-
+only pre-registration path must break this cycle without granting claims, Finals, rewards or
+beacon-source rights before their independent gates pass. The release additionally refuses
+sampled conformance as reward eligibility pending its digest/refutation courts (GAP-70). None
+of these gates is relaxed by the new test or record API.
+
+Validation passed: **97 final kernel tests**, two SDK identity/delivery tests, one final v5
+encoder regression and the final actual-weight node test (**101 distinct tests**; repeat runs
+not counted again). One existing manual hash benchmark remains ignored. The SDK identity tests
+preceded the later pricing-only change; their API/test sources are unchanged, and the final
+kernel/node checks cover the pricing change. The final node trial passed in **104.02 s**,
+including independent replay and redemption. Node-package incremental caching was disabled
+locally after confirmed terminal disk failures; optimizations and node limits were preserved.
+Commands, code/binary hashes, diagnostic failures and scoped results are saved in
+[evidence/qwen25-real-node-delivery-verdict.json](evidence/qwen25-real-node-delivery-verdict.json).
+The protocol is [evidence/qwen25-real-node-delivery-protocol.json](evidence/qwen25-real-node-delivery-protocol.json).
+
+Initial diagnostics are described separately from successful evidence. The first trial used a
+100,000-byte registration chunk and was refused at block transient storage mass 614,992 over
+500,000; transport was reduced, without increasing the limit. A later trial changed the global
+eligibility hook after an initially refused registration, so replay admitted that earlier
+object and diverged. The final test keeps all mock eligibility facts fixed from the beginning
+on both nodes and evaluates the real no-hook refusal separately. This is a corrected harness
+history, not a waived replay assertion. A SDK build also exhausted disk; only completed inactive
+incremental caches inside this worktree were removed, preserving sources, artifacts, compiled
+binaries, evidence and every working cache session before retrying. After the pricing source
+changed, an obsolete completed SDK core archive was also removed; it is a regenerable build
+cache, and its already linked test executable remains available.
+
+**Full RFC02 remains incomplete.** Actual onboarding and authenticated public DA acquisition,
+all state/weight/routing/internal relation faults, original/full contexts, independently measured
+source/task fidelity and performance ratios, remaining shared features and complete RFC03 tasks,
+aggregate resources/economic caps and A6/A8 coverage remain required. Keep the full objective
+and conditional model acquisition (A) unchanged.
+
+
+The first corrected fixed-hook node run passed all court, Final, redemption and independent
+replay assertions in **408.66 s**. A one-second live stack observation during that run located
+`tick_kernel_route_v1 → load_ledger → from_rows → class_prosecution_bounds_v1 → axis_cover`.
+The old pricing path materialized a leaf's flat-index vector only to obtain its length, for
+both trees and every priced operand, each time the authenticated class row was reconstructed.
+`LayoutV3::leaf_element_count` now derives the same length in constant space with checked
+tile-start/subtraction arithmetic. `axis_cover` uses it; leaf selection, tree choice, wire
+pricing, actual proof values and hashes are unchanged. No resource ceiling is increased.
+
+Three focused checks passed: exhaustive row/column counts at scalar/empty/tile/batch boundaries,
+invalid coordinates and the largest non-overflowing scalar line; differential pricing against
+the original index-vector oracle for every dtype and the actual embedding/projection geometries;
+and the **exact recorded 32-position plan root**. The complete kernel suite and a second actual
+node run validate the final optimized code below. Node-harness timings include registration,
+carriers, Final wait and replay and are not producer/model throughput, source task performance,
+isolated verifier RSS or an economic admission benchmark. The stack observation is diagnostic,
+not a sampling claim about every possible workload.
+
+
+Reproduce the final node and identity paths:
+
+```sh
+cargo test --locked -p misaka-palw-kernel --lib
+cargo test --locked -p misaka-palw-sdk --test real_native_decode_court
+G14_TRACE=1 cargo test --locked -p kaspa-consensus --lib \
+  --config 'profile.dev.package.kaspa-consensus.incremental=false' \
+  recorded_actual_weight_delivery_convicts_through_rpc_carriers_and_an_honest_claim_redeems_once -- --nocapture
+cargo test --locked -p kaspa-consensus --lib \
+  --config 'profile.dev.package.kaspa-consensus.incremental=false' \
+  g14_k2s_v5_an_encoder_class_on_the_node_convicts_its_lies_and_finalizes_an_honest_claim -- --nocapture
+```
+
+The confirmed terminal failed node compiler's cache was removed even though its name still
+ended in `-working`; the process/session was already terminal, and no live compiler cache was
+removed. The preserved baseline executable and final logs distinguish code/profile scopes.
+No model weights, private trace captures or compiled executables were committed.

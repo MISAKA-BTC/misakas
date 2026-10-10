@@ -75,6 +75,17 @@ impl LayoutV3 {
         if axis == AXIS_ROW { self.row_len } else { self.col_len }
     }
 
+    /// Number of elements in a leaf, without constructing its index vector. Pricing only
+    /// needs this count; both contiguous rows and strided columns have the same tile length.
+    pub fn leaf_element_count(&self, axis: u8, line: u64, tile: u64) -> Option<u64> {
+        let (lines, tiles) = if axis == AXIS_ROW { (self.rows, self.row_tiles) } else { (self.cols, self.col_tiles) };
+        if line >= lines || tile >= tiles {
+            return None;
+        }
+        let first = tile.checked_mul(TILE_V3)?;
+        Some(self.line_len(axis).checked_sub(first)?.min(TILE_V3))
+    }
+
     /// The elements of leaf `(line, tile)` of a tree, as flat (row-major) indices.
     pub fn leaf_elements(&self, axis: u8, line: u64, tile: u64) -> Option<Vec<u64>> {
         let lines = if axis == AXIS_ROW { self.rows } else { self.cols };
@@ -565,6 +576,49 @@ pub fn depth_v3(count: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leaf_element_counts_match_enumeration_at_both_axis_boundaries_without_allocation() {
+        for shape in [
+            vec![],
+            vec![0],
+            vec![1],
+            vec![4095],
+            vec![4096],
+            vec![4097],
+            vec![8193],
+            vec![0, 3],
+            vec![3, 0],
+            vec![3, 8193],
+            vec![8193, 3],
+            vec![2, 3, 4097],
+            vec![2, 4097, 3],
+        ] {
+            let l = LayoutV3::of(&shape);
+            for axis in [AXIS_ROW, AXIS_COL] {
+                let (lines, tiles) = if axis == AXIS_ROW { (l.rows, l.row_tiles) } else { (l.cols, l.col_tiles) };
+                for line in 0..lines {
+                    for tile in 0..tiles {
+                        assert_eq!(
+                            l.leaf_element_count(axis, line, tile),
+                            Some(l.leaf_elements(axis, line, tile).unwrap().len() as u64)
+                        );
+                    }
+                }
+                assert_eq!(l.leaf_element_count(axis, lines, 0), None);
+                assert_eq!(l.leaf_element_count(axis, 0, tiles), None);
+                assert_eq!(l.leaf_element_count(axis, u64::MAX, u64::MAX), None);
+            }
+        }
+        // The count needs no overflowing tile-end addition and no huge tensor/index vector.
+        if usize::BITS == 64 {
+            let l = LayoutV3::try_of(&[usize::MAX]).unwrap();
+            for axis in [AXIS_ROW, AXIS_COL] {
+                assert_eq!(l.leaf_element_count(axis, 0, 0), Some(TILE_V3));
+                assert_eq!(l.leaf_element_count(axis, 0, l.row_tiles - 1), Some(TILE_V3 - 1));
+            }
+        }
+    }
 
     fn t(shape: &[usize]) -> Tensor {
         let n: usize = shape.iter().product();

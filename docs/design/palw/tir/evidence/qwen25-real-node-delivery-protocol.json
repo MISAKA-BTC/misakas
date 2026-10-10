@@ -1,0 +1,44 @@
+{
+  "schema": "misaka.rfc02.node-delivery-mechanics-protocol.v1",
+  "scope": "Existing actual-weight 32-position delivery witness carried through node mechanics. No actual-model onboarding, activation or whole-computation G14 claim.",
+  "fixture": "qwen25-real-native-court-bundle.borsh",
+  "positions": 32,
+  "nodes_per_position": 7658,
+  "parameter_instances": 1636,
+  "honest_output": [
+    1
+  ],
+  "substituted_output": [
+    2
+  ],
+  "registration_chunk_payload_bytes": 32000,
+  "unchanged_block_transient_storage_mass_limit": 500000,
+  "acceptance": [
+    "exact canonical TIR/plan/parameter roots",
+    "RPC op 210 JSON and requested-claim identity",
+    "copied position cannot convict/slash",
+    "genuine delivery lie convicts position 31 and slashes its reservation",
+    "duplicate conviction cannot slash twice",
+    "honest weaker-rival proof is NoFault",
+    "honest Final and coinbase redemption once",
+    "independent block replay matches tip/state/route/delta roots and payouts"
+  ],
+  "seams": [
+    "activation validation bypass in parent harness",
+    "cfg(test) parameter-root attestation",
+    "cfg(test) OPV eligibility, fixed from beginning on both nodes"
+  ],
+  "no_hook_verdict": "NotOnboarded",
+  "small_stateless_complete_check": "Refused: stateful program",
+  "inventory_root_registration": false,
+  "model_weights_or_private_capture_loaded_by_node_test": false,
+  "public_state_authentication": "RPC builder JSON checked against local synced class row. JSON roots alone are not an inclusion proof.",
+  "profile": "Workspace debug profile with existing package optimizations. Final node package incremental caching disabled locally after confirmed terminal ENOSPC; kernel/core flags and consensus limits unchanged.",
+  "commands": [
+    "cargo test --locked -p misaka-palw-kernel --lib",
+    "cargo test --locked -p misaka-palw-sdk --test real_native_decode_court",
+    "G14_TRACE=1 cargo test --locked -p kaspa-consensus --lib --config 'profile.dev.package.kaspa-consensus.incremental=false' recorded_actual_weight_delivery_convicts_through_rpc_carriers_and_an_honest_claim_redeems_once -- --nocapture",
+    "cargo test --locked -p kaspa-consensus --lib --config 'profile.dev.package.kaspa-consensus.incremental=false' g14_k2s_v5_an_encoder_class_on_the_node_convicts_its_lies_and_finalizes_an_honest_claim -- --nocapture"
+  ],
+  "criterion_history": "Mechanics assertions were implemented before the node run. Chunk transport was reduced after a storage-mass refusal. Changing a mock hook mid-history caused a separate failed replay trial and was corrected before the successful baseline. No performance/admission threshold was inferred from elapsed times."
+}

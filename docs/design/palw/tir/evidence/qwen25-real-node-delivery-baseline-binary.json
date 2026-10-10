@@ -1,0 +1,6 @@
+{
+  "binary_path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/node-delivery-baseline-test",
+  "bytes": 156546944,
+  "sha256": "bd0e4c8b48f871938bf22f9cb8d67f89c267c7a3f87921ec83cbdcc695acfe29",
+  "scope": "Corrected fixed-hook-history node test before allocation-free leaf-count pricing. Pricing is the older index-vector enumeration; no model/execution throughput benchmark."
+}
