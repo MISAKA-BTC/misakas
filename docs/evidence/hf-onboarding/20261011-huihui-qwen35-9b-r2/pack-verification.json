@@ -1,0 +1,71 @@
+{
+ "schema": "misaka.h1.pack-verification.v1",
+ "command": "palw-class pack verify <pack> --model <checkpoint> --artifact <declared class file> --rebuild --strict --json",
+ "rebuild": "run (the artifact rebuilt from the public source and the pack's profile)",
+ "exit": 0,
+ "verified": true,
+ "ok": true,
+ "pack": "43ca73cbf4f2f19f55919d686b47dff39b2f30c199ae96e4c839a5aa8021a272",
+ "checks": [
+  {
+   "check": "manifest",
+   "detail": "huihui-qwen35-9b (43ca73cbf4f2f19f), schema misaka.palw.runtime-pack.v1",
+   "status": "PASS"
+  },
+  {
+   "check": "sidecars",
+   "detail": "4 file(s) match their hashes",
+   "status": "PASS"
+  },
+  {
+   "check": "adapter",
+   "detail": "built-in `vlm-qwen3-5` 9091e8ce28b19b2d",
+   "status": "PASS"
+  },
+  {
+   "check": "descriptors",
+   "detail": "none (a float checkpoint)",
+   "status": "PASS"
+  },
+  {
+   "check": "converter",
+   "detail": "built by palw-tir-convert 1.1.0 (misaka.palw.lowering.v1); this build 1.1.0 (misaka.palw.lowering.v1) \u2014 the same converter; math libm-v1: the same bytes on every platform",
+   "status": "PASS"
+  },
+  {
+   "check": "source",
+   "detail": "8 file(s) match their SHA-256",
+   "status": "PASS"
+  },
+  {
+   "check": "frontend",
+   "detail": "level B, spec 591821122c6b8834, 15 feature uses, scope: text-generation: token ids \u2192 next-token logits; NOT computed: vision tower, multi-token-prediction heads",
+   "status": "PASS"
+  },
+  {
+   "check": "artifact",
+   "detail": "file d5f527079aa00222 \u00b7 inventory root 96415a29ca74f93c \u00b7 graph root dd288ef2eebf32df",
+   "status": "PASS"
+  },
+  {
+   "check": "declared",
+   "detail": "testnet-12: exact class 8e90e27fea9e22e0 (context 8192, interval 298); identity verification, not live admission",
+   "status": "PASS"
+  },
+  {
+   "check": "conformance",
+   "detail": "streamed: 1 vector(s), 2 positions, equal on reference, typed-backend, independent (largest decoded parameter: reference 15520.0 MiB, independent 15520.0 MiB; not process RSS)",
+   "status": "PASS"
+  },
+  {
+   "check": "hf-reference",
+   "detail": "streamed: slope 0.9985, corr 0.99933, top-1 0.969, KL 0.00388 over 32 positions",
+   "status": "PASS"
+  }
+ ],
+ "skipped": [],
+ "failed": [],
+ "max_rss_bytes": [
+  22083108864
+ ]
+}

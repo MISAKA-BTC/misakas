@@ -274,6 +274,30 @@
    "full": "header-only",
    "bytes": 307867048,
    "note": "register/mine UNTESTED (preflight gives no verdict for a pipeline class; routed to P4)"
+  },
+  {
+   "order": 5,
+   "id": "glm-5",
+   "family": "glm-moe-dsa (DeepSeek sparse attention)",
+   "repo": "zai-org/GLM-5",
+   "revision": "c183ef8c61faee82855eca1ed9bb3a9a7ce3b0b2",
+   "task": "text-generation",
+   "context": 512,
+   "local": null,
+   "full": "header-only",
+   "bytes": 1507761492660
+  },
+  {
+   "order": 5,
+   "id": "glm-5.3",
+   "family": "glm-moe-dsa (DeepSeek sparse attention)",
+   "repo": "zai-org/GLM-5.3",
+   "revision": "aca966e4e02791568aa6a4ced368624b3d897f42",
+   "task": "text-generation",
+   "context": 512,
+   "local": null,
+   "full": "header-only",
+   "bytes": 755663689206
   }
  ]
 }
