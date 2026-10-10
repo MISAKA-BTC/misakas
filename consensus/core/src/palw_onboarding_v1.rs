@@ -80,8 +80,10 @@ const PALW_SIGNED_REGISTRATION_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/onboardi
 pub const PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1: u64 = 100 * SOMPI_PER_KASPA;
 pub const PALW_ONBOARDING_BINDING_WINDOW_DAA_V1: u64 = 40;
 pub const PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1: u64 = 200;
-/// The challenger's share of a refuted binding's slash (permille); the rest is burned (the slash's burn at release).
-pub const PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1: u64 = 500;
+/// The challenger's share of a refuted binding's slash (permille); the rest is burned (the slash's burn at release). The PALW reporter
+/// share of ADR-0032 (49 %), the route's one rate (`PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1`).
+pub const PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1: u64 =
+    crate::palw_kernel_route_v1::PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1 as u64;
 
 /// **The message an onboarding object's signer signs**: `H(domain; network ‖ kind ‖ signer ‖ len ‖ payload)`. `payload` is the
 /// object's Borsh with its signature field left out, so the signature covers every other field.

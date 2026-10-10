@@ -794,8 +794,8 @@ async fn g14_conformance_forged_evidence_is_refuted_withheld_evidence_defaults_a
 
 /// **Hostile evidence never panics, never passes, and is never judged for free.** A refutation with a junk opening (absurd leaf count,
 /// wrong coordinates, ragged bytes) and one naming a check that does not exist are dismissed — each charging the block's adjudication
-/// budget; five in one block: the four-adjudication test block judges four and the fifth is not charged. Evidence carrying an outcome
-/// the seed never selected, or two outcomes for one check, is a forgery: CONFORMANCE_FAILED, counted. The chain carries on.
+/// budget; five in one block: the four-adjudication test block judges two (two runs are reserved for proofs, C4 F-C4R4-10) and the
+/// rest are not charged. Evidence carrying an outcome the seed never selected, or two outcomes for one check, is a forgery: CONFORMANCE_FAILED, counted. The chain carries on.
 #[tokio::test]
 async fn g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_and_never_stops_the_chain() {
     kaspa_core::log::try_init_logger("warn");

@@ -11,6 +11,7 @@
 //!
 //! Every outsider here is built from the node's read API (the rows and the committed root) and a public DA directory — nothing the
 //! producer keeps privately — with its own salt.
+use super::g14_kernel_route_e2e::{assert_kernel_conserved_v1, kernel_money_v1};
 use super::g14_registration_e2e::{arrive, chain_blocks, root_at};
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_genesis_chain_on, t12_with_harness_cards,
@@ -308,6 +309,10 @@ impl Net {
         self.chain.tip_state().1.bond(&self.bond(card)).expect("the bond").collateral
     }
 
+    fn slashed(&self, card: usize) -> u64 {
+        self.chain.tip_state().1.bond(&self.bond(card)).expect("the bond").slashed
+    }
+
     fn owed(&self, card: usize) -> u64 {
         let state = self.chain.tip_state().1;
         let payee = state.bond(&self.bond(card)).unwrap().payout_payload;
@@ -598,7 +603,7 @@ async fn r4x_memory_class_end_to_end_a_lie_in_one_step_is_convicted_and_memory_i
             bump(&mut t.values[0][s_at][n_at], 1)
         }
     });
-    let (before, burned_before, owed_before) = (m.net.collateral(4), m.net.ledger().burned, m.net.owed(6));
+    let (before, slashed4, money0) = (m.net.collateral(4), m.net.slashed(4), kernel_money_v1(&m.net.chain));
     let c2 = m.net.commit(4, SpecClaimV1::Memory(lie.claim.clone())).await;
     let fault = fault_of(fresh(&m.net, c2, &Da::memory(&lie, None), &m.fx.params, &(), 0x22));
     let SpecFaultV1::MemoryStep { step: 1, proof } = &fault else { panic!("localised to step 1: {fault:?}") };
@@ -608,17 +613,13 @@ async fn r4x_memory_class_end_to_end_a_lie_in_one_step_is_convicted_and_memory_i
     m.net.file(outsider, c2, fault).await;
     let l = m.net.ledger();
     assert!(l.claims[&c2].convicted && matches!(l.claims[&c2].life.state, ClaimStateV1::Convicted { .. }));
-    let opv = m.net.api().unwrap().header.opv.unwrap().economics;
-    let (slashed, fee) = (opv.reservation_per_claim, opv.admission_fee);
-    assert_eq!(
-        m.net.collateral(4),
-        before - slashed - fee,
-        "the real bond lost the OPV reservation, and paid its claim's admission fee (C4 F-C4R3-05, burned, never refunded)"
-    );
-    let reward = m.net.owed(outsider) - owed_before;
-    assert_eq!(reward, slashed * u64::from(l.policy.accuser_reward_permille) / 1000, "the outsider's reward is queued");
-    // Conservation: the fee, the dismissed proof's fee and the slash less the reward are exactly what the ledger burned.
-    assert_eq!(l.burned - burned_before, fee + l.policy.dismissed_proof_fee + (slashed - reward), "every sompi is accounted for");
+    let economics = m.net.api().unwrap().header.opv.unwrap().economics;
+    let slashed = economics.reservation_per_claim;
+    // (and the non-refundable OPV admission fee burned at the commit: G14-R4's F-C4R3-05)
+    assert_eq!(m.net.collateral(4), before - slashed - economics.admission_fee, "the real bond lost the OPV reservation");
+    assert_eq!(m.net.slashed(4), slashed4 + slashed + economics.admission_fee, "the fee and the slash are collected from the producer");
+    assert_kernel_conserved_v1(money0, kernel_money_v1(&m.net.chain), "a typed claim's commit and conviction");
+    assert_eq!(m.net.owed(outsider), slashed * u64::from(l.policy.accuser_reward_permille) / 1000, "the outsider's reward is queued");
     assert_eq!(m.head(), root1, "a convicted claim never moves the line");
 
     // An honest claim of job 2 (card 5, from the node's copy) finalizes: the head is job 2's post-state, computed from job 1's.
@@ -648,7 +649,7 @@ async fn r4x_memory_a_withheld_pre_state_is_classified_as_a_default() {
 
     let job2 = m.job(vec![vec![7, 7], vec![9]]).await;
     let p2 = m.produce(&job2, 4, &m.chain_head(), |_, _| {});
-    let (before, burned_before, owed_before) = (m.net.collateral(4), m.net.ledger().burned, m.net.owed(6));
+    let (before, slashed4, money0) = (m.net.collateral(4), m.net.slashed(4), kernel_money_v1(&m.net.chain));
     let c2 = m.net.commit(4, SpecClaimV1::Memory(p2.claim.clone())).await;
     let at = p2.traces[0].values.len() as u32 - 1;
     let mut da = Da::memory(&p2, None);
@@ -671,16 +672,11 @@ async fn r4x_memory_a_withheld_pre_state_is_classified_as_a_default() {
         l.claims[&c2].life.state
     );
     assert!(!l.claims[&c2].convicted, "withholding is a default, never fraud");
+    // (and the non-refundable OPV admission fee burned at the commit: G14-R4's F-C4R3-05)
     let fee = m.net.api().unwrap().header.opv.unwrap().economics.admission_fee;
-    assert_eq!(
-        m.net.collateral(4),
-        before - l.policy.default_penalty - fee,
-        "the fixed default penalty, not the fraud slash (and the claim's admission fee, C4 F-C4R3-05)"
-    );
-    // Conservation: the penalty is split between the demander's share and the burn, and the fee is burned.
-    let paid = m.net.owed(outsider) - owed_before;
-    assert!(paid > 0 && paid < l.policy.default_penalty, "the demander takes a share of the penalty, never all of it: {paid}");
-    assert_eq!(l.burned - burned_before, fee + (l.policy.default_penalty - paid), "every sompi is accounted for");
+    assert_eq!(m.net.collateral(4), before - l.policy.default_penalty - fee, "the fixed default penalty, not the fraud slash");
+    assert_eq!(m.net.slashed(4), slashed4 + l.policy.default_penalty + fee, "the penalty and the fee are collected from the producer");
+    assert_kernel_conserved_v1(money0, kernel_money_v1(&m.net.chain), "a typed claim's commit and default");
     assert_eq!(m.head(), *p1.claim.step_roots.last().unwrap(), "a defaulted claim never moves the line");
     m.net.assert_replays().await;
 }

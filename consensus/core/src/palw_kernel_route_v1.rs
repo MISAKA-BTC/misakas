@@ -187,6 +187,12 @@ pub struct PalwRewardGateTermsV1 {
     pub fence_activation_daa: u64,
 }
 
+/// **The PALW reporter share on the kernel route, permille** (ADR-0032's 2026-10-10 amendment: 4,900 bps): what an accuser, a
+/// demander or an onboarding challenger is paid of a slash the chain actually collected; the rest is burned. One constant for every
+/// reporter path of the route, so the share cannot drift between them. (`palw_reporter_share_v2` is INTF's fence for the R-core rate;
+/// the kernel route is dormant as a whole, so its share needs no fence of its own: it has never been in force at any other rate.)
+pub const PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1: u16 = 490;
+
 /// **The INTERIM ledger policy.** Windows are short so a drill crosses them; the amounts are sompi. Values are consensus constants
 /// of the (never-armed) fence, written once here: a real activation would revisit every one.
 pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash64) -> LedgerPolicyV1 {
@@ -210,7 +216,11 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
         liability_daa: 200,
         exit_delay_daa: 30,
         dismissed_proof_fee: SOMPI_PER_KASPA / 10,
-        accuser_reward_permille: 500,
+        // ADR-0032 (2026-10-10 amendment): the PALW reporter share is 49 % (4,900 bps) of what a slash actually COLLECTED, the rest
+        // burned. The route's accuser (a conviction), its demanders (a default penalty) and — at the same rate — the onboarding
+        // challenger are PALW reporters, so the interim share is that ceiling, not the 500‰ it was. A self-reporter recovers at most
+        // 49 %: the net loss of a convicted producer is ≥ 51 % of the collected slash, never the gross slash (ADR-0176 D6).
+        accuser_reward_permille: PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1,
         default_penalty: 100 * SOMPI_PER_KASPA,
         // GAP-5 (the user's ruling: user-pays escrow): the reward is paid out of the job's ESCROW, reserved from the poster's bond at
         // posting and spent once at the job's first Final — never new money.
@@ -523,12 +533,12 @@ pub struct KernelClaimReadV1 {
     pub aux_root: Hash64,
 }
 
-/// One page of the route's rows, in `(table, key)` order (ledger tables first, then the consensus tables).
-#[derive(Clone, Debug, PartialEq, Eq)]
 /// The first table number of the route's consensus (aux) tables; the kernel ledger's own tables are numbered below it (op 211 serves
 /// both, in key order, so a page is ledger rows then aux rows).
 pub const PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1: u8 = 32;
 
+/// One page of the route's rows, in `(table, key)` order (ledger tables first, then the consensus tables).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KernelRowsPageV1 {
     pub rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
     /// The cursor to resume after (`None` at the end).
@@ -982,6 +992,17 @@ impl PalwKernelRouteStateV1 {
 mod tests {
     use super::*;
 
+    /// **C4 F-C4R4-16 (ADR-0032 49 %)**: the route's interim accuser share — and so the demanders' share of a default and the
+    /// onboarding challenger's — is at most 490‰; a self-reporter keeps at most 49 % of a slash, a net loss of at least 51 %.
+    #[test]
+    fn palw_kernel_route_the_interim_reporter_share_is_adr_0032s_49_percent() {
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        assert_eq!(p.accuser_reward_permille, 490);
+        assert_eq!(crate::palw_onboarding_v1::PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1, 490);
+        let kept = p.claim_collateral - p.claim_collateral * u64::from(p.accuser_reward_permille) / 1000;
+        assert!(kept * 100 >= p.claim_collateral * 51, "net loss {kept} of {}", p.claim_collateral);
+    }
+
     #[test]
     fn the_interim_policy_validates_and_the_bond_digest_separates_indices() {
         let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
@@ -1011,7 +1032,11 @@ mod tests {
         assert_ne!(state.ledger_root(), plain.ledger_root(), "the OPV root form is not the historical one");
         // OPV-BOOT GAP-B1a: with tables 25 and 26 empty there is no root extension — both forms are what they were before them.
         let (opv_ledger, plain_ledger) = (state.ledger().unwrap(), plain.ledger().unwrap());
-        assert!(opv_ledger.claim_beacon_salts.is_empty() && opv_ledger.forfeited_claim_seals.is_empty());
+        assert!(
+            opv_ledger.claim_beacon_salts.is_empty()
+                && opv_ledger.forfeited_claim_seals.is_empty()
+                && opv_ledger.job_posters.is_empty()
+        );
         assert_eq!(state.ledger_root().as_bytes(), opv_ledger.root_parts_v2().root(), "the OPV form, unextended");
         assert_eq!(plain.ledger_root().as_bytes(), plain_ledger.root_parts().root(), "the historical form, unextended");
         // The v3 beacon's window against the interim seal TTL: OPV-BOOT's interim W = 40 needs 2·W ≤ 100.

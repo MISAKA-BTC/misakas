@@ -175,6 +175,18 @@ impl LedgerPolicyV1 {
         (self.max_adjudications_per_block as u64 * self.prosecution_reserve_permille as u64 / 1000) as u32
     }
 
+    /// **What a dismissed filing that ran a court forfeits** (C4 F-C4R4-05): `dismissed_proof_fee` for each
+    /// `1 / max_adjudications_per_block` share of the block's court work it was charged (its class's declared worst court), at least
+    /// one fee. Every class shares ONE per-block court budget, so a junk filing against the heaviest class must cost what the runs it
+    /// crowds out would have cost: saturating a block costs about `max_adjudications_per_block × dismissed_proof_fee` whichever classes
+    /// the junk names, never one fee. A true proof still pays nothing.
+    pub fn dismissal_fee_v1(&self, court_work: u64) -> u64 {
+        let shares = (court_work as u128 * self.max_adjudications_per_block as u128)
+            .div_ceil(self.max_court_work_per_block.max(1) as u128)
+            .max(1);
+        (self.dismissed_proof_fee as u128).saturating_mul(shares).min(u64::MAX as u128) as u64
+    }
+
     /// The relations among the timings and amounts every rule below relies on.
     pub fn validate(&self) -> Result<(), String> {
         let p = self;
@@ -374,6 +386,8 @@ pub struct ClaimBeaconSealV1 {
     pub sealed_daa: u64,
     pub revealed: Option<(Digest, u64, Digest)>,
     pub forfeited_daa: Option<u64>,
+    /// The bond that posted the seal's job (`job_posters`; `None` for a job posted below the fence) — the beacon's consumer.
+    pub poster: Option<Digest>,
 }
 
 /// **The v3 beacon's window against the seal TTL**: every in-window reveal is legal only if `2·W ≤ seal_ttl_daa` (a seal made at
@@ -547,26 +561,6 @@ pub enum LedgerEventV1 {
         job: Digest,
         producer: Digest,
     } = 20,
-    /// **RFC-0009 §4.2 (lane DA16): a demand on a claim whose material obligation the consumer moved to bonded providers was not
-    /// answered by its deadline.** The producer pays nothing (one failure, one party): the consumer charges every live lease of the claim
-    /// and pays `demanders` from that charge; before Final the claim is `Unavailable { producer_defaulted: false }` (void, no reward), after
-    /// Final its fact is withdrawn. The demand bonds were refunded exactly as on the producer path. Never a conviction. (Discriminant 30:
-    /// 21–23 are G14-R4's.)
-    ProviderLiableDefault {
-        claim: Digest,
-        stage: u8,
-        position: u32,
-        last: Option<&'static str>,
-        post_final: bool,
-        demanders: Vec<Digest>,
-    } = 30,
-    /// **DA16: every provider that stood behind a transferred claim's material has defaulted** (a common-mode outage): the claim lapses —
-    /// before Final `Unavailable { producer_defaulted: false }` (no reward, the producer's reservation released, never slashed), after
-    /// Final its fact is withdrawn. Never a conviction.
-    ProviderLapsed {
-        claim: Digest,
-        post_final: bool,
-    } = 31,
     /// GAP-R7: an accuser sealed a proof against a claim.
     ProofSealed {
         claim: Digest,
@@ -589,6 +583,26 @@ pub enum LedgerEventV1 {
         claim: Digest,
         burned: u64,
     } = 24,
+    /// **RFC-0009 §4.2 (lane DA16): a demand on a claim whose material obligation the consumer moved to bonded providers was not
+    /// answered by its deadline.** The producer pays nothing (one failure, one party): the consumer charges every live lease of the claim
+    /// and pays `demanders` from that charge; before Final the claim is `Unavailable { producer_defaulted: false }` (void, no reward), after
+    /// Final its fact is withdrawn. The demand bonds were refunded exactly as on the producer path. Never a conviction. (Discriminant 30:
+    /// 21–23 are G14-R4's.)
+    ProviderLiableDefault {
+        claim: Digest,
+        stage: u8,
+        position: u32,
+        last: Option<&'static str>,
+        post_final: bool,
+        demanders: Vec<Digest>,
+    } = 30,
+    /// **DA16: every provider that stood behind a transferred claim's material has defaulted** (a common-mode outage): the claim lapses —
+    /// before Final `Unavailable { producer_defaulted: false }` (no reward, the producer's reservation released, never slashed), after
+    /// Final its fact is withdrawn. Never a conviction.
+    ProviderLapsed {
+        claim: Digest,
+        post_final: bool,
+    } = 31,
 }
 
 /// One block.
@@ -725,6 +739,10 @@ pub struct KernelLedgerV1 {
     /// `palw_panel_free_v1` for a seal accepted at or after the fence, and kept, so a withheld seal stays in the v3 beacon's mix and
     /// vetoes it rather than silently dropping out of it (SOUND SG-01a(i)). Every row cost a forfeited `seal_deposit`.
     pub forfeited_claim_seals: BTreeMap<(Digest, Digest, u64), ForfeitedSealRowV1>,
+    /// **C4R4 F-C4R4-08: `job → the bond that posted it`** (table 18), written at every job post past `palw_panel_free_v1` and kept
+    /// as long as the job row (never removed): the escrow that names the poster is spent at the job's Final, and the sealed-source
+    /// beacon v3's distinct-consumer rule must read the same poster at every later tip. Empty below the fence.
+    pub job_posters: BTreeMap<Digest, Digest>,
     /// Cumulative amount burned (derived from the settlement instructions; kept as a checksum).
     pub burned: u64,
     /// RFC-0015: the OPV policy, classes and claim rows. Dormant (no policy) = the historical ledger, root included.
@@ -801,6 +819,7 @@ impl KernelLedgerV1 {
             served_demands: BTreeMap::new(),
             claim_beacon_salts: BTreeMap::new(),
             forfeited_claim_seals: BTreeMap::new(),
+            job_posters: BTreeMap::new(),
             burned: 0,
             opv: OpvStateV1::default(),
             typed: crate::spec::TypedStateV1::default(),
@@ -1021,7 +1040,7 @@ impl KernelLedgerV1 {
                 self.file_demand(demander, claim, *stage, *position, &mut out)?
             }
             KernelRouteObjectV1::Respond { claim, stage, position, bytes } => {
-                self.respond(claim, *stage, *position, bytes, &mut out)?
+                self.respond(&auth.signer_bond, claim, *stage, *position, bytes, &mut out)?
             }
             KernelRouteObjectV1::RequestExit { bond } => match self.bonds.get_mut(bond) {
                 Some(b) if b.exit_requested.is_none() => {
@@ -1043,18 +1062,27 @@ impl KernelLedgerV1 {
                     return Err(KernelRefusalV1::rule(name, "another claim already holds the job"));
                 }
                 // A seal is bonded: `seal_deposit` of the producer's free collateral until it is revealed (forfeited if it expires). A
-                // producer may re-seal (another output): the latest seal replaces the earlier, keeps its deposit, and its clock restarts.
-                let held = self.seals.get(&(*job, *producer)).map(|r| r.deposit);
+                // producer may re-seal (another output): the latest seal replaces the earlier and its clock restarts. Below the fence the
+                // one deposit is kept. **Past `palw_panel_free_v1` (ECON F-ECON-1 / F-ECON-2, fix S1) the REPLACED seal is forfeited** at
+                // its own position (table 26, its deposit burned) and the new seal is bonded afresh: a seal position once taken is
+                // never withdrawn for free — re-sealing to stay live costs a deposit each time, and moving a mixed seal out of a beacon's
+                // seal window leaves the old one in the mix as a veto, never a silent withdrawal.
+                let held = self.seals.get(&(*job, *producer)).copied();
+                let replaced = held.filter(|r| self.salted_seals_from().is_some_and(|at| r.daa >= at));
                 let deposit = self.policy.seal_deposit;
-                if held.is_none() {
-                    let b = self.bonds.get_mut(producer).expect("checked");
-                    if b.free() < deposit {
+                if held.is_none() || replaced.is_some() {
+                    // (a forfeit of the replaced seal takes its deposit out of both the collateral and the reservation: free is unchanged)
+                    if self.bonds[producer].free() < deposit {
                         return Err(KernelRefusalV1::rule(name, "the producer's free collateral does not cover the seal deposit"));
                     }
-                    b.reserved += deposit;
+                    if let Some(row) = replaced {
+                        self.seals.remove(&(*job, *producer));
+                        self.forfeit_claim_seal(*job, *producer, row, &mut out);
+                    }
+                    self.bonds.get_mut(producer).expect("checked").reserved += deposit;
                     settle(&mut out, *producer, deposit, SettlementKindV1::ReserveSealDeposit, None);
                 }
-                let deposit = held.unwrap_or(deposit);
+                let deposit = held.filter(|_| replaced.is_none()).map_or(deposit, |r| r.deposit);
                 self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa, deposit });
                 out.push(LedgerEventV1::ClaimSealed { job: *job, producer: *producer });
             }
@@ -1190,7 +1218,12 @@ impl KernelLedgerV1 {
     }
 
     /// **GAP-5: open a job's escrow** — reserve `claim_reward` of the poster's free collateral against the job and burn `job_fee`.
+    /// Every job post opens its escrow here (single-program, pipeline and typed jobs alike), so past `palw_panel_free_v1` the poster
+    /// is recorded here too (`job_posters`, C4R4 F-C4R4-08): it outlives the escrow.
     fn open_job_escrow(&mut self, poster: &Digest, job: Digest, out: &mut Vec<LedgerEventV1>) {
+        if self.salted_seals_in_force() {
+            self.job_posters.insert(job, *poster);
+        }
         let (amount, fee) = (self.policy.claim_reward, self.policy.job_fee);
         if let Some(b) = self.bonds.get_mut(poster) {
             b.reserved += amount;
@@ -1207,6 +1240,9 @@ impl KernelLedgerV1 {
 
     /// **GAP-5: pay a Final out of its job's escrow** — the poster's bond is debited exactly what the producer is paid, and the escrow
     /// is spent (an escrow pays once). No escrow (already paid, or returned): no reward — nothing is ever issued.
+    ///
+    /// **ADR-0176 HOOK `budget-final` (lane BUDGET; not built here):** the reward is paid only within the R / F reservation the claim
+    /// made at acceptance (`budget-accept`), re-checked here; the budget is not recovered before `d + W`, whatever the claim's fate.
     fn pay_from_job_escrow(&mut self, job: &Digest, claim: &Digest, producer: Digest, out: &mut Vec<LedgerEventV1>) -> u64 {
         let Some(row) = self.job_escrows.remove(job) else { return 0 };
         let collateral = self.bonds.get(&row.poster).map_or(0, |b| b.collateral);
@@ -1224,15 +1260,23 @@ impl KernelLedgerV1 {
 
     /// **GAP-5: return the escrows no claim can still use**: past `job_escrow_ttl_daa`, the job held by no live claim and sealed by
     /// no producer. A job whose holder later fails keeps its escrow until this rule returns it.
+    ///
+    /// **A seal holds an escrow for one seal TTL past the escrow's, never longer** (C4 F-C4R4-03): a seal is a promise any bond may
+    /// make on an unclaimed job, and a re-seal restarts its clock on the same deposit, so "no live seal" let a squatter keep the
+    /// escrow — and, through `reserved`, the poster's whole bond exit — for as long as it re-sealed. A producer that sealed by the
+    /// escrow's TTL has `seal_ttl_daa` to reveal (its seal expires then anyway).
     fn release_idle_job_escrows(&mut self, out: &mut Vec<LedgerEventV1>) {
         let ttl = self.policy.job_escrow_ttl_daa;
+        let seal_ttl = self.policy.seal_ttl_daa;
         let idle: Vec<Digest> = self
             .job_escrows
             .iter()
             .filter(|(job, row)| {
-                self.daa > row.posted_daa.saturating_add(ttl)
+                let expired = row.posted_daa.saturating_add(ttl);
+                self.daa > expired
                     && !self.job_claims.get(*job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job)
-                    && self.seals.range((**job, [0u8; 64])..=(**job, [0xFFu8; 64])).next().is_none()
+                    && (self.daa > expired.saturating_add(seal_ttl)
+                        || self.seals.range((**job, [0u8; 64])..=(**job, [0xFFu8; 64])).next().is_none())
             })
             .map(|(job, _)| *job)
             .collect();
@@ -1567,6 +1611,11 @@ impl KernelLedgerV1 {
             self.opv.live.insert((producer, id));
             self.job_claims.insert(job, id);
         }
+        // **ADR-0176 HOOK `budget-accept` (lane BUDGET, `palw_bond_budget_v1`; not built here).** Claim acceptance is where the
+        // producer bond's Q/B/R/F budget over the common window W must reserve this claim: one unit of Q, and of R the reward the
+        // claim can draw at Final (the job escrow's amount, GAP-5; for an OPV claim also `work_credit_per_claim`, which nothing
+        // releases yet), plus any verifier bounty a later conviction could pay — refusing the commit when the budget is spent, as
+        // `need` above refuses it when collateral is. Until the engine exists every reward fence stays refused (arming list, CODE).
         settle(out, producer, seal_credit, SettlementKindV1::ReleaseSealDeposit, Some(id));
         settle(out, producer, need, SettlementKindV1::ReserveClaim, Some(id));
         settle(out, producer, fee, SettlementKindV1::AdmissionFee, Some(id));
@@ -1613,6 +1662,11 @@ impl KernelLedgerV1 {
         self.salted_seals_from().is_some_and(|at| self.daa >= at)
     }
 
+    /// The bond that posted `job`, past `palw_panel_free_v1` (C4R4 F-C4R4-08; `None`: posted below the fence, or unknown).
+    pub fn job_poster(&self, job: &Digest) -> Option<Digest> {
+        self.job_posters.get(job).copied()
+    }
+
     /// The salt a claim's seal was made with (`None`: the claim was revealed unsalted, or is unknown).
     pub fn claim_beacon_salt(&self, claim: &Digest) -> Option<Digest> {
         self.claim_beacon_salts.get(claim).copied()
@@ -1632,6 +1686,7 @@ impl KernelLedgerV1 {
                 sealed_daa: row.daa,
                 revealed: None,
                 forfeited_daa: None,
+                poster: self.job_poster(job),
             })
             .collect();
         for (id, salt) in &self.claim_beacon_salts {
@@ -1643,6 +1698,7 @@ impl KernelLedgerV1 {
                     sealed_daa: row.sealed_daa,
                     revealed: Some((*id, row.committed_daa, *salt)),
                     forfeited_daa: None,
+                    poster: self.job_poster(&row.job_id),
                 });
             }
         }
@@ -1654,6 +1710,7 @@ impl KernelLedgerV1 {
                 sealed_daa: *sealed_daa,
                 revealed: None,
                 forfeited_daa: Some(row.forfeited_daa),
+                poster: self.job_poster(job),
             });
         }
         out.sort_by(|a, b| (a.sealed_daa, a.seal).cmp(&(b.sealed_daa, b.seal)));
@@ -1955,7 +2012,7 @@ impl KernelLedgerV1 {
     ) -> Result<(), KernelRefusalV1> {
         const NAME: &str = "FileProof";
         let rule = |why: &str| KernelRefusalV1::rule(NAME, why);
-        let fee = self.policy.dismissed_proof_fee;
+        let mut fee = self.policy.dismissed_proof_fee;
         match self.bonds.get(accuser) {
             None => return Err(rule("the accuser is not a registered bond")),
             Some(b) if b.free() < fee => return Err(rule("the accuser's free collateral does not cover the filing fee")),
@@ -1979,8 +2036,15 @@ impl KernelLedgerV1 {
         let verdict = match cheap {
             Some(why) => Err(why),
             None => {
+                // C4 F-C4R4-05: a filing that reserves a share of the block's court pays for that share if it is dismissed.
+                let work = bounds.map(|b| b.max_court_work).unwrap_or(0);
+                let scaled = self.policy.dismissal_fee_v1(work);
+                if self.bonds.get(accuser).is_none_or(|b| b.free() < scaled) {
+                    return Err(rule("the accuser's free collateral does not cover the filing fee"));
+                }
+                fee = scaled;
                 // The court is about to run: it spends the block's budget (a refusal here costs the accuser nothing).
-                self.charge(NAME, bounds.map(|b| b.max_court_work).unwrap_or(0))?;
+                self.charge(NAME, work)?;
                 self.adjudicate(claim, proof)
             }
         };
@@ -2033,20 +2097,12 @@ impl KernelLedgerV1 {
             .map_or(*filer, |((_, accuser), _)| *accuser)
     }
 
-    /// What a claim reserved when it was admitted: an OPV claim's policy reservation, else the route's flat collateral.
-    fn admitted_reservation(&self, claim: &Digest) -> u64 {
-        self.opv.claims.get(claim).map_or(self.policy.claim_collateral, |o| o.reservation)
-    }
-
     fn convict(&mut self, claim: &Digest, accuser: &Digest, post_final: bool, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
         let producer_collateral = self.claims.get(claim).and_then(|r| self.bonds.get(&r.producer)).map_or(0, |b| b.collateral);
         // What a pre-Final default already took of this claim's reservation (0 for any other claim: before Final a reservation
         // changes only by a default or a conviction, and a post-Final forfeit leaves nothing to slash).
-        let admitted = self.admitted_reservation(claim);
-        let pre_final_default = self.claims.get(claim).is_some_and(|r| matches!(r.life.state, ClaimStateV1::Unavailable { .. }));
         let row = self.claims.get_mut(claim).expect("checked");
-        let taken_by_default = if pre_final_default { admitted.saturating_sub(row.reserved) } else { 0 };
         // Never instruct more than the bond holds (another subsystem may have slashed it since the claim reserved).
         let reserved = row.reserved;
         let slashed = reserved.min(producer_collateral);
@@ -2067,11 +2123,15 @@ impl KernelLedgerV1 {
             b.reserved = b.reserved.saturating_sub(reserved);
             b.collateral = b.collateral.saturating_sub(slashed);
         }
-        // The bounty is the accuser's share of the claim's reservation as if no default had come first (C4 F-C4R3-02): a producer
-        // that defaults on its own demand before a proof lands neither dilutes the honest accuser's bounty nor recoups more than its
-        // demanders' share of the penalty. Never more than this conviction slashes.
-        let basis = slashed as u128 + taken_by_default as u128;
-        let reward = ((basis * self.policy.accuser_reward_permille as u128 / 1000) as u64).min(slashed);
+        // **One reporter pool per claim** (C4 F-C4R4-15, ADR-0032): the bounty is the accuser's share of what THIS conviction
+        // collected, rounded down. A pre-Final default before it already paid its demanders at most the same share of the penalty,
+        // rounded down too, so across the default and the conviction the reporters together receive at most `⌊share × collected⌋`
+        // of everything collected — a coalition holding every reporter role loses ≥ 51 % of it (the 49 % share on the node,
+        // `PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1`). (This replaces F-C4R3-02's "as if no default had come first" basis, which
+        // paid the penalty's share twice; the honest accuser's residual dilution is the Sybil demanders' part of the default's
+        // share — recorded for ECON.) ADR-0176 HOOK `budget-bounty`: the bounty is a slash split, not issuance, but it counts
+        // against the claim's R reservation made at `budget-accept`.
+        let reward = ((slashed as u128 * self.policy.accuser_reward_permille as u128 / 1000) as u64).min(slashed);
         self.burned += slashed - reward;
         out.push(LedgerEventV1::Convicted { claim: *claim, accuser: *accuser, slashed, accuser_reward: reward, post_final });
         settle(out, producer, slashed, SettlementKindV1::SlashFraud, Some(*claim));
@@ -2143,6 +2203,16 @@ impl KernelLedgerV1 {
         }
     }
 
+    /// **ADR-0177 D2 — the cumulative-scope hook** (C4 F-C4R4-17). Every demand passes here before it reserves anything: a demand
+    /// whose served values, together with what the claim (and other claims of the class) already made public, would rebuild a
+    /// registered weight tensor must be refused. The predicate is DA16b's central one (`da16/transport-provider-court`); until it
+    /// lands this hook admits every demand, and the kernel PoC `f_c4r4_17_…` stays an ignored FAIL. The predicate must be a pure
+    /// function of the ledger's rows (served positions, open demands, the class's program) so every node refuses the same demand.
+    fn cumulative_scope_allows_v1(&self, claim: &Digest, stage: u8, position: u32) -> Result<(), &'static str> {
+        let _ = (claim, stage, position);
+        Ok(())
+    }
+
     /// Return every demand bond of `d` (the demand is over).
     fn refund(&mut self, claim: &Digest, d: &DemandRowV1, out: &mut Vec<LedgerEventV1>) {
         for (bond, amount) in &d.demanders {
@@ -2203,6 +2273,7 @@ impl KernelLedgerV1 {
         if self.served.contains_key(&k) {
             return Err(rule("already served: it is public"));
         }
+        self.cumulative_scope_allows_v1(claim, stage, position).map_err(rule)?;
         let need = self.policy.demand_bond;
         let Some(b) = self.bonds.get(demander) else { return Err(rule("the demander is not a registered bond")) };
         if b.exit_requested.is_some() || b.free() < need {
@@ -2247,8 +2318,16 @@ impl KernelLedgerV1 {
         }
     }
 
+    /// **A response to an open demand** (C4 F-C4R4-14: the response lane). A response spends NO run of the block's shared
+    /// adjudication budget: classifying it is linear in its own bytes (bounded by the class's `max_response_bytes` and carried in
+    /// the block), so no other object can crowd an honest producer's valid answer out before its deadline, whoever orders the block.
+    /// A REJECTED response (oversized, or classified as not serving the position) costs its signer `dismissed_proof_fee` (slashed,
+    /// burned) — junk is never free — and changes nothing the producer needs: the demand stays open with its deadline, and only a
+    /// response signed by the claim's producer records the demand's last rejection class. A signer whose free collateral cannot pay
+    /// that fee is refused before anything is classified. A valid response pays nothing and closes the demand, whoever signs it.
     fn respond(
         &mut self,
+        signer: &Digest,
         claim: &Digest,
         stage: u8,
         position: u32,
@@ -2260,12 +2339,16 @@ impl KernelLedgerV1 {
         if !self.demands.contains_key(&k) {
             return Err(KernelRefusalV1::rule(NAME, "no open demand for this position"));
         }
+        let fee = self.policy.dismissed_proof_fee;
+        if self.bonds.get(signer).is_none_or(|b| b.free() < fee) {
+            return Err(KernelRefusalV1::rule(NAME, "the signer's free collateral does not cover a rejected response's fee"));
+        }
         let row = self.claims.get(claim).expect("a demand names a committed claim");
+        let by_producer = row.producer == *signer;
         let limit = self.bounds_of(&row.class_binding_id).map(|b| b.max_response_bytes).unwrap_or(0);
         let verdict = if bytes.len() as u128 > limit {
             Err("oversized")
         } else {
-            self.charge(NAME, 0)?;
             let row = self.claims.get(claim).expect("checked");
             match self.spec_classify_slice(row, stage, position, bytes) {
                 Some(slice) => slice,
@@ -2287,13 +2370,44 @@ impl KernelLedgerV1 {
                 out.push(LedgerEventV1::Served { claim: *claim, stage, position });
             }
             Err(class) => {
-                if let Some(d) = self.demands.get_mut(&k) {
+                if by_producer && let Some(d) = self.demands.get_mut(&k) {
                     d.last = Some(response_class_code(class));
                 }
+                let b = self.bonds.get_mut(signer).expect("checked");
+                b.collateral -= fee;
+                self.burned += fee;
                 out.push(LedgerEventV1::ResponseRejected { claim: *claim, stage, position, class });
+                settle(out, *signer, fee, SettlementKindV1::SlashFiling, Some(*claim));
+                settle(out, *signer, fee, SettlementKindV1::Burn, Some(*claim));
             }
         }
         Ok(())
+    }
+
+    /// **Forfeit an unrevealed claim seal** (its row already removed from `seals`): the deposit is slashed and burned (as far as the
+    /// bond still holds it), and a seal accepted past `palw_panel_free_v1` stays readable as `(job, producer, sealed_daa) →
+    /// {seal, forfeited_daa}` (table 26) — it vetoes the v3 beacon it was mixed into; deleting it would turn the veto into a silent
+    /// exclusion. Called at expiry (the tick) and, past the fence, when a re-seal replaces it (ECON fix S1).
+    fn forfeit_claim_seal(&mut self, job: Digest, producer: Digest, row: SealRowV1, out: &mut Vec<LedgerEventV1>) {
+        let daa = self.daa;
+        if self.salted_seals_from().is_some_and(|at| row.daa >= at) {
+            self.forfeited_claim_seals.insert((job, producer, row.daa), ForfeitedSealRowV1 { seal: row.seal, forfeited_daa: daa });
+        }
+        let deposit = row.deposit;
+        if deposit == 0 {
+            return;
+        }
+        let collateral = self.bonds.get(&producer).map_or(0, |b| b.collateral);
+        let taken = deposit.min(collateral);
+        if let Some(b) = self.bonds.get_mut(&producer) {
+            b.reserved = b.reserved.saturating_sub(deposit);
+            b.collateral -= taken;
+        }
+        self.burned += taken;
+        settle(out, producer, taken, SettlementKindV1::ForfeitSealDeposit, None);
+        settle(out, producer, deposit - taken, SettlementKindV1::ReleaseSealDeposit, None);
+        settle(out, producer, taken, SettlementKindV1::Burn, None);
+        out.push(LedgerEventV1::SealForfeited { job, producer, forfeited: taken });
     }
 
     /// Deadlines, windows, Final, liability release.
@@ -2304,29 +2418,9 @@ impl KernelLedgerV1 {
         // An unrevealed claim seal expires and FORFEITS its deposit (slashed, burned): withholding a sealed reveal is never free.
         let expired: Vec<((Digest, Digest), SealRowV1)> =
             self.seals.iter().filter(|(_, row)| daa > row.daa.saturating_add(ttl)).map(|(k, row)| (*k, *row)).collect();
-        let salted_from = self.salted_seals_from();
         for ((job, producer), row) in expired {
             self.seals.remove(&(job, producer));
-            // OPV-BOOT GAP-B1a: a seal accepted past the fence stays readable once forfeited (it vetoes the v3 beacon it was mixed
-            // into; deleting it would turn the veto into a silent exclusion).
-            if salted_from.is_some_and(|at| row.daa >= at) {
-                self.forfeited_claim_seals.insert((job, producer, row.daa), ForfeitedSealRowV1 { seal: row.seal, forfeited_daa: daa });
-            }
-            let deposit = row.deposit;
-            if deposit == 0 {
-                continue;
-            }
-            let collateral = self.bonds.get(&producer).map_or(0, |b| b.collateral);
-            let taken = deposit.min(collateral);
-            if let Some(b) = self.bonds.get_mut(&producer) {
-                b.reserved = b.reserved.saturating_sub(deposit);
-                b.collateral -= taken;
-            }
-            self.burned += taken;
-            settle(out, producer, taken, SettlementKindV1::ForfeitSealDeposit, None);
-            settle(out, producer, deposit - taken, SettlementKindV1::ReleaseSealDeposit, None);
-            settle(out, producer, taken, SettlementKindV1::Burn, None);
-            out.push(LedgerEventV1::SealForfeited { job, producer, forfeited: taken });
+            self.forfeit_claim_seal(job, producer, row, out);
         }
         self.proof_seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
         // GAP-5: escrows no claim can still use go back to their posters.
@@ -2365,8 +2459,9 @@ impl KernelLedgerV1 {
                 }
                 _ => 1000 - self.policy.accuser_reward_permille.min(1000),
             };
-            let default_burn = (penalty as u128 * burn_permille as u128 / 1000) as u64;
-            let paid = if post_final { 0 } else { penalty - default_burn };
+            // Rounded DOWN (C4 F-C4R4-15): the demanders never take more than their share of what the default collected, so the
+            // claim's one reporter pool (the default's share plus a later conviction's bounty) stays within `⌊share × collected⌋`.
+            let paid = if post_final { 0 } else { (penalty as u128 * (1000 - burn_permille) as u128 / 1000) as u64 };
             let share = if d.demanders.is_empty() { 0 } else { paid / d.demanders.len() as u64 };
             let burn = penalty - share * d.demanders.len() as u64;
             self.burned += burn;

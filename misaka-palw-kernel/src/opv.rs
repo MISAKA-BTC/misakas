@@ -100,7 +100,8 @@ pub struct OpvEconomicsV1 {
     /// reserve this much free collateral is refused at inclusion (no double use of one collateral by concurrent claims).
     pub reservation_per_claim: u64,
     /// The work / weight credit the consumer releases at Final besides `claim_reward` (the same unit as the reward). Part of the
-    /// claim's maximum gain.
+    /// claim's maximum gain. Released by nothing today; when it is, it reserves at claim acceptance against the producer bond's
+    /// ADR-0176 R / F budget (`budget-accept` in the ledger) and is paid from the job escrow, never issued.
     pub work_credit_per_claim: u64,
     /// A stated bound on gains outside the claim's own credit (fork-choice, external settlement): never hidden inside the reward.
     pub external_gain_bound: u64,

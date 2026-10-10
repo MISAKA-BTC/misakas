@@ -21,8 +21,8 @@ use crate::consensus::test_consensus::TestConsensus;
 use crate::pipeline::virtual_processor::processor::kernel_route_test_attest_artifact_v1;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::Block;
-use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::config::Config;
+use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_kernel_route_v1::{
     PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1, PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1, PalwKernelChunkTargetV1, PalwKernelChunkV1,
     PalwKernelRouteStateV1, palw_kernel_bond_id_v1, palw_kernel_chunk_message_v1, palw_kernel_chunks_v1, palw_kernel_payout_key_v1,
@@ -41,8 +41,8 @@ use misaka_palw_kernel::ledger::{
     KernelLedgerV1, OutsiderFindingV1, OutsiderV1, ProsecutionV1, PublicSourceV1, SaltedCommitV1, claim_seal_v1, claim_seal_v2,
     proof_seal_v1, single_class_id_v1,
 };
-use misaka_palw_kernel::mode::VerificationModeV1;
 use misaka_palw_kernel::lifecycle::ClaimStateV1;
+use misaka_palw_kernel::mode::VerificationModeV1;
 use misaka_palw_kernel::plan::plan_for_tir_program_v1;
 use misaka_palw_kernel::public::{MaterialResponseV1, PositionResponseV1, TensorWireV1, program_root_v1};
 use misaka_palw_kernel::receipt::{CONSTRAINT_RECEIPT_MLDSA87_CONTEXT_V1, PalwConstraintReceiptV1, ReceiptInputsV1, receipt_for_v1};
@@ -240,8 +240,8 @@ impl Net {
     /// A `0x4b` carrier for `object`, funded by card `card`'s change chain (which it advances).
     fn carrier(&mut self, card: usize, object: &Obj) -> Transaction {
         use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
-        let payload =
-            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).expect("serializes");
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
+            .expect("serializes");
         let (outpoint, entry) = self.funding[card].clone();
         // A chunk group's opener pays the slot's rent (ADR-0075 SA-1, armed on testnet-12's harness); every chunk is sent with it.
         let fee = if matches!(object, Obj::ObjectChunk { .. }) {
@@ -393,7 +393,6 @@ impl Net {
             assert_eq!(root_at(other, b.header.hash), root_at(&self.chain, b.header.hash), "{what}: delta root of {}", b.header.hash);
         }
     }
-
 }
 
 // ---- the producer ----------------------------------------------------------------------------------------
@@ -519,7 +518,9 @@ impl Fresh {
     }
 
     fn check(&self, claim: Digest, da: &Da, artifact: &MapParams) -> OutsiderFindingV1 {
-        OutsiderV1 { ledger: &self.ledger, claim, material: da, artifact, salt: self.salt }.check().expect("the fresh verifier concludes")
+        OutsiderV1 { ledger: &self.ledger, claim, material: da, artifact, salt: self.salt }
+            .check()
+            .expect("the fresh verifier concludes")
     }
 }
 
@@ -585,7 +586,9 @@ impl Claim {
             .map(|(s, o)| {
                 o.iter()
                     .enumerate()
-                    .map(|(n, t)| if mask[s][n] { MaterialResponseV1::Omitted } else { MaterialResponseV1::Whole(TensorWireV1::of(t)) })
+                    .map(
+                        |(n, t)| if mask[s][n] { MaterialResponseV1::Omitted } else { MaterialResponseV1::Whole(TensorWireV1::of(t)) },
+                    )
                     .collect()
             })
             .collect();
@@ -626,7 +629,8 @@ impl World {
         let fx = fixture();
         let d = k2_tir_v2_descriptor();
         net.beat_to(1).await;
-        let id = single_class_id_v1(d.digest(), &fx.program.encode(), &fx.plan, &fx.pc, VerificationModeV1::OptimisticPublicVerification);
+        let id =
+            single_class_id_v1(d.digest(), &fx.program.encode(), &fx.plan, &fx.pc, VerificationModeV1::OptimisticPublicVerification);
         let register = K::RegisterClassV2 {
             mode: VerificationModeV1::OptimisticPublicVerification,
             descriptor: d.digest(),
@@ -736,10 +740,8 @@ impl World {
 
     /// `n` bonded cards that are neither the producer nor one of the claim's seats (nor card 1, the class's registrant).
     fn outsiders(&self, claim: &Claim, seats: &[usize], n: usize) -> Vec<usize> {
-        let picked: Vec<usize> = (0..self.net.chain.bonds.len())
-            .filter(|c| *c != claim.producer && *c != 1 && !seats.contains(c))
-            .take(n)
-            .collect();
+        let picked: Vec<usize> =
+            (0..self.net.chain.bonds.len()).filter(|c| *c != claim.producer && *c != 1 && !seats.contains(c)).take(n).collect();
         assert_eq!(picked.len(), n, "enough bonded cards outside the Panel");
         picked
     }
@@ -927,13 +929,21 @@ async fn g14_kernel_route_a_withheld_position_is_a_demand_then_a_default_never_a
     assert!(ledger.demands.contains_key(&(lie.id, 0, lie.at.0)), "the demand is open");
     assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Disputed { .. }), "an open demand holds Final");
     let deadline = ledger.demands[&(lie.id, 0, lie.at.0)].deadline_daa;
-    assert_eq!(w.net.kernel_reserved(outsider), u128::from(w.policy().demand_bond), "the demander's bond is reserved on the real bond");
+    assert_eq!(
+        w.net.kernel_reserved(outsider),
+        u128::from(w.policy().demand_bond),
+        "the demander's bond is reserved on the real bond"
+    );
 
     // Nobody answers: the deadline's tick is the producer's availability default.
     w.net.beat_to(deadline).await;
     let pol = w.policy();
     let penalty = pol.default_penalty;
-    assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Unavailable { producer_defaulted: true, .. }), "{:?}", w.net.claim_state(&lie.id));
+    assert!(
+        matches!(w.net.claim_state(&lie.id), ClaimStateV1::Unavailable { producer_defaulted: true, .. }),
+        "{:?}",
+        w.net.claim_state(&lie.id)
+    );
     assert!(!w.net.ledger().claims[&lie.id].convicted, "a default is not a conviction");
     assert_eq!(w.net.collateral(0), before - penalty, "the producer pays the fixed penalty, not the fraud slash");
     assert_eq!(w.net.slashed(0), penalty);
@@ -1081,10 +1091,7 @@ async fn g14_kernel_route_simultaneous_challengers_one_conviction_one_duplicate_
     assert_eq!(w.net.collateral(0), before - slashed, "one slash");
     let reward = slashed * u64::from(w.policy().accuser_reward_permille) / 1000;
     let (a, b) = (w.net.owed(cards[0]), w.net.owed(cards[1]));
-    assert!(
-        (a == reward && b == 0) || (a == 0 && b == reward),
-        "exactly one challenger is the accuser: {a} / {b} (reward {reward})"
-    );
+    assert!((a == reward && b == 0) || (a == 0 && b == reward), "exactly one challenger is the accuser: {a} / {b} (reward {reward})");
 }
 
 /// **A duplicate proof after replay**: a third challenger refiles the very same proof on a node that replayed the chain; it changes
@@ -1133,7 +1140,11 @@ async fn g14_kernel_route_final_waits_the_proof_grace_so_a_late_served_lie_is_co
     // The demand folds in the window's last block (the carrier rides one block earlier).
     w.net.beat_to(window_end_daa - 3).await;
     w.demand(outsider, &lie.id, lie.at.0).await;
-    assert!(w.net.daa() < window_end_daa, "the demand folded inside the window (DAA is not one per block): {} < {window_end_daa}", w.net.daa());
+    assert!(
+        w.net.daa() < window_end_daa,
+        "the demand folded inside the window (DAA is not one per block): {} < {window_end_daa}",
+        w.net.daa()
+    );
     let row = w.net.ledger().demands[&(lie.id, 0, lie.at.0)].clone();
     assert!(row.filed_daa + 3 >= window_end_daa, "in the window's last blocks: filed {} of {window_end_daa}", row.filed_daa);
     let deadline = row.deadline_daa;
@@ -1295,9 +1306,17 @@ async fn g14_kernel_route_a_chunked_object_is_signature_checked_at_the_completin
     let before = w.net.collateral(c);
     w.net.beat_to(sealed + ttl - 5).await;
     assert_eq!(w.net.kernel_reserved(c), u128::from(deposit), "held through the seal's TTL");
+    // Conservation across the expiry (C4R4: not just the new number): the deposit is collected from the sealer's real bond and
+    // burned by the route; nothing is paid out of it and nothing else moves — escrow, burn and coinbase agree.
+    let (money0, slashed0) = (kernel_money_v1(&w.net.chain), w.net.slashed(c));
     w.net.beat_to(sealed + ttl + 2).await;
     assert!(!w.net.ledger().seals.contains_key(&(job2.id(), w.net.kid(c))), "the seal expired");
     assert_eq!((w.net.kernel_reserved(c), w.net.collateral(c)), (0, before - deposit), "and its deposit was forfeited");
+    let money1 = kernel_money_v1(&w.net.chain);
+    assert_eq!(w.net.slashed(c), slashed0 + deposit, "collected from the sealer's real bond");
+    assert_eq!(money1.burned - money0.burned, u128::from(deposit), "and burned by the route");
+    assert_eq!(money1.paid, money0.paid, "nothing is paid out of a forfeited seal");
+    assert_kernel_conserved_v1(money0, money1, "a forfeited seal");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
@@ -1349,7 +1368,11 @@ async fn g14_kernel_route_replay_and_reorg_reach_the_same_roots() {
     assert_eq!(zn.chain.sink(), b.sink(), "B out-works A's two blocks: Z reorgs onto B");
     assert_eq!(zn.chain.tip_state().1.state_root(), b.tip_state().1.state_root(), "Z on B: the root of B's fresh replay");
     let on_b = zn.api().expect("the route survives (the claim was covered below the fork)");
-    assert_eq!((on_b.rows.clone(), on_b.aux.clone()), (at_fork.rows.clone(), at_fork.aux.clone()), "the reorged-out conviction left no row, aux or trace");
+    assert_eq!(
+        (on_b.rows.clone(), on_b.aux.clone()),
+        (at_fork.rows.clone(), at_fork.aux.clone()),
+        "the reorged-out conviction left no row, aux or trace"
+    );
     assert!(!zn.ledger().claims[&lie.id].convicted);
     assert_eq!(zn.collateral(0), collateral, "the slash is returned with the reorg");
     assert_eq!(zn.slashed(0), 0);
@@ -1467,7 +1490,12 @@ async fn g14_kernel_route_survives_a_pruned_import() {
     for blk in &all[k + 1..] {
         arrive(&importer, blk.clone(), "A's block after P").await;
         assert_eq!(importer.sink(), blk.header.hash);
-        assert_eq!(importer.tip_state().1.state_root(), root_at(&w.net.chain, blk.header.hash), "the importer folds to A's root at {}", blk.header.hash);
+        assert_eq!(
+            importer.tip_state().1.state_root(),
+            root_at(&w.net.chain, blk.header.hash),
+            "the importer folds to A's root at {}",
+            blk.header.hash
+        );
     }
     assert_eq!(importer.ctx.consensus.palw_kernel_route_v1(), w.net.api(), "the same route, rows and aux");
     assert!(importer.ctx.consensus.palw_kernel_route_v1().unwrap().ledger().unwrap().claims[&lie.id].convicted);
@@ -1514,7 +1542,11 @@ async fn g14_kernel_route_the_block_adjudication_budget_bounds_the_block_not_eac
     w.net.send(items).await;
     let (blue, adjudications, work) = budget(&w).expect("the spent budget is recorded");
     // C4 F-C4R3-05 (round 2): two of the block's four runs are reserved for proofs, so registrations take only the other two.
-    assert_eq!((adjudications, work), (2, 0), "two charged; the rest found the admissions' share spent (two runs reserved for proofs)");
+    assert_eq!(
+        (adjudications, work),
+        (2, 0),
+        "two charged; the rest found the admissions' share spent (two runs reserved for proofs)"
+    );
     assert_eq!(w.net.ledger().classes.len(), classes, "and none of the junk registered");
     assert!(blue_before.is_some());
     // The next chain block starts a fresh budget: one more junk object is charged once, from zero.
@@ -1624,7 +1656,14 @@ async fn g14_kernel_route_hostile_objects_are_dropped_or_dismissed_and_never_sto
         (a, K::Respond { claim: [0x11; 64], stage: 0, position: 0, bytes: vec![0xFF; 4096] }),
         (a, K::Respond { claim: lie.id, stage: 0, position: 3, bytes: vec![0xFF; 64] }),
         (a, K::FileProof { accuser: w.net.kid(a), claim: lie.id, proof: ProsecutionV1::Kernel(vec![0xFF; 64]) }),
-        (b, K::FileProof { accuser: w.net.kid(b), claim: lie.id, proof: ProsecutionV1::Decode(DecodeFaultV1 { index: 0, logits: huge }) }),
+        (
+            b,
+            K::FileProof {
+                accuser: w.net.kid(b),
+                claim: lie.id,
+                proof: ProsecutionV1::Decode(DecodeFaultV1 { index: 0, logits: huge }),
+            },
+        ),
         (b, K::FileProof { accuser: w.net.kid(b), claim: lie.id, proof: ProsecutionV1::Pipeline(vec![1, 2, 3]) }),
         (c, K::FileDemand { demander: w.net.kid(c), claim: lie.id, stage: 255, position: u32::MAX }),
         (c, K::FileDemand { demander: w.net.kid(c), claim: [0x22; 64], stage: 0, position: 0 }),
@@ -1676,6 +1715,60 @@ fn minted_and_owed(net: &Net, chain: &T12Chain, card: usize) -> (u64, u64) {
     let key = palw_kernel_payout_key_v1(&payload);
     let owed = state.pending_payouts_iter().find(|(k, _)| **k == key).map(|(_, p)| p.amount).unwrap_or(0);
     (minted, owed)
+}
+
+/// **The money the kernel route moves, read off a node** (the user's conservation ruling, 2026-10-09): Σ collateral of the cards'
+/// bonds (reservations, escrows and seal deposits are inside it), Σ their `slashed` (debited; burned at release unless paid), Σ kernel
+/// payouts to them minted by a coinbase or still queued, and the route ledger's burn checksum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct KernelMoneyV1 {
+    pub collateral: u128,
+    pub slashed: u128,
+    pub paid: u128,
+    pub burned: u128,
+}
+
+pub(super) fn kernel_money_v1(chain: &T12Chain) -> KernelMoneyV1 {
+    let state = chain.tip_state().1;
+    let blocks = chain_blocks(chain, chain.sink());
+    let mut m = KernelMoneyV1 { collateral: 0, slashed: 0, paid: 0, burned: 0 };
+    for bond in &chain.bonds {
+        let b = state.bond(bond).expect("a card's bond");
+        m.collateral += u128::from(b.collateral);
+        m.slashed += u128::from(b.slashed);
+        let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&b.payout_payload.as_bytes());
+        for blk in &blocks {
+            let Some(cb) = blk.transactions.first() else { continue };
+            for (i, o) in cb.outputs.iter().enumerate() {
+                if o.script_public_key == spk
+                    && chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(cb.id(), i as u32)).is_some()
+                {
+                    m.paid += u128::from(o.value);
+                }
+            }
+        }
+        let key = palw_kernel_payout_key_v1(&b.payout_payload);
+        m.paid += state.pending_payouts_iter().find(|(k, _)| **k == key).map_or(0, |(_, p)| u128::from(p.amount));
+    }
+    m.burned = chain.ctx.consensus.palw_kernel_route_v1().map_or(0, |r| u128::from(r.header.scalars.burned));
+    m
+}
+
+/// **Conservation across a window of folds**: a bond's collateral falls by exactly what it is debited, and every debited unit is
+/// paid (by a coinbase or the queue) or burned — `Δcollateral = −Δslashed` and `Δslashed = Δpaid + Δburned`: escrow, burn and
+/// coinbase agree, nothing is minted but the payouts the debits fund. (A window must not hold a debit outside the kernel ledger,
+/// such as a chunk group's forfeited deposit or a registration burn.)
+pub(super) fn assert_kernel_conserved_v1(before: KernelMoneyV1, after: KernelMoneyV1, what: &str) {
+    assert_eq!(
+        before.collateral + before.slashed,
+        after.collateral + after.slashed,
+        "{what}: Δcollateral = −Δslashed ({before:?} → {after:?})"
+    );
+    assert_eq!(
+        after.slashed - before.slashed,
+        (after.paid - before.paid) + (after.burned - before.burned),
+        "{what}: every debit is paid or burned ({before:?} → {after:?})"
+    );
 }
 
 /// **GAP-5 on the real node (the user's ruling: user-pays escrow).** The poster's escrow is a reservation on its REAL bond and the
@@ -1870,7 +1963,10 @@ async fn g14_kernel_route_the_routes_own_chunk_lane_is_per_bond_deposit_backed_a
 // mode by tag 13 (the network's admission is the test hook), a claim of it has NO Panel — no seats, no assignment, no receipts — and
 // is Challengeable from its inclusion for a fixed window. Everything an outsider needs to stop it is the route's, unchanged.
 
-fn opv_view(w: &World, claim: &Digest) -> (misaka_palw_kernel::opv::OpvPolicyV1, kaspa_consensus_core::palw_kernel_route_v1::KernelOpvReadV1) {
+fn opv_view(
+    w: &World,
+    claim: &Digest,
+) -> (misaka_palw_kernel::opv::OpvPolicyV1, kaspa_consensus_core::palw_kernel_route_v1::KernelOpvReadV1) {
     let route = w.net.api().expect("the route");
     let policy = route.header.opv.expect("the network declares the OPV policy");
     let view = route.claim_read_v1(claim).unwrap().expect("the claim").opv.expect("an OPV claim has the clock view");
@@ -1959,14 +2055,168 @@ async fn g14_opv_a_claim_commits_only_over_its_salted_seal_and_its_salt_is_kept(
     w.net.send(vec![(0, o)]).await;
     assert!(!w.net.ledger().claims.contains_key(&id), "a salt that does not open the seal commits nothing");
     // (3) The salted reveal commits; the salt is kept in the route's rows and roots like the ledger.
+    let (money0, slashed0) = (kernel_money_v1(&w.net.chain), w.net.slashed(0));
     let o = w.net.route(0, &reveal);
     w.net.send(vec![(0, o)]).await;
     let ledger = w.net.ledger();
     assert!(ledger.claims.contains_key(&id), "the salted reveal commits");
+    // The non-refundable OPV admission fee is collected from the producer's real bond and burned; nothing else moves.
+    let fee = w.net.api().unwrap().header.opv.unwrap().economics.admission_fee;
+    assert_eq!(w.net.slashed(0), slashed0 + fee, "the admission fee is debited from the producer");
+    let money1 = kernel_money_v1(&w.net.chain);
+    assert_eq!(money1.burned - money0.burned, u128::from(fee), "and burned");
+    assert_kernel_conserved_v1(money0, money1, "a salted reveal");
     assert_eq!(ledger.claim_beacon_salt(&id), Some(salt));
+    assert!(ledger.job_poster(&job.id()).is_some(), "past the fence the job's poster is on record (C4R4 F-C4R4-08)");
     let route = w.net.api().expect("the route state");
     assert!(route.rows.keys().any(|(t, _)| *t == misaka_palw_kernel::rows::TABLE_CLAIM_BEACON_SALTS_V1), "table 25 holds the salt");
     assert_eq!(route.ledger_root().as_bytes(), ledger.root(), "the route's rows root like its ledger, extension included");
+}
+
+/// **The salted seal's rows across replay and reorg** (the user's "verified", 2026-10-09: Final / reorg consistency for the new
+/// objects). On an OPV network job 1 is posted and sealed by producer 0, and job 2 is posted and sealed by producer 2. Then ONE
+/// carrying block writes all three new rows at once: job 3's poster (table 18), producer 0's salted reveal (its salt: table 25) and
+/// producer 2's re-seal of job 2, which forfeits the seal it replaces at its own position (table 26). A second node replays the chain
+/// to the same route; a heartbeat branch from just before that block out-works it and takes that node back to the branch's own route
+/// (the three rows gone, the fee and the forfeited deposit returned); and the original chain out-working the branch re-applies all
+/// three identically (rows, aux, roots, collateral and payout queue — `assert_same`). The node then follows the original chain to the
+/// claim's Final and the re-seal's own expiry (a second table-26 row), and a fresh replay agrees.
+///
+/// The fork is two blocks deep, like every other reorg case of this file: neither branch carries fork-choice weight, so a deep
+/// heartbeat-only branch is not one a node must take (the first version forked a hundred ticks back, and the node kept its chain).
+#[tokio::test]
+async fn g14_opv_the_salted_seal_rows_roll_back_and_reapply_identically_across_a_reorg() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let job = w.job().await;
+    let job2 = w.job().await;
+    let (kid0, kid2) = (w.net.kid(0), w.net.kid(2));
+    // Producer 0 seals job 1 (its reveal held back); producer 2 seals job 2.
+    let ledger = w.net.ledger();
+    let generated = greedy(&w.fx, &ledger, &w.class, &job.prompt, job.max_new_tokens as usize);
+    let produced = produce(&w.fx, &ledger, &w.class, &job, kid0, generated, |_| {});
+    let claim_id = produced.claim.id();
+    let (seal0, reveal0) = seal_and_reveal(&ledger, kid0, &produced.object);
+    let K::CommitClaimSalted { salt, .. } = reveal0.clone() else { panic!("past the fence the reveal is salted") };
+    let generated = greedy(&w.fx, &ledger, &w.class, &job2.prompt, job2.max_new_tokens as usize);
+    let produced2 = produce(&w.fx, &ledger, &w.class, &job2, kid2, generated, |_| {});
+    let (seal2, _withheld) = seal_and_reveal(&ledger, kid2, &produced2.object);
+    let (o0, o2) = (w.net.route(0, &seal0), w.net.route(2, &seal2));
+    w.net.send(vec![(0, o0), (2, o2)]).await;
+    let first_sealed = w.net.ledger().seals[&(job2.id(), kid2)].daa;
+
+    // The fork: everything above is common. A's next two blocks carry job 3's post, the reveal and the re-seal.
+    let fork = w.net.chain.sink();
+    let at_fork = w.net.api().expect("the route");
+    let money0 = kernel_money_v1(&w.net.chain);
+    let (collateral0, collateral1, collateral2) = (w.net.collateral(0), w.net.collateral(1), w.net.collateral(2));
+    w.jobs += 1;
+    let job3 = KernelJobV1 {
+        class_binding_id: w.class,
+        prompt: vec![3, 17, 9],
+        max_new_tokens: 3,
+        decode: DecodeRuleV1::Greedy,
+        nonce: [w.jobs; 64],
+    };
+    let reseal = K::SealClaim {
+        producer: kid2,
+        job: job2.id(),
+        seal: claim_seal_v2(&produced2.claim.id(), &misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt/reseal", &kid2)),
+    };
+    let (p3, r0, s2) = (w.net.route(1, &K::PostJob { job: job3.clone() }), w.net.route(0, &reveal0), w.net.route(2, &reseal));
+    w.net.send(vec![(1, p3), (0, r0), (2, s2)]).await;
+    let l = w.net.ledger();
+    assert!(l.claims.contains_key(&claim_id), "the salted reveal committed");
+    assert!(l.job_poster(&job3.id()).is_some(), "table 18: job 3's poster");
+    assert_eq!(l.claim_beacon_salt(&claim_id), Some(salt), "table 25: the claim's salt");
+    assert!(l.forfeited_claim_seals.contains_key(&(job2.id(), kid2, first_sealed)), "table 26: the replaced seal, at its position");
+    let pol = w.policy();
+    let fee = w.net.api().unwrap().header.opv.unwrap().economics.admission_fee;
+    let money1 = kernel_money_v1(&w.net.chain);
+    assert_eq!(w.net.collateral(0), collateral0 - fee, "the reveal paid its admission fee from the producer's real bond");
+    assert_eq!(w.net.collateral(2), collateral2 - pol.seal_deposit, "the re-seal forfeited the replaced seal's deposit");
+    assert_eq!(w.net.collateral(1), collateral1 - pol.job_fee, "job 3's posting fee (its escrow is a reservation, not a debit)");
+    assert_eq!(money1.burned - money0.burned, u128::from(fee + pol.seal_deposit + pol.job_fee), "all three burned");
+    assert_eq!(money1.paid, money0.paid, "and nothing paid");
+    assert_kernel_conserved_v1(money0, money1, "the post, the reveal and the re-seal");
+    let tables = |l: &KernelLedgerV1| (l.job_posters.clone(), l.claim_beacon_salts.clone(), l.forfeited_claim_seals.clone());
+    let on_a = tables(&l);
+
+    // A second node replays to the same route.
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "Z replays A");
+    let mut zn = w.net.on_chain(z);
+
+    // B, from the fork, out-works A's two blocks: Z reorgs onto B, and B's route is exactly the fork's.
+    let b = t12_genesis_chain(&w.net.config, &w.net.bundle, &w.net.premine, &w.net.floats);
+    let up_to_fork = chain_blocks(&w.net.chain, fork);
+    let fork_timestamp = up_to_fork.last().unwrap().header.timestamp;
+    for blk in up_to_fork {
+        arrive(&b, blk, "a block up to the fork").await;
+    }
+    let mut b = b;
+    b.ctx.simulated_time = fork_timestamp;
+    let ttpb = w.net.ttpb();
+    let mut b_blocks = Vec::new();
+    for _ in 0..4 {
+        b_blocks.push(b.heartbeat(ttpb, Vec::new()).await);
+    }
+    for blk in &b_blocks {
+        arrive(&zn.chain, blk.clone(), "B's block").await;
+    }
+    let order = |c: &T12Chain, h| c.vp().palw_candidate_order_v2(h);
+    assert_eq!(
+        zn.chain.sink(),
+        b.sink(),
+        "B out-works A's two blocks: Z reorgs onto B (Z weighs A {:?}, B {:?})",
+        order(&zn.chain, w.net.chain.sink()),
+        order(&zn.chain, b.sink())
+    );
+    let on_b = zn.api().expect("the route existed at the fork");
+    assert_eq!((on_b.rows.clone(), on_b.aux.clone()), (at_fork.rows.clone(), at_fork.aux.clone()), "B's route is the fork's");
+    assert_eq!(zn.chain.ctx.consensus.palw_kernel_route_v1(), b.ctx.consensus.palw_kernel_route_v1(), "Z's route is B's own");
+    let lz = zn.ledger();
+    assert!(
+        lz.job_poster(&job3.id()).is_none()
+            && lz.claim_beacon_salt(&claim_id).is_none()
+            && !lz.forfeited_claim_seals.contains_key(&(job2.id(), kid2, first_sealed)),
+        "the reorg rolled the three rows of tables 18, 25 and 26 back"
+    );
+    assert!(!lz.claims.contains_key(&claim_id), "and the salted claim with them");
+    assert!(lz.seals.contains_key(&(job2.id(), kid2)) && lz.seals.contains_key(&(job.id(), kid0)), "both seals are live again");
+    assert_eq!(
+        (zn.collateral(0), zn.collateral(1), zn.collateral(2)),
+        (collateral0, collateral1, collateral2),
+        "the fees and the forfeited deposit are returned with the reorg"
+    );
+    assert_eq!(kernel_money_v1(&zn.chain), money0, "Z's money is the fork's");
+
+    // A out-works B again: Z returns to A and re-applies all three rows identically.
+    let old_len = chain_blocks(&w.net.chain, w.net.chain.sink()).len();
+    for _ in 0..8 {
+        w.net.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    for blk in chain_blocks(&w.net.chain, w.net.chain.sink()).into_iter().skip(old_len) {
+        arrive(&zn.chain, blk, "A's later block").await;
+    }
+    w.net.assert_same(&zn.chain, "Z back on A");
+    assert_eq!(tables(&zn.ledger()), on_a, "tables 18, 25 and 26 re-applied identically");
+
+    // Z follows A to the claim's Final and the re-seal's own expiry (a second forfeited position); a fresh replay agrees.
+    let resealed = w.net.ledger().seals[&(job2.id(), kid2)].daa;
+    let (_, view) = opv_view(&w, &claim_id);
+    let old_len = chain_blocks(&w.net.chain, w.net.chain.sink()).len();
+    w.net.beat_to((resealed + pol.seal_ttl_daa + 2).max(view.final_floor_daa)).await;
+    for blk in chain_blocks(&w.net.chain, w.net.chain.sink()).into_iter().skip(old_len) {
+        arrive(&zn.chain, blk, "A's later block").await;
+    }
+    let l = w.net.ledger();
+    assert!(matches!(l.claims[&claim_id].life.state, ClaimStateV1::Final { .. }), "the salted claim went Final");
+    assert!(l.forfeited_claim_seals.contains_key(&(job2.id(), kid2, resealed)), "the re-seal expired unrevealed: its own position");
+    assert_eq!(l.claim_beacon_salt(&claim_id), Some(salt), "the salt outlives the Final");
+    w.net.assert_same(&zn.chain, "Z follows A to the Final");
+    let fresh = w.net.replay().await;
+    w.net.assert_same(&fresh, "a fresh replay");
 }
 
 #[tokio::test]
@@ -2035,7 +2285,7 @@ async fn g14_opv_withheld_material_defaults_the_producer_burns_a_share_and_frees
     kaspa_core::log::try_init_logger("warn");
     let mut w = World::opv().await;
     let job = w.job().await;
-    let before = w.net.collateral(0);
+    let (before, money0) = (w.net.collateral(0), kernel_money_v1(&w.net.chain));
     let lie = w.claim(0, &job, true).await;
     let outsider = w.outsiders(&lie, &[], 1)[0];
     let da = lie.published(&w.fx, &[lie.at]);
@@ -2048,6 +2298,7 @@ async fn g14_opv_withheld_material_defaults_the_producer_burns_a_share_and_frees
     assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Unavailable { producer_defaulted: true, .. }));
     assert!(!w.net.ledger().claims[&lie.id].convicted);
     assert_eq!(w.net.collateral(0), before - pol.default_penalty - opv.economics.admission_fee, "the penalty and the admission fee");
+    assert_kernel_conserved_v1(money0, kernel_money_v1(&w.net.chain), "an OPV default (the penalty, the demander's share, the fee)");
     assert_eq!(w.net.owed(outsider), default_share(&pol, Some(&opv)), "the demander is paid what the default did not burn");
     // C4 F-C4R3-02: the rest of the reservation is held through the default's liability horizon.
     assert_eq!(w.net.kernel_reserved(0), u128::from(opv.economics.reservation_per_claim - pol.default_penalty));
@@ -2198,7 +2449,11 @@ async fn g14_opv_replay_and_reorg_reach_the_same_roots() {
     }
     assert_eq!(zn.chain.sink(), b.sink(), "B out-works A: Z reorgs onto B");
     let on_b = zn.api().unwrap();
-    assert_eq!((on_b.rows.clone(), on_b.aux.clone()), (at_fork.rows.clone(), at_fork.aux.clone()), "no OPV row, no trace of the conviction");
+    assert_eq!(
+        (on_b.rows.clone(), on_b.aux.clone()),
+        (at_fork.rows.clone(), at_fork.aux.clone()),
+        "no OPV row, no trace of the conviction"
+    );
     assert!(!zn.ledger().claims[&lie.id].convicted && zn.ledger().opv_invariants().is_ok());
     assert_eq!((zn.collateral(0), zn.slashed(0), zn.owed(outsider)), (collateral, slashed, 0));
     assert_eq!(zn.chain.ctx.consensus.palw_kernel_route_v1(), b.ctx.consensus.palw_kernel_route_v1());
@@ -2242,7 +2497,6 @@ async fn g14_opv_survives_a_node_restart_and_finalizes_after_it() {
     let z = w.net.replay().await;
     w.net.assert_same(&z, "a node replaying the whole chain");
 }
-
 
 // ---- phase 3: model onboarding on the real node --------------------------------------------------------------------------
 //
@@ -2317,11 +2571,16 @@ impl Net {
     fn v2_registration(&self, f: &OnbFixture, card: usize, activation_daa: u64) -> Obj {
         use kaspa_consensus_core::palw_tir_admission_v1::palw_tir_post_genesis_registration_v1;
         use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_canonical_v1, palw_tir_job_context_v1};
-        use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1, palw_tir_class_registration_message_v1};
+        use kaspa_consensus_core::palw_tir_class_v1::{
+            PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1, palw_tir_class_registration_message_v1,
+        };
         let state = self.chain.tip_state().1;
         let floor = self.bundle.base_class_id;
-        let (target, slash, ladder) =
-            (state.class_target(&floor).unwrap().target, state.class(&floor).unwrap().slash_value_per_pwu, self.bundle.court.max_step_leaf_count());
+        let (target, slash, ladder) = (
+            state.class_target(&floor).unwrap().target,
+            state.class(&floor).unwrap().slash_value_per_pwu,
+            self.bundle.court.max_step_leaf_count(),
+        );
         let facts = PalwTirJobFactsV1::of_class(&f.class, f.class.class_id(&f.artifact_root)).expect("decodes");
         let canonical = palw_tir_job_context_v1(&facts, palw_tir_attempt_canonical_v1(&f.class).expect("wide enough"));
         let mut o = palw_tir_post_genesis_registration_v1(
@@ -2337,8 +2596,16 @@ impl Net {
             ladder,
         )
         .expect("the builder counts the canonical job");
-        let Obj::ClassRegisteredTirV1 { class_id, share_permille, activation_daa, artifact_root, slash_value_per_pwu, initial_target, pwu_rule, admission } =
-            &mut o
+        let Obj::ClassRegisteredTirV1 {
+            class_id,
+            share_permille,
+            activation_daa,
+            artifact_root,
+            slash_value_per_pwu,
+            initial_target,
+            pwu_rule,
+            admission,
+        } = &mut o
         else {
             unreachable!()
         };
@@ -2400,12 +2667,19 @@ impl Net {
     ) -> Obj {
         let payload = borsh::to_vec(&(v2_class, kernel_param_root, &proof)).unwrap();
         let signature = self.onboarding_signature(card, 105, &payload);
-        Obj::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, challenger: self.bond(card), proof: Box::new(proof), signature }
+        Obj::ArtifactBindingChallengedV1 {
+            v2_class,
+            kernel_param_root,
+            challenger: self.bond(card),
+            proof: Box::new(proof),
+            signature,
+        }
     }
 
     fn kernel_bound(&mut self, card: usize, v2_class: Hash64, kernel_class: Hash64) -> Obj {
         // The network's post-commit challenge policy (onboarding P0): the one the beacon and seed are derived under.
-        let policy = Hash64::from_bytes(kaspa_consensus_core::palw_conformance_evidence_v1::palw_onboarding_challenge_policy_v1().id());
+        let policy =
+            Hash64::from_bytes(kaspa_consensus_core::palw_conformance_evidence_v1::palw_onboarding_challenge_policy_v1().id());
         let payload = borsh::to_vec(&(v2_class, kernel_class, policy)).unwrap();
         let signature = self.onboarding_signature(card, 106, &payload);
         Obj::KernelBoundV1 { v2_class, kernel_class, challenge_policy_id: policy, signer: self.bond(card), signature }
@@ -2494,7 +2768,11 @@ async fn g14_onboarding_a_class_is_bound_attested_registered_and_released_by_the
     assert_eq!(row.reserved, kaspa_consensus_core::palw_onboarding_v1::PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1);
     assert_eq!(row.state_at(net.daa()), ArtifactBindingStateV1::Pending);
     assert!(route.onboarding_attested_roots_v1(net.daa()).is_empty(), "Pending attests nothing");
-    assert_eq!(net.chain.tip_state().1.onboarding_reserved(&net.bond(registrant)), u128::from(row.reserved), "V2 sees the reservation");
+    assert_eq!(
+        net.chain.tip_state().1.onboarding_reserved(&net.bond(registrant)),
+        u128::from(row.reserved),
+        "V2 sees the reservation"
+    );
     let o = net.route(registrant, &register(&f));
     net.send(vec![(registrant, o)]).await;
     assert!(net.ledger().classes.is_empty(), "a Pending binding attests nothing: still no kernel class");
@@ -2529,7 +2807,14 @@ async fn g14_onboarding_a_class_is_bound_attested_registered_and_released_by_the
     let read = net.chain.ctx.consensus.palw_onboarding_v1(v2_class).expect("the class is known");
     assert_eq!((read.artifact_bindings.len(), read.kernel_binding.is_some(), read.conformance.is_some()), (1, true, true));
     assert_eq!(read.artifact_bindings[0].2, "Matured");
-    assert!(matches!(read.gate, kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1::Held { code: "AVAILABILITY_REQUIRED", .. }), "{:?}", read.gate);
+    assert!(
+        matches!(
+            read.gate,
+            kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1::Held { code: "AVAILABILITY_REQUIRED", .. }
+        ),
+        "{:?}",
+        read.gate
+    );
 
     // ---- the horizon ends: the reservation is released — and a COMMITMENT ALONE never passes (onboarding P0) ----
     // This network has no Panel-independent Final, so the beacon never locks: the attempt waits for randomness, the collection window
@@ -2547,14 +2832,21 @@ async fn g14_onboarding_a_class_is_bound_attested_registered_and_released_by_the
     assert_eq!(attempt.record.state, misaka_palw_challenge::OnboardingStateV1::RegisteredDormant);
     assert_eq!(attempt.record.last_failure, Some(misaka_palw_challenge::OnboardingFailureV1::BeaconUnavailable));
     assert_eq!((attempt.record.attempts(), attempt.record.attempt_limit), (1, 3), "counted against the policy's limit");
-    assert!(matches!(attempt.last_end, Some((kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptEndV1::BeaconUnavailable, _))));
+    assert!(matches!(
+        attempt.last_end,
+        Some((kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptEndV1::BeaconUnavailable, _))
+    ));
     assert_eq!(net.chain.tip_state().1.onboarding_reserved(&net.bond(registrant)), 0, "released at the horizon");
     assert!(
         matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }),
         "{:?}",
         net.chain.tip_state().1.class(&v2_class).unwrap().status
     );
-    assert_eq!(net.collateral(registrant), collateral - kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, "only the registration burn left the bond");
+    assert_eq!(
+        net.collateral(registrant),
+        collateral - kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1,
+        "only the registration burn left the bond"
+    );
     let z = net.replay().await;
     net.assert_same(&z, "replay");
 }
@@ -2684,13 +2976,21 @@ async fn g14_onboarding_a_false_artifact_binding_is_refuted_by_two_disagreeing_o
     assert!(net.api().unwrap().onboarding_attested_roots_v1(net.daa()).is_empty());
     let o = net.route(
         binder,
-        &K::RegisterClass { descriptor: d.digest(), program_bytes: wrong.program.encode(), plan: wrong.plan.clone(), param_commitments: wrong.pc.clone() },
+        &K::RegisterClass {
+            descriptor: d.digest(),
+            program_bytes: wrong.program.encode(),
+            plan: wrong.plan.clone(),
+            param_commitments: wrong.pc.clone(),
+        },
     );
     net.send(vec![(binder, o)]).await;
     assert!(net.ledger().classes.is_empty(), "no kernel class over a refuted root");
     net.beat_to(row.final_daa + 40).await;
     assert!(
-        matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Registered { .. }),
+        matches!(
+            net.chain.tip_state().1.class(&v2_class).unwrap().status,
+            kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Registered { .. }
+        ),
         "the class never left Registered: it began onboarding and its binding is refuted"
     );
     // A second refutation of the same binding is refused.
@@ -2716,7 +3016,10 @@ async fn g14_onboarding_a_binding_over_the_wrong_set_of_tensors_is_refuted_witho
     // The honest commitments (the full set) are not a refutation of THEIR OWN binding.
     let o = net.artifact_challenged(3, v2_class, root, ArtifactMismatchProofV1::Instances { commitments: truth.pc.clone() });
     net.send(vec![(3, o)]).await;
-    assert!(!net.api().unwrap().artifact_binding_v1(&v2_class, &root).unwrap().refuted, "commitments that do not root to the bound root prove nothing");
+    assert!(
+        !net.api().unwrap().artifact_binding_v1(&v2_class, &root).unwrap().refuted,
+        "commitments that do not root to the bound root prove nothing"
+    );
     let o = net.artifact_challenged(3, v2_class, root, ArtifactMismatchProofV1::Instances { commitments: short });
     net.send(vec![(3, o)]).await;
     assert!(net.api().unwrap().artifact_binding_v1(&v2_class, &root).unwrap().refuted, "a missing tensor refutes the binding");
@@ -2762,7 +3065,12 @@ async fn g14_onboarding_refusals_leave_the_rows_untouched() {
     let d = k2_tir_v2_descriptor();
     let o = net.route(
         registrant,
-        &K::RegisterClass { descriptor: d.digest(), program_bytes: f.program.encode(), plan: f.plan.clone(), param_commitments: f.pc.clone() },
+        &K::RegisterClass {
+            descriptor: d.digest(),
+            program_bytes: f.program.encode(),
+            plan: f.plan.clone(),
+            param_commitments: f.pc.clone(),
+        },
     );
     net.send(vec![(registrant, o)]).await;
     let kernel_class = Hash64::from_bytes(*net.ledger().classes.keys().next().expect("registered over the matured binding"));
@@ -2892,7 +3200,14 @@ impl Net {
         .expect("ML-DSA-87 signs")
         .as_ref()
         .to_vec();
-        Obj::SignedRegistrationV1 { registration: Box::new(registration), valid_from_daa, valid_until_daa, fork_digest, signer, signature }
+        Obj::SignedRegistrationV1 {
+            registration: Box::new(registration),
+            valid_from_daa,
+            valid_until_daa,
+            fork_digest,
+            signer,
+            signature,
+        }
     }
 }
 
@@ -2957,7 +3272,10 @@ async fn g14_onboarding_a_signed_registration_envelope_expires_and_binds_its_rul
     let now = net.daa();
     let good = net.envelope(registrant, class_obj, now, now + 200, net.fork_digest_at(now));
     net.send(vec![(registrant, good)]).await;
-    assert!(matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }), "registered through the envelope");
+    assert!(
+        matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }),
+        "registered through the envelope"
+    );
 
     // and with the fence off the envelope is no object at all
     let mut plain = Net::over_cfg(kernel_config_onboarding_with(false), TestConsensus::new);
