@@ -82,7 +82,7 @@ wire/fence impact · test · real-node result · status.
 | existing (pre) | positional ≤ 82, declared 83–95, 100–103 | … ≤ 150 (150 = lane MU seat root readiness) | 0x87–0xDA (see `PALW_CARRIAGE_*`), 0xE0, 0xE1, 0xE4, 0xE6, 0xEA, 0xEB | — |
 | RFC-0009 provider court (DA16) | **150–153 used** (lease, challenge, answer, transfer) | 140–141 **released** | 0xE9 **released** (rows ride kernel route aux 43–45, delta 160, tail 0xEC) | `palw_provider_court_v1` (dormant) |
 | Kernel route (A, G14) | 110–119 (110–112 used; **113 reserved for G14-R4** accusation seal, 2026-10-08) | 160–169 | 0xEC (aux tables: 36–38 onboarding, 39–40 OB-P0, **41–42 G14-R4** G14 chunk table) | `palw_probabilistic_constraints_v1` (refused) |
-| RFC-0010 V3 production fold (C2) | 120–129 (120 = `PanelBeaconProofV3`) | 170–179 (170–173 used) | 0xED | `palw_permissionless_panel_v1` (refused); `PalwVoidReasonV2` 120–129 (120–122 used; 0–10 implicit unchanged) |
+| RFC-0010 V3 production fold (C2) | 120–129 (120 = `PanelBeaconProofV3`) | 170–179 (170–174 used; 174 `PanelV3EpochSources`, R10F) | 0xED | `palw_permissionless_panel_v1` (refused); `PalwVoidReasonV2` 120–129 (120–122 used; 0–10 implicit unchanged) |
 | EXEC payload v2 (A, later) | 130–139 | 180–189 | 0xEE | `palw_exec_payload_v2` (not yet declared) |
 | Onboarding objects (D phase 3) | 104–108 used (104 ArtifactBound, 105 refutation, 106 KernelBound, 107 ConformanceCommitted, 108 SignedRegistrationV1), 109 **used by OB-P0** `ConformanceEvidenceV1` (2026-10-08 18:10; aux tables 39 attempts / 40 evidence material used with it) | none (rows in the kernel route's aux tables 36–38, journalled by deltas 160/161) | none (tail 0xEC) | `palw_signed_registration_v1` (108; refused) |
 | RPC ops | C1 202–209 (202 used; 203 getPalwForkChoiceOpening (L2FC), 204–209 free), D 210–219 (210, 211, 212 used) and 230–239 (230 used; 231 used by OB-P0 `getPalwConformanceEvidence`, 232 unused), C2 220–229 (220 used), X8R 240–249 (RFC-0008 v2) | — | — | — |
@@ -215,7 +215,7 @@ the fence the object is not applied and its block stands — never an isolation 
 
 * 2026-10-08 — C2 milestone 1 (`rfc10/c2-panel` 5e294cdcc, d6f93e68b, 8f8410b0f; not yet integrated): V3 engine staged
   (advance / accept_beacon / admit); beacon adapter = borsh `WorkBeaconV1` verified by `verify_work_beacon_v1`; production fold —
-  `PalwChainStateV2.panel_v3` Some-only root block `panel_v3/v1`, deltas 170–173, tail 0xED, tag 120 (bad proof dropped, block
+  `PalwChainStateV2.panel_v3` Some-only root block `panel_v3/v1`, deltas 170–174, tail 0xED, tag 120 (bad proof dropped, block
   stands), void reasons 120–122; one exposure ledger via `reserve_seat_duties_with` (V3 binding writes the V2 Panel record anchored
   at the V3 seed, duty rows and seat `reserved_exposure`); a non-seat DA accusation + default convicts a V3-bound claim
   (ProducerWithholding, producer slashed). Open: V3 receipt/retry expiry vs non-seat DA default (G14 pre-emption — Lead asked for a

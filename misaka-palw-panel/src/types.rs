@@ -213,6 +213,24 @@ impl PanelSnapshotV1 {
     }
 }
 
+/// The most source profiles one epoch's frozen source set may hold. A host whose derivation exceeds it freezes NO set for the epoch
+/// (never a truncated one, which a registrant could steer by its id): the epoch's beacon is then unavailable (non-fraud).
+pub const MAX_EPOCH_SOURCES_V1: u32 = 1024;
+
+/// **An epoch's beacon source set, frozen once at its commitment position** (`release_daa = epoch × beacon_period_daa`): the source
+/// profiles the host derived from the PRE-ENTROPY checkpoint (the parent of the first block whose DAA reaches `release_daa`), sorted
+/// and unique. Written by the engine's freeze stage exactly once per epoch that has a live claim sealed for it, never rewritten, and
+/// dropped once the epoch's contribution window has closed (`daa > release_daa + beacon_wait_daa`) or no live claim is sealed for it.
+/// The beacon verifier reads THIS set; an epoch without one has no eligible source.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpochSourceSetV1 {
+    /// The DAA of the block that froze it (the first at or past `release_daa`).
+    pub frozen_daa: u64,
+    /// Non-empty, strictly ascending, at most [`MAX_EPOCH_SOURCES_V1`].
+    pub profiles: Vec<Hash64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BeaconProofV1 {
@@ -268,6 +286,13 @@ pub trait ConsensusViewV1 {
         _strata: &PanelStrataV1,
     ) -> Result<(Vec<SeatCandidateV1>, Vec<u64>), PanelErrorV1> {
         Ok((Vec::new(), Vec::new()))
+    }
+    /// **The beacon's eligible source profiles at an epoch's commitment position** `release_daa`, as the host derives them from the
+    /// same pre-entropy checkpoint as [`Self::candidates`] (never this block's objects). Asked once per epoch, by the freeze stage of
+    /// the first block whose DAA reaches `release_daa`; the answer is frozen into the state ([`EpochSourceSetV1`]). The default — a
+    /// host with no source rule — is none: nothing is frozen and the epoch's beacon has no eligible source.
+    fn epoch_sources(&self, _release_daa: u64) -> Vec<Hash64> {
+        Vec::new()
     }
 }
 

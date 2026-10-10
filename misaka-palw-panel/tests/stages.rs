@@ -260,3 +260,138 @@ fn the_hosts_receipt_clock_pauses_and_rebases_the_engines_timeout() {
     assert_eq!(e.bindings[&h(10)].retry_index, 1);
     assert_eq!(retried.claim(&h(10)).unwrap().binding_history.len(), 2);
 }
+
+/// A host whose source rule answers `set` for every epoch (the freeze stage asks it once per epoch, at the commitment).
+#[derive(Clone)]
+struct Sourced {
+    inner: View,
+    set: Vec<Hash64>,
+}
+impl ConsensusViewV1 for Sourced {
+    fn candidates(&self, c: &AdmittedClaimV1) -> Result<Vec<SeatCandidateV1>, PanelErrorV1> {
+        self.inner.candidates(c)
+    }
+    fn available_collateral(&self, b: &BondIdV1) -> u128 {
+        self.inner.available_collateral(b)
+    }
+    fn terminal_claim(&self, c: &Hash64) -> bool {
+        self.inner.terminal_claim(c)
+    }
+    fn verify_beacon(&self, r: &BeaconRequestV1, p: &BeaconProofV1) -> Result<(), PanelErrorV1> {
+        self.inner.verify_beacon(r, p)
+    }
+    fn epoch_sources(&self, _: u64) -> Vec<Hash64> {
+        self.set.clone()
+    }
+}
+
+/// **RFC-0010 residual: an epoch's beacon source set is frozen once, at its commitment position, and never re-derived.** The
+/// first block whose DAA reaches `release` (10) freezes what the host answers then (sorted, unique); a later answer — a profile
+/// denied or lapsed, another newly eligible — changes nothing; the set is dropped once the contribution window closes (DAA > 12).
+/// The staged fold equals the whole fold throughout, the keyed rows rebuild the committed root, and the carriage imports.
+#[test]
+fn an_epochs_source_set_is_frozen_once_at_its_commitment_and_dropped_after_its_window() {
+    let before = Sourced { inner: View::new(6), set: vec![h(6), h(5), h(6)] };
+    let after = Sourced { inner: View::new(6), set: vec![h(5), h(7)] };
+    let mut whole = initial(policy());
+    let mut parts = initial(policy());
+    let run: Vec<(SelectedChainStepV1, &Sourced)> = vec![
+        (step(h(0), 1, 1, vec![claim(10)], vec![]), &before),
+        (step(h(1), 2, 2, vec![], vec![]), &before),
+        (step(h(2), 3, 9, vec![], vec![]), &before), // sealed for epoch 1 (release 10); below the commitment: nothing frozen
+        (step(h(3), 4, 10, vec![], vec![proof()]), &before), // the first block reaching 10: frozen
+        (step(h(4), 5, 11, vec![], vec![]), &after), // eligibility changed after the commitment
+        (step(h(5), 6, 12, vec![], vec![]), &after),
+        (step(h(6), 7, 13, vec![], vec![]), &after), // the window (10 + 2) closed: dropped
+    ];
+    let mut seen = Vec::new();
+    for (st, v) in &run {
+        let (w, _) = whole.fold(st, *v).unwrap();
+        let mut prefix = st.clone();
+        prefix.admissions.clear();
+        prefix.beacons.clear();
+        let (mut p, _) = parts.advance(&prefix, *v).unwrap();
+        for b in &st.beacons {
+            p = p.accept_beacon(b, *v).unwrap();
+        }
+        let (p, _) = p.admit(&st.admissions).unwrap();
+        assert_eq!(w, p, "staged = whole at height {}", st.height);
+        seen.push((st.daa, w.epoch_source_rows().get(&1).cloned()));
+        whole = w;
+        parts = p;
+        if st.daa == 11 {
+            // Rebuilt from the journal's decomposition, the frozen row included, the state is the committed one; the carriage imports.
+            let mut t = PermissionlessPanelStateV1::from_cursor(whole.cursor()).unwrap();
+            for (id, record) in whole.claim_rows() {
+                t.put_claim_row(*id, Some(record.clone()));
+            }
+            for id in whole.work_id_rows() {
+                t.put_work_id_row(*id, true);
+            }
+            for (epoch, output) in whole.beacon_rows() {
+                t.put_beacon_row(*epoch, Some(*output));
+            }
+            for (epoch, row) in whole.epoch_source_rows() {
+                t.put_epoch_source_row(*epoch, Some(row.clone()));
+            }
+            t.refresh_derived().unwrap();
+            assert_eq!(t, whole);
+            let bytes = borsh::to_vec(&whole).unwrap();
+            let imported = PermissionlessPanelStateV1::import(&bytes, whole.root(), h(700), h(701), policy()).unwrap();
+            assert_eq!(imported, whole);
+            // The frozen row is committed: without it the root differs.
+            let mut u = whole.clone();
+            u.put_epoch_source_row(1, None);
+            assert_ne!(u.root(), whole.root());
+        }
+    }
+    let frozen = EpochSourceSetV1 { frozen_daa: 10, profiles: vec![h(5), h(6)] };
+    assert_eq!(
+        seen,
+        vec![(1, None), (2, None), (9, None), (10, Some(frozen.clone())), (11, Some(frozen.clone())), (12, Some(frozen)), (13, None)]
+    );
+    assert_eq!(whole.frozen_sources_at(10), None, "dropped after the window");
+}
+
+#[test]
+fn an_empty_or_over_cap_derivation_freezes_nothing_and_a_malformed_row_is_refused() {
+    for set in [Vec::new(), (0..=MAX_EPOCH_SOURCES_V1 as u64).map(|i| h(10_000 + i)).collect::<Vec<_>>()] {
+        let v = Sourced { inner: View::new(6), set };
+        let mut s = initial(policy());
+        for st in [
+            step(h(0), 1, 1, vec![claim(10)], vec![]),
+            step(h(1), 2, 2, vec![], vec![]),
+            step(h(2), 3, 3, vec![], vec![]), // sealed for epoch 1 (release 10) against the parent checkpoint
+            step(h(3), 4, 10, vec![], vec![]),
+        ] {
+            s = s.fold(&st, &v).unwrap().0;
+        }
+        let record = s.claim(&h(10)).unwrap();
+        assert!(record.seal.is_some() && !record.phase.terminal(), "a live claim is sealed for the epoch");
+        assert!(s.epoch_source_rows().is_empty(), "nothing frozen (never a truncated set)");
+    }
+    // No claim sealed for the epoch: nothing to freeze either.
+    let v = Sourced { inner: View::new(6), set: vec![h(5)] };
+    let mut s = initial(policy());
+    for st in [step(h(0), 1, 1, vec![], vec![]), step(h(1), 2, 10, vec![], vec![])] {
+        s = s.fold(&st, &v).unwrap().0;
+    }
+    assert!(s.epoch_source_rows().is_empty());
+    // A frozen set that is unsorted, or frozen before its commitment, is a state no fold writes.
+    let mut s = initial(policy());
+    for st in [
+        step(h(0), 1, 1, vec![claim(10)], vec![]),
+        step(h(1), 2, 2, vec![], vec![]),
+        step(h(2), 3, 3, vec![], vec![]), // sealed for epoch 1 (release 10) against the parent checkpoint
+        step(h(3), 4, 10, vec![], vec![]),
+    ] {
+        s = s.fold(&st, &v).unwrap().0;
+    }
+    assert_eq!(s.frozen_sources_at(10).map(|row| row.profiles.clone()), Some(vec![h(5)]));
+    let mut bad = s.clone();
+    bad.put_epoch_source_row(1, Some(EpochSourceSetV1 { frozen_daa: 10, profiles: vec![h(6), h(5)] }));
+    assert_eq!(bad.check_consistency().unwrap_err(), PanelErrorV1::InvalidCarriage);
+    let mut early = s.clone();
+    early.put_epoch_source_row(1, Some(EpochSourceSetV1 { frozen_daa: 9, profiles: vec![h(5)] }));
+    assert_eq!(early.check_consistency().unwrap_err(), PanelErrorV1::InvalidCarriage);
+}

@@ -1,6 +1,6 @@
 //! RFC-0010: dormant configuration, public-chain snapshot/admission adapters and versioned fold.
 //! Historical lane A remains unchanged. The production fold (`palw_panel_v3_fold_v1`, a child of `palw_state_v2`) wires the
-//! engine into `PalwChainStateV2` — Some-only root block, deltas 170–173, carriage tail `0xED` — and hands every binding to the
+//! engine into `PalwChainStateV2` — Some-only root block, deltas 170–174, carriage tail `0xED` — and hands every binding to the
 //! V2 receipt/court machinery as an ordinary panel record. **No certified entropy source is approved**
 //! ([`crate::palw_panel_beacon_v1`]), so this binary refuses EVERY attempted activation, including custom params and orphaned
 //! state mirrors. OPV source plumbing is present but does not approve a beacon policy.

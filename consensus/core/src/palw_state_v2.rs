@@ -158,7 +158,8 @@ mod palw_adapter_class_fold_v1;
 #[path = "palw_panel_v3_fold_v1.rs"]
 mod palw_panel_v3_fold_v1;
 pub use palw_panel_v3_fold_v1::{
-    ChainPanelBeaconHistoryV1, PalwPanelV3BeaconSourceV1, PalwPanelV3InputsV1, palw_panel_v3_final_events_v1,
+    ChainPanelBeaconHistoryV1, PalwPanelV3BeaconSourceV1, PalwPanelV3InputsV1, palw_panel_v3_epoch_sources_v1,
+    palw_panel_v3_final_events_v1,
 };
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
@@ -11920,8 +11921,9 @@ pub struct PalwChainStateV2 {
     /// (`improvement-eval/v1`) and carriage tail (`0xCC`): empty below the fence.
     improvement_eval_jobs: BTreeMap<crate::palw_improve_eval_v1::PalwEvalJobKeyV1, crate::palw_improve_eval_v1::PalwEvalJobStateV1>,
     /// **RFC-0010: the permissionless Panel's engine** (`misaka-palw-panel`) — the claims admitted under the V3 rule in the order
-    /// the chain accepted them, their seals, snapshots, certified epoch outputs, bindings and retries. ONE Some-only root block
-    /// (`panel_v3/v1`), carriage tail `0xED`, delta numbers 170–173: `None` below `palw_permissionless_panel_v1`, which no
+    /// the chain accepted them, their seals, snapshots, certified epoch outputs, each live epoch's frozen beacon source set, bindings
+    /// and retries. ONE Some-only root block (`panel_v3/v1`), carriage tail `0xED`, delta numbers 170–174: `None` below
+    /// `palw_permissionless_panel_v1`, which no
     /// network can arm today. Its reservations are not a second ledger: a binding writes the V2 duty row and exposure.
     panel_v3: Option<misaka_palw_panel::PermissionlessPanelStateV1>,
     /// **Lane LG14-A: the legacy route's dispute reservations**, by claim ([`crate::palw_legacy_public_filer_v1`]). One Some-only root
@@ -14852,7 +14854,7 @@ impl PalwChainStateV2 {
         // **RFC-0010: the permissionless Panel's engine, ONE Some-only block** after the mesh's — the engine exists only from the
         // first block at or past `palw_permissionless_panel_v1`, which no network can arm today, so a network that never arms it
         // roots as before. The engine commits its own state (policy, cursor, claims, retained work identities, certified outputs,
-        // reservations) under one root.
+        // reservations, frozen epoch source sets) under one root.
         if let Some(panel) = &self.panel_v3 {
             state.update(b"panel_v3/v1");
             state.update(panel.root().as_byte_slice());
@@ -16837,6 +16839,14 @@ pub enum PalwDeltaEntryV2 {
     PanelV3WorkId { key: Hash64, old: bool, new: bool } = 172,
     /// A certified epoch output was retained or dropped (**delta number 173**). Keyed by epoch.
     PanelV3Beacon { key: u64, old: Option<Hash64>, new: Option<Hash64> } = 173,
+    /// **An epoch's beacon source set was frozen or dropped** (**delta number 174**, RFC-0010's range). Keyed by epoch: `None → Some`
+    /// in the first block whose DAA reaches the epoch's commitment position (the freeze, once), `Some → None` once the epoch's
+    /// contribution window closed or no live claim is sealed for it. Never `Some → Some`. Dormant with the fence.
+    PanelV3EpochSources {
+        key: u64,
+        old: Option<misaka_palw_panel::EpochSourceSetV1>,
+        new: Option<misaka_palw_panel::EpochSourceSetV1>,
+    } = 174,
     /// **G14 lane D (delta number 160, declared explicitly; 160–169 are the kernel route's): a row of the kernel route state** was
     /// written, rewritten or dropped — `table` names the table (the ledger's own `1..=9`, the consensus tables `32..=34`, see
     /// [`crate::palw_kernel_route_v1`]), and the key and rows ride as their Borsh bytes. One entry for every table, so a table added
@@ -41553,6 +41563,9 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::PanelV3Claim { key, old, new } => palw_panel_v3_fold_v1::apply_claim_entry_v1(state, key, old, new, revert)?,
         PalwDeltaEntryV2::PanelV3WorkId { key, old, new } => palw_panel_v3_fold_v1::apply_work_id_entry_v1(state, key, *old, *new, revert)?,
         PalwDeltaEntryV2::PanelV3Beacon { key, old, new } => palw_panel_v3_fold_v1::apply_beacon_entry_v1(state, *key, old, new, revert)?,
+        PalwDeltaEntryV2::PanelV3EpochSources { key, old, new } => {
+            palw_panel_v3_fold_v1::apply_epoch_sources_entry_v1(state, *key, old, new, revert)?
+        }
         PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } => apply_kernel_route_row_v1(state, *table, key, old, new, revert)?,
         // Lane BUDGET: the bond budget's rows and header, verify-then-install (`palw_bond_budget_fold_v1`).
         PalwDeltaEntryV2::BondBudgetRow { table, key, old, new } => {
@@ -60779,6 +60792,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::PanelV3Claim { .. } => "panel_v3_claim",
                     PalwDeltaEntryV2::PanelV3WorkId { .. } => "panel_v3_work_id",
                     PalwDeltaEntryV2::PanelV3Beacon { .. } => "panel_v3_beacon",
+                    PalwDeltaEntryV2::PanelV3EpochSources { .. } => "panel_v3_epoch_sources",
                     PalwDeltaEntryV2::KernelRouteRow { .. } => "kernel_route_row",
                     PalwDeltaEntryV2::KernelRouteHeader { .. } => "kernel_route_header",
                     // Lane LG14-A: its round trip is the dispute suite's.
@@ -61198,6 +61212,7 @@ pub(crate) mod tests {
             (171, PalwDeltaEntryV2::PanelV3Claim { key, old: None, new: None }),
             (172, PalwDeltaEntryV2::PanelV3WorkId { key, old: false, new: true }),
             (173, PalwDeltaEntryV2::PanelV3Beacon { key: 1, old: None, new: None }),
+            (174, PalwDeltaEntryV2::PanelV3EpochSources { key: 1, old: None, new: None }),
             // G14 lane D (the kernel route, 160–169), declared explicitly.
             (160, PalwDeltaEntryV2::KernelRouteRow { table: 1, key: Vec::new(), old: None, new: None }),
             (161, PalwDeltaEntryV2::KernelRouteHeader { old: None, new: None }),
