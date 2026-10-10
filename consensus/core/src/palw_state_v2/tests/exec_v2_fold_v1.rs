@@ -1390,6 +1390,80 @@ fn exec_v2_origin_large_parent_run_with_wrong_class_never_enters_either_header_d
 }
 
 #[test]
+#[ignore = "explicit per-process resource measurement, not a latency/RSS approval threshold"]
+fn exec_v2_origin_resource_probe() {
+    use std::hint::black_box;
+    use std::time::Instant;
+    let mode = std::env::var("MISAKA_EXEC_ORIGIN_RESOURCE_CASE").unwrap_or_else(|_| "matching-fake".into());
+    assert!(["baseline", "wrong-class", "matching-fake", "pinned-identity", "eight-refusals", "one-parent"].contains(&mode.as_str()));
+    let (p, mut s, id, witness) = legacy_origin_world();
+    let mut header: crate::header::Header = borsh::from_slice(&witness.header).unwrap();
+    let cap = PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1;
+    let count = if mode == "one-parent" { 1 } else { (cap - witness.header.len() - 5) / kaspa_hashes::HASH64_SIZE };
+    header.parents_by_level =
+        crate::header::CompressedParents::try_from(vec![(255, (0..count).map(|i| h64(i as u64)).collect())]).unwrap();
+    let envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).unwrap();
+    // Arithmetic authentication control only: this large direct-parent set is not native admission evidence.
+    // Use the ordinary writers to pin the fixture, independently of the origin verifier's optimized writers.
+    let claim = s.claims.get_mut(&id).unwrap();
+    claim.accepted_block = crate::hashing::header::hash(&header);
+    claim.job_identity = crate::palw_attempt_v2::execution_anchor_v3(
+        envelope.attempt.network_domain,
+        crate::hashing::header::pre_pow_hash_64(&header),
+        claim.class_id,
+        &claim.bond.0,
+        header.nonce,
+    );
+    s.assert_internal_consistency(&p).unwrap();
+    if mode == "wrong-class" {
+        let mut wrong = envelope;
+        wrong.attempt.class_id = h64(0xBAD);
+        header.palw_commitment = wrong.encode_wire();
+    } else if mode == "matching-fake" || mode == "eight-refusals" {
+        header.nonce += 1; // Public attempt id/class/bond still match; full identity must reject the substitution.
+    }
+    let encoded = borsh::to_vec(&header).unwrap();
+    assert!(encoded.len() <= cap);
+    let issued = header.daa_score;
+    drop(header); // Measurement retains the state and carriage bytes, not a producer's decoded copy.
+    let witness = PalwExecOriginWitnessV1 { claim: id, header: encoded };
+    let repetitions = if mode == "eight-refusals" { PALW_OBJECT_CHUNK_MAX_GROUPS } else { 1 };
+    let expected_ok = mode == "pinned-identity" || mode == "one-parent";
+    let verify = || {
+        let result = black_box(s.exec_v2_origin_witness_admissible_v1(black_box(&p), 110, black_box(&witness)));
+        assert_eq!(result.is_ok(), expected_ok);
+        match result {
+            Ok(origin) => assert_eq!(origin.issued_daa, issued),
+            Err(error) => assert_eq!(
+                error.to_string(),
+                PalwStateV2Error::ExecV2Refused(PalwWorkRootRefusalV2::AuthorizationOrigin.to_string()).to_string()
+            ),
+        }
+    };
+    let mut samples = Vec::new();
+    if mode != "baseline" {
+        verify();
+        for _ in 0..6 {
+            let started = Instant::now();
+            for _ in 0..repetitions {
+                verify();
+            }
+            samples.push(started.elapsed());
+        }
+        samples.sort();
+    }
+    assert_eq!(s.exec_v2_origin_count_v1(), 0, "reader is read-only even for a successful provenance control");
+    eprintln!(
+        "[EXEC origin resource] case={mode} parents={count} levels=255 encoded_bytes={} parent_bytes_per_digest={} repetitions={repetitions} samples={} median_batch={:?} median_per_reader={:?}",
+        witness.header.len(),
+        count * 255 * kaspa_hashes::HASH64_SIZE,
+        samples.len(),
+        samples.get(3),
+        samples.get(3).map(|duration| *duration / repetitions as u32)
+    );
+}
+
+#[test]
 fn exec_v2_origin_capture_cannot_cap_or_reprice_native_weight_or_income() {
     let (p, state, _) = world(Some(0));
     let env = attempt(PWU, 2);

@@ -826,6 +826,29 @@ never trusted. All refusals retain `AuthorizationOrigin`, and the accepted predi
 An adversary can copy matching public envelope fields and still reach the identity digest, so
 this ordering does not establish the worst-case CPU/fee bound or transport availability.
 
+Resource accounting must cover all invocations, not just the origin reader once. In the current
+node, `palw_v2_validate_objects` authenticates tag 131 and the subsequent H1/rehearsal core fold
+authenticates it again before writing its row. Thus a successful H1/rehearsal can perform four
+expanded header digests, plus state cloning/journaling; actual block folding and repeated pool,
+template, reorg and chunk-completion calls need their own inventory. The standalone origin-reader
+resource probe does not measure that composite path. Eight active chunk groups are a concurrency
+bound, not by themselves a bound on all validations/completions in a block or on unaccepted traffic.
+An inclusion fee does not pay for a refused proof. Approval therefore requires bounded admission
+work and repeat-call accounting at each actual consumer, or authenticated reuse of the exact
+already-checked state/proof/point without weakening validation. Historical-header coverage and
+permissionless migration must remain intact; a smaller arbitrary header cap is not a substitute.
+
+For a carried header of `B <= 1,599,931` bytes, each parent hash consumes 64 encoded bytes and
+each compressed run expands at most 255 times. Thus parent input is at most `255 B` per digest
+(`407,982,405` bytes at this cap), `510 B` per successful reader and `1,020 B` per successful
+current H1/rehearsal's two readers. These are conservative cryptographic input bounds, not allocated
+vectors, elapsed-time bounds, per-block bounds or bounds for uncapped fresh native capture. Header
+footer bytes, level length prefixes, decoding, state operations and repeated consumers add work.
+The release origin-reader probe measures the actual public admission function on structural
+fixtures. Its large pinned control is not native-admitted; its eight-refusal sequence is not
+chunk/P2P or block admission evidence. A median and whole-process RSS observation cannot establish
+maximum latency, incremental memory, participation probability, collectible fees or activation.
+
 The node regression re-folds an actually admitted signed REAL header with EXEC dormant, proving
 the native row is unchanged and has no clock. It then uses a legacy-shaped authenticated snapshot
 with the same native data and prefix, deletes the actual source header from the node store, and

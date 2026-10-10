@@ -711,3 +711,82 @@ The final distinct regression total is **481 passed, 0 failed, 1 ignored** (473 
 rustfmt check of only the two new fold tests passed; existing fold-test sections were not reformatted.
 No public activation, push or deployment was performed. Full RFC6/7/8/12 completion remains unproven
 for the original coverage, resource, economic, soundness and multi-process conditions.
+
+### EXEC origin resources: actual reader, canonical release (2026-10-11)
+
+An ignored `exec_v2_origin_resource_probe` now calls the public
+`PalwChainStateV2::exec_v2_origin_witness_admissible_v1` on separate process fixtures.
+It covers setup-only baseline, wrong class (cheap refusal), matching public attempt fields with
+substituted nonce (identity refusal), a synthetically pinned large-header success control, eight
+sequential identity refusals, and a one-parent success control. Each measured case warms up once
+and takes six samples; values below are the **upper median**, sorted sample index 3. For eight
+refusals, per-reader time is that batch duration divided by eight, not a distribution of individual
+request latencies. Semantic assertions check the exact expected refusal/source clock and that the
+read-only method stores no origin. There is no timing/RSS pass threshold.
+
+Both profiles ran all six cases successfully. Large inputs have 24,977 parents repeated over 255
+levels, Borsh size 1,599,918 bytes, and **407,624,640 parent bytes per digest**. The direct-parent
+count exceeds native's u8 bound: the success control uses an arithmetic row pinned by the ordinary
+writers, not an actually native-admitted signed header. The fake copies its public attempt id,
+class and bond, while nonce substitution must fail at identity. Eight calls are an artificial
+sequence, not evidence that eight full proofs are admissible in a block or available through chunks.
+
+| Case | Dev opt-level 2 per reader (ms) | Release per reader (ms) | Release batch (ms) | Release maximum process RSS (MiB) |
+| --- | ---: | ---: | ---: | ---: |
+| Setup-only baseline | — | — | — | 15.266 |
+| Wrong class | 0.128458 | 0.104875 | 0.104875 | 15.422 |
+| Matching fake | 266.786792 | 261.117541 | 261.117541 | 20.062 |
+| Pinned large identity | 531.719416 | 522.286958 | 522.286958 | 20.016 |
+| Eight refusals | 266.439744 | 261.079411 | 2,088.635292 | 20.188 |
+| One parent × 255 levels | 0.032750 | 0.030542 | 0.030542 | 12.844 |
+
+RSS is the child process's maximum, including setup, test harness, loaded code and retained bytes.
+It is not incremental verifier RSS, a heap measurement, or an all-node memory bound; baseline
+subtraction is not a guaranteed allocation bound. Darwin `getrusage(2)` specifies bytes for
+`ru_maxrss`; the runner converts GNU time's Linux kilobytes to bytes separately. No Linux run was
+performed. Samples run sequentially on a shared macOS aarch64 host, Rust 1.93.0; no tail-latency,
+confidence-bound, node concurrency, 100k-claim state or availability approval follows from medians.
+The dev profile has the existing core/hashes/blake2b opt-level 2 overrides, debug 0, incremental 0.
+
+The fresh EVM-enabled release build used the workspace's canonical profile: opt-level 3,
+thin LTO, strip true, overflow checks true, debug assertions false, jobs 2 and incremental 0.
+It completed in **6m 49s**, with no profile weakening or release-LTO override.
+`cargo test --locked --release -p kaspa-consensus-core --features evm --lib exec_v2_origin_resource_probe --no-run --message-format=json-render-diagnostics`
+used the isolated `CARGO_TARGET_DIR=/tmp/misaka-rfc8-origin-release-7tzx12r5`.
+The runner checks that Cargo's JSON artifact matches the executable, opt-level 3 and its assertion /
+overflow policy. It records the binary and build-log SHA-256; labels alone are not build evidence.
+
+Reproduce with the actual executable from the Cargo artifact:
+`python3 scripts/rfc8-origin-resource-probe.py --binary <executable> --profile canonical-release --build-log <cargo-json-log> --output-dir <new-directory>`.
+The script invokes `/usr/bin/time -l` on macOS or `-v` on Linux, preserves each raw case log,
+and checks exactly one successful explicit test plus metrics. It never overwrites an existing
+output directory or interprets observations as an approved gate.
+Build log: `/tmp/rfc8-origin-resource-release-build.log`; final raw cases:
+`/tmp/rfc8-origin-resource-dev-cases` and `/tmp/rfc8-origin-resource-release-cases`.
+The committed machine-readable observations are
+[evidence/rfc-0008-origin-resource-2026-10-11.json](evidence/rfc-0008-origin-resource-2026-10-11.json),
+including the source/runner hashes and all 12 final case logs parsed against the final runner.
+The earlier dev smoke run is not added to those final case counts.
+
+The actual caller inventory revealed an additional scope gap: `palw_v2_validate_objects` checks
+tag 131, while H1/rehearsal then uses the core single-object fold, which checks it again before
+writing. A successful H1 therefore can hash four parent preimages, with clone/journal overhead
+outside this reader probe; actual block fold and pool/template/reorg repetition remain to measure.
+The spec now makes those consumers and unaccepted traffic explicit resource/fee approval conditions.
+An inclusion fee cannot fund a refused proof, and eight chunk slots alone do not bound all calls.
+No authenticated reuse, admission-cost policy or smaller historical-header cap was introduced here.
+
+The final normal core regression on the measured dev executable passed **473 tests, 0 failed,
+2 ignored** in 47.93 seconds. The ignored cases are the prior hash-writer timing test and this
+explicit resource probe. It uses the same broad filters recorded above, without `--ignored`.
+Log: `/tmp/rfc8-origin-resource-core-regression.log`. The dev smoke probe passed once in 2.52 seconds
+(5m 13s build); both final six-case runner processes exited successfully. Production logic was
+unchanged; the previous node/fence/daemon verification remains attached to production base
+`89a2555ce`. Full RFC coverage, composite CPU/memory/fee bounds, soundness, economic conditions,
+real-node workload, archival migration and chunk/P2P availability remain unapproved.
+
+Final script verification re-parsed all 12 actual case logs, checked the committed source/runner
+hashes, successfully ran a release matching-fake smoke case, and rejected a dev executable labeled
+as release before creating output files. The additional smoke is not added to the six-case table.
+`git diff --check`, Python syntax parsing, and a scoped rustfmt check on only the new ignored Rust
+test passed. No public activation, push or deployment was performed.
