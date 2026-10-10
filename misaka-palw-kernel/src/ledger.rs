@@ -2589,7 +2589,7 @@ impl KernelLedgerV1 {
                     // stays held, and a valid proof filed by `daa + liability_daa` still convicts it — keeping one proof out of the
                     // chain for a demand's deadline must not turn a provable fraud into a cheap default. If no valid proof arrives
                     // the outcome stays the default (availability, never fraud) and the reservation is released at the horizon.
-                    row.liability_until = Some(daa.saturating_add(self.policy.liability_daa));
+                    row.liability_until = Some(row.liability_until.unwrap_or(0).max(daa.saturating_add(self.policy.liability_daa)));
                 }
                 if let Some(b) = self.bonds.get_mut(&row.producer) {
                     b.reserved = b.reserved.saturating_sub(taken);
@@ -2629,7 +2629,7 @@ impl KernelLedgerV1 {
             match (&before, &after) {
                 (b, ClaimStateV1::Final { .. }) if !matches!(b, ClaimStateV1::Final { .. }) => {
                     let row = self.claims.get_mut(&id).expect("listed");
-                    row.liability_until = Some(daa + self.policy.liability_daa);
+                    row.liability_until = Some(row.liability_until.unwrap_or(0).max(daa.saturating_add(self.policy.liability_daa)));
                     // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. ADR-0176 hook
                     // (`palw_bond_budget_v1`, not built): this payout also re-checks and consumes the producer bond's reservation.
                     let (job, convicted) = (row.job_id, row.convicted);

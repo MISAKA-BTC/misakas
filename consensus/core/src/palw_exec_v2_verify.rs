@@ -334,6 +334,14 @@ pub fn palw_exec_v2_slice_statement_v1(
     if row.rewarded {
         return Err("the kernel claim has already been paid".into());
     }
+    if row.reserved == 0
+        || row.convicted
+        || matches!(row.life.state, ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. })
+        || (matches!(row.life.state, ClaimStateV1::Final { .. })
+            && row.liability_until.is_none_or(|until| route.header.scalars.daa > until))
+    {
+        return Err("the kernel claim no longer has an open collectible liability".into());
+    }
     let ClaimBodyV1::Program { claim, .. } = &row.body else {
         return Err("the claim is a pipeline claim: pipeline-class slices await a segment state".into());
     };

@@ -1220,6 +1220,10 @@ mod amendment_1 {
                 generated: PREFIX_RUN.to_vec(),
                 evidence_root: digest(h64(0xDF)),
             };
+            let liability_until = match &state {
+                ClaimStateV1::Final { final_daa } => Some(final_daa + s.kernel_route.as_ref().unwrap().header.policy.liability_daa),
+                _ => None,
+            };
             let row = ClaimRowV1 {
                 producer: kernel_bond,
                 class_binding_id: digest(h64(KERNEL_CLASS)),
@@ -1234,7 +1238,7 @@ mod amendment_1 {
                     final_hold_until: 0,
                 },
                 reserved: 1_000,
-                liability_until: None,
+                liability_until,
                 convicted: false,
                 rewarded,
             };
@@ -1527,6 +1531,15 @@ mod amendment_1 {
             borsh::to_vec(&job).unwrap(),
         );
         refuses(bad, "execution scope");
+        let mut bad = s.clone();
+        let kernel = bad.kernel_route.as_mut().unwrap();
+        kernel.ledger_cache.clear();
+        let prefix = s.exec_v2_root_v1(&claim).unwrap().prefix_claim;
+        let key = (TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&prefix));
+        let mut row: ClaimRowV1 = borsh::from_slice(&kernel.rows[&key]).unwrap();
+        row.liability_until = Some(s.exec_v2_root_v1(&claim).unwrap().expiry_daa + kernel.header.policy.liability_daa);
+        kernel.rows.insert(key, borsh::to_vec(&row).unwrap());
+        refuses(bad, "root window");
     }
 
     fn kernel_block(
@@ -1536,6 +1549,29 @@ mod amendment_1 {
         daa: u64,
         rows: Vec<(u8, Vec<u8>, Option<Vec<u8>>)>,
     ) -> PalwChainStateV2 {
+        // A kernel court/lifecycle update owns its verdict, not the consumer's already-frozen liability horizon.
+        let rows = rows
+            .into_iter()
+            .map(|(table, key, bytes)| {
+                let bytes = if table == TABLE_CLAIMS_V1 {
+                    bytes.map(|bytes| {
+                        let mut row: ClaimRowV1 = borsh::from_slice(&bytes).unwrap();
+                        let old: Option<ClaimRowV1> = s
+                            .kernel_route
+                            .as_ref()
+                            .unwrap()
+                            .rows
+                            .get(&(table, key.clone()))
+                            .and_then(|bytes| borsh::from_slice(bytes).ok());
+                        row.liability_until = row.liability_until.max(old.and_then(|row| row.liability_until));
+                        borsh::to_vec(&row).unwrap()
+                    })
+                } else {
+                    bytes
+                };
+                (table, key, bytes)
+            })
+            .collect();
         let extras = PalwTransitionExtrasV1 { exec_v2_test_kernel_rows: rows, ..xx() };
         step_with(s, p, word, daa, &[], &extras).expect("the block folds").0
     }
@@ -1780,6 +1816,7 @@ mod amendment_1 {
     fn a_slice_whose_claim_is_final_at_admission_is_verified_at_once_and_the_refusal_record_names_every_carrier() {
         let (p, mut s, claim, mut slices) = session(1_000);
         slices[0].row.life.state = ClaimStateV1::Final { final_daa: 115 };
+        slices[0].row.liability_until = Some(115 + s.kernel_route.as_ref().unwrap().header.policy.liability_daa);
         slices[0].install(&mut s);
         // Slice 0 (Final already) and a copy of slice 0 by the wrong executor in the same block.
         let mut wrong = slices[0].covered.clone();
@@ -1827,14 +1864,10 @@ mod amendment_1 {
         (producer, paid_to(bond_key(20)), paid_to(bond_key(21)), twin_leg)
     }
 
-    /// **The X8R round-2 finding: a leg's cap is fixed when its slice verifies.** Read at settlement (the first amendment), the cap of a
-    /// slice whose kernel claim had passed its liability horizon was zero — the route releases the reservation there — so a root bond
-    /// that held back the LAST slice until the earlier executors' horizons passed kept their whole legs. Here slices 0 and 1 verify
-    /// holding a billion each, the route then releases both reservations (their horizon passed: the rows stay `Final`, reserving
-    /// nothing), the last slice verifies, and the root settles: every executor is paid its full work share.
+    /// A consumer cannot trust a stale frozen cap when its dependency reservation disappears early.
     #[test]
-    fn a_leg_cap_is_fixed_when_the_slice_verifies_so_a_held_back_last_slice_takes_no_earlier_leg() {
-        let (p, s, claim, slices) = session(1_000_000_000);
+    fn a_reservation_lost_before_the_root_horizon_defaults_the_root_without_a_payout() {
+        let (p, s, claim, slices) = session(1_000_000);
         let s = license(&p, &s, claim, 45, 111);
         let s = carry_all(&p, &s, &slices);
         let s = kernel_block(
@@ -1844,40 +1877,22 @@ mod amendment_1 {
             130,
             slices.iter().take(2).map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect(),
         );
-        // The horizon (140) passes: both reservations are released while the last slice is held back.
-        let released = slices
-            .iter()
-            .take(2)
-            .map(|k| {
-                k.write_with(|row| {
-                    row.life.state = ClaimStateV1::Final { final_daa: 130 };
-                    row.liability_until = Some(140);
-                    row.reserved = 0;
-                })
-            })
-            .collect();
-        let s = kernel_block(&p, &s, 61, 141, released);
-        for index in 0..2 {
-            assert!(
-                matches!(
-                    s.exec_v2_slice_v1(&claim, index).unwrap().stage,
-                    PalwWorkSliceStageV2::Verified { verified_daa: 130, leg_cap: 1_000_000_000, .. }
-                ),
-                "a release past the horizon is no default and moves no cap: {:?}",
-                s.exec_v2_slice_v1(&claim, index).unwrap().stage
-            );
-        }
-        assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Complete));
-        let s = kernel_block(&p, &s, 62, 142, vec![slices[2].write(ClaimStateV1::Final { final_daa: 142 }, false)]);
-        let s = run_to_terminal(&p, s, claim, 70, 143);
-        assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Settled { .. }));
-        let (producer, leg_a, leg_b, twin_leg) = paid_legs(&s, claim);
-        let root = s.exec_v2_root_v1(&claim).unwrap();
-        let work = |index| s.exec_v2_slice_v1(&claim, index).unwrap().range.work().unwrap();
-        let share = |work: u64| (twin_leg as u128 * work as u128 / root.total_work as u128) as u64;
-        assert_eq!(leg_a, share(work(0) + work(2)), "bond 20: slices 0 and 2, in full");
-        assert_eq!(leg_b, share(work(1)), "bond 21: slice 1, in full — its released reservation kept nothing from it");
-        assert_eq!(producer + leg_a + leg_b, twin_leg, "nothing minted, nothing lost");
+        let s = kernel_block(
+            &p,
+            &s,
+            61,
+            141,
+            vec![slices[0].write_with(|row| {
+                row.life.state = ClaimStateV1::Final { final_daa: 130 };
+                row.liability_until = Some(140);
+                row.reserved = 0;
+            })],
+        );
+        assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }));
+        assert!(matches!(s.exec_v2_slice_v1(&claim, 0).unwrap().stage, PalwWorkSliceStageV2::Defaulted { .. }));
+        assert!(s.vesting_row(&claim).is_none());
+        assert_eq!(s.reserved_exposure(&bond_key(20)), 0);
+        assert_eq!(s.reserved_exposure(&bond_key(21)), 0);
     }
 
     /// Computation Final is unrewarded: the entire held reservation caps the executor's gross share.

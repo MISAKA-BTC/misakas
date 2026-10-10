@@ -383,12 +383,21 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
     kernel.ledger_cache.set(cached);
 }
 
-/// **Apply a ledger's settlement instructions to the real bonds** (module doc).
-///
-/// `strict` (every object arm): a slash the real bond cannot pay in full refuses the object (it is dropped, the block stands). The closing
-/// tick is not strict: it runs after the rehearsal, so an error there would fail the whole block — and with every held bond re-synced
-/// just before it, the ledger's clamped instructions are always payable; if that ever failed, taking what the bond holds is the safe side.
-/// These consumer hooks retain the current block budget; they do not begin a new kernel block.
+/// Latest permitted root Final plus native evidence window and the complete kernel court path.
+/// Checked additions refuse an impossible horizon before any consensus write.
+pub(super) fn exec_liability_floor_v1(
+    expiry: u64,
+    native_window: u64,
+    policy: &misaka_palw_kernel::ledger::LedgerPolicyV1,
+) -> Result<u64, PalwStateV2Error> {
+    expiry
+        .checked_add(native_window.max(policy.liability_daa))
+        .and_then(|until| until.checked_add(policy.court_deadline_daa))
+        .and_then(|until| until.checked_add(policy.proof_grace_daa))
+        .ok_or_else(|| refused("EXEC liability horizon overflows"))
+}
+
+/// Consumer hooks retain the current block budget; they do not begin a new kernel block.
 pub(super) fn bind_exec_reward_v1(
     builder: &mut TransitionBuilder<'_>,
     root: Hash64,
@@ -400,7 +409,8 @@ pub(super) fn bind_exec_reward_v1(
     let before = route.rows.clone();
     let mut ledger = route.ledger().map_err(refused)?;
     ledger.daa = daa;
-    ledger.bind_exec_reward(root.as_bytes(), claim.as_bytes(), expiry).map_err(refused)?;
+    let until = exec_liability_floor_v1(expiry, builder.params.window_court(), &ledger.policy)?;
+    ledger.bind_exec_reward_until(root.as_bytes(), claim.as_bytes(), expiry, until).map_err(refused)?;
     flush(builder, &ledger, &before);
     Ok(())
 }
@@ -453,6 +463,11 @@ pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: 
     Ok(())
 }
 
+/// **Apply a ledger's settlement instructions to the real bonds** (module doc).
+///
+/// `strict` (every object arm): a slash the real bond cannot pay in full refuses the object (it is dropped, the block stands). The closing
+/// tick is not strict: it runs after the rehearsal, so an error there would fail the whole block — and with every held bond re-synced
+/// just before it, the ledger's clamped instructions are always payable; if that ever failed, taking what the bond holds is the safe side.
 pub(super) fn apply_settlements(
     builder: &mut TransitionBuilder<'_>,
     events: &[LedgerEventV1],

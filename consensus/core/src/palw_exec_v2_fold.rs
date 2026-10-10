@@ -257,6 +257,12 @@ impl PalwChainStateV2 {
                 if row.rewarded {
                     return Err(R::VerificationAlreadyPaid);
                 }
+                if row.reserved == 0
+                    || (matches!(row.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. })
+                        && row.liability_until.is_none_or(|until| daa_score > until))
+                {
+                    return Err(R::VerificationClaimFailed);
+                }
                 if let Some(bytes) = kernel
                     .rows
                     .get(&(misaka_palw_kernel::rows::TABLE_EXEC_REWARD_HOLDS_V1, palw_exec_v2_kernel_key_v1(&slice.evidence_root)))
@@ -337,6 +343,21 @@ impl PalwChainStateV2 {
                             return Err(bad("a kernel reward is bound more than once".into()));
                         }
                     }
+                }
+            }
+            for (claim, hold) in &expected {
+                let row: misaka_palw_kernel::ledger::ClaimRowV1 = kernel
+                    .rows
+                    .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, borsh::to_vec(claim).expect("a digest serializes")))
+                    .and_then(|bytes| borsh::from_slice(bytes).ok())
+                    .ok_or_else(|| bad("a held dependency is missing".into()))?;
+                let floor = super::palw_kernel_route_fold_v1::exec_liability_floor_v1(
+                    hold.expires_daa,
+                    params.window_court(),
+                    &kernel.header.policy,
+                )?;
+                if row.liability_until.is_none_or(|until| until < floor) {
+                    return Err(bad("a dependency's liability cannot cover its root window".into()));
                 }
             }
             let mut actual = BTreeMap::new();
@@ -679,6 +700,12 @@ pub(super) fn apply_root_declared_v2(
                 .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::job::KernelJobV1>(bytes).ok());
             if row.rewarded {
                 return Err(no(R::PrefixAlreadyPaid));
+            }
+            if row.reserved == 0
+                || (matches!(row.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. })
+                    && row.liability_until.is_none_or(|until| daa > until))
+            {
+                return Err(no(R::PrefixClaimFailed));
             }
             let inputs = PalwExecV2PrefixInputsV1 {
                 root_claim_id: claim_id,

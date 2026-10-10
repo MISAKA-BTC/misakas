@@ -711,8 +711,74 @@ without reward or collateral debit. A previously verified piece receives no part
 
 ### 13.3 Remaining acceptance boundaries
 
-This correction does not prove post-root-Final recovery. Kernel liability can expire before a delayed root Final; a Settled root
-is still outside dependency-verdict propagation, and slice/native/kernel payouts do not yet all share the root's vesting horizon.
+This correction does not prove post-root-Final recovery. Section 14 prevents a bound kernel reservation's ordinary expiry before
+the root's base liability/court path, but a Settled root is still outside dependency-verdict propagation, and slice/native/kernel
+payouts do not yet all share the root's vesting horizon.
 Those WINDOW requirements remain activation blockers. Standalone kernel budget consumers, fee-only Round B policy,
 market-fee R policy, whole-model soundness, economics, pruned authorization history and worst-case resources retain their
 separate requirements in the full RFC6/7/8/12 audit. No preset or public activation validation is armed by this change.
+
+## 14. WINDOW correction — a consumer cannot inherit expired collateral
+
+### 14.1 Consumer floor and inclusive release
+
+Before writing an EXEC reward hold or executor exposure, freeze the following floor in the bound prefix/slice claim's existing
+`liability_until` row:
+
+```
+H_exec = root.expiry_daa
+       + max(native window_court, kernel liability_daa)
+       + kernel court_deadline_daa
+       + kernel proof_grace_daa
+liability_until = max(existing liability_until, H_exec)
+```
+
+`root.expiry_daa` is the latest possible REAL root Final, bounded by the existing root admission limits. The native window
+protects the base post-root-Final evidence path. The deadline and grace allow a kernel material demand begun at the end of that
+window to finish without making its public response unprosecutable. Every host addition is checked; an overflowing floor refuses
+before a write. This is a retention floor on actual collateral, not a new reservation, a payout authorization or a soundness claim.
+
+The trusted kernel hook refuses a paid, convicted, unavailable, timed-out or zero-reservation dependency. A computation-Final
+claim may attach only while its existing liability is still open; an expired-but-unswept positive reservation is also refused.
+Declaration, slice admission and the producer's statement helper make the same liability eligibility checks. A past expiry cannot
+be reopened by attaching already released work to a later consumer.
+
+Computation Final and a pre-Final availability default set `liability_until` to the maximum of its existing value and their normal
+kernel horizon. Neither overwrites the consumer floor. A root fee settlement or cancellation removes its reward hold without
+shortening this claim horizon. A healthy Final/defaulted claim's ordinary collateral release requires `daa > liability_until`;
+the inclusive last day remains available for a proof. Conviction or an availability penalty can consume collateral earlier, and a
+claim that times out without ever passing remains the existing terminal failure. Those outcomes cannot earn an EXEC reward.
+
+### 14.2 Restoration and defensive failure
+
+No row layout, wire field or new collection is added: table 27 still identifies the root and its expiry, and the existing claim row
+roots the extended liability. Kernel restoration requires each reward hold's claim to retain a horizon at least as long as its
+hold. EXEC restoration additionally rederives `H_exec` for every open/complete root and refuses a shorter dependency horizon.
+The network's native and kernel time parameters must remain stable while such roots are live; any later parameter transition
+must specify how outstanding commitments retain their originally admitted policy before that transition can be armed.
+
+A verified piece whose reservation disappears while its liability remains open defaults the root; its frozen leg cap cannot make
+lost collateral collectible. No partial native or job-fee payout follows. Release at the protected horizon remains finite.
+
+### 14.3 Evidence scope and remaining WINDOW work
+
+Real kernel lifecycle tests cover computation Final, post-old-horizon public conviction, a late material demand/default,
+root fee settlement, row restoration, inclusive last-day retention and following-day release. The public proof in the kernel
+test is constructed from the committed statement before the trusted consumer binding and filed later; it does not claim a fresh
+post-binding outsider replay of the complete host. The actual-node suite verifies consumer binding, extended kernel Final
+retention, existing outsider verdict propagation before root Final and replay. A fold regression refuses shortened restored
+liability and an early lost reservation. The actual node still uses the existing REAL Panel admission seam and reaches ready,
+not native root Final.
+
+This floor alone does not close WINDOW. Required follow-ups remain:
+
+- Propagate settled-root prefix/slice conviction and post-Final availability default into native Final evidence and exact safe
+  weight reversal, and burn every still-unreleased native/kernel/slice reward leg consistently.
+- Hold every payout through the same collectible consumer window; current root-Final job fees and slice legs can still be paid
+  immediately. Retain dependency records through retirement, pruned join, restart and reorg.
+- Couple any native DA/court extension beyond the base window to dependency collateral, vesting and public material/provider
+  TTL. Extending `liability_until` does not extend a provider's signed service commitment.
+- Specify the worker's authorization for the consumer's longer retention and its capital cost before activation. A root's
+  admission limit is a bound, not proof that the existing signed job contract has agreed to that obligation.
+
+These requirements retain their separate acceptance evidence in the full RFC6/7/8/12 audit. Public fences remain dormant.

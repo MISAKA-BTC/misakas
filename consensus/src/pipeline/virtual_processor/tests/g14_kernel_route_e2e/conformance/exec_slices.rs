@@ -704,6 +704,12 @@ async fn x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready
         assert!(!ledger.claims[&k.claim.id].rewarded, "EXEC producer has no early reward");
         assert!(ledger.job_escrows.contains_key(&k.job.id()), "poster escrow remains reserved");
         assert_eq!(ledger.exec_reward_holds[&k.claim.id].owner_root, root_claim.as_bytes());
+        let root = state.exec_v2_root_v1(&root_claim).unwrap();
+        let floor = root.expiry_daa + ledger.policy.liability_daa + ledger.policy.court_deadline_daa + ledger.policy.proof_grace_daa;
+        assert!(
+            ledger.claims[&k.claim.id].liability_until.unwrap() >= floor,
+            "the actual computation Final preserves the root's collectible liability floor"
+        );
     }
     let reward = ledger.policy.claim_reward;
     for index in 0..3u32 {

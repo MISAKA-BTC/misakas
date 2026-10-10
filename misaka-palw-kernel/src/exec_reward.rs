@@ -26,28 +26,56 @@ impl KernelLedgerV1 {
             if row.rewarded || !matches!(row.body, ClaimBodyV1::Program { .. }) {
                 return Err("an EXEC reward hold names paid or unsupported work".into());
             }
+            if row.liability_until.is_none_or(|until| until < self.exec_reward_holds[claim].expires_daa) {
+                return Err("an EXEC reward hold outlives its claim liability".into());
+            }
         }
         Ok(())
     }
 
     /// No route object can call this: only the consumer that admitted the root and its execution binding.
     pub fn bind_exec_reward(&mut self, root: Digest, claim: Digest, expires_daa: u64) -> Result<(), String> {
+        self.bind_exec_reward_until(root, claim, expires_daa, expires_daa)
+    }
+
+    /// The consumer freezes the latest root Final plus its liability/court path, before any escrow or exposure write.
+    /// This extends an existing reservation; it never recreates collateral a previous horizon released.
+    pub fn bind_exec_reward_until(
+        &mut self,
+        root: Digest,
+        claim: Digest,
+        expires_daa: u64,
+        liability_floor: u64,
+    ) -> Result<(), String> {
         let row = self.claims.get(&claim).ok_or("the EXEC reward claim is missing")?;
-        if row.rewarded || row.convicted || matches!(row.life.state, ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. })
+        if row.rewarded
+            || row.convicted
+            || row.reserved == 0
+            || matches!(
+                row.life.state,
+                ClaimStateV1::Convicted { .. } | ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. }
+            )
         {
             return Err("paid or failed work cannot attach to EXEC".into());
         }
-        if !matches!(row.body, ClaimBodyV1::Program { .. }) || expires_daa <= self.daa {
+        if matches!(row.life.state, ClaimStateV1::Final { .. }) && row.liability_until.is_none_or(|until| self.daa > until) {
+            return Err("expired work cannot reopen its liability for EXEC".into());
+        }
+        if !matches!(row.body, ClaimBodyV1::Program { .. }) || expires_daa <= self.daa || liability_floor < expires_daa {
             return Err("unsupported or expired EXEC reward hold".into());
         }
         let hold = ExecRewardHoldV1 { owner_root: root, expires_daa };
         if let Some(old) = self.exec_reward_holds.get(&claim) {
-            return if *old == hold { Ok(()) } else { Err("the EXEC reward claim already belongs to another root".into()) };
+            if *old != hold {
+                return Err("the EXEC reward claim already belongs to another root".into());
+            }
         }
-        if self.exec_reward_holds.len() >= MAX_EXEC_REWARD_HOLDS_V1 {
+        if !self.exec_reward_holds.contains_key(&claim) && self.exec_reward_holds.len() >= MAX_EXEC_REWARD_HOLDS_V1 {
             return Err("too many EXEC reward holds".into());
         }
         self.exec_reward_holds.insert(claim, hold);
+        let row = self.claims.get_mut(&claim).expect("checked");
+        row.liability_until = Some(row.liability_until.unwrap_or(0).max(liability_floor));
         Ok(())
     }
 
@@ -72,7 +100,8 @@ impl KernelLedgerV1 {
         Ok(paid)
     }
 
-    /// Void/expiry releases the reservation without debiting collateral or paying a producer.
+    /// Void/expiry releases poster escrow without debiting collateral or paying a producer.
+    /// It never shortens the computation claim's consumer-frozen fraud liability.
     pub fn cancel_exec_reward(&mut self, root: Digest, claim: Digest, out: &mut Vec<LedgerEventV1>) -> Result<(), String> {
         let Some(hold) = self.exec_reward_holds.get(&claim) else { return Ok(()) };
         if hold.owner_root != root {
