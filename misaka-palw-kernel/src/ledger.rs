@@ -1040,7 +1040,7 @@ impl KernelLedgerV1 {
                 self.file_demand(demander, claim, *stage, *position, &mut out)?
             }
             KernelRouteObjectV1::Respond { claim, stage, position, bytes } => {
-                self.respond(claim, *stage, *position, bytes, &mut out)?
+                self.respond(&auth.signer_bond, claim, *stage, *position, bytes, &mut out)?
             }
             KernelRouteObjectV1::RequestExit { bond } => match self.bonds.get_mut(bond) {
                 Some(b) if b.exit_requested.is_none() => {
@@ -2107,10 +2107,7 @@ impl KernelLedgerV1 {
         let producer_collateral = self.claims.get(claim).and_then(|r| self.bonds.get(&r.producer)).map_or(0, |b| b.collateral);
         // What a pre-Final default already took of this claim's reservation (0 for any other claim: before Final a reservation
         // changes only by a default or a conviction, and a post-Final forfeit leaves nothing to slash).
-        let admitted = self.admitted_reservation(claim);
-        let pre_final_default = self.claims.get(claim).is_some_and(|r| matches!(r.life.state, ClaimStateV1::Unavailable { .. }));
         let row = self.claims.get_mut(claim).expect("checked");
-        let taken_by_default = if pre_final_default { admitted.saturating_sub(row.reserved) } else { 0 };
         // Never instruct more than the bond holds (another subsystem may have slashed it since the claim reserved).
         let reserved = row.reserved;
         let slashed = reserved.min(producer_collateral);
@@ -2131,14 +2128,15 @@ impl KernelLedgerV1 {
             b.reserved = b.reserved.saturating_sub(reserved);
             b.collateral = b.collateral.saturating_sub(slashed);
         }
-        // The bounty is the accuser's share of the claim's reservation as if no default had come first (C4 F-C4R3-02): a producer
-        // that defaults on its own demand before a proof lands neither dilutes the honest accuser's bounty nor recoups more than its
-        // demanders' share of the penalty. Never more than this conviction slashes.
-        // The share is ADR-0032's PALW reporter share on the node (`PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1`, 49 %); a self-accusing
-        // producer recovers at most that much of THIS slash. ADR-0176 HOOK `budget-bounty`: the bounty is a slash split, not issuance,
-        // but it counts against the claim's R reservation made at `budget-accept`.
-        let basis = slashed as u128 + taken_by_default as u128;
-        let reward = ((basis * self.policy.accuser_reward_permille as u128 / 1000) as u64).min(slashed);
+        // **One reporter pool per claim** (C4 F-C4R4-15, ADR-0032): the bounty is the accuser's share of what THIS conviction
+        // collected, rounded down. A pre-Final default before it already paid its demanders at most the same share of the penalty,
+        // rounded down too, so across the default and the conviction the reporters together receive at most `⌊share × collected⌋`
+        // of everything collected — a coalition holding every reporter role loses ≥ 51 % of it (the 49 % share on the node,
+        // `PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1`). (This replaces F-C4R3-02's "as if no default had come first" basis, which
+        // paid the penalty's share twice; the honest accuser's residual dilution is the Sybil demanders' part of the default's
+        // share — recorded for ECON.) ADR-0176 HOOK `budget-bounty`: the bounty is a slash split, not issuance, but it counts
+        // against the claim's R reservation made at `budget-accept`.
+        let reward = ((slashed as u128 * self.policy.accuser_reward_permille as u128 / 1000) as u64).min(slashed);
         self.burned += slashed - reward;
         out.push(LedgerEventV1::Convicted { claim: *claim, accuser: *accuser, slashed, accuser_reward: reward, post_final });
         settle(out, producer, slashed, SettlementKindV1::SlashFraud, Some(*claim));
@@ -2210,6 +2208,16 @@ impl KernelLedgerV1 {
         }
     }
 
+    /// **ADR-0177 D2 — the cumulative-scope hook** (C4 F-C4R4-17). Every demand passes here before it reserves anything: a demand
+    /// whose served values, together with what the claim (and other claims of the class) already made public, would rebuild a
+    /// registered weight tensor must be refused. The predicate is DA16b's central one (`da16/transport-provider-court`); until it
+    /// lands this hook admits every demand, and the kernel PoC `f_c4r4_17_…` stays an ignored FAIL. The predicate must be a pure
+    /// function of the ledger's rows (served positions, open demands, the class's program) so every node refuses the same demand.
+    fn cumulative_scope_allows_v1(&self, claim: &Digest, stage: u8, position: u32) -> Result<(), &'static str> {
+        let _ = (claim, stage, position);
+        Ok(())
+    }
+
     /// Return every demand bond of `d` (the demand is over).
     fn refund(&mut self, claim: &Digest, d: &DemandRowV1, out: &mut Vec<LedgerEventV1>) {
         for (bond, amount) in &d.demanders {
@@ -2270,6 +2278,7 @@ impl KernelLedgerV1 {
         if self.served.contains_key(&k) {
             return Err(rule("already served: it is public"));
         }
+        self.cumulative_scope_allows_v1(claim, stage, position).map_err(rule)?;
         let need = self.policy.demand_bond;
         let Some(b) = self.bonds.get(demander) else { return Err(rule("the demander is not a registered bond")) };
         if b.exit_requested.is_some() || b.free() < need {
@@ -2314,8 +2323,16 @@ impl KernelLedgerV1 {
         }
     }
 
+    /// **A response to an open demand** (C4 F-C4R4-14: the response lane). A response spends NO run of the block's shared
+    /// adjudication budget: classifying it is linear in its own bytes (bounded by the class's `max_response_bytes` and carried in
+    /// the block), so no other object can crowd an honest producer's valid answer out before its deadline, whoever orders the block.
+    /// A REJECTED response (oversized, or classified as not serving the position) costs its signer `dismissed_proof_fee` (slashed,
+    /// burned) — junk is never free — and changes nothing the producer needs: the demand stays open with its deadline, and only a
+    /// response signed by the claim's producer records the demand's last rejection class. A signer whose free collateral cannot pay
+    /// that fee is refused before anything is classified. A valid response pays nothing and closes the demand, whoever signs it.
     fn respond(
         &mut self,
+        signer: &Digest,
         claim: &Digest,
         stage: u8,
         position: u32,
@@ -2327,12 +2344,16 @@ impl KernelLedgerV1 {
         if !self.demands.contains_key(&k) {
             return Err(KernelRefusalV1::rule(NAME, "no open demand for this position"));
         }
+        let fee = self.policy.dismissed_proof_fee;
+        if self.bonds.get(signer).is_none_or(|b| b.free() < fee) {
+            return Err(KernelRefusalV1::rule(NAME, "the signer's free collateral does not cover a rejected response's fee"));
+        }
         let row = self.claims.get(claim).expect("a demand names a committed claim");
+        let by_producer = row.producer == *signer;
         let limit = self.bounds_of(&row.class_binding_id).map(|b| b.max_response_bytes).unwrap_or(0);
         let verdict = if bytes.len() as u128 > limit {
             Err("oversized")
         } else {
-            self.charge(NAME, 0)?;
             let row = self.claims.get(claim).expect("checked");
             match self.spec_classify_slice(row, stage, position, bytes) {
                 Some(slice) => slice,
@@ -2354,10 +2375,15 @@ impl KernelLedgerV1 {
                 out.push(LedgerEventV1::Served { claim: *claim, stage, position });
             }
             Err(class) => {
-                if let Some(d) = self.demands.get_mut(&k) {
+                if by_producer && let Some(d) = self.demands.get_mut(&k) {
                     d.last = Some(response_class_code(class));
                 }
+                let b = self.bonds.get_mut(signer).expect("checked");
+                b.collateral -= fee;
+                self.burned += fee;
                 out.push(LedgerEventV1::ResponseRejected { claim: *claim, stage, position, class });
+                settle(out, *signer, fee, SettlementKindV1::SlashFiling, Some(*claim));
+                settle(out, *signer, fee, SettlementKindV1::Burn, Some(*claim));
             }
         }
         Ok(())
@@ -2438,8 +2464,9 @@ impl KernelLedgerV1 {
                 }
                 _ => 1000 - self.policy.accuser_reward_permille.min(1000),
             };
-            let default_burn = (penalty as u128 * burn_permille as u128 / 1000) as u64;
-            let paid = if post_final { 0 } else { penalty - default_burn };
+            // Rounded DOWN (C4 F-C4R4-15): the demanders never take more than their share of what the default collected, so the
+            // claim's one reporter pool (the default's share plus a later conviction's bounty) stays within `⌊share × collected⌋`.
+            let paid = if post_final { 0 } else { (penalty as u128 * (1000 - burn_permille) as u128 / 1000) as u64 };
             let share = if d.demanders.is_empty() { 0 } else { paid / d.demanders.len() as u64 };
             let burn = penalty - share * d.demanders.len() as u64;
             self.burned += burn;

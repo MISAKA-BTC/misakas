@@ -886,9 +886,9 @@ fn an_optimistic_self_inflicted_default_never_erases_a_provable_fraud() {
     assert_eq!((w.consumer.paid(&SPAM1), w.l.bonds[&PRODUCER].reserved), (50, 900));
     let outsider0 = w.l.bonds[&OUTSIDER].collateral;
     let ev = w.block(32, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
-    assert_eq!(convicted(&ev), Some((900, 500, false)), "{ev:?}");
+    assert_eq!(convicted(&ev), Some((900, 450, false)), "{ev:?}");
     assert_eq!(w.l.bonds[&OUTSIDER].collateral, outsider0, "no fee for a true proof");
-    assert_eq!(w.consumer.paid(&OUTSIDER), 500);
+    assert_eq!(w.consumer.paid(&OUTSIDER), 450, "C4 F-C4R4-15: the share of what the conviction collected");
     assert_eq!(w.l.bonds[&PRODUCER].collateral, producer0 - 1000);
     assert_eq!(w.l.opv_live_counts(&PRODUCER).0, 0, "the conviction ended the reservation");
     assert!(w.l.final_receipt(&id).is_none(), "never Final");

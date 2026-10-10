@@ -169,8 +169,10 @@ struct Escape {
     outsider_fee: u64,
     /// What the conviction owes the outsider (its bounty), measured in the folding block.
     outsider_paid: u64,
-    /// The claim's whole reservation at admission (the undiluted bounty is the accuser's share of it).
+    /// The claim's whole reservation at admission.
     reservation: u64,
+    /// What the self-inflicted default collected (the default penalty).
+    penalty: u64,
     convicted: bool,
     state: ClaimStateV1,
     censored_daa: u64,
@@ -210,6 +212,7 @@ async fn escape_by_self_default(mut w: World, cover: bool) -> Escape {
         outsider_fee: outsider_before - w.net.collateral(outsider),
         outsider_paid: w.net.owed(outsider),
         reservation,
+        penalty: w.policy().default_penalty,
         convicted: ledger.claims[&lie.id].convicted,
         state: ledger.claims[&lie.id].life.state.clone(),
         censored_daa: deadline - opened,
@@ -235,10 +238,14 @@ async fn g14_c4r3_a_self_inflicted_default_must_not_erase_a_provable_fraud() {
     assert!(e.convicted, "a valid proof inside the claim's horizon convicts it (it was {:?})", e.state);
     assert_eq!(e.outsider_fee, 0, "a true fraud proof never costs its filer the dismissal fee");
     assert!(e.sybil_gain < e.producer_loss as i128, "the colluding demander recoups less than the default cost the producer");
-    assert_eq!(
-        e.outsider_paid,
-        e.reservation * u64::from(PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1) / 1000,
-        "the honest accuser's bounty (ADR-0032's 49 %) is not diluted by the self-inflicted default"
+    // C4 F-C4R4-15: one reporter pool per claim — the bounty is the share of what the conviction collected (the reservation less
+    // the default's penalty), and the default's demanders plus the bounty stay within the share of everything collected. The
+    // honest accuser's residual dilution (the Sybil demander's part of the default's share) is ECON's.
+    let s = u64::from(PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1);
+    assert_eq!(e.outsider_paid, (e.reservation - e.penalty) * s / 1000, "the bounty is the share of what the conviction collected");
+    assert!(
+        (e.sybil_gain + e.outsider_paid as i128) * 1000 <= (e.reservation as i128) * s as i128,
+        "every reporter together: at most the share of what the default and the conviction collected"
     );
 }
 
@@ -254,10 +261,14 @@ async fn g14_c4r3_opv_a_self_inflicted_default_must_not_erase_a_provable_fraud()
     assert!(e.convicted, "a valid proof inside the claim's horizon convicts it (it was {:?})", e.state);
     assert_eq!(e.outsider_fee, 0, "a true fraud proof never costs its filer the dismissal fee");
     assert!(e.sybil_gain < e.producer_loss as i128, "the colluding demander recoups less than the default cost the producer");
-    assert_eq!(
-        e.outsider_paid,
-        e.reservation * u64::from(PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1) / 1000,
-        "the honest accuser's bounty (ADR-0032's 49 %) is not diluted by the self-inflicted default"
+    // C4 F-C4R4-15: one reporter pool per claim — the bounty is the share of what the conviction collected (the reservation less
+    // the default's penalty), and the default's demanders plus the bounty stay within the share of everything collected. The
+    // honest accuser's residual dilution (the Sybil demander's part of the default's share) is ECON's.
+    let s = u64::from(PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1);
+    assert_eq!(e.outsider_paid, (e.reservation - e.penalty) * s / 1000, "the bounty is the share of what the conviction collected");
+    assert!(
+        (e.sybil_gain + e.outsider_paid as i128) * 1000 <= (e.reservation as i128) * s as i128,
+        "every reporter together: at most the share of what the default and the conviction collected"
     );
 }
 

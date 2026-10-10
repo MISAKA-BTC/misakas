@@ -807,3 +807,6 @@ async fn da16_below_the_fence_court_objects_are_dropped_and_an_older_claim_stays
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
+
+// C4 round 4b (2026-10-10): ADR-0177 non-interference against this court as it stands (DA16's re-scope pending).
+mod c4r4;
