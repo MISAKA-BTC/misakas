@@ -351,3 +351,39 @@ Remaining, stated:
   delta 200 / tail `0xE2`.
 - **RPC.** Ops 204–206 are built by `kaspa_rpc_core::convert::palw_legacy` (the service's handlers call them and nothing else); the
   real-node suite calls the same builders on a node started after the claim and carries the answers through the JSON wire form.
+
+## 12. Handover status (2026-10-10, moved to codex)
+
+Branch `g14/legacy-filer`, merged with integration head `68bde1ea6`. Status words: implemented / verified / armable. Nothing is
+armable: `validate_palw_legacy_public_filer_v1` refuses every height.
+
+**Verified** (binaries run on this head): core lib `palw_legacy_public_filer*` unit tests (bisection bound, engine roles, descent
+mapping, facts read, demand builder, fence dormant / Some-only hashing); `lg14a_legacy_dispute_fold` 7/7 (unarmed byte identity,
+hold of Final / bind / receipt, lapse + burn, reserved budget, default refunds, admission refusals, direct proof over an open court);
+`rcore_m3_da_court`, `rcore_m5_reorg` green; kaspad `palw_fraud_filer` book tests; rpc-core round trips for ops 204–206.
+Before the integration merge, `scripts/t12-repin.sh --shipping --drift-only` showed only drift identical to OPVB's log on the base
+(schedule ids of every preset; t12 params/identity unchanged) — not re-run after the merge.
+
+**Implemented, not verified**: the real-node E2E (`lg14a_legacy_filer_e2e`, 8 tests) — compiles, FAILS on this head (see next
+steps); the node filer's tick in `palw_panel` (dormant; never run in a loop); the fused dissection on a reserved `Final` claim
+(`ShardCourtAccused`); `palw_fraud_filer_next_descent_v1` + `PalwLegacyProbeV1::HeldNode` (unit-tested mapping only); RPC handlers
+through `kaspa_rpc_core::convert::palw_legacy`; candidates / status reads.
+
+**Next steps, in order**
+1. E2E pursuits stall ("no verdict in 400 steps, 5 demands"; restart test 2). Before the merge the failure was the nonce bucket
+   (fixed: `0x47_0000 + nonce`). Diagnose with `--nocapture`: likely the Range demand's answer never reads (the producer answers via
+   `producer_answers`, which builds Held answers; check `answer_on_chain` scans far enough — 512 blocks — and that DA16b/LG14-B's
+   merged admission still routes reserved sessions). The dismissal test: Final not reached 3 beats after release (DL-1 rearm on
+   release; check `legacy_dispute_hold_ended_v1` re-arms past `window_challenge`). Reorg test: Z does not return to A (A needs more
+   work than B: raise `target`).
+2. `t12_a2u_new_kinds_uniform`: the harness arm for `palw_legacy_public_filer_v1` was added after the last build — re-run.
+3. Integration-owned failures seen here (not LG14-A): A2U pin of tag 109 and `dns_finality::TakeoverToken (gone)` unclassified.
+4. Move the E2E onto G14C's canonical harness (`g14_kernel_route_e2e/canonical.rs`: `ibd_node`, `Rpc`) so the verifier itself reads
+   through a fresh node; today a fresh IBD node only re-serves ops 204/206 identically after the conviction.
+5. Node filer: run the LG14-B descent (build `PalwLegacyOwnTreeV2` from the run, read tag-158 frontiers); rewire the seat modules
+   (P2-8b/8d, lane B) onto the engine.
+6. Re-run repin on the final tree.
+
+**Traps**: A2U fence index — LG14-A is `LegacyPublicFilerV1 = 6` (BUDGET took 5). Court-queue rounds `u32::MAX − 10/− 11` and proto
+payloads 1222–1227 are this lane's choice, unallocated by the Lead. Every merge so far damaged brace pairs at conflict tails
+(carriage encoder/decoder, `palw_legacy_held_signature_ok`): check `git diff integration -- <file> | grep '^-'` after merging.

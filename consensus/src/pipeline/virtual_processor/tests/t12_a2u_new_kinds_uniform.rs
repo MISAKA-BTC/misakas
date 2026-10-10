@@ -178,7 +178,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_receipt_spend_v4"
             | "palw_panel_free_v1"
             | "palw_typed_roots_v1"
-            | "palw_legacy_held_da_v2" => {} // armed above, through their enums
+            | "palw_legacy_held_da_v2"
+            | "palw_legacy_public_filer_v1" => {} // armed above, through their enums
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             // ADR-0175 needs model lines at or below it (`validate_palw_model_immutable_v1`); artifact root ownership is t12's.
             // testnet-12 runs model lines from genesis: never move them (a later height would disarm the live registry below it).
