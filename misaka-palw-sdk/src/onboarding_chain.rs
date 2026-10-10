@@ -17,11 +17,14 @@
 //!
 //! # The fresh verifier
 //!
-//! [`fresh_verify_from_reads_v1`] takes what a node serves publicly — op 231's attempt and evidence rows and the class's program,
-//! op 212's Final facts, and for a sealed-source (v3) attempt the seal facts of op 211's rows ([`sealed_sources_from_kernel_rows_v1`])
-//! — plus, optionally, the artifact from its public source, and re-derives the beacon, the seed, the selection and the evidence
-//! exactly as the chain's fold does (consensus-core's one implementation), then re-reads every selected leaf from the artifact. It
+//! [`fresh_verify_from_reads_v1`] takes public attempt/evidence/program, attributed Finals and v3 seals,
+//! plus optionally the artifact. It re-derives the beacon, seed, selection and evidence using the
+//! chain's implementation, then re-reads selected leaves. [`crate::onboarding_snapshot`] derives
+//! these reads from one root-consistent op-211 snapshot. Callers must authenticate the served roots
+//! against their chain, and callers assembling their own reads must keep the same snapshot. It
 //! needs no node-private state, no producer state and no Panel (G14 condition 9, RFC-0014 §3.4).
+//! Complete-check policy dispatch uses [`fresh_verify_complete_check_file_v1`] to re-execute its
+//! entire enumerable domain from the verifier's own file, with the chain's bounds checked first.
 
 use crate::runtime_pack::commit::{Refusal, hex};
 use kaspa_consensus_core::config::params::Params;
@@ -272,6 +275,14 @@ pub struct PublicConformanceReadsV1 {
     pub program: Vec<u8>,
 }
 
+/// The committed policy selects sampled conformance or an exhaustive bootstrap check.
+/// Obtain both variants from one root-consistent public row snapshot; the caller authenticates
+/// those served roots against its chain. These are not interchangeable evidence formats.
+pub enum PublicOnboardingReadsV1 {
+    Sampled(PublicConformanceReadsV1),
+    CompleteCheck(PublicCompleteCheckReadsV1),
+}
+
 /// The fresh verifier's report: its own verdict and the chain's state it should agree with.
 #[derive(Debug)]
 pub struct FreshReportV1 {
@@ -422,6 +433,61 @@ pub struct FreshCompleteReportV1 {
     /// The verifier's verdict and the chain's record agree.
     pub agrees: bool,
     pub why: String,
+}
+
+/// Replay an enumerable complete-check attempt from a verifier's own PALWTIR1 file. The
+/// chain's domain bounds are checked before collecting any tensor bytes. Large/history-bearing
+/// programs must use their sampled policy; this helper never truncates their input domain.
+pub fn fresh_verify_complete_check_file_v1(
+    reads: &PublicCompleteCheckReadsV1,
+    artifact: &Path,
+) -> Result<FreshCompleteReportV1, Refusal> {
+    use crate::tir_stream::{ContainerRanges, PalwTirRangeSourceV1};
+    use kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1;
+    use kaspa_consensus_core::palw_opv_bootstrap_v1::palw_complete_check_domain_v1;
+    use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_visit_inventory_rows_v1;
+
+    let attempt: ConformanceAttemptRowV1 =
+        borsh::from_slice(&reads.attempt_row).map_err(|e| Refusal::new("ROW_MALFORMED", format!("attempt row: {e}")))?;
+    if !attempt.is_complete_check() {
+        return Err(Refusal::new("NOT_COMPLETE_CHECK", "use fresh_verify_from_reads_v1 for the sampled policy"));
+    }
+    let program = misaka_palw_tir::TirProgramV1::decode_canonical(&reads.program)
+        .map_err(|e| Refusal::new("PROGRAM_MALFORMED", e.to_string()))?;
+    let domain =
+        palw_complete_check_domain_v1(&program, reads.max_positions).map_err(|e| Refusal::new("NOT_COMPLETELY_CHECKABLE", e))?;
+    let container = misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact)
+        .map_err(|e| Refusal::new("ARTIFACT_UNREADABLE", e.to_string()))?;
+    if container.header.program != reads.program {
+        return Err(Refusal::new("ARTIFACT_PROGRAM_MISMATCH", "the file does not carry the registered program"));
+    }
+    // No read-ahead beyond the bounded tensor domain: a large container metadata section must
+    // not make the reader prefetch megabytes of unrelated padding/provenance for a tiny leaf.
+    let source = ContainerRanges::open_with_window(&container, 1).map_err(|e| Refusal::new("ARTIFACT_UNREADABLE", e))?;
+    let mut operands = Vec::with_capacity(domain.leaves as usize);
+    let mut failure = None;
+    palw_tir_visit_inventory_rows_v1(&program, &mut |row| {
+        if failure.is_some() {
+            return;
+        }
+        let mut bytes = vec![0; row.len as usize];
+        let at = row.row_start as u64;
+        if let Err(e) = source.read_range(row.param, row.layer, at..at + row.len as u64, &mut bytes) {
+            failure = Some(Refusal::new("ARTIFACT_UNREADABLE", e));
+            return;
+        }
+        operands.push(PalwArtifactOperandV1 {
+            tensor_name: program.params[row.param as usize].name.clone(),
+            layer: row.layer,
+            row_start: row.row_start,
+            bytes,
+        });
+    })
+    .map_err(|e| Refusal::new("ARTIFACT_UNREADABLE", e.to_string()))?;
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    fresh_verify_complete_check_v1(reads, &operands)
 }
 
 /// **Verify a complete-check attempt from public reads and the verifier's own copy of the registered artifact** (ADR-0177: the

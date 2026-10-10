@@ -1,0 +1,20 @@
+{
+  "schema": "misaka.rfc02.real-checkpoint-pilot-verdict.v1",
+  "protocol_sha256": "0c45f44e969b7c226d3fb8444ac5dff91c8d98001127cc2dcae8749c251994a3",
+  "native_diagnostic_passes": true,
+  "reference_crosscheck_positions": 1,
+  "artifact_file": "target/rfc02-real/qwen25-pilot/qwen25-32.palwtir",
+  "artifact_digest": "4b9fb1572a2bb829aff8ffe09894e03c868ec3c47a19f21094235d63e593f2e2c7bb6a75beb069cf52f7e3f1bbc134f068b1514db028c4fca8e48c00baa5a3a6",
+  "program_digest": "71086e6b8a053586982ad76ddc1436059cbf74b3ed55661ed6fcad9bfbd338aa9ca61b7316f8cfe4dfe4db5248d50bbff957cf31591a81eb2b559eb165c65127",
+  "metrics": {
+    "kl_max": 0.040143249462830655,
+    "kl_mean": 0.001367935869054015,
+    "positions": 123,
+    "ppl_delta": -0.00434251653831752,
+    "ppl_float": 82.08896895475011,
+    "ppl_int": 81.73249624945068,
+    "scored": 119,
+    "top1_agreement": 0.967479674796748
+  },
+  "scope": "First real-weight lowering/calibration/fidelity cost measurement. Does not prove instruction/task quality, long context, source-independent reference equivalence, public node conviction or Final/redemption. Full RFC02 requirements remain unchanged."
+}

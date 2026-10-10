@@ -20,7 +20,8 @@ use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use kaspa_rpc_core::GetPalwConformanceEvidenceRequest;
 use kaspa_rpc_core::api::rpc::RpcApi;
 use misaka_palw_sdk::onboarding_chain::{
-    EnvelopeSigner, PublicConformanceReadsV1, SignedRegistrationRequestV1, fresh_verify_from_reads_v1, verify_signed_registration_v1,
+    EnvelopeSigner, PublicOnboardingReadsV1, SignedRegistrationRequestV1, fresh_verify_complete_check_file_v1,
+    fresh_verify_from_reads_v1, verify_signed_registration_v1,
 };
 use std::path::Path;
 use std::str::FromStr;
@@ -190,7 +191,7 @@ pub(crate) async fn status(ctx: &Ctx, class: &str) -> CliResult {
 async fn kernel_conformance_reads(
     nv: &crate::wallet::NodeView,
     class: kaspa_consensus_core::Hash64,
-) -> Result<PublicConformanceReadsV1, CliError> {
+) -> Result<PublicOnboardingReadsV1, CliError> {
     use kaspa_rpc_core::GetPalwKernelRowsRequest;
     use misaka_palw_sdk::onboarding_snapshot::{KernelRowsPageV1, KernelRowsSnapshotV1, MAX_SNAPSHOT_BYTES_V1};
     let mut snapshot = KernelRowsSnapshotV1::default();
@@ -243,7 +244,7 @@ async fn kernel_conformance_reads(
             })
             .map_err(refusal)?;
         match next {
-            None => return snapshot.into_reads(class).map_err(refusal),
+            None => return snapshot.into_onboarding_reads_v1(class).map_err(refusal),
             Some((table, key)) => {
                 request = GetPalwKernelRowsRequest {
                     has_cursor: true,
@@ -265,7 +266,45 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
     let nv = crate::wallet::connect(ctx).await?;
     let class_id =
         kaspa_consensus_core::Hash64::from_str(class).map_err(|_| CliError::new(exit::CONFIG, "class is not a full class id"))?;
-    let reads = kernel_conformance_reads(&nv, class_id).await?;
+    let reads = match kernel_conformance_reads(&nv, class_id).await? {
+        PublicOnboardingReadsV1::Sampled(reads) => reads,
+        PublicOnboardingReadsV1::CompleteCheck(reads) => {
+            let artifact = artifact.ok_or_else(|| {
+                CliError::new(exit::CONFIG, "complete-check verification requires --artifact: the verifier's own registered model")
+            })?;
+            let report = fresh_verify_complete_check_file_v1(&reads, artifact).map_err(refusal)?;
+            let attempt: kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1 =
+                borsh::from_slice(&reads.attempt_row).map_err(|e| CliError::new(exit::GENERIC, format!("attempt row: {e}")))?;
+            if ctx.output == OutputFormat::Json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema": "misaka.palw.onboard.complete-check-verify.v1",
+                        "class": class,
+                        "honest_post_id": misaka_palw_sdk::runtime_pack::commit::hex(&report.honest_post_id),
+                        "chain_post_id": report.chain_post_id.map(|id| misaka_palw_sdk::runtime_pack::commit::hex(&id)),
+                        "honest_passes": report.honest_passes,
+                        "chain_says_passed": report.chain_says_passed,
+                        "chain_state": attempt.record.state.code(),
+                        "agrees": report.agrees,
+                        "why": report.why,
+                    })
+                );
+            } else {
+                println!("complete check   every input and artifact leaf re-executed");
+                println!("honest post      {}", misaka_palw_sdk::runtime_pack::commit::hex(&report.honest_post_id));
+                println!("honest passes    {}", report.honest_passes);
+                println!("chain passed     {}", report.chain_says_passed);
+                println!("chain            {} — {}", attempt.record.state.code(), if report.agrees { "AGREES" } else { "DISAGREES" });
+                println!("                 {}", report.why);
+            }
+            return if report.agrees {
+                Ok(())
+            } else {
+                Err(CliError::new(exit::GENERIC, "the fresh verifier disagrees with the chain"))
+            };
+        }
+    };
     let report = fresh_verify_from_reads_v1(&reads, artifact).map_err(refusal)?;
     let v = &report.verdict;
     let posted = match &v.posted {

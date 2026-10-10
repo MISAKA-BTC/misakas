@@ -605,3 +605,64 @@ separate from the actual chain's attributed/sealed-source policies, and has no R
 its stale claim that no public node reads exist is corrected. Complete-check fresh replay,
 real-checkpoint fidelity/performance, permissionless public conviction and independent
 Final/redemption remain open; RFC02 is not complete and no dormant fence is activated.
+
+
+## Verified increment — complete-check public replay and first pinned real-weight baseline, 2026-10-10
+
+The same op-211 snapshot now dispatches by the committed policy: sampled reads retain their
+beacon verifier, while complete-check reads carry the bound plan's position ceiling and kernel
+parameter root into exhaustive replay. `misaka model onboard verify --artifact` reaches the
+complete-check verifier. The SDK checks the chain's enumerable-domain limits before collecting
+tensor bytes, requires the file's exact program, and authenticates its weights against the
+registered inventory. A substituted passing post, program or same-labelled different weights
+is refused/contradicted. Snapshot binding also checks the kernel link's challenge policy.
+
+Validation: seven snapshot tests, two new direct-TIR CLI tests, one existing detached-signing
+unit test, and the updated node complete-check test pass (11 distinct tests in this increment).
+The node test uses the actual acceptance fold, IBD and paged op-211 RPC response builders/wire
+forms with the SDK snapshot dispatch, for an honest and forged complete-check post. It still
+uses generated weights and test activation, not shipping activation or a live RPC socket.
+`cargo check --locked -p misaka-cli --bin misaka` passes with existing warnings.
+
+```sh
+cargo test --locked -p misaka-palw-sdk --test onboarding_snapshot --test kernel_preflight_cli
+cargo test --locked -p misaka-palw-sdk --lib onboarding_chain
+cargo test --locked -p kaspa-consensus --lib \
+  g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_and_its_own_artifact -- --test-threads=1
+cargo check --locked -p misaka-cli --bin misaka
+```
+
+`palw-class kernel-preflight <program.tir> --positions N --json` is an offline direct canonical
+TIR entry: it needs no model configuration, model name, official frontend or weights. It reports
+shipping/hypothetical kernel outcomes using the node's same prosecution/carrier/block limits,
+at exactly N (no silent clamp). The tests refuse zero, oversized/noncanonical inputs and an
+excessive context. This command grants neither registration nor economic eligibility.
+
+The local Qwen2.5-1.5B-Instruct checkpoint's complete model.safetensors, config.json and
+tokenizer.json match the official repository revision `989aa7980e4cf806f80c7fef2b1adb7bc71aa306`:
+LFS SHA-256 for weights and Git blob SHA-1 for config/tokenizer, plus local SHA-256 for all three.
+Missing generation/tokenizer configuration and other repository files remain listed. The files'
+SHA-256 values were checked unchanged again after both measurements. The generic data adapter
+lowered all real weights into a 14,011-byte TIR program and 1,835,516,100 bytes of tensor payload
+(1,835,572,288-byte PALWTIR1 file); the original assets were not modified.
+
+The predeclared short pilot uses four authored calibration sequences (121 measured positions)
+and four distinct evaluation sequences (123 positions), at most 32 tokens/window, `libm-v1`
+and headroom16=2.0. Its thresholds were top-1 >= 0.95, mean KL <= 0.01 and absolute perplexity
+delta <= 0.02. Actual results: top-1 0.9674797, mean KL 0.00136794, perplexity delta -0.00434252.
+The first run took 45.35 s in the release build. A second run reused the calibration, persisted
+the same artifact and reproduced every metric; one full position's logits matched the independent
+integer reference byte for byte (54.03 s total). These are measured real-weight diagnostics
+against the native f32 HL evaluator, **not** an independent Hugging Face reference, long-context
+coverage, instruction/translation/code quality, public conviction or Final/redemption.
+
+Crucially the real program does **not** pass the hypothetical public node gate even at 32
+positions: K2-TIR-v4 reports guaranteed proof work `629171712 > 536870912`. No work limit was
+raised and no fence was activated to manufacture a PASS. Its registered public-court/evidence
+path still needs repair; the next resource investigation must address this measured blocker.
+The preliminary source/metric/bit-match result does not make this checkpoint supported.
+All predeclared inputs, source hashes, material/binary hashes, results, logs and the refusal are
+saved under `evidence/qwen25-real-*`. The large artifact and venv are local ignored `target/`
+material, not repository payload. Source identity is conditional on the official HTTPS metadata
+observation; it is not chain-enforced model acquisition. Full RFC02 scope and the remaining
+A6/A8, feature, fidelity, resource/economic and public execution/court/Final gates remain open.

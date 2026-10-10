@@ -2273,8 +2273,12 @@ roots are checked before verification. The candidate, descriptor, program, plan 
 link must agree. This checks consistency with the served roots, not their canonical-chain
 authentication: the caller still needs its node/state-proof trust. The 128 MiB retained wire-byte
 ceiling is local reader policy, not a bound on total verifier RAM or a consensus capacity.
-Pinned pagination on a continuously advancing node, complete-check fresh replay, real-checkpoint
-public conviction and independent Final/redemption remain required completion evidence.
+Complete-check attempts now dispatch from the same snapshot to exhaustive file replay, with the
+chain's domain bounds checked before tensor collection. Pinned pagination on a continuously
+advancing node, real-checkpoint public conviction and independent Final/redemption remain required
+completion evidence. `palw-class kernel-preflight` also accepts canonical TIR without a frontend
+or model configuration, reports the shipping schedule and applies the node's hypothetical bounds
+at exactly the requested positions; it grants no registration or reward eligibility.
 
 Use pinned real checkpoints for dense baselines, GDN/KDA and unequal QK/V heads, MoE/routing,
 Mamba/hybrid state, sparse/compressed attention and complete multimodal tasks. The review's model

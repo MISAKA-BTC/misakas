@@ -1211,13 +1211,8 @@ async fn g14_opv_bootstrap_a_withheld_v3_seal_vetoes_the_attempt_and_is_counted(
 #[tokio::test]
 async fn g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_and_its_own_artifact() {
     use super::canonical::{Rpc, ibd_node};
-    use misaka_palw_sdk::onboarding_chain::{PublicCompleteCheckReadsV1, fresh_verify_complete_check_v1};
+    use misaka_palw_sdk::onboarding_chain::{PublicOnboardingReadsV1, fresh_verify_complete_check_v1};
     kaspa_core::log::try_init_logger("warn");
-    let unhex = |text: &str| {
-        let mut out = vec![0u8; text.len() / 2];
-        faster_hex::hex_decode(text.as_bytes(), &mut out).expect("the RPC serves hex");
-        out
-    };
     let mut net = Net::over_cfg(boot_config(0, Vec::new()), TestConsensus::new);
     net.beat_to(1).await;
     let onbs = onboard_all(&mut net, vec![Spec::honest(61, 1, true), Spec::honest(62, 3, true)]).await;
@@ -1239,17 +1234,9 @@ async fn g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_an
 
     let node = ibd_node(&net).await;
     let rpc = Rpc::of(&node.chain);
-    let (route, _) = rpc.route();
     for (i, o) in onbs.iter().enumerate() {
-        let read = rpc.conformance(o.v2);
-        assert!(read.available && read.found, "op 231 serves the attempt");
-        let binding = route.kernel_binding_v1(&o.v2).expect("op 211's rows hold the kernel binding");
-        let record = route.kernel_class_record_v1(&binding.kernel_class).expect("and the bound kernel class");
-        let reads = PublicCompleteCheckReadsV1 {
-            attempt_row: unhex(&read.attempt_row),
-            program: unhex(&read.program),
-            max_positions: record.plan.max_positions,
-            kernel_param_root: binding.kernel_param_root,
+        let PublicOnboardingReadsV1::CompleteCheck(reads) = rpc.onboarding(o.v2) else {
+            panic!("the committed policy chooses the complete-check verifier");
         };
         let report = fresh_verify_complete_check_v1(&reads, &ops_of(&o.f)).expect("the fresh verifier runs");
         assert!(report.agrees, "class {i}: {}", report.why);
@@ -1265,13 +1252,8 @@ async fn g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_an
         }
     }
     // A verifier holding another model cannot verify (and the chain asks it for nothing).
-    let read = rpc.conformance(onbs[0].v2);
-    let binding = route.kernel_binding_v1(&onbs[0].v2).unwrap();
-    let reads = PublicCompleteCheckReadsV1 {
-        attempt_row: unhex(&read.attempt_row),
-        program: unhex(&read.program),
-        max_positions: route.kernel_class_record_v1(&binding.kernel_class).unwrap().plan.max_positions,
-        kernel_param_root: binding.kernel_param_root,
+    let PublicOnboardingReadsV1::CompleteCheck(reads) = rpc.onboarding(onbs[0].v2) else {
+        panic!("a complete-check attempt");
     };
     let refusal = fresh_verify_complete_check_v1(&reads, &ops_of(&onbs[1].f)).expect_err("another model's artifact");
     assert_eq!(refusal.code, "ARTIFACT_NOT_REGISTERED");

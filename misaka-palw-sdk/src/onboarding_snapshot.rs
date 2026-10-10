@@ -4,7 +4,7 @@
 //! seal facts are then derived from those authenticated rows, rather than combined across RPC
 //! calls at different tips. The served roots still need the caller's chain/state-proof trust.
 
-use crate::onboarding_chain::PublicConformanceReadsV1;
+use crate::onboarding_chain::{PublicCompleteCheckReadsV1, PublicConformanceReadsV1, PublicOnboardingReadsV1};
 use crate::runtime_pack::commit::Refusal;
 use kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1;
 use kaspa_consensus_core::palw_onboarding_v1::{
@@ -91,6 +91,16 @@ impl KernelRowsSnapshotV1 {
     }
 
     pub fn into_reads(self, class: Hash64) -> Result<PublicConformanceReadsV1, Refusal> {
+        match self.into_onboarding_reads_v1(class)? {
+            PublicOnboardingReadsV1::Sampled(reads) => Ok(reads),
+            PublicOnboardingReadsV1::CompleteCheck(_) => {
+                Err(Refusal::new("COMPLETE_CHECK", "use into_onboarding_reads_v1 and the complete-check verifier for this attempt"))
+            }
+        }
+    }
+
+    /// Dispatch by the committed policy after checking the same program/attempt bindings.
+    pub fn into_onboarding_reads_v1(self, class: Hash64) -> Result<PublicOnboardingReadsV1, Refusal> {
         if !self.complete {
             return Err(Refusal::new("SNAPSHOT_INCOMPLETE", "no complete snapshot was received"));
         }
@@ -122,10 +132,21 @@ impl KernelRowsSnapshotV1 {
             || binding.plan_root.as_bytes() != kernel.plan.root()
             || binding.kernel_param_root.as_bytes() != kernel.param_commitments.root()
             || attempt.commitment.kernel_descriptor_id != kernel.descriptor.digest()
+            || attempt.commitment.challenge_policy_id != binding.challenge_policy_id.as_bytes()
         {
             return Err(Refusal::new("SNAPSHOT_BINDING", "the attempt, kernel link and public program are not the same statement"));
         }
-        Ok(PublicConformanceReadsV1 {
+        if attempt.is_complete_check() {
+            kaspa_consensus_core::palw_opv_bootstrap_v1::palw_complete_check_domain_v1(&kernel.program, kernel.plan.max_positions)
+                .map_err(|e| Refusal::new("NOT_COMPLETELY_CHECKABLE", e))?;
+            return Ok(PublicOnboardingReadsV1::CompleteCheck(PublicCompleteCheckReadsV1 {
+                attempt_row,
+                program: kernel.program_bytes.clone(),
+                max_positions: kernel.plan.max_positions,
+                kernel_param_root: binding.kernel_param_root,
+            }));
+        }
+        Ok(PublicOnboardingReadsV1::Sampled(PublicConformanceReadsV1 {
             attempt_row,
             evidence_row: route.aux.get(&(PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1, key)).cloned(),
             events: route.beacon_events_v1().map_err(|e| Refusal::new("ROWS_MALFORMED", e))?,
@@ -136,6 +157,6 @@ impl KernelRowsSnapshotV1 {
             },
             tip_daa,
             program: kernel.program_bytes.clone(),
-        })
+        }))
     }
 }

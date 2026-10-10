@@ -32,6 +32,7 @@ USAGE:
     palw-class inspect   --network <id> <artifact-path>
     palw-class preflight [--network <id>] <model>  [--depth headers|shape] [--height <DAA>] [--json] [more: see below]
     palw-class preflight --network <id> <artifact-path> [--model-id <model-id>]
+    palw-class kernel-preflight <program.tir> --positions N [--height DAA] [--json]
     palw-class bind-tokenizer --network <id> --tokenizer <tokenizer.json> --out <path> [--model-id <model-id>] <artifact-path>
     palw-class measure   --network <id> [--name <model name>] [--replay-ms <ms> --measured-on <host>]
                          [--key-file <ml-dsa-87 seed>] [--out <measured.json>] <artifact-path>
@@ -201,6 +202,11 @@ Exits 1 on a refusal.
 
 NETWORKS: a network id with a PALW V2 bundle, e.g. testnet-11 or devnet.
 
+`kernel-preflight` reads bounded canonical TIR directly, without config, model name or frontend.
+It reports the shipping kernel schedule and the node's hypothetical public-prosecution/carrier/block
+bounds at exactly N positions. It does not register a class or check weights, source fidelity or
+economic eligibility. Exit 0 means hypothetical bounds fit; 2 means they do not fit.
+
 `preflight` exits 0 only if every requested pairing passes the admission gate.";
 
 fn main() {
@@ -269,6 +275,50 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     let network = take_flag(&mut args, "--network");
     match command.as_str() {
+        "kernel-preflight" => {
+            use std::io::Read;
+            let positions: u32 = take_flag(&mut args, "--positions")
+                .ok_or("--positions is required")?
+                .parse()
+                .map_err(|_| "--positions must be a positive u32")?;
+            if positions == 0 {
+                return Err("--positions must be positive; no context is silently substituted".into());
+            }
+            let daa: u64 =
+                take_flag(&mut args, "--height").unwrap_or_else(|| "0".into()).parse().map_err(|_| "--height must be a u64")?;
+            let json = args.iter().any(|a| a == "--json");
+            args.retain(|a| a != "--json");
+            if args.len() != 1 || network.is_some() {
+                return Err("kernel-preflight takes one canonical TIR file; its reference schedule is not a network activation".into());
+            }
+            let mut bytes = Vec::new();
+            std::fs::File::open(&args[0])
+                .map_err(|e| e.to_string())?
+                .take((misaka_palw_tir::program::MAX_PROGRAM_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            let program = misaka_palw_tir::TirProgramV1::decode_canonical(&bytes).map_err(|e| e.to_string())?;
+            let route = misaka_palw_sdk::preflight::kernel::kernel_route_of(&program, positions, daa);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema": "misaka.palw.kernel-preflight.v1",
+                        "program_root": misaka_palw_sdk::runtime_pack::commit::hex(&misaka_palw_kernel::public::program_root_v1(&bytes)),
+                        "route": route,
+                    })
+                );
+            } else {
+                println!("kernel           {}", route.kernel);
+                println!("shipping         {}", route.shipped);
+                println!("hypothetical     {} at {} positions: {}", route.hypothetical, route.max_positions, route.detail);
+                println!("coverage         {}", route.bucket);
+                if !route.verification_mode_requirement.is_empty() {
+                    println!("requires         {}", route.verification_mode_requirement);
+                }
+            }
+            if route.hypothetical == "ELIGIBLE_AT" { Ok(()) } else { std::process::exit(2) }
+        }
         "census" => misaka_palw_sdk::census::cli::run(&args, network),
         "ledger" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
