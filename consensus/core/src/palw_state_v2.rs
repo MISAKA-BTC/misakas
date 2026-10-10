@@ -1038,9 +1038,19 @@ pub const PALW_RCORE_FINAL_BASIS_K_V1: u8 = 2;
 const _: () = assert!(crate::palw_verification_v2::PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT as u8 == PALW_RCORE_FINAL_BASIS_K_V1);
 /// R-3: open reporter commitments one bond may hold.
 pub const PALW_REPORTER_OPEN_COMMITMENTS_PER_BOND_V1: u32 = 64;
-/// R: the reporter's share of what a conviction collected, in basis points. ADR-0032's
-/// 2026-10-10 amendment sets PALW to 49%; the DNS slashing split has its own parameter.
-pub const PALW_RCORE_REPORTER_REWARD_BPS_V1: u16 = 4_900;
+/// R: the reporter's share of what a conviction collected, in basis points — **the historical
+/// share**, 1,000 bps (ADR-0152 §3.6). A constant, not a parameter: every conviction closed below
+/// `Params::palw_reporter_share_v2` (every conviction on every shipped network, testnet-12's live
+/// history included) is paid at it, and DA-6's refuted cost follows it there. It happens to equal
+/// testnet-12's `DnsParams::slashing_reporter_reward_bps` (T24), but since ADR-0032's 2026-10-10
+/// amendment the two are separate accounts and neither is read from the other.
+pub const PALW_RCORE_REPORTER_REWARD_BPS_V1: u16 = 1_000;
+/// **R past `Params::palw_reporter_share_v2`: ADR-0032's 2026-10-10 amendment, 4,900 bps (49%)** —
+/// for R-1 at a conviction closed at or past the fence, and for DA-6's refuted cost of a session
+/// opened at or past it ([`PalwStateParamsV2::reporter_reward_bps_at`]). The fence is dormant (`None`
+/// on every preset, refused when armed) until the full-activation release names its height, so the
+/// past 10% accounting is never re-read at 49% (the ADR's "versioned migration").
+pub const PALW_RCORE_REPORTER_REWARD_BPS_V2: u16 = 4_900;
 
 /// §3.6: the key a `CourtConviction` (kind 6) is recorded under — `H(domain ‖ claim_id)`, keyed on
 /// the claim because the shard-court sites carry no session (S-SPEC P10). Declared; unread.
@@ -1091,8 +1101,11 @@ pub fn palw_reporter_commit_slot_v1(commitment: &Hash64, reporter: &PalwBondKeyV
     finish(state)
 }
 
-/// **R-1: a conviction's reporter reward** — `⌊ r × max(0, collected − X) ⌋`, with `r` =
-/// [`PALW_RCORE_REPORTER_REWARD_BPS_V1`] (4,900 bps, ADR-0032's 2026-10-10 amendment).
+/// **R-1: a conviction's reporter reward at the historical share** — `⌊ r × max(0, collected − X) ⌋`,
+/// with `r` = [`PALW_RCORE_REPORTER_REWARD_BPS_V1`] (1,000 bps), the share of every conviction closed
+/// below `Params::palw_reporter_share_v2`. [`palw_reporter_reward_amount_at_bps_v1`] is the rule at
+/// any share; [`palw_reporter_reward_amount_v2`] is it at ADR-0032's amended 4,900 bps. The fold
+/// asks [`PalwStateParamsV2::reporter_reward_bps_at`] at the conviction's close.
 ///
 /// * `collected` is R-2's base: what the conviction's `slash_bond` calls actually debited from bonds
 ///   whose withdrawal gate was shut at the conviction (a pre-drained bond gives its remainder, an
@@ -1104,9 +1117,21 @@ pub fn palw_reporter_commit_slot_v1(commitment: &Hash64, reporter: &PalwBondKeyV
 /// `G_res − ΣS + r·(ΣS − G_res) = −(1 − r)(ΣS − G_res) < 0` after Final and `−(1 − r)·S` before it
 /// (R-7; `r_7_a_self_conviction_nets_negative_over_a_grid`).
 pub fn palw_reporter_reward_amount_v1(collected: u64, extracted: u128) -> u64 {
+    palw_reporter_reward_amount_at_bps_v1(collected, extracted, PALW_RCORE_REPORTER_REWARD_BPS_V1)
+}
+
+/// **R-1 at ADR-0032's amended share** ([`PALW_RCORE_REPORTER_REWARD_BPS_V2`], 4,900 bps): the reward
+/// of a conviction closed at or past `Params::palw_reporter_share_v2`. Rounded down to whole sompi.
+pub fn palw_reporter_reward_amount_v2(collected: u64, extracted: u128) -> u64 {
+    palw_reporter_reward_amount_at_bps_v1(collected, extracted, PALW_RCORE_REPORTER_REWARD_BPS_V2)
+}
+
+/// **R-1 at `share_bps`** — `⌊ share_bps × max(0, collected − X) / 10,000 ⌋`. A share above 10,000
+/// bps is clamped to 10,000, so the reward never exceeds what the conviction collected.
+pub fn palw_reporter_reward_amount_at_bps_v1(collected: u64, extracted: u128, share_bps: u16) -> u64 {
     let base = (collected as u128).saturating_sub(extracted);
-    // ≤ collected, so the division's quotient fits a u64.
-    (base.saturating_mul(PALW_RCORE_REPORTER_REWARD_BPS_V1 as u128) / 10_000) as u64
+    // ≤ collected (the share is at most 10,000 bps), so the division's quotient fits a u64.
+    (base.saturating_mul(u128::from(share_bps.min(10_000))) / 10_000) as u64
 }
 
 /// **R-1's `X` for one load-bearing signer's lock on a claim that reached Final** —
@@ -1744,6 +1769,12 @@ pub struct PalwStateParamsV2 {
     /// 2026-10-04 audit's fixes read it). `None` on every shipped preset.
     #[borsh(skip)]
     audit_1004_from_daa: Option<u64>,
+    /// **Lane INTF (ADR-0032's 2026-10-10 amendment): `Params::palw_reporter_share_v2`'s height**, mirrored by
+    /// `Params::sync_palw_reporter_share_v2` (R-1's reward at a conviction's close and DA-6's exposure at a session's open read
+    /// it through [`Self::reporter_reward_bps_at`]). `None` on every shipped preset, and `validate_palw_reporter_share_v2`
+    /// refuses every armed one until the full-activation release names its height.
+    #[borsh(skip)]
+    reporter_share_v2_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1981,6 +2012,7 @@ impl PalwStateParamsV2 {
             anchor_window_from_daa: None,
             panel_v3: None,
             audit_1004_from_daa: None,
+            reporter_share_v2_from_daa: None,
         })
     }
 
@@ -2362,6 +2394,33 @@ impl PalwStateParamsV2 {
     /// **Are the audit-1004 rules in force at `daa_score`?** `false` on every shipped preset.
     pub fn audit_1004_active_at(&self, daa_score: u64) -> bool {
         self.audit_1004_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **Lane INTF: the reporter share's mirror** — written by `Params::sync_palw_reporter_share_v2` and by nothing else (and by
+    /// fixtures, which is how a test arms the 49% share); `None` where the fence is not armed.
+    pub fn with_reporter_share_v2_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.reporter_share_v2_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_reporter_share_v2`'s height, if the network arms it (the mirror).
+    pub fn reporter_share_v2_from_daa(&self) -> Option<u64> {
+        self.reporter_share_v2_from_daa
+    }
+
+    /// **Is ADR-0032's amended reporter share in force at `daa_score`?** `false` on every shipped preset.
+    pub fn reporter_share_v2_active_at(&self, daa_score: u64) -> bool {
+        self.reporter_share_v2_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **The PALW reporter share, in basis points, in force at `daa_score`** — [`PALW_RCORE_REPORTER_REWARD_BPS_V1`] (1,000)
+    /// below `Params::palw_reporter_share_v2` (every block of every shipped network), [`PALW_RCORE_REPORTER_REWARD_BPS_V2`]
+    /// (4,900) at or past it. **Which DAA fixes an amount:** R-1 reads it at the conviction's close (the block that consumes
+    /// the offence and opens the reward — `accepted_daa` of the consumed record), DA-6 at the session's open (the accusation
+    /// block — the exposure is stored on the session and never re-priced). So a reward or an exposure written below the fence
+    /// keeps its 10% amount through every later block, sweep, refund, burn, reorg replay and reload.
+    pub fn reporter_reward_bps_at(&self, daa_score: u64) -> u16 {
+        if self.reporter_share_v2_active_at(daa_score) { PALW_RCORE_REPORTER_REWARD_BPS_V2 } else { PALW_RCORE_REPORTER_REWARD_BPS_V1 }
     }
 
     /// **RFC-0010: the permissionless Panel's mirror** — written by `Params::sync_palw_permissionless_panel_v1` and by nothing else
@@ -8460,6 +8519,17 @@ pub enum PalwConsensusObjectV2 {
     /// `signing_message()` under the receipt context, checked at acceptance. Admitted structurally by the kernel
     /// (`admit_receipt_v1`) against the claim's INTERIM assignment. **Tag 111, declared explicitly.**
     KernelConstraintReceiptV1 { receipt: Box<misaka_palw_kernel::receipt::PalwConstraintReceiptV1>, signature: Vec<u8> } = 111,
+    /// **G14 (tag 113, C4 F-C4R3-03): one chunk of a prosecution object in the kernel route's OWN chunk lane** — a `FileProof` or a
+    /// position `Respond` (tag 110) or an onboarding refutation (tag 105) too large for one carrier. The certification lane's
+    /// `ObjectChunk` table is ONE network-wide table of eight groups that eight junk chunks hold for 4,000 DAA; here a group is
+    /// keyed by the bond that SIGNS its chunks (`signature`: the opener's ML-DSA-87 over
+    /// [`crate::palw_kernel_route_v1::palw_kernel_chunk_message_v1`]), each bond holds at most
+    /// [`crate::palw_kernel_route_v1::PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1`] groups backed by a deposit forfeited if the group never
+    /// completes, and a group never outlives its target's deadline — so no set of bonds can hold another's prosecution off the chain.
+    /// The assembled object's own signature is checked at the completing chunk; the object is then applied by its own arm. Rows in
+    /// the route's aux table 41. Dropped by name below `palw_probabilistic_constraints_v1`. **Tag 113, declared explicitly** (the
+    /// lead's allocation of 2026-10-08; 112 unallocated).
+    KernelRouteChunkV1 { chunk: Box<crate::palw_kernel_route_v1::PalwKernelChunkV1>, signature: Vec<u8> } = 113,
     // Tags 104–108 are lane D's onboarding objects (phase 3; the lead's allocation of 2026-10-08), 109 P0's evidence. Dropped by name below
     // `palw_probabilistic_constraints_v1` (the envelope, 108, below `palw_signed_registration_v1`); rows in the route's aux tables.
     /// **G14 phase 3 (tag 104): the registrant of an existing V2 class states that its artifact has kernel root `kernel_param_root`**
@@ -8618,11 +8688,16 @@ pub fn palw_object_is_panel_v3_v1(object: &PalwConsensusObjectV2) -> bool {
     matches!(object, PalwConsensusObjectV2::PanelBeaconProofV3 { .. })
 }
 
-/// **Is this object a kernel route object (tag 110 or 111)** — a variant an older build cannot decode and skips (A-2)? Below
+/// **Is this object a kernel route object (tag 110, 111 or 113)** — a variant an older build cannot decode and skips (A-2)? Below
 /// `Params::palw_probabilistic_constraints_v1` the acceptance walk drops it by name before any slot, rent or budget is charged
 /// for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_kernel_route_v1(object: &PalwConsensusObjectV2) -> bool {
-    matches!(object, PalwConsensusObjectV2::KernelRouteV1 { .. } | PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. })
+    matches!(
+        object,
+        PalwConsensusObjectV2::KernelRouteV1 { .. }
+            | PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. }
+            | PalwConsensusObjectV2::KernelRouteChunkV1 { .. }
+    )
 }
 
 /// **Is this object an RFC-0007 audit-mesh move** (tag 102 or 103) — a variant an older build cannot decode and skips (A-2)? Below
@@ -16781,7 +16856,7 @@ impl PalwFoldReadV1<'_> {
     ) -> Result<PalwDaAdmissionV1, PalwStateV2Error> {
         use crate::palw_da_rcore_v1::{
             PALW_DA_OPEN_NON_SEAT_PER_CLAIM_V1, PALW_DA_SESSIONS_PER_CLAIM_TOTAL_V1, PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1,
-            PalwDaStageV1, palw_da_session_exposure_v1, palw_da_stage_reward_base_v1,
+            PalwDaStageV1, palw_da_session_exposure_at_bps_v1, palw_da_stage_reward_base_v1,
         };
         let state = self.state;
         let claim = state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?;
@@ -16849,7 +16924,13 @@ impl PalwFoldReadV1<'_> {
         let g = palw_claim_g_v1(state, &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(self.params), claim_id)
             .map(|gains| gains.g())
             .unwrap_or(0);
-        let exposure = palw_da_session_exposure_v1(palw_da_stage_reward_base_v1(stage, full, producer_collateral, g), floor);
+        // The share is fixed by the session's open (`now_daa`, the accusation block): 10% below
+        // `Params::palw_reporter_share_v2`, 49% at or past it (lane INTF). The session stores it.
+        let exposure = palw_da_session_exposure_at_bps_v1(
+            palw_da_stage_reward_base_v1(stage, full, producer_collateral, g),
+            floor,
+            self.params.reporter_reward_bps_at(now_daa),
+        );
         // A-6: the accuser's free half — a seat whose 500‰ is full of locks can still accuse, and no
         // bond accuses past its collateral (review M1: courts and the one ledger counted). Through
         // the one accuser gate ([`PalwRcoreGateV1::Accuser`]), the room the court opening and the held
@@ -21941,9 +22022,10 @@ impl<'a> TransitionBuilder<'a> {
     /// `liable`, each bond the conviction charges with the class of what it was convicted of). The
     /// record's `collected` is read BEFORE the funnel: it is the TIER debit the conviction's legs
     /// took, exactly as below the fence, so the reporter reward stays "on the collected debit, as
-    /// today" (§4.6) — the reporter share of the tier, never of a forfeited bond (lane liab review,
-    /// finding 2: counting the forfeiture would reward forcing a DA default on the whole bond).
-    /// ADR-0032's 2026-10-10 amendment changes that share to 49%. What the forfeiture took is the freeze record's
+    /// today" (§4.6) — the reporter share of the tier (10%, or ADR-0032's 49% past the dormant
+    /// `palw_reporter_share_v2`), never of a forfeited bond (lane liab review, finding 2: counting the
+    /// forfeiture turned forcing one DA default of a genesis producer into a ≈ 93,586 MSK bounty at
+    /// 10%, against ≈ 320 today). What the forfeiture took is the freeze record's
     /// `forfeited_sompi`. Below the fence the funnel is a no-op and the order changes nothing.
     #[allow(clippy::too_many_arguments)]
     fn close_conviction_v1(
@@ -22763,7 +22845,9 @@ impl<'a> TransitionBuilder<'a> {
         if self.state.reward_pending.contains_key(&offence_key) || self.state.reporter_rewards.contains_key(&offence_key) {
             return refuse("a reward under this key is already pending or awarded");
         }
-        let amount = palw_reporter_reward_amount_v1(collected, extracted);
+        // The share is fixed by the conviction's close (`now_daa`, which is the record's `accepted_daa`):
+        // 10% below `Params::palw_reporter_share_v2`, 49% at or past it (lane INTF).
+        let amount = palw_reporter_reward_amount_at_bps_v1(collected, extracted, self.params.reporter_reward_bps_at(now_daa));
         if amount == 0 {
             return Ok(None);
         }
@@ -34538,6 +34622,27 @@ fn apply_class_registration_v1(
     Ok(())
 }
 
+/// **A-2 uniformity in the fold: is the owning fence of `object`'s kind in force at this block**, read off what the fold is handed —
+/// the same answers `PalwLifecycleKindFencesV1` resolves from `Params` for the acceptance layer: the kernel route's extras exist exactly
+/// where `palw_probabilistic_constraints_v1` is in force (`palw_kernel_route_extras_at`), and the Panel mirror's height is
+/// `palw_permissionless_panel_v1`'s. The signed-expiry envelope (tag 108) is never folded — the acceptance walk unwraps it — so the fold
+/// reads it as never in force: a chunk group assembling to one is undecodable bytes here, and is refused either way.
+fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2, object: &PalwConsensusObjectV2) -> bool {
+    use crate::palw_lifecycle_objects_v2::{
+        PalwLifecycleKindFenceV1 as F, PalwLifecycleKindOwnerV1 as K, palw_lifecycle_kind_owner_v1,
+    };
+    match palw_lifecycle_kind_owner_v1(object) {
+        K::Int12 => true,
+        K::Fence(F::ProbabilisticConstraintsV1) => builder.extras.kernel_route.is_some(),
+        K::Fence(F::PermissionlessPanelV1) => builder.params.panel_v3().is_some_and(|mirror| ctx.daa_score >= mirror.from_daa),
+        K::Fence(F::SignedRegistrationV1) => false,
+        // Lane DA16: the route's extras carry the court's activation exactly where `palw_provider_court_v1` is in force here.
+        K::Fence(F::ProviderCourtV1) => builder.extras.kernel_route.as_ref().is_some_and(|route| route.provider_court.is_some()),
+        // Lane LG14-B: the extras flag the processor resolves from `palw_legacy_held_da_v2` at the block.
+        K::Fence(F::LegacyHeldDaV2) => builder.extras.legacy_held_da_v2_active,
+    }
+}
+
 fn apply_object(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -35024,6 +35129,10 @@ fn apply_object(
         }
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { receipt, signature } => {
             palw_kernel_route_fold_v1::apply_kernel_receipt_v1(builder, ctx, receipt, signature)?;
+        }
+        // (tag 113, C4 F-C4R3-03): a chunk of a prosecution object in the route's own chunk lane.
+        PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, signature: _ } => {
+            palw_kernel_route_fold_v1::apply_kernel_route_chunk_v1(builder, ctx, chunk)?;
         }
         // **G14 lane D phase 3 (tags 104–107): model onboarding** — rows in the route's aux tables (`palw_onboarding_fold_v1`).
         PalwConsensusObjectV2::ArtifactBoundV1 { v2_class, kernel_param_root, signer, signature: _ } => {
@@ -36119,6 +36228,13 @@ fn apply_object(
                 }
                 let inner: PalwConsensusObjectV2 =
                     borsh::from_slice(&whole).map_err(|e| PalwStateV2Error::ChunkedObjectUndecodable(e.to_string()))?;
+                // **A-2 uniformity: an inner kind whose owning fence is not in force at this block is bytes the live build cannot
+                // decode** — refused exactly as it refuses them, in its words, before any kind rule reads it.
+                if !palw_fold_kind_in_force_v1(builder, ctx, &inner) {
+                    return Err(PalwStateV2Error::ChunkedObjectUndecodable(
+                        crate::palw_lifecycle_objects_v2::palw_lifecycle_unknown_tag_reason_v1(&whole),
+                    ));
+                }
                 if !palw_chunked_object_kind_admitted_v1(&inner) {
                     return Err(PalwStateV2Error::ChunkedObjectKindNotAllowed);
                 }
@@ -72739,6 +72855,12 @@ pub(crate) mod tests {
             params().with_rcore_plus_mirrors(Some(0), 12_900, Vec::new())
         }
 
+        /// [`armed`] with `palw_reporter_share_v2` test-armed from genesis on the fold's mirror (lane INTF): ADR-0032's 49%
+        /// share. The release's validation refuses arming the fence; the fold is what is under test.
+        fn armed_49() -> PalwStateParamsV2 {
+            armed().with_reporter_share_v2_from_daa(Some(0))
+        }
+
         fn bond_obj(n: u64, collateral: u64) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(n),
@@ -72910,35 +73032,89 @@ pub(crate) mod tests {
             assert!(domains.iter().enumerate().all(|(i, a)| domains[i + 1..].iter().all(|b| a != b)), "three purposes, three domains");
         }
 
-        /// **R-1: `⌊r × max(0, collected − X)⌋`, r = 4,900 bps** — exact sompi expectations for
-        /// the original collected-debit examples at ADR-0032's amended share, including rounding.
+        /// **R-1: `⌊r × max(0, collected − X)⌋`, r = 1,000 bps** — the ADR's worked examples to the
+        /// cent (m = 3, 13,000 MSK producer, 130,000 MSK seats; ADR §3.6 "Examples"), and the
+        /// constant equal to what T24 pins against `DnsParams`.
         #[test]
         fn r_1_the_reward_is_r_times_the_collected_debit_less_x() {
-            assert_eq!(PALW_RCORE_REPORTER_REWARD_BPS_V1, 4_900);
+            assert_eq!(PALW_RCORE_REPORTER_REWARD_BPS_V1, 1_000);
             let cent = MSK / 100;
-            // Pre-licence: 3,200.95 → 1,568.4655; post-Final: (32,378.89 − 0.12) → 15,865.5973.
-            assert_eq!(palw_reporter_reward_amount_v1(320_095 * cent, 0), 156_846_550_000);
-            assert_eq!(palw_reporter_reward_amount_v1(3_237_889 * cent, (12 * cent) as u128), 1_586_559_730_000);
-            // Equivocation: 9,602.89 → 4,705.4161; 190,797.47 → 93,490.7603.
-            assert_eq!(palw_reporter_reward_amount_v1(960_289 * cent, 0), 470_541_610_000);
-            assert_eq!(palw_reporter_reward_amount_v1(19_079_747 * cent, 0), 9_349_076_030_000);
-            assert_eq!(palw_reporter_reward_amount_v1(1, 0), 0, "round down to whole sompi");
-            assert_eq!(palw_reporter_reward_amount_v1(101, 0), 49);
-            assert_eq!(palw_reporter_reward_amount_v1(103, 0), 50);
-            assert_eq!(palw_reporter_reward_amount_v1(1_003, 3), 490, "deduct X before applying the share");
+            let near = |got: u64, want_cents: u64, what: &str| {
+                let want = want_cents * cent;
+                assert!(got.abs_diff(want) <= cent / 2 + 1, "{what}: {got} sompi, want ≈ {want_cents} cents");
+            };
+            // DA-confirmed withholding, pre-licence, floor: collected 3,200.95 → 320.10.
+            near(palw_reporter_reward_amount_v1(320_095 * cent, 0), 32_010, "S1 floor");
+            // Floor post-Final fraud, V1 (k = 3): collected 32,378.89, X = G_res = 0.12 → 3,237.88.
+            near(palw_reporter_reward_amount_v1(3_237_889 * cent, (12 * cent) as u128), 323_788, "floor V1");
+            // Eq of a 13k bond (floor class): 9,602.89 → 960.29; of a genesis bond (2M): 190,797.47 → 19,079.75.
+            near(palw_reporter_reward_amount_v1(960_289 * cent, 0), 96_029, "Eq 13k");
+            near(palw_reporter_reward_amount_v1(19_079_747 * cent, 0), 1_907_975, "Eq 2M");
             // Nothing collected, or nothing beyond X: nothing to pay.
             assert_eq!(palw_reporter_reward_amount_v1(0, 0), 0);
             assert_eq!(palw_reporter_reward_amount_v1(1_000, 1_000), 0);
             assert_eq!(palw_reporter_reward_amount_v1(1_000, u128::MAX), 0);
-            assert_eq!(
-                palw_reporter_reward_amount_v1(u64::MAX, 0),
-                (u128::from(u64::MAX) * 49 / 100) as u64,
-                "no overflow at the top"
-            );
+            assert_eq!(palw_reporter_reward_amount_v1(u64::MAX, 0), u64::MAX / 10, "no overflow at the top");
             // X per lock: min(lock, G_res / basis_k); k = 0 reads as 1 (the larger X).
             assert_eq!(palw_reporter_reward_extracted_v1(100, 90, 3), 30);
             assert_eq!(palw_reporter_reward_extracted_v1(20, 90, 3), 20);
             assert_eq!(palw_reporter_reward_extracted_v1(100, 90, 0), 90);
+        }
+
+        /// **R-1 past `palw_reporter_share_v2`: `⌊r × max(0, collected − X)⌋`, r = 4,900 bps** (ADR-0032's 2026-10-10
+        /// amendment) — exact sompi for the collected-debit examples above at the amended share, rounding included; and the
+        /// share the fold reads is fixed by the conviction's DAA (10% below the fence, 49% at or past it).
+        #[test]
+        fn r_1_past_the_share_fence_the_reward_is_49_percent_of_the_collected_debit_less_x() {
+            assert_eq!(PALW_RCORE_REPORTER_REWARD_BPS_V2, 4_900);
+            let cent = MSK / 100;
+            // Pre-licence: 3,200.95 → 1,568.4655; post-Final: (32,378.89 − 0.12) → 15,865.5973.
+            assert_eq!(palw_reporter_reward_amount_v2(320_095 * cent, 0), 156_846_550_000);
+            assert_eq!(palw_reporter_reward_amount_v2(3_237_889 * cent, (12 * cent) as u128), 1_586_559_730_000);
+            // Equivocation: 9,602.89 → 4,705.4161; 190,797.47 → 93,490.7603.
+            assert_eq!(palw_reporter_reward_amount_v2(960_289 * cent, 0), 470_541_610_000);
+            assert_eq!(palw_reporter_reward_amount_v2(19_079_747 * cent, 0), 9_349_076_030_000);
+            assert_eq!(palw_reporter_reward_amount_v2(1, 0), 0, "round down to whole sompi");
+            assert_eq!(palw_reporter_reward_amount_v2(101, 0), 49);
+            assert_eq!(palw_reporter_reward_amount_v2(103, 0), 50);
+            assert_eq!(palw_reporter_reward_amount_v2(1_003, 3), 490, "deduct X before applying the share");
+            assert_eq!(palw_reporter_reward_amount_v2(0, 0), 0);
+            assert_eq!(palw_reporter_reward_amount_v2(1_000, 1_000), 0);
+            assert_eq!(palw_reporter_reward_amount_v2(1_000, u128::MAX), 0);
+            assert_eq!(
+                palw_reporter_reward_amount_v2(u64::MAX, 0),
+                (u128::from(u64::MAX) * 49 / 100) as u64,
+                "no overflow at the top"
+            );
+            // The share at any rate is clamped to the whole debit; the historical rule is the same function at 1,000 bps.
+            assert_eq!(palw_reporter_reward_amount_at_bps_v1(1_000, 0, 20_000), 1_000);
+            assert_eq!(palw_reporter_reward_amount_at_bps_v1(960_289, 0, 1_000), palw_reporter_reward_amount_v1(960_289, 0));
+            // The mirror: 10% everywhere unarmed; with the fence at 500, 10% at 499 and 49% from 500.
+            assert_eq!((armed().reporter_reward_bps_at(0), armed().reporter_reward_bps_at(u64::MAX)), (1_000, 1_000));
+            let fenced = armed().with_reporter_share_v2_from_daa(Some(500));
+            assert_eq!((fenced.reporter_reward_bps_at(499), fenced.reporter_reward_bps_at(500)), (1_000, 4_900));
+        }
+
+        /// **The DAA that fixes R-1 is the conviction's close (lane INTF)** — with the share fence at DAA 115, a conviction
+        /// closed at 110 opens int-12's 10% and is forgone at its 10% amount at the sweep past the fence (121): the past
+        /// accounting is never re-read at 49%; a conviction closed at 115 opens 49%. Each block's delta reverts and re-applies.
+        #[test]
+        fn a_reward_opened_below_the_share_fence_keeps_its_10_percent_amount_past_it() {
+            let p = armed().with_reporter_share_v2_from_daa(Some(115));
+            let s0 = chain(&p);
+            let (before, after) = (h64(0x4901), h64(0x4902));
+            let (s, _, opened) =
+                convict(&s0, &p, 110, before, PalwOffenceKindV1::ExecutorEquivocation, 960_289, 0, revealed(h64(0xE0)));
+            assert_eq!(opened.unwrap(), Some(96_028), "closed below the fence: 10%");
+            let s = ok(&s, &p, 114, &[]);
+            let (s, _, opened) = convict(&s, &p, 115, after, PalwOffenceKindV1::ExecutorEquivocation, 960_289, 0, revealed(h64(0xE1)));
+            assert_eq!(opened.unwrap(), Some(470_541), "closed at the fence: 49%");
+            assert_eq!(s.reward_pending(&before).unwrap().amount, 96_028, "the earlier reward is not re-priced");
+            reorg_twin(&s, &p, 121, &[], "the sweep past the fence");
+            let swept = ok(&s, &p, 121, &[]);
+            assert_eq!(swept.reporter_counters(), PalwReporterCountersV1 { awarded_sompi: 0, forgone_sompi: 96_028 });
+            let swept = ok(&swept, &p, 126, &[]);
+            assert_eq!(swept.reporter_counters(), PalwReporterCountersV1 { awarded_sompi: 0, forgone_sompi: 96_028 + 470_541 });
         }
 
         /// **R-5/R-7 over a grid: `Σ R ≤ r · Σ collected`, and a coalition that convicts itself
@@ -72949,39 +73125,46 @@ pub(crate) mod tests {
         /// no-farming bound with the reward handed back in full.
         #[test]
         fn r_7_a_self_conviction_nets_negative_over_a_grid() {
-            let r = |collected: u64, x: u128| palw_reporter_reward_amount_v1(collected, x) as i128;
-            let mut checked = 0u32;
-            for g_res in [0u64, 12 * MSK / 100, 543 * MSK, 60_398 * MSK, 1_000_000 * MSK] {
-                for k in [2u8, 3] {
-                    for lock_over in [0u64, 1, MSK, 10_000 * MSK] {
-                        for action in [0u64, 1_300 * MSK, 3_250 * MSK, 93_906 * MSK] {
-                            // Each of the k signers' locks is at least its share of G_res (L-1's
-                            // lock_k' ≥ G_res/k'), and each conviction also takes an action tier.
-                            let lock = g_res.div_ceil(k as u64) + lock_over;
-                            let collected: Vec<u64> = (0..k).map(|_| lock + action).collect();
-                            let total: u128 = collected.iter().map(|c| *c as u128).sum();
-                            let x = palw_reporter_reward_extracted_v1(lock as u128, g_res as u128, k);
-                            let rewards: i128 = collected.iter().map(|c| r(*c, x)).sum();
-                            assert!(
-                                rewards as u128 <= total * PALW_RCORE_REPORTER_REWARD_BPS_V1 as u128 / 10_000,
-                                "Σ R ≤ r·Σ collected"
-                            );
-                            // After Final: the offender kept G_res, lost ΣS, and captured Σ R.
-                            let after_final = g_res as i128 - total as i128 + rewards;
-                            if total > g_res as u128 {
-                                assert!(after_final < 0, "g_res {g_res} k {k} lock {lock} action {action}: nets {after_final}");
+            // int-12's 10%, and ADR-0032's 49% past `palw_reporter_share_v2` (lane INTF): the net is then
+            // `−0.51 × (ΣS − G_res)` after Final and `−0.51 × ΣS` before it, still < 0.
+            for share in [PALW_RCORE_REPORTER_REWARD_BPS_V1, PALW_RCORE_REPORTER_REWARD_BPS_V2] {
+                let r = |collected: u64, x: u128| palw_reporter_reward_amount_at_bps_v1(collected, x, share) as i128;
+                let mut checked = 0u32;
+                for g_res in [0u64, 12 * MSK / 100, 543 * MSK, 60_398 * MSK, 1_000_000 * MSK] {
+                    for k in [2u8, 3] {
+                        for lock_over in [0u64, 1, MSK, 10_000 * MSK] {
+                            for action in [0u64, 1_300 * MSK, 3_250 * MSK, 93_906 * MSK] {
+                                // Each of the k signers' locks is at least its share of G_res (L-1's
+                                // lock_k' ≥ G_res/k'), and each conviction also takes an action tier.
+                                let lock = g_res.div_ceil(k as u64) + lock_over;
+                                let collected: Vec<u64> = (0..k).map(|_| lock + action).collect();
+                                let total: u128 = collected.iter().map(|c| *c as u128).sum();
+                                let x = palw_reporter_reward_extracted_v1(lock as u128, g_res as u128, k);
+                                let rewards: i128 = collected.iter().map(|c| r(*c, x)).sum();
+                                assert!(rewards as u128 <= total * share as u128 / 10_000, "Σ R ≤ r·Σ collected");
+                                // The burn is the rest of what was collected: at least (1 − r) of it.
+                                let burned = total as i128 - rewards;
+                                assert!(
+                                    burned as u128 * 10_000 >= total * (10_000 - share as u128),
+                                    "the burn is ≥ (1 − r)·Σ collected"
+                                );
+                                // After Final: the offender kept G_res, lost ΣS, and captured Σ R.
+                                let after_final = g_res as i128 - total as i128 + rewards;
+                                if total > g_res as u128 {
+                                    assert!(after_final < 0, "g_res {g_res} k {k} lock {lock} action {action}: nets {after_final}");
+                                }
+                                // Before Final: nothing extracted, X = 0.
+                                let before: i128 = -(total as i128) + collected.iter().map(|c| r(*c, 0)).sum::<i128>();
+                                if total > 0 {
+                                    assert!(before < 0, "before Final nets {before}");
+                                }
+                                checked += 1;
                             }
-                            // Before Final: nothing extracted, X = 0.
-                            let before: i128 = -(total as i128) + collected.iter().map(|c| r(*c, 0)).sum::<i128>();
-                            if total > 0 {
-                                assert!(before < 0, "before Final nets {before}");
-                            }
-                            checked += 1;
                         }
                     }
                 }
+                assert_eq!(checked, 5 * 2 * 4 * 4);
             }
-            assert_eq!(checked, 5 * 2 * 4 * 4);
         }
 
         /// **T39, commit–reveal end to end**: the earliest commitment revealed in the window wins
@@ -72991,68 +73174,74 @@ pub(crate) mod tests {
         /// `reporter_rewards` with the winner's payload and `awarded_sompi` grows by it.
         #[test]
         fn t39_the_earliest_commitment_wins_and_a_copier_after_the_conviction_loses() {
-            let p = armed();
-            let s0 = chain(&p);
-            let (key, evidence) = (h64(0x3901), h64(0xE71D));
-            let early = ok(&s0, &p, 101, &[commit(c(key, evidence, 2), 2)]);
-            let later = ok(&early, &p, 102, &[commit(c(key, evidence, 3), 3)]);
-            // The accused's own commitment, and a speculator's key-only one (no evidence: V3S-03).
-            let later = ok(&later, &p, 103, &[commit(c(key, evidence, 1), 1), commit(c(key, Hash64::default(), 4), 4)]);
-            let (convicted, _, opened) =
-                convict(&later, &p, 110, key, PalwOffenceKindV1::PanelFalseValidV2, 1_000_000, 0, revealed(evidence));
-            assert_eq!(opened.expect("a proven kind-3 conviction opens a reward"), Some(490_000), "r × collected");
-            let pending = *convicted.reward_pending(&key).expect("pending");
-            assert_eq!((pending.amount, pending.reveal_until, pending.evidence_id, pending.best), (490_000, 120, evidence, None));
-            // The copier learns the evidence from the filing and commits after it (a new salt, so a
-            // new commitment; the speculator's key-only one is no use to it).
-            let copier =
-                ok(&convicted, &p, 111, &[commit(palw_reporter_commitment_v1(&key, &evidence, &bond_key(4), &[0xC0; 32]), 4)]);
-            // The LATER committer reveals first: it is the best so far.
-            let s = ok(&copier, &p, 112, &[reveal(key, 3)]);
-            let best = s.reward_pending(&key).unwrap().best.expect("a winner");
-            assert_eq!((best.reporter, best.committed_daa, best.payload), (bond_key(3), 102, payout(3)));
-            let copier_reveal = PalwConsensusObjectV2::ReporterRevealed { offence_key: key, reporter: bond_key(4), salt: [0xC0; 32] };
-            refused_reveal(block(&s, &p, 113, std::slice::from_ref(&copier_reveal)), "at or after the conviction");
-            refused_reveal(block(&s, &p, 113, &[reveal(key, 4)]), "no commitment of this reporter");
-            refused_reveal(block(&s, &p, 113, &[reveal(key, 1)]), "cannot report itself");
-            let wrong_salt = PalwConsensusObjectV2::ReporterRevealed { offence_key: key, reporter: bond_key(2), salt: [0xEE; 32] };
-            refused_reveal(block(&s, &p, 113, &[wrong_salt]), "no commitment of this reporter");
-            // The EARLIER committer reveals second and takes the reward from the later one.
-            let s = ok(&s, &p, 113, &[reveal(key, 2)]);
-            let best = s.reward_pending(&key).unwrap().best.expect("a winner");
-            assert_eq!((best.reporter, best.committed_daa, best.payload), (bond_key(2), 101, payout(2)));
-            refused_reveal(block(&s, &p, 114, &[reveal(key, 3)]), "an earlier commitment");
-            // Still open at `reveal_until`: nothing moves at 120.
-            let s = ok(&s, &p, 120, &[]);
-            assert!(s.reward_pending(&key).is_some() && awarded(&s, &key).is_none(), "the window is inclusive");
-            // Step 2 of the first block past it: the award, fixed.
-            let swept = ok(&s, &p, 121, &[]);
-            assert!(swept.reward_pending(&key).is_none(), "the window closed");
-            assert_eq!(awarded(&swept, &key), Some(PalwPayoutV2 { payload: payout(2), amount: 490_000 }));
-            assert_eq!(swept.reporter_counters(), PalwReporterCountersV1 { awarded_sompi: 490_000, forgone_sompi: 0 });
-            refused_reveal(block(&swept, &p, 122, &[reveal(key, 2)]), "no reporter reward is pending");
-            // S-7 itself never writes the payout queue: its one new entry is step 3d's move of the
-            // award (the vesting stream), on the award's A-KEY key.
-            let mut queued = s.pending_payouts.clone();
-            queued.insert(
-                crate::palw_vesting_v1::palw_reporter_payout_key_v1(&key),
-                PalwPayoutV2 { payload: payout(2), amount: 490_000 },
-            );
-            assert_eq!(swept.pending_payouts, queued, "S-7 never writes pending_payouts; 3d moves the award");
+            // int-12's 10% (below palw_reporter_share_v2), then ADR-0032's 49% with the fence test-armed on the mirror (lane INTF).
+            for (p, want) in [(armed(), 100_000), (armed_49(), 490_000)] {
+                let s0 = chain(&p);
+                let (key, evidence) = (h64(0x3901), h64(0xE71D));
+                let early = ok(&s0, &p, 101, &[commit(c(key, evidence, 2), 2)]);
+                let later = ok(&early, &p, 102, &[commit(c(key, evidence, 3), 3)]);
+                // The accused's own commitment, and a speculator's key-only one (no evidence: V3S-03).
+                let later = ok(&later, &p, 103, &[commit(c(key, evidence, 1), 1), commit(c(key, Hash64::default(), 4), 4)]);
+                let (convicted, _, opened) =
+                    convict(&later, &p, 110, key, PalwOffenceKindV1::PanelFalseValidV2, 1_000_000, 0, revealed(evidence));
+                assert_eq!(opened.expect("a proven kind-3 conviction opens a reward"), Some(want), "r × collected");
+                let pending = *convicted.reward_pending(&key).expect("pending");
+                assert_eq!((pending.amount, pending.reveal_until, pending.evidence_id, pending.best), (want, 120, evidence, None));
+                // The copier learns the evidence from the filing and commits after it (a new salt, so a
+                // new commitment; the speculator's key-only one is no use to it).
+                let copier =
+                    ok(&convicted, &p, 111, &[commit(palw_reporter_commitment_v1(&key, &evidence, &bond_key(4), &[0xC0; 32]), 4)]);
+                // The LATER committer reveals first: it is the best so far.
+                let s = ok(&copier, &p, 112, &[reveal(key, 3)]);
+                let best = s.reward_pending(&key).unwrap().best.expect("a winner");
+                assert_eq!((best.reporter, best.committed_daa, best.payload), (bond_key(3), 102, payout(3)));
+                let copier_reveal =
+                    PalwConsensusObjectV2::ReporterRevealed { offence_key: key, reporter: bond_key(4), salt: [0xC0; 32] };
+                refused_reveal(block(&s, &p, 113, std::slice::from_ref(&copier_reveal)), "at or after the conviction");
+                refused_reveal(block(&s, &p, 113, &[reveal(key, 4)]), "no commitment of this reporter");
+                refused_reveal(block(&s, &p, 113, &[reveal(key, 1)]), "cannot report itself");
+                let wrong_salt = PalwConsensusObjectV2::ReporterRevealed { offence_key: key, reporter: bond_key(2), salt: [0xEE; 32] };
+                refused_reveal(block(&s, &p, 113, &[wrong_salt]), "no commitment of this reporter");
+                // The EARLIER committer reveals second and takes the reward from the later one.
+                let s = ok(&s, &p, 113, &[reveal(key, 2)]);
+                let best = s.reward_pending(&key).unwrap().best.expect("a winner");
+                assert_eq!((best.reporter, best.committed_daa, best.payload), (bond_key(2), 101, payout(2)));
+                refused_reveal(block(&s, &p, 114, &[reveal(key, 3)]), "an earlier commitment");
+                // Still open at `reveal_until`: nothing moves at 120.
+                let s = ok(&s, &p, 120, &[]);
+                assert!(s.reward_pending(&key).is_some() && awarded(&s, &key).is_none(), "the window is inclusive");
+                // Step 2 of the first block past it: the award, fixed.
+                let swept = ok(&s, &p, 121, &[]);
+                assert!(swept.reward_pending(&key).is_none(), "the window closed");
+                assert_eq!(awarded(&swept, &key), Some(PalwPayoutV2 { payload: payout(2), amount: want }));
+                assert_eq!(swept.reporter_counters(), PalwReporterCountersV1 { awarded_sompi: u128::from(want), forgone_sompi: 0 });
+                refused_reveal(block(&swept, &p, 122, &[reveal(key, 2)]), "no reporter reward is pending");
+                // S-7 itself never writes the payout queue: its one new entry is step 3d's move of the
+                // award (the vesting stream), on the award's A-KEY key.
+                let mut queued = s.pending_payouts.clone();
+                queued.insert(
+                    crate::palw_vesting_v1::palw_reporter_payout_key_v1(&key),
+                    PalwPayoutV2 { payload: payout(2), amount: want },
+                );
+                assert_eq!(swept.pending_payouts, queued, "S-7 never writes pending_payouts; 3d moves the award");
+            }
         }
 
         /// **T39: an unrevealed reward is forgone** — no winner by `reveal_until`, so the amount
         /// goes to `forgone_sompi` and stays burned; nothing is awarded.
         #[test]
         fn t39_an_unrevealed_reward_is_forgone() {
-            let p = armed();
-            let s0 = chain(&p);
-            let key = h64(0x3902);
-            let (s, _, opened) = convict(&s0, &p, 110, key, PalwOffenceKindV1::ExecutorEquivocation, 960_289, 0, revealed(h64(0xE0)));
-            assert_eq!(opened.unwrap(), Some(470_541), "kind 0 takes commitments too (S-SPEC P10)");
-            let swept = ok(&s, &p, 121, &[]);
-            assert!(swept.reward_pending(&key).is_none() && awarded(&swept, &key).is_none());
-            assert_eq!(swept.reporter_counters(), PalwReporterCountersV1 { awarded_sompi: 0, forgone_sompi: 470_541 });
+            // int-12's 10% (below palw_reporter_share_v2), then ADR-0032's 49% with the fence test-armed on the mirror (lane INTF).
+            for (p, want) in [(armed(), 96_028), (armed_49(), 470_541)] {
+                let s0 = chain(&p);
+                let key = h64(0x3902);
+                let (s, _, opened) =
+                    convict(&s0, &p, 110, key, PalwOffenceKindV1::ExecutorEquivocation, 960_289, 0, revealed(h64(0xE0)));
+                assert_eq!(opened.unwrap(), Some(want), "kind 0 takes commitments too (S-SPEC P10)");
+                let swept = ok(&s, &p, 121, &[]);
+                assert!(swept.reward_pending(&key).is_none() && awarded(&swept, &key).is_none());
+                assert_eq!(swept.reporter_counters(), PalwReporterCountersV1 { awarded_sompi: 0, forgone_sompi: u128::from(want) });
+            }
         }
 
         /// **T39/T75 (V3S-03): a court conviction's (or DA default's) reward names its winner and
@@ -73061,26 +73250,28 @@ pub(crate) mod tests {
         /// accused forgoes it.
         #[test]
         fn t39_a_named_reward_takes_no_reveal_and_pays_the_named_reporter() {
-            let p = armed();
-            let s0 = chain(&p);
-            let key = palw_court_offence_key_v1(&h64(0xC1A1));
-            // The speculator commits to the court key at admission, with every evidence it could guess.
-            let s = ok(&s0, &p, 101, &[commit(c(key, Hash64::default(), 3), 3)]);
-            let (s, _, opened) = convict(&s, &p, 110, key, PalwOffenceKindV1::CourtConviction, 500_000, 0, verdict(2));
-            assert_eq!(opened.unwrap(), Some(245_000));
-            let pending = *s.reward_pending(&key).unwrap();
-            assert!(!pending.accepts_reveals() && pending.evidence_id == Hash64::default());
-            assert_eq!(pending.best.map(|b| (b.reporter, b.payload)), Some((bond_key(2), payout(2))), "the challenger");
-            refused_reveal(block(&s, &p, 111, &[reveal(key, 3)]), "takes no reveal");
-            let swept = ok(&s, &p, 121, &[]);
-            assert_eq!(awarded(&swept, &key), Some(PalwPayoutV2 { payload: payout(2), amount: 245_000 }));
-            // The accused as its own challenger: recorded with no winner, forgone at the sweep.
-            let key2 = palw_court_offence_key_v1(&h64(0xC1A2));
-            let (s, _, opened) = convict(&s0, &p, 110, key2, PalwOffenceKindV1::CourtConviction, 500_000, 0, verdict(1));
-            assert_eq!(opened.unwrap(), Some(245_000));
-            assert_eq!(s.reward_pending(&key2).unwrap().best, None, "R-3's hygiene: the accused wins nothing");
-            let swept = ok(&s, &p, 121, &[]);
-            assert_eq!(swept.reporter_counters().forgone_sompi, 245_000);
+            // int-12's 10% (below palw_reporter_share_v2), then ADR-0032's 49% with the fence test-armed on the mirror (lane INTF).
+            for (p, want) in [(armed(), 50_000), (armed_49(), 245_000)] {
+                let s0 = chain(&p);
+                let key = palw_court_offence_key_v1(&h64(0xC1A1));
+                // The speculator commits to the court key at admission, with every evidence it could guess.
+                let s = ok(&s0, &p, 101, &[commit(c(key, Hash64::default(), 3), 3)]);
+                let (s, _, opened) = convict(&s, &p, 110, key, PalwOffenceKindV1::CourtConviction, 500_000, 0, verdict(2));
+                assert_eq!(opened.unwrap(), Some(want));
+                let pending = *s.reward_pending(&key).unwrap();
+                assert!(!pending.accepts_reveals() && pending.evidence_id == Hash64::default());
+                assert_eq!(pending.best.map(|b| (b.reporter, b.payload)), Some((bond_key(2), payout(2))), "the challenger");
+                refused_reveal(block(&s, &p, 111, &[reveal(key, 3)]), "takes no reveal");
+                let swept = ok(&s, &p, 121, &[]);
+                assert_eq!(awarded(&swept, &key), Some(PalwPayoutV2 { payload: payout(2), amount: want }));
+                // The accused as its own challenger: recorded with no winner, forgone at the sweep.
+                let key2 = palw_court_offence_key_v1(&h64(0xC1A2));
+                let (s, _, opened) = convict(&s0, &p, 110, key2, PalwOffenceKindV1::CourtConviction, 500_000, 0, verdict(1));
+                assert_eq!(opened.unwrap(), Some(want));
+                assert_eq!(s.reward_pending(&key2).unwrap().best, None, "R-3's hygiene: the accused wins nothing");
+                let swept = ok(&s, &p, 121, &[]);
+                assert_eq!(swept.reporter_counters().forgone_sompi, u128::from(want));
+            }
         }
 
         /// **T39 (V3S-11): a commitment older than an open pending conviction is not pruned** — past
@@ -73167,25 +73358,31 @@ pub(crate) mod tests {
         /// opens to nothing — the copy costs the copier one of its 64 slots and denies nobody.
         #[test]
         fn t39_a_copied_commitment_neither_blocks_nor_steals_the_reward() {
-            let p = armed();
-            let s0 = chain(&p);
-            let (key, evidence) = (h64(0x3906), h64(0xE7AD));
-            let honest = c(key, evidence, 2);
-            // The squatter (bond 3) lands the honest reporter's hash first, then the reporter's own.
-            let squatted = ok(&s0, &p, 101, &[commit(honest, 3)]);
-            assert_eq!(row_of(&squatted, honest, 3).map(|row| row.reporter), Some(bond_key(3)), "rooted in the copier's slot");
-            assert!(row_of(&squatted, honest, 2).is_none());
-            let s = ok(&squatted, &p, 102, &[commit(honest, 2)]);
-            assert_eq!(row_of(&s, honest, 2).map(|row| row.committed_daa), Some(102), "the honest commitment is not blocked");
-            let (s, _, _) = convict(&s, &p, 110, key, PalwOffenceKindV1::PanelFalseValidV2, 1_000_000, 0, revealed(evidence));
-            // The copier cannot open the copy: the commitment binds the reporter, so no salt of its
-            // own recomputes the honest hash.
-            refused_reveal(block(&s, &p, 111, &[reveal(key, 3)]), "no commitment of this reporter");
-            let won = ok(&s, &p, 111, &[reveal(key, 2)]);
-            let best = won.reward_pending(&key).unwrap().best.expect("a winner");
-            assert_eq!((best.reporter, best.committed_daa, best.commitment), (bond_key(2), 102, honest), "the honest reporter wins");
-            let swept = ok(&won, &p, 121, &[]);
-            assert_eq!(awarded(&swept, &key), Some(PalwPayoutV2 { payload: payout(2), amount: 490_000 }));
+            // int-12's 10% (below palw_reporter_share_v2), then ADR-0032's 49% with the fence test-armed on the mirror (lane INTF).
+            for (p, want) in [(armed(), 100_000), (armed_49(), 490_000)] {
+                let s0 = chain(&p);
+                let (key, evidence) = (h64(0x3906), h64(0xE7AD));
+                let honest = c(key, evidence, 2);
+                // The squatter (bond 3) lands the honest reporter's hash first, then the reporter's own.
+                let squatted = ok(&s0, &p, 101, &[commit(honest, 3)]);
+                assert_eq!(row_of(&squatted, honest, 3).map(|row| row.reporter), Some(bond_key(3)), "rooted in the copier's slot");
+                assert!(row_of(&squatted, honest, 2).is_none());
+                let s = ok(&squatted, &p, 102, &[commit(honest, 2)]);
+                assert_eq!(row_of(&s, honest, 2).map(|row| row.committed_daa), Some(102), "the honest commitment is not blocked");
+                let (s, _, _) = convict(&s, &p, 110, key, PalwOffenceKindV1::PanelFalseValidV2, 1_000_000, 0, revealed(evidence));
+                // The copier cannot open the copy: the commitment binds the reporter, so no salt of its
+                // own recomputes the honest hash.
+                refused_reveal(block(&s, &p, 111, &[reveal(key, 3)]), "no commitment of this reporter");
+                let won = ok(&s, &p, 111, &[reveal(key, 2)]);
+                let best = won.reward_pending(&key).unwrap().best.expect("a winner");
+                assert_eq!(
+                    (best.reporter, best.committed_daa, best.commitment),
+                    (bond_key(2), 102, honest),
+                    "the honest reporter wins"
+                );
+                let swept = ok(&won, &p, 121, &[]);
+                assert_eq!(awarded(&swept, &key), Some(PalwPayoutV2 { payload: payout(2), amount: want }));
+            }
         }
 
         /// **The seam's contract** (`open_reporter_reward`): only a record consumed in this block, on
@@ -73233,7 +73430,10 @@ pub(crate) mod tests {
             assert!(s.reward_pending(&h64(0x5D)).is_none() && s.reporter_counters() == PalwReporterCountersV1::default());
             // A DA default names the earliest defaulted accuser and takes no reveal (DA-7).
             let (s, _, r) = convict(&s0, &p, 110, h64(0x5A), K::DaDefault, 1_000, 0, da(3));
-            assert_eq!(r.unwrap(), Some(490));
+            assert_eq!(r.unwrap(), Some(100));
+            // Past palw_reporter_share_v2 (test-armed on the mirror, lane INTF) the same default opens ADR-0032's 49%.
+            let (_, _, r49) = convict(&s0, &armed_49(), 110, h64(0x5B), K::DaDefault, 1_000, 0, da(3));
+            assert_eq!(r49.unwrap(), Some(490));
             let pending = *s.reward_pending(&h64(0x5A)).unwrap();
             assert!(!pending.accepts_reveals());
             assert_eq!(pending.best.map(|b| (b.reporter, b.payload)), Some((bond_key(3), payout(3))), "the accuser");

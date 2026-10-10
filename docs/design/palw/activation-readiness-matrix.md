@@ -58,6 +58,13 @@ Today **no fence is armable**. Integration continues; no new fence for rewards, 
 4e. K2 v4 (real-scale) detection policy: the drawn share q of claims re-executed after commit, and how P_run (the chance a drawn
     watcher actually runs and files) is derived. Per-claim detection is q·P_run; until these are set, v4 classes do not earn.
     Source: `k2-real-scale.md` §11 (SG-06). This is Q-01 made concrete.
+4f. ADR-0175 clarifications (INTF audit, 2026-10-10; text proposals for the user, no code change needed):
+    - RFC-0004 §II.3's "promoted … with its root recorded on the line" means a new independent registration (`CandidateSelected`).
+    - ADR-0175 should state that a Memory registration fixes its update rule and initial memory state, while the line's current
+      state evolves as independent material.
+    The full-activation release must arm `palw_model_immutable_v1`. `palw_improvement_v1` is already ARMED on t12, so the
+    ordering is a release-checklist item, not a validation rule. `palw_typed_roots_v1` (dormant) requires
+    `palw_model_immutable_v1` at or below it.
 5. The activation height of the single release, once every row above is clear.
 
 ## 3a. User rulings on the Panel=0 parameters (2026-10-08 ~20:30)

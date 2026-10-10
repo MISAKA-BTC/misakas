@@ -66,10 +66,16 @@ fn policy() -> LedgerPolicyV1 {
         accuser_reward_permille: 500,
         default_penalty: 100,
         claim_reward: 7,
+        // G14-R4 (merged): the job's escrow and fee (GAP-5), the prosecution reserve (F-C4R3-05), the bonded seal (OPV-BOOT #2) — the
+        // values of the shared ledger-test world.
+        job_fee: 2,
+        job_escrow_ttl_daa: 300,
         max_adjudications_per_block: 64,
+        prosecution_reserve_permille: 500,
         max_court_work_per_block: u64::MAX,
         claim_seal_delay_daa: 1,
         seal_ttl_daa: 100,
+        seal_deposit: 1,
         prosecution: ProsecutionPolicyV1 {
             court_deadline_daa: 20,
             max_sessions_per_claim: 1 << 10,
@@ -100,7 +106,10 @@ fn opv() -> OpvPolicyV1 {
             assumed_detection_permille: 500,
             max_live_claims_per_producer: 8,
             max_live_claims_total: 32,
+            // G14-R4 (merged, F-C4R3-05): the hard ceiling's fresh slots and the non-refundable admission fee.
+            fresh_producer_slots: 2,
             default_burn_permille: 100,
+            admission_fee: 3,
         },
         carrier: CarrierCapsV1 { filing_cap: 1 << 26, response_cap: 1 << 27, commit_cap: 1 << 27 },
     }
@@ -185,12 +194,25 @@ impl W {
         let id = job.id();
         let ev = self.block(vec![spec_obj(REG, SpecObjectV1::PostJob { job })]);
         assert!(ev.contains(&E::JobPosted { job: id }), "{ev:?}");
+        // GAP-5 (G14-R4, at the merge): a typed job opens its poster's escrow exactly as `PostJob` does.
+        if self.l.policy.claim_reward > 0 {
+            assert_eq!(self.l.job_escrows.get(&id).map(|e| (e.poster, e.amount)), Some((REG, self.l.policy.claim_reward)));
+        }
         id
     }
 
-    /// Seal one block, then reveal.
+    /// Seal one block, then reveal. Past `palw_panel_free_v1` (OPV-BOOT GAP-B1a) the seal is salted (`claim_seal_v2`) and the reveal
+    /// carries the salt (`CommitClaimSalted` with the typed claim); before it, the historical unsalted pair.
     fn commit(&mut self, claim: SpecClaimV1) -> (Digest, Vec<E>) {
         let (id, producer, job) = (claim.id(), claim.producer(), claim.job_id());
+        if self.l.salted_seals_from().is_some_and(|at| self.l.daa >= at) {
+            let salt = misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt", &id);
+            let seal = misaka_palw_kernel::ledger::claim_seal_v2(&id, &salt);
+            self.block(vec![obj(producer, O::SealClaim { producer, job, seal })]);
+            let reveal = O::CommitClaimSalted { salt, commit: misaka_palw_kernel::ledger::SaltedCommitV1::Spec { claim } };
+            let ev = self.block(vec![obj(producer, reveal)]);
+            return (id, ev);
+        }
         self.block(vec![obj(producer, O::SealClaim { producer, job, seal: claim_seal_v1(&id) })]);
         let ev = self.block(vec![spec_obj(producer, SpecObjectV1::CommitClaim { claim })]);
         (id, ev)

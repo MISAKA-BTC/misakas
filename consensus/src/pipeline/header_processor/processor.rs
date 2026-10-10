@@ -165,6 +165,9 @@ pub struct HeaderProcessor {
     /// **RFC-0009: `Params::palw_receipt_spend_v4`** resolved off a `ConsensusV2` ruleset. `None` on every shipped preset, which leaves a
     /// `PFS4` header refused by name (`ReceiptV4BelowFence`) at every height — exactly the set of valid blocks there is today.
     pub(super) palw_receipt_spend_v4: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **A-2 uniformity: the header carriage forms' owning fences** (`Params::palw_header_form_fences_v1`) — the shape gate reads a form
+    /// whose fence is not in force at the header's DAA exactly as the live testnet-12 build reads it.
+    pub(super) palw_header_forms: kaspa_consensus_core::pow_layer0::PalwHeaderFormFencesV1,
     /// MISAKA Phase 4b PoW: PALW-Ollama (`algo_id = 5`) activation — supersedes everything.
     pub(super) pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
     /// kaspa-pq EVM Lane v0.4 (ADR-0020): drives the per-header version rule
@@ -281,6 +284,7 @@ impl HeaderProcessor {
                 _ => None,
             }),
             palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),
+            palw_header_forms: params.palw_header_form_fences_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             evm_activation_daa_score: params.evm_activation_daa_score,
         }

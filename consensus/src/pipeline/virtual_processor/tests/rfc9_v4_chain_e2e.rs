@@ -6,7 +6,8 @@
 //! (all four fences) at [`H`]. Every block below is the node's own template, inserted through `validate_and_insert_block`; every PALW
 //! object rides a funded transaction; nothing is planted in state. What the chain is shown to do:
 //!
-//! 1. **Below the fence** a `PFS4` receipt header is refused at the header stage, by name (`BelowFence`).
+//! 1. **Below the fence** a `PFS4` receipt header is refused at the header stage exactly as the live testnet-12 build refuses it — its shape
+//!    gate has no `PFS4` arm, so the carriage is over the 8,192-byte cap (A-2 uniformity; the by-name `BelowFence` is the second lock).
 //! 2. **The claim**: the floor's free-prompt lane is certified on chain (`FamilyCertified`, `ClassLaneCertified`); the executor runs a
 //!    caller's prompt on the floor (`Base0Backend`), publishes the capture to two independent DA providers (a directory and the
 //!    127.0.0.1 reference HTTP server — read back verified), commits the claim on a 0x4a carrier funded from its own float, signs ONE
@@ -56,8 +57,8 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2;
 use kaspa_consensus_core::palw_receipt_v4::{
     PALW_COMMITMENT_MAX_BYTES_V4, PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, PALW_RECEIPT_V4_BEACON_RULE_SLOT,
     PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS, PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT, PALW_RECEIPT_V4_VERSION, PalwReceiptSpendEnvelopeV4,
-    PalwReceiptSpendUnsignedV4, PalwReceiptV4Error, PalwRedemptionAuthBundleV4, PalwRedemptionAuthV4, fp_spend_id_v4,
-    palw_receipt_v4_miner_script, palw_receipt_v4_split_v1, redeem_auth_id_v4, spend_challenge_v4,
+    PalwReceiptSpendUnsignedV4, PalwRedemptionAuthBundleV4, PalwRedemptionAuthV4, fp_spend_id_v4, palw_receipt_v4_miner_script,
+    palw_receipt_v4_split_v1, redeem_auth_id_v4, spend_challenge_v4,
 };
 use kaspa_consensus_core::palw_state_v2::{
     PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwConsensusObjectV2 as Obj,
@@ -400,11 +401,27 @@ async fn rfc9_v4_chain_e2e_the_offline_miner_is_paid_by_another_builders_block()
         let mut probe = receipt_template(&chain, card_payout_spk(BUILDER_A), chain.ctx.simulated_time + 1, 0xB10F);
         sign_v4(&mut probe, domain, BUILDER_A, bonds[BUILDER_A].0, &probe_bundle, 0, h64(0xBEAC));
         let probe_daa = probe.header.daa_score;
+        let probe_commitment = probe.header.palw_commitment.clone();
         assert!(probe_daa < H, "the probe stands below the fence ({probe_daa} < {H})");
         assert!(probe.header.palw_commitment.len() > PALW_COMMITMENT_MAX_BYTES, "a PFS4 carriage is above the 8,192-byte cap");
         let (_, verdict) = insert(&chain, probe).await;
         let why = verdict.expect_err("a PFS4 header below the fence is refused");
-        assert!(why.contains(&PalwReceiptV4Error::BelowFence.to_string()), "refused BY NAME below the fence: {why}");
+        // A-2 uniformity: refused as the live build refuses it — by the shape gate that build runs, which reads no `PFS4` form.
+        let live = kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at(
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+            &probe_commitment,
+            false,
+            kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::Unfenced,
+        )
+        .expect_err("the live build's gate refuses a PFS4 carriage");
+        assert!(
+            matches!(
+                live,
+                kaspa_consensus_core::pow_layer0::PowLayer0Error::PalwCommitmentTooLong { cap: PALW_COMMITMENT_MAX_BYTES, .. }
+            ),
+            "{live}"
+        );
+        assert!(why.contains(&live.to_string()), "refused below the fence as the live build refuses it: {why}");
         eprintln!("[rfc9-v4] 1. below the fence (DAA {probe_daa}): {why}");
     }
 

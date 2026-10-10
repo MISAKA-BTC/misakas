@@ -179,6 +179,17 @@ fn t12_tir_config(tir_at: u64) -> (Config, PalwConsensusParamsV2, Premine, Premi
     (armed, bundle, premine, floats)
 }
 
+/// **GAP-11**: [`t12_tir_config`] with `palw_reorg_strict_economic_win` armed from genesis. Without it a reorg between two branches
+/// that tie on every economic key (a heartbeat branch against a heartbeat branch) is decided by the candidate HASH — a race whose
+/// outcome moves with every block's timestamp, so the replay-and-reorg case flaked under machine load. With it a shallow tie is
+/// GHOSTDAG's (blue work, then hash: the heavier branch wins) and a deeper reorg needs a STRICT economic win.
+fn t12_tir_config_strict_win(tir_at: u64) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    let (mut config, bundle, premine, floats) = t12_tir_config(tir_at);
+    config.params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
+    config.params.validate_palw_v2().expect("strict-win is a shipped fence: the ruleset still validates with it armed");
+    (config, bundle, premine, floats)
+}
+
 impl Env {
     fn new(tir_at: u64) -> Env {
         Env::over(t12_tir_config(tir_at))
@@ -1052,7 +1063,8 @@ async fn extend_past_activation(m: &mut Mined, extra: u64) {
 #[tokio::test]
 async fn g14_registration_replay_on_a_second_node_and_across_a_reorg() {
     kaspa_core::log::try_init_logger("warn");
-    let mut a = mine_registration(&case("moe-top2-shared"), 2).await;
+    // GAP-11: strict-win armed, so neither reorg below is a race on the candidate hash (see `t12_tir_config_strict_win`).
+    let mut a = mine_registration_on(Env::over(t12_tir_config_strict_win(0)), &case("moe-top2-shared"), 2).await;
     let (h1, carrying, folding) = (a.blocks[0].clone(), a.blocks[1].clone(), a.blocks[2].clone());
     let float_outpoint = a.env.floats[a.card].0;
     let change = TransactionOutpoint::new(a.carrier.id(), 0);
@@ -1126,7 +1138,13 @@ async fn g14_registration_replay_on_a_second_node_and_across_a_reorg() {
     assert_eq!(z_merged.bond(&bond).unwrap().collateral, collateral_on_a, "and the burn is taken again, once");
 
     // ---- A out-works B again: Z reorgs back, the row returns identically ----
+    // Z now sits five ticks deep on B: a tie there keeps the incumbent past strict-win, so A's tail must be STRICTLY heavier on
+    // economics, not merely on blue work — an attempt (a live claim) on A's side makes it so (GAP-11: the heavier branch strictly
+    // heavier, never a hash race).
     extend_past_activation(&mut a, 3).await;
+    let (attempt, _) = a.env.chain.attempt(1, ttpb, Vec::new(), &|_| true).await;
+    a.blocks.push(attempt);
+    a.blocks.push(a.env.chain.heartbeat(ttpb, Vec::new()).await);
     let a_tail: Vec<Block> = a.blocks[3..].to_vec();
     assert!(a_tail.len() > 5, "A's tail ({}) out-works B's four blocks and Z's merge block", a_tail.len());
     for blk in &a_tail {
