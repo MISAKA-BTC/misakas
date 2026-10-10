@@ -102,6 +102,8 @@ pub mod merkle5;
 pub mod flat_court4;
 /// Staged flat-v5 complete court-kind set, not selected by a shipping route.
 pub mod flat_court5;
+/// Staged complete flat-v5 court resource admission.
+pub mod flat_scope5;
 /// Bounded raw-width producer hashing of the unchanged v3 tensor commitments.
 pub mod merkle3_stream;
 pub mod mode;

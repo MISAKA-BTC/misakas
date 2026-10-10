@@ -1713,3 +1713,32 @@ ignored and excluded. The production library check also passed. Exact source/bin
 behavior only. Worst-job admission, typed node binding, hash-unit DA, aggregate
 budgets, actual-node prosecution and independent Final/redemption remain open.
 No shipping fence is activated; the complete RFC02 goal remains active.
+
+### Staged flat-v5 resource admission — 2026-10-11
+
+RFC02 §14.24 adds a canonical, independently checked terminal-court scope
+bound to program/profile/job mode and maximum extent. One reachable block-node
+entry counts all layer instances. Derivation reuses the filing price contract,
+validates wiring once, caches program size, covers both sides of the 64-element
+node grammar boundary and every possible 127-element tail, and allocates no
+parameter/value/tree/position image. Malformed and decode budgets join the
+maximum court vector. Trace, commitment and flat material prices are recorded
+separately from economic work/credit.
+
+The shared flat court price now also charges reference line/sort work for
+constants and public inputs, which require no Merkle leaves. Oversized constant
+TopK is refused before sorting. Synthetic trial coverage includes all primitive
+samples, growing/sliding/transposed wide histories, every actual position/leaf
+price, 1,024 layers with state, exact encoder job bindings, changed declarations,
+and huge abstract extents without images. A new court regression authenticates
+the 63→64→65 grammar transition and window sliding without producer output
+values. The final full-library run passed **132 tests**, with one manual timing
+benchmark ignored and excluded. The production library check, formatting
+check and diff whitespace check passed. Commands, source/binary hashes and
+logs are recorded in `evidence/rfc02-flat-scope-v5-verdict.json`.
+
+The terminal scope has no shipping consumer yet. Typed statement binding,
+execution/checker/DA integration and aggregate budgets, actual-node acquisition,
+fresh prosecution and independent Final/redemption remain open, along with the
+full original RFC02 checkpoint/task/context/fidelity, security, privacy,
+economics and honest liveness requirements. Shipping fences remain dormant.

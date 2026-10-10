@@ -2972,3 +2972,68 @@ deadlines, shared aggregate resource accounting, public-chain acquisition,
 fresh model-holder prosecution and independent Final/redemption. The original
 §II.14 checkpoint/task/context/fidelity, conformance, economic and honest
 liveness requirements remain open. Shipping fences stay dormant.
+
+### 14.24 Staged flat-v5 all-position terminal-court resource admission
+
+`misaka-palw-kernel::flat_scope5::flat_resource_scope_v5` derives a canonical
+resource declaration from the validated program, maximum position count and
+optional exact encoder binding. `check_flat_resource_scope_v5` independently
+re-derives it and rejects any difference, including omitted relations, smaller
+costs, altered occurrence counts, profile/program/extent substitution or a
+changed job mode. The declaration has its own v5 root domain. There is no model
+name, frontend identity or operator allowlist input.
+
+The derivation validates wiring once, prices one representative per reachable
+block node and counts every layer occurrence. The same shared price function
+prices individual §14.23 filings and the registration envelope. No position
+array, parameter tensor, output tensor or Merkle tree is constructed; program
+serialization size is measured once and reused across relations. v1 permits
+at most one H per tensor, and H is `min(position + 1, window)`. The maximum
+resolved shape bounds every contraction/reduction/sort line, tree depth and
+source size, but is **not sufficient alone** for the commitment grammar:
+
+- Every large output span is conservatively priced at 127 elements, including
+  an earlier merged tail when the final shape has only 64-element leaves.
+- A source node that can cross 64 elements is priced for both flat-v5 and its
+  largest sub-64 v3 shape. The envelope retains the larger leaf count, carrier
+  and scratch bound; flat contiguous-span optimizations cannot discard the
+  earlier v3 row openings.
+- Initialization requires fewer sources than later positions. The maximum
+  position includes the previous fixed-state writer and HistAppend window
+  whenever either can occur in the admitted extent. The same symbolic block
+  types and fixed proof depths apply to every layer instance.
+- Constants and public inputs need no Merkle leaves, but still pay reference
+  contraction/reduction/sort work and scratch. The previous staged flat price
+  omitted those costs when skipping leaf authentication; both filing and scope
+  prices now include them. This correction activates no shipping profile.
+
+Every reachable relation must fit the existing one-MiB, 2^30 abstract-work,
+32-MiB scratch and 1024-operand-leaf caps, including the v5 envelope bytes.
+Malformed-header and decode costs join the maximum court vector. Logits have
+no H under v1, so decode pricing is invariant across positions. The declaration
+also records relation instances, maximum raw trace bytes, node commitment
+bytes, flat-tree bytes per position and flat hashing input bytes per claim.
+These are conservative independent maxima. They are neither a promise to
+serve clear model values nor a requirement to retain every position's full
+tree simultaneously. They are not yet the complete execution/checker/DA/network
+resource vector.
+
+An exhaustive small-program price oracle enumerates every position and leaf
+for all 25 primitive samples and growing/sliding histories with differing row
+sizes; every individual price fits the derived scope. Tests include earlier
+63-row v3 paths and 127-element tails, wide intermediate histories, exact
+encoder binding, 1,024 per-layer state instances, changed declarations and a
+2^21-position extent with a 2^24-entry external parameter table, without passing
+parameter images or position arrays to admission. Constant TopK beyond the
+court work cap is refused by both admission and the exact filing guard before
+reference sorting. Actual synthetic courts also cross 63→64→65 elements and
+a sliding window, convict false relations and dismiss missing/borrowed sources.
+
+This closes the staged **terminal-court resource preflight component**. A
+shipping consumer still must bind and check this exact scope in typed class/job
+statements, combine it with execution/checker/DA and aggregate budgets, and
+implement bounded public material/default/session acquisition. Actual-node
+fresh prosecution and independent Final/redemption, measured costs, real
+checkpoint/task/context/fidelity, privacy, economic and liveness requirements
+remain open. No shipping descriptor/class/route or fence selects flat-v5, and
+this declaration does not confer reward eligibility or full RFC02 completion.

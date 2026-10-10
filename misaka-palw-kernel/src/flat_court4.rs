@@ -209,15 +209,43 @@ pub(crate) fn relation_bounds<const V: u8>(
     count: u64,
     output_bytes: u64,
 ) -> Result<FlatCourtBoundsV4, DismissalV1> {
-    if !valid_at(c, pr, p, s, n) {
+    relation_bounds_program::<V>(
+        c.claim.program,
+        c.claim.positions,
+        pr,
+        p,
+        s,
+        n,
+        count,
+        output_bytes,
+        false,
+        size_with_limit(c.claim.program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64).map_err(|_| na("oversized program"))?,
+    )
+}
+
+/// Same price contract for filings and a conservative all-position envelope.
+/// The latter covers both sides of a node source's 64-element grammar boundary
+/// and the full possible 127-element tail, without enumerating positions/leaves.
+pub(crate) fn relation_bounds_program<const V: u8>(
+    program: &misaka_palw_tir::program::TirProgramV1,
+    positions: u32,
+    pr: &PreparedV1<'_>,
+    p: u32,
+    s: u16,
+    n: u16,
+    count: u64,
+    output_bytes: u64,
+    envelope: bool,
+    program_bytes: u64,
+) -> Result<FlatCourtBoundsV4, DismissalV1> {
+    if p >= positions || !pr.valid(s, n) {
         return Err(na("no such relation"));
     }
     let node = pr.w.node(s, n);
     let sh = pr.shapes(p, s, n);
+    let min_sh = envelope.then(|| pr.shapes(0, s, n));
     let sources = operand_sources(pr, p, s, n).map_err(DismissalV1::NotAuthentic)?;
     let mut bytes = 2 + node_opening_bytes_v1(pr.node_count) + output_bytes + 4 + 1;
-    let program_bytes =
-        size_with_limit(c.claim.program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64).map_err(|_| na("oversized program"))?;
     // Canonical parsing/type validation and the unrolled source-writer scan are
     // separate from reference arithmetic, but both are part of this API's work.
     let mut work =
@@ -238,7 +266,7 @@ pub(crate) fn relation_bounds<const V: u8>(
             }
             OperandSourceV1::Source(SourceV1::Param { .. }) => true,
             OperandSourceV1::Source(SourceV1::Const(j)) => {
-                let d = &c.claim.program.consts[*j as usize];
+                let d = &program.consts[*j as usize];
                 scratch = scratch.saturating_add(d.data.len() as u64 * 16);
                 false
             }
@@ -255,10 +283,6 @@ pub(crate) fn relation_bounds<const V: u8>(
             }
             _ => false,
         };
-        if !committed {
-            leaf_limits.push(0);
-            continue;
-        }
         let line = match node.prim {
             Prim::MatMul => shape.last().copied().unwrap_or(1) as u64,
             Prim::ReduceSum { axis } | Prim::ReduceMax { axis } | Prim::TopK { axis, .. } => shape[axis as usize] as u64,
@@ -267,8 +291,17 @@ pub(crate) fn relation_bounds<const V: u8>(
         // The second MatMul operand's contraction is its penultimate dimension.
         let line = if matches!(node.prim, Prim::MatMul) && i == 1 { shape[shape.len() - 2] as u64 } else { line };
         let reads = (count as u64).saturating_mul(line);
+        if !committed {
+            // Constants/public inputs need no Merkle leaves, but reference
+            // contraction/reduction/sort work and scratch still have a cost.
+            let sorting = if matches!(node.prim, Prim::TopK { .. }) { crate::merkle::depth(line) * 64 } else { 0 };
+            work = work.saturating_add(reads.saturating_mul(64 + sorting));
+            scratch = scratch.saturating_add(line.saturating_mul(128));
+            leaf_limits.push(0);
+            continue;
+        }
         let l = LayoutV3::of(shape);
-        let (all, max_value, leaf_bytes) = if flat {
+        let (mut all, mut max_value, mut leaf_bytes) = if flat {
             let f = FlatLayoutV4::of(&shape64(shape)).ok_or_else(|| na("invalid input shape"))?;
             let b = f.bounds_for::<V>(dtype).ok_or_else(|| na("invalid input dtype"))?;
             (f.leaves(), b.leaf_elements, b.leaf_value_bytes)
@@ -280,12 +313,47 @@ pub(crate) fn relation_bounds<const V: u8>(
                 94 + 8 * shape.len() as u64 + values * dtype.width() as u64 + 64 * crate::merkle::depth(l.leaves(AXIS_ROW)),
             )
         };
+        let mut mixed_node_grammar = false;
+        if envelope && matches!(src, OperandSourceV1::Source(SourceV1::Node { .. })) {
+            // The maximum shape alone can miss a smaller v3 source, or a
+            // 127-element flat tail at an earlier position. Bound both grammars.
+            if flat {
+                max_value = 127;
+                let f = FlatLayoutV4::of(&shape64(shape)).ok_or_else(|| na("invalid envelope input"))?;
+                leaf_bytes = f.bounds_for::<V>(dtype).ok_or_else(|| na("invalid envelope dtype"))?.leaf_hash_bytes
+                    + 4
+                    + 127 * dtype.width() as u64;
+            }
+            let min_shape = min_sh.as_ref().and_then(|sh| sh.inputs.get(i)).cloned().unwrap_or_else(|| pr.w.node(s, n).out.resolve(1)); // previous HistAppend window
+            let min_len = LayoutV3::of(&min_shape).len;
+            if min_len < 64 {
+                mixed_node_grammar = flat;
+                let mut small = shape.clone();
+                // Validated v1 types have at most one H, whose minimum is 1.
+                if let Some(axis) = small.iter().zip(&min_shape).position(|(max, min)| max != min) {
+                    small[axis] = small[axis].min((63 / min_len) as usize);
+                }
+                let small = LayoutV3::of(&small);
+                let legacy_leaves = small.leaves(AXIS_ROW);
+                let legacy_values = small.row_len.min(crate::merkle3::TILE_V3);
+                all = all.max(legacy_leaves);
+                max_value = max_value.max(legacy_values);
+                leaf_bytes = leaf_bytes.max(
+                    94 + 8 * shape.len() as u64 + legacy_values * dtype.width() as u64 + 64 * crate::merkle::depth(legacy_leaves),
+                );
+            }
+        }
         let mut leaves = reads.min(all);
         // Identity-position reads cover a contiguous flat interval, irrespective
         // of rank; equality of shapes in pointwise relations also preserves it.
         if flat
+            && !mixed_node_grammar
             && (matches!(node.prim, Prim::Reshape | Prim::Cast | Prim::StateWrite { .. })
-                || (shape == &sh.out
+                || (((!envelope && shape == &sh.out)
+                    || (envelope
+                        && i < node.inputs.len()
+                        && crate::plan::ref_type(program, pr.w.occurrences[s as usize].0 as usize, &node.inputs[i]).shape
+                            == node.out.shape))
                     && matches!(
                         node.prim,
                         Prim::Add

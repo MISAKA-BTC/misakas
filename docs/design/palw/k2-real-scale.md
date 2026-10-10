@@ -842,3 +842,10 @@ v3. Wide commit points remain prohibited. This adds kernel component coverage
 without selecting a node profile or establishing real-size checkpoint support,
 worst-job resource bounds, DA, fresh prosecution or Final/redemption. Evidence:
 `evidence/rfc02-flat-v5-verdict.json`.
+
+**2026-10-11 terminal-scope update:** RFC02 §14.24 derives and rechecks all-position
+flat-v5 court ceilings without tensor/tree/position arrays, retaining earlier v3
+small-node paths and larger merged tails. Constants/public inputs pay reference
+line/sort work. This is a kernel resource preflight component; typed node binding,
+complete execution/checker/DA budgets, aggregate admission and actual-node/Final
+integration remain open. See `tir/evidence/rfc02-flat-scope-v5-verdict.json`.

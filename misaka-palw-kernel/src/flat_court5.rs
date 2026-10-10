@@ -276,8 +276,17 @@ fn decode(
     let rival = common::value_in_opening(&f.logits, dtype, &shape, f.rival as u64).ok_or_else(|| na("missing rival logit"))?;
     if rival > got || (rival == got && f.rival < delivered) { convict() } else { Err(DismissalV1::NoFault) }
 }
-fn decode_bounds(
+pub(crate) fn decode_bounds(
     c: &FlatSegContextV5<'_>,
+    pr: &crate::element::PreparedV1<'_>,
+    p: u32,
+    s: u16,
+    n: u16,
+) -> Result<FlatCourtBoundsV5, DismissalV1> {
+    decode_bounds_program(c.claim.program, pr, p, s, n)
+}
+pub(crate) fn decode_bounds_program(
+    program: &misaka_palw_tir::program::TirProgramV1,
     pr: &crate::element::PreparedV1<'_>,
     p: u32,
     s: u16,
@@ -295,8 +304,8 @@ fn decode_bounds(
             + 64 * crate::merkle::depth(LayoutV3::of(&shape).leaves(0))
     };
     let bytes = 8 + 9 + crate::element::node_opening_bytes_v1(pr.node_count) + 2 * each;
-    let program = common::size_with_limit(c.claim.program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
-        .map_err(|_| na("large program"))?;
+    let program =
+        common::size_with_limit(program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64).map_err(|_| na("large program"))?;
     Ok(FlatCourtBoundsV4 {
         filing_bytes: bytes,
         work: bytes * 16 + program * 1024 + pr.node_count * 256 + 8192,
@@ -337,6 +346,21 @@ pub fn flat_fault_court_bounds_v5(c: &FlatSegContextV5<'_>, f: &FlatFaultV5) -> 
     let pr = common::prepare(c)?;
     fault_bounds_prepared(c, &pr, f)
 }
+pub(crate) fn malformed_bounds(
+    program: &misaka_palw_tir::program::TirProgramV1,
+    pr: &crate::element::PreparedV1<'_>,
+) -> Result<FlatCourtBoundsV5, DismissalV1> {
+    let bytes = crate::element::node_opening_bytes_v1(pr.node_count) + 2 + 4 + 32 + 1 + 128;
+    let program =
+        common::size_with_limit(program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64).map_err(|_| na("large program"))?;
+    Ok(FlatCourtBoundsV4 {
+        filing_bytes: bytes,
+        work: bytes * 16 + program * 1024 + pr.node_count * 256,
+        scratch_bytes: 8 << 20,
+        operand_leaves: vec![],
+    })
+}
+
 fn fault_bounds_prepared(
     c: &FlatSegContextV5<'_>,
     pr: &crate::element::PreparedV1<'_>,
@@ -349,15 +373,7 @@ fn fault_bounds_prepared(
             if !pr.valid(f.output.occurrence, f.output.node) || f.output.position >= c.claim.positions {
                 return Err(na("no malformed target"));
             }
-            let bytes = crate::element::node_opening_bytes_v1(pr.node_count) + 2 + 4 + 32 + 1 + 128;
-            let program = common::size_with_limit(c.claim.program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
-                .map_err(|_| na("large program"))?;
-            FlatCourtBoundsV4 {
-                filing_bytes: bytes,
-                work: bytes * 16 + program * 1024 + pr.node_count * 256,
-                scratch_bytes: 8 << 20,
-                operand_leaves: vec![],
-            }
+            malformed_bounds(c.claim.program, pr)?
         }
         FlatFaultV5::Decode(f) => {
             if f.index as usize >= c.claim.generated.len() {
@@ -932,5 +948,44 @@ mod tests {
         bytes.push(DType::I128.tag());
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
         assert!(FlatFaultV5::from_bytes(&bytes).is_err());
+    }
+    #[test]
+    fn flat_v5_history_crosses_small_whole_to_large_leaf_and_sliding_window_with_bound_sources() {
+        let p = crate::flat_scope5::tests::history(1, 65);
+        let scope = crate::flat_scope5::flat_resource_scope_v5(&p, 66, None).unwrap();
+        let honest = Trial::of(p.clone(), MapParams::default(), vec![1; 66], vec![], None);
+        for position in [0, 62, 63, 64, 65] {
+            let value = honest.own.value(position, 0, 2).unwrap();
+            let f = if value.data.len() < 64 { honest.whole(position, 0, 2) } else { honest.leaf(position, 0, 2, hash(value, 0)) };
+            assert_eq!(verify_flat_fault_v5(&honest.context(), &f), Err(DismissalV1::NoFault));
+            assert_codec(&honest, &f);
+            let mut actual = value.clone();
+            let e = actual.data.len() - 1;
+            actual.data[e] += 1;
+            let bad = Trial::of(p.clone(), MapParams::default(), vec![1; 66], vec![], Some((position, 0, 2, e as u64)));
+            let f = if value.data.len() < 64 { bad.whole(position, 0, 2) } else { bad.leaf(position, 0, 2, hash(&actual, 0)) };
+            assert!(verify_flat_fault_v5(&bad.context(), &f).is_ok());
+            let bound = scope.relations.iter().find(|r| r.block == 0 && r.node == 2).unwrap();
+            assert!(f.to_bytes().unwrap().len() as u64 <= bound.filing_bytes);
+            if position > 0 {
+                let mut missing = f.clone();
+                let inputs = match &mut missing {
+                    FlatFaultV5::Whole(f) => &mut f.inputs,
+                    FlatFaultV5::Leaf(f) => &mut f.inputs,
+                    _ => unreachable!(),
+                };
+                inputs[1].flat.clear();
+                inputs[1].legacy.clear();
+                assert!(verify_flat_fault_v5(&bad.context(), &missing).is_err());
+                let mut borrowed = f.clone();
+                let inputs = match &mut borrowed {
+                    FlatFaultV5::Whole(f) => &mut f.inputs,
+                    FlatFaultV5::Leaf(f) => &mut f.inputs,
+                    _ => unreachable!(),
+                };
+                inputs[1].node = bad.public.node_opening(position, 0, 2);
+                assert!(verify_flat_fault_v5(&bad.context(), &borrowed).is_err());
+            }
+        }
     }
 }
