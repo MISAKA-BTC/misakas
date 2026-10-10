@@ -335,3 +335,19 @@ Remaining, stated:
   POLICY values;
 - the reward front-running residual (§5);
 - BUDGET's re-check at the deferred `Final` (§7).
+
+## 11. LG14-B interfaces (after the integration merge)
+
+- **Final hold.** LG14-B's tag-157 demand opens its session through `open_da_session_rcore_v1`, so a reserver's descent sessions are
+  reserved sessions: seat-like for DA-5, on the reservation's own budget, and the reservation holds `Final` and every timeout for the
+  whole descent.
+- **The fused terminal after Final.** `ShardCourtAccused` (the held dissection's one move) is admitted on a `Final` claim when the
+  accuser's own reservation on it is live; below the fence the reservation table is empty and the refusal is unchanged.
+- **The common engine.** `palw_fraud_filer_next_descent_v1` runs LG14-B's `palw_legacy_descent_next_v2` behind the same prelude
+  (reserve, one session at a time, the binding read); `PalwLegacyProbeV1::HeldNode` builds tag 157 and names
+  `PalwDaUnitV1::LegacyHeldV2`. The node module still runs the bisection only: building the verifier's own tree
+  (`PalwLegacyOwnTreeV2`) and reading tag-158 frontiers in the node is not done.
+- **A2U.** `PalwLifecycleKindFenceV1::LegacyPublicFilerV1 = 5` owns tags 154–155 (allocation 154–156), with a `StateEncoding` row for
+  delta 200 / tail `0xE2`.
+- **RPC.** Ops 204–206 are built by `kaspa_rpc_core::convert::palw_legacy` (the service's handlers call them and nothing else); the
+  real-node suite calls the same builders on a node started after the claim and carries the answers through the JSON wire form.
