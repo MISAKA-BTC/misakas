@@ -364,7 +364,10 @@ pub(crate) fn derive_budgets(
         artifact_bytes: program
             .params
             .iter()
-            .map(|p| p.shape.iter().map(|d| *d as u128).product::<u128>() * p.dtype.width() as u128)
+            .map(|p| {
+                let instances = if p.per_layer { program.schedule.layers.len() as u128 } else { 1 };
+                p.shape.iter().map(|d| *d as u128).product::<u128>() * p.dtype.width() as u128 * instances
+            })
             .sum(),
         ..Default::default()
     };

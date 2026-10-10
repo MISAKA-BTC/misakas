@@ -92,8 +92,7 @@ impl KernelLedgerV1 {
                     &declared_param_instances(&program.params, program.schedule.layers.len()),
                 )?;
                 let writers = check_memory_root_v1(m, &program, &w.param_commitments)?;
-                let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
-                let base = public_prosecution_complete_v1(&d, &w.plan, nodes, &ProfileMaterialV1::kernel_route(true), policy)
+                let base = public_prosecution_complete_v1(&d, &program, &w.plan, &ProfileMaterialV1::kernel_route(true), policy)
                     .map_err(|g| format!("the update rule is not publicly prosecutable: {g:?}"))?;
                 let bounds = memory_bounds_v1(&base, &program, &w.plan, m, policy)?;
                 let rule = ClassRowV1 {

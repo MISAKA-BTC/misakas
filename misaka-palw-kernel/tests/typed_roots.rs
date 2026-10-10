@@ -1123,11 +1123,12 @@ fn bounds_per_kind_fit_the_carriers_and_refuse_past_each_ceiling_by_name() {
     assert_eq!(b.max_concurrent_sessions, 8 * MAX_POSITIONS + 1);
     assert_eq!(b.max_public_bytes, rule.bounds.max_public_bytes + 16 * 4 + 128, "one step's material and the 16 × i32 pre-state");
     let evidence = 64 * 16 + 64 * MAX_POSITIONS as u128 * 2;
-    assert_eq!(
-        b.max_retained_state,
-        8 * (rule.bounds.max_retained_state + evidence) + 64 * 9 + 64 + 16 * 4 + 128,
-        "8 steps' commitments and evidence, 9 boundary roots, the pre-state's commitment and the carried 16 × i32 post-state"
+    let without_demand_metadata = 8 * (rule.bounds.max_retained_state + evidence) + 64 * 9 + 64 + 16 * 4 + 128;
+    assert!(
+        b.max_retained_state > without_demand_metadata,
+        "the pre-state demand's participants and response metadata are retained too"
     );
+    assert!(b.max_commit_bytes < b.max_retained_state, "served responses and demand bonds do not share the commitment carrier");
     assert_eq!(
         (b.max_opening_bytes, b.max_court_work),
         (rule.bounds.max_opening_bytes, rule.bounds.max_court_work),

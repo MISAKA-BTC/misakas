@@ -176,7 +176,6 @@ fn k2_route(program: &misaka_palw_tir::program::TirProgramV1, positions: u32) {
     use misaka_palw_kernel::public::ProfileMaterialV1;
     let bytes = program.encode();
     let root = misaka_palw_kernel::public::program_root_v1(&bytes);
-    let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
     let policy = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default());
     let carrier = kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1;
     for (name, d) in [("K2-TIR-v1", k2_tir_v1_descriptor()), ("K2-TIR-v2", k2_tir_v2_descriptor())] {
@@ -207,7 +206,7 @@ fn k2_route(program: &misaka_palw_tir::program::TirProgramV1, positions: u32) {
             ),
             Err(o) => println!("      check_plan_v1 (armed): {} — {}", o.code(), o.to_string().chars().take(500).collect::<String>()),
         }
-        match public_prosecution_complete_v1(&d, &plan, nodes, &ProfileMaterialV1::kernel_route(true), &policy.prosecution) {
+        match public_prosecution_complete_v1(&d, program, &plan, &ProfileMaterialV1::kernel_route(true), &policy.prosecution) {
             Ok(g) => {
                 println!(
                     "      public_prosecution_complete_v1: PASS — public {} B, opening {} B, filing {} B, response {} B, court work {}, verifier RAM {} B, retained {} B, sessions {}",

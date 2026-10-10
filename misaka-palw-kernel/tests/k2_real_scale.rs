@@ -610,7 +610,7 @@ fn k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers() {
     // K2-TIR-v2 (as measured by COV-P1P2): the whole-claim gate refuses, and so do the carriers.
     let v2 = k2_tir_v2_descriptor();
     let plan2 = plan_for_tir_program_v1(&v2, &program, root, ctx).unwrap();
-    let gaps = public_prosecution_complete_v1(&v2, &plan2, nodes, &material, &ROUTE).unwrap_err();
+    let gaps = public_prosecution_complete_v1(&v2, &program, &plan2, &material, &ROUTE).unwrap_err();
     eprintln!(
         "[k2s] 9B-8k K2-TIR-v2: {} relations, worst court {} B; gate refuses: {gaps:?}",
         plan2.relations.len(),
