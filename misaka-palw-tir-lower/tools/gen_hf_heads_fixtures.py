@@ -45,6 +45,10 @@ ALBERT = dict(ENC, embedding_size=16, max_position_embeddings=32, type_vocab_siz
 DEBERTA = dict(ENC, max_position_embeddings=32, type_vocab_size=0, hidden_act="gelu", layer_norm_eps=1e-7, pad_token_id=0,
                relative_attention=True, position_buckets=8, max_relative_positions=-1, pos_att_type=["p2c", "c2p"], share_att_key=True,
                norm_rel_ebd="layer_norm", position_biased_input=False, pooler_hidden_size=32, pooler_hidden_act="gelu", legacy=True)
+MODERN = dict(ENC, max_position_embeddings=64, local_attention=4, global_attn_every_n_layers=3, pad_token_id=0, bos_token_id=1,
+              eos_token_id=2, cls_token_id=1, sep_token_id=2, norm_bias=False, attention_bias=False, mlp_bias=False,
+              hidden_activation="gelu", classifier_activation="gelu", num_hidden_layers=3,
+              layer_types=["full_attention", "sliding_attention", "sliding_attention"])
 DSEQ2 = [[1, 11, 25, 7, 2], [1, 40, 9, 17, 2, 33, 21, 8, 2]]
 MASK_B = 4  # an id used as the mask token in the MLM fixtures (any id: the class reads the row at a position)
 
@@ -61,6 +65,7 @@ CONFIGS = {
     "albert_qa": ("AlbertConfig", "AlbertForQuestionAnswering", dict(ALBERT), BSEQ, "qa", 0, 12, 3),
     "deberta_v2_tokcls": ("DebertaV2Config", "DebertaV2ForTokenClassification", dict(DEBERTA, num_labels=4), DSEQ2, "token", 0, 12, None),
     "deberta_v2_qa": ("DebertaV2Config", "DebertaV2ForQuestionAnswering", dict(DEBERTA), DSEQ2, "qa", 0, 12, None),
+    "modernbert_tokcls": ("ModernBertConfig", "ModernBertForTokenClassification", dict(MODERN, classifier_bias=True, num_labels=4), DSEQ2, "token", 0, 12, None),
     "bert_mlm": ("BertConfig", "BertForMaskedLM", dict(BERT), [[2, 11, MASK_B, 7, 3], [2, 40, 9, 17, 33, MASK_B, 8, 3]], "mlm", 0, 12, None),
     "roberta_mlm": ("RobertaConfig", "RobertaForMaskedLM", dict(ROBERTA), [[0, 11, MASK_B, 7, 2], [0, 40, 9, 17, 33, MASK_B, 8, 2]], "mlm", 1,
                     12, None),

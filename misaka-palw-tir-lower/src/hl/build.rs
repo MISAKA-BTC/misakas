@@ -655,13 +655,16 @@ impl Builder<'_> {
             x = self.full_norm(&mut bk, x, n, "final_norm", d, false)?;
         }
         // A sequence classifier: the final row through the optional dense + activation and the classification layer; no head.
-        if let OutputSpec::Classify { labels, bias, pre } = &s.output {
+        if let OutputSpec::Classify { labels, bias, pre, .. } = &s.output {
             if h.transform.is_some() {
                 return Err(LowerError::not_lowerable("HEAD_TRANSFORM_V1 under a classification output: the transform belongs to a language-model head"));
             }
             if let Some(p) = pre {
                 x = self.linear(&mut bk, x, "classifier.pre", d, d, p.bias, false, "classifier.pre")?;
                 x = bk.f(Op::Act(plain_act(p.act, "a classifier head")?), vec![x], d, "classifier.act");
+                if let Some(n) = p.norm {
+                    x = self.full_norm(&mut bk, x, n, "classifier.pre.norm", d, false)?;
+                }
             }
             x = self.linear(&mut bk, x, "classifier.out", *labels, d, *bias, false, "classifier.out")?;
             if !matches!(x, Ref::Node(..)) {
@@ -671,9 +674,16 @@ impl Builder<'_> {
             return Ok(self.blocks.len() - 1);
         }
         // Per-token logits (`OUTPUT_TOKEN_LOGITS_V1`): the position's final row through the classification layer; no pooling, no head.
-        if let OutputSpec::TokenLogits { labels, bias } = &s.output {
+        if let OutputSpec::TokenLogits { labels, bias, pre } = &s.output {
             if h.transform.is_some() {
                 return Err(LowerError::not_lowerable("HEAD_TRANSFORM_V1 under per-token logits: the transform belongs to a language-model head"));
+            }
+            if let Some(p) = pre {
+                x = self.linear(&mut bk, x, "classifier.pre", d, d, p.bias, false, "classifier.pre")?;
+                x = bk.f(Op::Act(plain_act(p.act, "a token head")?), vec![x], d, "classifier.act");
+                if let Some(n) = p.norm {
+                    x = self.full_norm(&mut bk, x, n, "classifier.pre.norm", d, false)?;
+                }
             }
             x = self.linear(&mut bk, x, "classifier.out", *labels, d, *bias, false, "classifier.out")?;
             if !matches!(x, Ref::Node(..)) {

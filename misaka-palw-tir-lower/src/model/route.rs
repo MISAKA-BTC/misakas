@@ -329,7 +329,10 @@ pub fn lower_bidir_class_shape_with_v1(
     use crate::lower::bidir::{self, BidirCfg, BidirExtras, Pooling};
     let head = bidir_head_of(spec).ok_or_else(|| crate::error::LowerError::not_lowerable("not a bidirectional encoder's head"))?;
     let pooled = matches!(head, BidirHeadV1::Embedding | BidirHeadV1::Sequence);
-    let pooling = if head == BidirHeadV1::Embedding && mean { Pooling::Mean } else { Pooling::Cls };
+    // An embedding pools as the repository's sentence-transformers module says; a sequence classifier as its OWN head says
+    // (`classifier_pooling = "mean"` of ModernBERT), the rest read `[CLS]`.
+    let classifier_mean = matches!(spec.output, crate::spec::OutputSpec::Classify { mean: true, .. });
+    let pooling = if (head == BidirHeadV1::Embedding && mean) || classifier_mean { Pooling::Mean } else { Pooling::Cls };
     let normalize = normalize && head == BidirHeadV1::Embedding;
     let rows_max = spec.embedding.positions.as_ref().map(|p| p.rows.saturating_sub(p.offset) as u32);
     let lmax = rows_max.map_or(lmax, |r| lmax.min(r)).max(3);

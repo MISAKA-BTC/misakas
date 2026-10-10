@@ -46,6 +46,7 @@ const TOKEN_HEADS: &[(&str, &str, usize, u32)] = &[
     ("albert_qa", "albert-qa", 2, 0),
     ("deberta_v2_tokcls", "deberta-v2-tokcls", 4, 0),
     ("deberta_v2_qa", "deberta-v2-qa", 2, 0),
+    ("modernbert_tokcls", "modernbert-tokcls", 4, 0),
 ];
 
 struct OneProgram<'a>(&'a dyn tir::ParamSource);
@@ -74,7 +75,7 @@ fn every_token_head_is_read_by_its_adapter_and_binds_every_tensor() {
             r.adapter
         );
         assert!(
-            matches!(r.spec.output, OutputSpec::TokenLogits { labels: l, bias: true } if l == *labels),
+            matches!(r.spec.output, OutputSpec::TokenLogits { labels: l, bias: true, .. } if l == *labels),
             "{name}: {:?}",
             r.spec.output
         );

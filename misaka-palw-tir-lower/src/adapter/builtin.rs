@@ -178,6 +178,8 @@ pack!(
     "deberta-v2-seqcls",
     "deberta-v2-tokcls",
     "deberta-v2-qa",
+    "modernbert-seqcls",
+    "modernbert-tokcls",
 );
 
 /// The text of a built-in adapter, by id.

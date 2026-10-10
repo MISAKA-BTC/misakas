@@ -1294,12 +1294,27 @@ pub enum OutputSpec {
     /// **A sequence classifier / reranker / reward head** (`OUTPUT_CLASSIFY_V1`): the pooled row (the last token of a decoder, `[CLS]`
     /// of an encoder) through an optional dense layer with an activation (`pre`: BERT's pooler, RoBERTa's `dense` + tanh,
     /// DistilBERT's `pre_classifier` + ReLU), then a linear layer to `labels` logits. The output is the `labels` logits, unnormalised.
-    Classify { labels: usize, bias: bool, pre: Option<ClassifyPre> },
+    ///
+    /// `mean`: the pooled row is the MEAN of the real rows, not `[CLS]` (ModernBERT's `classifier_pooling = "mean"`).
+    Classify {
+        labels: usize,
+        bias: bool,
+        pre: Option<ClassifyPre>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        mean: bool,
+    },
     /// **Per-token logits** (`OUTPUT_TOKEN_LOGITS_V1`, HFX 2026-10-08): EVERY row of a bidirectional encoder through one linear layer
     /// to `labels` logits, `[L, labels]` over the padded token axis — token classification (`…ForTokenClassification`'s
     /// `classifier`) and extractive question answering (`…ForQuestionAnswering`'s `qa_outputs`, `labels` = 2: the start logit in
     /// column 0, the end logit in column 1). Unnormalised; a pad row is computed like any other and is not a token of the input.
-    TokenLogits { labels: usize, bias: bool },
+    ///
+    /// `pre`: a prediction head before the classifier (ModernBERT's `head`: dense, activation, norm), on every row.
+    TokenLogits {
+        labels: usize,
+        bias: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pre: Option<ClassifyPre>,
+    },
     /// **A masked-language-model head** (`…ForMaskedLM`, the `fill-mask` task; HFX 2026-10-10): EVERY row of a bidirectional encoder through
     /// the head's transform (`HEAD_TRANSFORM_V1`: dense, activation, LayerNorm) and the vocabulary projection (tied to the word
     /// embeddings, plus the head's bias), `[L, vocab]` logits over the padded token axis. The row of a masked position is what a user reads;
@@ -1313,6 +1328,10 @@ pub enum OutputSpec {
 pub struct ClassifyPre {
     pub bias: bool,
     pub act: Act,
+    /// A norm after the activation (ModernBERT's `ModernBertPredictionHead`: `norm(act(dense(x)))`); its tensors are the roles
+    /// `cls_pre_norm.{weight, bias}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub norm: Option<NormSpec>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

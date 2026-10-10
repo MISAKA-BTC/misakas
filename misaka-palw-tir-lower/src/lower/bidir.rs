@@ -106,9 +106,9 @@ struct Arch {
     /// ALBERT: the embedding is at the table's width and a projection (bias or not) lifts the normed row to the hidden width.
     proj_in: Option<bool>,
     /// `OUTPUT_CLASSIFY_V1`: the pooled row `[CLS]` goes through an optional dense layer + activation and a linear layer to the labels.
-    classify: Option<(bool, Option<crate::spec::ClassifyPre>)>,
+    classify: Option<(bool, Option<crate::spec::ClassifyPre>, bool)>,
     /// `OUTPUT_TOKEN_LOGITS_V1`: every row goes through a linear layer (its bias) to the labels; no pooling.
-    token_logits: Option<bool>,
+    token_logits: Option<(bool, Option<crate::spec::ClassifyPre>)>,
     /// `ENC_PAIR_SEGMENTS_V1`: the first segment's closing separator (set only for a model with a type table of two rows or more).
     pair_sep: Option<u32>,
     /// `OutputSpec::MaskedLm`: every row through the head's transform (dense, activation, LayerNorm) and the vocabulary projection.
@@ -257,11 +257,11 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
         proj_in: factorised.then_some(e.proj_in_bias),
         dis: e.disentangled,
         classify: match &spec.output {
-            crate::spec::OutputSpec::Classify { bias, pre, .. } => Some((*bias, *pre)),
+            crate::spec::OutputSpec::Classify { bias, pre, mean, .. } => Some((*bias, *pre, *mean)),
             _ => None,
         },
         token_logits: match &spec.output {
-            crate::spec::OutputSpec::TokenLogits { bias, .. } => Some(*bias),
+            crate::spec::OutputSpec::TokenLogits { bias, pre, .. } => Some((*bias, *pre)),
             _ => None,
         },
         pair_sep: None,
@@ -946,11 +946,23 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             }
             // **Per-token logits** (`OUTPUT_TOKEN_LOGITS_V1`): every row through the classification layer, `[L, labels]` in one
             // power-of-two unit; no pooling. A pad row is computed like any other.
-            if let Some(tbias) = a.token_logits {
+            if let Some((tbias, tpre)) = a.token_logits {
                 if cfg.normalize {
                     return Err(LowerError::not_lowerable("per-token logits read the encoder's rows, un-normalised"));
                 }
-                let h = codes_rows(&mut b, cx, &mut lb, &x)?;
+                let codes_want = |site: &str| Want { dt: DType::I16, key: site_key(site) };
+                let mut h = codes_rows(&mut b, cx, &mut lb, &x)?;
+                // A prediction head before the classifier (ModernBERT's: dense, activation, norm), on every row.
+                if let Some(p) = tpre {
+                    let up = linear_rows(&mut b, cx, &mut lb, &h, "classifier.pre.w", p.bias.then_some("classifier.pre.b"), "tok.pre", &codes_want("tok.pre"))?;
+                    note_site(cx, tb, &up);
+                    h = lower_table_named(&mut b, cx, &mut lb, &up, TableFn::Act(p.act), "tok.act")?;
+                    note_site(cx, tb, &h);
+                    if let Some(n) = p.norm {
+                        h = norm_rows_kind(&mut b, cx, &mut lb, &h, n.kind, n.eps, "classifier.pre.norm", n.bias, &codes_want("tok.norm"))?;
+                        note_site(cx, tb, &h);
+                    }
+                }
                 let key = ScaleKey { base: Base::Pow2Site { names: vec!["tok.out".into()] }, factor: 1.0 };
                 let out = linear_rows(
                     &mut b,
@@ -995,9 +1007,10 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             // **A classification head** (`OUTPUT_CLASSIFY_V1`): the `[CLS]` row through the optional dense + activation (BERT's pooler,
             // RoBERTa's `dense` + tanh, DistilBERT's `pre_classifier` + ReLU) and the linear layer to the labels; the output is the
             // labels' logits in one power-of-two unit.
-            if let Some((cbias, pre)) = a.classify {
-                if cfg.pooling != Pooling::Cls || cfg.normalize {
-                    return Err(LowerError::not_lowerable("a classification head reads the [CLS] row, un-normalised"));
+            if let Some((cbias, pre, mean)) = a.classify {
+                let want_pooling = if mean { Pooling::Mean } else { Pooling::Cls };
+                if cfg.pooling != want_pooling || cfg.normalize {
+                    return Err(LowerError::not_lowerable("a classification head reads the pooled row its spec names ([CLS] or the mean), un-normalised"));
                 }
                 let codes_want = |site: &str| Want { dt: DType::I16, key: site_key(site) };
                 let mut h = codes_rows(&mut b, cx, &mut lb, &pv)?;
@@ -1006,6 +1019,10 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                     note_site(cx, tb, &up);
                     h = lower_table_named(&mut b, cx, &mut lb, &up, TableFn::Act(p.act), "cls.act")?;
                     note_site(cx, tb, &h);
+                    if let Some(n) = p.norm {
+                        h = norm_rows_kind(&mut b, cx, &mut lb, &h, n.kind, n.eps, "classifier.pre.norm", n.bias, &codes_want("cls.norm"))?;
+                        note_site(cx, tb, &h);
+                    }
                 }
                 let key = ScaleKey { base: Base::Pow2Site { names: vec!["cls.out".into()] }, factor: 1.0 };
                 let out = linear_rows(&mut b, cx, &mut lb, &h, "classifier.out.w", cbias.then_some("classifier.out.b"), "cls.out", &Want { dt: DType::I32, key })?;
@@ -1653,7 +1670,20 @@ pub fn float_forward_with(
         return Ok(out[..n_real].concat());
     }
     // Per-token logits: the real rows' logits, row-major `[count, labels]`.
-    if let Some(tbias) = a.token_logits {
+    if let Some((tbias, tpre)) = a.token_logits {
+        let mut x = x;
+        if let Some(pr) = tpre {
+            let wd = p("classifier.pre.w", None)?;
+            let bd = if pr.bias { Some(p("classifier.pre.b", None)?) } else { None };
+            x = x.iter().map(|r| lin(r, &wd, bd.as_deref(), d)).collect();
+            observe("post.tok.pre".into(), &x[..n_real]);
+            x = x.iter().map(|r| r.iter().map(|v| crate::float_ref::act(pr.act, *v as f32) as f64).collect()).collect();
+            observe("post.tok.act".into(), &x[..n_real]);
+            if let Some(n) = pr.norm {
+                x = x.iter().map(|r| norm(r, &norm_cfg(&n), "classifier.pre.norm", None)).collect::<Result<_>>()?;
+                observe("post.tok.norm".into(), &x[..n_real]);
+            }
+        }
         let w = p("classifier.out.w", None)?;
         let labels = hl.params[hl_param(hl, "classifier.out.w")? as usize].shape[0];
         let bv = if tbias { Some(p("classifier.out.b", None)?) } else { None };
@@ -1666,9 +1696,10 @@ pub fn float_forward_with(
         Pooling::Mean => (0..d).map(|j| (0..n_real).map(|i| x[i][j]).sum::<f64>() / n_real as f64).collect(),
     };
     observe("post.pool".into(), std::slice::from_ref(&pooled));
-    if let Some((cbias, pre)) = a.classify {
-        if cfg.pooling != Pooling::Cls || cfg.normalize {
-            return Err(LowerError::not_lowerable("a classification head reads the [CLS] row, un-normalised"));
+    if let Some((cbias, pre, mean)) = a.classify {
+        let want_pooling = if mean { Pooling::Mean } else { Pooling::Cls };
+        if cfg.pooling != want_pooling || cfg.normalize {
+            return Err(LowerError::not_lowerable("a classification head reads the pooled row its spec names ([CLS] or the mean), un-normalised"));
         }
         let mut h = pooled.clone();
         if let Some(pr) = pre {
@@ -1678,6 +1709,10 @@ pub fn float_forward_with(
             observe("post.cls.pre".into(), std::slice::from_ref(&h));
             h = h.iter().map(|v| crate::float_ref::act(pr.act, *v as f32) as f64).collect();
             observe("post.cls.act".into(), std::slice::from_ref(&h));
+            if let Some(n) = pr.norm {
+                h = norm(&h, &norm_cfg(&n), "classifier.pre.norm", None)?;
+                observe("post.cls.norm".into(), std::slice::from_ref(&h));
+            }
         }
         let w = p("classifier.out.w", None)?;
         let labels = hl.params[hl_param(hl, "classifier.out.w")? as usize].shape[0];
