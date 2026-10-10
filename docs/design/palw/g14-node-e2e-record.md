@@ -599,6 +599,34 @@ PoCs from `adv/c4r4` @ `162df6b16` (kernel `tests/c4r4.rs`, node `da16/c4r4.rs`)
   The PoC stays an ignored FAIL.
 * F-C4R4-19 (DA16's court vs ADR-0177) is carried as C4R4 wrote it: an ignored FAIL for DA16b.
 
+### G14-R4 round 3 (2026-10-10): M\*-49 verifier pay and the held default share (readiness §3f)
+
+Behind the new dormant fence `palw_verifier_pay_v1` (Params, Some-only hashed, `never()` collapse, refused when armed, needing the
+route and OPV at or below it; fork-id probe arm; A2U row; kernel ledger table 27, `LedgerEventV1` 25 `CheckFeePaid` / 26
+`DefaultShareHeld`). Kernel `misaka_palw_kernel::verifier_pay`, core `palw_verifier_pay_v1` (INTERIM terms, POLICY: `F` = 1 BILI,
+`m` = 4, `B_cap` = 40 BILI).
+* **M\*-49.** A job past the fence escrows `m·F` beside its reward escrow; the post-commit draw (`assign_drawn_v1`) keeps `F` per drawn
+  slot and returns the rest; a slot is paid `F` on its attestation (`attest_drawn_v1`) or on the claim's conviction / producer default
+  before the deadline; otherwise its fee returns. The fee is a user transfer (`PayJobEscrow` + `FinalReward`, the poster's debit
+  funding the payout exactly) and does not draw on BUDGET's producer hook `bond_budget_final_reward_v1`. Of a conviction's 49 %
+  bounty, the drawn sealers of the convicting bytes share up to `B_cap` first; the earliest sealer keeps the rest. A drawn slot's
+  served demand bond is never burned (A-DEM).
+* **O2.** A pre-Final default collects only its burned part; the demanders' share stays reserved on the producer's bond. A conviction
+  inside the horizon slashes it into the one pool `⌊49 % × everything collected⌋` — ECON's measured case now pays the honest
+  accuser **490** (was 441) and the Sybil demander 0; with no conviction the share is paid to the demanders at the horizon.
+* **C9 (ECON round 4, §5e).** The interim fee is `F = F_min + ⌈r_w · S_pool / (q·m·N)⌉` = 0.86 + 0.50 = **1.36 BILI**
+  (`check_fee_with_stake_capital_v1`; every input POLICY); core `palw_verifier_pay_c9_…` shows an honest watcher's books ≥ 0 over a
+  fault-free window at any stake share, and in the red at `F = F_min`.
+* **S3/S4 (ECON §4.4, F-ECON-3).** An opt-in beacon-source seal (`opt_in_beacon_source_v1`, consumer-called until an object carries
+  it) reserves `d_src − d` beside the 1-BILI race seal (interim `d_src = d*` = 28.6 BILI), returned at the reveal, forfeited with the
+  seal; it feeds exactly ONE attempt (a second opt-in is refused) and a class's beacon-source seals feed at most `N_max` = 2 open
+  attempts. `beacon_source_seals_for_attempt_v1` lists only an attempt's opted-in seals; a race seal is no attempt's source. OPVB's
+  v3 reader must switch to it at integration (CODE). Kernel `s3_s4_one_deposit_buys_at_most_one_attempts_worth_of_veto`.
+* Tests: kernel `tests/verifier_pay.rs` (the measured case, the horizon payout, C4R4's F-C4R4-15 coalition ≤ 49 %, the fee escrow and
+  attestation with exact conservation, pay on fate and drawn sealers first); core fence pin. **Not wired:** the draw (OPVB's v3
+  `ClaimVerification` beacon and the watcher pool) and the attestation object (an inner kind needs an allocation) — the node injects
+  the terms, so O2 and the fee escrow run on the node past the fence, the draw and attestation only through the ledger API.
+
 ### What still refuses arming `palw_probabilistic_constraints_v1` / `palw_panel_free_v1` (end of lane, 2026-10-10)
 
 The validators (`validate_palw_probabilistic_constraints_v1`, `validate_palw_panel_free_v1`, `validate_palw_signed_registration_v1`)

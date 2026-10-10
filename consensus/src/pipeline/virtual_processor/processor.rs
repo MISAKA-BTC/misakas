@@ -683,6 +683,8 @@ pub struct VirtualStateProcessor {
     /// the route's schedule holds `K2-TR-v1` Active. Resolved in ONE place ([`Self::palw_kernel_typed_roots_at`]). Never armable by a
     /// real network (its validation refuses every height); a test builds the config without that validation.
     pub(super) palw_typed_roots_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_verifier_pay_v1` (G14R round 3): M*-49 verifier pay and the held default share on the kernel route.
+    pub(super) palw_verifier_pay_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
     pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1328,6 +1330,7 @@ impl VirtualStateProcessor {
             palw_probabilistic_constraints_v1: params.palw_probabilistic_constraints_v1,
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_typed_roots_v1: params.palw_typed_roots_v1,
+            palw_verifier_pay_v1: params.palw_verifier_pay_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_provider_court_v1: params.palw_provider_court_v1,
             palw_legacy_held_da_v2: params.palw_legacy_held_da_v2,
@@ -13804,7 +13807,9 @@ impl VirtualStateProcessor {
             return None;
         }
         if !self.palw_kernel_route_at(virtual_daa_score) {
-            return Some("palw_probabilistic_constraints_v1 is not in force at this tip (G14)".to_string());
+            // A-2: below its fence a kernel-route carrier rides unjudged, as every other new kind does — refusing it here
+            // would make a template this release builds differ from one a release that tolerates the kind builds.
+            return None;
         }
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
@@ -15482,6 +15487,11 @@ impl VirtualStateProcessor {
                     .palw_provider_court_at(daa_score)
                     .then(|| self.palw_provider_court_v1.map(|f| f.daa_score()))
                     .flatten(),
+                // G14R round 3: M*-49 / O2's dormant fence (refused when armed; a test arms it through the Config seam).
+                verifier_pay: self
+                    .palw_verifier_pay_v1
+                    .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never())
+                    .map(|f| f.daa_score()),
             }
         })
     }
@@ -16901,7 +16911,7 @@ impl VirtualStateProcessor {
         // whose commitment's reservation cannot pay it (one block, this block's carve) is refused for the reason the fold would refuse
         // it. `true` for every unbudgeted claim — every claim of every network that never armed `palw_bond_budget_v1` — and the carve
         // is not even read then.
-        if !state.bond_budget_spend_fits_v1(&envelope.spend.claim_id, || {
+        if !state.bond_budget_spend_fits_v1(state_params, &envelope.spend.claim_id, point.daa_score, || {
             state_params.worker_carve_at(point.subsidy, self.palw_escrow_for_carrier_at(point.block, point.daa_score, point.daa_score))
         }) {
             return Err(format!("claim {}'s bond budget cannot pay this receipt block (ADR-0176)", envelope.spend.claim_id));

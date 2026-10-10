@@ -247,6 +247,10 @@ fn fixture_gqa() -> Fixture {
 /// shard 0's and shard 1's ready bonds (`shard0`, `shard1`: each declares its shard's readiness class), the base class's outsiders and
 /// the watcher at DAA 1 (the engine is created there); the plan at `SHARD_AT`; the claim at `CLAIM_AT`; the seal two blocks later.
 fn sealed(f: &Fixture, x: &Execution, shard0: &[u64], shard1: &[u64]) -> (Run, Hash64) {
+    sealed_with_policy(f, x, shard0, shard1, engine_policy())
+}
+
+fn sealed_with_policy(f: &Fixture, x: &Execution, shard0: &[u64], shard1: &[u64], policy: PanelPolicyV1) -> (Run, Hash64) {
     let extras = PalwTransitionExtrasV1 {
         admission_independence_daa: Some(0),
         panel_economy_active: true,
@@ -265,7 +269,11 @@ fn sealed(f: &Fixture, x: &Execution, shard0: &[u64], shard1: &[u64]) -> (Run, H
         }),
         ..Default::default()
     };
-    let mut run = Run { p: params(), s: PalwChainStateV2::genesis(), daa: 0, extras };
+    let mut p = params();
+    let mut mirror = *p.panel_v3().unwrap();
+    mirror.policy = policy;
+    p = p.with_panel_v3(Some(mirror));
+    let mut run = Run { p, s: PalwChainStateV2::genesis(), daa: 0, extras };
     let ready = |s: u16| palw_tir_shard_ready_class_v1(&f.class_id, 2, s);
     let mut objects = vec![
         PalwConsensusObjectV2::ClassRegistered {
@@ -468,6 +476,40 @@ fn a_stratum_short_of_ready_bonds_ends_the_claim_no_capable_panel_never_a_flat_p
     let after = run.s.bond(&bond_key(PRODUCER)).unwrap();
     assert_eq!((after.slashed, after.collateral), (before.slashed, before.collateral), "a non-fraud end charges the producer nothing");
     assert!(run.s.withholding_strikes(&bond_key(PRODUCER)).is_none(), "no strike");
+}
+
+#[test]
+fn an_oversized_shard_population_cannot_prioritize_large_bonds_or_a_partial_panel() {
+    use kaspa_consensus_core::palw_permissionless_panel_v1::{PanelErrorV1, panel_stratified_candidates_v1};
+    let f = fixture_gqa();
+    let x = f.honest();
+    let (run, claim) = sealed(&f, &x, &SHARD0, &SHARD1);
+    let record = run.record(&claim);
+    let strata = record.strata.unwrap();
+    let population = record.snapshot.unwrap().candidates.len() as u32;
+    assert!(population > strata.seat_count() as u32);
+    let mut policy = engine_policy();
+    policy.max_candidates = population - 1;
+    let inputs = run.extras.panel_v3.as_ref().unwrap();
+    assert_eq!(
+        panel_stratified_candidates_v1(&run.s, claim, inputs.floor_class, run.daa, policy, inputs.draw, false, &strata),
+        Err(PanelErrorV1::ResourceLimit),
+        "capacity never keeps just the largest bonds"
+    );
+    // Re-run from genesis with the smaller capacity committed in the policy. The harness checks
+    // the full fold's deltas and reloads its carriage, including the non-fraud terminal outcome.
+    let (mut limited, claim) = sealed_with_policy(&f, &x, &SHARD0, &SHARD1, policy);
+    assert!(limited.record(&claim).snapshot.unwrap().candidates.is_empty(), "no chosen subset");
+    let release = limited.record(&claim).seal.unwrap().anchor_slot;
+    let proof = limited.proof_for(&claim);
+    limited.at(release + 4, &[], None);
+    limited.at(release + 5, &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }], None);
+    let before = limited.s.bond(&bond_key(PRODUCER)).unwrap().clone();
+    limited.at(release + 10, &[], None);
+    assert!(matches!(limited.phase(&claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::PermissionlessNoCapablePanel, .. }));
+    assert!(limited.s.panel(&claim).is_none());
+    let after = limited.s.bond(&bond_key(PRODUCER)).unwrap();
+    assert_eq!((before.collateral, before.slashed), (after.collateral, after.slashed));
 }
 
 /// A lane of leaf `i` moved by one inside its proven interval, if it can be.

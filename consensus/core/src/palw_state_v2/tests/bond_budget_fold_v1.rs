@@ -10,7 +10,7 @@ use crate::palw_bond_budget_v1::*;
 /// A TEST policy: per 1,000 base units of capital and W = 50 DAA, 2 claims, 2 blocks, 2,000 of reward and 1,000 of weight.
 fn test_policy(rho: u32) -> PalwBondBudgetPolicyV1 {
     PalwBondBudgetPolicyV1 {
-        version: PALW_BOND_BUDGET_POLICY_VERSION_V1,
+        version: PALW_BOND_BUDGET_POLICY_VERSION_V2,
         window_daa: 50,
         capital_unit_sompi: 1_000,
         rho,
@@ -21,6 +21,9 @@ fn test_policy(rho: u32) -> PalwBondBudgetPolicyV1 {
         max_open_claims_per_bond: 1_000,
         slice_rights_by_rho: false,
         round_rights: PalwRoundRightsPolicyV1::CountAgainstBlocks,
+        liability_hold_daa: PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1,
+        export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
+        weight_value: PalwWeightValuePolicyV1::Unknown,
     }
 }
 
@@ -456,8 +459,8 @@ fn free_prompt_spends_draw_the_commitments_reservation() {
     // Strict R: a receipt block whose carve exceeds what is left refuses the spend (the block, not a skip).
     let refused = spend_at(&certified, &p, &PalwBlockContextV2 { subsidy: 1_000, ..ctx(6, 130, 6) }, &fp_spend(0xFC, 0));
     assert!(matches!(refused, Err(PalwStateV2Error::BondBudgetExhausted { .. })), "{refused:?}");
-    assert!(!certified.bond_budget_spend_fits_v1(&h64(0xFC), || 620), "the processor's pre-check (hook H-5) agrees");
-    assert!(certified.bond_budget_spend_fits_v1(&h64(0xFC), || 0));
+    assert!(!certified.bond_budget_spend_fits_v1(&p, &h64(0xFC), 130, || 620), "the processor's pre-check (hook H-5) agrees");
+    assert!(certified.bond_budget_spend_fits_v1(&p, &h64(0xFC), 130, || 0));
     // Blocks: a commitment of three quanta (60 leaves) does not fit B = 2 blocks — refused by name.
     let genesis = PalwChainStateV2::genesis();
     let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
@@ -509,7 +512,12 @@ fn the_model_allocation_clips_reward_only_and_unassigned_budget_is_never_minted(
             apply(&s4, &p, &ctx(5, 123, 5), &[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seat_says(true) }], None);
         let (s6, _) = apply(&s5, &p, &ctx(6, 144, 6), &[], None);
         assert!(matches!(s6.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
-        (s6.pending_payouts_iter().map(|(_, pay)| pay.amount).sum(), s6.safe_weight(), s3.claim(&id).is_some())
+        // The grant (what the budget let Final pay), and — PESG §6 — the payout this non-vesting fixture writes straight into the queue
+        // is at most 0.51 of the claim's collateral (40 pwu × 5 = 200: 102).
+        let paid: u64 = s6.pending_payouts_iter().map(|(_, pay)| pay.amount).sum();
+        let granted = s6.bond_budget().unwrap().claim_row(&id).map_or(0, |row| row.consumed.reward_sompi);
+        assert_eq!(paid, granted.min(102), "the export cap");
+        (granted, s6.safe_weight(), s3.claim(&id).is_some())
     };
     let off = run(None, None);
     let mut halves = vec![(h64(1), 500), (h64(2), 500)];
@@ -583,4 +591,103 @@ fn alpha_two_divides_the_realized_carve_four_to_one_and_every_block_replays() {
     assert_eq!(budget.header.allocation.unwrap().accrued_sompi, 620);
     assert_eq!((budget.model_available(&h64(1)), budget.model_available(&h64(2))), (496, 124), "4:1 of the realized carve");
     budget.check_consistency().expect("the engine's invariants");
+}
+
+// ---- PESG §6: the safety bounds through the fold ---------------------------------------------------------------------------------
+
+/// **The external export cap at Final** (PESG §6): this fixture does not vest (`palw_rcore_plus` off), so Final writes the legs straight
+/// into the payout queue — what the coinbase mints and a holder can bridge out. With the budget granting the whole escrow (620), the
+/// payout stops exactly at `⌊0.51 · 200⌋ = 102` (the claim's collateral, 40 pwu × 5); the rest is never named. Unarmed: 620.
+#[test]
+fn a_non_vesting_final_exports_at_most_fifty_one_percent_of_the_collateral_its_liability_holds() {
+    let p = armed_with(test_policy(1), None);
+    let walked = walk(&p);
+    for pair in walked.windows(2) {
+        assert_replayable(&p, &pair[0].0, &pair[1].0, &pair[1].1);
+    }
+    let claim_id = attempt_id_v2(&attempt(40, 1).attempt);
+    let (s5, _) = &walked[4];
+    assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+    assert_eq!(s5.bond_budget().unwrap().claim_row(&claim_id).unwrap().consumed.reward_sompi, 620, "the budget granted the escrow");
+    assert_eq!(s5.pending_payouts_iter().map(|(_, pay)| pay.amount).sum::<u64>(), 102, "exported: 0.51 of 200, at the edge");
+    let unarmed = walk(&params().with_worker_carve_permille(620).unwrap());
+    assert_eq!(unarmed[4].0.pending_payouts_iter().map(|(_, pay)| pay.amount).sum::<u64>(), 620);
+}
+
+/// **No payout before Final** (PESG §6), as the import check reads it: every state of the walk passes; a payout row, a vesting row or
+/// an execution-lane Final planted on the claim before its Final is refused.
+#[test]
+fn a_payout_vesting_row_or_exec_right_before_final_is_refused() {
+    let p = armed_with(test_policy(1), None);
+    let walked = walk(&p);
+    let claim_id = attempt_id_v2(&attempt(40, 1).attempt);
+    for (s, _) in &walked {
+        s.bond_budget_no_payout_before_final_v1().expect("the honest walk");
+    }
+    let (s4, _) = &walked[3];
+    assert!(!matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "licensed, not yet Final");
+    let mut planted = s4.clone();
+    planted.pending_payouts.insert(claim_id, PalwPayoutV2 { payload: h64(9), amount: 1 });
+    assert!(planted.bond_budget_no_payout_before_final_v1().is_err(), "a producer payout");
+    let mut planted = s4.clone();
+    let final_row = crate::palw_execution_lane_v1::PalwExecFinalV1 {
+        domain: h64(1),
+        bond: bond_key(1),
+        operator_id: op_id(21),
+        claim_id,
+        execution_root: h64(2),
+        credit: 1,
+        accepted_blue_score: 0,
+    };
+    planted.round_finals.insert(claim_id, final_row);
+    assert!(planted.bond_budget_no_payout_before_final_v1().is_err(), "an EXEC right");
+}
+
+/// **The liability hold through the fold** (PESG §6): the walk's Final at 124 holds bond 1's capital until 124 + H_L (280) = 404,
+/// although its issuance window ended at 151 — the withdrawal hold reads both clocks, and the hold's release entry ends it, by delta.
+#[test]
+fn the_liability_hold_outlives_the_window_and_ends_at_terminal_plus_h_l() {
+    let p = armed_with(test_policy(1), None);
+    let walked = walk(&p);
+    let (s7, _) = walked.last().unwrap();
+    let budget = s7.bond_budget().unwrap();
+    assert!(!budget.window_holds(&bond_key(1), 200), "the window (W = 50) is over");
+    assert!(budget.liability_holds(&bond_key(1), 200) && s7.bond_budget_window_holds(&bond_key(1), 200));
+    assert_eq!(budget.bond_row(&bond_key(1)).unwrap().liability_hold_until, 124 + PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1);
+    let (s8, d8) = apply(s7, &p, &ctx(8, 403, 8), &[], None);
+    assert_replayable(&p, s7, &s8, &d8);
+    assert!(s8.bond_budget_window_holds(&bond_key(1), 403));
+    let (s9, d9) = apply(&s8, &p, &ctx(9, 404, 9), &[], None);
+    assert_replayable(&p, &s8, &s9, &d9);
+    assert!(!s9.bond_budget_window_holds(&bond_key(1), 404), "ended at 404, by its release entry");
+    s9.bond_budget().unwrap().check_consistency().unwrap();
+}
+
+/// **The export cap on free-prompt receipt spends** (PESG §6): each spend's worker share is minted straight into a coinbase output, so
+/// while the claim's liability holds (`now < final + H_L`) the spends so far plus this one stop at `⌊0.51 · reserved⌋` — at the edge,
+/// in the fold's predicate and in the processor's pre-check (hook H-5); once the liability has ended, unbounded.
+#[test]
+fn free_prompt_spends_stop_at_the_export_cap_while_the_liability_holds() {
+    let p = armed_with(sliced(25), None);
+    let certified = certify_fp_claim(&p, 40, 2);
+    let id = h64(0xFC);
+    let claim = certified.claim(&id).unwrap().clone();
+    let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { panic!("the fixture certifies the commitment") };
+    let cap = (claim.reserved * 510 / 1_000) as u64;
+    assert!(cap > 10, "a cap to test against: {cap}");
+    let at = |consumed: u64| {
+        let mut s = certified.clone();
+        let row = s.bond_budget.as_mut().unwrap().claims.get_mut(&id).unwrap();
+        row.consumed.reward_sompi = consumed;
+        // Room in R (the fixture's commit block had no subsidy), so only the export cap decides.
+        row.reserved.reward_sompi = 1_000_000;
+        s
+    };
+    let now = final_daa + 1;
+    assert!(at(cap - 10).bond_budget_fp_export_fits_v1(&p, &id, now, 10), "at the edge");
+    assert!(!at(cap - 9).bond_budget_fp_export_fits_v1(&p, &id, now, 10), "one past it");
+    let after = final_daa + PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1;
+    assert!(at(cap).bond_budget_fp_export_fits_v1(&p, &id, after, 10_000), "the liability has ended");
+    assert!(at(cap - 10).bond_budget_spend_fits_v1(&p, &id, now, || 10), "the processor's pre-check agrees at the edge");
+    assert!(!at(cap - 9).bond_budget_spend_fits_v1(&p, &id, now, || 10), "and one past it");
 }

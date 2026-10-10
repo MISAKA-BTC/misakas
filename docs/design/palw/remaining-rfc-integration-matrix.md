@@ -94,6 +94,7 @@ wire/fence impact · test · real-node result · status.
 | Legacy V2 Panel route G14, filer/reservation (LG14-A, RFC-0014 §6–§7, 2026-10-10) | **154–156** | **200–204** | **0xE2** | `palw_legacy_public_filer_v1` (dormant, refused); RPC **204–206** |
 | Legacy V2 Panel route G14, held/fused DA + localization (LG14-B, RFC-0014 §4–§5, 2026-10-10) | **157–159** | **205–209** | **0xE3** | `palw_legacy_held_da_v2` (dormant, refused); RPC **207–209** |
 | Kernel `LedgerEventV1` (2026-10-10) | 21–23 G14R, **24 G14R** (approved 10-10), 30–31 DA16 | — | — | — |
+| Verifier pay (G14R, palw_verifier_pay_v1, 2026-10-10) | kernel inner kinds **21** (verifier attestation), **22** (beacon-source opt-in) | — | — | ledger table 27, `LedgerEventV1` 25–26 |
 | `PalwVoidReasonV2` | C2 120–122; X8 one variant (assign an explicit number ≥ 130 at merge) | — | — | — |
 
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the

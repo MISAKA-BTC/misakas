@@ -14867,6 +14867,8 @@ impl PalwChainStateV2 {
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.
         if let Some(budget) = &self.bond_budget {
             budget.check_consistency().map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("bond budget: {why}")))?;
+            self.bond_budget_no_payout_before_final_v1()
+                .map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("bond budget: {why}")))?;
         }
         let mut exposure: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
         let mut safe: u128 = 0;
@@ -24370,7 +24372,7 @@ impl<'a> TransitionBuilder<'a> {
         // Lane BUDGET: a budgeted claim's reversal takes back exactly what its Final (or its spends) was granted; nothing returns to its
         // bond's window.
         let weight = self.state.bond_budget_weight_or(&id, weight);
-        self.bond_budget_close_v1(&id);
+        self.bond_budget_close_v1(&id, ctx.daa_score);
         self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
         self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score);
         self.unnote_activation_probe_credits_v1(&id, &claim);
@@ -28154,7 +28156,20 @@ impl<'a> TransitionBuilder<'a> {
             // **Lane BUDGET (ADR-0176 D3, design §2.6): the reward under the budget**, before the buyback and the panel split, so every
             // leg derives from it; the rest is never named — never minted. Unchanged for an unbudgeted claim.
             let escrow = self.bond_budget_final_reward_v1(&id, escrow);
-            let slice = self.model_buyback_at_final(&id, claim, escrow);
+            // **Lane BUDGET, PESG §6: the external export cap.** What leaves the chain's books at Final — a leg written straight into the
+            // payout queue (no vesting), or a buyback slice in a market reserve a holder can sell out of — is at most 0.51 of the
+            // collateral the claim's liability still holds; a vesting leg is not an export (it moves once the lock has ended). The rest
+            // is never named (never minted). Unchanged below the fence.
+            let export_cap = self.bond_budget_export_cap_v1(&id, claim, final_daa);
+            let escrow = match export_cap {
+                Some(cap) if !vests => escrow.min(cap),
+                _ => escrow,
+            };
+            let slice = if export_cap.is_some_and(|cap| crate::palw_model_market_v1::palw_model_buyback_slice_v1(escrow) > cap) {
+                0
+            } else {
+                self.model_buyback_at_final(&id, claim, escrow)
+            };
             let reward = escrow - slice;
             // **ADR-0124 Decisions 1 and 2: the panel's share.** A claim whose panel holds a duty
             // row — bound past `Params::palw_panel_economy`, which is the only way a row exists —
@@ -28234,7 +28249,7 @@ impl<'a> TransitionBuilder<'a> {
         }
         // Lane BUDGET: an attempt's Final is terminal for its budget (a free-prompt claim's spends come after its Final).
         if matches!(claim.source, PalwClaimSourceV2::Attempt) {
-            self.bond_budget_close_v1(&id);
+            self.bond_budget_close_v1(&id, final_daa);
         }
         // ADR-0132 Upgrade C: the snapshot leaves with the claim — it was read above, once.
         self.write_claim_economics(id, None);
@@ -28296,7 +28311,7 @@ impl<'a> TransitionBuilder<'a> {
             _ => {}
         }
         // Lane BUDGET (ADR-0176 D4): a void is terminal for the claim's budget — and returns nothing to the window before `d + W`.
-        self.bond_budget_close_v1(&id);
+        self.bond_budget_close_v1(&id, voided_daa);
         // **ADR-0152 §4-ter C3: a void by any route closes every court session on the claim
         // NEUTRALLY**, past `palw_offence_attribution`: the session is removed (its challenger's
         // reservation released by `write_court`), nobody is slashed and no court time is charged —
