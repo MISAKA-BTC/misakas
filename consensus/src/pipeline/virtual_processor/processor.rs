@@ -860,6 +860,15 @@ pub struct VirtualStateProcessor {
     /// ([`Self::palw_reorg_shallow_ghostdag_win_v1`]), so honest slot races converge.
     pub(super) palw_reorg_strict_economic_win: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
+    /// **ADR-0178: rule E** (`Params::palw_fork_choice_rule_e_v1`), `None` on every preset. Past it — at the incumbent's DAA — the
+    /// deep-reorg gate weighs the two tips' exclusive pasts ([`Self::palw_rule_e_gate_v1`]) and the sink search takes the best of the
+    /// candidates it admits rather than the first ([`Self::sink_search_algorithm`]).
+    pub(super) palw_fork_choice_rule_e: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// Rule E's search cost, node-local: the most candidates one search's continuation has UTXO-validated past its first, and how
+    /// many continuations ran (`palw_rule_e_finish_search_v1`). Read by the cost tests and the log; no rule reads it.
+    pub(crate) palw_rule_e_max_extra_validated: std::sync::atomic::AtomicUsize,
+    pub(crate) palw_rule_e_searches: std::sync::atomic::AtomicU64,
+
     /// **ADR-0018 §E's payout bounds** (mainnet audit 2026-09-06 — H-2/H-3/M-1), mode folded in.
     /// `None` on testnet-11, devnet and simnet; `always()` on a card. Resolved at the BLOCK's DAA
     /// on both the coinbase construction and the validation path — they must agree, or every node
@@ -1407,6 +1416,9 @@ impl VirtualStateProcessor {
             palw_anchor_at_ceiling: params.palw_anchor_at_ceiling_fence(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_reorg_strict_economic_win: params.palw_reorg_strict_economic_win,
+            palw_fork_choice_rule_e: params.palw_fork_choice_rule_e_v1,
+            palw_rule_e_max_extra_validated: Default::default(),
+            palw_rule_e_searches: Default::default(),
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             palw_slashing_evidence_utxo_genuine: params.palw_slashing_evidence_utxo_genuine,
             palw_lane_accept_parents_first: params.palw_lane_accept_parents_first_fence(),
@@ -6985,8 +6997,11 @@ impl VirtualStateProcessor {
     }
 
     /// Record (or clear) the streak at the point a sink search settles on `sink`. `refused` is the
-    /// heaviest candidate the gate refused in that search, if any.
-    fn note_palw_refusal_streak(&self, sink: BlockHash, refused: Option<(BlockHash, DnsReorgOutcome)>) {
+    /// heaviest candidate the gate refused in that search, if any. Past rule E (`rule_e`) a refusal is
+    /// weighed when rule E weighed the pair over the two exclusive pasts and the refused tip does not
+    /// outrank `sink` (ADR-0178); below it, when both absolute orders were read and the refused one is not
+    /// strictly ahead.
+    fn note_palw_refusal_streak(&self, sink: BlockHash, refused: Option<(BlockHash, DnsReorgOutcome)>, rule_e: bool) {
         use kaspa_consensus_core::api::PalwPartitionRefusalV1;
         let weighed = refused.and_then(|(refused, reason)| {
             (reason == DnsReorgOutcome::DominanceViolation
@@ -6994,6 +7009,13 @@ impl VirtualStateProcessor {
                 && !matches!(self.reachability_service.try_is_chain_ancestor_of(sink, refused), Ok(true)))
             .then_some(refused)
             .and_then(|refused| {
+                if rule_e {
+                    let mut states = super::palw_rule_e::PalwRuleEStatesV1::default();
+                    let (pair, counts) = self.palw_rule_e_pair_v1(&mut states, refused, sink)?;
+                    return (kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v1(&pair.a, &pair.b, counts)
+                        != std::cmp::Ordering::Greater)
+                        .then_some(refused);
+                }
                 let (incumbent, challenger) = (self.palw_candidate_order_v2(sink)?, self.palw_candidate_order_v2(refused)?);
                 let economic = |o: &kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1| {
                     (o.safe_frontier_blue_score, o.safe_weight, o.live_total)
@@ -18976,6 +18998,18 @@ impl VirtualStateProcessor {
             // incumbent is the comparator's; a challenger this node cannot weigh never beats one it
             // can; and an incumbent this node cannot weigh is a state fault, refused rather than
             // silently downgraded to blue work.
+            //
+            // **ADR-0178: past rule E's fence the two tips' EXCLUSIVE pasts decide, and the absolute orders are not read.** Bonded
+            // participation first once both tips stand `W_p` above the fork, then the economic keys over those pasts; a claim both
+            // tips hold decides nothing (`palw_rule_e`). Unweighable refuses, as below; an allowed reorg still meets ADR-0065 D2.
+            if self.palw_rule_e_active_at(incumbent_daa) {
+                return match self.palw_rule_e_gate_v1(candidate, prev_sink, incumbent_daa) {
+                    kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Allow => {
+                        self.palw_frontier_provenance_outcome(candidate, prev_sink)
+                    }
+                    kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Refuse => DnsReorgOutcome::DominanceViolation,
+                };
+            }
             return match (self.palw_candidate_order_v2(prev_sink), self.palw_candidate_order_v2(candidate)) {
                 (Some(incumbent), Some(challenger)) => {
                     // **lane: rcore/f1-forkchoice-attacks — an all-economic tie keeps the incumbent
@@ -19647,7 +19681,14 @@ impl VirtualStateProcessor {
                         // only way to notice was comparing DAA against a peer by hand. Emitting
                         // this at the point virtual settles — once per search, not per candidate —
                         // keeps a healthy node quiet while making a wedged one impossible to miss.
-                        self.note_palw_refusal_streak(candidate, gate_rejected.map(|(rejected, reason, _)| (rejected, reason)));
+                        let rule_e = self.palw_rule_e_active_at(self.headers_store.get_daa_score(prev_sink).unwrap_or(0));
+                        if !rule_e {
+                            self.note_palw_refusal_streak(
+                                candidate,
+                                gate_rejected.map(|(rejected, reason, _)| (rejected, reason)),
+                                false,
+                            );
+                        }
                         if let Some((rejected, reason, rejected_work)) = gate_rejected {
                             warn!(
                                 "DNS reorg gate: virtual settled on sink {} (blue_work {}) after refusing the heavier candidate {} (blue_work {}, reason {:?}{}). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.",
@@ -19665,6 +19706,25 @@ impl VirtualStateProcessor {
                         // Hence as an optimization we prefer removing such blocks in advance to allow valid tips to be considered.
                         let filtering_root = self.depth_store.merge_depth_root(candidate).unwrap();
                         let filtering_blue_work = self.ghostdag_store.get_blue_work(filtering_root).unwrap_or_default();
+                        // **ADR-0178: past rule E's fence (at the incumbent's DAA) the search goes on** for a bounded number of
+                        // lighter candidates and keeps the best over the exclusive pasts (`palw_rule_e_finish_search_v1`); where the
+                        // first stays best its answer is this one.
+                        // LIVE-R1 N2's record is then taken at the sink rule E settles on, and a refusal counts as weighed when
+                        // rule E weighed the pair and the refused tip does not outrank it.
+                        if rule_e {
+                            let (sink, parents, _) = self.palw_rule_e_finish_search_v1(
+                                stores,
+                                diff,
+                                bond_view,
+                                prev_sink,
+                                candidate,
+                                heap,
+                                diff_point,
+                                finality_point,
+                            );
+                            self.note_palw_refusal_streak(sink, gate_rejected.map(|(rejected, reason, _)| (rejected, reason)), true);
+                            return (sink, parents);
+                        }
                         // The heap is GHOSTDAG's own order, so the sink is the maximum of every
                         // candidate left in it and `pick_virtual_parents`' assumption holds as is.
                         return (
@@ -19833,7 +19893,7 @@ impl VirtualStateProcessor {
 
     /// ADR-0125: a round block stands for its anchor — its selected parent, never itself a round
     /// block — wherever the chain's own blocks are being chosen among.
-    fn palw_project_round_block(&self, block: BlockHash) -> BlockHash {
+    pub(super) fn palw_project_round_block(&self, block: BlockHash) -> BlockHash {
         if self.palw_execution_lane.is_some() && self.ghostdag_manager.is_round_block(block) {
             self.ghostdag_store.get_selected_parent(block).unwrap_or(block)
         } else {

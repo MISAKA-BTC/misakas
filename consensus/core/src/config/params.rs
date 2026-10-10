@@ -2953,6 +2953,13 @@ pub struct Params {
     /// ([`Self::validate_palw_probabilistic_constraints_v1`]) — the RFC assigns none, and shadow comparison precedes any proposal.
     pub palw_probabilistic_constraints_v1: Option<ForkActivation>,
 
+    /// **ADR-0178: rule E, the fork choice that heals a partition on bonded participation** ([`crate::palw_fork_choice_rule_e_v1`]):
+    /// past it the sink search weighs every valid tip, the deep-reorg gate and the IBD commit compare the two tips' EXCLUSIVE pasts
+    /// (participation of bonds registered in both first, once the fork is `PALW_RULE_E_PARTICIPATION_DEPTH_DAA_V1` deep; then the
+    /// economic keys over those pasts), and the relay fetches below the merge-depth root. **Dormant**: `None` on every preset and in no
+    /// flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed by
+    /// [`Self::validate_palw_fork_choice_rule_e_v1`] — which also refuses `palw_dns_retirement_v1` unless rule E is armed at or below it.
+    pub palw_fork_choice_rule_e_v1: Option<ForkActivation>,
     /// **RFC-0004 Part II: typed-root computation specifications on the kernel route** ([`crate::palw_typed_roots_v1`]): the separately
     /// named fence under which the route's ledger schedules the typed-roots extension `K2-TR-v1` (Memory, Retrieval, Composite classes;
     /// `misaka-palw-kernel::spec`). **Dormant with no activation height**: `None` on every preset and in no flag-day list, hashed
@@ -5153,7 +5160,9 @@ impl Params {
             self.validate_palw_anchor_window_v1()?;
             self.validate_palw_receipt_spend_v4()?;
             self.validate_palw_evidence_court_v1()?;
-            return self.validate_palw_audit_1004_v1();
+            self.validate_palw_audit_1004_v1()?;
+            // ADR-0178 on this path too: rule E's fence and the DNS retirement's order.
+            return self.validate_palw_fork_choice_rule_e_v1();
         };
         bundle.validate()?;
         // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
@@ -6032,7 +6041,10 @@ impl Params {
         // **RFC-0009 stage B: the provider court's refusals** — after the fences it names.
         self.validate_palw_evidence_court_v1()?;
         // Lane PA's audit-1004 fence: last, likewise.
-        self.validate_palw_audit_1004_v1()
+        self.validate_palw_audit_1004_v1()?;
+        // **ADR-0178: rule E's fence and the DNS retirement's order** — last, after every other refusal, so a rule-E refusal
+        // is reached only by a ruleset that passes everything else (`rfc12_zero_dns_matrix` relies on that).
+        self.validate_palw_fork_choice_rule_e_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -6592,6 +6604,10 @@ impl Params {
         // The probabilistic-constraint fence, likewise.
         if self.palw_probabilistic_constraints_v1 == Some(ForkActivation::never()) {
             self.palw_probabilistic_constraints_v1 = None;
+        }
+        // Rule E's fence (ADR-0178), likewise.
+        if self.palw_fork_choice_rule_e_v1 == Some(ForkActivation::never()) {
+            self.palw_fork_choice_rule_e_v1 = None;
         }
         // The typed-roots fence, likewise.
         if self.palw_typed_roots_v1 == Some(ForkActivation::never()) {
@@ -10354,6 +10370,7 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
@@ -10635,6 +10652,7 @@ impl Params {
             ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
+            ("palw_fork_choice_rule_e_v1", *palw_fork_choice_rule_e_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
             ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
             ("palw_verifier_pay_v1", *palw_verifier_pay_v1),
@@ -10928,6 +10946,11 @@ impl Params {
         // The probabilistic-constraint fence, NAMED likewise.
         if let Some(at) = self.palw_probabilistic_constraints_v1 {
             h.write(b"palw_probabilistic_constraints_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // Rule E's fence (ADR-0178), NAMED likewise.
+        if let Some(at) = self.palw_fork_choice_rule_e_v1 {
+            h.write(b"palw_fork_choice_rule_e_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // The typed-roots fence, NAMED likewise.
@@ -11675,6 +11698,7 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
@@ -12440,6 +12464,10 @@ impl Params {
         if let Some(activation) = palw_probabilistic_constraints_v1.as_mut() {
             fork(activation, visit);
         }
+        // Rule E's fence. Some-only.
+        if let Some(activation) = palw_fork_choice_rule_e_v1.as_mut() {
+            fork(activation, visit);
+        }
         // The typed-roots fence. Some-only.
         if let Some(activation) = palw_typed_roots_v1.as_mut() {
             fork(activation, visit);
@@ -13019,6 +13047,7 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
@@ -13832,6 +13861,11 @@ impl Params {
         // The probabilistic-constraint fence, Some-only for the same reason.
         if let Some(activation) = palw_probabilistic_constraints_v1 {
             h.write(b"palw_probabilistic_constraints_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Rule E's fence, Some-only for the same reason.
+        if let Some(activation) = palw_fork_choice_rule_e_v1 {
+            h.write(b"palw_fork_choice_rule_e_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // The typed-roots fence, Some-only for the same reason.
@@ -14688,6 +14722,7 @@ impl Params {
             palw_fp_job_v5: self.palw_fp_job_v5,
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
+            palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1: self.palw_verifier_pay_v1,
@@ -15793,6 +15828,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
@@ -16094,6 +16130,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
@@ -16377,6 +16414,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
@@ -24002,6 +24040,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,

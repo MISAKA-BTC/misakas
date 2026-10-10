@@ -89,6 +89,8 @@ pub struct HandleRelayInvsFlow {
     header_format: HeaderFormat,
     /// H2 (the 2026-09-24 heartbeat audit): how many more heartbeats this peer may hand over.
     heartbeat_budget: crate::palw_heartbeat_relay::PalwHeartbeatInvBudgetV1,
+    /// ADR-0178 (rule E): how many more blocks below the virtual's merge-depth root this peer may have validated.
+    deep_relay_budget: kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEDeepRelayBudgetV1,
 }
 
 #[async_trait::async_trait]
@@ -124,6 +126,9 @@ impl HandleRelayInvsFlow {
             ibd_sender,
             header_format,
             heartbeat_budget: crate::palw_heartbeat_relay::PalwHeartbeatInvBudgetV1::new(kaspa_core::time::unix_now()),
+            deep_relay_budget: kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEDeepRelayBudgetV1::new(
+                kaspa_core::time::unix_now(),
+            ),
         }
     }
 
@@ -302,11 +307,26 @@ impl HandleRelayInvsFlow {
             // We do not apply the skip heuristic below if inv was queued indirectly (as an orphan root), since
             // that means the process started by a proper and relevant relay block
             if !inv.is_orphan_root && !broadcast {
+                // **ADR-0178 (rule E): past the fence a non-heartbeat block below the root is validated, not skipped** — rule E's
+                // sink search weighs a lighter branch the status quo never holds, and its attempt blocks are what participation
+                // counts; their missing ancestors arrive as orphan roots. Per-peer budgeted, and never announced onward (`broadcast`
+                // stays false).
+                let weighs = kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_relay_weighs_below_merge_root_v1(
+                    &self.ctx.config.params,
+                    session.get_virtual_daa_score(),
+                    block.header.pow_algo_id,
+                ) && self.deep_relay_budget.take(kaspa_core::time::unix_now());
+                if !weighs {
+                    debug!(
+                        "Relay block {} has lower blue work than virtual's merge depth root ({} <= {}), hence we are skipping it",
+                        inv.hash, block.header.blue_work, blue_work_threshold
+                    );
+                    continue;
+                }
                 debug!(
-                    "Relay block {} has lower blue work than virtual's merge depth root ({} <= {}), hence we are skipping it",
+                    "Relay block {} is below virtual's merge depth root ({} <= {}); rule E weighs its branch, so it is validated (not announced)",
                     inv.hash, block.header.blue_work, blue_work_threshold
                 );
-                continue;
             }
             // if in a transitional ibd state, do not wait, sync immediately
             if is_ibd_in_transitional_state {

@@ -499,6 +499,10 @@ pub mod palw_fp_job_v5;
 pub mod palw_gen_range_twin_v1;
 /// RFC-0011 §15.7: the kernel route's fence `palw_probabilistic_constraints_v1` — dormant, no height, refused when armed.
 pub mod palw_probabilistic_constraints_v1;
+/// ADR-0178: rule E — the fork choice weighs exclusive pasts, bonded participation first (`palw_fork_choice_rule_e_v1`, dormant).
+pub mod palw_fork_choice_rule_e_v1;
+/// ADR-0178 × RFC-0009 L2: the rule-E fields of the fork-choice leaf v2 — the window and registry trees, openings, the client's pair.
+pub mod palw_fork_choice_rule_e_leaf_v2;
 /// RFC-0004 Part II: the typed-roots fence `palw_typed_roots_v1` — dormant, no height, refused when armed.
 pub mod palw_typed_roots_v1;
 /// ECON's M*-49 verifier pay and the held default share: the fence `palw_verifier_pay_v1` — dormant, no height, refused when armed.

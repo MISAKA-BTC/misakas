@@ -2354,7 +2354,8 @@ fn handle_chat_candidates(
                     let mut sink = BufferedSink;
                     handle_chat(config, identity, worker, budget, facts, chain_source, chat, admitted, (seed, temperature_q), &mut sink, ctx)
                 })
-                .collect();
+            })
+            .collect();
             handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("a candidate's job panicked".to_string()))).collect()
         }),
     };
