@@ -10,7 +10,7 @@ to the user's decision on the OPV terms (`activation-readiness-matrix.md` §3a, 
 label, here and in the JSON:
 
 * **M** — measured: read off a harness run on this Mac, on a real artifact (the run count and spread are given);
-* **D** — derived from M by a stated formula (the formulas are executable: `opv-meas derive`, written with 10 unit tests whose run is queued — see §11; the same arithmetic is mirrored in
+* **D** — derived from M by a stated formula (the formulas are executable: `opv-meas derive`, 10 unit tests, all passing, one over the committed inputs; the same arithmetic is mirrored in
   Python, which reproduces the soundness dossier's row K at its own 500 permille);
 * **A** — assumed: no run established it. An A is never used as a result; it is named so that a measurement can replace it.
 
@@ -576,9 +576,9 @@ opv-meas derive --in opv-measurements-data/derive/in-v2-one-verifier.json       
 python3 -I tools/opv-meas/scripts/derive_mirror.py IN.json OUT.json            # the same arithmetic in Python (used for the tables of this revision)
 ```
 
-**Status of the Rust tool (stated, not hidden).** Its revision (`derive.rs`: model off the clock, net-of-49 % reservation, holders, bond-level rows, 10 unit tests including one over the committed inputs; the `ProsecutionV1::Spec`
-arm that the merged integration head requires of `verify.rs`) is **implemented, not verified**: the `buildslot.sh` job (log `meas-m3b.log`) was queued behind the G14 lanes' builds at the time of writing and has not compiled it. The previous revision
-built and passed its 4 tests (`meas-m2.log`). The 2026-10-10 measurements (GLM-Edge-1.5B, P = 32, the P = 64 attempt) ran on the pre-merge harness binary `meas-logs/bin/opv-meas` (commit `76067416e`'s harness over the pre-merge kernel); the
+**Status of the Rust tool.** Its revision (`derive.rs`: model off the clock, net-of-49 % reservation, holders, bond-level rows; `verify.rs`'s new `ProsecutionV1::Spec` and `Segmented` arms) is **verified**: it compiled on the merged
+PESG integration head (`cargo test --release -p misaka-palw-opv-meas --no-run`, `meas-m4c.log`) and the test binary's 10 tests pass (`derive::tests`, including `the_committed_inputs_reproduce_the_tables_the_note_quotes`). The tables here were produced by the Python mirror;
+the test asserts the same key numbers (226 positions, 40,156.86 BILI, closed model = none), but the Rust binary's `out-v2-*.json` were not regenerated (the worktree's target was cleaned) — compare when it next builds. The 2026-10-10 measurements (GLM-Edge-1.5B, P = 32, the P = 64 attempt) ran on the pre-merge harness binary `meas-logs/bin/opv-meas` (commit `76067416e`'s harness over the pre-merge kernel); the
 verifier path they time, `OutsiderV1::check`, is the same code the merged head carries, but that is a statement about the source, not a measurement on the merged binary.
 
 Raw results of this note: `docs/design/palw/opv-measurements-data/` (JSON lines; host load, free memory and swap are recorded per sample). The GAP-07 samples taken on the merged integration head are in

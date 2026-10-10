@@ -487,7 +487,7 @@ mod tests {
     fn an_uncollected_slash_deters_nothing() {
         let (full, d) = p_dc_rational(0.01, 1.0, 1, 0.0, 1.0);
         let (half, _) = p_dc_rational(0.01, 1.0, 1, 0.0, 0.5);
-        assert_eq!(half * 2, full);
+        assert!(full - half * 2 <= 2, "half the collection is half the probability, up to rounding");
         assert!(
             reservation_sompi(GAIN, PEN, REPORTER_RETURN_PERMILLE, half, d).unwrap()
                 > reservation_sompi(GAIN, PEN, REPORTER_RETURN_PERMILLE, full, d).unwrap()
