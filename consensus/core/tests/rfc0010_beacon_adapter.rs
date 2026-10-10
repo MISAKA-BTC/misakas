@@ -14,15 +14,16 @@ use std::collections::BTreeSet;
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_panel_beacon_v1::{
-    PanelBeaconHistoryV1, PanelBeaconRefusalV1, approved_panel_beacon_policies_v1, panel_beacon_context_v1, panel_beacon_scheme_of_v1,
-    panel_beacon_state_v1, verify_panel_beacon_for_engine_v1, verify_panel_beacon_v1,
+    PanelBeaconHistoryV1, PanelBeaconRefusalV1, PanelBeaconStateV1, approved_panel_beacon_policies_v1, panel_beacon_context_v1,
+    panel_beacon_scheme_of_v1, panel_beacon_state_v1, verify_panel_beacon_for_engine_v1, verify_panel_beacon_v1,
 };
 use kaspa_consensus_core::palw_permissionless_panel_v1::{BeaconProofV1, BeaconRequestV1, PanelErrorV1};
 use misaka_palw_challenge::beacon::{BeaconEvidenceRefusalV1, BeaconSourceV1, challenge_anchor_v1, initial_accumulator_v1, mix_v1};
 use misaka_palw_challenge::hash::Digest;
 use misaka_palw_challenge::policy::reference_policy_v1;
 use misaka_palw_challenge::{
-    FinalPathV1, PostCommitChallengePolicyV1, WorkBeaconStateV1, WorkBeaconV1, WorkFinalEventV1, WorkSourceKindV1, collect_work_beacon_v1,
+    FinalPathV1, PostCommitChallengePolicyV1, WorkBeaconStateV1, WorkBeaconV1, WorkFinalEventV1, WorkSourceKindV1,
+    collect_work_beacon_v1,
 };
 
 const RELEASE: u64 = 1_100;
@@ -81,7 +82,13 @@ impl PanelBeaconHistoryV1 for History {
     fn tip_position(&self) -> u64 {
         self.tip
     }
-    fn eligible_profiles(&self) -> BTreeSet<Digest> {
+    fn attributed_works(&self) -> Vec<kaspa_consensus_core::palw_panel_beacon_v1::challenge::AttributedWorkV1> {
+        Vec::new()
+    }
+    fn sealed_sources(&self) -> Vec<kaspa_consensus_core::palw_panel_beacon_v1::challenge::SealedSourceV3> {
+        Vec::new()
+    }
+    fn eligible_profiles(&self, _: u64) -> BTreeSet<Digest> {
         self.eligible.clone()
     }
     fn pending_work_of_epoch(&self, _: u64) -> BTreeSet<Digest> {
@@ -151,9 +158,9 @@ fn an_independent_source_inside_the_window_locks_and_verifies() {
     // The state machine an observer reads: collecting → candidate → locked, and unavailable once the window closed short.
     let state = |h: &History, tip: u64| panel_beacon_state_v1(std::slice::from_ref(&p), h, &request(&p), tip).unwrap();
     let empty = History::new(vec![]);
-    assert!(matches!(state(&empty, RELEASE + 3), WorkBeaconStateV1::Collecting { have: 0, need: 1 }));
-    assert!(matches!(state(&history, RELEASE + 2), WorkBeaconStateV1::Candidate { have: 1, .. }));
-    assert!(matches!(state(&history, RELEASE + 3), WorkBeaconStateV1::Locked(_)));
+    assert!(matches!(state(&empty, RELEASE + 3), PanelBeaconStateV1::Accumulator(WorkBeaconStateV1::Collecting { have: 0, need: 1 })));
+    assert!(matches!(state(&history, RELEASE + 2), PanelBeaconStateV1::Accumulator(WorkBeaconStateV1::Candidate { have: 1, .. })));
+    assert!(matches!(state(&history, RELEASE + 3), PanelBeaconStateV1::Accumulator(WorkBeaconStateV1::Locked(_))));
     assert!(matches!(state(&empty, RELEASE + 1 + 10), WorkBeaconStateV1::Unavailable { have: 0, need: 1 }), "BEACON_UNAVAILABLE");
 }
 
@@ -172,7 +179,10 @@ fn the_shipped_registry_approves_no_scheme_so_every_proof_is_refused() {
     // …and a scheme id the request does not name is not the approved one.
     let mut other = request(&p);
     other.scheme = Hash64::from_u64_word(5);
-    assert_eq!(verify_panel_beacon_v1(std::slice::from_ref(&p), &history, &other, &proof), Err(PanelBeaconRefusalV1::UnapprovedScheme));
+    assert_eq!(
+        verify_panel_beacon_v1(std::slice::from_ref(&p), &history, &other, &proof),
+        Err(PanelBeaconRefusalV1::UnapprovedScheme)
+    );
 }
 
 /// The circularity and every forbidden kind: a perfectly eligible-looking contribution of the wrong KIND or PATH seeds nothing.
@@ -200,7 +210,7 @@ fn a_panel_licensed_final_and_every_non_useful_work_kind_are_refused() {
     }
     // The contract states the same by its own state machine: with only such contributions the window ends unavailable.
     let state = panel_beacon_state_v1(std::slice::from_ref(&p), &History::new(vec![licensed]), &request(&p), RELEASE + 20).unwrap();
-    assert!(matches!(state, WorkBeaconStateV1::Unavailable { have: 0, need: 1 }));
+    assert!(matches!(state, PanelBeaconStateV1::Accumulator(WorkBeaconStateV1::Unavailable { have: 0, need: 1 })));
 }
 
 #[test]
@@ -241,7 +251,10 @@ fn duplicate_reordered_substituted_and_forged_contributions_are_refused() {
     verify(&p, &history, &good).unwrap();
     // Reordered: the same two sources in the other order, accumulators recomputed for that order.
     let reordered = forged(&p, vec![source_of(&b), source_of(&a)]);
-    assert!(matches!(verify(&p, &history, &reordered), Err(PanelBeaconRefusalV1::Evidence(BeaconEvidenceRefusalV1::Mismatch { at: 0 }))));
+    assert!(matches!(
+        verify(&p, &history, &reordered),
+        Err(PanelBeaconRefusalV1::Evidence(BeaconEvidenceRefusalV1::Mismatch { at: 0 }))
+    ));
     // Duplicate: one work listed twice cannot make `k`.
     let duplicate = forged(&p, vec![source_of(&a), source_of(&a)]);
     assert!(matches!(verify(&p, &history, &duplicate), Err(PanelBeaconRefusalV1::Evidence(BeaconEvidenceRefusalV1::Mismatch { .. }))));
@@ -253,11 +266,15 @@ fn duplicate_reordered_substituted_and_forged_contributions_are_refused() {
     // Substituted: a source the branch has not settled.
     let alien = event(9, RELEASE + 1, RELEASE + 2);
     let substituted = forged(&p, vec![source_of(&a), source_of(&alien)]);
-    assert!(matches!(verify(&p, &history, &substituted), Err(PanelBeaconRefusalV1::Evidence(BeaconEvidenceRefusalV1::Mismatch { at: 1 }))));
+    assert!(matches!(
+        verify(&p, &history, &substituted),
+        Err(PanelBeaconRefusalV1::Evidence(BeaconEvidenceRefusalV1::Mismatch { at: 1 }))
+    ));
     // Forged output or anchor on the right sources.
     let mut tampered: WorkBeaconV1 = borsh::from_slice(&good.proof).unwrap();
     tampered.output[0] ^= 1;
-    let output = BeaconProofV1 { output: Hash64::from_bytes(tampered.output), proof: borsh::to_vec(&tampered).unwrap(), ..good.clone() };
+    let output =
+        BeaconProofV1 { output: Hash64::from_bytes(tampered.output), proof: borsh::to_vec(&tampered).unwrap(), ..good.clone() };
     assert!(matches!(verify(&p, &history, &output), Err(PanelBeaconRefusalV1::Evidence(BeaconEvidenceRefusalV1::Derivation))));
     let mut anchor: WorkBeaconV1 = borsh::from_slice(&good.proof).unwrap();
     anchor.challenge_anchor[0] ^= 1;
@@ -297,4 +314,143 @@ fn a_scheme_that_is_not_a_valid_non_interactive_policy_is_not_approved() {
     let mut req = request(&p);
     req.scheme = panel_beacon_scheme_of_v1(&p);
     assert!(matches!(verify_panel_beacon_v1(std::slice::from_ref(&p), &history, &req, &proof), Err(PanelBeaconRefusalV1::Policy(_))));
+}
+
+/// **GAP-B3 (RFC-0010 × RFC-0015): the Panel draw seeded by the sealed-source beacon v3** over Panel-independent (OPV) Finals — the
+/// non-circular source a permissionless Panel needs (`opv-beacon-bootstrap.md` §4: complete-check classes reach Final with no beacon
+/// and seed every later draw). The scheme is passed in as the approved list here; the shipped list stays EMPTY (POLICY + EXTERNAL).
+mod sealed_v3 {
+    use super::*;
+    use misaka_palw_challenge::{
+        AttributedWorkV1, RootV1, SealRevealV3, SealedBeaconStateV3, SealedSourceV3, SourceAttributionV1, SourceFateV3,
+        collect_sealed_work_beacon_v3, sealed_source_policy_v3,
+    };
+
+    const W: u64 = 20;
+
+    fn v3() -> PostCommitChallengePolicyV1 {
+        sealed_source_policy_v3(2, 2, W, 2, 1)
+    }
+
+    fn start() -> u64 {
+        RELEASE + v3().anchor_delay_slots
+    }
+
+    struct SealedHistory {
+        sealed: Vec<SealedSourceV3>,
+        tip: u64,
+    }
+
+    impl PanelBeaconHistoryV1 for SealedHistory {
+        fn final_events(&self) -> Vec<WorkFinalEventV1> {
+            Vec::new()
+        }
+        fn attributed_works(&self) -> Vec<AttributedWorkV1> {
+            Vec::new()
+        }
+        fn sealed_sources(&self) -> Vec<SealedSourceV3> {
+            self.sealed.clone()
+        }
+        fn tip_position(&self) -> u64 {
+            self.tip
+        }
+        fn eligible_profiles(&self, _: u64) -> BTreeSet<Digest> {
+            BTreeSet::from([PROFILE])
+        }
+        fn pending_work_of_epoch(&self, _: u64) -> BTreeSet<Digest> {
+            BTreeSet::new()
+        }
+    }
+
+    /// One sealed claim of producer `who`, sealed at `S + at`, revealed at `S + W + at` with `fate` (`None`: withheld).
+    fn seal(who: u8, at: u64, final_path: Option<FinalPathV1>) -> SealedSourceV3 {
+        let reveal_position = start() + W + at;
+        SealedSourceV3 {
+            source_profile_id: PROFILE,
+            attribution: SourceAttributionV1 { producer_id: [who; 64], consumer_id: RootV1::Absent },
+            seal: [0x50 ^ who; 64],
+            seal_position: start() + at,
+            reveal: final_path.map(|final_path| SealRevealV3 {
+                reveal_position,
+                salt: [0x5A ^ who; 64],
+                fate: SourceFateV3::Final(WorkFinalEventV1 {
+                    kind: WorkSourceKindV1::RealUsefulWork,
+                    source_profile_id: PROFILE,
+                    canonical_work_id: [0x40 ^ who; 64],
+                    execution_commitment: [0x30 ^ who; 64],
+                    accepted_position: reveal_position,
+                    settlement_position: reveal_position + 1,
+                    occurrence_index: 0,
+                    claim_final: true,
+                    da_satisfied: true,
+                    validity_independent: true,
+                    depends_on_profiles: Vec::new(),
+                    final_path,
+                }),
+            }),
+        }
+    }
+
+    fn tip() -> u64 {
+        start() + 2 * W + 10
+    }
+
+    fn proof_of(history: &SealedHistory) -> BeaconProofV1 {
+        let p = v3();
+        let request = request(&p);
+        let ctx = panel_beacon_context_v1(&request, &p, BTreeSet::from([PROFILE]));
+        let SealedBeaconStateV3::Locked(beacon) = collect_sealed_work_beacon_v3(&ctx, &history.sealed, history.tip).unwrap() else {
+            panic!("two distinct OPV producers' revealed Finals lock the beacon");
+        };
+        BeaconProofV1 {
+            epoch: request.epoch,
+            output: Hash64::from_bytes(beacon.output),
+            proof: borsh::to_vec(beacon.beacon()).unwrap(),
+        }
+    }
+
+    #[test]
+    fn a_v3_beacon_over_panel_independent_finals_seeds_the_panel_draw() {
+        let p = v3();
+        let history = SealedHistory {
+            sealed: vec![seal(1, 0, Some(FinalPathV1::PanelIndependent)), seal(2, 1, Some(FinalPathV1::PanelIndependent))],
+            tip: tip(),
+        };
+        let proof = proof_of(&history);
+        verify_panel_beacon_v1(std::slice::from_ref(&p), &history, &request(&p), &proof).expect("the branch derives this beacon");
+        assert!(matches!(
+            panel_beacon_state_v1(std::slice::from_ref(&p), &history, &request(&p), tip()).unwrap(),
+            PanelBeaconStateV1::Sealed(SealedBeaconStateV3::Locked(_))
+        ));
+        // The shipped registry approves nothing: the same proof is refused on every real network.
+        assert_eq!(
+            verify_panel_beacon_v1(&approved_panel_beacon_policies_v1(), &history, &request(&p), &proof),
+            Err(PanelBeaconRefusalV1::UnapprovedScheme)
+        );
+    }
+
+    #[test]
+    fn a_panel_licensed_final_never_seeds_a_panel_and_a_withheld_seal_vetoes() {
+        let p = v3();
+        let licensed = FinalPathV1::PanelLicensed { panel_seed_id: [9; 64], panel_epoch: 3 };
+        // The circularity guard: a source whose Final passed through a Panel licence is not a source of a Panel draw.
+        let circular =
+            SealedHistory { sealed: vec![seal(1, 0, Some(FinalPathV1::PanelIndependent)), seal(2, 1, Some(licensed))], tip: tip() };
+        let state = panel_beacon_state_v1(std::slice::from_ref(&p), &circular, &request(&p), tip()).unwrap();
+        assert!(matches!(state, PanelBeaconStateV1::Sealed(SealedBeaconStateV3::Vetoed { failed: 1, .. })), "{state:?}");
+        // After the reveals the adversary's only move is to withhold, and that vetoes: it never chooses the output.
+        let withheld = SealedHistory { sealed: vec![seal(1, 0, Some(FinalPathV1::PanelIndependent)), seal(2, 1, None)], tip: tip() };
+        let state = panel_beacon_state_v1(std::slice::from_ref(&p), &withheld, &request(&p), tip()).unwrap();
+        assert!(matches!(state, PanelBeaconStateV1::Sealed(SealedBeaconStateV3::Vetoed { withheld: 1, .. })), "{state:?}");
+        // An honest proof of the full history is refused on the vetoed branch.
+        let honest_full = SealedHistory {
+            sealed: vec![seal(1, 0, Some(FinalPathV1::PanelIndependent)), seal(2, 1, Some(FinalPathV1::PanelIndependent))],
+            tip: tip(),
+        };
+        let proof = proof_of(&honest_full);
+        assert!(matches!(
+            verify_panel_beacon_v1(std::slice::from_ref(&p), &withheld, &request(&p), &proof),
+            Err(PanelBeaconRefusalV1::Evidence(_))
+        ));
+    }
 }
