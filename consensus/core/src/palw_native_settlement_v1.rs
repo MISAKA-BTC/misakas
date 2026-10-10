@@ -176,8 +176,19 @@ pub struct NativeFactRulesV1<'a> {
     pub canonical_work_daa: Option<u64>,
     /// The committed execution-quantum maturity window (DAA).
     pub quantum_maturity_daa: u64,
-    /// Claims with a DA session open at the sink are not mature.
-    pub claims_with_open_da: &'a BTreeSet<Hash64>,
+    /// Claims with a DA or computation-court session open at the sink supply no evidence.
+    pub claims_with_open_disputes: &'a BTreeSet<Hash64>,
+}
+
+/// The same open-dispute inventory feeds evidence filtering, lifecycle closure and
+/// the readiness explanation. A court remains open even after the recorded trace
+/// retention lapses; its absence must never be inferred from that clock.
+pub fn native_open_sessions_v1(state: &PalwChainStateV2) -> Vec<(Hash64, u64)> {
+    state
+        .da_sessions_iter()
+        .map(|((claim, _), session)| (*claim, session.deadline_daa))
+        .chain(state.court_sessions_iter().map(|(_, session)| (session.claim, session.deadline_daa)))
+        .collect()
 }
 
 fn fp_slice_identity(work_id: &Hash64, index: u32) -> Hash64 {
@@ -190,7 +201,7 @@ fn fp_slice_identity(work_id: &Hash64, index: u32) -> Hash64 {
 
 /// Turn one block's extracted evidence into facts. `accepting` is that block's `(daa, blue)`. Missing information
 /// is never guessed: a bond the sink no longer holds, a claim without a canonical work id or weight, a floor
-/// claim, a claim in `voided` and a claim with an open DA session contribute nothing.
+/// claim, a claim in `voided` and a claim with an open DA or computation-court session contribute nothing.
 ///
 /// **Maturity** is the latest of the claim's trace retention (the producer's own obligation to keep the trace
 /// available), `final + claim_retirement` (after which no conviction can reverse the `Final`), and for a
@@ -217,7 +228,7 @@ pub struct SkippedEvidenceV1 {
     pub voided: u64,
     /// The floor (BASE-0) class: never evidence.
     pub base_class: u64,
-    /// A data-availability session is open on the claim.
+    /// A DA or computation-court session is open. The existing `openDa` JSON name is retained.
     pub open_da: u64,
     /// No canonical work identity / weight (or a free-prompt claim not priced in compute).
     pub unpriced: u64,
@@ -276,7 +287,7 @@ pub fn native_facts_and_skips_v1(
             skipped.base_class += 1;
             continue;
         }
-        if rules.claims_with_open_da.contains(id) {
+        if rules.claims_with_open_disputes.contains(id) {
             skipped.open_da += 1;
             continue;
         }
@@ -326,7 +337,7 @@ pub fn native_facts_and_skips_v1(
             skipped.unpriced += 1;
             continue;
         }
-        if rules.claims_with_open_da.contains(id) {
+        if rules.claims_with_open_disputes.contains(id) {
             skipped.open_da += 1;
             continue;
         }
@@ -538,7 +549,7 @@ pub fn certify_native_effect_v1(
 }
 
 /// **The lifecycle question, answered once for the whole chain.** An effect at blue score `b` is *closed* iff every claim
-/// accepted at or before `b` is resolved — `Voided`, or `Final` with its trace retention lapsed — and no data-availability session
+/// accepted at or before `b` is resolved — `Voided`, or `Final` with its trace retention lapsed — and no DA or computation-court session
 /// names a claim accepted at or before `b` (a session whose claim the state no longer holds is open for every effect: the dispute it
 /// records cannot be located, and an unlocatable dispute is not a closed one). A claim already retired is absent from the state and
 /// therefore closed.
@@ -547,7 +558,7 @@ pub fn certify_native_effect_v1(
 /// The O(chain x claims) form this replaces asked the question once per effect; this is one pass over the claims.
 ///
 /// `claims` is `(accepted_blue_score, phase, trace_retention_daa)` for every claim the sink's state holds; `sessions` is, for every
-/// open DA session, the `accepted_blue_score` of its claim (`None` when the claim is not in the state).
+/// open dispute session, the `accepted_blue_score` of its claim (`None` when the claim is not in the state).
 pub fn native_open_from_v1(
     claims: impl IntoIterator<Item = (u64, PalwClaimPhaseV2, u64)>,
     sessions: impl IntoIterator<Item = Option<u64>>,

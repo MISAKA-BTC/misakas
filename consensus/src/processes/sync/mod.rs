@@ -36,7 +36,17 @@ pub struct SyncManager<
     _header_selected_tip_store: Arc<RwLock<W>>,
     pruning_point_store: Arc<RwLock<X>>,
     statuses_store: Arc<RwLock<Y>>,
+    /// **RFC-0008 v2 (sync): the EXEC blocks a chain block's anchor covered** — the syncer lists them beside the chain block's
+    /// mergeset, because no block names them as a parent. `None` where the EXEC payload is not armed.
+    exec_members: Option<ExecHook>,
+    /// **RFC-0008 v2 (sync): the header-only lane blocks hanging off a block** — what a syncing node requests the bodies of beside
+    /// the chain's own (it learns which of them a chain block anchors only from that block's body). `None` where the EXEC payload is
+    /// not armed.
+    exec_children: Option<ExecHook>,
 }
+
+/// A hook the consensus services install: a block's lane blocks (RFC-0008 v2).
+pub type ExecHook = Arc<dyn Fn(BlockHash) -> Vec<BlockHash> + Send + Sync>;
 
 impl<
     S: RelationsStoreReader,
@@ -67,7 +77,16 @@ impl<
             _header_selected_tip_store: header_selected_tip_store,
             pruning_point_store,
             statuses_store,
+            exec_members: None,
+            exec_children: None,
         }
+    }
+
+    /// Install RFC-0008 v2's two hooks (only on a network that armed the EXEC payload).
+    pub fn with_exec_hooks(mut self, members: ExecHook, children: ExecHook) -> Self {
+        self.exec_members = Some(members);
+        self.exec_children = Some(children);
+        self
     }
 
     /// Returns the hashes of the blocks between low's antipast and high's antipast, or up to `max_blocks`, if provided.
@@ -92,13 +111,17 @@ impl<
         let mut blocks = Vec::with_capacity(min(max_blocks, (high_bs - low_bs) as usize));
         for current in self.reachability_service.forward_chain_iterator(low, high, true).skip(1) {
             let gd = self.ghostdag_store.get_data(current).unwrap();
-            if blocks.len() + gd.mergeset_size() > max_blocks {
+            // RFC-0008 v2: the EXEC blocks this chain block's anchor covered ride with it — before it, since its body cannot be judged
+            // without them. A first segment is always taken whole, however many it holds.
+            let exec: Vec<BlockHash> = self.exec_members.as_ref().map(|hook| hook(current)).unwrap_or_default();
+            if blocks.len() + gd.mergeset_size() + if blocks.is_empty() { 0 } else { exec.len() } > max_blocks {
                 break;
             }
-            let segment: Vec<BlockHash> = gd
+            let mut segment: Vec<BlockHash> = gd
                 .consensus_ordered_mergeset(self.ghostdag_store.deref())
                 .filter(|hash| !self.reachability_service.is_dag_ancestor_of(*hash, original_low))
                 .collect();
+            segment.extend(exec.into_iter().filter(|hash| !self.reachability_service.is_dag_ancestor_of(*hash, original_low)));
             blocks.extend(self.parents_first(segment));
             highest_reached = current;
         }
@@ -222,11 +245,29 @@ impl<
             return Ok(vec![]);
         };
 
-        let (mut hashes_between, _) = self.antipast_hashes_between(highest_with_body.unwrap(), high, None);
+        let (hashes_between, _) = self.antipast_hashes_between(highest_with_body.unwrap(), high, None);
         let statuses = self.statuses_store.read();
-        hashes_between.retain(|&h| statuses.get(h).unwrap().is_header_only());
-
-        Ok(hashes_between)
+        let Some(children) = self.exec_children.as_ref() else {
+            let mut hashes_between = hashes_between;
+            hashes_between.retain(|&h| statuses.get(h).unwrap().is_header_only());
+            return Ok(hashes_between);
+        };
+        // RFC-0008 v2: each header-only lane block hanging off a listed block is requested right after it — before the chain block that
+        // anchors it, which follows in the list.
+        let mut out = Vec::with_capacity(hashes_between.len());
+        let mut seen: std::collections::HashSet<BlockHash> = hashes_between.iter().copied().collect();
+        for hash in hashes_between {
+            if statuses.get(hash).unwrap().is_header_only() {
+                out.push(hash);
+            }
+            let lane: Vec<BlockHash> = children(hash)
+                .into_iter()
+                .filter(|lane_block| seen.insert(*lane_block))
+                .filter(|lane_block| statuses.get(*lane_block).optional().unwrap().is_some_and(|status| status.is_header_only()))
+                .collect();
+            out.extend(self.parents_first(lane));
+        }
+        Ok(out)
     }
 
     pub fn create_block_locator_from_pruning_point(

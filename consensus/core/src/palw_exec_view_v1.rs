@@ -13,8 +13,8 @@
 //!   from the sink's PALW state: the tickets it minted (the rounds it is permitted) and the ones
 //!   spent (the rounds accepted).
 
-use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2};
 use crate::BlockHash;
+use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2};
 use kaspa_hashes::Hash64;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
@@ -46,6 +46,9 @@ pub enum PalwRoundRefusalV1 {
     BondNotActiveOrKeyMismatch,
     PayoutMismatch,
     PermitAlreadyUsed,
+    /// RFC-0008 v2: the covered set already holds the most distinct payees one coinbase may pay (the lane's payee bound); a later
+    /// permit holder's block is a lane verdict, not an error of the chain block.
+    PayeeBound,
 }
 
 impl PalwRoundRefusalV1 {
@@ -64,6 +67,7 @@ impl PalwRoundRefusalV1 {
             Self::BondNotActiveOrKeyMismatch => "bond_inactive_or_key_mismatch",
             Self::PayoutMismatch => "coinbase_payout_mismatch",
             Self::PermitAlreadyUsed => "permit_already_used",
+            Self::PayeeBound => "payee_bound",
         }
     }
 }
@@ -378,11 +382,7 @@ pub fn palw_recent_executions_v1(state: &PalwChainStateV2, limit: usize) -> (Vec
         .collect();
     // Newest first: by Final DAA where the claim is still kept, else by span; the claim id breaks ties.
     rows.sort_by(|a, b| {
-        b.final_daa
-            .unwrap_or(0)
-            .cmp(&a.final_daa.unwrap_or(0))
-            .then(b.span.cmp(&a.span))
-            .then(a.claim_id.cmp(&b.claim_id))
+        b.final_daa.unwrap_or(0).cmp(&a.final_daa.unwrap_or(0)).then(b.span.cmp(&a.span)).then(a.claim_id.cmp(&b.claim_id))
     });
     let total = rows.len();
     if limit > 0 {
@@ -422,10 +422,23 @@ mod tests {
         PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(v), index: 0 })
     }
     fn rec(hash: u64, ts: u64, outcome: PalwRoundOutcomeV1) -> PalwRoundBlockRecordV1 {
-        PalwRoundBlockRecordV1 { hash: h(hash), daa_score: ts / 1000, timestamp_ms: ts, round: ts / 1000, permit_index: 0, bond: Some(bond(1)), outcome }
+        PalwRoundBlockRecordV1 {
+            hash: h(hash),
+            daa_score: ts / 1000,
+            timestamp_ms: ts,
+            round: ts / 1000,
+            permit_index: 0,
+            bond: Some(bond(1)),
+            outcome,
+        }
     }
     fn exec(claim: u64) -> PalwRoundOutcomeV1 {
-        PalwRoundOutcomeV1::Exec(PalwRoundLineageV1 { quantum_id: h(9), claim_id: Some(h(claim)), quantum_index: Some(3), class_id: Some(h(77)) })
+        PalwRoundOutcomeV1::Exec(PalwRoundLineageV1 {
+            quantum_id: h(9),
+            claim_id: Some(h(claim)),
+            quantum_index: Some(3),
+            class_id: Some(h(77)),
+        })
     }
     fn refused(r: PalwRoundRefusalV1) -> PalwRoundOutcomeV1 {
         PalwRoundOutcomeV1::Refused(r)
@@ -512,9 +525,20 @@ mod tests {
     fn every_refusal_has_a_distinct_name() {
         use PalwRoundRefusalV1::*;
         let all = [
-            HeaderEnvelope, HeaderSignature, HeaderMergesetRule, HeaderAnchorOffChain, HeaderOther, EnvelopeUndecodable,
-            SpanOutsideWindow, PermitEquivocated, NoSchedule, PermitNotGranted, BondNotActiveOrKeyMismatch, PayoutMismatch,
+            HeaderEnvelope,
+            HeaderSignature,
+            HeaderMergesetRule,
+            HeaderAnchorOffChain,
+            HeaderOther,
+            EnvelopeUndecodable,
+            SpanOutsideWindow,
+            PermitEquivocated,
+            NoSchedule,
+            PermitNotGranted,
+            BondNotActiveOrKeyMismatch,
+            PayoutMismatch,
             PermitAlreadyUsed,
+            PayeeBound,
         ];
         let names: std::collections::BTreeSet<_> = all.iter().map(|r| r.name()).collect();
         assert_eq!(names.len(), all.len());
@@ -607,7 +631,14 @@ mod tests {
         assert_eq!(palw_round_block_class_v1(Some(&refused_rec)), PalwBlockClassV1::Round, "a refused round is never a genuine red");
         assert_eq!(palw_round_block_class_v1(None), PalwBlockClassV1::Round, "no verdict is never guessed");
         assert_eq!(
-            [PalwBlockClassV1::Blue, PalwBlockClassV1::Exec, PalwBlockClassV1::Red, PalwBlockClassV1::Round, PalwBlockClassV1::Unmerged].map(|c| c.name()),
+            [
+                PalwBlockClassV1::Blue,
+                PalwBlockClassV1::Exec,
+                PalwBlockClassV1::Red,
+                PalwBlockClassV1::Round,
+                PalwBlockClassV1::Unmerged
+            ]
+            .map(|c| c.name()),
             ["BLUE", "EXEC", "RED", "ROUND", ""]
         );
     }

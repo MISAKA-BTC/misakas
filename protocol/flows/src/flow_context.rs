@@ -671,6 +671,8 @@ pub struct FlowContextInner {
 
     /// ADR-0125 §7.3: round blocks by permit — one relayed a permit, and the evidence of two.
     palw_round_relay: crate::palw_round_relay::PalwRoundRelayV1,
+    /// RFC-0008 v2 §10.3: the EXEC v2 lane's relay memory (node-local backpressure).
+    palw_exec_v2_relay: crate::palw_exec_v2_relay::PalwExecV2RelayV1,
 
     /// The 2026-09-24 heartbeat audit, H2: heartbeats by slot — one announced a slot.
     palw_heartbeat_relay: crate::palw_heartbeat_relay::PalwHeartbeatRelayV1,
@@ -944,8 +946,12 @@ impl FlowContext {
                 consensus_manager,
                 palw_gossip: crate::palw_gossip::PalwGossipCenter::default(),
                 palw_round_relay: Default::default(),
+                palw_exec_v2_relay: Default::default(),
                 palw_heartbeat_relay: Default::default(),
-                orphans_pool: AsyncRwLock::new(OrphanBlocksPool::new(max_orphans)),
+                // RFC-0008 v2: past the EXEC payload fence an anchoring block waits for its lane heads; below it nothing is read.
+                orphans_pool: AsyncRwLock::new(
+                    OrphanBlocksPool::new(max_orphans).with_exec_v2(config.params.palw_exec_payload_v2_fence()),
+                ),
                 shared_block_requests: Arc::new(Mutex::new(HashMap::new())),
                 transactions_spread: AsyncRwLock::new(TransactionsSpread::new(hub.clone())),
                 shared_transaction_requests: Arc::new(Mutex::new(HashMap::new())),
@@ -1027,6 +1033,11 @@ impl FlowContext {
         &self.palw_round_relay
     }
 
+    /// RFC-0008 v2 §10.3: the EXEC v2 lane's relay memory.
+    pub fn palw_exec_v2_relay(&self) -> &crate::palw_exec_v2_relay::PalwExecV2RelayV1 {
+        &self.palw_exec_v2_relay
+    }
+
     /// **ADR-0125 §7.3: may this validated block be announced onward?** Every block but a round
     /// block may; a round block may when it is the first this node has seen for its permit. A
     /// second, different signed block for the permit is kept, not announced, and queued as
@@ -1063,7 +1074,64 @@ impl FlowContext {
     /// **May this validated block be announced onward?** One door for both relay call sites:
     /// ADR-0125 §7.3's round-lane rule and the heartbeat audit's H2 slot rule.
     pub async fn palw_lane_relay_admits(&self, consensus: &ConsensusProxy, block: &Block) -> bool {
-        self.palw_round_relay_admits(consensus, block).await && self.palw_heartbeat_relay_admits(consensus, block).await
+        self.palw_round_relay_admits(consensus, block).await
+            && self.palw_exec_v2_relay_admits(consensus, block).await
+            && self.palw_heartbeat_relay_admits(consensus, block).await
+    }
+
+    /// **RFC-0008 v2 amendment 1, §10.3: may a validated `PXE2` lane block be announced onward?** Every block but a lane block past
+    /// `palw_exec_payload_v2` may; an `EXEC_TX` block when it is the first for its `(span, round, permit index)`; an `EXEC_SLICE` block
+    /// when the sink state says its root, executor, index and verification claim stand and its executor has announced fewer than its
+    /// quota of slice blocks in the span (`crate::palw_exec_v2_relay`). Node-local backpressure: validity never reads it, and the block
+    /// is stored either way. Where the payload is not armed — every shipped preset — the question does not arise.
+    pub async fn palw_exec_v2_relay_admits(&self, consensus: &ConsensusProxy, block: &Block) -> bool {
+        use crate::palw_exec_v2_relay::PalwExecV2RelayVerdictV1 as V;
+        use kaspa_consensus_core::palw_exec_v2::{PalwExecSubtypeV2, PalwExecV2Envelope};
+        let Some(fence) = self.config.params.palw_exec_payload_v2_fence() else {
+            return true;
+        };
+        if block.header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
+            || !fence.is_active(block.header.daa_score)
+        {
+            return true;
+        }
+        let Some(lane) = self.config.params.palw_execution_lane_fence() else {
+            return true;
+        };
+        // Header-validated, so it decodes; a block that does not is no v2 carrier and the policy has no opinion of it.
+        let Ok(envelope) = PalwExecV2Envelope::decode(&block.header.palw_commitment) else {
+            return true;
+        };
+        let anchor_daa = consensus.async_get_header(envelope.anchor).await.map(|h| h.daa_score).unwrap_or_default();
+        let span =
+            kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(anchor_daa, lane.schedule_span_daa_at(anchor_daa));
+        let verdict = match (envelope.subtype, &envelope.tx_permit, &envelope.work_slice) {
+            (PalwExecSubtypeV2::Tx, Some(permit), None) => {
+                self.palw_exec_v2_relay.observe_permit(block.hash(), span, permit.round, permit.permit_index)
+            }
+            (PalwExecSubtypeV2::Slice, None, Some(slice)) => {
+                if !consensus.async_palw_exec_v2_slice_relayable_v1(slice.clone()).await {
+                    debug!(
+                        "[palw-exec-v2-relay] slice block {} is not relayable against the sink state — kept, not relayed",
+                        block.hash()
+                    );
+                    return false;
+                }
+                self.palw_exec_v2_relay.take_slice_quota(envelope.executor_bond, span)
+            }
+            _ => return true,
+        };
+        match verdict {
+            V::Relay => true,
+            V::PermitRepeat => {
+                debug!("[palw-exec-v2-relay] {} is a second block for an announced permit — kept, not relayed", block.hash());
+                false
+            }
+            V::OverQuota => {
+                debug!("[palw-exec-v2-relay] {}: its executor's slice quota for the span is spent — kept, not relayed", block.hash());
+                false
+            }
+        }
     }
 
     /// Whether the heartbeat lane's relay rules (H2) govern a block at `daa_score`: where the clock

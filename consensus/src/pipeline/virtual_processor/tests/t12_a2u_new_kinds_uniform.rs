@@ -114,6 +114,10 @@ fn arm_the_release(params: &mut Params) {
 fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
     for fence in PalwLifecycleKindFenceV1::ALL {
         match fence {
+            PalwLifecycleKindFenceV1::ExecPayloadV2 => {
+                params.palw_exec_payload_v2 = Some(at);
+                params.sync_palw_exec_payload_v2();
+            }
             PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1 => params.palw_probabilistic_constraints_v1 = Some(at),
             PalwLifecycleKindFenceV1::SignedRegistrationV1 => params.palw_signed_registration_v1 = Some(at),
             PalwLifecycleKindFenceV1::PermissionlessPanelV1 => {
@@ -147,6 +151,10 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
     }
     for form in PalwHeaderFormFenceV1::ALL {
         match form {
+            PalwHeaderFormFenceV1::ExecPayloadV2 => {
+                params.palw_exec_payload_v2 = Some(at);
+                params.sync_palw_exec_payload_v2();
+            }
             PalwHeaderFormFenceV1::ReceiptSpendV4 => params.palw_receipt_spend_v4 = Some(at),
         }
     }
@@ -170,6 +178,7 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_permissionless_panel_v1"
             | "palw_provider_court_v1"
             | "palw_model_bond_allocation_v1"
+            | "palw_exec_payload_v2"
             | "palw_receipt_spend_v4"
             | "palw_panel_free_v1"
             | "palw_typed_roots_v1"

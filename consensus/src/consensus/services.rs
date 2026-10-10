@@ -151,7 +151,9 @@ impl ConsensusServices {
             params.deflationary_phase_daa_score,
             params.pre_deflationary_phase_base_subsidy,
             params.target_time_per_block_history(),
-        );
+        )
+        // RFC-0008 v2: the anchor-trailer readings exist only where the EXEC payload is armed.
+        .with_exec_v2_armed(params.palw_exec_payload_v2_fence().is_some());
 
         let mass_calculator = MassCalculator::new(
             params.mass_per_tx_byte,
@@ -243,7 +245,8 @@ impl ConsensusServices {
             relations_service.clone(),
         );
 
-        let pruning_proof_manager = Arc::new(PruningProofManager::new(
+        let pruning_proof_manager = Arc::new(
+            PruningProofManager::new(
             db,
             &storage,
             parents_manager.clone(),
@@ -291,6 +294,65 @@ impl ConsensusServices {
             storage.pruning_point_store.clone(),
             storage.statuses_store.clone(),
         );
+        // **RFC-0008 v2 (sync): the EXEC blocks a chain block's anchor covers**, so that IBD lists and requests them although no block
+        // names them as a parent. Installed only where the payload is armed.
+        let sync_manager = if let Some(exec_v2_fence) = params.palw_exec_payload_v2_fence() {
+            use crate::model::stores::{
+                acceptance_data::AcceptanceDataStoreReader, ghostdag::GhostdagStoreReader as _, headers::HeaderStoreReader,
+                relations::RelationsStoreReader,
+            };
+            use kaspa_consensus_core::BlockHash;
+            let members = {
+                let acceptance_data_store = storage.acceptance_data_store.clone();
+                let ghostdag_store = storage.ghostdag_store.clone();
+                Arc::new(move |chain_block: BlockHash| -> Vec<BlockHash> {
+                    let (Ok(acceptance), Ok(data)) = (acceptance_data_store.get(chain_block), ghostdag_store.get_data(chain_block))
+                    else {
+                        return Vec::new();
+                    };
+                    acceptance
+                        .iter()
+                        .map(|entry| entry.block_hash)
+                        .filter(|block| {
+                            *block != data.selected_parent
+                                && !data.mergeset_blues.contains(block)
+                                && !data.mergeset_reds.contains(block)
+                        })
+                        .collect()
+                }) as crate::processes::sync::ExecHook
+            };
+            let children = {
+                let relations_service = relations_service.clone();
+                let headers_store = storage.headers_store.clone();
+                let bound = params.palw_execution_lane_fence().map(|lane| lane.max_per_mergeset as usize).unwrap_or(0);
+                Arc::new(move |from: BlockHash| -> Vec<BlockHash> {
+                    let lane_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
+                    let mut found: Vec<BlockHash> = Vec::new();
+                    let mut queue = vec![from];
+                    while let Some(current) = queue.pop() {
+                        let Ok(children) = relations_service.get_children(current) else { continue };
+                        for child in children.read().iter().copied() {
+                            if found.len() >= bound || found.contains(&child) {
+                                continue;
+                            }
+                            // Lane blocks of the v2 era only: below the fence a round block reaches a syncee through the mergeset
+                            // that names it, and the list stays the one the build before RFC-0008 v2 served (the X8R review).
+                            if headers_store
+                                .get_header(child)
+                                .is_ok_and(|header| header.pow_algo_id == lane_id && exec_v2_fence.is_active(header.daa_score))
+                            {
+                                found.push(child);
+                                queue.push(child);
+                            }
+                        }
+                    }
+                    found
+                }) as crate::processes::sync::ExecHook
+            };
+            sync_manager.with_exec_hooks(members, children)
+        } else {
+            sync_manager
+        };
 
         Arc::new(Self {
             _storage: storage,

@@ -614,11 +614,17 @@ impl T12Chain {
     pub(super) fn nonce_for_reopen(&self) -> u64 {
         self.nonce
     }
+
+    /// Start this chain's heartbeat nonces at `nonce`, so a second node that builds a competing branch off a shared prefix mints
+    /// blocks of its own rather than the first node's.
+    pub(super) fn set_nonce_for_fork(&mut self, nonce: u64) {
+        self.nonce = nonce;
+    }
 }
 
 /// Which seed anchor the chain is given — see [`a_floor_final_scheduled`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SeedDraw {
+pub(super) enum SeedDraw {
     /// An anchor whose seed lets the floor Final mint a ticket.
     MintsATicket,
     /// An anchor whose seed leaves the floor Final without one.
@@ -627,19 +633,19 @@ enum SeedDraw {
 
 /// The chain standing at the first block of the span a floor Final's snapshot targets, with the
 /// schedule that block seeded.
-struct AtTheTargetSpan {
-    chain: T12Chain,
-    lane: kaspa_consensus_core::config::params::PalwExecutionLaneV1,
-    claim_id: Hash64,
-    executor: PalwBondKeyV2,
-    final_row: kaspa_consensus_core::palw_execution_lane_v1::PalwExecFinalV1,
-    span_daa: u64,
-    target: u64,
-    opening: BlockHash,
-    open_round: u64,
-    window: u64,
-    schedule: kaspa_consensus_core::palw_execution_lane_v1::PalwExecScheduleV1,
-    carrier: Transaction,
+pub(super) struct AtTheTargetSpan {
+    pub(super) chain: T12Chain,
+    pub(super) lane: kaspa_consensus_core::config::params::PalwExecutionLaneV1,
+    pub(super) claim_id: Hash64,
+    pub(super) executor: PalwBondKeyV2,
+    pub(super) final_row: kaspa_consensus_core::palw_execution_lane_v1::PalwExecFinalV1,
+    pub(super) span_daa: u64,
+    pub(super) target: u64,
+    pub(super) opening: BlockHash,
+    pub(super) open_round: u64,
+    pub(super) window: u64,
+    pub(super) schedule: kaspa_consensus_core::palw_execution_lane_v1::PalwExecScheduleV1,
+    pub(super) carrier: Transaction,
 }
 
 /// **Stages 1–7 on testnet-12, every window as shipped**: card 0's floor attempt → its claim → the
@@ -655,6 +661,13 @@ struct AtTheTargetSpan {
 /// whose seed gives the answer `draw` asks for, and the seed the chain then writes is asserted equal
 /// to the one predicted. Every other block is what it would be anyway.
 async fn a_floor_final_scheduled(draw: SeedDraw) -> AtTheTargetSpan {
+    a_floor_final_scheduled_with(draw, None).await
+}
+
+/// [`a_floor_final_scheduled`] with RFC-0008 v2's `palw_exec_payload_v2` armed at `exec_v2_fence` on the config AFTER it is built (the
+/// fence validator refuses every real height, so the harness arms what validation refuses — see `t12_exec_v2_carriage`). `None` is the
+/// chain exactly as before.
+pub(super) async fn a_floor_final_scheduled_with(draw: SeedDraw, exec_v2_fence: Option<u64>) -> AtTheTargetSpan {
     use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecSeedAnchorV1, palw_execution_span_seed_v1, palw_execution_span_v1};
     use kaspa_consensus_core::palw_execution_quanta_v1::{
         PALW_EXECUTION_QUANTUM_V1, palw_execution_quantum_count_v1, palw_execution_span_rounds_v1,
@@ -664,7 +677,13 @@ async fn a_floor_final_scheduled(draw: SeedDraw) -> AtTheTargetSpan {
     };
     kaspa_core::log::try_init_logger("warn");
 
-    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let (mut config, mut bundle, premine, floats) = t12_with_harness_cards();
+    if let Some(height) = exec_v2_fence {
+        config.params.palw_exec_payload_v2 = Some(kaspa_consensus_core::config::params::ForkActivation::new(height));
+        config.params.sync_palw_exec_payload_v2();
+        let PalwConsensusMode::ConsensusV2(armed) = &config.params.palw_consensus_mode else { unreachable!("testnet-12 is V2") };
+        bundle = armed.clone();
+    }
     let lane = config.params.palw_execution_lane.expect("t12 opens the execution lane");
     let ttpb = config.params.target_time_per_block();
     // testnet-12's maturity is the challenge window it applies (user decision 2026-09-25): 120 DAA,
@@ -1239,18 +1258,18 @@ async fn t12_a_skipped_own_attempt_has_its_carve_withheld_from_the_child_coinbas
         claim.escrowed_reward,
         "a skipped attempt is withheld the carve its claim would have escrowed, and it is never released"
     );
-    assert_eq!(vp.palw_v2_escrow_withheld_at(&skipped_state, beat.header.hash, beat.header.daa_score), 0, "a heartbeat carries no attempt");
+    assert_eq!(
+        vp.palw_v2_escrow_withheld_at(&skipped_state, beat.header.hash, beat.header.daa_score),
+        0,
+        "a heartbeat carries no attempt"
+    );
 
     // And the child's coinbase, built by the node's own template path against the admitted state,
     // pays the attempt block's worker base less exactly that escrow — the figure the skipped state
     // now withholds as well.
     let child = chain.heartbeat(ttpb, Vec::new()).await;
-    let paid_to_card0: u64 = child.transactions[0]
-        .outputs
-        .iter()
-        .filter(|o| o.script_public_key == card_payout_spk(0))
-        .map(|o| o.value)
-        .sum();
+    let paid_to_card0: u64 =
+        child.transactions[0].outputs.iter().filter(|o| o.script_public_key == card_payout_spk(0)).map(|o| o.value).sum();
     let split = vp.fee_split_at(attempt_block.header.daa_score).expect("the overlay split");
     let parts = kaspa_consensus_core::dns_finality::split_block_subsidy(
         vp.coinbase_manager.calc_block_subsidy(attempt_block.header.daa_score),

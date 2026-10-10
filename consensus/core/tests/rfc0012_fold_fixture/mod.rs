@@ -311,7 +311,7 @@ pub fn rules<'a>(l: &'a Life, state: &'a PalwChainStateV2, open: &'a BTreeSet<Ha
         params: &l.sp,
         canonical_work_daa: l.p.palw_canonical_work_daa(),
         quantum_maturity_daa: 120,
-        claims_with_open_da: open,
+        claims_with_open_disputes: open,
     }
 }
 

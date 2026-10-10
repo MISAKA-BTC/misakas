@@ -23,6 +23,11 @@ and authenticated model operands before claiming bounded court completeness. G14
 Model-bond coinbase allocation uses distinct miner principal and preserves network/model/individual-bond budgets and EXEC zero weight/DAA.
 Open-versus-closed economics, allocation/recovery and non-interference gates are pending; this historical implementation does not satisfy them.
 
+**Implementation record (lane X8/X8R; non-normative — the design above wins).** Dormant code for an earlier reading of this spec
+exists on branch `rfc8/x8r-review` behind the unarmable fence `palw_exec_payload_v2`. What is built, what proves it and which gates
+remain open are in [rfc-0008-v2-implementation-record.md](rfc-0008-v2-implementation-record.md) and in the labelled section 10 at the
+end of this document. That record does not close any gate of section 9; every gate stays open until the gate's own evidence exists.
+
 ## 1. Invariants and rollout boundary
 
 One EXEC class contains `EXEC_TX` and `EXEC_SLICE`. Extend the existing algo-10 execution lane under a new
@@ -288,3 +293,220 @@ parameters only after independent review, measured evidence and a separate coord
 [ADR-0177](../../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
+
+## 10. Implementation record — X8R amendment 1 (2026-10-08/09): the slice verification route and the five design decisions
+
+> **Label (2026-10-10 merge).** This section is lane X8R's implementation record, kept as it was written. It is **not normative**: where it
+and the user's 2026-10-10 revision of sections 1–9 and the two 2026-10-10 sections above differ, the revision wins. Section 10.9 maps the
+revision onto the code.
+
+This amendment closed the choices sections 1–7 left open, for the implementation on `rfc8/x8r-review`; it changes no
+activation height, preset or fingerprint (the fence stays unarmable on every shipped ruleset). Each decision states its rationale; none
+needed a policy value from the user (the numbers it touches are existing protocol constants or the G14 route's own policy, whose
+production values stay on hold per the 2026-10-08 Panel=0 rulings).
+
+### 10.1 The verification route is the G14 kernel route (closes the section-6 route and gap "no production writer of `Verified`")
+
+**A slice is verified only through a claim of the probabilistic-constraint kernel route (`palw_probabilistic_constraints_v1`, tag 110),
+and only that route can verify, convict or default it.** Concretely:
+
+1. **The root's class must be kernel-bound.** A root declaration is refused (`ClassNotKernelBound`) unless the root claim's V2 class
+   has a kernel binding (onboarding tag 106: the V2 class bound to a kernel class that registered after `PUBLIC_PROSECUTION_COMPLETE`),
+   and its `plan_root` must be that binding's `plan_root` (the kernel class's `VerificationPlanV1` root; `PlanNotKernels`). So a work
+   session exists only for a G14-complete class — the class whose claims an ordinary outside bond can already convict or default from
+   public material (the kernel route's G14 cases, `g14-node-e2e-record.md`).
+2. **Each slice names its verification claim.** `slice.evidence_root` is the id of a kernel-route *program* claim, and admission rule
+   5 gains the **verification binding** (refused by name, no write): the route holds that claim; it is not failed (convicted,
+   unavailable, timed out); its producer is the slice executor's kernel bond (`palw_kernel_bond_id_v1`); its job's class is the
+   bound kernel class; its job's `nonce` is the **slice job nonce** `H("misaka-palw/exec-v2/slice-job-nonce/v1"; root claim ‖ index ‖
+   range ‖ canonical job ‖ plan root)` — so one kernel job, hence one kernel claim, can back exactly one
+   `(root, index, range)`; `slice.predecessor_state_root` is the **token state** `H("misaka-palw/exec-v2/token-state/v1"; n ‖ tokens)`
+   of the job's prompt; `slice.result_state_root` is the token state of the prompt followed by the claim's generated tokens;
+   `slice.output_root` is the token state of the generated tokens alone; and `slice.da_root` is the kernel claim's own evidence root.
+   Rule 4 then makes consecutive slices one token stream: slice `i+1`'s prompt is slice `i`'s prompt and output.
+3. **The slice's stage follows its claim, every block, after the kernel route's closing tick** (so a Final, conviction or default the
+   route decided in the block is read the same block): a kernel claim **Final** makes its slice `Verified` (a root whose every slice is
+   verified releases its claim's `Final` hold); a claim **convicted** makes its slice *proven false*; a claim **unavailable or timed
+   out** (withheld material, no timely check) makes it *defaulted*. A claim the route no longer holds while its slice is pending is
+   treated as defaulted (it cannot be verified).
+4. **Sampled checks** are the kernel claim's own, under its committed subject and the one post-commit challenge contract
+   (`misaka-palw-challenge`); the slice's `WORK_SLICE` subject binding (`challenge_binding`) is recorded with the slice so a future
+   supplemental check has its own seed domain. No seed or court is added for slices.
+
+**Why.** RFC-0008 §6 requires that an ordinary non-Panel bond can verify and prosecute every slice and boundary from public material,
+with an exact court and DA default. The kernel route is the one place this repository has that property on the real node (G14 cases
+PASS: an outsider convicts a covered lie, a withheld position defaults, OPV windows finalize Panel-independently). Binding the slice
+statement to a kernel claim of the same token stream gives every slice that property without a second court, a second seed formula or
+a second DA protocol, which RFC-0007 Part VI and RFC-0014 forbid. **Limits (named, not hidden):** pipeline (K2-TIR-v3) classes are
+refused for slices until the K2-at-scale lane defines a segment state for them (`VerificationKindUnsupported`); the initial boundary
+(`initial_state_root`, slice 0's predecessor) is the root bond's declaration and its link to the REAL claim's verified output is not
+checked — every slice after it is verified as a continuation of it.
+
+### 10.2 Suffix void on a proven-false or defaulted slice (closes the section-6 CODE gap)
+
+A proven-false or defaulted slice voids **itself and every later accepted slice of its root** (they chain from its result), the root
+becomes `Voided { from_index }` and the root claim is voided — `WorkSliceProvenFalse` (void reason 131) or `WorkSliceDefaulted` (132).
+Neither reason charges at the V2 level: the evidence-bound liability is the kernel route's conviction or default penalty on the slice
+executor's kernel reservation, already collected; a second V2 forfeit would charge the root bond for another bond's lie. No prefix or
+partial payment is made (section 6: "no independent prefix payment"); the extra executors' exposure returns; the job's one-use
+tombstone stays until the claim retires. A slice that was `Verified` and whose claim is convicted later (inside the route's liability
+horizon), or whose claim forfeits its reservation to a post-Final default (10.5's revision), is handled the same way while its root has
+not settled.
+
+### 10.3 Flood residual (DESIGN gap 4) — decided: bounded by relay admission, not by a consensus rule
+
+Consensus already bounds what is *covered* (8 heads, the lane leaf bound, 8 slices folded per block, the pending and root quotas) and
+a flood moves no consensus number (P9). The residual — unanchored lane blocks occupying relay and storage until pruned — is bounded
+**node-locally**, as section 7 requires ("node-local backpressure controls production and relay only"): past the fence a node relays an
+`EXEC_SLICE` block only when, against its sink state, the root is open, the executor is authorised, the index is in
+`[next_index, next_index + PALW_EXEC_V2_MAX_PENDING_DEPTH)`, the named verification claim exists, and the executor has relayed fewer
+than `PALW_EXEC_V2_MAX_PENDING_PER_BOND` slice blocks in the anchor's span; it relays the first `EXEC_TX` block per
+`(span, round, permit index)` and keeps (does not announce) a second. A block outside these rules is still validated and stored if a peer
+sends it — validity never depends on relay policy. **Why:** the price of a lane header is the constant algo-10 PoW plus one ML-DSA-87
+check, both paid by the sender; the only unpriced cost was gossip amplification, which the state-aware filter removes for every
+non-executor and the per-bond quota bounds for an authorised one.
+
+### 10.4 Schedule credit of settled slice work (DESIGN gap 6) — decided: no raise in the initial release
+
+The root claim's REAL `Final` earns exactly the credit the existing eligibility/credit/cap rules give its own admitted work, snapshot
+once; settled slice work adds **no** schedule credit, weight or permit. Section 4's "derive one aggregate credit from the root" is read
+as this single existing credit (section 1: a REAL root "does not import its EXEC slices' work as additional weight"). **Why:** the plan's
+boundaries are the root bond's declaration and slice work is verified as kernel claims that themselves earn no fork-choice or schedule
+credit; raising the root's credit by declared slice work would let a root bond mint schedule credit by declaring a longer plan. A raise
+needs a measured, verified work unit for slices — a later versioned rule.
+
+### 10.5 Post-Final liability for slice legs (DESIGN gap 2) — decided: the kernel reservation is the collectible liability, and caps the leg
+
+Each slice's liability after the root's `Final` is its kernel claim's: the route holds the slice executor's reservation until the claim's
+liability horizon, and a post-Final conviction slashes it (G14 case "convicted after Final within the liability horizon"). So the leg is
+always backed. **Each slice's contribution to its executor's leg is capped at its leg cap, fixed when the slice verifies**: the reservation
+its kernel claim holds at that moment, less the route's own `Final` reward on that claim (`palw_exec_v2_leg_cap_v1`). An executor's leg at
+the root's settlement is capped at the sum of its slices' caps; the excess stays with the root executor's leg (nothing minted,
+`sum(paid) == allocation` still holds). **Why:** section 6 requires retention "to cover … collectible liability after Final"; an
+uncapped leg larger than the collateral that backs it would be an uncollectible gain. The route's own invariant is `claim_reward <
+claim_collateral` (what one claim gains stays below what it puts at risk); a slice leg is a second gain on the same claim, so the two
+together are held under the same reservation. The legs stay unvested (`add_panel_payout`): vesting would add a second, V2-side forfeiture
+path for a fault the kernel route already convicts.
+
+**Revision (X8R round 2, 2026-10-09).** The first text capped each leg at the reservation the route held *at the root's settlement*. The
+route releases a Final claim's reservation once its liability horizon passes, so that cap fell to zero for every slice verified long
+enough before the root's `Final` — and a root bond, itself an authorised executor, could hold back the last slice until the earlier
+executors' horizons had passed and keep their whole legs. The cap is now fixed at verification, when the liability it stands for exists;
+its later release changes neither the risk nor the work. The same review found the converse hole: the route answers a demand left
+unserved inside the horizon after `Final` by forfeiting the whole reservation while the claim stays `Final` (`PostFinalDefault`). The
+settlement-time read had zeroed such a leg incidentally; the outcome rule now reads a `Final` claim that reserves nothing at or before
+its horizon as **defaulted** (`palw_exec_v2_claim_outcome_v1`), so the slice is defaulted and, while its root has not settled, voids the
+suffix and the root as 10.2 says. A release *past* the horizon is not a default.
+
+### 10.6 Permit equivocation evidence (DESIGN gap 8) — decided: no offence for v2 permits
+
+A `PXE2` `EXEC_TX` permit signed twice is not slashable. The covered set is judged in the canonical order `(round, permit index, hash)`:
+the first block of a permit takes it, every other is `PermitAlreadyUsed`, so a double-signed permit can never be spent twice. **Why:**
+v2 binds the carrier's anchor into the signature, so an honest executor whose carrier was stranded by a reorg *must* re-sign the same
+permit at a new anchor; section 6 forbids "heuristic equivocation slashing for honest reattachment". The v1 evidence path
+(`round_equivocated`) is not extended to `PXE2`; relay keeps the second block un-announced (10.3).
+
+### 10.7 Anchoring-window strand (DESIGN gap 5) — decided: keep the two-span window; the producer republishes
+
+The covered set stays bounded by the two-span window (a span is one DAA on testnet-12). A lane block anchored on a branch that is
+reorganised away and outside the window on the new branch is not covered there; nothing is invalidated or double-credited (P10). The
+node's `EXEC_SLICE` producer republishes a slice whose carrier is not anchored on its sink chain once the carrier has left the window —
+re-signed at the current anchor, the honest reattachment 10.6 protects. **Why:** a longer window is a parameter, not code, but it
+lengthens the consensus closure walk for every anchoring block; republishing costs the executor one header.
+
+### 10.8 Fence prerequisites added
+
+`validate_palw_exec_payload_v2` additionally requires, at or below the fence: `palw_probabilistic_constraints_v1` (the verification
+route, 10.1) and the declaration of `palw_audit_2026_09_11` (A-2's tolerance of undecodable lifecycle payloads, which keeps a tag-130
+carrier block-valid on a fleet that mixes builds — the X8R review, record section 10).
+
+### 10.9 X8R round 3 (2026-10-10): the user's revision applied, G14 completion (GAP-60 to GAP-63) and ADR-0176 D2
+
+Like 10.1–10.8, this subsection records the implementation's choices and is **not normative**; sections 1–9 and the two 2026-10-10
+sections win. It maps the revision onto the code, closes the G14 completion matrix's EXEC-slice gaps, and names what lane BUDGET must
+provide. Nothing here arms a fence or moves a shipped id.
+
+**The revision, row by row.**
+
+| Revision item | Where the code stands |
+| --- | --- |
+| EXEC weight / DAA / blue score / selected parent = 0, settlement included (§1, ADR-0176 D3) | unchanged: P1, P3, P9 pin it; no settlement path writes weight |
+| One root settlement, unique work (§4) | unchanged: `JobWorkUse`, the one `Settled` marker, `sum(paid) == allocation`; now net of the bound claims' route rewards (D2 below) |
+| ADR-0177 non-interference | the slice route demands only claim-specific material (one committed position of one kernel claim); no model bytes, no availability condition. The outsider computes with its own model copy; G14 for a slice is conditional on the verifier having acquired the registered model |
+| ADR-0176 D2: no double rights from root/slice splitting | the D2 rule and hooks below |
+| Rule E (ADR-0178) | EXEC carriers contribute no fork-choice term, so rule E reads nothing from this lane; the root REAL claim is an ordinary REAL claim to it |
+
+**GAP-62 — the initial boundary is linked to the REAL claim's output (the prefix binding).** Before this round the initial boundary was
+the root bond's unchecked declaration. Now, wherever the kernel route is in force, the declaration names a **prefix claim**: a
+kernel-route program claim, by the root bond's kernel bond, of the root class's bound kernel class, whose job carries the **prefix job
+nonce** `H("misaka-palw/exec-v2/prefix-job-nonce/v1"; root claim ‖ prefix work ‖ canonical job ‖ plan root)`. The fold checks, from
+chain state alone (refused by name, nothing written):
+
+1. the job's prompt is the prompt the REAL claim's execution anchor names (`palw_attempt_prompt_ids_v1` at the class's canonical
+   prefill — the IR class record's facts);
+2. the claim's generated tokens are the REAL claim's committed output: `palw_attempt_output_root_v1(ctx, generated) ==
+   claim.output_root`, `ctx` the canonical attempt context J5a/J5b derive (`palw_tir_attempt_context_v1`);
+3. the initial boundary is `token_state(prompt ‖ generated)` (`InitialBoundaryNotLinked` otherwise);
+4. the claim has not failed.
+
+So a wrong initial boundary cannot enter the chain at all, and the REAL claim's own output is now public material that the kernel route
+adjudicates: an outsider with the model convicts a lying prefix claim exactly as a slice's, and the conviction (or a default of its
+withheld material, or a forfeit after its `Final`) voids the whole session — every slice, the root (`Voided { from_index: 0 }`) and the
+REAL claim (`WorkSliceProvenFalse` / `WorkSliceDefaulted`, the prefix being the session's first verified piece). A pending prefix holds
+the root's `Final` like a pending slice. This is the slice binding of 10.1 applied to the root's own work, so it adds no court, seed or
+DA protocol. **Limit:** it binds the REAL claim's *output*; the REAL claim's V2 step trace is still adjudicated on its own route.
+That is G14C's GAP-81, and this binding is the shape GAP-81's option "bind the V2 claim 1:1 to a kernel claim of the same job" would
+take.
+
+**ADR-0176 D2 — one work, one right, one budget.** A session's work is paid once, from the root claim's single allocation `A`: the
+root executor's reward leg that its REAL `Final` releases (BUDGET clips it before any split, §2.6 of its design). The kernel claims
+that verify the prefix and the slices are verification vehicles. Each draws `Q` from its own producer's window, because a claim is a
+claim (D2's `m·N` claims), but no reward right of its own. Their route `Final` reward is an advance on the same work's share of `A`.
+At settlement, with `e_i` a piece's work share (capped as in 10.5) and `r_i` the route reward paid on its bound claim:
+
+```text
+slice executor's leg  = e_i − min(e_i, r_i)        (aggregated per bond)
+root executor's leg   = A − Σ r_i (prefix included) − Σ slice legs
+Σ legs + root leg + Σ r_i = A                      (when Σ r_i ≤ A; nothing minted, the withheld Σ r_i is never paid twice)
+```
+
+A piece whose share is at least its route reward is paid exactly its share in total; a piece whose share is smaller keeps its route
+reward and the root executor bears the difference. EXEC weight stays 0; carriers pay no worker share (`B` = 0 per carrier).
+
+**Hooks for lane BUDGET (`palw_bond_budget_v1`; the engine is BUDGET's, not built here).**
+
+| Hook | Called / read where | What the engine does |
+| --- | --- | --- |
+| H-3 (BUDGET's name) | an `EXEC_SLICE` carrier | nothing: the lane mints nothing, so no carrier calls `bond_budget_consume_block_v1` |
+| H-3a `palw_bond_budget_bind_vehicle_v1(kernel_claim, root_claim)` | the declaration (the prefix claim) and slice admission (the slice's claim); the read `PalwChainStateV2::exec_v2_root_of_kernel_claim_v1` answers it at any time | re-attributes the bound kernel claim's `R` (and `F`, 0 today) to the root claim's reservation: its route `FinalReward` is consumed from the ROOT's `R` (Clip), never from a fresh reservation on the executor's bond; its own `Q` and `d + W` stay as they are (D4). A route reward paid before the binding was charged to the executor's own budget; the settlement still nets it from `A`, so the right is never doubled |
+| H-3b | the root claim's `Final` | the reward is clipped before the split; `settle_at_final_v2` splits the clipped amount and nets the bound claims' route rewards, so `consume(root, R, A, Clip)` covers the whole session |
+
+**GAP-61 — superseded by the Lead's GAP-81 decision; the seam is re-scoped, not replaced.** OPVB's reward gate is now per claim
+verification route (`opv/bootstrap-beacon` `c3221bc34`, unbuilt at this writing): the gate's `Onboarded` grants a V2-root claim nothing
+beyond the old rules, and only kernel-route claims earn the new rewards, each through `opv_gate_v1`. A session's REAL root is a V2
+claim, so its admission is the legacy channel's (registry lifecycle, Panel room, seating, bond share — Panel seat readiness), never the
+gate's. The composed real-node run cannot prove seat readiness (possession proofs) on its harness, so `exec_v2_test_admit_class_v1`
+stays and now stands for that channel's admission; it still lives only in `cfg(test)` builds. The per-route split is already the
+session's: the root earns on the legacy channel, every prefix and slice claim is a kernel-route claim the route gates and adjudicates,
+and the legs are a re-division of the root's legacy-channel allocation (D2 above). No code of this lane calls the gate; when OPVB
+integrates, `PalwRewardGateV1::channel()` names the channel each leg draws from.
+
+**GAP-60 — the slice DA default on the real node.** A slice whose kernel claim's committed position is withheld is demanded by an
+outside bond from the fresh verifier's finding; at the demand's deadline the route defaults the claim (`Unavailable`), and the
+same block's sync defaults the slice, voids its suffix, the root and the REAL claim (`WorkSliceDefaulted`) and charges the root bond
+nothing. Rule 4 (continuity) is exercised on the node too: a slice whose kernel job's prompt does not continue the stream is carried,
+anchored and refused `PredecessorMismatch`, crediting nothing.
+
+## 11. The user's Round / EXEC additional acceptance conditions (2026-10-10) — the activation gates they add
+
+Source: `docs/palw-round-exec-additional-acceptance-2026-10-10.md` (adopted by the user; integrated at `f325d6696`). None of the eight
+gates passes today, and the unified EXEC stays unarmable (`PALW_EXEC_PAYLOAD_V2_ARMABLE = false`) until all eight and every earlier gate hold.
+
+| Gate | Owner | What this branch already shows (implemented; verified only where a run is named) | Open |
+| --- | --- | --- | --- |
+| SLICE | X8R (the Lead) | a plan is a partition with no gap or overlap (`a_plan_is_a_partition_with_no_gap_and_no_overlap`); more slices pay no more (`splitting_a_range_into_more_slices_pays_no_more`); a used index, a skip, an overlap and a replay credit nothing (`a_used_index_a_skip_an_overlap_and_a_replay_credit_nothing`); the root settles once and the allocation is conserved (`the_root_settles_once_…`); one job work id per root (`JobWorkAlreadyUsed`); the prefix claim's job nonce binds the root claim id, so another root cannot reuse a prefix (GAP-62); one budget per work, legs net of the route reward (ADR-0176 D2, §10.9) | a node test that a second root naming the same prefix claim, and a duplicate Final of one kernel claim backing two slices, are refused / credited once; the X8R round-3 build itself (queued) |
+| RECOVERY (EXEC half) | X8R | restart / replay / IBD / reorg of the carriage and the ledgers (`t12_exec_v2_carriage`), the salted-seal and slice-verification reorg cases | the prefix stage across a reorg |
+| BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, RECOVERY (budget half) | BUDGET (`palw_bond_budget_v1`) | — (EXEC carriers mint nothing: `B` = 0 per carrier; hooks H-3 / H-3a / H-3b, §10.9) | the pre-draw cap `T_candidate <= min(T_earned, BondRemainingRoundRights)` on the shared window; fee-only Rounds under B_max or an explicit execution cap (POLICY); split invariance; role-swap neutrality |
+| ECON | ECON | — | small/large model economics before/after the cap and window saturation, with criteria fixed before the run |
+
+EXEC_TX / EXEC_SLICE weight, blue score and DAA contribution stay 0; a slice's verification and reward aggregate to its root.

@@ -128,6 +128,7 @@ impl Factory {
                 GetPalwCapacityShadow,
                 GetPalwStateProof,
                 GetPalwPanelV3Status,
+                GetPalwExecV2Status,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
                 GetPalwKernelFinals,

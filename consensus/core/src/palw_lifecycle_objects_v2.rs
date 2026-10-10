@@ -426,6 +426,14 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // RFC-0007 Part I: a vertex rides shaped (the strict leaf order, the caps, the root) at every height, and an equivocation
         // shaped (one seat, one round, two roots), as the held leaf challenge does; the signatures, the clock and the registry are
         // the acceptance layer's, and below `palw_verification_vertex_v1` the walk drops them by name.
+        // RFC-0008 v2 (tag 130): a work-session root declaration rides at every height UNJUDGED (A-2, exactly). The live testnet-12
+        // build cannot decode tag 130 and, its ruleset declaring the audit fence, tolerates the payload as undecodable — so any
+        // ride-time refusal here, a shape check included, would make an upgraded node refuse a block that node accepts: a split before
+        // the fence (the X8R review). The shape, the signature, the claim, the prefix and the quotas are the acceptance layer's and the
+        // fold's past `palw_exec_payload_v2`; below it the walk drops the object by name, as the older build skips it.
+        // [`validate_palw_lifecycle_tx`] holds the other half: where a ruleset does NOT tolerate undecodable payloads, tag 130 is
+        // refused as undecodable, as the older build refuses it.
+        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } => Ok(()),
         PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {
             crate::palw_vertex_v1::palw_vertex_shape_v1(vertex).map_err(|_| "a verification vertex is malformed (RFC-0007 Part I)")
         }
@@ -1117,17 +1125,20 @@ pub enum PalwLifecycleKindFenceV1 {
     /// `Params::palw_model_bond_allocation_v1` — lane BUDGET's capital assignment (tag 140, ADR-0177 D3). In force only where
     /// `palw_bond_budget_v1` is too (the assignment's rows are the budget's), as the processor's `palw_model_bond_allocation_at` reads it.
     ModelBondAllocationV1 = 5,
+    /// `Params::palw_exec_payload_v2` — RFC-0008 v2's work-root declaration (tag 130), only on a `ConsensusV2` network.
+    ExecPayloadV2 = 6,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
         Self::ProviderCourtV1,
         Self::LegacyHeldDaV2,
         Self::ModelBondAllocationV1,
+        Self::ExecPayloadV2,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1139,6 +1150,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::ProviderCourtV1 => "palw_provider_court_v1",
             Self::LegacyHeldDaV2 => "palw_legacy_held_da_v2",
             Self::ModelBondAllocationV1 => "palw_model_bond_allocation_v1",
+            Self::ExecPayloadV2 => "palw_exec_payload_v2",
         }
     }
 }
@@ -1292,6 +1304,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         }
         // Lane BUDGET: a bond's capital assignment (140).
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
+        // RFC-0008 v2 (X8R): the work-root declaration (130).
+        O::ExecWorkRootOpenedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
     }
 }
 
@@ -1422,6 +1436,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (157, "LegacyHeldDemandedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (158, "LegacyHeldAnsweredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (159, "LegacyLeafRecomputedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
+    (130, "ExecWorkRootOpenedV2", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
 
 /// **The owning fences' activations, resolved once from `Params`** (`Params::palw_lifecycle_kind_fences_v1`) and asked by every site
@@ -1498,6 +1513,8 @@ impl crate::config::params::Params {
                             _ => None,
                         }
                     }
+                    // RFC-0008 v2: only on a `ConsensusV2` network (`palw_exec_payload_v2_fence` folds the mode in).
+                    PalwLifecycleKindFenceV1::ExecPayloadV2 => self.palw_exec_payload_v2_fence(),
                 },
             )
         })
@@ -1722,6 +1739,12 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     ),
     // SMALL (RFC-0009 RDA4, RFC-0001 P1): the signer protocol and the worker frame — node-local wire forms, never a block's.
     (
+        "consensus/core/src/dns_finality.rs::TakeoverToken",
+        PalwInt12WireChangeV1::NotCarried(
+            "the removed HA takeover's node-local signer credential; no lifecycle object carries it (retired paths, 27252fa18)",
+        ),
+    ),
+    (
         "consensus/core/src/dns_finality.rs::SigningPurpose",
         PalwInt12WireChangeV1::NotCarried(
             "the node ↔ signer protocol's purpose tag; a block carries signatures, never a purpose (RDA4 = 8 is offered only under \
@@ -1842,7 +1865,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // 120 `PanelBeaconProofV3` (landed); 121–129 unallocated.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 120, hi: 120 }, "palw_permissionless_panel_v1", "RFC-0010 V3 production fold", true),
     // 130 `ExecWorkRootOpenedV2` (X8R, `rfc8/x8r-review`).
-    a2_row(PalwA2SlotV1::ObjectTags { lo: 130, hi: 139 }, "palw_exec_payload_v2", "X8R RFC-0008 v2", false),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 130, hi: 139 }, "palw_exec_payload_v2", "X8R RFC-0008 v2", true),
     // 140–149: BUDGET (ADR-0176/0177, allocated 2026-10-10). 140 `BondCapitalAssignedV1` (landed, owned by the allocation fence, which
     // needs `palw_bond_budget_v1` at or below it); 141–149 unallocated within the lane: no row until a kind lands there.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 140, hi: 140 }, "palw_model_bond_allocation_v1", "BUDGET capital assignment", true),
@@ -1898,7 +1921,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     ),
     // ---- header carriage forms and coinbase trailers ----
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 7, magic: *b"PFS4" }, "palw_receipt_spend_v4", "RFC-0009 V4 receipt carriage", true),
-    a2_row(PalwA2SlotV1::HeaderForm { algo_id: 10, magic: *b"PXE2" }, "palw_exec_payload_v2", "X8R EXEC envelope", false),
+    a2_row(PalwA2SlotV1::HeaderForm { algo_id: 10, magic: *b"PXE2" }, "palw_exec_payload_v2", "X8R EXEC envelope", true),
     a2_row(PalwA2SlotV1::CoinbaseTrailer { magic: *b"PXA2" }, "palw_exec_payload_v2", "X8R anchor trailer", false),
     // ---- forms appended inside kinds int-12 decodes (tag 68 is ARMED on testnet-12: `palw_gen_v1`) ----
     a2_row(
@@ -4074,7 +4097,7 @@ pub(crate) mod tests {
             (106, 0x888f101d106c24bc),
             (107, 0x0081a402000ddbf4),
             (108, 0xac8ecc3ff97ec415),
-            (109, 0xc7d6537424a66090),
+            (109, 0xcd35f41524be4a4f),
             (110, 0x7da0346d0633de78),
             (111, 0x2d490db20d075bfe),
             (113, 0xca1188bcd2f663d2),
@@ -4088,6 +4111,7 @@ pub(crate) mod tests {
             (157, 0x342660230d2d6514),
             (158, 0x2d33651174652aca),
             (159, 0x0395636b651f74fa),
+            (130, 0x5774ef35c9a3fdaa),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline

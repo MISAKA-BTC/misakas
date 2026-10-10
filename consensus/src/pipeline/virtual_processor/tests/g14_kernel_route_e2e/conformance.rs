@@ -119,16 +119,42 @@ impl Cw {
         Cw::over_floor(make, 0).await
     }
 
-    /// [`Cw::over`] on a network whose OPV fence states the effective-bits floor `floor` (the ruled value is 128).
+    /// [`Cw::over`] with an explicit OPV effective-bits floor.
     async fn over_floor(make: impl FnOnce(&Config) -> TestConsensus, floor: u16) -> Cw {
+        Cw::over_with_floor(11, |_| {}, make, floor).await
+    }
+
+    /// A candidate and ruleset edit for RFC-0008's composed slice run.
+    async fn over_with(
+        seed: u64,
+        edit: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
+        make: impl FnOnce(&Config) -> TestConsensus,
+    ) -> Cw {
+        Cw::over_with_floor(seed, edit, make, 0).await
+    }
+
+    async fn over_with_floor(
+        seed: u64,
+        edit: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
+        make: impl FnOnce(&Config) -> TestConsensus,
+        floor: u16,
+    ) -> Cw {
         use super::super::g14_registration_e2e::Tensors;
         use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_operands_v1;
         let src = fixture();
-        let f = onb_fixture(11);
+        let f = onb_fixture(seed);
         let src_class = opv_class_id(&src.program, &src.plan, &src.pc);
         let kernel_class = opv_class_id(&f.program, &f.plan, &f.pc);
-        let mut net =
-            Net::over_cfg(conformance_config(vec![Hash64::from_bytes(src_class), Hash64::from_bytes(kernel_class)], floor), make);
+        let (config, bundle, premine, floats) =
+            conformance_config(vec![Hash64::from_bytes(src_class), Hash64::from_bytes(kernel_class)], floor);
+        let mut params = config.params.clone();
+        edit(&mut params);
+        // The fold reads the V2 bundle the params mirror (an edit may sync a fence into it): the node's and the harness's are one.
+        let bundle = match &params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(edited) => edited.clone(),
+            _ => bundle,
+        };
+        let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), make);
         net.beat_to(1).await;
         // ---- the beacon's source: a pre-existing OPV class (its artifact attested by the harness hook, §3) ----
         let d = k2_tir_v2_descriptor();
@@ -1008,6 +1034,8 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
     cw.net.assert_same(&z, "a node replaying the whole chain");
 }
 
+// RFC-0008 v2 (X8R): the composed run — a REAL root on this world's kernel-bound class, its slices verified through the route.
+mod exec_slices;
 /// **G14C (GAP-03): ops 231 and 212, served by a node started after the evidence was posted, carry everything the SDK's fresh
 /// verifier needs.** The attempt row, the evidence row and the program arrive as op 231 serves them, the Final facts as op 212 serves
 /// them — each op's own builder over a node that synced by IBD, through the RPC's JSON wire form (`canonical.rs`'s [`Rpc`]) — and

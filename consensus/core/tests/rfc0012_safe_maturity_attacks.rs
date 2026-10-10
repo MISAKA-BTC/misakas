@@ -356,7 +356,7 @@ fn rfc0012_d1_c_the_last_daa_a_withheld_final_can_be_accused_and_when_the_defaul
 }
 
 /// **EXPECTED.** What `safe` does while material is withheld, per rule. An honest accuser files `DefaultAccused` at `Final + a`; the
-/// session holds the claim open (`claims_with_open_da` removes its fact, `native_open_from_v1` keeps the lifecycle open) for
+/// session holds the claim open (`claims_with_open_disputes` removes its fact, `native_open_from_v1` keeps the lifecycle open) for
 /// `W_disclose + 1` blocks and then the default voids it.
 /// * a rule that had NOT yet counted the claim (`a <= X`) never counts it: held, then dropped when the default lands;
 /// * a rule that HAD counted it (`a > X`, only the short rules) loses `safe` at the accusation, not at the default.

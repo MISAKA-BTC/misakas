@@ -325,6 +325,18 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// **RFC-0008 v2: re-shape a standard template into an `EXEC_SLICE` lane block** — the lane's parents, algo 10, the coinbase alone
+    /// (a slice carries no user transaction batch) and an empty `palw_commitment` for the executor to fill with its signed `PXE2`
+    /// envelope once it has solved the header. Refused below `palw_exec_payload_v2`.
+    fn exec_v2_slice_adapt_block_template(
+        &self,
+        template: BlockTemplate,
+        payout: crate::tx::ScriptPublicKey,
+    ) -> Result<BlockTemplate, RuleError> {
+        let _ = (template, payout);
+        unimplemented!()
+    }
+
     fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
         unimplemented!()
     }
@@ -984,6 +996,42 @@ pub trait ConsensusApi: Send + Sync {
         _limit: usize,
     ) -> Option<crate::palw_permissionless_panel_v1::PanelV3ObservationV1> {
         None
+    }
+
+    /// **RFC-0008 v2: the EXEC v2 lane's observation at the tip** (`getPalwExecV2Status`, op 240): counts, the named (or first) roots
+    /// with each slice and its verification claim's state, `block`'s refusal record, the lane's health. A read: no rule calls it.
+    /// `None` where the payload is not armed.
+    fn palw_exec_v2_observation_v1(
+        &self,
+        _roots: Vec<crate::Hash64>,
+        _block: Option<crate::BlockHash>,
+    ) -> Option<crate::palw_exec_v2_verify::PalwExecV2ObservationV1> {
+        None
+    }
+
+    /// **RFC-0008 v2 amendment 1: the slice statement `bond` signs for `(root, index)` backed by the kernel claim `claim`**, derived from
+    /// the tip (`palw_exec_v2_slice_statement_v1`) — the EXEC_SLICE producer's input. A read.
+    fn palw_exec_v2_slice_statement_v1(
+        &self,
+        _root: crate::Hash64,
+        _index: u32,
+        _claim: crate::Hash64,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<crate::palw_exec_v2::PalwWorkSliceV1, String> {
+        Err("this consensus does not carry the EXEC v2 lane".into())
+    }
+
+    /// **RFC-0008 v2 amendment 1, §10.3: may a validated `EXEC_SLICE` block be announced onward?** Against the tip: its root is open,
+    /// its executor authorised, its index inside `[next, next + depth)`, its verification claim held by the kernel route. Node-local
+    /// relay policy: validity never reads it. `true` where the payload is not armed.
+    fn palw_exec_v2_slice_relayable_v1(&self, _slice: &crate::palw_exec_v2::PalwWorkSliceV1) -> bool {
+        true
+    }
+
+    /// **RFC-0008 v2: has an anchor on this node's selected chain covered `block`?** The EXEC_SLICE producer republishes a carrier that
+    /// left the window uncovered (amendment 1, §10.7). A read.
+    fn palw_exec_v2_anchored_v1(&self, _block: crate::BlockHash) -> bool {
+        false
     }
 
     /// The court's half: open sessions this node holds a bond in.

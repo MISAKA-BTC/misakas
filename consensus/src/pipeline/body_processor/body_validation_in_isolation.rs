@@ -18,6 +18,7 @@ impl BlockBodyProcessor {
         Self::check_only_one_coinbase(block)?;
         Self::check_evm_payload(block)?;
         self.check_round_block_carries_no_evm_payload(block)?;
+        self.check_exec_v2_shape(block)?;
         self.check_transactions_in_isolation(block)?;
         let mass = self.check_block_mass(block)?;
         self.check_duplicate_transactions(block)?;
@@ -131,6 +132,34 @@ impl BlockBodyProcessor {
             && !block.evm_payload.is_empty()
         {
             return Err(RuleError::RoundBlockCarriesEvmPayload);
+        }
+        Ok(())
+    }
+
+    /// **RFC-0008 v2: the anchor trailer's shape and the slice body's, from the block alone.** Past the fence a coinbase payload that
+    /// ends in the trailer magic must carry a well-formed trailer, a lane block's must carry none (only a chain block anchors the
+    /// lane), and an `EXEC_SLICE` block carries nothing beside its coinbase. Nothing is read on a network that has not armed the
+    /// fence, and below it the bytes are the miner's own.
+    fn check_exec_v2_shape(&self, block: &Block) -> BlockProcessResult<()> {
+        let Some(fence) = self.palw_exec_v2 else { return Ok(()) };
+        if !fence.is_active(block.header.daa_score) {
+            return Ok(());
+        }
+        let anchor = kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(&block.transactions[0].payload)
+            .map_err(RuleError::BadExecAnchor)?
+            .1;
+        let is_lane = block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
+        if anchor.is_some() && is_lane {
+            return Err(RuleError::BadExecAnchor(
+                kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorErrorV1::LaneBlockAnchors,
+            ));
+        }
+        if is_lane
+            && kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope::decode(&block.header.palw_commitment)
+                .is_ok_and(|envelope| envelope.subtype == kaspa_consensus_core::palw_exec_v2::PalwExecSubtypeV2::Slice)
+            && block.transactions.len() != 1
+        {
+            return Err(RuleError::ExecSliceCarriesTransactions(block.transactions.len() - 1));
         }
         Ok(())
     }

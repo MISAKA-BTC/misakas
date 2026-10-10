@@ -38,7 +38,7 @@ use kaspa_consensus_core::{
     palw_native_settlement_v1::{
         MatureUsefulWorkV1, NativeDeltaEvidenceV1, NativeEffectV1, NativeFactRulesV1, NativePrefixV1, NativeSettlementSnapshotV1,
         SettlementStopV1, SkippedEvidenceV1, certify_native_prefix_v1, native_delta_evidence_v1, native_facts_and_skips_v1,
-        native_open_from_v1,
+        native_open_from_v1, native_open_sessions_v1,
     },
     palw_state_v2::{PalwChainStateV2, PalwClaimPhaseV2},
 };
@@ -304,13 +304,14 @@ impl VirtualStateProcessor {
 
         // 5. Facts: oldest first is not needed, only the set. The pruning point's own delta is never read.
         let voided: BTreeSet<Hash64> = rows.iter().flat_map(|r| r.evidence.voided.iter().copied()).collect();
-        let claims_with_open_da: BTreeSet<Hash64> = state.da_sessions_iter().map(|((claim, _), _)| *claim).collect();
+        let open_sessions = native_open_sessions_v1(&state);
+        let claims_with_open_disputes: BTreeSet<Hash64> = open_sessions.iter().map(|(claim, _)| *claim).collect();
         let rules = NativeFactRulesV1 {
             state: &state,
             params,
             canonical_work_daa: self.palw_canonical_work_daa,
             quantum_maturity_daa: self.palw_exec_quantum_maturity_daa,
-            claims_with_open_da: &claims_with_open_da,
+            claims_with_open_disputes: &claims_with_open_disputes,
         };
         let mut facts: Vec<MatureUsefulWorkV1> = Vec::new();
         let mut skipped = SkippedEvidenceV1::default();
@@ -328,12 +329,12 @@ impl VirtualStateProcessor {
         }
 
         // 6. The lifecycle question, once: an effect at `blue` is closed iff every claim accepted at or before it is
-        // resolved (Voided, or Final with its trace retention lapsed) and no DA session names a claim at or before it
+        // resolved (Voided, or Final with its trace retention lapsed) and no dispute session names a claim at or before it
         // (a session whose claim is gone is open for every effect). Claims already retired are absent from state and
         // therefore closed.
         let open_from = native_open_from_v1(
             state.claims_iter().map(|(_, c)| (c.accepted_blue_score, c.phase.clone(), c.trace_retention_daa)),
-            state.da_sessions_iter().map(|((claim, _), _)| state.claim(claim).map(|c| c.accepted_blue_score)),
+            open_sessions.iter().map(|(claim, _)| state.claim(claim).map(|c| c.accepted_blue_score)),
             sink_daa,
         );
 
@@ -497,13 +498,12 @@ impl VirtualStateProcessor {
                 for c in open_claims.iter_mut().take(NATIVE_READINESS_LISTED_V1) {
                     c.next_deadline_daa = w.state.deadline_of(&c.claim);
                 }
-                let open_sessions: Vec<OpenSessionV1> = w
-                    .state
-                    .da_sessions_iter()
-                    .map(|((claim, _), session)| OpenSessionV1 {
-                        claim: *claim,
-                        claim_accepted_blue: w.state.claim(claim).map(|c| c.accepted_blue_score),
-                        deadline_daa: session.deadline_daa,
+                let open_sessions: Vec<OpenSessionV1> = native_open_sessions_v1(&w.state)
+                    .into_iter()
+                    .map(|(claim, deadline)| OpenSessionV1 {
+                        claim,
+                        claim_accepted_blue: w.state.claim(&claim).map(|c| c.accepted_blue_score),
+                        deadline_daa: deadline,
                     })
                     .collect();
                 native_safe_readiness_v1(&NativeReadinessInputV1 {

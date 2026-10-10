@@ -1,5 +1,5 @@
 //! **RFC-0012 D1 — why `safe` stands where it does.** A pure explanation of the native-settlement certificate, built from the
-//! SAME inputs the snapshot is: the executed chain's effects, the facts, the sink's open claims and data-availability sessions.
+//! SAME inputs the snapshot is: the executed chain's effects, the facts, the sink's open claims and dispute sessions.
 //!
 //! The snapshot says *what* is safe and gives one stop reason. A reader waiting on a transaction needs more: *which* effect holds
 //! `safe` back, *every* condition it still lacks (not only the first), how long each time-driven one has to run, which claim or
@@ -11,7 +11,7 @@
 //! * The first wait that maps to a stop reason is, for the blocking effect, exactly the snapshot's `stop`
 //!   ([`SafeWaitV1::stop`]); a test holds it against [`certify_native_prefix_v1`].
 //! * `earliest_ready_in_daa` is an estimate *from the facts already on the chain* and is `None` the moment any unmet condition
-//!   needs something that has not happened yet (a claim still working through its panel/receipt/court clocks, an open DA session,
+//!   needs something that has not happened yet (a claim still working through its panel/receipt/court clocks, an open dispute session,
 //!   a frontier that has not advanced, work that is not there). It never promises that `safe` WILL advance.
 //! * Evidence the node saw and did not count is reported as [`SkippedEvidenceV1`], not hidden.
 
@@ -127,8 +127,8 @@ pub enum SafeWaitV1 {
         next_deadline_daa: Option<u64>,
         wait_daa: Option<u64>,
     },
-    /// A data-availability court session names a claim at or before the effect (`claim_known` false: the claim is not in the
-    /// state, so the dispute cannot be located and counts against every effect).
+    /// A DA or computation-court session names a claim at or before the effect (`claim_known` false: the claim is not in the
+    /// state, so the dispute cannot be located and counts against every effect). The existing `openDaSession` JSON tag is retained.
     #[serde(rename_all = "camelCase")]
     OpenDaSession {
         claim: Hash64,
@@ -309,7 +309,7 @@ pub struct OpenClaimV1 {
     pub next_deadline_daa: Option<u64>,
 }
 
-/// An open data-availability session at the sink.
+/// An open DA or computation-court session at the sink.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenSessionV1 {
     pub claim: Hash64,

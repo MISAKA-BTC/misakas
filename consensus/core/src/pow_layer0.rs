@@ -679,25 +679,31 @@ pub fn check_palw_commitment_shape_at(
 pub enum PalwHeaderFormFenceV1 {
     /// RFC-0009's `PFS4` receipt carriage (a V4 public-redemption spend) on an algo-7 header — `Params::palw_receipt_spend_v4`.
     ReceiptSpendV4,
+    /// RFC-0008 v2's `PXE2` EXEC envelope on an algo-10 header — `Params::palw_exec_payload_v2` (only on a `ConsensusV2` network).
+    ExecPayloadV2,
 }
 
 impl PalwHeaderFormFenceV1 {
     /// Every owned form. A form added here needs its `HeaderForm` row in
     /// `crate::palw_lifecycle_objects_v2::PALW_A2_KIND_FENCE_TABLE_V1`, which the table test reconciles.
-    pub const ALL: [Self; 1] = [Self::ReceiptSpendV4];
+    pub const ALL: [Self; 2] = [Self::ReceiptSpendV4, Self::ExecPayloadV2];
 
     /// The `Params` field the form's fence is resolved from.
     pub const fn params_field(self) -> &'static str {
         match self {
             Self::ReceiptSpendV4 => "palw_receipt_spend_v4",
+            Self::ExecPayloadV2 => "palw_exec_payload_v2",
         }
     }
 }
 
 /// Which owned form a header's carriage is, if any (`None`: a form the live build knows, judged as it judges it at every height).
 pub fn palw_header_form_owner_v1(algo_id: u8, palw_commitment: &[u8]) -> Option<PalwHeaderFormFenceV1> {
-    (algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment))
-        .then_some(PalwHeaderFormFenceV1::ReceiptSpendV4)
+    if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment) {
+        return Some(PalwHeaderFormFenceV1::ReceiptSpendV4);
+    }
+    (algo_id == POW_ALGO_ID_PALW_ROUND_V1 && crate::palw_exec_v2::PalwExecV2Envelope::is_v2_carriage(palw_commitment))
+        .then_some(PalwHeaderFormFenceV1::ExecPayloadV2)
 }
 
 /// **The header forms' owning fences, resolved once from `Params`** (`Params::palw_header_form_fences_v1`) and handed to every gate
@@ -706,6 +712,7 @@ pub fn palw_header_form_owner_v1(algo_id: u8, palw_commitment: &[u8]) -> Option<
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PalwHeaderFormFencesV1 {
     pub receipt_spend_v4: Option<crate::config::params::ForkActivation>,
+    pub exec_payload_v2: Option<crate::config::params::ForkActivation>,
 }
 
 impl PalwHeaderFormFencesV1 {
@@ -713,6 +720,7 @@ impl PalwHeaderFormFencesV1 {
     pub fn in_force_at(&self, form: PalwHeaderFormFenceV1, daa_score: u64) -> bool {
         match form {
             PalwHeaderFormFenceV1::ReceiptSpendV4 => self.receipt_spend_v4,
+            PalwHeaderFormFenceV1::ExecPayloadV2 => self.exec_payload_v2,
         }
         .is_some_and(|activation| activation != crate::config::params::ForkActivation::never() && activation.is_active(daa_score))
     }
@@ -721,8 +729,24 @@ impl PalwHeaderFormFencesV1 {
 impl crate::config::params::Params {
     /// The header forms' owning fences ([`PalwHeaderFormFencesV1`]).
     pub fn palw_header_form_fences_v1(&self) -> PalwHeaderFormFencesV1 {
-        PalwHeaderFormFencesV1 { receipt_spend_v4: self.palw_receipt_spend_v4_fence() }
+        PalwHeaderFormFencesV1 {
+            receipt_spend_v4: self.palw_receipt_spend_v4_fence(),
+            exec_payload_v2: self.palw_exec_payload_v2_fence(),
+        }
     }
+}
+
+/// RFC-0008 v2's spelling of [`check_palw_commitment_shape_with_forms_at`]: only the `PXE2` form, in force where `exec_v2_active`.
+pub fn check_palw_commitment_shape_exec_at(
+    algo_id: u8,
+    palw_commitment: &[u8],
+    bound: bool,
+    lane: PalwAttemptLaneV1,
+    exec_v2_active: bool,
+) -> Result<(), PowLayer0Error> {
+    check_palw_commitment_shape_with_forms_at(algo_id, palw_commitment, bound, lane, |form| {
+        exec_v2_active && form == PalwHeaderFormFenceV1::ExecPayloadV2
+    })
 }
 
 /// [`check_palw_commitment_shape_at`] with the owned header forms in force at the header's position named by `form_in_force` —
@@ -752,6 +776,8 @@ pub fn check_palw_commitment_shape_with_forms_at(
     // A2U: only where the form's fence is in force; below it the cap is the live build's, as is every other byte of the gate.
     let cap = if form == Some(PalwHeaderFormFenceV1::ReceiptSpendV4) {
         crate::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4
+    } else if form == Some(PalwHeaderFormFenceV1::ExecPayloadV2) {
+        crate::palw_exec_v2::PALW_EXEC_V2_MAX_ENVELOPE_BYTES
     } else {
         PALW_COMMITMENT_MAX_BYTES
     };
@@ -795,6 +821,13 @@ pub fn check_palw_commitment_shape_with_forms_at(
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
     }
     if algo_id == POW_ALGO_ID_PALW_ROUND_V1 {
+        // RFC-0008 v2: where the fence is in force the magic says which envelope this is; both are the lane's, and a payload of
+        // neither is malformed. Shape only — that a `PXR1` one is refused past the fence is the stateless carriage check's.
+        if form == Some(PalwHeaderFormFenceV1::ExecPayloadV2) {
+            return crate::palw_exec_v2::PalwExecV2Envelope::decode(palw_commitment)
+                .and_then(|envelope| envelope.validate_shape())
+                .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
+        }
         // ADR-0125: the permit envelope is REQUIRED — a round block without one names no permit.
         // Shape only here; the round, the signature and the network are the stateless carriage
         // check's, and whether the bond holds the permit is the merging block's.

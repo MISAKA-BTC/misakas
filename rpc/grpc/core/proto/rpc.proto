@@ -2886,6 +2886,20 @@ message GetPalwActivationPoolResponseMessage {
 
 // RFC-0010 (lane C2): the permissionless Panel's observation (op 220; read-only). `json` is the node's versioned
 // PanelV3ObservationV1 (camelCase); fields are only appended.
+// RFC-0008 v2 (lane X8R): the EXEC v2 lane's observation (op 240; read-only). `json` is the node's versioned
+// PalwExecV2ObservationV1 (camelCase); fields are only appended.
+message GetPalwExecV2StatusRequestMessage {
+  repeated string rootClaimIds = 1;
+  string blockHash = 2;
+}
+
+message GetPalwExecV2StatusResponseMessage {
+  bool available = 1;
+  uint32 observationVersion = 2;
+  string json = 3;
+  RPCError error = 1000;
+}
+
 message GetPalwPanelV3StatusRequestMessage {
   repeated string claimIds = 1;
   uint32 limit = 2;

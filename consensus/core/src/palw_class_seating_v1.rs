@@ -309,6 +309,10 @@ impl PalwFoldReadV1<'_> {
         daa: u64,
     ) -> Result<(), PalwStateV2Error> {
         let root = root.filter(|_| self.params.audit_1004_active_at(daa));
+        // RFC-0008 v2 (X8R): the composed run's test seam — empty in production (`test_admitted_class_v1`).
+        if self.test_admitted_class_v1(class_id) {
+            return Ok(());
+        }
         let Some(terms) = self.params.class_seating_terms_at(daa) else { return Ok(()) };
         if *class_id == self.params.base_class_id() {
             return Ok(());

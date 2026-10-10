@@ -216,6 +216,14 @@ pub enum RuleError {
     #[error("round lane mergeset: {0}")]
     BadRoundLaneMergeset(String),
 
+    /// RFC-0008 v2: a coinbase's anchor trailer is malformed, rides a lane block, or does not match the EXEC blocks its heads cover.
+    #[error("EXEC anchor: {0}")]
+    BadExecAnchor(crate::palw_exec_v2_anchor::PalwExecV2AnchorErrorV1),
+
+    /// RFC-0008 v2: an `EXEC_SLICE` carrier carries a transaction beside its coinbase — a slice has no user transaction batch.
+    #[error("an EXEC_SLICE block carries {0} transactions: a slice carries only its coinbase")]
+    ExecSliceCarriesTransactions(usize),
+
     /// Lane accept-order (post-launch, `palw_lane_accept_parents_first`): a round block carries no EVM
     /// payload — its merging block would execute it with no permit asked.
     #[error("a round block carries a non-empty EVM payload past palw_lane_accept_parents_first")]

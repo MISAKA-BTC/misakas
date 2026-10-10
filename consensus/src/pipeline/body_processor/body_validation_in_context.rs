@@ -60,11 +60,30 @@ impl BlockBodyProcessor {
         if !missing.is_empty() {
             return Err(RuleError::MissingParents(missing));
         }
+        // RFC-0008 v2: the lane heads an anchor names are dependencies the block cannot be judged without. Retryable, never invalid —
+        // the same treatment as a parent whose body has not arrived.
+        if self.palw_exec_v2.is_some_and(|fence| fence.is_active(block.header.daa_score)) {
+            let heads = kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_heads_of_block(block);
+            let missing: Vec<BlockHash> = heads
+                .into_iter()
+                .filter(|head| statuses_read_guard.get(*head).optional().unwrap().is_none_or(|s| !s.has_block_body()))
+                .collect();
+            if !missing.is_empty() {
+                return Err(RuleError::MissingParents(missing));
+            }
+        }
 
         Ok(())
     }
 
     fn check_coinbase_blue_score_and_subsidy(self: &Arc<Self>, block: &Block) -> BlockProcessResult<()> {
+        // RFC-0008 v2: the length cap, at the block's height (the reader below is lenient for an anchoring payload).
+        self.coinbase_manager
+            .check_payload_len_at(
+                &block.transactions[0].payload,
+                self.palw_exec_v2.is_some_and(|fence| fence.is_active(block.header.daa_score)),
+            )
+            .map_err(RuleError::BadCoinbasePayload)?;
         match self.coinbase_manager.deserialize_coinbase_payload(&block.transactions[0].payload) {
             Ok(data) => {
                 if data.blue_score != block.header.blue_score {
