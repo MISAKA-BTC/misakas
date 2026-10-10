@@ -1033,6 +1033,21 @@ pub trait RpcApi: Sync + Send + AnySync {
     /// **RFC-0010: the permissionless Panel's observation** (op 220; read-only) — the engine's overview and the named claims'
     /// seal, snapshot, beacon state, assignment, retries and terminal reason, as one versioned JSON document. A node built before
     /// op 220 drops the WebSocket on it: ask it on a connection of its own.
+    /// **RFC-0008 v2: the EXEC v2 lane's observation** (op 240; read-only) — counts, the named (or first) work roots with each slice and
+    /// its verification claim's state, a block's refusal record and the lane's health, as one versioned JSON document. A node built
+    /// before op 240 drops the WebSocket on it: ask it on a connection of its own.
+    async fn get_palw_exec_v2_status(&self, request: GetPalwExecV2StatusRequest) -> RpcResult<GetPalwExecV2StatusResponse> {
+        self.get_palw_exec_v2_status_call(None, request).await
+    }
+    async fn get_palw_exec_v2_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwExecV2StatusRequest,
+    ) -> RpcResult<GetPalwExecV2StatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwExecV2StatusResponse::default())
+    }
+
     async fn get_palw_panel_v3_status(&self, request: GetPalwPanelV3StatusRequest) -> RpcResult<GetPalwPanelV3StatusResponse> {
         self.get_palw_panel_v3_status_call(None, request).await
     }

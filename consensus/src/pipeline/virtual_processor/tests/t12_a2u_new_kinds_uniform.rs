@@ -143,11 +143,18 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                     Some(kaspa_consensus_core::palw_bond_budget_v1::PalwModelBondAllocationFenceV1::at(at));
                 params.sync_palw_bond_budget_v1();
             }
+            // RFC-0008 v2 (X8R): the work-root declaration, mirrored onto the V2 bundle the fold reads.
+            PalwLifecycleKindFenceV1::ExecPayloadV2 => {
+                params.palw_exec_payload_v2 = Some(at);
+                params.sync_palw_exec_payload_v2();
+            }
         }
     }
     for form in PalwHeaderFormFenceV1::ALL {
         match form {
             PalwHeaderFormFenceV1::ReceiptSpendV4 => params.palw_receipt_spend_v4 = Some(at),
+            // The PXE2 header form shares the lifecycle kind's fence (armed above, the same field).
+            PalwHeaderFormFenceV1::ExecPayloadV2 => params.palw_exec_payload_v2 = Some(at),
         }
     }
     for fence in PalwKernelInnerFenceV1::ALL {
@@ -173,7 +180,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_receipt_spend_v4"
             | "palw_panel_free_v1"
             | "palw_typed_roots_v1"
-            | "palw_legacy_held_da_v2" => {} // armed above, through their enums
+            | "palw_legacy_held_da_v2"
+            | "palw_exec_payload_v2" => {} // armed above, through their enums
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
             // ADR-0175 needs model lines at or below it (`validate_palw_model_immutable_v1`); artifact root ownership is t12's.

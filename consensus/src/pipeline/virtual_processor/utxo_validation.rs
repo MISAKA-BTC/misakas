@@ -1024,7 +1024,12 @@ impl VirtualStateProcessor {
         // with the §F carve in Stage 3 (`full_reward_split_daa_score` = 0), so the
         // overlay is active and the fan-out runs from genesis everywhere. The rewarded
         // `(bond, epoch)` keys are stashed for `commit_utxo_state` (§B.3(c)).
-        let mergeset_non_daa = self.daa_excluded_store.get_mergeset_non_daa(header.hash).unwrap();
+        // RFC-0008 v2: the stored set is the DAG's own; the EXEC blocks this block's anchor covered join it (they are outside the DAA).
+        let mergeset_non_daa = self.palw_exec_v2_non_daa(
+            &self.daa_excluded_store.get_mergeset_non_daa(header.hash).unwrap(),
+            &ctx.ghostdag_data,
+            header.daa_score,
+        );
         // ADR-0018 §F staged rollout: None (Stage 1) / bootstrap (Stage 2) / full
         // (Stage 3) selected by DAA, identically to the construction path — and past ADR-0126's
         // fence the full split lowered, through the one reader both paths call.
