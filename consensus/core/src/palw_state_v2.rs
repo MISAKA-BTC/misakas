@@ -35124,12 +35124,17 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
     }
 }
 
-fn apply_object(
-    builder: &mut TransitionBuilder<'_>,
+/// Shared read-only guards before any object arm. The writer supplies its in-transition class registrations;
+/// the Origin rehearsal has no registration arm and supplies an empty view. Keep new common guards here.
+fn object_preconditions_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
+    registered_in_transition: impl Fn(&Hash64) -> bool,
 ) -> Result<(), PalwStateV2Error> {
-    if builder.extras.model_immutable_active {
+    if extras.model_immutable_active {
         if let Some(object) = crate::palw_lifecycle_objects_v2::palw_model_definition_update_v1(object) {
             return Err(PalwStateV2Error::ImmutableModelUpdate(object));
         }
@@ -35137,11 +35142,8 @@ fn apply_object(
         // may be supplied with a NEW class in that block, never attached to an older class.
         if let PalwConsensusObjectV2::ClassShardPlanDeclared { class_id, .. }
         | PalwConsensusObjectV2::TirShardPlanDeclared { class_id, .. } = object
-            && !builder.extras.model_classes_registered_in_block.contains(class_id)
-            && !builder.entries.iter().any(|entry| {
-                matches!(entry,
-                PalwDeltaEntryV2::Class { key, old: None, new: Some(_) } if key == class_id)
-            })
+            && !extras.model_classes_registered_in_block.contains(class_id)
+            && !registered_in_transition(class_id)
         {
             return Err(PalwStateV2Error::ImmutableModelUpdate("verification plan binding"));
         }
@@ -35149,7 +35151,7 @@ fn apply_object(
     // **ADR-0152 Q-1: `Sampled` is R-core+'s verdict.** Below `Params::palw_rcore_plus` an object
     // carrying one is refused by name, before any arm reads it — the acceptance layer refuses it
     // first — so the fold's behaviour on every other network is exactly what it was.
-    if !builder.params.rcore_plus_active_at(ctx.daa_score)
+    if !params.rcore_plus_active_at(ctx.daa_score)
         && let Some((claim, seat)) = palw_object_sampled_receipt_v1(object)
     {
         return Err(PalwStateV2Error::SampledBelowRcore { claim, seat });
@@ -35157,14 +35159,14 @@ fn apply_object(
     // **RFC-0002 Phase F: below `palw_tir_v1` an IR object is refused by name, before any arm reads
     // it** — the acceptance layer drops it first (an older build cannot decode it and skips it), so
     // this is the second lock, and every network below the fence folds exactly as before.
-    if palw_object_is_tir_v1(object) && !builder.params.tir_active_at(ctx.daa_score) {
+    if palw_object_is_tir_v1(object) && !params.tir_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirRegistrationRefused("an IR object before palw_tir_v1 is in force (RFC-0002 Phase F)"));
     }
-    if palw_object_is_gen_v1(object) && !builder.params.gen_active_at(ctx.daa_score) {
+    if palw_object_is_gen_v1(object) && !params.gen_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::GenObjectRefused("a generative object before palw_gen_v1 is in force (RFC-0003)"));
     }
     // **ADR-0096 Decision 7, likewise**: below `palw_fp_decode_constraint` a constrained decode close is refused by name.
-    if palw_object_is_constrained_decode_v1(object) && !builder.params.fp_decode_constraint_active_at(ctx.daa_score) {
+    if palw_object_is_constrained_decode_v1(object) && !params.fp_decode_constraint_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::AdapterClassRefused(
             "a constrained decode close before palw_fp_decode_constraint is in force (ADR-0096)".into(),
         ));
@@ -35172,14 +35174,14 @@ fn apply_object(
     // **RFC-0002 Phase H (`palw_tir_only_v1`): past it a post-genesis legacy-family registration is refused by name** — the carriage
     // is what makes it a permissionless registration of hand-written kernels; the card's own (no carriage) are genesis and stay. The
     // acceptance walk refuses it first; this is the second lock.
-    if matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(_), .. }) && builder.params.tir_only_active_at(ctx.daa_score) {
+    if matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(_), .. }) && params.tir_only_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirRegistrationRefused(
             "a legacy-family class registration past palw_tir_only_v1: a new class is an IR program or an IR pipeline (RFC-0002 Phase H)",
         ));
     }
     // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is refused by name** — the acceptance walk
     // drops it first (an older build cannot decode it and skips it); this is the second lock.
-    if palw_object_is_eval_v1(object) && !builder.params.improve_active_at(ctx.daa_score) {
+    if palw_object_is_eval_v1(object) && !params.improve_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::ImprovementObjectRefused {
             object: "an evaluation court move",
             why: "before palw_improvement_v1 is in force (RFC-0004)",
@@ -35187,20 +35189,20 @@ fn apply_object(
     }
     // **The second IR fence, likewise**: below `palw_tir_fence2` its moves are payloads an older build
     // cannot decode; the acceptance walk drops them by name, and this is the second lock.
-    if palw_object_is_tir_fence2_v1(object) && !builder.params.tir_fence2_active_at(ctx.daa_score) {
+    if palw_object_is_tir_fence2_v1(object) && !params.tir_fence2_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirFence2Refused("a move before palw_tir_fence2 is in force"));
     }
     // **Pipeline-claim data availability, likewise** (spec 17 §17.14): below `palw_improvement_v1` its
     // moves are payloads an older build cannot decode; the acceptance walk drops them by name, and this is
     // the second lock.
-    if palw_object_is_pipeline_da_v1(object) && !builder.params.pipeline_da_active_at(ctx.daa_score) {
+    if palw_object_is_pipeline_da_v1(object) && !params.pipeline_da_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::PipelineDaRefused("a move before palw_improvement_v1 is in force"));
     }
     // **RFC-0004 §6.3: a composite artifact's sub-root openings** (the IR parameter carriage's
     // appended tag 2) only past `palw_improvement_v1`: the acceptance walk drops a close carrying one
     // first; this is the second lock.
     if crate::palw_improve_composite_v1::palw_object_carries_composite_opening_v1(object)
-        && !builder.params.improve_active_at(ctx.daa_score)
+        && !params.improve_active_at(ctx.daa_score)
     {
         return Err(PalwStateV2Error::ImprovementObjectRefused {
             object: "an IR close with composite openings",
@@ -35211,13 +35213,13 @@ fn apply_object(
     // with the reference recorded there. A class registered with a composite root any other way was
     // sized as one tree, so its composite closes are refused, never believed. The acceptance walk
     // drops such an object first; this is the second lock.
-    palw_improve_material_fold_v1::composite_openings_admitted_v1(&builder.state, object)?;
+    palw_improve_material_fold_v1::composite_openings_admitted_v1(state, object)?;
     // **RFC-0004: an improvement object is refused by name, before any arm reads it** — below
     // `palw_improvement_v1`, and above it until the object's admission lands. The acceptance walk
     // drops it first (an older build cannot decode it and skips it), so this is the second lock,
     // and every network folds exactly as before these variants existed.
     if let Some(name) = palw_improvement_object_name_v1(object) {
-        let active = builder.params.improve_active_at(ctx.daa_score);
+        let active = params.improve_active_at(ctx.daa_score);
         if !active || !palw_improvement_object_landed_v1(object) {
             let why = if active { "its admission has not landed" } else { "before palw_improvement_v1 is in force (RFC-0004)" };
             return Err(PalwStateV2Error::ImprovementObjectRefused { object: name, why });
@@ -35225,36 +35227,36 @@ fn apply_object(
     }
     // **RFC-0006, likewise**: below `palw_tir_shard_v1` the layer-sharded panels' objects and the `TirStepRun` unit are payloads
     // an older build cannot decode; the acceptance walk drops them by name, and this is the second lock.
-    if palw_object_is_tir_shard_v1(object) && !builder.params.tir_shard_active_at(ctx.daa_score) {
+    if palw_object_is_tir_shard_v1(object) && !params.tir_shard_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirShardDormant);
     }
     // **RFC-0001 §2.10, likewise**: below `palw_adapter_class_v1` the adapter class listing is a payload an older
     // build cannot decode; the acceptance walk drops it by name, and this is the second lock.
-    if palw_object_is_adapter_class_v1(object) && !builder.params.adapter_class_active_at(ctx.daa_score) {
+    if palw_object_is_adapter_class_v1(object) && !params.adapter_class_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::AdapterClassRefused("an adapter class listing before palw_adapter_class_v1 is in force".into()));
     }
     // **RFC-0003 decision 22, likewise**: below `palw_held_close_chunks_v1` the held leaf challenge is a payload an
     // older build cannot decode; the acceptance walk drops it by name, and this is the second lock.
-    if palw_object_is_held_close_chunks_v1(object) && !builder.params.held_close_chunks_active_at(ctx.daa_score) {
+    if palw_object_is_held_close_chunks_v1(object) && !params.held_close_chunks_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::HeldLeafChallengeRefused("a held leaf challenge before palw_held_close_chunks_v1 is in force".into()));
     }
     // **RFC-0007 Part I, likewise**: below `palw_verification_vertex_v1` a vertex move is a payload an older build cannot decode;
     // the acceptance walk drops it by name, and this is the second lock.
-    if palw_object_is_vertex_v1(object) && !builder.params.vertex_active_at(ctx.daa_score) {
+    if palw_object_is_vertex_v1(object) && !params.vertex_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::VertexRefused(crate::palw_vertex_v1::PalwVertexErrorV1::Dormant.to_string()));
     }
     // **RFC-0008 v2, likewise**: below `palw_exec_payload_v2` a work-session root declaration is a payload an older build cannot
     // decode; the acceptance walk drops it by name, and this is the second lock.
-    if palw_object_is_exec_v2(object) && !builder.params.exec_v2_active_at(ctx.daa_score) {
+    if palw_object_is_exec_v2(object) && !params.exec_v2_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::ExecV2Refused(crate::palw_work_slice_v2::PalwWorkRootRefusalV2::Dormant.to_string()));
     }
     // **RFC-0007 Part IV.1, likewise**: below `palw_audit_mesh_v1` a trap move is a payload an older build cannot decode.
-    if palw_object_is_mesh_v1(object) && !builder.params.audit_mesh_active_at(ctx.daa_score) {
+    if palw_object_is_mesh_v1(object) && !params.audit_mesh_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::MeshRefused(crate::palw_mesh_v1::PalwMeshErrorV1::Dormant("palw_audit_mesh_v1").to_string()));
     }
     // **RFC-0010, likewise**: below `palw_permissionless_panel_v1` a certified epoch output is a payload an older build cannot decode;
     // the acceptance walk drops it by name, and this is the second lock.
-    if palw_object_is_panel_v3_v1(object) && builder.params.panel_v3().is_none_or(|mirror| ctx.daa_score < mirror.from_daa) {
+    if palw_object_is_panel_v3_v1(object) && params.panel_v3().is_none_or(|mirror| ctx.daa_score < mirror.from_daa) {
         return Err(PalwStateV2Error::CarriageInconsistent(
             "a permissionless-Panel certified output before palw_permissionless_panel_v1 is in force".into(),
         ));
@@ -35262,12 +35264,48 @@ fn apply_object(
     // **RFC-0007's path rule, the second lock**: a receipt-path licence for a claim whose panel bound at or after
     // `palw_verification_vertex_v1` is refused by name (it licenses by tally); the acceptance walk drops it first.
     if let Some(claim) = crate::palw_vertex_v1::palw_receipt_object_claim_v1(object)
-        && crate::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(&builder.state, builder.params, ctx.daa_score, claim)
+        && crate::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(state, params, ctx.daa_score, claim)
     {
         return Err(PalwStateV2Error::VertexRefused(format!(
             "claim {claim} bound at or after palw_verification_vertex_v1: it licenses by tally, not by a receipt object"
         )));
     }
+    Ok(())
+}
+
+/// The complete read-only Origin recording verdict, without state clones or a second header authentication.
+/// Always authenticate this exact state/proof/point afresh; extras are loaded only after the proof passes.
+/// This verdict writes nothing and is never a hint permitting the actual fold to skip its own checks.
+pub fn palw_v2_origin_rehearsal_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    extras: impl FnOnce() -> PalwTransitionExtrasV1,
+) -> crate::palw_producer_v2::PalwObjectRehearsalV1 {
+    use crate::palw_producer_v2::PalwObjectRehearsalV1 as Verdict;
+    let PalwConsensusObjectV2::ExecOriginRecordedV1 { witness } = object else {
+        return Verdict::NotAccepted("Origin rehearsal requires ExecOriginRecordedV1".into());
+    };
+    if let Err(error) = state.exec_v2_origin_witness_admissible_v1(params, ctx.daa_score, witness) {
+        return Verdict::NotAccepted(error.to_string());
+    }
+    match object_preconditions_v1(state, params, &extras(), ctx, object, |_| false) {
+        Ok(()) => Verdict::Accepted,
+        Err(error) => Verdict::Refused(error),
+    }
+}
+
+fn apply_object(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    object_preconditions_v1(&builder.state, builder.params, builder.extras, ctx, object, |class_id| {
+        builder.entries.iter().any(|entry| {
+            matches!(entry, PalwDeltaEntryV2::Class { key, old: None, new: Some(_) } if key == class_id)
+        })
+    })?;
     match object {
         // ---- RFC-0010: a certified epoch output (tag 120): queued; the V3 stage verifies it against the branch and drops it if
         // it does not verify, the block standing ----
@@ -70303,7 +70341,7 @@ pub(crate) mod tests {
             }
             // …and the chain walk folds a block's objects, its EVM actions and its refunds with them.
             for line in [
-                "let mut extras = self.palw_transition_extras_for_objects(&point, &objects);",
+                "let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);",
                 "extras.evm_actions = staged.result.market_actions.clone();",
                 "extras.carrier_market_refunds = carrier_refunds;",
             ] {

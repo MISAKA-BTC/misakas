@@ -488,6 +488,61 @@ async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_abse
         blue_score: state.last_point().unwrap().blue_score + 1,
         subsidy: 0,
     };
+    // Compare both query APIs with the former acceptance + writer path, using this native signed header.
+    // A query result cannot be reused across a changed state, proof or fence; the actual block fold still authenticates afresh.
+    {
+        use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 as Verdict;
+        let Obj::ExecOriginRecordedV1 { witness } = &proof else { unreachable!() };
+        let mut nonce = stored.header.as_ref().clone();
+        nonce.nonce += 1;
+        let mut cached = stored.header.as_ref().clone();
+        cached.hash = Hash64::from_u64_word(0xBAD_CACE);
+        let mut alternatives = vec![proof.clone()];
+        for (claim, header) in [
+            (real.claim, borsh::to_vec(&nonce).unwrap()),
+            (real.claim, borsh::to_vec(&cached).unwrap()),
+            (Hash64::from_u64_word(0xBAD), witness.header.clone()),
+            (real.claim, Vec::new()),
+        ] {
+            alternatives.push(Obj::ExecOriginRecordedV1 {
+                witness: Box::new(kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginWitnessV1 { claim, header }),
+            });
+        }
+        for base in [&old, &state] {
+            let original_root = base.state_root();
+            for params in [
+                p.clone(),
+                p.clone().with_exec_v2_from_daa(None),
+                p.clone().with_exec_v2_from_daa(Some(point.daa_score + 1)),
+                p.clone().with_exec_v2_from_daa(Some(point.daa_score)),
+            ] {
+                for candidate in &alternatives {
+                    let expected = vp.palw_object_rehearsal_with_writer_for_tests(base, &params, &point, candidate);
+                    assert_eq!(vp.palw_object_rehearsal_v1_on(base, &params, &point, candidate), expected);
+                    let refusal = match expected {
+                        Verdict::Accepted => None,
+                        Verdict::NotAccepted(why) => Some(why),
+                        Verdict::Refused(why) => Some(why.to_string()),
+                    };
+                    assert_eq!(vp.palw_h1_carrier_refusal_on(base, &params, &point, candidate), refusal);
+                    assert_eq!(base.state_root(), original_root, "neither query installs the clock");
+                }
+            }
+        }
+    }
+    // A processor without the V2 bundle must refuse before consulting even a valid legacy proof.
+    {
+        use kaspa_consensus_core::config::{ConfigBuilder, params::MAINNET_PARAMS};
+        use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 as Verdict;
+        let disabled = crate::pipeline::virtual_processor::tests::TestContext::new(crate::consensus::test_consensus::TestConsensus::new(
+            &ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build(),
+        ));
+        let off = disabled.consensus.virtual_processor();
+        assert!(off.palw_panel_params_v2.is_none());
+        let why = "PALW objects on a network with no V2 bundle";
+        assert_eq!(off.palw_object_rehearsal_v1_on(&old, p, &point, &proof), Verdict::NotAccepted(why.into()));
+        assert_eq!(off.palw_h1_carrier_refusal_on(&old, p, &point, &proof), Some(why.into()));
+    }
     assert!(vp.palw_h1_carrier_refusal_on(&state, p, &point, &object).is_none(), "full header positive control");
     let (full, full_delta) = vp.palw_v2_fold_accepted_with_delta_for_tests(&state, p, &point, std::slice::from_ref(&object)).unwrap();
     vp.headers_store.delete(origin.source_block).unwrap();

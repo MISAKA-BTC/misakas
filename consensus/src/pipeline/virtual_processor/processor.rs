@@ -1733,9 +1733,32 @@ impl VirtualStateProcessor {
         self.palw_h1_carrier_refusal_on(state, state_params, &point, object)
     }
 
+    /// Origin has no extra fallible writer operation after its shared guards and full proof check.
+    /// Ask the core's read-only verdict once, retaining the no-V2-bundle gate and both refusal variants.
+    fn palw_exec_origin_rehearsal_v1_on(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1> {
+        if !matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ExecOriginRecordedV1 { .. }) {
+            return None;
+        }
+        if self.palw_panel_params_v2.is_none() {
+            return Some(kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::NotAccepted(
+                "PALW objects on a network with no V2 bundle".into(),
+            ));
+        }
+        Some(kaspa_consensus_core::palw_state_v2::palw_v2_origin_rehearsal_v1(state, state_params, point, object, || {
+            self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object))
+        }))
+    }
+
     /// [`Self::palw_mempool_h1_carrier_refusal`]'s question on a given state and point: the
     /// acceptance layer first (cheap refusals — an unknown bond, a signature that does not verify —
-    /// before any state is cloned), then the fold's own arm. `None` when both take it.
+    /// before any state is cloned), then the fold's own conditions. Origin asks the read-only
+    /// verdict once; all other objects use the single-object writer. `None` when both take it.
     pub(super) fn palw_h1_carrier_refusal_on(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -1743,6 +1766,14 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> Option<String> {
+        if let Some(verdict) = self.palw_exec_origin_rehearsal_v1_on(state, state_params, point, object) {
+            use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 as Verdict;
+            return match verdict {
+                Verdict::Accepted => None,
+                Verdict::NotAccepted(why) => Some(why),
+                Verdict::Refused(why) => Some(why.to_string()),
+            };
+        }
         if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
             return Some(why);
         }
@@ -5099,8 +5130,41 @@ impl VirtualStateProcessor {
     /// [`Self::palw_object_rehearsal_v1_impl`] on a given state and point — the H-1 gate's two
     /// layers ([`Self::palw_h1_carrier_refusal_on`]) with the fold's reason kept typed. The acceptance
     /// layer first (cheap refusals before any state is cloned), then `palw_v2_apply_one_object_v1`
-    /// under the point's own flags and extras.
+    /// under the point's own flags and extras. Origin uses the equivalent read-only verdict above.
     pub(crate) fn palw_object_rehearsal_v1_on(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 {
+        use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1;
+        if let Some(verdict) = self.palw_exec_origin_rehearsal_v1_on(state, state_params, point, object) {
+            return verdict;
+        }
+        if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
+            return PalwObjectRehearsalV1::NotAccepted(why);
+        }
+        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)),
+        ) {
+            Ok(_) => PalwObjectRehearsalV1::Accepted,
+            Err(why) => PalwObjectRehearsalV1::Refused(why),
+        }
+    }
+
+    /// The pre-optimization acceptance + writer oracle, with this node's private flags/extras.
+    /// No admission bypass: used only by equivalence tests, never compiled into a production node.
+    #[cfg(test)]
+    pub(crate) fn palw_object_rehearsal_with_writer_for_tests(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,

@@ -768,9 +768,9 @@ The committed machine-readable observations are
 including the source/runner hashes and all 12 final case logs parsed against the final runner.
 The earlier dev smoke run is not added to those final case counts.
 
-The actual caller inventory revealed an additional scope gap: `palw_v2_validate_objects` checks
+At the measured production base `89a2555ce`, the caller inventory revealed an additional scope gap: `palw_v2_validate_objects` checks
 tag 131, while H1/rehearsal then uses the core single-object fold, which checks it again before
-writing. A successful H1 therefore can hash four parent preimages, with clone/journal overhead
+writing. At that base, a successful H1 could hash four parent preimages, with clone/journal overhead
 outside this reader probe; actual block fold and pool/template/reorg repetition remain to measure.
 The spec now makes those consumers and unaccepted traffic explicit resource/fee approval conditions.
 An inclusion fee cannot fund a refused proof, and eight chunk slots alone do not bound all calls.
@@ -790,3 +790,71 @@ hashes, successfully ran a release matching-fake smoke case, and rejected a dev 
 as release before creating output files. The additional smoke is not added to the six-case table.
 `git diff --check`, Python syntax parsing, and a scoped rustfmt check on only the new ignored Rust
 test passed. No public activation, push or deployment was performed.
+
+
+### EXEC origin H1/rehearsal: one fresh authentication (2026-10-11)
+
+Starting from `5d8efa11e`, tag 131's query paths now ask
+`palw_v2_origin_rehearsal_v1`. It checks the exact state/proof/point with the existing public
+admission reader, then runs the writer's common guards, loaded through a lazy extras supplier.
+All common guard expressions and their order were mechanically compared with the prior writer;
+only the state/params/extras access and in-transition registration view were substituted.
+The actual writer still supplies its own delta entries, so a newly registered class can bind its
+plan in that same transition. Origin has no registration arm and supplies an empty registration view.
+
+H1 and typed rehearsal preserve the node's no-V2-bundle gate and the old `NotAccepted` / `Refused`
+classification. They create no transition builder or discarded write journal for Origin. The
+successful query authenticates once (identity and pre-PoW, two digests); the previous successful
+query authenticated twice (four digests). Failed proofs do not load extras. Other object paths
+keep their single-object writer. Actual node acceptance and actual block folding still perform
+fresh checks independently: a read verdict is not a mutable authorization, reusable hint or cache.
+No object encoding, source-DAA rule, carriage row, state commitment or public fence changed.
+
+The new core comparison uses the former admission-reader + one-object writer as its oracle:
+17 input/state cases and 32 combinations of writer flags and immutable-model policy, plus changed
+points across the fence and an unrelated object. It checks cached-hash irrelevance, changed nonce /
+DAA / claim / class / bond / anchor, missing claim, wrong source, already recorded origin, dormant
+and boundary fences, malformed bytes, lazy extras, and read-only state roots/counts. Its provenance
+fixture remains arithmetic, not native signature evidence.
+
+The extended node regression uses its actually admitted signed REAL header and compares both query
+APIs with the former node acceptance + writer path for missing/recorded clocks, four fence settings
+and five proof variants. A `cfg(test)` copy of the former node query uses the private flags/extras
+without changing their production visibility or skipping authentication. A separate processor with
+no V2 bundle preserves the early refusal. The
+existing missing-source-header, actual migration write, carriage and undo assertions remain.
+That fixture still has the documented REAL model-registry/seat/share and synthetic-trace seam;
+it does not certify native REAL Final, public-market payment, historical activation or P2P pruning.
+
+The §12.8 cryptographic parent-input bound for one successful H1/rehearsal query is now `510B`,
+not the former `1,020B`. The prior dated resource observations and their frozen-source hashes are
+historical evidence attached to `5d8efa11e`; they are not fresh composite-path measurements.
+State materialization, extras, repeated pool/template/reorg/chunk calls, actual block pipelines,
+uncapped native capture, tail latency, fees and shared-lane availability remain open. Removing this
+one duplication does not approve resource/economic/participation gates or the complete four RFCs.
+
+The final full EVM-enabled core run passed **3,642 tests, 0 failed, 13 ignored** in **70.13 s**
+after a 5m 43s build (including artifact-lock wait). Command:
+`cargo test --locked -p kaspa-consensus-core --features evm --lib -- --test-threads=2`,
+with jobs 2, dev/test debug 0 and incremental 0. Log:
+`/tmp/rfc8-origin-rehearsal-core-final.log`. The preliminary full run's only failure was a stale
+source pin to the old two-argument extras-builder call; the previous compiled core binary also
+failed that same pin, and HEAD already passed state/point/objects. Only the pin was updated;
+all production market/fence/refund wiring stayed unchanged. The full run includes the new Origin
+comparison and the existing same-block immutable-model plan-registration regression. The earlier
+one-test smoke is not counted again. The 13 ignored cases are explicit probes/dumps/measurements;
+they are not additional successful tests or resource approval.
+
+The final EVM-enabled node command
+`cargo test --locked -p kaspa-consensus --features evm --lib x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_absent -- --test-threads=1`
+passed **1 test, 0 failed, 0 ignored** in **29.71 s** (6m 57s build including lock wait),
+log `/tmp/rfc8-origin-rehearsal-node-final.log`. From that exact newly built executable,
+`pipeline::virtual_processor::tests::h1_the_template_asks_the_carrier_gate_the_mempool_asks`
+also passed **1 test** (0.00 s), log `/tmp/rfc8-origin-rehearsal-h1-callers.log`. This checks the
+mempool/template/sweep caller wiring; it is distinct from the behavioral Origin test above.
+`cargo check --locked -p kaspad --features evm` succeeded in **2m 55s**, including lock wait,
+with existing warnings; log `/tmp/rfc8-origin-rehearsal-daemon.log`. The same jobs/debug/incremental
+settings were used. Scoped rustfmt checks for the new core query/test and node helper/oracle/test
+block, the common-guard text/order comparison, and `git diff --check` passed.
+No public fence activation, push or deployment was performed. All remaining RFC obligations above
+remain open; these successes are not soundness, whole-node resource, archival/P2P or economic approval.

@@ -1085,6 +1085,132 @@ fn legacy_origin_world_at(
     (p, s, id, witness)
 }
 
+/// Compare the clone-free query with the old acceptance-reader + one-object writer oracle.
+/// The verdict is scoped to this exact state/point/proof and never installs an authority row.
+#[test]
+fn exec_v2_origin_rehearsal_matches_the_writer_and_rechecks_changed_inputs() {
+    use crate::palw_producer_v2::PalwObjectRehearsalV1 as Verdict;
+    use std::cell::Cell;
+    let (p, original, id, witness) = legacy_origin_world();
+    let header: crate::header::Header = borsh::from_slice(&witness.header).unwrap();
+    for case in 0..17 {
+        let mut state = original.clone();
+        let mut params = p.clone();
+        let mut proof = witness.clone();
+        let mut changed = header.clone();
+        let point = ctx(21, 110, 21);
+        match case {
+            0 => {}
+            1 => {
+                changed.nonce += 1;
+                proof.header = borsh::to_vec(&changed).unwrap();
+            }
+            2 => {
+                changed.daa_score += 1;
+                proof.header = borsh::to_vec(&changed).unwrap();
+            }
+            3 => {
+                changed.hash = h64(0xCA_CE);
+                proof.header = borsh::to_vec(&changed).unwrap();
+            }
+            4 => {
+                proof.claim = h64(0xBAD);
+            }
+            5 => {
+                state.claims.get_mut(&id).unwrap().class_id = h64(0xBAD);
+            }
+            6 => {
+                state.claims.get_mut(&id).unwrap().bond = bond_key(99);
+            }
+            7 => {
+                state.claims.get_mut(&id).unwrap().job_identity = h64(0xBAD);
+            }
+            8 => {
+                state.claims.get_mut(&id).unwrap().source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: BTreeSet::new() };
+            }
+            9 => {
+                state.claims.remove(&id);
+            }
+            10 => {
+                state.exec_v2_origins.insert(id, state.exec_v2_origin_witness_admissible_v1(&p, point.daa_score, &witness).unwrap());
+            }
+            11 => {
+                params = params.with_exec_v2_from_daa(None);
+            }
+            12 => {
+                params = params.with_exec_v2_from_daa(Some(point.daa_score + 1));
+            }
+            13 => {
+                params = params.with_exec_v2_from_daa(Some(point.daa_score));
+            }
+            14 => {
+                proof.header.clear();
+            }
+            15 => {
+                proof.header.pop();
+            }
+            16 => {
+                changed.pow_algo_id = crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH;
+                proof.header = borsh::to_vec(&changed).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let object = PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(proof.clone()) };
+        let root = state.state_root();
+        let origins = state.exec_v2_origin_count_v1();
+        for flags in 0..32 {
+            let mut extras = xx_declare();
+            extras.model_immutable_active = flags & 16 != 0;
+            let accepted = state.exec_v2_origin_witness_admissible_v1(&params, point.daa_score, &proof);
+            let expected = match &accepted {
+                Err(error) => Verdict::NotAccepted(error.to_string()),
+                Ok(_) => match palw_v2_apply_one_object_v1(
+                    &state,
+                    &params,
+                    &point,
+                    &object,
+                    flags & 1 != 0,
+                    flags & 2 != 0,
+                    flags & 4 != 0,
+                    flags & 8 != 0,
+                    &extras,
+                ) {
+                    Ok(written) => {
+                        assert_eq!(written.exec_v2_origin_v1(&id), accepted.as_ref().ok());
+                        Verdict::Accepted
+                    }
+                    Err(error) => Verdict::Refused(error),
+                },
+            };
+            let calls = Cell::new(0);
+            let actual = palw_v2_origin_rehearsal_v1(&state, &params, &point, &object, || {
+                calls.set(calls.get() + 1);
+                extras.clone()
+            });
+            assert_eq!(actual, expected, "case {case}, flags {flags}");
+            assert_eq!(calls.get(), usize::from(accepted.is_ok()), "no extras for a refused proof");
+            assert_eq!(state.state_root(), root, "the query is read-only");
+            assert_eq!(state.exec_v2_origin_count_v1(), origins);
+        }
+    }
+    let object = PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(witness) };
+    let dormant = p.clone().with_exec_v2_from_daa(Some(110));
+    for (daa, ok) in [(109, false), (110, true), (111, true), (109, false)] {
+        let verdict = palw_v2_origin_rehearsal_v1(&original, &dormant, &ctx(21, daa, 21), &object, xx);
+        assert_eq!(verdict == Verdict::Accepted, ok, "a previous verdict never authorizes a new point");
+    }
+    let other = register_class_and_bond().pop().unwrap();
+    let calls = Cell::new(0);
+    assert!(matches!(
+        palw_v2_origin_rehearsal_v1(&original, &p, &ctx(21, 110, 21), &other, || {
+            calls.set(calls.get() + 1);
+            xx()
+        }),
+        Verdict::NotAccepted(_)
+    ));
+    assert_eq!(calls.get(), 0, "this query never substitutes for another object arm");
+}
+
 #[test]
 fn exec_v2_authorization_orders_both_clocks_against_opening_not_against_each_other() {
     use crate::palw_state_v2::palw_exec_v2_history_v1::authorize;
