@@ -256,6 +256,13 @@ pub(crate) fn kernel_route_test_opv_eligible_v1(class: kaspa_hashes::Hash64) {
     }
 }
 
+/// The seam's inverse (`cfg(test)`): a class taken off the list, so a test can make a component lose its eligibility after a typed
+/// class derived from it registered (lane G14C: the commit-time re-gate of typed claims).
+#[cfg(test)]
+pub(crate) fn kernel_route_test_opv_ineligible_v1(class: kaspa_hashes::Hash64) {
+    KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap().retain(|c| *c != class);
+}
+
 #[cfg(test)]
 fn kernel_route_test_opv_eligible_list_v1() -> Vec<kaspa_hashes::Hash64> {
     let mut list = KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap().clone();
@@ -15171,7 +15178,9 @@ impl VirtualStateProcessor {
         if !Self::verify_mldsa87_with_context_bool(&record.pubkey, message.as_byte_slice(), signature, context) {
             return Err(format!("claim {claim}: the legacy held object is not signed by the bond it names"));
         }
-        }
+        Ok(())
+    }
+
     /// **Lane BUDGET: `Params::palw_model_bond_allocation_v1` resolved at the block's DAA**, in exactly one place (the bond budget's fence
     /// must be in force too: an assignment's rows are the budget's).
     pub(super) fn palw_model_bond_allocation_at(&self, daa_score: u64) -> bool {

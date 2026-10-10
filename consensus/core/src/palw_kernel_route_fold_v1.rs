@@ -264,6 +264,18 @@ fn opv_gate_v1(
     let view = OpvEligibilityViewV1::of(opv);
     let eligible =
         |class: &misaka_palw_kernel::hash::Digest| route.opv_class_eligibility_v1(ledger, class, ctx.daa_score, &view).is_ok();
+    // A typed claim's class, through its job (an unknown job or class: the kernel refuses the claim by its own rule, so pass it on).
+    let spec_claim_eligible = |claim: &misaka_palw_kernel::spec::SpecClaimV1| {
+        use misaka_palw_kernel::spec::SpecJobV1 as J;
+        let Some(job) = ledger.typed.jobs.get(&claim.job_id()) else { return true };
+        let class = match job {
+            J::Memory(j) => j.class,
+            J::Retrieval(j) => j.class,
+            J::Composite(j) => j.class,
+        };
+        let Some(row) = ledger.typed.classes.get(&class) else { return true };
+        route.opv_spec_eligibility_v1(ledger, &row.spec, ctx.daa_score, &view).is_ok()
+    };
     match object {
         KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } if mode.is_optimistic() => {
             let facts = OpvClassFactsV1::of_registration(*descriptor, program_bytes, plan, param_commitments);
@@ -308,12 +320,18 @@ fn opv_gate_v1(
             let class = match commit {
                 C::Claim { claim, .. } => ledger.jobs.get(&claim.job_id).map(|j| j.class_binding_id),
                 C::Pipeline { claim, .. } => ledger.pipeline_jobs.get(&claim.job_id).map(|j| j.class_binding_id),
-                C::Spec { .. } => None,
+                // A typed claim is re-gated by its class's DERIVED eligibility (G14C): a class whose component lost eligibility (its
+                // binding refuted, its kernel retired, denied) takes no new claim.
+                C::Spec { claim } => return if spec_claim_eligible(claim) { OpvGateV1::Pass } else { OpvGateV1::Drop },
             };
             match class {
                 Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
                 _ => OpvGateV1::Pass,
             }
+        }
+        // The unsalted typed reveal (kind 19, before salted seals are required) is gated the same way.
+        KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::CommitClaim { claim } } => {
+            if spec_claim_eligible(claim) { OpvGateV1::Pass } else { OpvGateV1::Drop }
         }
         _ => OpvGateV1::Pass,
     }
