@@ -26,7 +26,7 @@
 //!
 //! **The challenger's share is the PALW reporter share (G14).** A producer's own Sybil challengers can void its claim by charging its
 //! own leases and collect the share. With the share at ADR-0032's 49% — the share an accuser of a conviction gets (G14-R4's one 490‰
-//! constant; here `PALW_RCORE_REPORTER_REWARD_BPS_V1`, the same 49%) — a self-lapse nets the coalition a loss of ≥ 51% of Σ leases ≥
+//! constant; here `PALW_RCORE_REPORTER_REWARD_BPS_V2`, the same 49%: the court is dormant as a whole, so it has never been in force at another rate) — a self-lapse nets the coalition a loss of ≥ 51% of Σ leases ≥
 //! 51% of the claim's reservation: exactly the floor a self-reported conviction leaves, so voiding is never the cheaper escape. (The
 //! former 500‰ beside a 10% accuser share was a discount; the transfer's Σ leases ≥ the claim's reservation is what makes the floors
 //! meet.) After Final the charge is burned whole — the kernel's post-Final rule, under which demanders are not paid either.
@@ -84,7 +84,7 @@ pub const PALW_PROVIDER_MAX_OPEN_CHALLENGES_V1: usize = 8;
 /// as the route's accuser and demander shares (G14-R4's `PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1` = 490‰; at its merge this reads that
 /// constant), so the two reporter paths of a claim cannot drift.
 pub fn palw_provider_reporter_share_v1(slashed: u64) -> u64 {
-    (slashed as u128 * crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V1 as u128 / 10_000) as u64
+    (slashed as u128 * crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V2 as u128 / 10_000) as u64
 }
 
 // ---- the fence ---------------------------------------------------------------------------------------------------------------
