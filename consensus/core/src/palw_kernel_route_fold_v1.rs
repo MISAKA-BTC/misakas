@@ -534,6 +534,18 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     // Inner 22/23 are consensus-owned state/collateral courts, never bare-ledger moves.
     match &object {
+        KernelRouteObjectV1::DemandFlatModelVectorV3 { vector, slot, position, occurrence, node, leaf } => {
+            let unit = crate::palw_flat_model_vector_da_v3::FlatVectorUnitV3 {
+                position: *position, occurrence: *occurrence, node: *node, leaf: *leaf,
+            };
+            return super::palw_flat_model_vector_fold_v3::demand(builder, ctx, signer, vector, *slot, unit);
+        }
+        KernelRouteObjectV1::AnswerFlatModelVectorV3 { demand, answer } => {
+            return super::palw_flat_model_vector_fold_v3::answer(builder, ctx, signer, demand, answer);
+        }
+        KernelRouteObjectV1::SettleFlatModelVectorDemandV3 { demand } => {
+            return super::palw_flat_model_vector_fold_v3::settle_demand(builder, ctx, signer, demand);
+        }
         KernelRouteObjectV1::PostFlatModelVectorV3 { class, binding, post } => {
             return super::palw_flat_model_vector_fold_v3::post(builder, ctx, signer, class, binding, post);
         }

@@ -18,7 +18,8 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | Performance and resource contract | TIR admission derives operation/state/cone costs; SDK conformance and single-program preflight now reuse node prosecution/carrier/block bounds and choose v1/v2/segmented v4; integrated public replay and court bounds | Shared complete resource vector across registration/claim/proof/court; aggregate load enforcement; real-size execution/evidence/hash/storage/delivery ratios |
 | Work/economic conservation | Existing canonical work, RFC8/BUDGET and ADR176 paths must be audited at their call sites | Root/slice/rider/model-copy uniqueness, shared capital/window accounting, no splitting or excess-PWU rights gain, role-swap tests |
 | Public dispute completeness | Kernel and TIR court modules exist; this alone proves no detection or end-to-end gate | Fresh outsider from public material through all relation classes, bounded terminal court, invalid-proof flood and honest liveness trials |
-| Flat-v5 typed node component | Explicit dormant inner 31/32 candidate statements bind the independently derived terminal scope; court folds recheck it, use shared block budgets and share original collateral/eight-statement catalogs with v2 | Public hash-unit acquisition/default/session rules, proof pre-emption seals, complete execution/checker/DA/network resource vector and execution Final; component tests are not full checkpoint/G14 acceptance |
+| Flat-v5 typed node component | Explicit dormant inner 31/32 candidate statements bind the independently derived terminal scope; court folds recheck it, use shared block budgets and share original collateral/eight-statement catalogs with v2 | General public acquisition/localization, proof pre-emption seals, complete execution/checker/DA/network resource vector and execution Final; component tests are not full checkpoint/G14 acceptance |
+| Flat-v5 native public acquisition | Dormant inner 33/34/35 fetch authenticated node/hash units into public read-API state; bounded service/default, original collateral and four requester slots shared with v2 | Deployed RPC/transport, retention/pruning, general streamed first-fault verification, proof pre-emption seals, complete shared resources/DA/network load and execution Final; no full real-checkpoint/privacy/liveness acceptance |
 | Real models and coverage | Dated census reports exist; fixture/structural passes are not full-task passes | Revision/task/context/storage/arithmetic/plan records, real sizes, complete modalities via RFC03, independent Final references, A6 and A8 denominators/confidence/residuals |
 
 The source review names dense baselines, MoE/MXFP4, GDN/KDA with unequal head counts, sparse indexers,
@@ -1780,3 +1781,43 @@ seals, full execution/checker/DA/network accounting and actual acquisition throu
 node APIs remain open, together with the original real checkpoint/task/context/
 fidelity, privacy, economics and honest liveness requirements. The full RFC02
 goal remains active and incomplete.
+
+### Dormant flat-v5 native public hash acquisition — 2026-10-11
+
+RFC02 §14.26 adds inner 33/34/35 for node/hash-unit requests, bounded authenticated
+answers and explicit availability default. No answer grammar carries clear model
+values. Demand admission rechecks the stored typed scope and caches fixed node/
+segment/type/shape metadata. Responding requires no program, PC, trace or value
+decoding and does not consume public adjudication slots. v2/v3 requests share
+four owned requester slots and their original collateral; a flat vector has a
+32-open-request bound. Service collects the requester's deposit for the poster.
+Unresolved requests retain poster liability past its horizon; default marks
+unavailability separately from integer conviction and pays only the authenticated
+requester. Published replies remain in the public native read API after slot reuse.
+
+The actual-node synthetic verifier reads public node/hash openings through that
+API, independently computes from its own model copy, adaptively localizes a late
+false leaf and files a successful bounded court without producer output values.
+Independent replay reproduces the public replies and ordinary challenger payout
+redemption. A second trial checks shared slots in both directions, refusal of a
+small-node leaf request, invalid answers, service after the court count is spent,
+slot recycling, held collateral and one objective default. This is native API
+evidence; it does not establish deployed RPC transport or execution Final.
+
+**43 distinct selected tests pass**: 13 actual-node tests, 12 core tests,
+14 A-2 tests and four kernel route tests. Five cases are new. The production
+core check, targeted formatting and diff whitespace checks pass. New wire tests
+cover all truncations, surplus/version changes, nested path/rank counts and
+exact unit/shape/namespace authentication; the public reader checks stored
+length and digest before returning bytes. Initial development wire-count and
+disk-full build failures are excluded. Final node/check commands disable only
+incremental caching to fit local disk; arithmetic, optimization/debug profile,
+runtime stack and consensus configuration are unchanged. Commands, names,
+logs and final source/binary hashes: `evidence/rfc02-flat-hash-da-v3-verdict.json`.
+
+General streamed first-fault verification and localization over all relations,
+RPC/transport, retention/pruning, proof pre-emption seals, complete shared
+resource/aggregate DA/network bounds and worst-job localization/deadline liveness
+remain open. The original checkpoint/task/context/fidelity, privacy, economics,
+execution Final/redemption and A6/A8 requirements are unchanged. Shipping fences
+remain dormant, and the full RFC02 goal stays active.

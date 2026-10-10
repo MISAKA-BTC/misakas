@@ -74,6 +74,9 @@ pub const TAG_ANSWER_MODEL_VECTOR_V2: u8 = 29;
 pub const TAG_SETTLE_MODEL_VECTOR_DEMAND_V2: u8 = 30;
 pub const TAG_POST_FLAT_MODEL_VECTOR_V3: u8 = 31;
 pub const TAG_REFUTE_FLAT_MODEL_VECTOR_V3: u8 = 32;
+pub const TAG_DEMAND_FLAT_MODEL_VECTOR_V3: u8 = 33;
+pub const TAG_ANSWER_FLAT_MODEL_VECTOR_V3: u8 = 34;
+pub const TAG_SETTLE_FLAT_MODEL_VECTOR_V3: u8 = 35;
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 
@@ -179,6 +182,22 @@ impl SaltedCommitV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum KernelRouteObjectV1 {
+    /// Node commitment or flat-v5 hash leaf only; four slots shared with v2.
+    DemandFlatModelVectorV3 {
+        vector: Digest,
+        slot: u8,
+        position: u32,
+        occurrence: u16,
+        node: u16,
+        leaf: Option<u64>,
+    } = 33,
+    AnswerFlatModelVectorV3 {
+        demand: Digest,
+        answer: Vec<u8>,
+    } = 34,
+    SettleFlatModelVectorDemandV3 {
+        demand: Digest,
+    } = 35,
     /// Explicit flat-v5 profile and resource-root statement; non-reward candidate trace.
     PostFlatModelVectorV3 {
         class: Digest,
@@ -481,6 +500,9 @@ impl KernelRouteObjectV1 {
     /// The variant's declared discriminant.
     pub const fn tag(&self) -> u8 {
         match self {
+            Self::DemandFlatModelVectorV3 { .. } => TAG_DEMAND_FLAT_MODEL_VECTOR_V3,
+            Self::AnswerFlatModelVectorV3 { .. } => TAG_ANSWER_FLAT_MODEL_VECTOR_V3,
+            Self::SettleFlatModelVectorDemandV3 { .. } => TAG_SETTLE_FLAT_MODEL_VECTOR_V3,
             Self::PostFlatModelVectorV3 { .. } => TAG_POST_FLAT_MODEL_VECTOR_V3,
             Self::RefuteFlatModelVectorV3 { .. } => TAG_REFUTE_FLAT_MODEL_VECTOR_V3,
             Self::DemandModelVectorV2 { .. } => TAG_DEMAND_MODEL_VECTOR_V2,
@@ -585,6 +607,9 @@ impl KernelRouteObjectV1 {
 
 pub const fn name_of_tag(tag: u8) -> &'static str {
     match tag {
+        TAG_DEMAND_FLAT_MODEL_VECTOR_V3 => "DemandFlatModelVectorV3",
+        TAG_ANSWER_FLAT_MODEL_VECTOR_V3 => "AnswerFlatModelVectorV3",
+        TAG_SETTLE_FLAT_MODEL_VECTOR_V3 => "SettleFlatModelVectorDemandV3",
         TAG_POST_FLAT_MODEL_VECTOR_V3 => "PostFlatModelVectorV3",
         TAG_REFUTE_FLAT_MODEL_VECTOR_V3 => "RefuteFlatModelVectorV3",
         TAG_COMPLETE_MODEL_CONFORMANCE_V2 => "CompleteModelConformanceV2",
@@ -628,6 +653,9 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_REFUTE_MODEL_ARTIFACT_V2 => 2 << 20,
         TAG_COMPLETE_MODEL_CONFORMANCE_V2 => 90_000 + 134,
         TAG_POST_MODEL_VECTOR_V2 | TAG_REFUTE_MODEL_VECTOR_V2 => MAX_FILE_PROOF_BYTES_V1,
+        TAG_DEMAND_FLAT_MODEL_VECTOR_V3 => 84,
+        TAG_ANSWER_FLAT_MODEL_VECTOR_V3 => (10 << 10) + 70,
+        TAG_SETTLE_FLAT_MODEL_VECTOR_V3 => 66,
         TAG_POST_FLAT_MODEL_VECTOR_V3 => 1_583_616,
         TAG_REFUTE_FLAT_MODEL_VECTOR_V3 => (1 << 20) + 70,
         TAG_DEMAND_MODEL_VECTOR_V2 => 92,
@@ -710,8 +738,8 @@ mod tests {
         let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_REGISTER_CONFORMANCE_CLASS_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!(max_encoded_bytes_of_tag(33).is_none(), "33 is not allocated");
-        for tag in 22..=32 {
+        assert!(max_encoded_bytes_of_tag(36).is_none(), "36 is not allocated");
+        for tag in 22..=35 {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         let complete = KernelRouteObjectV1::CompleteModelConformanceV2 { class: [1; 64], binding: [2; 64], proof: vec![0; 90_000] };

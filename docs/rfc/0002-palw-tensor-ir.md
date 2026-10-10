@@ -3089,3 +3089,57 @@ resource accounting, fresh outsider acquisition through actual node APIs,
 execution Final/redemption, real checkpoint/task/context/fidelity, privacy,
 economics and honest liveness requirements remain open. The full RFC02 goal
 remains active, and no shipping fence is armed by this increment.
+
+### 14.26 Dormant flat-v5 public hash-unit demand, service and default
+
+Inner kinds 33/34/35 add `DemandFlatModelVectorV3`,
+`AnswerFlatModelVectorV3` and `SettleFlatModelVectorDemandV3`, under the existing
+route/PanelFree fences. Aux tables 59–63 store fixed requests, requester slots,
+public responses, open-request counts and unavailability. Shipping presets and
+the existing v2/v3 statement encodings are unchanged.
+
+A request identifies a committed position/occurrence/node and optionally a
+flat leaf index. Its grammar has no model-file, parameter, row/column or clear
+value request. Admission reserves structural work before reconstructing the
+stored statement, independently checks its scope and binds the fixed request
+to the exact node index/count, segment root, extent, declared dtype and resolved
+shape. Small nodes allow only node commitments; large nodes additionally allow
+hash leaves of 64–127 elements. A response binds the two node/position paths
+and, where requested, the flat-v5 hash path. The explicit answer version and
+strict ten-KiB carrier reject old answer grammars, unbounded nested counts,
+wrong units/shapes, copied roots, surplus bytes and truncation.
+
+Each requester owns four slots **shared with v2**, and each flat vector permits
+at most 32 simultaneously open requests. Open requests reserve the requester's
+own collateral. Their service deposit covers the maximum bounded-answer fee
+floor and is paid to the statement poster on authenticated service. Published
+answer bytes and their digest can be read through the node's native route read
+API even after the requester recycles its slot; a fresh verifier independently
+authenticates them and uses its own model copy for values and operands. The
+response fold reads only fixed request metadata and bounded hash paths; it
+decodes no stored program, parameters, trace or clear values. As in v2, these
+bounded responses use payload carriage rather than public adjudication slots,
+so spending the court count does not prevent service.
+
+A request must leave the existing response deadline and proof grace inside the
+statement's liability horizon. An unresolved request keeps the poster's
+reservation committed after that horizon. An explicit bounded close accepts
+timely public service, or marks the statement **unavailable**, slashes its
+remaining reservation once and pays the authenticated requester. A copying
+closer cannot take that bounty. Later service cannot erase an earlier request's
+missed deadline. Availability default is separate from integer conviction.
+The original statement row remains immutable on default; the auxiliary status
+is authoritative for refutation, demand and reservation accounting.
+
+The actual-node synthetic trial reads hash openings from persisted public node
+state, localizes a late false leaf through bounded adaptive probes, reconstructs
+its operands from an independent model copy and files a successful court. An
+independent replay node reproduces public replies and ordinary challenger payout
+redemption. Additional trials exercise shared v2/v3 slots, invalid replies,
+responses after a full court count, slot recycling, held liability and default.
+These are native read-API trials, not a deployed RPC/transport drill or real
+checkpoint/fidelity acceptance. General first-fault verification and streamed
+localization across all relations, proof pre-emption seals, public retention/
+pruning, the complete shared resource vector and aggregate DA/network load,
+execution Final, privacy/economics and honest liveness remain open. No shipping
+fence is activated; full RFC02 completion is still unproven.

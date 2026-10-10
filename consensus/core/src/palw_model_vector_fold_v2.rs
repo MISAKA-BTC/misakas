@@ -227,7 +227,8 @@ pub(super) fn demand(
     if builder.state.bonds.get(&h.poster).map(|b| b.operator_id) == builder.state.bonds.get(signer).map(|b| b.operator_id) {
         return Err(refused("vector poster's operator cannot demand its own bounty"));
     }
-    if route.model_vector_served_v2(&id, &unit).is_some()
+    if route.flat_vector_slot_v3(signer, slot).and_then(|d| route.flat_vector_demand_v3(&d)).is_some_and(|d| !d.settled)
+        || route.model_vector_served_v2(&id, &unit).is_some()
         || route.model_vector_demand_slot_v2(signer, slot).and_then(|d| route.model_vector_demand_v2(&d)).is_some_and(|d| !d.settled)
     {
         return Err(refused("vector unit is public or requester's slot remains held"));

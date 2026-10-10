@@ -861,3 +861,16 @@ actual node acquisition protocol; no execution Final, full conformance, real
 checkpoint support or privacy/liveness acceptance is established. Public flat
 hash DA/default/session rules, proof pre-emption seals and complete shared
 resource accounting remain open. Evidence: `tir/evidence/rfc02-flat-node-v3-verdict.json`.
+
+**2026-10-11 native hash-unit acquisition update:** RFC02 §14.26 adds dormant
+inner 33/34/35. Requesters share four v2/v3 slots and original collateral;
+flat requests admit only node commitments or hash leaves, with bounded strict
+answers and public native read-API persistence. Synthetic actual-node tests
+localize a late false leaf from public replies and an independent model copy,
+convict without output values, replay payouts, survive spent court counts and
+default an unserved statement while keeping its collateral held. All 43 selected
+tests pass. This closes the native point-acquisition component, not general
+streamed verification/localization, deployed RPC transport, retention/pruning,
+pre-emption seals, complete aggregate resources, execution Final, real checkpoint
+or privacy/economic/honest-liveness acceptance. Evidence:
+`tir/evidence/rfc02-flat-hash-da-v3-verdict.json`.

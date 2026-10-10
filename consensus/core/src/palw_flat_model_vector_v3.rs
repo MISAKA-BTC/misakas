@@ -141,7 +141,15 @@ impl PalwKernelRouteStateV1 {
             .iter()
             .filter_map(|id| self.flat_model_vector_header_v3(id))
             .filter(|h| h.poster == *bond)
-            .map(|h| h.reserved_at(daa) as u128)
+            .map(|h| {
+                if self.flat_vector_unavailable_v3(&h.id()) {
+                    0
+                } else if !h.refuted && self.flat_vector_open_demands_v3(&h.id()) > 0 {
+                    h.reserved as u128
+                } else {
+                    h.reserved_at(daa) as u128
+                }
+            })
             .sum()
     }
     pub fn flat_model_vector_row_v3(&self, id: &Hash64) -> Option<FlatModelVectorRowV3> {

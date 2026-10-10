@@ -1021,18 +1021,18 @@ async fn model_vector_da_deadlines_hold_capital_and_responses_survive_a_full_cou
 }
 
 // Explicit flat-v5 profile. The producer helper returns only public commitment
-// structure and hash openings to the filer, never its output values. Point-unit
-// hash DA acquisition is still a separate requirement, not simulated as a node API.
+// structure and hash openings to direct court component tests, never output values.
+// The separate DA tests below obtain material through the real node read API.
 struct FlatPublicMaterial {
     c: SegmentedCommitmentsV1,
     hash: Option<misaka_palw_kernel::merkle5::FlatLeafHashV5>,
 }
-fn flat_vector_post(
+fn flat_vector_post_at(
     net: &Net,
     f: &Fixture,
     binding: Hash64,
     prompt: Vec<u32>,
-    lie: bool,
+    lie: Option<usize>,
 ) -> (kaspa_consensus_core::palw_flat_model_vector_v3::FlatModelVectorPostV3, FlatPublicMaterial) {
     use kaspa_consensus_core::palw_flat_model_vector_v3::FlatModelVectorPostV3;
     let encoder = f.d.digest() == k2_tir_v5_descriptor().digest();
@@ -1042,8 +1042,8 @@ fn flat_vector_post(
     } else {
         misaka_palw_kernel::trace::trace_v1(&f.p, &f.params, &prompt).unwrap()
     };
-    if lie {
-        trace.values[0][0][0].data[0] += 1;
+    if let Some(at) = lie {
+        trace.values[0][0][0].data[at] += 1;
     }
     let c = SegmentedCommitmentsV1::new(
         trace
@@ -1086,6 +1086,15 @@ fn flat_vector_post(
     post.trace.implementation_roots = [post.trace_root(f.class, binding.as_bytes()); 3];
     (post, FlatPublicMaterial { c, hash })
 }
+fn flat_vector_post(
+    net: &Net,
+    f: &Fixture,
+    binding: Hash64,
+    prompt: Vec<u32>,
+    lie: bool,
+) -> (kaspa_consensus_core::palw_flat_model_vector_v3::FlatModelVectorPostV3, FlatPublicMaterial) {
+    flat_vector_post_at(net, f, binding, prompt, lie.then_some(0))
+}
 async fn send_flat_vector(
     net: &mut Net,
     f: &Fixture,
@@ -1103,6 +1112,14 @@ fn flat_first_relation_fault(
     public: &FlatPublicMaterial,
     model: &MapParams,
 ) -> Vec<u8> {
+    flat_first_relation_fault_from_reads(view, public.c.node_opening(0, 0, 0).unwrap(), public.hash.as_ref(), model)
+}
+fn flat_first_relation_fault_from_reads(
+    view: &kaspa_consensus_core::palw_flat_model_vector_v3::FlatModelVectorViewV3,
+    output: misaka_palw_kernel::seg::NodeOpeningV1,
+    hash: Option<&misaka_palw_kernel::merkle5::FlatLeafHashV5>,
+    model: &MapParams,
+) -> Vec<u8> {
     use misaka_palw_kernel::flat_court5::*;
     use misaka_palw_kernel::merkle3::{LeafOpeningV3, TreesV3};
     // Only the external model copy and authenticated job input supply operands.
@@ -1113,8 +1130,8 @@ fn flat_first_relation_fault(
         Tensor::scalar(DType::Idx, view.trace.job.inline_prompt.as_ref().unwrap()[0] as i128).unwrap()
     };
     let own = vec![table.clone(), token];
-    let deps = if public.hash.is_some() {
-        flat_leaf_dependencies_v5(&view.context(), 0, 0, 0, 0, &own).unwrap()
+    let deps = if hash.is_some() {
+        flat_leaf_dependencies_v5(&view.context(), 0, 0, 0, hash.unwrap().index, &own).unwrap()
     } else {
         flat_whole_dependencies_v5(&view.context(), 0, 0, 0, &own).unwrap()
     };
@@ -1130,8 +1147,7 @@ fn flat_first_relation_fault(
         },
         FlatOperandV5::default(),
     ];
-    let output = public.c.node_opening(0, 0, 0).unwrap();
-    let fault = if let Some(leaf) = &public.hash {
+    let fault = if let Some(leaf) = hash {
         FlatFaultV5::Leaf(FlatLeafFaultV5 { version: 5, output, leaf: leaf.clone(), inputs, token: None })
     } else {
         FlatFaultV5::Whole(FlatWholeFaultV5 { output, inputs, token: None })
@@ -1281,4 +1297,184 @@ async fn flat_model_vector_node_and_v2_catalogs_share_the_same_capital_and_eight
     assert_eq!(net.api().unwrap().flat_model_vectors_of_v3(&bond).len(), 4);
     let replay = net.replay().await;
     net.assert_same(&replay, "mixed typed vector catalog and shared original capital");
+}
+
+async fn ask_flat_vector(
+    net: &mut Net,
+    vector: Hash64,
+    card: usize,
+    slot: u8,
+    unit: &kaspa_consensus_core::palw_flat_model_vector_da_v3::FlatVectorUnitV3,
+) -> Option<Hash64> {
+    let before = net.api().unwrap().flat_vector_slot_v3(&net.bond(card), slot);
+    send(
+        net,
+        card,
+        &K::DemandFlatModelVectorV3 {
+            vector: vector.as_bytes(),
+            slot,
+            position: unit.position,
+            occurrence: unit.occurrence,
+            node: unit.node,
+            leaf: unit.leaf,
+        },
+    )
+    .await;
+    net.api().unwrap().flat_vector_slot_v3(&net.bond(card), slot).filter(|id| Some(*id) != before)
+}
+fn flat_server_answer(
+    server: &FlatPublicMaterial,
+    tree: Option<&misaka_palw_kernel::merkle5::FlatTreeV5>,
+    unit: &kaspa_consensus_core::palw_flat_model_vector_da_v3::FlatVectorUnitV3,
+) -> Vec<u8> {
+    use kaspa_consensus_core::palw_flat_model_vector_da_v3::FlatVectorAnswerV3;
+    borsh::to_vec(&FlatVectorAnswerV3 {
+        version: 3,
+        opening: server.c.node_opening(unit.position, unit.occurrence, unit.node).unwrap(),
+        leaf: unit.leaf.map(|i| tree.unwrap().opening(i).unwrap()),
+    })
+    .unwrap()
+}
+#[tokio::test]
+async fn flat_hash_da_node_fresh_public_reads_localize_late_leaf_and_convict_without_output_values() {
+    use kaspa_consensus_core::palw_flat_model_vector_da_v3::*;
+    use misaka_palw_kernel::merkle5::*;
+    let f = vector_fixture(false);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let (post, server) = flat_vector_post_at(&net, &f, binding, vec![0, 1], Some(1900));
+    let vector = send_flat_vector(&mut net, &f, binding, 4, &post).await;
+    // Producer retains its private tree. It supplies only authenticated wire replies.
+    let mut producer = misaka_palw_kernel::trace::trace_v1(&f.p, &f.params, &post.trace.prompt).unwrap();
+    producer.values[0][0][0].data[1900] += 1;
+    let producer_tree = FlatTreeV5::of(&producer.values[0][0][0]).unwrap();
+    drop(producer);
+    let unit = FlatVectorUnitV3 { position: 0, occurrence: 0, node: 0, leaf: None };
+    let demand = ask_flat_vector(&mut net, vector, 7, 0, &unit).await.unwrap();
+    let reply = flat_server_answer(&server, None, &unit);
+    send(&mut net, 4, &K::AnswerFlatModelVectorV3 { demand: demand.as_bytes(), answer: reply }).await;
+    // Fresh verifier reads chain facts only and executes its independently acquired model.
+    let view = net.api().unwrap().flat_model_vector_view_v3(&vector).unwrap();
+    let job = view.trace.job.inline_prompt.as_ref().unwrap();
+    let own_trace = misaka_palw_kernel::trace::trace_v1(&view.trace.program, &f.params, job).unwrap();
+    let expected = FlatTreeV5::of(&own_trace.values[0][0][0]).unwrap();
+    let answer = decode_flat_vector_answer_v3(&net.api().unwrap().flat_vector_public_answer_v3(&vector, &unit).unwrap()).unwrap();
+    assert!(answer.authenticates(&net.api().unwrap().flat_vector_demand_v3(&demand).unwrap()));
+    let node = answer.opening;
+    assert_ne!(node.commitment, expected.commitment());
+    let max = flat_material_bounds_v5(own_trace.values[0][0][0].dtype, &[2048]).unwrap().localization_replies;
+    let mut probe = 0;
+    let mut terminal = None;
+    let mut queried = vec![unit.clone()];
+    for _ in 0..max {
+        let unit = FlatVectorUnitV3 { leaf: Some(probe), ..unit.clone() };
+        let demand = ask_flat_vector(&mut net, vector, 7, 0, &unit).await.unwrap();
+        let reply = flat_server_answer(&server, Some(&producer_tree), &unit);
+        send(&mut net, 4, &K::AnswerFlatModelVectorV3 { demand: demand.as_bytes(), answer: reply }).await;
+        let api = net.api().unwrap();
+        let answer = decode_flat_vector_answer_v3(&api.flat_vector_public_answer_v3(&vector, &unit).unwrap()).unwrap();
+        assert!(answer.authenticates(&api.flat_vector_demand_v3(&demand).unwrap()));
+        queried.push(unit);
+        let leaf = answer.leaf.unwrap();
+        match leaf.descend(&node.commitment, &expected).unwrap() {
+            FlatDescentV5::Probe(next) => probe = next,
+            FlatDescentV5::DivergentLeaf(index) => {
+                assert_eq!(index, 1900 / 64);
+                terminal = Some(leaf);
+                break;
+            }
+            FlatDescentV5::Matched => panic!("false relation matched"),
+        }
+    }
+    let leaf = terminal.expect("bounded localization reached the late divergent leaf");
+    assert!(queried.len() > 2, "initial leaf matched; subsequent probes were needed");
+    let fault = flat_first_relation_fault_from_reads(&view, node, Some(&leaf), &f.params);
+    send(&mut net, 7, &K::RefuteFlatModelVectorV3 { vector: vector.as_bytes(), proof: fault }).await;
+    assert!(net.api().unwrap().flat_model_vector_header_v3(&vector).unwrap().refuted);
+    assert_eq!(net.owed(7), mega(49));
+    assert_eq!(net.chain.tip_state().1.flat_vector_demand_reserved_v3(&net.bond(7)), 0);
+    net.send(Vec::new()).await;
+    let replay = net.replay().await;
+    net.assert_same(&replay, "public hash-only localization and independent payout replay");
+    for unit in queried {
+        let other = replay.ctx.consensus.palw_kernel_route_v1().unwrap();
+        assert_eq!(
+            other.flat_vector_public_answer_v3(&vector, &unit),
+            net.api().unwrap().flat_vector_public_answer_v3(&vector, &unit)
+        );
+    }
+    assert_eq!(minted_and_owed(&net, &replay, 7), (mega(49), 0));
+}
+#[tokio::test]
+async fn flat_hash_da_node_shared_slots_response_priority_withholding_and_horizon_hold() {
+    use kaspa_consensus_core::palw_flat_model_vector_da_v3::*;
+    use kaspa_consensus_core::palw_state_v2::{palw_bond_backs_live_duty_v1, palw_bond_backs_live_duty_v2};
+    let f = vector_fixture(true);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let (p, server) = flat_vector_post(&net, &f, binding, vec![0, 1], false);
+    let vector = send_flat_vector(&mut net, &f, binding, 4, &p).await;
+    let unit = FlatVectorUnitV3 { position: 0, occurrence: 0, node: 0, leaf: None };
+    let binder = net.collateral(1);
+    assert!(ask_flat_vector(&mut net, vector, 4, 0, &unit).await.is_none());
+    let fee = net.slashed(7);
+    assert!(
+        ask_flat_vector(&mut net, vector, 7, 0, &FlatVectorUnitV3 { leaf: Some(0), ..unit.clone() }).await.is_none(),
+        "small node never exposes a hash leaf or clear value"
+    );
+    assert!(net.slashed(7) > fee);
+    let demand = ask_flat_vector(&mut net, vector, 7, 0, &unit).await.unwrap();
+    let (old, _) = vector_post(&net, &f, binding, vec![0, 1], false);
+    let old_vector = send_vector(&mut net, &f, binding, 4, &old).await;
+    assert!(ask_vector(&mut net, old_vector, 7, 0, &node_unit(0)).await.is_none(), "new slot blocks old route");
+    let old_demand = ask_vector(&mut net, old_vector, 6, 0, &node_unit(0)).await.unwrap();
+    assert!(ask_flat_vector(&mut net, vector, 6, 0, &unit).await.is_none(), "old slot blocks new route");
+    let other = ask_flat_vector(&mut net, vector, 5, 0, &unit).await.unwrap();
+    let valid = flat_server_answer(&server, None, &unit);
+    let mut bad = valid.clone();
+    bad[10] ^= 1;
+    let fee = net.slashed(2);
+    send(&mut net, 2, &K::AnswerFlatModelVectorV3 { demand: demand.as_bytes(), answer: bad }).await;
+    assert!(net.slashed(2) > fee);
+    let deposit = net.api().unwrap().flat_vector_demand_v3(&demand).unwrap().bond;
+    let state = net.chain.tip_state().1;
+    assert_eq!(state.flat_vector_demand_reserved_v3(&net.bond(7)), deposit as u128);
+    assert!(palw_bond_backs_live_duty_v1(&state, &net.bond(7), net.daa(), None));
+    assert!(palw_bond_backs_live_duty_v2(&state, &net.bond(7), net.daa(), None, 10));
+    let hostile = [2, 3, 6, 7];
+    let fees: Vec<_> = hostile.iter().map(|c| net.slashed(*c)).collect();
+    let mut objects: Vec<_> = hostile
+        .iter()
+        .map(|c| (*c, net.route(*c, &K::RefuteFlatModelVectorV3 { vector: vector.as_bytes(), proof: vec![5, 0, 255] })))
+        .collect();
+    objects.push((4, net.route(4, &K::AnswerFlatModelVectorV3 { demand: demand.as_bytes(), answer: valid.clone() })));
+    net.send(objects).await;
+    assert_eq!(
+        hostile.iter().zip(fees).filter(|(c, b)| net.slashed(**c) > *b).count(),
+        net.ledger().policy.max_adjudications_per_block as usize
+    );
+    assert!(net.api().unwrap().flat_vector_demand_v3(&demand).unwrap().settled, "bounded answer survives a fully spent court count");
+    send(&mut net, 3, &K::SettleFlatModelVectorDemandV3 { demand: other.as_bytes() }).await;
+    assert_eq!(net.api().unwrap().flat_vector_open_demands_v3(&vector), 0);
+    // Slot reuse deletes the old fixed request but keeps published answer bytes.
+    let missing = FlatVectorUnitV3 { node: 1, ..unit.clone() };
+    let pending = ask_flat_vector(&mut net, vector, 7, 0, &missing).await.unwrap();
+    assert!(net.api().unwrap().flat_vector_demand_v3(&demand).is_none());
+    assert_eq!(net.api().unwrap().flat_vector_public_answer_v3(&vector, &unit), Some(valid));
+    let until = net.api().unwrap().flat_model_vector_header_v3(&vector).unwrap().liability_until;
+    net.beat_to(until + 1).await;
+    assert_eq!(net.chain.tip_state().1.flat_model_vector_reserved_at_v3(&net.bond(4), net.daa()), mega(100) as u128);
+    let before = net.collateral(4);
+    send(&mut net, 3, &K::SettleFlatModelVectorDemandV3 { demand: pending.as_bytes() }).await;
+    assert!(net.api().unwrap().flat_vector_unavailable_v3(&vector));
+    assert!(!net.api().unwrap().flat_model_vector_header_v3(&vector).unwrap().refuted);
+    assert_eq!(before - net.collateral(4), mega(100));
+    assert_eq!(net.owed(7), mega(49));
+    assert_eq!(net.owed(3), 0);
+    assert_eq!(net.chain.tip_state().1.flat_model_vector_reserved_at_v3(&net.bond(4), net.daa()), 0);
+    assert_eq!(net.chain.tip_state().1.flat_vector_demand_reserved_v3(&net.bond(7)), 0);
+    send(&mut net, 3, &K::SettleFlatModelVectorDemandV3 { demand: old_demand.as_bytes() }).await;
+    assert_eq!(net.collateral(1), binder);
+    let replay = net.replay().await;
+    net.assert_same(&replay, "shared requester slots, held liability and objective flat DA default");
 }
