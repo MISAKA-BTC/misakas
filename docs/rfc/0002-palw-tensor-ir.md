@@ -2670,15 +2670,81 @@ decoding. Every judged post, including a truthful duplicate, pays the actor's po
 An invalid judged refutation also pays the actor's scaled fee; an over-budget filing is
 not judged or charged. The fixed header prices the worst admitted court plus program/wire
 work; admission requires this whole envelope to fit the work reserved for prosecution.
-Nested counts, v3 leaf sizes and paths are bounded before allocation. WholeValue's optional
-whole tensors are excluded from this filing grammar pending their own resource contract.
+Nested counts, v3 leaf sizes and paths are bounded before allocation. §14.19 adds bounded
+WholeValue optional tensors within the candidate's already admitted filing/work envelope.
 A valid fault slashes the poster's reservation once and pays only the existing 49% share
 of the collected slash; self-operator bounties are refused.
 
 This path offers falsifiable integer trace assertions for domains too large to enumerate.
 It is **not** complete-domain conformance, an OPV eligibility source, or a sampled reward
-gate. Public trace demand/default, vector discovery/transport tooling, immutable policy
-selection and its whole-statement soundness, legacy flat-digest courts and independent
+gate. §14.19 supplies public point-unit trace demand/default. Vector discovery/transport
+tooling, immutable policy selection and its whole-statement soundness, legacy flat-digest courts and independent
 runtime certification remain required before integrating it into reward eligibility.
 Opaque/withheld source-PC relation cases and every other §II.14 requirement remain open.
 Shipping activation is unchanged.
+
+
+### 14.19 Candidate trace unit availability and verifier-owned whole-value courts
+
+Inner **28 `DemandModelVectorV2`**, **29 `AnswerModelVectorV2`**, and **30
+`SettleModelVectorDemandV2`** use the same signed, dormant PanelFree consumer. A demand
+names the exact statement and `(position, occurrence, node, axis, line, tile)`: row/column
+tiles (axis 0/1), or node commitment and Merkle paths only (axis 2, zero line/tile). No
+parameter, model file or inventory range can be requested. The existing v4/v5 disclosure
+mask is authoritative: a model-derived value marked withheld owes only its node opening.
+The Level-1 model-byte mask also forbids requesting a copied or model-only tensor even
+when its WholeValue envelope is too large for the existing disclosure mask.
+Its tensor is supplied by the verifier's own model, under the existing whole-value court.
+Conditional model acquisition remains outside consensus.
+
+A requester owns four reusable slots, backed by its free collateral together with all
+other commitments and both withdrawal duty gates. Other bonds cannot occupy its slots.
+A replaced settled slot deletes its old demand row; answers/closing calls bind the new
+request id, including vector, unit, requester, slot and filed DAA. Demands decode and
+validate the stored program/trace only after reserving shared admission work and charging
+the actor's fee. The fixed request retains its admitted node index/count, positions and
+containing segment root; response classification does not decode the program or trace.
+
+The policy's court deadline plus proof grace must fit the vector's liability horizon. An
+answer is timely through its deadline; a default is closable strictly after it. Pending
+requests keep the poster's reservation held even after that horizon, until explicitly
+closed. Aux **53** holds requests, **54** their bond/slot indices, **55** authenticated
+public-unit receipts, and **56** the outstanding count per vector. No periodic scan over
+all vectors/requests is added. Reservation reads visit at most eight vectors or four
+request slots per bond. Any active bond may close a request; a default bounty goes to the
+requester's recorded payout, not the closer. A poster's own operator cannot demand it.
+
+Answers have an 80 KiB ceiling, two bounded paths and at most one existing 4096-element
+v3 tile. Counts, type/rank and paths are checked before allocation. Like the existing
+segmented response lane, this bounded Merkle/byte classification uses no shared court
+adjudication run; exhausting proof runs cannot by itself prevent a valid answer. Invalid
+answers pay their actor's scaled fee. A timely authenticated answer is public thereafter;
+its collected requester deposit compensates the poster once per admitted request. The
+deposit is at least the policy demand bond and the fee floor of the maximum bounded
+answer. Other pending requests for that same unit close from its public receipt, subject
+to their own original deadline. No new demand is admitted for an already public unit.
+This local fee floor is not a measurement of complete network/producer economics.
+
+An unserved request's explicit close slashes the poster's remaining vector reservation
+once, sets **unavailable**, refunds pending requester reservations, and pays only the
+existing 49% collected-slash bounty. Availability failure is distinct from a proven
+integer fault (**refuted**); either outcome prevents a second slash. A timely service
+and later integer conviction remain separate operations. Closed/late requests are
+refused before classification and no mutable deadline extension is allowed.
+
+The existing WholeValue proof variant is admitted with bounded node/leaf paths, input
+counts and optional whole tensors. Rank, dtype, checked dimension product and exact byte
+length are verified before allocating tensor bytes. Both wire and stored trace bytes
+join the program/court work envelope; the candidate's derived prosecution bounds and
+reserved proof-work/carrier limits still apply. This allows a verifier to reconstruct
+a falsifiable withheld-node relation from public openings and its own model, without
+requiring that model's weights from the poster. It does not certify independent runtime
+implementations or complete-domain conformance.
+
+These routes remain non-reward conformance signals and grant no execution eligibility.
+Legacy flat-vector courts, immutable whole-statement policy/soundness, actual checkpoint
+fidelity and task/context/feature coverage, discovery/transport tooling and the complete
+network resource/liveness/economic contract remain required. Opaque source-PC fidelity
+relations and large model-only trace relations outside the existing WholeValue price
+cap remain open; the latter still require a bounded court, not forced weight disclosure.
+All other §II.14 requirements remain open. Shipping fences stay dormant.

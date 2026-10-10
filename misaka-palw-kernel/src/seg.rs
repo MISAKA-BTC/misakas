@@ -258,6 +258,22 @@ pub struct NodeOpeningV1 {
 }
 
 impl NodeOpeningV1 {
+    /// Same authentication with only the committed segment containing this position.
+    /// A bounded DA request can retain that root without copying all segment roots.
+    pub fn authenticates_segment_v1(&self, segment_root: &Digest, positions: u32, node_index: u64, node_count: u64) -> bool {
+        let index = self.position / SEG_LEN_V4;
+        let Some((first, end)) = segment_bounds_v1(positions, index) else { return false };
+        self.position_root_ok(node_index, node_count)
+            && tree_root_from_path(
+                segment_leaf_v1(self.position, &self.position_root),
+                (self.position - first) as u64,
+                (end - first) as u64,
+                &self.position_siblings,
+                seg_node,
+            )
+            .is_some_and(|tree| segment_root_of_tree(index, first, end, &tree) == *segment_root)
+    }
+
     /// Does this opening put `commitment` at `(position, occurrence, node)` of the claim? `node_index` is the flat index of
     /// `(occurrence, node)` among the program's `node_count` committed values a position.
     pub fn authenticates(&self, segment_roots: &[Digest], positions: u32, node_index: u64, node_count: u64) -> bool {

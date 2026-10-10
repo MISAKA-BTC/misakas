@@ -1020,7 +1020,10 @@ impl KernelLedgerV1 {
         self.authorize(obj, auth)?;
         let mut out = Vec::new();
         match obj {
-            KernelRouteObjectV1::PostModelVectorV2 { .. }
+            KernelRouteObjectV1::DemandModelVectorV2 { .. }
+            | KernelRouteObjectV1::AnswerModelVectorV2 { .. }
+            | KernelRouteObjectV1::SettleModelVectorDemandV2 { .. }
+            | KernelRouteObjectV1::PostModelVectorV2 { .. }
             | KernelRouteObjectV1::RefuteModelVectorV2 { .. }
             | KernelRouteObjectV1::CompleteModelConformanceV2 { .. }
             | KernelRouteObjectV1::BindModelArtifactV2 { .. }

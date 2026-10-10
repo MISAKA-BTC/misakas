@@ -1649,7 +1649,10 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         // these can act where that fence is not armed either.
         K::CommitSegmentedClaim { .. } | K::PostTiledJob { .. } | K::PostPromptTile { .. } => None,
         K::CommitClaimSalted { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
-        K::PostModelVectorV2 { .. }
+        K::DemandModelVectorV2 { .. }
+        | K::AnswerModelVectorV2 { .. }
+        | K::SettleModelVectorDemandV2 { .. }
+        | K::PostModelVectorV2 { .. }
         | K::RefuteModelVectorV2 { .. }
         | K::CompleteModelConformanceV2 { .. }
         | K::BindModelArtifactV2 { .. }
@@ -1691,6 +1694,9 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (25, "CompleteModelConformanceV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (26, "PostModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (27, "RefuteModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (28, "DemandModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (29, "AnswerModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (30, "SettleModelVectorDemandV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -1916,10 +1922,10 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     ),
     a2_row(PalwA2SlotV1::KernelInner { lo: 19, hi: 19 }, "palw_typed_roots_v1", "R4X Spec (RFC-0004 Part II)", true),
     // G14R's salted claim seal v2, beside the OPV registrations (the Lead, 2026-10-09): below `palw_panel_free_v1` the kernel refuses
-    // it and the gate drops it through this table. Inner kind 21 is conformance preparation; 22–27 are descriptor-scoped model onboarding.
+    // it and the gate drops it through this table. Inner kind 21 is conformance preparation; 22–30 are descriptor-scoped model onboarding.
     a2_row(PalwA2SlotV1::KernelInner { lo: 20, hi: 20 }, "palw_panel_free_v1", "G14R CommitClaimSalted (salted claim seal v2)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 21, hi: 21 }, "palw_panel_free_v1", "RFC-0002 conformance-only class preparation", true),
-    a2_row(PalwA2SlotV1::KernelInner { lo: 22, hi: 27 }, "palw_panel_free_v1", "RFC-0002 model artifact role binding", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 22, hi: 30 }, "palw_panel_free_v1", "RFC-0002 model artifact role binding", true),
     // K2S: a segmented fault rides a filing (inner 7) under tag 110's own fence, as the filing does, so no guarded arm is needed;
     // `ClaimBodyV1::Segmented` is the kernel ledger's state, never carried.
     a2_row(

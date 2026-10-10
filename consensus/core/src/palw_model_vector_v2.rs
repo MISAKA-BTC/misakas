@@ -46,6 +46,7 @@ pub struct ModelVectorHeaderV2 {
     pub class: Hash64,
     pub binding: Hash64,
     pub program_bytes_len: u32,
+    pub post_bytes_len: u32,
     pub max_filing_bytes: u64,
     pub max_court_work: u64,
     pub poster: PalwBondKeyV2,
@@ -53,13 +54,15 @@ pub struct ModelVectorHeaderV2 {
     pub liability_until: u64,
     pub reserved: u64,
     pub refuted: bool,
+    /// Availability is separate from a proven integer fault.
+    pub unavailable: bool,
 }
 impl ModelVectorHeaderV2 {
     pub fn id(&self) -> Hash64 {
         vector_id(self.trace_root)
     }
     pub fn reserved_at(&self, daa: u64) -> u64 {
-        if self.refuted || daa >= self.liability_until { 0 } else { self.reserved }
+        if self.refuted || self.unavailable || daa >= self.liability_until { 0 } else { self.reserved }
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -86,13 +89,22 @@ impl PalwKernelRouteStateV1 {
             .iter()
             .filter_map(|id| self.model_vector_header_v2(id))
             .filter(|h| h.poster == *bond)
-            .map(|h| h.reserved_at(daa) as u128)
+            .map(|h| {
+                if !h.refuted && !h.unavailable && self.model_vector_open_demands_v2(&h.id()) > 0 {
+                    h.reserved as u128
+                } else {
+                    h.reserved_at(daa) as u128
+                }
+            })
             .sum()
     }
     /// Rebuild the exact public court context. Neither a kernel job, execution permission
     /// nor a Final claim is needed; the candidate's admitted program/plan is authoritative.
     pub fn model_vector_view_v2(&self, id: &Hash64) -> Result<misaka_palw_kernel::seg_ledger::SegClaimViewV1, String> {
         let row = self.model_vector_v2(id).ok_or("no model vector")?;
+        if row.post.len() != row.header.post_bytes_len as usize {
+            return Err("vector body length differs from its priced header".into());
+        }
         let post = decode_model_vector_post_v2(&row.post).map_err(|e| e.to_string())?;
         if post.trace_root(row.header.class.as_bytes(), row.header.binding.as_bytes()) != row.header.trace_root {
             return Err("model vector body differs from its statement".into());
@@ -220,11 +232,12 @@ pub fn decode_model_vector_post_v2(data: &[u8]) -> std::io::Result<ModelVectorPo
     Ok(ModelVectorPostV2 { version, prompt, max_new_tokens, generated, evidence, segment_roots, implementation_roots })
 }
 
-/// Only bounded element/type/decode courts are admitted here. WholeValue's optional
-/// tensors are deliberately excluded; they need their separate admission/resource contract.
+/// Bounded element/type/decode and whole-value courts. Optional whole tensors have
+/// rank/product/byte bounds checked before allocation and remain inside the admitted
+/// class's worst filing/work envelope.
 pub fn decode_model_vector_fault_v2(data: &[u8]) -> std::io::Result<misaka_palw_kernel::element::SegFaultV1> {
     use misaka_palw_kernel::{element::*, seg::*};
-    fn node(r: &mut Cursor<&[u8]>) -> std::io::Result<NodeOpeningV1> {
+    fn super_node(r: &mut Cursor<&[u8]>) -> std::io::Result<NodeOpeningV1> {
         let position = u32::deserialize_reader(r)?;
         let occurrence = u16::deserialize_reader(r)?;
         let node = u16::deserialize_reader(r)?;
@@ -239,7 +252,7 @@ pub fn decode_model_vector_fault_v2(data: &[u8]) -> std::io::Result<misaka_palw_
     fn operand(r: &mut Cursor<&[u8]>) -> std::io::Result<OperandOpeningV1> {
         let node = match u8::deserialize_reader(r)? {
             0 => None,
-            1 => Some(node(r)?),
+            1 => Some(super_node(r)?),
             _ => return Err(invalid()),
         };
         let n = count(r, MODEL_VECTOR_MAX_PROOF_BYTES_V2 / 70, 70)?;
@@ -262,6 +275,29 @@ pub fn decode_model_vector_fault_v2(data: &[u8]) -> std::io::Result<misaka_palw_
             _ => Err(invalid()),
         }
     }
+    fn whole(r: &mut Cursor<&[u8]>) -> std::io::Result<WholeOperandV1> {
+        let base = operand(r)?;
+        let tensor = match u8::deserialize_reader(r)? {
+            0 => None,
+            1 => {
+                let dtype = u8::deserialize_reader(r)?;
+                let d = misaka_palw_tir::DType::ALL.into_iter().find(|d| d.tag() == dtype).ok_or_else(invalid)?;
+                let n = count(r, misaka_palw_tir::types::MAX_RANK, 8)?;
+                let shape = (0..n).map(|_| u64::deserialize_reader(r)).collect::<std::io::Result<Vec<_>>>()?;
+                let bytes_len = shape.iter().try_fold(d.width() as u64, |n, dim| n.checked_mul(*dim)).ok_or_else(invalid)?;
+                let n = count(r, MODEL_VECTOR_MAX_PROOF_BYTES_V2, 1)?;
+                if bytes_len != n as u64 {
+                    return Err(invalid());
+                }
+                let from = r.position() as usize;
+                let bytes = r.get_ref()[from..from + n].to_vec();
+                r.set_position((from + n) as u64);
+                Some(WholeTensorV1 { dtype, shape, bytes })
+            }
+            _ => return Err(invalid()),
+        };
+        Ok(WholeOperandV1 { node: base.node, leaves: base.leaves, whole: tensor })
+    }
     if data.len() > MODEL_VECTOR_MAX_PROOF_BYTES_V2 {
         return Err(invalid());
     }
@@ -278,7 +314,7 @@ pub fn decode_model_vector_fault_v2(data: &[u8]) -> std::io::Result<misaka_palw_
             SegFaultV1::Element(ElementFaultV1 { position, occurrence, node, element, output, inputs, token: token(&mut r)? })
         }
         1 => {
-            let opening = node(&mut r)?;
+            let opening = super_node(&mut r)?;
             let dtype = u8::deserialize_reader(&mut r)?;
             let n = count(&mut r, MODEL_VECTOR_MAX_PROOF_BYTES_V2 / 8, 8)?;
             let shape = (0..n).map(|_| u64::deserialize_reader(&mut r)).collect::<std::io::Result<_>>()?;
@@ -295,6 +331,15 @@ pub fn decode_model_vector_fault_v2(data: &[u8]) -> std::io::Result<misaka_palw_
             rival: u32::deserialize_reader(&mut r)?,
             logits: operand(&mut r)?,
         }),
+        3 => {
+            let position = u32::deserialize_reader(&mut r)?;
+            let occurrence = u16::deserialize_reader(&mut r)?;
+            let node = u16::deserialize_reader(&mut r)?;
+            let output = super_node(&mut r)?;
+            let n = count(&mut r, MODEL_VECTOR_MAX_PROOF_BYTES_V2 / 6, 6)?;
+            let inputs = (0..n).map(|_| whole(&mut r)).collect::<std::io::Result<_>>()?;
+            SegFaultV1::WholeValue(WholeValueFaultV1 { position, occurrence, node, output, inputs, token: token(&mut r)? })
+        }
         _ => return Err(invalid()),
     };
     if r.position() as usize != data.len() {
@@ -376,7 +421,16 @@ mod tests {
             inputs: vec![OperandOpeningV1::default(); 32],
             token: Some(PromptTileOpeningV1::of(&[0, 1], 0).unwrap()),
         };
+        let whole = SegFaultV1::WholeValue(WholeValueFaultV1 {
+            position: 0,
+            occurrence: 0,
+            node: 0,
+            output: opening(),
+            inputs: vec![WholeOperandV1 { node: None, leaves: Vec::new(), whole: Some(WholeTensorV1::of(&t)) }],
+            token: None,
+        });
         let faults = [
+            whole,
             SegFaultV1::Element(f),
             SegFaultV1::Malformed(MalformedFaultV1 {
                 opening: opening(),
@@ -401,7 +455,7 @@ mod tests {
         bad.extend([1; 64]);
         bad.extend(65u32.to_le_bytes());
         assert_eq!(decode_model_vector_fault_v2(&bad).unwrap_err().kind(), ErrorKind::InvalidData);
-        assert_eq!(decode_model_vector_fault_v2(&[3]).unwrap_err().kind(), ErrorKind::InvalidData);
+        assert_eq!(decode_model_vector_fault_v2(&[4]).unwrap_err().kind(), ErrorKind::InvalidData);
     }
     #[test]
     fn model_vector_statement_binds_exact_scope_input_delivery_and_clocked_capital() {
@@ -425,6 +479,7 @@ mod tests {
             class: Hash64::from_bytes([3; 64]),
             binding: Hash64::from_bytes([4; 64]),
             program_bytes_len: 123,
+            post_bytes_len: 456,
             max_filing_bytes: 456,
             max_court_work: 789,
             poster: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(9), 0)),
@@ -432,6 +487,7 @@ mod tests {
             liability_until: 201,
             reserved: 100,
             refuted: false,
+            unavailable: false,
         };
         assert_eq!(h.id(), id);
         assert_eq!(h.reserved_at(200), 100);
@@ -442,7 +498,54 @@ mod tests {
     }
     #[test]
     fn model_vector_tables_are_disjoint_from_provider_and_scoped_model_allocations() {
-        let tables = [43, 44, 45, 46, 47, 48, 49, 50, MODEL_VECTOR_TABLE_V2, MODEL_VECTOR_BOND_INDEX_TABLE_V2];
-        assert_eq!(tables.into_iter().collect::<std::collections::BTreeSet<_>>().len(), 10);
+        let tables = [43, 44, 45, 46, 47, 48, 49, 50, MODEL_VECTOR_TABLE_V2, MODEL_VECTOR_BOND_INDEX_TABLE_V2, 53, 54, 55, 56];
+        assert_eq!(tables.into_iter().collect::<std::collections::BTreeSet<_>>().len(), 14);
+    }
+}
+
+#[cfg(test)]
+mod whole_wire_tests {
+    use super::*;
+    #[test]
+    fn whole_vector_proof_rejects_rank_product_and_byte_counts_before_tensor_allocation() {
+        use misaka_palw_kernel::seg::NodeOpeningV1;
+        let o = NodeOpeningV1 {
+            position: 0,
+            occurrence: 0,
+            node: 0,
+            commitment: [0; 64],
+            node_siblings: Vec::new(),
+            position_root: [0; 64],
+            position_siblings: Vec::new(),
+        };
+        let prefix = || {
+            let mut b = vec![3];
+            b.extend([0; 8]);
+            b.extend(borsh::to_vec(&o).unwrap());
+            b.extend(1u32.to_le_bytes()); // one whole operand
+            b.push(0); // no node
+            b.extend(0u32.to_le_bytes()); // no leaves
+            b.extend([1, misaka_palw_tir::DType::I8.tag()]);
+            b
+        };
+        let mut b = prefix();
+        b.extend(5u32.to_le_bytes());
+        assert_eq!(decode_model_vector_fault_v2(&b).unwrap_err().kind(), ErrorKind::InvalidData);
+        let mut b = prefix();
+        b.extend(2u32.to_le_bytes());
+        b.extend(u64::MAX.to_le_bytes());
+        b.extend(2u64.to_le_bytes());
+        assert_eq!(decode_model_vector_fault_v2(&b).unwrap_err().kind(), ErrorKind::InvalidData);
+        let mut b = prefix();
+        b.extend(1u32.to_le_bytes());
+        b.extend(4u64.to_le_bytes());
+        b.extend(u32::MAX.to_le_bytes());
+        assert_eq!(decode_model_vector_fault_v2(&b).unwrap_err().kind(), ErrorKind::InvalidData);
+        let mut b = prefix();
+        b.extend(1u32.to_le_bytes());
+        b.extend(4u64.to_le_bytes());
+        b.extend(1u32.to_le_bytes());
+        b.extend([0, 0]);
+        assert_eq!(decode_model_vector_fault_v2(&b).unwrap_err().kind(), ErrorKind::InvalidData);
     }
 }

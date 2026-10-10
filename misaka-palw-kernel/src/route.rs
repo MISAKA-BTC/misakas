@@ -69,6 +69,9 @@ pub const TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2: u8 = 24;
 pub const TAG_COMPLETE_MODEL_CONFORMANCE_V2: u8 = 25;
 pub const TAG_POST_MODEL_VECTOR_V2: u8 = 26;
 pub const TAG_REFUTE_MODEL_VECTOR_V2: u8 = 27;
+pub const TAG_DEMAND_MODEL_VECTOR_V2: u8 = 28;
+pub const TAG_ANSWER_MODEL_VECTOR_V2: u8 = 29;
+pub const TAG_SETTLE_MODEL_VECTOR_DEMAND_V2: u8 = 30;
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 
@@ -174,6 +177,26 @@ impl SaltedCommitV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum KernelRouteObjectV1 {
+    /// Claim-specific trace tile (axis 0/1), or node commitment (axis 2).
+    /// No param or model-file unit is expressible. Slots belong to the signer.
+    DemandModelVectorV2 {
+        vector: Digest,
+        slot: u8,
+        position: u32,
+        occurrence: u16,
+        node: u16,
+        axis: u8,
+        line: u64,
+        tile: u64,
+    } = 28,
+    AnswerModelVectorV2 {
+        demand: Digest,
+        answer: Vec<u8>,
+    } = 29,
+    /// Permissionless explicit close; no network-wide deadline scan.
+    SettleModelVectorDemandV2 {
+        demand: Digest,
+    } = 30,
     /// Non-reward conformance trace of a scoped candidate, authenticated by the consumer.
     PostModelVectorV2 {
         class: Digest,
@@ -445,6 +468,9 @@ impl KernelRouteObjectV1 {
     /// The variant's declared discriminant.
     pub const fn tag(&self) -> u8 {
         match self {
+            Self::DemandModelVectorV2 { .. } => TAG_DEMAND_MODEL_VECTOR_V2,
+            Self::AnswerModelVectorV2 { .. } => TAG_ANSWER_MODEL_VECTOR_V2,
+            Self::SettleModelVectorDemandV2 { .. } => TAG_SETTLE_MODEL_VECTOR_DEMAND_V2,
             Self::PostModelVectorV2 { .. } => TAG_POST_MODEL_VECTOR_V2,
             Self::RefuteModelVectorV2 { .. } => TAG_REFUTE_MODEL_VECTOR_V2,
             Self::CompleteModelConformanceV2 { .. } => TAG_COMPLETE_MODEL_CONFORMANCE_V2,
@@ -545,6 +571,9 @@ impl KernelRouteObjectV1 {
 pub const fn name_of_tag(tag: u8) -> &'static str {
     match tag {
         TAG_COMPLETE_MODEL_CONFORMANCE_V2 => "CompleteModelConformanceV2",
+        TAG_DEMAND_MODEL_VECTOR_V2 => "DemandModelVectorV2",
+        TAG_ANSWER_MODEL_VECTOR_V2 => "AnswerModelVectorV2",
+        TAG_SETTLE_MODEL_VECTOR_DEMAND_V2 => "SettleModelVectorDemandV2",
         TAG_POST_MODEL_VECTOR_V2 => "PostModelVectorV2",
         TAG_REFUTE_MODEL_VECTOR_V2 => "RefuteModelVectorV2",
         TAG_BIND_MODEL_ARTIFACT_V2 => "BindModelArtifactV2",
@@ -582,6 +611,9 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_REFUTE_MODEL_ARTIFACT_V2 => 2 << 20,
         TAG_COMPLETE_MODEL_CONFORMANCE_V2 => 90_000 + 134,
         TAG_POST_MODEL_VECTOR_V2 | TAG_REFUTE_MODEL_VECTOR_V2 => MAX_FILE_PROOF_BYTES_V1,
+        TAG_DEMAND_MODEL_VECTOR_V2 => 92,
+        TAG_ANSWER_MODEL_VECTOR_V2 => (80 << 10) + 70,
+        TAG_SETTLE_MODEL_VECTOR_DEMAND_V2 => 66,
         TAG_REGISTER_CONFORMANCE_CLASS_V1 => MAX_REGISTER_CLASS_BYTES_V1,
         TAG_REGISTER_CLASS_V1 => MAX_REGISTER_CLASS_BYTES_V1,
         TAG_REGISTER_PIPELINE_CLASS_V1 => MAX_REGISTER_PIPELINE_CLASS_BYTES_V1,
@@ -659,8 +691,8 @@ mod tests {
         let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_REGISTER_CONFORMANCE_CLASS_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!(max_encoded_bytes_of_tag(28).is_none(), "28 is not allocated");
-        for tag in 22..=27 {
+        assert!(max_encoded_bytes_of_tag(31).is_none(), "31 is not allocated");
+        for tag in 22..=30 {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         let complete = KernelRouteObjectV1::CompleteModelConformanceV2 { class: [1; 64], binding: [2; 64], proof: vec![0; 90_000] };
@@ -737,5 +769,35 @@ mod tests {
         lie.extend(u32::MAX.to_le_bytes());
         lie.extend([1, 2, 3]);
         assert_eq!(kind(&lie), RefusalKindV1::Malformed);
+    }
+}
+
+#[cfg(test)]
+mod model_vector_da_wire_tests {
+    use super::*;
+    #[test]
+    fn vector_da_units_have_fixed_wire_and_bounded_response_ceiling() {
+        let objects = [
+            KernelRouteObjectV1::DemandModelVectorV2 {
+                vector: [1; 64],
+                slot: 3,
+                position: 7,
+                occurrence: 2,
+                node: 5,
+                axis: 2,
+                line: 0,
+                tile: 0,
+            },
+            KernelRouteObjectV1::AnswerModelVectorV2 { demand: [2; 64], answer: vec![0; 80 << 10] },
+            KernelRouteObjectV1::SettleModelVectorDemandV2 { demand: [3; 64] },
+        ];
+        for o in objects {
+            let b = o.encode();
+            assert_eq!(b.len(), max_encoded_bytes_of_tag(o.tag()).unwrap());
+            assert_eq!(KernelRouteObjectV1::decode(&b).unwrap(), o);
+            let mut oversized = b;
+            oversized.push(0);
+            assert!(KernelRouteObjectV1::decode(&oversized).is_err());
+        }
     }
 }

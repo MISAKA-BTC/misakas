@@ -1494,3 +1494,69 @@ soundness/policy, legacy flat-digest courts and independent runtime certificatio
 Opaque/withheld source-PC relations, actual checkpoint/task/context and feature coverage,
 full resource/capital/liveness accounting and every other RFC02 §II.14 requirement remain
 mandatory. Shipping fences stay dormant and the full RFC02 implementation goal stays active.
+
+
+## Candidate point-unit DA and bounded whole-value prosecution — 2026-10-11
+
+The preceding turn made progress with candidate statement/refutation consumers, 69 passing
+checks and verified push at `e453ce83c`. The reference review was read again; the complete
+RFC02 objective and all §II.14 requirements remain active.
+
+Authenticated inner 28–30 now request, answer and explicitly close one trace unit. Fixed
+node coordinates and a single segment root define the response duty. Axis 0/1 serves an
+eligible bounded v3 tile; axis 2 serves only the node commitment/path. Both the existing
+withheld mask and Level-1 model-byte mask apply: copying a weight or a model-only value
+cannot become a permitted request just because its whole-value envelope exceeds the old
+price cap. Parameters and file/inventory ranges have no demand grammar. A verifier still
+acquires its model conditionally outside consensus. Large model-only relations beyond the
+existing WholeValue price cap remain a G14 gap requiring a bounded court, not disclosure.
+
+Aux 53–56 store requests, four reusable requester-owned slots, served-unit receipts and
+an outstanding count per vector. Admission reserves shared work and burns the requester's
+fee before program/trace decoding. It fixes the policy response deadline and proof grace
+inside the vector's liability horizon. The requester deposit joins ordinary committed
+capital and both withdrawal duty gates. Pending requests keep the poster's reservation
+held past its horizon until explicitly closed; no network-wide deadline scan is added.
+A correct answer decodes no program or trace and consumes no shared adjudication run,
+matching the existing bounded segmented response lane. Invalid answers cost their actor.
+Collected requester deposits compensate service; late/shared replies cannot retroactively
+erase another request's earlier default. Anyone may close, but an unavailable default's
+49% collected-slash bounty belongs to the original requester's recorded payout, not the
+closer. Availability failure and proven integer refutation are separate once-only outcomes.
+Slot replacement deletes the old settled row, preventing stale-generation reuse.
+
+The existing WholeValue fault is now decoded with bounded rank, type, dimension product,
+exact tensor byte length, leaf/path/input counts and total carrier. Stored trace bytes are
+also included in the request/refutation work price and admission's worst proof envelope.
+The program's derived court/filing bounds remain authoritative; no optional tensor bypasses
+them. This enables a priced withheld relation to be checked from public openings and the
+verifier's own model, including a committed whole-tensor input, without an earlier Final.
+
+The node trials retain synthetic T=2048 and the decoder's 4 MiB source. They publish node
+openings and model-independent tiles, read the response carriers back from the selected
+chain and authenticate them against the public receipt. With only those replies and its
+own model/re-execution, a fresh verifier constructs a sub-32 KiB WholeValue proof and the
+node convicts once; independent replay agrees. The first trial assumed the initial Gather
+was withheld. The conservative mask showed otherwise at this source size; the adversarial
+trace now corrupts a later priced relation with a withheld committed operand. Neither the
+source size nor the mask was relaxed. The test also refuses model-only tile requests when
+the whole-value price cap leaves that node outside the withheld mask.
+
+Other trials cover malformed answers, paid service, requester slot/capital/duty checks,
+valid responses alongside exhausted proof runs, lateness, post-horizon collateral holding,
+copy-safe explicit default, cancellation/refund, generation replacement, and later shared
+service that must not erase an earlier unanswered deadline. These are mechanics tests, not
+checkpoint/task/context support, independent runtime identity or a complete disclosure,
+network resource, economic or honest-liveness proof. The policy fee floor is not a measured
+producer serving-cost certificate. Discovery/transport tooling, carrier behavior at every
+maximum, legacy flat-digest courts, whole-statement soundness, opaque source-PC fidelity,
+real checkpoint/common-feature coverage and every other §II.14 requirement remain open.
+Shipping fences remain dormant; no sampled reward or new execution eligibility is granted.
+
+**81 distinct tests passed:** 39 core, 31 actual-node and 11 kernel. The scope filter
+also matches one segmented-scope regression run by the second filter; that repeat is
+counted once (82 total passing executions). The final eight node cases ran after the
+public block-reader and explicit saturation assertion were added. The 23 legacy node
+regressions ran with identical production code before that last test-only assertion.
+Final results, source/binary hashes and logs are recorded in
+`evidence/rfc02-vector-da-verdict.json`.

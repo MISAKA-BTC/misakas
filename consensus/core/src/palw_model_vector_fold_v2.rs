@@ -2,6 +2,7 @@
 use super::palw_kernel_route_fold_v1::{charge_route_budget_v1, ensure_route_header, route_ledger_policy_v1};
 use super::*;
 use crate::palw_model_artifact_v2::model_artifact_work_v2;
+use crate::palw_model_vector_da_v2::*;
 use crate::palw_model_vector_v2::*;
 use crate::palw_onboarding_v1::{
     ArtifactBindingStateV1, PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1, PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1,
@@ -34,6 +35,9 @@ fn charge(
     Ok(charge_route_budget_v1(builder, ctx, work, court)?.then_some(fee))
 }
 impl PalwChainStateV2 {
+    pub fn model_vector_demand_reserved_v2(&self, bond: &PalwBondKeyV2) -> u128 {
+        self.kernel_route.as_ref().map(|r| r.model_vector_demand_reserved_v2(bond)).unwrap_or(0)
+    }
     pub fn model_vector_reserved_at_v2(&self, bond: &PalwBondKeyV2, daa: u64) -> u128 {
         self.kernel_route.as_ref().map(|r| r.model_vector_reserved_at_v2(bond, daa)).unwrap_or(0)
     }
@@ -87,9 +91,12 @@ pub(super) fn post(
             &policy.prosecution,
         )
         .map_err(|e| format!("vector plan is not publicly prosecutable: {e:?}"))?;
-        let worst_work = model_artifact_work_v2(statement.program_bytes_len as usize, bounds.max_filing_bytes as usize)
-            .and_then(|w| w.checked_add(bounds.max_court_work))
-            .ok_or("vector worst court work overflows")?;
+        let worst_work = model_artifact_work_v2(
+            statement.program_bytes_len as usize,
+            (bounds.max_filing_bytes as usize).saturating_add(bytes.len()),
+        )
+        .and_then(|w| w.checked_add(bounds.max_court_work))
+        .ok_or("vector worst court work overflows")?;
         if worst_work > policy.guaranteed_proof_work_v1() || bounds.max_filing_bytes > MODEL_VECTOR_MAX_PROOF_BYTES_V2 as u64 {
             return Err("vector court cannot fit the shared reserved work/carrier".into());
         }
@@ -110,6 +117,7 @@ pub(super) fn post(
             class,
             binding,
             program_bytes_len: statement.program_bytes_len,
+            post_bytes_len: bytes.len() as u32,
             max_filing_bytes: bounds.max_filing_bytes,
             max_court_work: bounds.max_court_work,
             poster: *signer,
@@ -120,6 +128,7 @@ pub(super) fn post(
                 .ok_or_else(|| refused("vector liability horizon overflows"))?,
             reserved: PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1,
             refuted: false,
+            unavailable: false,
         },
         post: bytes.to_vec(),
     };
@@ -139,7 +148,7 @@ pub(super) fn refute(
     enabled(builder, ctx)?;
     let id = Hash64::from_bytes(*vector);
     let h = builder.state.kernel_route.as_ref().unwrap().model_vector_header_v2(&id).ok_or_else(|| refused("no vector statement"))?;
-    if h.refuted || ctx.daa_score >= h.liability_until {
+    if h.refuted || h.unavailable || ctx.daa_score >= h.liability_until {
         return Err(refused("vector is no longer refutable"));
     }
     let challenger = builder.state.bonds.get(signer).unwrap();
@@ -147,7 +156,7 @@ pub(super) fn refute(
         return Err(refused("vector poster cannot collect its own operator's bounty"));
     }
     let payout = challenger.payout_payload;
-    let work = model_artifact_work_v2(h.program_bytes_len as usize, bytes.len())
+    let work = model_artifact_work_v2(h.program_bytes_len as usize, bytes.len().saturating_add(h.post_bytes_len as usize))
         .and_then(|w| w.checked_add(h.max_court_work))
         .ok_or_else(|| refused("vector court envelope overflows"))?;
     let Some(fee) = charge(builder, ctx, signer, work, true)? else { return Ok(()) };
@@ -171,4 +180,224 @@ pub(super) fn refute(
     row.header.reserved = 0;
     builder.write_kernel_row(MODEL_VECTOR_TABLE_V2, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&row).unwrap()));
     Ok(())
+}
+
+/// One requester owns four reusable slots. Another bond cannot occupy them.
+/// Model-dependent values owe only their node commitment, according to the existing scope.
+pub(super) fn demand(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    vector: &Digest,
+    slot: u8,
+    unit: ModelVectorUnitV2,
+) -> Result<(), PalwStateV2Error> {
+    enabled(builder, ctx)?;
+    let id = Hash64::from_bytes(*vector);
+    let route = builder.state.kernel_route.as_ref().unwrap();
+    let prior_slot = route.model_vector_demand_slot_v2(signer, slot);
+    let h = route.model_vector_header_v2(&id).ok_or_else(|| refused("no vector to demand"))?;
+    let policy = route_ledger_policy_v1(builder)?;
+    let deadline = ctx.daa_score.checked_add(policy.court_deadline_daa).ok_or_else(|| refused("vector deadline overflow"))?;
+    let proof_until = deadline.checked_add(policy.proof_grace_daa).ok_or_else(|| refused("vector proof grace overflow"))?;
+    if h.refuted || h.unavailable || proof_until > h.liability_until || slot >= MODEL_VECTOR_DEMAND_SLOTS_V2 {
+        return Err(refused("vector demand cannot finish within its horizon/slot"));
+    }
+    if builder.state.bonds.get(&h.poster).map(|b| b.operator_id) == builder.state.bonds.get(signer).map(|b| b.operator_id) {
+        return Err(refused("vector poster's operator cannot demand its own bounty"));
+    }
+    if route.model_vector_served_v2(&id, &unit).is_some()
+        || route.model_vector_demand_slot_v2(signer, slot).and_then(|d| route.model_vector_demand_v2(&d)).is_some_and(|d| !d.settled)
+    {
+        return Err(refused("vector unit is public or requester's slot remains held"));
+    }
+    let work = model_artifact_work_v2(h.program_bytes_len as usize, h.post_bytes_len as usize)
+        .ok_or_else(|| refused("vector demand work overflow"))?;
+    let Some(fee) = charge(builder, ctx, signer, work, false)? else { return Ok(()) };
+    builder.slash_bond(*signer, fee)?;
+    let checked = (|| -> Result<_, String> {
+        let view = builder.state.kernel_route.as_ref().unwrap().model_vector_view_v2(&id)?;
+        if unit.position >= view.positions {
+            return Err("position is not committed".into());
+        }
+        let w = misaka_palw_kernel::trace::WiringV1::new(&view.program).map_err(|e| e.to_string())?;
+        let (block, _) = w.occurrences.get(unit.occurrence as usize).ok_or("occurrence is not committed")?;
+        let node = view.program.blocks[*block as usize].nodes.get(unit.node as usize).ok_or("node is not committed")?;
+        if unit.axis == MODEL_VECTOR_NODE_AXIS_V2 {
+            if unit.line != 0 || unit.tile != 0 {
+                return Err("node demand has nonzero tile coordinates".into());
+            }
+        } else {
+            let s = unit.occurrence as usize;
+            let n = unit.node as usize;
+            let model_bytes = misaka_palw_kernel::scope::court_model_bytes_mask_v1(
+                &view.program,
+                misaka_palw_kernel::seg_scope::seg_model_params_v1(&view.program),
+            );
+            if unit.axis > 1 || model_bytes[s][n] || misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&view.program)[s][n] {
+                return Err("model-derived bytes are supplied by the verifier, never demanded".into());
+            }
+            let layout = misaka_palw_kernel::merkle3::LayoutV3::try_of(&node.out.resolve(w.h(unit.occurrence, unit.position)))
+                .ok_or("invalid declared tile layout")?;
+            if layout.leaf_element_count(unit.axis, unit.line, unit.tile).is_none() {
+                return Err("tile is outside declared layout".into());
+            }
+        }
+        let mut count = 0u64;
+        let mut index = 0u64;
+        for (s, (b, _)) in w.occurrences.iter().enumerate() {
+            if s == unit.occurrence as usize {
+                index = count + unit.node as u64;
+            }
+            count += view.program.blocks[*b as usize].nodes.len() as u64;
+        }
+        let root = view.segment_roots[(unit.position / misaka_palw_kernel::seg::SEG_LEN_V4) as usize];
+        Ok((index, count, view.positions, root))
+    })();
+    let Ok((node_index, node_count, positions, segment_root)) = checked else { return Ok(()) };
+    // Serving is compensated from the requester's deposit, sized at the maximum bounded answer's fee floor.
+    let answer_work = model_artifact_work_v2(0, MODEL_VECTOR_ANSWER_MAX_BYTES_V2).unwrap();
+    let bond = policy.demand_bond.max(policy.dismissal_fee_v1(answer_work));
+    let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < bond as u128 {
+        return Ok(());
+    }
+    let row = ModelVectorDemandV2 {
+        vector: id,
+        unit,
+        requester: *signer,
+        requester_payout: builder.state.bonds.get(signer).unwrap().payout_payload,
+        poster: h.poster,
+        poster_payout: builder.state.bonds.get(&h.poster).unwrap().payout_payload,
+        slot,
+        filed_daa: ctx.daa_score,
+        deadline_daa: deadline,
+        proof_until,
+        bond,
+        node_index,
+        node_count,
+        positions,
+        segment_root,
+        settled: false,
+    };
+    let demand = row.id();
+    let count = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .unwrap()
+        .model_vector_open_demands_v2(&id)
+        .checked_add(1)
+        .ok_or_else(|| refused("vector pending request count overflows"))?;
+    if let Some(prior) = prior_slot {
+        builder.write_kernel_row(MODEL_VECTOR_DEMAND_TABLE_V2, borsh::to_vec(&prior).unwrap(), None);
+    }
+    builder.write_kernel_row(MODEL_VECTOR_DEMAND_TABLE_V2, borsh::to_vec(&demand).unwrap(), Some(borsh::to_vec(&row).unwrap()));
+    builder.write_kernel_row(
+        MODEL_VECTOR_DEMAND_SLOT_TABLE_V2,
+        borsh::to_vec(&(*signer, slot)).unwrap(),
+        Some(borsh::to_vec(&demand).unwrap()),
+    );
+    builder.write_kernel_row(MODEL_VECTOR_DEMAND_COUNT_TABLE_V2, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&count).unwrap()));
+    Ok(())
+}
+
+fn close_demand(builder: &mut TransitionBuilder<'_>, id: &Hash64, mut d: ModelVectorDemandV2) -> Result<(), PalwStateV2Error> {
+    let count = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .unwrap()
+        .model_vector_open_demands_v2(&d.vector)
+        .checked_sub(1)
+        .ok_or_else(|| refused("vector request count does not cover close"))?;
+    d.settled = true;
+    builder.write_kernel_row(MODEL_VECTOR_DEMAND_TABLE_V2, borsh::to_vec(id).unwrap(), Some(borsh::to_vec(&d).unwrap()));
+    builder.write_kernel_row(
+        MODEL_VECTOR_DEMAND_COUNT_TABLE_V2,
+        borsh::to_vec(&d.vector).unwrap(),
+        Some(borsh::to_vec(&count).unwrap()),
+    );
+    Ok(())
+}
+
+pub(super) fn answer(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    demand: &Digest,
+    bytes: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    enabled(builder, ctx)?;
+    let id = Hash64::from_bytes(*demand);
+    let route = builder.state.kernel_route.as_ref().unwrap();
+    let d = route.model_vector_demand_v2(&id).ok_or_else(|| refused("no vector demand"))?;
+    let h = route.model_vector_header_v2(&d.vector).ok_or_else(|| refused("no vector"))?;
+    if d.settled || h.refuted || h.unavailable || ctx.daa_score > d.deadline_daa {
+        return Err(refused("vector answer is closed/late"));
+    }
+    if route.model_vector_served_v2(&d.vector, &d.unit).is_some() {
+        return settle_demand(builder, ctx, signer, demand);
+    }
+    // As the existing segmented response lane, responses use no shared adjudication run.
+    // Unlike a demand/court they decode no stored program or trace: one fixed request,
+    // two capped Merkle paths, and at most 4096 elements. Work is bounded by carrier bytes.
+    let work = model_artifact_work_v2(0, bytes.len().min(MODEL_VECTOR_ANSWER_MAX_BYTES_V2)).unwrap();
+    let fee = route_ledger_policy_v1(builder)?.dismissal_fee_v1(work) as u128;
+    let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < fee {
+        return Err(refused("answer actor cannot cover invalid answer"));
+    }
+    let valid = decode_model_vector_answer_v2(bytes).is_ok_and(|a| a.authenticates(&d));
+    if !valid {
+        builder.slash_bond(*signer, fee)?;
+        return Ok(());
+    }
+    let served = ModelVectorServedV2 {
+        answered_daa: ctx.daa_score,
+        answer_root: misaka_palw_kernel::hash::object_id(b"misaka-palw/model-vector/answer/v2", &bytes),
+    };
+    builder.write_kernel_row(MODEL_VECTOR_SERVED_TABLE_V2, d.unit.key(&d.vector), Some(borsh::to_vec(&served).unwrap()));
+    let paid = builder.slash_bond(d.requester, d.bond as u128)?;
+    builder.add_kernel_payout(d.poster_payout, paid)?;
+    close_demand(builder, &id, d)
+}
+
+/// Explicit close keeps deadline work O(1) per supplied id, not O(all network vectors).
+/// Default is unavailable, never a false integer conviction. Anyone may trigger it,
+/// but its bounty belongs to the authenticated requester, not a copying closer.
+pub(super) fn settle_demand(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    demand: &Digest,
+) -> Result<(), PalwStateV2Error> {
+    enabled(builder, ctx)?;
+    let id = Hash64::from_bytes(*demand);
+    let route = builder.state.kernel_route.as_ref().unwrap();
+    let d = route.model_vector_demand_v2(&id).ok_or_else(|| refused("no vector demand to close"))?;
+    if d.settled {
+        return Err(refused("vector demand already closed"));
+    }
+    let h = route.model_vector_header_v2(&d.vector).ok_or_else(|| refused("no vector to close"))?;
+    if h.refuted || h.unavailable {
+        return close_demand(builder, &id, d);
+    }
+    if route.model_vector_served_v2(&d.vector, &d.unit).is_some_and(|s| s.answered_daa <= d.deadline_daa) {
+        let paid = builder.slash_bond(d.requester, d.bond as u128)?;
+        builder.add_kernel_payout(d.poster_payout, paid)?;
+        return close_demand(builder, &id, d);
+    }
+    if ctx.daa_score <= d.deadline_daa {
+        return Err(refused("vector demand's response deadline is still open"));
+    }
+    let work = model_artifact_work_v2(0, h.post_bytes_len as usize).ok_or_else(|| refused("vector default work overflow"))?;
+    let Some(_fee) = charge(builder, ctx, signer, work, true)? else { return Ok(()) };
+    let slashed = builder.slash_bond(h.poster, h.reserved as u128)?;
+    builder.add_kernel_payout(d.requester_payout, slashed.saturating_mul(PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1) / 1000)?;
+    let mut row = builder.state.kernel_route.as_ref().unwrap().model_vector_v2(&d.vector).unwrap();
+    row.header.unavailable = true;
+    row.header.reserved = 0;
+    builder.write_kernel_row(MODEL_VECTOR_TABLE_V2, borsh::to_vec(&d.vector).unwrap(), Some(borsh::to_vec(&row).unwrap()));
+    close_demand(builder, &id, d)
 }

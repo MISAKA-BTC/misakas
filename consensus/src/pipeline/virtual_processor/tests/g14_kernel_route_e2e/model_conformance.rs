@@ -564,7 +564,8 @@ async fn model_vector_wrong_roots_scope_and_invalid_refutations_cost_only_the_ac
     assert_eq!(net.chain.tip_state().1.model_vector_reserved_at_v2(&net.bond(4), net.daa()), held);
     let h = net.api().unwrap().model_vector_header_v2(&id).unwrap();
     let junk = vec![0, 255, 255, 255, 255];
-    let work = model_artifact_work_v2(h.program_bytes_len as usize, junk.len()).unwrap() + h.max_court_work;
+    let work =
+        model_artifact_work_v2(h.program_bytes_len as usize, junk.len() + h.post_bytes_len as usize).unwrap() + h.max_court_work;
     let expected = net.ledger().policy.dismissal_fee_v1(work);
     let mut objects = Vec::new();
     let cards = [2, 3, 5, 6, 7];
@@ -584,4 +585,346 @@ async fn model_vector_wrong_roots_scope_and_invalid_refutations_cost_only_the_ac
     assert_eq!(net.collateral(1), before);
     let replay = net.replay().await;
     net.assert_same(&replay, "invalid vector court flood and scope refusal replay");
+}
+
+fn node_unit(node: u16) -> kaspa_consensus_core::palw_model_vector_da_v2::ModelVectorUnitV2 {
+    kaspa_consensus_core::palw_model_vector_da_v2::ModelVectorUnitV2 { position: 0, occurrence: 0, node, axis: 2, line: 0, tile: 0 }
+}
+async fn ask_vector(
+    net: &mut Net,
+    vector: Hash64,
+    card: usize,
+    slot: u8,
+    u: &kaspa_consensus_core::palw_model_vector_da_v2::ModelVectorUnitV2,
+) -> Option<Hash64> {
+    send(
+        net,
+        card,
+        &K::DemandModelVectorV2 {
+            vector: vector.as_bytes(),
+            slot,
+            position: u.position,
+            occurrence: u.occurrence,
+            node: u.node,
+            axis: u.axis,
+            line: u.line,
+            tile: u.tile,
+        },
+    )
+    .await;
+    net.api().unwrap().model_vector_demand_slot_v2(&net.bond(card), slot)
+}
+fn vector_answer(
+    material: &Material,
+    u: &kaspa_consensus_core::palw_model_vector_da_v2::ModelVectorUnitV2,
+) -> kaspa_consensus_core::palw_model_vector_da_v2::ModelVectorAnswerV2 {
+    let opening = misaka_palw_kernel::seg::position_node_opening_v1(
+        u.position,
+        &material.c.commitments[u.position as usize],
+        material.c.position_path(u.position).1,
+        u.occurrence,
+        u.node,
+    )
+    .unwrap();
+    let tile = if u.axis == 2 {
+        None
+    } else {
+        let values = material.values.as_ref().unwrap();
+        Some(
+            kaspa_consensus_core::palw_onboarding_v1::ArtifactTileOpeningV3::new(
+                misaka_palw_kernel::merkle3::LeafOpeningV3::of(
+                    &values[u.occurrence as usize][u.node as usize],
+                    u.axis,
+                    u.line,
+                    u.tile,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        )
+    };
+    kaspa_consensus_core::palw_model_vector_da_v2::ModelVectorAnswerV2 { opening, tile }
+}
+
+/// Read the answer's carrier back from the selected chain, and authenticate it to
+/// the node's public receipt. The verifier never receives the sender's local buffer.
+fn vector_answer_from_blocks(
+    net: &Net,
+    vector: Hash64,
+    unit: &kaspa_consensus_core::palw_model_vector_da_v2::ModelVectorUnitV2,
+    demand: Hash64,
+) -> Vec<u8> {
+    use kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2;
+    let receipt = net.api().unwrap().model_vector_served_v2(&vector, unit).unwrap();
+    for block in chain_blocks(&net.chain, net.chain.sink()) {
+        for tx in block.transactions.iter() {
+            if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+                continue;
+            }
+            let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload) else { continue };
+            let Obj::KernelRouteV1 { bytes, .. } = payload.object else { continue };
+            let Ok(K::AnswerModelVectorV2 { demand: id, answer }) = K::decode(&bytes) else { continue };
+            if id == demand.as_bytes()
+                && misaka_palw_kernel::hash::object_id(b"misaka-palw/model-vector/answer/v2", &answer.as_slice())
+                    == receipt.answer_root
+            {
+                return answer;
+            }
+        }
+    }
+    panic!("the public served receipt has no matching answer in the selected chain's carrier bodies")
+}
+
+/// This source holds decoded public replies, verifier-own re-execution, and placeholders for withheld values.
+/// It has no access to the producer's trace or the producer's commitment collection.
+struct VectorReplies {
+    values: Vec<Vec<Tensor>>,
+    commitments: Vec<Vec<Digest>>,
+    siblings: Vec<Digest>,
+}
+impl SegMaterialV1 for VectorReplies {
+    fn position(&self, p: u32) -> Option<Vec<Vec<Tensor>>> {
+        (p == 0).then(|| self.values.clone())
+    }
+    fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
+        (p == 0).then(|| self.siblings.clone())
+    }
+    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+        (p == 0).then(|| self.commitments.clone())
+    }
+}
+
+#[tokio::test]
+async fn model_vector_da_public_replies_enable_a_fresh_whole_value_conviction_without_model_disclosure() {
+    use kaspa_consensus_core::palw_model_vector_da_v2::*;
+    for encoder in [true, false] {
+        let f = vector_fixture(encoder);
+        let mut net = Net::over_cfg(config(), TestConsensus::new);
+        let binding = prepare(&mut net, &f).await;
+        let (mut post, mut producer) = vector_post(&net, &f, binding, vec![0, 1], false);
+        let mask = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&f.p);
+        let w = misaka_palw_kernel::trace::WiringV1::new(&f.p).unwrap();
+        let target = w
+            .occurrences
+            .iter()
+            .enumerate()
+            .find_map(|(s, (b, _))| {
+                f.p.blocks[*b as usize].nodes.iter().enumerate().find_map(|(n, node)| {
+                    (mask[s][n] && node.inputs.iter().any(|r| matches!(r, Ref::Node(k) if mask[s][*k as usize]))).then_some((s, n))
+                })
+            })
+            .expect("fixture keeps a whole-value relation with a withheld committed operand");
+        // Keep the large source and conservative disclosure mask. The Gather is not
+        // necessarily withheld at this source size; corrupt a later priced relation.
+        producer.values.as_mut().unwrap()[target.0][target.1].data[0] += 1;
+        let mut commitments = producer.c.commitments.clone();
+        commitments[0] = producer
+            .values
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|o| o.iter().map(misaka_palw_kernel::merkle3::tensor_commitment_v3).collect())
+            .collect();
+        producer.c = SegmentedCommitmentsV1::new(commitments);
+        post.segment_roots = producer.c.segment_roots();
+        post.evidence = build_segmented_evidence_v1(
+            post.evidence.header.clone(),
+            &f.d,
+            post.prompt.len() as u32,
+            &prompt_root_of_ids_v1(&post.prompt),
+            if post.generated.is_empty() { &[] } else { &post.generated[..post.generated.len() - 1] },
+            &producer.c,
+        );
+        post.implementation_roots = [post.trace_root(f.class, binding.as_bytes()); 3];
+        let vector = send_vector(&mut net, &f, binding, 4, &post).await;
+        let mut forbidden = ModelVectorUnitV2 { occurrence: target.0 as u16, node: target.1 as u16, ..node_unit(0) };
+        forbidden.axis = 0;
+        let before = net.slashed(7);
+        assert!(ask_vector(&mut net, vector, 7, 0, &forbidden).await.is_none());
+        let raw_model =
+            misaka_palw_kernel::scope::court_model_bytes_mask_v1(&f.p, misaka_palw_kernel::seg_scope::seg_model_params_v1(&f.p));
+        assert!(raw_model[0][0], "Gather's copy of model rows is always model bytes, even beyond the WholeValue price cap");
+        let mut raw_request = node_unit(0);
+        raw_request.axis = 0;
+        assert!(ask_vector(&mut net, vector, 7, 0, &raw_request).await.is_none());
+        assert!(net.slashed(7) > before, "demanding model-derived bytes is rejected at the actor's cost");
+        let own_trace = if encoder {
+            let b = misaka_palw_kernel::seg_encoder::encoder_binding_v1(&f.p).unwrap();
+            misaka_palw_kernel::seg_encoder::trace_encoder_v1(&f.p, &f.params, &b, &post.prompt).unwrap()
+        } else {
+            misaka_palw_kernel::trace::trace_v1(&f.p, &f.params, &post.prompt).unwrap()
+        };
+        let model_dependent =
+            misaka_palw_kernel::scope::court_model_dependent_mask_v1(&f.p, misaka_palw_kernel::seg_scope::seg_model_params_v1(&f.p));
+        let mut public = VectorReplies { values: Vec::new(), commitments: Vec::new(), siblings: Vec::new() };
+        for (s, (block, _)) in w.occurrences.iter().enumerate() {
+            let mut values = Vec::new();
+            let mut commitments = Vec::new();
+            for (n, node) in f.p.blocks[*block as usize].nodes.iter().enumerate() {
+                let u = ModelVectorUnitV2 { occurrence: s as u16, node: n as u16, ..node_unit(0) };
+                let demand = ask_vector(&mut net, vector, 7, 0, &u).await.unwrap();
+                let wire = borsh::to_vec(&vector_answer(&producer, &u)).unwrap();
+                send(&mut net, 4, &K::AnswerModelVectorV2 { demand: demand.as_bytes(), answer: wire.clone() }).await;
+                assert!(net.api().unwrap().model_vector_demand_v2(&demand).unwrap().settled);
+                let wire = vector_answer_from_blocks(&net, vector, &u, demand);
+                let a = decode_model_vector_answer_v2(&wire).unwrap();
+                assert!(a.tile.is_none());
+                commitments.push(a.opening.commitment);
+                public.siblings = a.opening.position_siblings;
+                let shape = node.out.resolve(w.h(s as u16, 0));
+                let mut value = Tensor::zeros(node.out.dtype, &shape);
+                if !mask[s][n] && model_dependent[s][n] {
+                    // Matching values can be supplied by the verifier's own model;
+                    // no model-derived tensor bytes are acquired from the poster here.
+                    value = own_trace.values[0][s][n].clone();
+                } else if !mask[s][n] {
+                    let u = ModelVectorUnitV2 { axis: 0, ..u };
+                    assert!(misaka_palw_kernel::merkle3::LayoutV3::of(&shape).len <= 4096);
+                    let demand = ask_vector(&mut net, vector, 7, 0, &u).await.unwrap();
+                    let wire = borsh::to_vec(&vector_answer(&producer, &u)).unwrap();
+                    send(&mut net, 4, &K::AnswerModelVectorV2 { demand: demand.as_bytes(), answer: wire.clone() }).await;
+                    let wire = vector_answer_from_blocks(&net, vector, &u, demand);
+                    let a = decode_model_vector_answer_v2(&wire).unwrap();
+                    for (i, x) in a.tile.unwrap().leaf().elements().unwrap() {
+                        value.data[i as usize] = x;
+                    }
+                }
+                values.push(value);
+            }
+            public.values.push(values);
+            public.commitments.push(commitments);
+        }
+        assert_eq!(net.chain.tip_state().1.model_vector_demand_reserved_v2(&net.bond(7)), 0);
+        assert_eq!(net.api().unwrap().model_vector_open_demands_v2(&vector), 0);
+        let route = net.api().unwrap();
+        let view = route.model_vector_view_v2(&vector).unwrap();
+        let params = f.params.clone();
+        let own_model = move |j, l| params.tensors.get(&(j, l)).cloned();
+        let fault = match misaka_palw_kernel::element::check_positions_v1(&view.context(), &public, &own_model, &post.prompt, &[0]) {
+            SegFindingV1::Fault(f) => *f,
+            other => panic!("public replies plus the verifier's own model must construct a court: {other:?}"),
+        };
+        assert!(
+            matches!(&fault, SegFaultV1::WholeValue(f) if f.inputs.iter().any(|i| i.whole.is_some())),
+            "public openings plus own replay require the bounded optional whole tensor operand"
+        );
+        let proof = fault.to_bytes();
+        assert!(proof.len() < 32 << 10);
+        assert_eq!(kaspa_consensus_core::palw_model_vector_v2::decode_model_vector_fault_v2(&proof).unwrap(), fault);
+        let before = net.collateral(4);
+        send(&mut net, 7, &K::RefuteModelVectorV2 { vector: vector.as_bytes(), proof }).await;
+        assert!(net.api().unwrap().model_vector_header_v2(&vector).unwrap().refuted);
+        assert_eq!(before - net.collateral(4), mega(100));
+        assert_eq!(net.owed(7), mega(49));
+        assert!(net.ledger().claims.is_empty() && net.ledger().classes.is_empty());
+        let replay = net.replay().await;
+        net.assert_same(&replay, "public candidate DA, verifier-own-model whole court and once-only slash replay");
+    }
+}
+
+#[tokio::test]
+async fn model_vector_da_deadlines_hold_capital_and_responses_survive_a_full_court_budget() {
+    use kaspa_consensus_core::palw_state_v2::{palw_bond_backs_live_duty_v1, palw_bond_backs_live_duty_v2};
+    let f = vector_fixture(true);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let (post, material) = vector_post(&net, &f, binding, vec![0, 1], false);
+    let vector = send_vector(&mut net, &f, binding, 4, &post).await;
+    let source = net.collateral(1);
+    assert!(ask_vector(&mut net, vector, 4, 0, &node_unit(0)).await.is_none());
+    let mut demands = Vec::new();
+    for slot in 0..4 {
+        demands.push(ask_vector(&mut net, vector, 7, slot, &node_unit(slot as u16)).await.unwrap());
+    }
+    assert!(ask_vector(&mut net, vector, 7, 4, &node_unit(0)).await.is_none());
+    let other = ask_vector(&mut net, vector, 6, 0, &node_unit(0)).await.unwrap();
+    assert_eq!(net.api().unwrap().model_vector_open_demands_v2(&vector), 5);
+    let deposit = net.api().unwrap().model_vector_demand_v2(&demands[0]).unwrap().bond;
+    let state = net.chain.tip_state().1;
+    assert_eq!(state.model_vector_demand_reserved_v2(&net.bond(7)), deposit as u128 * 4);
+    assert!(palw_bond_backs_live_duty_v1(&state, &net.bond(7), net.daa(), None));
+    assert!(palw_bond_backs_live_duty_v2(&state, &net.bond(7), net.daa(), None, 10));
+    let valid = borsh::to_vec(&vector_answer(&material, &node_unit(0))).unwrap();
+    let mut wrong = valid.clone();
+    wrong[8] ^= 1;
+    let fee = net.slashed(2);
+    send(&mut net, 2, &K::AnswerModelVectorV2 { demand: demands[0].as_bytes(), answer: wrong }).await;
+    assert!(net.slashed(2) > fee);
+    assert!(!net.api().unwrap().model_vector_demand_v2(&demands[0]).unwrap().settled);
+    let before = net.collateral(4);
+    let hostile_cards = [2, 3, 5, 6];
+    let hostile_fees: Vec<_> = hostile_cards.iter().map(|c| net.slashed(*c)).collect();
+    let mut objects = Vec::new();
+    for card in hostile_cards {
+        objects.push((card, net.route(card, &K::RefuteModelVectorV2 { vector: vector.as_bytes(), proof: vec![0] })));
+    }
+    objects.push((4, net.route(4, &K::AnswerModelVectorV2 { demand: demands[0].as_bytes(), answer: valid.clone() })));
+    net.send(objects).await;
+    assert_eq!(
+        hostile_cards.into_iter().zip(hostile_fees).filter(|(card, fee)| net.slashed(*card) > *fee).count(),
+        net.ledger().policy.max_adjudications_per_block as usize,
+        "all shared court runs were actually consumed before accepting the bounded answer",
+    );
+    assert!(
+        net.api().unwrap().model_vector_demand_v2(&demands[0]).unwrap().settled,
+        "answer has no shared adjudication-run dependency"
+    );
+    assert_eq!(net.collateral(4), before);
+    assert_eq!(net.owed(4), deposit, "serving is funded by the requester's collected deposit");
+    assert_eq!(net.api().unwrap().model_vector_open_demands_v2(&vector), 4);
+    // The second requester closes from the public receipt, without reposting bytes.
+    send(&mut net, 3, &K::SettleModelVectorDemandV2 { demand: other.as_bytes() }).await;
+    assert_eq!(net.api().unwrap().model_vector_open_demands_v2(&vector), 3);
+    let until = net.api().unwrap().model_vector_header_v2(&vector).unwrap().liability_until;
+    net.beat_to(until + 1).await;
+    let state = net.chain.tip_state().1;
+    assert_eq!(
+        state.model_vector_reserved_at_v2(&net.bond(4), net.daa()),
+        mega(100) as u128,
+        "unresolved default cannot escape by waiting out the liability horizon"
+    );
+    assert!(palw_bond_backs_live_duty_v1(&state, &net.bond(4), net.daa(), None));
+    let before = net.collateral(4);
+    let fee = net.slashed(2);
+    let late = borsh::to_vec(&vector_answer(&material, &node_unit(1))).unwrap();
+    send(&mut net, 2, &K::AnswerModelVectorV2 { demand: demands[1].as_bytes(), answer: late }).await;
+    assert_eq!(net.slashed(2), fee, "late answer is refused before classification");
+    send(&mut net, 3, &K::SettleModelVectorDemandV2 { demand: demands[1].as_bytes() }).await;
+    let h = net.api().unwrap().model_vector_header_v2(&vector).unwrap();
+    assert!(h.unavailable && !h.refuted, "availability failure is not an integer conviction");
+    assert_eq!(before - net.collateral(4), mega(100));
+    assert_eq!(net.owed(7), mega(49));
+    assert_eq!(net.owed(3), 0, "copying the explicit close cannot steal its requester's bounty");
+    assert_eq!(net.chain.tip_state().1.model_vector_demand_reserved_v2(&net.bond(7)), 0);
+    assert_eq!(net.chain.tip_state().1.model_vector_reserved_at_v2(&net.bond(4), net.daa()), 0);
+    for d in &demands {
+        send(&mut net, 3, &K::SettleModelVectorDemandV2 { demand: d.as_bytes() }).await;
+    }
+    assert_eq!(net.api().unwrap().model_vector_open_demands_v2(&vector), 0);
+    assert_eq!(net.collateral(1), source);
+    let (post, _) = vector_post(&net, &f, binding, vec![1, 2], false);
+    let vector2 = send_vector(&mut net, &f, binding, 4, &post).await;
+    let new = ask_vector(&mut net, vector2, 7, 0, &node_unit(0)).await.unwrap();
+    assert_ne!(new, demands[0]);
+    assert!(net.api().unwrap().model_vector_demand_v2(&demands[0]).is_none(), "settled slot replacement removes its old row");
+    let fee = net.slashed(2);
+    send(&mut net, 2, &K::AnswerModelVectorV2 { demand: new.as_bytes(), answer: valid }).await;
+    assert!(net.slashed(2) > fee, "another prompt's opening cannot answer the new vector's unit");
+    let early = net.api().unwrap().model_vector_demand_v2(&new).unwrap();
+    net.beat_to(early.filed_daa + 8).await;
+    let later = ask_vector(&mut net, vector2, 6, 0, &node_unit(0)).await.unwrap();
+    let (_, material2) = vector_post(&net, &f, binding, vec![1, 2], false);
+    net.beat_to(early.deadline_daa + 1).await;
+    let response = borsh::to_vec(&vector_answer(&material2, &node_unit(0))).unwrap();
+    send(&mut net, 4, &K::AnswerModelVectorV2 { demand: later.as_bytes(), answer: response }).await;
+    let served = net.api().unwrap().model_vector_served_v2(&vector2, &node_unit(0)).unwrap();
+    assert!(served.answered_daa > early.deadline_daa);
+    assert!(net.api().unwrap().model_vector_demand_v2(&later).unwrap().settled);
+    send(&mut net, 3, &K::SettleModelVectorDemandV2 { demand: new.as_bytes() }).await;
+    assert!(
+        net.api().unwrap().model_vector_header_v2(&vector2).unwrap().unavailable,
+        "later service of the shared unit cannot retroactively erase an earlier request's default"
+    );
+    let replay = net.replay().await;
+    net.assert_same(&replay, "DA slots, hostile proofs, late answer, held horizon, explicit default and new generation replay");
 }

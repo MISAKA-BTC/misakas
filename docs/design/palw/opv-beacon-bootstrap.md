@@ -600,10 +600,10 @@ rewards, consensus weight or Panel=0 is armed.
 **GAP-70 (the Lead's decision, 2026-10-10): only the complete check gates rewards in the release.** A sampled conformance (v2 or v3) is
 a non-reward signal. It still runs and records G14_ELIGIBLE, but it satisfies E6 only once a digest court exists: a court for a
 vector's logits and commit digests (OB-P0 GAP 2), a vector refutation for a new class (GAP-B6), and closure of the self-reported
-implementation results (GAP-B7). That legacy court stays on the DESIGN list. RFC02 §14.18 now has a separate typed candidate
-trace statement and bounded element/type/decode refutation, requiring no execution Final.
-It does not reinterpret these legacy flat `a`/`b` digests, prove implementation independence,
-provide a trace demand/default policy, or satisfy E6. The sampled reward switch remains
+implementation results (GAP-B7). That legacy court stays on the DESIGN list. RFC02 §14.18–14.19 now has a separate typed candidate
+trace statement, bounded element/type/decode/whole-value refutation and point-unit trace
+availability demands, requiring no execution Final. It does not reinterpret these legacy
+flat `a`/`b` digests, prove implementation independence, or satisfy E6. The sampled reward switch remains
 refused in production. In code:
 
 * E6 refuses a sampled attempt with `POLICY_NOT_VERIFIED`, citing GAP-70, whatever its effective bits;
