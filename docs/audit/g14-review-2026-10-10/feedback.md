@@ -14,7 +14,7 @@
 1. **legacyの全対象違反と本番完走:** base0-codecの独立replayを持つ共通filerに、認証済みtag-158公開履歴、subtree descent、model-copyを開示しないtag-159 leaf recompute、CKWからfused courtを開く接続を追加した。controllerのfold試験はFinal前後のgather/matmul conviction、fused conviction、node/CKW非応答defaultを通過。公開bindingに基づくjob/trace identity、step/checkpoint countのshape違反、公開token pinに基づくoutput不正をkind-4 reporter経路へ追加した。executionとtraceが一致してもoutputだけが違えば追及する。別jobの実fold convictionはFinal前後を検証し、output/count builderとcache妨害はunitで検証した。大型canonical promptの入力不正も既存PromptNotAnchoredへ自動変換する。PublicDA／認証できるcanonical inputのFP startupを公開accepted commitmentへ接続した。PanelDAの公開court input bootstrapも追加した。最大入力のsession／carrier予算、bad canonical input-root、prefix-state等のbootstrap、checkpoint/traceの残る局所化、全familyの正規eligibility、fresh-nodeのservice tick完走は残る。step treeの一致だけでMismatchをHonestへ変えない。unsupported-codecの小型fallbackは34-session枠を超えるclaimをUnjudgedとする。
 2. **累積scopeとcourtの両立:** 64要素hiding tileと累積scopeを実際のresponse/court/reward gateへ接続する。`cumulative_scope_allows_v1`のstubとF-C4R4-17は残る。scope報告関数の成功だけでreward eligibilityを認めない。
 3. **DAと包含の期限:** 最大Respond、全chunk、adaptiveな探索round、proof処理が責任期間内に収まる条件を実nodeで立証する。9B/8kの1 positionは2,029 partsであり、現行の固定20 DAAだけでは十分性を示せない。
-4. **共謀者による枠の占有:** claim共通のlive 64・生涯256 reservation枠を先取りされても、outsiderが必要materialを取得できる設計が必要。別bondのreservationが1件ある試験は、全枠飽和への耐性ではない。
+4. **共謀者による負荷と包含:** claim共通のlive 64・生涯256 reservation上限を除き、本人のretained record 64件と担保余力へ帰属させた。他bondの予約数で新verifierを拒否しない。旧閾値を超える予約から公開input→conviction/defaultへ進むV-foldを追加したが、owner数に比例する最大state／response負荷と期限内包含の実node測定は残る。
 5. **正規eligibilityと測定:** 各active familyをtest-only admissionなしで登録し、fresh verifier自身のnode/RPC、最大profileの実測RAM・時間、restart/IBD/reorgを確認する。shape計算や小型fixtureだけで代替しない。legacy readerの途中走査の取りこぼしは修正したが、対応外unitの恒久prune後の取得・再要求とfresh-node追及の実node試験は残る（下記）。
 
 **FP startupとFinal後の追及:** free-promptを無条件にUnjudgedとする経路を、accepted transaction・claim hash・記録済みjob pinの照合と独立replayへ変更した。producer captureは実行せず、hostのmemory budgetにはjobのdecode ceilingを使う。FPにはvesting rowがないためFinal後の発見・reservation・DA admissionが止まっていた抜けも、休眠public-filer fence内の共通predicateとliability保持で修正した。PanelDAのinput prefixが読めることを、strangerへの取得保証とは扱わない。試験範囲と残条件は[FP修正記録](implementation.md#公開fp-commitmentinputからの独立再実行とpost-final-fpの追及)を参照。
@@ -30,6 +30,8 @@
 **回答済み公開DAの再取得:** 当初のpagination修正だけでは恒久的にpruneされた回答を取得できなかった。追加修正では、休眠tag 156の署名付きsession番号・期限を用いて、Event／Held／LG14-Bの回答済みunitに新しい公開義務を開く。historical回答を消さず、古い署名の再送を拒否する。古いsuffixが欠けても新tipの再公開を読む。上記の「既回答unitの再要求も拒否する」という記述は、この対応unitについては追加修正前の状況である。TIR／pipeline、FP job commitment自体、最大入力のbootstrap予算、全枠飽和とfull-nodeの期限内包含は未達であり、これを全familyのC2/C7/C8達成とは数えない。最終検証は[修正記録](implementation.md)末尾を参照。
 
 **PanelDA入力のbootstrap（今回の追加）:** 公開FP commitmentだけではUser入力が手に入らず、全Panelの配布拒否で再計算前に止まる経路を修正した。公開予約→row-0 binding→認証済みinput chunk→自身のmodel replayへ接続し、不応答は既存DA defaultとする。Merkle入力は2,048 token単位、Flat入力はwhole hash照合とし、court上限と1本のcarrier上限の小さい方を超える義務は要求時に拒否する。登録モデル保有前提は維持する。34-session予算で全contextを扱えること、FP commitment自体の恒久prune、全family・fresh-node serviceの包含は別の未達条件である。今回の関連回帰は **159 PASS**、通常node binary checkは成功。検証結果と範囲は[修正記録](implementation.md)末尾を参照。
+
+**予約の共通人数上限の修正（今回の追加）:** 64-live／256-lifetimeの先取りによる締出しを除き、closed replay guardを含む1 bondのretained recordを64に制限した。本人のreleaseでは予算を回復させず、recordのsettlement／retirementで回収する。RPCにも保持件数を追加した。これは固定global RAM上限又は全familyの包含保証を立証したものではない。最終検証は[修正記録](implementation.md)末尾を参照。
 
 ## 初回レビューの判定
 

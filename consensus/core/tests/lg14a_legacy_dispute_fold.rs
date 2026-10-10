@@ -226,6 +226,96 @@ fn lg14a_a_reserved_session_rides_its_own_budget() {
     assert_eq!(c.s.legacy_dispute_reservation_v1(&id, &reserver).unwrap().sessions_opened, 1, "counted on the reservation");
 }
 
+/// Other bonds cannot consume a public verifier's admission budget. Every coalition bond and the outsider registers after genesis.
+/// Exercise both old exclusion thresholds, including the lifetime table with released deposits and a still-live claim hold.
+#[test]
+fn lg14a_coalition_reservations_cannot_exclude_a_new_bond() {
+    for closed in [false, true] {
+        let mut c = Chain::new(armed());
+        let count = if closed { 256 } else { 64 };
+        let first = 10_000;
+        let outsider = bond_key(first + count);
+        for chunk in (first..=first + count).collect::<Vec<_>>().chunks(16) {
+            c.step(&chunk.iter().map(|n| bond_obj(*n, RICH)).collect::<Vec<_>>());
+        }
+        let (id, _, _) = licensed_floor_claim(&mut c, 0x480 + u64::from(closed));
+        // The DA-8 budget is an existing independently tested attack. Reserve even if it was spent before this newcomer arrived.
+        c.s = edited(&c.sp, &c.s, |carriage| {
+            carriage.da_claims.insert(id, PalwDaClaimV1 { opened_non_seat_total: 16, ..Default::default() });
+        });
+        for n in first..first + count {
+            c.step(&[reserve(&c, id, bond_key(n))]);
+            if closed && n != first {
+                c.step(&[release(id, bond_key(n))]);
+            }
+        }
+        let record = c.s.legacy_dispute_v1(&id).unwrap();
+        assert_eq!(record.reservers_total(), count as usize);
+        assert_eq!(record.live.len(), if closed { 1 } else { 64 });
+        assert_eq!(record.closed.len(), if closed { 255 } else { 0 });
+        assert!(c.s.legacy_dispute_reservation_v1(&id, &outsider).is_none());
+        let before = collateral(&c, &outsider);
+        c.step(&[reserve(&c, id, outsider)]);
+        assert_eq!(c.s.legacy_dispute_v1(&id).unwrap().reservers_total(), count as usize + 1);
+        assert_eq!(c.s.legacy_retained_disputes_of_v1(&outsider), 1);
+        let status = c.s.palw_fraud_filer_status_v1(&c.sp, &outsider, c.daa).unwrap();
+        assert_eq!((status.retained_records, status.retained_cap), (1, 64));
+        c.step(&[da_accuse(id, outsider, 0)]);
+        let deadline = c.s.da_session(&id, &outsider).unwrap().deadline_daa;
+        assert_eq!(c.s.legacy_dispute_reservation_v1(&id, &outsider).unwrap().sessions_opened, 1);
+        assert_eq!(c.s.da_claim(&id).unwrap().opened_non_seat_total, 16, "the coalition's shared budget is not ours");
+        c.step_at(deadline + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+        assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
+        assert!(c.s.legacy_dispute_v1(&id).is_none(), "the objective default releases every live/held row");
+        assert_eq!(c.s.legacy_retained_disputes_of_v1(&outsider), 0);
+        assert_eq!(palw_accuser_exposure_v1(&c.s, &outsider), 0);
+        assert_eq!(collateral(&c, &outsider), before, "the successful verifier pays no failed-pursuit charge");
+        for n in first..first + count {
+            assert_eq!(c.s.legacy_retained_disputes_of_v1(&bond_key(n)), 0);
+            assert_eq!(palw_accuser_exposure_v1(&c.s, &bond_key(n)), 0);
+        }
+    }
+}
+
+/// Removing shared caps must not remove the state bound: closed rows still consume only THEIR owner's retained-record budget.
+#[test]
+fn lg14a_a_bonds_closed_records_keep_its_own_budget_until_retirement() {
+    let mut c = Chain::new(armed());
+    let n = 20_000;
+    let bond = bond_key(n);
+    c.step(&[bond_obj(n, RICH)]);
+    let mut ids = Vec::new();
+    for seed in 0..64 {
+        let id = c.floor_claim(0x500 + seed);
+        c.step(&[reserve(&c, id, bond)]);
+        c.step(&[release(id, bond)]);
+        ids.push(id);
+    }
+    assert_eq!(c.s.legacy_live_reservations_of_v1(&bond), 0);
+    assert_eq!(c.s.legacy_retained_disputes_of_v1(&bond), 64);
+    let next = c.floor_claim(0x600);
+    let err = try_step(&c, &[reserve(&c, next, bond)]).expect_err("closed records still occupy this bond's memory budget");
+    assert!(err.to_string().contains("the bond retains as many dispute records as it may"), "{err}");
+    // A different bond has its own budget even though the first owner retains 64 records.
+    let (_, other) = bystanders(&c);
+    c.step(&[reserve(&c, next, other)]);
+    assert_eq!(c.s.legacy_retained_disputes_of_v1(&other), 1);
+    // A zero-exposure closed guard is still a retained row: the loader must not let a forged carriage bypass the owner budget.
+    let mut forged = PalwStateCarriageV2::from_state(&c.s);
+    forged.legacy_disputes.get_mut(&next).unwrap().closed.insert(bond);
+    let err = forged.into_state(&c.sp, None).expect_err("65 retained rows are not a loadable state");
+    assert!(err.to_string().contains("a bond retains more dispute records than its cap"), "{err}");
+    // Follow the state's real deadline queue, including the void/retire stages; retention alone is not the retirement clock.
+    for _ in 0..8 {
+        if c.s.legacy_retained_disputes_of_v1(&bond) == 0 {
+            break;
+        }
+        let after = ids.iter().filter_map(|id| c.s.deadline_of(id)).max().expect("retained claims have a deadline");
+        c.step_at(after.max(c.daa) + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    }
+    assert_eq!(c.s.legacy_retained_disputes_of_v1(&bond), 0, "retirement reclaims closed replay guards");
+}
+
 /// **A conviction (here a DA default of the reserved session) refunds every deposit** — the live one and a released one held in
 /// `dismissed_held` — and deletes the record; the reservers' collateral never moves.
 #[test]

@@ -444,3 +444,32 @@ core `lg14a_legacy_dispute_fold`は **7 V-fold PASS**。actual ML-DSA-87署名�
 最初のPanelDA fixtureは、accepted-payload extractionのPanelDA fence引数を既存PublicDA試験同様のfalseにしており、正しくstateless拒否された。fixtureだけを明示的にtest-armし、productionのfenceを緩めていない。gate試験では、Merkle networkの大きな入力もchunkは小さいという性質をFlatのwhole-inputと取り違えた期待を訂正した。FlatとMerkleのcoherentなgenesis形式を別々に通す。初回gate buildはdisk不足で失敗し、自分の古いbuild cacheを整理して再実行した。最終PASSだけを結果へ計上する。
 
 G14全域は未達。34-session予算に入力取得も含むため、8kは4 input unitだが最大contextや任意回数のrestartを保証しない。accepted FP commitment自体の恒久prune、canonical FP bad root、prefix-state、非base0／全familyの正規eligibility、全枠飽和、最大profileのRAM／時間、fresh-node serviceと責任期間内包含、累積scope等は残る。ADR-0177 D7の登録モデル保有前提を維持し、model distribution義務とactivation heightは追加しない。
+
+## 共謀者の予約数による新verifierの締出しを除く
+
+`4d01414de`を基点に、claim共通の64-live／256-lifetime上限を除いた。担保をburnさせることは経済的な抑止であり、担保を払う共謀者に追及を排除されない保証ではない。予約admissionは、Active／floor、本人の担保余力、正しいclaim roots、once-per-bond/claim、絶対hard deadlineと本人のsession予算を維持する。他bondが予約を先に取得又はreleaseしても、これら本人の条件を消費しない。
+
+stateの上限を本人へ帰属させるため、1 bondあたりretained recordを64に制限した。live、released/lapsed deposit、返金済みだが別ownerのdepositのためrecordが残るclosed replay guardも数える。derived `(bond, claim)` indexのwriter／load／delta rebuild／consistencyとadmissionが同じlive＋closed集合を使う。本人のreleaseでは保持予算を回復せず、既存のobjective settlement又はretirementでrecordを消去して回復する。held depositの重複entryと、known owner／matching sessionを持たないreacquisitionをload時に拒否する。
+
+保持recordに帰属するdistinct bond identityをBとすればowner/claim rowは64×B以下となる。各rowは高々1件のpending reacquisition、各closed rowは高々1件のheld depositを持つ。固定のclaim人数上限をowner数に比例するstate上限へ変更したものであり、固定global RAM上限や無制限arrivalへの包含期限を立証しない。現foldはclaim recordをcloneするため、最大人口でのCPU／RAMとresponse処理・包含は引き続き受入条件である。RPC op 206は`retainedRecords`／`retainedCap`を末尾へ追加する。rooted field、object encoding、activation heightは変更していない。
+
+coreの新attack fixtureは、genesis後にcoalition bondと新verifier bondを実foldで登録し、64同時又は256生涯の予約を先取りさせる。新verifierは65人目／257人目として本人の予約とsessionを開き、非応答defaultを成立させる。DA-8の16回共有counterだけは既存試験同様にcarriage fixtureで消費済みに設定する。counterが本人のreserved sessionへ影響しないこと、全depositの返金、index回収、毎blockのdelta適用／巻戻しとcarriage reloadを検査する。別の新試験は本人のclosed records 64件でadmissionを拒否し、zero-exposureの65件目を追加した偽carriageも拒否する。最初のretirement試験はtrace retentionとretirement clockを混同した期待だけがFAILであり、state自身のdeadline queueへ修正した。
+
+小型PanelDA FP試験にもcoalitionの予約を追加した。Final前の64同時、Final後の256生涯、Final後の64同時をそれぞれ満たしてから、公開controllerのinput bootstrap→own model replay→CourtFraud又はinput-only DA defaultを通す。署名／class admissionは既存callbackのV-foldであり、mature ordinary bondを用いるfull-node包含や全familyのC6/C8達成とは数えない。
+
+| 最終sourceの検証 | 結果 |
+| --- | --- |
+| `cargo test -p kaspa-consensus-core --test lg14a_legacy_dispute_fold --locked` | **9 V-fold PASS**。新しい人数先取りattackと本人の保持予算／偽carriage／retirement回収、既存fence-off互換性・deposit・期限・公開予約sessionの回帰 |
+| `cargo test -p kaspa-consensus-core --lib palw_legacy --locked` | **19 V-unit PASS**。公開filer 10件＋held DA 9件 |
+| current core lib-test binary `palw_lifecycle_objects_v2 --test-threads=2` | **31 V-unit PASS**。A2／A2U、全wire pinの同値、owner/fence guard |
+| `cargo test -p kaspad --lib palw_filer_held::e2e --locked` | **26 PASS**。LG14-B 12 V-fold＋2 V-unit、既存held replay 12件。PanelDAの旧64/256閾値を超える予約から公開入力bootstrap→独立replay→Final前後のCourtFraud／input-only DA default、honest twinを含む |
+| current node lib-test binary `palw_fraud_filer --test-threads=2` | **20 V-unit PASS**。book／input／worker handoff／memory／reorg回帰 |
+| current node lib-test binary `accepted_objects_walk_tests --test-threads=2` | **7 V-unit PASS**。accepted history API adapter／selected authenticated input／paged/reorg回帰 |
+| current node lib-test binary `reporter_filer::tests --test-threads=2` | **21 V-unit PASS**。既存reporter door回帰 |
+| `cargo check -p kaspad --bin kaspad --locked` | **成功**。通常node binaryのcompile |
+
+この修正範囲の回帰は **133 PASS**。coreはdefault feature、nodeはdefault feature（EVMを含む）、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`。binary直実行は最終sourceでcargoがbuildした同じcore／node lib-test binaryを使用した。既存unused/dead-code警告は残る。[core fold](evidence/reservation-isolation-core-fold-final.log)、[core unit](evidence/reservation-isolation-core-unit-final.log)、[lifecycle](evidence/reservation-isolation-core-lifecycle-final.log)、[node held](evidence/reservation-isolation-node-held-final.log)、[filer](evidence/reservation-isolation-node-filer-final.log)、[reader](evidence/reservation-isolation-node-reader-final.log)、[reporter](evidence/reservation-isolation-node-reporter-final.log)、[binary check](evidence/reservation-isolation-binary-final.log)。初回node fixtureの署名builder呼出しは署名bytesをcallback引数へ渡してcompile拒否され、既存APIどおりcallbackへ訂正した。最終PASSだけを計上した。
+
+最終sourceの `scripts/t12-repin.sh --shipping --drift-only` はexit 0、**361 ok・差分なし**。fresh harvest再読込もexit 0。pinを書き換えていない。[repin](evidence/reservation-isolation-repin-final.log)、[harvest tests](evidence/reservation-isolation-repin-harvest-tests.log)、[harvest lib](evidence/reservation-isolation-repin-harvest-lib.log)、[log再検証](evidence/reservation-isolation-repin-replay-final.log)。
+
+G14全域は未達であり、owner数に比例する最大response負荷、fresh-node service、全family、最大contextの34-session予算、未取得FP job／canonical input／prefix-state、累積scopeと期限内包含が残る。

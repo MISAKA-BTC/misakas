@@ -98,7 +98,7 @@ as DA16's does). The fee is the carrier's, as for every lifecycle object.
 4. **One reservation per bond per claim over the claim's life.** A bond that released, lapsed or was charged never reserves the
    same claim again (this is also the replay rule: a replayed tag 154 or 155 finds the bond closed).
 5. `now ≤ hard_deadline` (§3.3).
-6. Caps: at most 64 live reservations on a claim, 256 reservers over its life, 64 live reservations per bond (§5).
+6. Owner budgets: at most 64 retained dispute records per bond, including closed replay guards, and 64 live reservations per bond. Other bonds cannot spend this budget. The former claim-wide 64-live / 256-lifetime caps are removed; see the coalition-admission follow-up below.
 7. **The deposit** fits the reserver's free half: `D = min(⌈r · S_P(stage)⌉, min_collateral)` — DA-6's exposure for one session at
    the claim's stage, with INTF's `r` (1,000 bps below `palw_reporter_share_v2`, 4,900 past it). It is checked through the one
    accuser gate (`palw_rcore_gate_room_of_v1`, `Accuser`) and joins the A-6 ledger (`palw_accuser_exposure_v1`).
@@ -241,11 +241,11 @@ descends. The operator module's producer/signer filter is a discovery preference
 | the producer's Sybil (or a colluding seat) opens a court first | direct proofs land over it (§2) and the conviction closes it |
 | a Sybil reserves first and does nothing | the hold is shared and its end is the claim's (§3.3); the honest verifier's reservation and budget are its own |
 | Sybils exhaust DA-8's shared non-seat budget | a reserved session never reads it (§3.5) |
-| Sybils fill the 64 live reservations of a claim | the hold still applies to everyone; the honest verifier keeps every direct proof and DA-8's 16 non-seat sessions. Excluding it ALSO needs those 16 spent: ≥ 64 deposits + 16 session exposures, ≥ 80 · r · S_P, all burned when the attack succeeds (the claim unconvicted) — 8 · S_P at r = 10%, 39 · S_P at 49% — against a gain bounded by one claim's reward |
-| Sybils fill a claim's 256-reserver lifetime | ≥ 256 burned deposits, ≥ 25.6 · S_P at r = 10% |
+| Sybils fill the former 64 live reservations of a claim | there is no shared admission count: a new owner with headroom may reserve and use its own sessions |
+| Sybils fill the former 256-reserver lifetime | closed guards consume their owners' budgets, never a shared lifetime budget; the newcomer still has its own headroom |
 | misdirection ("the lie is at leaf j") | nothing on chain is a claim about where the lie is; the shared progress is only the units the fold authenticated, and every verifier compares them with its own replay |
 | serial reservations to hold an honest claim | the hard deadline is absolute; each reservation is a deposit at risk |
-| spam against an honest producer | each reserved session is a DA session: its units are answered once for every session (DA-4) and a refuted one costs `r · S_P`, held and burned at retirement; at most 64 × 34 per claim |
+| spam against an honest producer | each reserved session is charged; each owner has at most 64 retained records and 34 sessions per record. The per-claim response envelope now scales with its distinct owners; largest-population processing and inclusion remain to be measured, not proved by deposits alone |
 
 **Residuals, named.**
 - **Reward front-running by the producer.** A guilty disclosed leaf rewards the accuser whose session demanded the unit FIRST. A
@@ -457,3 +457,13 @@ producer又は依然責任を負うsignerの再公開は既存tag 55／158を使
 nodeの共通filerは、必要unitの公開bytesがない場合、30 DAAの履歴再試行後に明示的要求を署名してqueueする。signatureのretryと次の番号の要求は区別する。履歴readerは古いsuffixで失敗しても、それ以前に読めた独立に認証済みの回答を保持する。floorの読了watermarkは進めず、次tickで新しいtipから再開するため、古いcarrierが永久に欠けていても新しい再公開を読める。
 
 現段階の対応unitはEvent、従来Held（prompt tile／state chunk／step range／非fused leaf）、LG14-B frontier／CKW。TIR／pipelineの自動再取得、pruneされたFP job commitmentそのものの再取得、input未取得のbootstrap、全枠飽和、fresh nodeの実service／包含、最大profileと累積scopeの完成は別途必要である。再取得回数も既存予算を消費するため、任意回数のrestartや無期限の取得を保証しない。検証結果は監査記録へ追記する。
+
+## Coalition admission follows the reserver's own budget (Codex, 2026-10-10)
+
+The former 64-live / 256-lifetime claim caps let a funded coalition exclude a fresh public verifier. Burning the coalition's deposits is an economic deterrent, not prosecution reachability. The never-armed public-filer fence now admits reservations without either shared count test. Active status, collateral floor, exact roots, once per bond/claim, deposit headroom and the claim's absolute hard deadline still apply. Reserved sessions continue to use their owner's 34-session budget, bypassing DA-8's shared 3-open / 16-lifetime non-seat budget.
+
+State is attributed to owners instead: each bond may retain at most 64 claim records, including live rows, released/lapsed deposits and closed replay guards with zero exposure. Releasing a reservation does not free its retained-record budget. The derived `(bond, claim)` index includes every live/closed row; the writer, delta/load rebuild, admission and carriage consistency share that index. A neutral outcome can retain a refunded closed guard while another owner's held deposit keeps the record, and that guard still counts. Objective settlement or claim retirement deletes records as before and restores the owner's budget. Duplicate held-deposit entries and pending reacquisitions without a known owner/session are refused on load.
+
+For `B` distinct bond identities attributed in retained dispute records, there are at most `64 * B` owner/claim rows, at most one pending reacquisition per row and one held deposit per closed row. This replaces a fixed per-claim envelope with a bound scaling with registered owners; it does not provide a fixed global memory bound or a deadline/inclusion guarantee under unbounded arrivals. The block fold still clones a claim's record, so peak memory/time and carrier scheduling at the largest permitted population need measured acceptance evidence. No scarce slot is handed to another bond or replaced by a preferred filer. A verifier needs its own unspent owner budget and collateral headroom.
+
+Op 206 appends `retainedRecords` and `retainedCap` to its observation. No rooted field, object encoding, fence activation or shipping pin changes. Attack fixtures cross 64 concurrent and 256 lifetime reservers, then open the newcomer’s own session despite an exhausted shared DA-8 counter. A small PanelDA FP fixture also fills these thresholds before public input acquisition, own-model replay and objective conviction/default. These are V-fold tests, not full fresh-node service or a proof of all-family throughput. Final results and logs are in the audit implementation record.

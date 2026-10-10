@@ -15,7 +15,7 @@ fn refused(why: impl Into<String>) -> PalwStateV2Error {
 
 /// **The two derived indexes, from the rooted map alone** — the one derivation the load, the writer and the consistency check
 /// share: `(hard_deadline, claim)` for every record that holds its claim (the lapse sweep's queue), and `(bond, claim)` for every
-/// bond with a live or held deposit on the claim (the A-6 exposure ledger's).
+/// bond with a live or closed reservation on the claim (the A-6 exposure ledger and the per-bond retained-record budget).
 #[allow(clippy::type_complexity)]
 pub(super) fn palw_legacy_dispute_indexes_of_v1(
     disputes: &BTreeMap<Hash64, PalwDisputeClaimV1>,
@@ -26,7 +26,7 @@ pub(super) fn palw_legacy_dispute_indexes_of_v1(
         if record.holds() {
             deadlines.insert((record.hard_deadline_daa, *claim_id));
         }
-        for bond in record.live.keys().chain(record.dismissed_held.iter().map(|(bond, _)| bond)) {
+        for bond in record.live.keys().chain(record.closed.iter()) {
             by_reserver.insert((*bond, *claim_id));
         }
     }
@@ -69,7 +69,7 @@ impl PalwChainStateV2 {
         self.legacy_disputes.get(claim_id).and_then(|record| record.live.get(bond))
     }
 
-    /// The claims on which `bond` holds a live or held deposit, in claim order.
+    /// The claims retaining `bond`'s reservation or closed replay guard, in claim order.
     pub fn legacy_disputes_of_v1(&self, bond: &PalwBondKeyV2) -> impl Iterator<Item = Hash64> + '_ {
         let bond = *bond;
         self.legacy_disputes_by_reserver
@@ -92,6 +92,11 @@ impl PalwChainStateV2 {
         self.legacy_disputes_of_v1(bond).filter(|claim| self.legacy_dispute_reservation_v1(claim, bond).is_some()).count()
     }
 
+    /// Every retained row of this bond counts, even if a neutral outcome refunded its deposit while another row keeps the record.
+    pub fn legacy_retained_disputes_of_v1(&self, bond: &PalwBondKeyV2) -> usize {
+        self.legacy_disputes_of_v1(bond).count()
+    }
+
     /// **The records agree with each other, with the claims and with their indexes** — what a carriage somebody else wrote must
     /// satisfy before it is believed. Below `palw_rcore_plus` the table is empty (no writer runs there).
     pub(crate) fn assert_legacy_disputes_consistency_v1(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
@@ -105,6 +110,7 @@ impl PalwChainStateV2 {
             return bad("the indexes differ from the records".into());
         }
         let mut live_per_bond: BTreeMap<PalwBondKeyV2, usize> = BTreeMap::new();
+        let mut retained_per_bond: BTreeMap<PalwBondKeyV2, usize> = BTreeMap::new();
         for (claim_id, record) in &self.legacy_disputes {
             let Some(claim) = self.claims.get(claim_id) else {
                 return bad(format!("a record names claim {claim_id}, which the state does not hold"));
@@ -112,28 +118,26 @@ impl PalwChainStateV2 {
             if record.live.is_empty() && record.dismissed_held.is_empty() {
                 return bad(format!("claim {claim_id}'s record holds nothing and was not deleted"));
             }
-            if record.reacquiring.len() > PALW_DISPUTE_RESERVERS_PER_CLAIM_TOTAL_V1
-                || record.reacquiring.iter().any(|(bond, unit)| {
-                    self.da_sessions.get(&(*claim_id, *bond)).is_none_or(|session| session.units.as_slice() != [*unit])
-                        || self.da_claims.get(claim_id).is_none_or(|da| {
-                            !crate::palw_da_rcore_v1::palw_da_unit_answered_v1(
-                                da,
-                                unit,
-                                crate::palw_da_rcore_v1::palw_da_in_run_rows_v1(claim, true),
-                            )
-                        })
-                })
-            {
+            if record.reacquiring.iter().any(|(bond, unit)| {
+                !record.knows(bond)
+                    || self.da_sessions.get(&(*claim_id, *bond)).is_none_or(|session| session.units.as_slice() != [*unit])
+                    || self.da_claims.get(claim_id).is_none_or(|da| {
+                        !crate::palw_da_rcore_v1::palw_da_unit_answered_v1(
+                            da,
+                            unit,
+                            crate::palw_da_rcore_v1::palw_da_in_run_rows_v1(claim, true),
+                        )
+                    })
+            }) {
                 return bad(format!("claim {claim_id}'s reacquisition has no matching historical answer and open session"));
             }
             if record.holds() && matches!(claim.phase, PalwClaimPhaseV2::Voided { .. } | PalwClaimPhaseV2::DefaultDisputed { .. }) {
                 return bad(format!("claim {claim_id} is voided with a live reservation (every void releases them)"));
             }
-            if record.live.len() > PALW_DISPUTE_LIVE_RESERVATIONS_PER_CLAIM_V1
-                || record.reservers_total() > PALW_DISPUTE_RESERVERS_PER_CLAIM_TOTAL_V1
-                || record.live.keys().any(|bond| record.closed.contains(bond))
+            if record.live.keys().any(|bond| record.closed.contains(bond))
                 || record.live.values().any(|row| row.sessions_opened > PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1 || row.deposit == 0)
                 || record.dismissed_held.iter().any(|(bond, amount)| *amount == 0 || !record.closed.contains(bond))
+                || record.dismissed_held.iter().map(|(bond, _)| *bond).collect::<BTreeSet<_>>().len() != record.dismissed_held.len()
             {
                 return bad(format!("claim {claim_id}'s record exceeds its caps or contradicts itself"));
             }
@@ -143,9 +147,15 @@ impl PalwChainStateV2 {
             for bond in record.live.keys() {
                 *live_per_bond.entry(*bond).or_default() += 1;
             }
+            for bond in record.live.keys().chain(record.closed.iter()) {
+                *retained_per_bond.entry(*bond).or_default() += 1;
+            }
         }
         if live_per_bond.values().any(|live| *live > PALW_DISPUTE_LIVE_RESERVATIONS_PER_BOND_V1) {
             return bad("a bond holds more live reservations than its cap".into());
+        }
+        if retained_per_bond.values().any(|count| *count > PALW_DISPUTE_RETAINED_RECORDS_PER_BOND_V1) {
+            return bad("a bond retains more dispute records than its cap".into());
         }
         Ok(())
     }
@@ -165,7 +175,7 @@ impl TransitionBuilder<'_> {
         }
         if let Some(previous) = &old {
             self.state.legacy_dispute_deadlines.remove(&(previous.hard_deadline_daa, claim_id));
-            for bond in previous.live.keys().chain(previous.dismissed_held.iter().map(|(bond, _)| bond)) {
+            for bond in previous.live.keys().chain(previous.closed.iter()) {
                 self.state.legacy_disputes_by_reserver.remove(&(*bond, claim_id));
             }
         }
@@ -173,7 +183,7 @@ impl TransitionBuilder<'_> {
             if record.holds() {
                 self.state.legacy_dispute_deadlines.insert((record.hard_deadline_daa, claim_id));
             }
-            for bond in record.live.keys().chain(record.dismissed_held.iter().map(|(bond, _)| bond)) {
+            for bond in record.live.keys().chain(record.closed.iter()) {
                 self.state.legacy_disputes_by_reserver.insert((*bond, claim_id));
             }
         }
@@ -358,11 +368,8 @@ pub(super) fn apply_dispute_reserved_v1(
     if record.knows(&reserver) {
         return Err(refused("this bond has reserved the claim before: one reservation per bond per claim over the claim's life"));
     }
-    if record.live.len() >= PALW_DISPUTE_LIVE_RESERVATIONS_PER_CLAIM_V1 {
-        return Err(refused("the claim holds as many live reservations as it may"));
-    }
-    if record.reservers_total() >= PALW_DISPUTE_RESERVERS_PER_CLAIM_TOTAL_V1 {
-        return Err(refused("the claim has admitted as many reservers as it may over its life"));
+    if builder.state.legacy_retained_disputes_of_v1(&reserver) >= PALW_DISPUTE_RETAINED_RECORDS_PER_BOND_V1 {
+        return Err(refused("the bond retains as many dispute records as it may"));
     }
     if builder.state.legacy_live_reservations_of_v1(&reserver) >= PALW_DISPUTE_LIVE_RESERVATIONS_PER_BOND_V1 {
         return Err(refused("the bond holds as many live reservations as it may"));
@@ -640,6 +647,8 @@ pub struct PalwFraudFilerStatusV1 {
     pub exposure: String,
     pub live_cap: u32,
     pub sessions_per_reservation: u8,
+    pub retained_records: u32,
+    pub retained_cap: u32,
 }
 
 /// The observation version of ops 204 and 206 (fields are only ever appended).
@@ -825,6 +834,8 @@ impl PalwChainStateV2 {
             exposure: self.legacy_dispute_exposure_v1(bond).to_string(),
             live_cap: PALW_DISPUTE_LIVE_RESERVATIONS_PER_BOND_V1 as u32,
             sessions_per_reservation: PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1,
+            retained_records: self.legacy_retained_disputes_of_v1(bond) as u32,
+            retained_cap: PALW_DISPUTE_RETAINED_RECORDS_PER_BOND_V1 as u32,
         })
     }
 }

@@ -12091,7 +12091,7 @@ pub struct PalwChainStateV2 {
     /// **Lane LG14-A: `(hard_deadline, claim)` for every dispute record that holds its claim** — the lapse sweep's queue. Maintained
     /// by `write_legacy_dispute`, rebuilt from `legacy_disputes` by every load and delta path, never hashed.
     legacy_dispute_deadlines: BTreeSet<(u64, Hash64)>,
-    /// **Lane LG14-A: `(bond, claim)` for every live or held reservation deposit** — what [`palw_accuser_exposure_v1`] reads.
+    /// **Lane LG14-A: `(bond, claim)` for every live or closed reservation** — the exposure and retained-record budgets read it.
     legacy_disputes_by_reserver: BTreeSet<(PalwBondKeyV2, Hash64)>,
     /// **ADR-0160 F-W (lane cap-weight): per bond, the staged weight and the weight reservation of its
     /// live new-rule claims** ([`crate::palw_weight_cap_v1::PalwBondWeightIndexV1`]). Maintained by

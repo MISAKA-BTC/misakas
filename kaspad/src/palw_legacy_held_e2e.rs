@@ -360,6 +360,57 @@ impl World {
     }
 }
 
+/// Registered, funded coalition bonds fill the old shared admission thresholds before the outsider starts its public input path.
+fn coalition_reservations(w: &mut World, claim: Hash64, count: u64, close: bool) {
+    use kaspa_consensus_core::palw_legacy_public_filer_v1::{palw_dispute_reserved_object_v1, palw_fraud_filer_reservation_v1};
+    let keys: Vec<_> = (10_000..10_000 + count).collect();
+    for group in keys.chunks(16) {
+        w.block(
+            group
+                .iter()
+                .map(|n| PalwConsensusObjectV2::BondRegistered {
+                    bond: bond_key(*n),
+                    pubkey: n.to_le_bytes().to_vec(),
+                    operator_pubkey: (20_000 + n).to_le_bytes().to_vec(),
+                    collateral: 1_000_000_000_000_000,
+                    payout_payload: Hash64::from_u64_word(0x9A00 + n),
+                    capable_classes: Default::default(),
+                    signature: Vec::new(),
+                })
+                .collect(),
+        )
+        .expect("coalition bonds register after genesis");
+    }
+    for group in keys.chunks(16) {
+        let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap();
+        w.block(
+            group
+                .iter()
+                .map(|n| {
+                    palw_dispute_reserved_object_v1(h64(999), palw_fraud_filer_reservation_v1(&view, bond_key(*n)), |_| SIG.to_vec())
+                })
+                .collect(),
+        )
+        .expect("each coalition bond reserves under its own charged budget");
+    }
+    if close {
+        // Keep one hold so Final/retirement cannot hide the old lifetime-saturation attack while the released rows accumulate.
+        for group in keys[1..].chunks(16) {
+            w.block(
+                group
+                    .iter()
+                    .map(|n| PalwConsensusObjectV2::DisputeReleasedV1 { claim, reserver: bond_key(*n), signature: SIG.to_vec() })
+                    .collect(),
+            )
+            .expect("released deposits and replay guards remain recorded");
+        }
+    }
+    let record = w.s.legacy_dispute_v1(&claim).unwrap();
+    assert_eq!(record.reservers_total(), count as usize);
+    assert_eq!(record.live.len(), if close { 1 } else { count as usize });
+    assert_eq!(record.closed.len(), if close { count as usize - 1 } else { 0 });
+}
+
 /// The claim's binding as the chain discloses it: the event answer a row-0 demand obtained.
 fn public_binding(chain: &[PalwConsensusObjectV2], claim: &Hash64) -> Option<PalwStepBindingV2> {
     chain.iter().find_map(|o| match o {
@@ -1301,6 +1352,9 @@ async fn lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_sta
                 w.quiet();
             }
             assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Final { .. }));
+        }
+        if lie {
+            coalition_reservations(&mut w, claim, if after_final && !withhold { 256 } else { 64 }, after_final && !withhold);
         }
         let candidate =
             w.s.palw_fraud_filer_candidates_v1(&rc_params(), &bond_key(OUTSIDER), w.daa)

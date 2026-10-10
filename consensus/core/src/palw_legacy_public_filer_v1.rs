@@ -56,10 +56,9 @@ pub const PALW_LEGACY_DISPUTE_ALL_DOMAINS: &[&[u8]] = &[PALW_LEGACY_DISPUTE_MLDS
 
 // ---- the terms (consensus constants of the never-armed fence; POLICY values, design §5) --------------------------------------------
 
-/// Live reservations one claim holds at once.
-pub const PALW_DISPUTE_LIVE_RESERVATIONS_PER_CLAIM_V1: usize = 64;
-/// Distinct reservers one claim admits over its life (live and closed).
-pub const PALW_DISPUTE_RESERVERS_PER_CLAIM_TOTAL_V1: usize = 256;
+/// Retained dispute records attributable to one bond, including closed replay guards. Other bonds cannot spend this budget.
+/// Claim-wide live/lifetime caps would let a funded coalition exclude a fresh public verifier, regardless of its own headroom.
+pub const PALW_DISPUTE_RETAINED_RECORDS_PER_BOND_V1: usize = 64;
 /// Live reservations one bond holds at once, across claims.
 pub const PALW_DISPUTE_LIVE_RESERVATIONS_PER_BOND_V1: usize = 64;
 /// Reserved DA sessions one reservation may open on its claim (one open at a time: DA-1): the legacy localizer's worst case over the
