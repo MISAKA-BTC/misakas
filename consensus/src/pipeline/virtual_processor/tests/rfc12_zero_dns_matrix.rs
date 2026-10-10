@@ -1043,7 +1043,11 @@ async fn rfc12_x6_a_node_without_the_fence_follows_history_to_the_fence_and_no_f
 fn publish_native(rig: &Rig, snapshot: NativeSettlementSnapshotV1) {
     let vp = rig.vp();
     let mut batch = rocksdb::WriteBatch::default();
-    vp.evm_heads_store.write().set_native_batch(&mut batch, Some(snapshot)).unwrap();
+    let mut store = vp.evm_heads_store.write();
+    if snapshot.finalized.is_some() {
+        store.set_native_finalized_publication_batch(&mut batch, Some(snapshot.clone())).unwrap();
+    }
+    store.set_native_batch(&mut batch, Some(snapshot)).unwrap();
     vp.db.write(batch).unwrap();
 }
 
@@ -1098,6 +1102,34 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
     let pp = a.chain.sink();
     let header = a.api().get_evm_header_of(pp).unwrap().expect("the EVM header");
     let snapshot = a.api().get_evm_state_snapshot_of(pp).unwrap().expect("the EVM state");
+    let publication = a.vp().evm_heads_store.read().native_finalized_publication().unwrap();
+    assert!(publication.as_ref().unwrap().finalized.is_some());
+    {
+        // Exercise the legacy side of the writer; this is a direct boundary seam, not a mined deep rollback.
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().update_evm_canonical_heads(&mut batch, a.config.params.genesis.hash);
+        a.vp().db.write(batch).unwrap();
+        assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(still.clone()), "rollback cannot erase a sticky alarm");
+        assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), publication);
+    }
+    assert_eq!(readiness_of(&a).stop, Some(SettlementStopV1::FinalizedConflict), "prime the advisory memo before resync");
+    let mut wrong_header = header.clone();
+    wrong_header.evm_number += 1;
+    assert!(a.vp().import_pruning_point_evm_state(pp, wrong_header, snapshot.clone()).is_err());
+    let mut wrong_state = snapshot.clone();
+    if let Some(account) = wrong_state.accounts.first_mut() {
+        account.nonce ^= 1;
+    } else {
+        wrong_state.accounts.push(kaspa_consensus_core::evm::EvmAccountSnapshot {
+            address: EvmAddress::from_bytes([0xee; 20]),
+            nonce: 1,
+            code_hash: kaspa_consensus_core::evm::EVM_EMPTY_CODE_HASH,
+            ..Default::default()
+        });
+    }
+    assert!(a.vp().import_pruning_point_evm_state(pp, header.clone(), wrong_state).is_err());
+    assert_eq!(snapshot_of(&a), Some(still.clone()), "rejected imports cannot clear the conflict");
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), publication);
     {
         // A node that imports has not got these rows (that is why it imports); this one has, so they go first.
         use crate::model::stores::evm::{EvmHeaderStore, EvmStateStore};
@@ -1108,6 +1140,9 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
     }
     a.vp().import_pruning_point_evm_state(pp, header, snapshot).expect("a root-verified import");
     assert_eq!(snapshot_of(&a), None, "the import clears native evidence until reconstruction supplies proof");
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), None);
+    assert_ne!(readiness_of(&a).stop, Some(SettlementStopV1::FinalizedConflict), "same-generation memo is invalidated immediately");
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, None);
     let heads = heads_of(&a).expect("heads");
     assert_eq!(
         (heads.latest_head(), heads.safe_head(), heads.finalized_head()),
@@ -1120,13 +1155,214 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
         (rebuilt.generation, rebuilt.latest, rebuilt.safe, rebuilt.finalized),
         (z3[0].header.hash, Some(z3[0].header.hash), None, None)
     );
-    assert_eq!(
-        rebuilt.stop,
-        Some(SettlementStopV1::FrontierNotCovered),
-        "reconstruction built it from the chain; the conflict is gone"
-    );
+    assert_eq!(rebuilt.stop, Some(SettlementStopV1::FrontierNotCovered), "reconstruction built it from the chain; the conflict is gone");
 }
 
+/// A test publication names a real canonical block, but is not a genuine Final-work certificate.
+/// The regression concerns retention of what was published, not source soundness.
+async fn withdrawn_publication_fork_case(restart: bool) {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let p = parts(Some(FENCE));
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _rx) = async_channel::unbounded();
+    let first = TestConsensus::with_db(db.clone(), &p.0, sender);
+    let mut a = Rig::on(first, &p, 0x12_0720_0000);
+    let common = prefix(&mut a).await;
+    let mut b = follower(&p, 0x12_0730_0000, &common).await;
+    let main = extend(&mut a, &[2]).await;
+    let published = main[0].header.hash;
+    publish_native(
+        &a,
+        NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: a.config.params.consensus_params_id(),
+            policy_id: test_policy().id(),
+            generation: published,
+            retirement_daa: FENCE,
+            frontier: None,
+            latest: Some(published),
+            safe: Some(published),
+            finalized: Some(published),
+            depth: 1,
+            unique_work: "1".into(),
+            stop: None,
+        },
+    );
+    // No certified work: the next canonical extension withdraws the labels, without abandoning the head.
+    extend(&mut a, &[4]).await;
+    let withdrawn = snapshot_of(&a).unwrap();
+    assert_eq!((withdrawn.safe, withdrawn.finalized), (None, None));
+    assert_ne!(withdrawn.stop, Some(SettlementStopV1::FinalizedConflict));
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, Some(published));
+    if restart {
+        let (wallets, nonce, simulated_time, reopen_nonce) =
+            (a.wallets.clone(), a.nonce, a.chain.ctx.simulated_time, a.chain.nonce_for_reopen());
+        drop(a);
+        let mut config = p.0.clone();
+        config.process_genesis = false;
+        let (sender, _rx) = async_channel::unbounded();
+        let second = TestConsensus::with_db(db.clone(), &config, sender);
+        let chain = t12_reopened_chain(second, &config, &p.1, simulated_time, reopen_nonce);
+        let resumed = (config, p.1.clone(), p.2.clone(), p.3.clone());
+        a = Rig::resumed(chain, &resumed, wallets, nonce);
+        assert_eq!(snapshot_of(&a), Some(withdrawn));
+        assert_eq!(readiness_of(&a).finalized.withdrawn_from, Some(published), "restart preserves the publication history");
+    }
+    let private = extend(&mut b, &[3, 4, 5, 6]).await;
+    for block in private.iter().cloned() {
+        a.arrive(block, "a heavier fork abandoning the withdrawn publication").await;
+    }
+    assert_eq!(a.chain.sink(), private.last().unwrap().header.hash, "fork choice still selects the heavier branch");
+    let conflict = snapshot_of(&a).unwrap();
+    assert_eq!(conflict.stop, Some(SettlementStopV1::FinalizedConflict), "withdrawal must not erase the historical conflict anchor");
+    assert_eq!((conflict.safe, conflict.finalized), (None, None));
+}
+
+#[tokio::test]
+async fn rfc12_publication_a_withdrawn_head_still_detects_a_later_abandoning_fork() {
+    withdrawn_publication_fork_case(false).await;
+}
+
+#[tokio::test]
+async fn rfc12_publication_a_restart_preserves_withdrawal_and_later_fork_detection() {
+    withdrawn_publication_fork_case(true).await;
+}
+#[tokio::test]
+async fn rfc12_publication_incompatible_history_is_preserved_and_readers_fail_closed() {
+    use kaspa_consensus_core::palw_native_readiness_v1::{HistoryGapV1, SafeWaitV1};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0740_0000);
+    prefix(&mut a).await;
+    let native = snapshot_of(&a).unwrap();
+    let valid = NativeSettlementSnapshotV1 {
+        safe: native.latest,
+        finalized: native.latest,
+        // A stop beyond a certified prefix may coexist with a genuine older positive head.
+        stop: Some(SettlementStopV1::InsufficientDepth),
+        ..native.clone()
+    };
+    for kind in 0..8 {
+        let mut invalid = valid.clone();
+        match kind {
+            0 => invalid.version = 2,
+            1 => invalid.policy_id = Hash64::from_u64_word(71),
+            2 => invalid.ruleset_id = kaspa_hashes::Hash::from_bytes([72; 32]),
+            3 => invalid.retirement_daa += 1,
+            4 => invalid.finalized = None,
+            5 => invalid.safe = None,
+            6 => invalid.latest = None,
+            7 => invalid.stop = Some(SettlementStopV1::FinalizedConflict),
+            _ => unreachable!(),
+        }
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().evm_heads_store.write().set_native_finalized_publication_batch(&mut batch, Some(invalid.clone())).unwrap();
+        a.vp().db.write(batch).unwrap();
+        assert!(a.api().get_native_settlement_snapshot().is_err(), "reader must reject incompatible publication {kind}");
+        assert!(a.api().get_evm_canonical_heads().is_err(), "ETH tags share the fail-closed reader");
+        extend(&mut a, &[2 + kind % 6]).await;
+        assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(native.clone()), "not overwritten");
+        assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), Some(invalid));
+        assert_eq!(
+            readiness_of(&a).stopped_early,
+            Some(SafeWaitV1::MissingHistory { gap: HistoryGapV1::PersistedSnapshotIncompatible, block: None })
+        );
+    }
+    let mut batch = rocksdb::WriteBatch::default();
+    a.vp().evm_heads_store.write().set_native_finalized_publication_batch(&mut batch, Some(valid)).unwrap();
+    a.vp().db.write(batch).unwrap();
+    extend(&mut a, &[4]).await;
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, native.latest, "partial-prefix publication is valid incident history");
+}
+/// Simulate a pre-publication-history database, discarding its in-memory store cache as on restart.
+fn remove_publication_row_for_legacy_upgrade(rig: &Rig) {
+    use crate::model::stores::evm::DbEvmCanonicalHeadsStore;
+    let mut key: Vec<u8> = kaspa_database::registry::DatabaseStorePrefixes::EvmCanonicalHeads.into();
+    key.extend_from_slice(b"/native/finalized-publication/v1");
+    rig.vp().db.delete(key).unwrap();
+    *rig.vp().evm_heads_store.write() = DbEvmCanonicalHeadsStore::new(rig.vp().db.clone());
+}
+
+#[tokio::test]
+async fn rfc12_publication_legacy_positive_snapshot_bootstraps_retained_history() {
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0750_0000);
+    prefix(&mut a).await;
+    let snapshot = snapshot_of(&a).unwrap();
+    let published = NativeSettlementSnapshotV1 {
+        safe: snapshot.latest,
+        finalized: snapshot.latest,
+        // Certified prefix followed by a newer stop must not disqualify the positive publication.
+        stop: Some(SettlementStopV1::InsufficientDepth),
+        ..snapshot
+    };
+    publish_native(&a, published.clone());
+    remove_publication_row_for_legacy_upgrade(&a);
+    assert_eq!(a.vp().native_finalized_publication().unwrap(), Some(published.clone()));
+    extend(&mut a, &[2]).await;
+    assert_eq!(snapshot_of(&a).unwrap().finalized, None);
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), Some(published.clone()));
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, published.finalized);
+}
+
+#[tokio::test]
+async fn rfc12_publication_legacy_negative_snapshot_requires_recovery_not_invented_empty_history() {
+    use kaspa_consensus_core::palw_native_readiness_v1::{HistoryGapV1, SafeWaitV1};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0760_0000);
+    prefix(&mut a).await;
+    let legacy = snapshot_of(&a).unwrap();
+    assert_eq!(legacy.finalized, None);
+    remove_publication_row_for_legacy_upgrade(&a);
+    assert!(a.api().get_native_settlement_snapshot().is_err());
+    extend(&mut a, &[2]).await;
+    assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(legacy));
+    assert!(a.vp().evm_heads_store.read().native_finalized_publication().is_err(), "missing history is not overwritten with None");
+    assert_eq!(
+        readiness_of(&a).stopped_early,
+        Some(SafeWaitV1::MissingHistory { gap: HistoryGapV1::PersistedSnapshotIncompatible, block: None })
+    );
+    let pp = a.chain.sink();
+    let header = a.api().get_evm_header_of(pp).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(pp).unwrap().unwrap();
+    {
+        use crate::model::stores::evm::{EvmHeaderStore, EvmStateStore};
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().evm_header_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().evm_state_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().db.write(batch).unwrap();
+    }
+    a.vp().import_pruning_point_evm_state(pp, header, state).unwrap();
+    assert_eq!(snapshot_of(&a), None);
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), None);
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, None);
+    extend(&mut a, &[3]).await;
+    assert_ne!(snapshot_of(&a).unwrap().stop, Some(SettlementStopV1::FinalizedConflict));
+}
+
+#[tokio::test]
+async fn rfc12_publication_corrupt_bytes_never_fall_back_to_a_convenient_snapshot() {
+    use crate::model::stores::evm::DbEvmCanonicalHeadsStore;
+    use kaspa_consensus_core::palw_native_readiness_v1::{HistoryGapV1, SafeWaitV1};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0770_0000);
+    prefix(&mut a).await;
+    let current = snapshot_of(&a).unwrap();
+    let published = NativeSettlementSnapshotV1 { safe: current.latest, finalized: current.latest, stop: None, ..current };
+    publish_native(&a, published.clone());
+    let mut key: Vec<u8> = kaspa_database::registry::DatabaseStorePrefixes::EvmCanonicalHeads.into();
+    key.extend_from_slice(b"/native/finalized-publication/v1");
+    a.vp().db.put(&key, [0xff]).unwrap();
+    *a.vp().evm_heads_store.write() = DbEvmCanonicalHeadsStore::new(a.vp().db.clone());
+    assert!(a.api().get_native_settlement_snapshot().is_err());
+    assert!(a.api().get_evm_canonical_heads().is_err());
+    extend(&mut a, &[2]).await;
+    assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(published));
+    assert_eq!(a.vp().db.get(key).unwrap(), Some(vec![0xff]), "unreadable incident evidence is preserved");
+    assert_eq!(
+        readiness_of(&a).stopped_early,
+        Some(SafeWaitV1::MissingHistory { gap: HistoryGapV1::PersistedSnapshotIncompatible, block: None })
+    );
+}
 // =====================================================================================================================
 // MATRIX 7 — certified work makes a prefix safe; a reorg takes it back; lost history stops certification
 // =====================================================================================================================

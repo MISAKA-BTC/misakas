@@ -324,3 +324,62 @@ The failure is recorded in `/tmp/rfc12-court-maturity.log`, not counted as succe
 passed 2 tests (2.45 s), then the final command above recompiled all four targets and passed the current code.
 `git diff --check` and rustfmt checks of the reader and small test files pass. No full node, release benchmark,
 multi-process transport or new class security approval is claimed.
+
+
+## Publication-history correction (2026-10-11 design audit)
+
+The earlier C11 implementation retained `withdrawnFrom` only in memory and compared reorgs against the
+current snapshot's `finalized`. Once that snapshot withdrew the label, a later abandoning branch was no
+longer detected; restart also forgot the withdrawal. Two regressions failed before the repair at those
+exact assertions: `FrontierNotCovered` instead of `FinalizedConflict`, and `None` instead of the published
+head after reopening the processor over the same database.
+
+`DbEvmCanonicalHeadsStore` now retains `Option<NativeSettlementSnapshotV1>` at prefix 209 plus
+`/native/finalized-publication/v1`. Its finalized hash is the deepest previously published conflict anchor;
+version/ruleset/policy/retirement fence and positive-head shape are checked. A stop beyond a certified
+prefix may coexist with a positive publication and is not rejected wholesale. This local row is never
+transported as a certificate, never counted as work and never consulted by fork choice. Its update is in
+the virtual-state batch with the native snapshot and canonical heads. The original three-hash singleton
+codec and native wire types are unchanged.
+
+Withdrawal retains this row; its committed negative snapshot yields `withdrawnFrom` after restart.
+Before-fence rollback preserves both this row and the native incident snapshot, while public readers use
+the legacy heads under their existing fence gate. Thus re-entry cannot erase a sticky conflict merely by
+returning to the originally published branch. Only the existing root-verified execution-state import
+clears both rows with its state/head batch, and invalidates the readiness memo after commit even at the
+same sink. Rejected commitment/state-root imports preserve the incident and memo. Corrupt or incompatible
+publication data is preserved, public readers fail closed, and readiness reports `PersistedSnapshotIncompatible`.
+
+A missing new row beside a legacy **positive** snapshot bootstraps that publication on the next commit.
+A legacy **negative** snapshot cannot establish whether a publication was forgotten: readers fail closed,
+the writer preserves it, and validated recovery installs explicit absence. Fresh state with no prior native
+snapshot can initialize normally. This conservative migration condition is required before any deployment;
+current public retirement fences remain dormant. It does not reconstruct history already lost by old code.
+
+New node cases exercise withdrawal followed by a heavier fork, fresh-processor reopen, eight incompatible
+metadata/shape cases, undecodable bytes, legacy-positive bootstrap and legacy-negative recovery. The existing
+x7 case also primes the memo, rejects invalid header/state imports without clearing history, checks the direct
+legacy-side writer boundary, and checks immediate same-sink readiness after a valid import. A store test
+checks positive publication, withdrawal and explicit reset across committed versus staged batches and fresh
+store readers. The retirement unit's synthetic no-publication fixture now records explicit absence.
+
+These are in-process real virtual-processor/EVM tests over harness parameters. Publications and several
+frontier/work facts are fixture-controlled; they do not prove genuine Final-work soundness, OS-process
+crash recovery, a mined below-fence deep rollback, real transport, pruning-proof IBD, 5,400-DAA maturity,
+common-prefix security or release resource bounds. The existing explicitly ignored long probe remains a
+separate gate. A root-verified import called directly is not evidence for the full resync protocol. The
+four-RFC audit retains those acceptance gates and the broad goal remains active.
+
+Final validation (Rust 1.93.0, macOS aarch64, jobs 2, dev/test debug 0, incremental 0):
+
+`cargo test --locked -p kaspa-consensus --features evm --lib -- rfc12_ rfc0012_ --test-threads=1`
+
+**36 passed, 0 failed, 1 ignored**; build 2m04s, runtime 16.06s. Matrix 28, C-items 3, existing private-Final
+probe 1, store 2, retirement unit 1, row-size unit 1. The ignored case is the existing explicit 5,400-DAA
+long probe, not a success. Log `/tmp/rfc12-publication-regression.log`. Earlier focused smoke results are
+not counted again. The fixture iteration failures (hash/address types, bond index, heartbeat clock-lead)
+were corrected without weakening production validation.
+
+`cargo check --locked -p kaspad --features evm` succeeded in 35.20s with existing warnings; log
+`/tmp/rfc12-publication-daemon.log`. Scoped formatting and `git diff --check` pass. No source logic changed
+after this validation; only the documentation records were completed. No public activation, push or deployment.

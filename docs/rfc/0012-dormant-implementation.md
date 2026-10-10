@@ -80,6 +80,16 @@ the conflict remains sticky until a validated resync/import clears it. Incompati
 unreadable persisted evidence is preserved for recovery and makes readers fail closed,
 rather than being replaced with an empty certificate. Neither case reinstates DNS authority.
 
+Publication history is stored separately at EVM-head prefix 209 plus
+`/native/finalized-publication/v1`, as `Option<NativeSettlementSnapshotV1>`. It keeps the deepest published
+finalized head even if the current snapshot withholds that label. Ordinary rollback across the fence
+preserves both this row and the native incident snapshot, hidden by the existing reader gates, so a
+sticky alarm survives re-entry. It is an alarm anchor, never a certificate or a selection veto. A validated
+execution-state import clears it in the same batch and invalidates the same-generation readiness memo;
+rejected imports preserve it. Old positive evidence bootstraps history, while missing history beside old
+negative evidence requires recovery rather than an assumption of no past publication. The legacy
+three-hash singleton and native RPC wire types are unchanged.
+
 An absent ETH block tag returns `null`. State/call queries for unavailable executed
 heads return an error, rather than reading tip state or inventing an empty account.
 The evidence API also verifies endpoint roots and provenance. The legacy DAA-only

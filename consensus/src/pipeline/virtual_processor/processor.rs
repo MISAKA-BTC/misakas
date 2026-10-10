@@ -556,9 +556,6 @@ pub struct VirtualStateProcessor {
     /// harness can produce) is read as REAL work. The node's own delta, extraction, conversion and certificate run unchanged.
     #[cfg(test)]
     pub(super) native_relabel_class: parking_lot::Mutex<Option<Hash64>>,
-    /// The `finalized` head a virtual change published and a later one withdrew while no conflict was recorded (RFC-0012 C11), kept
-    /// until a `finalized` is published again. Memory only, for the explanation; the `error!` at the withdrawal is the durable signal.
-    pub(super) native_finalized_withdrawn: parking_lot::Mutex<Option<BlockHash>>,
     /// Test-only: facts a test places at a chain block, as if its PALW delta had carried that work.
     #[cfg(test)]
     pub(super) native_fact_override:
@@ -1316,7 +1313,6 @@ impl VirtualStateProcessor {
             template_clock: Default::default(),
             #[cfg(test)]
             native_relabel_class: Default::default(),
-            native_finalized_withdrawn: Default::default(),
             #[cfg(test)]
             native_fact_override: Default::default(),
             palw_native_ruleset_id: params.consensus_params_id(),
@@ -3524,7 +3520,12 @@ impl VirtualStateProcessor {
         if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.dns_retired_at(daa)) {
             let policy = self.palw_dns_retirement.expect("retirement is active").settlement.id();
             let previous_finalized = match self.evm_heads_store.read().native_snapshot() {
-                Ok(Some(s)) if s.version != 1 || s.policy_id != policy || s.ruleset_id != self.palw_native_ruleset_id => {
+                Ok(Some(s))
+                    if s.version != 1
+                        || s.policy_id != policy
+                        || s.ruleset_id != self.palw_native_ruleset_id
+                        || s.retirement_daa != self.palw_dns_retirement.unwrap().activation.daa_score() =>
+                {
                     error!("[native-settlement] incompatible persisted evidence; preserving it for resync");
                     return;
                 }
@@ -3535,18 +3536,39 @@ impl VirtualStateProcessor {
                     return;
                 }
             };
+            let mut publication = match self.native_finalized_publication() {
+                Ok(s) => s,
+                Err(()) => {
+                    error!("[native-settlement] incompatible or unreadable finalized publication; preserving it for resync");
+                    return;
+                }
+            };
             let snapshot = self.native_evm_settlement_snapshot(sink);
+            if let Some(finalized) = snapshot.finalized {
+                // Never replace the alarm anchor with an older publication. This cannot veto selection.
+                let advances = publication
+                    .as_ref()
+                    .and_then(|s| s.finalized)
+                    .is_none_or(|previous| self.reachability_service.try_is_chain_ancestor_of(previous, finalized).unwrap_or(false));
+                if advances {
+                    publication = Some(snapshot.clone());
+                }
+            }
             self.note_finalized_withdrawal(sink, previous_finalized, &snapshot);
             let heads = kaspa_consensus_core::evm::CanonicalEvmHeads {
-                latest: snapshot.latest.unwrap_or_default(), safe: snapshot.safe.unwrap_or_default(), finalized: snapshot.finalized.unwrap_or_default(),
+                latest: snapshot.latest.unwrap_or_default(),
+                safe: snapshot.safe.unwrap_or_default(),
+                finalized: snapshot.finalized.unwrap_or_default(),
             };
             let mut store = self.evm_heads_store.write();
+            store.set_native_finalized_publication_batch(batch, publication).unwrap();
             store.set_native_batch(batch, Some(snapshot)).unwrap();
             store.set_batch(batch, heads).unwrap();
             return;
         }
-        // A legal rollback across the fence restores the legacy derivation, without stale V1 labels.
-        self.evm_heads_store.write().set_native_batch(batch, None).unwrap();
+        // A legal rollback across the fence restores the legacy derivation. Reader gates hide native labels.
+        // Preserve both native incident snapshot and publication history: re-entry must not erase a sticky
+        // conflict, even if it returns to the originally published branch. Only validated resync clears them.
         // The sink carries an EVM result iff the lane is live for it (it may
         // predate activation right after the fork).
         if !self.evm_header_store.has(sink).unwrap_or(false) {
@@ -22094,6 +22116,7 @@ impl VirtualStateProcessor {
             }
         }
         self.evm_state_store.insert_batch(&mut batch, pruning_point, snapshot).unwrap();
+        let mut readiness_memo = self.native_readiness_memo.lock();
         {
             let mut heads_write = self.evm_heads_store.write();
             let prev = heads_write.get().ok();
@@ -22103,10 +22126,12 @@ impl VirtualStateProcessor {
             let heads = if retired {
                 kaspa_consensus_core::evm::CanonicalEvmHeads { latest: pruning_point, safe: BlockHash::default(), finalized: BlockHash::default() }
             } else { kaspa_consensus_core::evm::CanonicalEvmHeads { latest, safe, finalized: pruning_point } };
+            heads_write.set_native_finalized_publication_batch(&mut batch, None).unwrap();
             heads_write.set_native_batch(&mut batch, None).unwrap();
             heads_write.set_batch(&mut batch, heads).unwrap();
         }
         self.db.write(batch).unwrap();
+        *readiness_memo = None;
         Ok(())
     }
 

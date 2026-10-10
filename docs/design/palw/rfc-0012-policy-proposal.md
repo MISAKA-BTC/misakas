@@ -585,13 +585,16 @@ line that makes the lead-cap parent policy read the same clock as the template b
 5. **A latch is not free.** It would relax the API's ordered-prefix invariant (`finalized` an ancestor of `safe`, enforced by `get_native_settlement_snapshot` and the
    ETH-tag consistency checks) and add persistent consensus-adjacent state.
 
-**What was implemented so the retreat is never silent.** The virtual-change path (`update_evm_canonical_heads` -> `note_finalized_withdrawal`) compares the previous
-snapshot's `finalized` with the new one's: when a published head is withdrawn and no conflict is recorded it logs `FINALIZED LABEL WITHDRAWN: <head> was published as
-finalized and is still canonical, but at <sink> the evidence no longer certifies it (stop ...)` at `ERROR` level (the durable signal; a pager rule on that string is OPS),
-and keeps the head in memory so `getPalwSettlement.nativeReadiness.finalized.withdrawnFrom` names it until a `finalized` is published again (a restart forgets the field,
-not the log). The CLI prints it, the explorer renders it as an alarm. Tested: `rfc12_r5` (the withdrawn head is the published one; nothing is named when nothing was
-published), core/rpc/gRPC/CLI/explorer round trips. **If the user prefers the latch**, it needs a design note first (it changes the snapshot's invariants), then
-`native_evaluate` step 8 reads the previous snapshot - the data is already in hand.
+**Publication-history correction (2026-10-11).** The original implementation logged withdrawal and retained its head only in memory.
+After a withdrawal made the current snapshot's `finalized` null, a later abandoning fork no longer had a finalized head to compare;
+a restart also lost `withdrawnFrom`. Logging is not durable publication state. The current design retains a local versioned publication
+record independently of the recomputed certificate, in the same batch as heads and snapshot. It is never used as evidence or a
+fork-choice veto. The deepest publication remains the conflict anchor through withdrawal/restart/cross-fence rollback; a canonical
+withdrawal's `withdrawnFrom` is derived from it, while a conflict has its own signal. Only a validated execution-state import clears
+it, and also invalidates the readiness memo immediately. Invalid imports, corrupt/incompatible history and ambiguous legacy negative
+snapshots cannot silently clear it. A legacy positive snapshot can bootstrap the row; previously forgotten history requires recovery.
+See RFC §3.1 and the implementation record's publication-history correction for the exact test evidence and its limits. This keeps the
+no-latch policy for **current labels**; retaining what was already published does not preserve a safe/finalized label without proof.
 
 ### 12.8 C7 - the activation release: a ready-to-apply checklist (do NOT apply before the release)
 

@@ -17491,6 +17491,8 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     };
     let publish = |s| {
         let mut batch = rocksdb::WriteBatch::default();
+        // This fixture has never published native finalized: persist that fact explicitly.
+        consensus.storage.evm_heads_store.write().set_native_finalized_publication_batch(&mut batch, None).unwrap();
         consensus.storage.evm_heads_store.write().set_native_batch(&mut batch, Some(s)).unwrap();
         vp.db.write(batch).unwrap();
     };

@@ -2965,6 +2965,9 @@ impl ConsensusApi for Consensus {
         else {
             return Ok(None);
         };
+        self.virtual_processor.native_finalized_publication().map_err(|()| {
+            ConsensusError::General("native finalized publication is incompatible or unreadable; reconstruct or resync")
+        })?;
         let snapshot = self
             .storage
             .evm_heads_store
@@ -2978,6 +2981,7 @@ impl ConsensusApi for Consensus {
                 || s.generation != sink
                 || s.policy_id != retirement.settlement.id()
                 || s.ruleset_id != self.config.params.consensus_params_id()
+                || s.retirement_daa != retirement.activation.daa_score()
             {
                 return Err(ConsensusError::General("native settlement generation/ruleset mismatch; reconstruct or resync"));
             }

@@ -171,9 +171,41 @@ impl VirtualStateProcessor {
     ///
     /// Every early return carries the `latest` found so far: the newest executed, root-verified result on the
     /// selected chain is a fact about execution, not about evidence, and it must not disappear because a
-    /// certificate could not be built. `safe` and `finalized` are `None` whenever `stop` is set.
+    /// certificate could not be built. A certification stop can retain an older safe prefix; an early
+    /// history/conflict stop withholds both `safe` and `finalized`.
     pub(super) fn native_evm_settlement_snapshot(&self, sink: BlockHash) -> NativeSettlementSnapshotV1 {
         self.native_evaluate(sink).snapshot
+    }
+
+    /// The deepest head this node published as finalized, retained through absent labels and restart.
+    /// This is incident history, never a certificate or an input to fork choice. Old positive snapshots
+    /// bootstrap the local row; an already-withdrawn pre-upgrade snapshot cannot reconstruct lost history.
+    pub(crate) fn native_finalized_publication(&self) -> Result<Option<NativeSettlementSnapshotV1>, ()> {
+        let retirement = self.palw_dns_retirement.ok_or(())?;
+        let store = self.evm_heads_store.read();
+        let publication = match store.native_finalized_publication() {
+            Ok(s) => s,
+            Err(StoreError::KeyNotFound(_)) => match store.native_snapshot() {
+                Ok(None) | Err(StoreError::KeyNotFound(_)) => None,
+                Ok(Some(s)) if s.finalized.is_some() => Some(s),
+                // A legacy absent label may be a forgotten withdrawal: require validated recovery.
+                Ok(Some(_)) | Err(_) => return Err(()),
+            },
+            Err(_) => return Err(()),
+        };
+        if publication.as_ref().is_some_and(|s| {
+            s.version != 1
+                || s.policy_id != retirement.settlement.id()
+                || s.ruleset_id != self.palw_native_ruleset_id
+                || s.retirement_daa != retirement.activation.daa_score()
+                || s.finalized.is_none()
+                || s.safe.is_none()
+                || s.latest.is_none()
+                || s.stop == Some(SettlementStopV1::FinalizedConflict)
+        }) {
+            return Err(());
+        }
+        Ok(publication)
     }
 
     /// The snapshot AND the material it was weighed from (or the reason nothing was weighed). One function, so the explanation
@@ -205,13 +237,21 @@ impl VirtualStateProcessor {
         };
         let previous = match self.evm_heads_store.read().native_snapshot() {
             Ok(Some(s))
-                if s.version == 1 && s.policy_id == retirement.settlement.id() && s.ruleset_id == self.palw_native_ruleset_id =>
+                if s.version == 1
+                    && s.policy_id == retirement.settlement.id()
+                    && s.ruleset_id == self.palw_native_ruleset_id
+                    && s.retirement_daa == retirement.activation.daa_score() =>
             {
                 Some(s)
             }
             Ok(None) | Err(StoreError::KeyNotFound(_)) => None,
             // Corrupt or incompatible evidence is never silently forgotten.
             _ => return stopped(result, gap(HistoryGapV1::PersistedSnapshotIncompatible, None)),
+        };
+
+        let publication = match self.native_finalized_publication() {
+            Ok(s) => s,
+            Err(()) => return stopped(result, gap(HistoryGapV1::PersistedSnapshotIncompatible, None)),
         };
 
         // 1. The selected chain, newest first: executed rows only, an execution gap inside them is a stop.
@@ -260,7 +300,8 @@ impl VirtualStateProcessor {
             result.stop = Some(SettlementStopV1::FinalizedConflict);
             return stopped(result, SafeWaitV1::FinalizedConflict);
         }
-        if let Some(previous_finalized) = previous.and_then(|s| s.finalized) {
+        // A withdrawal of the current label must not forget a later fork below that publication.
+        if let Some(previous_finalized) = publication.and_then(|s| s.finalized) {
             match self.reachability_service.try_is_chain_ancestor_of(previous_finalized, sink) {
                 Ok(false) => {
                     error!("[native-settlement] FINALIZED CONFLICT: {sink} abandons {previous_finalized}; resync required");
@@ -404,21 +445,15 @@ impl VirtualStateProcessor {
         previous_finalized: Option<BlockHash>,
         snapshot: &NativeSettlementSnapshotV1,
     ) {
-        let mut slot = self.native_finalized_withdrawn.lock();
-        if snapshot.finalized.is_some() {
-            *slot = None;
-            return;
-        }
-        if snapshot.stop == Some(SettlementStopV1::FinalizedConflict) {
+        if snapshot.finalized.is_some() || snapshot.stop == Some(SettlementStopV1::FinalizedConflict) {
             return;
         }
         if let Some(head) = previous_finalized {
             error!(
                 "[native-settlement] FINALIZED LABEL WITHDRAWN: {head} was published as finalized and is still canonical, but at {sink} the \
-                 evidence no longer certifies it (stop {:?}); safe and finalized read null until it is certified again",
+                 evidence no longer certifies it (stop {:?}); finalized reads null until it is certified again",
                 snapshot.stop
             );
-            *slot = Some(head);
         }
     }
 
@@ -444,7 +479,19 @@ impl VirtualStateProcessor {
             pruning_point: pruning,
             pruning_blue: blue_of(pruning),
             wait,
-            withdrawn_from: if snapshot.finalized.is_none() { *self.native_finalized_withdrawn.lock() } else { None },
+            withdrawn_from: if snapshot.finalized.is_none() && snapshot.stop != Some(SettlementStopV1::FinalizedConflict) {
+                // Only a committed withdrawal is reported, not an advisory reevaluation before publication.
+                let committed_withdrawal = self
+                    .evm_heads_store
+                    .read()
+                    .native_snapshot()
+                    .ok()
+                    .flatten()
+                    .is_some_and(|s| s.generation == snapshot.generation && s.finalized.is_none());
+                if committed_withdrawal { self.native_finalized_publication().ok().flatten().and_then(|s| s.finalized) } else { None }
+            } else {
+                None
+            },
         }
     }
 

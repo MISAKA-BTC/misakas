@@ -801,27 +801,54 @@ pub struct DbEvmCanonicalHeadsStore {
     db: Arc<DB>,
     access: CachedDbItem<CanonicalEvmHeads>,
     native: CachedDbItem<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>>,
+    /// Local publication history for the conflict alarm, independent of the current certificate.
+    finalized_publication: CachedDbItem<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>>,
 }
 
 impl DbEvmCanonicalHeadsStore {
     pub fn new(db: Arc<DB>) -> Self {
         let mut native_key: Vec<u8> = DatabaseStorePrefixes::EvmCanonicalHeads.into();
         native_key.extend_from_slice(b"/native/v1");
-        Self { db: Arc::clone(&db), access: CachedDbItem::new(db.clone(), DatabaseStorePrefixes::EvmCanonicalHeads.into()), native: CachedDbItem::new(db, native_key) }
+        let mut publication_key: Vec<u8> = DatabaseStorePrefixes::EvmCanonicalHeads.into();
+        publication_key.extend_from_slice(b"/native/finalized-publication/v1");
+        Self {
+            db: Arc::clone(&db),
+            access: CachedDbItem::new(db.clone(), DatabaseStorePrefixes::EvmCanonicalHeads.into()),
+            native: CachedDbItem::new(db.clone(), native_key),
+            finalized_publication: CachedDbItem::new(db, publication_key),
+        }
     }
 
     pub fn native_snapshot(&self) -> StoreResult<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
         self.native.read()
     }
-    pub fn set_native_batch(&mut self, batch: &mut WriteBatch, snapshot: Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>) -> StoreResult<()> {
+    pub fn set_native_batch(
+        &mut self,
+        batch: &mut WriteBatch,
+        snapshot: Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>,
+    ) -> StoreResult<()> {
         self.native.write(BatchDbWriter::new(batch), &snapshot)
+    }
+
+    pub fn native_finalized_publication(
+        &self,
+    ) -> StoreResult<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
+        self.finalized_publication.read()
+    }
+
+    /// Commit with native snapshot and heads; only validated resync clears publication history.
+    pub fn set_native_finalized_publication_batch(
+        &mut self,
+        batch: &mut WriteBatch,
+        publication: Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>,
+    ) -> StoreResult<()> {
+        self.finalized_publication.write(BatchDbWriter::new(batch), &publication)
     }
 
     pub fn set_batch(&mut self, batch: &mut WriteBatch, heads: CanonicalEvmHeads) -> StoreResult<()> {
         self.access.write(BatchDbWriter::new(batch), &heads)
     }
 }
-
 impl EvmCanonicalHeadsStoreReader for DbEvmCanonicalHeadsStore {
     fn get(&self) -> StoreResult<CanonicalEvmHeads> {
         self.access.read()
@@ -867,6 +894,75 @@ mod tests {
         assert_eq!(restarted.native_snapshot().unwrap(), Some(snapshot));
         assert_eq!(next.safe_head(), None);
         assert_eq!(next.finalized_head(), None);
+    }
+
+    #[test]
+    fn rfc0012_finalized_publication_survives_atomic_withdrawal_restart_and_explicit_resync() {
+        use kaspa_consensus_core::palw_native_settlement_v1::{NativeSettlementSnapshotV1, SettlementStopV1};
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut writer = DbEvmCanonicalHeadsStore::new(db.clone());
+        let published = NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: kaspa_hashes::Hash::from_bytes([7; 32]),
+            policy_id: bh(8),
+            generation: bh(3),
+            retirement_daa: 5,
+            frontier: Some(bh(2)),
+            latest: Some(bh(3)),
+            safe: Some(bh(2)),
+            finalized: Some(bh(1)),
+            depth: 1,
+            unique_work: "10".into(),
+            stop: Some(SettlementStopV1::InsufficientDepth),
+        };
+        let positive_heads = CanonicalEvmHeads { latest: bh(3), safe: bh(2), finalized: bh(1) };
+        let mut batch = WriteBatch::default();
+        writer.set_native_finalized_publication_batch(&mut batch, Some(published.clone())).unwrap();
+        writer.set_native_batch(&mut batch, Some(published.clone())).unwrap();
+        writer.set_batch(&mut batch, positive_heads).unwrap();
+        let before = DbEvmCanonicalHeadsStore::new(db.clone());
+        assert!(before.native_finalized_publication().is_err(), "staged history is not durable before commit");
+        assert!(before.native_snapshot().is_err());
+        assert!(before.get().is_err());
+        db.write(batch).unwrap();
+        let restarted = DbEvmCanonicalHeadsStore::new(db.clone());
+        assert_eq!(restarted.native_finalized_publication().unwrap(), Some(published.clone()));
+        assert_eq!(restarted.native_snapshot().unwrap(), Some(published.clone()));
+        assert_eq!(restarted.get().unwrap(), positive_heads);
+
+        let withdrawn = NativeSettlementSnapshotV1 {
+            generation: bh(4),
+            latest: Some(bh(4)),
+            safe: None,
+            finalized: None,
+            stop: Some(SettlementStopV1::MissingHistory),
+            ..published.clone()
+        };
+        let negative_heads = CanonicalEvmHeads { latest: bh(4), safe: Default::default(), finalized: Default::default() };
+        let mut batch = WriteBatch::default();
+        writer.set_native_finalized_publication_batch(&mut batch, Some(published.clone())).unwrap();
+        writer.set_native_batch(&mut batch, Some(withdrawn.clone())).unwrap();
+        writer.set_batch(&mut batch, negative_heads).unwrap();
+        let before = DbEvmCanonicalHeadsStore::new(db.clone());
+        assert_eq!(before.native_snapshot().unwrap(), Some(published.clone()));
+        assert_eq!(before.get().unwrap(), positive_heads);
+        db.write(batch).unwrap();
+        let restarted = DbEvmCanonicalHeadsStore::new(db.clone());
+        assert_eq!(restarted.native_finalized_publication().unwrap(), Some(published.clone()));
+        assert_eq!(restarted.native_snapshot().unwrap(), Some(withdrawn.clone()));
+        assert_eq!(restarted.get().unwrap(), negative_heads);
+
+        // The validated-import caller supplies this explicit reset in its execution-state batch.
+        let mut batch = WriteBatch::default();
+        writer.set_native_finalized_publication_batch(&mut batch, None).unwrap();
+        writer.set_native_batch(&mut batch, None).unwrap();
+        writer.set_batch(&mut batch, negative_heads).unwrap();
+        assert_eq!(DbEvmCanonicalHeadsStore::new(db.clone()).native_finalized_publication().unwrap(), Some(published));
+        db.write(batch).unwrap();
+        let restarted = DbEvmCanonicalHeadsStore::new(db);
+        assert_eq!(restarted.native_finalized_publication().unwrap(), None);
+        assert_eq!(restarted.native_snapshot().unwrap(), None);
+        assert_eq!(restarted.get().unwrap(), negative_heads);
     }
 
     fn bh(b: u8) -> BlockHash {

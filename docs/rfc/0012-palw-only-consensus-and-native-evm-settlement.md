@@ -175,6 +175,29 @@ Execution-check error, Panel compromise, randomness grinding, DA failure and cha
 are separate failure events. A Freivalds/GKR error bound is **not** a bound on total chain-finality
 risk. Publish assumptions and composed risk accounting before choosing the policy parameters.
 
+### 3.1 Publication history is separate from the current certificate
+
+A recomputed `finalized` may retreat to `null` when evidence no longer certifies it. That MUST NOT erase
+which head the node previously published as finalized. Retain a versioned local publication record,
+including its ruleset, policy, retirement fence and generation, in the same durable batch as the native
+snapshot and EVM heads. Advance its conflict anchor only to an equal or descendant finalized head.
+This record is incident history: it cannot certify a head, supply useful work, or veto fork choice.
+
+Every post-retirement evaluation MUST check the selected sink against the retained publication, including
+after an ordinary withdrawal, restart, or rollback across the retirement fence. Abandoning that head
+produces sticky `FinalizedConflict`, with safe/finalized absent. A canonical withdrawal is named by
+`readiness.finalized.withdrawnFrom` after restart; a conflict has its own alarm. Current labels remain
+subject to root, provenance, generation and ordered-prefix checks, independently of this history.
+
+Only a validated pruning-point execution-state import/resync may clear both publication history and the
+sticky snapshot, atomically with imported execution state and absent safe/finalized heads. Invalid imports
+preserve them. The readiness memo MUST be invalidated even when the imported generation is unchanged.
+Corrupt or incompatible history is preserved and makes readers fail closed. An older positive snapshot
+can bootstrap a missing publication row; an older negative snapshot cannot distinguish no publication
+from a forgotten withdrawal and requires validated recovery. An upgrade must not silently assume that
+such a node never published a finalized head. The dormant public fence provides no deployed migration
+evidence; local store tests and in-process fork tests do not establish crash/P2P/pruned-IBD guarantees.
+
 ## 4. Native EVM bridge: one ledger transition, no validator approval
 
 ### 4.1 Deposit / withdrawal invariants
