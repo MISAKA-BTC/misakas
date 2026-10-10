@@ -1057,11 +1057,17 @@ fn exec_v2_root_authorization_survives_header_loss_and_ignores_late_clock_inputs
 
 // Arithmetic provenance fixture: an accepted native row is pinned to a complete header; this is not native signature evidence.
 fn legacy_origin_world() -> (PalwStateParamsV2, PalwChainStateV2, Hash64, crate::palw_work_slice_v2::PalwExecOriginWitnessV1) {
+    legacy_origin_world_at(100)
+}
+
+fn legacy_origin_world_at(
+    source_daa: u64,
+) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, crate::palw_work_slice_v2::PalwExecOriginWitnessV1) {
     let (p, mut s, id) = world(Some(0));
     let envelope = attempt(PWU, 1);
     let mut header = crate::header::Header::from_precomputed_hash(h64(0xBAD_CACE), vec![]);
     header.pow_algo_id = crate::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3;
-    header.daa_score = 100;
+    header.daa_score = source_daa;
     header.nonce = 17;
     header.palw_commitment = envelope.encode_wire();
     let claim = s.claims.get_mut(&id).unwrap();
@@ -1077,6 +1083,44 @@ fn legacy_origin_world() -> (PalwStateParamsV2, PalwChainStateV2, Hash64, crate:
     s.assert_internal_consistency(&p).unwrap();
     let witness = crate::palw_work_slice_v2::PalwExecOriginWitnessV1 { claim: id, header: borsh::to_vec(&header).unwrap() };
     (p, s, id, witness)
+}
+
+#[test]
+fn exec_v2_authorization_orders_both_clocks_against_opening_not_against_each_other() {
+    use crate::palw_state_v2::palw_exec_v2_history_v1::authorize;
+    // Arithmetic provenance, not evidence that this DAA ordering occurs in a live DAG. Both clocks are authenticated data;
+    // neither possible ordering should create a fresh lease or forbid an otherwise eligible root after both clocks are reached.
+    let (p, s, id, witness) = legacy_origin_world_at(112);
+    assert_eq!(s.claim(&id).unwrap().accepted_daa, 101);
+    let mut extras = xx_declare();
+    extras.exec_v2_test_origin_daa = None;
+    let (migrated, _) =
+        step_with(&s, &p, 21, 110, &[PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(witness) }], &extras).unwrap();
+    let mut d = decl(id);
+    d.canonical_job_id = migrated.claim(&id).unwrap().job_identity;
+    assert!(step_with(&migrated, &p, 22, 111, &[open_object(d.clone())], &extras).is_err(), "source clock not reached");
+    let (opened, _) = step_with(&migrated, &p, 23, 112, &[open_object(d.clone())], &extras)
+        .expect("both clocks reached even though source DAA exceeds native acceptance DAA");
+    let key = d.job_work_id(&opened.claim(&id).unwrap().class_id);
+    let history = opened.exec_v2_job_use_v1(&key).unwrap();
+    assert_eq!((history.issued_daa, history.expires_daa), (112, 100_112));
+    let claim = opened.claim(&id).unwrap();
+    assert!(authorize(&opened, &d, claim, 100_111).is_ok());
+    assert!(authorize(&opened, &d, claim, 100_112).unwrap_err().to_string().contains("expired"));
+    let mut future_acceptance = claim.clone();
+    future_acceptance.accepted_daa = 113;
+    assert!(authorize(&opened, &d, &future_acceptance, 112).unwrap_err().to_string().contains("header"));
+    // A late state point cannot conceal that a root was opened before its original authorization clock.
+    let mut early_root = opened.clone();
+    early_root.exec_v2.roots.get_mut(&id).unwrap().opened_daa = 111;
+    assert!(early_root.assert_internal_consistency(&p).is_err());
+    assert!(PalwStateCarriageV2::from_state(&early_root).into_state(&p, None).is_err());
+    // Changing the native acceptance clock alone never renews or alters the authenticated source deadline.
+    for accepted in [100, 112, 113] {
+        let mut reordered = claim.clone();
+        reordered.accepted_daa = accepted;
+        assert_eq!(authorize(&opened, &d, &reordered, 114).unwrap().expires_daa, 100_112);
+    }
 }
 
 #[test]

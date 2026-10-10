@@ -54675,9 +54675,9 @@ pub(crate) mod tests {
 
     // ---- the frontier ----
 
-    /// A private fork cannot mature claims, so from its fork point its frontier never advances —
-    /// and the comparator prefers the shorter chain that matured (the anti-fabrication ordering,
-    /// end to end through the state).
+    /// This branch carries no receipts, so its claims do not mature and its frontier does not advance.
+    /// The comparator prefers the shorter matured chain. A private branch with colluding Panel receipts
+    /// is a separate attack case, not excluded by this fixture.
     #[test]
     fn an_unmatured_pile_never_advances_the_frontier_and_loses_to_a_matured_chain() {
         let p = params();

@@ -663,7 +663,7 @@ and 256-root restart fits the node's release latency budget.
 ### 12.6 Finite REAL authorization and retirement-independent job-use history
 
 The original REAL header, identified by the native claim's accepted block hash, authorizes root opening
-only while `source_daa <= accepted_daa <= opening_daa < source_daa + 100_000`. The sum is checked;
+only while `max(source_daa, accepted_daa) <= opening_daa < source_daa + 100_000`. The sum is checked;
 an overflow or a terminal `u64::MAX` deadline is refused. This is a fixed v1 authorization profile,
 not a lease renewed by later acceptance, claim retirement or root opening. It does not shorten an
 already opened root's signed execution/material terms or extend any collateral hold.
@@ -706,6 +706,19 @@ Local header presence must never decide root admission differently between a ful
 pruned joiner. The original-history profile alone did not meet that requirement; the capture
 mechanism below removes that lookup for newly recorded claims. Legacy migration and actual
 pruned P2P transfer/replay remain required before activation.
+
+The source header's DAA and the native claim's acceptance DAA are different authenticated facts.
+No ordering between them is required: DAA is derived from the selected parent and counted mergeset,
+not a wall-clock timestamp or a proof of the source/acceptance inequality. Neither fact may lie
+after root opening. In particular, a source DAA above acceptance DAA waits until opening reaches
+the source clock; it is not permanently excluded. Snapshot consistency checks the source clock
+against the root's own opening DAA, even if the latest state point is later. The expiry continues
+to derive solely from the original source DAA. Moving acceptance later cannot renew authorization,
+and acceptance at or after expiry leaves no valid opening interval. Deleting expired one-use
+history cannot authorize the same old source: opening at the deletion point is already expired.
+This order-independent profile replaces the earlier unproven `source_daa <= accepted_daa` guard.
+It does not assert that a reversed pair has been observed in a validated live DAG. Arithmetic
+fixtures and actual multi-process DAG evidence must be distinguished.
 
 ### 12.7 Native capture of the original clock
 

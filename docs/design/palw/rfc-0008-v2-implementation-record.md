@@ -562,3 +562,13 @@ reader/fold migration from a legacy-shaped snapshot with the actual source heade
 They retain the existing class/Panel and synthetic native-trace seams, and are not a historical
 activation or multi-process pruning/P2P drill. Oversized historical header coverage, availability
 before every original copy is pruned and worst expanded hash cost remain required gates.
+
+The finite profile now compares both authenticated clocks with root opening:
+`max(source_daa, accepted_daa) <= opening_daa < source_daa + 100_000` (spec §12.6).
+The earlier source/acceptance inequality was unproven and unnecessary for finite replay protection.
+A later source clock waits until opening reaches it; acceptance cannot renew the source deadline.
+Snapshot validation checks source DAA against the retained root's opening DAA, rather than just
+against the later state point. This changes only the dormant EXEC profile, not native admission,
+income, weight or existing wire fields. All previously admissible clock pairs remain admissible.
+The reversed pair's provenance/fold regression is an arithmetic fixture, not a validated live DAG
+counterexample. Actual multi-process DAG/activation/pruning evidence remains required.

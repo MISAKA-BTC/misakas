@@ -18983,11 +18983,11 @@ impl VirtualStateProcessor {
         }
         // **Unit D, site 4: on a V2 network the deep-reorg gate IS the one comparator.**
         //
-        // A private fork can pile blue work without limit, but its frontier died at the fork
-        // point — piles do not mature, because nobody could collect receipts on a chain nobody
-        // saw — so frontier-first ordering refuses it here with the same three keys the virtual
-        // tip used. Consulting depth, raw blue work or the stake overlay INSTEAD would be the
-        // second authority coming back through the basement, which is P0-5.
+        // Every actual V2 reorg uses the same PALW comparator as the virtual tip. Consulting
+        // depth, raw blue work or the stake overlay INSTEAD would create a second authority (P0-5).
+        // This is not a proof that private work cannot mature: colluding producers and Panel seats
+        // can supply receipts on a private branch. RFC-0012 requires analysis and adversarial fork
+        // drills under that case, rather than assuming its frontier stays at the fork point.
         //
         // **Scoped to actual REORGS, and the scoping is load-bearing.** A first version ran the
         // comparator on every sink-search candidate and the node wedged with "valid sink must

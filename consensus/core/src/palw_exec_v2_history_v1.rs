@@ -29,7 +29,9 @@ fn authorize_at(
     now: u64,
 ) -> Result<PalwExecJobUseV1, PalwStateV2Error> {
     let refuse = |why: PalwWorkRootRefusalV2| PalwStateV2Error::ExecV2Refused(why.to_string());
-    if issued > claim.accepted_daa || claim.accepted_daa > now {
+    // These are different DAG clocks, not wall-clock timestamps with a proven order between them. Reaching both is necessary;
+    // expiry remains tied solely to the original source, so later acceptance cannot renew an old authorization.
+    if issued > now || claim.accepted_daa > now {
         return Err(refuse(PalwWorkRootRefusalV2::AuthorizationOrigin));
     }
     let until = issued
@@ -176,7 +178,7 @@ impl PalwChainStateV2 {
                 || row.class_id != root.class_id
                 || row.canonical_job_id != root.canonical_job_id
                 || row.source_block != claim.accepted_block
-                || row.issued_daa > claim.accepted_daa
+                || row.issued_daa > root.opened_daa
                 || self
                     .exec_v2_origins
                     .get(id)
