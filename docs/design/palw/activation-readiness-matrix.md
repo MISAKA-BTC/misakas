@@ -201,6 +201,21 @@ behind new dormant fences, because the route is ARMED on testnet-12 and the live
   consistent-garbage-trace (row 0) / borrowed-trace / state / routing / checkpoint / output cases.
 Until both lanes' fences are verified, legacy classes are "not Panel=0, not new-reward eligible".
 
+## 3e. Round / EXEC additional acceptance conditions (user, 2026-10-10)
+
+The user adopted `docs/palw-round-exec-additional-acceptance-2026-10-10.md`:
+- compute-proportional Round tickets from verified CanonicalWork and a shared window (120 is a window's capacity, not a per-claim grant);
+- the bond's remaining Round rights capped BEFORE the draw's candidate set (`T_candidate <= min(T_earned, BondRemainingRoundRights)`);
+- no amplification by bond/operator/claim splitting, resubmission or root/slice repackaging;
+- no status priority for operators, genesis bonds or registration order;
+- small/large model economics evaluated before and after the cap;
+- fee-only Rounds bound either by B_max or by an explicit execution cap.
+
+Eight gates: BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, SLICE, RECOVERY, ECON. All are UNVERIFIED, and they block the
+unified EXEC and the new economic rules. Owners: BUDGET (BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, RECOVERY's budget half),
+X8R (SLICE, EXEC's RECOVERY), ECON (ECON). POLICY for the user: whether fee-only Rounds count against B_max or get their own
+execution cap, and whether market fee income counts in R_max.
+
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
 Waves, because the Mac (32 GiB, ~40 GB free disk) cannot build a dozen targets at once, and builds are batched (user rule): each lane
