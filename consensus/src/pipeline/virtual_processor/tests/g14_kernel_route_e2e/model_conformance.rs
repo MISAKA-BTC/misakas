@@ -1155,6 +1155,58 @@ fn flat_first_relation_fault_from_reads(
     fault.to_bytes().unwrap()
 }
 #[tokio::test]
+async fn flat_v3_node_preemption_counterexample_and_staged_v6_seal_rejects_equivalent_carrier() {
+    use misaka_palw_kernel::flat_court5::*;
+    use misaka_palw_kernel::flat_seal6::*;
+    let f = vector_fixture(true);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let (post, public) = flat_vector_post(&net, &f, binding, vec![0, 1], true);
+    let id = send_flat_vector(&mut net, &f, binding, 4, &post).await;
+    let view = net.api().unwrap().flat_model_vector_view_v3(&id).unwrap();
+    let proof = flat_first_relation_fault(&view, &public, &f.params);
+    let mut alternate = FlatFaultV5::from_bytes(&proof).unwrap();
+    let tile = misaka_palw_kernel::seg::PromptTileOpeningV1::of(&post.trace.prompt, 0).unwrap();
+    match &mut alternate {
+        FlatFaultV5::Whole(f) => f.token = Some(tile),
+        _ => panic!("small encoder relation"),
+    }
+    // The exact job prompt is already inline in the stored candidate. Its valid
+    // redundant tile changes the carrier without changing the proven relation.
+    let conviction = verify_flat_fault_v5(&view.context(), &FlatFaultV5::from_bytes(&proof).unwrap()).unwrap();
+    assert_eq!(verify_flat_fault_v5(&view.context(), &alternate).unwrap(), conviction);
+    let alternate = alternate.to_bytes().unwrap();
+    assert_ne!(alternate, proof);
+    assert_ne!(flat_proof_digest_v6(&alternate).unwrap(), flat_proof_digest_v6(&proof).unwrap());
+    let (finder, copyist, salt) = (net.kid(7), net.kid(6), [42; 64]);
+    let mut seals =
+        FlatSealBookV6::new(FlatSealPolicyV6 { maturity_daa: 3, ttl_daa: 20, max_rows: 4, max_rows_per_actor: 2 }).unwrap();
+    let now = net.daa();
+    let until = net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().liability_until;
+    let seal = flat_proof_seal_v6(&id.as_bytes(), &finder, &salt, &proof).unwrap();
+    seals.post(id.as_bytes(), finder, seal, now, until).unwrap();
+    seals.post(id.as_bytes(), copyist, seal, now, until).unwrap();
+    net.beat_to(now + 3).await;
+    assert_eq!(
+        seals.reveal(&id.as_bytes(), &copyist, &salt, &alternate, net.daa(), &view.context()),
+        Err(FlatSealErrorV6::SealMismatch)
+    );
+    let authorized = seals.reveal(&id.as_bytes(), &finder, &salt, &proof, net.daa(), &view.context()).unwrap();
+    assert_eq!((authorized.actor, authorized.conviction), (finder, conviction));
+    // Frozen v3 does NOT call the staged seal gate. This is a counterexample,
+    // not a successful security test of a protected consensus payout route.
+    let collateral = net.collateral(4);
+    send(&mut net, 6, &K::RefuteFlatModelVectorV3 { vector: id.as_bytes(), proof: alternate }).await;
+    assert_eq!(collateral - net.collateral(4), mega(100));
+    assert_eq!(net.owed(6), mega(49));
+    assert_eq!(net.owed(7), 0);
+    send(&mut net, 7, &K::RefuteFlatModelVectorV3 { vector: id.as_bytes(), proof }).await;
+    assert_eq!(net.collateral(4), collateral - mega(100));
+    assert_eq!(net.owed(7), 0);
+    let replay = net.replay().await;
+    net.assert_same(&replay, "frozen unsealed v3 counterexample and separate staged seal contract");
+}
+#[tokio::test]
 async fn flat_model_vector_node_admits_typed_scope_convicts_leaf_and_whole_once_and_replays_redemption() {
     for encoder in [true, false] {
         let f = vector_fixture(encoder);

@@ -104,6 +104,8 @@ pub mod flat_court4;
 pub mod flat_court5;
 pub mod flat_detect5;
 pub mod flat_replay6;
+/// Staged actor-bound sealed flat evidence; not a consensus route or payout.
+pub mod flat_seal6;
 /// Staged complete flat-v5 court resource admission.
 pub mod flat_scope5;
 /// Bounded raw-width producer hashing of the unchanged v3 tensor commitments.

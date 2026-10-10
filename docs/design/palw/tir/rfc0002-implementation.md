@@ -20,6 +20,7 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | Public dispute completeness | Kernel and TIR court modules exist; this alone proves no detection or end-to-end gate | Fresh outsider from public material through all relation classes, bounded terminal court, invalid-proof flood and honest liveness trials |
 | Flat-v5 typed node component | Explicit dormant inner 31/32 candidate statements bind the independently derived terminal scope; court folds recheck it, use shared block budgets and share original collateral/eight-statement catalogs with v2 | General public acquisition/localization, proof pre-emption seals, complete execution/checker/DA/network resource vector and execution Final; component tests are not full checkpoint/G14 acceptance |
 | Flat-v5 native public acquisition | Dormant inner 33/34/35 fetch authenticated node/hash units into public read-API state; bounded service/default, original collateral and four requester slots shared with v2 | Deployed RPC/transport, retention/pruning, whole-job acquisition/deadline guarantees, proof pre-emption seals, complete shared resources/DA/network load and execution Final; no full real-checkpoint/privacy/liveness acceptance |
+| Staged flat evidence seals v6 | Bounded actor/vector/salt/exact-carrier commitment; own mature seal gate before deferred court; finite local slots and explicit expiry; equivalent-carrier counterexamples | Consensus persistence/authentication/capital/budget/payout integration and a versioned protected statement that refuses the old unsealed refute bypass; frozen v3 remains vulnerable |
 | Flat-v5 streamed detector | Generic exact replay consumes public node/hash paths and acquired registered weights; all 25 primitive, state/history, encoder and decode synthetic trials; the native late-leaf case now uses the generic detector | Shared complete verifier/retry/hash/delivery accounting, optimized acquisition/localization, deadlines/honest liveness, all-feature real-node cases and real-checkpoint/full-task execution Final |
 | Flat replay v6 local session budget | New projection binds unchanged v5 scope; native read API and verifier independently derive i128 tensor payload, parameter/trace hash and response bounds; one session charges retries and cached reads | Full peak memory/CPU/metadata/transport/retention accounting, shared consensus admission and per-block/per-bond/network aggregate enforcement, real-size deadline/liveness evidence |
 | Real models and coverage | Dated census reports exist; fixture/structural passes are not full-task passes | Revision/task/context/storage/arithmetic/plan records, real sizes, complete modalities via RFC03, independent Final references, A6 and A8 denominators/confidence/residuals |
@@ -1892,3 +1893,39 @@ consensus and aggregate load accounting, whole-job deadlines/honest liveness,
 equivalent-proof pre-emption, checkpoint fidelity/tasks/performance, execution
 Final and the other full RFC02 requirements remain open. Historical scope and
 statement roots, route grammars and shipping fences stay unchanged.
+
+
+## Verified increment — sealed evidence contract and pre-emption counterexamples, 2026-10-11
+
+`flat_seal6` adds a staged, salt-bearing vector/actor/exact-carrier commitment and
+requires the authenticated filer's own mature seal before a deferred court. No
+unsealed fallback or other-sealer beneficiary search exists. Fixed local total
+and actor quotas, immutable occupied slots, clipped horizons, checked time math,
+one-use successful consumption and explicit constant-key expiry bound this book.
+Failed or honest proofs leave their row unspent. Rejected seal metadata and
+oversized carriers cannot enter the expensive court callback.
+
+Seven new kernel tests include distinct authentic decode rivals with the same
+conviction, including an out-of-range delivery. A new actual-node counterexample
+adds a redundant authentic prompt tile to an inline-bound encoder filing. Both
+carriers convict the same relation and have distinct bytes/digests. The local v6
+contract rejects the changed carrier, but **frozen native v3 remains unsealed**:
+the earlier copyist receives 49 mega, the original finder receives zero, the
+poster loses its 100 mega reservation once, and independent replay agrees.
+This test reproduces a security failure; its green test status is not a protected
+payout acceptance claim.
+
+**166 distinct tests pass:** the full kernel suite has 152 passes and one
+pre-existing ignored manual hardware benchmark; all 14 native model-conformance
+tests pass. Production consensus-core compilation, formatting and diff checks
+pass. Final commands, exact test names, logs, source/binary hashes and limits are
+in the [verdict](evidence/rfc02-flat-seal-v6-verdict.json). Earlier filtered runs
+are excluded. Compiler caching alone is disabled with `CARGO_INCREMENTAL=0`.
+
+The next required change is a versioned protected consensus statement and
+seal/reveal path, with authenticated persisted rows, original capital, shared
+processing quotas, fees and atomic once-only payout, refusing the old unsealed
+bypass. Merely adding optional seals beside inner 32 cannot close the gap.
+Network capacity/honest inclusion, complete shared resources, execution Final,
+real checkpoint/task/fidelity/performance, A6/A8 and all full RFC02 requirements
+remain open. No frozen route/statement grammar or dormant shipping fence changes.

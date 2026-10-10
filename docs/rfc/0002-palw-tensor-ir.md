@@ -3245,3 +3245,47 @@ These remaining quantities must join the shared complete resource vector and
 its consensus admission before practical or reward acceptance. Proof pre-emption
 (including equivalent proof encodings), real checkpoint/task/fidelity acceptance,
 execution Final, A6/A8 and the other full RFC02 conditions stay open.
+
+
+### §14.29 — Actor-bound sealed evidence and equivalent-carrier counterexamples (2026-10-11)
+
+A proof-byte digest and earliest matching beneficiary lookup alone do not protect
+against another valid encoding of the same fault. Two different authentic greedy
+rivals can convict the same delivered id. An out-of-range delivery ignores the
+rival. An already inline-bound prompt permits a redundant authentic prompt tile
+in a relation filing. These carriers have different exact digests while producing
+the same conviction. The unchanged flat-v3 native route remains unsealed: a
+copyist submitting the alternate carrier first receives its bounty. That is a
+security counterexample, not a protected-route acceptance result.
+
+`flat_seal6` adds a separate staged v6 contract. Its salt-bearing commitment binds
+vector, authenticated actor and exact bounded proof bytes under new domains.
+Every reveal requires the **filer's own mature seal**. It has no unsealed-filer
+fallback and does not search other actors' opaque seals for a beneficiary.
+Copying a finder's seal fails actor binding; changing its proof fails exact-byte
+binding. A new correctly rebound seal posted after observing a reveal cannot
+enter a court before its own maturity, including for an equivalent carrier.
+An independently prepared mature proof is still admissible; the contract does
+not claim protection against censorship until a later copy matures.
+
+The local book has fixed-size metadata rows keyed by `(vector, actor)`, a maximum
+of 1,024 rows with a caller-selected smaller total and per-actor bound, and no
+stored proofs or historical seal list. An occupied row cannot be overwritten.
+A successful court consumes its row once; a failed court leaves it unspent.
+Both states retain their bounded slot until explicit, constant-key expiry.
+Maturity must precede expiry, which is clipped to the vector's immutable horizon;
+all DAA additions are checked. Fixed slot/time checks and bounded raw-carrier
+hashing run before a deferred court callback, so an absent, immature, expired or
+mismatched seal cannot force a variable stored-program/court decode. Rejected
+filings still need consumer fee accounting.
+
+This is **not yet a consensus seal route or protected payout implementation**.
+The consumer must authenticate actors and vector/context identity, persist rows
+and shared quotas, reserve the same original capital, charge proof/admission work,
+and atomically apply one conviction and one payout per vector. A future explicit
+versioned protected statement must refuse the old unsealed refutation route;
+merely adding a seal object beside that bypass does not close the gap. Economic
+fees, aggregate capacity and honest inclusion/deadline feasibility must be
+verified before this path is accepted for rewards. Frozen candidate/route grammar,
+resource roots and dormant shipping fences remain unchanged. Full RFC02, real
+checkpoint/task/fidelity, execution Final and A6/A8 acceptance remain open.

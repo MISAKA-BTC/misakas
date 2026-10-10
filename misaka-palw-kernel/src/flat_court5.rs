@@ -900,6 +900,69 @@ mod tests {
         }
     }
     #[test]
+    fn flat_v6_sealed_invalid_or_honest_proof_retains_slot_without_conviction() {
+        use crate::flat_seal6::*;
+        let (p, m) = identity(129);
+        let t = Trial::of(p, m, vec![1], vec![0], None);
+        // An honest first relation is a NoFault control. Sealing its bytes does
+        // not turn authenticated evidence into a conviction.
+        let value = t.own.value(0, 0, 0).unwrap();
+        let proof = t.leaf(0, 0, 0, hash(value, 0)).to_bytes().unwrap();
+        let (v, a, salt) = ([1; 64], [2; 64], [3; 64]);
+        let mut book =
+            FlatSealBookV6::new(FlatSealPolicyV6 { maturity_daa: 3, ttl_daa: 20, max_rows: 4, max_rows_per_actor: 2 }).unwrap();
+        book.post(v, a, flat_proof_seal_v6(&v, &a, &salt, &proof).unwrap(), 10, 100).unwrap();
+        assert_eq!(book.reveal(&v, &a, &salt, &proof, 13, &t.context()), Err(FlatSealErrorV6::InvalidCourt("NoFault".into())));
+        assert!(!book.row(&v, &a).unwrap().spent);
+        assert_eq!(book.rows_for(&a), 1);
+        let bad = [5, 0, 255];
+        book.post([4; 64], a, flat_proof_seal_v6(&[4; 64], &a, &salt, &bad).unwrap(), 10, 100).unwrap();
+        assert!(matches!(book.reveal(&[4; 64], &a, &salt, &bad, 13, &t.context()), Err(FlatSealErrorV6::InvalidCourt(_))));
+        assert!(!book.row(&[4; 64], &a).unwrap().spent);
+        assert_eq!(book.rows_for(&a), 2);
+    }
+    #[test]
+    fn flat_v6_own_mature_seal_blocks_equivalent_convicting_decode_encodings() {
+        use crate::flat_seal6::*;
+        let (mut p, mut m) = identity(129);
+        p.token_bound = 132;
+        m.tensors.get_mut(&(0, None)).unwrap().data.fill(0);
+        m.tensors.get_mut(&(0, None)).unwrap().data[1] = 10;
+        m.tensors.get_mut(&(0, None)).unwrap().data[2] = 9;
+        // Two authentic rivals prove the same incorrectly delivered id. Their
+        // exact proof bytes/digests differ even though their verdict is identical.
+        for delivered in [0, 129] {
+            let t = Trial::of(p.clone(), m.clone(), vec![1], vec![delivered], None);
+            let f = t.decode(0, 1);
+            let alternate = t.decode(0, 2);
+            let expected = verify_flat_fault_v5(&t.context(), &f).unwrap();
+            assert_eq!(verify_flat_fault_v5(&t.context(), &alternate).unwrap(), expected);
+            let bytes = f.to_bytes().unwrap();
+            let changed = alternate.to_bytes().unwrap();
+            assert_ne!(bytes, changed);
+            assert_ne!(flat_proof_digest_v6(&bytes).unwrap(), flat_proof_digest_v6(&changed).unwrap());
+            let (vector, finder, copyist, salt) = ([1; 64], [2; 64], [3; 64], [4; 64]);
+            let mut seals =
+                FlatSealBookV6::new(FlatSealPolicyV6 { maturity_daa: 3, ttl_daa: 20, max_rows: 4, max_rows_per_actor: 2 }).unwrap();
+            let sealed = flat_proof_seal_v6(&vector, &finder, &salt, &bytes).unwrap();
+            seals.post(vector, finder, sealed, 10, 100).unwrap();
+            // Copying another actor's opaque seal is ineffective after maturity.
+            seals.post(vector, copyist, sealed, 10, 100).unwrap();
+            assert_eq!(seals.reveal(&vector, &copyist, &salt, &changed, 13, &t.context()), Err(FlatSealErrorV6::SealMismatch));
+            assert_eq!(seals.reveal(&vector, &finder, &salt, &changed, 13, &t.context()), Err(FlatSealErrorV6::SealMismatch));
+            let r = seals.reveal(&vector, &finder, &salt, &bytes, 13, &t.context()).unwrap();
+            assert_eq!(r.conviction, expected);
+            assert_eq!(r.actor, finder);
+            assert_eq!(seals.reveal(&vector, &finder, &salt, &bytes, 14, &t.context()), Err(FlatSealErrorV6::Spent));
+            // A new, correctly rebound seal made after seeing a reveal still
+            // cannot enter a court in the reveal's DAA interval.
+            seals.expire(&vector, &copyist, 30).unwrap();
+            let changed_seal = flat_proof_seal_v6(&vector, &copyist, &salt, &changed).unwrap();
+            seals.post(vector, copyist, changed_seal, 30, 100).unwrap();
+            assert_eq!(seals.reveal(&vector, &copyist, &salt, &changed, 30, &t.context()), Err(FlatSealErrorV6::Immature));
+        }
+    }
+    #[test]
     fn flat_v5_all_fault_codecs_refuse_truncations_surplus_versions_and_nested_counts() {
         let (p, m, wn, sn) = wide_small();
         let trial = Trial::of(p, m, vec![1], vec![1], None);
