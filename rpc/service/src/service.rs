@@ -3199,6 +3199,53 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     }
 
     // ------------------------------------------------------------------------------------------
+    // Lane LG14-A — the legacy route's public dispute reads (ops 204-206; read-only)
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_legacy_dispute_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwLegacyDisputeRequest,
+    ) -> RpcResult<GetPalwLegacyDisputeResponse> {
+        use kaspa_rpc_core::convert::palw_legacy::{palw_legacy_dispute_request_v1, palw_legacy_dispute_response_v1};
+        // The request is parsed before a byte of chain state is read: a malformed id is an error, never an absence.
+        let claim = palw_legacy_dispute_request_v1(&request)?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwLegacyDisputeResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        Ok(session.spawn_blocking(move |c| palw_legacy_dispute_response_v1(c, claim)).await)
+    }
+
+    async fn get_palw_legacy_disputes_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwLegacyDisputesRequest,
+    ) -> RpcResult<GetPalwLegacyDisputesResponse> {
+        use kaspa_rpc_core::convert::palw_legacy::{palw_legacy_disputes_request_v1, palw_legacy_disputes_response_v1};
+        let (reserver, limit) = palw_legacy_disputes_request_v1(&request)?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwLegacyDisputesResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        Ok(session.spawn_blocking(move |c| palw_legacy_disputes_response_v1(c, reserver, limit)).await)
+    }
+
+    async fn get_palw_fraud_filer_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwFraudFilerStatusRequest,
+    ) -> RpcResult<GetPalwFraudFilerStatusResponse> {
+        use kaspa_rpc_core::convert::palw_legacy::{palw_fraud_filer_status_request_v1, palw_fraud_filer_status_response_v1};
+        let bond = palw_fraud_filer_status_request_v1(&request)?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwFraudFilerStatusResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        Ok(session.spawn_blocking(move |c| palw_fraud_filer_status_response_v1(c, bond)).await)
+    }
+
+    // ------------------------------------------------------------------------------------------
     // G14 lane D — the kernel route's public read (ops 210, 211)
     // ------------------------------------------------------------------------------------------
 

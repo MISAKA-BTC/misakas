@@ -2898,6 +2898,41 @@ message GetPalwPanelV3StatusResponseMessage {
   RPCError error = 1000;
 }
 
+// Lane LG14-A (RFC-0014 §6.3; ops 204-206): the legacy route's public dispute reads. `json` is the node's versioned observation
+// (camelCase); fields are only appended.
+message GetPalwLegacyDisputeRequestMessage {
+  string claimId = 1;
+}
+
+message GetPalwLegacyDisputeResponseMessage {
+  bool available = 1;
+  uint32 observationVersion = 2;
+  string json = 3;
+  RPCError error = 1000;
+}
+
+message GetPalwLegacyDisputesRequestMessage {
+  string reserver = 1;
+  uint32 limit = 2;
+}
+
+message GetPalwLegacyDisputesResponseMessage {
+  bool available = 1;
+  repeated string claimIds = 2;
+  RPCError error = 1000;
+}
+
+message GetPalwFraudFilerStatusRequestMessage {
+  string bond = 1;
+}
+
+message GetPalwFraudFilerStatusResponseMessage {
+  bool available = 1;
+  uint32 observationVersion = 2;
+  string json = 3;
+  RPCError error = 1000;
+}
+
 // ADR-0160 §7.5 (lane shadow, node-only): the capacity shadow (op 201).
 message RpcPalwCapacityStep {
   uint64 fromDaa = 1;

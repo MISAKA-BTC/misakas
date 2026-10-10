@@ -212,6 +212,10 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::ProviderChallengeV1 { .. }
         | O::ProviderAnswerV1 { .. }
         | O::DaTransferV1 { .. }
+        // Lane LG14-A (tags 154–155): a reservation holds a claim's clocks rather than convicting; it is in the fee market, never a
+        // halt's obligation (the policy stays H-1's enumeration).
+        | O::DisputeReservedV1 { .. }
+        | O::DisputeReleasedV1 { .. }
         // LG14-B (tags 157–159, dormant): fee-market traffic, never an H-1 carrier — below their fence they ride unjudged (A-2), and
         // an H-1 carrier is asked of the gate at the template.
         | O::LegacyHeldDemandedV2 { .. }

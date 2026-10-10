@@ -3025,6 +3025,16 @@ pub struct Params {
     /// full-activation release names its height; needs `palw_rcore_plus` in force at or below it.
     pub palw_reporter_share_v2: Option<ForkActivation>,
 
+    /// **Lane LG14-A (RFC-0014 §6–§7 on the legacy V2 Panel route): the public filer** ([`crate::palw_legacy_public_filer_v1`]). Past
+    /// this height any Active bond may reserve a pursuit of a live V2 claim (tag 154, a deposit on its free half), which holds every
+    /// end of the claim — `Final`, the bind / receipt / redraw / unavailable / replay timeouts, a `Final` claim's retirement — until the
+    /// claim's own hard deadline (`trace_retention_daa − W_disclose`); a reserver's DA sessions ride its reservation's budget, never
+    /// DA-8's shared non-seat budget; and a direct proof (kinds 3, 4, 7) lands over another bond's open court. **Dormant, with no
+    /// activation height**: `None` on every preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from
+    /// `Some(never())`, refused when armed ([`Self::validate_palw_legacy_public_filer_v1`]) until the full-activation release names its
+    /// height; needs `palw_rcore_plus` and `palw_offence_attribution` in force at or below it.
+    pub palw_legacy_public_filer_v1: Option<ForkActivation>,
+
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
     /// context ([`crate::palw_v2::PalwJobContextV2::prefix_context_hash_v1`], context version 3), so every claim over the same prefix
@@ -4218,6 +4228,8 @@ impl Params {
         self.validate_palw_model_bond_allocation_v1()?;
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;
+        // **Lane LG14-A's public filer** (`crate::palw_legacy_public_filer_v1`): refused when armed.
+        self.validate_palw_legacy_public_filer_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
         self.validate_palw_lifecycle_kind_fences_v1()?;
@@ -6611,6 +6623,10 @@ impl Params {
         // ADR-0032's amended reporter share (lane INTF), likewise.
         if self.palw_reporter_share_v2 == Some(ForkActivation::never()) {
             self.palw_reporter_share_v2 = None;
+        }
+        // The legacy route's public filer (lane LG14-A), likewise.
+        if self.palw_legacy_public_filer_v1 == Some(ForkActivation::never()) {
+            self.palw_legacy_public_filer_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -10336,6 +10352,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
+            palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -10615,6 +10632,7 @@ impl Params {
             ("palw_bond_budget_v1", palw_bond_budget_v1.as_ref().map(|fence| fence.activation)),
             ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
+            ("palw_legacy_public_filer_v1", *palw_legacy_public_filer_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -10956,6 +10974,11 @@ impl Params {
             h.write(b"palw_reporter_share_v2");
             h.write(at.daa_score().to_le_bytes());
             h.write(crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V2.to_le_bytes());
+        }
+        // The legacy route's public filer (lane LG14-A), NAMED likewise. Some-only.
+        if let Some(at) = self.palw_legacy_public_filer_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_legacy_public_filer_v1");
+            h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
         if let Some(at) = self.palw_fp_prefix_inherit {
@@ -11643,6 +11666,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
+            palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -12435,6 +12459,10 @@ impl Params {
         if let Some(activation) = palw_reporter_share_v2.as_mut() {
             fork(activation, visit);
         }
+        // The legacy route's public filer (lane LG14-A). Some-only.
+        if let Some(activation) = palw_legacy_public_filer_v1.as_mut() {
+            fork(activation, visit);
+        }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
             fork(activation, visit);
@@ -12976,6 +13004,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
+            palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -13833,6 +13862,11 @@ impl Params {
             h.write(activation.daa_score().to_le_bytes());
             h.write(crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V2.to_le_bytes());
         }
+        // The legacy route's public filer (lane LG14-A), Some-only for the same reason.
+        if let Some(activation) = palw_legacy_public_filer_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_legacy_public_filer_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {
             h.write(b"palw_fp_prefix_inherit");
@@ -14633,6 +14667,7 @@ impl Params {
             palw_bond_budget_v1: self.palw_bond_budget_v1.clone(),
             palw_model_bond_allocation_v1: self.palw_model_bond_allocation_v1.clone(),
             palw_reporter_share_v2: self.palw_reporter_share_v2,
+            palw_legacy_public_filer_v1: self.palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -15736,6 +15771,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
+    palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -16035,6 +16071,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
+    palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -16316,6 +16353,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
+    palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -23655,6 +23693,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_tir_shard_segment_v2();
     // ADR-0032's amended reporter share (lane INTF), likewise.
     params.sync_palw_reporter_share_v2();
+    // The legacy route's public filer (lane LG14-A), likewise.
+    params.sync_palw_legacy_public_filer_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
     // ADR-0096's decode constraint, likewise.
@@ -23937,6 +23977,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
+    palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,

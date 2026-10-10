@@ -796,6 +796,8 @@ mod tests {
             // ADR-0032's amended reporter share (lane INTF): a bare height, refused when armed by `validate_palw_v2` (which the probe
             // does not run).
             "palw_reporter_share_v2" => params.palw_reporter_share_v2 = Some(at),
+            // Lane LG14-A's public filer: a bare height, refused when armed by `validate_palw_v2` (which the probe does not run).
+            "palw_legacy_public_filer_v1" => params.palw_legacy_public_filer_v1 = Some(at),
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {

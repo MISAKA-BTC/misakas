@@ -122,6 +122,9 @@ message KaspadRequest {
     GetPalwActivationPoolRequestMessage getPalwActivationPoolRequest = 1214;
     GetPalwCapacityShadowRequestMessage getPalwCapacityShadowRequest = 1216;
     GetPalwStateProofRequestMessage getPalwStateProofRequest = 1218;
+    GetPalwLegacyDisputeRequestMessage getPalwLegacyDisputeRequest = 1222;
+    GetPalwLegacyDisputesRequestMessage getPalwLegacyDisputesRequest = 1224;
+    GetPalwFraudFilerStatusRequestMessage getPalwFraudFilerStatusRequest = 1226;
     GetPalwPanelV3StatusRequestMessage getPalwPanelV3StatusRequest = 1254;
     GetPalwKernelClaimRequestMessage getPalwKernelClaimRequest = 1234;
     GetPalwKernelRowsRequestMessage getPalwKernelRowsRequest = 1236;
@@ -249,6 +252,9 @@ message KaspadResponse {
     GetPalwActivationPoolResponseMessage getPalwActivationPoolResponse = 1215;
     GetPalwCapacityShadowResponseMessage getPalwCapacityShadowResponse = 1217;
     GetPalwStateProofResponseMessage getPalwStateProofResponse = 1219;
+    GetPalwLegacyDisputeResponseMessage getPalwLegacyDisputeResponse = 1223;
+    GetPalwLegacyDisputesResponseMessage getPalwLegacyDisputesResponse = 1225;
+    GetPalwFraudFilerStatusResponseMessage getPalwFraudFilerStatusResponse = 1227;
     GetPalwPanelV3StatusResponseMessage getPalwPanelV3StatusResponse = 1255;
     GetPalwKernelClaimResponseMessage getPalwKernelClaimResponse = 1235;
     GetPalwKernelRowsResponseMessage getPalwKernelRowsResponse = 1237;

@@ -388,6 +388,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::ProviderChallengeV1 { .. }
         | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
         | PalwConsensusObjectV2::DaTransferV1 { .. } => Ok(()),
+        // Lane LG14-A (tags 154–155): the dispute reservation and its release ride at every height with NO stateless refusal — the live
+        // int-12 build cannot decode them and tolerates their bytes, so refusing any shape here would mark invalid a block it accepts
+        // (A-2). The fence, the signature, the bond and the rules are the acceptance layer's and the fold's.
+        PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -1117,17 +1121,20 @@ pub enum PalwLifecycleKindFenceV1 {
     /// `Params::palw_model_bond_allocation_v1` — lane BUDGET's capital assignment (tag 140, ADR-0177 D3). In force only where
     /// `palw_bond_budget_v1` is too (the assignment's rows are the budget's), as the processor's `palw_model_bond_allocation_at` reads it.
     ModelBondAllocationV1 = 5,
+    /// `Params::palw_legacy_public_filer_v1` — lane LG14-A's dispute reservation and its release (tags 154–155; 156 reserved).
+    LegacyPublicFilerV1 = 6,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
         Self::ProviderCourtV1,
         Self::LegacyHeldDaV2,
         Self::ModelBondAllocationV1,
+        Self::LegacyPublicFilerV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1139,6 +1146,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::ProviderCourtV1 => "palw_provider_court_v1",
             Self::LegacyHeldDaV2 => "palw_legacy_held_da_v2",
             Self::ModelBondAllocationV1 => "palw_model_bond_allocation_v1",
+            Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
         }
     }
 }
@@ -1292,6 +1300,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         }
         // Lane BUDGET: a bond's capital assignment (140).
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
+        // Lane LG14-A: the dispute reservation and its release (154, 155).
+        O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
     }
 }
 
@@ -1419,6 +1429,8 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (151, "ProviderChallengeV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
     (152, "ProviderAnswerV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
     (153, "DaTransferV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
+    (154, "DisputeReservedV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
+    (155, "DisputeReleasedV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
     (157, "LegacyHeldDemandedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (158, "LegacyHeldAnsweredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (159, "LegacyLeafRecomputedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
@@ -1498,6 +1510,7 @@ impl crate::config::params::Params {
                             _ => None,
                         }
                     }
+                    PalwLifecycleKindFenceV1::LegacyPublicFilerV1 => self.palw_legacy_public_filer_v1,
                 },
             )
         })
@@ -1856,6 +1869,8 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // under this fence) re-pins `PALW_A2_NEW_KIND_WIRE_V1` in the same commit and keeps this row's fence, or adds a row for another.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 150, hi: 153 }, "palw_provider_court_v1", "DA16 provider court", true),
     // LG14-B: the legacy V2 route's descent demand, its answer and the leaf recompute (RFC-0014 §4–§5).
+    // LG14-A: the dispute reservation and its release (RFC-0014 §6–§7); 156 reserved, no kind.
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 154, hi: 155 }, "palw_legacy_public_filer_v1", "LG14-A dispute reservation", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 159 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
@@ -1981,6 +1996,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "INTF (ADR-0032 amendment)",
         false,
     ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "legacy dispute reservations (delta 200, tail 0xE2, root block legacy_disputes/v1)" },
+        "palw_legacy_public_filer_v1",
+        "LG14-A",
+        true,
+    ),
     // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
     a2_row(
         PalwA2SlotV1::Int12RefusedByName {
@@ -2016,6 +2037,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (130, 139, "EXEC payload v2 (X8R)", &["palw_exec_payload_v2"]),
     (140, 149, "BUDGET (ADR-0176/0177)", &["palw_bond_budget_v1", "palw_model_bond_allocation_v1"]),
     (150, 153, "DA16 provider court", &["palw_provider_court_v1"]),
+    (154, 156, "LG14-A dispute reservation", &["palw_legacy_public_filer_v1"]),
     (157, 159, "LG14-B legacy held DA", &["palw_legacy_held_da_v2"]),
 ];
 
@@ -4102,6 +4124,8 @@ pub(crate) mod tests {
             (151, 0x6a81242ebaeba7fd),
             (152, 0xc48f175fa3456d1e),
             (153, 0x74bac59d2cf50cd4),
+            (154, 0x047359d4d8ba0a7b),
+            (155, 0x6d9c4e7671a9cac7),
             (157, 0x342660230d2d6514),
             (158, 0x2d33651174652aca),
             (159, 0x0395636b651f74fa),

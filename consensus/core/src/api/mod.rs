@@ -1018,6 +1018,45 @@ pub trait ConsensusApi: Send + Sync {
         Default::default()
     }
 
+    /// **Lane LG14-A (RFC-0014 §6.3, RPC 204): one claim's dispute view at the tip** — its roots, retention, DL-1's deadline, the hard
+    /// deadline, the dispute record, the open DA sessions, the answered units, the open courts and its recorded convictions. What any
+    /// node serves to any verifier. `None` off `ConsensusV2` or for a claim the tip does not hold.
+    fn palw_legacy_dispute_v1(&self, _claim: crate::Hash64) -> Option<crate::palw_state_v2::PalwLegacyDisputeViewV1> {
+        None
+    }
+
+    /// **Lane LG14-A (RPC 205): the claims a live dispute reservation holds at the tip** (those of `reserver` when given), at most
+    /// `limit`, in claim order.
+    fn palw_legacy_disputes_v1(&self, _reserver: Option<crate::palw_state_v2::PalwBondKeyV2>, _limit: usize) -> Vec<crate::Hash64> {
+        Vec::new()
+    }
+
+    /// **Lane LG14-A: would the next block take this reservation?** The fold's own tag-154 arm on the tip, at the DAA the virtual's
+    /// next block folds at — `Some(Ok(deposit))` or the fold's refusal; `None` off `ConsensusV2`.
+    fn palw_legacy_dispute_reservation_check_v1(
+        &self,
+        _reservation: crate::palw_legacy_public_filer_v1::PalwDisputeReservationV1,
+    ) -> Option<Result<u128, String>> {
+        None
+    }
+
+    /// **Lane LG14-A (RFC-0014 §6.1): the claims `me`'s common fraud filer may pursue at the tip**, oldest acceptance first. Empty below
+    /// `palw_legacy_public_filer_v1` and off `ConsensusV2`.
+    fn palw_fraud_filer_candidates_v1(
+        &self,
+        _me: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<crate::palw_state_v2::PalwFraudFilerCandidateV1> {
+        Vec::new()
+    }
+
+    /// **Lane LG14-A (RPC 206): one bond's standing as a public filer at the tip** — `None` for a bond the state does not hold.
+    fn palw_fraud_filer_status_v1(
+        &self,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<crate::palw_state_v2::PalwFraudFilerStatusV1> {
+        None
+    }
+
     /// **ADR-0152 §3.8 (Phase 2, P2-6): what an automatic accusation of `claim` by `accuser` comes
     /// to** at the tip, for the DAA the virtual's next block folds at — the fold's own gate (C-8, A-6
     /// included), the named unit's bound, and whether the accuser accused before or the unit is

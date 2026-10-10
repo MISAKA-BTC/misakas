@@ -2302,6 +2302,39 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_da_accusation_check_v1_impl(claim, accuser)
     }
 
+    fn palw_legacy_dispute_v1(&self, claim: kaspa_consensus_core::Hash64) -> Option<kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1> {
+        self.virtual_processor.palw_legacy_dispute_v1_impl(claim)
+    }
+
+    fn palw_legacy_disputes_v1(
+        &self,
+        reserver: Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+        limit: usize,
+    ) -> Vec<kaspa_consensus_core::Hash64> {
+        self.virtual_processor.palw_legacy_disputes_v1_impl(reserver, limit)
+    }
+
+    fn palw_legacy_dispute_reservation_check_v1(
+        &self,
+        reservation: kaspa_consensus_core::palw_legacy_public_filer_v1::PalwDisputeReservationV1,
+    ) -> Option<Result<u128, String>> {
+        self.virtual_processor.palw_legacy_dispute_reservation_check_v1_impl(&reservation)
+    }
+
+    fn palw_fraud_filer_candidates_v1(
+        &self,
+        me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1> {
+        self.virtual_processor.palw_fraud_filer_candidates_v1_impl(&me)
+    }
+
+    fn palw_fraud_filer_status_v1(
+        &self,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFraudFilerStatusV1> {
+        self.virtual_processor.palw_fraud_filer_status_v1_impl(&bond)
+    }
+
     fn palw_operator_da_candidates_v1(
         &self,
         operators: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

@@ -126,6 +126,11 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             }
             PalwLifecycleKindFenceV1::ProviderCourtV1 => params.palw_provider_court_v1 = Some(at),
             PalwLifecycleKindFenceV1::LegacyHeldDaV2 => params.palw_legacy_held_da_v2 = Some(at),
+            // Lane LG14-A: the dispute reservation's fence and its bundle mirror.
+            PalwLifecycleKindFenceV1::LegacyPublicFilerV1 => {
+                params.palw_legacy_public_filer_v1 = Some(at);
+                params.sync_palw_legacy_public_filer_v1();
+            }
             // Lane BUDGET: the allocation needs the budget at or below it; both with the unapproved probe policies, mirrored.
             PalwLifecycleKindFenceV1::ModelBondAllocationV1 => {
                 // Caps per base unit of capital (a TEST policy, never binding here): this harness judges kinds, not budgets.
@@ -173,7 +178,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_receipt_spend_v4"
             | "palw_panel_free_v1"
             | "palw_typed_roots_v1"
-            | "palw_legacy_held_da_v2" => {} // armed above, through their enums
+            | "palw_legacy_held_da_v2"
+            | "palw_legacy_public_filer_v1" => {} // armed above, through their enums
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
             // ADR-0175 needs model lines at or below it (`validate_palw_model_immutable_v1`); artifact root ownership is t12's.
