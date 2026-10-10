@@ -744,12 +744,30 @@ async fn outsider_tick(
     held.begin_tick_v1(&duties, daa).await;
     let held_duties: Vec<PalwCourtDutyV2> = duties.into_iter().filter(|d| held.routes_v1(host, d, daa)).collect();
     for read in held.chain_reads_v1(host, &held_duties, daa) {
-        let objects = chain
-            .iter()
-            .filter(|o| crate::palw_panel::palw_held_chain_object_is_the_sessions_v1(o, &read.session_id, &read.claim_id))
-            .cloned()
-            .collect();
-        held.note_chain_v1(read.session_id, objects, daa);
+        let (duty, needed) = held.history_filter_v1(&held_duties, read.session_id).unwrap();
+        let cap = host.opening_cap(&duty.class_id, daa);
+        let mut objects = std::collections::BTreeMap::new();
+        for object in chain.iter().rev() {
+            if let Some(key) = crate::palw_panel::held_court::palw_held_history_object_key_v1(object, &duty, &needed, cap) {
+                objects.insert(key, object.clone());
+            }
+        }
+        held.note_history_page_v1(
+            read.session_id,
+            read.claim_id,
+            crate::palw_panel::held_court::PalwHeldHistoryPageV1 {
+                walk: crate::palw_panel::held_court::PalwHeldHistoryWalkV1 {
+                    floor: read.not_before_daa,
+                    anchor: h64(daa),
+                    next: None,
+                    selection: crate::palw_panel::held_court::palw_held_history_selection_v1(&duty, &needed, cap),
+                },
+                reset: false,
+                rewind: true,
+                objects,
+            },
+            daa,
+        );
     }
     let (pending, moved) = (&queue.pending, &queue.moved);
     let busy = |key: &(Hash64, u32, bool)| {

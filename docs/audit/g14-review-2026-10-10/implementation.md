@@ -269,3 +269,22 @@ step treeの一致だけでexecution MismatchをHonestにしない。checkpoint�
 [controller fold](evidence/legacy-filer-descent-fold-final.log)、[book](evidence/legacy-filer-descent-book-final.log)、[public reader](evidence/legacy-filer-descent-reader-final.log)、[producer](evidence/legacy-filer-descent-producer-final.log)、[IR](evidence/legacy-filer-descent-ir-final.log)。default feature（EVMを含む）、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で実行した。初回reader testのlocal import不足を修正して再実行した。初回compileのbackend traitに存在しないprompt-form読出しも、chain classからformを渡す形に修正した。
 
 fold fixtureのjobは既存のsupplied public free-prompt job／Attempt envelopeを使い、own replayとcontrollerを注入する。実serviceの`fraud_filer_start_replay_v1`、ledger予約、mempool→template→block、fresh-nodeのpaged readを一続きにしたV-nodeではない。production startupは現在free-promptをUnjudgedとする。step countやcheckpoint/traceのみの不一致、非base0 codec、全familyの正規eligibilityと最大profile、reservation飽和・期限内包含・恒久prune後の再取得も残る。held-court後半のchain readerに別のDAA差ベースのblock capがあるため、そのpaginationも必要。consensus encodingとactivation fenceは変更していない。
+
+## held-court後半の公開履歴paginationと認証cache
+
+`cac19f6d8`で残した後半readerも修正した。実service tickの`attn_held_objects_page_from_chain_v1`は、DAA差を件数へ変換せず、1ページ40,000 selected-chain blockまで読む。cursorと開始tipを保持して要求floorまで続け、読み終わるまではfiling候補をheld builderへ公開しない。newest-firstの走査で最後の認証済みrootを残し、次ページのより古いrootへ置き換える。最新のsuffixに立つfilingではなく、全対象範囲で最古のfilingを選ぶ。
+
+accepted carrierにはfoldが拒否したlifecycle objectも含まれるため、rootを現在dutyのexecution/class/artifact/leaf・anchor・subrootsへ認証してから保存する。disclosureは選択中のstep-6 `(checkpoint, chunk)`だけを対象に、binding・checkpoint opening・chunk membershipをconsensus predicateで検査する。1 walkのcacheはroot 1件＋選択chunkごと1件で、重複・decoy・未選択disclosureを保存しない。unit選択が途中で変わった場合も、既に走査したprefixにそのunitの古い回答がある可能性があるため、選択digestの変更でbackfillをやり直す。
+
+cached filingを取得した後にもtickでanchorのbranchを確認する。reorgではfiling・pending page・challenger evidenceと旧branchのqueued challenger moveを破棄し、元の古いfloorまで読み直す。branch確認に必要なdataを読めない場合は旧filingでmoveを送らず待つ。ページのheader/acceptance/block/parent取得失敗ではcursorを進めない。正しい登録モデルの保有前提とすべてのactivation fenceを維持し、consensus encodingは変更していない。
+
+| 検証 | 結果と範囲 |
+| --- | --- |
+| `cargo test -p kaspad --lib accepted_objects_walk_tests --locked` | **6 V-unit PASS**。新testはactual Consensus API adapterで、8 block / 3 DAA、ページ中の新tip、最古filing、refused decoy・重複、partial suffixの非公開、branch変更と古いfloorの再読出し、選択変更時のbackfill、認証済みselected chunkと改ざん拒否、取得失敗を検査 |
+| `cargo test -p kaspad --lib held_court::tests --locked` | **6 V-unit PASS**。held route／queue deadline／arity／actual service wiring pin |
+| `cargo test -p kaspad --lib held_court_e2e --locked` | **20 V-fold PASS**。fixtureのchain読出しも新しい認証filterと`note_history_page_v1`を使う。held conviction・honest acquittal・非応答default・step-6のchunk要求とCheckpointAccused・restart・forfeit復旧・非seat追及・ledger回帰 |
+| `cargo test -p kaspad --lib lg14b_ --locked` | **7 V-fold PASS**。outsiderのheld loopも新filter/page publishingを使い、common filerからのfused convictionと既存回帰を確認 |
+
+[reader API adapter](evidence/held-history-page-adapter-final.log)、[held policy](evidence/held-history-policy-final.log)、[selected-history held fold](evidence/held-history-court-fold-selected-final.log)、[outsider LG14-B fold](evidence/held-history-legacy-fold-final.log)。default feature、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で実行した。初回test fixtureがanchorを含めないsiteの0-position layoutを使ったため、chunkのfixtureだけanchor付きsiteのpositionで作り直した。認証条件は緩めていない。
+
+この試験もV-nodeのfull service完走ではない。後半fold fixtureはpublic object listを1 completed pageとして読み、pagination自体は別のAPI adapterで検査する。最大historyの読出し時間・包含期限、全profileの実model RAM、責任期間内の恒久retention、prune後の公開取得・replay-safe再要求、全familyの正規eligibilityは残る。IR／dense courtの別の旧history walkerまで変更したものでもない。

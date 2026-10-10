@@ -10201,17 +10201,64 @@ impl PalwPanelService {
                     materials: &materials,
                     open_claims: &open_claims,
                 };
+                let anchors = held_court.history_anchors_v1(&held_duties);
+                let branches = session
+                    .clone()
+                    .spawn_blocking(move |c| {
+                        let tip = c.get_sink();
+                        anchors
+                            .into_iter()
+                            .map(|(sid, claim, anchor)| {
+                                let same = if anchor == tip {
+                                    Ok(true)
+                                } else {
+                                    c.is_chain_ancestor_of(anchor, tip).map_err(|e| e.to_string())
+                                };
+                                (sid, claim, same)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .await;
+                let mut history_unavailable = HashSet::new();
+                for (sid, claim, same) in branches {
+                    match same {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            held_court.invalidate_history_v1(sid, claim);
+                            court_pending.retain(|(queued, _, responder, _)| *queued != sid || *responder);
+                        }
+                        Err(why) => {
+                            history_unavailable.insert(sid);
+                            court_pending.retain(|(queued, _, responder, _)| *queued != sid || *responder);
+                            warn!("[{PALW_PANEL}] session {sid}: held history branch unavailable: {why}; challenger moves wait");
+                        }
+                    }
+                }
+                held_duties.retain(|d| !history_unavailable.contains(&d.session_id));
                 for read in held_court.chain_reads_v1(&held_host, &held_duties, current_daa) {
-                    let span = current_daa.saturating_sub(read.not_before_daa).saturating_add(64).min(1 << 16) as usize;
-                    let (sid, claim, not_before) = (read.session_id, read.claim_id, read.not_before_daa);
-                    let objects = session
+                    if history_unavailable.contains(&read.session_id) {
+                        continue;
+                    }
+                    let previous = held_court.history_walk_v1(read.session_id);
+                    let Some((duty, needed)) = held_court.history_filter_v1(&held_duties, read.session_id) else { continue };
+                    let opening_cap = held_court::PalwHeldHostV1::opening_cap(&held_host, &duty.class_id, current_daa);
+                    let page = session
                         .clone()
-                        .spawn_blocking(move |c| attn_held_objects_from_chain_v1(c, sid, claim, not_before, span))
+                        .spawn_blocking(move |c| {
+                            attn_held_objects_page_from_chain_v1(c, read, previous, &duty, &needed, opening_cap, 40_000)
+                        })
                         .await;
-                    held_court.note_chain_v1(sid, objects, current_daa);
+                    match page {
+                        Ok(page) => held_court.note_history_page_v1(read.session_id, read.claim_id, page, current_daa),
+                        Err(why) => warn!(
+                            "[{PALW_PANEL}] session {}: held public history unavailable: {why}; cursor unchanged",
+                            read.session_id
+                        ),
+                    }
                 }
                 let busy = |key: &(Hash64, u32, bool)| {
-                    court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == *key)
+                    history_unavailable.contains(&key.0)
+                        || court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == *key)
                         || court_moved.get(key).is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                 };
                 let tick = held_court::palw_held_moves_v1(&held_host, &mut held_court, &held_duties, current_daa, busy);
@@ -14750,32 +14797,66 @@ fn tir_root_claims_from_chain_v1(
     found
 }
 
-/// **The held route's chain reads, beside [`attn_root_filings_from_chain_v1`]** (ADR-0152 §4-ter
-/// N3, C2; 4-ter.3 step 6): through the same walk, every lifecycle object accepted since the
+/// **The held route's paged chain reads, beside [`attn_root_filings_from_chain_v1`]** (ADR-0152 §4-ter
+/// N3, C2; 4-ter.3 step 6): through the strict paged walk, every lifecycle object accepted since the
 /// session's opening that is a held root claim for `session_id` (`CourtAttnRootClaimedHeld`, tag 57:
 /// the accused's binding, tile, anchor and slice sub-roots — `PalwAttnHeldFilingV1::from_object_v1(&object)`
 /// reads them) or the producer's disclosure of a held unit of `claim_id` (R-core+'s
-/// `MaterialDisclosedV2`, the v1 court's `MaterialDisclosedHeld`), OLDEST first. Nothing here is taken
-/// on its word: the walk returns objects the fold refused too, and the route checks each the fold's
-/// way before it reads it (`palw_held_filing_of_duty_v1`, `palw_held_step6_disclosed_v1`).
-fn attn_held_objects_from_chain_v1(
+/// `MaterialDisclosedV2`, the v1 court's `MaterialDisclosedHeld`). The map retains only the oldest authenticated root and one answer
+/// per selected chunk; the route publishes it after completing the anchored backfill. Partial suffixes never select the first
+/// standing filing. Refused objects in accepted carriers cannot enter the cache; consumers re-check the current duty when using it.
+fn attn_held_objects_page_from_chain_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
-    session_id: Hash64,
-    claim_id: Hash64,
-    not_before_daa: u64,
+    read: held_court::PalwHeldChainReadV1,
+    previous: Option<held_court::PalwHeldHistoryWalkV1>,
+    duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2,
+    needed: &[held_court::PalwHeldStep6UnitV1],
+    opening_cap: u64,
     max_chain_blocks: usize,
-) -> Vec<PalwConsensusObjectV2> {
-    let mut found = Vec::new();
-    walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| {
-        if palw_held_chain_object_is_the_sessions_v1(&object, &session_id, &claim_id) {
-            found.push(object);
+) -> Result<held_court::PalwHeldHistoryPageV1, String> {
+    let tip = consensus.get_sink();
+    let same_branch = match previous {
+        Some(walk) if walk.anchor != tip => {
+            consensus.is_chain_ancestor_of(walk.anchor, tip).map_err(|e| format!("held history branch: {e}"))?
         }
-    });
-    found.reverse();
-    found
+        _ => true,
+    };
+    let selection = held_court::palw_held_history_selection_v1(duty, needed, opening_cap);
+    let changed = previous.is_some_and(|walk| walk.selection != selection);
+    let continuing = previous.filter(|walk| same_branch && !changed && walk.next.is_some());
+    // A branch change may remove a formerly cached root filing. Re-read down to the earlier completed/active floor too,
+    // even when the present request is only for a later disclosure.
+    let floor = continuing.map_or_else(
+        || {
+            if same_branch && !changed {
+                read.not_before_daa
+            } else {
+                previous.map_or(read.not_before_daa, |walk| walk.floor.min(read.not_before_daa))
+            }
+        },
+        |walk| walk.floor,
+    );
+    let anchor = continuing.map_or(tip, |walk| walk.anchor);
+    let start = continuing.and_then(|walk| walk.next).unwrap_or(tip);
+    let mut found = BTreeMap::new();
+    let next = walk_accepted_lifecycle_page_v1(consensus, start, floor, max_chain_blocks, &mut |object| {
+        if read.session_id == duty.session_id
+            && read.claim_id == duty.claim_id
+            && let Some(key) = held_court::palw_held_history_object_key_v1(&object, duty, needed, opening_cap)
+        {
+            // The walk is newest first; the last valid root is the oldest in this page. Repeats and decoys do not grow the map.
+            found.insert(key, object);
+        }
+    })?;
+    Ok(held_court::PalwHeldHistoryPageV1 {
+        walk: held_court::PalwHeldHistoryWalkV1 { floor, anchor, next, selection },
+        reset: !same_branch,
+        rewind: changed || !same_branch,
+        objects: found,
+    })
 }
 
-/// Whether an accepted lifecycle object is one [`attn_held_objects_from_chain_v1`] returns for the
+/// Whether an accepted lifecycle object is one [`attn_held_objects_page_from_chain_v1`] returns for the
 /// session and its claim — the predicate alone, so a fixture chain filters with it too.
 pub(crate) fn palw_held_chain_object_is_the_sessions_v1(
     object: &PalwConsensusObjectV2,
@@ -18888,6 +18969,155 @@ mod accepted_objects_walk_tests {
                 .unwrap()
                 .2
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_held_reader_reaches_old_filings_before_publishing_and_restarts_on_a_fork() {
+        use super::held_court::{PalwHeldChainReadV1, PalwHeldCourtV1, PalwHeldHistoryObjectKeyV1};
+        let (duty, oldest, decoy, unit, chunk) = super::held_court_e2e::held_history_fixture_v1();
+        let mut later = oldest.clone();
+        let PalwConsensusObjectV2::CourtAttnRootClaimedHeld { signature, .. } = &mut later else { unreachable!() };
+        *signature = vec![0xAC; 8];
+        let mut chain = repeated_daa_chain();
+        let insert = |chain: &mut Chain, block: u64, objects: Vec<PalwConsensusObjectV2>| {
+            let txs = objects
+                .into_iter()
+                .map(|object| {
+                    Transaction::new(
+                        TX_VERSION,
+                        vec![],
+                        vec![],
+                        0,
+                        SUBNETWORK_ID_PALW_LIFECYCLE,
+                        0,
+                        borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let count = txs.len();
+            chain.blocks.insert(hash(block), Block::new(chain.headers[&hash(block)].as_ref().clone(), txs));
+            chain.acceptance.insert(
+                hash(block),
+                Arc::new(vec![MergesetBlockAcceptanceData {
+                    block_hash: hash(block),
+                    accepted_transactions: (0..count)
+                        .map(|i| AcceptedTxEntry { transaction_id: Default::default(), index_within_block: i as u32 })
+                        .collect(),
+                }]),
+            );
+        };
+        insert(&mut chain, 2, vec![oldest.clone()]);
+        insert(&mut chain, 6, vec![chunk.clone(), chunk.clone()]);
+        insert(&mut chain, 8, vec![later.clone(), later.clone(), decoy.clone()]);
+        let read = PalwHeldChainReadV1 { session_id: duty.session_id, claim_id: duty.claim_id, not_before_daa: 100 };
+        let mut held = PalwHeldCourtV1::default();
+        let page = |chain: &Chain, previous| {
+            attn_held_objects_page_from_chain_v1(
+                chain,
+                read,
+                previous,
+                &duty,
+                &[],
+                kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1,
+                3,
+            )
+        };
+        let first = page(&chain, None).unwrap();
+        assert_eq!(first.objects.len(), 1, "only an authenticated standing root is accumulated, regardless of repeats/decoys");
+        assert_eq!(first.walk.next, Some(hash(5)));
+        held.note_history_page_v1(duty.session_id, duty.claim_id, first, 102);
+        assert!(held.history_walk_v1(duty.session_id).unwrap().next.is_some());
+        assert!(
+            held.filing_v1(&duty, kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1).is_none(),
+            "a partial suffix is not a filing"
+        );
+        // A new tip does not move the in-progress anchor or skip the original chain's older filing.
+        append(&mut chain, 9, 150, 8);
+        let original_anchor = held.history_walk_v1(duty.session_id).unwrap().anchor;
+        let second = page(&chain, held.history_walk_v1(duty.session_id)).unwrap();
+        assert_eq!(second.walk.anchor, original_anchor);
+        assert_eq!(second.walk.next, Some(hash(2)));
+        let selected = attn_held_objects_page_from_chain_v1(
+            &chain,
+            read,
+            held.history_walk_v1(duty.session_id),
+            &duty,
+            &[unit],
+            kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1,
+            3,
+        )
+        .unwrap();
+        assert!(selected.rewind && !selected.reset, "a newly selected old answer invalidates the walk's previously filtered prefix");
+        assert_eq!(selected.walk.anchor, hash(9));
+        assert_eq!(selected.walk.next, Some(hash(6)));
+        let chunk_page = attn_held_objects_page_from_chain_v1(
+            &chain,
+            read,
+            Some(selected.walk),
+            &duty,
+            &[unit],
+            kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1,
+            3,
+        )
+        .unwrap();
+        assert_eq!(chunk_page.objects.len(), 1);
+        assert_eq!(
+            chunk_page.objects[&PalwHeldHistoryObjectKeyV1::Chunk { checkpoint: unit.checkpoint, chunk: unit.chunk_index }],
+            chunk,
+            "repeated old selected chunk is read once from an authenticated carrier"
+        );
+        held.note_history_page_v1(duty.session_id, duty.claim_id, second, 150);
+        let third = page(&chain, held.history_walk_v1(duty.session_id)).unwrap();
+        assert_eq!(third.objects[&PalwHeldHistoryObjectKeyV1::Root], oldest);
+        assert_eq!(third.walk.next, None);
+        held.note_history_page_v1(duty.session_id, duty.claim_id, third, 150);
+        assert_eq!(
+            held.filing_v1(&duty, kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1).unwrap().0,
+            held_court::palw_held_object_digest_v1(&oldest),
+            "the oldest authenticated filing stands once the read reaches its floor"
+        );
+        // The completed anchor belongs to the old branch; a later-only request must still re-read the older filing on a fork.
+        append(&mut chain, 20, 160, 3);
+        held.invalidate_history_v1(duty.session_id, duty.claim_id);
+        assert!(
+            held.filing_v1(&duty, kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1).is_none(),
+            "a cached old-branch filing cannot drive a challenger move"
+        );
+        let fork = attn_held_objects_page_from_chain_v1(
+            &chain,
+            PalwHeldChainReadV1 { not_before_daa: 140, ..read },
+            held.history_walk_v1(duty.session_id),
+            &duty,
+            &[],
+            kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1,
+            3,
+        )
+        .unwrap();
+        assert!(fork.reset);
+        assert_eq!(fork.walk.floor, 100);
+        assert_eq!(fork.objects[&PalwHeldHistoryObjectKeyV1::Root], oldest);
+        let mut missing = chain;
+        missing.acceptance.remove(&hash(20));
+        assert!(page(&missing, held.history_walk_v1(duty.session_id)).unwrap_err().contains("history acceptance"));
+        let cap = kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1;
+        assert!(
+            held_court::palw_held_history_object_key_v1(&chunk, &duty, &[], cap).is_none(),
+            "a valid unselected chunk is not cached"
+        );
+        assert_eq!(
+            held_court::palw_held_history_object_key_v1(&chunk, &duty, &[unit], cap),
+            Some(PalwHeldHistoryObjectKeyV1::Chunk { checkpoint: unit.checkpoint, chunk: unit.chunk_index })
+        );
+        let mut corrupt = chunk;
+        let PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure } = &mut corrupt else { unreachable!() };
+        let kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1::StateChunk { chunk, .. } = &mut disclosure.disclosure else {
+            unreachable!()
+        };
+        chunk.chunk_bytes[0] ^= 1;
+        assert!(
+            held_court::palw_held_history_object_key_v1(&corrupt, &duty, &[unit], cap).is_none(),
+            "a selected chunk must authenticate"
         );
     }
 

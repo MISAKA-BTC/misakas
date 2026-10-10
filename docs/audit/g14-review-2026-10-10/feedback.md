@@ -19,7 +19,7 @@
 
 有効化fenceは変更していない。以下は比較用に保持した初回レビューであり、解決済みのcompile・資源バグを現HEADの未解決事項として再掲するものではない。
 
-**LG14-B outsider接続の最新検証:** LG14-B **7 V-fold PASS**、共通filer **8 V-unit PASS**、公開history API adapter **5 V-unit PASS**。producer DA policyとIRの回帰も確認した。学習対象のtag 158を1つに絞り、frontierをdescent round数で制限し、重複・未選択・改ざんcarrierではcacheを増やさない。過去に回答済みの次unitを選ぶとbackfillを再開する。ここで使うfold fixtureはsupplied public jobからown replayを注入しており、実nodeのstartup・memory ledger・mempool包含まで立証したものではない。held-court後半の別history readerにはDAA差をblock上限とする旧経路が残るため、同じpagination修正を適用する必要がある。
+**LG14-B outsider接続の最新検証:** LG14-B **7 V-fold PASS**、共通filer **8 V-unit PASS**、公開history API adapter **5 V-unit PASS**。producer DA policyとIRの回帰も確認した。学習対象のtag 158を1つに絞り、frontierをdescent round数で制限し、重複・未選択・改ざんcarrierではcacheを増やさない。過去に回答済みの次unitを選ぶとbackfillを再開する。ここで使うfold fixtureはsupplied public jobからown replayを注入しており、実nodeのstartup・memory ledger・mempool包含まで立証したものではない。held-court後半のhistory readerにも、固定件数のpagination、最古の認証済みfilingの選択、選択chunkの認証とbackfill、branch確認を追加した。reader／held controllerのfixture回帰は確認したが、fresh nodeのfull service完走と責任期間内の恒久保持は別の受入条件である。
 
 **C2履歴readerの修正:** 以前はDAA差をblock件数へ変換し、途中で打ち切った走査も要求floorまで読んだと記録していた。公開済みunitが`AwaitAnswer`に留まる経路を、再開cursor・開始tipの固定・完了範囲の記録・新しい追及のbackfill・branch変更時の読み直しで修正した。認証済みの利用対象unitだけを重複なくcacheする。node-policyの **11 V-unit PASS**（filer 7、Consensus API adapterのreader 4）がある。これはfresh-node追及のV-node試験ではない。恒久的にpruneされた回答は今回の修正でも取得できず、完了扱いをせず再試行する。現行consensusは既回答unitの再要求も拒否するため、保持・取得・再要求の経路と期限を別途完成させる必要がある。詳細とlogは[修正記録](implementation.md)の履歴pagination節を参照。
 

@@ -15,7 +15,9 @@
 - integration `7d8c31270`のbeacon source-set freezeを`b6a90a0d0`で統合した。検証結果とscopeは監査記録へ記載する。
 - legacyの公開履歴readerを件数制限付きpaginationへ変更し、開始tipの固定、新しいMismatchのbackfill、reorg時の読み直し、認証済みの利用対象unitだけのcacheを実装した。filer 7件とConsensus API adapter reader 4件、計11 V-unit PASS。恒久的なprune後の取得・再要求とfresh-node追及のV-node試験は残る。
 - LG14-B producer応答を既存DA workerへ接続した。検証済みbase0-codecのdense/fold保持からstep node・checkpoint node・CKWを作り、認証・scope・close ceiling・署名・carrier検査を通るtag 158をqueueする。DA policy 8 V-unit、LG14-B 6 V-fold、IR回帰19件がPASS。outsiderの大型descent/terminalとproduction-serviceのV-nodeは残る。
-- 上記producer接続後、outsiderの共通filerをLG14-Bへ接続した。独立したown replayからstep treeを読み、認証済み公開frontierでdescentし、court自身のpredicateを通ったtag 159又はCKW fused accusationを署名・queueする。公開tag-158履歴は選択unitだけをcacheし、後から選ぶ既回答unitもbackfillする。LG14-B 7 V-fold、filer 8 V-unit、公開reader 5 V-unit PASS。Final前後のgather/matmulとfused conviction、frontier/CKWのDA defaultをactual controllerで確認した。full serviceのV-nodeや最大profileの測定は未達で、step treeのみの一致からHonestとは判定しない。held-court後半の旧readerもpaginationが必要。
+- 上記producer接続後、outsiderの共通filerをLG14-Bへ接続した。独立したown replayからstep treeを読み、認証済み公開frontierでdescentし、court自身のpredicateを通ったtag 159又はCKW fused accusationを署名・queueする。公開tag-158履歴は選択unitだけをcacheし、後から選ぶ既回答unitもbackfillする。LG14-B 7 V-fold、filer 8 V-unit、公開reader 5 V-unit PASS。Final前後のgather/matmulとfused conviction、frontier/CKWのDA defaultをactual controllerで確認した。full serviceのV-nodeや最大profileの測定は未達で、step treeのみの一致からHonestとは判定しない。held-court後半の旧readerも次の更新でpaginationへ変更した。
+
+- held-court後半のpublic readerもpaginationへ変更した。部分suffixからroot filingを採用せず、要求floorまでの最古の認証済みfilingと選択chunkだけを保持する。unit選択変更でbackfillし、cached filingのbranch確認をtickで行う。reorgではchallenger evidenceとqueued moveを破棄し、branch確認が読めない場合はmoveを待つ。reader 6 V-unit、held policy 6 V-unit、held controller 20 V-fold、LG14-B 7 V-foldを検証した。full service／最大profile／恒久pruneの完成ではない。
 
 G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
 
