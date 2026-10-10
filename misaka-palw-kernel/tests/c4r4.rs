@@ -188,7 +188,7 @@ fn f_c4r4_04_the_pre_final_default_liability_horizon_convicts_on_its_last_day_an
     let (_, _, until) = edge(31);
     assert_eq!(until, 231);
     let (conv_on, refused_on, _) = edge(until);
-    assert_eq!(conv_on, Some((900, 500, false)), "a proof on the horizon's last DAA convicts (the default kept 900 reserved)");
+    assert_eq!(conv_on, Some((900, 450, false)), "a proof on the horizon's last DAA convicts (the default kept 900 reserved; F-C4R4-15: the bounty is the share of the 900)");
     assert!(refused_on.is_none());
     let (conv_after, refused_after, _) = edge(until + 1);
     assert_eq!(conv_after, None, "one DAA past the horizon: no conviction");
