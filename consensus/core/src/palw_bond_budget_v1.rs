@@ -581,8 +581,10 @@ pub fn palw_bond_budget_caps_v1(policy: &PalwBondBudgetPolicyV1, capital: u64) -
         reward_sompi: sat(floor_mul_div(c, policy.reward_per_unit_sompi as u128, u)),
         final_weight: floor_mul_div(c, policy.final_weight_per_unit as u128, u),
         round_rights: match policy.round_rights {
-            // B binds: each ticket takes a block there; this dimension is never the binding one.
-            PalwRoundRightsPolicyV1::CountAgainstBlocks => u64::MAX,
+            // Each ticket takes a whole block of B: at most B_max's whole blocks (B binds alongside, shared with claims).
+            PalwRoundRightsPolicyV1::CountAgainstBlocks => {
+                sat(floor_mul_div(c, policy.block_units_per_unit as u128, u)) / PALW_BUDGET_BLOCK_UNIT_V1
+            }
             PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit } => sat(floor_mul_div(c, rights_per_unit as u128, u)),
         },
     }
@@ -604,7 +606,9 @@ pub fn palw_round_rights_remaining_v1(policy: &PalwBondBudgetPolicyV1, capital: 
     let caps = palw_bond_budget_caps_v1(policy, capital);
     let window = row.map(|r| r.window).unwrap_or_default();
     match policy.round_rights {
-        PalwRoundRightsPolicyV1::CountAgainstBlocks => caps.block_units.saturating_sub(window.block_units) / PALW_BUDGET_BLOCK_UNIT_V1,
+        PalwRoundRightsPolicyV1::CountAgainstBlocks => (caps.block_units.saturating_sub(window.block_units)
+            / PALW_BUDGET_BLOCK_UNIT_V1)
+            .min(caps.round_rights.saturating_sub(window.round_rights)),
         PalwRoundRightsPolicyV1::ExecutionCap { .. } => caps.round_rights.saturating_sub(window.round_rights),
     }
 }

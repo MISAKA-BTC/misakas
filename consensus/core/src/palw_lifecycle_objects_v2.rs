@@ -4004,6 +4004,8 @@ pub(crate) mod tests {
             (110, 0x7da0346d0633de78),
             (111, 0x2d490db20d075bfe),
             (120, 0xcbb24fb8f993e5c6),
+            // BUDGET's capital assignment (ADR-0177 D3), under `palw_model_bond_allocation_v1`.
+            (140, 0xa4ab9f7696775588),
             (150, 0x5fb8c8b2822f8386),
             (151, 0x6a81242ebaeba7fd),
             (152, 0xc48f175fa3456d1e),

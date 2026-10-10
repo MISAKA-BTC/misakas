@@ -7,7 +7,7 @@
 //!
 //! * **same bond, honest pace vs forger pace** — equal ceilings, the fast producer's extra attempts skipped;
 //! * **ρ ×1 / ×100 / ×1000** — Q moves, B/R/F (held and capped) do not; riders share their lead's one block;
-//! * **early Final / court void / retry** — nothing returns before `d + W`; a Final pays (all legs) at most the claim's reservation;
+//! * **early Final / void / retry** — nothing returns before `d + W`; a Final pays (all legs) at most the claim's reservation;
 //! * **split** — ten bonds of a tenth never admit more than the whole;
 //! * **allocation** — a model's share of the realized carve clips reward only (admission and weight unchanged), unassigned budget is
 //!   never minted;
@@ -171,10 +171,10 @@ fn rho_1_100_1000_move_q_and_never_b_r_or_f() {
     assert!(seen.windows(2).all(|p| p[0] == p[1]), "B, R and F are invariant in ρ: {seen:?}");
 }
 
-/// **Early Final, a court void and a retry recover nothing before `d + W`** (ADR-0176 D4), and a Final pays — every leg, buyback
+/// **Early Final, a void and a retry recover nothing before `d + W`** (ADR-0176 D4), and a Final pays — every leg, buyback
 /// included — at most the claim's reservation (rights sliced by ρ = 4: `R ≤ 1,000 MSK / 12` against a carve of thousands).
 #[test]
-fn early_final_court_void_and_retry_recover_nothing_before_d_plus_w() {
+fn early_final_void_and_retry_recover_nothing_before_d_plus_w() {
     let pol = policy(1_000_000, 5_000, 4, 1_000, true);
     let (r_claim, _) = palw_bond_budget_claim_ceilings_v1(&pol).unwrap();
     assert_eq!(r_claim, 1_000 * MSK / 12, "1,000 MSK per unit over q·ρ = 12");
@@ -186,18 +186,16 @@ fn early_final_court_void_and_retry_recover_nothing_before_d_plus_w() {
     let escrow = sim.c.claim(&a).escrowed_reward;
     assert!(escrow > r_claim, "the carve {escrow} exceeds the per-claim reward right {r_claim}");
     let d_a = budget(&sim).claim_row(&a).unwrap().accepted_daa;
-    // a: bound, licensed, audited, Final — long before d + W.
+    // a: bound, licensed, audited, Final — long before d + W. b and c are never bound and void at their anchor slots (a conviction
+    // of b would take the whole bond, ADR-0160 AG-2, and void a with it: the void here is the bind timeout's).
     let seats = sim.seats();
-    for id in [a, b] {
-        let bound = sim.bind(id, &seats);
-        sim.license(id, &seats, bound);
-    }
-    let audits = audit_receipts_for(&sim.c.s, &sim.c.sp, &[a, b]);
-    for batch in audits {
+    let bound = sim.bind(a, &seats);
+    sim.license(a, &seats, bound);
+    for batch in audit_receipts_for(&sim.c.s, &sim.c.sp, &[a]) {
         sim.step(vec![batch]);
     }
-    sim.court_fraud(b);
     sim.finalize_all(&[a]);
+    let _ = b;
     assert!(sim.c.daa < d_a + 5_000, "Final at {} is early: d + W = {}", sim.c.daa, d_a + 5_000);
     let row = sim.c.s.vesting_row(&a).expect("a vests").clone();
     let named = row.producer.amount + row.seats.iter().map(|(_, p)| p.amount).sum::<u64>() + row.reserve + row.buyback_bound;
@@ -205,7 +203,7 @@ fn early_final_court_void_and_retry_recover_nothing_before_d_plus_w() {
     assert!(named > 0);
     let grants = budget(&sim).claim_row(&a).unwrap().consumed;
     assert!(grants.reward_sompi <= r_claim && grants.final_weight > 0);
-    // The retry: refused while a, b and c sit in the window — a Final, b convicted, c pending.
+    // The retry: refused while a, b and c sit in the window — a Final, b and c unbound.
     let skips = skipped(&sim, "budget");
     assert!(sim.claim(90, 0x4_0005).is_none(), "no early recovery");
     assert_eq!(skipped(&sim, "budget"), skips + 1);
