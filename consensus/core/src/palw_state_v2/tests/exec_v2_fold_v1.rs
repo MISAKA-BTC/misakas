@@ -2347,6 +2347,91 @@ mod amendment_1 {
         (p, s, claim, slices, pre, delta.unwrap())
     }
 
+    #[test]
+    fn complete_reward_reader_conserves_all_funds_and_pages_each_leg_without_changing_totals() {
+        use crate::palw_reward_vesting_read_v2::palw_reward_vesting_read_v2 as read;
+        use crate::palw_vesting_read_v1::{PalwVestingPayeeV1 as Payee, PalwVestingQueryV1 as Q};
+        let (p, s, claim, _, _) = funded_final(0);
+        let daa = s.last_point.unwrap().daa_score + 1;
+        let chain = read(&s, &p, daa, None, &Q::Chain, 500, None, None);
+        let auxiliary = s.exec_v2_rewards[&claim].total_sompi_u128();
+        assert_eq!(chain.outstanding_sompi, chain.native.live_sompi + auxiliary);
+        assert_eq!(chain.query_outstanding_sompi, chain.outstanding_sompi);
+        assert_eq!(chain.exec_slice_sompi + chain.exec_kernel_fee_sompi, auxiliary);
+        assert_eq!(chain.outstanding_sompi + s.vesting_counters.moved + s.vesting_counters.burned, s.vesting_counters.created);
+        assert!(chain.native.has_exec_rewards);
+        assert_eq!(chain.state_root, s.state_root());
+        let mut cursor = None;
+        let mut legs = Vec::new();
+        loop {
+            let page = read(&s, &p, daa, None, &Q::Chain, 1, None, cursor);
+            assert_eq!(
+                (page.query_outstanding_sompi, page.locked_sources, page.exec_rows_total),
+                (chain.query_outstanding_sompi, chain.locked_sources, chain.exec_rows_total)
+            );
+            legs.extend(page.exec_rows);
+            match page.exec_next_after {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        assert_eq!(legs, chain.exec_rows, "same-bond funds require distinct cursor positions");
+        let own = read(&s, &p, daa, None, &Q::Payee(Payee::Bond(bond_key(20))), 1, None, None);
+        let expected: u128 = s.exec_v2_rewards[&claim]
+            .legs
+            .iter()
+            .filter(|((who, _), _)| *who == bond_key(20))
+            .map(|(_, leg)| u128::from(leg.amount))
+            .sum();
+        assert_eq!(own.native.rows_total, 0);
+        assert_eq!(own.exec_rows_total, 2);
+        assert_eq!(own.locked_sources, 1, "two funds of one actor share a holding source");
+        assert_eq!(own.query_outstanding_sompi, expected);
+        let address = read(&s, &p, daa, None, &Q::Payee(Payee::Payload(s.bonds[&bond_key(20)].payout_payload)), 500, None, None);
+        assert_eq!(address.query_outstanding_sompi, expected);
+        let root = read(&s, &p, daa, None, &Q::Claim(claim), 500, None, None);
+        assert_eq!(root.query_outstanding_sompi, chain.outstanding_sompi);
+        let absent = read(&s, &p, daa, None, &Q::Claim(h64(0xFA)), 1, None, None);
+        assert_eq!((absent.query_outstanding_sompi, absent.locked_sources, absent.exec_rows_total), (0, 0, 0));
+        let off = p.clone().with_rcore_plus_mirrors(None, 0, Vec::new());
+        let forced = read(&s, &off, daa, None, &Q::Chain, 500, None, None);
+        assert!(!forced.native.rcore_plus_active && forced.native.live_rows > 0);
+        assert_eq!(forced.outstanding_sompi, chain.outstanding_sompi, "mandatory EXEC native vesting remains visible below R-core+");
+    }
+
+    #[test]
+    fn complete_reward_reader_names_actor_hold_and_exact_release_after_native_moves() {
+        use crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1 as O;
+        use crate::palw_reward_vesting_read_v2::palw_reward_vesting_read_v2 as read;
+        use crate::palw_vesting_read_v1::{PalwClaimVestingStageV1 as Stage, PalwVestingPayeeV1 as Payee, PalwVestingQueryV1 as Q};
+        let (p, s, claim, _, _) = funded_final(0);
+        let p = aggregate_params(&p);
+        let until = s.exec_v2_rewards[&claim].liability_until;
+        let lift = until + p.window_court();
+        let (s, _) = aggregate_exec_actor(&s, &p, bond_key(20), until, O::Equivocation);
+        let word = s.last_point.unwrap().blue_score + 1;
+        let s = step(&s, &p, word, until + 1, &[]).unwrap().0;
+        let s = step(&s, &p, word + 1, until + 2, &[]).unwrap().0;
+        assert!(s.vesting_row(&claim).is_none());
+        let query = Q::Payee(Payee::Bond(bond_key(20)));
+        let held = read(&s, &p, lift - 1, None, &query, 1, None, None);
+        assert_eq!((held.exec_rows_total, held.locked_sources, held.last_lock_daa), (2, 1, Some(lift)));
+        assert_eq!(held.query_exec_ready_sompi, 0);
+        let root = read(&s, &p, lift - 1, None, &Q::Claim(claim), 500, None, None);
+        assert_eq!(root.native.claim_stage, Some(Stage::ExecPending));
+        let ready = read(&s, &p, lift, None, &query, 500, None, None);
+        assert_eq!(ready.query_exec_pending_sompi, 0);
+        assert_eq!(ready.query_exec_ready_sompi, held.query_exec_pending_sompi);
+        assert_eq!((ready.locked_sources, ready.last_lock_daa), (0, None));
+        assert!(ready.exec_rows.iter().all(|leg| leg.ready && leg.in_next_block && !leg.native_pending && !leg.lock_live));
+        let (after, _) = step(&s, &p, word + 2, lift, &[]).unwrap();
+        assert_eq!(after.vesting_counters.moved - s.vesting_counters.moved, ready.query_exec_ready_sompi);
+        let paid = read(&after, &p, lift + 1, None, &Q::Claim(claim), 500, None, None);
+        assert_eq!(paid.native.claim_stage, Some(Stage::Moved));
+        assert_eq!((paid.outstanding_sompi, paid.query_outstanding_sompi, paid.exec_rows_total), (0, 0, 0));
+        assert!(!paid.native.has_exec_rewards);
+    }
+
     fn aggregate_params(p: &PalwStateParamsV2) -> PalwStateParamsV2 {
         use crate::palw_aggregate_liability_v1::{PalwCapacityLiabilityV1, PalwCapacityStepV1};
         p.clone().with_capacity_liability(Some(PalwCapacityLiabilityV1 {

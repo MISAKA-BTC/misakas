@@ -2456,6 +2456,16 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_vesting_v1_impl(query, limit, after)
     }
 
+    fn palw_reward_vesting_v2(
+        &self,
+        query: kaspa_consensus_core::palw_vesting_read_v1::PalwVestingQueryV1,
+        limit: usize,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        exec_after: Option<kaspa_consensus_core::palw_reward_vesting_read_v2::PalwExecRewardCursorV2>,
+    ) -> Option<kaspa_consensus_core::palw_reward_vesting_read_v2::PalwRewardVestingReadV2> {
+        self.virtual_processor.palw_reward_vesting_v2_impl(query, limit, after, exec_after)
+    }
+
     fn palw_capacity_shadow_v1(
         &self,
         options: kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1,

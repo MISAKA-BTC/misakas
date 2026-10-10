@@ -3359,38 +3359,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwVestingRequest,
     ) -> RpcResult<GetPalwVestingResponse> {
-        use kaspa_consensus_core::palw_vesting_read_v1::{PalwVestingPayeeV1, PalwVestingQueryV1};
-        // Everything the caller sent is parsed before a byte of chain state is read (mainnet audit
-        // M-5): a malformed request is free, and an ERROR — "this payee has no rows" and "you named
-        // nobody readable" must not share a reply.
-        let named = [&request.bond, &request.payout_address, &request.claim_id].iter().filter(|field| !field.is_empty()).count();
-        if named > 1 {
-            return Err(RpcError::General("name at most one of bond, payoutAddress and claimId".to_string()));
-        }
-        let query = if !request.bond.is_empty() {
-            PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(
-                parse_bond_outpoint(&request.bond)?,
-            )))
-        } else if !request.payout_address.is_empty() {
-            PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Payload(palw_payout_payload_of_address(
-                &request.payout_address,
-                self.config.prefix(),
-            )?))
-        } else if !request.claim_id.is_empty() {
-            PalwVestingQueryV1::Claim(parse_hash64(&request.claim_id, "claim id")?)
-        } else {
-            PalwVestingQueryV1::Chain
-        };
-        let after = match request.after.trim() {
-            "" => None,
-            cursor => {
-                let (expiry, claim) = cursor
-                    .split_once(':')
-                    .ok_or_else(|| RpcError::General(format!("after '{cursor}' is not <expiry_daa>:<claim_id>")))?;
-                let expiry: u64 = expiry.parse().map_err(|_| RpcError::General(format!("after '{cursor}' has a non-numeric DAA")))?;
-                Some((expiry, parse_hash64(claim, "after's claim id")?))
-            }
-        };
+        let (query, after) = parse_palw_vesting_query(&request, self.config.prefix())?;
         let echo = GetPalwVestingResponse {
             bond: request.bond.clone(),
             payout_address: request.payout_address.clone(),
@@ -3400,101 +3369,94 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         if palw_v2_bundle(&self.config.params).is_none() {
             return Ok(echo);
         }
-        let limit = request.limit as usize;
         let session = self.consensus_manager.consensus().unguarded_session();
+        let limit = request.limit as usize;
         let Some(read) = session.clone().spawn_blocking(move |c| c.palw_vesting_v1(query, limit, after)).await else {
             return Ok(echo);
         };
-        let measured_ms_per_daa = palw_measured_ms_per_daa(&session).await;
-        let outpoint = |b: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", b.0.transaction_id, b.0.index);
-        let stopped = match read.next_block.stopped {
-            kaspa_consensus_core::palw_vesting_v1::PalwVestingStopV1::NotLatched => "not_latched",
-            kaspa_consensus_core::palw_vesting_v1::PalwVestingStopV1::BudgetFull => "budget_full",
-            kaspa_consensus_core::palw_vesting_v1::PalwVestingStopV1::Empty => "empty",
+        if read.has_exec_rewards {
+            return Err(RpcError::General("getPalwVesting cannot represent live EXEC funds; use getPalwRewardVesting".into()));
+        }
+        let measured = palw_measured_ms_per_daa(&session).await;
+        Ok(rpc_palw_vesting_response(&read, echo, measured))
+    }
+
+    async fn get_palw_reward_vesting_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwRewardVestingRequest,
+    ) -> RpcResult<GetPalwRewardVestingResponse> {
+        use kaspa_consensus_core::palw_work_slice_v2::PalwExecV2RewardFundV1 as Fund;
+        let native_request = GetPalwVestingRequest {
+            bond: request.bond,
+            payout_address: request.payout_address,
+            claim_id: request.claim_id,
+            limit: request.limit,
+            after: request.after,
         };
-        let source_named = |source: &kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1| match source {
-            kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1::Row { claim_id } => ("row", claim_id.to_string()),
-            kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1::Reporter { offence_id } => {
-                ("reporter", offence_id.to_string())
-            }
+        let (query, after) = parse_palw_vesting_query(&native_request, self.config.prefix())?;
+        let exec_after = parse_exec_reward_cursor(&request.exec_after)?;
+        let echo = GetPalwVestingResponse {
+            bond: native_request.bond.clone(),
+            payout_address: native_request.payout_address.clone(),
+            claim_id: native_request.claim_id.clone(),
+            ..Default::default()
         };
-        Ok(GetPalwVestingResponse {
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwRewardVestingResponse { native: echo, ..Default::default() });
+        }
+        let limit = native_request.limit as usize;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(read) = session.clone().spawn_blocking(move |c| c.palw_reward_vesting_v2(query, limit, after, exec_after)).await
+        else {
+            return Ok(GetPalwRewardVestingResponse { native: echo, ..Default::default() });
+        };
+        let measured = palw_measured_ms_per_daa(&session).await;
+        let fund_name = |fund| match fund {
+            Fund::NativeSlice => "slice",
+            Fund::KernelFee => "kernel_fee",
+        };
+        let bond_name =
+            |bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", bond.0.transaction_id, bond.0.index);
+        Ok(GetPalwRewardVestingResponse {
             available: true,
-            rcore_plus_active: read.rcore_plus_active,
-            tip_daa: read.tip_daa,
-            next_daa: read.next_daa,
-            halted: read.halted,
-            second_clock_depth: read.raw_depth,
-            second_clock_escaped_depth: read.escaped_depth,
-            settled_anchors: read.settled_now,
-            measured_ms_per_daa,
-            created_sompi: read.counters.created.to_string(),
-            moved_sompi: read.counters.moved.to_string(),
-            burned_sompi: read.counters.burned.to_string(),
-            live_rows: read.live_rows as u64,
-            latched_rows: read.latched_rows as u64,
-            live_sompi: read.live_sompi.to_string(),
-            latched_sompi: read.latched_sompi.to_string(),
-            latched_behind_head: read.latched_behind_head as u64,
-            reporter_pending_rows: read.reporter_pending_rows as u64,
-            reporter_awarded_rows: read.reporter_awarded_rows as u64,
-            next_block_moves: read
-                .next_block
-                .moves
+            native: rpc_palw_vesting_response(&read.native, echo, measured),
+            state_root: read.state_root.to_string(),
+            outstanding_sompi: read.outstanding_sompi.to_string(),
+            exec_slice_sompi: read.exec_slice_sompi.to_string(),
+            exec_kernel_fee_sompi: read.exec_kernel_fee_sompi.to_string(),
+            query_outstanding_sompi: read.query_outstanding_sompi.to_string(),
+            query_exec_pending_sompi: read.query_exec_pending_sompi.to_string(),
+            query_exec_ready_sompi: read.query_exec_ready_sompi.to_string(),
+            reporter_pending_sompi_of_query: read.native.reporter_pending_sompi_of_query.to_string(),
+            reporter_awarded_sompi_of_query: read.native.reporter_awarded_sompi_of_query.to_string(),
+            locked_sources: read.locked_sources as u64,
+            last_lock_daa: read.last_lock_daa,
+            exec_rows_total: read.exec_rows_total as u64,
+            exec_next_after: read
+                .exec_next_after
+                .map(|(daa, root, bond, fund)| format!("{daa}:{root}:{}:{}", bond_name(bond), fund_name(fund)))
+                .unwrap_or_default(),
+            exec_rows: read
+                .exec_rows
                 .iter()
-                .map(|next| {
-                    let (source, id) = source_named(&next.source);
-                    RpcPalwVestingMove { source: source.to_string(), id, legs: next.legs.iter().map(rpc_palw_vesting_leg).collect() }
+                .map(|row| RpcPalwExecRewardLeg {
+                    claim_id: row.claim_id.to_string(),
+                    bond: bond_name(row.bond),
+                    fund: fund_name(row.fund).into(),
+                    payload: row.payout.payload.to_string(),
+                    sompi: row.payout.amount.to_string(),
+                    final_daa: row.final_daa,
+                    earliest_daa: row.earliest_daa,
+                    native_pending: row.native_pending,
+                    native_clock_live: row.native_clock_live,
+                    native_expiry_daa: row.native_expiry_daa,
+                    native_second_clock_bound_daa: row.native_second_clock_bound_daa,
+                    lock_live: row.lock_live,
+                    ready: row.ready,
+                    in_next_block: row.in_next_block,
                 })
                 .collect(),
-            next_block_legs: read.next_block.legs as u32,
-            next_block_new_keys: read.next_block.new_keys as u32,
-            next_block_stopped: stopped.to_string(),
-            next_block_stopped_at: read.next_block.stopped_at.as_ref().map(|source| source_named(source).1).unwrap_or_default(),
-            backlog_keys: read.backlog_keys as u64,
-            backlog_blocks_est: read.backlog_blocks_est,
-            licence_histogram: read
-                .licence_histogram
-                .iter()
-                .map(|(door, count)| RpcPalwVestingDoorCount {
-                    door: door.to_string(),
-                    rows: count.rows as u64,
-                    latched_rows: count.latched_rows as u64,
-                    sompi: count.sompi.to_string(),
-                })
-                .collect(),
-            claim_stage: read.claim_stage.map(|stage| stage.name().to_string()).unwrap_or_default(),
-            bond_known: read.bond_known,
-            payee_holds_collateral: read.payee_holds_collateral,
-            lock_live_rows: read.lock_live_rows as u64,
-            lock_live_last_expiry_daa: read.lock_live_last_expiry_daa,
-            rows: read.rows.iter().map(rpc_palw_vesting_row).collect(),
-            rows_total: read.rows_total as u64,
-            next_after: read.next_after.map(|(expiry, claim)| format!("{expiry}:{claim}")).unwrap_or_default(),
-            maturing_sompi: read.maturing_sompi.to_string(),
-            query_latched_sompi: read.latched_sompi_of_query.to_string(),
-            reporter_rewards: read
-                .reporter_rewards
-                .iter()
-                .map(|reward| RpcPalwReporterReward {
-                    offence_key: reward.offence_key.to_string(),
-                    stage: match reward.stage {
-                        kaspa_consensus_core::palw_vesting_read_v1::PalwReporterRewardStageV1::Pending => "pending",
-                        kaspa_consensus_core::palw_vesting_read_v1::PalwReporterRewardStageV1::Awarded => "awarded",
-                    }
-                    .to_string(),
-                    reporter_bond: reward.reporter.as_ref().map(outpoint).unwrap_or_default(),
-                    payload: if reward.payload == kaspa_hashes::Hash64::default() {
-                        String::new()
-                    } else {
-                        reward.payload.to_string()
-                    },
-                    sompi: reward.amount,
-                    reveal_until: reward.reveal_until,
-                    in_next_block: reward.in_next_block,
-                })
-                .collect(),
-            ..echo
         })
     }
 
@@ -6141,5 +6103,179 @@ mod palw_vesting_wire_tests {
         assert_eq!(palw_ms_per_daa_since(at(6_000, 1_100_000), &samples), Some(600), "the 5,000 sample is now 1,000 below");
         assert_eq!(palw_ms_per_daa_since(at(999, 99_900), &samples), None, "no span of 1,000 DAA yet");
         assert_eq!(palw_ms_per_daa_since(at(5_500, 550_000), &[]), None);
+    }
+}
+
+fn parse_palw_vesting_query(
+    request: &GetPalwVestingRequest,
+    prefix: kaspa_addresses::Prefix,
+) -> RpcResult<(kaspa_consensus_core::palw_vesting_read_v1::PalwVestingQueryV1, Option<(u64, kaspa_hashes::Hash64)>)> {
+    use kaspa_consensus_core::palw_vesting_read_v1::{PalwVestingPayeeV1, PalwVestingQueryV1};
+    let named = [&request.bond, &request.payout_address, &request.claim_id].iter().filter(|field| !field.is_empty()).count();
+    if named > 1 {
+        return Err(RpcError::General("name at most one of bond, payoutAddress and claimId".to_string()));
+    }
+    let query = if !request.bond.is_empty() {
+        PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(parse_bond_outpoint(
+            &request.bond,
+        )?)))
+    } else if !request.payout_address.is_empty() {
+        PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Payload(palw_payout_payload_of_address(&request.payout_address, prefix)?))
+    } else if !request.claim_id.is_empty() {
+        PalwVestingQueryV1::Claim(parse_hash64(&request.claim_id, "claim id")?)
+    } else {
+        PalwVestingQueryV1::Chain
+    };
+    let after = match request.after.trim() {
+        "" => None,
+        cursor => {
+            let (expiry, claim) =
+                cursor.split_once(':').ok_or_else(|| RpcError::General(format!("after '{cursor}' is not <expiry_daa>:<claim_id>")))?;
+            let expiry: u64 = expiry.parse().map_err(|_| RpcError::General(format!("after '{cursor}' has a non-numeric DAA")))?;
+            Some((expiry, parse_hash64(claim, "after's claim id")?))
+        }
+    };
+    Ok((query, after))
+}
+
+fn parse_exec_reward_cursor(
+    cursor: &str,
+) -> RpcResult<Option<kaspa_consensus_core::palw_reward_vesting_read_v2::PalwExecRewardCursorV2>> {
+    use kaspa_consensus_core::palw_work_slice_v2::PalwExecV2RewardFundV1 as Fund;
+    if cursor.trim().is_empty() {
+        return Ok(None);
+    }
+    let parts: Vec<_> = cursor.split(':').collect();
+    if parts.len() != 5 {
+        return Err(RpcError::General("execAfter is <final_daa>:<root>:<bond_txid>:<bond_index>:<slice|kernel_fee>".into()));
+    }
+    let daa = parts[0].parse::<u64>().map_err(|_| RpcError::General("execAfter has a non-numeric final DAA".into()))?;
+    let root = parse_hash64(parts[1], "execAfter root")?;
+    let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(parse_bond_outpoint(&format!("{}:{}", parts[2], parts[3]))?);
+    let fund = match parts[4] {
+        "slice" => Fund::NativeSlice,
+        "kernel_fee" => Fund::KernelFee,
+        _ => return Err(RpcError::General("execAfter has an unknown fund".into())),
+    };
+    Ok(Some((daa, root, bond, fund)))
+}
+
+fn rpc_palw_vesting_response(
+    read: &kaspa_consensus_core::palw_vesting_read_v1::PalwVestingReadV1,
+    echo: GetPalwVestingResponse,
+    measured_ms_per_daa: Option<u64>,
+) -> GetPalwVestingResponse {
+    let outpoint = |b: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", b.0.transaction_id, b.0.index);
+    let stopped = match read.next_block.stopped {
+        kaspa_consensus_core::palw_vesting_v1::PalwVestingStopV1::NotLatched => "not_latched",
+        kaspa_consensus_core::palw_vesting_v1::PalwVestingStopV1::BudgetFull => "budget_full",
+        kaspa_consensus_core::palw_vesting_v1::PalwVestingStopV1::Empty => "empty",
+    };
+    let source_named = |source: &kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1| match source {
+        kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1::Row { claim_id } => ("row", claim_id.to_string()),
+        kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1::Reporter { offence_id } => ("reporter", offence_id.to_string()),
+    };
+    GetPalwVestingResponse {
+        available: true,
+        rcore_plus_active: read.rcore_plus_active,
+        tip_daa: read.tip_daa,
+        next_daa: read.next_daa,
+        halted: read.halted,
+        second_clock_depth: read.raw_depth,
+        second_clock_escaped_depth: read.escaped_depth,
+        settled_anchors: read.settled_now,
+        measured_ms_per_daa,
+        created_sompi: read.counters.created.to_string(),
+        moved_sompi: read.counters.moved.to_string(),
+        burned_sompi: read.counters.burned.to_string(),
+        live_rows: read.live_rows as u64,
+        latched_rows: read.latched_rows as u64,
+        live_sompi: read.live_sompi.to_string(),
+        latched_sompi: read.latched_sompi.to_string(),
+        latched_behind_head: read.latched_behind_head as u64,
+        reporter_pending_rows: read.reporter_pending_rows as u64,
+        reporter_awarded_rows: read.reporter_awarded_rows as u64,
+        next_block_moves: read
+            .next_block
+            .moves
+            .iter()
+            .map(|next| {
+                let (source, id) = source_named(&next.source);
+                RpcPalwVestingMove { source: source.to_string(), id, legs: next.legs.iter().map(rpc_palw_vesting_leg).collect() }
+            })
+            .collect(),
+        next_block_legs: read.next_block.legs as u32,
+        next_block_new_keys: read.next_block.new_keys as u32,
+        next_block_stopped: stopped.to_string(),
+        next_block_stopped_at: read.next_block.stopped_at.as_ref().map(|source| source_named(source).1).unwrap_or_default(),
+        backlog_keys: read.backlog_keys as u64,
+        backlog_blocks_est: read.backlog_blocks_est,
+        licence_histogram: read
+            .licence_histogram
+            .iter()
+            .map(|(door, count)| RpcPalwVestingDoorCount {
+                door: door.to_string(),
+                rows: count.rows as u64,
+                latched_rows: count.latched_rows as u64,
+                sompi: count.sompi.to_string(),
+            })
+            .collect(),
+        claim_stage: read.claim_stage.map(|stage| stage.name().to_string()).unwrap_or_default(),
+        bond_known: read.bond_known,
+        payee_holds_collateral: read.payee_holds_collateral,
+        lock_live_rows: read.lock_live_rows as u64,
+        lock_live_last_expiry_daa: read.lock_live_last_expiry_daa,
+        rows: read.rows.iter().map(rpc_palw_vesting_row).collect(),
+        rows_total: read.rows_total as u64,
+        next_after: read.next_after.map(|(expiry, claim)| format!("{expiry}:{claim}")).unwrap_or_default(),
+        maturing_sompi: read.maturing_sompi.to_string(),
+        query_latched_sompi: read.latched_sompi_of_query.to_string(),
+        reporter_rewards: read
+            .reporter_rewards
+            .iter()
+            .map(|reward| RpcPalwReporterReward {
+                offence_key: reward.offence_key.to_string(),
+                stage: match reward.stage {
+                    kaspa_consensus_core::palw_vesting_read_v1::PalwReporterRewardStageV1::Pending => "pending",
+                    kaspa_consensus_core::palw_vesting_read_v1::PalwReporterRewardStageV1::Awarded => "awarded",
+                }
+                .to_string(),
+                reporter_bond: reward.reporter.as_ref().map(outpoint).unwrap_or_default(),
+                payload: if reward.payload == kaspa_hashes::Hash64::default() { String::new() } else { reward.payload.to_string() },
+                sompi: reward.amount,
+                reveal_until: reward.reveal_until,
+                in_next_block: reward.in_next_block,
+            })
+            .collect(),
+        ..echo
+    }
+}
+
+#[cfg(test)]
+mod complete_reward_cursor_tests {
+    use super::*;
+    #[test]
+    fn exec_cursor_preserves_fund_and_rejects_partial_or_malformed_components() {
+        let root = "ab".repeat(64);
+        let txid = "cd".repeat(64);
+        let base = format!("17:{root}:{txid}:2");
+        let slice = parse_exec_reward_cursor(&format!("{base}:slice")).unwrap().unwrap();
+        let fee = parse_exec_reward_cursor(&format!("{base}:kernel_fee")).unwrap().unwrap();
+        assert_eq!((slice.0, slice.1, slice.2), (fee.0, fee.1, fee.2));
+        assert_ne!(slice.3, fee.3);
+        assert_eq!((slice.0, slice.2.0.index), (17, 2));
+        assert!(parse_exec_reward_cursor("  ").unwrap().is_none());
+        for bad in [
+            "x".to_string(),
+            base.clone(),
+            format!("{base}:unknown"),
+            format!("{base}:slice:extra"),
+            format!("x:{root}:{txid}:2:slice"),
+            format!("17:bad:{txid}:2:slice"),
+            format!("17:{root}:bad:2:slice"),
+            format!("17:{root}:{txid}:4294967296:slice"),
+        ] {
+            assert!(parse_exec_reward_cursor(&bad).is_err(), "{bad}");
+        }
     }
 }

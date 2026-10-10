@@ -304,6 +304,8 @@ pub enum RpcApiOps {
     /// its kernel-route verification claim, one block's refusal record, the lane's health — as one versioned JSON document. Read-only:
     /// no rule reads it. Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwExecV2Status = 240,
+    /// Complete native / slice / kernel-fee vesting observation (RFC6/8/12).
+    GetPalwRewardVesting = 241,
 }
 
 impl RpcApiOps {

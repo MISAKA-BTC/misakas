@@ -985,6 +985,21 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwVestingResponse::default())
     }
 
+    /// All live native, EXEC slice and kernel fee funds in one committed snapshot (op 241).
+    /// `after` pages native rows; `exec_after` independently pages additional fund legs.
+    /// Whole-query money and holding-source totals are independent of both cursors.
+    async fn get_palw_reward_vesting(&self, request: GetPalwRewardVestingRequest) -> RpcResult<GetPalwRewardVestingResponse> {
+        self.get_palw_reward_vesting_call(None, request).await
+    }
+    async fn get_palw_reward_vesting_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwRewardVestingRequest,
+    ) -> RpcResult<GetPalwRewardVestingResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwRewardVestingResponse::default())
+    }
+
     /// **ADR-0152-adjacent: one class's Activation Pool** (op 200; testnet-12) — its budgets, its
     /// payees, the terms and the sink a top-up pays into. A node built before op 200 drops the
     /// WebSocket on it: ask it last on a connection, or reconnect.

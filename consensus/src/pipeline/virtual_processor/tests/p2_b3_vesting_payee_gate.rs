@@ -429,5 +429,29 @@ async fn p2_exec_actor_holds_reach_block_burn_mempool_and_wallet_after_carriage_
         }
         g.every_site_answers("restored EXEC funds before lift", &restored, case.now, true);
         g.every_site_answers("restored EXEC funds at lift", &restored, lift, false);
+        use kaspa_consensus_core::palw_vesting_read_v1::{PalwVestingPayeeV1, PalwVestingQueryV1};
+        let vp = g.chain.vp();
+        let chain = vp.palw_reward_vesting_v2_impl(PalwVestingQueryV1::Chain, 1, None, None).unwrap();
+        assert_eq!(chain.state_root, restored.state_root());
+        assert_eq!((chain.outstanding_sompi, chain.native.live_sompi, chain.exec_rows_total), (2_000, 0, 2));
+        assert_eq!((chain.exec_slice_sompi, chain.exec_kernel_fee_sompi), (1_000, 1_000));
+        assert_eq!(chain.exec_rows.len(), 1);
+        let claim = vp.palw_reward_vesting_v2_impl(PalwVestingQueryV1::Claim(root), 1, None, None).unwrap();
+        assert_eq!(claim.query_outstanding_sompi, 2_000);
+        assert_eq!(claim.locked_sources, 2);
+        assert_eq!(claim.native.claim_stage, Some(kaspa_consensus_core::palw_vesting_read_v1::PalwClaimVestingStageV1::ExecPending));
+
+        let next = vp.palw_reward_vesting_v2_impl(PalwVestingQueryV1::Chain, 1, None, chain.exec_next_after).unwrap();
+        assert_eq!(next.outstanding_sompi, 2_000);
+        assert_eq!(next.exec_rows.len(), 1);
+        assert_ne!(chain.exec_rows[0].bond, next.exec_rows[0].bond);
+        for card in PAYEES {
+            let own = vp
+                .palw_reward_vesting_v2_impl(PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(g.bond(card))), 1, None, None)
+                .unwrap();
+            assert_eq!((own.query_outstanding_sompi, own.locked_sources, own.last_lock_daa), (1_000, 1, Some(lift)));
+            assert_eq!(own.native.rows_total, 0);
+            assert!(own.native.payee_holds_collateral && own.exec_rows[0].lock_live);
+        }
     }
 }

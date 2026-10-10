@@ -5762,3 +5762,176 @@ mod palw_state_proof_grpc_tests {
         assert!(!back.available && back.header.is_none() && back.reason == "too far behind");
     }
 }
+
+from!(item: &kaspa_rpc_core::GetPalwRewardVestingRequest, protowire::GetPalwRewardVestingRequestMessage, {
+    Self {
+        bond: item.bond.clone(),
+        payout_address: item.payout_address.clone(),
+        claim_id: item.claim_id.clone(),
+        limit: item.limit,
+        after: item.after.clone(),
+        exec_after: item.exec_after.clone(),
+    }
+});
+try_from!(item: &protowire::GetPalwRewardVestingRequestMessage, kaspa_rpc_core::GetPalwRewardVestingRequest, {
+    Self {
+        bond: item.bond.clone(),
+        payout_address: item.payout_address.clone(),
+        claim_id: item.claim_id.clone(),
+        limit: item.limit,
+        after: item.after.clone(),
+        exec_after: item.exec_after.clone(),
+    }
+});
+
+from!(item: &kaspa_rpc_core::RpcPalwExecRewardLeg, protowire::RpcPalwExecRewardLeg, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        bond: item.bond.clone(),
+        fund: item.fund.clone(),
+        payload: item.payload.clone(),
+        sompi: item.sompi.clone(),
+        final_daa: item.final_daa,
+        earliest_daa: item.earliest_daa,
+        native_pending: item.native_pending,
+        native_clock_live: item.native_clock_live,
+        native_expiry_daa: item.native_expiry_daa,
+        native_second_clock_bound_daa: item.native_second_clock_bound_daa,
+        lock_live: item.lock_live,
+        ready: item.ready,
+        in_next_block: item.in_next_block,
+    }
+});
+try_from!(item: &protowire::RpcPalwExecRewardLeg, kaspa_rpc_core::RpcPalwExecRewardLeg, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        bond: item.bond.clone(),
+        fund: item.fund.clone(),
+        payload: item.payload.clone(),
+        sompi: item.sompi.clone(),
+        final_daa: item.final_daa,
+        earliest_daa: item.earliest_daa,
+        native_pending: item.native_pending,
+        native_clock_live: item.native_clock_live,
+        native_expiry_daa: item.native_expiry_daa,
+        native_second_clock_bound_daa: item.native_second_clock_bound_daa,
+        lock_live: item.lock_live,
+        ready: item.ready,
+        in_next_block: item.in_next_block,
+    }
+});
+
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwRewardVestingResponse>, protowire::GetPalwRewardVestingResponseMessage, {
+    Self {
+        available: item.available,
+        native: Some(protowire::GetPalwVestingResponseMessage::from(Ok(&item.native))),
+        state_root: item.state_root.clone(),
+        outstanding_sompi: item.outstanding_sompi.clone(),
+        exec_slice_sompi: item.exec_slice_sompi.clone(),
+        exec_kernel_fee_sompi: item.exec_kernel_fee_sompi.clone(),
+        query_outstanding_sompi: item.query_outstanding_sompi.clone(),
+        query_exec_pending_sompi: item.query_exec_pending_sompi.clone(),
+        query_exec_ready_sompi: item.query_exec_ready_sompi.clone(),
+        reporter_pending_sompi_of_query: item.reporter_pending_sompi_of_query.clone(),
+        reporter_awarded_sompi_of_query: item.reporter_awarded_sompi_of_query.clone(),
+        locked_sources: item.locked_sources,
+        last_lock_daa: item.last_lock_daa,
+        exec_rows: item.exec_rows.iter().map(protowire::RpcPalwExecRewardLeg::from).collect(),
+        exec_rows_total: item.exec_rows_total,
+        exec_next_after: item.exec_next_after.clone(),
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwRewardVestingResponseMessage, RpcResult<kaspa_rpc_core::GetPalwRewardVestingResponse>, {
+    let native = item.native.as_ref().map(kaspa_rpc_core::GetPalwVestingResponse::try_from).transpose()?;
+    if item.available && !native.as_ref().is_some_and(|r| r.available) {
+        return Err(RpcError::General("available reward snapshot lacks its native component".into()));
+    }
+    Self {
+        available: item.available,
+        native: native.unwrap_or_default(),
+        state_root: item.state_root.clone(),
+        outstanding_sompi: item.outstanding_sompi.clone(),
+        exec_slice_sompi: item.exec_slice_sompi.clone(),
+        exec_kernel_fee_sompi: item.exec_kernel_fee_sompi.clone(),
+        query_outstanding_sompi: item.query_outstanding_sompi.clone(),
+        query_exec_pending_sompi: item.query_exec_pending_sompi.clone(),
+        query_exec_ready_sompi: item.query_exec_ready_sompi.clone(),
+        reporter_pending_sompi_of_query: item.reporter_pending_sompi_of_query.clone(),
+        reporter_awarded_sompi_of_query: item.reporter_awarded_sompi_of_query.clone(),
+        locked_sources: item.locked_sources,
+        last_lock_daa: item.last_lock_daa,
+        exec_rows: item.exec_rows.iter().map(kaspa_rpc_core::RpcPalwExecRewardLeg::try_from).collect::<RpcResult<Vec<_>>>()?,
+        exec_rows_total: item.exec_rows_total,
+        exec_next_after: item.exec_next_after.clone(),
+    }
+});
+
+#[cfg(test)]
+mod reward_vesting_v2_tests {
+    use super::*;
+    use kaspa_rpc_core::{GetPalwRewardVestingRequest, GetPalwRewardVestingResponse, GetPalwVestingResponse, RpcPalwExecRewardLeg};
+    #[test]
+    fn complete_reward_snapshot_survives_grpc_with_both_cursors_and_u128_money() {
+        let request = GetPalwRewardVestingRequest {
+            bond: "b:1".into(),
+            payout_address: "a".into(),
+            claim_id: "c".into(),
+            limit: 17,
+            after: "native".into(),
+            exec_after: "exec".into(),
+        };
+        let wire: protowire::GetPalwRewardVestingRequestMessage = (&request).into();
+        let back = GetPalwRewardVestingRequest::try_from(&wire).unwrap();
+        assert_eq!(serde_json::to_value(back).unwrap(), serde_json::to_value(request).unwrap());
+        let response = GetPalwRewardVestingResponse {
+            available: true,
+            native: GetPalwVestingResponse {
+                available: true,
+                claim_stage: "exec_pending".into(),
+                payee_holds_collateral: true,
+                next_after: "native-next".into(),
+                ..Default::default()
+            },
+            state_root: "root".into(),
+            outstanding_sompi: u128::MAX.to_string(),
+            exec_slice_sompi: (u128::from(u64::MAX) + 1).to_string(),
+            exec_kernel_fee_sompi: "18".into(),
+            query_outstanding_sompi: "23".into(),
+            query_exec_pending_sompi: "11".into(),
+            query_exec_ready_sompi: "12".into(),
+            reporter_pending_sompi_of_query: "18446744073709551616".into(),
+            reporter_awarded_sompi_of_query: "17".into(),
+            locked_sources: 29,
+            last_lock_daa: Some(37),
+            exec_rows_total: 41,
+            exec_next_after: "exec-next".into(),
+            exec_rows: vec![RpcPalwExecRewardLeg {
+                claim_id: "c".into(),
+                bond: "b:1".into(),
+                fund: "kernel_fee".into(),
+                payload: "p".into(),
+                sompi: "19".into(),
+                final_daa: 20,
+                earliest_daa: 30,
+                native_pending: true,
+                native_clock_live: true,
+                native_expiry_daa: Some(40),
+                native_second_clock_bound_daa: Some(50),
+                lock_live: true,
+                ready: false,
+                in_next_block: true,
+            }],
+        };
+        let wire: protowire::GetPalwRewardVestingResponseMessage = RpcResult::Ok(&response).into();
+        let back = GetPalwRewardVestingResponse::try_from(&wire).unwrap();
+        assert_eq!(serde_json::to_value(back).unwrap(), serde_json::to_value(response).unwrap());
+        let mut missing = wire.clone();
+        missing.native = None;
+        assert!(GetPalwRewardVestingResponse::try_from(&missing).is_err());
+        missing.native = Some(protowire::GetPalwVestingResponseMessage::default());
+        assert!(GetPalwRewardVestingResponse::try_from(&missing).is_err());
+        let wire: protowire::GetPalwRewardVestingResponseMessage = RpcResult::<&GetPalwRewardVestingResponse>::Err(RpcError::General("unavailable".into())).into();
+        assert!(GetPalwRewardVestingResponse::try_from(&wire).is_err());
+    }
+}

@@ -825,8 +825,7 @@ actual-node post-native-Final public-proof demonstration. Pruned P2P provenance 
 
 The complete WINDOW gate still requires native DA/computation-court extension to retain dependency collateral and public
 material/provider TTL, worker consent and capital cost, the full actor-specific/tier/B-3/RPC reader compatibility matrix, and
-actual-node native root Final followed by public conviction/default and payment recovery. The existing vesting RPC describes
-native rows; it does not yet page the independent executor-fund rows. Standalone kernel budgets, R6/R7/R12 and economic gates
+actual-node native root Final followed by public conviction/default and payment recovery. The complete reward RPC in §15.3 pages both native rows and independent executor funds. Standalone kernel budgets, R6/R7/R12 and economic gates
 remain independent blockers. This change neither enables a public preset nor approves an activation height.
 
 
@@ -855,3 +854,36 @@ The optional actor-extension carriage tail is `0xF1`, the independent root colle
 forfeiture appends action tag 3. Missing, orphan, non-extending and malformed holds fail restore or committed-root validation.
 These are dormant EXEC/capacity-liability paths; shipped activation heights remain unchanged. A funded-Final conviction-funnel
 test establishes actor isolation and accounting, not admission of a public offence against the native/kernel claim.
+
+
+### 15.3 Complete reward read and financial client compatibility
+
+`getPalwRewardVesting` (op 241) takes one committed consensus snapshot. `stateRoot` identifies it;
+`native` is the explicitly scoped legacy native component. Global `outstandingSompi` is native live money plus all unpaid
+`NativeSlice` and `KernelFee` legs. It satisfies `created = moved + burned + outstanding` for vesting counters; reporter
+income is reported separately and is never inserted into those counters. Whole-query outstanding, additional pending/ready
+money, and collateral-holding sources are computed before either page is truncated.
+
+The existing native `after` cursor is independent of `execAfter`, whose exact form is
+`<final_daa>:<root>:<bond_txid>:<bond_index>:<slice|kernel_fee>`. Additional legs are ordered by those four typed values;
+fund participates in the cursor so two funds of one actor cannot disappear between pages. Each page defaults to and is capped
+at 500 details. `execRowsTotal`, money and hold totals always cover the entire match, including earlier/later pages.
+A holding source is one native row or one additional `(root, bond)` obligation, regardless of its number of funds.
+`lastLockDaa` is a DAA-clock lower bound, not a guarantee against a shared second clock. Each additional leg also exposes its
+native pending/clock state, native expiry and bounded second-clock escape, own earliest DAA, B-3 hold and readiness.
+Ready means the inclusive dependency horizon and own actor extension have spent and the native row is gone. It still awaits
+payout capacity; it has not been minted. `inNextBlock` uses the fold's additional-fund planner after simulating the first queue
+drain, with no new block objects. It is a snapshot forecast, not a promise about subsequent blocks or newly included objects.
+
+Whole-query reporter pending and awarded amounts include details beyond the reporter cap. A chain query counts all pending/
+awarded sources, a payee query retains existing reporter attribution, and a claim query does not attribute unrelated reporter
+income. Decimal-string amounts preserve u128 sums on both transports and in financial client JSON.
+
+Op 199's fixed binary layout remains unchanged. When any live additional EXEC leg exists it returns an explicit error directing
+clients to op 241, rather than an incomplete financial answer. Both transports route the new typed request/response; malformed
+selectors and either cursor are errors even on a non-V2 network, while a well-formed unavailable read echoes its selector.
+The CLI vesting, wallet observation and operator snapshot use op 241;
+financial CLI envelopes are version 2 and the dashboard adds decimal-string funds with BigInt; observed unpaid rewards are never selectable UTXOs.
+A claim with no native row but unpaid additional funds is `exec_pending`, including after native retirement; operators keep it
+pending until all funds move. Forced native EXEC vesting is displayed below R-core+ as well. This observation change neither
+alters any consensus activation height nor changes historical op 199 field order or native monetary policy.

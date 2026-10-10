@@ -63,6 +63,22 @@ impl PalwChainStateV2 {
             .then(|| row.liability_until.saturating_add(1).max(self.exec_v2_reward_holds.get(&(*root, *bond)).copied().unwrap_or(0)))
     }
 
+    pub fn exec_v2_reward_clock_live_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        root: &Hash64,
+        bond: &PalwBondKeyV2,
+        daa: u64,
+        raw: Option<u64>,
+    ) -> Option<bool> {
+        self.exec_v2_reward_hold_after_v1(root, bond).map(|_| actor_unmatured(self, params, root, bond, daa, raw))
+    }
+
+    /// The exact additional moves the fold will make, optionally simulating its first queue drain.
+    pub fn exec_v2_reward_release_moves_v1(&self, daa: u64, after_drain: bool) -> Vec<(Hash64, (PalwBondKeyV2, Fund), PalwPayoutV2)> {
+        release_plan(self, daa, after_drain).0
+    }
+
     /// Additional new keys ahead of native vesting, after this block's drain (or its next-block simulation).
     pub fn exec_v2_reward_release_keys_v1(&self, daa: u64, after_drain: bool) -> usize {
         release_plan(self, daa, after_drain).1

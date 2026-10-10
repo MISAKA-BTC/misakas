@@ -3283,3 +3283,49 @@ message GetPalwStateProofResponseMessage {
   repeated RpcPalwProofRow rows = 7;
   RPCError error = 1000;
 }
+
+message GetPalwRewardVestingRequestMessage {
+  string bond = 1;
+  string payoutAddress = 2;
+  string claimId = 3;
+  uint32 limit = 4;
+  string after = 5;
+  string execAfter = 6;
+}
+
+message RpcPalwExecRewardLeg {
+  string claimId = 1;
+  string bond = 2;
+  string fund = 3;
+  string payload = 4;
+  string sompi = 5;
+  uint64 finalDaa = 6;
+  uint64 earliestDaa = 7;
+  bool nativePending = 8;
+  bool nativeClockLive = 9;
+  optional uint64 nativeExpiryDaa = 10;
+  optional uint64 nativeSecondClockBoundDaa = 11;
+  bool lockLive = 12;
+  bool ready = 13;
+  bool inNextBlock = 14;
+}
+
+message GetPalwRewardVestingResponseMessage {
+  bool available = 1;
+  GetPalwVestingResponseMessage native = 2;
+  string stateRoot = 3;
+  string outstandingSompi = 4;
+  string execSliceSompi = 5;
+  string execKernelFeeSompi = 6;
+  string queryOutstandingSompi = 7;
+  string queryExecPendingSompi = 8;
+  string queryExecReadySompi = 9;
+  uint64 lockedSources = 10;
+  optional uint64 lastLockDaa = 11;
+  repeated RpcPalwExecRewardLeg execRows = 12;
+  uint64 execRowsTotal = 13;
+  string execNextAfter = 14;
+  string reporterPendingSompiOfQuery = 15;
+  string reporterAwardedSompiOfQuery = 16;
+  RPCError error = 1000;
+}

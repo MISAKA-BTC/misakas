@@ -5891,6 +5891,28 @@ impl VirtualStateProcessor {
         ))
     }
 
+    pub fn palw_reward_vesting_v2_impl(
+        &self,
+        query: kaspa_consensus_core::palw_vesting_read_v1::PalwVestingQueryV1,
+        limit: usize,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        exec_after: Option<kaspa_consensus_core::palw_reward_vesting_read_v2::PalwExecRewardCursorV2>,
+    ) -> Option<kaspa_consensus_core::palw_reward_vesting_read_v2::PalwRewardVestingReadV2> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        let next_daa = self.palw_next_block_daa_for_reads(&state);
+        Some(kaspa_consensus_core::palw_reward_vesting_read_v2::palw_reward_vesting_read_v2(
+            &state,
+            state_params,
+            next_daa,
+            self.palw_settled_anchor_depth_at(next_daa),
+            &query,
+            limit,
+            after,
+            exec_after,
+        ))
+    }
+
     /// **RFC-0008 v2: `getPalwExecV2Status` (op 240)** — the EXEC v2 lane's observation over the committed tip (`load_tip_cached`):
     /// roots, slices and the state of each verification claim, `block`'s refusal record (its delta's `ExecV2Verdict` notes), the lane's
     /// health. A read: no rule calls it. `None` where the payload is not armed.

@@ -798,3 +798,5 @@ mod tests {
         assert_eq!(hasher.finish(), 8);
     }
 }
+
+pub mod palw_reward_vesting_read_v2;
