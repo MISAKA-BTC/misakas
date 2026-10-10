@@ -82,6 +82,7 @@ impl Compiled {
         if self.metadata_max_read_bytes > block_bytes {
             return Err(bad("FRONTEND_STREAM_LIMIT: recompile metadata with the requested block budget"));
         }
+        source.validate_snapshot()?;
         let names: BTreeSet<_> = source.names().into_iter().collect();
         let expected: BTreeSet<_> = self.bindings.values().flat_map(|r| r.sources.keys().cloned()).collect();
         if names != expected {
@@ -215,6 +216,7 @@ impl Compiled {
             return Err(bad("FRONTEND_BUILD_MISMATCH: source, frontend, tokenizer or artifact differs"));
         }
         // A failure above leaves any previous artifact intact and removes the incomplete temporary.
+        source.validate_snapshot()?;
         std::fs::rename(&temp.0, path).map_err(|e| LowerError::Io(e.to_string()))?;
         Ok(Conversion { tensor_bytes, source_bytes, max_read_bytes, source_read_bytes, record })
     }

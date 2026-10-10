@@ -10,7 +10,7 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | --- | --- | --- |
 | Current specification | RFC02 now separates current requirements from historical primitive-count, replay, availability and seating notes; §II.14 incorporates all six review requirements | Keep formal specification and implementation aligned as versioned features land |
 | Direct canonical TIR | SDK `tests/direct_tir_registration.rs` exercises byte-based admission and provenance-independent identity; the generic frontend now reproduces the same program/inventory/class ID through common admission | Same-binary real-checkpoint registration, independent conformance/claim/Final/redemption and all §II.11.4 mutations |
-| Declarative frontend pack | Implemented content-addressed primitive/state grammar, strict config/source bindings, bounded streaming integer/IEEE and inline virtual/tensors/blocks descriptor imports, with pinned shape/JSON metadata, replayable receipts and SDK companion build/verify with source SHAs and all three engines; [format contract](tir-frontend-pack-v1.md) | Native GGUF-container acquisition for the generic CLI/SDK, HF-reference/beacon runtime-pack integration, all advertised tasks/components and real-node §II.11.4 acceptance |
+| Declarative frontend pack | Implemented content-addressed primitive/state grammar, strict config/source bindings, bounded integer/IEEE and inline virtual/tensors/blocks imports, pinned metadata, raw single-file GGUF acquisition including supplied unknown IDs and tokenizer identity, replayable receipts and staged SDK build/verify with source SHAs and all three engines; [format contract](tir-frontend-pack-v1.md) | Split GGUF acquisition, HF-reference/beacon runtime-pack integration, all advertised tasks/components and real-node §II.11.4 acceptance |
 | Compiler expansion bounds | Shared work/allocation/depth budget now also protects general frontend variables/program/bindings; strict key tracking survives nested scopes; structural/constant bounds precede canonical encoding and weight reads | Maintain coverage as descriptor and versioned graph/dimension features land; existing bounds do not prove whole-node load safety |
 | Bounded dimensions and sparse/state semantics | v1 has fixed/Hist dimensions and fixed-axis TopK; v2 stage programs exist | Versioned length commitments; efficient sparse/routing/state relations; complete evaluator/checker/court/evidence binding; long-context and boundary trials |
 | Fidelity and reproducibility | ModelSpec runtime pack has source/frontend/artifact checks, executor vectors and logit fidelity; generic companion pins source SHA/compiler/executor revisions and reproduces canonical bytes/inventory while reporting SOURCE_EQUIVALENCE_UNVERIFIED | Pre-run thresholds and checkpoint-scoped routing, task quality, long-context and saturation measurements; generic frontend HF-reference/beacon evidence; named failures rather than broad PASS |
@@ -250,3 +250,53 @@ The goal remains active and not complete. Native GGUF-container acquisition in t
 HF-reference/beacon runtime-pack integration, versioned dimensions/sparse/state relations, complete
 resource/economic accounting, real-size fidelity/performance/aggregate-load evidence, complete
 modalities, public G14 and independent Final/redemption, and the full A6/A8 requirements remain open.
+
+## Verified increment — generic native GGUF acquisition, 2026-10-10
+
+`FrontendSource` now acquires a single GGUF without ModelSpec/family dispatch and exposes raw
+names/bytes with reversed GGML dimensions as row-major shapes. A public descriptor supplies
+unknown packed-type geometry; the binding's pinned local key still selects the decoder. Scalar
+IEEE and integer types use the existing explicit imports, preserving I64 values beyond 2^53.
+Native metadata joins an optional config sidecar, with duplicate/unread keys refused and exact
+integer/finite float conversion. Embedded tokenizer metadata receives a canonical representation
+ID when no external tokenizer file is chosen; this binds identity, not tokenizer/task fidelity.
+
+Parsed header and cumulative logical allocation budgets are 64 MiB each, with 65,536 tensor/key
+counts, rank four and alignment 64 KiB. Arithmetic, duplicate/overlap and truncation checks precede
+weight acquisition. Unknown-type span lookup is now O(log N) per tensor instead of scanning the
+entire table. The writer revalidates the header before reading and before replacing its output,
+including a mutation during payload reads. The CLI and SDK share this acquisition contract.
+
+The SDK pins the container plus present config/tokenizer sidecars and accepts an explicit GGUF
+file or an unambiguous directory. Artifact build/verify uses a temporary until receipt, inventory,
+all three engines and final source SHAs pass. Late conformance failure preserves the prior output;
+source/frontend/pack output conflicts include Unix symlinks and hard links.
+
+**82 distinct targeted tests pass** with the normal Rust test stack. The final frontend/SDK rerun
+is **51/51** (33 frontend, eight Direct-TIR/SDK, ten existing runtime-pack). The same increment's
+GGUF/metadata/RoPE, golden-lowering and streamed-range regressions are **31/31**:
+
+```sh
+cargo test --locked -p misaka-palw-tir-lower --test frontend_pack
+cargo test --locked -p misaka-palw-tir-lower \
+  --test gguf --test gguf_unmodelled --test gguf_rope_freqs \
+  --test golden_lowering --test quant_streamed_ranges
+cargo test --locked -p misaka-palw-sdk --test direct_tir_registration --test runtime_pack
+```
+
+Native acquisition fixtures cover all 31 block formats plus an unpublished architecture and
+unknown GGML type, bounded reads at 8/127 bytes, three-way execution, court demand evaluation,
+common inventory/class identity, peer rebuild and both CLIs. A binary64 value immediately below
+0.5 rounds differently under exact IEEE import and an explicitly requested binary32 descriptor;
+the storage label grants neither arithmetic priority. Further mutations refuse false type
+declarations, giant headers/arrays, extent/byte/alignment overflow, zero dimensions, duplicate or
+overlapping tensors, truncated data, non-finite metadata, changed headers/SHAs/tokenizers and
+late conformance mismatches. These are interface/fixture results, not real model or node passes.
+`cargo clippy --locked -p misaka-palw-tir-lower -p misaka-palw-sdk --lib` completes with existing
+warnings; the new acquisition/publisher modules produce none. Formatter checks for the frontend,
+CLI, SDK and changed test files, `git diff --check` and local Markdown targets pass.
+
+RFC02 remains **not complete**. Split GGUF acquisition, HF-reference/beacon integration,
+versioned length/sparse/state extensions, complete shared resource/economic accounting, real-size
+fidelity/performance/load measurements, complete RFC03 tasks, fresh-outsider G14 and independent
+Final/redemption, and A6/A8 coverage remain required by the original completion contract.

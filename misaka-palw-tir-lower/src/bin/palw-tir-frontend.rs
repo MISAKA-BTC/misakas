@@ -2,8 +2,7 @@
 use clap::Parser;
 use misaka_palw_tir_lower::{
     admission, artifact,
-    frontend_pack::{BuildRecord, FrontendPack},
-    weights::Checkpoint,
+    frontend_pack::{BuildRecord, FrontendPack, FrontendSource, source_dir},
 };
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -14,9 +13,9 @@ struct Args {
     /// Content-addressed frontend JSON; no model-family selection is performed.
     #[arg(long)]
     frontend_pack: PathBuf,
-    /// Checkpoint directory or safetensors file.
+    /// Checkpoint directory, safetensors or GGUF file. Ambiguous directories require a file path.
     model: PathBuf,
-    /// Config JSON (default: config.json beside the checkpoint).
+    /// Config JSON (default: config.json beside the checkpoint; optional for native GGUF metadata).
     #[arg(long)]
     config: Option<PathBuf>,
     #[arg(long)]
@@ -50,12 +49,18 @@ fn read(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 fn run(a: Args) -> Result<(), String> {
-    let dir = if a.model.is_dir() { a.model.as_path() } else { a.model.parent().unwrap_or(Path::new(".")) };
-    let config_path = a.config.unwrap_or_else(|| dir.join("config.json"));
-    let config = serde_json::from_slice(&read(&config_path, 2 << 20)?).map_err(|e| e.to_string())?;
+    let dir = source_dir(&a.model);
     let pack = FrontendPack::read(&a.frontend_pack).map_err(|e| e.to_string())?;
-    let source = Checkpoint::open(&a.model).map_err(|e| e.to_string())?;
-    let mut protected = source.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>();
+    let source = FrontendSource::open(&a.model, &pack).map_err(|e| e.to_string())?;
+    let explicit_config = a.config.is_some();
+    let config_path = a.config.unwrap_or_else(|| dir.join("config.json"));
+    let sidecar = if explicit_config || config_path.exists() || !source.is_gguf() {
+        serde_json::from_slice(&read(&config_path, 2 << 20)?).map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({})
+    };
+    let config = source.configuration(sidecar).map_err(|e| e.to_string())?;
+    let mut protected = source.files();
     protected.extend([config_path, a.frontend_pack.clone()]);
     if let Some(p) = &a.expect_record {
         protected.push(p.clone());
@@ -73,7 +78,7 @@ fn run(a: Args) -> Result<(), String> {
     let compiled = pack.compile_bounded(&config, &source, &inputs, a.block_bytes).map_err(|e| e.to_string())?;
     let tokenizer = match a.tokenizer.or_else(|| artifact::tokenizer_path_in(dir)) {
         Some(path) => artifact::tokenizer_id_of(&read(&path, 64 << 20)?),
-        None => [0; 64],
+        None => source.embedded_tokenizer_id().map_err(|e| e.to_string())?.unwrap_or([0; 64]),
     };
     let expected: Option<BuildRecord> =
         a.expect_record.map(|p| serde_json::from_slice(&read(&p, 64 << 20)?).map_err(|e| e.to_string())).transpose()?;

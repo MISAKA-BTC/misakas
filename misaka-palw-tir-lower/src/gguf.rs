@@ -69,7 +69,22 @@ impl GgmlType {
     }
     /// `(elements, bytes)` of one block, when the type is described.
     pub fn block(&self) -> Option<(usize, usize)> {
-        self.blocks().map(|b| (b.elems, b.bytes))
+        self.stored_dtype().map(|(_, bytes)| (1, bytes)).or_else(|| self.blocks().map(|b| (b.elems, b.bytes)))
+    }
+    /// Scalar GGML storage types, independent of any decoder or model-family registry.
+    /// IDs are the stable enum in ggml/include/ggml.h; packed types remain descriptor-defined.
+    pub fn stored_dtype(&self) -> Option<(&'static str, usize)> {
+        match self.id {
+            0 => Some(("F32", 4)),
+            1 => Some(("F16", 2)),
+            24 => Some(("I8", 1)),
+            25 => Some(("I16", 2)),
+            26 => Some(("I32", 4)),
+            27 => Some(("I64", 8)),
+            28 => Some(("F64", 8)),
+            30 => Some(("BF16", 2)),
+            _ => None,
+        }
     }
     /// Stored as floats (`F32`, `F16`, `BF16`, …), not as quantised integers.
     pub fn is_float(&self) -> bool {
@@ -191,19 +206,32 @@ pub struct GgufFile {
 struct Rd<R: Read> {
     r: R,
     pos: u64,
+    header_left: u64,
+    allocation_left: u64,
 }
 
 impl<R: Read> Rd<R> {
+    fn allocation(&mut self, n: u64) -> Result<()> {
+        self.allocation_left = self.allocation_left.checked_sub(n)
+            .ok_or_else(|| LowerError::weights("GGUF: header allocation limit"))?;
+        Ok(())
+    }
+    fn advance(&mut self, n: u64) -> Result<()> {
+        self.header_left = self.header_left.checked_sub(n)
+            .ok_or_else(|| LowerError::weights("GGUF: header byte limit"))?;
+        self.pos = self.pos.checked_add(n).ok_or_else(|| LowerError::weights("GGUF: header offset overflow"))?;
+        Ok(())
+    }
     fn bytes(&mut self, n: usize) -> Result<Vec<u8>> {
+        self.advance(n as u64)?;
         let mut b = vec![0u8; n];
         self.r.read_exact(&mut b).map_err(|e| LowerError::weights(format!("GGUF: truncated header ({e})")))?;
-        self.pos += n as u64;
         Ok(b)
     }
     fn arr<const N: usize>(&mut self) -> Result<[u8; N]> {
+        self.advance(N as u64)?;
         let mut b = [0u8; N];
         self.r.read_exact(&mut b).map_err(|e| LowerError::weights(format!("GGUF: truncated header ({e})")))?;
-        self.pos += N as u64;
         Ok(b)
     }
     fn u32(&mut self) -> Result<u32> {
@@ -217,9 +245,11 @@ impl<R: Read> Rd<R> {
         if n > MAX_STRING {
             return Err(LowerError::weights(format!("GGUF: a string of {n} bytes")));
         }
+        self.allocation(n * 2 + 32)?;
         String::from_utf8(self.bytes(n as usize)?).map_err(|_| LowerError::weights("GGUF: a string that is not UTF-8"))
     }
     fn value(&mut self, ty: u32, depth: u32) -> Result<GValue> {
+        self.allocation(std::mem::size_of::<GValue>() as u64)?;
         Ok(match ty {
             0 => GValue::U8(self.arr::<1>()?[0]),
             1 => GValue::I8(self.arr::<1>()?[0] as i8),
@@ -228,7 +258,11 @@ impl<R: Read> Rd<R> {
             4 => GValue::U32(self.u32()?),
             5 => GValue::I32(i32::from_le_bytes(self.arr()?)),
             6 => GValue::F32(f32::from_le_bytes(self.arr()?)),
-            7 => GValue::Bool(self.arr::<1>()?[0] != 0),
+            7 => GValue::Bool(match self.arr::<1>()?[0] {
+                0 => false,
+                1 => true,
+                _ => return Err(LowerError::weights("GGUF: invalid boolean")),
+            }),
             8 => GValue::Str(self.string()?),
             9 => {
                 if depth > 2 {
@@ -238,6 +272,9 @@ impl<R: Read> Rd<R> {
                 let n = self.u64()?;
                 if n > MAX_ARRAY {
                     return Err(LowerError::weights(format!("GGUF: an array of {n} elements")));
+                }
+                if n.checked_mul(std::mem::size_of::<GValue>() as u64).is_none_or(|n| n > self.allocation_left) {
+                    return Err(LowerError::weights("GGUF: header allocation limit"));
                 }
                 let mut v = Vec::with_capacity((n as usize).min(1 << 20));
                 for _ in 0..n {
@@ -263,10 +300,16 @@ impl GgufFile {
     /// [`open`](Self::open), types resolved through `reg` (a registry extended with the
     /// descriptors a model needs).
     pub fn open_with(path: &Path, reg: &QuantRegistry) -> Result<Self> {
+        Self::open_bounded(path, reg, u64::MAX, u64::MAX, MAX_TENSORS)
+    }
+
+    /// Raw acquisition with aggregate header/allocation/inventory budgets, before allocations.
+    /// These producer-side limits do not define consensus admission or model support.
+    pub fn open_bounded(path: &Path, reg: &QuantRegistry, header_bytes: u64, allocation_bytes: u64, max_tensors: u64) -> Result<Self> {
         let f = std::fs::File::open(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?;
         let len = f.metadata().map_err(|e| LowerError::Io(e.to_string()))?.len();
         let file = Arc::new(f.try_clone().map_err(|e| LowerError::Io(e.to_string()))?);
-        let mut g = Self::parse(BufReader::new(f), Some(len), path, reg)?;
+        let mut g = Self::parse_bounded(BufReader::new(f), Some(len), path, reg, header_bytes, allocation_bytes, max_tensors)?;
         g.file = Some(file);
         Ok(g)
     }
@@ -277,7 +320,11 @@ impl GgufFile {
     /// known, bounds every tensor against the file; when `None` (a header alone) the bounds are not
     /// checked and a type no descriptor describes has no size.
     pub fn parse(reader: impl Read, file_len: Option<u64>, label: &Path, reg: &QuantRegistry) -> Result<Self> {
-        let mut r = Rd { r: reader, pos: 0 };
+        Self::parse_bounded(reader, file_len, label, reg, u64::MAX, u64::MAX, MAX_TENSORS)
+    }
+
+    fn parse_bounded(reader: impl Read, file_len: Option<u64>, label: &Path, reg: &QuantRegistry, header_bytes: u64, allocation_bytes: u64, max_tensors: u64) -> Result<Self> {
+        let mut r = Rd { r: reader, pos: 0, header_left: header_bytes, allocation_left: allocation_bytes };
         if &r.arr::<4>()? != b"GGUF" {
             return Err(LowerError::weights(format!("{}: not a GGUF file", label.display())));
         }
@@ -287,9 +334,10 @@ impl GgufFile {
         }
         let n_tensors = r.u64()?;
         let n_kv = r.u64()?;
-        if n_tensors > MAX_TENSORS || n_kv > MAX_KV {
+        if n_tensors > MAX_TENSORS.min(max_tensors) || n_kv > MAX_KV.min(max_tensors) {
             return Err(LowerError::weights(format!("GGUF: {n_tensors} tensors, {n_kv} metadata keys")));
         }
+        r.allocation(n_tensors.checked_add(n_kv).and_then(|n| n.checked_mul(256)).ok_or_else(|| LowerError::weights("GGUF: header allocation overflow"))?)?;
         let mut meta = BTreeMap::new();
         for _ in 0..n_kv {
             let k = r.string()?;
@@ -312,13 +360,21 @@ impl GgufFile {
             }
             let mut dims = Vec::with_capacity(nd as usize);
             for _ in 0..nd {
-                dims.push(r.u64()?);
+                let dim = r.u64()?;
+                if dim == 0 || usize::try_from(dim).is_err() {
+                    return Err(LowerError::weights("GGUF: zero or unsupported dimension"));
+                }
+                dims.push(dim);
             }
             let ty = GgmlType::from_id(r.u32()?, reg);
             let off = r.u64()?;
             infos.push((name, dims, ty, off));
         }
-        let data_start = r.pos.div_ceil(alignment) * alignment;
+        let data_start = r.pos.checked_add(alignment - 1).and_then(|p| (p / alignment).checked_mul(alignment))
+            .ok_or_else(|| LowerError::weights("GGUF: alignment overflow"))?;
+        if file_len.is_some_and(|len| data_start > len) {
+            return Err(LowerError::weights("GGUF: data start past the end of the file"));
+        }
         let mut tensors = BTreeMap::new();
         for (name, dims, ty, off) in infos {
             let numel = dims.iter().try_fold(1u64, |a, d| a.checked_mul(*d)).ok_or_else(|| LowerError::weights("GGUF: size overflow"))?;
@@ -327,7 +383,7 @@ impl GgufFile {
                     if dims[0] % be as u64 != 0 {
                         return Err(LowerError::weights(format!("GGUF: `{name}` rows of {} are not whole {} blocks", dims[0], ty.name())));
                     }
-                    numel / be as u64 * bb as u64
+                    (numel / be as u64).checked_mul(bb as u64).ok_or_else(|| LowerError::weights("GGUF: byte size overflow"))?
                 }
                 None => 0,
             };
@@ -335,8 +391,7 @@ impl GgufFile {
                 return Err(LowerError::weights(format!("GGUF: `{name}` at an unaligned offset")));
             }
             let offset = data_start.checked_add(off).ok_or_else(|| LowerError::weights("GGUF: offset overflow"))?;
-            if ty.block().is_some()
-                && let Some(len) = file_len
+            if let Some(len) = file_len
                 && offset.checked_add(bytes).is_none_or(|e| e > len)
             {
                 return Err(LowerError::weights(format!("GGUF: `{name}` runs past the end of the file")));
@@ -350,11 +405,18 @@ impl GgufFile {
         // tensor's data (or to the end of the file) bounds it, so a size estimate can still be made.
         let mut starts: Vec<u64> = tensors.values().map(|t| t.offset).collect();
         starts.sort_unstable();
+        let mut ordered: Vec<_> = tensors.values().collect();
+        ordered.sort_unstable_by_key(|t| t.offset);
+        for pair in ordered.windows(2) {
+            if pair[0].offset == pair[1].offset || pair[0].offset.checked_add(pair[0].bytes).is_none_or(|end| end > pair[1].offset) {
+                return Err(LowerError::weights("GGUF: overlapping tensor ranges"));
+            }
+        }
         let mut unsized_bounds = BTreeMap::new();
         for t in tensors.values().filter(|t| t.ty.block().is_none()) {
-            let next = starts.iter().find(|s| **s > t.offset).copied().or(file_len);
+            let next = starts.get(starts.partition_point(|s| *s <= t.offset)).copied().or(file_len);
             if let Some(n) = next {
-                unsized_bounds.insert(t.name.clone(), n - t.offset);
+                unsized_bounds.insert(t.name.clone(), n.checked_sub(t.offset).ok_or_else(|| LowerError::weights("GGUF: tensor offset past file"))?);
             }
         }
         Ok(GgufFile { path: label.to_path_buf(), version, meta, tensors, alignment, data_start, file: None, unsized_bounds })

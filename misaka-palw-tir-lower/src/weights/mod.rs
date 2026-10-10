@@ -84,6 +84,9 @@ impl TensorMeta {
 /// tensor, never the whole of it. A source that cannot serve ranges keeps the defaults, which are
 /// correct and read whole tensors.
 pub trait TensorSource {
+    /// A container-backed source may revalidate its acquired header before publishing an artifact.
+    /// Raw tensor hashes are independently checked by the frontend writer.
+    fn validate_snapshot(&self) -> Result<()> { Ok(()) }
     fn shape(&self, name: &str) -> Option<Vec<usize>>;
     fn load(&self, name: &str) -> Result<Tensor>;
     fn names(&self) -> Vec<String>;

@@ -151,10 +151,10 @@ All binding headers and aggregate metadata/read-count budgets are checked before
 A block binding uses exactly `roles: {"data":"raw.name"}`, empty config and no metadata inert map.
 Its logical shape is the TIR parameter: leading axes flatten to rows and the last axis is tiled by
 the descriptor's block elements. The source is an I8/U8 byte container, or a raw `TensorSource` with
-an opaque storage dtype and the same logical shape. The source bytes must exactly equal the
-computed block bytes. No opaque dtype name selects the descriptor. Current CLI/SDK checkpoint
-acquisition uses local safetensors (byte containers can hold raw blocks); native GGUF-container
-acquisition for the generic CLI/SDK remains separate work. The legacy GGUF importer remains available.
+the same logical shape. A scalar storage dtype must additionally have the exact declared scalar
+byte count. The source bytes must exactly equal the computed block bytes. No dtype name selects
+the decoder. Local safetensors can carry raw block bytes; native single-file GGUF uses the raw
+acquisition contract below. The separate legacy ModelSpec GGUF importer remains available.
 
 Tensor group-index, scale/zero/min and element passes preserve their original coordinates. Blocks
 retain global row/column/block/group coordinates, including when a range splits a group or row.
@@ -165,7 +165,8 @@ These storage contracts do not establish actual checkpoint fidelity or completed
 
 Pack text is at most 2 MiB. Evaluation shares the existing 4M work, 64 MiB cumulative logical
 allocation, 32 evaluator-call, 96 JSON-depth and list bounds across variables/program/bindings.
-Config logical input is bounded to 2 MiB; source inventory to 65,536 names. Before encoding, the
+Config logical input is bounded to 64 MiB (including native tokenizer metadata); JSON sidecar text
+remains capped at 2 MiB. Source inventory is capped at 65,536 names. Before encoding, the
 compiler checks v1's declarations, ranks, names, inputs/carries and total 64 KiB constant data.
 Canonical decoding enforces the 256 KiB program ceiling. The caller supplies `TirAdmitInputsV1`,
 so provenance cannot enlarge execution/court ceilings.
@@ -203,6 +204,48 @@ size, emitted integer size and actual raw read traffic, including the pinning sc
 and peak read size are operational measurements excluded from reproducible identity; these are
 not execution/proof/hash/retention/delivery benchmarks.
 
+## Native GGUF acquisition
+
+Both the generic CLI and SDK companion accept a GGUF file or a directory containing one GGUF,
+including a directory with `config.json`. Multiple GGUFs or a mix with the ordinary default
+checkpoint require an explicit file path. This increment handles a single container; split GGUF
+acquisition remains open. Selection and decoder validity have no model-family/name dispatch.
+
+`FrontendSource` exposes the stored tensor names unchanged. Reversing GGML dimensions yields the
+logical row-major shape; bytes stay untouched. No Q/K permutation, gain adjustment, expert split
+or architecture rewrite is implicit. Such transforms belong in the submitted graph/frontend.
+Scalar GGML F32/F16/BF16/F64 and I8/I16/I32/I64 expose their stored dtype; packed tensors expose
+an opaque `GGML:<id>:<elements>:<bytes>` storage label. The public registry supplies byte geometry
+only. Packed decoding still uses the binding's explicit local descriptor key and digest.
+Scalar IDs follow the [GGML storage enum](https://github.com/ggml-org/llama.cpp/blob/master/ggml/include/ggml.h),
+checked against the official header on 2026-10-10.
+
+A new GGML ID can be supplied by a self-tested inline block descriptor with exactly one
+`ids: [{"scheme":"ggml","id":...}]` entry. A registry collision or scalar storage redefinition
+refuses; unknown types without supplied geometry refuse by tensor name/ID. Registry membership
+does not select a decoder, establish source equivalence or affect consensus admission.
+
+Native metadata keys are literal config keys, such as `$cfg: "future.block_count"`. They join an
+optional sidecar, which cannot duplicate/override a native key. Every key must be read or
+explicitly listed as inert, including tokenizer and architecture metadata; values enter the
+effective config digest. Integer metadata retains its full width; finite stored F32 values widen
+exactly to F64 for JSON. Non-finite metadata refuses.
+
+An external tokenizer file follows the existing byte-hash contract. When none is supplied/found,
+all embedded `tokenizer.*` values are hashed as canonical JSON
+`{"format":"misaka.palw.gguf-tokenizer.v1","metadata":{...}}` through `tokenizer_id_of`.
+No tokenizer information yields the existing zero ID. This pins the representation and class
+identity; it does not certify a tokenizer algorithm or complete text-task fidelity.
+
+Acquisition caps parsed header bytes and cumulative logical header allocation at 64 MiB each,
+tensor/metadata-key counts at 65,536, rank at four and alignment at 64 KiB. Existing per-string,
+array and nesting limits also apply. Counts/allocation budgets precede allocation; dimension/byte/
+offset/alignment arithmetic is checked. Zero dimensions, duplicate names/keys, overlapping tensor
+ranges and truncated data refuse. Unknown tensor bounds use a sorted lookup rather than a
+quadratic scan. The writer revalidates the native header before conversion and before publishing,
+so a header change during payload reads preserves the prior output. Payload read metrics retain
+their stated block budget; header parsing is a separate bounded acquisition cost.
+
 The `misaka.palw.tir-frontend-build.v1` receipt pins frontend/config/program/tokenizer/artifact
 digests, compiler version and compiler/reader/dependency source digest, intended scope, assumed
 defaults, source tensor metadata/raw digests, descriptor digests and saturation count. An independent rebuild checks
@@ -232,8 +275,12 @@ palw-class pack verify-frontend --model ./public-checkpoint --artifact model.pal
   --pack ./pack --rebuild-out peer.palwtir --block-bytes 8192
 ```
 
-The companion currently accepts local safetensors directories with each shard pinned. Verification
+The companion accepts local safetensors directories with each shard pinned, and a single GGUF
+file/directory with the container plus optional config/tokenizer sidecars pinned. Verification
 checks SHAs/compiler/executor/profile pins, rebuilds without uploaded executable code, derives
 the common inventory and reruns all three engines. Named build/conformance checks are separate
 from `SOURCE_EQUIVALENCE_UNVERIFIED`, full task and live Final. A pack cannot supply a boolean
-to promote equivalence. HF-reference/beacon pack integration remains part of RFC02 completion.
+to promote equivalence. Artifacts are staged until receipt, inventory, conformance and final source
+SHA checks pass; late failure preserves the prior published artifact and removes the temporary.
+Output guards cover source/sidecar aliases, including Unix symlinks and hard links.
+HF-reference/beacon pack integration remains part of RFC02 completion.

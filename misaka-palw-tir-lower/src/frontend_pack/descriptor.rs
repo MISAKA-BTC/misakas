@@ -300,7 +300,13 @@ pub(super) fn resolve(
         let byte_container =
             matches!(meta.dtype.as_str(), "U8" | "I8") && meta.shape.iter().try_fold(1usize, |n, d| n.checked_mul(*d)) == Some(bytes);
         let opaque = stored_width(&meta.dtype).is_none() && meta.shape == target_shape;
-        if bytes != plan.bytes() || meta.shape.iter().any(|d| *d == 0 || *d > i64::MAX as usize) || !(byte_container || opaque) {
+        let scalar = meta.shape == target_shape
+            && stored_width(&meta.dtype)
+                .is_some_and(|width| meta.shape.iter().try_fold(width, |n, d| n.checked_mul(*d)) == Some(bytes));
+        if bytes != plan.bytes()
+            || meta.shape.iter().any(|d| *d == 0 || *d > i64::MAX as usize)
+            || !(byte_container || opaque || scalar)
+        {
             return Err(bad("FRONTEND_BINDING: block source bytes/shape/storage"));
         }
         sources.insert(name.clone(), meta);

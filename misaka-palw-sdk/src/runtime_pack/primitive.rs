@@ -9,13 +9,13 @@ use super::{
 use crate::tir_manifest::PalwTirManifestV1;
 use misaka_palw_tir_lower::{
     admission, artifact,
-    frontend_pack::{BuildRecord, FrontendPack, distinct_output},
-    weights::Checkpoint,
+    frontend_pack::{BuildRecord, FrontendPack, FrontendSource, checkpoint_path, distinct_output, source_dir},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const FORMAT: &str = "misaka.palw.runtime-pack.tir-frontend.v1";
 pub const PACK_FILE: &str = "frontend-runtime-pack.json";
@@ -108,15 +108,37 @@ fn read(path: &Path, max: usize) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 fn files(model: &Path) -> Result<Vec<SourceFile>, String> {
-    if !model.is_dir() {
+    let selected = checkpoint_path(model).map_err(|e| e.to_string())?;
+    let dir = source_dir(model);
+    let gguf = selected.extension().is_some_and(|ext| ext == "gguf");
+    if !gguf && !model.is_dir() {
         return Err("FRONTEND_SOURCE_FORMAT: a safetensors directory is required".into());
     }
-    let names = source_files(model)?;
-    if !names.iter().any(|n| n.ends_with(".safetensors")) {
+    let mut names = if gguf {
+        let mut names =
+            vec![selected.file_name().and_then(|n| n.to_str()).ok_or("FRONTEND_SOURCE_FORMAT: UTF-8 file name required")?.to_string()];
+        let mut entries = 0;
+        for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+            entries += 1;
+            if entries > misaka_palw_tir_lower::frontend_pack::MAX_SOURCE_TENSORS {
+                return Err("FRONTEND_SOURCE_LIMIT: directory inventory".into());
+            }
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if (name == "config.json" || artifact::is_tokenizer_file(&name)) && entry.path().is_file() {
+                names.push(name);
+            }
+        }
+        names
+    } else {
+        source_files(model)?
+    };
+    names.sort();
+    if !gguf && !names.iter().any(|n| n.ends_with(".safetensors")) {
         return Err("FRONTEND_SOURCE_FORMAT: safetensors weights required".into());
     }
-    let index = model.join("model.safetensors.index.json");
-    if index.exists() {
+    let index = dir.join("model.safetensors.index.json");
+    if !gguf && index.exists() {
         let v: Value = serde_json::from_slice(&read(&index, 2 << 20)?).map_err(|e| e.to_string())?;
         let map = v.get("weight_map").and_then(Value::as_object).ok_or("FRONTEND_SOURCE_FORMAT: weight_map required")?;
         for shard in map.values() {
@@ -129,16 +151,25 @@ fn files(model: &Path) -> Result<Vec<SourceFile>, String> {
     names
         .into_iter()
         .map(|path| {
-            let (bytes, sha256) = sha256_file(&model.join(&path))?;
+            let (bytes, sha256) = sha256_file(&dir.join(&path))?;
             Ok(SourceFile { path, bytes, sha256 })
         })
         .collect()
 }
-fn tokenizer(model: &Path) -> Result<[u8; 64], String> {
-    match artifact::tokenizer_path_in(model) {
+fn tokenizer(model: &Path, source: &FrontendSource) -> Result<[u8; 64], String> {
+    match artifact::tokenizer_path_in(source_dir(model)) {
         Some(path) => Ok(artifact::tokenizer_id_of(&read(&path, 64 << 20)?)),
-        None => Ok([0; 64]),
+        None => Ok(source.embedded_tokenizer_id().map_err(|e| e.to_string())?.unwrap_or([0; 64])),
     }
+}
+fn config(model: &Path, source: &FrontendSource) -> Result<Value, String> {
+    let path = source_dir(model).join("config.json");
+    let sidecar = if path.exists() || !source.is_gguf() {
+        serde_json::from_slice(&read(&path, 2 << 20)?).map_err(|e| e.to_string())?
+    } else {
+        json!({})
+    };
+    source.configuration(sidecar).map_err(|e| e.to_string())
 }
 fn jobs_checked(jobs: &[ConformanceJob]) -> Result<(), String> {
     let mut total = 0usize;
@@ -161,6 +192,25 @@ fn manifest(artifact: &Path) -> Result<Value, String> {
     serde_json::from_str(&PalwTirManifestV1::derive_streamed(artifact)?.to_json()).map_err(|e| e.to_string())
 }
 
+static NEXT_ARTIFACT: AtomicU64 = AtomicU64::new(0);
+struct PendingArtifact(PathBuf);
+impl PendingArtifact {
+    fn new(output: &Path) -> Result<Self, String> {
+        let parent = output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let path = parent.join(format!(".frontend-pack-{}-{}.tmp", std::process::id(), NEXT_ARTIFACT.fetch_add(1, Ordering::Relaxed)));
+        std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e| e.to_string())?;
+        Ok(Self(path))
+    }
+    fn publish(&self, output: &Path) -> Result<(), String> {
+        std::fs::rename(&self.0, output).map_err(|e| e.to_string())
+    }
+}
+impl Drop for PendingArtifact {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Build a published recipe without any model-name or ModelSpec selection. All three existing
 /// implementations must agree; there is no --no-ref2/--no-exec escape in this route.
 pub fn build(
@@ -174,16 +224,22 @@ pub fn build(
 ) -> Result<PrimitiveRuntimePackV1, String> {
     jobs_checked(jobs)?;
     let pins = files(model)?;
-    let mut protected = pins.iter().map(|f| model.join(&f.path)).collect::<Vec<_>>();
-    protected.extend([frontend.to_path_buf(), pack_dir.join(FRONTEND_FILE), pack_dir.join(PACK_FILE)]);
+    let mut protected = pins.iter().map(|f| source_dir(model).join(&f.path)).collect::<Vec<_>>();
+    protected.push(frontend.to_path_buf());
+    std::fs::create_dir_all(pack_dir).map_err(|e| e.to_string())?;
+    distinct_output(&pack_dir.join(FRONTEND_FILE), &protected).map_err(|e| e.to_string())?;
+    protected.push(pack_dir.join(FRONTEND_FILE));
+    distinct_output(&pack_dir.join(PACK_FILE), &protected).map_err(|e| e.to_string())?;
+    protected.push(pack_dir.join(PACK_FILE));
     distinct_output(artifact_path, &protected).map_err(|e| e.to_string())?;
     let text = read(frontend, misaka_palw_tir_lower::frontend_pack::MAX_PACK_BYTES)?;
     let frontend = FrontendPack::parse(std::str::from_utf8(&text).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    let config: Value = serde_json::from_slice(&read(&model.join("config.json"), 2 << 20)?).map_err(|e| e.to_string())?;
-    let source = Checkpoint::open(model).map_err(|e| e.to_string())?;
+    let source = FrontendSource::open(model, &frontend).map_err(|e| e.to_string())?;
+    let config = config(model, &source)?;
     let compiled = frontend.compile_bounded(&config, &source, &admission::default_inputs(), block_bytes).map_err(|e| e.to_string())?;
-    let conversion = compiled.write(artifact_path, &source, tokenizer(model)?, block_bytes).map_err(|e| e.to_string())?;
-    let (vectors, _) = conformance::run_streamed(artifact_path, jobs, ImplSet::default(), &|_| {})?;
+    let pending = PendingArtifact::new(artifact_path)?;
+    let conversion = compiled.write(&pending.0, &source, tokenizer(model, &source)?, block_bytes).map_err(|e| e.to_string())?;
+    let (vectors, _) = conformance::run_streamed(&pending.0, jobs, ImplSet::default(), &|_| {})?;
     if pins != files(model)? {
         return Err("FRONTEND_SOURCE_CHANGED: source files changed during build".into());
     }
@@ -192,17 +248,17 @@ pub fn build(
         revision,
         source_files: pins,
         build: conversion.record,
-        artifact: manifest(artifact_path)?,
+        artifact: manifest(&pending.0)?,
         implementations: ImplSet::default().records(),
         implementation_revisions: revisions(),
         admission_profile: admission_profile(),
         conformance: vectors,
         source_equivalence: crate::tir_registration::SOURCE_EQUIVALENCE_UNVERIFIED.into(),
     };
-    std::fs::create_dir_all(pack_dir).map_err(|e| e.to_string())?;
     std::fs::write(pack_dir.join(FRONTEND_FILE), text).map_err(|e| e.to_string())?;
     std::fs::write(pack_dir.join(PACK_FILE), serde_json::to_vec_pretty(&pack).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
+    pending.publish(artifact_path)?;
     Ok(pack)
 }
 
@@ -216,7 +272,7 @@ pub fn verify(
     block_bytes: usize,
 ) -> Result<VerifiedFrontendPack, String> {
     let pack = PrimitiveRuntimePackV1::read(pack_dir)?;
-    let mut protected = pack.source_files.iter().map(|f| model.join(&f.path)).collect::<Vec<_>>();
+    let mut protected = pack.source_files.iter().map(|f| source_dir(model).join(&f.path)).collect::<Vec<_>>();
     protected.extend([artifact_path.to_path_buf(), pack_dir.join(FRONTEND_FILE), pack_dir.join(PACK_FILE)]);
     distinct_output(rebuilt, &protected).map_err(|e| e.to_string())?;
     if pack.admission_profile != admission_profile() {
@@ -241,20 +297,24 @@ pub fn verify(
         return Err("FRONTEND_IMPLEMENTATION_MISMATCH: executor versions differ".into());
     }
     let frontend = FrontendPack::read(&pack_dir.join(FRONTEND_FILE)).map_err(|e| e.to_string())?;
-    let config: Value = serde_json::from_slice(&read(&model.join("config.json"), 2 << 20)?).map_err(|e| e.to_string())?;
-    let source = Checkpoint::open(model).map_err(|e| e.to_string())?;
+    let source = FrontendSource::open(model, &frontend).map_err(|e| e.to_string())?;
+    let config = config(model, &source)?;
     let compiled = frontend.compile_bounded(&config, &source, &admission::default_inputs(), block_bytes).map_err(|e| e.to_string())?;
-    compiled.write_checked(rebuilt, &source, tokenizer(model)?, block_bytes, Some(&pack.build)).map_err(|e| e.to_string())?;
-    if manifest(rebuilt)? != pack.artifact {
+    let pending = PendingArtifact::new(rebuilt)?;
+    compiled
+        .write_checked(&pending.0, &source, tokenizer(model, &source)?, block_bytes, Some(&pack.build))
+        .map_err(|e| e.to_string())?;
+    if manifest(&pending.0)? != pack.artifact {
         return Err("FRONTEND_REBUILD_MISMATCH: rebuilt inventory differs".into());
     }
-    let (vectors, _) = conformance::run_streamed(rebuilt, &jobs, ImplSet::default(), &|_| {})?;
+    let (vectors, _) = conformance::run_streamed(&pending.0, &jobs, ImplSet::default(), &|_| {})?;
     if vectors != pack.conformance {
         return Err("FRONTEND_CONFORMANCE_MISMATCH: tokens, logits or commits differ".into());
     }
     if files(model)? != pack.source_files {
         return Err("FRONTEND_SOURCE_CHANGED: source files changed during verification".into());
     }
+    pending.publish(rebuilt)?;
     Ok(VerifiedFrontendPack(pack))
 }
 

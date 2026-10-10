@@ -230,6 +230,10 @@ fn third_party_blocks_descriptor_rebuilds_and_registers_through_the_common_sdk()
 fn third_party_role_json_descriptor_rebuilds_and_registers_through_the_common_sdk() {
     frontend_sdk(4);
 }
+#[test]
+fn third_party_native_gguf_rebuilds_and_registers_through_the_common_sdk() {
+    frontend_sdk(5);
+}
 fn frontend_sdk(saved: usize) {
     let packed = saved != 0;
     use misaka_palw_sdk::runtime_pack::{conformance::ConformanceJob, primitive};
@@ -242,10 +246,16 @@ fn frontend_sdk(saved: usize) {
     std::fs::create_dir_all(&model).unwrap();
     let p = program();
     let mut params = params_of(&p);
+    let gguf = saved == 5;
     if packed {
         for ((j, l), t) in &mut params.tensors {
             if *j == 1 {
                 t.data = (0..16).map(|i| ((i * 3 + l.unwrap() as usize * 5) % 16) as i128 - 8).collect();
+            }
+            if gguf && *j == 2 {
+                for v in &mut t.data {
+                    *v += 9_007_199_254_740_993;
+                }
             }
         }
     }
@@ -266,7 +276,7 @@ fn frontend_sdk(saved: usize) {
             header.insert(source.clone(), json!({"dtype":"U8","shape":[4,2],"data_offsets":[start,data.len()]}));
             let mut roles = json!({"codes":source});
             let mut inert = json!({});
-            if saved == 3 {
+            if saved == 3 || gguf {
                 roles = json!({"data":source});
             }
             if saved == 4 {
@@ -289,6 +299,54 @@ fn frontend_sdk(saved: usize) {
     raw.extend_from_slice(&h);
     raw.extend_from_slice(&data);
     std::fs::write(model.join("model.safetensors"), raw).unwrap();
+    let weight_name = if gguf { "model.gguf" } else { "model.safetensors" };
+    if gguf {
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend(3u32.to_le_bytes());
+        bytes.extend((params.tensors.len() as u64).to_le_bytes());
+        bytes.extend(2u64.to_le_bytes());
+        let string = |out: &mut Vec<u8>, s: &str| {
+            out.extend((s.len() as u64).to_le_bytes());
+            out.extend(s.as_bytes());
+        };
+        string(&mut bytes, "general.architecture");
+        bytes.extend(8u32.to_le_bytes());
+        string(&mut bytes, "UnregisteredThirdPartyArchitecture");
+        string(&mut bytes, "tokenizer.ggml.tokens");
+        bytes.extend(9u32.to_le_bytes());
+        bytes.extend(8u32.to_le_bytes());
+        bytes.extend(16u64.to_le_bytes());
+        for i in 0..16 {
+            string(&mut bytes, &format!("tok{i}"));
+        }
+        let mut body = Vec::new();
+        for ((j, l), tensor) in &params.tensors {
+            body.resize(body.len().div_ceil(32) * 32, 0);
+            let name = format!("independent.tensor.{j}.{}", l.map_or_else(|| "global".into(), |l| l.to_string()));
+            string(&mut bytes, &name);
+            bytes.extend((tensor.shape.len() as u32).to_le_bytes());
+            for dim in tensor.shape.iter().rev() {
+                bytes.extend((*dim as u64).to_le_bytes());
+            }
+            let ty: u32 = match j {
+                1 => 65535,
+                2 => 27,
+                3 => 25,
+                _ => 24,
+            };
+            bytes.extend(ty.to_le_bytes());
+            bytes.extend((body.len() as u64).to_le_bytes());
+            if *j == 1 {
+                body.extend(tensor.data.chunks_exact(2).map(|b| ((b[0] + 8) as u8) | (((b[1] + 8) as u8) << 4)));
+            } else {
+                body.extend(tensor.to_le_bytes());
+            }
+        }
+        bytes.resize(bytes.len().div_ceil(32) * 32, 0);
+        bytes.extend(body);
+        std::fs::write(model.join(weight_name), bytes).unwrap();
+        std::fs::remove_file(model.join("model.safetensors")).unwrap();
+    }
     std::fs::write(model.join("config.json"), r#"{"model_type":"NotInAnyRegistry"}"#).unwrap();
     let frontend = dir.join("third-party.json");
     let mut definition = json!({"format":FORMAT,"id":"unknown-static-combination","scope":{"task":"text-generation","completeness":"full","components":["decoder"]},
@@ -305,13 +363,18 @@ fn frontend_sdk(saved: usize) {
     if saved == 2 {
         definition["quant_formats"]["public-nibble"]["layout"] = json!({"kind":"tensors","roles":[{"name":"codes","suffix":".anything","dtypes":["U8"],"rank":2}],"dims":{"out":"dim_codes[0]","inp":"dim_codes[1]*2"}});
         definition["quant_formats"]["public-nibble"]["decode"] = json!({"target":"integers","group":{"size":2},"q":"(codes[o,i/2] >> (4*(i%2))) & 15","scale":"1","zero":"8","code":{"min":0,"max":15}});
-    } else if saved == 3 {
+    } else if saved == 3 || gguf {
         definition["quant_formats"]["public-nibble"]["layout"] =
             json!({"kind":"blocks","elems":4,"bytes":2,"fields":[{"name":"codes","at":0,"type":"u8","count":2}]});
         definition["quant_formats"]["public-nibble"]["decode"] = json!({"target":"integers","group":{"size":4},"q":"(codes[e/2] >> (4*(e%2))) & 15","scale":"1","zero":"8","code":{"min":0,"max":15}});
         let test = &mut definition["quant_formats"]["public-nibble"]["tests"][0];
         test.as_object_mut().unwrap().remove("roles");
         test["block_hex"] = json!("f078");
+        if gguf {
+            definition["quant_formats"]["public-nibble"]["ids"] = json!([{"scheme":"ggml","id":65535}]);
+            definition["inert"].as_array_mut().unwrap().push(json!("general.architecture"));
+            definition["inert"].as_array_mut().unwrap().push(json!("tokenizer.ggml.tokens"));
+        }
     } else if saved == 4 {
         definition["quant_formats"]["public-nibble"]["layout"] = json!({"kind":"tensors","roles":[{"name":"codes","suffix":".anything","dtypes":["U8"],"rank":2},{"name":"meta","suffix":".metadata","dtypes":["U8"],"rank":1}],"dims":{"out":"rows","inp":"cols"}});
         definition["quant_formats"]["public-nibble"]["params"] = json!({"rows":{"from_role":{"role":"meta","path":"shape[0]","kind":"int"}},"cols":{"from_role":{"role":"meta","path":"shape[1]","kind":"int"}},"offset":{"from_role":{"role":"meta","path":"offset","kind":"float"}}});
@@ -349,7 +412,7 @@ fn frontend_sdk(saved: usize) {
     assert_eq!(&built, verified.pack());
     assert!(primitive::verify(&pack_dir, &peer, &artifact, &artifact, 32).unwrap_err().contains("FRONTEND_OUTPUT_CONFLICT"));
     assert!(
-        primitive::build(&model, &frontend, &model.join("model.safetensors"), &pack_dir, &jobs, None, 32)
+        primitive::build(&model, &frontend, &model.join(weight_name), &pack_dir, &jobs, None, 32)
             .unwrap_err()
             .contains("FRONTEND_OUTPUT_CONFLICT")
     );
@@ -365,6 +428,52 @@ fn frontend_sdk(saved: usize) {
     )
     .unwrap();
     assert_eq!(built.digest().unwrap(), pack_again.digest().unwrap(), "no machine path or streaming size in pack identity");
+    if gguf {
+        let explicit = primitive::build(
+            &peer.join(weight_name),
+            &frontend,
+            &dir.join("file.palwtir"),
+            &dir.join("file-pack"),
+            &jobs,
+            Some("fixture-revision".into()),
+            64,
+        )
+        .unwrap();
+        assert_eq!(built.digest().unwrap(), explicit.digest().unwrap(), "directory/file source selection has no identity priority");
+        primitive::verify(&pack_dir, &peer.join(weight_name), &artifact, &dir.join("file-rebuilt.palwtir"), 16).unwrap();
+        let original = std::fs::read(peer.join(weight_name)).unwrap();
+        let mut corrupted = original.clone();
+        *corrupted.last_mut().unwrap() ^= 1;
+        std::fs::write(peer.join(weight_name), corrupted).unwrap();
+        let prior = std::fs::read(&rebuilt).unwrap();
+        assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("FRONTEND_SOURCE_MISMATCH"));
+        assert_eq!(prior, std::fs::read(&rebuilt).unwrap());
+        std::fs::write(peer.join(weight_name), original).unwrap();
+        std::fs::write(peer.join("tokenizer.json"), "{}").unwrap();
+        assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("FRONTEND_SOURCE_MISMATCH"));
+        std::fs::remove_file(peer.join("tokenizer.json")).unwrap();
+        #[cfg(unix)]
+        {
+            let conflict = dir.join("conflict-pack");
+            std::fs::create_dir_all(&conflict).unwrap();
+            let prior = std::fs::read(model.join(weight_name)).unwrap();
+            std::os::unix::fs::symlink(model.join(weight_name), conflict.join(primitive::FRONTEND_FILE)).unwrap();
+            assert!(
+                primitive::build(&model, &frontend, &dir.join("conflict-artifact"), &conflict, &jobs, None, 32)
+                    .unwrap_err()
+                    .contains("FRONTEND_OUTPUT_CONFLICT")
+            );
+            assert_eq!(std::fs::read(model.join(weight_name)).unwrap(), prior);
+            std::fs::remove_file(conflict.join(primitive::FRONTEND_FILE)).unwrap();
+            std::fs::hard_link(model.join(weight_name), conflict.join(primitive::PACK_FILE)).unwrap();
+            assert!(
+                primitive::build(&model, &frontend, &dir.join("hardlink-artifact"), &conflict, &jobs, None, 32)
+                    .unwrap_err()
+                    .contains("FRONTEND_OUTPUT_CONFLICT")
+            );
+            assert_eq!(std::fs::read(model.join(weight_name)).unwrap(), prior);
+        }
+    }
 
     let vectors = dir.join("vectors.json");
     std::fs::write(&vectors, json!({"sequences":[[1,2,3,4]]}).to_string()).unwrap();
@@ -407,7 +516,12 @@ fn frontend_sdk(saved: usize) {
     assert_eq!(a.graph_ir_root, b.graph_ir_root);
     let net = palw_t12_shipped_params();
     let PalwConsensusMode::ConsensusV2(bundle) = &net.palw_consensus_mode else { panic!() };
-    let tokenizer = Hash64::from_bytes([0; 64]);
+    let tokenizer = Hash64::from_bytes(a.tokenizer_id);
+    if gguf {
+        assert_ne!(a.tokenizer_id, [0; 64]);
+    } else {
+        assert_eq!(a.tokenizer_id, [0; 64]);
+    }
     let chosen = tir_choose_layout_v1(
         &net,
         bundle,
@@ -445,7 +559,10 @@ fn frontend_sdk(saved: usize) {
     let mut false_vector: Value = serde_json::from_slice(&canonical).unwrap();
     false_vector["conformance"][0]["logits_digest"] = json!("00".repeat(32));
     std::fs::write(&sidecar, false_vector.to_string()).unwrap();
+    std::fs::write(&rebuilt, b"keep prior published output").unwrap();
     assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("FRONTEND_CONFORMANCE_MISMATCH"));
+    assert_eq!(std::fs::read(&rebuilt).unwrap(), b"keep prior published output");
+    assert!(!std::fs::read_dir(&dir).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".frontend-pack-")));
     let mut false_equivalence: Value = serde_json::from_slice(&canonical).unwrap();
     false_equivalence["source_equivalence"] = json!("VERIFIED");
     std::fs::write(&sidecar, false_equivalence.to_string()).unwrap();

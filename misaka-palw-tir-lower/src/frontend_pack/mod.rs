@@ -4,7 +4,9 @@
 
 mod descriptor;
 pub mod program;
+mod source;
 mod stream;
+pub use source::{FrontendSource, checkpoint_path, source_dir};
 pub use stream::{BuildRecord, Conversion, DescriptorRecord, SourceRecord};
 
 use crate::adapter::{canonical_json, expr::Env};
@@ -23,6 +25,8 @@ use std::path::Path;
 pub const FORMAT: &str = "misaka.palw.tir-frontend-pack.v1";
 pub const MAX_PACK_BYTES: usize = 2 << 20;
 pub const MAX_SOURCE_TENSORS: usize = 65_536;
+/// Logical configuration budget, including native GGUF tokenizer/header metadata.
+pub const MAX_CONFIG_BYTES: usize = 64 << 20;
 pub const HASH_KEY: &[u8] = b"MISAKA/PALW/TIR/FRONTEND/PACK/V1";
 
 /// Output files must not replace public inputs or another output with a different format.
@@ -36,7 +40,17 @@ pub fn distinct_output(path: &Path, inputs: &[std::path::PathBuf]) -> Result<()>
         }
     }
     let out = resolve(path).map_err(|e| LowerError::Io(e.to_string()))?;
-    if inputs.iter().any(|input| resolve(input).is_ok_and(|input| input == out)) {
+    fn same_file(a: &Path, b: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if let (Ok(a), Ok(b)) = (std::fs::metadata(a), std::fs::metadata(b)) {
+                return a.dev() == b.dev() && a.ino() == b.ino();
+            }
+        }
+        false
+    }
+    if inputs.iter().any(|input| resolve(input).is_ok_and(|input| input == out) || same_file(path, input)) {
         return Err(bad("FRONTEND_OUTPUT_CONFLICT: output aliases an input or another output"));
     }
     Ok(())
@@ -79,6 +93,9 @@ pub fn compiler_digest() -> String {
         include_str!("program.rs"),
         include_str!("stream.rs"),
         include_str!("descriptor.rs"),
+        include_str!("source.rs"),
+        include_str!("../gguf.rs"),
+        include_str!("../artifact.rs"),
         include_str!("../quantfmt/mod.rs"),
         include_str!("../quantfmt/desc.rs"),
         include_str!("../quantfmt/expr.rs"),
@@ -254,9 +271,10 @@ impl FrontendPack {
         if !(8..=stream::MAX_BLOCK_BYTES).contains(&block_bytes) {
             return Err(bad("FRONTEND_STREAM_LIMIT: block bytes must be 8..=16MiB"));
         }
+        source.validate_snapshot()?;
         let d = &self.definition;
         let map = config.as_object().ok_or_else(|| bad("FRONTEND_ENCODING: config is an object"))?;
-        let mut remaining = MAX_PACK_BYTES;
+        let mut remaining = MAX_CONFIG_BYTES;
         input_bound(config, 0, &mut remaining)?;
         let names = source.names();
         if names.len() > MAX_SOURCE_TENSORS {

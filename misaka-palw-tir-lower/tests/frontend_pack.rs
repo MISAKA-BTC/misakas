@@ -1082,3 +1082,438 @@ fn aggregate_metadata_is_reserved_before_reading_any_repeated_binding() {
     assert!(e.contains("aggregate metadata bytes"), "{e}");
     assert_eq!(s.reads.get(), 0);
 }
+
+type GgufStored = (String, Vec<usize>, u32, Vec<u8>);
+fn gguf_string(bytes: &mut Vec<u8>, text: &str) {
+    bytes.extend((text.len() as u64).to_le_bytes());
+    bytes.extend(text.as_bytes());
+}
+fn native_gguf(tensors: &[GgufStored], metadata: &[(String, u32, Vec<u8>)], offsets: Option<&[u64]>) -> Vec<u8> {
+    let mut bytes = b"GGUF".to_vec();
+    bytes.extend(3u32.to_le_bytes());
+    bytes.extend((tensors.len() as u64).to_le_bytes());
+    bytes.extend((metadata.len() as u64).to_le_bytes());
+    for (key, ty, raw) in metadata {
+        gguf_string(&mut bytes, key);
+        bytes.extend(ty.to_le_bytes());
+        bytes.extend(raw);
+    }
+    let mut data = Vec::new();
+    for (i, (name, shape, ty, raw)) in tensors.iter().enumerate() {
+        data.resize(data.len().div_ceil(32) * 32, 0);
+        gguf_string(&mut bytes, name);
+        bytes.extend((shape.len() as u32).to_le_bytes());
+        for dim in shape.iter().rev() {
+            bytes.extend((*dim as u64).to_le_bytes());
+        }
+        bytes.extend(ty.to_le_bytes());
+        bytes.extend(offsets.map_or(data.len() as u64, |o| o[i]).to_le_bytes());
+        data.extend(raw);
+    }
+    bytes.resize(bytes.len().div_ceil(32) * 32, 0);
+    bytes.extend(data);
+    bytes
+}
+fn gguf_meta() -> Vec<(String, u32, Vec<u8>)> {
+    let mut raw = Vec::new();
+    gguf_string(&mut raw, "never-registered-architecture");
+    vec![("general.architecture".into(), 8, raw)]
+}
+fn gguf_tokenizer_meta() -> (String, u32, Vec<u8>) {
+    let mut raw = Vec::new();
+    raw.extend(8u32.to_le_bytes());
+    raw.extend(2u64.to_le_bytes());
+    for token in ["Hello", "世界"] {
+        gguf_string(&mut raw, token);
+    }
+    ("tokenizer.ggml.tokens".into(), 9, raw)
+}
+
+#[test]
+fn native_gguf_imports_all_block_formats_by_explicit_binding_and_retains_exact_execution() {
+    use frontend_pack::FrontendSource;
+    let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin();
+    let dir = Temp::new();
+    let mut count = 0;
+    for f in reg.all().iter().filter(|f| f.as_blocks().is_some()) {
+        let (mut d, s, p, expected) = saved_fixture(f, 0);
+        d["inert"] = json!(["general.architecture"]);
+        let pack = FrontendPack::parse(&d.to_string()).unwrap();
+        let path = dir.0.join(format!("{}.gguf", f.name()));
+        let shape = p.params[0].shape.iter().map(|n| *n as usize).collect();
+        std::fs::write(
+            &path,
+            native_gguf(
+                &[("outside.data".into(), shape, f.ggml_id().unwrap(), s.tensors["outside.data"].1.clone())],
+                &gguf_meta(),
+                None,
+            ),
+        )
+        .unwrap();
+        let source = FrontendSource::open(&path, &pack).unwrap_or_else(|e| panic!("{}: {e}", f.name()));
+        let config = source.configuration(json!({})).unwrap();
+        let compiled = pack.compile_bounded(&config, &source, &admission::default_inputs(), 8).unwrap();
+        let artifact_path = dir.0.join(f.name());
+        let a = compiled.write(&artifact_path, &source, [0; 64], 8).unwrap();
+        assert!(a.max_read_bytes <= 8);
+        let peer = dir.0.join(format!("{}-peer", f.name()));
+        let b = compiled.write_checked(&peer, &source, [0; 64], 127, Some(&a.record)).unwrap();
+        assert_eq!(a.record, b.record);
+        assert_eq!(std::fs::read(&artifact_path).unwrap(), std::fs::read(peer).unwrap());
+        let (_, params) = artifact::read(&artifact_path, &p).unwrap();
+        assert_eq!(
+            params.tensors[&(0, None)].le_bytes(),
+            expected.into_iter().flat_map(|v| (v as i16).to_le_bytes()).collect::<Vec<_>>(),
+            "{}",
+            f.name()
+        );
+        common::three_ways(&p, &params, &[vec![0, 0]]).unwrap();
+        common::court_coverage(&p, &params, &[0, 0], &[0, 1], &[4]).unwrap();
+        count += 1;
+    }
+    assert_eq!(count, 31);
+}
+
+#[test]
+fn native_gguf_scalar_integers_preserve_i64_bits_without_family_or_float_loading() {
+    use frontend_pack::FrontendSource;
+    let dir = Temp::new();
+    let p = program();
+    let s = source(&p);
+    let mut d = definition(&p);
+    d["inert"].as_array_mut().unwrap().push(json!("general.architecture"));
+    let pack = FrontendPack::parse(&d.to_string()).unwrap();
+    let tensors: Vec<_> = s
+        .tensors
+        .iter()
+        .map(|(n, (m, raw))| {
+            let ty = match m.dtype.as_str() {
+                "I8" => 24,
+                "I16" => 25,
+                "I64" => 27,
+                _ => panic!(),
+            };
+            (n.clone(), m.shape.clone(), ty, raw.clone())
+        })
+        .collect();
+    let path = dir.0.join("model.gguf");
+    std::fs::write(&path, native_gguf(&tensors, &gguf_meta(), None)).unwrap();
+    let source = FrontendSource::open(&dir.0, &pack).unwrap();
+    let config = source.configuration(config()).unwrap();
+    let compiled = pack.compile_bounded(&config, &source, &admission::default_inputs(), 8).unwrap();
+    let artifact_path = dir.0.join("native");
+    compiled.write(&artifact_path, &source, [0; 64], 8).unwrap();
+    let (_, params) = artifact::read(&artifact_path, &p).unwrap();
+    for ((j, l), tensor) in &params.tensors {
+        let name = match j {
+            0 => "stranger.table".into(),
+            1 => format!("stranger.w.{}", l.unwrap()),
+            2 => format!("stranger.m.{}", l.unwrap()),
+            3 => "stranger.head".into(),
+            _ => panic!(),
+        };
+        assert_eq!(tensor.le_bytes(), s.tensors[&name].1);
+    }
+    common::three_ways(&p, &params, &[vec![1, 2, 3, 4]]).unwrap();
+    common::court_coverage(&p, &params, &[1, 2, 3, 4], &[0, 1, 3], &[4]).unwrap();
+}
+
+fn stranger_gguf_descriptor() -> misaka_palw_tir_lower::quantfmt::QuantFormat {
+    let floats: Vec<_> = [-8f32, 7.0, 0.0, -1.0].into_iter().flat_map(f32::to_le_bytes).collect();
+    misaka_palw_tir_lower::quantfmt::QuantFormat::from_json(&json!({"schema":"misaka.palw.quant-format.v1","name":"NeverSeenByThisBuild",
+        "ids":[{"scheme":"ggml","id":65535}],"layout":{"kind":"blocks","elems":4,"bytes":2,"fields":[{"name":"codes","at":0,"type":"u8","count":2}]},
+        "decode":{"target":"integers","group":{"size":4},"q":"(codes[e/2] >> (4*(e%2))) & 15","scale":"1","zero":"8","code":{"min":0,"max":15}},
+        "tests":[{"block_hex":"f078","values_f32_hex":frontend_pack::program::hex(&floats)}]}).to_string()).unwrap()
+}
+
+#[test]
+fn native_gguf_storage_type_does_not_select_integer_arithmetic_or_decoder() {
+    use frontend_pack::FrontendSource;
+    let dir = Temp::new();
+    let (mut d, _, p, _) = saved_fixture(&stranger_gguf_descriptor(), 0);
+    let floats = [f64::from_bits(0.5f64.to_bits() - 1), 0.5, 1.5, -1.5];
+    let raw: Vec<_> = floats.into_iter().flat_map(f64::to_le_bytes).collect();
+    let path = dir.0.join("same-bytes.gguf");
+    std::fs::write(&path, native_gguf(&[("outside.data".into(), vec![1, 4], 28, raw)], &[], None)).unwrap();
+    d.as_object_mut().unwrap().remove("quant_formats");
+    d["bindings"][0] = json!({"param":0,"layer":null,"source":"outside.data","import":{"kind":"fixed_point","shift":0,"round":"half_away_from_zero","overflow":"reject"}});
+    let pack = FrontendPack::parse(&d.to_string()).unwrap();
+    let source = FrontendSource::open(&path, &pack).unwrap();
+    let config = source.configuration(json!({})).unwrap();
+    let compiled = pack.compile_bounded(&config, &source, &admission::default_inputs(), 8).unwrap();
+    let target = dir.0.join("exact-ieee");
+    let a = compiled.write(&target, &source, [0; 64], 8).unwrap();
+    let (_, params) = artifact::read(&target, &p).unwrap();
+    assert_eq!(params.tensors[&(0, None)].le_bytes(), [0i16, 1, 2, -2].into_iter().flat_map(i16::to_le_bytes).collect::<Vec<_>>());
+    // This binding explicitly requests binary32 between storage decoding and integer rounding.
+    let f = misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin().ggml(28).unwrap();
+    d["quant_formats"] = json!({"declared":f.desc});
+    d["bindings"][0] = json!({"param":0,"layer":null,"import":{"kind":"descriptor","format":"declared","roles":{"data":"outside.data"},"config":{},"shift":0,"round":"half_away_from_zero","overflow":"reject"}});
+    let pack = FrontendPack::parse(&d.to_string()).unwrap();
+    let source = FrontendSource::open(&path, &pack).unwrap();
+    let compiled = pack.compile_bounded(&config, &source, &admission::default_inputs(), 8).unwrap();
+    let target = dir.0.join("declared-binary32");
+    let b = compiled.write(&target, &source, [0; 64], 8).unwrap();
+    let (_, params) = artifact::read(&target, &p).unwrap();
+    assert_eq!(params.tensors[&(0, None)].le_bytes(), [1i16, 1, 2, -2].into_iter().flat_map(i16::to_le_bytes).collect::<Vec<_>>());
+    assert_ne!(a.record.artifact_digest, b.record.artifact_digest);
+}
+
+#[test]
+fn native_gguf_header_change_during_weight_reads_refuses_before_output_replacement() {
+    use frontend_pack::FrontendSource;
+    struct MutatingHeader {
+        source: FrontendSource,
+        path: PathBuf,
+        replacement: Vec<u8>,
+        changed: Cell<bool>,
+    }
+    impl TensorSource for MutatingHeader {
+        fn names(&self) -> Vec<String> {
+            self.source.names()
+        }
+        fn shape(&self, n: &str) -> Option<Vec<usize>> {
+            self.source.shape(n)
+        }
+        fn metadata(&self, n: &str) -> Option<TensorMeta> {
+            self.source.metadata(n)
+        }
+        fn load(&self, _: &str) -> misaka_palw_tir_lower::Result<misaka_palw_tir_lower::weights::Tensor> {
+            panic!("no whole loading")
+        }
+        fn validate_snapshot(&self) -> misaka_palw_tir_lower::Result<()> {
+            self.source.validate_snapshot()
+        }
+        fn read_slice(&self, n: &str, r: Range<u64>) -> misaka_palw_tir_lower::Result<Vec<u8>> {
+            let bytes = self.source.read_slice(n, r)?;
+            if !self.changed.replace(true) {
+                std::fs::write(&self.path, &self.replacement).unwrap();
+            }
+            Ok(bytes)
+        }
+    }
+    let dir = Temp::new();
+    let (mut d, s, _, _) = saved_fixture(&stranger_gguf_descriptor(), 0);
+    d["inert"] = json!(["general.architecture"]);
+    let pack = FrontendPack::parse(&d.to_string()).unwrap();
+    let tensors = vec![("outside.data".into(), vec![1, 4], 65535, s.tensors["outside.data"].1.clone())];
+    let path = dir.0.join("mutable.gguf");
+    let meta = gguf_meta();
+    std::fs::write(&path, native_gguf(&tensors, &meta, None)).unwrap();
+    let source = FrontendSource::open(&path, &pack).unwrap();
+    let config = source.configuration(json!({})).unwrap();
+    let compiled = pack.compile_bounded(&config, &source, &admission::default_inputs(), 8).unwrap();
+    let mut meta = meta;
+    *meta[0].2.last_mut().unwrap() ^= 1;
+    let mutator = MutatingHeader { source, path, replacement: native_gguf(&tensors, &meta, None), changed: Cell::new(false) };
+    let target = dir.0.join("existing");
+    std::fs::write(&target, b"previous artifact").unwrap();
+    let e = compiled.write(&target, &mutator, [0; 64], 8).err().unwrap().to_string();
+    assert!(mutator.changed.get());
+    assert!(e.contains("header changed"), "{e}");
+    assert_eq!(std::fs::read(&target).unwrap(), b"previous artifact");
+}
+
+#[test]
+fn native_gguf_unknown_type_rebuilds_via_cli_and_refuses_unread_or_changed_metadata() {
+    use frontend_pack::FrontendSource;
+    let dir = Temp::new();
+    let f = stranger_gguf_descriptor();
+    let (mut d, s, p, _) = saved_fixture(&f, 0);
+    let tensors = vec![("outside.data".into(), vec![1, 4], 65535, s.tensors["outside.data"].1.clone())];
+    let path = dir.0.join("third-party.gguf");
+    let mut metadata = gguf_meta();
+    metadata.push(gguf_tokenizer_meta());
+    let raw = native_gguf(&tensors, &metadata, None);
+    std::fs::write(&path, &raw).unwrap();
+    let pack = FrontendPack::parse(&d.to_string()).unwrap();
+    let source = FrontendSource::open(&path, &pack).unwrap();
+    let config = source.configuration(json!({})).unwrap();
+    assert!(pack.compile(&config, &source, &admission::default_inputs()).err().unwrap().to_string().contains("general.architecture"));
+    assert!(source.configuration(json!({"general.architecture":"hidden"})).unwrap_err().to_string().contains("duplicates native key"));
+    d["inert"] = json!(["general.architecture", "tokenizer.ggml.tokens"]);
+    let pack = FrontendPack::parse(&d.to_string()).unwrap();
+    let compiled = pack.compile_bounded(&config, &source, &admission::default_inputs(), 8).unwrap();
+    let target = dir.0.join("existing");
+    let tokenizer = source.embedded_tokenizer_id().unwrap().unwrap();
+    assert_ne!(tokenizer, [0; 64]);
+    let c = compiled.write(&target, &source, tokenizer, 8).unwrap();
+    let frontend = dir.0.join("frontend.json");
+    let receipt = dir.0.join("receipt.json");
+    std::fs::write(&frontend, d.to_string()).unwrap();
+    std::fs::write(&receipt, serde_json::to_vec(&c.record).unwrap()).unwrap();
+    let cli_target = dir.0.join("cli");
+    let r = std::process::Command::new(env!("CARGO_BIN_EXE_palw-tir-frontend"))
+        .arg(&dir.0)
+        .arg("--frontend-pack")
+        .arg(&frontend)
+        .arg("--out")
+        .arg(&cli_target)
+        .arg("--record")
+        .arg(dir.0.join("cli.json"))
+        .arg("--expect-record")
+        .arg(&receipt)
+        .arg("--block-bytes")
+        .arg("127")
+        .output()
+        .unwrap();
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert_eq!(std::fs::read(&target).unwrap(), std::fs::read(&cli_target).unwrap());
+    let external = dir.0.join("explicit-tokenizer.json");
+    std::fs::write(&external, b"different tokenizer").unwrap();
+    let prior = std::fs::read(&cli_target).unwrap();
+    let r = std::process::Command::new(env!("CARGO_BIN_EXE_palw-tir-frontend"))
+        .arg(&path)
+        .arg("--frontend-pack")
+        .arg(&frontend)
+        .arg("--out")
+        .arg(&cli_target)
+        .arg("--record")
+        .arg(dir.0.join("different.json"))
+        .arg("--expect-record")
+        .arg(&receipt)
+        .arg("--tokenizer")
+        .arg(&external)
+        .output()
+        .unwrap();
+    assert!(!r.status.success());
+    assert!(String::from_utf8_lossy(&r.stderr).contains("FRONTEND_BUILD_MISMATCH"));
+    assert_eq!(std::fs::read(&cli_target).unwrap(), prior);
+    let (_, params) = artifact::read(&target, &p).unwrap();
+    common::three_ways(&p, &params, &[vec![0, 0]]).unwrap();
+    common::court_coverage(&p, &params, &[0, 0], &[0, 1], &[4]).unwrap();
+    let mut changed_meta = metadata;
+    changed_meta[0].2.last_mut().map(|b| *b ^= 1);
+    std::fs::write(&path, native_gguf(&tensors, &changed_meta, None)).unwrap();
+    let before = std::fs::read(&target).unwrap();
+    let e = compiled.write(&target, &source, tokenizer, 8).err().unwrap().to_string();
+    assert!(e.contains("header changed"), "{e}");
+    assert_eq!(std::fs::read(&target).unwrap(), before);
+    std::fs::write(&path, &raw).unwrap();
+    let mut missing = d.clone();
+    missing["quant_formats"]["published"].as_object_mut().unwrap().remove("ids");
+    assert!(
+        FrontendSource::open(&path, &FrontendPack::parse(&missing.to_string()).unwrap())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("needs a block descriptor")
+    );
+    std::fs::write(dir.0.join("second.gguf"), &raw).unwrap();
+    assert!(FrontendSource::open(&dir.0, &pack).err().unwrap().to_string().contains("AMBIGUOUS"));
+    assert!(FrontendSource::open(&path, &pack).is_ok());
+    let conflict = std::process::Command::new(env!("CARGO_BIN_EXE_palw-tir-frontend"))
+        .arg(&path)
+        .arg("--frontend-pack")
+        .arg(&frontend)
+        .arg("--out")
+        .arg(&path)
+        .arg("--record")
+        .arg(dir.0.join("conflict.json"))
+        .output()
+        .unwrap();
+    assert!(!conflict.status.success());
+    assert!(String::from_utf8_lossy(&conflict.stderr).contains("FRONTEND_OUTPUT_CONFLICT"));
+    assert_eq!(std::fs::read(&path).unwrap(), raw);
+}
+
+#[test]
+fn native_gguf_header_bounds_reject_overflow_overlap_duplicates_and_truncation() {
+    use frontend_pack::FrontendSource;
+    use misaka_palw_tir_lower::{gguf::GgufFile, quantfmt::QuantRegistry};
+    let dir = Temp::new();
+    let (mut d, _, _, _) = saved_fixture(&stranger_gguf_descriptor(), 0);
+    d["inert"] = json!(["general.architecture"]);
+    let pack = FrontendPack::parse(&d.to_string()).unwrap();
+    let path = dir.0.join("bad.gguf");
+    let floats = vec![("float".into(), vec![4], 0, vec![0; 16])];
+    let reject = |raw: Vec<u8>, want: &str| {
+        std::fs::write(&path, raw).unwrap();
+        let e = FrontendSource::open(&path, &pack).err().unwrap().to_string();
+        assert!(e.contains(want), "expected {want}: {e}");
+    };
+    reject(native_gguf(&[("bad".into(), vec![0], 0, vec![])], &[], None), "zero or unsupported dimension");
+    reject(native_gguf(&[("bad".into(), vec![usize::MAX, 2], 0, vec![])], &[], None), "size overflow");
+    reject(native_gguf(&[("bad".into(), vec![usize::MAX / 4 + 1], 0, vec![])], &[], None), "byte size overflow");
+    reject(native_gguf(&floats, &[], Some(&[1])), "unaligned");
+    reject(native_gguf(&floats, &[], Some(&[u64::MAX - 31])), "offset overflow");
+    reject(native_gguf(&floats, &[], Some(&[32])), "past the end");
+    let two = vec![floats[0].clone(), ("other".into(), vec![4], 0, vec![0; 16])];
+    reject(native_gguf(&two, &[], Some(&[0, 0])), "overlapping");
+    reject(native_gguf(&[("long".into(), vec![16], 0, vec![0; 64]), two[1].clone()], &[], Some(&[0, 32])), "overlapping");
+    reject(native_gguf(&[floats[0].clone(), floats[0].clone()], &[], None), "twice");
+    reject(native_gguf(&floats, &[gguf_meta()[0].clone(), gguf_meta()[0].clone()], None), "twice");
+    reject(native_gguf(&floats, &[("general.alignment".into(), 10, (1u64 << 63).to_le_bytes().to_vec())], None), "past the end");
+    reject(native_gguf(&floats, &[("flag".into(), 7, vec![2])], None), "invalid boolean");
+    let mut oversized = native_gguf(&[], &[], None);
+    oversized[8..16].copy_from_slice(&65_537u64.to_le_bytes());
+    reject(oversized, "65537 tensors");
+    let mut array = Vec::new();
+    array.extend(4u32.to_le_bytes());
+    array.extend((1u64 << 26).to_le_bytes());
+    reject(native_gguf(&[], &[("huge".into(), 9, array)], None), "allocation limit");
+    let good = native_gguf(&floats, &gguf_meta(), None);
+    std::fs::write(&path, &good).unwrap();
+    assert!(
+        GgufFile::open_bounded(&path, QuantRegistry::builtin(), 32, 1 << 20, 10)
+            .unwrap_err()
+            .to_string()
+            .contains("header byte limit")
+    );
+    assert!(
+        GgufFile::open_bounded(&path, QuantRegistry::builtin(), 1 << 20, 64, 10).unwrap_err().to_string().contains("allocation limit")
+    );
+    reject(good[..good.len() - 1].to_vec(), "past the end");
+    std::fs::write(&path, native_gguf(&floats, &[("nan".into(), 6, f32::NAN.to_le_bytes().to_vec())], None)).unwrap();
+    let source = FrontendSource::open(&path, &pack).unwrap();
+    assert!(source.configuration(json!({})).unwrap_err().to_string().contains("non-finite metadata"));
+}
+
+#[test]
+fn native_gguf_format_ids_cannot_redefine_storage_or_bypass_descriptor_conflicts() {
+    use frontend_pack::FrontendSource;
+    let dir = Temp::new();
+    let f = stranger_gguf_descriptor();
+    let (d, s, _, _) = saved_fixture(&f, 0);
+    let path = dir.0.join("model.gguf");
+    std::fs::write(&path, native_gguf(&[("outside.data".into(), vec![1, 4], 65535, s.tensors["outside.data"].1.clone())], &[], None))
+        .unwrap();
+    for (change, want) in [
+        (json!({"ids":[{"scheme":"ggml","id":2}]}), "cannot redefine"),
+        (json!({"name":"F32"}), "already registered"),
+        (json!({"ids":[{"scheme":"ggml","id":24}]}), "scalar integer storage cannot be redefined"),
+        (json!({"ids":[{"scheme":"ggml","id":65535},{"scheme":"ggml","id":65534}]}), "exactly one GGML ID"),
+    ] {
+        let mut d = d.clone();
+        for (k, v) in change.as_object().unwrap() {
+            d["quant_formats"]["published"][k] = v.clone();
+        }
+        let pack = FrontendPack::parse(&d.to_string()).unwrap();
+        let e = FrontendSource::open(&path, &pack).err().unwrap().to_string();
+        assert!(e.contains(want), "{e}");
+    }
+}
+
+#[test]
+fn native_gguf_metadata_retains_signed_unsigned_and_binary32_values_exactly() {
+    use frontend_pack::FrontendSource;
+    let dir = Temp::new();
+    let (d, _, _, _) = saved_fixture(&stranger_gguf_descriptor(), 0);
+    let pack = FrontendPack::parse(&d.to_string()).unwrap();
+    let path = dir.0.join("metadata.gguf");
+    let signed = -9_007_199_254_740_993i64;
+    let unsigned = u64::MAX;
+    let metadata = vec![
+        ("signed".into(), 11, signed.to_le_bytes().to_vec()),
+        ("unsigned".into(), 10, unsigned.to_le_bytes().to_vec()),
+        ("binary32".into(), 6, 0.1f32.to_le_bytes().to_vec()),
+    ];
+    std::fs::write(&path, native_gguf(&[("f".into(), vec![1], 0, vec![0; 4])], &metadata, None)).unwrap();
+    let source = FrontendSource::open(&path, &pack).unwrap();
+    let config = source.configuration(json!({"sidecar":"public"})).unwrap();
+    assert_eq!(config["signed"].as_i64(), Some(signed));
+    assert_eq!(config["unsigned"].as_u64(), Some(unsigned));
+    assert_eq!(config["binary32"].as_f64(), Some(0.1f32 as f64));
+    assert_eq!(config["sidecar"], "public");
+    assert!(source.configuration(json!({"signed":signed})).unwrap_err().to_string().contains("duplicates native key"));
+}

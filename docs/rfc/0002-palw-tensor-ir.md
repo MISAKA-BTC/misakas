@@ -2008,8 +2008,12 @@ mandatory decode vectors, nested-config checks, bounded pages and before/after s
 Tensor shape/JSON metadata is acquired after all binding-header checks, with per-plan and aggregate
 limits, exact-number parsing and source-change pins. MXFP4 expert axes, all built-in saved layouts
 and unknown third-party formats are exercised. Storage decode is explicitly binary32 before the
-declared integer rounding. This does not close §II.11.4: native GGUF-container acquisition in the
-generic CLI/SDK, source-fidelity/beacon pack integration and real-checkpoint independent-seat
+declared integer rounding. Native single-file GGUF acquisition now exposes raw names/layouts to
+the same generic CLI/SDK, including supplied unknown GGML IDs, strict native metadata and embedded
+tokenizer identity. Header/allocation budgets, checked extents and snapshot revalidation protect
+this producer-side reader. SDK artifact publication follows all receipt/inventory/conformance/source
+checks. These fixtures do not close §II.11.4: split GGUF acquisition, source-fidelity/beacon pack
+integration and real-checkpoint independent-seat
 claim/Final/redemption evidence remain open in the [implementation ledger](../design/palw/tir/rfc0002-implementation.md).
 
 ### II.11.3 Direct-TIR escape hatch and exact boundary of permissionlessness
