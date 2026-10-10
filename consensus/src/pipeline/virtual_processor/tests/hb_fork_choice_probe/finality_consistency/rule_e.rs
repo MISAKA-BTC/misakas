@@ -19,6 +19,7 @@
 //! | `finx_e_sybil_flood_…` | V5 (Sybil flood) | the fresh node stays on the Sybil branch | the honest branch outranks twelve junk tips (more than one resolve validates) and is taken |
 //! | `finx_e_sybil_bonds_…` | — | the heavy node stays on the Sybil side | bonds registered after the fork count for nothing |
 //! | `finx_e_dos_…` | — | no continuation runs | a heartbeat flood costs no validation; an attempt flood at most `PALW_RULE_E_MAX_EXTRA_CANDIDATES_V1` a resolve |
+//! | `finx_e_drill_1010_…` | — (the 10-10 drill stall) | followers lagging on one chain, reopened, reach the leader's sink | the same; rule E weighs nothing (one tip) |
 //!
 //! **Weights in this harness.** PoW is skipped, so a heartbeat carries almost no blue work and an attempt header 2^20: the side
 //! with more attempt blocks is the GHOSTDAG-heavier one, whatever its producer count. Each scenario below sets "heavier" with
@@ -1148,6 +1149,85 @@ async fn finx_e_a_partition_heals_while_a_private_branch_is_released() {
             assert!(on_chain(&n.light, at) && on_chain(&b, at), "{tag}: both honest nodes on A");
             for node in [&n.light, &b] {
                 assert!(has_utxo(node, x_out) && !has_utxo(node, y_out), "{tag}: X stands, Y absent");
+            }
+        }
+    }
+}
+
+// =====================================================================================================
+// The 2026-10-10 drill stall: a lagging sink on one chain is no fork-choice state
+// =====================================================================================================
+
+/// **The shape the 2026-10-10 9-node drill left behind (integration `0b73fd33f`, `devnet-lead2`), and why rule E is not its fix.**
+/// The stuck datadirs (B, C, D3 at 18:18; A at 18:54) hold ONE chain with ONE tip: each node's sink is a block of that chain —
+/// a different one per node — and the blocks above it are stored (header and body) but never became its virtual's chain
+/// ("0 UTXO-validated blocks" for every block after). Reopened by the same binary, each copy UTXO-validated the blocks above
+/// its sink at the first block that arrived and converged on one sink (FINX, 2026-10-10). There is no second tip, so no
+/// comparator — the status quo's, strict-win's or rule E's — is ever asked: the stall is in the node's processing, not its
+/// choice.
+///
+/// Modelled here: one chain mined by a leader (heartbeat slots and attempts by three bonds); three followers each hold it only
+/// up to a different height (the drill's stuck sinks), stop, are reopened from their own databases, and receive the rest. In
+/// both arms every follower ends on the leader's sink; armed, rule E validates no extra candidate (nothing to weigh), and its
+/// own weighing of each follower's sink is what the leader's is.
+#[tokio::test]
+async fn finx_e_drill_1010_a_lagging_sink_on_one_chain_is_no_fork_choice_state() {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    kaspa_core::log::try_init_logger("warn");
+    for armed in ARMS {
+        let tag = format!("E drill-1010 {}", arm(armed));
+        let mut n = net_ruled(None, armed);
+        shared_prefix(&mut n).await;
+        for slot in 0..SPLIT {
+            free_slot(&mut n.heavy, &mut n.nonce, 1, Vec::new()).await;
+            if slot % 8 == 0 {
+                free_attempt(&mut n.heavy, 2 + slot / 8).await;
+            }
+        }
+        let chain = blocks_in_topological_order(&n.heavy);
+        let leader_sink = n.heavy.sink();
+        assert_eq!(n.heavy.ctx.consensus.get_tips().len(), 1, "{tag}: the leader holds one chain with one tip");
+        let resumed = {
+            let mut c = n.config.clone();
+            c.process_genesis = false;
+            c
+        };
+        for cut in [chain.len() / 3, chain.len() / 2, chain.len() * 2 / 3] {
+            let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+            let (s, _rx) = async_channel::unbounded();
+            let mut follower =
+                t12_genesis_chain_on(TestConsensus::with_db(db.clone(), &n.config, s), &n.config, &n.bundle, &n.premine, &n.floats);
+            feed(&mut follower, &chain[..cut]).await;
+            let lagging = follower.sink();
+            assert_ne!(lagging, leader_sink, "{tag}: the follower's sink lags at block {cut} of {}", chain.len());
+            assert!(
+                n.heavy.vp().reachability_service.is_chain_ancestor_of(lagging, leader_sink),
+                "{tag}: the lagging sink is a block of the leader's chain — no fork"
+            );
+            let (time, nonce) = (follower.ctx.simulated_time, follower.nonce_for_reopen());
+            drop(follower);
+            let (s, _rx2) = async_channel::unbounded();
+            let mut follower = t12_reopened_chain(TestConsensus::with_db(db.clone(), &resumed, s), &resumed, &n.bundle, time, nonce);
+            assert_eq!(follower.sink(), lagging, "{tag}: the reopened follower resumes at its own sink");
+            feed(&mut follower, &chain[cut..]).await;
+            let vp = follower.vp();
+            eprintln!(
+                "[finx {tag}] follower cut at {cut}/{}: reopened on its lagging sink, then on {} (continuations {}, most extra validations in one {})",
+                chain.len(),
+                if follower.sink() == leader_sink { "the leader's sink" } else { "ANOTHER sink" },
+                vp.palw_rule_e_searches.load(Relaxed),
+                vp.palw_rule_e_max_extra_validated.load(Relaxed),
+            );
+            assert_eq!(follower.sink(), leader_sink, "{tag}: one chain, one sink");
+            if armed {
+                assert_eq!(vp.palw_rule_e_max_extra_validated.load(Relaxed), 0, "{tag}: one tip — rule E has nothing to weigh");
+                assert_eq!(
+                    follower.ctx.consensus.get_palw_rule_e_weighing_v1().map(|w| (w.block, w.daa_score, w.state.state_root())),
+                    n.heavy.ctx.consensus.get_palw_rule_e_weighing_v1().map(|w| (w.block, w.daa_score, w.state.state_root())),
+                    "{tag}: the follower weighs the sink as the leader does"
+                );
+            } else {
+                assert_eq!(vp.palw_rule_e_searches.load(Relaxed), 0, "{tag}: no continuation runs unarmed");
             }
         }
     }

@@ -258,3 +258,12 @@ moves participation.
 * **Policy:** `W_p` beyond testnet-12; whether participation stays one-per-bond or becomes budget-weighted (a capital split into
   minimum bonds before the fork counts once per bond — the per-bond caps of ADR-0176 do not reach a count); the heights.
 * **External:** review of the mechanism (internal) and the multi-node runs.
+
+## 12. The 2026-10-10 drill stall is not this decision's problem (2026-10-10)
+
+The 9-node drill on integration `0b73fd33f` stopped three times with "0 UTXO-validated blocks", each node on its own sink. The kept
+datadirs hold one linear chain with one tip; the sinks are different blocks of it; the same binary, reopened on each datadir, moved
+to the common sink at the first arriving block. It is a non-deterministic stall of virtual processing, not a fork choice: no
+comparator is consulted where there is one tip, and rule E (armed) changes nothing there — pinned by
+`finx_e_drill_1010_a_lagging_sink_on_one_chain_is_no_fork_choice_state`. Evidence and the next step (a stack of the stuck
+virtual-processor thread): design record §10.5. Rule E's scope is unchanged — the comparator split of 10-08 (two branches).

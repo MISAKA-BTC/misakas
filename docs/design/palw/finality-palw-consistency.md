@@ -575,3 +575,34 @@ pins that a node's streamed side equals the records' side with and without an en
 was a veto purchasable with claim volume under ADR-0160 S (ρ = 1,000: 100 claims a DAA per 13,000 MSK bond); a node now streams
 each side and never refuses on volume; the bound remains for a leaf window and a client's opening only. ADR-0177: rule E reads no
 availability input (ADR-0178 §10 lists its inputs and the two indirect readers).
+
+### 10.5 The 2026-10-10 drill "permanent split" — not a fork-choice split (MEASURED)
+
+The Lead's 9-node salted drill on integration `0b73fd33f` (`MISAKA-wt-b/wh-h1-run/devnet-lead2`) stopped three times in ~2 h:
+nodes kept receiving blocks but logged "0 UTXO-validated blocks", each on its own sink, until resynced from an empty datadir. The
+stuck datadirs were examined read-only (copies in FINX's scratch; the originals are untouched):
+
+* **One chain, one tip.** Each copy, opened by the same binary in isolation (`getBlockDagInfo`, `getBlock` walk): B, C and D3 hold
+  the same single tip `01cb710e…` (DAA 36) and a linear selected-parent chain; their sinks are three different blocks OF THAT
+  CHAIN — D3 `8f0d468e…` (DAA 32), B `55566d03…` (DAA 34), C `98f3cdfb…` (DAA 34). A (18:54) has tip `b90c5976…` (DAA 50) 12 blocks
+  above its sink `3c63fd0c…`, also linear. The block above each sink extends it directly (single parent). There is no second
+  branch, so no comparator — the status quo's GHOSTDAG order, `palw_reorg_strict_economic_win_v1` or rule E — had anything to
+  decide. The LIVE-R1 recovery traces on the fresh D5 show the peers' frozen sinks (`challenger_work` below the defender's on
+  one chain), not competing branches.
+* **The processing stopped, not the choice.** In each original log the last block the node advanced to is followed by the next
+  block's "Processed … 1 UTXO-validated" and then nothing from the virtual path: no "Accepted block … via relay" (logged only once
+  `virtual_state_task` resolves, `flow_context.rs` / `v7/blockrelay/flow.rs`), no `[dns-bft] sink=` line, the panel's per-minute
+  schedule line stops, the heartbeat miner stops; header and body processing go on ("Processed N blocks and N headers … 0
+  UTXO-validated"). P2P and RPC stay alive (IBD served, headers proofs built), so it is not the 10-08 IBD-candidates lock.
+* **Not deterministic.** Each copy, reopened by the SAME `0b73fd33f` binary on the SAME datadir and connected to one peer (a copy of
+  A), UTXO-validated the blocks above its sink at the first block that arrived (D3: 16 at once; B: 10; C: 9) and all three reached
+  A's sink `3c63fd0c…`. No resync was needed — a restart was. So the cause is a stall of the virtual processor inside a resolve
+  (after the next chain block's UTXO walk, before the virtual state commit and its notifications), not a state the chain cannot
+  leave.
+
+**Rule E does not resolve this class.** Armed, it weighs only non-extension candidates; with one tip it is never asked (pinned by
+`finx_e_drill_1010_a_lagging_sink_on_one_chain_is_no_fork_choice_state`: followers stopped at three heights of one chain, reopened,
+reach the leader's sink in both arms; armed, rule E validates no extra candidate). It remains the fix for the comparator split of
+10-08 (two branches; §10.1). The stall needs its own lane: a symbolized build on the next drill and `sample <pid>` (macOS) or a
+thread dump of the stuck process — the virtual-processor thread's stack names the wait — plus a watchdog that says "virtual
+processing has not completed for N s" (the N2 watchdog runs after the virtual task, so it never fires here).
