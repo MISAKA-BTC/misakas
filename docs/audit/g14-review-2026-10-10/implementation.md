@@ -69,4 +69,39 @@ Claudeの統合commit `7d1c82324394198a7efb6226570d09b9e12f8f50`へmergeした�
 
 全域としてはまだ不十分である。今回の値開示なしのconviction経路を、累積開示predicateの代替とみなしてはならない。`cumulative_scope_allows_v1`は依然としてstubであり、旧DA responseの和からweightを再構成するF-C4R4-17が残る。モデルに依存する値をcommitmentのみで回答するprotocol、small-value court、全claim/aliasをまたぐscopeを、反例そのものと1 outsiderの追及可能性の両方で閉じる必要がある。
 
-`3730cc90f382341635322fd21b77b56c9db41fc5`が新たにpushされ、K2-TIR-v4/v5、MEASの実測、PESGの未完了gateが公開された。上記の試験は7d1c82324を基点にした修正の証拠であり、新統合版のsegmented courtを検証した結果ではない。次の統合ではv4のRAM/retained responses/metadataを導出し直し、16-unit以内で任意faultを発見してfileできること、chunk carriageを含むdeadline、legacy実node、production eligibility、junk filings下の期限内包含を確認する。fence/activationは変更しない。
+`3730cc90f382341635322fd21b77b56c9db41fc5`をmergeした。上表は7d1c82324を基点にした履歴であり、最新統合後の結果は以下に記録する。fence/activationは変更しない。
+
+## 最新統合版のsegmented経路の修正
+
+対象は3730cc90fのK2-TIR-v4/v5である。未compileのK2S WIP `4a6f20aaf`は、この検証には含めていない。
+
+`prepare_reexecution_v1`は公開jobのprompt root、fed ids、登録param commitmentsを確認し、producerのnodeを読まずにstreaming再計算する。保持する結果はposition rootsと最初のdecode不一致だけであり、DAの各要求でモデルを再実行する必要はない。`OutsiderV1::check_segmented_computation`にも接続した。v5ではjobのids/countを入力として構成する。正しいclaimはproducer valuesなしでCleanとなり、異なるsegmentには公開pathのdescentを適用する。
+
+segmented demandは最大64人のcollateral参加者とし、既存demandへのjoinでも1 bondあたり4 open sessionsを守る。拒否されたjoinはreserveを増やさない。参加者満杯でも、Panel外の新しいbondの直接proof、response、DA defaultを妨げない。bondごとのcountも当該claimのBTreeMap rangeに限定した。
+
+v4 gateではprogramを検証し、program root、grammar、relations、boundaries、budgetsを再導出して照合する。RAMはdtypeのwire幅ではなくi128で数え、2 position、streaming履歴、node operands、evaluation temporaries、Merkle tree、encoded buffersを含む。verifier内部の全param cacheを除き、evaluatorへ渡すparamの複製もなくした。登録モデルをdiskから必要なrelation分だけ読む実装を前提とし、任意に全モデルをi128で保持するcallerのstoreは含めない。これはworking-memoryの保守的な式であり、実機のpeak測定ではない。
+
+retained stateには全positionのbitmap、最大64人のdemand/held metadata、proof seals、claim headersを計上する。v4のresponse payloadはblocksにあり、ledger rowsには保存しない。`max_commit_bytes`はgenerated idsを含む独立のcarrier boundである。concurrent sessionsの2は1 prosecutionの局所position数であり、全claimのmetadataは`max_retained_state`で別に計上する。局所化roundsも、適応的な最大10 path probes＋position demand＋filingの12に修正した。
+
+raw Tensor providerにもcanonical range/length確認を追加した。I8の値へ256を加えた同じwire hashのaliasは、paramなら取得エラー、positionなら未認証materialとしてdemandとなり、false convictionを作らない。
+
+| 最新の検証 | 結果と限界 |
+| --- | --- |
+| 全kernel | 259 PASS / 0 FAIL / 1 ignored。既知F-C4R4-17は未解決 |
+| canonical node | 26 PASS。post-genesis・fresh pruned nodeの既存試験を再実行 |
+| typed node | 5 PASS。pruned nodeのmemory conviction/rollback、composite stage、restart、eligibilityを再実行 |
+| SDK | tiny BERT encoderとtiny XLM-R headの全element court試験1 PASS。9B APIは`--no-run` PASS |
+| segmented node | baselineの14 PASS（history 8kを含む）。修正後は13 PASS（未変更の長時間history試験を除く）と、再計算へ強化したv5試験1 PASS |
+| fault位置を教えないnode試験 | 共謀するproducerと他bondを前に、1 outsiderがpublic RPC recordと自分のモデルからrootsを作り、blocksの応答だけを適応的に読み、通常のsigned FileProofでconvict/slash/bounty。distinct position demandsは12以下 |
+| 9B・8k shape fixture | RAM 55,528,466,948 B、全claim保持state 276,099,584 B、public bytes 21,843,011,715 B、12 rounds。既存RAM/state/carrier ceiling内。weights_loaded=false、artifact root syntheticのshape fixtureであり、実9Bモデルの実行・peak・期限保証のPASSではない |
+
+[全kernel](evidence/seg-final-kernel.log)、[canonical node](evidence/seg-final-canonical.log)、[typed node](evidence/seg-final-typed.log)、[segmented node](evidence/seg-final-node.log)、[v5 replay](evidence/seg-final-v5.log)、[統合直後の全14 segmented node](evidence/merged-segmented-node.log)、[9B shapeの資源式](evidence/seg-bounds-replay-all.log)、[SDK tiny encoder/head](evidence/seg-final-sdk-encoder.log)、[SDK API](evidence/seg-final-sdk-api.log)、[fresh replayとmodel alias拒否](evidence/seg-streaming-final.log)。
+
+### 残条件へのフィードバック
+
+1. **累積開示scopeは未完成。** `cumulative_scope_allows_v1`はstubのままで、F-C4R4-17もignoredである。K2S WIPのwhole-value courtをcompile・soundness/completeness試験し、small masked valuesとlarge valuesのhiding protocolを実際のresponse、全claim/aliasのscope、reward判定まで接続する必要がある。再計算によるconvictionのPASSを、強制開示のprivacy predicateのPASSへ流用しない。
+2. **最大DAの期限は未完成。** 9B・8kの1 positionは2,294 parts、約2.34 GBである。現在の固定20 DAAのresponse期限と、Final後の`court_deadline + proof_grace`だけの開始判定は、12 roundsとchunk inclusionの完了時間を保証していない。tag-113の最大Respond、chunk数を数えた期限、expiry直前のadaptive追及を実ノードで検証する必要がある。
+3. **全familyと包含は未完成。** legacy filerの実ノード失敗、pipeline等のcanonical public entry/own-node reads、production eligibility、junk FileProof下のcourt budgetと期限内包含は残る。今回のgenesis cardを使うsegmented試験だけでC1/C2/C7の全域PASSとはしない。
+4. **F-MEAS-07は現snapshotでは修正済み。** `required_reservation`は自己還流分を除くnet penaltyから導出している。旧handoverのgross-slash指摘を現在のbugとして再掲しない。p=0等のPESG/経済gateは別途残る。
+
+この段階の判定は、登録モデル保有者による告発経路と資源式の改善がverified、G14全域は未完成である。armingの許可や外部soundness reviewの完了を意味しない。

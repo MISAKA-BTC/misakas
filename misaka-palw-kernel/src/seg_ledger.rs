@@ -330,7 +330,10 @@ impl KernelLedgerV1 {
 
     /// The open sessions `demander` holds on `claim`.
     fn seg_open_sessions(&self, claim: &Digest, demander: &Digest) -> u32 {
-        self.demands.iter().filter(|((c, _, _), d)| c == claim && d.demanders.iter().any(|(b, _)| b == demander)).count() as u32
+        self.demands
+            .range((*claim, 0, 0)..=(*claim, u8::MAX, u32::MAX))
+            .filter(|(_, d)| d.demanders.iter().any(|(b, _)| b == demander))
+            .count() as u32
     }
 
     pub(crate) fn seg_file_demand(
@@ -371,17 +374,21 @@ impl KernelLedgerV1 {
         if b.exit_requested.is_some() || b.free() < need {
             return Err(rule("the demander's free collateral does not cover the demand bond"));
         }
+        let already_joined = self.demands.get(&k).is_some_and(|d| d.demanders.iter().any(|(b, _)| b == demander));
+        if !already_joined && self.seg_open_sessions(claim, demander) >= SEG_OPEN_PER_DEMANDER_V4 {
+            return Err(rule("the demander already holds its open sessions on this claim"));
+        }
         if let Some(d) = self.demands.get_mut(&k) {
-            if !d.demanders.iter().any(|(b, _)| b == demander) {
+            if !already_joined {
+                if d.demanders.len() >= crate::gate::MAX_DEMANDERS_PER_SESSION_V1 {
+                    return Err(rule("the shared demand already has its maximum collateral participants"));
+                }
                 d.demanders.push((*demander, need));
                 self.bonds.get_mut(demander).expect("checked").reserved += need;
                 settle(out, *demander, need, SettlementKindV1::ReserveDemand, Some(*claim));
             }
             out.push(LedgerEventV1::DemandJoined { claim: *claim, stage, position });
             return Ok(());
-        }
-        if self.seg_open_sessions(claim, demander) >= SEG_OPEN_PER_DEMANDER_V4 {
-            return Err(rule("the demander already holds its open sessions on this claim"));
         }
         let program = self.classes.get(&class_id).map(|c| c.program.clone()).ok_or_else(|| rule("no such class"))?;
         let parts = position_parts_v1(&program, position).map_err(|_| rule("the position does not lay out"))?.len() as u32;

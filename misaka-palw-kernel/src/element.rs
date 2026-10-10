@@ -738,7 +738,6 @@ pub fn check_positions_v1(
         Ok(pr) => pr,
         Err(why) => return SegFindingV1::Inconsistent(why),
     };
-    let mut params: BTreeMap<(u16, Option<u16>), Tensor> = BTreeMap::new();
     let mut ps: Vec<u32> = positions.to_vec();
     ps.sort_unstable();
     ps.dedup();
@@ -750,7 +749,7 @@ pub fn check_positions_v1(
         Err(missing) => return SegFindingV1::Demand(missing),
     };
     for &p in &ps {
-        match check_one(c, &pr, &loaded, &mut params, artifact, tokens, p) {
+        match check_one(c, &pr, &loaded, artifact, tokens, p) {
             Ok(None) => {}
             Ok(Some(f)) => return SegFindingV1::Fault(Box::new(f)),
             Err(why) => return SegFindingV1::Inconsistent(why),
@@ -767,11 +766,12 @@ fn resolve_operands(
     c: &SegClaimContextV1<'_>,
     pr: &PreparedV1<'_>,
     loaded: &BTreeMap<u32, Loaded>,
-    params: &mut BTreeMap<(u16, Option<u16>), Tensor>,
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],
     (p, s, n): (u32, u16, u16),
 ) -> Result<OperandsResolvedV1, String> {
+    // Params are read into this relation's owned operands and dropped with them. A model holder can read from disk;
+    // a cache of every layer's decoded i128 tensors is not needed for the localized court.
     let sources = operand_sources(pr, p, s, n)?;
     let mut owned: Vec<Option<Tensor>> = Vec::new();
     let mut scalars: Vec<Option<i128>> = Vec::new();
@@ -784,14 +784,13 @@ fn resolve_operands(
                 (Some(l.values[*occurrence as usize][*node as usize].clone()), None)
             }
             OperandSourceV1::Source(SourceV1::Param { index, layer }) => {
-                if !params.contains_key(&(*index, *layer)) {
-                    let t = artifact(*index, *layer).ok_or_else(|| format!("the public artifact lacks param {index}"))?;
-                    if c.params.by_instance.get(&(*index, *layer)) != Some(&tensor_commitment_v3(&t)) {
-                        return Err(format!("the public artifact's param {index} is not the class's"));
-                    }
-                    params.insert((*index, *layer), t);
+                let t = artifact(*index, *layer).ok_or_else(|| format!("the public artifact lacks param {index}"))?;
+                if !crate::verify::canonical_tensor_v1(&t)
+                    || c.params.by_instance.get(&(*index, *layer)) != Some(&tensor_commitment_v3(&t))
+                {
+                    return Err(format!("the public artifact's param {index} is not the class's"));
                 }
-                (Some(params[&(*index, *layer)].clone()), None)
+                (Some(t), None)
             }
             OperandSourceV1::Source(SourceV1::Const(j)) => (const_tensor(c.program, *j).ok(), None),
             OperandSourceV1::Source(SourceV1::Zeros { dtype, shape }) => (Some(Tensor::zeros(*dtype, shape)), None),
@@ -881,8 +880,7 @@ pub fn prove_element_v1(
         return Err("no such value".into());
     }
     let loaded = load_positions(c, &pr, material, &[p])?;
-    let mut params = BTreeMap::new();
-    let resolved = resolve_operands(c, &pr, &loaded, &mut params, artifact, tokens, (p, s, n))?;
+    let resolved = resolve_operands(c, &pr, &loaded, artifact, tokens, (p, s, n))?;
     build_element_fault(c, &pr, &loaded, &resolved, tokens, (p, s, n), e)
 }
 
@@ -925,6 +923,12 @@ fn load_positions_or_demand(
             missing.push(q);
             continue;
         }
+        // Raw Tensor providers must obey the same range/length rules as the on-chain byte decoder. Otherwise a value
+        // outside its dtype aliases authentic bytes when the commitment truncates it to the dtype's wire width.
+        if !values.iter().flatten().all(crate::verify::canonical_tensor_v1) {
+            missing.push(q);
+            continue;
+        }
         let commitments: Vec<Vec<Digest>> = values.iter().map(|occ| occ.iter().map(tensor_commitment_v3).collect()).collect();
         if !position_in_segment(q, &position_root_of_v1(q, &commitments), &siblings, c.segment_roots, c.positions) {
             missing.push(q);
@@ -940,7 +944,6 @@ fn check_one(
     c: &SegClaimContextV1<'_>,
     pr: &PreparedV1<'_>,
     loaded: &BTreeMap<u32, Loaded>,
-    params: &mut BTreeMap<(u16, Option<u16>), Tensor>,
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],
     p: u32,
@@ -964,8 +967,8 @@ fn check_one(
                     col_root: trees.col_root(),
                 })));
             }
-            let resolved = resolve_operands(c, pr, loaded, params, artifact, tokens, (p, s, n))?;
-            let (_, owned, scalars) = &resolved;
+            let mut resolved = resolve_operands(c, pr, loaded, artifact, tokens, (p, s, n))?;
+            let (_, owned, scalars) = &mut resolved;
             // Fast path: the whole value at once.
             let expected = match node.prim {
                 Prim::HistAppend { .. } => {
@@ -982,13 +985,21 @@ fn check_one(
                 }
                 _ => {
                     let inputs: Vec<Tensor> = owned
-                        .iter()
-                        .zip(scalars)
+                        .iter_mut()
+                        .zip(scalars.iter())
                         .map(|(t, v)| {
-                            t.clone().unwrap_or_else(|| Tensor { dtype: DType::Idx, shape: Vec::new(), data: vec![v.unwrap_or(0)] })
+                            t.take().unwrap_or_else(|| Tensor { dtype: DType::Idx, shape: Vec::new(), data: vec![v.unwrap_or(0)] })
                         })
                         .collect();
-                    eval_node(c.program, node, &inputs, &[], pr.w.h(s, p)).ok().map(|t| t.data)
+                    let expected = eval_node(c.program, node, &inputs, &[], pr.w.h(s, p)).ok().map(|t| t.data);
+                    // Return the same allocations to the prover, which needs them if a mismatch is found. Cloning these
+                    // operands doubled the largest embedding matrix's live memory for no evaluation benefit.
+                    for ((slot, scalar), input) in owned.iter_mut().zip(scalars.iter()).zip(inputs) {
+                        if scalar.is_none() {
+                            *slot = Some(input);
+                        }
+                    }
+                    expected
                 }
             };
             if expected.as_ref() == Some(&out.data) {
@@ -1301,14 +1312,13 @@ mod tests {
         let c = ctx(&f, &roots);
         let pr = PreparedV1::new(&f.program, None).unwrap();
         let loaded = load_positions(&c, &pr, &honest, &(0..5).collect::<Vec<_>>()).unwrap();
-        let mut params = BTreeMap::new();
         let art = |j: u16, l: Option<u16>| f.params.tensors.get(&(j, l)).cloned();
         let mut checked = 0u64;
         let mut prims = BTreeSet::new();
         for p in 0..5u32 {
             for s in 0..pr.w.occurrences.len() as u16 {
                 for n in 0..pr.nodes_in(s).unwrap() {
-                    let (_, owned, scalars) = resolve_operands(&c, &pr, &loaded, &mut params, &art, &f.tokens, (p, s, n)).unwrap();
+                    let (_, owned, scalars) = resolve_operands(&c, &pr, &loaded, &art, &f.tokens, (p, s, n)).unwrap();
                     let ops = FullOperands {
                         ops: owned.iter().map(Option::as_ref).collect(),
                         scalars: scalars.clone(),

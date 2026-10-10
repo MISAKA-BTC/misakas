@@ -753,8 +753,8 @@ impl SegWorld {
 /// * it publishes nothing off-chain and never prosecutes.
 ///
 /// The outsider is the last genesis card, a bond the route has never seen. From the node's read API and the chain's blocks only, it
-/// checks position 1,200 of the first lie. That check is a demand of positions 1,199 and 1,200. The coalition's producer serves them on
-/// chain (else it defaults). The outsider reads the parts back from the blocks and files one element court, and the fold convicts.
+/// streams its registered-model replay, then descends the first differing segment without a fault-position hint. The coalition's
+/// producer serves each demanded path/position on chain (else it defaults). The outsider reads the blocks and files an element court.
 /// The real bond is slashed, the slash splits exactly into the accuser's reward and the burn, and the next coinbase pays the reward.
 /// The second lie's producer withholds instead: at the demand's deadline the claim is Unavailable — the default charged, never a
 /// conviction, never Final. The third lie is in the output (a delivered id that is not the decode of honest logits): the decode court
@@ -787,15 +787,32 @@ async fn g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_
     // The verifier's own copy of the artifact (owned: the world is driven while it checks).
     let params = w.f.params.clone();
     let art = move |j: u16, l: Option<u16>| params.tensors.get(&(j, l)).cloned();
-    let nothing = SegDa { claim: &lie, withhold: 0..positions, read: Cell::new(0) };
-    let SegFindingV1::Demand(missing) = check_positions_v1(&view.context(), &nothing, &art, &lie.tokens, &[1200]) else {
-        panic!("material nobody published is a demand")
-    };
-    assert_eq!(missing, vec![1199, 1200]);
-    // The producer must serve or default: it serves, on chain, in parts, and the outsider reads them back from the blocks.
-    let chain = w.demand_served_and_read(outsider, &lie, &missing).await;
-    let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &lie.tokens, &[1200]) else {
-        panic!("the served lie is found")
+    let own = misaka_palw_kernel::seg_detect::prepare_reexecution_v1(&view.context(), &art, &lie.tokens).unwrap();
+    let mut chain = FromBlocks { positions: BTreeMap::new(), read: Cell::new(0) };
+    let mut demanded = std::collections::BTreeSet::new();
+    let fault = loop {
+        let r = misaka_palw_kernel::seg_detect::check_claim_by_reexecution_v1(
+            &view.context(),
+            &own.roots,
+            own.decode_mismatch,
+            &chain,
+            &art,
+            &lie.tokens,
+        );
+        assert!(r.probes <= 10);
+        match r.finding {
+            SegFindingV1::Fault(fault) => {
+                assert_eq!(r.divergent, Some(1200), "the fault was localized from public paths");
+                break fault;
+            }
+            SegFindingV1::Demand(missing) => {
+                assert!(!missing.is_empty() && missing.iter().all(|p| demanded.insert(*p)), "no repeated demand");
+                assert!(demanded.len() <= 12 && demanded.len() <= 16, "the single bond's distinct DA units are bounded");
+                let served = w.demand_served_and_read(outsider, &lie, &missing).await;
+                chain.positions.extend(served.positions);
+            }
+            other => panic!("the public prosecution stopped: {other:?}"),
+        }
     };
     let bytes = fault.to_bytes();
     let bounds = w.net.ledger().classes[&w.class].bounds;
@@ -1526,13 +1543,32 @@ async fn g14_k2s_v5_an_encoder_class_on_the_node_convicts_its_lies_and_finalizes
         let claim = w.encoder_claim(0, job, &prompt, Some(lie)).await;
         let view = w.fresh_record(&claim.id);
         assert!(view.encoder.is_some() && view.positions == 1, "{what}: a v5 claim of one position");
+        let own = misaka_palw_kernel::seg_detect::prepare_reexecution_v1(&view.context(), &art, &claim.tokens).unwrap();
         let nothing = SegDa { claim: &claim, withhold: 0..1, read: Cell::new(0) };
-        let SegFindingV1::Demand(missing) = check_positions_v1(&view.context(), &nothing, &art, &claim.tokens, &[0]) else {
+        let SegFindingV1::Demand(missing) = misaka_palw_kernel::seg_detect::check_claim_by_reexecution_v1(
+            &view.context(),
+            &own.roots,
+            own.decode_mismatch,
+            &nothing,
+            &art,
+            &claim.tokens,
+        )
+        .finding
+        else {
             panic!("{what}: a demand")
         };
         assert_eq!(missing, vec![0]);
         let chain = w.demand_served_and_read(outsider, &claim, &missing).await;
-        let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &claim.tokens, &[0]) else {
+        let SegFindingV1::Fault(fault) = misaka_palw_kernel::seg_detect::check_claim_by_reexecution_v1(
+            &view.context(),
+            &own.roots,
+            own.decode_mismatch,
+            &chain,
+            &art,
+            &claim.tokens,
+        )
+        .finding
+        else {
             panic!("{what}: the lie is found")
         };
         let SegFaultV1::Element(e) = fault.as_ref() else { panic!("{what}: an element fault") };
@@ -1546,6 +1582,13 @@ async fn g14_k2s_v5_an_encoder_class_on_the_node_convicts_its_lies_and_finalizes
     // The honest claim: an honest element filed is dismissed; Final at the window's end.
     let job = w.tiled_job_generating(&prompt, 0).await;
     let honest = w.encoder_claim(0, job, &prompt, None).await;
+    let public = w.fresh_record(&honest.id);
+    let no_values = SegDa { claim: &honest, withhold: 0..1, read: Cell::new(0) };
+    assert_eq!(
+        misaka_palw_kernel::seg_detect::reexecute_claim_v1(&public.context(), &no_values, &art, &honest.tokens).finding,
+        SegFindingV1::Clean
+    );
+    assert_eq!(no_values.read.get(), 0, "honest encoder replay requires no producer values");
     let view = w.fresh_record(&honest.id);
     let published = SegDa { claim: &honest, withhold: 0..0, read: Cell::new(0) };
     assert_eq!(check_positions_v1(&view.context(), &published, &art, &honest.tokens, &[0]), SegFindingV1::Clean);

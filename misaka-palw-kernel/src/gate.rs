@@ -22,8 +22,8 @@ use misaka_palw_tir::program::{StateKind, TirProgramV1};
 pub struct ProsecutionPolicyV1 {
     /// A demand's response window, and a filed proof's inclusion bound.
     pub court_deadline_daa: u64,
-    /// The ceiling on concurrent demand sessions per claim. A demand names one position (every committed value of it), so a
-    /// plan needs `max_positions` sessions: every position demandable at once, and nobody's demands can starve anybody's.
+    /// Inline plans price all concurrent positions per claim. Segmented plans price the two sessions one prosecution needs;
+    /// their aggregate position/participant metadata is separately bounded for every position by `max_retained_state`.
     /// Direct proofs are never limited: they settle in the block that carries them.
     pub max_sessions_per_claim: u32,
     /// Ceilings the derived bounds must fit.
@@ -54,7 +54,7 @@ pub struct ProsecutionBoundsV1 {
     pub max_verifier_ram: u128,
     /// Kernel claim rows, all served responses and bounded demand/proof metadata (not a global chain storage bound).
     pub max_retained_state: u128,
-    /// One demand session per position.
+    /// Inline: all positions at once. Segmented: the two localized positions of one prosecution; aggregate state is priced above.
     pub max_concurrent_sessions: u32,
     pub deadline_daa: u64,
 }
@@ -433,9 +433,71 @@ pub const SEG_FILING_HEADER_BYTES_V4: u64 = 4096;
 /// What a segmented claim keeps on chain beside its segment roots: the claim, the evidence object and the claim row's fields.
 pub const SEG_CLAIM_FIXED_BYTES_V4: u128 = 4096;
 
+/// Segmented DA keeps progress bitmaps and bounded collateral metadata, not response payloads (those are in the blocks).
+/// All positions may be demanded/served at once; a per-demander session limit does not bound the whole claim's state.
+fn retained_state_bound_v4(commit: u128, positions: u32, parts: u32) -> u128 {
+    retained_state_bound_v1(commit, (parts as u128).div_ceil(8).saturating_add(512), positions)
+}
+
+/// Working memory of streaming replay plus one localized position check. The registered model may be read one relation at a
+/// time from disk; `resolve_operands` retains no param cache. Caller-owned in-memory
+/// copies of the whole model/trace are optional stores, not required by this algorithm.
+fn verifier_ram_bound_v4(program: &TirProgramV1, plan: &VerificationPlanV1, position_wire: u128, filing: u64) -> u128 {
+    let tensor = |t: &misaka_palw_tir::TensorType, h| {
+        t.resolve(h).iter().fold(1u128, |n, d| n.saturating_mul(*d as u128)).saturating_mul(16).saturating_add(512)
+    };
+    let mut position = 0u128;
+    let mut max_node = 0u128;
+    let mut max_params = 0u128;
+    let mut max_operands = 0u128;
+    let mut max_trees = 0u128;
+    for (b, _) in program.occurrences() {
+        let b = b as usize;
+        let h = crate::plan::worst_h(program, b).min(plan.max_positions as usize).max(1);
+        for node in &program.blocks[b].nodes {
+            let out = tensor(&node.out, h);
+            position = position.saturating_add(out);
+            max_node = max_node.max(out);
+            let mut params = 0u128;
+            let mut operands = 0u128;
+            for t in std::iter::once(node.out.clone()).chain(node.inputs.iter().map(|r| crate::plan::ref_type(program, b, r))) {
+                let l = crate::merkle3::LayoutV3::of(&t.resolve(h));
+                // Both leaf vectors, root/path construction copies and hashing scratch. Narrow columns may have one leaf per element.
+                let trees = (l.leaves(crate::merkle::AXIS_ROW) as u128)
+                    .saturating_add(l.leaves(crate::merkle::AXIS_COL) as u128)
+                    .saturating_mul(64 * 4)
+                    .saturating_add(crate::merkle3::TILE_V3 as u128 * 64);
+                max_trees = max_trees.max(trees);
+            }
+            for r in &node.inputs {
+                let bytes = tensor(&crate::plan::ref_type(program, b, r), h);
+                if matches!(r, misaka_palw_tir::program::Ref::Param(_)) {
+                    params = params.saturating_add(bytes);
+                } else {
+                    operands = operands.saturating_add(bytes);
+                }
+            }
+            if matches!(node.prim, misaka_palw_tir::Prim::HistAppend { .. }) {
+                operands = operands.saturating_add(out);
+            }
+            max_params = max_params.max(params);
+            max_operands = max_operands.max(operands);
+        }
+    }
+    position.saturating_mul(3) // two positions + streamed appended history rows
+        .saturating_add(max_params) // evaluator borrows the same owned allocations; hashing scratch is priced with trees
+        .saturating_add(max_operands.saturating_mul(2))
+        .saturating_add(max_node.saturating_mul(4)) // output, evaluator scratch, copied history window
+        .saturating_add(max_trees.saturating_mul(2)) // output tree + current operand tree
+        .saturating_add(position_wire.saturating_mul(4)) // response assembly and encoded buffers
+        .saturating_add((filing as u128).saturating_mul(64)) // authenticated filing's decoded leaves
+        .saturating_add((plan.max_positions as u128).saturating_mul(1024)) // roots, tokens, descent and scope metadata
+        .saturating_add((program.encode().len() as u128).saturating_add(plan.encoded_len() as u128).saturating_mul(16))
+}
+
 /// **`PUBLIC_PROSECUTION_COMPLETE` for a K2-TIR-v4 plan**: the same family / checker / court / material gaps as
-/// [`public_prosecution_complete_v1`], and the bounds of ONE prosecution — two positions' material and the artifact, one demand round
-/// and one filing, two sessions, the worst element court — with what the chain keeps per claim (the segment roots).
+/// [`public_prosecution_complete_v1`], and the bounds of ONE prosecution — two positions' material and the artifact, at most ten
+/// adaptive path probes, one position-demand round and one filing, two sessions, the worst element court — with aggregate claim state.
 pub fn public_prosecution_complete_v4(
     descriptor: &KernelDescriptorV1,
     plan: &VerificationPlanV1,
@@ -444,6 +506,22 @@ pub fn public_prosecution_complete_v4(
     policy: &ProsecutionPolicyV1,
 ) -> Result<(ProsecutionBoundsV1, SegBoundsV4), Vec<ProsecutionGapV1>> {
     use ProsecutionGapV1 as G;
+    if misaka_palw_tir::validate::validate(program).is_err()
+        || plan.program_root != crate::public::program_root_v1(&program.encode())
+        || plan.max_positions == 0
+        || plan.max_positions > program.history_bound.min(descriptor.limits.max_positions)
+    {
+        return Err(vec![G::WrongProgram]);
+    }
+    let expected = crate::plan::plan_for_tir_program_v1(descriptor, program, plan.program_root, plan.max_positions)
+        .map_err(|_| vec![G::WrongProgram])?;
+    if plan.grammar != expected.grammar
+        || plan.relations != expected.relations
+        || plan.boundaries != expected.boundaries
+        || plan.budgets != expected.budgets
+    {
+        return Err(vec![G::WrongProgram]);
+    }
     let mut gaps = Vec::new();
     if plan.descriptor_digest != descriptor.digest() || !crate::descriptor::is_segmented_v1(descriptor) {
         gaps.push(G::WrongDescriptor);
@@ -480,23 +558,27 @@ pub fn public_prosecution_complete_v4(
     let segments = crate::seg::segment_count_v1(plan.max_positions);
     let node_lists = 2 * node_count as u128 * 64;
     let filing = b.worst_court_bytes.saturating_add(SEG_FILING_HEADER_BYTES_V4);
+    let commit =
+        (segments as u128).saturating_mul(64).saturating_add(positions.saturating_mul(4)).saturating_add(SEG_CLAIM_FIXED_BYTES_V4);
+    let response_material = (parts as u128).saturating_mul(crate::seg_da::SEG_PART_BYTES_V4 as u128);
     let bounds = ProsecutionBoundsV1 {
-        max_public_bytes: position_bytes
+        max_public_bytes: response_material
             .saturating_mul(2)
             .saturating_add(b.artifact_bytes)
             .saturating_add(node_lists)
+            .saturating_add(10 * crate::seg_da::SEG_PART_BYTES_V4 as u128) // first response part of each adaptive path probe
+            .saturating_add(program.encode().len() as u128)
+            .saturating_add(plan.encoded_len() as u128)
+            .saturating_add(positions.saturating_mul(8)) // public prompt and generated ids
             .saturating_add(filing as u128),
         max_opening_bytes: b.worst_court_bytes,
         max_filing_bytes: filing,
         max_response_bytes: crate::seg_da::SEG_PART_BYTES_V4 as u128,
-        max_localization_rounds: 2,
+        max_localization_rounds: crate::merkle::depth(crate::seg::SEG_LEN_V4 as u64) as u32 + 2,
         max_court_work: b.worst_court_work,
-        max_verifier_ram: b.artifact_bytes.saturating_add(position_bytes.saturating_mul(2)),
-        // The segmented commitment (segment roots + the fixed claim part) is what a CommitSegmentedClaim carries; codex's
-        // review (2026-10-10) separated it from the retained state. v4's retained state and RAM have NOT been re-derived
-        // with codex's conservative accounting (served responses, prosecution metadata, 16 B decoded elements): open, G14 (codex).
-        max_retained_state: (segments as u128).saturating_mul(64).saturating_add(SEG_CLAIM_FIXED_BYTES_V4),
-        max_commit_bytes: (segments as u128).saturating_mul(64).saturating_add(SEG_CLAIM_FIXED_BYTES_V4),
+        max_verifier_ram: verifier_ram_bound_v4(program, plan, position_bytes, filing),
+        max_retained_state: retained_state_bound_v4(commit, plan.max_positions, parts),
+        max_commit_bytes: commit,
         max_concurrent_sessions: 2,
         deadline_daa: policy.court_deadline_daa,
     };
@@ -508,10 +590,12 @@ pub fn public_prosecution_complete_v4(
         segments,
     };
     let l = &descriptor.limits;
+    let (replay_work, _, _) = crate::plan::reexecution_bounds_v1(program, plan);
     for (what, required, limit) in [
         ("public bytes (one prosecution)", bounds.max_public_bytes, policy.max_public_bytes),
         ("opening bytes (one element court)", bounds.max_opening_bytes as u128, l.max_court_bytes as u128),
         ("court work", bounds.max_court_work as u128, l.max_court_work as u128),
+        ("exact localization work", replay_work, l.max_claim_verifier_work),
         ("verifier RAM", bounds.max_verifier_ram, policy.max_verifier_ram),
         ("retained state (on chain, per claim)", bounds.max_retained_state, policy.max_retained_state),
         ("concurrent sessions (one prosecution)", bounds.max_concurrent_sessions as u128, policy.max_sessions_per_claim as u128),

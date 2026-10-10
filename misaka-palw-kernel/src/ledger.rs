@@ -2837,7 +2837,7 @@ impl MaterialV1 for StageMaterial<'_> {
         let want = self.commitments.by_instance.get(&(index, layer))?;
         let t = self.o.artifact.param(self.program, index, layer)?;
         // A tensor the registered commitment does not open to is unavailable, not trusted.
-        (tensor_commitment(&t) == *want).then_some(t)
+        (crate::verify::canonical_tensor_v1(&t) && tensor_commitment(&t) == *want).then_some(t)
     }
     fn stage_input(&self, k: u16, position: u32) -> Option<Tensor> {
         self.o.input(self.stage, position, k)
@@ -2852,6 +2852,11 @@ impl OutsiderV1<'_> {
         let row = self.ledger.claims.get(&self.claim).ok_or("no such claim")?;
         if matches!(&row.body, ClaimBodyV1::Pipeline { .. }) {
             return self.check_pipeline_mode(row, true);
+        }
+        if matches!(&row.body, ClaimBodyV1::Segmented { .. }) {
+            return Err(
+                "a segmented claim: use check_segmented_computation with public position paths/parts and authenticated job ids".into(),
+            );
         }
         let ClaimBodyV1::Program { claim, .. } = &row.body else {
             return Err("a typed claim: replay with crate::spec::outsider::SpecOutsiderV1".into());
@@ -2877,6 +2882,24 @@ impl OutsiderV1<'_> {
                 }
                 Ok(OutsiderFindingV1::Clean)
             }
+        }
+    }
+
+    /// Stream a segmented claim's replay from this ledger's public class/job/claim rows and the acquired registered model.
+    /// Position material is the public stream or authenticated parts read from blocks, never producer private state.
+    pub fn check_segmented_computation(
+        &self,
+        positions: &dyn crate::element::SegMaterialV1,
+        tokens: &[u32],
+    ) -> Result<OutsiderFindingV1, String> {
+        let view = self.ledger.seg_claim_view_v1(&self.claim).ok_or("no segmented claim")?;
+        let artifact = |index, layer| self.artifact.param(0, index, layer);
+        let r = crate::seg_detect::reexecute_claim_v1(&view.context(), positions, &artifact, tokens);
+        match r.finding {
+            crate::element::SegFindingV1::Clean => Ok(OutsiderFindingV1::Clean),
+            crate::element::SegFindingV1::Fault(f) => Ok(OutsiderFindingV1::Prosecute(ProsecutionV1::Segmented(f.to_bytes()))),
+            crate::element::SegFindingV1::Demand(ps) => Ok(OutsiderFindingV1::Demand(ps.into_iter().map(|p| (0, p)).collect())),
+            crate::element::SegFindingV1::Inconsistent(why) => Err(why),
         }
     }
 

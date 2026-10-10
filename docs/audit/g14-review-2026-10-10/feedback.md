@@ -8,7 +8,7 @@
 **方向は妥当だが、提示されたG14を満たすコード設計としてはまだ十分ではない。**
 class/program/plan/commitmentのbinding、Panel投票と独立したexact court、claim固有のdemandと客観的timeout、Final後の責任期間、再生可能なledgerという骨格は適切である。milestone 3には計算不正・output不正の実node経路の前進がある。しかし、最新統合HEADはコンパイルできず、public-prosecution gateが返すRAM・保持stateの上限は実データで破れる。courtの存在や小さいfixtureのPASSだけでは、すべての許可profileについて「有限資源・許可scope・期限内包含を経て終局に達する」ことを証明できない。
 
-この判定と次の不具合説明は初回レビュー時点のもの。再現済み不具合には修正を実装したが、G14全域の完成判定は引き続き保留する。これはdormant実装の完成度評価である。現行のactivation validatorはarmingを拒否する。以下の資源テストは上限式の反例であり、稼働ネットワークへのDoS実証ではない。
+この判定と次の不具合説明は初回レビュー時点のもの。最新3730cc90fを統合したCodex branchはcompileでき、公開commitmentからのexact再計算、segmented版のRAM/state計上、bounded demand参加者を実装・検証した。最新結果と残条件は[実装修正記録](implementation.md)の末尾にある。G14全域の完成判定は引き続き保留する。これはdormant実装の完成度評価である。現行のactivation validatorはarmingを拒否する。以下の資源テストは上限式の反例であり、稼働ネットワークへのDoS実証ではない。
 
 ## まずG14の主張を正確にする
 
