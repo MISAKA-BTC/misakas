@@ -26,6 +26,10 @@ USAGE:
     palw-class pack verify <pack dir> [--model <dir | .gguf>] [--artifact <file>] [--rebuild]
                            [--no-ref2] [--no-exec] [--no-declared] [--stream|--no-stream] [--strict] [--json]
     palw-class pack show   <pack dir> [--json]
+    palw-class pack build-frontend --model <safetensors dir> --frontend-pack <file> --out <artifact> --pack <dir>
+                           --vectors <tokens.json> [--decode N] [--revision <rev>] [--block-bytes N]
+    palw-class pack verify-frontend --model <safetensors dir> --artifact <file> --pack <dir> --rebuild-out <file>
+                           [--block-bytes N]
     palw-class pack bind-class --pack <existing dir> --artifact <declared.palwtir> --network <network> --out <new dir>
     palw-class pack index  --artifact <file.palwtir> [--out <file>] [--root <hex128>]
     palw-class pack commit-conformance --pack <dir> --artifact <declared class file> --state <dir> --network <net>
@@ -127,6 +131,40 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     let t0 = Instant::now();
     let log = |m: String| eprintln!("[{:>7.1}s] {m}", t0.elapsed().as_secs_f64());
     match sub.as_str() {
+        "build-frontend" => {
+            let model = PathBuf::from(take_flag(&mut args, "--model").ok_or(PACK_USAGE)?);
+            let frontend = PathBuf::from(take_flag(&mut args, "--frontend-pack").ok_or(PACK_USAGE)?);
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or(PACK_USAGE)?);
+            let dir = PathBuf::from(take_flag(&mut args, "--pack").ok_or(PACK_USAGE)?);
+            let vectors = PathBuf::from(take_flag(&mut args, "--vectors").ok_or(PACK_USAGE)?);
+            let decode = num(&mut args, "--decode")?.unwrap_or(4);
+            let block = num(&mut args, "--block-bytes")?.unwrap_or(1 << 20);
+            let revision = take_flag(&mut args, "--revision");
+            if let Some(extra) = args.first() {
+                return Err(format!("unexpected argument `{extra}`"));
+            }
+            let jobs = super::primitive::read_jobs(&vectors, decode)?;
+            let pack = super::primitive::build(&model, &frontend, &out, &dir, &jobs, revision, block)?;
+            println!(
+                "{}",
+                serde_json::json!({"pack_digest":pack.digest()?,"integer_conformance":"PASS","source_equivalence":pack.source_equivalence,
+                "full_task":"UNVERIFIED","live_final":"UNVERIFIED"})
+            );
+            Ok(0)
+        }
+        "verify-frontend" => {
+            let model = PathBuf::from(take_flag(&mut args, "--model").ok_or(PACK_USAGE)?);
+            let artifact = PathBuf::from(take_flag(&mut args, "--artifact").ok_or(PACK_USAGE)?);
+            let dir = PathBuf::from(take_flag(&mut args, "--pack").ok_or(PACK_USAGE)?);
+            let rebuilt = PathBuf::from(take_flag(&mut args, "--rebuild-out").ok_or(PACK_USAGE)?);
+            let block = num(&mut args, "--block-bytes")?.unwrap_or(1 << 20);
+            if let Some(extra) = args.first() {
+                return Err(format!("unexpected argument `{extra}`"));
+            }
+            let pack = super::primitive::verify(&dir, &model, &artifact, &rebuilt, block)?;
+            println!("{}", pack.report()?);
+            Ok(0)
+        }
         "commit-conformance" => conformance_cli::commit(&mut args, &log),
         "run-conformance" => conformance_cli::run_cmd(&mut args, &log),
         "verify-conformance" => conformance_cli::verify_cmd(&mut args, &log),

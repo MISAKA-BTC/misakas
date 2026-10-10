@@ -141,6 +141,7 @@ pub struct Cfg<'a> {
     pub path: String,
     map: &'a Map<String, Value>,
     used: RefCell<BTreeSet<String>>,
+    hf_inert_defaults: bool,
 }
 
 fn as_usize(v: &Value) -> Option<usize> {
@@ -153,9 +154,20 @@ fn as_usize(v: &Value) -> Option<usize> {
 
 impl<'a> Cfg<'a> {
     pub fn new(arch: impl Into<String>, map: &'a Map<String, Value>, path: impl Into<String>) -> Self {
-        let c = Cfg { arch: arch.into(), path: path.into(), map, used: RefCell::new(BTreeSet::new()) };
+        let mut c = Self::new_strict(arch, map, path);
+        c.hf_inert_defaults = true;
         c.inert(GLOBAL_INERT);
         c
+    }
+
+    /// A generic frontend declares its own inert keys; HF model-class assumptions do not apply.
+    pub fn new_strict(arch: impl Into<String>, map: &'a Map<String, Value>, path: impl Into<String>) -> Self {
+        Cfg { arch: arch.into(), path: path.into(), map, used: RefCell::new(BTreeSet::new()), hf_inert_defaults: false }
+    }
+
+    /// Nested scopes preserve the enclosing frontend's policy for implicit inert fields.
+    pub fn nested(&self, map: &'a Map<String, Value>, path: impl Into<String>) -> Self {
+        if self.hf_inert_defaults { Self::new(self.arch.clone(), map, path) } else { Self::new_strict(self.arch.clone(), map, path) }
     }
 
     fn key(&self, k: &str) -> String {

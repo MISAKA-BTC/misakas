@@ -22,6 +22,8 @@ pub mod facts;
 pub mod hfref;
 pub mod manifest;
 pub mod provenance;
+/// Generic primitive/state frontends, independently of the ModelSpec runtime-pack schema.
+pub mod primitive;
 pub mod verify;
 
 pub use build::{BuildOpts, BuiltPack, DeclareOpts, build as build_pack};

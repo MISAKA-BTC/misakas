@@ -1158,7 +1158,7 @@ impl<'a> Env<'a> {
                     // Absent: the body is not evaluated; its value is null.
                     return Ok(Value::Null);
                 };
-                let nested = std::rc::Rc::new(Cfg::new(self.arch.to_string(), map, key));
+                let nested = std::rc::Rc::new(self.cur().nested(map, key));
                 if let Some(Value::Array(a)) = o.get("inert") {
                     let keys: Vec<&str> = a.iter().filter_map(Value::as_str).collect();
                     nested.inert(&keys);

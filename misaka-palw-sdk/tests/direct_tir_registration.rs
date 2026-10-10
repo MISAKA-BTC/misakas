@@ -207,3 +207,164 @@ fn the_ir_registration_path_names_no_model_identity() {
     }
     assert!(offenders.is_empty(), "the IR registration path names a model identity:\n{}", offenders.join("\n"));
 }
+
+/// The declarative route feeds the very same artifact inventory, layout/admission and three
+/// engines as a direct compiler. This fixture proves an interface, not real-checkpoint Final.
+#[test]
+fn third_party_frontend_rebuilds_and_registers_through_the_common_sdk() {
+    use misaka_palw_sdk::runtime_pack::{conformance::ConformanceJob, primitive};
+    use misaka_palw_tir_lower::frontend_pack::{FORMAT, program::Program};
+    use serde_json::{Value, json};
+    let dir = std::env::temp_dir().join(format!("palw-frontend-sdk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = dir.join("checkpoint");
+    std::fs::create_dir_all(&model).unwrap();
+    let p = program();
+    let params = params_of(&p);
+    let mut header = serde_json::Map::new();
+    let mut data = Vec::new();
+    let mut bindings = Vec::new();
+    for ((j, l), tensor) in &params.tensors {
+        let source = format!("independent.tensor.{j}.{}", l.map_or_else(|| "global".into(), |l| l.to_string()));
+        let raw = tensor.to_le_bytes();
+        let start = data.len();
+        data.extend_from_slice(&raw);
+        header.insert(source.clone(),json!({"dtype":p.params[*j as usize].dtype.name().to_ascii_uppercase(),"shape":tensor.shape,"data_offsets":[start,data.len()]}));
+        bindings.push(json!({"param":j,"layer":l,"source":source,"import":{"kind":"integer"}}));
+    }
+    let h = serde_json::to_vec(&header).unwrap();
+    let mut raw = (h.len() as u64).to_le_bytes().to_vec();
+    raw.extend_from_slice(&h);
+    raw.extend_from_slice(&data);
+    std::fs::write(model.join("model.safetensors"), raw).unwrap();
+    std::fs::write(model.join("config.json"), r#"{"model_type":"NotInAnyRegistry"}"#).unwrap();
+    let frontend = dir.join("third-party.json");
+    let definition = json!({"format":FORMAT,"id":"unknown-static-combination","scope":{"task":"text-generation","completeness":"full","components":["decoder"]},
+        "inert":["model_type"],"program":Program::of(&p),"bindings":bindings});
+    std::fs::write(&frontend, definition.to_string()).unwrap();
+    let pack_dir = dir.join("pack");
+    let artifact = dir.join("model.palwtir");
+    let jobs = vec![ConformanceJob { label: "public-prompt".into(), prompt: vec![1, 2, 3, 4], decode: 4 }];
+    let built = primitive::build(&model, &frontend, &artifact, &pack_dir, &jobs, Some("fixture-revision".into()), 8).unwrap();
+    assert_eq!(built.source_equivalence, SOURCE_EQUIVALENCE_UNVERIFIED);
+    assert_eq!(built.implementations.len(), 3);
+    let peer = dir.join("peer");
+    std::fs::create_dir_all(&peer).unwrap();
+    for f in &built.source_files {
+        std::fs::copy(model.join(&f.path), peer.join(&f.path)).unwrap();
+    }
+    let rebuilt = dir.join("rebuilt.palwtir");
+    let verified = primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 127).unwrap();
+    assert_eq!(&built, verified.pack());
+    assert!(primitive::verify(&pack_dir, &peer, &artifact, &artifact, 32).unwrap_err().contains("FRONTEND_OUTPUT_CONFLICT"));
+    assert!(
+        primitive::build(&model, &frontend, &model.join("model.safetensors"), &pack_dir, &jobs, None, 32)
+            .unwrap_err()
+            .contains("FRONTEND_OUTPUT_CONFLICT")
+    );
+    assert_eq!(std::fs::read(&artifact).unwrap(), std::fs::read(&rebuilt).unwrap());
+    let pack_again = primitive::build(
+        &peer,
+        &frontend,
+        &dir.join("again.palwtir"),
+        &dir.join("again-pack"),
+        &jobs,
+        Some("fixture-revision".into()),
+        32,
+    )
+    .unwrap();
+    assert_eq!(built.digest().unwrap(), pack_again.digest().unwrap(), "no machine path or streaming size in pack identity");
+
+    let vectors = dir.join("vectors.json");
+    std::fs::write(&vectors, json!({"sequences":[[1,2,3,4]]}).to_string()).unwrap();
+    let cli_pack = dir.join("cli-pack");
+    let cli_artifact = dir.join("cli.palwtir");
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_palw-class"))
+        .args(["pack", "build-frontend", "--model"])
+        .arg(&peer)
+        .arg("--frontend-pack")
+        .arg(&frontend)
+        .arg("--pack")
+        .arg(&cli_pack)
+        .arg("--out")
+        .arg(&cli_artifact)
+        .arg("--vectors")
+        .arg(&vectors)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_palw-class"))
+        .args(["pack", "verify-frontend", "--model"])
+        .arg(&peer)
+        .arg("--artifact")
+        .arg(&cli_artifact)
+        .arg("--pack")
+        .arg(&cli_pack)
+        .arg("--rebuild-out")
+        .arg(dir.join("cli-rebuilt.palwtir"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["rebuild"], "PASS");
+    assert_eq!(report["source_equivalence"], SOURCE_EQUIVALENCE_UNVERIFIED);
+
+    let direct = write(&dir, "direct.palwtir", &p, &params, "{}");
+    let a = PalwTirManifestV1::derive_streamed(&artifact).unwrap();
+    let b = PalwTirManifestV1::derive_streamed(&direct).unwrap();
+    assert_eq!(a.inventory_root, b.inventory_root);
+    assert_eq!(a.graph_ir_root, b.graph_ir_root);
+    let net = palw_t12_shipped_params();
+    let PalwConsensusMode::ConsensusV2(bundle) = &net.palw_consensus_mode else { panic!() };
+    let tokenizer = Hash64::from_bytes([0; 64]);
+    let chosen = tir_choose_layout_v1(
+        &net,
+        bundle,
+        &p,
+        tokenizer,
+        a.inventory_root,
+        a.leaf_count.max(2),
+        &TirLayoutChoiceV1 { max_context: Some(64), ..Default::default() },
+    )
+    .unwrap();
+    assert_eq!(chosen.admission, Ok(()));
+    let class =
+        PalwTirClassV1 { version: PALW_TIR_CLASS_VERSION_V1, program: p.encode(), layout: chosen.layout, tokenizer_id: tokenizer };
+    assert_eq!(tir_class_admission_offline_v1(&net, bundle, &class, a.inventory_root), Ok(()));
+    assert_eq!(class.class_id(&a.inventory_root), class.class_id(&b.inventory_root));
+
+    // Public source hashes, frontend identity, integer vectors and fidelity labels are all checked.
+    std::fs::write(peer.join("config.json"), "{}").unwrap();
+    assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("FRONTEND_SOURCE_MISMATCH"));
+    std::fs::copy(model.join("config.json"), peer.join("config.json")).unwrap();
+    let sidecar = pack_dir.join(primitive::PACK_FILE);
+    let canonical = std::fs::read(&sidecar).unwrap();
+    let mut false_profile: Value = serde_json::from_slice(&canonical).unwrap();
+    false_profile["admission_profile"]["ceilings"]["max_tile_macs"] = json!(u64::MAX);
+    std::fs::write(&sidecar, false_profile.to_string()).unwrap();
+    assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("FRONTEND_PROFILE_MISMATCH"));
+    let mut false_revision: Value = serde_json::from_slice(&canonical).unwrap();
+    false_revision["implementation_revisions"][0]["source_digest"] = json!("00".repeat(64));
+    std::fs::write(&sidecar, false_revision.to_string()).unwrap();
+    assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("FRONTEND_IMPLEMENTATION_MISMATCH"));
+    let mut oversized: Value = serde_json::from_slice(&canonical).unwrap();
+    oversized["conformance"][0]["decode"] = json!(u64::MAX);
+    std::fs::write(&sidecar, oversized.to_string()).unwrap();
+    assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("FRONTEND_CONFORMANCE_LIMIT"));
+    let mut false_vector: Value = serde_json::from_slice(&canonical).unwrap();
+    false_vector["conformance"][0]["logits_digest"] = json!("00".repeat(32));
+    std::fs::write(&sidecar, false_vector.to_string()).unwrap();
+    assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("FRONTEND_CONFORMANCE_MISMATCH"));
+    let mut false_equivalence: Value = serde_json::from_slice(&canonical).unwrap();
+    false_equivalence["source_equivalence"] = json!("VERIFIED");
+    std::fs::write(&sidecar, false_equivalence.to_string()).unwrap();
+    assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("unsupported fidelity"));
+    std::fs::write(&sidecar, canonical).unwrap();
+    let mut wrong = definition.clone();
+    wrong["id"] = json!("changed");
+    std::fs::write(pack_dir.join(primitive::FRONTEND_FILE), wrong.to_string()).unwrap();
+    assert!(primitive::verify(&pack_dir, &peer, &artifact, &rebuilt, 32).unwrap_err().contains("FRONTEND_BUILD_MISMATCH"));
+    assert!(primitive::build(&model, &frontend, &artifact, &pack_dir, &[], None, 32).unwrap_err().contains("jobs required"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
