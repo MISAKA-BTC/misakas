@@ -1610,3 +1610,42 @@ selected-row proof is **3,288 bytes** against a **21,602-byte** opening bound an
 real-model performance/fidelity or network serving-cost results. Full logs,
 source/binary hashes, commands and limitations are recorded in
 `evidence/rfc02-candidate-gather-verdict.json`.
+
+
+### Staged flat-v4 material for large withheld values — 2026-10-11
+
+Existing v3 rows/columns and their final tiles may expose fewer than 64 elements.
+Publishing those leaf hashes would violate the agreed hiding-width rule. The
+new `merkle4` module provides a separate commitment grammar with flat 64-element
+leaves and the short final tail merged into the previous leaf (maximum 127).
+It is not selected by any descriptor, plan, candidate, route, claim or reward.
+V3 and the frozen v4/v5 execution/candidate contracts retain their meaning.
+
+The root-only raw-width builder uses fixed scratch; the optional retained tree
+prices live digest/vector capacity and offers a pre-allocation retention limit.
+Public hash openings and filer-owned value openings have bounded, strict codecs.
+An authenticated public hash can be compared with the model holder's cached tree
+and localized within the derived logarithmic reply bound, including odd carried
+nodes. Each probe reads one digest per level without copying the whole tree.
+Independent one-buffer/recursive hashing agrees with the streamed stack root.
+Malformed shapes, overflow, short tensors, wrong metadata/type/index/value,
+wrong path length, surplus bytes and unsupported commit dtypes are refused.
+
+This is the first material milestone of the large-value path, not a completed
+feature, eligible class, actual checkpoint result or model-privacy proof. A
+versioned profile, primitive dependency-leaf court and worst resource bounds,
+node demand/default/verification integration, fresh model-holder prosecution
+and independent Final/redemption still remain. The 64-element width does not
+prove entropy or safety for predictable values/cumulative disclosures. These
+requirements and the entire original RFC02 goal remain active; shipping stays
+dormant. See RFC02 §14.21 and the retained §4.2 milestone sequence.
+
+
+**40 distinct tests passed:** six final flat-v4 cases and 34 existing v3,
+element-court, scope and route-wire regressions. One manual v3 producer timing
+benchmark stays ignored and is not counted. The legacy regressions used
+unchanged legacy production code before the final flat-v4-only rank-bound
+correction; the six flat tests ran after that correction. Logs, source/binary
+hashes, exact verification timing and selection audit are recorded in
+`evidence/rfc02-flat-v4-verdict.json`. No actual-node flat court/DA/Final
+verification is claimed.

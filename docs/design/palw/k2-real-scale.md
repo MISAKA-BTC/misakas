@@ -224,6 +224,18 @@ input, or to have the read API state the condition next to each G14-complete cla
 
 ### 4.2 Under DA16b's court scope (`palw_court_scope_v1`, `misaka_palw_kernel::scope`): hiding leaves — DESIGN, staged
 
+**2026-10-11 staged material update:** RFC02 §14.21 and `merkle4` implement a
+separate flat-v4 namespace, 64–127-element leaves with tail merging, bounded
+public/filer openings, cached root descent and explicit material bounds. They
+do not change v3 or select a new execution/candidate format. Primitive relation
+courts, profile admission/resource bounds and actual-node DA/Final integration
+still have to land before this milestone can close the large withheld-value gap.
+The older in-place-v3 proposal below is historical; future selection must use
+the new namespace and a separately priced profile. A merged-tail court must
+price up to 127 output elements, not only 64. The historical status and
+sequence below are retained.
+
+
 DA16b's §7.8–§7.9 bind K2-TIR-v4/v5 to two rules. **Level 1:** a `ModelCopy` or `ModelOnly` value (an embedding row gathered by the
 token, a transposed weight) is never owed in the clear. **The clear budget:** `court_clear_position_budget_v1` is 0 for every class
 with an elementwise model relation (every LM: a norm gain is revealed by one position), so in practice every model-dependent value is

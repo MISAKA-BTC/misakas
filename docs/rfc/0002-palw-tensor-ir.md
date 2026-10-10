@@ -2793,3 +2793,56 @@ opaque source-PC fidelity or a relation outside these ceilings still needs a sep
 bounded court. No sampled security/complete-domain conformance, actual checkpoint
 support, independent runtime identity or reward eligibility follows. Every remaining
 §II.14 completion requirement and the dormant shipping fences remain in force.
+
+
+### 14.21 Staged flat-v4 commitment material for large withheld values
+
+`misaka-palw-kernel::merkle4` implements the flat hiding-width layout proposed in
+`k2-real-scale.md` §4.2 as a **new hash and wire grammar**, not a v3 leaf-rule
+replacement. This stage provides commitment construction, public hash-only
+openings, filer-owned value openings, bounded root descent and material resource
+bounds. No descriptor, class, candidate statement, route object, reward source
+or shipping fence selects it. A commitment helper is not a terminal court or a
+completed large-model prosecution path.
+
+The canonical layout flattens the row-major tensor across rank/line boundaries.
+Let `N` be its checked element count. For `N >= 64`, it has `floor(N/64)` leaves:
+all but the last contain 64 elements; the last contains 64 through 127, including
+the entire ragged tail. A 65-element tensor has one 65-element leaf; a 129-element
+tensor has one 64-element leaf and one 65-element leaf. No padding, short tail
+hash or interior hash of that short tail is published. Tensors below 64 elements
+have no flat-v4 leaf contract and still need a bounded whole-value alternative.
+Rank is at most four; zero dimensions, overflow and non-committable dtypes are
+refused. The primitive arithmetic and the existing `I64`/`I128` commit prohibition
+are unchanged.
+
+The flat leaf commits its dtype, flat leaf index, exact count and raw-width
+little-endian elements under the new flat-v4 leaf domain. A binary tree carries
+an odd final node upward; separate flat-v4 node and typed-tensor domains bind
+both tree structure and dtype/rank/dimensions. A hash opening carries bounded
+metadata, one leaf digest and its exact path; it contains no elements. A value
+opening additionally carries exactly the declared span's bytes, at most 508
+bytes for the existing committable dtypes. Both codecs check rank/count/path and
+carrier limits before allocating variable fields, and refuse surplus bytes.
+
+A model holder authenticates each public reply against the committed typed
+value before comparing it with its own tree. A differing leaf is terminal
+material for a future relation court. Otherwise, the first differing bottom-up
+sibling identifies a strictly smaller divergent branch, including odd carried
+nodes. At most `ceil(log2(leaves)) + 1` replies identify a divergent leaf. A
+cached tree reads paths in logarithmic time; it does not copy/hash the whole
+tree on every probe. The root-only raw-width builder retains a fixed stack
+with a conservative 8 KiB scratch bound and does not expand bytes into an i128
+tensor. Optional retained trees expose their derived live digest/vector bounds
+and can refuse a caller's retention limit before hashing or tree allocation.
+
+The 64-element rule supplies a minimum encoded width; it does **not** prove
+entropy, cryptographic privacy of predictable values, or cumulative disclosure
+safety. No ordinary participant is required to acquire the model through
+consensus. Before selecting this format, the full profile must also bind its
+masked nodes and source commitments, implement the union of each leaf's
+primitive dependency lines and terminal court, derive court/RAM/work/retention
+and aggregate budgets, connect authenticated DA/default and verifier descent,
+and pass fresh actual-node prosecution/Final trials. It cannot inherit reward
+eligibility from the existing v4/v5 plans. Existing commitments, plans, claims,
+candidate v2 statements and every §II.14 completion requirement remain in force.
