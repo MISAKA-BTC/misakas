@@ -88,7 +88,7 @@ attempt は claim を載せる**block 自体が work**である。外部 node �
 
 これらの prepare/build/quote/sign/submit/status 境界は SDK/CLI に分離し、Web UI も同じ実装を利用する。新しい API 名・wire field を既存 RPC に実装済みと扱わず、追加が必要なら schema/version と適合性 test を仕様化する。登録者の bond と carrier の fee payer は区別するが、**現行で Active registrant bond が必要な条件は維持**する。bond の設定も remote wallet の署名・提出で行え、ローカル Panel の稼働とは別である。
 
-[RFC04](0004-palw-model-improvement.md)、[RFC05](0005-palw-ml-vm.md)、[RFC11](0011-permissionless-model-and-long-context-onboarding.md) の対象 profile と [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) の versioned Kernel 境界を守る。node-less 登録を admission の迂回路や Universal VM の導入理由にしない。未対応 Kernel、審査上限、未有効 fence は理由を返して停止する。
+[RFC04](0004-palw-model-improvement.md)、[Kernel design](../design/palw/versioned-kernels.md)、[RFC11](0011-permissionless-model-and-long-context-onboarding.md) の対象 profile と [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) の versioned Kernel 境界を守る。node-less 登録を admission の迂回路や Universal VM の導入理由にしない。未対応 Kernel、審査上限、未有効 fence は理由を返して停止する。
 
 ### 3.4 GAS は登録者が用意する: 固定登録費・carrier fee・担保を区別
 
@@ -163,6 +163,8 @@ storage receipt は**保管の約束**であり、将来の全 Panel からの�
 
 この客観的 court を用意できないなら「miner は送信後に必ず PC を切れて、配信事故の slash リスクもない」とは約束しない。その場合は miner 自身が provider を手配して責任を持つ段階で止める。
 
+**実装（lane DA16、2026-10-10 に ADR-0177 で再範囲化）:** provider court は claim 固有 material だけを対象にする（tags 150–153、休眠 fence `palw_provider_court_v1`、kernel route aux table 43–45）。lease の subject は kernel claim のみで、challenge unit は claim の committed position のみ。モデル／artifact bytes の可用性 lease（旧 `Artifact` subject）、READY/LAPSED、tag 104 の可用性 gate、モデル bytes 不提供への charge は合意から撤回した（bytes は decode 可能なまま fence 以下で従来どおり無判定で通り、fence 以上では常に拒否）。provider の charge のうち Final 前は challenger／demander に PALW reporter share（ADR-0032 の 49%、kernel route の accuser・demander と同率）を払い残りを burn、Final 後は全額 burn（自作自演の lapse でも損失は自己申告の有罪と同じ 51% 以上）。共通障害は claim を失効させ有罪にしない。偽 root・不正計算は miner の責任に残る。どの court も compel できる unit は claim 固有のものだけで、累積 scope（モデル bytes 開示 0、unit ごとに 1 回、(claim, 要求 operator) ごとに 16）を `palw_court_scope_v1` が一元判定する。設計・試験は [DA16 design](../design/palw/da16-transport-and-provider-court.md) §2・§7。状態は implemented（armable ではない）。
+
 ## 5. executor と receipt block builder の分離
 
 ### 5.1 公開 redemption authorization
@@ -187,7 +189,7 @@ node-less は「chain を検証しない」を意味しない。miner が必要�
 
 | 段階 | 内容 | 合格条件 |
 | --- | --- | --- |
-| A0: remote model registration | prepare/preflight・live terms/費用明細・ローカル署名・有料 carrier relay・accepted registry state の追跡を SDK/CLI/Web に分離する。Artifact/metadata は投稿者/peer の Torrent 配信とする。 | `kaspad`・Panel がないユーザー PC から、自己負担の GAS と Active bond で登録が本人の class/line/root として受理される。GAS 不足、担保不足、期限切れ quote、改変 relay/owner、二重提出、fold 拒否、reorg、VPS 再作成、seeder 停止を test し、誤課金・誤帰属・偽 readiness を起こさない。 |
+| A0: remote model registration | prepare/preflight・live terms/費用明細・ローカル署名・有料 carrier relay・accepted registry state の追跡を SDK/CLI/Web に分離する。Artifact/metadata は認証できる公開経路から取得する。 | `kaspad`・Panel がないユーザー PC から、自己負担の GAS と Active bond で登録が本人の class/line/root として受理される。GAS 不足、担保不足、期限切れ quote、改変 relay/owner、二重提出、fold 拒否、reorg、VPS 再作成、seeder 停止を test し、誤課金・誤帰属・偽 readiness を起こさない。 |
 | A: remote claim | rail の署名/funding と node の提出を分離し、attempt の remote template と完成 block relay を実装。複数 RPC と状態監視を入れる。 | miner PC に `kaspad` がなくても claim が本人の bond で chain に入り、改変 relay・stale template・二重提出・reorg で誤帰属しない。material 配信責任は従来どおり。 |
 | B: independent DA | manifest、複数 provider、Panel の root 検証を実装。まず既存責任下で試験し、客観的 provider challenge/court 後に責任を移す。 | miner PC を落としても Panel/court が期限内に material を取得・裁定できる。取得障害と fraud の結果が全 node で一致する。 |
 | C: public receipt redemption | V4 spend、builder fee、bond payout、旧 V3 との fence 境界を実装。 | miner PC を `Final` 後も止めたまま、他者の block が winning quantum を一度だけ使い、報酬が miner に入る。builder の取り分以外の供給・weight・Panel 報酬は現行の上限を超えない。 |
@@ -279,7 +281,7 @@ L2 を健全にするために必要な DAG 履歴と state transition の量は
 | Verified chain state / stale detection | 無効 job への計算浪費・無効 claim への署名 | L1（header/DAG）と L3（claim state）の検証、4 段階の表示、推論前・署名直前の gate は IMPLEMENTED_AND_TESTED。PALW fork-choice の検証（L2）は DESIGN_GAP で、その間は `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` に留まり opt-in なしでは署名しない |
 | Canonical job/input/output binding | 計算の流用・job 差し替え | FP Job V4 は凍結済み（DORMANT_NOT_INTEGRATED）。claim 署名は commitment に bind |
 | Public authenticated DA | miner 停止後に検証不能 | manifest・複数 provider・共通 fetch は IMPLEMENTED_AND_TESTED（local）。discovery は DESIGN_GAP |
-| Objective DA/default | 通信障害で誤 slash | kernel route の demand/default は実ノード E2E あり（fence 未武装）。provider への責任移転（provider court）は DESIGN_GAP |
+| Objective DA/default | 通信障害で誤 slash | kernel route の demand/default は実ノード E2E あり（fence 未武装）。provider への責任移転（provider court、claim material のみ、ADR-0177 で再範囲化）は implemented（`palw_provider_court_v1` 休眠、実ノード E2E: DA16 design §6.1） |
 | Miner-bound payout / V4 redemption | builder による横取り・報酬消失 | chain-block E2E（miner offline、別 builder が redemption、payout は miner、手数料 500 bps）は IMPLEMENTED_AND_TESTED。複数ノード drill は EXTERNAL_GATE_PENDING |
 | Multi-relay / censorship fallback | 少数 node への依存 | 改変・横取りの拒否と、妨害時の同一 bytes 別 relay 再送（library）は IMPLEMENTED_AND_TESTED。rail の自動再送は CODE_GAP |
 | Fresh outsider G14 prosecution | pool/Panel 共謀時の不正承認 | 必須試験 3 は実ノードで合格（Panel あり/Panel=0、node-less relay 経路、fence 未武装）。第 3 ラウンドの P1 2 件は修正中 |

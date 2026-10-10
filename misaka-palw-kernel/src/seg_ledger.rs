@@ -261,6 +261,7 @@ impl KernelLedgerV1 {
         claim: &KernelClaimV1,
         evidence: &SegmentedEvidenceV2,
         segment_roots: &[Digest],
+        salt: Option<&Digest>,
         out: &mut Vec<LedgerEventV1>,
     ) -> Result<(), KernelRefusalV1> {
         const NAME: &str = "CommitSegmentedClaim";
@@ -314,12 +315,16 @@ impl KernelLedgerV1 {
         if self.claims.contains_key(&id) {
             return Err(rule("an exact duplicate claim".into()));
         }
-        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id).map_err(rule)?;
-        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond).map_err(rule)?;
+        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id, salt).map_err(rule)?;
+        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
         self.charge(NAME, 0)?;
         let body = ClaimBodyV1::Segmented { claim: claim.clone(), evidence: evidence.clone(), segment_roots: segment_roots.to_vec() };
         self.admit(id, claim.producer_bond, job.class_binding_id, claim.job_id, body, out).map_err(rule)?;
         self.seals.remove(&(claim.job_id, claim.producer_bond));
+        // G14R's salted reveal (claim seal v2): the salt is kept for the sealed-source beacon, as for every other claim kind.
+        if let Some(salt) = salt {
+            self.claim_beacon_salts.insert(id, *salt);
+        }
         Ok(())
     }
 
@@ -395,6 +400,7 @@ impl KernelLedgerV1 {
 
     pub(crate) fn seg_respond(
         &mut self,
+        signer: &Digest,
         claim: &Digest,
         position: u32,
         bytes: &[u8],
@@ -405,10 +411,13 @@ impl KernelLedgerV1 {
         if !self.demands.contains_key(&k) {
             return Err(KernelRefusalV1::rule(NAME, "no open demand for this position"));
         }
+        // C4 F-C4R4-14: a response spends no run of the block's shared adjudication budget (classifying a part is linear in its own
+        // bytes); a rejected one costs its signer the dismissed-proof fee (checked by the caller before anything is classified).
+        let fee = self.policy.dismissed_proof_fee;
+        let by_producer = self.claims.get(claim).is_some_and(|r| r.producer == *signer);
         let verdict = if bytes.len() as u64 > SEG_PART_BYTES_V4 {
             Err("oversized")
         } else {
-            self.charge(NAME, 0)?;
             let row = self.claims.get(claim).expect("a demand names a committed claim");
             let ClaimBodyV1::Segmented { evidence, segment_roots, .. } = &row.body else {
                 return Err(KernelRefusalV1::rule(NAME, "not a segmented claim"));
@@ -442,10 +451,16 @@ impl KernelLedgerV1 {
                 out.push(LedgerEventV1::Served { claim: *claim, stage: 0, position });
             }
             Err(class) => {
-                if let Some(d) = self.demands.get_mut(&k) {
+                if by_producer && let Some(d) = self.demands.get_mut(&k) {
                     d.last = Some(response_class_code(class));
                 }
+                if let Some(b) = self.bonds.get_mut(signer) {
+                    b.collateral -= fee;
+                }
+                self.burned += fee;
                 out.push(LedgerEventV1::ResponseRejected { claim: *claim, stage: 0, position, class });
+                settle(out, *signer, fee, SettlementKindV1::SlashFiling, Some(*claim));
+                settle(out, *signer, fee, SettlementKindV1::Burn, Some(*claim));
             }
         }
         Ok(())

@@ -198,6 +198,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         // G14 lane D (tags 110, 111): kernel route traffic is in the fee market; no halt waits on it.
         | O::KernelRouteV1 { .. }
         | O::KernelConstraintReceiptV1 { .. }
+        | O::KernelRouteChunkV1 { .. }
         // G14 phase 3 (tags 104-108): onboarding traffic is registry traffic like a candidate's.
         | O::ArtifactBoundV1 { .. }
         | O::ArtifactBindingChallengedV1 { .. }

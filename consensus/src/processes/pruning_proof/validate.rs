@@ -95,12 +95,7 @@ impl ProofLevelContext<'_> {
     }
 }
 
-/// The maximum number of header slots a pruning proof may carry before ANY inference is spawned
-/// (ADR-0041 Decision 3).
-///
-/// On a PALW network each proof header costs one full LLM inference, serialized on a single spawn
-/// gate, so an uncapped proof is a remote stall — a peer can replay the network's own historical
-/// headers, valid PoW and all, and buy the victim tens of hours of work for a few MB (audit H1).
+/// The maximum number of header slots a pruning proof may carry before per-header PoW checks.
 ///
 /// Derived from the validator's OWN params, never from the proof's claimed `daa_score`: the honest
 /// builder's per-level working set is `2 · pruning_proof_m` (`build.rs` VecDeque capacity and cache
@@ -134,15 +129,14 @@ pub(super) fn check_proof_header_budget(
 /// End index of the PoW batch that starts at `start` (ADR-0041 Decision 2).
 ///
 /// At most `batch` headers, stopping at the first one that fails the cheap shape gate — so a header
-/// the walk is going to reject never buys an inference, and neither does anything behind it. Always
+/// the walk is going to reject never reaches PoW, and neither does anything behind it. Always
 /// at least `start + 1`: the caller has already gated `start` itself and needs its result now.
 ///
 /// Split out of the walk because this arithmetic is the only part of the batching that can be
 /// wrong, and inside the walk it is unreachable by a test.
 fn pow_batch_end(start: usize, len: usize, batch: usize, gated_ok: impl Fn(usize) -> bool) -> usize {
     debug_assert!(start < len, "the walk only asks about a header it is standing on");
-    // `batch.max(1)` is belt and braces: `inference_concurrency()` already refuses 0, and a 0 here
-    // would return `start`, hand the walk an empty window and panic it on the pop below.
+    // Always yield the current header, even if a caller supplies a zero batch size.
     let limit = (start + batch.max(1)).min(len);
     start + 1 + (start + 1..limit).take_while(|&k| gated_ok(k)).count()
 }
@@ -168,8 +162,7 @@ impl ProofContext {
             return Err(PruningImportError::PruningProofNotEnoughHeaders);
         }
 
-        // ADR-0041 Decision 3: bound the number of header slots BEFORE the per-header PoW loop below
-        // spawns one inference each. This is the single chokepoint both entry points reach
+        // Bound header slots before the per-header PoW loop. Both entry points reach this check
         // (`validate_pruning_point_proof` and `..._standalone` both go through `from_proof`).
         check_proof_header_budget(proof, ppm.max_block_level, ppm.pruning_proof_m)?;
 
@@ -288,27 +281,14 @@ impl ProofContext {
             let level_idx = level as usize;
             let mut selected_tip =
                 proof[level as usize].first().map(|header| header.hash).ok_or(PruningImportError::PruningProofNotEnoughHeaders)?;
-            // ADR-0041 Decision 2. On a PALW network `calc_block_level_check_pow_layer0` is a full
-            // LLM inference, and it is a pure function of the header — so a bounded batch of them
-            // runs in parallel and the loop consumes the results in order.
-            //
-            // The loop itself stays strictly sequential: every line after the PoW checks mutates
-            // stores whose order IS the validation. Errors stay in header order too, so nothing
-            // about what is accepted changes — only the wall clock. Up to `batch` inferences may be
-            // spent on headers a later error makes moot; that is the price of the parallelism, and
-            // it is bounded by the same constant rather than by the level's length.
+            // Compute bounded PoW batches and consume results in header order. Store mutations
+            // and error selection stay sequential; speculative work is bounded by the batch size.
             let level_headers = &proof[level as usize];
-            let batch = kaspa_pow::palw::inference_concurrency();
+            let batch = super::HEADER_POW_BATCH_SIZE;
             let mut pow_ahead: std::collections::VecDeque<(BlockLevel, bool)> = std::collections::VecDeque::new();
 
             for (i, header) in level_headers.iter().enumerate() {
-                // Gate the peer-supplied proof header BEFORE its PoW is computed (audit P0-1 / P0-2).
-                // The order matters: `calc_block_level_check_pow_layer0` runs the Layer-1 finalizer,
-                // whose PALW arm escalates a REGISTERED runtime's persistent failure into a node-wide
-                // panic (a missing runtime is a failed PoW since ADR-0042 Decision 4) and whose
-                // unknown-id path was a remote panic before it was made total — so a peer-chosen
-                // `pow_algo_id` must be rejected here, not after: an inference-priced id this network
-                // never demands must not be able to spend this node's inference budget either.
+                // Gate the peer-supplied header before computing its PoW.
                 // `check_algo_id` enforces the SAME per-DAA
                 // required-algo rule the main pipeline applies (not the looser `check_algo_id_known`),
                 // because proof-only headers below the pruning point are never re-processed by the
@@ -996,8 +976,7 @@ mod pow_batch_tests {
 
     #[test]
     fn a_zero_batch_still_yields_a_header() {
-        // `inference_concurrency()` refuses 0, but an empty window would panic the walk's `pop`,
-        // so the helper must not be the place that trusts its caller.
+        // An empty window would panic the walk's `pop`; the helper must tolerate a zero input.
         assert_eq!(pow_batch_end(3, 10, 0, |_| true), 4);
     }
 

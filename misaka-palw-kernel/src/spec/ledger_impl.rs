@@ -16,12 +16,13 @@ use crate::spec::memory::{
     step_claim_v1, step_header_v1, step_job_v1, step_record_v1,
 };
 use crate::spec::retrieval::{
-    check_query_v1, check_result_v1, classify_slice_response_v1, judge_retrieval_fault_v1, payload_digest_v1,
+    RetrievalRootV1, RetrievedV1, check_query_v1, check_result_v1, classify_entry_response_v1, classify_slice_response_v1,
+    judge_retrieval_fault_v1, payload_digest_v1,
 };
 use crate::spec::{
-    ComputationSpecV1, MEMORY_PRE_STATE_STAGE_V1, SNAPSHOT_STAGE_BASE_V1, SpecClaimBodyV1, SpecClaimV1, SpecClassKindV1,
-    SpecClassRowV1, SpecFaultV1, SpecJobV1, SpecObjectV1, SpecShapeV1, composite_bounds_v1, k2_tr_v1_descriptor, memory_bounds_v1,
-    retrieval_bounds_v1,
+    ComputationSpecV1, MEMORY_PRE_STATE_STAGE_V1, RETRIEVAL_ENTRY_STAGE_BASE_V1, SNAPSHOT_STAGE_BASE_V1, SpecClaimBodyV1, SpecClaimV1,
+    SpecClassKindV1, SpecClassRowV1, SpecFaultV1, SpecJobV1, SpecObjectV1, SpecShapeV1, composite_bounds_v1, k2_tr_v1_descriptor,
+    memory_bounds_v1, retrieval_bounds_v1,
 };
 
 impl KernelLedgerV1 {
@@ -60,9 +61,11 @@ impl KernelLedgerV1 {
             SpecObjectV1::PostJob { job } => {
                 let id = self.post_spec_job(job, &auth.signer_bond)?;
                 out.push(LedgerEventV1::JobPosted { job: id });
+                // GAP-5 (user-pays): the job's escrow funds its Final reward, exactly as for `PostJob` (checked affordable above).
+                self.open_job_escrow(&auth.signer_bond, id, out);
             }
             SpecObjectV1::CommitClaim { claim } => {
-                self.commit_spec_claim(claim, out)?;
+                self.commit_spec_claim(claim, None, out)?;
                 out.push(LedgerEventV1::ClaimCommitted { claim: claim.id() });
             }
         }
@@ -177,9 +180,11 @@ impl KernelLedgerV1 {
         Ok(class)
     }
 
-    /// `_poster` is the signer: G14-R4's GAP-5 escrow (user-pays) opens against it exactly as for `PostJob`, once that lands
-    /// (`job_escrow_affordable` before the charge, `open_job_escrow` after the insert).
-    fn post_spec_job(&mut self, job: &SpecJobV1, _poster: &Digest) -> Result<Digest, KernelRefusalV1> {
+    /// `poster` is the signer: G14-R4's GAP-5 escrow (user-pays) opens against it exactly as for `PostJob` — affordable before the
+    /// charge (here), opened after the insert (the caller). A memory job posted over a head that has since moved can never be
+    /// claimed; its escrow goes back to the poster by the ordinary idle-escrow rule (`job_escrow_ttl_daa`, no live claim, no live
+    /// seal), so a stranded job never strands its poster's collateral.
+    fn post_spec_job(&mut self, job: &SpecJobV1, poster: &Digest) -> Result<Digest, KernelRefusalV1> {
         const NAME: &str = "SpecPostJob";
         let rule = |why: String| KernelRefusalV1::rule(NAME, why);
         let id = job.id();
@@ -217,6 +222,7 @@ impl KernelLedgerV1 {
             }
             _ => return Err(rule("the job is not of its class's kind".into())),
         }
+        self.job_escrow_affordable(NAME, poster)?;
         self.charge(NAME, 0)?;
         self.typed.jobs.insert(id, job.clone());
         Ok(id)
@@ -250,7 +256,38 @@ impl KernelLedgerV1 {
             .map_err(|why| format!("{what}: malformed evidence: {why}"))
     }
 
-    fn commit_spec_claim(&mut self, claim: &SpecClaimV1, out: &mut Vec<LedgerEventV1>) -> Result<(), KernelRefusalV1> {
+    /// **A typed claim's salted reveal** (inner kind 20 carrying `SaltedCommitV1::Spec`, OPV-BOOT GAP-B1a): the `Spec` object's own
+    /// gate (the typed-roots extension Active, the claim's ceiling), then the commit over the producer's v2 seal; the salt is kept.
+    pub(super) fn apply_salted_spec_claim(
+        &mut self,
+        claim: &SpecClaimV1,
+        salt: &Digest,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), KernelRefusalV1> {
+        const NAME: &str = "SpecCommitClaim";
+        if !self.typed_roots_active() {
+            return Err(KernelRefusalV1::rule(
+                NAME,
+                "KERNEL_NOT_ACTIVE [typed-roots]: K2-TR-v1 is not Active in this ledger's schedule",
+            ));
+        }
+        let len = borsh::to_vec(claim).map(|v| v.len()).unwrap_or(usize::MAX);
+        if len > crate::spec::MAX_SPEC_CLAIM_BYTES_V1 {
+            return Err(KernelRefusalV1::new(
+                NAME,
+                RefusalKindV1::Oversized,
+                format!("{len} bytes past the {}-byte ceiling", crate::spec::MAX_SPEC_CLAIM_BYTES_V1),
+            ));
+        }
+        self.commit_spec_claim(claim, Some(salt), out)
+    }
+
+    fn commit_spec_claim(
+        &mut self,
+        claim: &SpecClaimV1,
+        salt: Option<&Digest>,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), KernelRefusalV1> {
         const NAME: &str = "SpecCommitClaim";
         let rule = |why: String| KernelRefusalV1::rule(NAME, why);
         let id = claim.id();
@@ -317,8 +354,8 @@ impl KernelLedgerV1 {
             }
             _ => return Err(rule("the claim is not of its job's kind".into())),
         };
-        self.reveal_ready(&job_id, &producer, &id).map_err(rule)?;
-        self.opv_claim_capacity(&class_id, &producer).map_err(rule)?;
+        self.reveal_ready(&job_id, &producer, &id, salt).map_err(rule)?;
+        self.opv_claim_capacity(&class_id, &producer, &job_id).map_err(rule)?;
         self.charge(NAME, 0)?;
         // Then every structure a court checks first, per step / model stage.
         let job = self.typed.jobs.get(&job_id).expect("checked");
@@ -381,6 +418,9 @@ impl KernelLedgerV1 {
         let body = ClaimBodyV1::Spec(Box::new(SpecClaimBodyV1 { claim: claim.clone(), pre_state, pre_source }));
         self.admit(id, producer, class_id, job_id, body, out).map_err(rule)?;
         self.seals.remove(&(job_id, producer));
+        if let Some(salt) = salt {
+            self.claim_beacon_salts.insert(id, *salt);
+        }
         Ok(())
     }
 
@@ -564,10 +604,33 @@ impl KernelLedgerV1 {
         }
     }
 
-    /// Whether `(stage, position)` is a snapshot slice of a typed claim (demandable though no claim commits it: it is the snapshot's).
+    /// Whether `(stage, position)` is a snapshot slice of a typed claim (demandable though no claim commits it: it is the snapshot's), or
+    /// one of its retrieved entries (`0xC0 + s`, GAP-52: the claim's own stated output).
     pub(super) fn spec_slice_demandable(&self, row: &ClaimRowV1, stage: u8, position: u32) -> bool {
         matches!(row.body, ClaimBodyV1::Spec(_))
-            && self.slice_root(row, stage).is_some_and(|r| (position as u64) < r.snapshot.slices())
+            && (self.slice_root(row, stage).is_some_and(|r| (position as u64) < r.snapshot.slices())
+                || self.entry_of(row, stage, position).is_some())
+    }
+
+    /// **Retrieved entry `position` of a typed claim's retrieval stage** (`0xC0 + s`), with the root it is opened against: a plain
+    /// retrieval claim's result (`s = 0`), or a composite claim's retrieval stage `s`.
+    fn entry_of(&self, row: &ClaimRowV1, stage: u8, position: u32) -> Option<(&RetrievalRootV1, RetrievedV1)> {
+        let s = stage.checked_sub(RETRIEVAL_ENTRY_STAGE_BASE_V1)? as usize;
+        let ClaimBodyV1::Spec(body) = &row.body else { return None };
+        match (&self.typed.classes.get(&row.class_binding_id)?.kind, &body.claim) {
+            (SpecClassKindV1::Retrieval { root }, SpecClaimV1::Retrieval(c)) if s == 0 => {
+                Some((root, *c.result.get(position as usize)?))
+            }
+            (SpecClassKindV1::Composite { components, .. }, SpecClaimV1::Composite(c)) => {
+                match (components.get(s)?, c.stages.get(s)?) {
+                    (ComponentV1::Retrieval(root), StageClaimV1::Retrieval { result, .. }) => {
+                        Some((root, *result.get(position as usize)?))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// The classification of a slice response (`None`: not a slice stage — the position path classifies it).
@@ -580,6 +643,9 @@ impl KernelLedgerV1 {
     ) -> Option<Result<ServedPositionV1, &'static str>> {
         if !matches!(row.body, ClaimBodyV1::Spec(_)) {
             return None;
+        }
+        if let Some((root, entry)) = self.entry_of(row, stage, position) {
+            return Some(classify_entry_response_v1(root, &entry, bytes));
         }
         self.slice_root(row, stage).map(|r| classify_slice_response_v1(r, position as u64, bytes))
     }

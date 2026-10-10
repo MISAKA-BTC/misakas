@@ -105,24 +105,61 @@ impl SegMaterialV1 for FromBlocks {
     }
 }
 
+/// The largest object one carrier takes here (the canonical harness's chunk size): a larger one rides `ObjectChunk`s, since a
+/// `Respond` part (≤ `SEG_PART_BYTES_V4` = 1 MiB) or a class registration can exceed a block's compute mass in one carrier.
+const SEG_CARRIER_CAP: usize = 50_000;
+
+impl Net {
+    /// [`Net::send`] for objects of any size: one carrier when the object fits [`SEG_CARRIER_CAP`], else its generic `ObjectChunk`s
+    /// (judged on the assembled whole), each card's in order.
+    async fn send_all(&mut self, items: Vec<(usize, Obj)>) -> Block {
+        let mut out = Vec::new();
+        for (card, o) in items {
+            match kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&o, SEG_CARRIER_CAP).expect("chunks") {
+                None => out.push((card, o)),
+                Some(chunks) => out.extend(chunks.into_iter().map(|c| (card, c))),
+            }
+        }
+        self.send(out).await
+    }
+}
+
 /// **Every `Respond` part the selected chain carries for `(claim, position)`**, read back from the blocks' transactions the way a fresh
-/// verifier reads them: the ledger keeps none of their bytes.
+/// verifier reads them (a chunked carrier reassembled from its `ObjectChunk`s): the ledger keeps none of their bytes.
 fn served_parts_from_blocks(net: &Net, claim: &Digest, position: u32) -> Vec<Vec<u8>> {
     use kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2;
-    let mut out = Vec::new();
+    let mut objects = Vec::new();
+    let mut groups: BTreeMap<Vec<u8>, (u8, BTreeMap<u8, Vec<u8>>)> = BTreeMap::new();
     for b in chain_blocks(&net.chain, net.chain.sink()) {
         for tx in b.transactions.iter() {
             if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
                 continue;
             }
             let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload) else { continue };
-            let Obj::KernelRouteV1 { bytes, .. } = payload.object else { continue };
-            if let Ok(K::Respond { claim: c, stage: 0, position: p, bytes }) = K::decode(&bytes)
-                && c == *claim
-                && p == position
-            {
-                out.push(bytes);
+            match payload.object {
+                Obj::ObjectChunk { group, index, count, bytes } => {
+                    let key = borsh::to_vec(&group).expect("a group id serializes");
+                    let entry = groups.entry(key).or_insert_with(|| (count, BTreeMap::new()));
+                    entry.1.insert(index, bytes);
+                    if entry.1.len() == entry.0 as usize {
+                        let whole: Vec<u8> = entry.1.values().flatten().copied().collect();
+                        if let Ok(o) = borsh::from_slice::<Obj>(&whole) {
+                            objects.push(o);
+                        }
+                    }
+                }
+                o => objects.push(o),
             }
+        }
+    }
+    let mut out = Vec::new();
+    for o in objects {
+        let Obj::KernelRouteV1 { bytes, .. } = o else { continue };
+        if let Ok(K::Respond { claim: c, stage: 0, position: p, bytes }) = K::decode(&bytes)
+            && c == *claim
+            && p == position
+        {
+            out.push(bytes);
         }
     }
     out
@@ -153,6 +190,8 @@ impl SegWorld {
 
     /// The K2-TIR-v4 class registered on `net` through the real path (a Panel registration of it is dropped first).
     async fn register(mut net: Net, f: SegFixture) -> SegWorld {
+        // The class is derived-eligible for OPV through the test seam (no onboarding binding on this node), as the parent's are.
+        crate::pipeline::virtual_processor::processor::kernel_route_test_opv_eligible_v1(seg_class_id(&f));
         net.beat_to(1).await;
         // The plan's descriptor: K2-TIR-v4, or K2-TIR-v5 for an encoder.
         let descriptor = f.plan.descriptor_digest;
@@ -176,6 +215,31 @@ impl SegWorld {
         SegWorld { net, f, class, jobs: 0 }
     }
 
+    /// **Seal, then reveal, a segmented claim** (its producer's): past `palw_panel_free_v1` — every OPV network here — the seal is
+    /// claim seal v2 and the reveal carries its salt (`CommitClaimSalted { Segmented }`, G14R's GAP-B1a); below it, seal v1 and the
+    /// plain `CommitSegmentedClaim`.
+    async fn seal_and_commit(
+        &mut self,
+        producer: usize,
+        claim: KernelClaimV1,
+        evidence: misaka_palw_kernel::seg::SegmentedEvidenceV2,
+        segment_roots: Vec<Digest>,
+    ) {
+        let (kid, job, id) = (self.net.kid(producer), claim.job_id, claim.id());
+        let ledger = self.net.ledger();
+        let (seal, reveal) = if ledger.salted_seals_from().is_some_and(|at| ledger.daa.saturating_add(1) >= at) {
+            let salt = misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt", &id);
+            let commit = SaltedCommitV1::Segmented { claim, evidence, segment_roots };
+            (K::SealClaim { producer: kid, job, seal: claim_seal_v2(&id, &salt) }, K::CommitClaimSalted { salt, commit })
+        } else {
+            (K::SealClaim { producer: kid, job, seal: claim_seal_v1(&id) }, K::CommitSegmentedClaim { claim, evidence, segment_roots })
+        };
+        let o = self.net.route(producer, &seal);
+        self.net.send_all(vec![(producer, o)]).await;
+        let o = self.net.route(producer, &reveal);
+        self.net.send_all(vec![(producer, o)]).await;
+    }
+
     /// A tiled job of `prompt` posted by card 1, then every tile of it (any bond: card 2).
     async fn tiled_job(&mut self, prompt: &[u32]) -> Digest {
         self.tiled_job_generating(prompt, 2).await
@@ -193,7 +257,7 @@ impl SegWorld {
             nonce: [self.jobs; 64],
         };
         let o = self.net.route(1, &K::PostTiledJob { job: job.clone() });
-        self.net.send(vec![(1, o)]).await;
+        self.net.send_all(vec![(1, o)]).await;
         assert!(self.net.ledger().tiled_jobs.contains_key(&job.id()), "the tiled job posted");
         // Each tile from another card, so the tiles ride ONE block: every load after the block's first is the cached ledger (GAP 8).
         let mut tiles = Vec::new();
@@ -206,7 +270,7 @@ impl SegWorld {
         }
         let hits =
             kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_LEDGER_CACHE_HITS_V1.load(std::sync::atomic::Ordering::Relaxed);
-        self.net.send(tiles).await;
+        self.net.send_all(tiles).await;
         if prompt_tiles_v1(prompt.len() as u32) > 1 {
             let now = kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_LEDGER_CACHE_HITS_V1
                 .load(std::sync::atomic::Ordering::Relaxed);
@@ -282,11 +346,7 @@ impl SegWorld {
         let kid = self.net.kid(producer);
         let claim = KernelClaimV1 { job_id: job, producer_bond: kid, generated: vec![g0, g1], evidence_root: evidence.root() };
         let id = claim.id();
-        let seal = self.net.route(producer, &K::SealClaim { producer: kid, job, seal: claim_seal_v1(&id) });
-        self.net.send(vec![(producer, seal)]).await;
-        let commit = K::CommitSegmentedClaim { claim, evidence, segment_roots: c.segment_roots() };
-        let o = self.net.route(producer, &commit);
-        self.net.send(vec![(producer, o)]).await;
+        self.seal_and_commit(producer, claim, evidence, c.segment_roots()).await;
         assert!(self.net.ledger().claims.contains_key(&id), "the segmented claim committed over its seal");
         SegClaim { id, values, c, tokens }
     }
@@ -343,7 +403,7 @@ async fn g14_k2s_a_tiled_prompt_past_4096_ids_commits_as_a_multi_segment_claim_o
             proof: ProsecutionV1::Segmented(SegFaultV1::Element(filing).to_bytes()),
         },
     );
-    w.net.send(vec![(outsider, o)]).await;
+    w.net.send_all(vec![(outsider, o)]).await;
     assert!(!w.net.ledger().claims[&claim.id].convicted, "an honest element is never a conviction");
     assert_eq!(w.net.slashed(0), slashed_before, "and never a slash");
     // No Panel: Final at the OPV window's end.
@@ -395,7 +455,7 @@ async fn g14_k2s_a_lie_in_one_segment_is_localized_and_convicted_with_bounded_by
     let slashed_before = w.net.slashed(0);
     let o =
         w.net.route(outsider, &K::FileProof { accuser: w.net.kid(outsider), claim: lie.id, proof: ProsecutionV1::Segmented(bytes) });
-    w.net.send(vec![(outsider, o)]).await;
+    w.net.send_all(vec![(outsider, o)]).await;
     let ledger = w.net.ledger();
     assert!(ledger.claims[&lie.id].convicted, "convicted by an outsider from public material");
     assert!(matches!(ledger.claims[&lie.id].life.state, ClaimStateV1::Convicted { .. }));
@@ -432,7 +492,7 @@ async fn g14_k2s_a_withheld_segment_is_demanded_and_defaults_never_a_conviction(
             )
         })
         .collect();
-    w.net.send(demands).await;
+    w.net.send_all(demands).await;
     assert_eq!(w.net.ledger().demands.keys().filter(|(c, _, _)| *c == claim.id).count(), 2, "two sessions, one per position");
     assert!(w.net.kernel_reserved(outsider) > 0, "the demand bonds are reserved on the real bond");
     // A response with another position's values: its position root is not the committed one.
@@ -440,7 +500,7 @@ async fn g14_k2s_a_withheld_segment_is_demanded_and_defaults_never_a_conviction(
         misaka_palw_kernel::seg_da::position_part_v1(&w.f.program, 1050, &claim.values[1048], claim.c.position_path(1050).1, 0)
             .unwrap();
     let o = w.net.route(0, &K::Respond { claim: claim.id, stage: 0, position: 1050, bytes: borsh::to_vec(&wrong).unwrap() });
-    w.net.send(vec![(0, o)]).await;
+    w.net.send_all(vec![(0, o)]).await;
     let at_demand = w.net.ledger();
     let d = &at_demand.demands[&(claim.id, 0, 1050)];
     assert_eq!(d.last_class(), Some("wrong_root"), "rejected and classified");
@@ -503,7 +563,7 @@ async fn g14_k2s_the_mempool_runs_the_kernel_acceptance_gate() {
         other => panic!("a signed non-canonical encoding is refused at admission: {other:?}"),
     }
     let genuine = w.net.route(3, &K::PostTiledJob { job: job.clone() });
-    w.net.send(vec![(3, genuine)]).await;
+    w.net.send_all(vec![(3, genuine)]).await;
     assert!(w.net.ledger().tiled_jobs.contains_key(&job.id()), "the genuine carrier is admitted and folded");
 }
 
@@ -534,7 +594,7 @@ async fn g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_
             (outsider, w.net.route(outsider, &K::FileDemand { demander: w.net.kid(outsider), claim: lie.id, stage: 0, position: *p }))
         })
         .collect();
-    w.net.send(demands).await;
+    w.net.send_all(demands).await;
     assert!(w.net.kernel_reserved(outsider) > 0, "the demand bonds are reserved on the real bond");
     // The producer serves every part of both positions.
     let mut answers = Vec::new();
@@ -545,7 +605,7 @@ async fn g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_
             answers.push((0usize, o));
         }
     }
-    w.net.send(answers).await;
+    w.net.send_all(answers).await;
     let ledger = w.net.ledger();
     for &p in &missing {
         assert!(ledger.seg_progress.get(&(lie.id, 0, p)).is_some_and(|g| g.complete_daa.is_some()), "position {p} served on chain");
@@ -574,7 +634,7 @@ async fn g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_
         outsider,
         &K::FileProof { accuser: w.net.kid(outsider), claim: lie.id, proof: ProsecutionV1::Segmented(fault.to_bytes()) },
     );
-    w.net.send(vec![(outsider, o)]).await;
+    w.net.send_all(vec![(outsider, o)]).await;
     let ledger = w.net.ledger();
     assert!(ledger.claims[&lie.id].convicted, "the served values convict the claim");
     assert!(matches!(ledger.claims[&lie.id].life.state, ClaimStateV1::Convicted { .. }));
@@ -640,7 +700,7 @@ impl SegWorld {
             }
         }
         assert!(!admitted.is_empty(), "the bonds the route has seen sign get their receipts mined");
-        self.net.send(admitted).await;
+        self.net.send_all(admitted).await;
         refused
     }
 }
@@ -656,7 +716,7 @@ impl SegWorld {
                 (outsider, self.net.route(outsider, &demand))
             })
             .collect();
-        self.net.send(demands).await;
+        self.net.send_all(demands).await;
         self.serve_and_read(claim, missing).await
     }
 
@@ -672,7 +732,7 @@ impl SegWorld {
                 answers.push((0usize, self.net.route(0, &respond)));
             }
         }
-        self.net.send(answers).await;
+        self.net.send_all(answers).await;
         let mut positions = BTreeMap::new();
         for &p in missing {
             let parts = served_parts_from_blocks(&self.net, &claim.id, p);
@@ -743,7 +803,7 @@ async fn g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_
     let (collateral, burned) = (w.net.collateral(0), w.net.ledger().burned);
     let o =
         w.net.route(outsider, &K::FileProof { accuser: w.net.kid(outsider), claim: lie.id, proof: ProsecutionV1::Segmented(bytes) });
-    w.net.send(vec![(outsider, o)]).await;
+    w.net.send_all(vec![(outsider, o)]).await;
     let ledger = w.net.ledger();
     assert!(ledger.claims[&lie.id].convicted, "convicted by the one outside bond");
     assert!(matches!(ledger.claims[&lie.id].life.state, ClaimStateV1::Convicted { .. }));
@@ -778,7 +838,7 @@ async fn g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_
             (outsider, w.net.route(outsider, &K::FileDemand { demander: w.net.kid(outsider), claim: lie2.id, stage: 0, position: *p }))
         })
         .collect();
-    w.net.send(demands).await;
+    w.net.send_all(demands).await;
     let deadline = w.net.ledger().demands.iter().filter(|((c, _, _), _)| *c == lie2.id).map(|(_, d)| d.deadline_daa).max().unwrap();
     let slashed_before = w.net.slashed(0);
     w.net.beat_to(deadline + 2).await;
@@ -810,7 +870,7 @@ async fn g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_
     assert!(bytes3.len() as u64 <= w.net.ledger().classes[&w.class].bounds.max_filing_bytes, "the decode filing is priced");
     let o =
         w.net.route(outsider, &K::FileProof { accuser: w.net.kid(outsider), claim: lie3.id, proof: ProsecutionV1::Segmented(bytes3) });
-    w.net.send(vec![(outsider, o)]).await;
+    w.net.send_all(vec![(outsider, o)]).await;
     assert!(w.net.ledger().claims[&lie3.id].convicted, "the output lie is convicted by the outside bond");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay of the coalition's convictions and default");
@@ -851,7 +911,7 @@ impl SegWorld {
             card,
             &K::FileProof { accuser: self.net.kid(card), claim: *claim, proof: ProsecutionV1::Segmented(fault.to_bytes()) },
         );
-        self.net.send(vec![(card, o)]).await;
+        self.net.send_all(vec![(card, o)]).await;
     }
 
     /// The outsider's check of `positions` over what the producer published (everything it committed), by name.
@@ -963,14 +1023,14 @@ async fn g14_k2s_spam_demands_never_preempt_a_proof_and_simultaneous_filers_get_
             spam.push((c, w.net.route(c, &K::FileDemand { demander: w.net.kid(c), claim: lie.id, stage: 0, position })));
         }
     }
-    w.net.send(spam).await;
+    w.net.send_all(spam).await;
     let open = w.net.ledger().demands.keys().filter(|(c, _, _)| *c == lie.id).count();
     assert_eq!(open, coalition.len() * per as usize, "every spam session is open");
     let fault = w.fault_from_published(&lie, &[1200]);
     let (collateral, ledger_burned) = (w.net.collateral(0), w.net.ledger().burned);
     let oa = w.net.route(a, &K::FileProof { accuser: w.net.kid(a), claim: lie.id, proof: ProsecutionV1::Segmented(fault.to_bytes()) });
     let ob = w.net.route(b, &K::FileProof { accuser: w.net.kid(b), claim: lie.id, proof: ProsecutionV1::Segmented(fault.to_bytes()) });
-    w.net.send(vec![(a, oa), (b, ob)]).await;
+    w.net.send_all(vec![(a, oa), (b, ob)]).await;
     let ledger = w.net.ledger();
     assert!(ledger.claims[&lie.id].convicted, "the direct proof is not pre-empted by the open sessions");
     let slashed = collateral - w.net.collateral(0);
@@ -980,12 +1040,12 @@ async fn g14_k2s_spam_demands_never_preempt_a_proof_and_simultaneous_filers_get_
     assert_eq!(ledger.burned - ledger_burned, slashed - reward, "one slash: reward + burn");
     assert!(ledger.demands.keys().all(|(c, _, _)| *c != lie.id), "the spam demands are moot");
     assert!(coalition.iter().all(|c| w.net.kernel_reserved(*c) == 0), "and their bonds return");
-    // A later duplicate changes nothing.
+    // A later duplicate changes nothing (the first reward has been paid by a coinbase meanwhile: nothing new is queued).
     let row = ledger.claims[&lie.id].clone();
-    let (collateral, owed_a, owed_b) = (w.net.collateral(0), w.net.owed(a), w.net.owed(b));
+    let collateral = w.net.collateral(0);
     w.file(a, &lie.id, &fault).await;
     assert_eq!(w.net.ledger().claims[&lie.id], row, "the claim row is untouched");
-    assert_eq!((w.net.collateral(0), w.net.owed(a), w.net.owed(b)), (collateral, owed_a, owed_b), "no second slash or reward");
+    assert_eq!((w.net.collateral(0), w.net.owed(a), w.net.owed(b)), (collateral, 0, 0), "no second slash or reward");
 }
 
 /// The rows of the K2-TIR-v4 tables (20: tiled jobs, 21: demand progress) in a route state.
@@ -1018,15 +1078,17 @@ async fn g14_k2s_a_reorg_across_live_tiled_job_and_progress_rows_restores_them_e
             (outsider, w.net.route(outsider, &K::FileDemand { demander: w.net.kid(outsider), claim: lie.id, stage: 0, position: *p }))
         })
         .collect();
-    w.net.send(demands).await;
+    w.net.send_all(demands).await;
+    // The producer serves (the progress rows record it and hold the demand bonds through the proof grace).
+    let chain = w.serve_and_read(&lie, &[1199, 1200]).await;
+    // The fork: a shallow one, so a heavier branch is GHOSTDAG's to choose (a deep all-economic tie is the strict-win rule's).
     let fork = w.net.chain.sink();
     let at_fork = w.net.api().expect("the route");
     let tables = seg_tables(&at_fork);
     assert!(tables.iter().any(|((t, _), _)| *t == misaka_palw_kernel::rows::TABLE_TILED_JOBS_V1), "table 20 is live at the fork");
     assert_eq!(tables.iter().filter(|((t, _), _)| *t == misaka_palw_kernel::rows::TABLE_SEG_PROGRESS_V1).count(), 2, "table 21 too");
     let collateral = w.net.collateral(0);
-    // A: the producer serves; the outsider convicts from the blocks.
-    let chain = w.serve_and_read(&lie, &[1199, 1200]).await;
+    // A: the outsider convicts from the blocks.
     let view = w.fresh_record(&lie.id);
     let art = |j: u16, l: Option<u16>| w.f.params.tensors.get(&(j, l)).cloned();
     let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &lie.tokens, &[1200]) else { panic!("found") };
@@ -1049,7 +1111,7 @@ async fn g14_k2s_a_reorg_across_live_tiled_job_and_progress_rows_restores_them_e
     let ttpb = w.net.ttpb();
     let a_len = chain_blocks(&w.net.chain, w.net.chain.sink()).len() - chain_blocks(&w.net.chain, fork).len();
     let mut b_blocks = Vec::new();
-    for _ in 0..a_len + 2 {
+    for _ in 0..a_len.max(2) + 2 {
         b_blocks.push(b.heartbeat(ttpb, Vec::new()).await);
     }
     for blk in &b_blocks {
@@ -1096,7 +1158,7 @@ async fn g14_k2s_survives_a_node_restart_with_live_tiled_job_and_progress_rows()
             (outsider, w.net.route(outsider, &K::FileDemand { demander: w.net.kid(outsider), claim: lie.id, stage: 0, position: *p }))
         })
         .collect();
-    w.net.send(demands).await;
+    w.net.send_all(demands).await;
     let serve = |w: &mut SegWorld, p: u32| -> Vec<(usize, Obj)> {
         (0..position_parts_v1(&w.f.program, p).unwrap().len() as u32)
             .map(|i| {
@@ -1106,7 +1168,7 @@ async fn g14_k2s_survives_a_node_restart_with_live_tiled_job_and_progress_rows()
             .collect()
     };
     let first = serve(&mut w, 1199);
-    w.net.send(first).await;
+    w.net.send_all(first).await;
     let (sink, root, route) = (w.net.chain.sink(), w.net.chain.tip_state().1.state_root(), w.net.api());
     let tables = seg_tables(route.as_ref().unwrap());
     assert!(tables.len() >= 3, "a tiled job and two progress rows are live: {}", tables.len());
@@ -1117,7 +1179,7 @@ async fn g14_k2s_survives_a_node_restart_with_live_tiled_job_and_progress_rows()
     assert_eq!(w.net.api(), route, "the route's rows off disk");
     assert_eq!(seg_tables(w.net.api().as_ref().unwrap()), tables, "tables 20 and 21 off disk");
     let second = serve(&mut w, 1200);
-    w.net.send(second).await;
+    w.net.send_all(second).await;
     let view = w.fresh_record(&lie.id);
     let art = |j: u16, l: Option<u16>| w.f.params.tensors.get(&(j, l)).cloned();
     let mut served = BTreeMap::new();
@@ -1152,7 +1214,7 @@ async fn g14_k2s_survives_a_pruned_import_with_live_tiled_job_and_progress_rows(
             (outsider, w.net.route(outsider, &K::FileDemand { demander: w.net.kid(outsider), claim: lie.id, stage: 0, position: *p }))
         })
         .collect();
-    w.net.send(demands).await;
+    w.net.send_all(demands).await;
     let p = w.net.chain.sink();
     let at_p = seg_tables(&w.net.api().unwrap());
     assert!(at_p.len() >= 3, "table 20 and table 21 rows are live at P");
@@ -1268,10 +1330,7 @@ impl SegWorld {
         let kid = self.net.kid(producer);
         let claim = KernelClaimV1 { job_id: job, producer_bond: kid, generated: vec![g0], evidence_root: evidence.root() };
         let id = claim.id();
-        let seal = self.net.route(producer, &K::SealClaim { producer: kid, job, seal: claim_seal_v1(&id) });
-        self.net.send(vec![(producer, seal)]).await;
-        let o = self.net.route(producer, &K::CommitSegmentedClaim { claim, evidence, segment_roots: c.segment_roots() });
-        self.net.send(vec![(producer, o)]).await;
+        self.seal_and_commit(producer, claim, evidence, c.segment_roots()).await;
         assert!(self.net.ledger().claims.contains_key(&id), "the held claim committed over its seal");
         SegClaim { id, values, c, tokens: prompt.to_vec() }
     }
@@ -1419,10 +1478,7 @@ impl SegWorld {
         let kid = self.net.kid(producer);
         let claim = KernelClaimV1 { job_id: job, producer_bond: kid, generated: Vec::new(), evidence_root: evidence.root() };
         let id = claim.id();
-        let seal = self.net.route(producer, &K::SealClaim { producer: kid, job, seal: claim_seal_v1(&id) });
-        self.net.send(vec![(producer, seal)]).await;
-        let o = self.net.route(producer, &K::CommitSegmentedClaim { claim, evidence, segment_roots: c.segment_roots() });
-        self.net.send(vec![(producer, o)]).await;
+        self.seal_and_commit(producer, claim, evidence, c.segment_roots()).await;
         assert!(self.net.ledger().claims.contains_key(&id), "the encoder claim committed over its seal");
         SegClaim { id, values, c, tokens: prompt.to_vec() }
     }

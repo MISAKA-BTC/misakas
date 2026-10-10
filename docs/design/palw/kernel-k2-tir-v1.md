@@ -1,12 +1,11 @@
-# The kernel route: K2-TIR-v1/v2/v3 (ADR-0172 / RFC-0005 §§K.0–K.8 / RFC-0011 §§15–16 / RFC-0004 §0)
+# The kernel route: K2-TIR-v1/v2/v3 (ADR-0172 / versioned-kernels.md §§K.0–K.8 / RFC-0011 §§15–16 / RFC-0004 §0)
 
 Status: reference implementation in `misaka-palw-kernel`, **dormant**. The consensus fence `palw_probabilistic_constraints_v1`
 exists with **no activation height** (`None` on every preset, Some-only in both fingerprints, refused when armed). The shipped
 schedule lists K2-TIR-v1, v2 and v3 as `Implemented`; every registration checked against it returns `KERNEL_NOT_ACTIVE`.
 This document is the completion matrix of the RFCs' implementable items; it is not a soundness review and not an activation proposal.
 
-Precedence: RFC-0004/0005/0011 (with their 2026-10-07 mission-alignment amendments and ADR-0173) are the design of record for this
-route. Where the existing network code says otherwise, the crate follows the RFC and the difference is listed in §4.
+Precedence: RFC-0004/0011, the [Kernel design](versioned-kernels.md), ADR-0172 and ADR-0173 are the design of record for this route. Where the existing network code says otherwise, the crate follows the RFC and the difference is listed in §4.
 
 ## 1. The kernels
 
@@ -24,7 +23,7 @@ one is never judged by another.
 `✔` implemented and tested in this crate; `◐` implemented as far as this repository can, the remainder named; `✖` not implementable
 here (an external gate: review, measurement, real-chain drill, activation).
 
-### RFC-0005 §§K.0–K.8
+### versioned-kernels.md §§K.0–K.8
 
 | Item | Status | Where / evidence |
 | --- | --- | --- |

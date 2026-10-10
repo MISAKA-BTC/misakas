@@ -78,9 +78,6 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
                 f.activation = at
             })?
         }
-        "palw_inactivity_leak" => {
-            companion(&mut params.palw_inactivity_leak, name, "t_leak_daa and the re-entry depth", at, |f, at| f.activation = at)?
-        }
         "palw_beacon_fold" => companion(&mut params.palw_beacon_fold, name, "k", at, |f, at| f.activation = at)?,
         "palw_capability_bound" => params.palw_capability_bound = Some(at),
         "palw_compute_overlay_retired" => params.palw_compute_overlay_retired = Some(at),
@@ -545,14 +542,18 @@ mod tests {
     use super::*;
     use kaspa_consensus_core::network::{NetworkId, NetworkType};
 
-    /// **Every fence this build's `Params` names has an arm here.** A fence added to `Params` is
-    /// named in `palw_fences_v1` by the compiler's exhaustive destructure; this walks that list
-    /// so the same fence cannot be missing from the candidate kind without this going red.
+    /// Supported fences can be set by name; retired and unimplemented reservations are refused.
     #[test]
-    fn every_fence_the_build_names_can_be_set_by_name() {
+    fn supported_fences_can_be_set_and_reserved_fences_are_refused() {
         let params: Params = NetworkId::with_suffix(NetworkType::Testnet, 11).into();
         for (name, _) in params.palw_fences_v1() {
             let mut arming = params.clone();
+            if matches!(name, "palw_inactivity_leak" | "palw_dns_retirement_v1" | "palw_permissionless_panel_v1") {
+                assert!(set_fence_by_name(&mut arming, name, ForkActivation::always()).is_err());
+                let after = arming.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, v)| v);
+                assert!(after.is_none(), "{name}: refusal must leave the reservation unset");
+                continue;
+            }
             match set_fence_by_name(&mut arming, name, ForkActivation::new(9_000_000)) {
                 Ok(()) => {
                     let after = arming.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, v)| v);
@@ -562,11 +563,33 @@ mod tests {
                         "{name}: setting by name did not land on the fence the list reads"
                     );
                 }
+                // Reserved names need not have a candidate setter until their implementation lands.
+                Err(why) if why.contains("this build has no fence") => {
+                    let after = arming.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, v)| v);
+                    assert!(after.is_none(), "{name}: an active fence must have a candidate setter");
+                    assert!(set_fence_by_name(&mut arming, name, ForkActivation::always()).is_err());
+                }
                 // A genesis-only fence is refused at a height by name (ADR-0152 §4-quater).
                 Err(why) => assert!(why.contains("companion value") || why.contains("is genesis-only"), "{name}: {why}"),
             }
         }
         assert!(set_fence_by_name(&mut params.clone(), "palw_no_such_fence", ForkActivation::always()).is_err());
+    }
+
+    #[test]
+    fn inactivity_leak_cannot_be_set_even_when_companion_values_are_present() {
+        use kaspa_consensus_core::config::params::PalwInactivityLeakV1;
+        let mut params: Params = NetworkId::with_suffix(NetworkType::Testnet, 11).into();
+        let reserved = PalwInactivityLeakV1 {
+            activation: ForkActivation::never(),
+            t_leak_daa: 100,
+            reentry_final_depth_daa: 10,
+        };
+        params.palw_inactivity_leak = Some(reserved);
+        for at in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
+            assert!(set_fence_by_name(&mut params, "palw_inactivity_leak", at).is_err());
+            assert_eq!(params.palw_inactivity_leak, Some(reserved));
+        }
     }
 
     /// **The class-verify-deadline fence is refused at a height and set, with its bundle mirror, at

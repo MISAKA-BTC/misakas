@@ -62,18 +62,11 @@ impl PruningProofManager {
         let mut trusted_gd_map: BlockHashMap<GhostdagData> = BlockHashMap::new();
         // This loop expands the proof with the headers of the trusted set
         // and creates a hash to ghostdag data map of the trusted set
-        // Gate every peer-supplied trusted-set header BEFORE any PoW is computed (audit P0-1 /
-        // P0-2): the trusted set arrives with the proof and reaches the finalizer here, whose PALW
-        // arm turns a missing worker into a panic on a non-PALW network. Sequential and
-        // first-failure, so the error a given trusted set produces is exactly what it was.
+        // Gate trusted-set headers before computing PoW, in order, so the first shape failure wins.
         for tb in trusted_set.iter() {
             self.check_proof_header_shape(&tb.block.header, 0)?;
         }
-        // ADR-0041 Decision 2. On a PALW network each of these levels is a full LLM inference. The
-        // loop below has no early exit once the gate above has passed, so every gated header's PoW
-        // is computed either way: batching them is the same work in less wall clock, with no
-        // speculation at all — unlike the validator's own header loop, where a PoW-derived error
-        // can stop the walk and the batch has to be bounded to bound the waste.
+        // Every gated header is consumed below; compute its block level in input order.
         let trusted_levels = self.batched_block_levels(trusted_set.iter().map(|tb| &tb.block.header));
 
         for (tb, &tb_block_level) in trusted_set.iter().zip(trusted_levels.iter()) {
@@ -178,12 +171,10 @@ impl PruningProofManager {
 
     /// Block levels for `headers`, in order, computed in bounded parallel batches.
     ///
-    /// Callers must have gated every header first: this runs the Layer-1 finalizer, whose PALW arm
-    /// panics the node on an unusable runtime, and whose unknown-algo path is only total because
-    /// the gate rejects a peer-chosen id before it gets here.
+    /// Callers must gate every header first to enforce the network's algorithm and shape rules.
     fn batched_block_levels<'a>(&self, headers: impl Iterator<Item = &'a Arc<Header>>) -> Vec<BlockLevel> {
         let headers = headers.collect_vec();
-        let batch = kaspa_pow::palw::inference_concurrency();
+        let batch = super::HEADER_POW_BATCH_SIZE;
         let mut levels = Vec::with_capacity(headers.len());
         for chunk in headers.chunks(batch) {
             // One header is the overwhelmingly common case — every network whose PoW is a hash —
@@ -218,15 +209,8 @@ impl PruningProofManager {
         let capacity_estimate = self.estimate_proof_unique_size(proof);
         let mut dag = BlockHashMap::with_capacity(capacity_estimate);
         let mut up_heap = BinaryHeap::with_capacity(capacity_estimate);
-        // pow passing has already been checked during validation, and the trusted set was gated in
-        // `apply_proof` before it was folded into `proof` here — but re-gate before these PoW
-        // recomputes anyway (audit P0-1 / P0-2): this method is `pub`, and a future caller reaching
-        // it without prior validation must not hand a peer-chosen algo id to the finalizer's
-        // panicking PALW arm.
-        //
-        // Gating and computing here rather than inside the walk is ADR-0041 Decision 2: the walk's
-        // only error is this gate, so hoisting it changes no error, and the levels it needs are
-        // pure functions of the headers — so they batch. It also means a proof that fails the gate
+        // Re-gate before recomputing PoW: this public method may be called without prior validation.
+        // Hoisting the gate preserves error order. A proof that fails the gate
         // now aborts having written NOTHING to the headers store, where before it had written every
         // header up to the bad one.
         let levels = self.gated_block_levels(proof)?;

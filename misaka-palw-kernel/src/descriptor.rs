@@ -1,4 +1,4 @@
-//! **`KernelDescriptorV1`, the class binding, and the binary's descriptor schedule** (RFC-0005 §K.2, §K.5).
+//! **`KernelDescriptorV1`, the class binding, and the binary's descriptor schedule** (`docs/design/palw/versioned-kernels.md` §K.2, §K.5).
 //!
 //! A descriptor names, by id, every sub-specification a class bound to it is judged by. Its digest is
 //! what a class binds; the schedule says whether that digest may be used at a DAA. Meanings are
@@ -49,7 +49,7 @@ pub struct ResourceLimitsV1 {
     pub max_court_work: u64,
 }
 
-/// RFC-0005 §K.2's descriptor. Sub-ids are this crate's spellings (u32), not allocated wire ids.
+/// The Kernel design §K.2's descriptor. Sub-ids are this crate's spellings (u32), not allocated wire ids.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct KernelDescriptorV1 {
     pub kernel_id: u32,
@@ -189,7 +189,7 @@ committed per position and its post writes wired to the next position; every sta
 (job scalars, token templates and counts, canonical u8 RGB images, earlier stages' committed rows and final values with zero pad, \
 RFC-0003 R) inside its declared interval; edge court recomputes one input at one position";
 
-/// **K2-TIR-v3**: K2-TIR-v2 with the media-pipeline family (RFC-0005 §K.3's "media and pipelines" row), so RFC-0003 pipeline
+/// **K2-TIR-v3**: K2-TIR-v2 with the media-pipeline family (Kernel design §K.3's "media and pipelines" row), so RFC-0003 pipeline
 /// classes (text encoders, denoisers, decoders, vision encoders, decode stages, evaluation pipelines) are expressible.
 pub fn k2_tir_v3_descriptor() -> KernelDescriptorV1 {
     let mut d = k2_tir_v2_descriptor();
@@ -330,7 +330,7 @@ pub struct ContextPolicyV1 {
     pub max_positions: u32,
 }
 
-/// RFC-0005 §K.2's `ModelKernelBindingV1`: the whole binding a new-format class id commits to.
+/// The Kernel design §K.2's `ModelKernelBindingV1`: the whole binding a new-format class id commits to.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ModelKernelBindingV1 {
     pub descriptor_digest: Digest,

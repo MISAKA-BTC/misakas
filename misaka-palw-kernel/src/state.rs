@@ -103,6 +103,12 @@ pub struct StateRootPartsV1 {
     pub attested_artifacts: Digest,
     pub job_claims: Digest,
     pub seals: Digest,
+    /// GAP-R7: the accusers' proof seals (in the root since the G14-R4 fix).
+    pub proof_seals: Digest,
+    /// GAP-5: the posters' job escrows that fund Final rewards (in the root since the G14-R4 fix).
+    pub job_escrows: Digest,
+    /// The demand bonds of served positions awaiting their fate (in the root since G14-R4).
+    pub served_demands: Digest,
 }
 
 impl StateRootPartsV1 {
@@ -173,6 +179,9 @@ impl KernelLedgerV1 {
             ),
             job_claims: collection_root(&d("job-claims"), self.job_claims.len(), self.job_claims.iter()),
             seals: collection_root(&d("seals"), self.seals.len(), self.seals.iter()),
+            proof_seals: collection_root(&d("proof-seals"), self.proof_seals.len(), self.proof_seals.iter()),
+            job_escrows: collection_root(&d("job-escrows"), self.job_escrows.len(), self.job_escrows.iter()),
+            served_demands: collection_root(&d("served-demand-bonds"), self.served_demands.len(), self.served_demands.iter()),
         }
     }
 
@@ -195,7 +204,20 @@ impl KernelLedgerV1 {
                 &collection_root(&d("seg-progress"), self.seg_progress.len(), self.seg_progress.iter()),
             )
         };
-        crate::spec::typed_root_v1(base, &self.typed_root_parts())
+        // RFC-0004 Part II: the typed tables, each only when non-empty.
+        let base = crate::spec::typed_root_v1(base, &self.typed_root_parts());
+        // OPV-BOOT GAP-B1a / C4R4 F-C4R4-08 (tables 25, 26 and 18): an extension only once any holds a row, so every older root is
+        // unchanged.
+        if self.claim_beacon_salts.is_empty() && self.forfeited_claim_seals.is_empty() && self.job_posters.is_empty() {
+            return base;
+        }
+        let d = |name: &str| format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes();
+        crate::rows::beacon_seal_root_extension_v1(
+            &base,
+            &collection_root(&d("claim-beacon-salts"), self.claim_beacon_salts.len(), self.claim_beacon_salts.iter()),
+            &collection_root(&d("forfeited-claim-seals"), self.forfeited_claim_seals.len(), self.forfeited_claim_seals.iter()),
+            &collection_root(&d("job-posters"), self.job_posters.len(), self.job_posters.iter()),
+        )
     }
 
     /// RFC-0004 Part II: `(table, collection root)` of every NON-EMPTY typed table, in root order (empty for an untyped ledger).

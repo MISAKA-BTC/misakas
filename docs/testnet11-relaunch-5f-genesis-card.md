@@ -1,5 +1,7 @@
 # t11 Relaunch 5f — genesis card
 
+> Cleanup, 2026-10-10: The algo-4/5 driver and its tests have been removed. The V1 runtime discussion below records the earlier launch; current network behavior follows the V2 preset.
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **Branch** `palw-testnet-5f` · **tip at writing** `fc496331` · public at github.com/MISAKA-BTC/misakas

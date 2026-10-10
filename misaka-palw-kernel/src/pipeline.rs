@@ -1,4 +1,4 @@
-//! **The media-pipeline family** (RFC-0005 §K.3 "media and pipelines", RFC-0003 §I.2.3, spec 04b §15) on the kernel route.
+//! **The media-pipeline family** (`docs/design/palw/versioned-kernels.md` §K.3 "media and pipelines", RFC-0003 §I.2.3, spec 04b §15) on the kernel route.
 //!
 //! A pipeline class is several TIR v2 programs run in declared order (a text encoder, a denoiser, a decoder; a vision encoder
 //! and a language model; an evaluation's subject and scorer). Every stage is checked as a K2 claim over its **version-1 view**

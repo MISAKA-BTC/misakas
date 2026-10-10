@@ -159,7 +159,7 @@ start_node() {
   local i="$1"
   local addr; addr="$(cat "$WORK_DIR/keys/bond-$i.address")"
   local args=(); while IFS= read -r a; do args+=("$a"); done < <(node_args "$i" "$addr")
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
+  "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
   echo $!
 }
 

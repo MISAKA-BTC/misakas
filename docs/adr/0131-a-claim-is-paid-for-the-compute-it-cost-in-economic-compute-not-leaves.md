@@ -85,23 +85,7 @@ state update, MoE by the router and the active experts only, elementwise ops by 
 logits are computed — summed with one versioned cost table (`PALW_ECONOMIC_COST_TABLE_V1`). Wall-clock time on
 reference hosts calibrates the table and is never a consensus input. Shadow only: nothing on the block path reads it.
 
-**Decision 3 — the reward basis, when it moves, is `expected attempts × draw compute + job compute`.** Expected
-attempts come from the class target at the attempt (the same factor `claim.pwu` carries, read once, never
-multiplied again); the draw is ADR-0117's one forward; the job is the canonical job executed once. Fork choice
-keeps `claim.pwu` in leaves. The switch is a fence at a height the operator names after Decision 1 shows
-`Gap` under 10 % on the compute basis (5 % once data suffices) and the calibration residuals are stated.
-
-**Decision 4 — a panel is paid for verification compute, measured separately.** A seat replays sampled intervals
-and opens trace material; its compute per claim is not the producer's. Classes carry `producer` and `panel`
-compute separately before panel pay follows compute.
-
-**Decision 5 — the unit is not the heaviest class.** Pricing by compute needs a rate, not a class to divide by:
-a registration must not be able to move every other class's pay. The rate's derivation (a declared reference
-job, or the span's compute-weighted average) is decided with Decision 3.
-
-**Decision 6 — a new model earns under the rate only after a shadow period.** A class registers, produces and is
-measured (compute, runtime on reference hosts, final rate, calibration residual) before its claims are priced by
-compute.
+**Decisions 3–6 — reward scalar (not adopted).** 単一の CCU/MAC-eq に報酬を切り替える計画は実装しない。class 間の実コストを同じ尺度で表せる根拠がなく、[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P4 の representation-neutral accounting を満たさないため。[ADR-0146](0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md) は係数表を採用していない。D1–D2 の shadow 計測は維持する。
 
 ## 7. Implementation record and measurements (2026-09-17)
 
@@ -151,19 +135,7 @@ expectation (MSK per 10⁹ MAC-eq):**
 | economic job | 172.9 G | 10.4 % · 334.21 (267.37 / 66.84) | 48.1 % · 1,538.28 (1,230.62 / 307.66) | 18.51 / 18.51 | 0.0 % | 18.47 / 12.38 | **49.2 %** |
 | economic attempted | 547 T | 0 % · 0.11 | 0 % · 0.73 | 0.01 / 0.01 | 49.2 % | 0.01 / 0.01 | 0.0 % |
 
-Producer and pool rates are the total's 80 % and 20 % on every basis (the split is after the price), so
-their gaps are the total's. With the 27B retired from the unit (the two live classes alone): leaves 100 % /
-40.4 %, `F` gap 86.4 %, `A` gap 178 %; job 100 % / 21.7 %, `F` 0 %, `A` 49.2 %; attempted 100 % / 14.6 %
-(3,200.85 / 466.09 MSK), `F` 49.2 %, `A` 0 %. **The job basis and the attempted basis cannot both close:**
-a class drawn 1.495 times a claim is paid 1.495 × per `Final` on the attempted basis and 1 × on the job
-basis, and which is right is Decision 3's — the producer pays for every draw, so the attempted basis is the
-one under which MSK per compute actually spent is equal, and the 49.2 % `F` gap it leaves is the price of
-the dense tier's tighter target, not a distortion. The attempted basis with the heaviest class as its unit
-pays the live classes nothing (the 27B's 3,166 draws set a unit of 547 T MAC-eq): Decision 5's rate is a
-precondition of Decision 3, not an option. At three expected attempts the job basis pays the hybrid a third
-per attempted unit and the attempted basis pays it three times per `Final` unit, and the panel's rate per
-verification compute follows the job on the job basis only (Decision 4) — each pinned in `adr0131_*`. On every basis and every mix `producer + pool + burned == escrow`: no basis
-changes what the schedule withheld. The floor is paid whole on every basis.
+The measured producer / pool split is 80 % / 20 % after pricing. The compared bases do not simultaneously equalize per-job and per-attempt cost. No reward scalar or calibration rate is selected from this shadow comparison; ADR-0144 P4 and ADR-0146 govern. The conservation result remains `producer + pool + burned == escrow`; the floor is paid whole on every measured basis.
 
 **The live window** (1,311 distinct claims read from four bonds at DAA 5,774, before 6,001, when every
 `Final` paid its whole 2,756.28 MSK escrow to the producer and no panel was paid): the dense tier's
@@ -178,10 +150,7 @@ cost ratio is 1.8). The hybrid's 33 GiB artifact is not resident on that host (A
 its timing is a host property, not the graph's; calibration needs a host where the artifact is resident,
 and the routed experts' per-token weight traffic (~1 GB a token at batch one) is the term to measure there.
 
-**Not built.** Decision 1's recorder of what was actually paid (the census prices `Final` claims by the
-rule at read time and reports the panel pool, since credited seats are not retained past `Final`); a
-durable window past the state's retention; Decision 3's fence; Decision 4's panel compute measurement
-(a seat replays the attempt's job once, so today `panel compute = seats × job`); Decision 5's rate.
+**Not built.** Decision 1's durable recorder of actual payments and a window beyond state retention. The former scalar reward fence, panel-compute pricing and calibration-rate implementation plans are not adopted: no justified scalar was found (ADR-0144/0146).
 
 ## 3. Deferred
 
@@ -191,7 +160,7 @@ reward.
 ## 4. Status
 
 * Decisions 1 and 2: built in shadow (§7); the λ shadow of ADR-0130 Decision 8 is not yet read by op 185.
-* Decisions 3–6: the operator's, after the shadow has run.
+* Decisions 3–6: not adopted; shadow measurements alone do not authorize a reward scalar.
 
 ## 5. Number hygiene
 
@@ -202,7 +171,7 @@ reward.
 [ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P4: reward may change
 only when verified work changes. Canonical work is a **vector**; a single scalar (MAC-eq, CCU, a
 heaviest-class unit) has not been shown to track real cost. [ADR-0146](0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md)
-is the experiment that would justify coefficients; it has not been run.
+records the coefficient search; no coefficient table or scalar was adopted.
 
 * **Kept, in shadow.** Decisions 1 and 2: node-local measurement, PWU stays fork-choice work, time
   is calibration data, producer compute and panel compute are named separately. Op 185 may keep

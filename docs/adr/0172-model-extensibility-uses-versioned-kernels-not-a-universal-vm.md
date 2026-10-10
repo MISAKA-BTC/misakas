@@ -45,8 +45,7 @@ spML型BFT運営者委員会・trusted PKI・committee beaconは、この経路�
 
 An existing production ISA still needs MISAKA-specific deterministic arithmetic, syscall bindings,
 state commitments, metering, proof localization, replay and adversarial tests. Borrowing a VM does
-not remove those costs. The previous RFC05 estimates are historical planning estimates, not measured
-savings achieved by this decision. Kernel extensions also require reference implementations,
+not remove those costs. No measured implementation-cost saving is asserted here. Kernel extensions also require reference implementations,
 independent review, court/resource tests and safe upgrades; their costs are not zero.
 
 The deliberate trade-off is a narrower accepted language today in exchange for a smaller consensus
@@ -126,7 +125,7 @@ challenged faults, not a mechanism that retroactively removes undetected-error p
 
 | Document / component | Decision |
 | --- | --- |
-| RFC05 old Parts I/II, ladder TIR → BVM/GVM, Linux/ISA fallback and EXEC VM programme | Withdrawn implementation directions; retained only as historical rationale. RFC05's new current section defines kernel-only extension. Do not implement or arm the old VM proposals. |
+| RFC05 old Parts I/II, ladder TIR → BVM/GVM, Linux/ISA fallback and EXEC VM programme | Withdrawn; RFC05 retains only the reason. The [Kernel design](../design/palw/versioned-kernels.md) specifies the selected extension route. |
 | RFC04 improvement, candidate/evaluation/promotion rules | Keep. Off-chain automation is unrestricted. Code-by-tests/EXEC is not promised via a future VM; a distinct reviewed non-VM checker extension would need its own specification. |
 | RFC11 model registration and broad coverage | Replace all proposed VM fallback with active-kernel plan composition or an explicitly required future kernel. Preserve the real 9B/2M blockers and the all-HF denominator. |
 | ADR0171 / RFC07 probabilistic verification | Unchanged security direction; reusable kernel-primitive templates replace references to VM templates. Full replay remains a conformance baseline or exact small-class option, not the required ordinary large-model path. |

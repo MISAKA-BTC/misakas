@@ -75,7 +75,7 @@ pub struct PalwPanelSeatV3 {
 ///   documenting it again.
 ///
 /// **`bond_status` here is the TRUTH, and the credit path's assembler writes something else into
-/// the same field.** `palw_credit::panel_seats_at_anchor_v3` uses it as an eligibility verdict —
+/// the same field.** the retired V1 panel helper uses it as an eligibility verdict —
 /// `Active` iff the bond may be seated, `Slashed` otherwise — because it must carry an exclusion
 /// the type cannot hold (every bond of the executor's OWNER, while the draw is only told the
 /// executor's validator id). Both are correct for their own draw and neither may read the other's
@@ -116,7 +116,7 @@ where
                 //
                 // This said the chain knows no operator grouping here and that `None` merely cost a
                 // weaker dedup. Both halves were wrong. The chain does know one — `owner_pubkey_hash`
-                // — and `palw_credit::panel_seats_at_anchor_v3` has been using exactly it all along,
+                // — and the retired V1 panel helper has been using exactly it all along,
                 // so the two assemblers disagreed about the same panel. And the cost is not weaker
                 // dedup: with `None` an operator splits its stake across k bonds and collects k
                 // seats on one panel, which is the quorum the receipt count is supposed to measure,

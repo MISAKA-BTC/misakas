@@ -238,11 +238,7 @@ pub mod palw_context_ladder;
 /// shipped constant; it relates two numbers that had never appeared in one expression.
 pub mod palw_court_deadline;
 pub mod palw_court_v2;
-/// MISAKA PALW class registration (B12): the object every "pinned at registration" sentence
-/// across ADR-0026…0033 meant — measured identities, the derived credited ceiling, windows,
-/// commitment form and adjudication depth, with the validation that makes an incoherent
-/// registration unrepresentable. Land-stage, consensus-inert (ADR-0033's gate is its first
-/// consumer).
+/// Reserved encoding of the retired V1 credit parameters; no executable credit gate.
 pub mod palw_credit;
 pub mod palw_credit_batch;
 pub mod palw_decode_constraint_v1;
@@ -504,6 +500,9 @@ pub mod palw_onboarding_v1;
 pub mod palw_conformance_evidence_v1;
 /// RFC-0015: the Panel=0 (`OptimisticPublicVerification`) fence `palw_panel_free_v1` — dormant, no height, refused when armed.
 pub mod palw_panel_free_v1;
+/// The OPV ↔ PALW Work Beacon startup cycle, closed: the complete-check bootstrap, derived OPV eligibility, the effective bits of a
+/// passed attempt, and the dependency graph (`docs/design/palw/opv-beacon-bootstrap.md`) — dormant with the kernel route's fences.
+pub mod palw_opv_bootstrap_v1;
 /// RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt; dormant behind `palw_fp_prefix_state`.
 pub mod palw_fp_prefix_v1;
 /// RFC-0001 §2.9: the job's tokenizer must be the class's listed one; dormant behind `palw_fp_tokenizer_match`.
@@ -526,11 +525,18 @@ pub mod palw_evidence_v1;
 /// RFC-0009 stage B: the provider challenge court (`palw_evidence_court_v1`, DORMANT, not yet folded into the chain state).
 pub mod palw_evidence_court_v1;
 /// Lane DA16 (RFC-0014 §16, RFC-0009 §4): public material units — what an artifact leaf, a bound kernel row or a claim position is checked
-/// against (always the chain's root), the artifact manifest, and a binding confirmed or refuted from the bytes.
+/// against (always the chain's root), the artifact manifest, and a binding confirmed or refuted from the bytes. Since ADR-0177 the
+/// ARTIFACT half is NON-CONSENSUS (optional off-chain tooling; no fold arm reads it); only `ClaimPosition` is a court unit.
 pub mod palw_public_material_v1;
 /// Lane DA16 (RFC-0009 §4.2): the provider court on the kernel route — leases, unit challenges, answers, the DA transfer, its rows and its
 /// fence `palw_provider_court_v1` (dormant, refused when armed).
 pub mod palw_provider_court_v1;
+/// Lane DA16: the court scope (ADR-0177 D2, RFC-0014 §16.4) — what a court may demand (claim-specific units only), what a verifier
+/// supplies from its own copy against the registered root, the node-level model-bytes masks and the cumulative bound.
+pub mod palw_court_scope_v1;
+/// Lane INTF (ADR-0032's 2026-10-10 amendment): the PALW reporter share, 10% below and 49% at or past the dormant fence
+/// `palw_reporter_share_v2` (refused when armed) — R-1 fixed at the conviction's close, DA-6 at the session's open.
+pub mod palw_reporter_share_v2;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
 /// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).

@@ -1,6 +1,6 @@
 # PALW full-logits trace scheme v2 — 設計根拠・安全条件・段階導入
 
-Status: **EXPERIMENTAL / devnet・shadow mode・zero-credit のみ GO**
+Status: **旧 trace format・測定記録。float class と恒久 hash floor の導入案は撤回済み。**
 Date: 2026-08-12
 Relates to: ADR-0007, ADR-0008, ADR-0021, ADR-0024, `misaka-palw-worker`
 
@@ -17,24 +17,7 @@ Companion documents:
 
 ## 1. 判定と適用範囲
 
-full logitsへ束縛する方向で実装と検証を進めてよい。ただし、現在許可するのは
-`ShadowSidecar`、`LocalReceiptOnly`、`ConsensusVisibleZeroCredit`までとする。
-
-| 段階 | 判定 | 条件・理由 |
-|---|---:|---|
-| worker実装と異機種再現試験 | **GO** | 出力文字列ではなくfull logitsをcommitする |
-| VLT overlay試験運用 | **条件付きGO** | portable x86 classの候補が2台・3 vectorsで成立した |
-| consensus-visible / 報酬0 | **GO** | 実ネットワーク条件で不一致、停止、容量を観測する |
-| 専用testnetの低credit cap | **NO-GO（gate待ち）** | 本書§12のactivation gateをすべて満たすこと |
-| PALW報酬・work加算 | **NO-GO** | commitmentの受理は監査経済と委員会安全性に依存する |
-| mainnet・fork choiceへの影響 | **NO-GO** | 外部監査、長期soak、攻撃試験、経済評価が未完了 |
-
-設計原則は次のとおり。
-
-1. 永久hash floorを残す。
-2. PALW障害時は `PALW credit = 0` とし、hash ordering/livenessを継続する。
-3. zero-creditの観測を経ずに報酬、work、fork-choice weightを与えない。
-4. fail-openでPALW creditを与えない。runtime不明・再現不能・委員会不足はzero-creditとする。
+本書は既存 trace format と測定根拠の記録であり、旧 float worker・VLT overlay を新規採用する計画ではない。float class は異種 CPU の厳密一致と客観的裁定を保証できず、[ADR-0053](adr/0053-palw-one-execution-family.md) の整数 runtime に置き換えた。恒久 hash floor は有用計算を迂回する誘因と混合 difficulty の負担があるため撤回した。現在の activation 判断は [ADR-0042](adr/0042-palw-mainnet-candidate-ruleset.md) と後続 ADR に従う。
 
 ## 2. 識別子と上位アーキテクチャ
 
@@ -55,16 +38,7 @@ trace_commitment_version       = 2
 
 ### 2.2 推奨ブロック条件
 
-PALWを単独PoWにはしない。上位条件は次を推奨する。
-
-```text
-Valid block = valid permanent hash PoW
-              AND (PALW certificate is absent
-                   OR PALW certificate is valid under its activation stage)
-```
-
-shadow/zero-credit段階ではPALW certificateはfork choice、blue work、DAA、block levelへ
-影響しない。PALW固有のcreditを導入する場合は、別ADRと明示的activationが必要である。
+hash PoW の上に任意の PALW certificate を載せる旧構成は採用しない。有用計算が block production を担わず hash mining に迂回できるため。[ADR-0038](adr/0038-palw-is-the-consensus-work.md)・[ADR-0039](adr/0039-palw-only-block-production.md) が置き換える。
 
 ## 3. 旧Ollama方式を廃止した測定根拠
 
@@ -242,68 +216,11 @@ root再利用は、root不一致として検出されなければならない。
 
 ## 7. RuntimeManifestV2とdeterminism class
 
-`GGML_NATIVE=OFF`だけでは十分でない。class membershipは自己申告CPU名ではなく、exact artifactと
-固定実行条件で定義する。
-
-```text
-RuntimeManifestV2
-├─ target_arch / target_triple
-├─ compiler_name / compiler_version
-├─ linker_version
-├─ cmake_cache_sha256
-├─ worker_binary_sha256
-├─ llama_static_library_sha256
-├─ llama_cpp_commit
-├─ patchset_root
-├─ exact_cpu_isa_baseline
-├─ runtime_cpu_feature_mask
-├─ GGML_NATIVE / GGML_OPENMP / GGML_BLAS / GGML_ACCELERATE
-├─ GGML_SSE42 / GGML_AVX / GGML_AVX2 / GGML_FMA / GGML_F16C
-├─ GGML_CPU_ALL_VARIANTS
-├─ thread_count / thread_affinity_policy
-├─ floating_point_environment
-├─ GGUF_sha256
-├─ tokenizer_sha256
-├─ prompt_template_sha256
-├─ trace_scheme_id
-└─ golden_vector_root
-```
-
-可能な限り各machineで個別compileせず、bit-identical static worker artifactを配布する。
-当面のclass定義は次より広げない。
-
-```text
-x86_64-linux
-+ exact worker/llama artifacts
-+ fixed ISA baseline and runtime feature mask
-+ OpenMP disabled
-+ fixed thread count and affinity policy
-+ exact GGUF/tokenizer/template
-+ fixed floating-point environment
-```
-
-「EPYCとBroadwellは同一class」と断定せず、「両者を含められるportable x86 class候補が
-3 vectorsで成立した」と表現する。F16C maskingがbuild optionかruntime CPUID maskか、EPYC側と
-同じkernel pathかはmanifestと試験logに明記する。
+build・ISA・CPU ごとの float class を新規採用する計画は撤回した。manifest の固定では異種 CPU の reduction 差と客観的裁定の問題を解決できないため。既存 format の履歴は Git に残し、現在の実行方針は [ADR-0053](adr/0053-palw-one-execution-family.md) に従う。
 
 ## 8. 浮動小数点のcanonical policy
 
-起動時に次を検証し、manifestと異なる場合はPALW execution/verifierを開始しない。
-
-```text
-rounding_mode = round-to-nearest-ties-to-even
-fast_math = false
-fp_contract = off
-FTZ = manifestで固定
-DAZ = manifestで固定
-NaN / +/-Inf = execution invalid（fail closed）
-finite f32 = IEEE-754 little-endian bytesをそのままcommit
-signed zero = bitを保持（FTZ/DAZとともに固定）
-```
-
-buildでは `-ffast-math` を禁止し、FMA contractionを無効にする。正常有限値を丸めたり
-量子化して「canonicalize」してはならない。low-bit bindingを弱める変更は新scheme versionと
-再activationを要求する。
+float 環境の固定を将来 PALW class の導入条件にする案は採用しない。整数 runtime で同じ演算を実行と裁定に共有でき、float 専用 policy を追加する必要がなくなったため。
 
 ## 9. TokenBudgetV2とseed導出
 

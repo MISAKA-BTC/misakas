@@ -209,7 +209,7 @@ for ((i=0; i<NODES; i++)); do
   # a floor-only seat, which is the shape of a fleet host without the artifact.
   if [ "$i" -le 1 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT" --palw-producer-class="$EXPECTED_CLASS_ID"); fi
   if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:$P2P_BASE); fi
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
+  "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
   # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
   # array index at PARSE time — the whole script fails to load, not the line.
   node_pid=$!
@@ -299,7 +299,7 @@ advance 1
 # same background-watch-kill shape stage 2 uses rather than a wait on a process that never exits.
 class_table() {
   local pid deadline
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
+  "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
     --rpclisten-borsh=127.0.0.1:$((reg_rpc + 200)) --nogrpc --nodnsseed --disable-upnp \
     --connect=127.0.0.1:$P2P_BASE --utxoindex --palw-dump-classes >"$WORK_DIR/class-table.log" 2>&1 &
   pid=$!
@@ -341,7 +341,7 @@ REGISTRAR_ADDR="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/
 # no-op the same observation (no output, forever) and cost two hours on 2026-09-03. The sentence
 # below is printed only after the object is IN an accepted block, so it is the one that means the
 # chain has the class rather than that a transaction was built.
-MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
+"$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
       --rpclisten-borsh=127.0.0.1:$((reg_rpc + 100)) --nogrpc --nodnsseed --disable-upnp \
       --connect=127.0.0.1:$P2P_BASE --utxoindex \
       --palw-register-class="$MODEL_ID" --palw-class-artifact="$MISAKA_PALW_ARTIFACT" \

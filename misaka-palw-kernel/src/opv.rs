@@ -100,20 +100,31 @@ pub struct OpvEconomicsV1 {
     /// reserve this much free collateral is refused at inclusion (no double use of one collateral by concurrent claims).
     pub reservation_per_claim: u64,
     /// The work / weight credit the consumer releases at Final besides `claim_reward` (the same unit as the reward). Part of the
-    /// claim's maximum gain.
+    /// claim's maximum gain. Released by nothing today; when it is, it reserves at claim acceptance against the producer bond's
+    /// ADR-0176 R / F budget (`budget-accept` in the ledger) and is paid from the job escrow, never issued.
     pub work_credit_per_claim: u64,
     /// A stated bound on gains outside the claim's own credit (fork-choice, external settlement): never hidden inside the reward.
     pub external_gain_bound: u64,
     /// The share (permille) of claims the network's operating assumptions expect to be caught; `reservation × this ≥ 1000 × gain`.
     /// `1000` claims certain detection — and must then be defended; a lower number demands a proportionally larger reservation.
     pub assumed_detection_permille: u16,
-    /// Most OPV claims one producer may have with a reservation held (aggregate gain cap = this × the per-claim maximum gain).
+    /// Most PRE-FINAL OPV claims one producer (bond) may have at once (C4 F-C4R3-05: a Final claim's liability needs its reservation,
+    /// not an admission slot). Its whole exposure stays bounded by its free collateral (every claim reserves `reservation_per_claim`).
     pub max_live_claims_per_producer: u32,
-    /// Most OPV claims in the whole ledger with a reservation held (bounds the retained commitments).
+    /// Most PRE-FINAL OPV claims in the whole ledger for producers that already hold one (C4 F-C4R3-05).
     pub max_live_claims_total: u32,
-    /// Of an OPV claim's pre-Final default penalty, the share (permille) that is burned instead of paid to the demanders, so a
-    /// producer cannot cycle its own penalty through a Sybil demander for nothing. In `1..=1000`.
+    /// **Slots past `max_live_claims_total` that only a producer holding NO pre-Final OPV claim may take** (C4 F-C4R3-05, round 2): a
+    /// set of bonds that fills the total does not shut a new producer out; to do that it must also fill these, one fresh bond, one
+    /// reservation and one fee each. `max_live_claims_total + fresh_producer_slots` is the lane's HARD ceiling, bounded by the
+    /// prosecution room of the window (`OpvPolicyV1::validate`), so no flood of claims outgrows what outsiders can prosecute.
+    pub fresh_producer_slots: u32,
+    /// Of an OPV claim's pre-Final default penalty, the LEAST share (permille) that is burned instead of paid to the demanders, so a
+    /// producer cannot cycle its own penalty through a Sybil demander for nothing. In `1..=1000`. The ledger burns the larger of
+    /// this and `1000 − accuser_reward_permille` (a default is split at least like a slash, C4 F-C4R3-02).
     pub default_burn_permille: u16,
+    /// **What admitting an OPV claim costs, non-refundably** (C4 F-C4R3-05): taken from the producer's free collateral at admission and
+    /// burned whatever becomes of the claim (Final, convicted, defaulted), so holding the lane's slots by refilling them is never free.
+    pub admission_fee: u64,
 }
 
 /// **The network's OPV policy** — a consensus constant fixed at genesis (like [`LedgerPolicyV1`]); absent = this network has no
@@ -146,13 +157,16 @@ impl OpvPolicyV1 {
     }
 
     /// **The smallest reservation RFC-0015 §8.1 allows**: the maximum gain plus the default penalty, and the maximum gain divided
-    /// by the detection probability the operating assumptions claim (rounded up).
+    /// by the detection probability the operating assumptions claim (rounded up) — **both after self-recoup** (GAP-R7): a colluding
+    /// producer can always convict itself first with a proof of its own and recoup the accuser's share of the slash, so what the
+    /// relation counts on losing is only `reservation × (1 − accuser_reward_permille / 1000)`; the reservation is divided by that.
     pub fn required_reservation(&self, ledger: &LedgerPolicyV1) -> u128 {
         let gain = self.max_gain_per_claim(ledger);
         let by_penalty = gain + ledger.default_penalty as u128;
         let p = self.economics.assumed_detection_permille.max(1) as u128;
         let by_detection = (gain * 1000).div_ceil(p);
-        by_penalty.max(by_detection)
+        let kept = 1000u128.saturating_sub(ledger.accuser_reward_permille as u128).max(1);
+        (by_penalty.max(by_detection) * 1000).div_ceil(kept)
     }
 
     /// The latest DAA by which any claim admitted at `admitted` is Final or decided, whatever is filed: the window's end, a
@@ -198,7 +212,7 @@ impl OpvPolicyV1 {
             + u(b.reorg_slack_daa);
         let hard = window + u(l.court_deadline_daa) + u(l.proof_grace_daa);
         let gain = self.max_gain_per_claim(l);
-        let checks: [(bool, &str); 20] = [
+        let checks: [(bool, &str); 22] = [
             (w.base_challenge_window_daa > 0, "the base challenge window is non-empty"),
             (
                 first_step <= window,
@@ -218,6 +232,13 @@ impl OpvPolicyV1 {
             (l.default_penalty > 0, "withheld material costs the producer something (a free default is a free job squat)"),
             (l.accuser_reward_permille < 1000, "a convicted fraud burns part of the slash (a 100% bounty makes self-conviction free)"),
             (e.default_burn_permille >= 1 && e.default_burn_permille <= 1000, "a default burns part of its penalty"),
+            (e.admission_fee > 0, "admitting a claim is not free (C4 F-C4R3-05: a refilled lane must cost its occupiers)"),
+            // C4 F-C4R3-05 (round 2): every claim the lane can hold before Final has a reserved court run within its window, so a flood
+            // of claims never leaves an outsider without room to file the proof of one of them.
+            (
+                (e.max_live_claims_total as u128 + e.fresh_producer_slots as u128) <= l.prosecution_reserved_runs() as u128 * window,
+                "the lane's hard ceiling exceeds the proof runs the window reserves (max_adjudications × prosecution_reserve ‰ × window)",
+            ),
             (
                 e.assumed_detection_permille >= 1 && e.assumed_detection_permille <= 1000,
                 "the assumed detection probability is a probability",
@@ -530,6 +551,15 @@ impl KernelLedgerV1 {
         }
     }
 
+    /// **PRE-FINAL OPV claims** — those not yet Final, convicted, defaulted or timed out: for `producer` and in total. The admission
+    /// caps count these (C4 F-C4R3-05); a claim in its liability phase keeps its reservation but holds no admission slot.
+    pub fn opv_open_counts(&self, producer: &Digest) -> (u32, u32) {
+        let open = |id: &Digest| self.claims.get(id).is_some_and(|r| !r.life.state.is_terminal());
+        let mine = self.opv.live.range((*producer, [0u8; 64])..=(*producer, [0xFFu8; 64])).filter(|(_, id)| open(id)).count();
+        let all = self.opv.live.iter().filter(|(_, id)| open(id)).count();
+        (mine as u32, all as u32)
+    }
+
     /// OPV claims with a held reservation: for `producer` and in total.
     pub fn opv_live_counts(&self, producer: &Digest) -> (u32, u32) {
         let mine = self.opv.live.range((*producer, [0u8; 64])..=(*producer, [0xFFu8; 64])).count() as u32;
@@ -553,12 +583,24 @@ impl KernelLedgerV1 {
         if !p.allowed_at(self.daa) {
             return Err("the palw_panel_free_v1 fence is not reached".into());
         }
-        let (mine, all) = self.opv_live_counts(producer);
-        if mine >= p.economics.max_live_claims_per_producer {
-            return Err(format!("the producer already has {mine} live claims (cap {})", p.economics.max_live_claims_per_producer));
+        // C4 F-C4R3-05: only PRE-FINAL claims hold admission slots (a Final claim's reservation stays held through its liability
+        // horizon, so refilling the lane needs fresh collateral every window); a producer is capped; past the total only a producer with
+        // no pre-Final claim is admitted, up to the HARD ceiling the window's reserved proof runs bound; and every admission pays a
+        // non-refundable fee (`admit`). Holding the whole lane therefore costs one fresh bond, one reservation and one fee per slot.
+        let (mine, all) = self.opv_open_counts(producer);
+        let e = &p.economics;
+        if mine >= e.max_live_claims_per_producer {
+            return Err(format!("the producer already has {mine} pre-Final claims (cap {})", e.max_live_claims_per_producer));
         }
-        if all >= p.economics.max_live_claims_total {
-            return Err(format!("{all} live claims in the ledger (cap {})", p.economics.max_live_claims_total));
+        let hard = e.max_live_claims_total.saturating_add(e.fresh_producer_slots);
+        if all >= hard {
+            return Err(format!("{all} pre-Final claims: the lane's hard ceiling (the window's reserved proof runs) is reached"));
+        }
+        if mine > 0 && all >= e.max_live_claims_total {
+            return Err(format!(
+                "{all} pre-Final claims in the ledger (cap {}; past it only a producer holding none is admitted)",
+                e.max_live_claims_total
+            ));
         }
         let gain = p.max_gain_per_claim(&self.policy).min(u64::MAX as u128) as u64;
         let row = OpvClaimRowV1 {
@@ -736,10 +778,14 @@ mod tests {
             accuser_reward_permille: 500,
             default_penalty: 100,
             claim_reward: 7,
+            job_fee: 2,
+            job_escrow_ttl_daa: 300,
             max_adjudications_per_block: 64,
+            prosecution_reserve_permille: 500,
             max_court_work_per_block: u64::MAX,
             claim_seal_delay_daa: 1,
             seal_ttl_daa: 100,
+            seal_deposit: 1,
             prosecution: ProsecutionPolicyV1 {
                 court_deadline_daa: 20,
                 max_sessions_per_claim: 1 << 10,
@@ -771,7 +817,9 @@ mod tests {
                 assumed_detection_permille: 500,
                 max_live_claims_per_producer: 3,
                 max_live_claims_total: 5,
+                fresh_producer_slots: 2,
                 default_burn_permille: 100,
+                admission_fee: 3,
             },
             carrier: CarrierCapsV1 { filing_cap: 1 << 26, response_cap: 1 << 27, commit_cap: 1 << 27 },
         }
@@ -784,7 +832,11 @@ mod tests {
         p.validate(&l).unwrap();
         assert_eq!(p.window_daa(), 50);
         assert_eq!(p.max_gain_per_claim(&l), 7 + 13 + 80);
-        assert_eq!(p.required_reservation(&l), 200, "gain 100 over a 50% assumed detection is 200; gain + penalty is also 200");
+        assert_eq!(
+            p.required_reservation(&l),
+            400,
+            "gain 100 over a 50% assumed detection is 200, gain + penalty is also 200; after a self-recouped 50% bounty, 400"
+        );
 
         let mut bad = Vec::new();
         let mut push = |name: &'static str, f: &dyn Fn(&mut OpvPolicyV1, &mut LedgerPolicyV1)| {
@@ -803,8 +855,11 @@ mod tests {
         push("free default", &|_, l| l.default_penalty = 0);
         push("hundred percent bounty", &|_, l| l.accuser_reward_permille = 1000);
         push("no default burn", &|p, _| p.economics.default_burn_permille = 0);
+        push("free admission", &|p, _| p.economics.admission_fee = 0);
+        push("a hard ceiling past the window's proof room", &|p, _| p.economics.fresh_producer_slots = 32 * 50);
         push("no detection assumption", &|p, _| p.economics.assumed_detection_permille = 0);
         push("reservation below gain + penalty", &|p, _| p.economics.reservation_per_claim = 199);
+        push("reservation below what self-recoup leaves (GAP-R7)", &|p, _| p.economics.reservation_per_claim = 399);
         push("detection assumption too weak for the reservation", &|p, _| p.economics.assumed_detection_permille = 90);
         push("no per-producer cap", &|p, _| p.economics.max_live_claims_per_producer = 0);
         push("total below per-producer", &|p, _| p.economics.max_live_claims_total = 2);
@@ -842,9 +897,12 @@ mod tests {
         let l = ledger_policy();
         let mut p = example();
         p.economics.assumed_detection_permille = 1000;
-        assert_eq!(p.required_reservation(&l), 200, "certain detection: gain + penalty");
+        assert_eq!(p.required_reservation(&l), 400, "certain detection: gain + penalty, after the self-recouped half (GAP-R7)");
         p.economics.assumed_detection_permille = 250;
-        assert_eq!(p.required_reservation(&l), 400, "a 25% detection assumption quadruples the gain");
+        assert_eq!(p.required_reservation(&l), 800, "a 25% detection assumption quadruples the gain");
+        let mut low = l;
+        low.accuser_reward_permille = 0;
+        assert_eq!(p.required_reservation(&low), 400, "no bounty, nothing to recoup");
         p.economics.external_gain_bound = 1080;
         assert_eq!(p.max_gain_per_claim(&l), 1100, "a stated external gain is never hidden in the reward");
         assert!(p.validate(&l).is_err(), "and the reservation must follow it");

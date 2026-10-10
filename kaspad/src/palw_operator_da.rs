@@ -20,7 +20,8 @@
 //! accuser's exposure comes back with the reward. **Any claim whose roots open answers** — an honest
 //! one, and a self-consistent garbage trace alike, since the court checks the answer by hash
 //! arithmetic against the claim's own roots — and the session is refuted: its exposure
-//! (`min(10% · S_P(stage), min_collateral)`: 320.10 MSK on the floor, 369.52 on 8k, 6,294.38 on 2M)
+//! (`min(r · S_P(stage), min_collateral)`, `r` the PALW reporter share in force at the session's open: 10% below the dormant
+//! `palw_reporter_share_v2` — 320.10 MSK on the floor, 369.52 on 8k, 6,294.38 on 2M — and ADR-0032's 49% at or past it)
 //! is held on the accuser's free half until the claim record retires (~3,122 DAA after the licence)
 //! and then BURNED off a genesis bond that no object can top up (the lane B review, finding 2).
 //!
@@ -930,12 +931,13 @@ impl PalwPanelService {
                     Ok(object) => {
                         info!(
                             "[{PALW_PANEL}] claim {claim}: the operator's non-seat accusation (lane B, {action:?}) — producer {:?}, {} \
-                             outside Valid signer(s); {unit:?} at stage {:?}, {} sompi on this bond's free half, the session's deadline \
-                             DAA {} (panel-seed stopgap (B), DA-8)",
+                             outside Valid signer(s); {unit:?} at stage {:?}, {} sompi on this bond's free half (DA-6 at the {} bps \
+                             reporter share in force at DAA {current_daa}), the session's deadline DAA {} (panel-seed stopgap (B), DA-8)",
                             candidate.producer.0,
                             candidate.outside_signers.len(),
                             admission.stage,
                             admission.exposure,
+                            self.consensus_config.params.palw_reporter_share_bps_at(current_daa),
                             admission.deadline_daa
                         );
                         let key = palw_operator_da_queue_key_v1(claim);
@@ -1691,6 +1693,11 @@ mod tests {
         let floor_min_collateral = 13_000 * 100_000_000u64;
         let exposure = palw_da_session_exposure_v1(floor_commitment, floor_min_collateral);
         assert_eq!(exposure, 32_009_500_000, "10% of the floor's commitment: 320.095 MSK");
+        // Below `palw_reporter_share_v2` (every shipped network) the fold prices DA-6 at 10%; past the dormant fence it is
+        // ADR-0032's 49% — what a blind filing would hold then (not what testnet-12 burns today).
+        let exposure_49 = kaspa_consensus_core::palw_da_rcore_v1::palw_da_session_exposure_v2(floor_commitment, floor_min_collateral);
+        assert_eq!(exposure_49, 156_846_550_000, "49% of the floor's commitment, rounded up: 1,568.4655 MSK");
+        println!("DA-6 on the floor: {exposure} sompi at 10% (in force), {exposure_49} sompi at 49% (past palw_reporter_share_v2)");
         let c = GENESIS_C as u128;
         let held_span_daa: u128 = 120 + 3_002; // licence → Final → retirement (the review's probe: 3,122)
         let daa_per_day = 86_400 / 120u128;

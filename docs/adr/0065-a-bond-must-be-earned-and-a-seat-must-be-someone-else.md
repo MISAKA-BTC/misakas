@@ -144,13 +144,7 @@ supposed to impose, and it does impose it.
   (`protocol/flows/src/ibd/flow.rs:1912-1913`) with no shared reachability, so there is no ancestor
   to compute. Say so in whatever ships it; a gate that silently covers one of two entry points is
   worse than one that admits its scope.
-* **D2b — ~~a single-chain anchor that is not the DAA.~~ Withdrawn: D2a needs no anchor.** The
-  worry was that "registered after the fork point" required comparing a blue score to a DAA score,
-  which is unsound, and that fixing it meant new state and a re-mint. **It requires neither.** The
-  bond registry is append-only (D5), so along any chain bonds only accumulate, and therefore
-  *registered after the fork point* is exactly *present in the challenger's registry and absent
-  from the ancestor's* — a set difference between two materialized states. No units are compared,
-  `registered_daa` is never read, and no state changes. That is what D2a implements.
+* **D2b — 新しい single-chain anchor は不採用。** append-only bond registry の ancestor との差分で登録 provenance を判定でき、追加 state や異なる score 単位の比較は不要なため。D2a の判定は維持する。
 
 **What landed for D2a**, behind a top-level bare `Option<ForkActivation>` (`None` on every preset):
 at the deep-reorg gate, when the challenger's registry holds bonds the ancestor's does not and a
@@ -194,38 +188,12 @@ it either. That residual is a **pricing** question (D6 and the collateral floor)
 one — which is worth saying plainly, because the two were run together in the original draft and
 the provenance half is the expensive one.
 
-**D3 — ~~A seat is a distinct operator.~~ WITHDRAWN: already implemented, and it does not deliver what
-the title claims.** Correcting this ADR against the code before implementing it:
-
-* `derive_panel_v2` **already draws one seat per operator** — `palw_panel_v2.rs:216-228` tickets every
-  eligible bond, sorts, and skips any bond whose `operator_id` is already seated.
-* Registration **already enforces one key, one bond** — `palw_state_v2.rs:4632` refuses a
-  `DuplicateBondKey`, and its comment (audit M2-19) names this exact attack: *"splitting collateral
-  across N registrations of the SAME key manufactured N independent seat tickets, and a 3-of-5 panel
-  is a permanent quorum for whoever holds three of them."*
-
-So the dedup this ADR asked for is not missing. **The property it wanted is not obtainable by dedup at
-all**, and that is the finding: `operator_id` is `palw_operator_id_v2(operator_pubkey)`
-(`palw_state_v2.rs:4642`) over a key the registrant chooses freely and separately from the bond key.
-One party mints as many operator identities as it wants. Host C demonstrates it — three seats, three
-bonds, three operator keys, one machine, all perfectly within the rules.
-
-**"Distinct operator" is not a checkable predicate**, for the same reason silence is not one
-(ADR-0064 Fact A): nothing on-chain distinguishes two identities from two people. Deduping harder
-cannot fix a namespace that is free to enter. The only real levers are the ones that cost something
-(D1, and the collateral floor) and the one that stops a failure being read as guilt (D4). An ADR that
-demands an uncheckable property produces exactly the kind of gate that looks like a defence and
-enforces nothing — which is the failure this whole audit line keeps finding.
+**D3 — operator dedup の追加案は不採用。** one-seat-per-operator と one-key-per-bond は既に実装済みであり、自由に生成できる別鍵から独立した人間であることは証明できないため。D1 の maturity、collateral、D4 の abstention は維持する。
 
 **D4 — `Unavailable` must be evidence of a refusal, not of a failure. LANDED, dormant.** A seat that
 cannot evaluate a claim for reasons on its own side must **abstain**, not convict.
 
-**The "minimum viable form" proposed here — a seat demonstrates it holds the class artifact root —
-is unsound, for the same reason D3 was withdrawn.** `artifact_root` is a public consensus field
-(`palw_state_v2.rs:1116/1667`, and it is served over public RPC), so a seat holding nothing presents
-the same 64 bytes as one holding the model. Worse, the honest-node half of that test already ships:
-`kaspad/src/palw_panel.rs` answers `Incapable` when the class backend does not resolve, and the
-measured convictions come from seats that DO hold the class and did not receive bytes.
+**artifact root の提示だけを possession proof とする案は不採用。** root は公開 field であり、モデルを持たない seat も同じ値を提示できるため。
 
 **And no positive proof of refusal is constructible in this tree.** The material pull carries no
 seat identity, nonce or signature; the serve carries no producer signature; the serve path returns
