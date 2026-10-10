@@ -229,7 +229,7 @@ async fn r4x_g14c_a_lie_in_the_model_stage_of_a_composite_is_convicted_at_that_s
     let mut da = Da::default();
     da.stage(1, 0, &trace);
     let artifact = vec![model_fx.params.clone(), model_fx.params.clone()];
-    let fault = fault_of(fresh(&net, c, &da, &artifact, &Mirror(&data, 0..data.items.len() as u64), 0x62));
+    let fault = fault_of(fresh(&net, c, &da, &artifact, &Mirror(&data, 0..0), 0x62));
     assert!(!matches!(fault, SpecFaultV1::Retrieval { .. }), "the honest tool stage is not accused: {fault:?}");
     net.file(6, c, fault).await;
     assert!(net.ledger().claims[&c].convicted, "convicted at the model stage");

@@ -592,3 +592,20 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   whole-instance courts vs 1.58 MB carriable (pinned: `g14_canonical_a_routing_and_history_class_is_refused_by_the_node_carrier_fit_until_element_courts`).
   Owner: K2S (K2-TIR-v4 element courts, GAP-30/31). GAP-71b (SDK fresh complete-check verifier) waits on OPVB's `PostComplete`,
   which is not on the integration line.
+* 2026-10-10 — G14C on `34b6c3f5e` (+ this branch): **GAP-71b verified** — `misaka_palw_sdk::onboarding_chain::fresh_verify_complete_check_v1`
+  re-runs a complete check from op 231 / op 211 reads and the verifier's own copy of the registered artifact (the post is in no served
+  row; a post passes the fold only if it IS the honest post, so the chain's verdict is checked by post id); node test
+  `opv_bootstrap::g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_and_its_own_artifact` (an honest and a forged
+  check, another model refused `ARTIFACT_NOT_REGISTERED`). **GAP-50 implemented + verified at node level** —
+  `PalwKernelRouteStateV1::opv_spec_eligibility_v1` (consensus-core, dormant behind `palw_panel_free_v1` + `palw_typed_roots_v1`):
+  `Weights`/`Memory` through the rule program's single-program registration, `Composite` through every stage's component,
+  `Retrieval` never (`SNAPSHOT_NOT_ONBOARDABLE`, until a snapshot conformance statement exists); the OPV gate admits typed classes by
+  it; test `r4x_typed_roots_e2e::g14c::r4x_g14c_typed_classes_are_eligible_only_through_their_components` (only the component is
+  seamed). **GAP-51 verified** — a memory lie that finalized, convicted from a pruned-import node inside liability, the line rolled
+  back; a composite model-stage lie convicted at that stage; the typed rows and the line across a real restart. Residual: typed
+  claims are not re-gated at commit (a class whose component later loses eligibility keeps taking claims). Run `g14c-m4`: consensus-core
+  `palw_opv_bootstrap` 6/6; node `g14_canonical`/`r4x_`/`g14_opv_bootstrap`/`g14_conformance`/`g14_onboarding`/`g14_rewards`/`da16_`
+  66 pass, 1 fail not this lane's (`da16_scope_a_snapshot_is_never_demanded_…`: expects the producer to lose only the default
+  penalty, but r4-fixes also burns the 1 BILI OPV admission fee); after the composite test's snapshot-copy fix, `r4x_g14c` 4/4.
+  Integration note: `34b6c3f5e`'s cherry-pick names `ledger_cache` / `KernelLedgerCacheV1`, which exist only on `k2/real-scale`;
+  this branch drops that field from `from_rows` so the tree compiles.

@@ -714,7 +714,7 @@ impl PalwKernelRouteStateV1 {
     ) -> Result<Self, String> {
         let header: PalwKernelRouteHeaderV1 =
             borsh::from_slice(header).map_err(|e| format!("the route header does not decode: {e}"))?;
-        let mut route = Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new(), ledger_cache: KernelLedgerCacheV1::default() };
+        let mut route = Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new() };
         for (table, key, row) in rows {
             let twice = if table < PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1 {
                 route.rows.insert((table, key), row).is_some()
