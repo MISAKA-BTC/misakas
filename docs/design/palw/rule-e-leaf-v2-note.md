@@ -1,7 +1,7 @@
 # Rule E and the L2 fork-choice leaf — what leaf v2 must carry (FINX → L2FC, 2026-10-09; revised 2026-10-10)
 
 > **INTERNAL — not for publication.** Rule E (ADR-0178) is the fix for an internal fork-choice finding; this note lives on the
-> unpushed branch `fin/palw-finality-consistency` and goes to lane L2FC by hand. It describes what rule E reads, not why it was
+> internal branch `fin/palw-finality-consistency` and goes to lane L2FC by hand. It describes what rule E reads, not why it was
 > needed.
 
 Lane L2FC's design (`docs/design/palw/rfc9-l2-fork-choice.md` on `rfc9/l2-fork-choice`, §5.4) states the contract: *the leaf is
