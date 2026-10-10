@@ -1,6 +1,6 @@
 //! Checkpoint acquisition only: raw names/layouts, never architecture/name dispatch or decoding.
-use super::{FrontendPack, MAX_CONFIG_BYTES, MAX_SOURCE_TENSORS, bad};
-use crate::gguf::{GValue, GgufFile};
+use super::{FrontendPack, MAX_SOURCE_TENSORS, bad};
+use crate::gguf::GValue;
 use crate::quantfmt::QuantRegistry;
 use crate::weights::{Checkpoint, Tensor, TensorMeta, TensorSource};
 use crate::{LowerError, Result};
@@ -10,8 +10,23 @@ use std::path::{Path, PathBuf};
 
 const HEADER_BYTES: u64 = 64 << 20;
 const MAX_ALIGNMENT: u64 = 65_536;
+mod gguf_set;
+use gguf_set::GgufSet;
 
-/// Select one checkpoint. Ambiguous containers require an explicit file path.
+pub fn is_gguf_checkpoint(path: &Path) -> bool {
+    path.extension().is_some_and(|x| x == "gguf") || gguf_set::is_index(path)
+}
+/// All native checkpoint inputs, including its optional public index. Geometry is checked again
+/// with the pack's descriptors by FrontendSource; this header-only inventory selects no decoder.
+pub fn checkpoint_inputs(path: &Path) -> Result<Vec<PathBuf>> {
+    let selected = checkpoint_path(path)?;
+    if !is_gguf_checkpoint(&selected) {
+        return Err(bad("FRONTEND_SOURCE_FORMAT: native GGUF input required"));
+    }
+    Ok(GgufSet::open(&selected, QuantRegistry::builtin().clone(), false)?.inputs())
+}
+
+/// Select one checkpoint or split set. Ambiguous containers require an explicit file/index path.
 /// Unlike the family importer, a GGUF can have a config.json sidecar.
 pub fn checkpoint_path(path: &Path) -> Result<PathBuf> {
     if !path.is_dir() {
@@ -33,8 +48,30 @@ pub fn checkpoint_path(path: &Path) -> Result<PathBuf> {
     let ordinary = ["model.safetensors.index.json", "model.safetensors", "pytorch_model.bin.index.json", "pytorch_model.bin"]
         .iter()
         .any(|n| path.join(n).exists());
-    if gguf.len() > 1 || (ordinary && !gguf.is_empty()) {
+    let index = path.join("model.gguf.index.json");
+    if index.exists() {
+        if ordinary {
+            return Err(bad("FRONTEND_SOURCE_AMBIGUOUS: select an explicit checkpoint file"));
+        }
+        return Ok(index);
+    }
+    if ordinary && !gguf.is_empty() {
         return Err(bad("FRONTEND_SOURCE_AMBIGUOUS: select an explicit checkpoint file"));
+    }
+    if gguf.len() > 1 {
+        let selected = gguf_set::split_name(&gguf[0]);
+        if selected.is_none()
+            || !gguf.iter().all(|p| {
+                gguf_set::split_name(p).is_some_and(|(prefix, _, count)| {
+                    let (expected, _, n) = selected.unwrap();
+                    prefix == expected && count == n
+                })
+            })
+        {
+            return Err(bad("FRONTEND_SOURCE_AMBIGUOUS: select an explicit checkpoint file or index"));
+        }
+        gguf.sort();
+        return Ok(gguf.remove(0));
     }
     Ok(gguf.pop().unwrap_or_else(|| path.to_path_buf()))
 }
@@ -45,7 +82,7 @@ pub fn source_dir(path: &Path) -> &Path {
 
 enum RawSource {
     Ordinary(Checkpoint),
-    Gguf { file: GgufFile, registry: QuantRegistry },
+    Gguf(Box<GgufSet>),
 }
 
 /// A producer-side source for the public frontend. GGUF dimensions reverse into row-major shapes;
@@ -55,11 +92,11 @@ pub struct FrontendSource {
 }
 impl FrontendSource {
     pub fn is_gguf(&self) -> bool {
-        matches!(self.raw, RawSource::Gguf { .. })
+        matches!(self.raw, RawSource::Gguf(_))
     }
     pub fn open(path: &Path, pack: &FrontendPack) -> Result<Self> {
         let selected = checkpoint_path(path)?;
-        let raw = if selected.extension().is_some_and(|x| x == "gguf") {
+        let raw = if is_gguf_checkpoint(&selected) {
             // Registry lookup computes storage extent only. The binding's pinned local key selects
             // the decoder. Unknown types can supply a self-tested block descriptor and public ID.
             let mut registry = QuantRegistry::builtin().clone();
@@ -72,14 +109,7 @@ impl FrontendSource {
                 }
                 registry.add((**format).clone())?;
             }
-            let file = open_gguf(&selected, &registry)?;
-            if let Some(t) = file.tensors.values().find(|t| t.ty.block().is_none()) {
-                return Err(bad(format!(
-                    "FRONTEND_GGUF_FORMAT: tensor {} needs a block descriptor for GGML type {}",
-                    t.name, t.ty.id
-                )));
-            }
-            RawSource::Gguf { file, registry }
+            RawSource::Gguf(Box::new(GgufSet::open(&selected, registry, true)?))
         } else {
             RawSource::Ordinary(Checkpoint::open(&selected)?)
         };
@@ -90,16 +120,16 @@ impl FrontendSource {
     pub fn files(&self) -> Vec<PathBuf> {
         match &self.raw {
             RawSource::Ordinary(c) => c.files.iter().map(|f| f.path.clone()).collect(),
-            RawSource::Gguf { file, .. } => vec![file.path.clone()],
+            RawSource::Gguf(set) => set.inputs(),
         }
     }
 
     /// The embedded tokenizer's public representation, without inferring an algorithm from a
     /// model name. An explicit external tokenizer file can be chosen by the producer instead.
     pub fn embedded_tokenizer_id(&self) -> Result<Option<[u8; 64]>> {
-        let RawSource::Gguf { file, .. } = &self.raw else { return Ok(None) };
+        let RawSource::Gguf(set) = &self.raw else { return Ok(None) };
         let mut values = serde_json::Map::new();
-        for (key, value) in file.meta.iter().filter(|(key, _)| key.starts_with("tokenizer.")) {
+        for (key, value) in set.metadata().filter(|(key, _)| key.starts_with("tokenizer.")) {
             values.insert(key.clone(), metadata(value)?);
         }
         if values.is_empty() {
@@ -113,9 +143,14 @@ impl FrontendSource {
     /// inert in the frontend, and all values enter the effective configuration digest.
     /// A sidecar cannot override or hide a native metadata key.
     pub fn configuration(&self, sidecar: Value) -> Result<Value> {
-        let mut config = sidecar.as_object().cloned().ok_or_else(|| bad("FRONTEND_ENCODING: config is an object"))?;
-        if let RawSource::Gguf { file, .. } = &self.raw {
-            for (key, value) in &file.meta {
+        let Value::Object(mut config) = sidecar else { return Err(bad("FRONTEND_ENCODING: config is an object")) };
+        if let RawSource::Gguf(set) = &self.raw {
+            for key in ["split.no", "split.count", "split.tensors.count"] {
+                if config.contains_key(key) {
+                    return Err(bad("FRONTEND_GGUF_CONFIG: sidecar cannot inject transport metadata"));
+                }
+            }
+            for (key, value) in set.metadata() {
                 if config.insert(key.clone(), metadata(value)?).is_some() {
                     return Err(bad(format!("FRONTEND_GGUF_CONFIG: sidecar duplicates native key {key}")));
                 }
@@ -123,13 +158,6 @@ impl FrontendSource {
         }
         Ok(Value::Object(config))
     }
-}
-fn open_gguf(path: &Path, registry: &QuantRegistry) -> Result<GgufFile> {
-    let file = GgufFile::open_bounded(path, registry, HEADER_BYTES, MAX_CONFIG_BYTES as u64, MAX_SOURCE_TENSORS as u64)?;
-    if file.alignment > MAX_ALIGNMENT {
-        return Err(bad("FRONTEND_GGUF_LIMIT: alignment exceeds 64KiB"));
-    }
-    Ok(file)
 }
 fn metadata(value: &GValue) -> Result<Value> {
     Ok(match value {
@@ -156,7 +184,7 @@ impl TensorSource for FrontendSource {
     fn names(&self) -> Vec<String> {
         match &self.raw {
             RawSource::Ordinary(c) => c.names(),
-            RawSource::Gguf { file, .. } => file.tensors.keys().cloned().collect(),
+            RawSource::Gguf(set) => set.tensors.keys().cloned().collect(),
         }
     }
     fn shape(&self, name: &str) -> Option<Vec<usize>> {
@@ -165,8 +193,8 @@ impl TensorSource for FrontendSource {
     fn metadata(&self, name: &str) -> Option<TensorMeta> {
         match &self.raw {
             RawSource::Ordinary(c) => c.metadata(name),
-            RawSource::Gguf { file, .. } => {
-                let t = file.tensors.get(name)?;
+            RawSource::Gguf(set) => {
+                let t = set.parts[*set.tensors.get(name)?].tensors.get(name)?;
                 let (elems, bytes) = t.ty.block()?;
                 Some(TensorMeta {
                     dtype: t
@@ -186,20 +214,15 @@ impl TensorSource for FrontendSource {
     fn read_slice(&self, name: &str, range: Range<u64>) -> Result<Vec<u8>> {
         match &self.raw {
             RawSource::Ordinary(c) => c.read_slice(name, range),
-            RawSource::Gguf { file, .. } => file.read_range(name, range),
+            RawSource::Gguf(set) => {
+                let part = set.tensors.get(name).ok_or_else(|| bad(format!("FRONTEND_BINDING: no tensor {name}")))?;
+                set.parts[*part].read_range(name, range)
+            }
         }
     }
     fn validate_snapshot(&self) -> Result<()> {
-        if let RawSource::Gguf { file, registry } = &self.raw {
-            let current = open_gguf(&file.path, registry)?;
-            if file.version != current.version
-                || file.meta != current.meta
-                || file.tensors != current.tensors
-                || file.alignment != current.alignment
-                || file.data_start != current.data_start
-            {
-                return Err(bad("FRONTEND_SOURCE_CHANGED: GGUF header changed since acquisition"));
-            }
+        if let RawSource::Gguf(set) = &self.raw {
+            set.validate_snapshot()?;
         }
         Ok(())
     }

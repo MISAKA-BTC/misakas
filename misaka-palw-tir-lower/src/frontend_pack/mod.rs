@@ -6,7 +6,7 @@ mod descriptor;
 pub mod program;
 mod source;
 mod stream;
-pub use source::{FrontendSource, checkpoint_path, source_dir};
+pub use source::{FrontendSource, checkpoint_inputs, checkpoint_path, is_gguf_checkpoint, source_dir};
 pub use stream::{BuildRecord, Conversion, DescriptorRecord, SourceRecord};
 
 use crate::adapter::{canonical_json, expr::Env};
@@ -94,6 +94,7 @@ pub fn compiler_digest() -> String {
         include_str!("stream.rs"),
         include_str!("descriptor.rs"),
         include_str!("source.rs"),
+        include_str!("source/gguf_set.rs"),
         include_str!("../gguf.rs"),
         include_str!("../artifact.rs"),
         include_str!("../quantfmt/mod.rs"),

@@ -9,7 +9,9 @@ use super::{
 use crate::tir_manifest::PalwTirManifestV1;
 use misaka_palw_tir_lower::{
     admission, artifact,
-    frontend_pack::{BuildRecord, FrontendPack, FrontendSource, checkpoint_path, distinct_output, source_dir},
+    frontend_pack::{
+        BuildRecord, FrontendPack, FrontendSource, checkpoint_inputs, checkpoint_path, distinct_output, is_gguf_checkpoint, source_dir,
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -110,13 +112,21 @@ fn read(path: &Path, max: usize) -> Result<Vec<u8>, String> {
 fn files(model: &Path) -> Result<Vec<SourceFile>, String> {
     let selected = checkpoint_path(model).map_err(|e| e.to_string())?;
     let dir = source_dir(model);
-    let gguf = selected.extension().is_some_and(|ext| ext == "gguf");
+    let gguf = is_gguf_checkpoint(&selected);
     if !gguf && !model.is_dir() {
         return Err("FRONTEND_SOURCE_FORMAT: a safetensors directory is required".into());
     }
     let mut names = if gguf {
-        let mut names =
-            vec![selected.file_name().and_then(|n| n.to_str()).ok_or("FRONTEND_SOURCE_FORMAT: UTF-8 file name required")?.to_string()];
+        let mut names = checkpoint_inputs(&selected)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_string)
+                    .ok_or("FRONTEND_SOURCE_FORMAT: UTF-8 file name required".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut entries = 0;
         for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
             entries += 1;

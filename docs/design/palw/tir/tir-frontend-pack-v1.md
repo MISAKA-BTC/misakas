@@ -153,7 +153,7 @@ Its logical shape is the TIR parameter: leading axes flatten to rows and the las
 the descriptor's block elements. The source is an I8/U8 byte container, or a raw `TensorSource` with
 the same logical shape. A scalar storage dtype must additionally have the exact declared scalar
 byte count. The source bytes must exactly equal the computed block bytes. No dtype name selects
-the decoder. Local safetensors can carry raw block bytes; native single-file GGUF uses the raw
+the decoder. Local safetensors can carry raw block bytes; native GGUF containers use the raw
 acquisition contract below. The separate legacy ModelSpec GGUF importer remains available.
 
 Tensor group-index, scale/zero/min and element passes preserve their original coordinates. Blocks
@@ -206,10 +206,34 @@ not execution/proof/hash/retention/delivery benchmarks.
 
 ## Native GGUF acquisition
 
-Both the generic CLI and SDK companion accept a GGUF file or a directory containing one GGUF,
-including a directory with `config.json`. Multiple GGUFs or a mix with the ordinary default
-checkpoint require an explicit file path. This increment handles a single container; split GGUF
-acquisition remains open. Selection and decoder validity have no model-family/name dispatch.
+Both the generic CLI and SDK companion accept a GGUF file, any part of a standard split set,
+an explicit `*.gguf.index.json`, or an unambiguous directory, including a `config.json` sidecar.
+Standard sets use `<arbitrary-prefix>-00001-of-00003.gguf`; a directory containing multiple sets
+or ordinary checkpoint files alongside GGUF requires an explicit file/index path. A directory's
+`model.gguf.index.json` selects its enumerated native set. Selection and decoder validity have
+no model-family/name dispatch.
+
+Arbitrary part names use a public acquisition index, outside consensus:
+
+```json
+{"format":"misaka.palw.gguf-checkpoint.v1","parts":["weights-B.bin","metadata.bin","weights-A.bin"]}
+```
+
+The index has exactly these fields, at most 2 MiB and 1–1024 distinct local basenames (no path
+separators, traversal or absolute paths). Ordering grants no priority: headers identify the parts.
+All three `split.no`, `split.count` and `split.tensors.count` integer fields are required together;
+part numbers are contiguous from zero, declarations agree, and the global tensor count is checked.
+A merged standalone file may declare count zero; a one-part set declares count one. Part zero
+may be metadata-only. Container versions agree and tensor names are globally unique. Later parts
+may omit primary metadata or repeat it exactly, with only transport keys and part-local alignment
+exempted. Additional/conflicting model or tokenizer metadata refuses. These conventions match the
+[upstream split writer](https://github.com/ggml-org/llama.cpp/blob/master/tools/gguf-split/gguf-split.cpp).
+
+Only the three verified transport fields are excluded from the effective model configuration;
+a sidecar cannot inject them. Other `split.*` keys remain subject to strict read/inert validation.
+For the same payloads and effective metadata, whole and split sources yield identical artifacts,
+receipts and tokenizer/class identities. SDK source SHAs still pin every physical part and the
+index, so a changed partition or index requires a fresh companion pack.
 
 `FrontendSource` exposes the stored tensor names unchanged. Reversing GGML dimensions yields the
 logical row-major shape; bytes stay untouched. No Q/K permutation, gain adjustment, expert split
@@ -237,13 +261,15 @@ all embedded `tokenizer.*` values are hashed as canonical JSON
 No tokenizer information yields the existing zero ID. This pins the representation and class
 identity; it does not certify a tokenizer algorithm or complete text-task fidelity.
 
-Acquisition caps parsed header bytes and cumulative logical header allocation at 64 MiB each,
-tensor/metadata-key counts at 65,536, rank at four and alignment at 64 KiB. Existing per-string,
+Acquisition shares parsed header bytes and cumulative logical header allocation budgets of
+64 MiB each across every part, with aggregate tensor/metadata-key counts of 65,536, rank four
+and per-part alignment at 64 KiB. Each part consumes the same budget before allocation;
+opening another part cannot replenish it. Existing per-string,
 array and nesting limits also apply. Counts/allocation budgets precede allocation; dimension/byte/
 offset/alignment arithmetic is checked. Zero dimensions, duplicate names/keys, overlapping tensor
 ranges and truncated data refuse. Unknown tensor bounds use a sorted lookup rather than a
-quadratic scan. The writer revalidates the native header before conversion and before publishing,
-so a header change during payload reads preserves the prior output. Payload read metrics retain
+quadratic scan. The writer revalidates every native header and the index before conversion and before publishing,
+so a header or index change during acquisition preserves the prior output. Payload read metrics retain
 their stated block budget; header parsing is a separate bounded acquisition cost.
 
 The `misaka.palw.tir-frontend-build.v1` receipt pins frontend/config/program/tokenizer/artifact
@@ -275,8 +301,8 @@ palw-class pack verify-frontend --model ./public-checkpoint --artifact model.pal
   --pack ./pack --rebuild-out peer.palwtir --block-bytes 8192
 ```
 
-The companion accepts local safetensors directories with each shard pinned, and a single GGUF
-file/directory with the container plus optional config/tokenizer sidecars pinned. Verification
+The companion accepts local safetensors directories with each shard pinned, and whole/split GGUF
+files or indexes with every part, index and optional config/tokenizer sidecar pinned. Verification
 checks SHAs/compiler/executor/profile pins, rebuilds without uploaded executable code, derives
 the common inventory and reruns all three engines. Named build/conformance checks are separate
 from `SOURCE_EQUIVALENCE_UNVERIFIED`, full task and live Final. A pack cannot supply a boolean

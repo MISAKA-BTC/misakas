@@ -1517,3 +1517,235 @@ fn native_gguf_metadata_retains_signed_unsigned_and_binary32_values_exactly() {
     assert_eq!(config["sidecar"], "public");
     assert!(source.configuration(json!({"signed":signed})).unwrap_err().to_string().contains("duplicates native key"));
 }
+
+fn split_metadata(no: u16, count: u16, total: i32) -> Vec<(String, u32, Vec<u8>)> {
+    vec![
+        ("split.no".into(), 2, no.to_le_bytes().to_vec()),
+        ("split.count".into(), 2, count.to_le_bytes().to_vec()),
+        ("split.tensors.count".into(), 5, total.to_le_bytes().to_vec()),
+    ]
+}
+
+#[test]
+fn split_gguf_has_identical_artifacts_receipts_and_tokenizer_identity_for_every_entry_part_and_index_order() {
+    use frontend_pack::FrontendSource;
+    let dir = Temp::new();
+    let p = program();
+    let s = source(&p);
+    let mut d = definition(&p);
+    d["inert"].as_array_mut().unwrap().extend([json!("general.architecture"), json!("tokenizer.ggml.tokens")]);
+    let pack = FrontendPack::parse(&d.to_string()).unwrap();
+    let tensors: Vec<_> = s
+        .tensors
+        .iter()
+        .map(|(name, (m, raw))| {
+            let ty = match m.dtype.as_str() {
+                "I8" => 24,
+                "I16" => 25,
+                "I64" => 27,
+                _ => panic!(),
+            };
+            (name.clone(), m.shape.clone(), ty, raw.clone())
+        })
+        .collect();
+    let mut metadata = gguf_meta();
+    let mut tokens = Vec::new();
+    tokens.extend(8u32.to_le_bytes());
+    tokens.extend(16u64.to_le_bytes());
+    for n in 0..16 {
+        gguf_string(&mut tokens, &format!("token{n}"));
+    }
+    metadata.push(("tokenizer.ggml.tokens".into(), 9, tokens));
+    let whole = dir.0.join("whole.gguf");
+    std::fs::write(&whole, native_gguf(&tensors, &metadata, None)).unwrap();
+    let native = FrontendSource::open(&whole, &pack).unwrap();
+    let effective = native.configuration(config()).unwrap();
+    let tokenizer = native.embedded_tokenizer_id().unwrap().unwrap();
+    let compiled = pack.compile_bounded(&effective, &native, &admission::default_inputs(), 8).unwrap();
+    let out = dir.0.join("whole.palwtir");
+    let expected = compiled.write(&out, &native, tokenizer, 8).unwrap();
+    let model = dir.0.join("split");
+    std::fs::create_dir_all(&model).unwrap();
+    let mut parts = Vec::new();
+    for no in 0..3 {
+        let path = model.join(format!("arbitrary-{:05}-of-00003.gguf", no + 1));
+        let mut meta = split_metadata(no, 3, tensors.len() as i32);
+        if no == 0 {
+            meta.extend(metadata.clone());
+        }
+        let rows = match no {
+            0 => &tensors[0..0],
+            1 => &tensors[..2],
+            _ => &tensors[2..],
+        };
+        std::fs::write(&path, native_gguf(rows, &meta, None)).unwrap();
+        parts.push(path);
+    }
+    std::fs::write(model.join("config.json"), config().to_string()).unwrap();
+    for (j, input) in std::iter::once(&model).chain(parts.iter()).enumerate() {
+        let source = FrontendSource::open(input, &pack).unwrap();
+        assert_eq!(source.configuration(config()).unwrap(), effective);
+        assert_eq!(source.embedded_tokenizer_id().unwrap(), Some(tokenizer));
+        assert_eq!(source.files().len(), 3);
+        let built = pack.compile_bounded(&effective, &source, &admission::default_inputs(), 127).unwrap();
+        let output = dir.0.join(format!("split-{j}"));
+        let actual = built.write_checked(&output, &source, tokenizer, 127, Some(&expected.record)).unwrap();
+        assert_eq!(actual.record, expected.record);
+        assert_eq!(std::fs::read(&out).unwrap(), std::fs::read(&output).unwrap());
+        let (_, params) = artifact::read(&output, &p).unwrap();
+        common::three_ways(&p, &params, &[vec![1, 2, 3, 4]]).unwrap();
+        common::court_coverage(&p, &params, &[1, 2, 3, 4], &[0, 1, 3], &[4]).unwrap();
+        assert!(source.configuration(json!({"split.no":0})).unwrap_err().to_string().contains("inject transport"));
+    }
+    let indexed = dir.0.join("indexed");
+    std::fs::create_dir_all(&indexed).unwrap();
+    let names = ["metadata.bin", "arbitrary-A.gguf", "第三者.bin"];
+    for (part, name) in parts.iter().zip(names) {
+        std::fs::copy(part, indexed.join(name)).unwrap();
+    }
+    std::fs::copy(model.join("config.json"), indexed.join("config.json")).unwrap();
+    let index = indexed.join("model.gguf.index.json");
+    let manifest = json!({"format":"misaka.palw.gguf-checkpoint.v1","parts":[names[2],names[0],names[1]]});
+    std::fs::write(&index, manifest.to_string()).unwrap();
+    let source = FrontendSource::open(&indexed, &pack).unwrap();
+    assert_eq!(source.configuration(config()).unwrap(), effective);
+    assert_eq!(source.files().len(), 4);
+    let built = pack.compile_bounded(&effective, &source, &admission::default_inputs(), 8).unwrap();
+    let output = dir.0.join("indexed.palwtir");
+    built.write_checked(&output, &source, tokenizer, 8, Some(&expected.record)).unwrap();
+    let frontend = dir.0.join("frontend.json");
+    let receipt = dir.0.join("record.json");
+    std::fs::write(&frontend, d.to_string()).unwrap();
+    std::fs::write(&receipt, serde_json::to_vec(&expected.record).unwrap()).unwrap();
+    let cli = dir.0.join("cli-split");
+    let r = std::process::Command::new(env!("CARGO_BIN_EXE_palw-tir-frontend"))
+        .arg(&indexed)
+        .arg("--frontend-pack")
+        .arg(&frontend)
+        .arg("--out")
+        .arg(&cli)
+        .arg("--record")
+        .arg(dir.0.join("cli-record.json"))
+        .arg("--expect-record")
+        .arg(&receipt)
+        .output()
+        .unwrap();
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert_eq!(std::fs::read(&out).unwrap(), std::fs::read(&cli).unwrap());
+    std::fs::write(&index, json!({"format":"misaka.palw.gguf-checkpoint.v1","parts":names}).to_string()).unwrap();
+    let prior = std::fs::read(&output).unwrap();
+    assert!(built.write(&output, &source, tokenizer, 8).err().unwrap().to_string().contains("index changed"));
+    assert_eq!(std::fs::read(&output).unwrap(), prior);
+    // A merged upstream GGUF can retain split.count=0; checked transport fields confer no identity.
+    let mut merged_meta = metadata;
+    merged_meta.extend(split_metadata(0, 0, tensors.len() as i32));
+    std::fs::write(&whole, native_gguf(&tensors, &merged_meta, None)).unwrap();
+    let merged = FrontendSource::open(&whole, &pack).unwrap();
+    let built = pack.compile_bounded(&effective, &merged, &admission::default_inputs(), 8).unwrap();
+    built.write_checked(&dir.0.join("merged"), &merged, tokenizer, 8, Some(&expected.record)).unwrap();
+}
+
+#[test]
+fn split_gguf_refuses_missing_inconsistent_duplicated_or_hidden_headers_and_unsafe_indexes() {
+    use frontend_pack::FrontendSource;
+    let dir = Temp::new();
+    let (d, _, _, _) = saved_fixture(&stranger_gguf_descriptor(), 0);
+    let pack = FrontendPack::parse(&d.to_string()).unwrap();
+    let a = dir.0.join("any-00001-of-00002.gguf");
+    let b = dir.0.join("any-00002-of-00002.gguf");
+    let first = vec![("a".into(), vec![1], 0, vec![0; 4])];
+    let second = vec![("b".into(), vec![1], 0, vec![0; 4])];
+    let initial_a = native_gguf(&first, &split_metadata(0, 2, 2), None);
+    let initial_b = native_gguf(&second, &split_metadata(1, 2, 2), None);
+    let reset = || {
+        std::fs::write(&a, &initial_a).unwrap();
+        std::fs::write(&b, &initial_b).unwrap();
+    };
+    reset();
+    assert!(FrontendSource::open(&dir.0, &pack).is_ok());
+    let reject = |input: &std::path::Path, want: &str| {
+        let e = FrontendSource::open(input, &pack).err().unwrap().to_string();
+        assert!(e.contains(want), "{e}");
+    };
+    std::fs::remove_file(&b).unwrap();
+    reject(&a, "00002-of-00002");
+    reset();
+    std::fs::write(&b, native_gguf(&second, &split_metadata(1, 3, 2), None)).unwrap();
+    reject(&a, "inconsistent part declarations");
+    reset();
+    std::fs::write(&b, native_gguf(&second, &split_metadata(1, 2, 3), None)).unwrap();
+    reject(&a, "inconsistent part declarations");
+    reset();
+    for (path, no, rows) in [(&a, 0, &first), (&b, 1, &second)] {
+        std::fs::write(path, native_gguf(rows, &split_metadata(no, 2, 3), None)).unwrap();
+    }
+    reject(&a, "total tensor count mismatch");
+    reset();
+    std::fs::write(&b, native_gguf(&first, &split_metadata(1, 2, 2), None)).unwrap();
+    reject(&a, "duplicate tensor");
+    reset();
+    let mut hidden = split_metadata(1, 2, 2);
+    hidden.extend(gguf_meta());
+    std::fs::write(&b, native_gguf(&second, &hidden, None)).unwrap();
+    reject(&a, "additional metadata");
+    reset();
+    let mut partial = split_metadata(0, 2, 2);
+    partial.pop();
+    std::fs::write(&a, native_gguf(&first, &partial, None)).unwrap();
+    reject(&a, "incomplete split metadata");
+    reset();
+    std::fs::write(&b, native_gguf(&second, &split_metadata(0, 2, 2), None)).unwrap();
+    reject(&b, "filename disagrees");
+    reset();
+    let mut v2 = initial_b.clone();
+    v2[4..8].copy_from_slice(&2u32.to_le_bytes());
+    std::fs::write(&b, v2).unwrap();
+    reject(&a, "inconsistent container versions");
+    reset();
+    std::fs::write(&a, native_gguf(&first, &split_metadata(0, 1025, 2), None)).unwrap();
+    reject(&a, "bound");
+    reset();
+    let index = dir.0.join("arbitrary.gguf.index.json");
+    let valid = json!({"format":"misaka.palw.gguf-checkpoint.v1","parts":[a.file_name().unwrap().to_str().unwrap(),b.file_name().unwrap().to_str().unwrap()]});
+    std::fs::write(&index, valid.to_string()).unwrap();
+    std::fs::write(&b, native_gguf(&second, &split_metadata(0, 2, 2), None)).unwrap();
+    reject(&index, "duplicate part number");
+    reset();
+    for names in
+        [json!([]), json!(["../outside.gguf"]), json!(["/outside.gguf"]), json!(["C:\\outside.gguf"]), json!(["a.gguf", "a.gguf"])]
+    {
+        std::fs::write(&index, json!({"format":"misaka.palw.gguf-checkpoint.v1","parts":names}).to_string()).unwrap();
+        reject(&index, "FRONTEND_GGUF_INDEX");
+    }
+    let mut unknown = valid.clone();
+    unknown["ignored"] = json!(true);
+    std::fs::write(&index, unknown.to_string()).unwrap();
+    reject(&index, "unknown field");
+    std::fs::write(&index, vec![b' '; frontend_pack::MAX_PACK_BYTES + 1]).unwrap();
+    reject(&index, "index bytes");
+}
+
+#[test]
+fn gguf_parts_share_header_allocation_and_count_budgets_before_reading_payloads() {
+    use misaka_palw_tir_lower::{
+        gguf::{GgufFile, GgufReadBudget},
+        quantfmt::QuantRegistry,
+    };
+    let dir = Temp::new();
+    let a = dir.0.join("a.gguf");
+    let b = dir.0.join("b.gguf");
+    let raw = native_gguf(&[], &split_metadata(0, 2, 0), None);
+    std::fs::write(&a, &raw).unwrap();
+    std::fs::write(&b, &raw).unwrap();
+    let reg = QuantRegistry::builtin();
+    for (header, allocation, count, want) in [
+        (raw.len() as u64, 1 << 20, 100, "header byte limit"),
+        (1 << 20, 1500, 100, "allocation limit"),
+        (1 << 20, 1 << 20, 3, "metadata keys"),
+    ] {
+        let mut budget = GgufReadBudget::new(header, allocation, count);
+        GgufFile::open_with_budget(&a, reg, &mut budget).unwrap();
+        let e = GgufFile::open_with_budget(&b, reg, &mut budget).unwrap_err().to_string();
+        assert!(e.contains(want), "{e}");
+    }
+}

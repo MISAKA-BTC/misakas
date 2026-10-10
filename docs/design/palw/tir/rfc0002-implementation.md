@@ -10,7 +10,7 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | --- | --- | --- |
 | Current specification | RFC02 now separates current requirements from historical primitive-count, replay, availability and seating notes; §II.14 incorporates all six review requirements | Keep formal specification and implementation aligned as versioned features land |
 | Direct canonical TIR | SDK `tests/direct_tir_registration.rs` exercises byte-based admission and provenance-independent identity; the generic frontend now reproduces the same program/inventory/class ID through common admission | Same-binary real-checkpoint registration, independent conformance/claim/Final/redemption and all §II.11.4 mutations |
-| Declarative frontend pack | Implemented content-addressed primitive/state grammar, strict config/source bindings, bounded integer/IEEE and inline virtual/tensors/blocks imports, pinned metadata, raw single-file GGUF acquisition including supplied unknown IDs and tokenizer identity, replayable receipts and staged SDK build/verify with source SHAs and all three engines; [format contract](tir-frontend-pack-v1.md) | Split GGUF acquisition, HF-reference/beacon runtime-pack integration, all advertised tasks/components and real-node §II.11.4 acceptance |
+| Declarative frontend pack | Implemented content-addressed primitive/state grammar, strict config/source bindings, bounded integer/IEEE and inline virtual/tensors/blocks imports, pinned metadata, raw whole/split GGUF acquisition including public indexes, aggregate budgets, supplied unknown IDs and tokenizer identity, replayable receipts and staged SDK build/verify with source SHAs and all three engines; [format contract](tir-frontend-pack-v1.md) | HF-reference/beacon runtime-pack integration, all advertised tasks/components and real-node §II.11.4 acceptance |
 | Compiler expansion bounds | Shared work/allocation/depth budget now also protects general frontend variables/program/bindings; strict key tracking survives nested scopes; structural/constant bounds precede canonical encoding and weight reads | Maintain coverage as descriptor and versioned graph/dimension features land; existing bounds do not prove whole-node load safety |
 | Bounded dimensions and sparse/state semantics | v1 has fixed/Hist dimensions and fixed-axis TopK; v2 stage programs exist | Versioned length commitments; efficient sparse/routing/state relations; complete evaluator/checker/court/evidence binding; long-context and boundary trials |
 | Fidelity and reproducibility | ModelSpec runtime pack has source/frontend/artifact checks, executor vectors and logit fidelity; generic companion pins source SHA/compiler/executor revisions and reproduces canonical bytes/inventory while reporting SOURCE_EQUIVALENCE_UNVERIFIED | Pre-run thresholds and checkpoint-scoped routing, task quality, long-context and saturation measurements; generic frontend HF-reference/beacon evidence; named failures rather than broad PASS |
@@ -300,3 +300,43 @@ RFC02 remains **not complete**. Split GGUF acquisition, HF-reference/beacon inte
 versioned length/sparse/state extensions, complete shared resource/economic accounting, real-size
 fidelity/performance/load measurements, complete RFC03 tasks, fresh-outsider G14 and independent
 Final/redemption, and A6/A8 coverage remain required by the original completion contract.
+
+
+## Verified increment — split GGUF acquisition, 2026-10-10
+
+The generic frontend and SDK now acquire a split checkpoint through any standard part, an
+unambiguous directory, or a strict public `*.gguf.index.json` listing arbitrary local basenames.
+Part zero may hold metadata without tensors; index order and the selected entry part grant no
+priority. Every part must agree on the declared count and total tensors, use contiguous unique
+part numbers and the same container version, and contribute globally unique tensor names.
+Later model/tokenizer metadata must repeat the primary value exactly or be absent. Only the
+three verified split transport fields are excluded from model configuration; sidecars cannot
+inject them. The same values/configuration produce identical artifacts, receipts and tokenizer
+identities whether stored whole or split.
+
+The native reader uses shared 64 MiB header and logical allocation budgets and aggregate 65,536
+metadata/tensor counts across the entire set. No part resets these budgets. Public indexes are
+bounded to 2 MiB and 1024 distinct local basenames; traversal, duplicate names and unknown fields
+refuse. Snapshot validation rechecks every part and the index before output publication. The SDK
+pins the index, every part and present sidecars, including unknown descriptor-supplied GGML IDs.
+A changed payload or reordered source index fails source-SHA verification without replacing the
+prior published artifact. Output conflict guards cover every part.
+
+**86 distinct targeted tests pass**: 36 generic frontend, nine Direct-TIR/SDK, ten existing
+runtime-pack and 31 GGUF/metadata/RoPE/golden-lowering/streamed-range regressions. Commands are
+unchanged from the preceding increment. The new SDK fixture reconstructs an arbitrary-name,
+reordered three-part set with a metadata-only first part, exact I64 values above 2^53 and an
+unknown self-tested packed type. Directory/index rebuilds, both CLIs, three-engine conformance,
+common inventory and offline class admission pass. Refusal fixtures exercise missing/mismatched
+parts, hidden metadata, duplicate global tensors, unsafe/oversized indexes and exhaustion of
+shared header/allocation/count budgets. These are fixture/interface results, not real-checkpoint
+or real-node Final evidence.
+
+`cargo clippy --locked -p misaka-palw-tir-lower -p misaka-palw-sdk --lib`, formatter checks for the
+changed frontend/SDK files, `git diff --check` and local Markdown target checks pass. Existing
+clippy warnings remain; the new split acquisition and modified publisher produce none.
+
+RFC02 remains **not complete**. HF-reference/beacon integration, versioned length/sparse/state
+extensions, complete shared resource/economic accounting, real-size fidelity/performance/load
+measurements, complete RFC03 tasks, fresh-outsider G14 and independent Final/redemption, and
+A6/A8 coverage remain required by the original completion contract.

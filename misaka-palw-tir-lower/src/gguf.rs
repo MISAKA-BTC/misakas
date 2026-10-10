@@ -203,21 +203,34 @@ pub struct GgufFile {
     unsized_bounds: BTreeMap<String, u64>,
 }
 
-struct Rd<R: Read> {
-    r: R,
-    pos: u64,
+/// Producer-side aggregate budgets shared by every part of a checkpoint, before allocation.
+pub struct GgufReadBudget {
     header_left: u64,
     allocation_left: u64,
+    tensors_left: u64,
+    metadata_left: u64,
+}
+impl GgufReadBudget {
+    pub fn new(header_bytes: u64, allocation_bytes: u64, max_entries: u64) -> Self {
+        Self { header_left: header_bytes, allocation_left: allocation_bytes,
+            tensors_left: max_entries.min(MAX_TENSORS), metadata_left: max_entries.min(MAX_KV) }
+    }
 }
 
-impl<R: Read> Rd<R> {
+struct Rd<'a, R: Read> {
+    r: R,
+    pos: u64,
+    budget: &'a mut GgufReadBudget,
+}
+
+impl<R: Read> Rd<'_, R> {
     fn allocation(&mut self, n: u64) -> Result<()> {
-        self.allocation_left = self.allocation_left.checked_sub(n)
+        self.budget.allocation_left = self.budget.allocation_left.checked_sub(n)
             .ok_or_else(|| LowerError::weights("GGUF: header allocation limit"))?;
         Ok(())
     }
     fn advance(&mut self, n: u64) -> Result<()> {
-        self.header_left = self.header_left.checked_sub(n)
+        self.budget.header_left = self.budget.header_left.checked_sub(n)
             .ok_or_else(|| LowerError::weights("GGUF: header byte limit"))?;
         self.pos = self.pos.checked_add(n).ok_or_else(|| LowerError::weights("GGUF: header offset overflow"))?;
         Ok(())
@@ -273,7 +286,7 @@ impl<R: Read> Rd<R> {
                 if n > MAX_ARRAY {
                     return Err(LowerError::weights(format!("GGUF: an array of {n} elements")));
                 }
-                if n.checked_mul(std::mem::size_of::<GValue>() as u64).is_none_or(|n| n > self.allocation_left) {
+                if n.checked_mul(std::mem::size_of::<GValue>() as u64).is_none_or(|n| n > self.budget.allocation_left) {
                     return Err(LowerError::weights("GGUF: header allocation limit"));
                 }
                 let mut v = Vec::with_capacity((n as usize).min(1 << 20));
@@ -306,10 +319,15 @@ impl GgufFile {
     /// Raw acquisition with aggregate header/allocation/inventory budgets, before allocations.
     /// These producer-side limits do not define consensus admission or model support.
     pub fn open_bounded(path: &Path, reg: &QuantRegistry, header_bytes: u64, allocation_bytes: u64, max_tensors: u64) -> Result<Self> {
+        Self::open_with_budget(path,reg,&mut GgufReadBudget::new(header_bytes,allocation_bytes,max_tensors))
+    }
+
+    /// Open another part without replenishing its checkpoint's header/count/allocation budgets.
+    pub fn open_with_budget(path: &Path, reg: &QuantRegistry, budget: &mut GgufReadBudget) -> Result<Self> {
         let f = std::fs::File::open(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?;
         let len = f.metadata().map_err(|e| LowerError::Io(e.to_string()))?.len();
         let file = Arc::new(f.try_clone().map_err(|e| LowerError::Io(e.to_string()))?);
-        let mut g = Self::parse_bounded(BufReader::new(f), Some(len), path, reg, header_bytes, allocation_bytes, max_tensors)?;
+        let mut g = Self::parse_with_budget(BufReader::new(f), Some(len), path, reg, budget)?;
         g.file = Some(file);
         Ok(g)
     }
@@ -320,11 +338,11 @@ impl GgufFile {
     /// known, bounds every tensor against the file; when `None` (a header alone) the bounds are not
     /// checked and a type no descriptor describes has no size.
     pub fn parse(reader: impl Read, file_len: Option<u64>, label: &Path, reg: &QuantRegistry) -> Result<Self> {
-        Self::parse_bounded(reader, file_len, label, reg, u64::MAX, u64::MAX, MAX_TENSORS)
+        Self::parse_with_budget(reader, file_len, label, reg, &mut GgufReadBudget::new(u64::MAX,u64::MAX,MAX_TENSORS))
     }
 
-    fn parse_bounded(reader: impl Read, file_len: Option<u64>, label: &Path, reg: &QuantRegistry, header_bytes: u64, allocation_bytes: u64, max_tensors: u64) -> Result<Self> {
-        let mut r = Rd { r: reader, pos: 0, header_left: header_bytes, allocation_left: allocation_bytes };
+    fn parse_with_budget(reader: impl Read, file_len: Option<u64>, label: &Path, reg: &QuantRegistry, budget: &mut GgufReadBudget) -> Result<Self> {
+        let mut r = Rd { r: reader, pos: 0, budget };
         if &r.arr::<4>()? != b"GGUF" {
             return Err(LowerError::weights(format!("{}: not a GGUF file", label.display())));
         }
@@ -334,9 +352,11 @@ impl GgufFile {
         }
         let n_tensors = r.u64()?;
         let n_kv = r.u64()?;
-        if n_tensors > MAX_TENSORS.min(max_tensors) || n_kv > MAX_KV.min(max_tensors) {
+        if n_tensors > r.budget.tensors_left || n_kv > r.budget.metadata_left {
             return Err(LowerError::weights(format!("GGUF: {n_tensors} tensors, {n_kv} metadata keys")));
         }
+        r.budget.tensors_left -= n_tensors;
+        r.budget.metadata_left -= n_kv;
         r.allocation(n_tensors.checked_add(n_kv).and_then(|n| n.checked_mul(256)).ok_or_else(|| LowerError::weights("GGUF: header allocation overflow"))?)?;
         let mut meta = BTreeMap::new();
         for _ in 0..n_kv {
