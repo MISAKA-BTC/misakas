@@ -2097,11 +2097,6 @@ impl KernelLedgerV1 {
             .map_or(*filer, |((_, accuser), _)| *accuser)
     }
 
-    /// What a claim reserved when it was admitted: an OPV claim's policy reservation, else the route's flat collateral.
-    fn admitted_reservation(&self, claim: &Digest) -> u64 {
-        self.opv.claims.get(claim).map_or(self.policy.claim_collateral, |o| o.reservation)
-    }
-
     fn convict(&mut self, claim: &Digest, accuser: &Digest, post_final: bool, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
         let producer_collateral = self.claims.get(claim).and_then(|r| self.bonds.get(&r.producer)).map_or(0, |b| b.collateral);
