@@ -3315,3 +3315,8 @@ mod canonical;
 // OPV-BOOT: the OPV ↔ beacon startup cycle closed — the complete-check bootstrap from zero Finals, derived eligibility, its loss,
 // hostile complete checks, the deny-list and the test seam's pin: `g14_kernel_route_e2e/opv_bootstrap.rs`.
 mod opv_bootstrap;
+// Lane G14-R: the public prosecution RESUMES — verifier restart, node restart, reorg, full IBD, pruned import and the deadline bound,
+// planned from public rows alone (`misaka_palw_remote::pursuit`): `g14_kernel_route_e2e/recovery.rs`; over a real socket RPC:
+// `g14_kernel_route_e2e/socket_rpc.rs`.
+mod recovery;
+mod socket_rpc;

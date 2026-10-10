@@ -94,6 +94,14 @@ misaka-palw-remote.workspace = true
 # G14C (GAP-03): the canonical G14 harness reads the kernel route through the RPC ops' own builders (`kaspa_rpc_core::convert::palw_kernel`,
 # which the RPC service calls) and carries each answer through the RPC's JSON wire form. rpc-core depends on consensus-core only.
 kaspa-rpc-core.workspace = true
+# Lane G14-R: the PALW read ops over a REAL socket (`tests/g14r_socket_rpc.rs`) — the shipping gRPC server and wRPC proxy on 127.0.0.1
+# in front of a test node, and the real clients. None of these depends on kaspa-consensus (no cycle).
+async-trait.workspace = true
+kaspa-grpc-server.workspace = true
+kaspa-grpc-client.workspace = true
+kaspa-wrpc-server.workspace = true
+kaspa-wrpc-client.workspace = true
+workflow-rpc.workspace = true
 
 [[bench]]
 name = "parallel_muhash"

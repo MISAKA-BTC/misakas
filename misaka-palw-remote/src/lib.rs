@@ -34,6 +34,8 @@ pub mod miner;
 pub mod proof;
 /// Lane DA16: the public material transport — artifacts (both roots of a binding) and claim material (kernel positions, V2 held units).
 pub mod public_material;
+/// Lane G14-R: the kernel route's public prosecution planner — what to send next, rebuilt from public reads (restart, reorg, IBD, RPC).
+pub mod pursuit;
 pub mod register;
 pub mod relay;
 pub mod resubmit;
