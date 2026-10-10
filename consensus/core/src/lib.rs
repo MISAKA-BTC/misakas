@@ -271,6 +271,14 @@ pub mod palw_exec_view_v1;
 /// ADR-0125 — the execution lane's round rules (a second, a seed, capped quotas, alternating
 /// permits) as pure functions; consensus-inert until the lane that reads them is built.
 pub mod palw_execution_lane_v1;
+/// RFC-0008 v2: the unified EXEC lane's wire layer — one versioned envelope, two exclusive subtypes (`EXEC_TX`, `EXEC_SLICE`); dormant behind `palw_exec_payload_v2`.
+pub mod palw_exec_v2;
+/// RFC-0008 v2: the weightless carriage — the anchor trailer, the closure of lane heads, the covered-set root; dormant behind `palw_exec_payload_v2`.
+pub mod palw_exec_v2_anchor;
+/// RFC-0008 v2 amendment 1: the slice verification route — a slice is verified, convicted or defaulted through the G14 kernel route.
+pub mod palw_exec_v2_verify;
+/// RFC-0008 v2: the work-slice ledgers (`WorkSliceUse`, `RootWorkBudget`, `JobWorkUse`), the canonical plan, the admission refusals and the root's one settlement; dormant behind `palw_exec_payload_v2`.
+pub mod palw_work_slice_v2;
 /// Spend-once execution-round quanta: 1 verified CanonicalWork → N unique permit tickets.
 pub mod palw_execution_quanta_v1;
 pub mod palw_exposure;
@@ -279,6 +287,9 @@ pub mod palw_facts;
 pub mod palw_false_valid_filing_v1;
 pub mod palw_fork_authority_v2;
 pub mod palw_fork_choice;
+/// RFC-0009 L2: the fork-choice leaf a header commits past `palw_fork_choice_commitment_v1` (dormant, refused when armed) — the
+/// comparator's inputs as an O(1) opening of the committed root.
+pub mod palw_fork_choice_commitment_v1;
 pub mod palw_fp_admission_v3;
 pub mod palw_fp_beacon_v3;
 pub mod palw_fp_devnet_v3;
@@ -486,8 +497,13 @@ pub mod palw_gen_worker_v1;
 /// RFC-0003 §II.2.1 (RFC-0001's lane): FP Job V5 — a V4 job with image inputs, for a vision-language class; dormant behind `palw_fp_job_v5`.
 pub mod palw_fp_job_v5;
 pub mod palw_gen_range_twin_v1;
+pub mod palw_task_heads_v1;
 /// RFC-0011 §15.7: the kernel route's fence `palw_probabilistic_constraints_v1` — dormant, no height, refused when armed.
 pub mod palw_probabilistic_constraints_v1;
+/// ADR-0178: rule E — the fork choice weighs exclusive pasts, bonded participation first (`palw_fork_choice_rule_e_v1`, dormant).
+pub mod palw_fork_choice_rule_e_v1;
+/// ADR-0178 × RFC-0009 L2: the rule-E fields of the fork-choice leaf v2 — the window and registry trees, openings, the client's pair.
+pub mod palw_fork_choice_rule_e_leaf_v2;
 /// RFC-0004 Part II: the typed-roots fence `palw_typed_roots_v1` — dormant, no height, refused when armed.
 pub mod palw_typed_roots_v1;
 /// ECON's M*-49 verifier pay and the held default share: the fence `palw_verifier_pay_v1` — dormant, no height, refused when armed.

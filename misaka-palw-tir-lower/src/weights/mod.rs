@@ -819,6 +819,12 @@ impl<'a> Resolver<'a> {
                 if self.names.contains(&n) {
                     return Some(n);
                 }
+                // …and the legacy spelling UNDER the alias (`bert.embeddings.LayerNorm.gamma` of a task model saved before the rename).
+                if let Some(legacy) = legacy_layer_norm_name(&n)
+                    && self.names.contains(&legacy)
+                {
+                    return Some(legacy);
+                }
             }
         }
         // transformers renames `LayerNorm.gamma` / `LayerNorm.beta` of every checkpoint on load (its "legacy" conversion: checkpoints

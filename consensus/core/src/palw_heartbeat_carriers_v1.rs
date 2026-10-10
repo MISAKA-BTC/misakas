@@ -225,6 +225,9 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         // equivocation evidence is a conviction needing no court, but like the round lane's it is outside H-1's enumeration.
         | O::VerificationVertexV1 { .. }
         | O::VertexEquivocationV1 { .. }
+        // RFC-0008 v2 (tag 130): a work-session root declaration is registry traffic in the fee market — it earns nothing and is
+        // no conviction or court move a halt must let through.
+        | O::ExecWorkRootOpenedV2 { .. }
         // RFC-0007 Part IV.1 (tags 93, 94): trap commitments and reveals are mesh traffic in the fee market.
         | O::TrapCommittedV1 { .. }
         | O::TrapRevealedV1 { .. }

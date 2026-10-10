@@ -82,6 +82,9 @@ pub fn build_spec(adapter: &Adapter, config: &Value, tensors: Option<&TensorInde
     };
     let inert = strs("inert");
     cfg.inert(crate::hf_schema::READER_KEYS);
+    if dec_path.is_empty() {
+        cfg.inert(crate::hf_schema::ROOT_READER_KEYS);
+    }
     cfg.inert(&inert.iter().map(String::as_str).collect::<Vec<_>>());
     if flat {
         let ri = strs("root_inert");
@@ -89,6 +92,7 @@ pub fn build_spec(adapter: &Adapter, config: &Value, tensors: Option<&TensorInde
     }
     if let Some(r) = &root_cfg {
         r.inert(crate::hf_schema::READER_KEYS);
+        r.inert(crate::hf_schema::ROOT_READER_KEYS);
         let ri = strs("root_inert");
         r.inert(&ri.iter().map(String::as_str).collect::<Vec<_>>());
         if let Some(k) = decoder {

@@ -16859,6 +16859,8 @@ mod t12_rcore_s7_reporter_gate;
 // past `palw_rcore_plus`, and nothing below it (M4 review, finding 1).
 mod t12_rcore_sr10_door_gate;
 mod t12_round_lane_e2e;
+// RFC-0008 v2: the EXEC payload through the real pipeline — the weightless carriage, the anchor, the slice ledgers, the gates.
+mod t12_exec_v2_carriage;
 // The 2026-09-26 testnet-12 IBD stall from DAA 316: a round lane ties on blue work, so blue-work
 // order is not topological; the node's sync paths order parents first (node-only).
 mod ibd_parents_first;
@@ -16911,6 +16913,8 @@ mod t46_false_valid_real_claim;
 mod t12_capacity_shadow;
 // RFC-0009 stage D (lane C1): the node proves the PALW state its header commits, a client checks it against the block it pinned.
 mod t12_state_proof;
+// RFC-0009 L2 (lane L2FC): the fork-choice commitment crosses its fence; the node serves openings and a remote client verifies the tip.
+mod t12_fork_choice_commitment;
 // RFC-0009 stage C (lane C1): public receipt redemption (V4) with the miner and the builder different bonds, on the processor's own methods.
 mod rfc9_redemption_v4;
 // ADR-0152 Phase 2, P2-1: B-3's vesting term at every UTXO site (T23 processor half, T05 bond half).
@@ -17384,7 +17388,7 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle(&catalog);
     // Validated WITHOUT the retirement, which is set afterwards: the release's validation requires `palw_fork_choice_rule_e_v1` armed
-    // at or below it (ADR-0175), a fence this fixture does not arm; the test is about the retirement's own behaviour.
+    // at or below it (ADR-0178), a fence this fixture does not arm; the test is about the retirement's own behaviour.
     let mut config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {

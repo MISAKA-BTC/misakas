@@ -131,6 +131,17 @@ pub enum CnnOut {
     GlobalAvgNorm { name: String, eps: f64 },
 }
 
+/// **A classification layer after the pooled vector** (`…ForImageClassification`; HFX 2026-10-10): the checkpoint's
+/// `{name}.weight` (`[labels, C]`) and, with `bias`, `{name}.bias`, applied to the pooled `[1, C]` row (so `out` is `GlobalAvg` or
+/// `GlobalAvgNorm`, never `Map`): the output is the `[1, labels]` logits in a power-of-two unit.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CnnHead {
+    pub name: String,
+    pub labels: usize,
+    #[serde(default)]
+    pub bias: bool,
+}
+
 /// A convolutional network as the lowering reads it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CnnSpec {
@@ -148,6 +159,9 @@ pub struct CnnSpec {
     /// Name prefixes a wrapped checkpoint adds (`resnet.` of an image classifier): `[from, to]`, tried when a name is absent.
     #[serde(default)]
     pub aliases: Vec<[String; 2]>,
+    /// The classifier of an image-classification checkpoint, when the class is the classifier (not the backbone's pooled vector).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<CnnHead>,
 }
 
 // ───────────────────────────── the plan: ids, geometry, blocks ─────────────────────────────
@@ -399,6 +413,14 @@ fn plan(spec: &CnnSpec) -> Result<Plan> {
     if spec.std.iter().any(|s| *s <= 0.0 || !s.is_finite()) || spec.mean.iter().any(|m| !m.is_finite()) {
         return Err(LowerError::bad("a normalisation mean or std that is not finite and positive"));
     }
+    if let Some(h) = &spec.head {
+        if matches!(spec.out, CnnOut::Map) {
+            return Err(LowerError::bad(format!("{}: a classifier head reads the pooled row, not the feature map", spec.architecture)));
+        }
+        if h.labels == 0 || h.labels > MAX_CHANNELS {
+            return Err(LowerError::not_lowerable(format!("{}: a classifier of {} labels", spec.architecture, h.labels)));
+        }
+    }
     let mut counter = 0;
     let (nodes, last) = plan_ops(&spec.ops, Geo { h: spec.h as usize, w: spec.w as usize, c: 3 }, &mut counter)?;
     if let Some(big) = nodes.iter().find(|n| estimate(n) > MAX_UNIT) {
@@ -486,6 +508,12 @@ fn param_table(spec: &CnnSpec, p: &Plan) -> Vec<(String, Vec<usize>, Src)> {
         v.push(("pnorm.gain".into(), vec![p.last.c], Src::t(format!("{name}.weight"))));
         v.push(("pnorm.bias".into(), vec![p.last.c], Src::t(format!("{name}.bias"))));
     }
+    if let Some(h) = &spec.head {
+        v.push(("classifier.w".into(), vec![h.labels, p.last.c], Src::t(format!("{}.weight", h.name))));
+        if h.bias {
+            v.push(("classifier.b".into(), vec![h.labels], Src::t(format!("{}.bias", h.name))));
+        }
+    }
     v
 }
 
@@ -504,7 +532,8 @@ pub fn hl_program(spec: &CnnSpec) -> Result<(HlProgram, Binding)> {
         });
         table.iter().enumerate().filter(|(_, (name, _, _))| name.split('.').next().is_some_and(|id| ids.contains(id))).map(|(i, _)| Ref::Param(i as u32)).collect()
     };
-    let post_params: Vec<Ref> = table.iter().enumerate().filter(|(_, (name, _, _))| name.starts_with("pnorm.")).map(|(i, _)| Ref::Param(i as u32)).collect();
+    let post_params: Vec<Ref> =
+        table.iter().enumerate().filter(|(_, (name, _, _))| name.starts_with("pnorm.") || name.starts_with("classifier.")).map(|(i, _)| Ref::Param(i as u32)).collect();
     let anchor = |inputs: Vec<Ref>| Node {
         op: crate::hl::Op::Scale { c: 1.0 },
         inputs,
@@ -847,6 +876,18 @@ pub fn float_forward(hl: &HlProgram, spec: &CnnSpec, params: &ParamStore, image:
         }
     };
     observe("post.out".into(), &out);
+    // The classifier, on the pooled row.
+    if let Some(h) = &spec.head {
+        let pooled = out.first().ok_or_else(|| LowerError::eval("a classifier head reads the pooled row"))?;
+        let w = get("classifier.w")?;
+        let bv = if h.bias { Some(get("classifier.b")?) } else { None };
+        let cc = p.last.c;
+        let logits: Vec<f64> = (0..h.labels)
+            .map(|o| bv.as_ref().map_or(0.0, |b| b[o] as f64) + (0..cc).map(|i| w[o * cc + i] as f64 * pooled[i]).sum::<f64>())
+            .collect();
+        observe("post.cls.out".into(), std::slice::from_ref(&logits));
+        return Ok(vec![logits]);
+    }
     Ok(out)
 }
 
@@ -1232,6 +1273,26 @@ fn cnn_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, spec: &CnnSpe
                     let mean = b.clamp(mean, i32::MIN as i64, i32::MAX as i64, DType::I32);
                     rows_val(mean, DType::I32, ok.clone(), g.c, "out")
                 }
+            };
+            // The classifier (`CnnHead`): the pooled row as codes, then one linear layer to the labels.
+            let out = match &spec.head {
+                Some(h) => {
+                    let pooled = ensure_node(&mut b, &out);
+                    note_site(cx, tb, &pooled);
+                    let codes = super::bidir::codes_rows(&mut b, cx, &mut lb, &pooled)?;
+                    let key = ScaleKey { base: Base::Pow2Site { names: vec!["cls.out".into()] }, factor: 1.0 };
+                    super::bidir::linear_rows(
+                        &mut b,
+                        cx,
+                        &mut lb,
+                        &codes,
+                        "classifier.w",
+                        h.bias.then_some("classifier.b"),
+                        "cls.out",
+                        &Want { dt: DType::I32, key },
+                    )?
+                }
+                None => out,
             };
             let out = ensure_node(&mut b, &out);
             let tir::Ref::Node(oi) = out.r else { unreachable!("ensure_node") };

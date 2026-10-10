@@ -160,6 +160,8 @@ pub fn classify_census_code_v1(gate: Gate, code: &str, arg: Option<&str>, eviden
         codes::TASK_UNKNOWN if arg == Some(codes::TASK_UNKNOWN_NO_CONFIG) => ExternalBlocker,
         codes::TASK_UNKNOWN | "TASK_MISMATCH" => FrontendRequired,
         codes::MODALITY_PROFILE_MISSING | codes::PARTIAL_TASK_ONLY => ProfileRequired,
+        // The profile exists; its fence is not armed.
+        codes::PROFILE_NOT_ARMED => KernelNotActive,
 
         // ---- lower: the artifact's form and the reader --------------------------------------------------------------------------
         codes::FORMAT_UNSUPPORTED | codes::ADAPTER_UNCHECKED | "ADAPTER_REFUSED" => FrontendRequired,

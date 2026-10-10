@@ -149,6 +149,10 @@ pub struct HeaderProcessor {
     /// ADR-0125: the execution lane, mode folded in (`Params::palw_execution_lane_fence`) — its
     /// activation admits round blocks; its shape bounds every mergeset that holds them.
     pub(super) palw_execution_lane: Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1>,
+    /// **RFC-0008 v2**: the unified EXEC payload's fence (`Params::palw_exec_payload_v2_fence`). Past it an algo-10 header carries a
+    /// `PXE2` envelope and no other, and a block that is not a lane block names no lane block as a parent. `None` on every shipped
+    /// preset.
+    pub(super) palw_exec_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset,
     /// which resolves to `PalwAttemptLaneV1::Unfenced` and leaves this gate exactly as it was.
     pub(super) palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -252,7 +256,7 @@ impl HeaderProcessor {
             _pruning_point_manager: services.pruning_point_manager.clone(),
             parents_manager: services.parents_manager.clone(),
 
-            task_manager: BlockTaskDependencyManager::new(),
+            task_manager: BlockTaskDependencyManager::new(params.palw_exec_payload_v2_fence()),
             pruning_lock,
             counters,
 
@@ -277,6 +281,7 @@ impl HeaderProcessor {
                 .palw_receipt_rows_unpriced
                 .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),
             palw_execution_lane: params.palw_execution_lane_fence(),
+            palw_exec_v2: params.palw_exec_payload_v2_fence(),
             palw_attempt_activation: params.palw_attempt_activation,
             palw_single_lottery: params.palw_single_lottery,
             palw_attempt_header_pins: params.palw_attempt_header_pins.and_then(|fence| match &params.palw_consensus_mode {

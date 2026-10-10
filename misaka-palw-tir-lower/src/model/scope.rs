@@ -153,6 +153,12 @@ pub fn scope_of(config: &Value, spec: Option<&ModelSpec>, tensors: Option<&Tenso
     let (task, input, output) = match spec.map(|s| &s.output) {
         Some(OutputSpec::Embedding { .. }) => ("text-embedding", "token ids", "a pooled sentence embedding"),
         Some(OutputSpec::Classify { .. }) => ("text-classification", "token ids", "one logit per label"),
+        // Two logits per token are a span head's start and end (`…ForQuestionAnswering`); any other width a token classifier's labels.
+        Some(OutputSpec::TokenLogits { labels: 2, .. }) if spec.is_some_and(|s| s.architecture.ends_with("ForQuestionAnswering")) => {
+            ("question-answering", "token ids (question ‖ separator ‖ context)", "a start and an end logit per token")
+        }
+        Some(OutputSpec::TokenLogits { .. }) => ("token-classification", "token ids", "one logit per label per token"),
+        Some(OutputSpec::MaskedLm) => ("fill-mask", "token ids (one of them the mask token)", "vocabulary logits per token"),
         _ => ("text-generation", "token ids", "next-token logits"),
     };
     let mut excluded = Vec::new();

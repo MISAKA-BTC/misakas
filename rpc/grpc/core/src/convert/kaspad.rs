@@ -104,7 +104,9 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetPalwActivationPool);
     impl_into_kaspad_request!(GetPalwCapacityShadow);
     impl_into_kaspad_request!(GetPalwStateProof);
+    impl_into_kaspad_request!(GetPalwForkChoiceOpening);
     impl_into_kaspad_request!(GetPalwPanelV3Status);
+    impl_into_kaspad_request!(GetPalwExecV2Status);
     impl_into_kaspad_request!(GetPalwKernelClaim);
     impl_into_kaspad_request!(GetPalwKernelRows);
     impl_into_kaspad_request!(GetPalwKernelFinals);
@@ -299,7 +301,9 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetPalwActivationPool);
     impl_into_kaspad_response!(GetPalwCapacityShadow);
     impl_into_kaspad_response!(GetPalwStateProof);
+    impl_into_kaspad_response!(GetPalwForkChoiceOpening);
     impl_into_kaspad_response!(GetPalwPanelV3Status);
+    impl_into_kaspad_response!(GetPalwExecV2Status);
     impl_into_kaspad_response!(GetPalwKernelClaim);
     impl_into_kaspad_response!(GetPalwKernelRows);
     impl_into_kaspad_response!(GetPalwKernelFinals);

@@ -36,7 +36,8 @@ impl HeaderProcessor {
         // ADR-0125: round blocks are counted by the round lane's own bound
         // (`check_round_lane_mergeset`), not by this one — which keeps bounding the chain's own
         // blocks exactly as it did before the lane existed.
-        let round_members = self.round_lane_members(ctx.ghostdag_data())?.len() as u64;
+        let (permit_members, slice_members) = self.round_lane_members_v2(ctx.ghostdag_data())?;
+        let round_members = (permit_members.len() + slice_members) as u64;
         let mergeset_size = ctx.ghostdag_data().mergeset_size() as u64 - round_members;
         let mergeset_size_limit = self.mergeset_size_limit;
         if mergeset_size > mergeset_size_limit {
@@ -48,24 +49,48 @@ impl HeaderProcessor {
     /// ADR-0125: the round blocks of a mergeset as `(round, permit index)`, in mergeset order. Round
     /// discovery reads all members except the selected parent, independently of raw colour — and
     /// nothing at all on a network that has not configured the lane.
-    fn round_lane_members(
+    ///
+    /// **RFC-0008 v2:** a member may carry either envelope. A permit holder (a v1 round block, a v2 `EXEC_TX`) is listed as
+    /// `(round, permit index, bond)`; a v2 `EXEC_SLICE` holds no permit and is returned in the second count, so it is still a lane
+    /// member (it never counts against the chain's own mergeset bound) and still counts against the lane's total bound.
+    fn round_lane_members_v2(
         &self,
         ghostdag_data: &crate::model::stores::ghostdag::GhostdagData,
-    ) -> BlockProcessResult<Vec<(u64, u16, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>> {
+    ) -> BlockProcessResult<(Vec<(u64, u16, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>, usize)> {
+        use kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1;
         let mut members = Vec::new();
+        let mut slices = 0usize;
         if self.palw_execution_lane.is_none() {
-            return Ok(members);
+            return Ok((members, slices));
         }
         for member in ghostdag_data.unordered_mergeset_without_selected_parent() {
             let header = self.headers_store.get_header(member).map_err(|_| RuleError::MissingParents(vec![member]))?;
             if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 {
                 continue;
             }
-            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&header.palw_commitment)
-                .map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))?;
-            members.push((envelope.round, envelope.permit_index, envelope.bond));
+            match self.lane_coords(&header.palw_commitment)? {
+                PalwExecLaneCoordsV1::Permit { round, permit_index, bond } => members.push((round, permit_index, bond)),
+                PalwExecLaneCoordsV1::Slice { .. } => slices += 1,
+            }
         }
-        Ok(members)
+        Ok((members, slices))
+    }
+
+    /// **A lane member's coordinates.** Where `palw_exec_payload_v2` is not armed this is the v1 envelope's decode and nothing else —
+    /// the exact reading (and refusal) of the build before RFC-0008 v2, whatever bytes a header holds — so the header rule cannot
+    /// move on a network that does not arm the fence (the X8R review). Where it is armed a `PXE2` member (which only a header at or past
+    /// the fence can be: the shape and stateless gates refuse one below it) reads as its subtype.
+    fn lane_coords(&self, commitment: &[u8]) -> BlockProcessResult<kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1> {
+        if self.palw_exec_v2.is_none() {
+            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(commitment)
+                .map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))?;
+            return Ok(kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1::Permit {
+                round: envelope.round,
+                permit_index: envelope.permit_index,
+                bond: envelope.bond,
+            });
+        }
+        kaspa_consensus_core::palw_exec_v2::palw_exec_lane_coords_v1(commitment).map_err(RuleError::BadRoundLaneMergeset)
     }
 
     /// **ADR-0125: the round lane's header rule.**
@@ -103,14 +128,39 @@ impl HeaderProcessor {
                 )));
             }
         }
+        use kaspa_consensus_core::palw_exec_v2::{PalwExecLaneCoordsV1, PalwExecV2Envelope};
         let block_round = if header.pow_algo_id == round_id {
-            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&header.palw_commitment)
-                .map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))?;
-            Some(envelope.round)
+            // **RFC-0008 v2:** the envelope's carrier anchor IS the block's selected parent (the chain block it hangs from), so
+            // a carrier cannot be re-hung from another anchor under a signature that names one. (Only where the fence is armed: elsewhere
+            // a `PXE2` header never passed the shape gate.)
+            if self.palw_exec_v2.is_some() && PalwExecV2Envelope::is_v2_carriage(&header.palw_commitment) {
+                let envelope =
+                    PalwExecV2Envelope::decode(&header.palw_commitment).map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))?;
+                if envelope.anchor != selected_parent {
+                    return Err(RuleError::BadRoundLaneParents(format!(
+                        "the envelope names anchor {} but the block's selected parent is {selected_parent}",
+                        envelope.anchor
+                    )));
+                }
+            }
+            match self.lane_coords(&header.palw_commitment)? {
+                PalwExecLaneCoordsV1::Permit { round, .. } => Some(round),
+                PalwExecLaneCoordsV1::Slice { .. } => None,
+            }
         } else {
             None
         };
-        let members = self.round_lane_members(ctx.ghostdag_data())?;
+        let (members, slices) = self.round_lane_members_v2(ctx.ghostdag_data())?;
+        // The lane's total bound covers every member; the width / one-per-permit / older-round rules are the permit holders'.
+        if members.len() as u64 + slices as u64 > lane.max_per_mergeset {
+            return Err(RuleError::BadRoundLaneMergeset(
+                kaspa_consensus_core::palw_execution_lane_v1::PalwExecMergesetError::TooMany {
+                    count: members.len() as u64 + slices as u64,
+                    bound: lane.max_per_mergeset,
+                }
+                .to_string(),
+            ));
+        }
         kaspa_consensus_core::palw_execution_lane_v1::palw_execution_mergeset_rule_v1(
             block_round,
             &members,

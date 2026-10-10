@@ -103,7 +103,8 @@ pub enum LayoutDesc {
     /// Tensors the checkpoint stores packed are served as another, float tensor under another name:
     /// the descriptor names the roles (`<module><suffix>` each), the lanes and shape of the served
     /// tensor (any rank up to 4, so a leading expert axis is just the first lane), and as one expression
-    /// the value of each element. The served tensor is called `<module>`.
+    /// the value of each element. The served tensor is called `<module><serve_suffix>` (`<module>` when the
+    /// descriptor declares no suffix).
     #[serde(rename = "virtual")]
     Virtual {
         roles: Vec<RoleDesc>,
@@ -113,6 +114,12 @@ pub enum LayoutDesc {
         shape: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         checks: Vec<CheckDesc>,
+        /// The suffix the served tensor's name carries after the module's (`.weight`: MLX keeps a quantised
+        /// module's packed codes under the float export's own name, `<module>.weight`, beside `<module>.scales`
+        /// and `<module>.biases`). Absent (every descriptor before MLX_AFFINE): the served tensor is `<module>`,
+        /// and a descriptor without it has the canonical text, so the digest, it always had.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        serve_suffix: Option<String>,
     },
     #[serde(rename = "tensors")]
     Tensors {

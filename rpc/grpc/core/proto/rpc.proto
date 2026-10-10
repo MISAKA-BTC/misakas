@@ -2886,6 +2886,20 @@ message GetPalwActivationPoolResponseMessage {
 
 // RFC-0010 (lane C2): the permissionless Panel's observation (op 220; read-only). `json` is the node's versioned
 // PanelV3ObservationV1 (camelCase); fields are only appended.
+// RFC-0008 v2 (lane X8R): the EXEC v2 lane's observation (op 240; read-only). `json` is the node's versioned
+// PalwExecV2ObservationV1 (camelCase); fields are only appended.
+message GetPalwExecV2StatusRequestMessage {
+  repeated string rootClaimIds = 1;
+  string blockHash = 2;
+}
+
+message GetPalwExecV2StatusResponseMessage {
+  bool available = 1;
+  uint32 observationVersion = 2;
+  string json = 3;
+  RPCError error = 1000;
+}
+
 message GetPalwPanelV3StatusRequestMessage {
   repeated string claimIds = 1;
   uint32 limit = 2;
@@ -3267,5 +3281,34 @@ message GetPalwStateProofResponseMessage {
   bytes statePreimage = 5;
   string collection = 6;
   repeated RpcPalwProofRow rows = 7;
+  RPCError error = 1000;
+}
+
+// RFC-0009 L2: the fork-choice openings of blocks' post-states, with the node's sink and tips (op 203).
+message GetPalwForkChoiceOpeningRequestMessage {
+  repeated string blockHashes = 1;
+}
+
+message RpcPalwForkChoiceEntry {
+  string blockHash = 1;
+  bool available = 2;
+  string reason = 3;
+  RpcBlockHeader header = 4;
+  bytes leaf = 5;
+  string innerRoot = 6;
+  string committedRoot = 7;
+  bool committedForm = 8;
+}
+
+message GetPalwForkChoiceOpeningResponseMessage {
+  bool available = 1;
+  string reason = 2;
+  string sink = 3;
+  repeated string tips = 4;
+  repeated RpcPalwForkChoiceEntry entries = 5;
+  bool dnsOverlay = 6;
+  bool dnsStageActive = 7;
+  string dnsConfirmedAnchor = 8;
+  uint64 dnsConfirmedAnchorDaa = 9;
   RPCError error = 1000;
 }

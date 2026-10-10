@@ -1195,6 +1195,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.round_adapt_block_template(template, round, payout)
     }
 
+    fn exec_v2_slice_adapt_block_template(
+        &self,
+        template: BlockTemplate,
+        payout: kaspa_consensus_core::tx::ScriptPublicKey,
+    ) -> Result<BlockTemplate, RuleError> {
+        self.virtual_processor.exec_v2_slice_adapt_block_template(template, payout)
+    }
+
     fn build_block_template_with_selector_factory(
         &self,
         miner_data: MinerData,
@@ -2463,6 +2471,32 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_panel_v3_observation_v1_impl(ids, limit)
     }
 
+    fn palw_exec_v2_observation_v1(
+        &self,
+        roots: Vec<kaspa_hashes::Hash64>,
+        block: Option<BlockHash>,
+    ) -> Option<kaspa_consensus_core::palw_exec_v2_verify::PalwExecV2ObservationV1> {
+        self.virtual_processor.palw_exec_v2_observation_v1_impl(roots, block)
+    }
+
+    fn palw_exec_v2_slice_statement_v1(
+        &self,
+        root: kaspa_hashes::Hash64,
+        index: u32,
+        claim: kaspa_hashes::Hash64,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<kaspa_consensus_core::palw_exec_v2::PalwWorkSliceV1, String> {
+        self.virtual_processor.palw_exec_v2_slice_statement_v1_impl(root, index, claim, bond)
+    }
+
+    fn palw_exec_v2_slice_relayable_v1(&self, slice: &kaspa_consensus_core::palw_exec_v2::PalwWorkSliceV1) -> bool {
+        self.virtual_processor.palw_exec_v2_slice_relayable_v1_impl(slice)
+    }
+
+    fn palw_exec_v2_anchored_v1(&self, block: BlockHash) -> bool {
+        self.virtual_processor.palw_exec_v2_anchored_v1_impl(block)
+    }
+
     fn palw_v2_class_table(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
         self.virtual_processor.palw_v2_class_table_impl()
     }
@@ -2684,6 +2718,16 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_state_proof_v1_impl(block, collection)
     }
 
+    fn palw_fork_choice_openings_v1(
+        &self,
+        blocks: &[BlockHash],
+    ) -> Result<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let sink = self.get_sink();
+        let mut tips = self.get_tips();
+        tips.sort();
+        self.virtual_processor.palw_fork_choice_openings_v1_impl(blocks, sink, tips)
+    }
+
     fn import_pruning_point_overlay_snapshot(
         &self,
         pruning_point: BlockHash,
@@ -2744,6 +2788,15 @@ impl ConsensusApi for Consensus {
     fn get_palw_candidate_order_v2(&self) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
         let point = self.virtual_processor.palw_weighing_point_v2(self.get_sink())?;
         self.virtual_processor.palw_candidate_order_v2(point)
+    }
+
+    /// ADR-0178 rule E: the state at the same weighing point as [`Self::get_palw_candidate_order_v2`], for the IBD commit's
+    /// claim-set comparison.
+    fn get_palw_rule_e_weighing_v1(&self) -> Option<kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1> {
+        let point = self.virtual_processor.palw_weighing_point_v2(self.get_sink())?;
+        let state = self.virtual_processor.palw_candidate_state_v2(point)?;
+        let daa_score = self.headers_store.get_daa_score(point).ok()?;
+        Some(kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1 { state, block: point, daa_score })
     }
 
     fn get_antipast_from_pov(

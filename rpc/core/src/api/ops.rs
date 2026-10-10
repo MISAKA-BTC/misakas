@@ -279,6 +279,9 @@ pub enum RpcApiOps {
     /// RFC-0009 stage D: one PALW state collection proven against the header that commits it (a remote miner checks it against a block it
     /// pinned). Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwStateProof = 202,
+    /// RFC-0009 L2: the fork-choice openings of blocks' post-states (the comparator's inputs as an O(1) opening of the committed root),
+    /// with the node's sink and DAG tips. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwForkChoiceOpening = 203,
     /// RFC-0010 (lane C2; op range 220–229): a permissionless-Panel claim's status — the rule that governs it, its seal, frozen
     /// snapshot, certified-beacon state, assignment, retries and terminal reason — and the engine's overview, as one versioned
     /// JSON observation. Read-only: no rule reads it. Appended at the tail: a node built before it drops the WebSocket on it.
@@ -300,6 +303,10 @@ pub enum RpcApiOps {
     /// Onboarding P0 (the lead's allocation): a V2 class's conformance record, current attempt and posted evidence (aux tables 39 and
     /// 40, raw), the network's challenge policy and the beacon state the node derives. Appended at the tail.
     GetPalwConformanceEvidence = 231,
+    /// RFC-0008 v2 (lane X8R; op range 240–249): the EXEC v2 lane's observation — counts, roots with each work slice and the state of
+    /// its kernel-route verification claim, one block's refusal record, the lane's health — as one versioned JSON document. Read-only:
+    /// no rule reads it. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwExecV2Status = 240,
 }
 
 impl RpcApiOps {

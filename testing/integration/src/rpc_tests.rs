@@ -1185,6 +1185,25 @@ async fn sanity_test() {
                     assert!(!read.available && read.bonds.is_empty() && read.claims.is_empty() && read.steps.is_empty());
                 })
             }
+            KaspadPayloadOps::GetPalwExecV2Status => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0008 v2 (op 240): a malformed id is an error before any state is read; a well-formed read on a network that
+                    // does not arm the EXEC v2 payload answers `available: false` with no document.
+                    let bad = GetPalwExecV2StatusRequest { root_claim_ids: vec!["x".to_string()], ..Default::default() };
+                    assert!(rpc_client.get_palw_exec_v2_status_call(None, bad).await.is_err());
+                    let bad_block = GetPalwExecV2StatusRequest { block_hash: "zz".to_string(), ..Default::default() };
+                    assert!(rpc_client.get_palw_exec_v2_status_call(None, bad_block).await.is_err());
+                    let read = rpc_client
+                        .get_palw_exec_v2_status_call(
+                            None,
+                            GetPalwExecV2StatusRequest { root_claim_ids: vec!["00".repeat(64)], ..Default::default() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.json.is_empty());
+                })
+            }
             KaspadPayloadOps::GetPalwPanelV3Status => {
                 let rpc_client = client.clone();
                 tst!(op, {
@@ -1257,6 +1276,25 @@ async fn sanity_test() {
                         .await
                         .unwrap();
                     assert!(!read.available && read.rows.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwForkChoiceOpening => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0009 L2 (op 203): a malformed block hash is an error before any state is read; simnet has no PALW V2 bundle,
+                    // so a well-formed request serves no opening.
+                    assert!(
+                        rpc_client
+                            .get_palw_fork_choice_opening_call(
+                                None,
+                                GetPalwForkChoiceOpeningRequest { block_hashes: vec!["zz".to_string()] }
+                            )
+                            .await
+                            .is_err()
+                    );
+                    let read =
+                        rpc_client.get_palw_fork_choice_opening_call(None, GetPalwForkChoiceOpeningRequest::default()).await.unwrap();
+                    assert!(!read.available && read.entries.is_empty());
                 })
             }
             KaspadPayloadOps::GetPalwOnboarding => {

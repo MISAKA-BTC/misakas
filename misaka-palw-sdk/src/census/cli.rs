@@ -18,7 +18,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--depth headers|shape] [--assume-task TASK] [--judge-budget-secs N] [--judge-cache FILE] [--dirs FILE [--follow]]";
+const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--depth headers|shape] [--assume-task TASK] [--judge-budget-secs N] [--judge-cache FILE] [--tokenizer-bases FILE] [--dirs FILE [--follow]]";
 
 fn take(args: &mut Vec<String>, flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
@@ -51,6 +51,7 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
     };
     let assume_task = take(&mut args, "--assume-task");
     let judge_cache = take(&mut args, "--judge-cache");
+    let tokenizer_bases = take(&mut args, "--tokenizer-bases");
     let judge_budget = match take(&mut args, "--judge-budget-secs") {
         Some(b) => Some(std::time::Duration::from_secs(b.parse::<u64>().map_err(|e| format!("--judge-budget-secs {b}: {e}"))?)),
         None => None,
@@ -72,6 +73,22 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
     if let Some(path) = &judge_cache {
         ctx.cache = crate::preflight::JudgeCache::with_file(std::path::Path::new(path))?;
         eprintln!("census: {} judgment(s) read from {path}", ctx.cache.len());
+    }
+    // `--tokenizer-bases FILE`: JSON lines `{"repo", "base", "vocab_size"}` — the tokenizer a repository without one may bind from its
+    // pinned base (`tokenizer_bases.py` writes it from the snapshot's listing; the preflight accepts it only for the same vocabulary).
+    if let Some(path) = &tokenizer_bases {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("--tokenizer-bases {path}: {e}"))?;
+        for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+            let v: serde_json::Value = serde_json::from_str(line).map_err(|e| format!("--tokenizer-bases {path} line {}: {e}", n + 1))?;
+            let (Some(repo), Some(base), Some(vocab)) =
+                (v["repo"].as_str(), v["base"].as_str(), v["vocab_size"].as_u64())
+            else {
+                return Err(format!("--tokenizer-bases {path} line {}: needs repo, base and vocab_size", n + 1));
+            };
+            ctx.base_tokenizers
+                .insert(repo.to_string(), crate::preflight::BaseTokenizerV1 { base: base.to_string(), vocab_size: vocab });
+        }
+        eprintln!("census: {} base tokenizer(s) offered from {path}", ctx.base_tokenizers.len());
     }
     ctx.judge_budget = judge_budget;
     if let Some(b) = judge_budget {

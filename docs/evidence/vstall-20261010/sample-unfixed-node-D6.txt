@@ -1,0 +1,1503 @@
+Analysis of sampling kaspad (pid 14488) every 1 millisecond
+Process:         kaspad [14488]
+Path:            /private/tmp/*/kaspad
+Load Address:    0x104c0c000
+Identifier:      kaspad
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  launchd [1]
+Target Type:     live task
+
+Date/Time:       2026-10-10 22:14:53.674 +0900
+Launch Time:     2026-10-10 20:58:39.949 +0900
+OS Version:      macOS 26.7 (25G229)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         605.2M
+Physical footprint (peak):  620.8M
+Idle exit:                  untracked
+----
+
+Call graph:
+    7555 Thread_10139707   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 7555 start  (in dyld) + 6992  [0x1891584e4]
+    +   7555 main  (in kaspad) + 52  [0x106fa7a00]
+    +     7555 std::rt::lang_start_internal::h0662b076b027b010  (in kaspad) + 952  [0x107edc184]  rt.rs:171
+    +       7555 std::rt::lang_start::_$u7b$$u7b$closure$u7d$$u7d$::he5c6da680b78b87e  (in kaspad) + 16  [0x106fa4b00]
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h54a0f9b8b9887340  (in kaspad) + 12  [0x106fa7a18]  backtrace.rs:160
+    +           7555 kaspad::main::h3631d3eb2aaf1670  (in kaspad) + 1376  [0x106fa7520]  main.rs:101
+    +             7555 kaspa_core::core::Core::join::h3ccc87cfe757f2e1  (in kaspad) + 188  [0x105e3e4a0]  core.rs:53
+    +               7555 std::thread::lifecycle::JoinInner$LT$T$GT$::join::h487f3677186ea483  (in kaspad) + 40  [0x105e4246c]  lifecycle.rs:237
+    +                 7555 _pthread_join  (in libsystem_pthread.dylib) + 616  [0x189526114]
+    +                   7555 __ulock_wait  (in libsystem_kernel.dylib) + 8  [0x1894e1af8]
+    7555 Thread_10140576
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140577
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140578
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140579
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140580
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140581
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140582
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140583
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140584
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140585
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140968
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140969
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140985
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (rocksdb::Timer::*)(), rocksdb::Timer*>>(void*)  (in kaspad) + 72  [0x1081ac280]
+    +       7555 rocksdb::Timer::Run()  (in kaspad) + 160  [0x1081abd40]
+    +         7555 rocksdb::InstrumentedCondVar::TimedWait(unsigned long long)  (in kaspad) + 212  [0x1082b020c]
+    +           7555 rocksdb::port::CondVar::TimedWait(unsigned long long)  (in kaspad) + 72  [0x1083238ac]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140986
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140987
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140988
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140989
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140990
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140991
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140992
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140993
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140994
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10140995
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+    +       7555 rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+    +         7555 rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+    +           7555 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+    +             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141012: block-pool-0
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7546 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +             ! 7546 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +             !   7546 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +             !     7546 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    +             9 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 204  [0x1085bcedc]  registry.rs:800
+    +               9 cthread_yield  (in libsystem_pthread.dylib) + 36  [0x189520c28]
+    +                 9 swtch_pri  (in libsystem_kernel.dylib) + 8  [0x1894dfc88]
+    7555 Thread_10141013: block-pool-1
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7535 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +             ! 7535 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +             !   7535 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +             !     7535 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    +             20 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 204  [0x1085bcedc]  registry.rs:800
+    +               20 cthread_yield  (in libsystem_pthread.dylib) + 36  [0x189520c28]
+    +                 20 swtch_pri  (in libsystem_kernel.dylib) + 8  [0x1894dfc88]
+    7555 Thread_10141014: block-pool-2
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             6255 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +             ! 6255 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +             !   6255 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +             !     6255 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    +             1300 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 204  [0x1085bcedc]  registry.rs:800
+    +               1300 cthread_yield  (in libsystem_pthread.dylib) + 36  [0x189520c28]
+    +                 1300 swtch_pri  (in libsystem_kernel.dylib) + 8  [0x1894dfc88]
+    7555 Thread_10141015: block-pool-3
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7547 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +             ! 7547 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +             !   7547 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +             !     7547 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    +             8 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 204  [0x1085bcedc]  registry.rs:800
+    +               8 cthread_yield  (in libsystem_pthread.dylib) + 36  [0x189520c28]
+    +                 8 swtch_pri  (in libsystem_kernel.dylib) + 8  [0x1894dfc88]
+    7555 Thread_10141016: block-pool-4
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7535 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +             ! 7535 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +             !   7535 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +             !     7535 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    +             20 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 204  [0x1085bcedc]  registry.rs:800
+    +               20 cthread_yield  (in libsystem_pthread.dylib) + 36  [0x189520c28]
+    +                 20 swtch_pri  (in libsystem_kernel.dylib) + 8  [0x1894dfc88]
+    7555 Thread_10141017: block-pool-5
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141018: block-pool-6
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141019: block-pool-7
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141020: block-pool-8
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141021: block-pool-9
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141022: virtual-pool-0
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141023: virtual-pool-1
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141024: virtual-pool-2
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141025: virtual-pool-3
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141026: virtual-pool-4
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141027: virtual-pool-5
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 600  [0x1085bd068]  registry.rs:794
+    +               7555 _$LT$rayon_core..job..StackJob$LT$L$C$F$C$R$GT$$u20$as$u20$rayon_core..job..Job$GT$::execute::hfb2992187e80987a  (in kaspad) + 108  [0x10522ffc0]  job.rs:120
+    +                 7555 rayon::iter::collect::collect_with_consumer::h54fd7214a089447a  (in kaspad) + 216  [0x10554e284]  mod.rs:84
+    +                   7555 rayon::iter::plumbing::bridge_producer_consumer::helper::ha4f4a1c94c1f976e  (in kaspad) + 108  [0x1052be0d4]  mod.rs:437
+    +                     7555 rayon::iter::plumbing::Folder::consume_iter::hf1c330a37b3dc92f  (in kaspad) + 112  [0x1053f619c]  mod.rs:177
+    +                       7555 core::ops::function::impls::_$LT$impl$u20$core..ops..function..FnMut$LT$A$GT$$u20$for$u20$$RF$F$GT$::call_mut::hfbc436742260c693  (in kaspad) + 1752  [0x105022090]  function.rs:274
+    +                         7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::dns_coinbase_settlement::h8a080468bca8de0d  (in kaspad) + 104  [0x104fb9424]  processor.rs:19106
+    +                           7555 parking_lot::raw_rwlock::RawRwLock::lock_shared_slow::h9dfc9857a4b33ec3  (in kaspad) + 688  [0x1085b8ea8]  raw_rwlock.rs:723
+    +                             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141028: virtual-pool-6
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 600  [0x1085bd068]  registry.rs:794
+    +               7555 _$LT$rayon_core..job..StackJob$LT$L$C$F$C$R$GT$$u20$as$u20$rayon_core..job..Job$GT$::execute::hfb2992187e80987a  (in kaspad) + 108  [0x10522ffc0]  job.rs:120
+    +                 7555 rayon::iter::collect::collect_with_consumer::h54fd7214a089447a  (in kaspad) + 216  [0x10554e284]  mod.rs:84
+    +                   7555 rayon::iter::plumbing::bridge_producer_consumer::helper::ha4f4a1c94c1f976e  (in kaspad) + 108  [0x1052be0d4]  mod.rs:437
+    +                     7555 rayon::iter::plumbing::Folder::consume_iter::hf1c330a37b3dc92f  (in kaspad) + 112  [0x1053f619c]  mod.rs:177
+    +                       7555 core::ops::function::impls::_$LT$impl$u20$core..ops..function..FnMut$LT$A$GT$$u20$for$u20$$RF$F$GT$::call_mut::hfbc436742260c693  (in kaspad) + 1752  [0x105022090]  function.rs:274
+    +                         7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::dns_coinbase_settlement::h8a080468bca8de0d  (in kaspad) + 104  [0x104fb9424]  processor.rs:19106
+    +                           7555 parking_lot::raw_rwlock::RawRwLock::lock_shared_slow::h9dfc9857a4b33ec3  (in kaspad) + 688  [0x1085b8ea8]  raw_rwlock.rs:723
+    +                             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141029: virtual-pool-7
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141030: virtual-pool-8
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141031: virtual-pool-9
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+    +           7555 rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+    +             7555 rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+    +               7555 rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+    +                 7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                   7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141051: palw-economics
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h89bf13cd90d656d4  (in kaspad) + 56  [0x107523734]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h1ddfcd8266a798ae  (in kaspad) + 184  [0x1071830dc]  backtrace.rs:160
+    +           7555 nanosleep  (in libsystem_c.dylib) + 220  [0x1893becc0]
+    +             7555 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x1894e3308]
+    7555 Thread_10141052: palw-memory-phase
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h10c58f4aae5c34ac  (in kaspad) + 56  [0x107523164]  function.rs:250
+    +         7555 _$LT$core..panic..unwind_safe..AssertUnwindSafe$LT$F$GT$$u20$as$u20$core..ops..function..FnOnce$LT$$LP$$RP$$GT$$GT$::call_once::h6451a140ea4714d0  (in kaspad) + 12  [0x107517954]  unwind_safe.rs:274
+    +           7555 std::thread::lifecycle::spawn_unchecked::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h74c95f900df90ae4  (in kaspad) + 44  [0x1075227c8]  lifecycle.rs:92
+    +             7555 std::sys::backtrace::__rust_begin_short_backtrace::hf771173c32f4b01e  (in kaspad) + 12  [0x107183cdc]  backtrace.rs:160
+    +               7555 kaspad_lib::daemon::create_core_with_runtime::_$u7b$$u7b$closure$u7d$$u7d$::h2a697ecb72b87655  (in kaspad) + 168  [0x107179d70]  daemon.rs:2238
+    +                 7555 nanosleep  (in libsystem_c.dylib) + 220  [0x1893becc0]
+    +                   7555 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x1894e3308]
+    7555 Thread_10141053: ctrl-c
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::he2ebdc3e84f66ced  (in kaspad) + 88  [0x106fa5e80]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hc0cc11bcac28f3a9  (in kaspad) + 300  [0x106fa7b4c]  backtrace.rs:160
+    +           7555 read  (in libsystem_kernel.dylib) + 8  [0x1894e091c]
+    7555 Thread_10141054
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hf01a28f20f5b0b25  (in kaspad) + 84  [0x105e2c880]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h49d09e22573ea908  (in kaspad) + 32  [0x105e266a8]  backtrace.rs:160
+    +           7555 kaspa_consensusmanager::ConsensusManager::worker::h96c9881cf1753c9b  (in kaspad) + 412  [0x105e28f4c]  lib.rs:157
+    +             7555 std::thread::lifecycle::JoinInner$LT$T$GT$::join::hf763a8e060837141  (in kaspad) + 40  [0x105e2c698]  lifecycle.rs:237
+    +               7555 _pthread_join  (in libsystem_pthread.dylib) + 616  [0x189526114]
+    +                 7555 __ulock_wait  (in libsystem_kernel.dylib) + 8  [0x1894e1af8]
+    7555 Thread_10141055: async-runtime
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hf8c1a208359564aa  (in kaspad) + 88  [0x105e427c0]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hdda33bd38ac4459e  (in kaspad) + 32  [0x105e40724]  backtrace.rs:160
+    +           7555 kaspa_core::task::runtime::AsyncRuntime::worker::hed72b988a2ce7a94  (in kaspad) + 204  [0x105e403f4]  runtime.rs:59
+    +             7555 tokio::runtime::runtime::Runtime::block_on::h5f7b915d20488ff5  (in kaspad) + 340  [0x105e4719c]  runtime.rs:342
+    +               7555 tokio::runtime::context::runtime::enter_runtime::hceb58fa6c2261421  (in kaspad) + 384  [0x105e39e20]  runtime.rs:65
+    +                 7555 tokio::runtime::park::CachedParkThread::block_on::hd735adb7d7516fb5  (in kaspad) + 3208  [0x105e37a90]  park.rs:285
+    +                   7555 tokio::runtime::park::Inner::park::h6d640474e6229b6e  (in kaspad) + 188  [0x107f33198]
+    +                     7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                       7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141056: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd79cd972722002f2  (in kaspad) + 148  [0x107f1f5c0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::h41d03b0276337f1f  (in kaspad) + 172  [0x107f21180]  core.rs:320
+    +                 7555 tokio::runtime::scheduler::multi_thread::worker::run::h612da59ab1958f94  (in kaspad) + 192  [0x107f3b99c]  worker.rs:498
+    +                   7555 tokio::runtime::context::runtime::enter_runtime::h402c760889784eab  (in kaspad) + 436  [0x107f3ee34]  runtime.rs:65
+    +                     7555 tokio::runtime::context::scoped::Scoped$LT$T$GT$::set::hf90177e0e4022efd  (in kaspad) + 56  [0x107f388c8]  scoped.rs:40
+    +                       7555 tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 2172  [0x107f3d3b8]  worker.rs:564
+    +                         7555 tokio::runtime::scheduler::multi_thread::worker::Context::park_timeout::he523c0930a0ffa36  (in kaspad) + 144  [0x107f3c8a0]  worker.rs:748
+    +                           7555 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 264  [0x107f3f500]  park.rs:70
+    +                             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141057: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd79cd972722002f2  (in kaspad) + 148  [0x107f1f5c0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::h41d03b0276337f1f  (in kaspad) + 172  [0x107f21180]  core.rs:320
+    +                 7555 tokio::runtime::scheduler::multi_thread::worker::run::h612da59ab1958f94  (in kaspad) + 192  [0x107f3b99c]  worker.rs:498
+    +                   7555 tokio::runtime::context::runtime::enter_runtime::h402c760889784eab  (in kaspad) + 436  [0x107f3ee34]  runtime.rs:65
+    +                     7555 tokio::runtime::context::scoped::Scoped$LT$T$GT$::set::hf90177e0e4022efd  (in kaspad) + 56  [0x107f388c8]  scoped.rs:40
+    +                       7555 tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 2172  [0x107f3d3b8]  worker.rs:564
+    +                         7555 tokio::runtime::scheduler::multi_thread::worker::Context::park_timeout::he523c0930a0ffa36  (in kaspad) + 144  [0x107f3c8a0]  worker.rs:748
+    +                           6258 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 264  [0x107f3f500]  park.rs:70
+    +                           ! 6258 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                           !   6258 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    +                           1297 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 344  [0x107f3f550]  park.rs:70
+    +                             1297 tokio::runtime::time::Driver::park_internal::h03b0a9c44bd5c078  (in kaspad) + 1072  [0x107f2998c]
+    +                               1297 tokio::runtime::io::driver::Driver::turn::hbc9875dcd3c1865e  (in kaspad) + 232  [0x107f2ca64]
+    +                                 1297 kevent  (in libsystem_kernel.dylib) + 8  [0x1894e5fc4]
+    7555 Thread_10141058: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd79cd972722002f2  (in kaspad) + 148  [0x107f1f5c0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::h41d03b0276337f1f  (in kaspad) + 172  [0x107f21180]  core.rs:320
+    +                 7555 tokio::runtime::scheduler::multi_thread::worker::run::h612da59ab1958f94  (in kaspad) + 192  [0x107f3b99c]  worker.rs:498
+    +                   7555 tokio::runtime::context::runtime::enter_runtime::h402c760889784eab  (in kaspad) + 436  [0x107f3ee34]  runtime.rs:65
+    +                     7555 tokio::runtime::context::scoped::Scoped$LT$T$GT$::set::hf90177e0e4022efd  (in kaspad) + 56  [0x107f388c8]  scoped.rs:40
+    +                       7546 tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 2172  [0x107f3d3b8]  worker.rs:564
+    +                       ! 7546 tokio::runtime::scheduler::multi_thread::worker::Context::park_timeout::he523c0930a0ffa36  (in kaspad) + 144  [0x107f3c8a0]  worker.rs:748
+    +                       !   6247 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 344  [0x107f3f550]  park.rs:70
+    +                       !   : 6235 tokio::runtime::time::Driver::park_internal::h03b0a9c44bd5c078  (in kaspad) + 1072  [0x107f2998c]
+    +                       !   : | 6235 tokio::runtime::io::driver::Driver::turn::hbc9875dcd3c1865e  (in kaspad) + 232  [0x107f2ca64]
+    +                       !   : |   6235 kevent  (in libsystem_kernel.dylib) + 8  [0x1894e5fc4]
+    +                       !   : 9 tokio::runtime::time::_$LT$impl$u20$tokio..runtime..time..handle..Handle$GT$::process::h51c947eee6873692  (in kaspad) + 168  [0x107f2ddb8]  mod.rs:304
+    +                       !   : | 9 core::ops::function::FnOnce::call_once::h89e62faa31a774ce  (in kaspad) + 52  [0x107f37a88]
+    +                       !   : 2 tokio::runtime::time::_$LT$impl$u20$tokio..runtime..time..handle..Handle$GT$::process::h51c947eee6873692  (in kaspad) + 352  [0x107f2de70]  mod.rs:305
+    +                       !   : 1 tokio::runtime::time::_$LT$impl$u20$tokio..runtime..time..handle..Handle$GT$::process::h51c947eee6873692  (in kaspad) + 280  [0x107f2de28]  mod.rs:305
+    +                       !   :   1 tokio::runtime::time::_$LT$impl$u20$tokio..runtime..time..handle..Handle$GT$::process_at_sharded_time::h700ec9c65c14db57  (in kaspad) + 756  [0x107f2dae0]  mod.rs:354
+    +                       !   :     1 pthread_mutex_unlock  (in libsystem_pthread.dylib) + 0  [0x18951e944]
+    +                       !   1299 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 264  [0x107f3f500]  park.rs:70
+    +                       !     1299 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                       !       1299 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    +                       9 tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 1396  [0x107f3d0b0]  worker.rs:0
+    +                         8 tokio::runtime::scheduler::multi_thread::worker::Context::run_task::hce72fd6dceab3870  (in kaspad) + 548  [0x107f3d910]  worker.rs:595
+    +                         : 7 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::h91c4299192b138ff  (in kaspad) + 172  [0x104e2cc28]  harness.rs:154
+    +                         : | 7 ???  (in kaspad)  load address 0x104c0c000 + 0x23f3dc  [0x104e4b3dc]
+    +                         : |   7 kaspa_p2p_lib::core::router::Router::new::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h5d1fc466568f1954  (in kaspad) + 724  [0x104e3eb74]
+    +                         : |     7 _$LT$core..future..poll_fn..PollFn$LT$F$GT$$u20$as$u20$core..future..future..Future$GT$::poll::h274ce03a17aa0196  (in kaspad) + 176  [0x104eb86dc]  poll_fn.rs:151
+    +                         : |       7 _$LT$tonic..codec..decode..Streaming$LT$T$GT$$u20$as$u20$futures_core..stream..Stream$GT$::poll_next::h1b1051167f2b7a4d  (in kaspad) + 176  [0x104e86ae8]  decode.rs:408
+    +                         : |         7 _$LT$tonic_prost..codec..ProstDecoder$LT$U$GT$$u20$as$u20$tonic..codec..Decoder$GT$::decode::ha143af28cc8ae913  (in kaspad) + 52  [0x104e3c154]  codec.rs:131
+    +                         : |           7 prost::message::Message::decode::he2c94a8524918213  (in kaspad) + 744  [0x104e5b934]  message.rs:110
+    +                         : |             7 kaspa_p2p_lib::pb::kaspad_message::Payload::merge::h01a135c4d4075e2b  (in kaspad) + 3976  [0x104e23ac8]  protowire.rs:755
+    +                         : |               7 prost::encoding::merge_loop::h4cc3154a7143cbcd  (in kaspad) + 240  [0x104e8c1f0]  encoding.rs:157
+    +                         : |                 7 _$LT$kaspa_p2p_lib..pb..BlockMessage$u20$as$u20$prost..message..Message$GT$::merge_field::h31f1e99f864ff59c  (in kaspad) + 176  [0x104e60900]  protowire.rs:84
+    +                         : |                   7 prost::encoding::message::merge_repeated::h47b7c1214c98e8d2  (in kaspad) + 116  [0x104ed5e98]  encoding.rs:840
+    +                         : |                     7 prost::encoding::merge_loop::h36ee9bff3e447f58  (in kaspad) + 240  [0x104e8b07c]  encoding.rs:157
+    +                         : |                       7 _$LT$kaspa_p2p_lib..pb..TransactionMessage$u20$as$u20$prost..message..Message$GT$::merge_field::h2a4c18539b66dbee  (in kaspad) + 844  [0x104e62de8]  protowire.rs:28
+    +                         : |                         7 prost::encoding::merge_loop::h9be81efcae2d5b2b  (in kaspad) + 264  [0x104e8f240]  encoding.rs:157
+    +                         : |                           7 prost::encoding::bytes::merge::h0dc6d98c88426cfc  (in kaspad) + 252  [0x104e93d98]  encoding.rs:722
+    +                         : |                             7 prost::encoding::_$LT$impl$u20$prost..encoding..sealed..BytesAdapter$u20$for$u20$alloc..vec..Vec$LT$u8$GT$$GT$::replace_with::h07eb8ee4db3e3102  (in kaspad) + 152  [0x104ec358c]  encoding.rs:678
+    +                         : 1 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::h8fff6f413a1b3c62  (in kaspad) + 172  [0x1068760e8]  harness.rs:154
+    +                         :   1 ???  (in kaspad)  load address 0x104c0c000 + 0x1cff9a4  [0x10690b9a4]
+    +                         :     1 kaspa_p2p_lib::core::router::Router::new::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h5d5e7a04cc79b7f2  (in kaspad) + 360  [0x1068fd0d0]
+    +                         :       1 _$LT$core..future..poll_fn..PollFn$LT$F$GT$$u20$as$u20$core..future..future..Future$GT$::poll::h10e9b3d5113e0c59  (in kaspad) + 176  [0x1068ca404]  poll_fn.rs:151
+    +                         :         1 _$LT$tonic..codec..decode..Streaming$LT$T$GT$$u20$as$u20$futures_core..stream..Stream$GT$::poll_next::ha7bf208761ac37d2  (in kaspad) + 176  [0x1068e4b48]  decode.rs:408
+    +                         :           1 _$LT$tonic_prost..codec..ProstDecoder$LT$U$GT$$u20$as$u20$tonic..codec..Decoder$GT$::decode::h6daced2d0dbf5269  (in kaspad) + 52  [0x1068e4a4c]  codec.rs:131
+    +                         :             1 prost::message::Message::decode::h8580e5b0d5f21242  (in kaspad) + 744  [0x10687e4e4]  message.rs:110
+    +                         :               1 kaspa_p2p_lib::pb::kaspad_message::Payload::merge::h727f9a0fad1f091d  (in kaspad) + 6768  [0x1068d6184]  protowire.rs:755
+    +                         :                 1 prost::encoding::merge_loop::h7ecc5f0cd3c5d56e  (in kaspad) + 40  [0x10691a444]  encoding.rs:149
+    +                         :                   1 prost::encoding::varint::decode_varint::h74fd6fafb6c2c976  (in kaspad) + 732  [0x106920f48]
+    +                         1 tokio::runtime::scheduler::multi_thread::worker::Context::run_task::hce72fd6dceab3870  (in kaspad) + 348  [0x107f3d848]  worker.rs:595
+    +                           1 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::he15e3873b8d94f3f  (in kaspad) + 188  [0x104e2d40c]  harness.rs:154
+    +                             1 ???  (in kaspad)  load address 0x104c0c000 + 0x23f2a0  [0x104e4b2a0]
+    +                               1 kaspa_connectionmanager::ConnectionManager::start_event_loop::_$u7b$$u7b$closure$u7d$$u7d$::h2b831c83d7b98b93  (in kaspad) + 108  [0x104e400c4]
+    +                                 1 _$LT$core..future..poll_fn..PollFn$LT$F$GT$$u20$as$u20$core..future..future..Future$GT$::poll::hcbf5e2cfe2ca56f3  (in kaspad) + 192  [0x104eb8c48]  poll_fn.rs:151
+    +                                   1 kaspa_connectionmanager::ConnectionManager::handle_event::_$u7b$$u7b$closure$u7d$$u7d$::h40dc686f1677ab61  (in kaspad) + 12444  [0x104eafc28]
+    7555 Thread_10141059: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd79cd972722002f2  (in kaspad) + 148  [0x107f1f5c0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::h41d03b0276337f1f  (in kaspad) + 172  [0x107f21180]  core.rs:320
+    +                 7555 tokio::runtime::scheduler::multi_thread::worker::run::h612da59ab1958f94  (in kaspad) + 192  [0x107f3b99c]  worker.rs:498
+    +                   7555 tokio::runtime::context::runtime::enter_runtime::h402c760889784eab  (in kaspad) + 436  [0x107f3ee34]  runtime.rs:65
+    +                     7555 tokio::runtime::context::scoped::Scoped$LT$T$GT$::set::hf90177e0e4022efd  (in kaspad) + 56  [0x107f388c8]  scoped.rs:40
+    +                       7555 tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 1396  [0x107f3d0b0]  worker.rs:0
+    +                         7555 tokio::runtime::scheduler::multi_thread::worker::Context::run_task::hce72fd6dceab3870  (in kaspad) + 348  [0x107f3d848]  worker.rs:595
+    +                           7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::h14a6e03dab8e603e  (in kaspad) + 176  [0x105e2e928]  harness.rs:154
+    +                             7555 ???  (in kaspad)  load address 0x104c0c000 + 0x123e690  [0x105e4a690]
+    +                               7555 _$LT$kaspad_lib..palw_panel..PalwPanelService$u20$as$u20$kaspa_core..task..service..AsyncService$GT$::start::_$u7b$$u7b$closure$u7d$$u7d$::hdade8b732e590cb8  (in kaspad) + 6968  [0x107054a38]  palw_panel.rs:14705
+    +                                 7555 kaspad_lib::palw_panel::PalwPanelService::worker::_$u7b$$u7b$closure$u7d$$u7d$::h0b07478a4b1f8d14  (in kaspad) + 268620  [0x1070cfafc]  palw_panel.rs:10306
+    +                                   7555 _$LT$kaspa_consensus..consensus..Consensus$u20$as$u20$kaspa_consensus_core..api..ConsensusApi$GT$::palw_disclosure_duties_v1::h1040a36b29fcf0eb  (in kaspad) + 40  [0x1054f69c4]  mod.rs:2294
+    +                                     7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::palw_disclosure_duties_v1_impl::h7aa48368af5573d7  (in kaspad) + 216  [0x104feb024]  processor.rs:4790
+    +                                       7555 parking_lot::raw_rwlock::RawRwLock::lock_shared_slow::h9dfc9857a4b33ec3  (in kaspad) + 688  [0x1085b8ea8]  raw_rwlock.rs:723
+    +                                         7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                                           7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141060: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd79cd972722002f2  (in kaspad) + 148  [0x107f1f5c0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::h41d03b0276337f1f  (in kaspad) + 172  [0x107f21180]  core.rs:320
+    +                 7555 tokio::runtime::scheduler::multi_thread::worker::run::h612da59ab1958f94  (in kaspad) + 192  [0x107f3b99c]  worker.rs:498
+    +                   7555 tokio::runtime::context::runtime::enter_runtime::h402c760889784eab  (in kaspad) + 436  [0x107f3ee34]  runtime.rs:65
+    +                     7555 tokio::runtime::context::scoped::Scoped$LT$T$GT$::set::hf90177e0e4022efd  (in kaspad) + 56  [0x107f388c8]  scoped.rs:40
+    +                       7555 tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 2172  [0x107f3d3b8]  worker.rs:564
+    +                         7555 tokio::runtime::scheduler::multi_thread::worker::Context::park_timeout::he523c0930a0ffa36  (in kaspad) + 144  [0x107f3c8a0]  worker.rs:748
+    +                           7555 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 264  [0x107f3f500]  park.rs:70
+    +                             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141061: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd79cd972722002f2  (in kaspad) + 148  [0x107f1f5c0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::h41d03b0276337f1f  (in kaspad) + 172  [0x107f21180]  core.rs:320
+    +                 7555 tokio::runtime::scheduler::multi_thread::worker::run::h612da59ab1958f94  (in kaspad) + 192  [0x107f3b99c]  worker.rs:498
+    +                   7555 tokio::runtime::context::runtime::enter_runtime::h402c760889784eab  (in kaspad) + 436  [0x107f3ee34]  runtime.rs:65
+    +                     7555 tokio::runtime::context::scoped::Scoped$LT$T$GT$::set::hf90177e0e4022efd  (in kaspad) + 56  [0x107f388c8]  scoped.rs:40
+    +                       7555 tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 2172  [0x107f3d3b8]  worker.rs:564
+    +                         7555 tokio::runtime::scheduler::multi_thread::worker::Context::park_timeout::he523c0930a0ffa36  (in kaspad) + 144  [0x107f3c8a0]  worker.rs:748
+    +                           7555 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 264  [0x107f3f500]  park.rs:70
+    +                             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141062: header-processor
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hb99aa8d4146d8922  (in kaspad) + 88  [0x105479454]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h293d6c8f60c8537b  (in kaspad) + 32  [0x105474a28]  backtrace.rs:160
+    +           7555 kaspa_consensus::pipeline::header_processor::processor::HeaderProcessor::worker::hf9a77c711b552fd7  (in kaspad) + 108  [0x1051b38dc]  processor.rs:294
+    +             7555 crossbeam_channel::channel::Receiver$LT$T$GT$::recv::h2fdfa5be8846b2d1  (in kaspad) + 532  [0x10505fa60]  channel.rs:815
+    +               7537 crossbeam_channel::flavors::list::Channel$LT$T$GT$::recv::h96611fa486a7b229  (in kaspad) + 600  [0x1052d8c58]  list.rs:485
+    +               ! 7537 crossbeam_channel::flavors::list::Channel$LT$T$GT$::recv::_$u7b$$u7b$closure$u7d$$u7d$::h2792a2890cfd75aa  (in kaspad) + 252  [0x1052d902c]  list.rs:495
+    +               !   7537 std::thread::functions::park::h4b143ad52af9659e  (in kaspad) + 96  [0x107ee765c]  functions.rs:529
+    +               !     7537 _dispatch_semaphore_wait_slow  (in libdispatch.dylib) + 132  [0x189369b20]
+    +               !       7537 _dispatch_sema4_wait  (in libdispatch.dylib) + 28  [0x189369490]
+    +               !         7537 semaphore_wait_trap  (in libsystem_kernel.dylib) + 8  [0x1894dfbb0]
+    +               18 crossbeam_channel::flavors::list::Channel$LT$T$GT$::recv::h96611fa486a7b229  (in kaspad) + 496  [0x1052d8bf0]  list.rs:474
+    +                 18 cthread_yield  (in libsystem_pthread.dylib) + 36  [0x189520c28]
+    +                   18 swtch_pri  (in libsystem_kernel.dylib) + 8  [0x1894dfc88]
+    7555 Thread_10141063: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd79cd972722002f2  (in kaspad) + 148  [0x107f1f5c0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::h41d03b0276337f1f  (in kaspad) + 172  [0x107f21180]  core.rs:320
+    +                 7555 tokio::runtime::scheduler::multi_thread::worker::run::h612da59ab1958f94  (in kaspad) + 192  [0x107f3b99c]  worker.rs:498
+    +                   7555 tokio::runtime::context::runtime::enter_runtime::h402c760889784eab  (in kaspad) + 436  [0x107f3ee34]  runtime.rs:65
+    +                     7555 tokio::runtime::context::scoped::Scoped$LT$T$GT$::set::hf90177e0e4022efd  (in kaspad) + 56  [0x107f388c8]  scoped.rs:40
+    +                       7555 tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 2172  [0x107f3d3b8]  worker.rs:564
+    +                         7555 tokio::runtime::scheduler::multi_thread::worker::Context::park_timeout::he523c0930a0ffa36  (in kaspad) + 144  [0x107f3c8a0]  worker.rs:748
+    +                           7552 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 264  [0x107f3f500]  park.rs:70
+    +                           ! 7552 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                           !   7552 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    +                           3 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 344  [0x107f3f550]  park.rs:70
+    +                             3 tokio::runtime::time::Driver::park_internal::h03b0a9c44bd5c078  (in kaspad) + 1072  [0x107f2998c]
+    +                               3 tokio::runtime::io::driver::Driver::turn::hbc9875dcd3c1865e  (in kaspad) + 232  [0x107f2ca64]
+    +                                 3 kevent  (in libsystem_kernel.dylib) + 8  [0x1894e5fc4]
+    7555 Thread_10141064: body-processor
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h7eeff30a5718b237  (in kaspad) + 88  [0x105478f38]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h2bc8dfadae9027fb  (in kaspad) + 32  [0x105474aa4]  backtrace.rs:160
+    +           7555 kaspa_consensus::pipeline::body_processor::processor::BlockBodyProcessor::worker::h90fec6a228108768  (in kaspad) + 100  [0x1051aa26c]  processor.rs:160
+    +             7555 crossbeam_channel::channel::Receiver$LT$T$GT$::recv::h2fdfa5be8846b2d1  (in kaspad) + 532  [0x10505fa60]  channel.rs:815
+    +               7554 crossbeam_channel::flavors::list::Channel$LT$T$GT$::recv::h96611fa486a7b229  (in kaspad) + 600  [0x1052d8c58]  list.rs:485
+    +               ! 7554 crossbeam_channel::flavors::list::Channel$LT$T$GT$::recv::_$u7b$$u7b$closure$u7d$$u7d$::h2792a2890cfd75aa  (in kaspad) + 252  [0x1052d902c]  list.rs:495
+    +               !   7554 std::thread::functions::park::h4b143ad52af9659e  (in kaspad) + 96  [0x107ee765c]  functions.rs:529
+    +               !     7554 _dispatch_semaphore_wait_slow  (in libdispatch.dylib) + 132  [0x189369b20]
+    +               !       7554 _dispatch_sema4_wait  (in libdispatch.dylib) + 28  [0x189369490]
+    +               !         7554 semaphore_wait_trap  (in libsystem_kernel.dylib) + 8  [0x1894dfbb0]
+    +               1 crossbeam_channel::flavors::list::Channel$LT$T$GT$::recv::h96611fa486a7b229  (in kaspad) + 496  [0x1052d8bf0]  list.rs:474
+    +                 1 cthread_yield  (in libsystem_pthread.dylib) + 36  [0x189520c28]
+    +                   1 swtch_pri  (in libsystem_kernel.dylib) + 8  [0x1894dfc88]
+    7555 Thread_10141065: virtual-processor
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h9862360afdd69ae9  (in kaspad) + 88  [0x1054790d8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::h879e815900950e7a  (in kaspad) + 32  [0x105475c98]  backtrace.rs:160
+    +           7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::worker::h7ccb462c4fed16ad  (in kaspad) + 380  [0x10501f12c]  processor.rs:1868
+    +             7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::resolve_virtual::hd66ca6eb09d27e62  (in kaspad) + 4564  [0x104f9afd4]  processor.rs:1965
+    +               7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::calculate_and_commit_virtual_state::ha16fafa274042a8e  (in kaspad) + 144  [0x105003630]  processor.rs:3951
+    +                 7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::commit_virtual_state::h2b8dc6e95e217396  (in kaspad) + 24380  [0x104fac6e8]  processor.rs:4034
+    +                   7555 parking_lot::raw_rwlock::RawRwLock::wait_for_readers::ha56029f201785965  (in kaspad) + 600  [0x107d4345c]
+    +                     7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                       7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141066: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd79cd972722002f2  (in kaspad) + 148  [0x107f1f5c0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::h41d03b0276337f1f  (in kaspad) + 172  [0x107f21180]  core.rs:320
+    +                 7555 tokio::runtime::scheduler::multi_thread::worker::run::h612da59ab1958f94  (in kaspad) + 192  [0x107f3b99c]  worker.rs:498
+    +                   7555 tokio::runtime::context::runtime::enter_runtime::h402c760889784eab  (in kaspad) + 436  [0x107f3ee34]  runtime.rs:65
+    +                     7555 tokio::runtime::context::scoped::Scoped$LT$T$GT$::set::hf90177e0e4022efd  (in kaspad) + 56  [0x107f388c8]  scoped.rs:40
+    +                       7555 tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 2172  [0x107f3d3b8]  worker.rs:564
+    +                         7555 tokio::runtime::scheduler::multi_thread::worker::Context::park_timeout::he523c0930a0ffa36  (in kaspad) + 144  [0x107f3c8a0]  worker.rs:748
+    +                           7555 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 264  [0x107f3f500]  park.rs:70
+    +                             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141067: pruning-processor
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hb4503d85de105a44  (in kaspad) + 88  [0x1054792b4]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hb992fcd316016a2a  (in kaspad) + 32  [0x105475d14]  backtrace.rs:160
+    +           7555 kaspa_consensus::pipeline::pruning_processor::processor::PruningProcessor::worker::hcbc9a2da14ee66a5  (in kaspad) + 300  [0x105516bc8]  processor.rs:132
+    +             7555 crossbeam_channel::channel::Receiver$LT$T$GT$::recv::h6ac9e27c4706ff8e  (in kaspad) + 72  [0x105060010]  channel.rs:814
+    +               7555 crossbeam_channel::flavors::array::Channel$LT$T$GT$::recv::h8c476af9c93dd948  (in kaspad) + 1160  [0x1054be414]  array.rs:421
+    +                 7555 crossbeam_channel::flavors::array::Channel$LT$T$GT$::recv::_$u7b$$u7b$closure$u7d$$u7d$::h32d7296e0d706b65  (in kaspad) + 256  [0x1054beb4c]  array.rs:432
+    +                   7555 std::thread::functions::park::h4b143ad52af9659e  (in kaspad) + 96  [0x107ee765c]  functions.rs:529
+    +                     7555 _dispatch_semaphore_wait_slow  (in libdispatch.dylib) + 132  [0x189369b20]
+    +                       7555 _dispatch_sema4_wait  (in libdispatch.dylib) + 28  [0x189369490]
+    +                         7555 semaphore_wait_trap  (in libsystem_kernel.dylib) + 8  [0x1894dfbb0]
+    7555 Thread_10141068: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd79cd972722002f2  (in kaspad) + 148  [0x107f1f5c0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::h41d03b0276337f1f  (in kaspad) + 172  [0x107f21180]  core.rs:320
+    +                 7555 tokio::runtime::scheduler::multi_thread::worker::run::h612da59ab1958f94  (in kaspad) + 192  [0x107f3b99c]  worker.rs:498
+    +                   7555 tokio::runtime::context::runtime::enter_runtime::h402c760889784eab  (in kaspad) + 436  [0x107f3ee34]  runtime.rs:65
+    +                     7555 tokio::runtime::context::scoped::Scoped$LT$T$GT$::set::hf90177e0e4022efd  (in kaspad) + 56  [0x107f388c8]  scoped.rs:40
+    +                       7555 tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 2172  [0x107f3d3b8]  worker.rs:564
+    +                         7555 tokio::runtime::scheduler::multi_thread::worker::Context::park_timeout::he523c0930a0ffa36  (in kaspad) + 144  [0x107f3c8a0]  worker.rs:748
+    +                           7555 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 264  [0x107f3f500]  park.rs:70
+    +                             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141069: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd79cd972722002f2  (in kaspad) + 148  [0x107f1f5c0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::h41d03b0276337f1f  (in kaspad) + 172  [0x107f21180]  core.rs:320
+    +                 7555 tokio::runtime::scheduler::multi_thread::worker::run::h612da59ab1958f94  (in kaspad) + 192  [0x107f3b99c]  worker.rs:498
+    +                   7555 tokio::runtime::context::runtime::enter_runtime::h402c760889784eab  (in kaspad) + 436  [0x107f3ee34]  runtime.rs:65
+    +                     7555 tokio::runtime::context::scoped::Scoped$LT$T$GT$::set::hf90177e0e4022efd  (in kaspad) + 56  [0x107f388c8]  scoped.rs:40
+    +                       7555 tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 2172  [0x107f3d3b8]  worker.rs:564
+    +                         7555 tokio::runtime::scheduler::multi_thread::worker::Context::park_timeout::he523c0930a0ffa36  (in kaspad) + 144  [0x107f3c8a0]  worker.rs:748
+    +                           7555 tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 264  [0x107f3f500]  park.rs:70
+    +                             7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                               7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141070
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h7b2eab38a9ecffe8  (in kaspad) + 56  [0x105e42648]  function.rs:250
+    +         7555 _$LT$core..panic..unwind_safe..AssertUnwindSafe$LT$F$GT$$u20$as$u20$core..ops..function..FnOnce$LT$$LP$$RP$$GT$$GT$::call_once::h845f55afbc9f6f5d  (in kaspad) + 36  [0x105e41980]  unwind_safe.rs:274
+    +           7555 std::thread::lifecycle::spawn_unchecked::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h56f041791b1dc2f7  (in kaspad) + 44  [0x105e423e0]  lifecycle.rs:92
+    +             7555 std::sys::backtrace::__rust_begin_short_backtrace::hfcca09d262cedf9a  (in kaspad) + 12  [0x105e4078c]  backtrace.rs:160
+    +               7555 kaspa_core::task::runtime::AsyncRuntime::worker_impl::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::hbc303e54d4719d2b  (in kaspad) + 116  [0x105e3fd4c]  runtime.rs:70
+    +                 7555 nanosleep  (in libsystem_c.dylib) + 220  [0x1893becc0]
+    +                   7555 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x1894e3308]
+    7555 Thread_10141072: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd65328d1aacd2e91  (in kaspad) + 176  [0x1064df4a0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::he091a76727686917  (in kaspad) + 240  [0x106707450]  core.rs:320
+    +                 7555 kaspa_consensusmanager::session::ConsensusSessionOwned::spawn_blocking::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h650d5258a2f18ac6  (in kaspad) + 120  [0x106777fa4]
+    +                   7555 kaspa_mining::manager::MiningManager::validate_and_insert_transaction_batch::heee89fc531947ee8  (in kaspad) + 1032  [0x106414cd0]  manager.rs:1019
+    +                     7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::validate_mempool_transactions_in_parallel::haea588740628e8c4  (in kaspad) + 96  [0x10501a308]  processor.rs:19816
+    +                       7555 parking_lot::raw_rwlock::RawRwLock::lock_shared_slow::h9dfc9857a4b33ec3  (in kaspad) + 688  [0x1085b8ea8]  raw_rwlock.rs:723
+    +                         7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                           7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141080: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd65328d1aacd2e91  (in kaspad) + 176  [0x1064df4a0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::he091a76727686917  (in kaspad) + 240  [0x106707450]  core.rs:320
+    +                 7555 kaspa_consensusmanager::session::ConsensusSessionOwned::spawn_blocking::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h650d5258a2f18ac6  (in kaspad) + 120  [0x106777fa4]
+    +                   7555 kaspa_mining::manager::MiningManager::validate_and_insert_transaction_batch::heee89fc531947ee8  (in kaspad) + 1032  [0x106414cd0]  manager.rs:1019
+    +                     7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::validate_mempool_transactions_in_parallel::haea588740628e8c4  (in kaspad) + 216  [0x10501a380]  processor.rs:19822
+    +                       7555 rayon_core::registry::Registry::in_worker_cold::h104c8f7b4627cb13  (in kaspad) + 216  [0x1084e7314]
+    +                         7555 rayon_core::latch::LockLatch::wait_and_reset::h64b8b6fc41764b6c  (in kaspad) + 136  [0x107d4df10]  latch.rs:250
+    +                           7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                             7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10141081: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd65328d1aacd2e91  (in kaspad) + 176  [0x1064df4a0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::he091a76727686917  (in kaspad) + 240  [0x106707450]  core.rs:320
+    +                 7555 kaspa_consensusmanager::session::ConsensusSessionOwned::spawn_blocking::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h650d5258a2f18ac6  (in kaspad) + 120  [0x106777fa4]
+    +                   7555 kaspa_mining::manager::MiningManager::validate_and_insert_transaction_batch::heee89fc531947ee8  (in kaspad) + 1032  [0x106414cd0]  manager.rs:1019
+    +                     7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::validate_mempool_transactions_in_parallel::haea588740628e8c4  (in kaspad) + 216  [0x10501a380]  processor.rs:19822
+    +                       7555 rayon_core::registry::Registry::in_worker_cold::h104c8f7b4627cb13  (in kaspad) + 216  [0x1084e7314]
+    +                         7555 rayon_core::latch::LockLatch::wait_and_reset::h64b8b6fc41764b6c  (in kaspad) + 136  [0x107d4df10]  latch.rs:250
+    +                           7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                             7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10142119: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::h3b6d0bc8fc9c6454  (in kaspad) + 184  [0x106fe75e0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::hbfef3544c726392a  (in kaspad) + 184  [0x1074fc43c]  core.rs:320
+    +                 7555 _$LT$tokio..runtime..blocking..task..BlockingTask$LT$T$GT$$u20$as$u20$core..future..future..Future$GT$::poll::hcae7c0021d7b3e03  (in kaspad) + 172  [0x1075cfd40]  task.rs:42
+    +                   7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::palw_round_lane_status_v1::h18a49f02a4144dea  (in kaspad) + 284  [0x104fd6afc]  processor.rs:20325
+    +                     7555 parking_lot::raw_rwlock::RawRwLock::lock_shared_slow::h9dfc9857a4b33ec3  (in kaspad) + 688  [0x1085b8ea8]  raw_rwlock.rs:723
+    +                       7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                         7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10142123: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd65328d1aacd2e91  (in kaspad) + 176  [0x1064df4a0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::he091a76727686917  (in kaspad) + 240  [0x106707450]  core.rs:320
+    +                 7555 kaspa_consensusmanager::session::ConsensusSessionOwned::spawn_blocking::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h650d5258a2f18ac6  (in kaspad) + 120  [0x106777fa4]
+    +                   7555 kaspa_mining::manager::MiningManager::validate_and_insert_transaction_batch::heee89fc531947ee8  (in kaspad) + 1032  [0x106414cd0]  manager.rs:1019
+    +                     7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::validate_mempool_transactions_in_parallel::haea588740628e8c4  (in kaspad) + 96  [0x10501a308]  processor.rs:19816
+    +                       7555 parking_lot::raw_rwlock::RawRwLock::lock_shared_slow::h9dfc9857a4b33ec3  (in kaspad) + 688  [0x1085b8ea8]  raw_rwlock.rs:723
+    +                         7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                           7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10353405
+    + 7555 start_wqthread  (in libsystem_pthread.dylib) + 8  [0x18951ec10]
+    +   7555 _pthread_wqthread  (in libsystem_pthread.dylib) + 368  [0x18951ff0c]
+    +     7555 __workq_kernreturn  (in libsystem_kernel.dylib) + 8  [0x1894e19f0]
+    7555 Thread_10401156: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+    +             7555 tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd65328d1aacd2e91  (in kaspad) + 176  [0x1064df4a0]  harness.rs:154
+    +               7555 tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::he091a76727686917  (in kaspad) + 240  [0x106707450]  core.rs:320
+    +                 7555 kaspa_consensusmanager::session::ConsensusSessionOwned::spawn_blocking::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h650d5258a2f18ac6  (in kaspad) + 120  [0x106777fa4]
+    +                   7555 kaspa_mining::manager::MiningManager::validate_and_insert_transaction_batch::heee89fc531947ee8  (in kaspad) + 1032  [0x106414cd0]  manager.rs:1019
+    +                     7555 kaspa_consensus::pipeline::virtual_processor::processor::VirtualStateProcessor::validate_mempool_transactions_in_parallel::haea588740628e8c4  (in kaspad) + 96  [0x10501a308]  processor.rs:19816
+    +                       7555 parking_lot::raw_rwlock::RawRwLock::lock_shared_slow::h9dfc9857a4b33ec3  (in kaspad) + 688  [0x1085b8ea8]  raw_rwlock.rs:723
+    +                         7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+    +                           7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10409371: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             7555 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10410944: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             7555 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10411242: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             7555 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10411250: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             7555 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    7555 Thread_10411251: tokio-runtime-worker
+    + 7555 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   7555 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     7555 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       7555 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         7555 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           7555 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             7555 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               7555 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 7555 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    1299 Thread_10411564: tokio-runtime-worker
+    + 1299 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   1299 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     1299 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       1299 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         1299 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           1299 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             1299 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               1299 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 1299 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    1299 Thread_10411565: tokio-runtime-worker
+    + 1299 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   1299 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     1299 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       1299 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         1299 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           1299 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             1299 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               1299 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 1299 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    1299 Thread_10411566: tokio-runtime-worker
+    + 1299 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   1299 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     1299 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       1299 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         1299 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           1299 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             1299 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               1299 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 1299 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    1299 Thread_10411569: tokio-runtime-worker
+    + 1299 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   1299 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     1299 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       1299 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         1299 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           1299 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             1299 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               1299 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 1299 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    1299 Thread_10411570: tokio-runtime-worker
+    + 1299 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   1299 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     1299 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       1299 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         1299 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           1299 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             1299 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               1299 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 1299 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    1299 Thread_10411571: tokio-runtime-worker
+    + 1299 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   1299 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     1299 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       1299 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         1299 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           1299 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             1299 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               1299 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 1299 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    1299 Thread_10411572: tokio-runtime-worker
+    + 1299 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   1299 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     1299 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       1299 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         1299 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           1299 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             1299 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               1299 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 1299 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    1299 Thread_10411573: tokio-runtime-worker
+    + 1299 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   1299 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     1299 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       1299 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         1299 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           1299 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             1299 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               1299 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 1299 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    1299 Thread_10411574: tokio-runtime-worker
+    + 1299 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+    +   1299 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+    +     1299 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+    +       1299 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+    +         1299 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+    +           1299 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+    +             1299 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+    +               1299 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+    +                 1299 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+    1299 Thread_10411575: tokio-runtime-worker
+      1299 thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+        1299 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+          1299 std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+            1299 core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+              1299 std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+                1299 tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+                  1299 std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+                    1299 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+                      1299 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1894e350c]
+
+Total number in stack (recursive counted multiple, when >=5):
+        84       _pthread_start  (in libsystem_pthread.dylib) + 136  [0x189523c58]
+        84       thread_start  (in libsystem_pthread.dylib) + 8  [0x18951ec1c]
+        76       __psynch_cvwait  (in libsystem_kernel.dylib) + 0  [0x1894e3504]
+        71       std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587  (in kaspad) + 400  [0x107ee22e8]
+        61       _pthread_cond_wait  (in libsystem_pthread.dylib) + 980  [0x189524128]
+        31       core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h08150d6230368dc3  (in kaspad) + 96  [0x107f2f3e8]  function.rs:250
+        31       std::sys::backtrace::__rust_begin_short_backtrace::hab04812f2af03e8a  (in kaspad) + 224  [0x107f37834]  backtrace.rs:160
+        30       core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::hca1c5b9f52241921  (in kaspad) + 204  [0x107d4cdbc]  function.rs:250
+        30       rayon_core::registry::ThreadBuilder::run::h39d32c81d9893026  (in kaspad) + 300  [0x107d4754c]  registry.rs:53
+        30       std::sys::backtrace::__rust_begin_short_backtrace::h56268b3fbfeb7e13  (in kaspad) + 52  [0x107d4c700]  backtrace.rs:160
+        28       rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 316  [0x1085bcf4c]  registry.rs:800
+        28       rayon_core::sleep::Sleep::sleep::h38f4962336312fba  (in kaspad) + 532  [0x1085bd9b0]  mod.rs:188
+        16       tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 408  [0x107f35dc4]  pool.rs:511
+        15       _pthread_cond_wait  (in libsystem_pthread.dylib) + 1024  [0x189524154]
+        15       std::sys::sync::condvar::pthread::Condvar::wait_timeout::h29c184fe267ec5a7  (in kaspad) + 176  [0x107ee1f6c]  pthread.rs:77
+        15       tokio::runtime::blocking::pool::Inner::run::h79f333642a38c15b  (in kaspad) + 220  [0x107f35d08]  pool.rs:520
+        12       rocksdb::ThreadPoolImpl::Impl::BGThread(unsigned long)  (in kaspad) + 172  [0x1083eef98]
+        12       rocksdb::ThreadPoolImpl::Impl::BGThreadWrapper(void*)  (in kaspad) + 116  [0x1083ef378]
+        12       std::__thread_proxy[abi:nqe210106]<std::tuple<std::unique_ptr<std::__thread_struct>, void (*)(void*), rocksdb::BGThreadMetadata*>>(void*)  (in kaspad) + 52  [0x1083f0b98]
+        12       std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x189439858]
+        10       tokio::runtime::context::runtime::enter_runtime::h402c760889784eab  (in kaspad) + 436  [0x107f3ee34]  runtime.rs:65
+        10       tokio::runtime::context::scoped::Scoped$LT$T$GT$::set::hf90177e0e4022efd  (in kaspad) + 56  [0x107f388c8]  scoped.rs:40
+        10       tokio::runtime::scheduler::multi_thread::worker::run::h612da59ab1958f94  (in kaspad) + 192  [0x107f3b99c]  worker.rs:498
+        10       tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::h41d03b0276337f1f  (in kaspad) + 172  [0x107f21180]  core.rs:320
+        10       tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd79cd972722002f2  (in kaspad) + 148  [0x107f1f5c0]  harness.rs:154
+        9       tokio::runtime::scheduler::multi_thread::park::Parker::park::h885e0e3b6a9ebe09  (in kaspad) + 264  [0x107f3f500]  park.rs:70
+        9       tokio::runtime::scheduler::multi_thread::worker::Context::park_timeout::he523c0930a0ffa36  (in kaspad) + 144  [0x107f3c8a0]  worker.rs:748
+        9       tokio::runtime::scheduler::multi_thread::worker::Context::run::hf7944ffcb6a6b592  (in kaspad) + 2172  [0x107f3d3b8]  worker.rs:564
+        7       cthread_yield  (in libsystem_pthread.dylib) + 36  [0x189520c28]
+        7       parking_lot::raw_rwlock::RawRwLock::lock_shared_slow::h9dfc9857a4b33ec3  (in kaspad) + 688  [0x1085b8ea8]  raw_rwlock.rs:723
+        7       swtch_pri  (in libsystem_kernel.dylib) + 0  [0x1894dfc80]
+        5       kaspa_consensusmanager::session::ConsensusSessionOwned::spawn_blocking::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h650d5258a2f18ac6  (in kaspad) + 120  [0x106777fa4]
+        5       kaspa_mining::manager::MiningManager::validate_and_insert_transaction_batch::heee89fc531947ee8  (in kaspad) + 1032  [0x106414cd0]  manager.rs:1019
+        5       rayon_core::registry::WorkerThread::wait_until_cold::h3ff228c05230a308  (in kaspad) + 204  [0x1085bcedc]  registry.rs:800
+        5       tokio::runtime::task::core::Core$LT$T$C$S$GT$::poll::he091a76727686917  (in kaspad) + 240  [0x106707450]  core.rs:320
+        5       tokio::runtime::task::harness::Harness$LT$T$C$S$GT$::poll::hd65328d1aacd2e91  (in kaspad) + 176  [0x1064df4a0]  harness.rs:154
+
+Sort by top of stack, same collapsed (when >= 5):
+        __psynch_cvwait  (in libsystem_kernel.dylib)        502707
+        __semwait_signal  (in libsystem_kernel.dylib)        22665
+        semaphore_wait_trap  (in libsystem_kernel.dylib)        22646
+        __ulock_wait  (in libsystem_kernel.dylib)        15110
+        __workq_kernreturn  (in libsystem_kernel.dylib)        7555
+        read  (in libsystem_kernel.dylib)        7555
+        kevent  (in libsystem_kernel.dylib)        7535
+        swtch_pri  (in libsystem_kernel.dylib)        1376
+        core::ops::function::FnOnce::call_once::h89e62faa31a774ce  (in kaspad)        9
+        prost::encoding::_$LT$impl$u20$prost..encoding..sealed..BytesAdapter$u20$for$u20$alloc..vec..Vec$LT$u8$GT$$GT$::replace_with::h07eb8ee4db3e3102  (in kaspad)        7
+
+Binary Images:
+       0x104c0c000 -        0x10942acb3 +kaspad (0) <DAF5E33B-3817-3DBE-AAA9-DA1588FF24DD> /tmp/*/kaspad
+       0x1890b0000 -        0x189102b4b  libobjc.A.dylib (951.7) <1D62B376-2303-376A-B993-9432A2004EB6> /usr/lib/libobjc.A.dylib
+       0x189103000 -        0x189137d58  libdyld.dylib (1387) <70073E6E-4CDD-314F-BBDF-EC7FF6CE2DFC> /usr/lib/system/libdyld.dylib
+       0x189138000 -        0x1891eb4ff  dyld (1.0.0 - 1387) <0263B88E-0B22-3B33-BBC0-483BE879B513> /usr/lib/dyld
+       0x1891ec000 -        0x1891ef228  libsystem_blocks.dylib (96) <B33F1440-9364-38E4-AF85-8A21BFF24324> /usr/lib/system/libsystem_blocks.dylib
+       0x1891f0000 -        0x18924455f  libxpc.dylib (3102.160.5) <E26A36A6-4B8F-321C-AE17-54353F9EEE84> /usr/lib/system/libxpc.dylib
+       0x189245000 -        0x1892659ff  libsystem_trace.dylib (1861.160.4) <314A8A89-4715-32B9-ABC2-B3087149C8B7> /usr/lib/system/libsystem_trace.dylib
+       0x189266000 -        0x1893145f7  libcorecrypto.dylib (1922.160.10) <057A41E9-2A2E-39CD-B198-387734EED870> /usr/lib/system/libcorecrypto.dylib
+       0x189315000 -        0x189365257  libsystem_malloc.dylib (812.160.5) <B7ED74D2-5A24-3F39-9296-EE5688FF4B63> /usr/lib/system/libsystem_malloc.dylib
+       0x189366000 -        0x1893ad23f  libdispatch.dylib (1542.160.2) <80E75F3F-333F-38A8-A3DD-6279FCDB771B> /usr/lib/system/libdispatch.dylib
+       0x1893ae000 -        0x1893b0ffb  libsystem_featureflags.dylib (103) <5725BCFE-07F3-3629-9B44-551A435E2DE2> /usr/lib/system/libsystem_featureflags.dylib
+       0x1893b1000 -        0x1894321e7  libsystem_c.dylib (1752.160.4) <3498CA79-EF40-3587-AD44-75187CEE7D95> /usr/lib/system/libsystem_c.dylib
+       0x189433000 -        0x1894c3ae7  libc++.1.dylib (2100.43) <32327062-C3A2-389E-ABFE-68A9942422E3> /usr/lib/libc++.1.dylib
+       0x1894c4000 -        0x1894de75f  libc++abi.dylib (2100.43) <CCDE1614-20B7-354C-B201-99C5C4CC589D> /usr/lib/libc++abi.dylib
+       0x1894df000 -        0x18951c2f7  libsystem_kernel.dylib (12377.161.15.700.19) <EE805B14-29F2-360D-9A2C-3221A1211833> /usr/lib/system/libsystem_kernel.dylib
+       0x18951d000 -        0x189529b3b  libsystem_pthread.dylib (539.100.4) <A58BEABD-7AC0-35F8-BCFF-E4FFBD79E938> /usr/lib/system/libsystem_pthread.dylib
+       0x18952a000 -        0x189532963  libsystem_platform.dylib (375.120.2) <3AF14164-15FE-3623-9EE3-46DE29FD5B5A> /usr/lib/system/libsystem_platform.dylib
+       0x189533000 -        0x1895626eb  libsystem_info.dylib (600) <0037F576-2C50-36F0-9F36-6CB7A049D5B1> /usr/lib/system/libsystem_info.dylib
+       0x189563000 -        0x189ac191f  com.apple.CoreFoundation (6.9 - 5026.6.7.2) <ADB84143-D965-3B3D-9BA5-EAB165A96490> /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+       0x189ac2000 -        0x189ddcfbf  com.apple.LaunchServices (1141.1 - 1141.1) <13981C10-A9C3-3AA4-A86C-07CD1B658A00> /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/LaunchServices
+       0x189ddd000 -        0x189fc595f  com.apple.gpusw.MetalTools (1.0 - 1) <7DA73466-576B-3025-A247-954A7D5306A8> /System/Library/PrivateFrameworks/MetalTools.framework/Versions/A/MetalTools
+       0x189fc6000 -        0x18a7c04bf  libBLAS.dylib (1551.160.2) <6EE5A2F5-FD5B-3E70-89AD-B95619151E6A> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib
+       0x18a7c1000 -        0x18a8d035f  com.apple.Lexicon-framework (1.0 - 195.12) <C85AB7DE-AE86-3649-9935-57525F317BE7> /System/Library/PrivateFrameworks/Lexicon.framework/Versions/A/Lexicon
+       0x18a8d1000 -        0x18aa4038f  libSparse.dylib (184.160.6) <2359C0FC-462A-3ED6-96C9-95691B1201FB> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libSparse.dylib
+       0x18aa41000 -        0x18aad410f  com.apple.SystemConfiguration (1.21 - 1.21) <442D7EC5-D327-3BA7-AC9E-F610AB233FAB> /System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration
+       0x18aad5000 -        0x18ab0957b  libCRFSuite.dylib (55) <873D36B8-2B8A-36DA-9180-E4299BB87E58> /usr/lib/libCRFSuite.dylib
+       0x18add2000 -        0x18bdb87ff  com.apple.Foundation (6.9 - 5026.6.7.2) <C18B43C3-0606-3B04-8865-D00745487E8B> /System/Library/Frameworks/Foundation.framework/Versions/C/Foundation
+       0x18bf69000 -        0x18c089cbf  com.apple.CoreDisplay (291.4 - 291.4) <42F8E70D-8B00-3F77-9888-6ADFD21E419C> /System/Library/Frameworks/CoreDisplay.framework/Versions/A/CoreDisplay
+       0x18c08a000 -        0x18c44cfdf  com.apple.audio.AudioToolboxCore (1.0 - 1556.705) <6086D741-DCD6-3203-9981-FF2104745DA9> /System/Library/PrivateFrameworks/AudioToolboxCore.framework/Versions/A/AudioToolboxCore
+       0x18c44d000 -        0x18c676d9f  com.apple.CoreText (877.20.0.1 - 877.20.0.1) <6724CE42-A528-3BA6-AEBB-EC7C0D4BC56C> /System/Library/Frameworks/CoreText.framework/Versions/A/CoreText
+       0x18c677000 -        0x18ce0ce1f  com.apple.audio.CoreAudio (5.0 - 5.0) <1B6BA86A-7937-3894-B5E9-A60E1E40B8AE> /System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio
+       0x18ce0d000 -        0x18d22c21f  com.apple.security (7.0 - 61901.160.44.701.4) <096A80E0-43BE-3E53-A065-58E7294ECAD0> /System/Library/Frameworks/Security.framework/Versions/A/Security
+       0x18d22d000 -        0x18d502d53  libicucore.A.dylib (76142.5.2.1) <1DCC2DA6-D469-369F-8554-2777FEC31655> /usr/lib/libicucore.A.dylib
+       0x18d503000 -        0x18d50ce5f  libsystem_darwin.dylib (1752.160.4) <B808D04B-2798-36C9-96F6-35534BDFCF11> /usr/lib/system/libsystem_darwin.dylib
+       0x18d50d000 -        0x18d804cbf  com.apple.CoreServices.CarbonCore (1333 - 1333) <627D09C4-40F0-310F-AB12-AA419CA9598E> /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/CarbonCore.framework/Versions/A/CarbonCore
+       0x18d805000 -        0x18d844f47  com.apple.CoreServicesInternal (505 - 505) <1E89146A-9C2B-3038-B14B-28AC5CEB88CA> /System/Library/PrivateFrameworks/CoreServicesInternal.framework/Versions/A/CoreServicesInternal
+       0x18d845000 -        0x18d8841bf  com.apple.CSStore (1141.1 - 1141.1) <1DCC6A9C-1FBC-3490-9D65-A4025E556FB0> /System/Library/PrivateFrameworks/CoreServicesStore.framework/Versions/A/CoreServicesStore
+       0x18d885000 -        0x18d96d25f  com.apple.framework.IOKit (2.0.2 - 100231.120.3) <BCD3F155-E14F-3191-A1F9-E6F24876FA89> /System/Library/Frameworks/IOKit.framework/Versions/A/IOKit
+       0x18d96e000 -        0x18d9801b6  libsystem_notify.dylib (348.160.3) <922BDCF4-CD33-3EEB-BC56-9DCAE54F8F65> /usr/lib/system/libsystem_notify.dylib
+       0x18f2bd000 -        0x18f2d33ff  com.apple.UniformTypeIdentifiers (709 - 709) <5D7862C3-EFB4-3CF0-A7D5-8DB1FC3A581E> /System/Library/Frameworks/UniformTypeIdentifiers.framework/Versions/A/UniformTypeIdentifiers
+       0x18f7b0000 -        0x18f88895f  libboringssl.dylib (532.120.8) <3D06F086-FA5E-320C-8BCE-EECE4B3DCCFF> /usr/lib/libboringssl.dylib
+       0x18f889000 -        0x18fc3e1df  com.apple.CFNetwork (1.0 - 3860.700.1) <A26A8BA0-E0B5-3C4A-9B76-2D2491FA426F> /System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork
+       0x18fc3f000 -        0x18fc59f7b  libsystem_networkextension.dylib (2226.161.1.700.2) <83F224A4-40C4-3106-A97B-788D1D961DCB> /usr/lib/system/libsystem_networkextension.dylib
+       0x18fc5a000 -        0x18fc5b067  libenergytrace.dylib (23) <1A584316-EEC8-3137-8BA7-AFBE50DF5883> /usr/lib/libenergytrace.dylib
+       0x18fc5c000 -        0x18fcdbeff  libMobileGestalt.dylib (1484.120.3) <194DE7B9-C0BF-348A-9855-90E41F8C74EE> /usr/lib/libMobileGestalt.dylib
+       0x18fcdc000 -        0x18fcf3fdf  libsystem_asl.dylib (406) <FF6BE113-1093-3D23-8A55-E0A5B327CA8E> /usr/lib/system/libsystem_asl.dylib
+       0x18fcf4000 -        0x18fd17797  com.apple.TCC (1.0 - 1) <3BC4BFE7-2666-3BA0-BEEB-550EBB717692> /System/Library/PrivateFrameworks/TCC.framework/Versions/A/TCC
+       0x18fd18000 -        0x1902ced1f  com.apple.SkyLight (1.600.0 - 922.13.4.1) <CD5F2362-8462-38D4-8C57-0BCD4E04F962> /System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight
+       0x1902cf000 -        0x190a245ff  com.apple.CoreGraphics (2.0 - 1965.6.3) <8871EBD4-3306-32E6-9FE6-8A35C9ECA7C8> /System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics
+       0x190a25000 -        0x190bccb8b  com.apple.ColorSync (4.13.0 - 3813.5.1) <505BFEDB-09C2-37BB-968E-7CAA06F0D5D9> /System/Library/Frameworks/ColorSync.framework/Versions/A/ColorSync
+       0x191021000 -        0x19140ef5f  com.apple.CoreData (120 - 1526) <0E165051-218B-3732-8F53-236E07761116> /System/Library/Frameworks/CoreData.framework/Versions/A/CoreData
+       0x19140f000 -        0x19142addf  com.apple.ProtocolBuffer (1 - 310.26.4.23.2) <8445F0D6-8667-3E5D-9071-C70B131E7B61> /System/Library/PrivateFrameworks/ProtocolBuffer.framework/Versions/A/ProtocolBuffer
+       0x19142b000 -        0x191613a2f  libsqlite3.dylib (382) <FA81FC7D-A418-36C7-80DC-F23D6D66D852> /usr/lib/libsqlite3.dylib
+       0x1916b1000 -        0x1917a249f  com.apple.BaseBoard (732.1.1 - 732.1.1) <BBEAEC70-0458-3A37-9884-EB8BA991B5B2> /System/Library/PrivateFrameworks/BaseBoard.framework/Versions/A/BaseBoard
+       0x1917a3000 -        0x19180ed5f  com.apple.RunningBoardServices (1.0 - 1015.160.2.0.1) <9CD3619D-B517-3F88-B35F-0B6D39495E31> /System/Library/PrivateFrameworks/RunningBoardServices.framework/Versions/A/RunningBoardServices
+       0x19180f000 -        0x191882c37  com.apple.AE (944 - 944) <EA4B9595-8D7F-3B5E-9072-27FA8FCDFEA0> /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/AE.framework/Versions/A/AE
+       0x191883000 -        0x191894d87  libdns_services.dylib (2881.160.4.700.1) <7D585F8D-E25A-3961-A991-70FC2A4A68F5> /usr/lib/libdns_services.dylib
+       0x191895000 -        0x19189d387  libsystem_symptoms.dylib (2169.160.3.701.1) <7F0D4E31-268A-3EBB-8A2C-30CCC771A5A5> /usr/lib/system/libsystem_symptoms.dylib
+       0x19189e000 -        0x1930bb29f  com.apple.Network (1.0 - 5812.160.9) <3853CB92-7E37-3A29-B6B2-81AAFEB9E951> /System/Library/Frameworks/Network.framework/Versions/A/Network
+       0x1930bc000 -        0x1930ebddf  com.apple.analyticsd (1.0 - 1) <D901A599-F5A4-3F37-879D-B8D2281312DE> /System/Library/PrivateFrameworks/CoreAnalytics.framework/Versions/A/CoreAnalytics
+       0x1930ec000 -        0x1930ed8bb  libDiagnosticMessagesClient.dylib (113) <64AEDF19-F2F6-3E92-9396-711FD9E2D7AF> /usr/lib/libDiagnosticMessagesClient.dylib
+       0x1930ee000 -        0x19315a37f  com.apple.spotlight.metadata.utilities (1.0 - 2418.6.3.9.401) <F2998DC5-E89D-3DC5-BC7C-B3AF717FDBC5> /System/Library/PrivateFrameworks/MetadataUtilities.framework/Versions/A/MetadataUtilities
+       0x19315b000 -        0x1931e6b5f  com.apple.Metadata (26.7 - 2418.6.3.9.401) <3852B926-BC08-39C1-9CA9-C3F895BD89E9> /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Metadata
+       0x1931e7000 -        0x1931f01eb  com.apple.DiskArbitration (2.7 - 2.7) <DBEEB2D7-4F74-379B-9991-753B4B3A31C1> /System/Library/Frameworks/DiskArbitration.framework/Versions/A/DiskArbitration
+       0x1931f1000 -        0x19361506b  com.apple.vImage (8.1 - 632.120.2.701.1) <1C8CC389-CE64-3B3F-97AA-A1BFBD99D2C1> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vImage.framework/Versions/A/vImage
+       0x193616000 -        0x193a2be3f  com.apple.QuartzCore (1195.17.2 - 1195.17.2) <DF88B985-E9A5-310B-990F-1ECBB86CE4CC> /System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore
+       0x193a2c000 -        0x193a7ccdf  libFontRegistry.dylib (408.20.0.2) <E697F2AF-E225-3F97-8296-3A072D5D3ABB> /System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/ATS.framework/Versions/A/Resources/libFontRegistry.dylib
+       0x193d43000 -        0x193d50aff  com.apple.OpenDirectory (26.7 - 666.100.1) <5F7E4BE7-DBAE-3F0D-B49D-E42E0562ECF8> /System/Library/Frameworks/OpenDirectory.framework/Versions/A/OpenDirectory
+       0x193d51000 -        0x193d7a27f  com.apple.CFOpenDirectory (26.7 - 666.100.1) <3335BD98-F9F8-36DC-954D-5FDF76E740D2> /System/Library/Frameworks/OpenDirectory.framework/Versions/A/Frameworks/CFOpenDirectory.framework/Versions/A/CFOpenDirectory
+       0x193d7b000 -        0x193d8791b  com.apple.CoreServices.FSEvents (1413.160.2 - 1413.160.2) <5A74D8B7-D870-39AA-863D-8718B69C3A87> /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/FSEvents
+       0x193d88000 -        0x193db10df  com.apple.coreservices.SharedFileList (225 - 225) <5118BC7D-EA1E-3AA0-9A5D-EC4CDE67EC7C> /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/SharedFileList.framework/Versions/A/SharedFileList
+       0x193db2000 -        0x193db508f  libapp_launch_measurement.dylib (17) <8AE2A6D2-B312-36E9-8502-794BC2B1A538> /usr/lib/libapp_launch_measurement.dylib
+       0x193db6000 -        0x193dfe9bf  com.apple.CoreAutoLayout (1.0 - 34) <6262E250-0A98-3E16-9062-8AD09CB13AEA> /System/Library/PrivateFrameworks/CoreAutoLayout.framework/Versions/A/CoreAutoLayout
+       0x193dff000 -        0x193ee53c3  libxml2.2.dylib (39.10.3) <C90946C4-CEE6-359B-BB2E-B20A7870A434> /usr/lib/libxml2.2.dylib
+       0x193ee6000 -        0x193f66bbf  com.apple.CoreVideo (1.8 - 0.0) <97D8F3BE-3618-3D1C-B091-6F58BE12FAD1> /System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo
+       0x193f67000 -        0x193f69f5f  com.apple.loginsupport (3.0 - 264.4.2.100) <39085810-317C-3ABB-B56D-833012AB10C7> /System/Library/PrivateFrameworks/login.framework/Versions/A/Frameworks/loginsupport.framework/Versions/A/loginsupport
+       0x193fa8000 -        0x193fd465f  com.apple.UserManagement (1.0 - 1) <13C7D776-746D-3238-8E6C-B7366816974C> /System/Library/PrivateFrameworks/UserManagement.framework/Versions/A/UserManagement
+       0x195b3a000 -        0x195b72373  libsystem_containermanager.dylib (725.160.3.701.2) <118BC21E-B17D-32A2-9B65-16256131974F> /usr/lib/system/libsystem_containermanager.dylib
+       0x195b73000 -        0x195b8f25f  com.apple.IOSurface (393.5.8 - 393.5.8) <980DCBCE-DA4F-3255-A575-3DC93B6421E8> /System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface
+       0x195b90000 -        0x195b9a05f  com.apple.IOAccelerator (487.4.4 - 487.4.4) <B4470C45-276C-3ABC-A50A-09813A75D92F> /System/Library/PrivateFrameworks/IOAccelerator.framework/Versions/A/IOAccelerator
+       0x195b9b000 -        0x195e74e1f  com.apple.Metal (373.7 - 373.7) <5192171C-7963-364B-906E-A7C6FCC289A2> /System/Library/Frameworks/Metal.framework/Versions/A/Metal
+       0x195e75000 -        0x195e9e3ff  com.apple.audio.caulk (1.0 - 214.701.1) <17D94B6F-C622-36F7-B775-2FE1F8A749B8> /System/Library/PrivateFrameworks/caulk.framework/Versions/A/caulk
+       0x195e9f000 -        0x19604077f  com.apple.CoreMedia (1.0 - 3330.13.105.2) <0EC488E4-B00F-3662-A61D-2AEF7D6DC495> /System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia
+       0x196041000 -        0x19631043f  libFontParser.dylib (435.6.0.2) <90621BC3-4A16-3BF7-B384-3194F517A9B6> /System/Library/PrivateFrameworks/FontServices.framework/libFontParser.dylib
+       0x196666000 -        0x1969a6f1f  com.apple.ImageIO (3.3.0 - 2784.6.4) <D8C1E694-DD38-3E4B-AF31-075B8E912D23> /System/Library/Frameworks/ImageIO.framework/Versions/A/ImageIO
+       0x1969a7000 -        0x196e91f9f  com.apple.CoreImage (19.0.0 - 1592.120.2) <BFE7CCA2-299D-35AE-B97C-9C9F6CB7C628> /System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImage
+       0x196e92000 -        0x196f4bddf  com.apple.MetalPerformanceShaders.MPSCore (1.0 - 1) <A14BF218-2400-3671-9CF9-A585F546D3D7> /System/Library/Frameworks/MetalPerformanceShaders.framework/Versions/A/Frameworks/MPSCore.framework/Versions/A/MPSCore
+       0x196f4c000 -        0x196f505d7  libsystem_configuration.dylib (1405.160.3.701.3) <7725D903-1D37-33E7-82AF-2260661C81A8> /usr/lib/system/libsystem_configuration.dylib
+       0x196f51000 -        0x196f5799f  libsystem_sandbox.dylib (2680.160.6.700.3) <7B54AAA3-EB32-3853-8F0E-EB956EC957A1> /usr/lib/system/libsystem_sandbox.dylib
+       0x196f58000 -        0x196f5917f  com.apple.AggregateDictionary (1.0 - 1) <39320E6E-C885-325A-8E05-46299431F631> /System/Library/PrivateFrameworks/AggregateDictionary.framework/Versions/A/AggregateDictionary
+       0x196f5a000 -        0x196f5e4d3  com.apple.AppleSystemInfo (3.1.5 - 3.1.5) <FAB4C56B-86C3-3C4F-9C94-5424C8E5D7BA> /System/Library/PrivateFrameworks/AppleSystemInfo.framework/Versions/A/AppleSystemInfo
+       0x196f5f000 -        0x196f6046b  liblangid.dylib (140) <37329BE8-053E-3997-8524-36DED44A3154> /usr/lib/liblangid.dylib
+       0x196f61000 -        0x19708045f  com.apple.CoreNLP (1.0 - 313) <E5D0F20E-BE93-3344-8DC3-2BCD4FEBCA52> /System/Library/PrivateFrameworks/CoreNLP.framework/Versions/A/CoreNLP
+       0x197081000 -        0x19708791f  com.apple.LinguisticData (1.0 - 483.10) <D9E92919-75FB-3FCF-928F-D8DDA620043F> /System/Library/PrivateFrameworks/LinguisticData.framework/Versions/A/LinguisticData
+       0x197088000 -        0x19811041f  libBNNS.dylib (1961.160.8) <DF22E2F1-49E8-3752-8B7C-ACED037C7E75> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBNNS.dylib
+       0x198111000 -        0x19824e46f  libvDSP.dylib (1126.160.2) <B98FEB65-21F7-307A-95FA-B36B80C018AA> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libvDSP.dylib
+       0x198283000 -        0x1982bc267  com.apple.IOMobileFramebuffer (343.0.0 - 343.0.0) <811E1C0F-5325-3FB2-ABFA-855AC08F510F> /System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/Versions/A/IOMobileFramebuffer
+       0x1984b5000 -        0x1984cc6df  com.apple.MobileKeyBag (2.0 - 1.0) <E70D41AE-5777-30B7-9991-493B13DBE5DB> /System/Library/PrivateFrameworks/MobileKeyBag.framework/Versions/A/MobileKeyBag
+       0x1984cd000 -        0x1984db0ff  com.apple.AssertionServices (1.0 - 1015.160.2.0.1) <86AC7BCD-A13F-30B6-A723-1BFAA9CD8CC2> /System/Library/PrivateFrameworks/AssertionServices.framework/Versions/A/AssertionServices
+       0x1984dc000 -        0x19856ea9f  com.apple.securityfoundation (6.0 - 55293) <9B401DEC-F246-316B-862D-5D9808449E69> /System/Library/Frameworks/SecurityFoundation.framework/Versions/A/SecurityFoundation
+       0x19856f000 -        0x1985a02ff  com.apple.coreservices.BackgroundTaskManagement (1.0 - 104) <C2ACE084-54F8-3A3A-AFE2-7383EEA19575> /System/Library/PrivateFrameworks/BackgroundTaskManagement.framework/Versions/A/BackgroundTaskManagement
+       0x1985ac000 -        0x1985af1fb  libquarantine.dylib (196.160.2.700.3) <45146171-F0C1-3104-AE01-6AAD841A70B5> /usr/lib/system/libquarantine.dylib
+       0x1985b0000 -        0x1985bb2bf  libCheckFix.dylib (33) <A873D376-4A28-389E-A479-159368FA8677> /usr/lib/libCheckFix.dylib
+       0x1985bc000 -        0x1985d37ab  libcoretls.dylib (187.100.3) <250936F1-FE65-3746-AE71-56384ECC8419> /usr/lib/libcoretls.dylib
+       0x1985d4000 -        0x1985e5273  libbsm.0.dylib (90) <C63E7165-3AC7-3104-99EE-A984265C7DF2> /usr/lib/libbsm.0.dylib
+       0x1985e6000 -        0x198644c6b  libmecab.dylib (1121.5.1) <BF02041A-D8D9-3A87-B261-817F969F1BA7> /usr/lib/libmecab.dylib
+       0x198645000 -        0x19864741b  libgermantok.dylib (31) <C45F456C-A003-3694-B594-57E6E4F5474A> /usr/lib/libgermantok.dylib
+       0x198648000 -        0x19865be3f  libLinearAlgebra.dylib (1551.160.2) <676371DF-AF18-3EB9-9D7F-E6C1195FA25F> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLinearAlgebra.dylib
+       0x19865c000 -        0x1988b217f  com.apple.MetalPerformanceShaders.MPSNeuralNetwork (1.0 - 1) <F119A3BA-5272-3181-A9CF-5F1537D5584C> /System/Library/Frameworks/MetalPerformanceShaders.framework/Versions/A/Frameworks/MPSNeuralNetwork.framework/Versions/A/MPSNeuralNetwork
+       0x1988b3000 -        0x19890719f  com.apple.MetalPerformanceShaders.MPSRayIntersector (1.0 - 1) <A9CED6ED-873D-3123-B221-111DE040A93D> /System/Library/Frameworks/MetalPerformanceShaders.framework/Versions/A/Frameworks/MPSRayIntersector.framework/Versions/A/MPSRayIntersector
+       0x198a9b000 -        0x198acc57f  com.apple.MetalPerformanceShaders.MPSMatrix (1.0 - 1) <FFAF8C61-C08D-35B8-AA02-B537F9210905> /System/Library/Frameworks/MetalPerformanceShaders.framework/Versions/A/Frameworks/MPSMatrix.framework/Versions/A/MPSMatrix
+       0x198acd000 -        0x198c9ccdf  com.apple.MetalPerformanceShaders.MPSNDArray (1.0 - 1) <BBC9B11F-9817-3C36-913D-BD34E0543F92> /System/Library/Frameworks/MetalPerformanceShaders.framework/Versions/A/Frameworks/MPSNDArray.framework/Versions/A/MPSNDArray
+       0x198c9d000 -        0x198d311df  com.apple.MetalPerformanceShaders.MPSImage (1.0 - 1) <A02CA05F-E8B5-3DF2-BF46-9424B0CEB2E4> /System/Library/Frameworks/MetalPerformanceShaders.framework/Versions/A/Frameworks/MPSImage.framework/Versions/A/MPSImage
+       0x198d32000 -        0x198d3d4c3  com.apple.AppleFSCompression (174.160.2 - 1.0) <F94BA7CD-07EC-32D3-A06D-82383C934BD4> /System/Library/PrivateFrameworks/AppleFSCompression.framework/Versions/A/AppleFSCompression
+       0x198d3e000 -        0x198d4a0a3  libbz2.1.0.dylib (49) <0824081F-39D6-33E2-94B8-C33B231C81FF> /usr/lib/libbz2.1.0.dylib
+       0x198d4b000 -        0x198d51d03  libsystem_coreservices.dylib (191.5.1) <BF51842C-BC69-3725-9EB2-7A52804963F8> /usr/lib/system/libsystem_coreservices.dylib
+       0x198d52000 -        0x198d83adf  com.apple.CoreServices.OSServices (1141.1 - 1141.1) <17B070E4-39A8-35F5-9981-37EFA30DD701> /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/OSServices.framework/Versions/A/OSServices
+       0x1992cb000 -        0x1992d9d97  libz.1.dylib (100.120.1) <E4DB2DC8-3F00-308A-BFB5-65F71CB7D0D1> /usr/lib/libz.1.dylib
+       0x1992da000 -        0x199317a77  libsystem_m.dylib (3312.100.1) <A2858495-5B01-3D11-955D-FF6F25E88A6E> /usr/lib/system/libsystem_m.dylib
+       0x199318000 -        0x199318c9b  libcharset.1.dylib (115.120.2) <A2E8DF49-5A82-3DB3-88A1-D8E1B6516F8B> /usr/lib/libcharset.1.dylib
+       0x199319000 -        0x19931c527  libmacho.dylib (1387) <95DEC6C1-4480-3303-8A52-9AFC3D8C9219> /usr/lib/system/libmacho.dylib
+       0x19931d000 -        0x199335dc3  libkxld.dylib (12377.161.15.700.19) <4DA71DB4-2A84-3315-BA60-771A9A68FCD4> /usr/lib/system/libkxld.dylib
+       0x199336000 -        0x1993433a7  libcommonCrypto.dylib (600035) <EBA6E4D0-4DD2-33BB-BF95-48A58591AAAD> /usr/lib/system/libcommonCrypto.dylib
+       0x199344000 -        0x19934dca3  libunwind.dylib (2100.2) <201827AE-90B0-38B1-9729-50455B607293> /usr/lib/system/libunwind.dylib
+       0x19934e000 -        0x199355349  liboah.dylib (367.9) <3DBB2990-262D-3776-8FAC-B88C0373DCF0> /usr/lib/liboah.dylib
+       0x199356000 -        0x199360c1f  libcopyfile.dylib (240.160.2.702.1) <BA7266A8-BF4B-32BF-A323-F4B2EBCDC0B0> /usr/lib/system/libcopyfile.dylib
+       0x199361000 -        0x199364987  libcompiler_rt.dylib (103.3) <9EE26D98-97BF-3BE0-B6BE-425284AB2D24> /usr/lib/system/libcompiler_rt.dylib
+       0x199365000 -        0x19936978b  libsystem_collections.dylib (1752.160.4) <34CEFA68-1E15-32F2-A5B1-97C0170A77C5> /usr/lib/system/libsystem_collections.dylib
+       0x19936a000 -        0x19936d4cf  libsystem_secinit.dylib (168.100.7) <B6B286B6-6E08-3578-8AFC-E4C55697C760> /usr/lib/system/libsystem_secinit.dylib
+       0x19936e000 -        0x199370bf7  libremovefile.dylib (85.100.6) <33530415-3DB6-3556-A59A-24C22681D632> /usr/lib/system/libremovefile.dylib
+       0x199371000 -        0x199371f27  libkeymgr.dylib (31) <AD45B9EE-CE2B-3E1F-B96B-15F7F9FA3712> /usr/lib/system/libkeymgr.dylib
+       0x199372000 -        0x19937ae3f  libsystem_dnssd.dylib (2881.160.4.700.1) <71833E65-58B3-3C06-A4F3-D69D476CCC3C> /usr/lib/system/libsystem_dnssd.dylib
+       0x19937b000 -        0x19938009b  libcache.dylib (95) <A13AF0DC-5928-38BE-97FF-E04C29EF96AF> /usr/lib/system/libcache.dylib
+       0x199381000 -        0x199382ce3  libSystem.B.dylib (1356) <E9E4C9A6-16BB-392C-96AA-07797764E2A1> /usr/lib/libSystem.B.dylib
+       0x199383000 -        0x199384fcf  libfakelink.dylib (5) <ADE2A84A-0131-36E6-8CE2-BA226701BEF2> /usr/lib/libfakelink.dylib
+       0x199385000 -        0x199385a33  com.apple.SoftLinking (1.0 - 71) <089D0FBB-10B7-361F-A38A-A987B003185E> /System/Library/PrivateFrameworks/SoftLinking.framework/Versions/A/SoftLinking
+       0x1993bb000 -        0x1993c22bb  libiconv.2.dylib (115.120.2) <20288349-686B-37CB-9D84-9566FCFFC979> /usr/lib/libiconv.2.dylib
+       0x1993d6000 -        0x1994cdf3f  libarchive.2.dylib (167.160.4) <F1A229FF-C9E3-3103-9DA7-AB7E9F8FEF7A> /usr/lib/libarchive.2.dylib
+       0x1994ce000 -        0x19953385b  com.apple.SearchKit (1.4.2 - 1.4.2) <E0FCA8AD-A12E-3EA6-ACAC-C2CFDEBB102D> /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/SearchKit.framework/Versions/A/SearchKit
+       0x199534000 -        0x19953c18f  libThaiTokenizer.dylib (28) <A6A863B9-195F-3CD9-83E6-6C4A7294D025> /usr/lib/libThaiTokenizer.dylib
+       0x19953d000 -        0x199560f37  com.apple.applesauce (1.0 - 17.7) <78071698-F976-3AD1-BB7E-176B11BE1AA5> /System/Library/PrivateFrameworks/AppleSauce.framework/Versions/A/AppleSauce
+       0x199561000 -        0x1995794ab  libapple_nghttp2.dylib (37.120.3) <24313FDE-140D-3460-AEBC-61E285D22976> /usr/lib/libapple_nghttp2.dylib
+       0x19957a000 -        0x19962338f  libSparseBLAS.dylib (184.160.6) <1E50E208-E26B-33E1-8425-0325EB493980> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libSparseBLAS.dylib
+       0x199624000 -        0x19962563f  com.apple.MetalPerformanceShaders.MetalPerformanceShaders (1.0 - 1) <B22F152B-70EA-3686-BC9E-F4B4A23ECDC5> /System/Library/Frameworks/MetalPerformanceShaders.framework/Versions/A/MetalPerformanceShaders
+       0x199626000 -        0x19962bff7  libpam.2.dylib (35) <4DD45409-F205-3FBF-832F-22928AE3597A> /usr/lib/libpam.2.dylib
+       0x19962c000 -        0x199700d97  libcompression.dylib (193.120.2) <0EC52D41-3B72-3EC1-9522-A99CB4E88D63> /usr/lib/libcompression.dylib
+       0x199701000 -        0x199705267  libQuadrature.dylib (8) <F9902EDE-5AED-3BCF-BAAD-5CD302E20A6B> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libQuadrature.dylib
+       0x199706000 -        0x19a8d694f  libLAPACK.dylib (1551.160.2) <A74A12EE-0D49-30AA-B403-35497BC18889> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib
+       0x19a8d7000 -        0x19a92d4ff  com.apple.DictionaryServices (1.2 - 382.0.1) <DFB5B11F-087E-39DB-8B03-76A73008F030> /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/DictionaryServices.framework/Versions/A/DictionaryServices
+       0x19a92e000 -        0x19a94c4f7  liblzma.5.dylib (21) <A9563C70-3C72-3504-AAD0-E73E927159C3> /usr/lib/liblzma.5.dylib
+       0x19a94d000 -        0x19a94e85f  libcoretls_cfhelpers.dylib (187.100.3) <8288A14F-19BD-3CE1-B758-0AC8C0DBC494> /usr/lib/libcoretls_cfhelpers.dylib
+       0x19a94f000 -        0x19a9c28a3  com.apple.APFS (2811.160.7 - 2811.160.7) <5DE06663-D39E-3090-A5F6-49A0E226DB6A> /System/Library/PrivateFrameworks/APFS.framework/Versions/A/APFS
+       0x19a9c3000 -        0x19a9d182b  libxar.1.dylib (503.160.5.700.1) <87B48212-EA55-3985-9ADE-B2FED87CC358> /usr/lib/libxar.1.dylib
+       0x19a9d2000 -        0x19a9d579b  libutil.dylib (73) <E3316786-3660-3F3E-A002-6AEBD7A77E20> /usr/lib/libutil.dylib
+       0x19a9d6000 -        0x19aa00cbf  libxslt.1.dylib (21.13.2) <3B0DF292-9C49-3AF0-A41F-A38066B43AC3> /usr/lib/libxslt.1.dylib
+       0x19aa09000 -        0x19aa82587  libvMisc.dylib (1126.160.2) <9AA556D7-C597-3315-A119-BCC3C345FB26> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libvMisc.dylib
+       0x19aa83000 -        0x19ab125df  libate.dylib (3.0.12) <0683FB66-0AFE-3920-A894-65F657D949F3> /usr/lib/libate.dylib
+       0x19ab1c000 -        0x19ab2f1bf  com.apple.CrashReporterSupport (10.13 - 15140) <D8D91D12-DA64-3C6A-9CEF-B80BED29370E> /System/Library/PrivateFrameworks/CrashReporterSupport.framework/Versions/A/CrashReporterSupport
+       0x19ac73000 -        0x19acb3f9f  com.apple.pluginkit.framework (1.0 - 1) <4A67E28C-FAB3-3251-92A6-AB1E2B37F2E9> /System/Library/PrivateFrameworks/PlugInKit.framework/Versions/A/PlugInKit
+       0x19ad2a000 -        0x19ad729ff  com.apple.AppleVAFramework (6.2.10 - 6.2.10) <29DF7632-4F8C-3C1A-962E-F7DC53025CB7> /System/Library/PrivateFrameworks/AppleVA.framework/Versions/A/AppleVA
+       0x19ad73000 -        0x19ad8dccf  libexpat.1.dylib (47) <0D5AE600-87F2-33EA-BD47-481AB0A13960> /usr/lib/libexpat.1.dylib
+       0x19ad8e000 -        0x19ad97bfb  libheimdal-asn1.dylib (710.160.4.701.2) <739BDB31-1F19-3A9C-935A-3A162E40C455> /usr/lib/libheimdal-asn1.dylib
+       0x19aeb8000 -        0x19af79edf  com.apple.MediaExperience (1.0 - 1) <CDA2EB83-4772-3AB7-91FB-27EAD1B81604> /System/Library/PrivateFrameworks/MediaExperience.framework/Versions/A/MediaExperience
+       0x19afa7000 -        0x19afb67ff  com.apple.GraphVisualizer (1.0 - 307) <61AD2AE3-BAF5-37FF-A4DD-ED221184E591> /System/Library/PrivateFrameworks/GraphVisualizer.framework/Versions/A/GraphVisualizer
+       0x19afb7000 -        0x19aff651f  com.apple.OTSVG (1.0 - 877.20.0.1) <DCBC1DC8-7728-32D8-BED1-D94AAE388F58> /System/Library/PrivateFrameworks/OTSVG.framework/Versions/A/OTSVG
+       0x19aff7000 -        0x19b003c7f  com.apple.xpc.AppServerSupport (1.0 - 3102.160.5) <997B0ACC-FBF2-3B74-8F0D-BD4FCE114895> /System/Library/PrivateFrameworks/AppServerSupport.framework/Versions/A/AppServerSupport
+       0x19b004000 -        0x19b00aabf  libspindump.dylib (419.11) <EA01F4F5-5B53-3199-821A-2C40EAEA51A9> /usr/lib/libspindump.dylib
+       0x19b00b000 -        0x19b0cbebf  com.apple.Heimdal (4.0 - 2.0) <9E1A9783-490E-3187-90B8-3749D6602399> /System/Library/PrivateFrameworks/Heimdal.framework/Versions/A/Heimdal
+       0x19b39a000 -        0x19b3de6ef  com.apple.AppleJPEG (1.0 - 1) <861A310F-68FB-393B-898B-BAADAEE2366D> /System/Library/PrivateFrameworks/AppleJPEG.framework/Versions/A/AppleJPEG
+       0x19b3df000 -        0x19b59f92f  libJP2.dylib (2784.6.6) <D6771749-026F-303A-B7AF-8453B1930124> /System/Library/Frameworks/ImageIO.framework/Versions/A/Resources/libJP2.dylib
+       0x19b5a0000 -        0x19b5a1e1f  com.apple.WatchdogClient.framework (1.0 - 333) <7959ABCD-AB3E-3826-9478-481D57808E5A> /System/Library/PrivateFrameworks/WatchdogClient.framework/Versions/A/WatchdogClient
+       0x19b5a2000 -        0x19b5e7d7f  com.apple.MultitouchSupport.framework (9461.1 - 9461.1) <8C75235A-DF75-360D-A93B-C09645222413> /System/Library/PrivateFrameworks/MultitouchSupport.framework/Versions/A/MultitouchSupport
+       0x19b5e8000 -        0x19bb3e37f  com.apple.VideoToolbox (1.0 - 3330.13.105.2) <BC0EC514-ED6C-3069-8F1F-71A3CC7E3506> /System/Library/Frameworks/VideoToolbox.framework/Versions/A/VideoToolbox
+       0x19bb3f000 -        0x19bb6420f  libAudioToolboxUtility.dylib (1556.705) <FB11A6DA-BB60-39C7-85D0-1A8617237337> /usr/lib/libAudioToolboxUtility.dylib
+       0x19bb65000 -        0x19bb8f01f  libPng.dylib (2784.6.6) <8D855916-D266-3546-AC25-13F40BDE4916> /System/Library/Frameworks/ImageIO.framework/Versions/A/Resources/libPng.dylib
+       0x19bb90000 -        0x19bbf0b63  libTIFF.dylib (2784.6.6) <C4EF60EC-F57A-388E-A75F-DA0FF752560C> /System/Library/Frameworks/ImageIO.framework/Versions/A/Resources/libTIFF.dylib
+       0x19bbf1000 -        0x19bc10257  com.apple.IOPresentment (67 - 67) <99734842-0D43-382B-B159-9BE7FAB2D49A> /System/Library/PrivateFrameworks/IOPresentment.framework/Versions/A/IOPresentment
+       0x19bc11000 -        0x19bc157d3  com.apple.GPUWrangler (8.1.12 - 8.1.12) <E536D4EA-4A69-36C8-AD24-E31AD947ED34> /System/Library/PrivateFrameworks/GPUWrangler.framework/Versions/A/GPUWrangler
+       0x19bc16000 -        0x19bc18913  libRadiance.dylib (2784.6.6) <DF198A7A-E7B5-3D02-81A1-2242FED93374> /System/Library/Frameworks/ImageIO.framework/Versions/A/Resources/libRadiance.dylib
+       0x19bc19000 -        0x19bc1e2f3  com.apple.DSExternalDisplay (3.1 - 380) <5A4C570E-E196-3F44-934C-BBABAD85F882> /System/Library/PrivateFrameworks/DSExternalDisplay.framework/Versions/A/DSExternalDisplay
+       0x19bc1f000 -        0x19bc49baf  libJPEG.dylib (2784.6.6) <A41EB50C-F1E5-3462-B685-5A3B166F0DAF> /System/Library/Frameworks/ImageIO.framework/Versions/A/Resources/libJPEG.dylib
+       0x19bc78000 -        0x19bc7d9fb  libGIF.dylib (2784.6.6) <0A2ACF07-8A0B-3A24-8908-CEE660E2240B> /System/Library/Frameworks/ImageIO.framework/Versions/A/Resources/libGIF.dylib
+       0x19bc7e000 -        0x19bc8e19f  com.apple.CMCaptureCore (1.0 - 665.140.6) <328E21CB-CF9C-333B-9C5B-54C784B9A301> /System/Library/PrivateFrameworks/CMCaptureCore.framework/Versions/A/CMCaptureCore
+       0x19cc07000 -        0x19cc7586f  libusrtcp.dylib (5812.160.9) <F09B4A99-0E34-3C89-A238-17DF2AA3DB0C> /usr/lib/libusrtcp.dylib
+       0x19cc76000 -        0x19d2187ff  libswiftCore.dylib (6.3.2 - 6.3.2.1.11) <7E39E8F6-12CF-3DED-A388-6A2D0338DD7E> /usr/lib/swift/libswiftCore.dylib
+       0x19d2cc000 -        0x19d32131f  libSessionUtility.dylib (398.701) <FDD6D3AA-4381-361A-98A1-DBFFEB263647> /System/Library/PrivateFrameworks/AudioSession.framework/libSessionUtility.dylib
+       0x19d322000 -        0x19d4f741f  com.apple.audio.toolbox.AudioToolbox (1.14 - 1.14) <196DC6E2-485C-3238-B8E8-EAD9F4BFD3F5> /System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox
+       0x19d4f8000 -        0x19d578b7f  com.apple.audio.AudioSession (1.0 - 398.701) <CA23DB9F-A36E-3F89-B5E1-58D87D7F5513> /System/Library/PrivateFrameworks/AudioSession.framework/Versions/A/AudioSession
+       0x19d579000 -        0x19d59239f  libAudioStatistics.dylib (262.601) <5C016DB5-65A6-30D6-9ADB-73F306FF1D8C> /usr/lib/libAudioStatistics.dylib
+       0x19d60f000 -        0x19d62b19b  libresolv.9.dylib (96) <002A6291-6D59-320A-8F15-133FDC398A21> /usr/lib/libresolv.9.dylib
+       0x19d62c000 -        0x19d63e7e7  libsasl2.2.dylib (215) <10CC737F-5D50-3958-BCE8-204495456ADB> /usr/lib/libsasl2.2.dylib
+       0x19d827000 -        0x19d907337  libSMC.dylib (38) <919A3107-895B-39E3-A5B6-3B0A7B665E08> /usr/lib/libSMC.dylib
+       0x19d967000 -        0x19d974257  com.apple.NetAuth (6.2 - 6.2) <D04A8DDE-644C-3B4F-805E-AB87B200A8C1> /System/Library/PrivateFrameworks/NetAuth.framework/Versions/A/NetAuth
+       0x19d983000 -        0x19d990b1f  com.apple.perfdata (1.0 - 130) <F9BA8F11-725E-3193-8286-7E511BD9483D> /System/Library/PrivateFrameworks/perfdata.framework/Versions/A/perfdata
+       0x19d991000 -        0x19d99ec9f  libperfcheck.dylib (46) <EBC004E1-7C36-3FB5-B297-75B27297B2BA> /usr/lib/libperfcheck.dylib
+       0x19d99f000 -        0x19d9b0187  com.apple.Kerberos (3.0 - 1) <61045540-CEE5-3987-AE84-241941A23E70> /System/Library/Frameworks/Kerberos.framework/Versions/A/Kerberos
+       0x19d9b1000 -        0x19da02ae7  com.apple.GSS (4.0 - 2.0) <8D181B55-758C-3CDB-835B-4F620B9D5BA8> /System/Library/Frameworks/GSS.framework/Versions/A/GSS
+       0x19da03000 -        0x19da13d77  com.apple.CommonAuth (4.0 - 2.0) <BF2E9C5E-CBB3-3228-8402-1BF55FD9765E> /System/Library/PrivateFrameworks/CommonAuth.framework/Versions/A/CommonAuth
+       0x19da14000 -        0x19daf805f  com.apple.MobileAssets (1.0 - 1837.160.15) <9F0B80E6-21F3-3B15-A9E6-07C9DC7F92E8> /System/Library/PrivateFrameworks/MobileAsset.framework/Versions/A/MobileAsset
+       0x19daf9000 -        0x19db47c1f  com.apple.CacheDelete (1.0 - 1) <506D4797-3A8A-372B-824D-11F22CC52047> /System/Library/PrivateFrameworks/CacheDelete.framework/Versions/A/CacheDelete
+       0x19db8b000 -        0x19db9a160  com.apple.CorePhoneNumbers (1.0 - 1) <B9AF3994-811E-3D50-B2A8-F2BACF6B1205> /System/Library/PrivateFrameworks/CorePhoneNumbers.framework/Versions/A/CorePhoneNumbers
+       0x19f777000 -        0x19f86aa36  com.apple.combine (1.0 - 3023) <E470132E-3C4F-375E-9A33-B1EA0CD59B98> /System/Library/Frameworks/Combine.framework/Versions/A/Combine
+       0x1a1ae0000 -        0x1a1ae086f  com.apple.Accelerate.vecLib (3.11 - vecLib 3.11) <8F00D025-76AB-3AFC-80D9-31684A1D574C> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/vecLib
+       0x1a1b05000 -        0x1a1b0598f  com.apple.CoreServices (1226 - 1226) <5E0424D1-98D4-38E2-8AF2-9507D3B08DD9> /System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices
+       0x1a1d84000 -        0x1a1d84417  com.apple.Accelerate (1.11 - Accelerate 1.11) <12890E6D-2282-3986-AF30-816846E0F85B> /System/Library/Frameworks/Accelerate.framework/Versions/A/Accelerate
+       0x1a2c8b000 -        0x1a2c9a5df  com.apple.SymptomDiagnosticReporter (1.0 - 411.160.2) <981B22F6-55EC-368E-BBA0-017C639D8174> /System/Library/PrivateFrameworks/SymptomDiagnosticReporter.framework/Versions/A/SymptomDiagnosticReporter
+       0x1a2c9b000 -        0x1a2cc925f  com.apple.PowerLog (1.0 - 1) <6B78F2B3-DC0A-392E-A83E-2E9BE9CEC006> /System/Library/PrivateFrameworks/PowerLog.framework/Versions/A/PowerLog
+       0x1a2cd7000 -        0x1a2d886df  com.apple.DiscRecording (9.0.3 - 9030.4.5) <3066BC53-4BFF-3C80-A6B1-8E53951105B7> /System/Library/Frameworks/DiscRecording.framework/Versions/A/DiscRecording
+       0x1a2d89000 -        0x1a2dba137  com.apple.MediaKit (16 - 938) <B3A15621-8607-3F44-A416-3DA23BEBD903> /System/Library/PrivateFrameworks/MediaKit.framework/Versions/A/MediaKit
+       0x1a387c000 -        0x1a3892950  libswiftDispatch.dylib (1542.160.2) <9B0D7D51-31D3-3DB2-89CE-6F0C8E104E20> /usr/lib/swift/libswiftDispatch.dylib
+       0x1a3bdd000 -        0x1a3c69c3f  com.apple.BoardServices (1.0 - 732.1.1) <5955D381-FC7E-392A-8858-FEA7FC0E9AF5> /System/Library/PrivateFrameworks/BoardServices.framework/Versions/A/BoardServices
+       0x1a3caa000 -        0x1a3cb753f  com.apple.GraphicsServices (1.0 - 1.0) <5C9B67AE-A63C-365C-8B8A-BD8A88112D6C> /System/Library/PrivateFrameworks/GraphicsServices.framework/Versions/A/GraphicsServices
+       0x1a3fd4000 -        0x1a3ff5e9f  com.apple.DebugSymbols (216 - 217) <4BF7AD91-C408-381A-92F3-1B5866048FB6> /System/Library/PrivateFrameworks/DebugSymbols.framework/Versions/A/DebugSymbols
+       0x1a3ff6000 -        0x1a41538df  com.apple.CoreSymbolication (16.0 - 64575.56.1) <53BE7690-3B50-31D9-A8A2-7239D86786CE> /System/Library/PrivateFrameworks/CoreSymbolication.framework/Versions/A/CoreSymbolication
+       0x1a4154000 -        0x1a415e09f  com.apple.CoreTime (334.0.16.3 - 334.0.16.3) <9238EED9-7424-3EBC-BECF-E0F046C4CED2> /System/Library/PrivateFrameworks/CoreTime.framework/Versions/A/CoreTime
+       0x1a5aae000 -        0x1a5b207ff  com.apple.BackBoardServices (1.0 - 1.0) <18A604B3-AA79-39B4-AFF8-04C081C70AF9> /System/Library/PrivateFrameworks/BackBoardServices.framework/Versions/A/BackBoardServices
+       0x1a5b21000 -        0x1a5b5c4ef  com.apple.LDAPFramework (2.4.28 - 194.5) <6E9C38D1-E1F8-3076-BE56-AE8B50E59F46> /System/Library/Frameworks/LDAP.framework/Versions/A/LDAP
+       0x1a5b5d000 -        0x1a5b5e7b7  com.apple.TrustEvaluationAgent (2.0 - 38) <BA45BC5B-411C-3A7C-8877-385ED817C54E> /System/Library/PrivateFrameworks/TrustEvaluationAgent.framework/Versions/A/TrustEvaluationAgent
+       0x1a5c8c000 -        0x1a5d4561f  com.apple.DiskImagesFramework (683.160.3.701.2 - 683.160.3.701.2) <A95243A3-30BA-31B1-BD0D-E7A51E2B6B8B> /System/Library/PrivateFrameworks/DiskImages.framework/Versions/A/DiskImages
+       0x1a5d86000 -        0x1a5d9c59f  com.apple.RemoteServiceDiscovery (1.0 - 219.160.4) <DF5E83C3-3E3E-39D2-93DA-6789CFE09833> /System/Library/PrivateFrameworks/RemoteServiceDiscovery.framework/Versions/A/RemoteServiceDiscovery
+       0x1a5d9d000 -        0x1a5db2c3f  com.apple.xpc.RemoteXPC (1.0 - 3102.160.5) <4D2CF21E-8017-30E7-9C3A-C5069AE01F6F> /System/Library/PrivateFrameworks/RemoteXPC.framework/Versions/A/RemoteXPC
+       0x1a5e47000 -        0x1a5ec7f4b  libcurl.4.dylib (168) <BBD15412-BA25-3FD3-ABF0-B7D6671A8CC4> /usr/lib/libcurl.4.dylib
+       0x1a5ece000 -        0x1a5f1125f  com.apple.AppSupport (1.0.0 - 29) <40E2D644-CC61-303D-957B-B2AA6D2B6907> /System/Library/PrivateFrameworks/AppSupport.framework/Versions/A/AppSupport
+       0x1a61e2000 -        0x1a61e4f3f  com.apple.InternationalTextSearch (1.0 - 1) <0361FEB2-4BCA-343F-8E7F-E6437DE2BA55> /System/Library/PrivateFrameworks/InternationalTextSearch.framework/Versions/A/InternationalTextSearch
+       0x1a67b5000 -        0x1a67b53f7  libHeimdalProxy.dylib (88) <CA1B9BC6-607E-30F0-954F-DA020D8778EC> /System/Library/Frameworks/Kerberos.framework/Versions/A/Libraries/libHeimdalProxy.dylib
+       0x1a67e0000 -        0x1a67feb9f  com.apple.StreamingZip (1.0 - 1) <B4BBBCA7-D9E9-3D8F-B9D7-A0EA4A1347E3> /System/Library/PrivateFrameworks/StreamingZip.framework/Versions/A/StreamingZip
+       0x1a6858000 -        0x1a685b6bf  libswiftObjectiveC.dylib (951.7) <6EB049B3-1C73-3081-922E-ACC82DDC13DC> /usr/lib/swift/libswiftObjectiveC.dylib
+       0x1a685c000 -        0x1a68796ff  libswiftos.dylib (1082) <DCEFDB82-75C6-3C53-B737-5D0EFBDA57CC> /usr/lib/swift/libswiftos.dylib
+       0x1a77c3000 -        0x1a785185f  com.apple.proactive.support.ProactiveSupport (1.0 - 418.1) <A59F1416-C4B2-3C08-A888-C30256A546F7> /System/Library/PrivateFrameworks/ProactiveSupport.framework/Versions/A/ProactiveSupport
+       0x1a794e000 -        0x1a797229f  com.apple.ASEProcessing (1.55.0 - 1.55.0) <26F3FA93-582E-3A51-9931-415CBB5FCF9F> /System/Library/PrivateFrameworks/ASEProcessing.framework/Versions/A/ASEProcessing
+       0x1a8bd2000 -        0x1a8ca0c1f  com.apple.audio.midi.CoreMIDI (2.0 - 88) <B9E70AF5-FFB9-3503-8668-4E83C1A54981> /System/Library/Frameworks/CoreMIDI.framework/Versions/A/CoreMIDI
+       0x1a98e3000 -        0x1a98e775f  com.apple.IOSurfaceAccelerator (1.0.0 - 1.0.0) <D308650E-04AA-3FFA-8016-F92A009583E4> /System/Library/PrivateFrameworks/IOSurfaceAccelerator.framework/Versions/A/IOSurfaceAccelerator
+       0x1aebb3000 -        0x1aebc69ff  com.apple.HID (1.0 - 1) <F47D14B1-A17E-341B-9C27-C026B095D723> /System/Library/PrivateFrameworks/HID.framework/Versions/A/HID
+       0x1b37aa000 -        0x1b37b929f  com.apple.NetFS (6.0 - 4.0) <4E390E87-FE21-399D-8A43-4BF2750C5A77> /System/Library/Frameworks/NetFS.framework/Versions/A/NetFS
+       0x1b3d06000 -        0x1b3d08707  libswiftDarwin.dylib (377.160.5) <D4F393FF-1E27-3CE7-A1BD-953E3F26F4AA> /usr/lib/swift/libswiftDarwin.dylib
+       0x1b5e29000 -        0x1b5f124df  libquic.dylib (5812.160.9) <DC1C6608-D464-3491-8A95-9C0990338A42> /usr/lib/libquic.dylib
+       0x1b5f1e000 -        0x1b5f46edf  com.apple.private.SystemPolicy (1.0 - 1) <78D2C254-6948-3ED5-AAE1-BDB5D209F100> /System/Library/PrivateFrameworks/SystemPolicy.framework/Versions/A/SystemPolicy
+       0x1b6e03000 -        0x1b6e91bff  com.apple.LoggingSupport (1.0 - 1861.160.4) <576C80FD-BEFD-3E63-9AE5-2E7896ECFB9C> /System/Library/PrivateFrameworks/LoggingSupport.framework/Versions/A/LoggingSupport
+       0x1b6e92000 -        0x1b6e9eacb  com.apple.MallocStackLogging (1.0 - 65000) <2D0A731C-D66A-3866-B1CA-98B7FAF295DE> /System/Library/PrivateFrameworks/MallocStackLogging.framework/Versions/A/MallocStackLogging
+       0x1b6ec4000 -        0x1b6f1ed9f  libmis.dylib (463.160.2) <2CD960E7-452C-3C36-838E-DADAA5B6C626> /usr/lib/libmis.dylib
+       0x1b6f1f000 -        0x1b6f22c5f  com.apple.gpusw.GPURawCounter (34 - 34) <55AA8F48-E61D-3062-95AC-BC3B20DD4433> /System/Library/PrivateFrameworks/GPURawCounter.framework/Versions/A/GPURawCounter
+       0x1b6f23000 -        0x1b6f4287f  libswiftCoreAudio.dylib (411.701) <9D00A952-F20A-3576-A504-43F4ACAEDD36> /usr/lib/swift/libswiftCoreAudio.dylib
+       0x1b6f43000 -        0x1b6f49327  libswiftCoreFoundation.dylib (2411) <F5FC1302-25A3-322E-BF63-308930E8C57B> /usr/lib/swift/libswiftCoreFoundation.dylib
+       0x1b6f56000 -        0x1b6fa2843  libswiftXPC.dylib (128.120.2) <7471185D-7C00-32CF-8F6F-DE37DBB0EF95> /usr/lib/swift/libswiftXPC.dylib
+       0x1b6fa4000 -        0x1b6fa48a3  libswiftIOKit.dylib (1) <23C3D636-B793-3CFE-A510-BA94FCA4A05C> /usr/lib/swift/libswiftIOKit.dylib
+       0x1b8fd6000 -        0x1b900f2c7  libbootpolicy.dylib (289.160.2) <44EBA806-1C6E-30E7-AC00-E8D7A8F708C0> /usr/lib/libbootpolicy.dylib
+       0x1baa9e000 -        0x1baab588b  libswiftsimd.dylib (23) <B841C29B-340E-3DFA-8946-585C218C6A0C> /usr/lib/swift/libswiftsimd.dylib
+       0x1bc1c5000 -        0x1bc1ce37f  com.apple.IOAccelMemoryInfo (1.0 - 1) <9B8660AC-5EDE-3EED-894E-CECACF7130AB> /System/Library/PrivateFrameworks/IOAccelMemoryInfo.framework/Versions/A/IOAccelMemoryInfo
+       0x1bd895000 -        0x1bd89e0be  libswiftCoreMIDI.dylib (6) <02FA41D4-BAE5-3254-B696-A93A679BFBAA> /usr/lib/swift/libswiftCoreMIDI.dylib
+       0x1be086000 -        0x1be08cbbf  com.apple.MSUDataAccessor (1.0 - 1) <B67F1F22-22F4-30C7-84E5-A1E279CE84FD> /System/Library/PrivateFrameworks/MSUDataAccessor.framework/Versions/A/MSUDataAccessor
+       0x1be4af000 -        0x1be511ddf  com.apple.SoftwareUpdateCoreSupport (1.0 - 1) <26309F6C-7649-35DC-9224-EC0A621C2FE8> /System/Library/PrivateFrameworks/SoftwareUpdateCoreSupport.framework/Versions/A/SoftwareUpdateCoreSupport
+       0x1c1fdc000 -        0x1c203325f  com.apple.biome.BiomeFoundation (1.0 - 209.22) <F80EA57A-03C2-3A0D-8393-77AA76514CDB> /System/Library/PrivateFrameworks/BiomeFoundation.framework/Versions/A/BiomeFoundation
+       0x1c4f1a000 -        0x1c4f27a1f  libswiftMetal.dylib (373.7) <31BE5521-F202-34F3-A2F5-82AAE1A5E006> /usr/lib/swift/libswiftMetal.dylib
+       0x1c4f28000 -        0x1c4f2ee05  libswiftCompression.dylib (11) <A0101920-47DA-3EB3-A44D-098F2068C37F> /usr/lib/swift/libswiftCompression.dylib
+       0x1c5e62000 -        0x1c5f0cd7f  libFDR.dylib (1499.160.2) <165E0967-B467-3542-B41F-D05E2D35D477> /usr/lib/libFDR.dylib
+       0x1c5f8e000 -        0x1c655933f  com.apple.biome.BiomeStreams (1.0 - 209.22) <57D209D5-E6C5-3A5E-84EE-59819541AE13> /System/Library/PrivateFrameworks/BiomeStreams.framework/Versions/A/BiomeStreams
+       0x1c6a2d000 -        0x1c6a418ff  com.apple.SoftwareUpdateCoreConnect (1.0 - 1) <E0B8577A-B9F8-3D60-85F2-8B43AB87EB33> /System/Library/PrivateFrameworks/SoftwareUpdateCoreConnect.framework/Versions/A/SoftwareUpdateCoreConnect
+       0x1c8e85000 -        0x1c8eefc1f  com.apple.osanalytics.OSAnalytics (1.0 - 1) <3E8297C5-888A-36F5-9EB4-6CCED7856402> /System/Library/PrivateFrameworks/OSAnalytics.framework/Versions/A/OSAnalytics
+       0x1ca341000 -        0x1ca342f9f  libswiftQuartzCore.dylib (5) <7CCBEB85-167F-34DB-B007-B5476F190B63> /usr/lib/swift/libswiftQuartzCore.dylib
+       0x1ca734000 -        0x1ca7398e7  com.apple.kperf (1.0 - 1) <9E9347FA-842B-395E-ABE1-FB76635235CB> /System/Library/PrivateFrameworks/kperf.framework/Versions/A/kperf
+       0x1ca84b000 -        0x1ca85063f  com.apple.MobileSystemServices (1.0 - 1) <33D7F953-EC70-3D6C-A82F-780FC8DF3C30> /System/Library/PrivateFrameworks/MobileSystemServices.framework/Versions/A/MobileSystemServices
+       0x1cbe3d000 -        0x1cbe5f29f  libamsupport.dylib (434.160.4) <B129CCB3-CC5A-3C81-8538-E5834D106B53> /usr/lib/libamsupport.dylib
+       0x1cc23b000 -        0x1cc29b0ff  com.apple.biome.BiomePubSub (1.0 - 209.22) <1CF0A38C-0E3B-3C6A-A398-8A22CB539C8E> /System/Library/PrivateFrameworks/BiomePubSub.framework/Versions/A/BiomePubSub
+       0x1cc29c000 -        0x1cc2df19f  com.apple.biome.BiomeStorage (1.0 - 209.22) <C404FAEC-421E-36D7-B342-D38863AB8D19> /System/Library/PrivateFrameworks/BiomeStorage.framework/Versions/A/BiomeStorage
+       0x1cedd9000 -        0x1cede813f  libswiftUniformTypeIdentifiers.dylib (877.5.2) <C56D7B1D-FB84-3087-90A4-295768410946> /usr/lib/swift/libswiftUniformTypeIdentifiers.dylib
+       0x1cede9000 -        0x1ceeaea9b  libswiftAccelerate.dylib (77.100.2) <014F4B48-5D67-370F-96AB-32E30745B619> /usr/lib/swift/libswiftAccelerate.dylib
+       0x1cf007000 -        0x1cf01811f  libpartition2_dynamic.dylib (3476.160.2) <66AF2013-AD83-3C69-85DE-E4FB7F273632> /usr/lib/libpartition2_dynamic.dylib
+       0x1cf576000 -        0x1cf580fdf  com.apple.AFKUser (1.0 - 1) <ADFB48F6-5AB5-3705-A623-15DC8A0E1B1D> /System/Library/PrivateFrameworks/AFKUser.framework/Versions/A/AFKUser
+       0x1d2f7a000 -        0x1d2fdb75f  libswiftCoreMedia.dylib (3330.13.105.2) <4710B99E-37C4-3F7B-BAB0-5ACA6F1231EC> /usr/lib/swift/libswiftCoreMedia.dylib
+       0x1d472d000 -        0x1d472ebbf  libswiftOSLog.dylib (10) <9E6680B9-DED4-3EED-BE0D-B17B87A774AF> /usr/lib/swift/libswiftOSLog.dylib
+       0x1d8844000 -        0x1d8950d5f  com.apple.Symbolication (16.0 - 64575.70.1) <3C82653B-E115-3325-A1ED-E2B7ACBCB437> /System/Library/PrivateFrameworks/Symbolication.framework/Versions/A/Symbolication
+       0x1dced8000 -        0x1dcee83df  com.apple.OSLog (1.0 - 1861.160.4) <E91CE975-CDCF-3A38-9C10-46515A1F2A71> /System/Library/Frameworks/OSLog.framework/Versions/A/OSLog
+       0x1dd1ec000 -        0x1dd2fd75f  com.apple.InternalSwiftProtobuf (1.0 - 1.26.0) <28367C89-09D9-3FD3-9785-400B18D1A3BE> /System/Library/PrivateFrameworks/InternalSwiftProtobuf.framework/Versions/A/InternalSwiftProtobuf
+       0x1dd3c3000 -        0x1dd3ce0bf  com.apple.HIDDisplay (1.0 - 1) <60963898-F697-3278-AF1C-96A268940A27> /System/Library/PrivateFrameworks/HIDDisplay.framework/Versions/A/HIDDisplay
+       0x1e53f8000 -        0x1e53f8af3  com.apple.FeatureFlags (1.0 - 103) <63DC9704-D3F6-3505-84AA-4744662C6A85> /System/Library/PrivateFrameworks/FeatureFlags.framework/Versions/A/FeatureFlags
+       0x1eeb4c000 -        0x1eeb4e5bf  com.apple.ConfigProfileHelper (18.0 - 1800) <FBD3DC5C-6252-314A-9C12-4F77C50DD94A> /System/Library/PrivateFrameworks/ConfigProfileHelper.framework/Versions/A/ConfigProfileHelper
+       0x22f25b000 -        0x22f2622c3  libCoreFSCache.dylib (352.2) <0C49E231-DECE-36A5-85D2-398DB2A1BA52> /System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libCoreFSCache.dylib
+       0x22f263000 -        0x22f268947  libCoreVMClient.dylib (352.2) <ECB35CC4-0F62-3AB7-AEC3-A2BFB7469E93> /System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libCoreVMClient.dylib
+       0x22f269000 -        0x22f2792b7  com.apple.opengl (23.1.1 - 23.1.1) <3B7DAC4A-1E43-3CF2-9403-E8FECC377580> /System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL
+       0x22f27a000 -        0x22f27c7bf  libCVMSPluginSupport.dylib (23.1.1) <1D2CBB98-7A71-3A02-B152-2AF5DBE3D1B5> /System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libCVMSPluginSupport.dylib
+       0x22f27d000 -        0x22f2854ff  libGFXShared.dylib (23.1.1) <3B54123D-F52F-342D-9644-5608921F963F> /System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGFXShared.dylib
+       0x22f286000 -        0x22f2b954b  libGLImage.dylib (23.1.1) <92CC599F-57AC-311D-A8D5-CB570BC39886> /System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGLImage.dylib
+       0x22f2ba000 -        0x22f2f35bf  libGLU.dylib (23.1.1) <DA2AB2DC-847C-3860-9813-B1EA95F4FA4B> /System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGLU.dylib
+       0x22f44a000 -        0x22f453bc7  libGL.dylib (23.1.1) <0DE6C657-966F-3D61-906C-62FA569AEB2F> /System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib
+       0x2312e6000 -        0x231459f1f  com.apple.ExtensionFoundation (97 - 97) <470C195D-2465-32FB-A940-D6A1DDFA3B9A> /System/Library/Frameworks/ExtensionFoundation.framework/Versions/A/ExtensionFoundation
+       0x2326cd000 -        0x23270fa1f  com.apple.LightweightCodeRequirements (1.0 - 1) <BEDD0E23-C326-37F4-8387-D8E4621EBCD3> /System/Library/Frameworks/LightweightCodeRequirements.framework/Versions/A/LightweightCodeRequirements
+       0x233533000 -        0x2335511ff  com.apple.MPSBenchmarkLoop (1.0 - 1) <B6F74347-6E57-3805-B9E1-4470C8FA9E38> /System/Library/Frameworks/MetalPerformanceShaders.framework/Versions/A/Frameworks/MPSBenchmarkLoop.framework/Versions/A/MPSBenchmarkLoop
+       0x233552000 -        0x233565e7f  com.apple.MPSFunctions (1.0 - 1) <ECFF295E-9911-36C0-968B-5319D8577A7A> /System/Library/Frameworks/MetalPerformanceShaders.framework/Versions/A/Frameworks/MPSFunctions.framework/Versions/A/MPSFunctions
+       0x233566000 -        0x23356b53f  com.apple.MPSHost (1.0 - 1) <DE2582E7-16C0-3564-8CC2-702B305BD2F0> /System/Library/Frameworks/MetalPerformanceShaders.framework/Versions/A/Frameworks/MPSHost.framework/Versions/A/MPSHost
+       0x236816000 -        0x2369824bf  com.apple.SwiftData (1.0 - 135) <1FB8D183-945C-3ACF-B5CA-CD5CB403DD33> /System/Library/Frameworks/SwiftData.framework/Versions/A/SwiftData
+       0x23d4da000 -        0x23d4eeabf  com.apple.AppleDeviceQuerySupport (1.0 - 408.120.3) <81A1C715-8F45-3061-B466-BE8951020ADE> /System/Library/PrivateFrameworks/AppleDeviceQuerySupport.framework/Versions/A/AppleDeviceQuerySupport
+       0x23dc6c000 -        0x23dce7b46  com.apple.AppleKeyStore (1.0 - 1.0) <C3164877-CB17-3764-80C6-DCB694C17F64> /System/Library/PrivateFrameworks/AppleKeyStore.framework/Versions/A/AppleKeyStore
+       0x23e614000 -        0x23e62c9df  com.apple.private.AppleMobileFileIntegrity-fmk (1.0 - 1) <34996EFC-118C-3BC5-8CBC-BAFF4EA005EE> /System/Library/PrivateFrameworks/AppleMobileFileIntegrity.framework/Versions/A/AppleMobileFileIntegrity
+       0x23eb26000 -        0x23eb38799  com.apple.AtomicsInternal (1.1.0 - 5026.6.1) <43048DE0-2CF1-364C-A087-42C78020BF98> /System/Library/PrivateFrameworks/AtomicsInternal.framework/Versions/A/AtomicsInternal
+       0x23ebf5000 -        0x23ec17dff  com.apple.imgaudio.AudioAnalytics (1.0 - 1) <A3FF818C-C859-3C62-9BA7-F126B6D641CC> /System/Library/PrivateFrameworks/AudioAnalytics.framework/Versions/A/AudioAnalytics
+       0x23f25b000 -        0x23f2a385f  com.apple.BackBoardHIDEventFoundation (1.0 - 1) <50904B52-E93E-3684-B195-4ADFC7578837> /System/Library/PrivateFrameworks/BackBoardHIDEventFoundation.framework/Versions/A/BackBoardHIDEventFoundation
+       0x23f33c000 -        0x23f35577f  com.apple.biome.BiomeDSL (1.0 - 209.22) <58091704-8332-30A8-BE10-F148F0E2B5AC> /System/Library/PrivateFrameworks/BiomeDSL.framework/Versions/A/BiomeDSL
+       0x23f356000 -        0x23fc10f7f  com.apple.BiomeLibrary (274.60) <F8EBE4EA-1BFE-36AE-A6DC-D229E2834356> /System/Library/PrivateFrameworks/BiomeLibrary.framework/Versions/A/BiomeLibrary
+       0x23fc11000 -        0x23fc16b5f  com.apple.biome.BiomeSync (1.0 - 209.22) <9DB42D7C-E2E1-3DCF-9078-D541B3803CDA> /System/Library/PrivateFrameworks/BiomeSync.framework/Versions/A/BiomeSync
+       0x241247000 -        0x2412df8bf  com.apple.biome.CascadeSets (1.0 - 209.22) <AB4D3ED8-3ED8-3070-BB56-7A279E02B895> /System/Library/PrivateFrameworks/CascadeSets.framework/Versions/A/CascadeSets
+       0x24269a000 -        0x2427d84ee  com.apple.CollectionsInternal (1.2.0 - 5026.6.1) <0DFA2D20-8D7F-3883-BF21-6B9954E74D8D> /System/Library/PrivateFrameworks/CollectionsInternal.framework/Versions/A/CollectionsInternal
+       0x249dac000 -        0x249dbf49f  com.apple.DeviceRecovery (1.0 - 1) <0DF3001F-A974-30FF-B987-F3C9ED2BB3FF> /System/Library/PrivateFrameworks/DeviceRecovery.framework/Versions/A/DeviceRecovery
+       0x24c051000 -        0x24c0542ff  com.apple.FontServices (1.0 - 1) <4FF88376-5BD6-30A2-BC7A-3980A6B75747> /System/Library/PrivateFrameworks/FontServices.framework/Versions/A/FontServices
+       0x24c055000 -        0x24c144e2f  libXTFontStaticRegistryData.dylib (335.4.0.6) <2CD23373-684A-338C-B3E2-E5CFE9E22665> /System/Library/PrivateFrameworks/FontServices.framework/libXTFontStaticRegistryData.dylib
+       0x24c146000 -        0x24c152c9f  com.apple.FramePacing (1.0 - 1) <2CFA85BC-22EE-3D6A-9FD5-E10B4F5F4558> /System/Library/PrivateFrameworks/FramePacing.framework/Versions/A/FramePacing
+       0x24d274000 -        0x24d279f07  libGPUCompilerUtils.dylib (32023.886.1) <FEABB728-79BC-3BF2-9EC3-F2B9C1004A5C> /System/Library/PrivateFrameworks/GPUCompiler.framework/Versions/32023/Libraries/libGPUCompilerUtils.dylib
+       0x2516e7000 -        0x251726797  libllvm-flatbuffers.dylib (32023.886.1) <891D8FB9-8145-36E5-BBAE-62D61609017B> /System/Library/PrivateFrameworks/GPUCompiler.framework/Versions/32023/Libraries/libllvm-flatbuffers.dylib
+       0x25906a000 -        0x2591732bf  com.apple.InstalledContentLibrary (1.0 - 1.0) <66AB0BE2-8C55-3E6A-A448-3FC7C5994DFA> /System/Library/PrivateFrameworks/InstalledContentLibrary.framework/Versions/A/InstalledContentLibrary
+       0x25ba96000 -        0x25c264d3f  com.apple.IntelligencePlatformLibrary (274.60) <E57B6924-E645-3CC6-9943-63D3CEEFFE34> /System/Library/PrivateFrameworks/IntelligencePlatformLibrary.framework/Versions/A/IntelligencePlatformLibrary
+       0x25db46000 -        0x25e1dc923  com.apple.MIL (3520.4 - 3520.4.1) <AE042F88-F861-30B9-85DF-B5A808DF3B96> /System/Library/PrivateFrameworks/MIL.framework/Versions/A/MIL
+       0x262da7000 -        0x262e08abf  com.apple.MessageSecurity (1.0 - 195.160.36) <0DAE2428-9918-329A-9C2C-FAC35974C991> /System/Library/PrivateFrameworks/MessageSecurity.framework/Versions/A/MessageSecurity
+       0x267e19000 -        0x267e431bf  com.apple.OSEligibility (319.160.17) <E5A19223-55EF-3ACE-86D6-5E4C7453226A> /System/Library/PrivateFrameworks/OSEligibility.framework/Versions/A/OSEligibility
+       0x268aa6000 -        0x268bbe85f  com.apple.ParsingInternal (0.0.1 - 5026.6.1) <145B46E8-5DDD-39F4-A2C2-19254BB3E64B> /System/Library/PrivateFrameworks/ParsingInternal.framework/Versions/A/ParsingInternal
+       0x26bf57000 -        0x26bf78e1f  com.apple.accessibility.PhotosensitivityProcessing (1.0 - 1) <D28391E4-3ACF-3733-8F07-DD4CCAB5DE4C> /System/Library/PrivateFrameworks/PhotosensitivityProcessing.framework/Versions/A/PhotosensitivityProcessing
+       0x26c36c000 -        0x26c3a8a3c  com.apple.PoirotSQLite (1.0 - 1) <67EC3686-F23C-3C0B-AE66-34FCAAD521CB> /System/Library/PrivateFrameworks/PoirotSQLite.framework/Versions/A/PoirotSQLite
+       0x26c3a9000 -        0x26c41625f  com.apple.PoirotSchematizer (1.0 - 1) <2039208B-D706-3CF4-A87F-F27BE89C45F9> /System/Library/PrivateFrameworks/PoirotSchematizer.framework/Versions/A/PoirotSchematizer
+       0x26c417000 -        0x26c44cbff  com.apple.PoirotUDFs (1.0 - 1) <D5194566-C55C-3D6B-9B6D-6044DD141DE1> /System/Library/PrivateFrameworks/PoirotUDFs.framework/Versions/A/PoirotUDFs
+       0x26d5e5000 -        0x26d720ddf  com.apple.ProDisplayLibrary (10.6.1 - 10.6.1) <02C16EC1-0F6A-35DE-AA44-1F97D3B2FCC9> /System/Library/PrivateFrameworks/ProDisplayLibrary.framework/Versions/A/ProDisplayLibrary
+       0x26e6db000 -        0x26e6e34df  com.apple.ReflectionInternal (1.0.0 - 5026.6.1) <87E77AE8-41F7-399B-81C5-23115A20E2AB> /System/Library/PrivateFrameworks/ReflectionInternal.framework/Versions/A/ReflectionInternal
+       0x26f62f000 -        0x26f6429d7  com.apple.RuntimeInternal (1.0.0 - 5026.6.1) <1662B591-8508-3CF8-B700-AA4EABE970BA> /System/Library/PrivateFrameworks/RuntimeInternal.framework/Versions/A/RuntimeInternal
+       0x26f89a000 -        0x26f907abf  com.apple.SILManager (53.19 - 53.19) <2688F236-5A55-3F96-88F1-CC59ADB1E3A0> /System/Library/PrivateFrameworks/SILManager.framework/Versions/A/SILManager
+       0x27adb8000 -        0x27ade44a1  com.apple.security.SwiftASN1Internal (1.0 - 1) <D382032D-FCEA-3886-B497-3952D5EA0429> /System/Library/PrivateFrameworks/SwiftASN1Internal.framework/Versions/A/SwiftASN1Internal
+       0x27e218000 -        0x27e2541df  com.apple.tightbeam (1.0 - 483.100.88) <3E065B0A-1727-3015-B3AD-4815BE255B11> /System/Library/PrivateFrameworks/Tightbeam.framework/Versions/A/Tightbeam
+       0x282990000 -        0x2829912cf  com.apple.VideoToolboxParavirtualizationSupport (64.5 - 64.5) <D65B393D-3DBB-38FF-93FE-BB7A63C7154D> /System/Library/PrivateFrameworks/VideoToolboxParavirtualizationSupport.framework/Versions/A/VideoToolboxParavirtualizationSupport
+       0x28cc06000 -        0x28cca071f  libAppleArchive.dylib (450.160.2) <A2582E5F-F7E6-3084-BB27-2C789501E47B> /usr/lib/libAppleArchive.dylib
+       0x28cd5b000 -        0x28cd6545f  libCoreEntitlements.dylib (80.100.6) <6209C014-7DDE-3FA3-9118-954393060FDC> /usr/lib/libCoreEntitlements.dylib
+       0x28d051000 -        0x28d05887f  libReverseProxyDevice.dylib (104.120.2) <C57D932C-4539-3815-8BA3-C4628663A76D> /usr/lib/libReverseProxyDevice.dylib
+       0x28d059000 -        0x28d060349  libRosetta.dylib (367.9) <3DBB2990-262D-3776-8FAC-B88C0373DCF0> /usr/lib/libRosetta.dylib
+       0x28d0c9000 -        0x28d0d23ff  libTLE.dylib (80.100.6) <E8A7564E-61D7-3E10-ADBE-8EB212A6BB9F> /usr/lib/libTLE.dylib
+       0x28d8df000 -        0x28d9f0b17  libcrypto.46.dylib (109.100.2) <9CCBAEEB-F98B-33E5-A1D7-38F21A482DC4> /usr/lib/libcrypto.46.dylib
+       0x28db2b000 -        0x28db47762  libhvf.dylib (11) <5C27D0D2-E8BA-3FE1-9069-002A86516F75> /usr/lib/libhvf.dylib
+       0x28e462000 -        0x28e49a527  libssl.48.dylib (109.100.2) <F4261C66-E338-36AC-BB6B-88251E272384> /usr/lib/libssl.48.dylib
+       0x28e4d5000 -        0x28e5032ef  libswiftPrespecialized.dylib (0) <E9032B59-9047-3728-B102-D51439DB3CD1> /usr/lib/libswiftPrespecialized.dylib
+       0x28e79f000 -        0x28e7b1043  libswiftDistributed.dylib (6.3.2 - 6.3.2.1.11) <8EB60E26-AB3C-32A5-B929-422377D98A8A> /usr/lib/swift/libswiftDistributed.dylib
+       0x28e7c8000 -        0x28e7d7ebc  libswiftObservation.dylib (6.3.2 - 6.3.2.1.11) <0D024482-86A7-3D12-B813-263030085201> /usr/lib/swift/libswiftObservation.dylib
+       0x28e904000 -        0x28e9178ef  libswiftSynchronization.dylib (6.3.2 - 6.3.2.1.11) <8724FA96-C03B-3D6B-8DAA-03B33DE03C01> /usr/lib/swift/libswiftSynchronization.dylib
+       0x28e918000 -        0x28e930e60  libswiftSystem.dylib (75) <49EB73B0-CC94-368C-BC8E-34D9B7244AE1> /usr/lib/swift/libswiftSystem.dylib
+       0x28e932000 -        0x28e94879f  libswiftVideoToolbox.dylib (3330.13.105.2) <34DB5466-5B9A-3658-A66D-2F8718A1A633> /usr/lib/swift/libswiftVideoToolbox.dylib
+       0x28e94a000 -        0x28e94a669  libswift_Builtin_float.dylib (6.3.2.1.11) <AEED735C-6543-3FA4-A0F5-1BE6C370E160> /usr/lib/swift/libswift_Builtin_float.dylib
+       0x28e94b000 -        0x28e9d6095  libswift_Concurrency.dylib (6.3.2 - 6.3.2.1.11) <D028A0AB-FBD5-36C3-9BA8-C41D40F38602> /usr/lib/swift/libswift_Concurrency.dylib
+       0x28e9d7000 -        0x28e9d9f83  libswift_DarwinFoundation1.dylib (377.160.5) <9010E60D-F1FA-37DB-BB92-731AAE930186> /usr/lib/swift/libswift_DarwinFoundation1.dylib
+       0x28e9da000 -        0x28e9daeeb  libswift_DarwinFoundation2.dylib (377.160.5) <67E63B4C-4D7B-3A10-9109-BBD029447851> /usr/lib/swift/libswift_DarwinFoundation2.dylib
+       0x28e9db000 -        0x28e9db7a7  libswift_DarwinFoundation3.dylib (377.160.5) <5127E34D-DBF0-399A-95C2-700FF5C62A02> /usr/lib/swift/libswift_DarwinFoundation3.dylib
+       0x28e9dc000 -        0x28ea7a49f  libswift_RegexParser.dylib (6.3.2 - 6.3.2.1.11) <14699117-5DA7-310B-8E01-FAB5BDCDC53E> /usr/lib/swift/libswift_RegexParser.dylib
+       0x28ea7b000 -        0x28eb070cd  libswift_StringProcessing.dylib (6.3.2 - 6.3.2.1.11) <14609DB2-BEB8-3D00-BBB9-5722A6F86B7E> /usr/lib/swift/libswift_StringProcessing.dylib
+       0x28ec6c000 -        0x28ec6fa4b  libsystem_darwindirectory.dylib (122) <6246210A-5279-391D-8F58-E62A87CAB309> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x28ec70000 -        0x28ec7a39b  libsystem_eligibility.dylib (319.160.17) <85C0486B-60BE-3E10-ABBF-DD74341B7376> /usr/lib/system/libsystem_eligibility.dylib
+       0x28ec7b000 -        0x28ec8288b  libsystem_sanitizers.dylib (26.1) <A8C4F7FC-3443-35F7-B306-068D06237ED0> /usr/lib/system/libsystem_sanitizers.dylib
+       0x28ec83000 -        0x28ec83bbf  libsystem_trial.dylib (474.2.18.2.1) <83FF8DEB-1153-35BA-99C3-2AEF9B7559CD> /usr/lib/system/libsystem_trial.dylib

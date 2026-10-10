@@ -172,8 +172,18 @@ pub fn task_of(l: &ListingV1) -> TaskV1 {
     if let Some(t) = l.arch().and_then(task_of_architecture_class) {
         return mk(t, "inferred:architecture-class");
     }
+    // Inference v4 (HFX 2026-10-08): transformers' own auto-model tables — a class the library lists under exactly one task
+    // (`MarianMTModel` → text2text, `CLIPModel` → zero-shot image classification, `VitsModel` → text-to-speech) — read from data
+    // pinned to a transformers release (`census::inference_tables`). A class under two tasks, or under none, stays unknown.
+    if let Some(t) = l.arch().and_then(super::inference_tables::hf_automap_task_v1) {
+        return mk(t, "inferred:hf-automap");
+    }
     if let Some(t) = l.gguf_arch.as_deref().and_then(task_of_gguf_architecture) {
         return mk(t, "inferred:gguf-architecture");
+    }
+    // … and llama.cpp's own converter: a GGUF architecture whose registered Hugging Face classes all name one task.
+    if let Some(t) = l.gguf_arch.as_deref().and_then(super::inference_tables::gguf_converter_task_v1) {
+        return mk(t, "inferred:gguf-converter");
     }
     TaskV1 { task: "unknown".into(), group: "unknown".into(), profile: Profile::None, source: "none".into() }
 }
@@ -884,7 +894,7 @@ mod tests {
         let mut l = listing(&["adapter_config.json", "adapter_model.safetensors"]);
         l.config = serde_json::json!({"peft": {"task_type": "SEQ_CLS"}});
         let t = task_of(&l);
-        assert_eq!((t.task.as_str(), t.source.as_str(), t.profile), ("text-classification", "inferred:peft", Profile::None));
+        assert_eq!((t.task.as_str(), t.source.as_str(), t.profile), ("text-classification", "inferred:peft", Profile::GenHead));
         // No declared task: unknown until the pinned base is read.
         l.config = serde_json::json!({"peft": {"base_model_name_or_path": "b/base"}});
         assert_eq!(task_of(&l).task, "unknown");
@@ -960,13 +970,27 @@ mod tests {
         assert_eq!(task_of(&l).task, "unknown");
         l.config = serde_json::json!({"architectures": ["FooForCausalLM"]});
         assert_eq!((task_of(&l).task.as_str(), task_of(&l).source.as_str()), ("text-generation", "inferred:architecture"));
-        // Inference v2: a head class names its task (still no profile for classification).
+        // Inference v2: a head class names its task (its profile is the dormant `Head` profile).
         l.config = serde_json::json!({"architectures": ["FooForSequenceClassification"]});
         assert_eq!((task_of(&l).task.as_str(), task_of(&l).source.as_str()), ("text-classification", "inferred:architecture-class"));
-        assert_eq!(task_of(&l).profile, Profile::None);
+        assert_eq!(task_of(&l).profile, Profile::GenHead);
         l.config = serde_json::json!({"architectures": ["FooResearchModel"]});
         assert_eq!(task_of(&l).task, "unknown");
+        // Inference v4: transformers' own auto-model tables, and llama.cpp's converter for a GGUF architecture.
+        l.config = serde_json::json!({"architectures": ["MarianMTModel"]});
+        assert_eq!((task_of(&l).task.as_str(), task_of(&l).source.as_str()), ("text2text-generation", "inferred:hf-automap"));
+        // A class transformers lists under two tasks (ASR and text2text), and no earlier rule names: never guessed.
+        l.config = serde_json::json!({"architectures": ["GraniteSpeechForConditionalGeneration"]});
+        assert_eq!(task_of(&l).task, "unknown", "two tasks in transformers' tables: never guessed");
+        l.config = serde_json::json!({});
+        l.gguf_arch = Some("glm-dsa".into());
+        assert_eq!((task_of(&l).task.as_str(), task_of(&l).source.as_str()), ("text-generation", "inferred:gguf-converter"));
+        l.gguf_arch = Some("not-an-architecture".into());
+        assert_eq!(task_of(&l).task, "unknown");
+        l.gguf_arch = None;
         l.pipeline_tag = Some("image-classification".into());
+        assert_eq!(task_of(&l).profile, Profile::GenHead);
+        l.pipeline_tag = Some("depth-estimation".into());
         assert_eq!(task_of(&l).profile, Profile::None);
     }
 }

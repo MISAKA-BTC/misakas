@@ -35,6 +35,10 @@ _ARG_RULES = [
     # 2026-10-08: a namespace the reader does not model is refused (P1: `prism.*`, `mradermacher.*`), and the other refusals of the
     # lowering that carry no argument of their own
     (re.compile(r"GGUF metadata `[^`]+` is in a namespace this reader does not model \(`([^`.]+)\.\*`\)"), "gguf-namespace:{0}"),
+    # HFX 2026-10-08: the inert provenance registry (`GGUF_INERT_PROVENANCE_V1`) refuses an unlisted key, or a table, of a registered
+    # namespace by name
+    (re.compile(r"`([^`.]+)\.\*` is an inert provenance namespace"), "gguf-inert-unlisted:{0}"),
+    (re.compile(r"a key of the inert provenance namespace `([^`.]+)\.\*` is ignored only as a scalar"), "gguf-inert-table:{0}"),
     (re.compile(r"GGUF architecture `` has no mapping"), "gguf-arch:(none)"),
     (re.compile(r"rsLoRA with rank (\d+)"), "lora-rslora-rank"),
     (re.compile(r"quantised in some layers and not in others"), "quant-mixed-layers"),

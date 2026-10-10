@@ -131,7 +131,7 @@ pub(super) fn parts_with(fence: Option<u64>, bft: bool) -> Parts {
 /// **Built as a `Config` directly, never through `ConfigBuilder::build`.** The copy (the harness cards, the EVM lane as shipped,
 /// the BFT gate when `bft`, then `edit`) is validated by `validate_palw_v2` WITHOUT the retirement, so everything else in it is
 /// still a validated ruleset; the retirement is set afterwards. The release's validation requires `palw_fork_choice_rule_e_v1`
-/// armed at or below the retirement (ADR-0175), a fence this harness does not arm: these tests exercise the retirement's own
+/// armed at or below the retirement (ADR-0178), a fence this harness does not arm: these tests exercise the retirement's own
 /// behaviour and must not depend on it.
 pub(super) fn parts_custom(
     fence: Option<u64>,
@@ -1507,6 +1507,68 @@ async fn rfc12_x13_the_mempool_stops_reading_a_frozen_dns_anchor_past_the_fence(
     );
     let retired = a.vp().dns_coinbase_settlement().expect("the long fallback still applies");
     assert_eq!((retired.confirmed_anchor_daa, retired.long_maturity_daa), (None, legacy.long_maturity_daa));
+}
+
+/// **VSTALL regression (2026-10-10): the mempool's settlement read must not queue behind the virtual commit.**
+///
+/// `validate_mempool_transaction{,s_in_parallel}` hold a `virtual_stores.read()` guard for the whole validation and reach
+/// [`VirtualStateProcessor::dns_coinbase_settlement`] inside it. When that function took a SECOND read of the same parking_lot
+/// lock, a virtual commit that had begun `RwLockUpgradableReadGuard::upgrade` in between (WRITER_BIT set, waiting for the
+/// readers to leave) parked the inner read forever: the outer guard was never dropped, the upgrade never finished, and the
+/// virtual processor stopped after a block's UTXO validation (the 0b73fd33f drill stalled three times in two hours).
+///
+/// The rig reproduces that interleaving exactly and deterministically: the outer mempool guard, then a committer thread that
+/// takes the upgradable guard and upgrades (it announces itself and waits for the readers), then the settlement read. Under
+/// the old code the read does not answer within the timeout; with the fix it answers at once from the LKG virtual state.
+///
+/// [`VirtualStateProcessor::dns_coinbase_settlement`]: crate::pipeline::virtual_processor::VirtualStateProcessor
+#[tokio::test]
+async fn vstall_the_mempool_settlement_read_does_not_queue_behind_the_virtual_commit() {
+    use std::{sync::mpsc, thread, time::Duration};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0d10_0000);
+    let b = a.beat();
+    let b0 = a.take(b, "b0").await;
+    plant_dns(&a, b0.header.hash, 5, b0.header.hash, 0);
+    let vp = a.vp();
+    let expected = vp.dns_coinbase_settlement().expect("the long fallback is configured");
+
+    // 1. The mempool's outer guard.
+    let outer = vp.virtual_stores.read();
+    // 2. The virtual commit: `commit_virtual_state` upgrades the resolve's upgradable guard while the mempool still reads.
+    let committer = {
+        let vp = vp.clone();
+        thread::spawn(move || {
+            let upgradable = vp.virtual_stores.upgradable_read();
+            let _write = parking_lot::RwLockUpgradableReadGuard::upgrade(upgradable);
+        })
+    };
+    while !vp.virtual_stores.is_locked_exclusive() {
+        thread::yield_now();
+    }
+    // 3. The settlement read the mempool makes under its outer guard (on another thread here, so the test can always
+    //    release the outer guard and finish even when the read is stuck).
+    let (tx, rx) = mpsc::channel();
+    let reader = {
+        let vp = vp.clone();
+        thread::spawn(move || {
+            let _ = tx.send(vp.dns_coinbase_settlement());
+        })
+    };
+    let answered = rx.recv_timeout(Duration::from_secs(5));
+    drop(outer);
+    committer.join().unwrap();
+    reader.join().unwrap();
+    let settlement = answered.expect(
+        "dns_coinbase_settlement blocked on virtual_stores behind a queued virtual commit: under the mempool's own held read \
+         this is the VSTALL deadlock (the virtual processor never commits again)",
+    );
+    let settlement = settlement.expect("the long fallback is configured");
+    assert_eq!(
+        (settlement.long_maturity_daa, settlement.confirmed_anchor_daa),
+        (expected.long_maturity_daa, expected.confirmed_anchor_daa),
+        "the lock-free read answers what the locked read answered"
+    );
 }
 
 /// The rest of [`prefix`] after b0 (e1, b1, e2).

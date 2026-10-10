@@ -325,6 +325,18 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// **RFC-0008 v2: re-shape a standard template into an `EXEC_SLICE` lane block** — the lane's parents, algo 10, the coinbase alone
+    /// (a slice carries no user transaction batch) and an empty `palw_commitment` for the executor to fill with its signed `PXE2`
+    /// envelope once it has solved the header. Refused below `palw_exec_payload_v2`.
+    fn exec_v2_slice_adapt_block_template(
+        &self,
+        template: BlockTemplate,
+        payout: crate::tx::ScriptPublicKey,
+    ) -> Result<BlockTemplate, RuleError> {
+        let _ = (template, payout);
+        unimplemented!()
+    }
+
     fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
         unimplemented!()
     }
@@ -986,6 +998,42 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **RFC-0008 v2: the EXEC v2 lane's observation at the tip** (`getPalwExecV2Status`, op 240): counts, the named (or first) roots
+    /// with each slice and its verification claim's state, `block`'s refusal record, the lane's health. A read: no rule calls it.
+    /// `None` where the payload is not armed.
+    fn palw_exec_v2_observation_v1(
+        &self,
+        _roots: Vec<crate::Hash64>,
+        _block: Option<crate::BlockHash>,
+    ) -> Option<crate::palw_exec_v2_verify::PalwExecV2ObservationV1> {
+        None
+    }
+
+    /// **RFC-0008 v2 amendment 1: the slice statement `bond` signs for `(root, index)` backed by the kernel claim `claim`**, derived from
+    /// the tip (`palw_exec_v2_slice_statement_v1`) — the EXEC_SLICE producer's input. A read.
+    fn palw_exec_v2_slice_statement_v1(
+        &self,
+        _root: crate::Hash64,
+        _index: u32,
+        _claim: crate::Hash64,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<crate::palw_exec_v2::PalwWorkSliceV1, String> {
+        Err("this consensus does not carry the EXEC v2 lane".into())
+    }
+
+    /// **RFC-0008 v2 amendment 1, §10.3: may a validated `EXEC_SLICE` block be announced onward?** Against the tip: its root is open,
+    /// its executor authorised, its index inside `[next, next + depth)`, its verification claim held by the kernel route. Node-local
+    /// relay policy: validity never reads it. `true` where the payload is not armed.
+    fn palw_exec_v2_slice_relayable_v1(&self, _slice: &crate::palw_exec_v2::PalwWorkSliceV1) -> bool {
+        true
+    }
+
+    /// **RFC-0008 v2: has an anchor on this node's selected chain covered `block`?** The EXEC_SLICE producer republishes a carrier that
+    /// left the window uncovered (amendment 1, §10.7). A read.
+    fn palw_exec_v2_anchored_v1(&self, _block: crate::BlockHash) -> bool {
+        false
+    }
+
     /// The court's half: open sessions this node holds a bond in.
     fn palw_court_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwCourtDutyV2> {
         Vec::new()
@@ -1480,6 +1528,18 @@ pub trait ConsensusApi: Send + Sync {
         Err("this consensus serves no PALW state proof".to_string())
     }
 
+    /// **RFC-0009 L2: the fork-choice openings of `blocks`' post-states** (op 203), with this node's sink and DAG tips. Empty `blocks`: the
+    /// sink and every tip. At most [`crate::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1`] blocks; each
+    /// entry is the opening or the reason this node cannot weigh that block (no V2 ruleset, a block it never held as a chain block, a
+    /// block too far behind the sink). The client checks every opening against a root it trusts; nothing here is believed as served.
+    fn palw_fork_choice_openings_v1(
+        &self,
+        blocks: &[BlockHash],
+    ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let _ = blocks;
+        Err("this consensus serves no fork-choice opening".to_string())
+    }
+
     /// Import: persist the pruning point's DNS/PoS-v2 overlay snapshot.
     fn import_pruning_point_overlay_snapshot(
         &self,
@@ -1533,6 +1593,13 @@ pub trait ConsensusApi: Send + Sync {
     /// Deliberately the sink's and not the header download hint's: the hint is a download
     /// heuristic that says so in its own name, and a consensus decision reading it reopens P0-5.
     fn get_palw_candidate_order_v2(&self) -> Option<crate::palw_fork_choice::PalwCandidateOrderV1> {
+        None
+    }
+
+    /// **ADR-0178 rule E: this consensus's standing for the IBD commit** — the PALW state at the block it is weighed at (its sink; a
+    /// staging consensus's imported pruning point, exactly as [`Self::get_palw_candidate_order_v2`] chooses) and that block's DAA
+    /// score. `None` off a ConsensusV2 network or where the state cannot be read; the IBD flow fails closed on it.
+    fn get_palw_rule_e_weighing_v1(&self) -> Option<crate::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1> {
         None
     }
 

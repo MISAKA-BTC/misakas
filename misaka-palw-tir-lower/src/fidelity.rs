@@ -171,7 +171,7 @@ pub fn open_model_full(
             let source: Box<dyn crate::weights::TensorSource + Sync> = match prepared.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()) {
                 Some(q) => {
                     let (f, params) = q.fmt.binding().expect("a described format");
-                    Box::new(crate::weights::described::DescribedSource::new(Box::new(ck), f, params)?)
+                    Box::new(crate::weights::described::DescribedSource::new_with(Box::new(ck), f, params, &q.module_params)?)
                 }
                 None => Box::new(ck),
             };

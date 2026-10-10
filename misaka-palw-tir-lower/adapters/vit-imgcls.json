@@ -1,0 +1,198 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "vit-imgcls",
+ "kind": "vision",
+ "doc": "ViTForImageClassification (google/vit-*, and the thousands of ViT fine-tunes): the ViT tower (see `vit`) under the checkpoint's `vit.` prefix, the class row through the final layernorm and the linear `classifier` to num_labels logits (VisionOut::Classify; OUTPUT_CLASSIFY_V1). num_labels is the length of id2label. The pooler is not part of the class (add_pooling_layer = false). HFX 2026-10-10. Features: VISION_FROM_SPEC_V1.",
+ "match": {
+  "architectures": [
+   "ViTForImageClassification"
+  ],
+  "model_types": [
+   "vit"
+  ]
+ },
+ "config": {
+  "defaults": {
+   "hidden_size": 768,
+   "num_hidden_layers": 12,
+   "image_size": 224,
+   "patch_size": 16,
+   "num_attention_heads": 12,
+   "intermediate_size": 3072,
+   "hidden_act": "gelu",
+   "layer_norm_eps": 1e-12,
+   "qkv_bias": true
+  },
+  "inert": [
+   "add_pooling_layer",
+   "attention_probs_dropout_prob",
+   "classifier_dropout",
+   "encoder_stride",
+   "hidden_dropout_prob",
+   "id2label",
+   "initializer_range",
+   "label2id",
+   "num_channels",
+   "num_labels",
+   "pooler_act",
+   "pooler_output_size",
+   "problem_type",
+   "use_mask_token"
+  ]
+ },
+ "vars": [
+  {
+   "name": "qkv_ok",
+   "value": {
+    "$check": [
+     {
+      "$eq": [
+       {
+        "$cfg": "qkv_bias"
+       },
+       true
+      ]
+     },
+     "ViT with qkv_bias = false is not lowered"
+    ]
+   }
+  },
+  {
+   "name": "d",
+   "value": {
+    "$cfg": "hidden_size"
+   }
+  },
+  {
+   "name": "layers",
+   "value": {
+    "$cfg": "num_hidden_layers"
+   }
+  },
+  {
+   "name": "image",
+   "value": {
+    "$cfg": "image_size"
+   }
+  },
+  {
+   "name": "labels",
+   "value": {
+    "$let": [
+     "m",
+     {
+      "$cfg?": "id2label"
+     },
+     {
+      "$if": [
+       {
+        "$ne": [
+         {
+          "$var": "m"
+         },
+         null
+        ]
+       },
+       {
+        "$len": {
+         "$var": "m"
+        }
+       },
+       {
+        "$cfg": [
+         "num_labels",
+         2
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "spec": {
+  "architecture": {
+   "$var": "arch"
+  },
+  "h": {
+   "$var": "image"
+  },
+  "w": {
+   "$var": "image"
+  },
+  "downscale": 1,
+  "patch": {
+   "$cfg": "patch_size"
+  },
+  "temporal": 1,
+  "merge": 1,
+  "mean": [
+   0.5,
+   0.5,
+   0.5
+  ],
+  "std": [
+   0.5,
+   0.5,
+   0.5
+  ],
+  "d": {
+   "$var": "d"
+  },
+  "heads": {
+   "$cfg": "num_attention_heads"
+  },
+  "inter": {
+   "$cfg": "intermediate_size"
+  },
+  "layers": {
+   "$var": "layers"
+  },
+  "run": {
+   "$var": "layers"
+  },
+  "act": {
+   "$act": {
+    "$cfg": "hidden_act"
+   }
+  },
+  "swiglu": false,
+  "rms": false,
+  "eps": {
+   "$cfg": "layer_norm_eps"
+  },
+  "pre_norm": false,
+  "cls": true,
+  "patch_bias": true,
+  "learned_pos": true,
+  "rope_theta": null,
+  "window": null,
+  "out": {
+   "Classify": {
+    "labels": {
+     "$var": "labels"
+    }
+   }
+  },
+  "names": {
+   "patch.w": "vit.embeddings.patch_embeddings.projection.weight",
+   "patch.b": "vit.embeddings.patch_embeddings.projection.bias",
+   "cls": "vit.embeddings.cls_token",
+   "pos": "vit.embeddings.position_embeddings",
+   "post_norm": "vit.layernorm",
+   "norm1": "vit.encoder.layer.{L}.layernorm_before",
+   "norm2": "vit.encoder.layer.{L}.layernorm_after",
+   "attn.q": "vit.encoder.layer.{L}.attention.attention.query",
+   "attn.k": "vit.encoder.layer.{L}.attention.attention.key",
+   "attn.v": "vit.encoder.layer.{L}.attention.attention.value",
+   "attn.o": "vit.encoder.layer.{L}.attention.output.dense",
+   "mlp.up": "vit.encoder.layer.{L}.intermediate.dense",
+   "mlp.down": "vit.encoder.layer.{L}.output.dense",
+   "classifier": "classifier"
+  },
+  "ignored": [
+   "vit.pooler.",
+   "pooler."
+  ]
+ }
+}

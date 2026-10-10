@@ -314,7 +314,7 @@ macro_rules! builtin {
 const BUILTIN: &[&str] = builtin!(
     "f32", "f16", "bf16", "f64", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "q2_k", "q3_k", "q4_k", "q5_k", "q6_k", "iq4_nl", "iq4_xs",
     "tq1_0", "tq2_0", "ptq1_0", "pq2_0", "mxfp4", "nvfp4", "q1_0", "q2_0", "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq1_s", "iq1_m", "gptq", "awq",
-    "fp8_block", "ct_pack", "ct_fp8", "ct_int8", "mxfp4_hf", "bnb_nf4", "bnb_fp4", "bnb_int8",
+    "fp8_block", "ct_pack", "ct_fp8", "ct_int8", "mxfp4_hf", "bnb_nf4", "bnb_fp4", "bnb_int8", "mlx_affine",
 );
 
 impl QuantRegistry {
