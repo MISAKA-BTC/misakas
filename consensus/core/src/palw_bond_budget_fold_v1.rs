@@ -30,10 +30,11 @@ impl PalwChainStateV2 {
         self.bond_budget.as_ref()
     }
 
-    /// **Does `bond` still hold a budget reservation inside its window at `now_daa`?** — the withdrawal hold (design §2.4): the capital
-    /// that earned a window cannot leave, or be re-registered, before the window has passed. `false` with no engine.
+    /// **Does `bond`'s budget hold its capital at `now_daa`?** — the withdrawal hold (design §2.4): the capital that earned a window cannot
+    /// leave, or be re-registered, before the window has passed; and (PESG §6) not while a claim is open or within `H_L` of its terminal
+    /// step — the liability hold, a clock of its own. `false` with no engine.
     pub fn bond_budget_window_holds(&self, bond: &PalwBondKeyV2, now_daa: u64) -> bool {
-        self.bond_budget.as_ref().is_some_and(|b| b.window_holds(bond, now_daa))
+        self.bond_budget.as_ref().is_some_and(|b| b.withdrawal_holds(bond, now_daa))
     }
 
     /// **What a budgeted claim was granted in Final weight** (hook H-4: rule E reads this, never the full contribution) — `None` for a
@@ -45,11 +46,59 @@ impl PalwChainStateV2 {
     /// **Would the fold's strict budget draw take a receipt spend of `claim_id`?** (hook H-5: the processor asks it of the PARENT state
     /// before admitting a receipt block) — one block and `carve()` left on the claim's reservation; `true` for an unbudgeted claim, and
     /// the carve is not read then.
-    pub fn bond_budget_spend_fits_v1(&self, claim_id: &Hash64, carve: impl FnOnce() -> u64) -> bool {
+    pub fn bond_budget_spend_fits_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        claim_id: &Hash64,
+        now_daa: u64,
+        carve: impl FnOnce() -> u64,
+    ) -> bool {
         let Some(budget) = self.bond_budget.as_ref() else { return true };
         let Some(blocks) = budget.remaining(claim_id, PalwBudgetDimV1::BlockUnits) else { return true };
+        let carve = carve();
         blocks >= PALW_BUDGET_BLOCK_UNIT_V1 as u128
-            && budget.remaining(claim_id, PalwBudgetDimV1::Reward).is_some_and(|reward| reward >= carve() as u128)
+            && budget.remaining(claim_id, PalwBudgetDimV1::Reward).is_some_and(|reward| reward >= carve as u128)
+            && self.bond_budget_fp_export_fits_v1(params, claim_id, now_daa, carve)
+    }
+
+    /// **PESG §6: the external export cap on a free-prompt claim's receipt spends** — each spend's worker share is minted straight into
+    /// a coinbase output, so while the claim's liability holds (`now < final + H_L`) the spends paid so far plus this one are at most
+    /// `⌊0.51 · reserved⌋`; once it has ended, unbounded. `true` for an unbudgeted claim or below the fence.
+    pub fn bond_budget_fp_export_fits_v1(&self, params: &PalwStateParamsV2, claim_id: &Hash64, now_daa: u64, carve: u64) -> bool {
+        let Some(mirror) = params.bond_budget().filter(|m| m.active_at(now_daa)) else { return true };
+        let Some(row) =
+            self.bond_budget.as_ref().and_then(|b| b.claim_row(claim_id)).filter(|r| r.origin != PalwBudgetOriginV1::Legacy)
+        else {
+            return true;
+        };
+        let Some(claim) = self.claims.get(claim_id) else { return true };
+        let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { return true };
+        if now_daa >= final_daa.saturating_add(mirror.policy.liability_hold_daa) {
+            return true;
+        }
+        let cap = palw_bond_budget_export_cap_v1(&mirror.policy, claim.reserved) as u128;
+        (row.consumed.reward_sompi as u128).saturating_add(carve as u128) <= cap
+    }
+
+    /// **PESG §6: no payout before Final, on any leg the state attributes to a claim** — a claim not yet Final (nor voided) has no
+    /// producer row in the payout queue, no vesting row (which names its seats' and model-allocation legs), and no execution-lane Final
+    /// (the EXEC rights). Checked with the engine's invariants wherever a state is imported; every writer of those rows runs at Final.
+    pub fn bond_budget_no_payout_before_final_v1(&self) -> Result<(), String> {
+        for (id, claim) in &self.claims {
+            if matches!(claim.phase, PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. }) {
+                continue;
+            }
+            if self.pending_payouts.contains_key(id) {
+                return Err(format!("claim {id} has a payout before its Final"));
+            }
+            if self.vesting.contains_key(id) {
+                return Err(format!("claim {id} has a vesting row before its Final"));
+            }
+            if self.round_finals.contains_key(id) {
+                return Err(format!("claim {id} holds execution-lane rights before its Final"));
+            }
+        }
+        Ok(())
     }
 
     /// The caps of `bond` under `policy` at its current locked capital (RPC op 250's numbers).
@@ -265,7 +314,7 @@ impl TransitionBuilder<'_> {
         let window = mirror.policy.window_daa;
         let carve = self.params.worker_carve_at(ctx.subsidy, self.extras.escrow_carve);
         let pricing = self.fp_pricing();
-        let mut seeds: Vec<(Hash64, PalwBondKeyV2, u64, PalwBudgetVectorV1)> = Vec::new();
+        let mut seeds: Vec<(Hash64, PalwBondKeyV2, u64, PalwBudgetVectorV1, u128)> = Vec::new();
         for (id, claim) in &self.state.claims {
             if claim.accepted_daa.saturating_add(window) <= ctx.daa_score {
                 continue;
@@ -300,14 +349,28 @@ impl TransitionBuilder<'_> {
                     }
                 }
             };
-            seeds.push((*id, claim.bond, claim.accepted_daa, vector));
+            // PESG §6: an open old claim's liability collateral counts too (a Final one's FP spends hold none of their own).
+            let liability = if matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) { 0 } else { claim.reserved };
+            seeds.push((*id, claim.bond, claim.accepted_daa, vector, liability));
         }
         let policy = mirror.policy.clone();
         self.bond_budget_op(|budget, state, j| {
-            for (id, bond, accepted, vector) in seeds {
+            for (id, bond, accepted, vector, liability) in seeds {
                 let capital = state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
                 // A seed is counted, never refused (the window may start over-full); its id is new to an empty engine.
-                let _ = budget.reserve(&policy, capital, id, bond, None, accepted, vector, PalwBudgetOriginV1::Legacy, false, j);
+                let _ = budget.reserve_liable(
+                    &policy,
+                    capital,
+                    id,
+                    bond,
+                    None,
+                    accepted,
+                    vector,
+                    liability,
+                    PalwBudgetOriginV1::Legacy,
+                    false,
+                    j,
+                );
             }
         });
     }
@@ -333,6 +396,7 @@ impl TransitionBuilder<'_> {
             block_units: budget_block_units,
             reward_sompi: claim.escrowed_reward,
             final_weight: crate::palw_weight_cap_v1::palw_weight_final_safe_v1(self.params, claim, contribution),
+            liability_sompi: claim.reserved,
         };
         let origin = if rider { PalwBudgetOriginV1::Rider } else { PalwBudgetOriginV1::Attempt };
         let model = self.bond_budget_model_of(&claim.class_id, Some(artifact_root));
@@ -355,6 +419,7 @@ impl TransitionBuilder<'_> {
             block_units: PALW_BUDGET_BLOCK_UNIT_V1.saturating_mul(quanta as u64),
             reward_sompi: carve.saturating_mul(quanta as u64),
             final_weight: per_quantum.saturating_mul(quanta as u128),
+            liability_sompi: claim.reserved,
         };
         let model = self.bond_budget_model_of(&claim.class_id, None);
         self.plan_bond_budget_v1(ctx, claim.bond, Some(model), ask, PalwBudgetOriginV1::FreePrompt, 0)
@@ -375,6 +440,7 @@ impl TransitionBuilder<'_> {
         }
         let carve = self.params.worker_carve_at(ctx.subsidy, self.extras.escrow_carve);
         let bond = self.state.claims.get(claim_id).map(|c| c.bond).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?;
+        let hold_until = self.bond_budget_liability_hold_until_v1(ctx.daa_score);
         // Strict: checked whole before either is taken.
         let budget = self.state.bond_budget.as_ref().expect("checked");
         let short = |dim, need: u128| budget.remaining(claim_id, dim).is_some_and(|left| left < need);
@@ -384,6 +450,12 @@ impl TransitionBuilder<'_> {
         if short(PalwBudgetDimV1::Reward, carve as u128) {
             return Err(budget_refused(bond, PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::Reward }));
         }
+        if !self.state.bond_budget_fp_export_fits_v1(self.params, claim_id, ctx.daa_score, carve) {
+            return Err(PalwStateV2Error::BondBudgetExhausted {
+                bond,
+                why: "the spend would export more than 0.51 of the collateral its liability still holds (PESG §6)".to_string(),
+            });
+        }
         let granted = self
             .bond_budget_op(|budget, _, j| {
                 let blocks = budget.consume(claim_id, PalwBudgetDimV1::BlockUnits, PALW_BUDGET_BLOCK_UNIT_V1 as u128, true, j);
@@ -392,7 +464,7 @@ impl TransitionBuilder<'_> {
                 let weight =
                     budget.consume(claim_id, PalwBudgetDimV1::FinalWeight, per_quantum, false, j).and_then(Result::ok).unwrap_or(0);
                 if last_quantum {
-                    budget.close(claim_id, j);
+                    budget.close_at(claim_id, Some(hold_until), j);
                 }
                 weight
             })
@@ -489,9 +561,27 @@ impl TransitionBuilder<'_> {
             .unwrap_or(escrow)
     }
 
-    /// **A claim is terminal** (an attempt's Final, a void, a conviction): no further consumption; nothing returns to the window.
-    pub(super) fn bond_budget_close_v1(&mut self, claim_id: &Hash64) {
-        self.bond_budget_op(|budget, _, j| budget.close(claim_id, j));
+    /// **A claim is terminal** (an attempt's Final, a void, a conviction) at `now`: no further consumption; nothing returns to the window;
+    /// the bond's liability hold runs to `now + H_L` (PESG §6).
+    pub(super) fn bond_budget_close_v1(&mut self, claim_id: &Hash64, now: u64) {
+        let hold_until = self.bond_budget_liability_hold_until_v1(now);
+        self.bond_budget_op(|budget, _, j| budget.close_at(claim_id, Some(hold_until), j));
+    }
+
+    /// `now + H_L` under the policy in force (0 below the fence: no engine, nothing to hold).
+    fn bond_budget_liability_hold_until_v1(&self, now: u64) -> u64 {
+        self.params.bond_budget().map(|mirror| now.saturating_add(mirror.policy.liability_hold_daa)).unwrap_or(0)
+    }
+
+    /// **PESG §6: what of a claim's Final reward may leave the chain's books at once** (into the payout queue that mints, or a market
+    /// reserve a holder can sell out of) while its liability still holds `claim.reserved`: `⌊0.51 · reserved⌋` (the policy's permille,
+    /// at most 510). `None` below the fence (unbounded, the old rule). A vesting row is not an export: it moves only once its lock — the
+    /// claim's liability — has ended.
+    pub(super) fn bond_budget_export_cap_v1(&self, claim_id: &Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Option<u64> {
+        let mirror = self.bond_budget_mirror_at(final_daa)?;
+        // An old claim (no row, or a Legacy seed) is paid by the rule it was accepted under.
+        self.state.bond_budget.as_ref()?.claim_row(claim_id).filter(|row| row.origin != PalwBudgetOriginV1::Legacy)?;
+        Some(palw_bond_budget_export_cap_v1(&mirror.policy, claim.reserved))
     }
 
     /// **A claim left the state** (retirement): its row leaves once it is out of the window too.

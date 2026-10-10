@@ -457,6 +457,41 @@ PalwBondBudgetStateV1 {
   refuses undecodable bytes, and the central rule must make this build refuse tag 140 there too. That is A2U's mechanism, listed
   for the Lead (H-6).
 
+## 6b. PESG §6: safety bounds independent of the economics (round 3, 2026-10-10)
+
+These bounds come from `probabilistic-economic-security-gate.md` §6, with values from ECON §5e.4. All of them sit behind
+`palw_bond_budget_v1`. The budget policy is now version 2 (version 1 is refused).
+
+| Bound | Rule | Where it is enforced |
+|---|---|---|
+| No payout before Final, on any leg | No producer row in the payout queue, vesting row (which names the seat and model-allocation legs) or execution-lane Final for a claim that is neither Final nor voided. FP receipt spends already require the FP claim's Final. The verifier bounty is paid from the collected slash, after the conviction. | `PalwChainStateV2::bond_budget_no_payout_before_final_v1`, run with the import consistency check. Every writer of those rows runs at Final. |
+| External export cap | Nothing leaves before Final. After Final, while the liability holds collateral, what leaves at once is at most `⌊export_cap_permille · K / 1000⌋`. The cap is at most 510 permille (0.51), and `K` is the claim's `reserved`. "What leaves at once" means a leg written straight into the payout queue (no vesting), a buyback slice in a market reserve, or the sum of FP receipt spends while `now < final + H_L`. A vesting row is not an export, because it moves only after its lock (the liability) has ended. The rest is never named, so never minted. Legacy claims are paid by their old rule. | `finalize_claim` (non-vesting legs and buyback); `bond_budget_receipt_spend_v1` plus the processor's H-5 pre-check (`bond_budget_spend_fits_v1`, now given params and DAA). |
+| Open claims per bond | `Σ K` over open claims `≤ C`, so at most `⌊C/K⌋` open claims of reservation `K`. Checked at acceptance. | `palw_bond_budget_admit_v1` → `LiabilityExceedsCapital` |
+| Unsettled weight per bond | `Σ` Final-weight reservation over open claims `≤ F_max`. This counts claims still open past `d + W`, which have left the window but not the unsettled weight. | `palw_bond_budget_admit_v1` → `UnsettledWeight` |
+| Value of weight | A versioned slot, `PalwWeightValuePolicyV1`. It ships `Unknown`, so weight is bounded by `F_max` alone. Setting `SompiPerWeight { v }` also holds `reward + F·v ≤ R_max`. | admission |
+| `W` | Still POLICY. Validation keeps it within 280..=436 DAA, ECON's derived range. The fixtures run below validation. | `PalwBondBudgetPolicyV1::validate` |
+| Liability hold `H_L` | A clock of its own: `liability_hold_daa`, interim 280. It runs from an open claim through to terminal + `H_L`, apart from the issuance clock `d + W`. The withdrawal hold reads both clocks. | engine table 6 (`liability_releases`); `withdrawal_holds` |
+
+**Export paths not reached by this round:**
+* Kernel-route payouts (G14: `add_kernel_payout` in `palw_kernel_route_fold_v1::apply_settlements`).
+* Improvement grants (`palw_improve_fold_v1`) and mesh audit payouts (`palw_mesh_fold_v1`).
+* Activation-pool payouts and carrier refunds. These are funded by top-ups, not by claim rewards.
+* EVM `MarketSettle` trades. These are holders trading positions, and the reserve a claim's buyback adds is capped above.
+
+**G14 hook call sites, for codex.** All of them are in `palw_kernel_route_fold_v1.rs`, `apply_settlements`. OPV and typed-root claims
+settle through the same ledger events.
+* **`SettlementKindV1::ReserveClaim`:** reserve with `reserve_liable`. Use origin `KernelRoute`, the claim's Q/B/R/F ask and
+  `K` = the reserved claim collateral, under the engine's admission.
+* **`SettlementKindV1::FinalReward`:** before `add_kernel_payout`:
+  * consume `Reward` on the claim's row (as `bond_budget_final_reward_v1` does);
+  * then clip to `palw_bond_budget_export_cap_v1(policy, K)`, because kernel payouts do not vest;
+  * the rest is never named.
+* **`ReleaseClaim`, a conviction, or a timeout:** `close_at(claim, Some(now + H_L))`.
+* **`AccuserReward` / `DemanderShare`:** these are paid from the collected slash at the conviction, so no budget hook is needed.
+  The import check covers "no payout before Final".
+
+Still missing on integration: EXEC (X8R `consume_block_for_bond`) and the rule-E reader (FINX `bond_budget_final_weight`).
+
 ## 7. Hooks other lanes call (names fixed in M2)
 
 | Hook | Who | Call |

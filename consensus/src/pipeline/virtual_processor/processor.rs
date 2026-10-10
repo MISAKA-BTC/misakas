@@ -16909,7 +16909,7 @@ impl VirtualStateProcessor {
         // whose commitment's reservation cannot pay it (one block, this block's carve) is refused for the reason the fold would refuse
         // it. `true` for every unbudgeted claim — every claim of every network that never armed `palw_bond_budget_v1` — and the carve
         // is not even read then.
-        if !state.bond_budget_spend_fits_v1(&envelope.spend.claim_id, || {
+        if !state.bond_budget_spend_fits_v1(state_params, &envelope.spend.claim_id, point.daa_score, || {
             state_params.worker_carve_at(point.subsidy, self.palw_escrow_for_carrier_at(point.block, point.daa_score, point.daa_score))
         }) {
             return Err(format!("claim {}'s bond budget cannot pay this receipt block (ADR-0176)", envelope.spend.claim_id));
