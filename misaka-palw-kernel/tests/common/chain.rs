@@ -148,6 +148,7 @@ pub fn seals_for(txs: &[T]) -> Vec<T> {
                     SaltedCommitV1::Claim { claim, .. } => (claim.job_id, claim.id()),
                     SaltedCommitV1::Pipeline { claim, .. } => (claim.job_id, claim.id()),
                     SaltedCommitV1::Spec { claim } => (claim.job_id(), claim.id()),
+                    SaltedCommitV1::Segmented { claim, .. } => (claim.job_id, claim.id()),
                 };
                 Some(T::SealClaim { producer: commit.producer(), job, seal: claim_seal_v2(&id, salt) })
             }
