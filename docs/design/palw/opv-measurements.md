@@ -32,6 +32,7 @@ Premise conditions addressed (`docs/PRINCIPLES.md` §6): **5** (collateral again
 | ADR-0032 49 % / ADR-0176 D6 | every collateral and deterrence formula uses the loss **net** of the reporter's 49 % self-return (51 % of the collected slash), never the gross slash; the interim ledger's 500 permille is shown only as a comparator | §3.3, §5 |
 | ADR-0176 §4 | the measurement **plan** (it needs lane BUDGET's engine; none of it ran) | §7 |
 | RFC-0004 Part II | per-kind inspection cost: **no real Memory, Retrieval or Composite artifact exists**, so it is listed unmeasured, with the structural bounds and unit costs a measurement would use | §8 |
+| PESG §4 D (the user's Probabilistic–Economic Security Gate) | the five factors of the real conviction probability are scored per class and profile in `pesg-d-conviction-probability.md`; this note's GAP-07 (§4), ADR-0176 plan (§7) and RFC-0004 list (§8) are folded into it | pesg-d |
 | ADR-0175 | a registered model never changes, so a verifier that authenticates its copy once, when it acquires it, stays sound: the `model_auth_once` sensitivity (A) is legitimate | §3.1 |
 | a fifth real class | GLM-Edge-1.5B (H1's artifact, byte-identical copy): static bounds, the streaming weight pass and the producer's world ran on 2026-10-10 | §2.2 |
 
