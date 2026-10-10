@@ -280,6 +280,71 @@ the immutable registration id. Without an owner it maps to the class id, which i
 claim has no root on the claim and maps to its class id. **DESIGN question §10 D-4:** whether allocation should be per
 registration or per class.
 
+## 3b. Round rights before the draw (additional acceptance 2026-10-10, readiness §3e)
+
+[`docs/palw-round-exec-additional-acceptance-2026-10-10.md`](../../palw-round-exec-additional-acceptance-2026-10-10.md) §2–§3.
+The existing ticket code (`palw_execution_quanta_v1`, armed on testnet-12) is unchanged. Past `palw_bond_budget_v1` the span's
+schedule is minted by a **capped** variant, and below the fence it is minted exactly as before.
+
+```text
+T_earned(final)  = palw_execution_quantum_count_v1(credit, 100,000, seed, final)   (verified CanonicalWork; the seed rounds the remainder)
+R_round(bond)    = the bond's remaining Round rights in its window, read just before the draw
+T_candidate(b)   = Σ over b's Finals, in canonical order, of min(T_earned, what is left of R_round(b))
+T_allocated      = the seed's draw H(seed ‖ quantum_id) over every candidate ticket, the first `window_rounds` of them
+T_executed      <= T_allocated  (a permit exists only for an allocated ticket)
+Σ T_allocated per window <= window_rounds (the shared capacity, 120 on testnet-12 — never a per-claim grant)
+```
+
+**The versioned specification (`PalwRoundRightsPolicyV1`, inside the budget policy):**
+
+| Item | v1 |
+|---|---|
+| Unit | one ticket = one Round right = at most one algo-10 permit |
+| Period | the bond's common window `W`, keyed on the **draw** DAA |
+| Reserve | at the draw (the span's first chain block), `T_allocated` of the bond, as one budget row per `(span, bond)` |
+| Consume | at the same moment: an allocated ticket is a used right, executed or not |
+| Release | at `draw DAA + W` (the common clock), and at no other time |
+| Expiry | an allocated ticket whose round passes unspent is lost; its reservation stays until `draw + W` (no refund) |
+| Earliest reuse | `draw DAA + W` |
+| Remainders | the existing seed-drawn stochastic rounding of `credit / 100,000` per Final; the capital cap floors |
+| Lost draws | a candidate not drawn is not reserved and carries nothing forward |
+| Carry-over | none: a Final's unallocated tickets do not move to a later span (the existing mint's rule) |
+| Concurrent windows | the cap reads every reservation still in the window (other spans' draws included), so concurrent spans cannot exceed it |
+| Binding | the same bond and capital as claims, receipts and roots: one `C`, one window, one release clock |
+
+**Fee-only Rounds (POLICY P-9; both modes are implemented, and neither leaves an uncapped path):**
+
+* `CountAgainstBlocks`: each allocated ticket reserves one reward block (`U`) of the bond's `B`. Fee-only Rounds then compete with
+  attempts and receipts for `B_max`.
+* `ExecutionCap { rights_per_unit }`: a separate dimension of the window, `⌊C · rights / u⌋` tickets per `W`.
+
+**Market fee income and `R_max` (POLICY P-10).** Fee income depends on the market and cannot be reserved before it exists. v1 does
+not count it in `R`. What bounds a bond's fee-earning opportunities is the Round-rights cap above, which every permit passes. The
+alternative, counting fees in `R` at receipt and burning the excess, is listed for the user.
+
+**SPLIT / NEUTRALITY.** For the same work and the same total locked capital, the expected candidate total cannot rise:
+
+* splitting capital across bonds or operator keys gives `Σ ⌊C_i·r/u⌋ ≤ ⌊C·r/u⌋`;
+* splitting a claim or resubmitting work sums the same credits: the stochastic rounding is unbiased, and a Final's copies collapse by
+  `execution_root` (one ticket set per work);
+* repackaging as root/slice credits the root only (X8R's contract);
+* `Σ_i min(T_i, R_i) ≤ min(Σ T_i, Σ R_i)`.
+
+The capped mint therefore drops the old per-Final `min(window)` cap. That cap let a split into `k` claims field `k · window`
+candidates where the whole fielded `window`. The draw ranks tickets by `H(seed ‖ quantum_id)`, which is uniform, so the expected
+allocation is proportional to candidates.
+
+**Tolerance (fixed):** per bond, the realized candidate count of a split differs from the whole's by at most one rounding ticket per
+Final and one floor ticket per piece of capital, with expectation ≤ 0 (never in the splitter's favour).
+
+The draw reads no operator id, domain, genesis flag or registration order. The role-swap test swaps two bonds' labels and gets the
+swapped allocation. A span's candidates are bounded by `Σ_b R_round(b)`, and the hard per-span bound
+`PALW_EXEC_MAX_QUANTA_PER_SPAN_V1` must not bind under an approved policy (POLICY: `Σ caps < 65,536 per window`), because it
+truncates in root order.
+
+**Order of the step.** The budget's clock (§2.4) runs before the execution lane's span rotation in every block, so a draw sees this
+block's releases. Validation requires `palw_economic_safety` at or below the budget fence: the windowed mint is the one capped.
+
 ## 4. Inventory: every reward-bearing writer and reader on this tree
 
 `S` = `consensus/core/src/palw_state_v2.rs` @ `b8ae9412b`; `P` = `consensus/src/pipeline/virtual_processor/processor.rs`.
@@ -410,6 +475,12 @@ All four show "fence dormant" until armed.
 | **177 Same-bond opportunity** | F `model_budget_never_restores_bond_window` |
 | **177 Open vs closed economics** | **X**: ECON (D6); E `same_s_m_same_allocation_whoever_owns_it` covers the engine's half |
 | **177 Recovery / activation** | E/F round trips as 176-6; params tests `both_fences_dormant_and_refused` |
+| **§3e BUDGET** (unit, period, reserve, consume, expiry, reuse, fee attribution; every writer/reader/undo agrees) | §3b table; E `round_rights_reserve_once_and_release_at_d_plus_w`; F `round_draw_reserves_through_deltas_and_reverts` |
+| **§3e WORK** (same bond, light vs heavy work: proportional below the cap, limited at it) | E `candidates_follow_work_below_the_cap_and_stop_at_it` |
+| **§3e WINDOW** (120 shared slots saturated, huge candidate sets, capped bonds, concurrent windows) | E `the_window_is_shared_and_concurrent_draws_never_pass_the_cap` |
+| **§3e NEUTRALITY** (role swap: operator / genesis / new miner; registration order) | E `a_role_swap_swaps_the_allocation_and_order_is_irrelevant` |
+| **§3e SPLIT** (bond / operator / claim splits, rounding, candidate cap, resubmission) | E `splitting_bonds_or_claims_never_raises_candidates`, property over random splits, tolerance asserted |
+| **§3e RECOVERY (budget half)** | the round-rights rows ride deltas 190/191 and tail 0xEF: F reorg-by-delta and carriage reload in the Round draw test; real-node IBD/reorg as 176-6 |
 
 ## 10. Open questions for the user
 
@@ -434,6 +505,10 @@ All four show "fence dormant" until armed.
 * **P-6** the curve `f`, its cap and its increasing range, plus the numeric bar for "publication is overwhelmingly better".
 * **P-7** the rule for unallocated budget when `ΣA = 0` (v1: not minted).
 * **P-8** `max_models_per_bond`.
+* **P-9** fee-only Rounds: `CountAgainstBlocks` (each allocated ticket one block of `B_max`) or `ExecutionCap { rights_per_unit }`.
+* **P-10** whether market fee income counts in `R_max` (v1: no; bounded by the Round-rights cap) or is counted at receipt with the
+  excess burned.
+* **P-11** `Σ` of Round-rights caps per window below `PALW_EXEC_MAX_QUANTA_PER_SPAN_V1` (65,536).
 
 ## 11. Status by milestone
 
