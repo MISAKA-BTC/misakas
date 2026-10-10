@@ -212,26 +212,50 @@ fn the_ir_registration_path_names_no_model_identity() {
 /// engines as a direct compiler. This fixture proves an interface, not real-checkpoint Final.
 #[test]
 fn third_party_frontend_rebuilds_and_registers_through_the_common_sdk() {
+    frontend_sdk(false);
+}
+#[test]
+fn third_party_packed_descriptor_rebuilds_and_registers_through_the_common_sdk() {
+    frontend_sdk(true);
+}
+fn frontend_sdk(packed: bool) {
     use misaka_palw_sdk::runtime_pack::{conformance::ConformanceJob, primitive};
     use misaka_palw_tir_lower::frontend_pack::{FORMAT, program::Program};
     use serde_json::{Value, json};
-    let dir = std::env::temp_dir().join(format!("palw-frontend-sdk-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("palw-frontend-sdk-{}-{packed}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let model = dir.join("checkpoint");
     std::fs::create_dir_all(&model).unwrap();
     let p = program();
-    let params = params_of(&p);
+    let mut params = params_of(&p);
+    if packed {
+        for ((j, l), t) in &mut params.tensors {
+            if *j == 1 {
+                t.data = (0..16).map(|i| ((i * 3 + l.unwrap() as usize * 5) % 16) as i128 - 8).collect();
+            }
+        }
+    }
     let mut header = serde_json::Map::new();
     let mut data = Vec::new();
     let mut bindings = Vec::new();
     for ((j, l), tensor) in &params.tensors {
         let source = format!("independent.tensor.{j}.{}", l.map_or_else(|| "global".into(), |l| l.to_string()));
-        let raw = tensor.to_le_bytes();
+        let raw = if packed && *j == 1 {
+            tensor.data.chunks_exact(2).map(|b| ((b[0] + 8) as u8) | (((b[1] + 8) as u8) << 4)).collect()
+        } else {
+            tensor.to_le_bytes()
+        };
         let start = data.len();
         data.extend_from_slice(&raw);
         header.insert(source.clone(),json!({"dtype":p.params[*j as usize].dtype.name().to_ascii_uppercase(),"shape":tensor.shape,"data_offsets":[start,data.len()]}));
-        bindings.push(json!({"param":j,"layer":l,"source":source,"import":{"kind":"integer"}}));
+        if packed && *j == 1 {
+            header.insert(source.clone(), json!({"dtype":"U8","shape":[4,2],"data_offsets":[start,data.len()]}));
+            bindings.push(json!({"param":j,"layer":l,"import":{"kind":"descriptor","format":"public-nibble",
+                "roles":{"codes":source},"config":{},"shift":0,"round":"half_away_from_zero","overflow":"reject"}}));
+        } else {
+            bindings.push(json!({"param":j,"layer":l,"source":source,"import":{"kind":"integer"}}));
+        }
     }
     let h = serde_json::to_vec(&header).unwrap();
     let mut raw = (h.len() as u64).to_le_bytes().to_vec();
@@ -240,8 +264,17 @@ fn third_party_frontend_rebuilds_and_registers_through_the_common_sdk() {
     std::fs::write(model.join("model.safetensors"), raw).unwrap();
     std::fs::write(model.join("config.json"), r#"{"model_type":"NotInAnyRegistry"}"#).unwrap();
     let frontend = dir.join("third-party.json");
-    let definition = json!({"format":FORMAT,"id":"unknown-static-combination","scope":{"task":"text-generation","completeness":"full","components":["decoder"]},
+    let mut definition = json!({"format":FORMAT,"id":"unknown-static-combination","scope":{"task":"text-generation","completeness":"full","components":["decoder"]},
         "inert":["model_type"],"program":Program::of(&p),"bindings":bindings});
+    if packed {
+        let floats: Vec<u8> = [-8f32, 7.0, 0.0, -1.0].into_iter().flat_map(f32::to_le_bytes).collect();
+        definition["quant_formats"] = json!({"public-nibble":{"schema":"misaka.palw.quant-format.v1","name":"IndependentlyPublishedNibble",
+            "layout":{"kind":"virtual","roles":[{"name":"codes","suffix":".arbitrary","dtypes":["U8"],"rank":2}],
+                "axes":["o","i"],"shape":["dim_codes[0]","dim_codes[1]*2"]},
+            "decode":{"target":"tensor","value":"((codes[o,i/2] >> (4*(i%2))) & 15)-8"},
+            "tests":[{"roles":{"codes":{"dtype":"U8","shape":[1,2],"hex":"f078"}},
+                "values_f32_hex":misaka_palw_tir_lower::frontend_pack::program::hex(&floats)}]}});
+    }
     std::fs::write(&frontend, definition.to_string()).unwrap();
     let pack_dir = dir.join("pack");
     let artifact = dir.join("model.palwtir");
@@ -249,6 +282,7 @@ fn third_party_frontend_rebuilds_and_registers_through_the_common_sdk() {
     let built = primitive::build(&model, &frontend, &artifact, &pack_dir, &jobs, Some("fixture-revision".into()), 8).unwrap();
     assert_eq!(built.source_equivalence, SOURCE_EQUIVALENCE_UNVERIFIED);
     assert_eq!(built.implementations.len(), 3);
+    assert_eq!(built.build.quant_formats.len(), usize::from(packed));
     let peer = dir.join("peer");
     std::fs::create_dir_all(&peer).unwrap();
     for f in &built.source_files {

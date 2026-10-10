@@ -82,7 +82,7 @@ fn run(a: Args) -> Result<(), String> {
     println!(
         "{}",
         serde_json::json!({"artifact":a.out,"frontend_hash":pack.hash(),"artifact_digest":c.record.artifact_digest,
-        "tensor_bytes":c.tensor_bytes,"max_read_bytes":c.max_read_bytes,"saturated_values":c.record.saturated_values,
+        "tensor_bytes":c.tensor_bytes,"source_bytes":c.source_bytes,"max_read_bytes":c.max_read_bytes,"source_read_bytes":c.source_read_bytes,"saturated_values":c.record.saturated_values,
         "source_equivalence":"SOURCE_EQUIVALENCE_UNVERIFIED"})
     );
     Ok(())

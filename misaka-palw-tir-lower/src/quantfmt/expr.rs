@@ -457,6 +457,21 @@ pub fn compile(src: &str, scope: &dyn Scope) -> R<Node> {
     fold(n)
 }
 
+/// Preflight for declarative frontend streaming imports, before recursive parsing/folding.
+/// The legacy descriptor interpreter keeps its existing contract; this caller needs tighter bounds.
+pub fn streaming_syntax(src: &str) -> R<()> {
+    if src.len() > 1024 || lex(src)?.len() > 128 {
+        return err("FRONTEND_DESCRIPTOR_LIMIT: expression bytes/tokens");
+    }
+    let mut depth = 0usize;
+    for b in src.bytes() {
+        if b == b'(' || b == b'[' { depth += 1; }
+        if depth > 32 { return err("FRONTEND_DESCRIPTOR_LIMIT: expression nesting"); }
+        if b == b')' || b == b']' { depth = depth.saturating_sub(1); }
+    }
+    Ok(())
+}
+
 /// Fold constant sub-expressions (a `pow2(5)`, a `2 * 8`), so a descriptor's arithmetic on literals
 /// costs nothing per lane.
 fn fold(n: Node) -> R<Node> {

@@ -10,7 +10,7 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | --- | --- | --- |
 | Current specification | RFC02 now separates current requirements from historical primitive-count, replay, availability and seating notes; §II.14 incorporates all six review requirements | Keep formal specification and implementation aligned as versioned features land |
 | Direct canonical TIR | SDK `tests/direct_tir_registration.rs` exercises byte-based admission and provenance-independent identity; the generic frontend now reproduces the same program/inventory/class ID through common admission | Same-binary real-checkpoint registration, independent conformance/claim/Final/redemption and all §II.11.4 mutations |
-| Declarative frontend pack | Implemented content-addressed primitive/state grammar, strict config/source bindings, bounded streaming imports, replayable receipts and SDK companion build/verify with source SHAs and all three engines; [format contract](tir-frontend-pack-v1.md) | General quant-descriptor composition, HF-reference/beacon runtime-pack integration, all advertised tasks/components and real-node §II.11.4 acceptance |
+| Declarative frontend pack | Implemented content-addressed primitive/state grammar, strict config/source bindings, bounded streaming integer/IEEE and inline virtual descriptor imports, replayable receipts and SDK companion build/verify with source SHAs and all three engines; [format contract](tir-frontend-pack-v1.md) | Remaining tensors/blocks saved-format contracts and role-document parameters, HF-reference/beacon runtime-pack integration, all advertised tasks/components and real-node §II.11.4 acceptance |
 | Compiler expansion bounds | Shared work/allocation/depth budget now also protects general frontend variables/program/bindings; strict key tracking survives nested scopes; structural/constant bounds precede canonical encoding and weight reads | Maintain coverage as descriptor and versioned graph/dimension features land; existing bounds do not prove whole-node load safety |
 | Bounded dimensions and sparse/state semantics | v1 has fixed/Hist dimensions and fixed-axis TopK; v2 stage programs exist | Versioned length commitments; efficient sparse/routing/state relations; complete evaluator/checker/court/evidence binding; long-context and boundary trials |
 | Fidelity and reproducibility | ModelSpec runtime pack has source/frontend/artifact checks, executor vectors and logit fidelity; generic companion pins source SHA/compiler/executor revisions and reproduces canonical bytes/inventory while reporting SOURCE_EQUIVALENCE_UNVERIFIED | Pre-run thresholds and checkpoint-scoped routing, task quality, long-context and saturation measurements; generic frontend HF-reference/beacon evidence; named failures rather than broad PASS |
@@ -93,7 +93,58 @@ or out-of-range conversion, source/frontend/profile/implementation/vector change
 conformance jobs. All 25 primitive attribute variants round-trip; this does not claim a new execution
 implementation for them. Existing canonical lowering and ModelSpec pack checks still pass.
 
-Remaining completion work includes general descriptor composition, HF-reference/beacon integration,
+Remaining completion work includes the saved-format contracts beyond virtual descriptors, HF-reference/beacon integration,
 versioned bounded dimensions/sparse/state relations, shared complete resource/economic accounting,
 real-size fidelity/performance/aggregate-load evidence, complete modalities, public G14 and independent
 Final/redemption, and A6/A8 coverage. The full RFC02 goal remains active.
+
+
+## Verified increment — bounded packed descriptor composition, 2026-10-10
+
+Generic frontend packs now embed content-addressed `quant_formats` with the existing data-only
+virtual tensor grammar. Bindings explicitly map raw roles and config to a descriptor; there is no
+model-family/name/registry selection. Decode uses the pinned descriptor's binary32 semantics, then
+imports those exact bits using the declared integer scale/round/overflow. Receipts additionally pin
+descriptor digests and raw role hashes. Compiler source pins include the decoder/descriptor sources.
+The remaining saved-format contracts beyond virtual layouts stay open, including legacy tensors/
+blocks layouts and parameters loaded from role JSON documents.
+
+Descriptor preflight limits lexical/compiled expression size, nesting, tables, roles, vectors and
+aggregate vector work before checkpoint reads. Shape/check expressions use headers/parameters only;
+byte/shape/offset products use checked arithmetic. Config checks consume nested leaves, refusing
+unread siblings and additional array elements. Streaming retains bounded pages per role, with no
+whole-role cache fallback, and hashes all raw roles before/after conversion. Existing output survives
+source changes or receipt mismatches. CLI stored/emitted/read byte counts expose conversion size and
+I/O amplification separately; they do not prove runtime/evidence performance.
+
+This increment also fixes the shared role reader's lane-indexed dimension bug: it previously used
+lane zero's dimension for every lane, making otherwise valid descriptor output depend on chunk
+boundaries. The new regression checks lane-specific expected values and exact artifact/receipt
+identity at different block sizes. Existing pinned weight decodes and canonical lowering remain
+unchanged in the tested corpus.
+
+**118/118 targeted tests pass** with the normal test stack: 86 lowerer integration tests, 17 quant
+unit tests, one IEEE import unit test, four direct-TIR/SDK tests and ten existing runtime-pack tests.
+
+```sh
+cargo test --locked -p misaka-palw-tir-lower \
+  --test frontend_pack --test frontend_expansion --test quant_decode_pins \
+  --test quant_tensors --test corpus_formats --test quant_corpus --test quantized --test golden_lowering
+cargo test --locked -p misaka-palw-tir-lower --lib quantfmt
+cargo test --locked -p misaka-palw-tir-lower --lib frontend_pack::stream
+cargo test --locked -p misaka-palw-sdk --test direct_tir_registration --test runtime_pack
+```
+
+New coverage uses an unknown third-party nibble descriptor, MXFP4's independent decode vectors
+(including expert axes), a generated safetensors checkpoint, exact Direct-TIR parameter/inventory/
+class identity, peer rebuild, all three engines and court demand evaluation. Mutations cover false
+vectors/headers, oversized expression/vector work, unknown roles, missing/unused descriptors, data/
+lane-dependent shapes, unread nested config, source changes, unsupported saved-layout contracts and
+block budgets that cannot hold the roles. These are fixture/interface checks, not real gpt-oss task
+quality, public on-chain prosecution or independent Final/redemption evidence.
+
+New frontend/SDK files pass `rustfmt --check`; `git diff --check` and edited Markdown link-target
+checks pass. Existing compiler warnings remain. The full RFC02 goal is still active: HF-reference/
+beacon integration, versioned dimensions/sparse/state relations, complete shared resource/economic
+accounting, real-size fidelity/performance/aggregate-load measurements, complete modalities, fresh
+outsider G14 and independent Final/redemption, and A6/A8 coverage are still required.

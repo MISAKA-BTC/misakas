@@ -23,6 +23,7 @@ provenance; it grants no support or fidelity verdict.
 | `vars` | Optional object of named expressions/fragments; all globals are forced and bounded |
 | `program` | Expression producing the frozen program grammar below |
 | `bindings` | Expression producing one source binding per required parameter instance |
+| `quant_formats` | Optional object of pinned, data-only virtual tensor descriptors; no registry selection |
 
 Unknown document/grammar/binding fields are refused. Variables/fragments use the existing
 [bounded expression language](model-adapter-v1.md): config/variable reads, finite map/repeat,
@@ -80,7 +81,7 @@ once. All source tensors must be consumed with exact shapes/byte counts; missing
 or mismatched bindings fail before weight reads. Tied source tensors may feed explicit instances;
 their raw digests must agree during conversion.
 
-Two imports are implemented:
+The ordinary imports are:
 
 ```json
 {"kind": "integer"}
@@ -99,9 +100,39 @@ the latter records clipped values. NaN/infinity always refuse. No platform float
 determines emitted weights. This conversion specification does not prove source-model task
 quality, routing agreement or state fidelity.
 
-Packed quant formats/source transforms beyond these imports remain explicit refusals here.
-Existing descriptor/importer and Direct TIR routes remain available; generic frontend-pack
-descriptor composition and independent decode vectors still need integration evidence.
+A third import composes a descriptor embedded under `quant_formats.<id>`, using the existing
+`misaka.palw.quant-format.v1` **virtual** layout (1–4 output axes). The format label is local to the
+pack; no built-in name, `quant_method`, registry membership, suffix inference or model name selects it.
+Each role names an actual raw tensor explicitly. A descriptor binding omits `source`:
+
+```json
+{"param": 0, "layer": null, "import": {
+  "kind": "descriptor", "format": "my-packed-format",
+  "roles": {"blocks": "experts.blocks", "scales": "experts.scales"},
+  "config": {}, "shift": 12, "round": "half_away_from_zero", "overflow": "reject"
+}}
+```
+
+The descriptor's closed DSL produces binary32 values using its pinned decode semantics. The second
+step imports those exact binary32 bits with the stated integer shift/round/overflow. This explicitly
+includes binary32 rounding between storage decoding and integer conversion; it does not promise the
+higher precision of an original source format. Saving packed weights, agreeing on integer execution
+and preserving model quality are separate claims.
+
+Every descriptor carries at least one decode vector, which the loader checks against the pinned
+binary32 expected bytes. The published MXFP4 vectors and a previously unknown nibble descriptor are
+covered by tests. Author-supplied vectors establish internal consistency only; they confer no
+source-fidelity or on-chain authority. Missing/unknown roles, wrong types/ranks/bytes, a decoded
+shape different from the TIR parameter, unused descriptors and unknown config leaves refuse before
+checkpoint data reads. Nested parameter/check paths consume just their specified leaves; inert keys
+must be explicitly declared. Shape/check expressions may depend on headers and parameters, never
+lane coordinates or weight contents. Output expressions may use lane-dependent dimension indexes;
+the shared reader evaluates each lane, so read boundaries do not change the artifact.
+
+The `tensors`/`blocks` layout import contracts and parameters read from JSON role documents remain
+open for this frontend route and receive explicit extension refusals. Existing importer and Direct
+TIR routes remain available. This increment covers bounded virtual descriptor composition, not all
+saved quant formats, actual checkpoint fidelity or completed RFC02 support.
 
 ## Bounds and reproducibility
 
@@ -112,15 +143,33 @@ compiler checks v1's declarations, ranks, names, inputs/carries and total 64 KiB
 Canonical decoding enforces the 256 KiB program ceiling. The caller supplies `TirAdmitInputsV1`,
 so provenance cannot enlarge execution/court ceilings.
 
+At most 16 inline descriptors are accepted, each <=256 KiB, with <=16 roles/tables, <=32 parameters/
+checks/vectors, <=64 KiB table data and at least one vector. A vector has <=8192 decoded values and
+<=64 KiB per raw role. All vectors together consume <=4M expression-lane work. Expressions have
+<=1024 bytes, <=128 lexical tokens and <=32 delimiter nesting before parsing; compiled expressions
+have <=256 nodes and <=32 node depth. Shape/byte products and offsets use checked arithmetic.
+These are compiler/import limits; they do not replace the TIR execution/checker/court resource contract.
+
 Conversion uses raw byte ranges with no whole-tensor/f32 fallback. `block_bytes` is 8..16 MiB;
 stored and encoded buffers are each bounded by it even when widening I8 to I64. The container
 writer adds its ordinary buffer/header. Read boundaries do not enter artifact identity. Failure
 removes the temporary artifact and preserves previous output. Header/inventory changes, short
 ranges, changed tied tensors and receipt mismatches are explicit refusals.
 
+Descriptor conversion retains one page per present role; their total raw cache is <=`block_bytes`.
+The budget must hold at least eight bytes per present role. It decodes <=1024 values per batch;
+intermediate expression columns have a fixed bound (<=2 MiB logical column data plus coordinates,
+constants and normal container buffers), and the decoded/encoded buffers are independently bounded.
+There is no whole-role load or `DescribedSource` cache fallback. Raw roles are hashed in bounded
+scans before and after conversion; mismatches refuse before replacing the output. Strided layouts
+can incur extra cache misses. CLI `source_bytes`, `tensor_bytes` and `source_read_bytes` expose stored
+size, emitted integer size and actual raw read traffic, including the pinning scans. Read traffic
+and peak read size are operational measurements excluded from reproducible identity; these are
+not execution/proof/hash/retention/delivery benchmarks.
+
 The `misaka.palw.tir-frontend-build.v1` receipt pins frontend/config/program/tokenizer/artifact
 digests, compiler version and compiler/reader/dependency source digest, intended scope, assumed
-defaults, source tensor metadata/raw digests and saturation count. An independent rebuild checks
+defaults, source tensor metadata/raw digests, descriptor digests and saturation count. An independent rebuild checks
 every field before replacing its output. It is a build receipt, never a fidelity certificate.
 
 ```sh

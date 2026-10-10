@@ -1,4 +1,4 @@
-//! Bounded raw-byte conversion. Integer sources never take a detour through f32.
+//! Bounded raw-byte conversion. Ordinary integer imports never take a detour through f32.
 use super::*;
 use misaka_palw_tir::prim::Rounding;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +12,13 @@ pub struct SourceRecord {
     pub name: String,
     pub dtype: String,
     pub shape: Vec<usize>,
+    pub digest: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DescriptorRecord {
+    pub id: String,
     pub digest: String,
 }
 
@@ -31,13 +38,20 @@ pub struct BuildRecord {
     pub assumed_defaults: Vec<String>,
     pub source_tensors: Vec<SourceRecord>,
     pub saturated_values: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quant_formats: Vec<DescriptorRecord>,
 }
 
 pub struct Conversion {
     pub record: BuildRecord,
     pub tensor_bytes: u64,
+    /// Unique stored input bytes, independently of decoded integer artifact size.
+    pub source_bytes: u64,
     /// Largest source range actually requested, independent of checkpoint size or row width.
     pub max_read_bytes: usize,
+    /// Actual requested raw source bytes, including descriptor pinning scans and cache misses.
+    /// This operational measurement is excluded from reproducible identity.
+    pub source_read_bytes: u64,
 }
 
 struct Temp(std::path::PathBuf);
@@ -66,15 +80,22 @@ impl Compiled {
             return Err(bad("FRONTEND_STREAM_LIMIT: block bytes must be 8..=16MiB"));
         }
         let names: BTreeSet<_> = source.names().into_iter().collect();
-        let expected: BTreeSet<_> = self.bindings.values().map(|r| r.binding.source.clone()).collect();
+        let expected: BTreeSet<_> = self.bindings.values().flat_map(|r| r.sources.keys().cloned()).collect();
         if names != expected {
             return Err(bad("FRONTEND_BINDING: source inventory changed since compilation"));
         }
         for r in self.bindings.values() {
-            if source.metadata(&r.binding.source).as_ref() != Some(&r.meta) {
-                return Err(bad("FRONTEND_BINDING: source header changed since compilation"));
+            for (name, meta) in &r.sources {
+                if source.metadata(name).as_ref() != Some(meta) {
+                    return Err(bad("FRONTEND_BINDING: source header changed since compilation"));
+                }
             }
         }
+        let sources: BTreeMap<_, _> = self.bindings.values().flat_map(|r| r.sources.iter().map(|(n, m)| (n, m))).collect();
+        let source_bytes = sources
+            .values()
+            .try_fold(0u64, |n, m| n.checked_add(m.bytes))
+            .ok_or_else(|| bad("FRONTEND_STREAM_LIMIT: aggregate source byte count"))?;
         let parent = path.parent().unwrap_or(Path::new("."));
         let temp =
             Temp(parent.join(format!(".palw-frontend-{}-{}.tmp", std::process::id(), NEXT_TEMP.fetch_add(1, Ordering::Relaxed))));
@@ -88,6 +109,8 @@ impl Compiled {
         let mut saturated_values = 0u64;
         let mut tensor_bytes = 0u64;
         let mut max_read_bytes = 0usize;
+        let mut source_read_bytes = 0u64;
+        let mut quant_formats = BTreeMap::new();
         let artifact_digest = misaka_palw_tir_artifact::write_container_v1_streamed(
             &temp.0,
             &self.program,
@@ -97,6 +120,24 @@ impl Compiled {
             &mut |j, l, out| {
                 let r = &self.bindings[&(j, l)];
                 let dtype = self.program.params[j as usize].dtype;
+                if let Some(decoder) = &r.decoder {
+                    let converted =
+                        decoder.write(&r.sources, source, dtype, &r.binding.import, out, block_bytes).map_err(|e| e.to_string())?;
+                    max_read_bytes = max_read_bytes.max(converted.peak);
+                    source_read_bytes += converted.read_bytes;
+                    tensor_bytes += converted.bytes;
+                    saturated_values += converted.saturated;
+                    if let Import::Descriptor { format, .. } = &r.binding.import {
+                        quant_formats.insert(format.clone(), decoder.format.digest_hex());
+                    }
+                    for record in converted.records {
+                        if records.get(&record.name).is_some_and(|previous| previous != &record) {
+                            return Err("FRONTEND_BINDING: tied descriptor tensor changed during conversion".into());
+                        }
+                        records.insert(record.name.clone(), record);
+                    }
+                    return Ok(());
+                }
                 let width = stored_width(&r.meta.dtype).expect("preflight storage type");
                 // Bound both the stored and encoded buffers, even for I8 -> I64 widening.
                 let block = (block_bytes / width.max(dtype.width()) * width) as u64;
@@ -110,6 +151,7 @@ impl Compiled {
                         return Err(format!("FRONTEND_BINDING: short range of {}", r.binding.source));
                     }
                     max_read_bytes = max_read_bytes.max(bytes.len());
+                    source_read_bytes += bytes.len() as u64;
                     hash.update(&bytes);
                     let mut encoded = Vec::with_capacity(bytes.len() / width * dtype.width());
                     for chunk in bytes.chunks_exact(width) {
@@ -118,6 +160,7 @@ impl Compiled {
                             Import::FixedPoint { shift, round, .. } => {
                                 ieee_integer(&r.meta.dtype, chunk, shift, round.compile()).map_err(|e| e.to_string())?
                             }
+                            Import::Descriptor { .. } => unreachable!("handled by bounded descriptor writer"),
                         };
                         let value = if dtype.contains(value) {
                             value
@@ -163,13 +206,14 @@ impl Compiled {
             assumed_defaults: self.assumed_defaults.clone(),
             source_tensors: records.into_values().collect(),
             saturated_values,
+            quant_formats: quant_formats.into_iter().map(|(id, digest)| DescriptorRecord { id, digest }).collect(),
         };
         if expected_record.is_some_and(|expected| expected != &record) {
             return Err(bad("FRONTEND_BUILD_MISMATCH: source, frontend, tokenizer or artifact differs"));
         }
         // A failure above leaves any previous artifact intact and removes the incomplete temporary.
         std::fs::rename(&temp.0, path).map_err(|e| LowerError::Io(e.to_string()))?;
-        Ok(Conversion { tensor_bytes, max_read_bytes, record })
+        Ok(Conversion { tensor_bytes, source_bytes, max_read_bytes, source_read_bytes, record })
     }
 }
 
@@ -188,7 +232,7 @@ fn integer(dtype: &str, bytes: &[u8]) -> i128 {
 
 /// Decode IEEE bits to sign × mantissa × 2^exponent; scale and round in integers.
 /// Huge finite results are represented by a signed i128 sentinel, well outside every param dtype.
-fn ieee_integer(dtype: &str, bytes: &[u8], shift: i16, rule: Rounding) -> Result<i128> {
+pub(super) fn ieee_integer(dtype: &str, bytes: &[u8], shift: i16, rule: Rounding) -> Result<i128> {
     let (fraction_bits, exponent_bits, bias) = match dtype {
         "BF16" => (7, 8, 127),
         "F16" => (10, 5, 15),

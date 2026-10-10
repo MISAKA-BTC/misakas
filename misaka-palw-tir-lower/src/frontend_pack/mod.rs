@@ -2,9 +2,10 @@
 //! No ModelSpec, feature registry, model name, executable plugin or network access is involved.
 //! Source equivalence and full-task support remain separate evidence, not claims made by compilation.
 
+mod descriptor;
 pub mod program;
 mod stream;
-pub use stream::{BuildRecord, Conversion, SourceRecord};
+pub use stream::{BuildRecord, Conversion, DescriptorRecord, SourceRecord};
 
 use crate::adapter::{canonical_json, expr::Env};
 use crate::cfg::Cfg;
@@ -77,6 +78,13 @@ pub fn compiler_digest() -> String {
         include_str!("mod.rs"),
         include_str!("program.rs"),
         include_str!("stream.rs"),
+        include_str!("descriptor.rs"),
+        include_str!("../quantfmt/mod.rs"),
+        include_str!("../quantfmt/desc.rs"),
+        include_str!("../quantfmt/expr.rs"),
+        include_str!("../quantfmt/virt.rs"),
+        include_str!("../quantfmt/tensors.rs"),
+        include_str!("../quantfmt/blocks.rs"),
         include_str!("../adapter/expr.rs"),
         include_str!("../adapter/mod.rs"),
         include_str!("../cfg.rs"),
@@ -117,6 +125,15 @@ pub enum Import {
     Integer,
     /// IEEE finite value × 2^shift, rounded by the named rule; no platform float arithmetic.
     FixedPoint { shift: i16, round: program::Round, overflow: Overflow },
+    /// Pinned packed storage -> descriptor binary32 -> explicit integer scaling/rounding.
+    Descriptor {
+        format: String,
+        roles: BTreeMap<String, String>,
+        config: Value,
+        shift: i16,
+        round: program::Round,
+        overflow: Overflow,
+    },
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -130,6 +147,7 @@ pub enum Overflow {
 pub struct Binding {
     pub param: u16,
     pub layer: Option<u16>,
+    #[serde(default)]
     pub source: String,
     pub import: Import,
 }
@@ -146,6 +164,8 @@ struct Definition {
     inert: Vec<String>,
     #[serde(default)]
     vars: BTreeMap<String, Value>,
+    #[serde(default)]
+    quant_formats: BTreeMap<String, Value>,
     program: Value,
     bindings: Value,
 }
@@ -155,6 +175,7 @@ struct Definition {
 pub struct FrontendPack {
     definition: Definition,
     hash: String,
+    formats: BTreeMap<String, std::sync::Arc<crate::quantfmt::QuantFormat>>,
 }
 
 impl FrontendPack {
@@ -181,7 +202,18 @@ impl FrontendPack {
         {
             return Err(bad("FRONTEND_ENCODING: invalid id, scope or variables"));
         }
-        Ok(Self { definition, hash })
+        if definition.quant_formats.len() > descriptor::MAX_FORMATS {
+            return Err(bad("FRONTEND_DESCRIPTOR_LIMIT: format count"));
+        }
+        let mut test_work = 0;
+        let mut formats = BTreeMap::new();
+        for (id, value) in &definition.quant_formats {
+            if id.is_empty() || id.len() > 128 {
+                return Err(bad("FRONTEND_DESCRIPTOR: invalid format id"));
+            }
+            formats.insert(id.clone(), descriptor::parse(value, &mut test_work)?);
+        }
+        Ok(Self { definition, hash, formats })
     }
 
     pub fn read(path: &Path) -> Result<Self> {
@@ -239,11 +271,25 @@ impl FrontendPack {
             .collect();
         let mut resolved = BTreeMap::new();
         let mut used = BTreeSet::new();
+        let mut used_formats = BTreeSet::new();
         for b in bindings {
             if !expected.contains(&(b.param, b.layer)) || resolved.contains_key(&(b.param, b.layer)) {
                 return Err(bad("FRONTEND_BINDING: unexpected or repeated parameter instance"));
             }
-            let meta = source.metadata(&b.source).ok_or_else(|| bad(format!("FRONTEND_BINDING: missing tensor {}", b.source)))?;
+            let (meta, sources, decoder) = if let Import::Descriptor { format, roles, config, shift, .. } = &b.import {
+                if !b.source.is_empty() || !(-64..=64).contains(shift) {
+                    return Err(bad("FRONTEND_BINDING: descriptor uses roles only and shift -64..=64"));
+                }
+                let format = self.formats.get(format).ok_or_else(|| bad("FRONTEND_BINDING: undeclared descriptor"))?.clone();
+                let (decoder, meta, sources) = descriptor::resolve(format, roles, config, source)?;
+                if let Import::Descriptor { format, .. } = &b.import {
+                    used_formats.insert(format.clone());
+                }
+                (meta, sources, Some(decoder))
+            } else {
+                let meta = source.metadata(&b.source).ok_or_else(|| bad(format!("FRONTEND_BINDING: missing tensor {}", b.source)))?;
+                (meta.clone(), BTreeMap::from([(b.source.clone(), meta)]), None)
+            };
             let param = &program.params[b.param as usize];
             if meta.shape != param.shape.iter().map(|n| *n as usize).collect::<Vec<_>>() {
                 return Err(bad(format!("FRONTEND_BINDING: shape of {}", b.source)));
@@ -267,14 +313,17 @@ impl FrontendPack {
                 }
                 _ => {}
             }
-            used.insert(b.source.clone());
-            resolved.insert((b.param, b.layer), Resolved { binding: b, meta });
+            used.extend(sources.keys().cloned());
+            resolved.insert((b.param, b.layer), Resolved { binding: b, meta, sources, decoder });
         }
         if resolved.len() != expected.len() {
             return Err(bad("FRONTEND_BINDING: missing parameter instance"));
         }
         if used != available {
             return Err(LowerError::not_lowerable(format!("TENSOR_UNREAD: {:?}", available.difference(&used).collect::<Vec<_>>())));
+        }
+        if used_formats.len() != self.formats.len() {
+            return Err(bad("FRONTEND_DESCRIPTOR: unused format"));
         }
         Ok(Compiled {
             program,
@@ -303,9 +352,11 @@ pub(crate) fn stored_width(dtype: &str) -> Option<usize> {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Resolved {
+struct Resolved {
     pub binding: Binding,
     pub meta: TensorMeta,
+    pub sources: BTreeMap<String, TensorMeta>,
+    pub decoder: Option<descriptor::Decoder>,
 }
 
 pub struct Compiled {

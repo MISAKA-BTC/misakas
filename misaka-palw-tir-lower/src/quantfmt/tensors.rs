@@ -39,7 +39,7 @@ impl RoleTensor {
     }
     /// The stored size of this tensor's data, from its header.
     pub fn stored_bytes(&self) -> Option<usize> {
-        Some(self.shape.iter().product::<usize>() * Rd::parse(&self.dtype)?.size())
+        self.shape.iter().try_fold(1usize, |n, d| n.checked_mul(*d))?.checked_mul(Rd::parse(&self.dtype)?.size())
     }
 }
 
@@ -332,8 +332,15 @@ pub(super) fn check_roles(name: &str, defs: &[Role], roles: &[Option<RoleTensor>
                 if !r.dtypes.contains(&rd) {
                     return Err(DslError(format!("{name}: role `{}` is stored as {}, the format reads {:?}", r.name, t.dtype, r.dtypes)));
                 }
-                if !t.data.is_empty() && t.data.len() != t.shape.iter().product::<usize>() * rd.size() {
-                    return Err(DslError(format!("{name}: role `{}` holds {} bytes for shape {:?} of {}", r.name, t.data.len(), t.shape, t.dtype)));
+                let bytes = t.stored_bytes().ok_or_else(|| DslError(format!("{name}: role `{}` shape overflows", r.name)))?;
+                if !t.data.is_empty() && t.data.len() != bytes {
+                    return Err(DslError(format!(
+                        "{name}: role `{}` holds {} bytes for shape {:?} of {}",
+                        r.name,
+                        t.data.len(),
+                        t.shape,
+                        t.dtype
+                    )));
                 }
             }
             None => {}
@@ -1005,13 +1012,40 @@ impl Env for TEnv<'_> {
         &self.defs.tables[t]
     }
     fn read(&self, slot: usize, index: &[Col], mask: Mask<'_>) -> R<Col> {
+        self.read_with(slot, index, mask, &|r, range| {
+            let t = self.roles[r].as_ref().expect("presence checked before reading");
+            t.data.get(range).map(std::borrow::Cow::Borrowed).ok_or_else(|| {
+                DslError(format!("role `{}`: an element is read but only the tensor's header is loaded", self.defs.roles[r].name))
+            })
+        })
+    }
+}
+
+impl<'a> TEnv<'a> {
+    /// The same typed element reader, with a bounded range provider instead of resident tensors.
+    pub(super) fn read_with(
+        &self,
+        slot: usize,
+        index: &[Col],
+        mask: Mask<'_>,
+        read: &dyn Fn(usize, std::ops::Range<usize>) -> R<std::borrow::Cow<'a, [u8]>>,
+    ) -> R<Col> {
         let nr = self.defs.roles.len();
         // A role's shape.
         if slot >= nr {
             let r = slot - nr;
             let t = self.roles[r].as_ref().ok_or_else(|| DslError(format!("`dim_{}`: the role is absent", self.defs.roles[r].name)))?;
-            let axis = index[0].int_at(0)?;
-            return Ok(Col::CI(*usize::try_from(axis).ok().and_then(|a| t.shape.get(a)).ok_or_else(|| DslError(format!("`dim_{}[{axis}]`", self.defs.roles[r].name)))? as i64));
+            let at = |axis: i64| -> R<i64> {
+                let dim = *usize::try_from(axis)
+                    .ok()
+                    .and_then(|a| t.shape.get(a))
+                    .ok_or_else(|| DslError(format!("`dim_{}[{axis}]`", self.defs.roles[r].name)))?;
+                i64::try_from(dim).map_err(|_| DslError("role dimension outside i64".into()))
+            };
+            // A dimension indexed by a lane is a column, never lane zero broadcast to the block.
+            // The latter made conversion depend on read/chunk boundaries for valid descriptors.
+            return if let Col::CI(axis) = &index[0] { Ok(Col::CI(at(*axis)?)) }
+            else { (0..self.n).map(|k| if mask.on(k) { at(index[0].int_at(k)?) } else { Ok(0) }).collect::<R<Vec<_>>>().map(Col::I) };
         }
         let role = &self.defs.roles[slot];
         let t = self.roles[slot].as_ref().ok_or_else(|| DslError(format!("the tensor of role `{}` is absent", role.name)))?;
@@ -1030,11 +1064,18 @@ impl Env for TEnv<'_> {
                 if i < 0 || i as usize >= *dim {
                     return Err(DslError(format!("role `{}`{:?} indexed at {i} on axis {axis}", role.name, t.shape)));
                 }
-                flat = flat * dim + i as usize;
+                flat = flat
+                    .checked_mul(*dim)
+                    .and_then(|n| n.checked_add(i as usize))
+                    .ok_or_else(|| DslError(format!("role `{}` index overflows", role.name)))?;
             }
-            let Some(b) = t.data.get(flat * size..flat * size + size) else {
-                return Err(DslError(format!("role `{}`: an element is read but only the tensor's header is loaded", role.name)));
-            };
+            let at = flat.checked_mul(size).ok_or_else(|| DslError("role byte offset overflows".into()))?;
+            let end = at.checked_add(size).ok_or_else(|| DslError("role byte offset overflows".into()))?;
+            let bytes = read(slot, at..end)?;
+            if bytes.len() != size {
+                return Err(DslError(format!("role `{}`: short element range", role.name)));
+            }
+            let b = bytes.as_ref();
             match rd {
                 Rd::I8 => ints.push(b[0] as i8 as i64),
                 Rd::U8 => ints.push(b[0] as i64),
