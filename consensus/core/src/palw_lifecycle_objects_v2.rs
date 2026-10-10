@@ -1671,7 +1671,7 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     // LG14-B: `LegacyHeldV2` appended; every int-12 kind carrying it is owned by `palw_legacy_held_da_v2` (guarded arms).
     (
         "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
-        PalwInt12WireChangeV1::CarriedAppended { fence: "palw_legacy_held_da_v2", digest: 0 },
+        PalwInt12WireChangeV1::CarriedAppended { fence: "palw_legacy_held_da_v2", digest: 0xcca88a4c7733b9e5 },
     ),
     (
         "consensus/core/src/palw_state_v2.rs::PalwVoidReasonV2",
@@ -4044,6 +4044,9 @@ pub(crate) mod tests {
             (151, 0x6a81242ebaeba7fd),
             (152, 0xc48f175fa3456d1e),
             (153, 0x74bac59d2cf50cd4),
+            (157, 0x342660230d2d6514),
+            (158, 0x2d33651174652aca),
+            (159, 0x0395636b651f74fa),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline

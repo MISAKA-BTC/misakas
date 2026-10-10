@@ -147,7 +147,8 @@ fn rc_licensed(
         bond: bond_key(n),
         pubkey: vec![n as u8; 4],
         operator_pubkey: op_key(20 + n),
-        collateral: 1_000_000_000,
+        // Deep enough that each seat's R-core+ lock fits its work room (the backed subset licenses).
+        collateral: 1 << 50,
         payout_payload: Hash64::from_u64_word(0x9A00 + n),
         capable_classes: Default::default(),
         signature: Vec::new(),
@@ -222,7 +223,11 @@ fn rc_licensed(
     };
     let s = rc_step(&s, 103, &[PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: vec![valid(SEAT), valid(COLLUDER)] }])
         .expect("both seats license the lie");
-    assert!(matches!(phase_of(&s, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }), "licensed by every seat");
+    assert!(
+        matches!(phase_of(&s, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }),
+        "licensed by every seat: {:?}",
+        phase_of(&s, &claim)
+    );
     (s, claim)
 }
 
