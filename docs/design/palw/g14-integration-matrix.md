@@ -41,7 +41,7 @@ superseded by this matrix.
 | 13 | Borrowed valid trace (another job) | job/input roots | job | inclusion | n/a | `WrongInput` | refused; lender untouched | — | `k2_ledger` C | PASS | GAP (same kernel code runs in-node; no node-level case — the route E2E class is single-layer) | — |
 | 14 | Malformed Merkle / opening | response classification | response bytes | `classify_position_response_v1` | n/a | `malformed`/`wrong_bytes`/`wrong_root`/`fake_opening`/`partial`/`oversized` | response rejected; dismissed filing pays fee | `max_response_bytes`, `max_filing_bytes` | `k2_ledger` B, G | PASS | PASS (dormant fence) — `..._responses_are_rejected_then_the_producer_defaults`, hostile signature-valid objects dropped/dismissed | — |
 | 15 | Held / fused terminal | profile material must be public | — | gate | — | `PrivateMaterial` gap | class never registers / never rewards | — | `k2_public` fused gap | PASS (fail-closed) | GAP (same kernel code runs in-node; no node-level case — the route E2E class is single-layer) | 8k held real-hardware (RFC-0014 P1/P2) |
-| 16 | Public DA withholding | demand per stage position | on-chain `Respond` | `FileDemand` (one round, all positions) | position | served → court; silence → default | `ProducerDefault` (availability, not fraud), claim `Unavailable` | `max_concurrent_sessions` | `k2_ledger` D, G | PASS | PASS (dormant fence) — `..._a_withheld_position_is_a_demand_then_a_default_never_a_conviction`; OPV `g14_opv_withheld_material_defaults_...` | DA provider/transport drill |
+| 16 | Public DA withholding | demand per stage position | on-chain `Respond` | `FileDemand` (one round, all positions) | position | served → court; silence → default | `ProducerDefault` (availability, not fraud), claim `Unavailable`; the reservation stays liable until `default + liability_daa` (G14-R4, F-C4R3-02: a valid proof there convicts) | `max_concurrent_sessions` | `k2_ledger` D, G, `a_self_inflicted_default_never_erases_a_provable_fraud_…` | PASS | PASS (dormant fence) — `..._a_withheld_position_is_a_demand_then_a_default_never_a_conviction`; OPV `g14_opv_withheld_material_defaults_...`; `g14_c4r3_a_self_inflicted_default_…` (Panel, OPV) | DA provider/transport drill |
 | 17 | Court pre-emption | direct proofs | — | `FileProof` | — | adjudicated in-block whatever is open | open demands moot, bonds refunded | — | `k2_ledger` E | PASS | PASS (dormant fence) — `..._spam_demands_never_preempt_a_direct_proof_and_settle_moot` | — |
 | 18 | Challenge / Final race | window + court deadline | — | `FileDemand` / `FileProof` | — | — | Final ≤ window end + deadline; proof at window end blocks Final; post-Final liability | `liability_daa > court_deadline_daa + proof_grace_daa` | `k2_ledger` F, `k2_ledger_route` | PASS (R1 fixed `9e0cce365`) | PASS (dormant fence) — `..._final_waits_the_proof_grace_...`, `..._spam_demands_cannot_hold_final_past_...`, OPV Final race cases | inclusion/censorship drill |
 | 19 | Reorg / restart / IBD / duplicate proof | pure fold | block sequence | replay | — | `Duplicate` | convicted once; replay root equality | — | `k2_ledger` H, every `outsider()` | PASS (R2 canonical root `c6a7b5a48`, golden vector) | PASS (dormant fence) — `..._replay_and_reorg_reach_the_same_roots`, `..._survives_a_node_restart_...`, `..._survives_a_pruned_import`, `..._a_duplicate_proof_after_a_replay_changes_nothing` | — |
@@ -108,6 +108,20 @@ Independent soundness review (composition, alias bounds, CRT); beacon bias/withh
 activation height.
 
 ## 5. Change log
+
+* 2026-10-08 (later) — **G14-R4, continued**: the user's rulings — GAP-5 user-pays escrow (`6035931bd`), F-C4R3-05 round 2 Sybil-robust
+  lane (`70069988c`); queued items landed — bonded claim seals for OPV-BOOT's beacon v3 (`00b2491cc`), K2S's served-demand bond fate,
+  the chunk lane's conformance target (plumbing); the integration line merged (F-C4R3-01(b) fixed there). The end-of-lane list of what
+  still refuses arming is `g14-node-e2e-record.md` §8.
+
+* 2026-10-08 — **G14-R4 (branch `g14/r4-fixes`, base `4d3baa0c5`)**: the round-3 findings fixed at both levels, dormant —
+  F-C4R3-02 a self-inflicted default keeps the claim liable (`7da2d9ee2`); F-C4R3-03 the route's own chunk lane, consensus tag 113 +
+  aux table 41 (`a09c6119d`); GAP-R7 accuser seal (kernel tag 15 inside tag 110) with self-recoup priced (`1445dcbc5`); GAP-11 the
+  registration reorg case under strict-win (`39e4ea441`); F-C4R3-05 OPV admission (pre-Final slots, a slot per bond, a fee)
+  (`f05a672c5`); GAP-5 the Final reward paid out of the poster's escrow, once, with a non-refundable job fee (the user's ruling, user-pays
+  escrow; see `g14-node-e2e-record.md` §8). Every PoC of those items is
+  un-ignored and passes; F-C4R3-01(b) (the G-RULESET envelope, OB-P0's code) stays ignored. Families 16–19 gain the cases above.
+  Remaining external gates unchanged.
 
 * 2026-10-08 16:50 — **Integrated and verified on `510084b52`** (lane D phases 2/2b/3 + C2 V3 fold + R9 int-13): kernel 155,
   consensus-core lib 3,411, real-node `g14_` 50 (31 route + 19 registration), V3 Panel E2E 4, RFC-0010/0015/9,000 targeted 58 — all

@@ -1,5 +1,7 @@
 # PALW testnet-11 fleet soak — 稼働記録 (2026-08-16 開始)
 
+> Cleanup, 2026-10-10: The algo-4/5 PoW implementation and soak launchers have been removed. Commands below describe the historical experiment.
+
 公開テストネット Track A ゲート4。TN11 (公開testnet形状: T=120s, PALW-4 worker flavor,
 fingerprint `62781823…`) を **live t10 fleet 3 host上の隔離チェーン**として起動し、
 複数miner・実難易度・多日soakにかける。

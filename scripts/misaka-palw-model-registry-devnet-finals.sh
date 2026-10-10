@@ -159,7 +159,7 @@ start_node() {
   [ "$i" -gt 0 ] && args+=(--connect="127.0.0.1:$P2P_BASE")
   [ -n "$HEARTBEAT_NODE" ] && [ "$i" = "$HEARTBEAT_NODE" ] && args+=(--palw-heartbeat-miner-address="$addr")
   if [ -n "$MINER_BIN" ] && [ "$i" -eq "$MINER_NODE" ]; then args+=(--rpclisten="127.0.0.1:$GRPC_PORT"); else args+=(--nogrpc); fi
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
+  "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
   echo $!
 }
 start_miner() {
@@ -254,7 +254,7 @@ PYSEED
 addr="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$f.seed" | tail -1 | awk '{print $NF}')"
 echo "$addr" > "$WORK_DIR/keys/bond-$f.address"
 rm -rf "$WORK_DIR/node-$f"
-MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-$f" --listen="127.0.0.1:$((P2P_BASE + f))" --rpclisten-borsh="127.0.0.1:$((RPC_BASE + f))" \
+"$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-$f" --listen="127.0.0.1:$((P2P_BASE + f))" --rpclisten-borsh="127.0.0.1:$((RPC_BASE + f))" \
   --utxoindex --nodnsseed --disable-upnp --nogrpc \
   --palw-execution-lane-devnet="$LANE" --palw-model-registry-devnet="$REGISTRY_AT" --palw-panel --palw-class-artifact="$CLASS_ARTIFACT" \
   ${PAYOUT_AT:+--palw-economic-payout-devnet=$PAYOUT_AT} ${WORK_TARGET_AT:+--palw-work-target-devnet=$WORK_TARGET_AT} ${SINGLE_LOTTERY_AT:+--palw-single-lottery-devnet=$SINGLE_LOTTERY_AT} ${VERIFICATION_V2_AT:+--palw-verification-v2-devnet=$VERIFICATION_V2_AT} ${READINESS_V2_AT:+--palw-readiness-v2-devnet=$READINESS_V2_AT} ${ANCHOR_CLOCK_AT:+--palw-anchor-clock-devnet=$ANCHOR_CLOCK_AT} \

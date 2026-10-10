@@ -203,11 +203,13 @@ impl HeaderProcessor {
         // ADR-0072 SA-3: the admissible envelope version travels with the lane, so pre-fence
         // history validates under the old version and post-fence blocks under the new, in one
         // binary. `Unfenced` supplies the compiled-in version, which is every shipped preset.
-        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at(
+        // A2U: a carriage form added after the live build is read as that build reads it unless its fence is in force HERE.
+        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_with_forms_at(
             header.pow_algo_id,
             &header.palw_commitment,
             commitment_bound,
             attempt_lane,
+            |form| self.palw_header_forms.in_force_at(form, header.daa_score),
         )
         .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))?;
         // The `palw_state_root` shape rule, on the `palw_commitment` pattern: the field is
@@ -277,8 +279,9 @@ impl HeaderProcessor {
     }
 }
 
-/// **RFC-0009: [`palw_carriage_stateless_v1`] plus the receipt lane's `PFS4` carriage.** A `PFS4` header is refused by name below
-/// `palw_receipt_spend_v4` (`receipt_v4_active == false`, which is every height of every shipped preset); past it, the carriage's shape,
+/// **RFC-0009: [`palw_carriage_stateless_v1`] plus the receipt lane's `PFS4` carriage.** Below `palw_receipt_spend_v4` a `PFS4` header
+/// never reaches here — the shape gate reads it as the live build does and refuses it for its `PFS3` magic (A2U) — and the by-name
+/// refusal below is the second lock (`receipt_v4_active == false`, which is every height of every shipped preset); past it, the carriage's shape,
 /// its challenge (recomputed from the header position) and BOTH ML-DSA-87 signatures are checked here, on the relay path — the carriage is
 /// inside the block identity and outside the PoW pre-image, so an unverified signature would be free bytes (one solve, unbounded blocks).
 /// Whether the carried keys are the named bonds' keys is the chain walk's stateful question. Every other header takes the V1 function

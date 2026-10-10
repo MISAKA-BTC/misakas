@@ -97,105 +97,10 @@ pub const POW_L1_ARGON2ID_OUT_BYTES: usize = 32;
 /// Domain separator (BLAKE2b key) for the algo_id = 2 Argon2id password + salt derivation.
 pub const POW_L1_ARGON2ID_V1_DOMAIN: &[u8] = b"kaspa-pq-l1-argon2id-v1";
 
-/// MISAKA Phase 4 Layer 1 algorithm id: **PALW LLM inference** ("Proof of
-/// Artificial-LLM Work"; see docs/adr/0021-palw-llm-pow.md and the
-/// Open-then-Audit paper).
-///
-/// The Layer-1 tag is the replay-stable projection of ONE deterministic
-/// pinned-LLM inference (`misaka-palw-worker`: greedy argmax on the pinned
-/// Qwen3.5-2B GGUF, `gemm_trace_root` chaining the full logits vector of every
-/// decode call) whose prompt is derived from
-/// [`palw_pow_seed_v1`]`(network_id, pre_pow_hash, timestamp, nonce)`. Nothing
-/// short of running the pinned model reproduces the tag, so the mining "work"
-/// IS the inference; verification is the paper's small-`q` full replay (the
-/// worker's `verify` mode is `self-job` recomputed).
-///
-/// **Grinding closure** (this is why the seed takes `timestamp` even though
-/// the Layer-0 finalizer already binds it): for the cheap-tag algos (1/2/3)
-/// re-hashing the finalizer over a grindable input costs the same as a fresh
-/// attempt, so binding `timestamp`/`nonce` only at the finalizer is fine. For
-/// PALW the tag is ~10^9× more expensive than the finalizer, so any header
-/// input that is miner-adjustable WITHOUT changing the tag becomes a free
-/// hash-grinding dimension that collapses the PoW back to BLAKE2b. The two
-/// miner-grindable inputs zeroed out of `pre_pow_hash` are exactly `nonce`
-/// and `timestamp`; the seed therefore binds both, leaving no header degree
-/// of freedom outside the inference.
+/// Reserved identifier for retired pinned-LLM PoW. Execution is removed; do not reuse the id.
 pub const POW_ALGO_ID_PALW_LLM: u8 = 4;
 
-/// Output width of the `algo_id = 4` PALW Layer-1 tag:
-/// `output_commitment (64) ∥ gemm_trace_root (64) ∥
-/// operation_schedule_commitment (64) ∥ prefill_tokens (4, LE) ∥
-/// decode_tokens (4, LE)` = 200 bytes. Within [`POW_L1_TAG_MAX_BYTES`].
-pub const POW_L1_PALW_OUT_BYTES: usize = 200;
-
-/// Domain separator for every PALW-PoW v1 derivation (seed, prompt frame,
-/// fixture tag).
-pub const POW_L1_PALW_V1_DOMAIN: &[u8] = b"misaka-l1-palw-llm-v1";
-
-/// The `--n-predict` ceiling handed to the PALW worker for every PoW
-/// inference. A **frozen consensus constant** of the v1 algorithm (NOT a
-/// tunable `Params` field): the worker treats it as the total token budget
-/// (`decode budget = n_predict - prefill_tokens`), so two nodes disagreeing
-/// here compute different tags for the same header. Changing it is a
-/// hard fork = a new algo id, exactly like the other Layer-1 parameters.
-pub const POW_L1_PALW_N_PREDICT_V1: u32 = 128;
-
-/// The canonical **calibration probe** seed for `algo_id = 4`: a raw 32-byte PoW seed run through
-/// the ordinary worker path (same prompt frame, same frozen `--n-predict`), so the probe measures
-/// exactly what block validation will do. Provenance: `BLAKE2b-256("palw-audit-2026-08-16/uniform-0/0")`
-/// — the "uniform/u0" seed of the 61-seed forgery audit, whose tag was measured byte-identical on
-/// every fleet host (docs/palw-algo4-crosshost-determinism-2026-08-16.md).
-pub const POW_L1_PALW_PROBE_SEED_V1: [u8; 32] = [
-    0xf5, 0xfe, 0xda, 0x2e, 0xe8, 0xc6, 0xcc, 0x2c, 0xa2, 0x3b, 0x79, 0x6d, 0x48, 0x00, 0xb8, 0xe0, 0x22, 0xcd, 0x89, 0x6f, 0xb2,
-    0x95, 0xd5, 0xcb, 0xd2, 0x53, 0x66, 0xaf, 0x8d, 0x4a, 0x19, 0x0e,
-];
-
-/// The 200-byte tag [`POW_L1_PALW_PROBE_SEED_V1`] MUST produce on **testnet-11** — the public
-/// PALW net's determinism class, pinned (ADR-0035).
-///
-/// Same rationale as [`POW_L1_PALW_OLLAMA_CALIBRATION_V1`]: the GGUF pin catches the wrong model;
-/// this catches everything else that decides the arithmetic (worker build profile, CPU
-/// architecture, runtime scheduling). A runtime outside the class would compute a different tag
-/// for every header and silently fork itself off the network — so it must refuse to start and
-/// say which value it produced instead. The cost is one inference per process start.
-///
-/// Measured 2026-08-16 on all four fleet hosts — Intel Broadwell + 3× AMD EPYC, four kernel
-/// builds, two vendors — byte-identical on each (gate 2: 305/305 tag fields, canonical digest
-/// `311d7eab…`). An Apple-Silicon/Metal worker produces a different value and is — correctly —
-/// refused: it is not in this network's class (its own nets, e.g. devnet, pin no class here).
-pub const POW_L1_PALW_WORKER_CALIBRATION_TN11_V1: &str = "7d1981298652ca5c8fd224dfb6ea8d00787035a0430728d27aa3dd209b38731cc0f5e1cce6ab2a1be8cff97412d4553e0aa512cfc535220cfb57a71a27d060a046f5fc18c9e6564aaa0bc3fd0853802f66a27dfb9647736caa5f91de2ead9cf945d0b7a7d1b81b95ab858b33f260ac907a07f92bb46ae974c37193f4ea1b652ebfbfaad8aa1e587d1d28ad827cca24401c8b6f339a928ea85ea009249976ece4ba684f34d5a6cf911e9d24a9aaed53686c2b16479f1f553b022056d0039375934700000039000000";
-
-/// The pinned worker-class calibration for `network_id` (the `NetworkId::to_string()` bytes the
-/// whole Layer-0 path uses), or `None` where no single class is pinned: devnet deliberately pins
-/// nothing (any conforming runtime may mine its own mesh — that is what a dev net is for), and
-/// nets where algo 4 is inert never reach the check. Every PUBLIC PALW-4 network must add a row
-/// here before its activation flips — a class-less public net cannot tell an honest node from a
-/// silently-forking one.
-pub fn palw_worker_calibration_v1(network_id: &[u8]) -> Option<&'static str> {
-    match network_id {
-        b"testnet-11" => Some(POW_L1_PALW_WORKER_CALIBRATION_TN11_V1),
-        _ => None,
-    }
-}
-
-/// MISAKA Phase 4b Layer 1 algorithm id: **PALW LLM inference via an Ollama runtime**
-/// (ADR-0021 addendum). Same seed, same canonical prompt, same grinding closure as
-/// [`POW_ALGO_ID_PALW_LLM`]; the difference is WHERE the inference runs and WHAT the tag can
-/// bind:
-///
-/// * The runtime is a host-local **Ollama server** (`/api/generate`, `raw` mode, temperature 0,
-///   [`POW_L1_PALW_OLLAMA_NUM_PREDICT_V1`] new tokens) running the pinned Qwen model — the
-///   runtime an Ubuntu VPS fleet can actually operate, where the pinned-llama.cpp Metal worker
-///   cannot run at all.
-/// * Ollama's API does not expose per-decode logits, so the `gemm_trace_root` binding of the
-///   worker tag is UNAVAILABLE: the v1 tag here commits to the greedy RESPONSE BYTES and the
-///   token counts only. Weaker binding than algo 4 (an attacker reproducing the exact greedy
-///   continuation by other means is not distinguished), still model-work-priced: the response
-///   to a fresh 256-bit seed prompt is not predictable without running the model.
-/// * Determinism scope is the **runtime class** an operator deploys: same Ollama build, same
-///   model digest, same architecture. Greedy decoding across machines of one class is
-///   reproducible; across architectures (NEON vs AVX2 reduction order) it is NOT promised —
-///   the same arch-scoping the CPU compute class documents. One network = one class.
+/// Reserved identifier for retired Ollama PoW. Execution is removed; do not reuse the id.
 pub const POW_ALGO_ID_PALW_OLLAMA: u8 = 5;
 
 /// ADR-0042 Decision 3d: the V2 committed-attempt PoW.
@@ -428,110 +333,6 @@ pub fn algo_id_is_priced_by_bits_v2(algo_id: u8) -> bool {
 pub fn algo_id_is_priced_by_bits_v3(algo_id: u8) -> bool {
     algo_id_is_priced_by_bits_v2(algo_id) && !is_palw_attempt_algo_id(algo_id)
 }
-
-/// Output width of the `algo_id = 5` tag:
-/// `response_digest (64) ∥ prompt_eval_count (4, LE) ∥ eval_count (4, LE)` = 72 bytes.
-pub const POW_L1_PALW_OLLAMA_OUT_BYTES: usize = 72;
-
-/// Domain separator for every PALW-Ollama v1 derivation (tag digest, fixture).
-pub const POW_L1_PALW_OLLAMA_V1_DOMAIN: &[u8] = b"misaka-l1-palw-ollama-v1";
-
-/// `options.num_predict` for every PoW inference: the number of NEW tokens Ollama may decode
-/// (its `num_predict` is decode-only, unlike the worker's total ceiling). A frozen consensus
-/// constant of the v1 algorithm, exactly like [`POW_L1_PALW_N_PREDICT_V1`].
-///
-/// **16, chosen with the 120 s block interval (2026-08-12).** This constant IS the per-header
-/// verification cost every validator pays forever, so it is a capacity parameter, not a quality
-/// one: 48 tokens measured ~26-60 s of replay on the slowest fleet host, 16 measures ~12-26 s.
-/// Shrinking it does not weaken the proof — the work a miner must do is set by the DIFFICULTY,
-/// which the DAA re-derives for whatever an attempt costs; what the token count sets is the
-/// floor cost of *checking* someone else's answer, and that floor is what decides whether a
-/// modest host can stay on the network. Fewer decode steps also mean fewer near-tie argmax
-/// draws, i.e. a slightly wider cross-implementation determinism margin.
-pub const POW_L1_PALW_OLLAMA_NUM_PREDICT_V1: u32 = 16;
-
-/// `options.num_gpu` for every PoW inference: **0 — compute on the CPU backend, always.**
-///
-/// Measured 2026-08-11, and the reason this is a consensus constant rather than a host choice:
-/// the same model, same prompt, same options produced DIFFERENT greedy continuations on Ollama's
-/// Metal (GPU) backend and its CPU backend. GPU-vs-CPU is therefore a determinism-class
-/// dimension, and unlike the Ollama version or the host architecture it is one the protocol
-/// *controls* — so it is pinned rather than left to whatever hardware a host happens to have.
-/// A fleet mixing GPU-equipped and CPU-only hosts would otherwise split silently, and a
-/// GPU-equipped developer box would "verify" a configuration the CPU-only fleet never runs.
-///
-/// The cost is deliberate: PoW cannot exploit a GPU. That is the same trade the VLT portable CPU
-/// profile makes — a class a heterogeneous fleet can actually audit within beats a faster class
-/// only some hosts can join.
-///
-/// Thread count is NOT pinned: measured invariant across `num_thread` 1/4/8 on the CPU backend
-/// (ggml sums each dot product within one thread's row chunk, so the reduction order does not
-/// move with the split). Leaving it host-chosen lets a bigger VPS use its cores.
-pub const POW_L1_PALW_OLLAMA_NUM_GPU_V1: u32 = 0;
-
-/// The canonical **calibration probe** seed for `algo_id = 5`: a fixed 32-byte pattern, run
-/// through the ordinary PoW path (same prompt frame, same frozen options) so the probe measures
-/// exactly what block validation will do — not an approximation of it.
-pub const POW_L1_PALW_OLLAMA_PROBE_SEED_V1: [u8; 32] = [
-    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44,
-    0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
-];
-
-/// The Layer-1 tag [`POW_L1_PALW_OLLAMA_PROBE_SEED_V1`] MUST produce, hex-encoded — the network's
-/// **determinism class, pinned**.
-///
-/// The blob pin above catches the wrong model. This catches everything else that decides the
-/// arithmetic: the Ollama build, the CPU architecture, any future change in how the runtime
-/// schedules the same kernels. Those cannot be pinned individually — pinning an Ollama version
-/// would break the fleet on every patch release, and the architecture is a property of the host —
-/// but their COMBINED effect is observable in one inference, so that is what is pinned.
-///
-/// Without this check a node with, say, a newer Ollama starts happily (its blob matches), then
-/// computes a different tag for every header: it rejects every honest block, has its own
-/// rejected, bans its peers, and the operator sees "invalid PoW" with nothing pointing at the
-/// cause. With it, the node refuses to start and says which value it produced. The cost is one
-/// inference per process start.
-///
-/// Measured 2026-08-12 on the x86-64 fleet class (Ollama 0.32.8, `misaka-palw-2b-f16`,
-/// AMD EPYC and Intel Broadwell agreeing byte-for-byte). An arm64 machine produces a different
-/// value and is therefore — correctly — refused: it is not in this network's class.
-pub const POW_L1_PALW_OLLAMA_CALIBRATION_V1: &str = "85afd857dcb8f71ac8a0fdc98f8aace1a4b13a256139424c196a1ed05657b5c0c590c8b93911f5f7c691602411f1702b14d0df3980c6e0ed61ca7ac876b5fefd4400000010000000";
-
-/// The **pinned model blob** for `algo_id = 5`, as Ollama reports it (`GET /api/tags`).
-///
-/// The weights ARE the algorithm here: a different blob produces different greedy continuations,
-/// hence different tags, hence a node that rejects every honest block and whose own blocks are
-/// rejected — a silent one-host fork that looks like a network problem. So the digest is pinned
-/// in consensus source and verified against the live server before any PoW work is done
-/// (`misaka_palw_pow_driver::verify_ollama_model_pin`, called eagerly by the kaspad startup rail
-/// and lazily, once per process, by the driver's tag runner — the pin CONSTANT stays here in
-/// consensus, the code that reaches a server does not, per ADR-0042 Decision 4). Same stance as
-/// the worker's GGUF size+sha check.
-///
-/// The **F16 profile** of Qwen3.5-2B — `misaka-palw-2b-f16`, created via `ollama create` from
-/// the canonical F16 GGUF (sha256 `575eddc35774…`, requantized from unsloth's BF16 export of
-/// the base model; NOT the registry's `qwen3.5:2b`, whose Q8_0 blob was measured non-portable).
-///
-/// Why F16 (measured 2026-08-11→12, 8-seed canonical probe): with the Q8_0 blob the greedy
-/// stream diverged between Metal and CPU on one host AND between AMD EPYC and Intel Broadwell
-/// within x86-64 (4/8 seeds — quantized dot kernels differ per ISA feature set). With the F16
-/// blob every backend runs the f16→fp32-accumulate path and the same eight seeds agree across
-/// Metal, arm64 CPU, EPYC and Broadwell — except one seed (3/8) that still splits arm64-vs-x86
-/// in the batched prefill GEMM. The class this pins is therefore **x86-64 CPU** (8/8 across
-/// vendors); arm64/NVIDIA join only after the 35B PALW runtime's patched-llama.cpp
-/// serial-execution policy is ported to the 2B worker (its whole point is closing exactly that
-/// residual), or after a probe proves their calibration line equal.
-///
-/// The OTHER determinism-class dimensions — Ollama version and CPU architecture — deliberately
-/// are NOT pinned here: pinning a version would break the fleet on every patch release, and the
-/// arch is a property of the host, not of the algorithm. They are operational, covered by the
-/// calibration line `scripts/misaka-palw-ollama-setup.sh` prints and compared across the fleet
-/// before deployment. Pinning the blob closes the one dimension an operator can get wrong by
-/// typing a different model name.
-pub const POW_L1_PALW_OLLAMA_MODEL_DIGEST_V1: &str = "d5d0bc552430fc72c69d52583d722a43b8048fa9faf05c2faebabc204f4d13dc";
-/// Size in bytes of the pinned blob, checked alongside the digest (cheap defense against a
-/// truncated or re-tagged pull).
-pub const POW_L1_PALW_OLLAMA_MODEL_SIZE_V1: u64 = 3_775_709_366;
 
 /// kaspa-pq Phase 3 Layer 1 algorithm id: **compute-only BLAKE2b-512 ∥ SHA3-512** (ADR-0007 §"Phase 3").
 ///
@@ -862,6 +663,78 @@ pub fn check_palw_commitment_shape_at(
     bound: bool,
     lane: PalwAttemptLaneV1,
 ) -> Result<(), PowLayer0Error> {
+    // **A-2 uniformity: no form added after the live build is in force on this entry point** — it reads every such form's bytes as
+    // the live testnet-12 build (int-12, `0b1c11b87`) reads them. A pipeline that holds the header's height names the forms in force
+    // there through [`check_palw_commitment_shape_with_forms_at`].
+    check_palw_commitment_shape_with_forms_at(algo_id, palw_commitment, bound, lane, |_| false)
+}
+
+/// **A-2 uniformity for header carriages: the `palw_commitment` forms added after the live testnet-12 build, each owned by a fence.**
+///
+/// The live build's shape gate has no arm for these forms, so it refuses their headers (a `PFS4` carriage on an algo-7 header is read
+/// as a `PFS3` one and fails its magic). A build that admits the form's shape at a height where its fence is not in force accepts —
+/// on every path that runs only this gate, the pruning proof's included — a header the live build refuses: a split before the fence.
+/// So below its fence a form is read exactly as the live build reads it, and past it the form's own rules apply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PalwHeaderFormFenceV1 {
+    /// RFC-0009's `PFS4` receipt carriage (a V4 public-redemption spend) on an algo-7 header — `Params::palw_receipt_spend_v4`.
+    ReceiptSpendV4,
+}
+
+impl PalwHeaderFormFenceV1 {
+    /// Every owned form. A form added here needs its `HeaderForm` row in
+    /// `crate::palw_lifecycle_objects_v2::PALW_A2_KIND_FENCE_TABLE_V1`, which the table test reconciles.
+    pub const ALL: [Self; 1] = [Self::ReceiptSpendV4];
+
+    /// The `Params` field the form's fence is resolved from.
+    pub const fn params_field(self) -> &'static str {
+        match self {
+            Self::ReceiptSpendV4 => "palw_receipt_spend_v4",
+        }
+    }
+}
+
+/// Which owned form a header's carriage is, if any (`None`: a form the live build knows, judged as it judges it at every height).
+pub fn palw_header_form_owner_v1(algo_id: u8, palw_commitment: &[u8]) -> Option<PalwHeaderFormFenceV1> {
+    (algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment))
+        .then_some(PalwHeaderFormFenceV1::ReceiptSpendV4)
+}
+
+/// **The header forms' owning fences, resolved once from `Params`** (`Params::palw_header_form_fences_v1`) and handed to every gate
+/// that holds a header's height: the header processor, the pruning proof and the UTXO validator's block admission. `Default` is every
+/// fence unarmed — the live build's reading.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwHeaderFormFencesV1 {
+    pub receipt_spend_v4: Option<crate::config::params::ForkActivation>,
+}
+
+impl PalwHeaderFormFencesV1 {
+    /// Is `form`'s fence in force at `daa_score` (`never()` read as absence)?
+    pub fn in_force_at(&self, form: PalwHeaderFormFenceV1, daa_score: u64) -> bool {
+        match form {
+            PalwHeaderFormFenceV1::ReceiptSpendV4 => self.receipt_spend_v4,
+        }
+        .is_some_and(|activation| activation != crate::config::params::ForkActivation::never() && activation.is_active(daa_score))
+    }
+}
+
+impl crate::config::params::Params {
+    /// The header forms' owning fences ([`PalwHeaderFormFencesV1`]).
+    pub fn palw_header_form_fences_v1(&self) -> PalwHeaderFormFencesV1 {
+        PalwHeaderFormFencesV1 { receipt_spend_v4: self.palw_receipt_spend_v4_fence() }
+    }
+}
+
+/// [`check_palw_commitment_shape_at`] with the owned header forms in force at the header's position named by `form_in_force` —
+/// below its fence a form is the live build's malformed carriage (its cap, its decode, its refusal), past it the form's own.
+pub fn check_palw_commitment_shape_with_forms_at(
+    algo_id: u8,
+    palw_commitment: &[u8],
+    bound: bool,
+    lane: PalwAttemptLaneV1,
+    form_in_force: impl Fn(PalwHeaderFormFenceV1) -> bool,
+) -> Result<(), PowLayer0Error> {
+    let form = palw_header_form_owner_v1(algo_id, palw_commitment).filter(|form| form_in_force(*form));
     if !is_palw_algo_id(algo_id) {
         // Unconditional, fence or no fence: a non-PALW header's commitment is hash-INVISIBLE
         // (`write_header_preimage` length-prefixes it only for PALW ids), so a non-empty one is
@@ -876,7 +749,8 @@ pub fn check_palw_commitment_shape_at(
     // RFC-0009: a `PFS4` receipt carriage (two signatures and two keys) has its own, larger cap. Every other carriage — including a `PFS3`
     // receipt — keeps the 8,192-byte one, so the set of acceptable payloads below `palw_receipt_spend_v4` is unchanged (a `PFS4` header is
     // refused by name at the header stage until the fence opens).
-    let cap = if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment) {
+    // A2U: only where the form's fence is in force; below it the cap is the live build's, as is every other byte of the gate.
+    let cap = if form == Some(PalwHeaderFormFenceV1::ReceiptSpendV4) {
         crate::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4
     } else {
         PALW_COMMITMENT_MAX_BYTES
@@ -909,7 +783,9 @@ pub fn check_palw_commitment_shape_at(
     }
     if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 {
         // RFC-0009: the magic says which receipt carriage this is; both are the receipt lane's, and a payload of neither is malformed.
-        if crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment) {
+        // A2U: a `PFS4` carriage is the V4 one only where `palw_receipt_spend_v4` is in force; below it, it is read as the live build
+        // reads it — a `PFS3` decode, refused for its magic.
+        if form == Some(PalwHeaderFormFenceV1::ReceiptSpendV4) {
             return crate::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(palw_commitment)
                 .map(|_| ())
                 .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
@@ -1334,136 +1210,6 @@ pub fn blake2b_sha3_l1_tag_v1(pre_pow_hash: Hash64, nonce: u64, network_id: &[u8
     out[..64].copy_from_slice(half_b.as_bytes());
     out[64..].copy_from_slice(&half_s);
     out
-}
-
-/// MISAKA Phase 4 (`algo_id = 4`): the 32-byte PALW-PoW seed.
-///
-/// ```text
-/// seed = BLAKE2b-256(
-///     key   = POW_L1_PALW_V1_DOMAIN,
-///     input = "seed" || netid_len_le16 || network_id || pre_pow_hash64 ||
-///             timestamp_le || nonce_le,
-/// )
-/// ```
-///
-/// Binds the block (`pre_pow_hash`), the network (length-prefixed id), and BOTH miner-grindable
-/// header inputs (`timestamp`, `nonce`) — see the [`POW_ALGO_ID_PALW_LLM`] doc for why `timestamp`
-/// must be inside the expensive computation and not merely inside the Layer-0 finalizer.
-pub fn palw_pow_seed_v1(pre_pow_hash: Hash64, timestamp: u64, nonce: u64, network_id: &[u8]) -> [u8; 32] {
-    let digest = Params::new()
-        .hash_length(32)
-        .key(POW_L1_PALW_V1_DOMAIN)
-        .to_state()
-        .update(b"seed")
-        .update(&(network_id.len() as u16).to_le_bytes())
-        .update(network_id)
-        .update(pre_pow_hash.as_byte_slice())
-        .update(&timestamp.to_le_bytes())
-        .update(&nonce.to_le_bytes())
-        .finalize();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(digest.as_bytes());
-    out
-}
-
-/// MISAKA Phase 4 (`algo_id = 4`): the canonical prompt bytes fed to the PALW worker's stdin for a
-/// given PoW seed. Pure printable ASCII (a fixed frame + 64 lowercase-hex chars) so the pinned
-/// tokenizer's behavior is exercised only on a stable alphabet; the semantic content is irrelevant
-/// — determinism of the transcript is everything. The prompt tokenizes well under
-/// [`POW_L1_PALW_N_PREDICT_V1`], leaving a real greedy-decode budget (the actual work).
-pub fn palw_pow_prompt_v1(seed: &[u8; 32]) -> String {
-    format!("MISAKA PALW proof-of-work v1\nseed: {}\ncontinue:", faster_hex::hex_string(seed))
-}
-
-/// MISAKA Phase 4 (`algo_id = 4`): the **fixture** Layer-1 tag — the shape of a real PALW
-/// projection, synthesized in-process from the seed alone. Selected (in `kaspa-pow`) by
-/// `MISAKA_PALW_POW_FIXTURE=1`, mirroring the `devnet-vlt-fixture` precedent: CI and harness runs
-/// exercise the whole PALW dispatch/consensus surface without the 1.2 GB pinned model. A fixture
-/// node and a real-model node compute DIFFERENT tags — that is correct (they are different rule
-/// sets and must not share a mesh), exactly like fixture VLT tables.
-pub fn palw_fixture_l1_tag_v1(seed: &[u8; 32]) -> [u8; POW_L1_PALW_OUT_BYTES] {
-    let part = |label: &[u8]| -> [u8; 64] {
-        let digest = Params::new()
-            .hash_length(64)
-            .key(POW_L1_PALW_V1_DOMAIN)
-            .to_state()
-            .update(b"fixture")
-            .update(label)
-            .update(seed)
-            .finalize();
-        let mut out = [0u8; 64];
-        out.copy_from_slice(digest.as_bytes());
-        out
-    };
-    let mut tag = [0u8; POW_L1_PALW_OUT_BYTES];
-    tag[..64].copy_from_slice(&part(b"output"));
-    tag[64..128].copy_from_slice(&part(b"gemm"));
-    tag[128..192].copy_from_slice(&part(b"schedule"));
-    // Fixture "token counts": stable, obviously synthetic values (prefill = 47, decode = 81)
-    // keeping the count field layout identical to a real projection.
-    tag[192..196].copy_from_slice(&47u32.to_le_bytes());
-    tag[196..200].copy_from_slice(&81u32.to_le_bytes());
-    tag
-}
-
-/// MISAKA Phase 4b (`algo_id = 5`): assemble the 72-byte PALW-Ollama Layer-1 tag from a
-/// deterministic `/api/generate` response. Shared by the HTTP runner (`kaspa-pow`) and tests so
-/// the byte layout has one definition.
-///
-/// ```text
-/// digest = BLAKE2b-512(key = POW_L1_PALW_OLLAMA_V1_DOMAIN,
-///                      "output" || resp_len_le_u64 || response_bytes)
-/// tag    = digest ∥ prompt_eval_count_le_u32 ∥ eval_count_le_u32
-/// ```
-pub fn palw_ollama_l1_tag_from_response(
-    response_bytes: &[u8],
-    prompt_eval_count: u32,
-    eval_count: u32,
-) -> [u8; POW_L1_PALW_OLLAMA_OUT_BYTES] {
-    let digest = Params::new()
-        .hash_length(64)
-        .key(POW_L1_PALW_OLLAMA_V1_DOMAIN)
-        .to_state()
-        .update(b"output")
-        .update(&(response_bytes.len() as u64).to_le_bytes())
-        .update(response_bytes)
-        .finalize();
-    let mut tag = [0u8; POW_L1_PALW_OLLAMA_OUT_BYTES];
-    tag[..64].copy_from_slice(digest.as_bytes());
-    tag[64..68].copy_from_slice(&prompt_eval_count.to_le_bytes());
-    tag[68..72].copy_from_slice(&eval_count.to_le_bytes());
-    tag
-}
-
-/// MISAKA Phase 4b (`algo_id = 5`): the **fixture** tag — the 72-byte layout synthesized from the
-/// seed alone, selected by the same `MISAKA_PALW_POW_FIXTURE=1` env as the worker fixture (and
-/// confined to devnet by the same kaspad rail).
-pub fn palw_ollama_fixture_l1_tag_v1(seed: &[u8; 32]) -> [u8; POW_L1_PALW_OLLAMA_OUT_BYTES] {
-    let digest = Params::new().hash_length(64).key(POW_L1_PALW_OLLAMA_V1_DOMAIN).to_state().update(b"fixture").update(seed).finalize();
-    let mut tag = [0u8; POW_L1_PALW_OLLAMA_OUT_BYTES];
-    tag[..64].copy_from_slice(digest.as_bytes());
-    // Stable, obviously synthetic counts in the real field layout.
-    tag[64..68].copy_from_slice(&70u32.to_le_bytes());
-    tag[68..72].copy_from_slice(&48u32.to_le_bytes());
-    tag
-}
-
-/// Assemble the 200-byte PALW Layer-1 tag from a worker projection's replay-stable fields. Shared
-/// by the real subprocess runner (`kaspa-pow`) and tests so the byte layout has one definition.
-pub fn palw_l1_tag_from_projection(
-    output_commitment: &Hash64,
-    gemm_trace_root: &Hash64,
-    operation_schedule_commitment: &Hash64,
-    prefill_tokens: u32,
-    decode_tokens: u32,
-) -> [u8; POW_L1_PALW_OUT_BYTES] {
-    let mut tag = [0u8; POW_L1_PALW_OUT_BYTES];
-    tag[..64].copy_from_slice(&output_commitment.as_bytes());
-    tag[64..128].copy_from_slice(&gemm_trace_root.as_bytes());
-    tag[128..192].copy_from_slice(&operation_schedule_commitment.as_bytes());
-    tag[192..196].copy_from_slice(&prefill_tokens.to_le_bytes());
-    tag[196..200].copy_from_slice(&decode_tokens.to_le_bytes());
-    tag
 }
 
 /// Difficulty-lift helper. Maps a 256-bit upstream-style target to
@@ -1929,115 +1675,6 @@ mod tests {
             Err(PowLayer0Error::PalwCommitmentTooLong { got: oversized.len(), cap: PALW_COMMITMENT_MAX_BYTES }),
             "the cap still reports the cap it broke, before any codec runs"
         );
-    }
-
-    /// PALW-PoW seed (algo_id = 4): deterministic, and sensitive to EVERY grindable input — block,
-    /// network, nonce, and (unlike the other algos' tags) the timestamp. Timestamp sensitivity is
-    /// the grinding-closure property: a miner re-stamping a header must pay a fresh inference.
-    #[test]
-    fn palw_pow_seed_deterministic_and_binds_timestamp() {
-        let net = b"kaspa-devnet";
-        let a = palw_pow_seed_v1(h(0x11), 1_000, 42, net);
-        assert_eq!(a, palw_pow_seed_v1(h(0x11), 1_000, 42, net), "seed must be deterministic");
-        assert_ne!(a, palw_pow_seed_v1(h(0x12), 1_000, 42, net), "pre_pow_hash must change the seed");
-        assert_ne!(a, palw_pow_seed_v1(h(0x11), 1_001, 42, net), "timestamp must change the seed (grinding closure)");
-        assert_ne!(a, palw_pow_seed_v1(h(0x11), 1_000, 43, net), "nonce must change the seed");
-        assert_ne!(a, palw_pow_seed_v1(h(0x11), 1_000, 42, b"mainnet"), "network must change the seed");
-    }
-
-    /// The worker-class calibration is pinned exactly where a single class is claimed —
-    /// testnet-11 — and nowhere else; and the pinned value is a well-formed 200-byte tag whose
-    /// token counts are the audited probe record's (u0: prefill 71, decode 57, both under the
-    /// frozen 128 budget). Golden: a change here means the network's determinism class moved,
-    /// which strands every deployed runtime — make sure that is the intended outcome (ADR-0035).
-    #[test]
-    fn palw_worker_calibration_scope_and_shape() {
-        assert!(palw_worker_calibration_v1(b"testnet-11").is_some(), "the public PALW net must pin its class");
-        assert!(palw_worker_calibration_v1(b"testnet-10").is_none(), "the hash-lane t10 pins nothing");
-        assert!(palw_worker_calibration_v1(b"devnet").is_none(), "devnet deliberately pins no class");
-        assert!(palw_worker_calibration_v1(b"mainnet").is_none());
-        assert!(palw_worker_calibration_v1(b"simnet").is_none());
-        let hex = POW_L1_PALW_WORKER_CALIBRATION_TN11_V1;
-        assert_eq!(hex.len(), POW_L1_PALW_OUT_BYTES * 2, "calibration must encode a full tag");
-        let mut bytes = [0u8; POW_L1_PALW_OUT_BYTES];
-        faster_hex::hex_decode(hex.as_bytes(), &mut bytes).expect("calibration must be valid hex");
-        assert_eq!(u32::from_le_bytes(bytes[192..196].try_into().unwrap()), 71, "prefill tokens of the audited u0 probe");
-        assert_eq!(u32::from_le_bytes(bytes[196..200].try_into().unwrap()), 57, "decode tokens of the audited u0 probe");
-    }
-
-    /// The canonical PALW prompt is a pure-ASCII stable frame around the hex seed, and two seeds
-    /// never render the same prompt.
-    #[test]
-    fn palw_pow_prompt_is_ascii_and_seed_bound() {
-        let s1 = palw_pow_seed_v1(h(0x11), 1, 2, b"devnet");
-        let s2 = palw_pow_seed_v1(h(0x11), 1, 3, b"devnet");
-        let p1 = palw_pow_prompt_v1(&s1);
-        assert!(p1.is_ascii(), "prompt must be pure ASCII for tokenizer stability");
-        assert!(p1.contains(&faster_hex::hex_string(&s1)), "prompt must embed the seed hex");
-        assert_ne!(p1, palw_pow_prompt_v1(&s2));
-        assert_eq!(p1, palw_pow_prompt_v1(&s1), "prompt must be deterministic");
-    }
-
-    /// The fixture tag has the exact projection layout (200 bytes, counts in the tail),
-    /// is deterministic, seed-sensitive, and — critically — differs from what
-    /// `palw_l1_tag_from_projection` would assemble from any real worker fields (the fixture's
-    /// three 64-byte parts are domain-keyed on the seed, not on model output).
-    #[test]
-    fn palw_fixture_tag_layout_and_determinism() {
-        let seed_a = palw_pow_seed_v1(h(0x11), 1, 2, b"devnet");
-        let seed_b = palw_pow_seed_v1(h(0x11), 1, 9, b"devnet");
-        let a = palw_fixture_l1_tag_v1(&seed_a);
-        assert_eq!(a.len(), POW_L1_PALW_OUT_BYTES);
-        assert!(POW_L1_PALW_OUT_BYTES <= POW_L1_TAG_MAX_BYTES, "tag must fit the finalizer's max");
-        assert_eq!(a, palw_fixture_l1_tag_v1(&seed_a), "fixture tag must be deterministic");
-        assert_ne!(a, palw_fixture_l1_tag_v1(&seed_b), "fixture tag must be seed-sensitive");
-        assert_eq!(&a[192..196], &47u32.to_le_bytes(), "fixture prefill count field");
-        assert_eq!(&a[196..200], &81u32.to_le_bytes(), "fixture decode count field");
-        // The three 64-byte parts are pairwise distinct (distinct sub-domains).
-        assert_ne!(&a[..64], &a[64..128]);
-        assert_ne!(&a[64..128], &a[128..192]);
-    }
-
-    /// `palw_l1_tag_from_projection` writes each replay-stable field at its documented offset.
-    #[test]
-    fn palw_projection_tag_layout() {
-        let oc = h(0xaa);
-        let gt = h(0xbb);
-        let sc = h(0xcc);
-        let tag = palw_l1_tag_from_projection(&oc, &gt, &sc, 29, 99);
-        assert_eq!(&tag[..64], oc.as_byte_slice());
-        assert_eq!(&tag[64..128], gt.as_byte_slice());
-        assert_eq!(&tag[128..192], sc.as_byte_slice());
-        assert_eq!(&tag[192..196], &29u32.to_le_bytes());
-        assert_eq!(&tag[196..200], &99u32.to_le_bytes());
-        // The finalizer accepts the 200-byte tag with algo_id = 4.
-        assert!(pow_finalizer_blake2b_512(b"devnet", POW_ALGO_ID_PALW_LLM, h(0x01), 1, 2, 3, &tag).is_ok());
-    }
-
-    /// PALW-Ollama tag (algo_id = 5): documented layout, deterministic, response-sensitive, and
-    /// distinct from the fixture derivation over the same bytes.
-    #[test]
-    fn palw_ollama_tag_layout_and_determinism() {
-        let a = palw_ollama_l1_tag_from_response(b"greedy continuation", 70, 48);
-        assert_eq!(a.len(), POW_L1_PALW_OLLAMA_OUT_BYTES);
-        assert!(POW_L1_PALW_OLLAMA_OUT_BYTES <= POW_L1_TAG_MAX_BYTES);
-        assert_eq!(a, palw_ollama_l1_tag_from_response(b"greedy continuation", 70, 48), "tag must be deterministic");
-        assert_ne!(a, palw_ollama_l1_tag_from_response(b"greedy continuatioN", 70, 48), "response bytes must change the tag");
-        assert_eq!(&a[64..68], &70u32.to_le_bytes());
-        assert_eq!(&a[68..72], &48u32.to_le_bytes());
-        // Counts are OUTSIDE the digest but inside the tag, so they still alter the finalizer input.
-        let b = palw_ollama_l1_tag_from_response(b"greedy continuation", 71, 48);
-        assert_eq!(&a[..64], &b[..64], "digest covers response bytes only");
-        assert_ne!(a, b, "counts must alter the tag");
-        // Fixture: same layout, different derivation, seed-sensitive.
-        let seed_a = palw_pow_seed_v1(h(0x11), 1, 2, b"testnet-10");
-        let seed_b = palw_pow_seed_v1(h(0x11), 1, 3, b"testnet-10");
-        let fa = palw_ollama_fixture_l1_tag_v1(&seed_a);
-        assert_eq!(fa, palw_ollama_fixture_l1_tag_v1(&seed_a));
-        assert_ne!(fa, palw_ollama_fixture_l1_tag_v1(&seed_b));
-        assert_ne!(&fa[..64], &palw_ollama_l1_tag_from_response(&seed_a[..], 70, 48)[..64]);
-        // The finalizer accepts the 72-byte tag with algo_id = 5.
-        assert!(pow_finalizer_blake2b_512(b"testnet-10", POW_ALGO_ID_PALW_OLLAMA, h(0x01), 1, 2, 3, &fa).is_ok());
     }
 
     /// BLAKE2b-SHA3 Layer-1 (algo_id = 3) must be DETERMINISTIC (miner and every verifier agree on

@@ -1,6 +1,11 @@
 //! **Lane DA16 (RFC-0014 §16, RFC-0009 §4): the public material transport — an artifact's bytes and a claim's material, fetchable by any
 //! outsider for the liability horizon, every byte checked against the CHAIN's root.**
 //!
+//! **The artifact half is NON-CONSENSUS, optional off-chain tooling (ADR-0177, 2026-10-10).** Model distribution is off-chain and
+//! voluntary: nothing here is a duty, no lease or court backs it, and a provider that serves no model bytes is never charged. A
+//! verifier uses it to obtain a model and check it against the REGISTERED roots; the chain never reads its result. The claim half
+//! (claim positions, held units) is what the provider court's `ClaimPosition` unit and the kernel's demand serve.
+//!
 //! [`crate::evidence`] / [`crate::transport`] carry a free-prompt claim's evidence chunks. This module carries the rest of what a fresh
 //! verifier needs, over the SAME providers (a directory, HTTP(S), the reference [`crate::transport::server`]) and with the same
 //! discipline — nothing a provider says is believed:

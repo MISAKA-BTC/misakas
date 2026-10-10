@@ -393,26 +393,7 @@ wrapper. The predicate implemented is the class's **granted share**, which admis
 proxy for certification in the one direction that matters — `verify_class_admission_v3` refuses
 `share > 0` to a family that is not certified end to end, so `share > 0 ⇒ certified`.
 
-The third site, the **V1 resolver's search order, is a ceiling nobody reaches, and saying so is
-better than implying a wall that is not there.** `palw_facts::resolve_block_weight_v1` does hold the
-guard, but its only production producer of `weight_bearing` is
-`VirtualStateProcessor::palw_class_facts_for_block`, and there the predicate cannot be false: a
-V1-credit fence carries exactly ONE registration, the function refuses any other class outright
-(`None` = `ClassUnresolved`, a stronger answer than weightless), the share it reads comes from
-`PalwClassDaaParamsV1::single_class_domain`, which builds `{that_class: 1000‰}` from its own
-argument, and `PalwDifficultyDomainSetV1::validate` refuses a zero share for ANY domain set
-(`ZeroShare`). So a share-0 entrant is not representable on that path at all. The mitigation there
-is structural, not a check; the code now answers through
-`palw_facts::palw_v1_weight_bearing_or_refuse`, which yields `Some(true)` for a share and `None` —
-the same `ClassUnresolved` refusal the line above it gives an unregistered class — for the zero a
-domain set cannot hold. A first draft wrote `debug_assert!(share > 0, ..)` there instead: an assert
-inside block validation is a wrong assumption turned into every node aborting at one height, and
-this path already has a refusal for questions it cannot answer. Making the V1 half bind needs a
-chain-point-resolved share table on the resolver path — which it does not have, and must not take
-from `load_tip` for the reason its own `class_target` doc gives — so it is a redesign, not a fenced
-edit. A fourth site, the court's
-D3-3 opening-rung exemption in `sweep_court_deadlines`, asks the same predicate deliberately
-unfenced and now calls the helper too, so "one helper" is at least true where it is claimed.
+The V1 class resolver is removed: its credit overlay is not used on V2. V2 admission and certification checks above remain in force.
 
 Two consequences are residuals rather than choices, and are pinned by tests rather than left to be
 discovered. **(i)** The safe half is priced at the finalizing block, so a claim accepted while its

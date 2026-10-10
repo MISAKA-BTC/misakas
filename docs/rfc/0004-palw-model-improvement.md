@@ -31,10 +31,10 @@
 | Status | Revised Draft, 2026-10-06 — improvement remains independent of a VM. ADR-0172 withdraws the later BVM/GVM programme; model extension uses versioned kernels, with RFC07/RFC11 probabilistic verification (§0) |
 | Author(s) | MISAKA core (drafted with Claude) |
 | Created | 2026-09-29 |
-| Normative dependencies | **RFC-0002** (PALW-TIR) and **RFC-0003** (R, pipelines, canonical outputs); new kernel-bound registration/verification additionally follows RFC05 §§K.0–K.8, RFC07, RFC11 §§15–16 and ADR-0171/0172. Legacy profiles keep their rules. **No VM or EVM-contract dependency** |
+| Normative dependencies | **RFC-0002** (PALW-TIR) and **RFC-0003** (R, pipelines, canonical outputs); new kernel-bound registration/verification additionally follows [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md), RFC07, RFC11 §§15–16 and ADR-0171/0172. Legacy profiles keep their rules. **No VM or EVM-contract dependency** |
 | Affects | spec/palw 03 (registry: candidates, composite artifacts), 05 (canonical work of evaluation jobs), 07/08/09 (evaluation claims and their court), 10 (fees, bounties, vesting), 11 (the data-use opt-in), 15 (lines: the improvement policy and protocol promotion), 16 (fences), and a new chapter `spec/palw/17-model-improvement.md` · all networks (dormant until armed) · `consensus/core` (the fold: epochs, candidates, evaluation jobs, promotion, the pool), `misaka-palw-tir` (the scoring library), `misaka-palw-tir-lower` (adapter lowering), `misaka-palw-sdk`, the node |
 | Branch | `rfc/0004-0005-vm` (text only) |
-| Related | RFC-0005 (current kernel-only extension design; former VM roadmap withdrawn), ADR-0088 and spec 15 (lines, versions, proposals, the market), ADR-0160 (claim capacity), ADR-0144 P1–P7, ADR-0145 (canonical work), ADR-0069 (weight), ADR-0044 F5/F15 (beacons), ADR-0072 (one inference, one ticket) |
+| Related | RFC-0005 (VM withdrawal reason), ADR-0172 (kernel-only extension), ADR-0088 and spec 15 (lines, versions, proposals, the market), ADR-0160 (claim capacity), ADR-0144 P1–P7, ADR-0145 (canonical work), ADR-0069 (weight), ADR-0044 F5/F15 (beacons), ADR-0072 (one inference, one ticket) |
 
 ## 概要(日本語)
 
@@ -42,7 +42,7 @@
   次の head(v13)にする。これを **PALW-TIR / 有効なKernelで、VMなしで** 回す。2026-10-06の方針変更により、
   RFC-0005のBVM/GVMは後からも実装せず、モデル拡張はversioned Kernelで行う(§0)。
 - **層。** Layer 0 = PALW-TIR(候補を評価する場所)。Layer 1 = この Improvement Protocol(epoch・dataset・候補の registry・
-  報酬・promotion)。自動化や学習はconsensusの外。旧Phase B/CのVM実装計画は撤回し、RFC05の現行Kernel設計へ置き換える。
+  報酬・promotion)。自動化や学習はconsensusの外。旧Phase B/CのVM実装計画は撤回し、[versioned Kernel 設計](../design/palw/versioned-kernels.md)へ置き換える。
 - **分担。** 学習は consensus の外、評価は PALW-TIR、promotion はプロトコル。**作り方は自由で、成果物だけを厳密に検証する**
   (Bitcoin はブロックが正しいかを検証し、ASIC の作り方は問わない)。規範:**候補モデルが VM で作られたことを要求しては
   ならない(MUST NOT)**。プロトコルが検証するのは 4 つだけ:モデル成果物(IR class の admission)、provenance policy
@@ -105,7 +105,7 @@ no EVM dependency.
 
 - **Layers.** Layer 0 is PALW-TIR, where candidates are evaluated. Layer 1 is this protocol: epochs,
   datasets, the candidate registry, rewards and promotion. Automation stays off chain; new model
-  semantics use RFC05's versioned kernels, not a future Layer-2 VM programme.
+  semantics use the [versioned kernel design](../design/palw/versioned-kernels.md).
 - **The division of work.** Training is outside consensus; evaluation is PALW-TIR; promotion is the
   protocol. The generation method is free and only the artifact is strictly verified — as Bitcoin checks
   that a block is valid, not how the ASIC that mined it was built. A candidate MUST NOT be required to
@@ -130,7 +130,7 @@ no EVM dependency.
 
 This section takes precedence over legacy Phase F wire examples and cost assumptions below.
 [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) withdraws
-the BVM/GVM programme; [RFC05 §§K.0–K.8](0005-palw-ml-vm.md) defines the replacement. Preserve
+the BVM/GVM programme; [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) defines the replacement. Preserve
 [RFC11 §§15–16](0011-permissionless-model-and-long-context-onboarding.md) and
 [RFC07](0007-palw-verification-certificates-and-algebraic-checks.md): small probabilistic checks
 of committed encoded constraints are the ordinary large-model verification path, not full replay.
@@ -155,7 +155,7 @@ of committed encoded constraints are the ordinary large-model verification path,
   retries; do not equate the sign-test significance with cryptographic soundness or assume independent
   seats. The proposed per-claim `2^-128` target is not a proved property of this draft.
 * **Identity and compatibility are explicit.** Legacy class-id formulas stay unchanged. New-format
-  candidates bind kernel and plan as RFC05 specifies. Kernel versions may differ only under an active
+  candidates bind kernel and plan as the [Kernel design](../design/palw/versioned-kernels.md) specifies. Kernel versions may differ only under an active
   family/evaluation-composition profile preserving task, tokenizer/output and policy requirements;
   changing kernels cannot change the epoch's score definition. Pin the accepted profiles when the
   epoch opens; no mid-epoch change of interpretation or retroactive regrading.
@@ -183,7 +183,7 @@ after valid small-check Final. No VM implementation is a dependency of these tes
    repeats.
 3. **Everything evaluation needs is already TIR.** Generation, likelihood and judge models are IR
    classes. Scoring is a small TIR program. Promotion is integer arithmetic in the fold. So the loop
-   needs no VM; RFC05 now supplies kernel extension, while arbitrary automation stays off chain.
+   needs no VM; the [Kernel design](../design/palw/versioned-kernels.md) supplies extension rules, while arbitrary automation stays off chain.
 4. **The Bitcoin analogy.** Bitcoin checks that a block is valid. It does not care how the ASIC that
    found it was designed. This protocol checks a candidate — its artifact, its declarations, its
    measured result — and does not care how it was trained. That keeps research methods free, and keeps
@@ -194,7 +194,7 @@ after valid small-check Final. No VM implementation is a dependency of these tes
 **Goals.**
 
 - G1. Three layers: TIR evaluates (Layer 0), this protocol decides (Layer 1), and any automation is
-  optional (Layer 2, RFC-0005).
+  optional (Layer 2, outside consensus).
 - G2. The generation method is free and only the artifact is verified. No candidate is required to have
   been produced by the VM, or by any particular method.
 - G3. The protocol verifies four things and nothing else: the artifact, the provenance policy, the
@@ -226,7 +226,7 @@ Layer 0 (RFC02/03/05/07/11)   versioned tensor/state kernels; encoded-constraint
 
 - **Phase A** remains this improvement protocol, with no VM dependency.
 - The former **Phase B/C** BVM/GVM roadmap is withdrawn by ADR0172, not merely delayed.
-- New model families follow RFC05's kernel extension gates; existing-family plans need no new node
+- New model families follow the [Kernel design](../design/palw/versioned-kernels.md)'s extension gates; existing-family plans need no new node
   semantics. Off-chain loops submit ordinary candidates and cannot change promotion or rewards.
 
 ## 2. The division of work
@@ -504,7 +504,7 @@ Fidelity is measured, never required (RFC-0002 criterion 5).
 ### 6.3 Composite artifacts and the class id
 
 The following is the **legacy Phase F identity**, preserved verbatim. New kernel-bound classes add
-RFC05's immutable descriptor/plan binding in a new versioned domain (§0); never reinterpret or
+the [Kernel design](../design/palw/versioned-kernels.md)'s immutable descriptor/plan binding in a new versioned domain (§0); never reinterpret or
 rehash an already registered legacy class to opt it into new verification semantics.
 
 The lowering orders params so that **the candidate's first `P` params are the parent program's,
@@ -840,7 +840,7 @@ money not yet paid out is the only lever left.
 
 ## 14. Kernel extensions and off-chain automation
 
-RFC05's current §§K.0–K.8 replace the former bounded/general VM roadmap. A new kernel may add a
+The [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) replaces the withdrawn VM roadmap. A new kernel may add a
 reusable computational or checker family after soundness/resource/court review and coordinated
 activation. A frontend plus a declarative plan suffices only within active semantics. New kernel
 support cannot bypass this RFC's family, provenance, evaluation, fees or promotion rules.
@@ -885,7 +885,7 @@ backdoors) it says so and prices the risk with bonds, vesting and rollback.
 The table preserves the original Phase F / `tir/phase-f-f7` planning baseline, in engineer-weeks for
 two to four experienced people. Its legacy Phase A dependencies were RFC02 Phase F and RFC03 steps
 3–5 (`TirProgramV2`, pipelines, their court). The new kernel-bound route additionally requires §0's
-RFC05/07/11 suites, assurance/identity changes and independent review; re-estimate those costs before
+Kernel / RFC07 / RFC11 suites, assurance/identity changes and independent review; re-estimate those costs before
 scheduling. There is no EVM-rung or VM implementation dependency.
 
 | # | Work item | Where | Depends on | Engineer-weeks | With agents |
@@ -914,9 +914,7 @@ scheduling. There is no EVM-rung or VM implementation dependency.
   and the differential tests (1–2 months), two audits with fixes (3–4 months, partly in parallel), at
   least 3 epochs armed on a testnet (2–3 months at the epoch lengths a testnet uses), a bounty window
   overlapping them, and the activation. It cannot come before PALW-TIR and RFC-0003's pipelines are
-  themselves mainnet-safe. The calibration is RFC-0005's *Effort* section: implementation compresses by
-  one to two orders of magnitude, while second implementations, drills, audits and soak do not.
-- **Human-only**, the same work is about 9–12 months with three people.
+  themselves mainnet-safe. These are Phase A estimates; the withdrawn VM effort estimate is not a scheduling basis.
 
 ## Proposed Spec text (new chapter `spec/palw/17-model-improvement.md`)
 
@@ -1065,8 +1063,7 @@ without the A-2 tolerance.
 - Accept Phase A as the first deliverable of the improvement roadmap, as the user ordered.
 - Implement A1–A13 as soon as RFC-0003's steps 3–5 land. Arm on a testnet with adapter-only candidates
   and S1 first; add full-weight candidates and S2 after an epoch; keep S3 on testnets.
-- Follow RFC05's current kernel-only design for new model semantics; do not start its withdrawn
-  BVM/GVM implementation programme. Existing Phase A engineering estimates do not include the new
+- Follow the [versioned kernel design](../design/palw/versioned-kernels.md) for new model semantics. Existing Phase A engineering estimates do not include the new
   probabilistic kernel's prover/checker work and must be re-estimated before scheduling that route.
 
 ## Part II — Verifiable computation beyond fixed weight files (2026-10-08)
@@ -1132,7 +1129,7 @@ Activation follows the single full-activation release. Nothing in Part II is arm
 
 For new Kernel/model conformance or probabilistic claim checks in this improvement workflow, bind and use only
 [RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol).
-RFC05's approved checker/challenge/soundness tuple and RFC11's Static Admission → Beacon Conformance → Active
+The [Kernel design](../design/palw/versioned-kernels.md)'s approved checker/challenge/soundness tuple and RFC11's Static Admission → Beacon Conformance → Active
 Eligibility apply to newly onboarded candidate profiles. Conformance sampling authorizes neither an unknown op nor
 a Kernel activation, and does not replace this RFC's evaluation/promotion criteria or per-claim checks.
 
