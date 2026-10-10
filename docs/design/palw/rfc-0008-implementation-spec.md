@@ -510,3 +510,95 @@ gates passes today, and the unified EXEC stays unarmable (`PALW_EXEC_PAYLOAD_V2_
 | ECON | ECON | — | small/large model economics before/after the cap and window saturation, with criteria fixed before the run |
 
 EXEC_TX / EXEC_SLICE weight, blue score and DAA contribution stay 0; a slice's verification and reward aggregate to its root.
+
+## 12. WORK design correction — execution cost is not lottery weight (2026-10-10 audit)
+
+This section resolves the unit ambiguity in §§3–4 and §10's prefix/range accounting. It is a design
+requirement for the next fenced implementation. `palw_exec_work_plan_v1` is its executable reference;
+the current `apply_root_declared_v2` / slice admission do **not** call it. WORK remains closed for
+activation until the caller, versioned plan material and recovery tests below exist.
+
+### 12.1 Two quantities and a fixed cost basis
+
+`W_REAL` is the REAL claim's accepted canonical lottery weight, including the attempt's lottery
+scaling. `C_EXEC` is the registered IR's useful execution cost for one frozen semantic job. Never
+compare a prefix `C_EXEC` with `W_REAL`, add the two, or multiply a suffix by the prefix's lottery
+factor. Root chain-position credit continues to be exactly `W_REAL`; EXEC adds zero weight / DAA.
+Work partitioning affects the allocation of the root's one funded reward, not the allocation itself.
+
+Use the existing ten-dimensional canonical TIR work vector. The reference carries its seven
+arithmetic dimensions in MAC-equivalents and its three traffic dimensions in bytes separately.
+It uses the existing arithmetic sum for range coordinates; this is **not** approval of a final
+economic price or a new byte-to-MAC coefficient. The accepted class fixes `AllNodesV1` or the
+existing `MinSelectArmsV2` policy at root admission; the producer cannot choose or switch it between
+cells. Any future scalar price must have a versioned, checked, additive conversion of the whole
+vector and pass the existing cost/arbitrage gates. Do not round each cell before aggregating.
+
+### 12.2 Absolute positions and exact job scope
+
+Freeze prompt length `P > 0`, REAL prefix decode `G_p > 0`, whole decode `G > G_p`, and strictly
+increasing cumulative suffix decode ends `G_p < G_1 < … < G_n = G`. Obtain `P` and `G_p` from the
+REAL context, and bound `P + G - 1` by both the accepted class's position limit and the registered IR's history bound. Bound `n` before allocation
+by the existing 128-slice limit, and the cumulative arithmetic cost by the existing `2^48` root bound.
+Whole job inputs and exact `G` must be authenticated before the declaration is accepted; the
+producer's MAC interval alone is not that authentication.
+
+All costs use **one** `PalwCanonicalExecutionFactsV1::uncached(P, G)` and the registered IR:
+
+```text
+prefix positions: [0, P + G_p - 1)
+suffix i positions: [P + G_(i-1) - 1, P + G_i - 1), with G_0 = G_p
+prefix vector + Σ suffix vector = whole-job vector, in every dimension
+boundaries[0] = C(prefix); boundaries[i+1] = C(prefix) + Σ_(j<=i) C(suffix j)
+total_work = C(whole job)
+```
+
+`post` / logits execute only where the original whole-job schedule requires them. Attention's
+prefill/decode split remains at original `P`, and KV/history length remains the absolute position
+with the registered history window. Recomputing the preceding prompt or history to build a slice
+trace is physical overhead, not newly credited work. A slice that follows cumulative decode
+`G_prev` must have exactly `P + G_prev` prompt tokens and generate exactly `G_end - G_prev` tokens,
+in addition to the existing token-state, nonce, class, executor, output and evidence bindings.
+The prefix job's maximum and actual generated-token counts must both equal the REAL context's
+nonzero exact decode. A matching output commitment alone does not validate those counts.
+
+### 12.3 Identity, plan material and refusal obligations
+
+The authenticated semantic job must commit the accepted class / immutable computation identity,
+canonical full inputs and any admitted cache state, the exact whole decode and execution/cost
+versions. Keep its useful-work identity independent of output values, slice cuts, executor/bond,
+carrier, root id and nonsemantic scheduling nonce. The current `job_work_id` hashes cuts and an
+output-dependent initial state, so it is not yet this identity. A new root or a different partition
+must not authorize fresh useful credit. Legitimate repeated jobs require existing admission/ticket
+authorization that binds fresh semantic work; neither a new root id nor an owner label proves it.
+
+Carry bounded, canonical generated-token ends and their authenticated job material in a versioned
+plan; bind its commitment to the root signature. Derive both the full vector and scalar boundaries
+from registered IR. Compare every carried cost against the derived result at declaration, slice
+admission and restart/replay. Reject missing material, unavailable cost version, changed shape,
+inflated costs, out-of-class positions, overflow, empty/non-increasing cuts and a zero-cost cell.
+No fallback to producer-declared work is permitted. The existing shape calculator saturates some
+intermediate arithmetic: the reference rejects saturated output dimensions and checked sum
+overflow, but a checked cost walk or a proof of every validated intermediate bound is still required
+before using it in consensus, especially the MinSelect subtraction path.
+
+`JobWorkUse` must survive the earliest legal reuse window and pruning as authenticated history,
+with an explicit finite retention / expiry rule from the canonical job authorization. Define its
+cross-snapshot generation and reorg rollback with the existing carriage ledgers. Do not claim that
+an indefinitely growing tombstone set is a bounded design or that a missing pruned row allows reuse.
+
+### 12.4 Evidence and remaining implementation work
+
+`consensus/core/tests/palw_exec_work_plan.rs` checks each cell against a position-by-position IR walk
+for all seven checked-in architecture fixtures; coarse/fine partitions preserve the full vector
+under both existing cost policies. It also exercises prompt replay, a tiny run claiming a large
+cell, fabricated declared cost, invalid partitions/context bounds, out-of-artifact positions and a
+valid 1,024-layer IR whose execution exceeds the root cost bound without enumerating its positions.
+These are reference-function tests, not node acceptance or pruning evidence. The prefix exact-decode
+refusal has a fold regression that accepted the wrong shape before the fix.
+
+The remaining WORK implementation is the authenticated plan format and cost-version snapshot;
+all declaration / slice / producer / replay callers; the partition-independent useful-work key
+and its bounded pruning rule; checked internal arithmetic; and node/restart/pruned replay attack
+tests. BUDGET and WINDOW remain separate blockers: correct costs alone do not stop early payout
+or retain post-Final collectible liability.

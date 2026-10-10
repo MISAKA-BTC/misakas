@@ -1938,6 +1938,35 @@ mod amendment_1 {
         assert!(s.exec_v2_root_v1(&claim).is_none());
     }
 
+    #[test]
+    fn a_prefix_cannot_change_the_real_claims_exact_decode_length_even_with_a_matching_output_commitment() {
+        let (p, mut s, claim) = world(Some(0));
+        with_route(&mut s, claim, Some(PLAN));
+        let mut prefix = Prefix::new(&mut s, claim, ClaimStateV1::Final { final_daa: 105 }, false);
+        let real = s.claim(&claim).unwrap();
+        let facts = &s.tir_class_v1(&real.class_id).unwrap().facts;
+        let (_, context) = palw_exec_v2_real_job_v1(facts, &real.job_identity, xx_declare().prompt_ids_form_v1()).unwrap();
+        assert_eq!(context.exact_decode_tokens, 1);
+
+        // A self-consistent two-token kernel job and its output hash under the ONE-token REAL context.
+        // The output-root function hashes its inputs; it is not an execution-shape validator.
+        let generated = vec![5, 6];
+        prefix.job.max_new_tokens = generated.len() as u32;
+        prefix.row.job_id = prefix.job.id();
+        let ClaimBodyV1::Program { claim: kernel_claim, .. } = &mut prefix.row.body else { unreachable!() };
+        kernel_claim.job_id = prefix.job.id();
+        kernel_claim.generated = generated.clone();
+        prefix.claim_id = Hash64::from_bytes(kernel_claim.id());
+        prefix.stream = prefix.job.prompt.clone();
+        prefix.stream.extend_from_slice(&generated);
+        s.claims.get_mut(&claim).unwrap().output_root = palw_attempt_output_root_v1(&context, &generated);
+        prefix.install(&mut s);
+
+        let err = open(&p, &s, prefix.decl(claim)).err().expect("a matching hash cannot enlarge the REAL decode").to_string();
+        assert!(err.contains("its decode differs"), "{err}");
+        assert!(s.exec_v2_root_v1(&claim).is_none());
+    }
+
     fn prefix_clone(p: &Prefix) -> Prefix {
         Prefix { claim_id: p.claim_id, job: p.job.clone(), row: p.row.clone(), stream: p.stream.clone() }
     }

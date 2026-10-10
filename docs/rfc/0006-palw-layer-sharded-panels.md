@@ -851,10 +851,13 @@ with a declared plan:
   `misaka-palw-tir-exec`; batched on a device by `misaka-palw-tir-gpu`), the readiness proof over a
   shard's rows, and the ledger's need for a shard (`PalwRoleMemoryNeedV1` over the shard's bytes).
 
-## Open questions
+## Historical open questions — initial baseline
 
-Each question carries the **recommended default** (marked so) that this text assumes until the user
-decides.
+The following list records the initial alternatives. The v1 implementation's constants record
+adoption of their recommended defaults on 2026-10-03 (`palw_tir_shard_v1.rs`), and the implemented
+baseline is described under **Decision** below. These are not unresolved choices for the live v1
+rules. New probabilistic coverage, V3 strata and segment-resident pricing have their own later
+review / activation requirements; this historical list does not authorize their activation.
 
 1. **One fence or two?** A plan-and-draw fence and a licensing fence would let a network draw stratified
    panels and attest cells before licensing by parts (shadow mode).
@@ -898,7 +901,20 @@ decides.
 
 ## Decision
 
-<Open.>
+The implemented v1 baseline adopts the nine recommended defaults above: one original shard fence;
+three class seats with two required attesters per cell and an outsider over the whole shard;
+`TirStepRun` DA; layers-only as the default with `S_P = 2` offered for the S1 plan; work-share lock / pay
+with the existing floor; the binding shard's effective readiness for class room; the network-seat-budget
+minimum shard count with at most twice the minimum; and the original measured-speed constant.
+`palw_tir_shard_plan_shape_v1` enforces the offered position counts, 2..64 shards, the layer-count bound
+and the derived under/over-sharding limits. These choices describe the existing implementation.
+
+The v1 fence is live on testnet-12 at DAA 5,300. The later [RFC6/10 implementation record](../design/palw/shard-rfc6-10.md)
+adds V3 per-shard draws and non-seat watchers behind the permissionless-panel fence, and resident-aware
+pricing behind the separate dormant `palw_tir_shard_segment_v2` fence. Live v1 work pricing is preserved.
+The [four-RFC design audit](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md) tracks the remaining
+coverage / public-court / worst-cell capacity / fee evidence. Model acquisition follows ADR-0177 and
+the later §3.1 amendment; historical readiness is not approval of a new acquisition-based earning gate.
 
 ## Shared verification-challenge boundary — 2026-10-08
 

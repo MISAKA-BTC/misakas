@@ -277,6 +277,8 @@ pub mod palw_exec_v2;
 pub mod palw_exec_v2_anchor;
 /// RFC-0008 v2 amendment 1: the slice verification route — a slice is verified, convicted or defaulted through the G14 kernel route.
 pub mod palw_exec_v2_verify;
+/// RFC-0008 WORK: executable reference for IR-derived continuation costs; no consensus caller yet.
+pub mod palw_exec_work_plan_v1;
 /// RFC-0008 v2: the work-slice ledgers (`WorkSliceUse`, `RootWorkBudget`, `JobWorkUse`), the canonical plan, the admission refusals and the root's one settlement; dormant behind `palw_exec_payload_v2`.
 pub mod palw_work_slice_v2;
 /// Spend-once execution-round quanta: 1 verified CanonicalWork → N unique permit tickets.

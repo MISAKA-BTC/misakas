@@ -128,7 +128,8 @@ pub struct PalwExecV2PrefixInputsV1<'a> {
 ///
 /// 1. a single-program claim of the bound kernel class, by the root bond, of a job carrying the prefix job nonce, not failed;
 /// 2. its job's prompt is the prompt the REAL claim's anchor names;
-/// 3. its generated tokens are the REAL claim's committed output: `palw_attempt_output_root_v1(ctx, generated) == output_root`;
+/// 3. its job and generated tokens have the REAL context's nonzero exact decode length, and are
+///    the committed output: `palw_attempt_output_root_v1(ctx, generated) == output_root`;
 /// 4. the declared initial boundary is `token_state(prompt ‖ generated)`.
 ///
 /// So the initial boundary is linked to the REAL claim's output from public material alone, and the REAL claim's run is a claim the
@@ -168,6 +169,12 @@ pub fn palw_exec_v2_prefix_binding_v1(
     }
     if job.prompt != inputs.real_prompt {
         return Err(PrefixNotBound("prompt"));
+    }
+    if inputs.real_context.exact_decode_tokens == 0
+        || job.max_new_tokens != inputs.real_context.exact_decode_tokens
+        || claim.generated.len() != inputs.real_context.exact_decode_tokens as usize
+    {
+        return Err(PrefixNotBound("decode"));
     }
     if crate::palw_attempt_rules_v1::palw_attempt_output_root_v1(inputs.real_context, &claim.generated) != inputs.real_output_root {
         return Err(PrefixNotBound("output"));
