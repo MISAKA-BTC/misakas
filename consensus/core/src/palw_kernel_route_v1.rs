@@ -523,12 +523,12 @@ pub struct KernelClaimReadV1 {
     pub aux_root: Hash64,
 }
 
-/// One page of the route's rows, in `(table, key)` order (ledger tables first, then the consensus tables).
-#[derive(Clone, Debug, PartialEq, Eq)]
 /// The first table number of the route's consensus (aux) tables; the kernel ledger's own tables are numbered below it (op 211 serves
 /// both, in key order, so a page is ledger rows then aux rows).
 pub const PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1: u8 = 32;
 
+/// One page of the route's rows, in `(table, key)` order (ledger tables first, then the consensus tables).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KernelRowsPageV1 {
     pub rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
     /// The cursor to resume after (`None` at the end).
