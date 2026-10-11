@@ -494,8 +494,8 @@ def section6() -> None:
         check(0.23 < share < 0.27 and 0.055 < both < 0.07, f"T2 Sybil-neutral ({name})")
     # M*-49 numbers.
     m = 2
-    b_cap = m * t.G  # T5's bribery floor
-    show("DERIVED", "M*-49: B_cap = m·G (bribery floor, T5)", b_cap)
+    b_cap = m * t.G  # Former gross bribery illustration; actual net collection must be established (section 15).
+    show("DERIVED", "M*-49: B_cap = m·G (gross ceiling, not a collectible/net bribery floor)", b_cap)
     each, rest = mstar49_split(t.K, t.a, b_cap, 1)
     show("DERIVED", "M*-49: one honest drawn sealer / the earliest (maybe the liar's) sealer", f"{float(each)} / {float(rest)}")
     check(each + rest == floor_q(t.a * t.K), "M*-49 pays out exactly the 49%, so the coalition still recoups at most a·K")
@@ -504,9 +504,10 @@ def section6() -> None:
     f_min = fee_floor(c)
     show("ASSUMED", "watcher costs per check (fetch, check, localize, attest, carrier, demand burn; acquisition 50 over 100)",
          "0.9, 4, 0.05, 0.02, 0.02, 0.1; 0.5")
-    show("DERIVED", "T3: the fee floor F_min", f_min)
+    show("DERIVED", "T3 example: expected/amortised running-cost floor F_min (no epoch/startup guarantee)", f_min)
     worst = f_min - (c.fetch + c.check + c.localize + c.attest + c.carrier + c.demand_burn + c.acquire / c.checks_per_acquisition)
-    check(worst == 0 and each >= c.file, "T3: at F = F_min and B_cap/m ≥ c_file an honest drawn slot never loses")
+    check(worst == 0 and each >= c.file,
+          "T3 example: amortised running costs and filing are covered at the stated collected amount; not an epoch guarantee")
     p_need = float(p_min(t, c_saved=t.R, r_risk=Q(0), x=t.X, a_e=t.a))
     show("DERIVED", "p needed (C_saved = R, X = 10, post-Final, E1)", f"{p_need:.4%}")
     for sigma in (0.0, 0.25, 0.5, 0.9, 1.0):
@@ -1400,9 +1401,10 @@ def section13() -> None:
     for draws in (0.001, 0.01, 0.1):
         r_w = 0.0005  # ASSUMED capital cost per BILI of stake per epoch
         f_need = f_min + r_w / draws
-        show("DERIVED", f"fault-free epoch, {draws:g} draws per BILI of stake: F needed to cover the stake's capital cost too",
+        show("DERIVED", f"expected fault-free epoch, {draws:g} paid draws per BILI of stake: F needed to cover capital cost",
              f"F ≥ F_min + r_w/draws = {f_need:.3f} BILI (F = F_min alone loses {r_w:g} per BILI per epoch)")
-    show("DERIVED", "C9 (new): F = F_min is not enough in fault-free periods", "the fee must also carry the watcher stake's capital cost r_w·S_pool/(q·m·N)")
+    show("DERIVED", "C9: capital cost at positive paid draw volume",
+         "r_w·S_pool/(q·m·N) covers EXPECTED capital cost under funded/included draws; zero draws still lose (section 15)")
     # Sybil farming of the fee.
     sigma = 0.25
     m_slots, fee = 2, 5.59
@@ -1428,8 +1430,10 @@ def section13() -> None:
         ("C6", "served-demand burn on an honest drawn demand (A-DEM)", "UNKNOWN until built"),
         ("C7", "pool capture: the coalition's stake share σ in a model's pool", "UNKNOWN (σ unobservable)"),
         ("C8", "lazy verifier (T6)", "UNKNOWN"),
-        ("C9", "F = F_min leaves the watcher stake's capital cost unpaid in fault-free periods", "FAIL at F = F_min; PASS with the r_w term"),
+        ("C9", "F = F_min leaves capital unpaid; the r_w term is an expected-volume quote", "FAIL at F_min; expected bound conditional; each-epoch guarantee FAILS without idle funding"),
         ("C10", "DA load of checking every claim: 149 MB/s and 117 cores at 100 claims/DAA for one bond (MEAS)", "PASS only with sampling (q < 1)"),
+        ("C11", "a bounty ceiling is not a collectible minimum, including rounding and earlier splits", "UNKNOWN minimum; fee must cover any filing shortfall"),
+        ("C12", "acquisition/expected checks leaves first-use or stranded acquisition unpaid", "FAIL as an each-epoch bound; actual cost/funding must be bounded"),
     ]
     for cid, what, v in cex:
         show("DERIVED", f"{cid:4} {what}", v)
@@ -1572,7 +1576,211 @@ def section14() -> None:
     show("DERIVED", "scope", "model checks cover arithmetic and counterexamples; they supply no measured cost, collection floor, minimum contract or activation approval")
 
 
-SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11, 12: section12, 13: section13, 14: section14}
+# =====================================================================================================================================
+# §15 Watchers: expected draws, collectible minima and the idle epoch
+# =====================================================================================================================================
+
+
+@dataclass(frozen=True)
+class WatcherFundingBound:
+    status: str
+    required_slot_fee_sompi: int | None
+    net_lower_sompi: Q | None
+
+
+def _watcher_u64(value: int | None, name: str) -> None:
+    if value is not None and (type(value) is not int or not 0 <= value < 2**64):
+        raise ValueError(f"{name} is not a u64 sompi amount")
+
+
+def drawn_bounty_lower_sompi(
+    remaining_reporter_pool_lower_sompi: int | None, b_cap_sompi: int, max_sealing_slots: int,
+) -> int | None:
+    """Conditional minimum for a drawn slot with an accepted convicting seal.
+
+    The pool input is a minimum actually collectible AFTER all earlier splits,
+    not collateral, a reservation or a slash ceiling. No collection floor is
+    inferred from the advertised bounty cap. Integer rounding matches payouts.
+    """
+    _watcher_u64(remaining_reporter_pool_lower_sompi, "remaining reporter pool minimum")
+    _watcher_u64(b_cap_sompi, "bounty cap")
+    if type(b_cap_sompi) is not int or type(max_sealing_slots) is not int or not 0 < max_sealing_slots < 2**64:
+        raise ValueError("bounty cap and sealing slot maximum must be bounded integers")
+    if remaining_reporter_pool_lower_sompi is None:
+        return None
+    return min(remaining_reporter_pool_lower_sompi, b_cap_sompi) // max_sealing_slots
+
+
+def watcher_epoch_price_bound(
+    scope: str,
+    cost_upper_sompi: Q | None,
+    paid_slots_lower: Q | None,
+    retainer_collected_lower_sompi: int | None,
+    slot_fee_minimum_sompi: int | None,
+) -> WatcherFundingBound:
+    """A financial calculation, not a funded consensus mechanism or class PASS.
+
+    EXPECTED uses expected TOTAL cost and a lower bound on the expected number
+    of slots actually paid. EACH_EPOCH uses total cost on every permitted path
+    and a guaranteed integer paid-slot count. These scopes cannot be swapped.
+    Cost includes startup, idle stake/exit capital-time, unpaid checks, filing
+    shortfalls and aborts. Retainer is net collectible income in the SAME scope;
+    returning the watcher's own principal is never income. Joint paid slots
+    need a floor; multiplying draw/availability/inclusion marginals is invalid.
+    """
+    if scope not in ("EXPECTED", "EACH_EPOCH"):
+        raise ValueError("unknown watcher bound scope")
+    if cost_upper_sompi is not None and (type(cost_upper_sompi) is not Q or cost_upper_sompi < 0):
+        raise ValueError("watcher total cost must be a nonnegative exact fraction")
+    if paid_slots_lower is not None and (
+        type(paid_slots_lower) is not Q or not 0 <= paid_slots_lower < 2**64
+        or (scope == "EACH_EPOCH" and paid_slots_lower.denominator != 1)
+    ):
+        raise ValueError("watcher paid-slot bound must be exact, bounded and integer for EACH_EPOCH")
+    _watcher_u64(retainer_collected_lower_sompi, "collected retainer minimum")
+    _watcher_u64(slot_fee_minimum_sompi, "slot fee minimum")
+    if cost_upper_sompi is None or paid_slots_lower is None:
+        return WatcherFundingBound("UNKNOWN", None, None)
+    if retainer_collected_lower_sompi is None:
+        return WatcherFundingBound("UNKNOWN_MINIMUM_CONTRACT", None, None)
+    gap = cost_upper_sompi - retainer_collected_lower_sompi
+    if gap > 0 and paid_slots_lower == 0:
+        return WatcherFundingBound("UNFINANCEABLE_AT_ZERO_PAID_SLOTS", None, -gap)
+    raw = max(Q(0), gap) / paid_slots_lower if paid_slots_lower else Q(0)
+    required = -(-raw.numerator // raw.denominator)
+    if required >= 2**64:
+        return WatcherFundingBound("UNREPRESENTABLE", required, None)
+    if slot_fee_minimum_sompi is None and required > 0:
+        return WatcherFundingBound("UNKNOWN_MINIMUM_CONTRACT", required, None)
+    net = retainer_collected_lower_sompi + paid_slots_lower * (slot_fee_minimum_sompi or 0) - cost_upper_sompi
+    status = f"MEETS_{scope}_BOUND" if net >= 0 else "UNDERPRICED"
+    return WatcherFundingBound(status, required, net)
+
+
+def section15() -> None:
+    head(15, "Watcher finance: a per-slot quote is not an each-epoch guarantee")
+    show("DERIVED", "criterion fixed before scenarios", "H_lower + paid_slots_lower * F_minimum >= total_cost_upper, in ONE stated scope")
+    show("DERIVED", "cost basis", "full acquisition and distinct stake/exit capital-time, all running/filing costs, including unpaid/aborted work")
+    show("DERIVED", "minimum receipts", "funded net retainer and actually paid slots; own principal refunds and escrow/bounty ceilings are not income floors")
+    # ASSUMED sompi prices, not measured classes or approved policy.
+    capital, running, acquisition = Q(5_000_000), Q(86_000_000), Q(5_000_000_000)
+    show("ASSUMED", "capital / running per slot / first acquisition (sompi)", f"{capital} / {running} / {acquisition}")
+    # Exhaust the exact one-claim draw distribution. q is one shared check
+    # event per claim; only the m slots conditional on that event are independent.
+    cases = losses = 0
+    for q in (Q(0), Q(1, 2), Q(1)):
+        for share in (Q(1, 10), Q(1, 4), Q(1, 2), Q(1)):
+            for m in (1, 2, 3, 4):
+                masses = [(1 - q if k == 0 else Q(0)) + q * math.comb(m, k) * share**k * (1 - share)**(m - k)
+                          for k in range(m + 1)]
+                count = q * m * share
+                check(sum(masses) == 1 and sum(k * p for k, p in enumerate(masses)) == count,
+                      "watcher finance: exact shared check event and conditional stake draw conserve probability and expected slots")
+                quote = watcher_epoch_price_bound("EXPECTED", capital + count * running, count, 0, None)
+                if count == 0:
+                    check(quote.status == "UNFINANCEABLE_AT_ZERO_PAID_SLOTS",
+                          "watcher finance: zero demand cannot finance positive locked capital through a slot fee")
+                    continue
+                fee = quote.required_slot_fee_sompi
+                funded_expected = watcher_epoch_price_bound("EXPECTED", capital + count * running, count, 0, fee)
+                actual = [k * (fee - running) - capital for k in range(m + 1)]
+                check(sum(p * net for p, net in zip(masses, actual)) == funded_expected.net_lower_sompi >= 0,
+                      "watcher finance: positive-volume capital surcharge covers the stated EXPECTED bound")
+                if masses[0] > 0:
+                    check(actual[0] == -capital, "watcher finance: an undrawn watcher loses capital cost despite a sufficient expected quote")
+                    losses += 1
+                # A collected capital retainer plus a running fee covers every
+                # draw outcome, including zero; this is a CONDITIONAL contract.
+                for k, mass in enumerate(masses):
+                    if mass:
+                        balance = watcher_epoch_price_bound("EACH_EPOCH", capital + k * running, Q(k), int(capital), int(running))
+                        check(balance.status == "MEETS_EACH_EPOCH_BOUND" and balance.net_lower_sompi == 0,
+                              "watcher finance: stated collectible standby funding and running fees cover every possible draw")
+                cases += 1
+    check(cases == 32 and losses == 28, "watcher finance: complete finite draw matrix exercised, including certain and zero-slot outcomes")
+    show("DERIVED", "exact draw matrix", f"{cases} positive-volume cases, {losses} permit a loss despite an expected break-even quote; 16 zero-volume cases")
+    shared_zero = 1 - Q(1, 2) + Q(1, 2) * (1 - Q(1, 2))**2
+    fictitious_independent_zero = (1 - Q(1, 2) * Q(1, 2))**2
+    check(shared_zero == Q(5, 8) > fictitious_independent_zero == Q(9, 16),
+          "watcher finance: marginal per-slot check probabilities cannot replace the shared claim check event")
+    check(watcher_epoch_price_bound("EACH_EPOCH", capital, Q(0), 0, 2**64 - 1).status == "UNFINANCEABLE_AT_ZERO_PAID_SLOTS",
+          "watcher finance: even the largest finite fee pays nothing in an idle epoch")
+    check(watcher_epoch_price_bound("EACH_EPOCH", capital, Q(0), int(capital), None).status == "MEETS_EACH_EPOCH_BOUND",
+          "watcher finance: idle funding needs no conditional slot fee")
+    check(watcher_epoch_price_bound("EACH_EPOCH", capital, Q(0), int(capital) - 1, None).status == "UNFINANCEABLE_AT_ZERO_PAID_SLOTS",
+          "watcher finance: a one-sompi shortfall cannot be funded by nonexistent slots")
+    check(watcher_epoch_price_bound("EACH_EPOCH", capital + acquisition + running, Q(1), int(capital), int(running + acquisition / 100)).status == "UNDERPRICED",
+          "watcher finance: amortising acquisition over 100 expected checks cannot pay a stranded first-use acquisition")
+    startup = watcher_epoch_price_bound("EACH_EPOCH", capital + acquisition, Q(0), int(capital + acquisition), None)
+    check(startup.net_lower_sompi == 0, "watcher finance: a funded startup contract is needed even if demand disappears")
+    check(watcher_epoch_price_bound("EXPECTED", capital + running / 2, Q(0), 0, int(2 * capital + running)).status == "UNFINANCEABLE_AT_ZERO_PAID_SLOTS",
+          "watcher finance: costs can accrue on drawn work whose inclusion/payment has zero joint floor")
+    # Neither the current collateral nor the ceiling promises a future payout.
+    check(drawn_bounty_lower_sompi(None, 4_000_000_000, 2) is None,
+          "watcher finance: an advertised bounty cap supplies no collectible minimum")
+    for pool in (0, 1, 39, 40, 41, 1000):
+        for cap in (0, 39, 40, 1000):
+            for m in (1, 2, 3, 4):
+                minimum = drawn_bounty_lower_sompi(pool, cap, m)
+                for n in range(1, m + 1):
+                    check(minimum <= min(pool, cap) // n,
+                          "watcher finance: a guaranteed drawn-sealer receipt uses remaining pool, cap, slot count and integer rounding")
+    check(drawn_bounty_lower_sompi(1, 40, 2) == 0,
+          "watcher finance: B_cap/m=20 does not fund even one sompi when the remaining reporter pool is one")
+    check(drawn_bounty_lower_sompi(40, 40, 2) == 20,
+          "watcher finance: a collectible full pool recovers the former example's filing bound")
+    # Absent a collectible bounty, the fee must cover filing even with a huge
+    # advertised ceiling. Check the fee on both non-filing and filing paths.
+    file_cost = Q(20)
+    for pool in (None, 0, 1, 39, 40, 1000):
+        floor = drawn_bounty_lower_sompi(pool, 40, 2)
+        conservative_floor = floor if floor is not None else 0
+        required = running + max(Q(0), file_cost - conservative_floor)
+        for filed in (False, True):
+            cost = running + (file_cost if filed else 0)
+            bounty = conservative_floor if filed else 0
+            result = watcher_epoch_price_bound("EACH_EPOCH", cost - bounty, Q(1), 0, int(required))
+            check(result.status == "MEETS_EACH_EPOCH_BOUND",
+                  "watcher finance: collectible filing shortfall is funded on both filing and non-filing paths")
+        if required > running:
+            check(watcher_epoch_price_bound("EACH_EPOCH", running + file_cost - conservative_floor, Q(1), 0, int(required) - 1).status == "UNDERPRICED",
+                  "watcher finance: one sompi below the corrected running fee cannot pay the filing path")
+    # A bribe comparison is NET of incremental prosecution costs. Equality
+    # gives indifference; it does not force truthful behaviour.
+    check(Q(40, 2) - Q(1) < 20,
+          "watcher finance: gross bounty equal to affordable bribe fails when prosecution still costs one sompi")
+    check(watcher_epoch_price_bound("EXPECTED", Q(7, 3), Q(2, 3), 0, 4).required_slot_fee_sompi == 4,
+          "watcher finance: fractional costs/counts round upward once at the final quote")
+    check(watcher_epoch_price_bound("EXPECTED", Q(7, 3), Q(2, 3), 0, 3).status == "UNDERPRICED",
+          "watcher finance: one sompi below a fractional quote fails the expected bound")
+    check(watcher_epoch_price_bound("EXPECTED", Q(1), Q(1, 2**65), 0, 2**64 - 1).status == "UNREPRESENTABLE",
+          "watcher finance: an unrepresentable quote cannot clamp to u64")
+    for missing in ((None, Q(1), 0, 1), (Q(1), None, 0, 1), (Q(1), Q(1), None, 1), (Q(1), Q(1), 0, None)):
+        check(watcher_epoch_price_bound("EXPECTED", *missing).status in ("UNKNOWN", "UNKNOWN_MINIMUM_CONTRACT"),
+              "watcher finance: missing measurements or funded minima stay unknown")
+    # Stake-time, not the number of registered watcher identities, prices the
+    # capital funding. Floor each collected settlement; do not mint fractions.
+    area, rate = Q(17), Q(7, 3)
+    whole = math.floor(area * rate)
+    for pieces in ((Q(17),), (Q(1), Q(16)), (Q(17, 50),) * 50):
+        check(sum(pieces) == area and sum(math.floor(part * rate) for part in pieces) <= whole,
+              "watcher finance: splitting one stake-time area cannot increase capital funding by integer rounding")
+    for scope, cost, count, retainer, fee in (
+        ("EACH_EPOCH", Q(1), Q(1, 2), 0, 1), ("EXPECTED", Q(-1), Q(1), 0, 1),
+        ("EXPECTED", Q(1), Q(-1), 0, 1), ("EXPECTED", Q(1), Q(2**64), 0, 1),
+        ("EXPECTED", Q(1), Q(1), -1, 1), ("EXPECTED", Q(1), Q(1), 0, 2**64),
+        ("EXPECTED", Q(1), Q(1), True, 1), ("EPOCH", Q(1), Q(1), 0, 1),
+    ):
+        try:
+            watcher_epoch_price_bound(scope, cost, count, retainer, fee)
+        except ValueError:
+            pass
+        else:
+            check(False, "watcher finance: invalid bound input was accepted")
+    show("DERIVED", "scope", "arithmetic and counterexamples only; no funded retainer, class measurement, collectible floor, diligence proof or consensus activation is supplied")
+
+
+SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11, 12: section12, 13: section13, 14: section14, 15: section15}
 
 
 def main() -> int:
