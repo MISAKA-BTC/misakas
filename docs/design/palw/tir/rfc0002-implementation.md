@@ -2424,3 +2424,49 @@ ordinary point court and full reference/transport/economic envelope are under
 integration, not established by the candidate-price correction. Complete typed
 H/media jobs, actual tasks/contexts, independent honest execution Final and A6/A8
 remain open. The full goal is active; mode A and dormant shipping fences remain.
+
+## Verified component — native mixed v7 public prosecution, 2026-10-11
+
+Candidate tag40 now connects to explicit post/seal/reveal/expiry/DA tags41..47
+using one independently rederived full scope7/replay7 namespace. Tables68..76
+persist the protected marker, own seals, catalogs and bounded public DA. The
+old/new catalogs share original capital and eight statements; seals share
+four-per-bond/1,024-global bounds in both admission orders, requester slots share
+four and open demands are bounded at32. Public 16-KiB answers use saved
+coordinates/type/shape/root and decode no variable model. Own tag113 target4
+chunks survive generic saturation, bind the actual actor/vector seal, and
+require two guaranteed runs for the last chunk plus court. Old unsealed
+refutations, copied/borrowed/early seals and invalid paid evidence refuse.
+
+Six new native fixtures cover independent sparse selection/state fault finding,
+own seals and exact original-capital payout, selected-value default/horizon,
+protected chunks and proof allowance after an admission flood, fixed text
+length identity, and a fresh actual non-genesis participant. That participant
+registers its carrier-funded bond after full IBD/pruning import, obtains real
+public op211 page conversions plus DA evidence, runs its own checker, convicts
+and redeems an actual UTXO. Independent full IBD recreates the credit; pruning
+comparison retains all existing deltas and the complete tip/rows. The fixture
+uses a 65-axis TopK/Gather/Reduce/state graph with two positions, not an actual
+checkpoint or maximum-context execution. There is no live TCP RPC measurement.
+
+The exact recorded builds pass 27 native +16 SDK +41 core +155 kernel tests,
+239 distinct with one ignored hardware benchmark. The new count is13 (six
+native, three SDK, two DA core, seal and outer-codec unit tests), bringing the
+protected component pool from263 to276. This is not model/task/A6/A8 coverage.
+The compiled native kernel includes the trace-provider fix and staged candidate
+pricing. Core additionally repairs static allocation declarations36..47 and
+the tag113 test pin; runtime dispatch and fences are identical to the native
+build. Later graph9/resource10/settlement changes are not included. Kernel lib
+staging includes the native seal7 export only; its compiled source also declared
+unused point9/scope9 modules retained in the dependency preimage archive. Those
+separate module implementations are committed only with their own verification.
+Immutable binary/source hashes, 553-file compiled-source manifests and retained
+fixture failures are in
+[the native verdict](evidence/rfc02-native-mixed-v7-verdict.json).
+
+Clean candidate verification still grants no execution class, eligibility,
+reward or ExecutionFinal right. Actual-model honest Final/redemption, dynamic
+maximum/actual jobs, typed H/media graph continuity, persisted unified
+resource/economic ceilings, complete checkpoint/task/context fidelity and
+A6/A8>=90% remain open. The full goal stays active; source R remains externally
+acquired under mode A and shipping fences remain dormant.

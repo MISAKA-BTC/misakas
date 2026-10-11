@@ -3637,3 +3637,42 @@ state reset or history-continuity fault remains a separate graph relation:
 the selection proof alone MUST NOT claim that continuity was established.
 Complete typed v8 execution/checker/graph admission/native court integration,
 shared resources/economics and RFC02 checkpoint/Final acceptance remain open.
+
+### §18.9 — Native protected mixed scope/court/DA, v7
+
+Append inner tags 41..47 for post, own seal, own reveal, seal expiry, public
+demand, answer and demand settlement. Require a matured bound candidate and
+active descriptor; independently rederive the complete registered scope7 and
+replay7. A post MUST bind the entire admitted program, PC, token/trace namespace
+and both envelopes. An optional fixed text specialization MUST match its
+maximum template, current program, exact counts and both derived roots.
+Nonzero patch/audio counts MUST fail. These candidates do not grant execution
+eligibility or ExecutionFinal rights.
+
+Use tables 68..76 for the protected marker, seals, seal actor/count catalogs,
+demands, requester slots, served units, open count and unavailable marker.
+Bind a seal to version7/vector/actor/salt/exact proof bytes. Maturity is three
+DAA; expiry is at most 100 DAA and the original vector liability horizon.
+Share four seals per bond and 1,024 globally with v6. A copied, spent, early,
+expired or wrong-version seal MUST NOT authenticate a prosecution. Share the
+eight-vector original-capital catalog with older routes. Protect v7 vectors
+against unsealed old refutations.
+
+Public units are committed node headers, flat hash leaves and admitted IDX
+TopK output elements. Bound replies to 16 KiB, open demands to 32 per vector
+and shared requester slots to four. Save exact node index/count, dtype/shape
+and segment root at demand admission; authenticate replies against these
+fixed fields without decoding variable program/PC rows. Preserve the original
+liability through answer grace and any pending own seal or demand. Once-only
+fraud/default credit MUST use the actual collected original poster slash and
+the existing 490-permille finder share. It MUST NOT create another reserve or
+pay a second conviction/default reward.
+
+Append tag113 target4 for FlatProofV7{vector,actor}. Admit chunks only for the
+same actor's mature unspent seal and protected vector. Bound the terminal by
+the persisted scope and 1 MiB ceiling; reserve stored cloning/assembly before
+allocation. The last chunk and nested court MUST fit two guaranteed proof runs
+and their combined work. Generic lane exhaustion MUST NOT take an own protected
+slot. Bound and charge decode, scope/PC work, hashes and retries before work;
+an invalid paid filing MUST NOT poison the stored honest statement. Shipping
+fences and mode-A external source acquisition remain unchanged.

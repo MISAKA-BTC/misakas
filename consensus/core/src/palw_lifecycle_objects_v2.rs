@@ -1649,7 +1649,14 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         // these can act where that fence is not armed either.
         K::CommitSegmentedClaim { .. } | K::PostTiledJob { .. } | K::PostPromptTile { .. } => None,
         K::CommitClaimSalted { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
-        K::PostFlatModelVectorV6 { .. }
+        K::PostFlatModelVectorV7 { .. }
+        | K::SealFlatModelProofV7 { .. }
+        | K::RevealFlatModelProofV7 { .. }
+        | K::ExpireFlatModelSealV7 { .. }
+        | K::DemandFlatModelUnitV7 { .. }
+        | K::AnswerFlatModelUnitV7 { .. }
+        | K::SettleFlatModelDemandV7 { .. }
+        | K::PostFlatModelVectorV6 { .. }
         | K::SealFlatModelProofV6 { .. }
         | K::RevealFlatModelProofV6 { .. }
         | K::ExpireFlatModelSealV6 { .. }
@@ -1717,6 +1724,13 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (38, "RevealFlatModelProofV6", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (39, "ExpireFlatModelSealV6", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (40, "RegisterFlatModelCandidateV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (41, "PostFlatModelVectorV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (42, "SealFlatModelProofV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (43, "RevealFlatModelProofV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (44, "ExpireFlatModelSealV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (45, "DemandFlatModelUnitV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (46, "AnswerFlatModelUnitV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (47, "SettleFlatModelDemandV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -1946,6 +1960,14 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::KernelInner { lo: 20, hi: 20 }, "palw_panel_free_v1", "G14R CommitClaimSalted (salted claim seal v2)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 21, hi: 21 }, "palw_panel_free_v1", "RFC-0002 conformance-only class preparation", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 22, hi: 35 }, "palw_panel_free_v1", "RFC-0002 model artifact role binding", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 36, hi: 39 }, "palw_panel_free_v1", "RFC-0002 protected flat candidate v6", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 40, hi: 47 }, "palw_panel_free_v1", "RFC-0002 complete-scope mixed candidate v7", true),
+    a2_row(
+        PalwA2SlotV1::KernelNested { what: "PalwKernelChunkTargetV1::FlatProofV7 (4) inside KernelRouteChunkV1 (tag 113)" },
+        "palw_panel_free_v1",
+        "RFC-0002 actor-owned mature v7 proof chunks (also needs tag 113's probabilistic constraints fence)",
+        true,
+    ),
     // K2S: a segmented fault rides a filing (inner 7) under tag 110's own fence, as the filing does, so no guarded arm is needed;
     // `ClaimBodyV1::Segmented` is the kernel ledger's state, never carried.
     a2_row(
@@ -2520,7 +2542,7 @@ pub(crate) mod tests {
     /// What this layer owns is the shape: carried material rides, missing material does not.
     #[test]
     fn a_class_registration_rides_only_when_it_carries_what_checks_it() {
-        use crate::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
+        use crate::palw_base0_profile::{base0_profile_v1, rc_job_context, PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY};
         use crate::palw_state_v2::PalwClassAdmissionCarriageV2;
 
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's own graph");
@@ -2672,8 +2694,8 @@ pub(crate) mod tests {
     /// extracted is the object carried, byte for byte.
     #[test]
     fn certification_objects_ride_and_extract_unchanged() {
-        use crate::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
-        use crate::palw_e2e_adjudicability::{PalwE2eDrillEvidenceV1, palw_e2e_family_id_v1};
+        use crate::palw_base0_profile::{base0_profile_v1, PALW_RC_BASE0_GEOMETRY};
+        use crate::palw_e2e_adjudicability::{palw_e2e_family_id_v1, PalwE2eDrillEvidenceV1};
         use crate::palw_state_v2::{PalwCertificationEvidenceV1, PalwCertifiedLaneV1};
 
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's profile");
@@ -2710,7 +2732,7 @@ pub(crate) mod tests {
     #[test]
     fn derived_artifacts_ride_signed_and_shaped_and_extract_unchanged() {
         use crate::palw_derived_v1::{
-            PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN, PALW_DERIVED_V1_SIGNATURE_LEN, PALW_DERIVED_V1_VERSION, PalwDerivedArtifactV1, kind,
+            kind, PalwDerivedArtifactV1, PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN, PALW_DERIVED_V1_SIGNATURE_LEN, PALW_DERIVED_V1_VERSION,
         };
         let object = PalwDerivedArtifactV1 {
             version: PALW_DERIVED_V1_VERSION,
@@ -4176,7 +4198,7 @@ pub(crate) mod tests {
             (109, 0xcd35f41524be4a4f), // OPVB: PostComplete and the derived-eligibility forms of tag 109 (under palw_probabilistic_constraints_v1)
             (110, 0x7da0346d0633de78),
             (111, 0x2d490db20d075bfe),
-            (113, 0xca1188bcd2f663d2),
+            (113, 0x7f9269cd557944a6), // FlatProofV7 (4) is appended; its own actor/maturity checks keep the panel-free fence.
             (120, 0xcbb24fb8f993e5c6),
             // X8R's RFC-0008 v2 work-root declaration, under `palw_exec_payload_v2` (lifecycle kind fence 6).
             (130, 0x5774ef35c9a3fdaa),

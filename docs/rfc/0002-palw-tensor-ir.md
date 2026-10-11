@@ -3750,3 +3750,49 @@ candidate regressions. Exact inputs, paid-attempt accounting, compiled binary
 identities and the retained Qwen scope refusal are recorded in
 [the staged-pricing verdict](../design/palw/tir/evidence/rfc02-staged-price-v7-verdict.json).
 These tests do not establish full-model execution, native Final or A6/A8.
+
+### §14.40 — Native protected mixed-graph prosecution, v7 (2026-10-11)
+
+The registered v7 scope/replay now has explicit native post, own seal/reveal,
+expiry and public node/hash/selected-TopK-value demand/answer/default carriers
+(inner tags 41..47, following candidate tag 40). The complete stored candidate,
+scope and replay are rederived for posting and prosecution. Ordinary v5 faults
+and bounded point TopK7 faults share that exact namespace; v3/v6 carriers cannot
+bypass the protected route. An optional text length admission fixes one current
+program specialization and its exact token count, scope and replay. It does not
+make one registered class dynamically shaped or accept patch/audio inputs.
+
+Protected v7 seals share the v6 four-per-bond and 1,024-global limits. The
+original vector catalog still shares eight statements per bond with v2/v3/v6.
+Requester slots are shared in both admission orders with old DA routes. Public
+answers authenticate fixed saved coordinates and type/shape/root without
+decoding the stored program. There are at most 32 open demands per vector and
+16 KiB per answer. Invalid filings retain actor processing costs; only an own
+mature seal enters guaranteed proof work. Own tag113 target4 chunks bind the
+same actor and vector and survive saturation of the generic chunk catalog.
+The last chunk plus its court requires two guaranteed runs, without increasing
+the ordinary or proof ceilings.
+
+A fresh, non-genesis bond registered on an independently synced node acquires
+public op211 pages and requested evidence, independently checks a synthetic
+sparse/state graph, seals its own proof, convicts and redeems the actual UTXO
+credit. Full IBD independently recreates that credit; pruning import checks all
+retained deltas and complete tip/rows. The original poster reserve funds one
+49% finder/default share and the remaining burn. The paged RPC conversion is
+exercised locally; this is not a live TCP service measurement.
+
+The recorded build set passes 27 native, 16 SDK, 41 core and 155 kernel tests
+(239 distinct; one hardware benchmark ignored). Thirteen tests are new. Kernel
+trace-parameter and staged-pricing changes are included. The later resource10,
+checked-settlement and graph9 changes are not included; the native-to-core
+source difference is a static allocation inventory/test pin only. Compiled
+source preimages, immutable binary hashes, repaired fixture trials and scope
+limits are preserved in
+[the native verdict](../design/palw/tir/evidence/rfc02-native-mixed-v7-verdict.json).
+
+An honest protected candidate has clean verification but still creates no
+execution class, reward eligibility or ExecutionFinal right. This evidence uses
+a synthetic 65-axis TopK/Gather/state program, not the actual checkpoint. Honest
+execution Final, complete typed H/media jobs, shared resources/economics and
+actual-model A6/A8 acceptance remain open. Mode A and dormant shipping fences
+remain unchanged.

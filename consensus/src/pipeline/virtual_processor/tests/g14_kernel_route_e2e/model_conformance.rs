@@ -2026,3 +2026,5 @@ async fn flat_candidate7_native_shares_legacy_catalog_and_cannot_spend_reserved_
     let replay = net.replay().await;
     net.assert_same(&replay, "old/new shared catalog and registration flood preserves proof reserve");
 }
+
+mod flat_native_v7;

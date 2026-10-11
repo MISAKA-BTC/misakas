@@ -871,19 +871,32 @@ pub enum PalwKernelChunkTargetV1 {
     /// A kernel claim: the assembled object is a `FileProof` against it or a `Respond` to a demand on it (tag 110).
     Claim(Digest) = 0,
     /// An onboarding artifact binding: the assembled object is its refutation (tag 105).
-    Binding { v2_class: Hash64, kernel_param_root: Hash64 } = 1,
+    Binding {
+        v2_class: Hash64,
+        kernel_param_root: Hash64,
+    } = 1,
     /// **OPV-BOOT #1: the conformance attempt of V2 class `v2_class`** — the assembled object is that class's conformance evidence
     /// (tag 109: a Post by the class's registrant, opening the group itself, or a Refute by anyone), applied by its own arm. Its
     /// deadline is OPV-BOOT's `palw_conformance_chunk_target_v1(route, v2_class, daa)` (the agreed signature: the attempt's evidence
     /// deadline for a Post, its refutation window's end for a Refute; `None` when no attempt is open).
-    Conformance { v2_class: Hash64 } = 2,
+    Conformance {
+        v2_class: Hash64,
+    } = 2,
     /// A protected flat reveal, opened only by its mature seal's authenticated actor.
-    FlatProofV6 { vector: Hash64, actor: Digest } = 3,
+    FlatProofV6 {
+        vector: Hash64,
+        actor: Digest,
+    } = 3,
+    FlatProofV7 {
+        vector: Hash64,
+        actor: Digest,
+    } = 4,
 }
 
 /// Raw protected reveal plus the bounded signed outer envelope; never an arbitrary
 /// sixteen-part object. This bounds assembly before its variable Borsh decode.
 pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6: usize = misaka_palw_kernel::flat_seal6::FLAT_SEAL_MAX_PROOF_BYTES_V6 + (16 << 10);
+pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7: usize = misaka_palw_kernel::flat_seal7::FLAT_SEAL_MAX_PROOF_BYTES_V7 + (16 << 10);
 
 /// A completing part and terminal court must fit together. Derive this upper
 /// debit from fixed admitted metadata before opening/continuing a group.
@@ -898,6 +911,19 @@ pub fn protected_flat_chunk_finish_work_v6(h: &crate::palw_flat_model_vector_v3:
     .and_then(|w| w.checked_add(h.max_court_work))
     .and_then(|w| w.checked_add(metadata(proof)?))
     .and_then(|w| w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6)?))
+}
+
+pub fn protected_flat_chunk_finish_work_v7(h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3) -> Option<u64> {
+    let proof = usize::try_from(h.max_filing_bytes).ok()?.min(misaka_palw_kernel::flat_seal7::FLAT_SEAL_MAX_PROOF_BYTES_V7);
+    let metadata = |bytes: usize| crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?);
+    crate::palw_flat_model_vector_v3::flat_model_vector_work_v3(
+        h.program_bytes_len,
+        h.pc_instances,
+        proof.checked_add(h.post_bytes_len as usize)?,
+    )
+    .and_then(|w| w.checked_add(h.max_court_work))
+    .and_then(|w| w.checked_add(metadata(proof)?))
+    .and_then(|w| w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7)?))
 }
 
 /// **One chunk of a prosecution object in the route's own lane** (the body of `KernelRouteChunkV1`, tag 113). `group` is
@@ -989,6 +1015,10 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
         (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV6 { vector, actor }) => {
             palw_kernel_bond_id_v1(signer) == *actor
                 && matches!(K::decode(bytes), Ok(K::RevealFlatModelProofV6 { vector: id, .. }) if id == vector.as_bytes())
+        }
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV7 { vector, actor }) => {
+            palw_kernel_bond_id_v1(signer) == *actor
+                && matches!(K::decode(bytes), Ok(K::RevealFlatModelProofV7 { vector: id, .. }) if id == vector.as_bytes())
         }
         _ => false,
     }
@@ -1128,6 +1158,18 @@ impl PalwKernelRouteStateV1 {
                     && daa < header.liability_until)
                     .then(|| seal.expires_daa.min(header.liability_until).saturating_sub(1))
             }
+            PalwKernelChunkTargetV1::FlatProofV7 { vector, actor } => {
+                let header = self.flat_model_vector_header_v3(vector)?;
+                let seal = self.flat_model_seal_v7(vector, actor)?.seal;
+                (self.flat_model_vector_protected_v7(vector)
+                    && !header.refuted
+                    && !self.flat_vector_unavailable_v7(vector)
+                    && !seal.spent
+                    && daa >= seal.mature_daa
+                    && daa < seal.expires_daa
+                    && daa < header.liability_until)
+                    .then(|| seal.expires_daa.min(header.liability_until).saturating_sub(1))
+            }
         }
     }
 
@@ -1151,6 +1193,19 @@ impl PalwKernelRouteStateV1 {
                 return None;
             }
         }
+        if let PalwKernelChunkTargetV1::FlatProofV7 { vector, actor } = chunk.target {
+            let header = self.flat_model_vector_header_v3(&vector)?;
+            let seal = self.flat_model_seal_v7(&vector, &actor)?;
+            if actor != palw_kernel_bond_id_v1(&chunk.opener)
+                || seal.bond != chunk.opener
+                || seal.seal.spent
+                || !self.flat_model_vector_protected_v7(&vector)
+                || header.refuted
+                || self.flat_vector_unavailable_v7(&vector)
+            {
+                return None;
+            }
+        }
         let stored = self.chunk_group_v1(&chunk.opener, &chunk.group);
         let mut parts: BTreeMap<u8, &[u8]> = BTreeMap::new();
         if let Some(stored) = &stored {
@@ -1164,7 +1219,12 @@ impl PalwKernelRouteStateV1 {
             return None;
         }
         let size: usize = parts.values().map(|p| p.len()).sum();
-        if matches!(chunk.target, PalwKernelChunkTargetV1::FlatProofV6 { .. }) && size > PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6 {
+        let proof_cap = match chunk.target {
+            PalwKernelChunkTargetV1::FlatProofV6 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6),
+            PalwKernelChunkTargetV1::FlatProofV7 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7),
+            _ => None,
+        };
+        if proof_cap.is_some_and(|cap| size > cap) {
             return None;
         }
         let mut whole = Vec::with_capacity(size);

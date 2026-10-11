@@ -116,7 +116,7 @@ async fn world(mode: Mode) -> World {
 }
 
 /// The participant's coins: the re-addressed main premine output.
-fn newcomer_funding(net: &Net) -> (TransactionOutpoint, UtxoEntry) {
+pub(super) fn newcomer_funding(net: &Net) -> (TransactionOutpoint, UtxoEntry) {
     let main = premine_outpoint_for(net.config.params.net, MAIN_PREMINE_INDEX);
     let (outpoint, entry) = net.premine.iter().find(|(o, _)| *o == main).expect("the main premine output").clone();
     assert_eq!(entry.script_public_key, card_payout_spk(NEWCOMER), "re-addressed to the participant");
@@ -139,7 +139,7 @@ pub(super) async fn ibd_node(main: &Net) -> Net {
 /// through `P`, discards its own PALW tip and deltas through `P`, installs the PALW state `main` serves for `P` against `T`'s
 /// committed root (tail `0xEC` carries the route), and then takes the blocks after `P` (the parent's `..._survives_a_pruned_import`,
 /// here a node that then prosecutes).
-async fn pruned_import_node(main: &mut Net) -> Net {
+pub(super) async fn pruned_import_node(main: &mut Net) -> Net {
     use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
     let p = main.chain.sink();
     let ttpb = main.ttpb();
@@ -189,7 +189,7 @@ async fn start_node(main: &mut Net, how: Start) -> Net {
 }
 
 /// `from`'s blocks that `to` lacks arrive at `to` (a peer relaying its chain); `to`'s clock continues from the later of the two.
-async fn sync(from: &Net, to: &mut Net) {
+pub(super) async fn sync(from: &Net, to: &mut Net) {
     for b in chain_blocks(&from.chain, from.chain.sink()) {
         if to.chain.ctx.consensus.get_block(b.header.hash).is_err() {
             arrive(&to.chain, b, "a peer's block").await;
@@ -201,7 +201,7 @@ async fn sync(from: &Net, to: &mut Net) {
 
 /// **Two nodes at one tip agree**: the sink, the PALW state root, the kernel route's rows (as served), and the delta root of every
 /// chain block both hold a delta for (a pruned-import node has none at or below its pruning point, by construction).
-fn agree(main: &Net, node: &Net, what: &str) {
+pub(super) fn agree(main: &Net, node: &Net, what: &str) {
     assert_eq!(node.chain.sink(), main.chain.sink(), "{what}: same sink");
     assert_eq!(node.chain.tip_state().1.state_root(), main.chain.tip_state().1.state_root(), "{what}: same PALW state root");
     assert_eq!(node.chain.ctx.consensus.palw_kernel_route_v1(), main.api(), "{what}: same kernel route rows");
@@ -221,7 +221,7 @@ fn agree(main: &Net, node: &Net, what: &str) {
 /// bond named by index with a zero id, the bond key's signature over the registration and the operator key's over possession (one key
 /// for both), under this chain's domain; change at output 0. Taken by `node`'s mempool, carried by `node`'s template, folded by the
 /// next block. Returns the bond, which is then this network's actor [`NEWCOMER`] on `node` (its key and its change output).
-async fn register_newcomer(node: &mut Net, funding: (TransactionOutpoint, UtxoEntry)) -> PalwBondKeyV2 {
+pub(super) async fn register_newcomer(node: &mut Net, funding: (TransactionOutpoint, UtxoEntry)) -> PalwBondKeyV2 {
     use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
     let key = TestConsensus::palw_v2_registry_keypair(NEWCOMER as u64);
     let pubkey = key.verification_key.as_ref().to_vec();
@@ -278,7 +278,7 @@ async fn register_newcomer(node: &mut Net, funding: (TransactionOutpoint, UtxoEn
 }
 
 /// The participant's bond, known to `net` too (for the reads that name actors by index); its funding stays its own node's.
-fn know_newcomer(net: &mut Net, bond: PalwBondKeyV2) {
+pub(super) fn know_newcomer(net: &mut Net, bond: PalwBondKeyV2) {
     assert_eq!(net.chain.bonds.len(), NEWCOMER);
     net.chain.bonds.push(bond);
 }

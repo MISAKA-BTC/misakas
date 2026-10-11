@@ -82,6 +82,13 @@ pub const TAG_SEAL_FLAT_MODEL_PROOF_V6: u8 = 37;
 pub const TAG_REVEAL_FLAT_MODEL_PROOF_V6: u8 = 38;
 pub const TAG_EXPIRE_FLAT_MODEL_SEAL_V6: u8 = 39;
 pub const TAG_REGISTER_FLAT_MODEL_CANDIDATE_V7: u8 = 40;
+pub const TAG_POST_FLAT_MODEL_VECTOR_V7: u8 = 41;
+pub const TAG_SEAL_FLAT_MODEL_PROOF_V7: u8 = 42;
+pub const TAG_REVEAL_FLAT_MODEL_PROOF_V7: u8 = 43;
+pub const TAG_EXPIRE_FLAT_MODEL_SEAL_V7: u8 = 44;
+pub const TAG_DEMAND_FLAT_MODEL_UNIT_V7: u8 = 45;
+pub const TAG_ANSWER_FLAT_MODEL_UNIT_V7: u8 = 46;
+pub const TAG_SETTLE_FLAT_MODEL_DEMAND_V7: u8 = 47;
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 
@@ -187,6 +194,40 @@ impl SaltedCommitV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum KernelRouteObjectV1 {
+    PostFlatModelVectorV7 {
+        class: Digest,
+        binding: Digest,
+        post: Vec<u8>,
+    } = 41,
+    SealFlatModelProofV7 {
+        vector: Digest,
+        seal: Digest,
+    } = 42,
+    RevealFlatModelProofV7 {
+        vector: Digest,
+        salt: Digest,
+        proof: Vec<u8>,
+    } = 43,
+    ExpireFlatModelSealV7 {
+        vector: Digest,
+        actor: Digest,
+    } = 44,
+    DemandFlatModelUnitV7 {
+        vector: Digest,
+        slot: u8,
+        position: u32,
+        occurrence: u16,
+        node: u16,
+        kind: u8,
+        index: u64,
+    } = 45,
+    AnswerFlatModelUnitV7 {
+        demand: Digest,
+        answer: Vec<u8>,
+    } = 46,
+    SettleFlatModelDemandV7 {
+        demand: Digest,
+    } = 47,
     RegisterFlatModelCandidateV7 {
         binding: Digest,
         descriptor: Digest,
@@ -535,6 +576,13 @@ impl KernelRouteObjectV1 {
     /// The variant's declared discriminant.
     pub const fn tag(&self) -> u8 {
         match self {
+            Self::PostFlatModelVectorV7 { .. } => TAG_POST_FLAT_MODEL_VECTOR_V7,
+            Self::SealFlatModelProofV7 { .. } => TAG_SEAL_FLAT_MODEL_PROOF_V7,
+            Self::RevealFlatModelProofV7 { .. } => TAG_REVEAL_FLAT_MODEL_PROOF_V7,
+            Self::ExpireFlatModelSealV7 { .. } => TAG_EXPIRE_FLAT_MODEL_SEAL_V7,
+            Self::DemandFlatModelUnitV7 { .. } => TAG_DEMAND_FLAT_MODEL_UNIT_V7,
+            Self::AnswerFlatModelUnitV7 { .. } => TAG_ANSWER_FLAT_MODEL_UNIT_V7,
+            Self::SettleFlatModelDemandV7 { .. } => TAG_SETTLE_FLAT_MODEL_DEMAND_V7,
             Self::RegisterFlatModelCandidateV7 { .. } => TAG_REGISTER_FLAT_MODEL_CANDIDATE_V7,
             Self::PostFlatModelVectorV6 { .. } => TAG_POST_FLAT_MODEL_VECTOR_V6,
             Self::SealFlatModelProofV6 { .. } => TAG_SEAL_FLAT_MODEL_PROOF_V6,
@@ -631,6 +679,20 @@ impl KernelRouteObjectV1 {
         if tag == TAG_REGISTER_FLAT_MODEL_CANDIDATE_V7 {
             bounded_flat_candidate_v7(rest).map_err(|e| bad(RefusalKindV1::Malformed, e))?;
         }
+        if matches!(tag, TAG_POST_FLAT_MODEL_VECTOR_V7 | TAG_REVEAL_FLAT_MODEL_PROOF_V7 | TAG_ANSWER_FLAT_MODEL_UNIT_V7) {
+            let prefix = if tag == TAG_ANSWER_FLAT_MODEL_UNIT_V7 { 65 } else { 129 };
+            let count = rest
+                .get(prefix..prefix + 4)
+                .ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated mixed-court blob count".into()))?;
+            if u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(prefix + 4) {
+                return Err(bad(RefusalKindV1::Malformed, "mixed-court blob count differs from actual carrier".into()));
+            }
+        }
+        if tag == TAG_DEMAND_FLAT_MODEL_UNIT_V7
+            && (rest.get(74).is_none_or(|kind| *kind > 2) || (rest[74] == 0 && rest.get(75..83) != Some(&[0u8; 8][..])))
+        {
+            return Err(bad(RefusalKindV1::Malformed, "invalid mixed-court public unit kind/index".into()));
+        }
         let object: Self =
             borsh::from_slice(rest).map_err(|e| KernelRefusalV1::new(name_of_tag(tag), RefusalKindV1::Malformed, e.to_string()))?;
         // A variant whose ceiling depends on what it carries (a salted reveal: its commit's own) is held to it once parsed.
@@ -693,6 +755,13 @@ fn bounded_flat_candidate_v7(mut bytes: &[u8]) -> Result<(), String> {
 
 pub const fn name_of_tag(tag: u8) -> &'static str {
     match tag {
+        TAG_POST_FLAT_MODEL_VECTOR_V7 => "PostFlatModelVectorV7",
+        TAG_SEAL_FLAT_MODEL_PROOF_V7 => "SealFlatModelProofV7",
+        TAG_REVEAL_FLAT_MODEL_PROOF_V7 => "RevealFlatModelProofV7",
+        TAG_EXPIRE_FLAT_MODEL_SEAL_V7 => "ExpireFlatModelSealV7",
+        TAG_DEMAND_FLAT_MODEL_UNIT_V7 => "DemandFlatModelUnitV7",
+        TAG_ANSWER_FLAT_MODEL_UNIT_V7 => "AnswerFlatModelUnitV7",
+        TAG_SETTLE_FLAT_MODEL_DEMAND_V7 => "SettleFlatModelDemandV7",
         TAG_REGISTER_FLAT_MODEL_CANDIDATE_V7 => "RegisterFlatModelCandidateV7",
         TAG_POST_FLAT_MODEL_VECTOR_V6 => "PostFlatModelVectorV6",
         TAG_SEAL_FLAT_MODEL_PROOF_V6 => "SealFlatModelProofV6",
@@ -740,6 +809,12 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
 /// The ceiling of a declared tag (`None`: not a declared tag).
 pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
     Some(match tag {
+        TAG_POST_FLAT_MODEL_VECTOR_V7 => 1_583_616,
+        TAG_SEAL_FLAT_MODEL_PROOF_V7 | TAG_EXPIRE_FLAT_MODEL_SEAL_V7 => 130,
+        TAG_REVEAL_FLAT_MODEL_PROOF_V7 => (1 << 20) + 134,
+        TAG_DEMAND_FLAT_MODEL_UNIT_V7 => 84,
+        TAG_ANSWER_FLAT_MODEL_UNIT_V7 => (16 << 10) + 70,
+        TAG_SETTLE_FLAT_MODEL_DEMAND_V7 => 66,
         TAG_REGISTER_FLAT_MODEL_CANDIDATE_V7 => 1_583_616,
         TAG_POST_FLAT_MODEL_VECTOR_V6 => 1_583_616,
         TAG_SEAL_FLAT_MODEL_PROOF_V6 | TAG_EXPIRE_FLAT_MODEL_SEAL_V6 => 130,
@@ -834,6 +909,21 @@ mod tests {
             KernelRouteObjectV1::SealFlatModelProofV6 { vector: [1; 64], seal: [2; 64] },
             KernelRouteObjectV1::RevealFlatModelProofV6 { vector: [1; 64], salt: [2; 64], proof: vec![5, 0] },
             KernelRouteObjectV1::ExpireFlatModelSealV6 { vector: [1; 64], actor: [2; 64] },
+            KernelRouteObjectV1::PostFlatModelVectorV7 { class: [1; 64], binding: [2; 64], post: vec![7, 0] },
+            KernelRouteObjectV1::SealFlatModelProofV7 { vector: [1; 64], seal: [2; 64] },
+            KernelRouteObjectV1::RevealFlatModelProofV7 { vector: [1; 64], salt: [2; 64], proof: vec![7, 0] },
+            KernelRouteObjectV1::ExpireFlatModelSealV7 { vector: [1; 64], actor: [2; 64] },
+            KernelRouteObjectV1::DemandFlatModelUnitV7 {
+                vector: [1; 64],
+                slot: 0,
+                position: 1,
+                occurrence: 2,
+                node: 3,
+                kind: 2,
+                index: 65,
+            },
+            KernelRouteObjectV1::AnswerFlatModelUnitV7 { demand: [1; 64], answer: vec![7, 0, 1] },
+            KernelRouteObjectV1::SettleFlatModelDemandV7 { demand: [1; 64] },
         ];
         for o in objects {
             let bytes = o.encode();
@@ -846,8 +936,8 @@ mod tests {
         let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_REGISTER_CONFORMANCE_CLASS_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!(max_encoded_bytes_of_tag(41).is_none(), "41 is not allocated");
-        for tag in 22..=40 {
+        assert!(max_encoded_bytes_of_tag(48).is_none(), "48 is not allocated");
+        for tag in 22..=47 {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         let complete = KernelRouteObjectV1::CompleteModelConformanceV2 { class: [1; 64], binding: [2; 64], proof: vec![0; 90_000] };
@@ -856,6 +946,58 @@ mod tests {
         assert_eq!(max_encoded_bytes_of_tag(21), Some(MAX_REGISTER_CLASS_BYTES_V1));
         assert_eq!(name_of_tag(21), "RegisterConformanceClass");
         assert!(max_encoded_bytes_of_tag(TAG_SPEC_V1).is_some() && name_of_tag(TAG_SPEC_V1) == "Spec", "RFC-0004 Part II's tag 19");
+    }
+
+    #[test]
+    fn explicit_mixed7_outer_codec_refuses_truncation_inflated_counts_trailing_and_noncanonical_units() {
+        let objects = [
+            KernelRouteObjectV1::PostFlatModelVectorV7 { class: [1; 64], binding: [2; 64], post: vec![7, 0, 0] },
+            KernelRouteObjectV1::RevealFlatModelProofV7 { vector: [1; 64], salt: [2; 64], proof: vec![7, 0, 0] },
+            KernelRouteObjectV1::AnswerFlatModelUnitV7 { demand: [1; 64], answer: vec![7, 0, 0] },
+        ];
+        for object in objects {
+            let raw = object.encode();
+            for n in 0..raw.len() {
+                assert!(KernelRouteObjectV1::decode(&raw[..n]).is_err());
+            }
+            let mut inflated = raw.clone();
+            let count = if object.tag() == TAG_ANSWER_FLAT_MODEL_UNIT_V7 { 66 } else { 130 };
+            inflated[count..count + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(KernelRouteObjectV1::decode(&inflated).is_err());
+            let mut trailing = raw.clone();
+            trailing.push(0);
+            assert!(KernelRouteObjectV1::decode(&trailing).is_err());
+        }
+        for (kind, index) in [(0, 0), (1, 65), (2, u64::MAX)] {
+            let object = KernelRouteObjectV1::DemandFlatModelUnitV7 {
+                vector: [1; 64],
+                slot: 0,
+                position: 1,
+                occurrence: 2,
+                node: 3,
+                kind,
+                index,
+            };
+            let raw = object.encode();
+            assert_eq!(raw.len(), 84);
+            assert_eq!(KernelRouteObjectV1::decode(&raw).unwrap(), object);
+            for n in 0..raw.len() {
+                assert!(KernelRouteObjectV1::decode(&raw[..n]).is_err());
+            }
+            let mut bad = raw.clone();
+            bad[75] = 3;
+            assert!(KernelRouteObjectV1::decode(&bad).is_err());
+        }
+        let invalid = KernelRouteObjectV1::DemandFlatModelUnitV7 {
+            vector: [1; 64],
+            slot: 0,
+            position: 1,
+            occurrence: 2,
+            node: 3,
+            kind: 0,
+            index: 1,
+        };
+        assert!(KernelRouteObjectV1::decode(&invalid.encode()).is_err());
     }
 
     /// **Inner kind 20** (OPV-BOOT GAP-B1a): the salted reveal's wire form is `version ‖ 20 ‖ salt ‖ the commit's own tag ‖ fields`,

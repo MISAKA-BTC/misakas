@@ -55,7 +55,9 @@ pub(super) fn post(
     let (class, binding) = (Hash64::from_bytes(*class), Hash64::from_bytes(*binding));
     let route = builder.state.kernel_route.as_ref().unwrap();
     let mut ids = route.model_vectors_of_v2(signer);
-    if ids.len() + route.flat_model_vectors_of_v3(signer).len() >= MODEL_VECTORS_PER_BOND_V2 || bytes.len() > MODEL_VECTOR_MAX_POST_BYTES_V2 {
+    if ids.len() + route.flat_model_vectors_of_v3(signer).len() >= MODEL_VECTORS_PER_BOND_V2
+        || bytes.len() > MODEL_VECTOR_MAX_POST_BYTES_V2
+    {
         return Err(refused("vector catalog or carrier is full"));
     }
     let statement = route.model_artifact_binding_header_v2(&binding).ok_or_else(|| refused("no scoped vector model"))?;
@@ -217,6 +219,9 @@ pub(super) fn demand(
     let id = Hash64::from_bytes(*vector);
     let route = builder.state.kernel_route.as_ref().unwrap();
     let prior_slot = route.model_vector_demand_slot_v2(signer, slot);
+    if route.flat_vector_slot_v7(signer, slot).and_then(|d| route.flat_vector_demand_v7(&d)).is_some_and(|d| !d.settled) {
+        return Err(refused("shared v7 requester slot held"));
+    }
     let h = route.model_vector_header_v2(&id).ok_or_else(|| refused("no vector to demand"))?;
     let policy = route_ledger_policy_v1(builder)?;
     let deadline = ctx.daa_score.checked_add(policy.court_deadline_daa).ok_or_else(|| refused("vector deadline overflow"))?;

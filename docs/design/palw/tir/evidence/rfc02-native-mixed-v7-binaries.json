@@ -1,0 +1,44 @@
+[
+  {
+    "kind": "node",
+    "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-d754e11b8a8783f7",
+    "retained": "/tmp/rfc02-native-v7-final-node",
+    "bytes": 154798032,
+    "sha256": "30d4e57559ab77a5b047d384289e71fc26102031c08fdcde2b5d9ba1df3221e7"
+  },
+  {
+    "kind": "kernel",
+    "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227",
+    "retained": "/tmp/rfc02-native-v7-final-kernel",
+    "bytes": 11952304,
+    "sha256": "b98d3c48ba11e6b32c23069b0c7c3639e22ab8dd04958be8323461cd58eb2ffd"
+  },
+  {
+    "kind": "sdk-candidate",
+    "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate_v6-e0a451f829e555db",
+    "retained": "/tmp/rfc02-native-v7-final-sdk-candidate",
+    "bytes": 11280896,
+    "sha256": "5c30f921ca94e12a1f415f32b6be578ef7f20735fa57c8596dc635f9137d0fa0"
+  },
+  {
+    "kind": "sdk-snapshot",
+    "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_snapshot_v6-87ab5baee7c99b85",
+    "retained": "/tmp/rfc02-native-v7-final-sdk-snapshot",
+    "bytes": 29574336,
+    "sha256": "40f1664bdf4566efcfa9b41e3e2341799b25facf8eb3f7a3a97a0c55308fef8d"
+  },
+  {
+    "kind": "sdk-vector",
+    "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_vector_v7-53e3b1bfa706b34e",
+    "retained": "/tmp/rfc02-native-v7-final-sdk-vector",
+    "bytes": 6515984,
+    "sha256": "68c9d8416f4cc940c80787883662b26ba6f780f51c858467859bad7000b963cd"
+  },
+  {
+    "kind": "core",
+    "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-66e4c5da2143b684",
+    "retained": "/tmp/rfc02-native-v7-final-core",
+    "bytes": 98563544,
+    "sha256": "c8c30fc053b44a682f0ae3b0bf7e2f8ab78a3841d6da6cbd85bb77958af489aa"
+  }
+]

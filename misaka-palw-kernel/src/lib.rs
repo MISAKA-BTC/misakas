@@ -111,6 +111,7 @@ pub mod flat_replay6;
 pub mod flat_replay7;
 /// Staged actor-bound sealed flat evidence; not a consensus route or payout.
 pub mod flat_seal6;
+pub mod flat_seal7;
 /// Staged complete flat-v5 court resource admission.
 pub mod flat_scope5;
 pub mod flat_scope7;

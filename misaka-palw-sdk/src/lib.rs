@@ -83,6 +83,8 @@ pub mod kernel_execution;
 pub mod flat_candidate_v6;
 /// Explicit v7 mixed-court candidate metadata registration.
 pub mod flat_candidate_v7;
+pub mod flat_vector_v7;
+pub mod flat_snapshot_v7;
 /// RFC-0002 Phase F (F6, node half): registering an IR class.
 pub mod tir_certification;
 /// RFC-0004 §6.3 (PALW-MIP-15): a LoRA candidate's container as a composite of its parent's.

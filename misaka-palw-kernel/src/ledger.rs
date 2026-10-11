@@ -1027,7 +1027,14 @@ impl KernelLedgerV1 {
         self.authorize(obj, auth)?;
         let mut out = Vec::new();
         match obj {
-            KernelRouteObjectV1::PostFlatModelVectorV6 { .. }
+            KernelRouteObjectV1::PostFlatModelVectorV7 {..}
+            | KernelRouteObjectV1::SealFlatModelProofV7 {..}
+            | KernelRouteObjectV1::RevealFlatModelProofV7 {..}
+            | KernelRouteObjectV1::ExpireFlatModelSealV7 {..}
+            | KernelRouteObjectV1::DemandFlatModelUnitV7 {..}
+            | KernelRouteObjectV1::AnswerFlatModelUnitV7 {..}
+            | KernelRouteObjectV1::SettleFlatModelDemandV7 {..}
+            | KernelRouteObjectV1::PostFlatModelVectorV6 { .. }
             | KernelRouteObjectV1::SealFlatModelProofV6 { .. }
             | KernelRouteObjectV1::RevealFlatModelProofV6 { .. }
             | KernelRouteObjectV1::ExpireFlatModelSealV6 { .. }

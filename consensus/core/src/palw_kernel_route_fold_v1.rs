@@ -534,6 +534,41 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     // Inner 22/23 are consensus-owned state/collateral courts, never bare-ledger moves.
     match &object {
+        KernelRouteObjectV1::PostFlatModelVectorV7 { class, binding, post } => {
+            return super::palw_flat_model_vector_fold_v7::post(builder, ctx, signer, class, binding, post);
+        }
+        KernelRouteObjectV1::SealFlatModelProofV7 { vector, seal } => {
+            return super::palw_flat_model_vector_fold_v7::post_seal(builder, ctx, signer, vector, seal);
+        }
+        KernelRouteObjectV1::RevealFlatModelProofV7 { vector, salt, proof } => {
+            return super::palw_flat_model_vector_fold_v7::reveal(builder, ctx, signer, vector, salt, proof);
+        }
+        KernelRouteObjectV1::ExpireFlatModelSealV7 { vector, actor } => {
+            return super::palw_flat_model_vector_fold_v7::expire(builder, ctx, signer, vector, actor);
+        }
+        KernelRouteObjectV1::DemandFlatModelUnitV7 { vector, slot, position, occurrence, node, kind, index } => {
+            use crate::palw_flat_model_vector_da_v7::{FlatVectorUnitKindV7 as Kind, FlatVectorUnitV7};
+            let kind = match kind {
+                0 if *index == 0 => Kind::Node,
+                1 => Kind::Hash(*index),
+                2 => Kind::Value(*index),
+                _ => return Err(refused("unknown v7 public unit")),
+            };
+            return super::palw_flat_model_vector_da_fold_v7::demand(
+                builder,
+                ctx,
+                signer,
+                vector,
+                *slot,
+                FlatVectorUnitV7 { position: *position, occurrence: *occurrence, node: *node, kind },
+            );
+        }
+        KernelRouteObjectV1::AnswerFlatModelUnitV7 { demand, answer } => {
+            return super::palw_flat_model_vector_da_fold_v7::answer(builder, ctx, signer, demand, answer);
+        }
+        KernelRouteObjectV1::SettleFlatModelDemandV7 { demand } => {
+            return super::palw_flat_model_vector_da_fold_v7::settle_demand(builder, ctx, signer, demand);
+        }
         KernelRouteObjectV1::PostFlatModelVectorV6 { class, binding, post } => {
             return super::palw_flat_model_vector_fold_v3::post_protected(builder, ctx, signer, class, binding, post);
         }
@@ -1030,6 +1065,36 @@ pub(super) fn apply_kernel_route_chunk_v1(
             return Ok(());
         }
     }
+    if let PalwKernelChunkTargetV1::FlatProofV7 { actor, vector } = chunk.target {
+        super::palw_flat_model_vector_fold_v3::enabled(builder, ctx)?;
+        let policy = route_ledger_policy_v1(builder)?;
+        let runs = if policy.prosecution_reserved_runs() == 0 {
+            policy.max_adjudications_per_block
+        } else {
+            policy.prosecution_reserved_runs()
+        };
+        let valid = runs >= 2
+            && actor == palw_kernel_bond_id_v1(&chunk.opener)
+            && builder.state.kernel_route.as_ref().is_some_and(|r| {
+                r.chunk_target_deadline_v1(&chunk.target, ctx.daa_score).is_some()
+                    && r.flat_model_vector_header_v3(&vector)
+                        .and_then(|h| protected_flat_chunk_finish_work_v7(&h))
+                        .is_some_and(|w| w <= policy.guaranteed_proof_work_v1())
+            });
+        // Fixed seal authentication precedes assembly. Unsealed spam consumes only
+        // admission capacity; a mature authenticated filer uses the proof reserve.
+        // Read/clone/serialize the bounded own group and assemble/hash the final
+        // carrier. Price that worst envelope before variable stored-group decode.
+        let work = super::palw_flat_model_vector_fold_v7::metadata_work(chunk.bytes.len() + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7)
+            .ok_or_else(|| refused("protected chunk metadata work overflows"))?;
+        let Some(fee) = super::palw_flat_model_vector_fold_v3::charge(builder, ctx, &chunk.opener, work, valid)? else {
+            return Ok(());
+        };
+        builder.slash_bond(chunk.opener, fee)?;
+        if !valid {
+            return Ok(());
+        }
+    }
     // A target lives in the route's state (a claim's rows, a binding's aux row): no route, nothing to prosecute.
     let Some(route) = builder.state.kernel_route.as_ref() else {
         return Err(refused("no kernel route state: a kernel chunk has no target"));
@@ -1074,14 +1139,13 @@ pub(super) fn apply_kernel_route_chunk_v1(
             }
         }
     };
-    if matches!(chunk.target, PalwKernelChunkTargetV1::FlatProofV6 { .. })
-        && group
-            .parts
-            .values()
-            .map(Vec::len)
-            .sum::<usize>()
-            .checked_add(chunk.bytes.len())
-            .is_none_or(|n| n > PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6)
+    let proof_cap = match chunk.target {
+        PalwKernelChunkTargetV1::FlatProofV6 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6),
+        PalwKernelChunkTargetV1::FlatProofV7 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7),
+        _ => None,
+    };
+    if proof_cap
+        .is_some_and(|cap| group.parts.values().map(Vec::len).sum::<usize>().checked_add(chunk.bytes.len()).is_none_or(|n| n > cap))
     {
         return Err(refused("protected chunk assembly exceeds its reveal byte bound"));
     }
@@ -1108,7 +1172,7 @@ pub(super) fn apply_kernel_route_chunk_v1(
     if !palw_kernel_chunk_inner_matches_target_v1(&inner, &chunk.target) {
         return Err(refused("the assembled object is not a prosecution of its group's target"));
     }
-    if matches!(chunk.target, PalwKernelChunkTargetV1::FlatProofV6 { .. })
+    if matches!(chunk.target, PalwKernelChunkTargetV1::FlatProofV6 { .. } | PalwKernelChunkTargetV1::FlatProofV7 { .. })
         && !matches!(&inner, PalwConsensusObjectV2::KernelRouteV1 { signer, .. } if *signer == chunk.opener)
     {
         return Err(refused("a protected reveal must be signed by its chunk opener"));

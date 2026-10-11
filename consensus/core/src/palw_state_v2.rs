@@ -149,6 +149,10 @@ mod palw_model_vector_fold_v2;
 mod palw_flat_model_vector_fold_v3;
 #[path = "palw_flat_model_seal_fold_v6.rs"]
 mod palw_flat_model_seal_fold_v6;
+#[path="palw_flat_model_vector_fold_v7.rs"]
+mod palw_flat_model_vector_fold_v7;
+#[path="palw_flat_model_vector_da_fold_v7.rs"]
+mod palw_flat_model_vector_da_fold_v7;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_provider_court_fold_v1.rs"]
 mod palw_provider_court_fold_v1;
@@ -3974,6 +3978,8 @@ pub fn palw_bond_backs_live_duty_v1(state: &PalwChainStateV2, key: &PalwBondKeyV
         || state.model_vector_reserved_at_v2(key, now_daa) > 0
         || state.flat_model_vector_reserved_at_v3(key, now_daa) > 0
         || state.flat_model_seal_reserved_v6(key) > 0
+        || state.flat_model_seal_reserved_v7(key) > 0
+        || state.flat_vector_demand_reserved_v7(key) > 0
         || state.model_vector_demand_reserved_v2(key) > 0
         || state.flat_vector_demand_reserved_v3(key) > 0
         || state.provider_court_reserved(key) > 0
@@ -4023,6 +4029,8 @@ pub fn palw_bond_backs_live_duty_v2(
         || state.model_vector_reserved_at_v2(key, now_daa) > 0
         || state.flat_model_vector_reserved_at_v3(key, now_daa) > 0
         || state.flat_model_seal_reserved_v6(key) > 0
+        || state.flat_model_seal_reserved_v7(key) > 0
+        || state.flat_vector_demand_reserved_v7(key) > 0
         || state.model_vector_demand_reserved_v2(key) > 0
         || state.flat_vector_demand_reserved_v3(key) > 0
         || state.provider_court_reserved(key) > 0
@@ -4297,6 +4305,8 @@ pub fn palw_bond_committed_v1(
         .saturating_add(state.model_vector_reserved_at_v2(bond, now_daa))
         .saturating_add(state.flat_model_vector_reserved_at_v3(bond, now_daa))
         .saturating_add(state.flat_model_seal_reserved_v6(bond))
+        .saturating_add(state.flat_model_seal_reserved_v7(bond))
+        .saturating_add(state.flat_vector_demand_reserved_v7(bond))
         .saturating_add(state.model_vector_demand_reserved_v2(bond))
         .saturating_add(state.flat_vector_demand_reserved_v3(bond))
         // DA16: the provider court's leases and challenge bonds.
