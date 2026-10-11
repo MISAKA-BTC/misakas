@@ -14579,6 +14579,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::BondRegistered { .. } => "BondRegistered",
         PalwConsensusObjectV2::SeatReadinessProved { .. } => "SeatReadinessProved",
         PalwConsensusObjectV2::ClassManifestV2 { .. } => "ClassManifestV2",
+        PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { .. } => "ClassSemanticsDeclaredV1",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         PalwConsensusObjectV2::VerificationVertexV1 { .. } => "VerificationVertexV1",

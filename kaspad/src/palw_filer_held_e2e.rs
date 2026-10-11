@@ -1040,7 +1040,6 @@ async fn t54g_an_honest_8k_claim_produces_no_dissection() {
             anchor: h64(0x0A11_E1D0),
             attempt_draw: None,
             output_root: None,
-            registered_semantics: None,
             job_pin: None,
         },
         carried: None,

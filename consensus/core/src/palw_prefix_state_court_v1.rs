@@ -133,12 +133,12 @@ pub fn palw_prefix_kv_authenticated_bytes_v1<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
     use crate::palw_step_leg::{PalwStepMerkleTreeV1, binding_commitment_root_v1, step_tile_leaf_hash_ctx_v1};
 
-    fn fixture(inherited: bool) -> (PalwStepBindingV2, Vec<PalwPrefixKvTileV1>, Hash64) {
+    pub(crate) fn fixture(inherited: bool) -> (PalwStepBindingV2, Vec<PalwPrefixKvTileV1>, Hash64) {
         let mut b = crate::palw_attempt_rules_v1::floor_binding_for_tests_v1(
             &Hash64::from_u64_word(0xF17), PalwPromptIdsFormV1::Flat);
         b.job_context.declared_prefill_tokens = 4;
