@@ -325,6 +325,19 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
             "held_sompi":f.held,"paid_sompi":f.paid,"refunded_sompi":f.refunded,
         })
     });
+    let source_cost_bounds = match opt_in_sources.as_ref() {
+        Some(VerifiedBeaconSources::Paid(s)) => {
+            let b = s.cost_bounds();
+            Some(serde_json::json!({
+                "execution_sompi":b.execution_sompi,"carrier_sompi":b.carrier_sompi,
+                "material_sompi":b.material_sompi,"public_court_sompi":b.public_court_sompi,
+                "locked_capital_sompi":b.locked_capital_sompi,"minimum_net_receipt_sompi":b.minimum_net_receipt_sompi,
+                "maximum_source_deposit_sompi":b.maximum_source_deposit_sompi,"maximum_liability_daa":b.maximum_liability_daa,
+                "report_root":misaka_palw_sdk::runtime_pack::commit::hex(&b.report_root),
+            }))
+        }
+        _ => None,
+    };
     let v = &report.verdict;
     let posted = match &v.posted {
         None => "none".to_string(),
@@ -338,6 +351,7 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
                 "schema": "misaka.palw.onboard.verify.v1",
                 "class": class,
                 "source_fee":source_fee,
+                "source_cost_bounds":source_cost_bounds,
                 "beacon": v.beacon,
                 "seed": v.seed.map(|s| misaka_palw_sdk::runtime_pack::commit::hex(&s)),
                 "posted": posted,
@@ -358,6 +372,9 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
                 "source fee       {} sompi/source, {} slots; held {}, paid {}, refunded {} sompi",
                 f.terms.fee_per_source, f.terms.max_sources, f.held, f.paid, f.refunded
             );
+        }
+        if let Some(VerifiedBeaconSources::Paid(s)) = opt_in_sources.as_ref() {
+            println!("source net floor {} sompi under the frozen cost bounds", s.cost_bounds().minimum_net_receipt_sompi);
         }
         println!("posted evidence  {posted}");
         println!(

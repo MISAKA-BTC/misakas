@@ -456,6 +456,7 @@ pub struct VerifiedOptInSourcesV4 {
     fee_receipts:
         std::collections::BTreeMap<misaka_palw_kernel::hash::Digest, misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1>,
     paid_material: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PaidBeaconMaterialV5>,
+    paid_cost_bounds: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1>,
 }
 
 /// The v5 API can only obtain mandatory money facts from the same root-verified
@@ -466,6 +467,9 @@ pub struct VerifiedPaidOptInSourcesV5 {
 /// Public monetary row type, so CLI consumers do not need the internal kernel crate.
 pub type SourceFeeFundingV1 = misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1;
 impl VerifiedPaidOptInSourcesV5 {
+    pub fn cost_bounds(&self) -> &kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1 {
+        self.sources.paid_cost_bounds.as_ref().expect("v5 constructor verifies frozen cost bounds")
+    }
     pub fn fee_contract(&self) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1> {
         self.sources.fee_contract()
     }
@@ -574,7 +578,22 @@ fn opt_in_sources_from_kernel_rows_inner(
     } else {
         None
     };
-    Ok(VerifiedOptInSourcesV4 { target, facts, attempt_row, evidence_row, program, fee_contract, fee_receipts, paid_material })
+    let paid_cost_bounds = if paid {
+        Some(route.beacon_source_cost_bounds_v5(context).map_err(|e| Refusal::new("SOURCE_COST_MALFORMED", e))?)
+    } else {
+        None
+    };
+    Ok(VerifiedOptInSourcesV4 {
+        target,
+        facts,
+        attempt_row,
+        evidence_row,
+        program,
+        fee_contract,
+        fee_receipts,
+        paid_material,
+        paid_cost_bounds,
+    })
 }
 
 fn unhex(s: &str) -> Result<Vec<u8>, String> {

@@ -44,6 +44,33 @@ The v5 accumulator binds the whole context, source contract and monetary contrac
 
 The native collector derives all facts from the rooted source/funding/promise tables. The SDK requires `VerifiedPaidOptInSourcesV5`, built from the same root-verified op-211 snapshot as the target and attempt; v4 and legacy verification entry points refuse a v5 attempt. CLI fresh verification dispatches to that SDK API and reports the authenticated funding/promise figures. These checks authenticate against supplied roots; a connected RPC server's self-consistent roots still require an authenticated chain view. No new source-independence assumption or effective-bit approval is inferred: v5 remains at **0 effective bits** under the release gate.
 
+### V5 gross fee and scoped net cost bounds
+
+The monetary policy carries optional proposed `PalwBeaconSourceCostBoundsV1`.
+V5 refuses an absent tuple, a zero component/report identifier, arithmetic
+overflow, a source deposit above the tuple's bound or a liability span beyond its
+scope. V4 keeps its earlier gross-fee contract. For V5, the admitted gross floor is
+
+`max(policy.minimum_fee, execution + carrier + material + public_court + locked_capital + minimum_net_receipt)`.
+
+The native commitment freezes the whole tuple in separate rooted aux table 48
+alongside the immutable table-47 sponsor/floor/cap. Every later admission checks
+the frozen terms against the network policy; collector and SDK require the
+frozen cost tuple and refuse a gross floor below its sum. The SDK exposes that
+same tuple, and CLI verification reports it and its conditional minimum net
+receipt. Every monetary component and report identifier participates in the
+fee-policy fingerprint. Nothing is appended to the old attempt/header schema.
+
+This is a conditional accounting bound, **not measured profitability or price
+approval**. The report identifier is provenance, not a proof of a cost estimate.
+The probe's six one-sompi components are arithmetic fixtures only. Activation
+still needs reproducible worst-work/court/DA/carrier and capital-cost upper
+bounds for every eligible source profile, evidence covering the signed liability
+and payment-delay horizon, conversion assumptions and actual receipts. The span
+checked by code is `H - seal_start + 1` (H is inclusive); this alone does not bound
+wall-clock stalls or sparse ticks after H. A zero-volume retainer, independent
+participation and censorship/entropy guarantees remain separate requirements.
+
 ## Remaining connections and acceptance
 
 The dormant native onboarding adapter freezes the actual accepted conformance context and terms in auxiliary **table 46**, keyed by the full context ID; it does not append fields to the historical route header or attempt row. Every ledger load rebuilds admission inputs only from open, post-fence v4 attempts in their seal windows, checking the stored context and terms against the attempt and typed network policy. Closed targets remain as immutable contracts for settlement and verification.

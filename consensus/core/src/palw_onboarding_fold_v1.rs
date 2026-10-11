@@ -407,10 +407,11 @@ pub(super) fn apply_conformance_committed_v1(
         if fee.policy.minimum_fee_sompi == 0 || cap < policy.work_count_k {
             return Err(refused("invalid mandatory source fee floor/capacity"));
         }
+        let minimum_fee = fee.policy.minimum_fee_for(&target).map_err(refused)?;
         Some(misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTargetV1 {
             target,
             sponsor: crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(signer),
-            minimum_fee: fee.policy.minimum_fee_sompi,
+            minimum_fee,
             max_sources: cap,
         })
     } else {
@@ -430,6 +431,15 @@ pub(super) fn apply_conformance_committed_v1(
         );
     }
     if let Some(target) = paid_fee_target {
+        let bounds = extras
+            .beacon_source_fee
+            .and_then(|f| f.policy.cost_bounds)
+            .ok_or_else(|| refused("mandatory source cost bounds missing"))?;
+        builder.write_kernel_row(
+            crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5,
+            borsh::to_vec(&target.target.terms.context).expect("context serializes"),
+            Some(borsh::to_vec(&bounds).expect("source cost bounds serialize")),
+        );
         builder.write_kernel_row(
             crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5,
             borsh::to_vec(&target.target.terms.context).expect("context serializes"),

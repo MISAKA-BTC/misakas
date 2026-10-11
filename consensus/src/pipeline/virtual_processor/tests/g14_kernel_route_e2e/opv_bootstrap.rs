@@ -1677,6 +1677,8 @@ async fn run_paid_v5_source_budget(budget_activation: u64) {
         paid_opt_in_sources_from_kernel_rows_v5(&header, rows.clone(), &route.ledger_root(), &route.aux_root(), &context).unwrap();
     assert!(opt_in_sources_from_kernel_rows_v4(&header, rows.clone(), &route.ledger_root(), &route.aux_root(), &context).is_err());
     assert_eq!(sources.fee_contract().unwrap().paid, 0, "lock and conformance decision are before signed H");
+    let gross_cost_floor = sources.cost_bounds().minimum_gross_fee(&terms.source).unwrap();
+    assert!(sources.fee_contract().unwrap().terms.fee_per_source >= gross_cost_floor);
     let read = net.chain.ctx.consensus.palw_conformance_evidence_v1(c.v2).unwrap();
     let reads = PublicConformanceReadsV1 {
         attempt_row: read.attempt_row.unwrap(),
@@ -1692,6 +1694,7 @@ async fn run_paid_v5_source_budget(budget_activation: u64) {
     assert_eq!(attempt_effective_bits_v1(&route, &c.v2, &net.attempt(c.v2)), misaka_palw_challenge::EffectiveBitsV1::Bits(0));
     for table in [
         kaspa_consensus_core::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5,
+        kaspa_consensus_core::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5,
         misaka_palw_kernel::rows::TABLE_BEACON_SOURCE_FEE_PROMISES_V1,
     ] {
         let mut forged = rows.clone();
