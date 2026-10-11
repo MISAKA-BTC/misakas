@@ -83,11 +83,21 @@ impl RecoveryRun {
         premine: &[Funding],
     ) -> Self {
         if mode == RecoveryMode::NetworkVerifier {
-            // Real transaction relay checks normal near-sync status against wall time.
-            // Mine one normally validated recent heartbeat; no gate or cursor rule is waived.
-            chain.realtime = true;
-            chain.time = kaspa_core::time::unix_now().saturating_sub(1);
+            // Use already elapsed normal clock slots inside the real near-sync window.
+            // Keep the original native cadence, lead cap, deadline and admission checks.
+            let threshold = chain.config.expected_difficulty_window_duration_in_milliseconds() / 4;
+            let margin = 2 * kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS;
+            assert!(threshold > margin, "the native near-sync history must leave elapsed protocol slots");
+            chain.time = kaspa_core::time::unix_now().saturating_sub(threshold - margin);
             chain.heartbeat(vec![]).await;
+            assert!(matches!(
+                chain
+                    .view(kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(
+                        &foreign.expect("FP network fixture").2.as_ref().unwrap().0
+                    ))
+                    .phase,
+                PalwClaimPhaseV2::ReceiptLicensed { .. }
+            ));
         }
         let directory = tempfile::tempdir().unwrap();
         let mut producer_config = panel_config(chain, directory.path(), chain.bonds[0], funding);

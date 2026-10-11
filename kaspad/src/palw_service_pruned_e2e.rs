@@ -47,7 +47,6 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
         bonds: chain.bonds.clone(),
         network_domain: chain.network_domain,
         time: chain.time,
-        realtime: chain.realtime,
         nonce: chain.nonce,
         history: chain.history.clone(),
         _pruned_db: Some(lifetime),

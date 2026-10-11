@@ -176,7 +176,6 @@ struct Chain {
     bonds: Vec<PalwBondKeyV2>,
     network_domain: Hash64,
     time: u64,
-    realtime: bool,
     nonce: u64,
     history: Vec<Block>,
     _pruned_db: Option<kaspa_database::utils::DbLifetime>,
@@ -203,7 +202,7 @@ impl Chain {
             Some(config.params.genesis.hash),
         );
         let time = config.params.genesis.timestamp;
-        Self { tc, handles, config, bundle, bonds, network_domain, time, realtime: false, nonce: 0, history: vec![], _pruned_db: None }
+        Self { tc, handles, config, bundle, bonds, network_domain, time, nonce: 0, history: vec![], _pruned_db: None }
     }
     fn daa(&self) -> u64 {
         self.tc.get_virtual_daa_score()
@@ -218,11 +217,7 @@ impl Chain {
         block
     }
     fn stamp(&mut self, block: &mut MutableBlock) {
-        self.time = if self.realtime {
-            kaspa_core::time::unix_now().max(self.time.saturating_add(1))
-        } else {
-            self.time + self.config.params.target_time_per_block()
-        };
+        self.time += self.config.params.target_time_per_block();
         self.nonce += 1;
         block.header.timestamp = self.time;
         block.header.nonce = self.nonce;
