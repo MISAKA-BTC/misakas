@@ -650,7 +650,9 @@ pub fn qwen36_execute_for_attempt_with_sink_v1(
     max_step_leaf_count: u64,
     kind: crate::legs::Base0CaptureKindV1,
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
-    qwen36_execute_streaming_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, kind, &mut |_| {}, &mut |row: &[i32]| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32)
+    qwen36_execute_streaming_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, kind, &mut |_| {}, &mut |row: &[i32]| {
+        kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32
+    })
 }
 
 pub fn qwen36_execute_free_prompt_streaming_v1(
@@ -662,7 +664,9 @@ pub fn qwen36_execute_free_prompt_streaming_v1(
     max_step_leaf_count: u64,
     on_token: &mut dyn FnMut(u32),
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
-    qwen36_execute_free_prompt_select_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, on_token, &mut |row: &[i32]| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32)
+    qwen36_execute_free_prompt_select_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, on_token, &mut |row: &[i32]| {
+        kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32
+    })
 }
 
 /// [`qwen36_execute_free_prompt_streaming_v1`] under the selection rule the caller names — the
@@ -732,7 +736,11 @@ fn qwen36_execute_streaming_v1(
     // died on ibm printed nothing between its start and `dmesg`; this is what says.
     let started = std::time::Instant::now();
     let anon_at_start = crate::memory_phase::process_anon_bytes_v1();
-    let bracket = |at: &str, positions: usize, cache: &Qwen36Cache, capture: &crate::legs::Base0CaptureSinkV1, leg: &crate::legs::Base0CheckpointCaptureV1| {
+    let bracket = |at: &str,
+                   positions: usize,
+                   cache: &Qwen36Cache,
+                   capture: &crate::legs::Base0CaptureSinkV1,
+                   leg: &crate::legs::Base0CheckpointCaptureV1| {
         crate::memory_phase::execution_phase_v1(|| {
             let (filled, leaves) = capture.progress();
             let kind = match capture.kind() {
@@ -1238,52 +1246,53 @@ fn qwen36_cache_from_checkpoint_chunks_v1(
     let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
     let declared = profile.state_chunk_map_id;
     let mut cache = Qwen36Cache::new(shape);
-    let apply_attn = |cache: &mut Qwen36Cache, geometry: &map::PalwStateChunkGeometryV1, attn_chunks: &[Vec<u8>]| -> Result<(), String> {
-        if attn_chunks.len() as u64 != geometry.chunk_count() {
-            return Err(format!(
-                "the attention half names {} chunks and the opening carried {}",
-                geometry.chunk_count(),
-                attn_chunks.len()
-            ));
-        }
-        let count = geometry.positions as usize;
-        for (li, kind) in shape.layer_types.iter().enumerate() {
-            if *kind == crate::qwen36::Qwen36LayerKind::FullAttention {
-                cache.keys[li].resize(count, Vec::new());
-                cache.values[li].resize(count, Vec::new());
+    let apply_attn =
+        |cache: &mut Qwen36Cache, geometry: &map::PalwStateChunkGeometryV1, attn_chunks: &[Vec<u8>]| -> Result<(), String> {
+            if attn_chunks.len() as u64 != geometry.chunk_count() {
+                return Err(format!(
+                    "the attention half names {} chunks and the opening carried {}",
+                    geometry.chunk_count(),
+                    attn_chunks.len()
+                ));
             }
-        }
-        for (index, bytes) in attn_chunks.iter().enumerate() {
-            let entry = map::integer_kv_state_chunk_entry_v1(geometry, index as u64)
-                .ok_or_else(|| format!("the attention map has no entry for chunk {index}"))?;
-            let width = entry.row_bytes as usize;
-            for p in entry.position_start..entry.position_start + entry.position_count {
-                let row = map::integer_kv_state_row_v1(&entry, bytes, p)
-                    .ok_or_else(|| format!("attention chunk {index} is not its own length at position {p}"))?;
-                let values: Vec<i32> = if row.len() == width {
-                    if width % 4 == 0 {
-                        row.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+            let count = geometry.positions as usize;
+            for (li, kind) in shape.layer_types.iter().enumerate() {
+                if *kind == crate::qwen36::Qwen36LayerKind::FullAttention {
+                    cache.keys[li].resize(count, Vec::new());
+                    cache.values[li].resize(count, Vec::new());
+                }
+            }
+            for (index, bytes) in attn_chunks.iter().enumerate() {
+                let entry = map::integer_kv_state_chunk_entry_v1(geometry, index as u64)
+                    .ok_or_else(|| format!("the attention map has no entry for chunk {index}"))?;
+                let width = entry.row_bytes as usize;
+                for p in entry.position_start..entry.position_start + entry.position_count {
+                    let row = map::integer_kv_state_row_v1(&entry, bytes, p)
+                        .ok_or_else(|| format!("attention chunk {index} is not its own length at position {p}"))?;
+                    let values: Vec<i32> = if row.len() == width {
+                        if width % 4 == 0 {
+                            row.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+                        } else {
+                            row.iter().map(|b| *b as i8 as i32).collect()
+                        }
                     } else {
-                        row.iter().map(|b| *b as i8 as i32).collect()
-                    }
-                } else {
-                    return Err("the map describes a row this cache does not hold".into());
-                };
-                let side = match entry.kind {
-                    map::PalwStateChunkKindV1::Key => &mut cache.keys,
-                    map::PalwStateChunkKindV1::Value => &mut cache.values,
-                };
-                let layer = side
-                    .get_mut(entry.attn_layer as usize)
-                    .ok_or_else(|| format!("attention chunk {index} names layer {} this cache does not hold", entry.attn_layer))?;
-                let slot = layer
-                    .get_mut(p as usize)
-                    .ok_or_else(|| format!("attention chunk {index} names position {p} past the restored history"))?;
-                *slot = values;
+                        return Err("the map describes a row this cache does not hold".into());
+                    };
+                    let side = match entry.kind {
+                        map::PalwStateChunkKindV1::Key => &mut cache.keys,
+                        map::PalwStateChunkKindV1::Value => &mut cache.values,
+                    };
+                    let layer = side
+                        .get_mut(entry.attn_layer as usize)
+                        .ok_or_else(|| format!("attention chunk {index} names layer {} this cache does not hold", entry.attn_layer))?;
+                    let slot = layer
+                        .get_mut(p as usize)
+                        .ok_or_else(|| format!("attention chunk {index} names position {p} past the restored history"))?;
+                    *slot = values;
+                }
             }
-        }
-        Ok(())
-    };
+            Ok(())
+        };
     let apply_gdn = |cache: &mut Qwen36Cache, gdn_chunks: &[Vec<u8>]| -> Result<(), String> {
         let (layers, _) = crate::fp_recompute::qwen36_recurrence_state_v1(shape, cache);
         let heads = shape.linear_v_heads as u32;
@@ -1458,7 +1467,10 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         // **CoreV1 (ADR-0152 v3.1 J-5): the chain's job, over this class's registered profile** — as
         // the dense tier's (see there): the formula canonical, the core prompt, no artifact field.
         if self.attempt_rules == kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1 {
-            let profile = self.profile.as_ref().ok_or_else(|| "CoreV1 derives a job from the class's registered profile, and this instance holds none".to_string())?;
+            let profile = self
+                .profile
+                .as_ref()
+                .ok_or_else(|| "CoreV1 derives a job from the class's registered profile, and this instance holds none".to_string())?;
             let formula = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_canonical_v1(profile, false);
             if formula != Some(self.canonical_job) {
                 return Err(format!(
@@ -1540,14 +1552,14 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
         // RFC-0001 §A: the executor replays its own committed ids (a V4 answer is not re-selected).
         crate::fp_interval::base0_fp_executor_replay_v1(capture, || -> Result<Vec<u8>, String> {
-        crate::segment_opening::base0_open_segment_checkpoint_capped_v2(
-            capture,
-            seat_count,
-            segment_index,
-            self.profile.as_ref(),
-            self.step_ladder_cap(),
-        )
-        .map_err(|e| e.to_string())
+            crate::segment_opening::base0_open_segment_checkpoint_capped_v2(
+                capture,
+                seat_count,
+                segment_index,
+                self.profile.as_ref(),
+                self.step_ladder_cap(),
+            )
+            .map_err(|e| e.to_string())
         })
     }
 
@@ -1617,18 +1629,14 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             .global_node_slot(table, site.layer, 0)
             .ok_or_else(|| "this layer has no node to sample".to_string())?;
         let prefill = binding.job_context.declared_prefill_tokens;
-        let (call_index, position) = if site.position < prefill {
-            (0u32, site.position)
-        } else {
-            (site.position - prefill + 1, 0u32)
-        };
+        let (call_index, position) = if site.position < prefill { (0u32, site.position) } else { (site.position - prefill + 1, 0u32) };
         let coord = kaspa_consensus_core::palw_step::PalwStepCoordinateV1 { call_index, node_slot, position, tile_index: 0 };
         let leaf = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &coord)
             .ok_or_else(|| "the sampled site is not a main step of this job".to_string())?;
         let seats = seat_count.max(1);
         let k = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats);
-        let index = kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(binding.step_leaf_count, k, leaf)
-            .unwrap_or(0);
+        let index =
+            kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(binding.step_leaf_count, k, leaf).unwrap_or(0);
         // The segment holding the site, from the capture's own authenticated opening (SEAT-S4).
         let (profile, kernels) = self.interval_kernels_v1()?;
         let replay = crate::segment_opening::base0_replay_capture_segment_v2(
@@ -1746,7 +1754,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let job = match job {
             Some(job) => job,
             None => {
-                canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, self.canonical_job.0, self.canonical_job.1);
+                canonical =
+                    kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, self.canonical_job.0, self.canonical_job.1);
                 &canonical
             }
         };
@@ -1932,7 +1941,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             // A held class's fold attempt is the honest producer's own material and stays
             // licensable here; its selecting row is the residual SEAT-R (a full-mask `Valid` only
             // from a replay) and F1c's rule 12 close at `palw_offence_attribution`.
-            if claim.attempt_draw.is_some() && !self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1) {
+            if claim.attempt_draw.is_some()
+                && !self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1)
+            {
                 return PalwMaterialVerdictV1::Mismatch;
             }
             // **SEAT-S1: the whole job, here too** — a held class's attempt is a fold, and this
@@ -2112,41 +2123,41 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
         // RFC-0001 §A: the executor replays its own committed ids (a V4 answer is not re-selected).
         crate::fp_interval::base0_fp_executor_replay_v1(capture, || -> Result<Vec<u8>, String> {
-        let interval = self
-            .checkpoint_interval()
-            .ok_or_else(|| "this backend serves no registered graph, so it opens no interval".to_string())?;
-        // Two retention forms, one opening, the class's map deciding whether the history travels —
-        // ADR-0082 Decisions 7 and 9, exactly as the dense tier composes them.
-        let chunked =
-            match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
-                crate::produce::Base0RetentionV1::Folded(material) => {
-                    let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
-                    crate::fp_interval::base0_open_fp_interval_sparse_anchored_capped_v1(
+            let interval = self
+                .checkpoint_interval()
+                .ok_or_else(|| "this backend serves no registered graph, so it opens no interval".to_string())?;
+            // Two retention forms, one opening, the class's map deciding whether the history travels —
+            // ADR-0082 Decisions 7 and 9, exactly as the dense tier composes them.
+            let chunked =
+                match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
+                    crate::produce::Base0RetentionV1::Folded(material) => {
+                        let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
+                        crate::fp_interval::base0_open_fp_interval_sparse_anchored_capped_v1(
+                            &material,
+                            index,
+                            prompt_token_ids,
+                            interval,
+                            self.step_ladder_cap(),
+                            &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+                            &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
+                            self.prompt_ids_form,
+                        )
+                        .map_err(|e| e.to_string())?
+                    }
+                    crate::produce::Base0RetentionV1::Dense(material) => crate::fp_interval::base0_open_fp_interval_capped_v1(
                         &material,
                         index,
                         prompt_token_ids,
                         interval,
-                        self.step_ladder_cap(),
-                        &Qwen36IntervalKernels { artifact: &self.artifact, plan },
-                        &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
+                        self.network_ladder,
                         self.prompt_ids_form,
                     )
-                    .map_err(|e| e.to_string())?
-                }
-                crate::produce::Base0RetentionV1::Dense(material) => crate::fp_interval::base0_open_fp_interval_capped_v1(
-                    &material,
-                    index,
-                    prompt_token_ids,
-                    interval,
-                    self.network_ladder,
-                    self.prompt_ids_form,
-                )
-                .map_err(|e| e.to_string())?,
-            };
-        if self.profile.as_ref().is_some_and(crate::fp_interval::base0_fp_class_requires_flat_openings_v1) {
-            return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
-        }
-        Ok(chunked)
+                    .map_err(|e| e.to_string())?,
+                };
+            if self.profile.as_ref().is_some_and(crate::fp_interval::base0_fp_class_requires_flat_openings_v1) {
+                return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
+            }
+            Ok(chunked)
         })
     }
 
@@ -3127,247 +3138,295 @@ mod tests {
         use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFreePromptJobV3};
         let prompt = [1u32, 2, 3, 4];
         for inherited in [false, true] {
-            for false_named in [false,true] {
-            let mut job = PalwFreePromptJobV3 {
-                version: if inherited { 12 } else { 11 },
-                network_domain: Hash64::from_u64_word(0xd0),
-                class_id: class,
-                executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
-                    kaspa_consensus_core::tx::TransactionId::from_u64_word(0xb0),
-                    0,
-                ),
-                executor_pubkey: vec![0x11; 32],
-                operator_id: Hash64::from_u64_word(0xb),
-                anchor_block: Hash64::from_u64_word(0xa0),
-                anchor_daa: 4242,
-                job_nonce: [0x5a; 32],
-                tokenizer_id: Hash64::from_u64_word(0x71),
-                prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
-                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
-                    &prompt,
-                )
-                .unwrap(),
-                prompt_tokens: 4,
-                decode_token_limit: 1,
-                max_context_tokens: profile.n_ctx,
-                privacy_mode: 0,
-                prompt_mode: 0,
-                sampling_seed: [0; 32],
-                temperature_q: 0,
-                decode: Some(DecodeConfigV4::NOOP),
-                tail: Some(PalwFpJobTailV1::Prefix(if false_named { kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {state_root:Hash64::from_u64_word(0xbad17),..named} } else {named})),
-            };
-            if false_named { assert!(backend.verify_prefix_state_v1(&job, &prompt).is_err()); } else { backend.verify_prefix_state_v1(&job, &prompt).unwrap(); }
-            let good = backend.execute_free_prompt(&job, &prompt.map(|id| id as usize)).unwrap();
-            use kaspa_consensus_core::palw_step::{
-                PalwStepCoordinateV1, PalwStepOutLenV1, PalwStepTableV1, canonical_step_leaf_index,
-            };
-            use kaspa_consensus_core::palw_step_leg::{PalwStepMerkleTreeV1, PalwStepOpeningV1, step_tile_leaf_hash_ctx_v1};
-            let retained = crate::produce::base0_material_decode_any_v1(&good.outcome.material).unwrap();
-            let binding = retained.binding();
-            // Public answers are assembled by the producer from its normal folded retention.
-            // The production conversion checks the reproduced execution root before exposing
-            // these tiles; the outsider below receives only their authenticated openings.
-            let producer_tiles = backend.tiles_from_material_v1(&retained).unwrap();
-            let raw = &producer_tiles.tiles;
-            let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(i, t)| (*i, t)).collect();
-            let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
-            for (i, t) in raw {
-                hashes[*i as usize] = step_tile_leaf_hash_ctx_v1(&binding.job_context, &class, t);
-            }
-            let tree = PalwStepMerkleTreeV1::build_capped_v1(&hashes, 1 << 22).unwrap();
-            assert_eq!(tree.root(), binding.step_merkle_root);
-            let inventory = crate::inventory::qwen36_inventory_v1(&artifact, &profile).unwrap();
-            let operands: Vec<_> = (0..inventory.operands().len())
-                .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
-                .collect();
-            let mut semantic = kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
-                class,
-                inventory.root(),
-                &binding.job_context,
-                0,
-            );
-            semantic.prefix_state_relation =
-                Some(kaspa_consensus_core::palw_class_semantics_v1::PalwPrefixStateRelationV1::Qwen36HybridCacheV1);
-            let target = kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1 {
-                claim_id: Hash64::from_u64_word(0xc19),
-                class_id: class,
-                artifact_root: inventory.root(),
-                executor_bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond),
-                execution_root: binding.committed_execution_root,
-                lane: Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt),
-                segment_count: Some(4),
-                phase: None,
-                job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
-                trace_root: binding.full_logits_trace_root,
-                output_root: good.outcome.output_root,
-                registered_semantics: Some(semantic),
-            };
-            let rows_for = |slot: u32, position: u32, width: u64, tile_len: u32, start: u64, end: u64| {
-                (start / u64::from(tile_len)..=(end - 1) / u64::from(tile_len))
-                    .map(|tile| {
-                        let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position, tile_index: tile as u32 };
-                        let index = canonical_step_leaf_index(&profile, &binding.job_context, &coord).unwrap();
-                        let preimage = (**by_index.get(&index).unwrap()).clone();
-                        assert_eq!(u64::from(preimage.value_count), (width - tile * u64::from(tile_len)).min(u64::from(tile_len)));
-                        kaspa_consensus_core::palw_prefix_state_court_v1::PalwPrefixKvTileV1 {
-                            opening: PalwStepOpeningV1 {
-                                leaf_index: index,
-                                leaf_hash: hashes[index as usize],
-                                siblings: tree.path_v1(index as usize).unwrap(),
-                            },
-                            preimage,
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            };
-            let gdn = profile
-                .gdn_nodes
-                .iter()
-                .find(|n| {
-                    n.kernel_semantics_id
-                        == kaspa_consensus_core::palw_step::kernel_semantics_id_v1(
-                            kaspa_consensus_core::palw_step_refute::KDESC_Q36_GDN_STEP,
-                        )
-                })
-                .unwrap();
-            let widths: Vec<_> = gdn
-                .input_refs
-                .iter()
-                .map(|r| match profile.gdn_nodes[*r as usize].out_len {
-                    PalwStepOutLenV1::Fixed { elements } => u64::from(elements),
-                    _ => panic!("fixed GDN source"),
-                })
-                .collect();
-            for layer in 0..profile.layer_count {
-                if profile.layer_kind(layer) != kaspa_consensus_core::palw_step::PalwLayerKindV1::GatedDeltaNet {
-                    continue;
-                }
-                for head in 0..u32::from(profile.gdn_heads) {
-                    let mut replay = kaspa_consensus_core::palw_prefix_gdn_replay_v1::PalwPrefixGdnHeadReplayV1::new(
-                        &target,
-                        binding,
-                        &job,
-                        layer,
-                        head,
-                        &operands,
-                        1 << 20,
+            for false_named in [false, true] {
+                let mut job = PalwFreePromptJobV3 {
+                    version: if inherited { 12 } else { 11 },
+                    network_domain: Hash64::from_u64_word(0xd0),
+                    class_id: class,
+                    executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                        kaspa_consensus_core::tx::TransactionId::from_u64_word(0xb0),
+                        0,
+                    ),
+                    executor_pubkey: vec![0x11; 32],
+                    operator_id: Hash64::from_u64_word(0xb),
+                    anchor_block: Hash64::from_u64_word(0xa0),
+                    anchor_daa: 4242,
+                    job_nonce: [0x5a; 32],
+                    tokenizer_id: Hash64::from_u64_word(0x71),
+                    prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+                        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                        &prompt,
                     )
-                    .unwrap();
-                    let ranges = kaspa_consensus_core::palw_step_refute::qwen36_gdn_slice_v1(&profile, gdn, &widths, head).unwrap();
-                    for position in 0..k {
-                        let inputs: Vec<_> = gdn
-                            .input_refs
-                            .iter()
-                            .enumerate()
-                            .map(|(i, r)| {
-                                let n = &profile.gdn_nodes[*r as usize];
-                                rows_for(
-                                    profile.global_node_slot(PalwStepTableV1::Gdn, layer, *r as usize).unwrap(),
-                                    position,
-                                    widths[i],
-                                    n.tile_len,
-                                    ranges[i].0,
-                                    ranges[i].1,
-                                )
-                            })
-                            .collect();
-                        let before = borsh::to_vec(&replay).unwrap();
-                        let mut forged = inputs.clone();
-                        forged[0][0].preimage.values_le[0] ^= 1;
-                        assert!(replay.advance(&target, binding, &forged, 1 << 22).is_err());
-                        assert_eq!(borsh::to_vec(&replay).unwrap(), before);
-                        replay.advance(&target, binding, &inputs, 1 << 22).unwrap();
-                        replay = borsh::from_slice(&borsh::to_vec(&replay).unwrap()).unwrap();
-                    }
-                    assert_eq!(
-                        replay.completed_matrix().unwrap(),
-                        cache.gdn[layer as usize][head as usize].s,
-                        "every public reconstructed head matches the actual registered backend cache"
-                    );
+                    .unwrap(),
+                    prompt_tokens: 4,
+                    decode_token_limit: 1,
+                    max_context_tokens: profile.n_ctx,
+                    privacy_mode: 0,
+                    prompt_mode: 0,
+                    sampling_seed: [0; 32],
+                    temperature_q: 0,
+                    decode: Some(DecodeConfigV4::NOOP),
+                    tail: Some(PalwFpJobTailV1::Prefix(if false_named {
+                        kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {
+                            state_root: Hash64::from_u64_word(0xbad17),
+                            ..named
+                        }
+                    } else {
+                        named
+                    })),
+                };
+                if false_named {
+                    assert!(backend.verify_prefix_state_v1(&job, &prompt).is_err());
+                } else {
+                    backend.verify_prefix_state_v1(&job, &prompt).unwrap();
                 }
-            }
-            let context = Hash64::from_u64_word(0x170019);
-            use kaspa_consensus_core::palw_prefix_family_court_v1::{PalwPrefixCourtActionV1 as Action, PalwPrefixFamilyCourtV1};
-            let mut court = PalwPrefixFamilyCourtV1::new(context, &target, binding, &job, 1 << 22, 1 << 20).unwrap();
-            assert!(court.finish().is_err());
-            let mut public_digest = PalwQwen36PrefixCacheDigestV1::new(&profile, k).unwrap();
-            while let Some((unit, length, offset)) = public_digest.next_unit() {
-                match unit {
-                    PalwPrefixCacheUnitV1::GdnHead { layer, head } => {
-                        // The actual court owns its own zero-state replay; no producer cache
-                        // matrix enters its actions or checkpoint.
-                        court.movement(context, &Action::BeginHead { parameters: operands.clone() }).unwrap();
-                        let ranges = kaspa_consensus_core::palw_step_refute::qwen36_gdn_slice_v1(&profile, gdn, &widths, head).unwrap();
-                        for position in 0..k {
-                            let inputs = gdn.input_refs.iter().enumerate().map(|(i, r)| {
-                                let n = &profile.gdn_nodes[*r as usize];
-                                rows_for(profile.global_node_slot(PalwStepTableV1::Gdn, layer, *r as usize).unwrap(),
-                                    position, widths[i], n.tile_len, ranges[i].0, ranges[i].1)
-                            }).collect();
-                            court.movement(context, &Action::HeadPosition { inputs }).unwrap();
-                            court = borsh::from_slice(&borsh::to_vec(&court).unwrap()).unwrap();
-                        }
-                        let words = &cache.gdn[layer as usize][head as usize].s;
-                        let bytes: Vec<_> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-                        public_digest.push(unit, offset, &bytes).unwrap();
-                        for chunk in bytes.chunks(65_536) {
-                            court.movement(context, &Action::HeadDigest { length: chunk.len() as u32 }).unwrap();
-                        }
+                let good = backend.execute_free_prompt(&job, &prompt.map(|id| id as usize)).unwrap();
+                use kaspa_consensus_core::palw_step::{
+                    PalwStepCoordinateV1, PalwStepOutLenV1, PalwStepTableV1, canonical_step_leaf_index,
+                };
+                use kaspa_consensus_core::palw_step_leg::{PalwStepMerkleTreeV1, PalwStepOpeningV1, step_tile_leaf_hash_ctx_v1};
+                let retained = crate::produce::base0_material_decode_any_v1(&good.outcome.material).unwrap();
+                let binding = retained.binding();
+                // Public answers are assembled by the producer from its normal folded retention.
+                // The production conversion checks the reproduced execution root before exposing
+                // these tiles; the outsider below receives only their authenticated openings.
+                let producer_tiles = backend.tiles_from_material_v1(&retained).unwrap();
+                let raw = &producer_tiles.tiles;
+                let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(i, t)| (*i, t)).collect();
+                let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
+                for (i, t) in raw {
+                    hashes[*i as usize] = step_tile_leaf_hash_ctx_v1(&binding.job_context, &class, t);
+                }
+                let tree = PalwStepMerkleTreeV1::build_capped_v1(&hashes, 1 << 22).unwrap();
+                assert_eq!(tree.root(), binding.step_merkle_root);
+                let inventory = crate::inventory::qwen36_inventory_v1(&artifact, &profile).unwrap();
+                let operands: Vec<_> = (0..inventory.operands().len())
+                    .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
+                    .collect();
+                let mut semantic = kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
+                    class,
+                    inventory.root(),
+                    &binding.job_context,
+                    0,
+                );
+                semantic.prefix_state_relation =
+                    Some(kaspa_consensus_core::palw_class_semantics_v1::PalwPrefixStateRelationV1::Qwen36HybridCacheV1);
+                let target = kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1 {
+                    claim_id: Hash64::from_u64_word(0xc19),
+                    class_id: class,
+                    artifact_root: inventory.root(),
+                    executor_bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond),
+                    execution_root: binding.committed_execution_root,
+                    lane: Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt),
+                    segment_count: Some(4),
+                    phase: None,
+                    job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
+                    trace_root: binding.full_logits_trace_root,
+                    output_root: good.outcome.output_root,
+                    registered_semantics: Some(semantic),
+                };
+                let rows_for = |slot: u32, position: u32, width: u64, tile_len: u32, start: u64, end: u64| {
+                    (start / u64::from(tile_len)..=(end - 1) / u64::from(tile_len))
+                        .map(|tile| {
+                            let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position, tile_index: tile as u32 };
+                            let index = canonical_step_leaf_index(&profile, &binding.job_context, &coord).unwrap();
+                            let preimage = (**by_index.get(&index).unwrap()).clone();
+                            assert_eq!(u64::from(preimage.value_count), (width - tile * u64::from(tile_len)).min(u64::from(tile_len)));
+                            kaspa_consensus_core::palw_prefix_state_court_v1::PalwPrefixKvTileV1 {
+                                opening: PalwStepOpeningV1 {
+                                    leaf_index: index,
+                                    leaf_hash: hashes[index as usize],
+                                    siblings: tree.path_v1(index as usize).unwrap(),
+                                },
+                                preimage,
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let gdn = profile
+                    .gdn_nodes
+                    .iter()
+                    .find(|n| {
+                        n.kernel_semantics_id
+                            == kaspa_consensus_core::palw_step::kernel_semantics_id_v1(
+                                kaspa_consensus_core::palw_step_refute::KDESC_Q36_GDN_STEP,
+                            )
+                    })
+                    .unwrap();
+                let widths: Vec<_> = gdn
+                    .input_refs
+                    .iter()
+                    .map(|r| match profile.gdn_nodes[*r as usize].out_len {
+                        PalwStepOutLenV1::Fixed { elements } => u64::from(elements),
+                        _ => panic!("fixed GDN source"),
+                    })
+                    .collect();
+                for layer in 0..profile.layer_count {
+                    if profile.layer_kind(layer) != kaspa_consensus_core::palw_step::PalwLayerKindV1::GatedDeltaNet {
+                        continue;
                     }
-                    _ => {
-                        let plan = kaspa_consensus_core::palw_prefix_q36_public_rows_v1::PalwQ36PrefixPublicRowV1::new(
-                            binding, k, unit, offset, length,
+                    for head in 0..u32::from(profile.gdn_heads) {
+                        let mut replay = kaspa_consensus_core::palw_prefix_gdn_replay_v1::PalwPrefixGdnHeadReplayV1::new(
+                            &target,
+                            binding,
+                            &job,
+                            layer,
+                            head,
+                            &operands,
+                            1 << 20,
                         )
                         .unwrap();
-                        let inputs: Vec<_> = plan
-                            .sources
-                            .iter()
-                            .map(|source| {
-                                rows_for(
-                                    source.node_slot,
-                                    source.position,
-                                    source.row_values,
-                                    source.tile_len,
-                                    source.start,
-                                    source.end,
-                                )
-                            })
-                            .collect();
-                        public_digest.push(unit, offset, &plan.authenticate(binding, k, &inputs, 1 << 22).unwrap()).unwrap();
-                        let before = borsh::to_vec(&court).unwrap();
-                        assert!(court.movement(Hash64::default(), &Action::PublicRow { length: length as u32, inputs: inputs.clone() }).is_err());
-                        assert_eq!(borsh::to_vec(&court).unwrap(), before);
-                        court.movement(context, &Action::PublicRow { length: length as u32, inputs }).unwrap();
+                        let ranges =
+                            kaspa_consensus_core::palw_step_refute::qwen36_gdn_slice_v1(&profile, gdn, &widths, head).unwrap();
+                        for position in 0..k {
+                            let inputs: Vec<_> = gdn
+                                .input_refs
+                                .iter()
+                                .enumerate()
+                                .map(|(i, r)| {
+                                    let n = &profile.gdn_nodes[*r as usize];
+                                    rows_for(
+                                        profile.global_node_slot(PalwStepTableV1::Gdn, layer, *r as usize).unwrap(),
+                                        position,
+                                        widths[i],
+                                        n.tile_len,
+                                        ranges[i].0,
+                                        ranges[i].1,
+                                    )
+                                })
+                                .collect();
+                            let before = borsh::to_vec(&replay).unwrap();
+                            let mut forged = inputs.clone();
+                            forged[0][0].preimage.values_le[0] ^= 1;
+                            assert!(replay.advance(&target, binding, &forged, 1 << 22).is_err());
+                            assert_eq!(borsh::to_vec(&replay).unwrap(), before);
+                            replay.advance(&target, binding, &inputs, 1 << 22).unwrap();
+                            replay = borsh::from_slice(&borsh::to_vec(&replay).unwrap()).unwrap();
+                        }
+                        assert_eq!(
+                            replay.completed_matrix().unwrap(),
+                            cache.gdn[layer as usize][head as usize].s,
+                            "every public reconstructed head matches the actual registered backend cache"
+                        );
                     }
                 }
-            }
-            assert_eq!(
-                public_digest.finish().unwrap(),
-                named.state_root,
-                "all public component relations reproduce the native prefix root"
-            );
-            assert_eq!(court.finish(), Ok(false_named), "actual bad-context public leaves convict the false named prefix; honest clears");
-            if !false_named {
-            job.tail = Some(PalwFpJobTailV1::Prefix(kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {
-                state_root: Hash64::from_u64_word(0xbad17),
-                ..named
-            }));
-            assert!(backend.verify_prefix_state_v1(&job, &prompt).is_err());
-            let bad = backend.execute_free_prompt(&job, &prompt.map(|id| id as usize)).unwrap();
-            let bad_retained = crate::produce::base0_material_decode_any_v1(&bad.outcome.material).unwrap();
-            assert_eq!(retained.generated_token_ids(), bad_retained.generated_token_ids(), "same exact model answer IDs");
-            assert_eq!(retained.logits_rows(), bad_retained.logits_rows(), "same exact model logits");
-            for (run, material) in [(&good, &retained), (&bad, &bad_retained)] {
-                assert_eq!(run.outcome.output_root, output_commitment_v2(
-                    &material.binding().job_context.context_hash(), material.generated_token_ids(),
-                    &rendered_output_hash_v1(material.generated_token_ids())));
-            }
-            // Changing the signed prefix statement changes the job-bound output root even
-            // though it does not change the independently replayed arithmetic answer.
-            assert_ne!(retained.binding().job_context.context_hash(), bad_retained.binding().job_context.context_hash());
-            assert_ne!(good.outcome.output_root, bad.outcome.output_root);
-            }
+                let context = Hash64::from_u64_word(0x170019);
+                use kaspa_consensus_core::palw_prefix_family_court_v1::{PalwPrefixCourtActionV1 as Action, PalwPrefixFamilyCourtV1};
+                let mut court = PalwPrefixFamilyCourtV1::new(context, &target, binding, &job, 1 << 22, 1 << 20).unwrap();
+                assert!(court.finish().is_err());
+                let mut public_digest = PalwQwen36PrefixCacheDigestV1::new(&profile, k).unwrap();
+                while let Some((unit, length, offset)) = public_digest.next_unit() {
+                    match unit {
+                        PalwPrefixCacheUnitV1::GdnHead { layer, head } => {
+                            // The actual court owns its own zero-state replay; no producer cache
+                            // matrix enters its actions or checkpoint.
+                            let parameters = operands
+                                .iter()
+                                .filter(|opening| {
+                                    opening.operand.tensor_name == gdn.weight_name
+                                        && opening.operand.layer == Some(layer)
+                                        && opening.operand.row_start == head * 68
+                                        && opening.operand.bytes.len() == 68
+                                })
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            assert_eq!(parameters.len(), 1, "the original inventory has exactly one68-byte head parameter leaf");
+                            court.movement(context, &Action::BeginHead { parameters }).unwrap();
+                            let ranges =
+                                kaspa_consensus_core::palw_step_refute::qwen36_gdn_slice_v1(&profile, gdn, &widths, head).unwrap();
+                            for position in 0..k {
+                                let inputs = gdn
+                                    .input_refs
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, r)| {
+                                        let n = &profile.gdn_nodes[*r as usize];
+                                        rows_for(
+                                            profile.global_node_slot(PalwStepTableV1::Gdn, layer, *r as usize).unwrap(),
+                                            position,
+                                            widths[i],
+                                            n.tile_len,
+                                            ranges[i].0,
+                                            ranges[i].1,
+                                        )
+                                    })
+                                    .collect();
+                                court.movement(context, &Action::HeadPosition { inputs }).unwrap();
+                                court = borsh::from_slice(&borsh::to_vec(&court).unwrap()).unwrap();
+                            }
+                            let words = &cache.gdn[layer as usize][head as usize].s;
+                            let bytes: Vec<_> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+                            public_digest.push(unit, offset, &bytes).unwrap();
+                            for chunk in bytes.chunks(65_536) {
+                                court.movement(context, &Action::HeadDigest { length: chunk.len() as u32 }).unwrap();
+                            }
+                        }
+                        _ => {
+                            let plan = kaspa_consensus_core::palw_prefix_q36_public_rows_v1::PalwQ36PrefixPublicRowV1::new(
+                                binding, k, unit, offset, length,
+                            )
+                            .unwrap();
+                            let inputs: Vec<_> = plan
+                                .sources
+                                .iter()
+                                .map(|source| {
+                                    rows_for(
+                                        source.node_slot,
+                                        source.position,
+                                        source.row_values,
+                                        source.tile_len,
+                                        source.start,
+                                        source.end,
+                                    )
+                                })
+                                .collect();
+                            public_digest.push(unit, offset, &plan.authenticate(binding, k, &inputs, 1 << 22).unwrap()).unwrap();
+                            let before = borsh::to_vec(&court).unwrap();
+                            assert!(
+                                court
+                                    .movement(Hash64::default(), &Action::PublicRow { length: length as u32, inputs: inputs.clone() })
+                                    .is_err()
+                            );
+                            assert_eq!(borsh::to_vec(&court).unwrap(), before);
+                            court.movement(context, &Action::PublicRow { length: length as u32, inputs }).unwrap();
+                        }
+                    }
+                }
+                assert_eq!(
+                    public_digest.finish().unwrap(),
+                    named.state_root,
+                    "all public component relations reproduce the native prefix root"
+                );
+                assert_eq!(
+                    court.finish(),
+                    Ok(false_named),
+                    "actual bad-context public leaves convict the false named prefix; honest clears"
+                );
+                if !false_named {
+                    job.tail = Some(PalwFpJobTailV1::Prefix(kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {
+                        state_root: Hash64::from_u64_word(0xbad17),
+                        ..named
+                    }));
+                    assert!(backend.verify_prefix_state_v1(&job, &prompt).is_err());
+                    let bad = backend.execute_free_prompt(&job, &prompt.map(|id| id as usize)).unwrap();
+                    let bad_retained = crate::produce::base0_material_decode_any_v1(&bad.outcome.material).unwrap();
+                    assert_eq!(retained.generated_token_ids(), bad_retained.generated_token_ids(), "same exact model answer IDs");
+                    assert_eq!(retained.logits_rows(), bad_retained.logits_rows(), "same exact model logits");
+                    for (run, material) in [(&good, &retained), (&bad, &bad_retained)] {
+                        assert_eq!(
+                            run.outcome.output_root,
+                            output_commitment_v2(
+                                &material.binding().job_context.context_hash(),
+                                material.generated_token_ids(),
+                                &rendered_output_hash_v1(material.generated_token_ids())
+                            )
+                        );
+                    }
+                    // Changing the signed prefix statement changes the job-bound output root even
+                    // though it does not change the independently replayed arithmetic answer.
+                    assert_ne!(retained.binding().job_context.context_hash(), bad_retained.binding().job_context.context_hash());
+                    assert_ne!(good.outcome.output_root, bad.outcome.output_root);
+                }
             }
         }
         assert!(backend.prefix_state_v1(Hash64::from_u64_word(0xbad), Hash64::default(), &ids).is_err());
@@ -4406,7 +4465,9 @@ mod tests {
     /// a DENSE capture that the honest claim refuses, and the resource profile prices the fold.
     #[test]
     fn a_held_hybrid_classs_attempt_folds_and_stays_adjudicable() {
-        use kaspa_consensus_core::palw_resource_profile_v1::{PalwCaptureRetentionV1, PalwResourceRoleV1, palw_attempt_capture_folds_v1};
+        use kaspa_consensus_core::palw_resource_profile_v1::{
+            PalwCaptureRetentionV1, PalwResourceRoleV1, palw_attempt_capture_folds_v1,
+        };
         let (artifact, v5) = crate::fuzz_qwen36::tiny_class_v5_for_tests();
         let geometry = kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
             n_ctx: v5.n_ctx,
@@ -4463,10 +4524,17 @@ mod tests {
         // The drill tampers a DENSE capture even on the held class.
         let guilty = backend.execute_with_injected_fault(&job, &prompt, 3).expect("the drill's dense tamper commits");
         assert_ne!(guilty.execution_root, folded.execution_root, "the lie moved the commitment");
-        assert!(matches!(crate::produce::base0_material_decode_any_v1(&guilty.material), Ok(crate::produce::Base0RetentionV1::Dense(_))));
+        assert!(matches!(
+            crate::produce::base0_material_decode_any_v1(&guilty.material),
+            Ok(crate::produce::Base0RetentionV1::Dense(_))
+        ));
         assert_eq!(backend.verify_material(&guilty.material, claim), PalwMaterialVerdictV1::Mismatch, "a lie is not the honest claim");
         assert!(backend.refutation_for_index(&guilty.material, 3).is_ok(), "the tampered leaf opens from the retained tiles");
-        assert_eq!(backend.execute_for_verdict(&job, &prompt).expect("replays").execution_root, folded.execution_root, "the replays stay honest");
+        assert_eq!(
+            backend.execute_for_verdict(&job, &prompt).expect("replays").execution_root,
+            folded.execution_root,
+            "the replays stay honest"
+        );
 
         // The profile prices the fold, the recurrence state and the attention rows — and the
         // producer's figure the gate asks for is the same derivation.
@@ -4483,10 +4551,14 @@ mod tests {
         );
 
         // A class outside the regime keeps its tiles, priced as such.
-        let dense_backend = Qwen36Backend::from_registered_profile(artifact, b"misaka-palw-test".to_vec(), v5, (3, 4)).expect("servable");
+        let dense_backend =
+            Qwen36Backend::from_registered_profile(artifact, b"misaka-palw-test".to_vec(), v5, (3, 4)).expect("servable");
         let (job2, prompt2) = dense_backend.job_for_anchor(Hash64::from_u64_word(0x0151_DE45)).expect("a job");
         let outcome = dense_backend.execute(&job2, &prompt2).expect("executes");
-        assert!(matches!(crate::produce::base0_material_decode_any_v1(&outcome.material), Ok(crate::produce::Base0RetentionV1::Dense(_))));
+        assert!(matches!(
+            crate::produce::base0_material_decode_any_v1(&outcome.material),
+            Ok(crate::produce::Base0RetentionV1::Dense(_))
+        ));
         let dense_profile = dense_backend.resource_profile_v1(Some(&job2), PalwResourceRoleV1::Producer).expect("derives");
         assert!(matches!(dense_profile.capture, PalwCaptureRetentionV1::DenseTiles { .. }), "{:?}", dense_profile.capture);
         assert!(dense_profile.capture_retained_bytes >= dense_profile.leaves * (64 + 56));
