@@ -62,3 +62,133 @@ impl TransitionBuilder<'_> {
         }
     }
 }
+
+fn stage_refused(claim: Hash64, why: impl Into<String>) -> PalwStateV2Error {
+    PalwStateV2Error::ObjectiveOffenceRefused(claim, why.into())
+}
+fn gate<'a>(
+    b: &'a TransitionBuilder<'_>,
+    claim: &Hash64,
+    owner: PalwBondKeyV2,
+    reserved: u64,
+    now: u64,
+) -> Result<&'a PalwStagedClaimContractV1, PalwStateV2Error> {
+    if b.extras.staged_public_court.is_none() {
+        return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+    }
+    let c =
+        b.state.staged_claim_contract_v1(claim).ok_or_else(|| stage_refused(*claim, "claim has no prospective staged contract"))?;
+    if !b.state.legacy_dispute_reservation_v1(claim, &owner).is_some_and(|r| r.reserved_daa == reserved)
+        || now >= c.terms.stream_until_daa
+    {
+        return Err(stage_refused(*claim, "staged owner is not the literal live reservation or its admitted clock ended"));
+    }
+    Ok(c)
+}
+pub(super) fn open(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    seed: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1,
+) -> Result<(), PalwStateV2Error> {
+    let contract = gate(b, &seed.claim, seed.reserver, seed.reserved_daa, ctx.daa_score)?.clone();
+    let key = PalwStagedCourtKeyV1::Owner(seed.claim, seed.reserver);
+    if b.state.staged_courts.contains_key(&key) {
+        return Err(stage_refused(seed.claim, "owned staged seed is immutable"));
+    }
+    let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state, &seed.claim)
+        .ok_or(PalwStateV2Error::MissingClaim(seed.claim))?;
+    if crate::palw_offence_attribution_v1::palw_binding_identity_fault_v1(
+        &target,
+        &seed.binding,
+        b.identity_rules_v1(ctx.daa_score),
+        false,
+    )
+    .map_err(|e| stage_refused(seed.claim, e.to_string()))?
+    .is_some()
+    {
+        return Err(stage_refused(seed.claim, "staged seed binding answers another claim's job"));
+    }
+    let original = b
+        .state
+        .fp_public_jobs
+        .get(&seed.claim)
+        .ok_or_else(|| stage_refused(seed.claim, "staged selection seed requires accepted original public FP job"))?;
+    let original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 =
+        borsh::from_slice(original).map_err(|_| stage_refused(seed.claim, "accepted public FP job encoding invalid"))?;
+    if original.job != seed.job {
+        return Err(stage_refused(seed.claim, "staged seed changes accepted original FP job"));
+    }
+    if contract.panel.is_empty() {
+        return Err(stage_refused(seed.claim, "staged contract has no actual bound Panel"));
+    }
+    b.check_accuser_room(seed.reserver, u128::from(contract.terms.plan.deposit_sompi), "staged public court", ctx.daa_score)?;
+    // Rent is burned by this object's normative minimum carrier fee; only the deposit occupies
+    // bond capital. The acceptance walk validates that fee before invoking this fold.
+    let funded = contract
+        .terms
+        .plan
+        .rent_sompi
+        .checked_add(contract.terms.plan.deposit_sompi)
+        .ok_or(PalwStateV2Error::Overflow("staged funding"))?;
+    let exits = vec![contract.terms.bond_exit_after_daa; contract.panel.len()];
+    let row = crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1::admit(
+        seed,
+        target.execution_root,
+        contract.terms,
+        ctx.daa_score,
+        funded,
+        b.extras.terminal_evidence_max_bytes.unwrap_or(100_000),
+        b.state.class_step_ladder_v1(
+            &target.class_id,
+            b.extras.held_context_ladder.or(b.extras.shard_court_ladder).ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?,
+        ),
+        b.state.claim(&seed.claim).ok_or(PalwStateV2Error::MissingClaim(seed.claim))?.trace_retention_daa,
+        contract.terms.bond_exit_after_daa,
+        &exits,
+    )
+    .map_err(|e| stage_refused(seed.claim, e))?;
+    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::Constraint(Box::new(row))));
+    Ok(())
+}
+pub(super) fn leaf(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    leaf: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamLeafV1,
+) -> Result<(), PalwStateV2Error> {
+    gate(b, &leaf.claim, leaf.reserver, leaf.reserved_daa, ctx.daa_score)?;
+    let key = (leaf.claim, leaf.reserver);
+    let row = b.state.staged_owned_constraint_v1(key.0, key.1).ok_or_else(|| stage_refused(key.0, "staged leaf lacks owned seed"))?;
+    let old = row.checkpoint_v1();
+    let row = match b.state.staged_courts.get_mut(&PalwStagedCourtKeyV1::Owner(key.0, key.1)) {
+        Some(PalwStagedCourtRowV1::Constraint(row)) => row,
+        _ => return Err(stage_refused(key.0, "owned staged seed disappeared")),
+    };
+    if let Err(error) = row.leaf(ctx.daa_score, leaf) {
+        row.restore_checkpoint_v1(&old).map_err(|e| stage_refused(key.0, e))?;
+        return Err(stage_refused(key.0, error));
+    }
+    let new = row.checkpoint_v1();
+    b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key, old, new });
+    Ok(())
+}
+pub(super) fn movement(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    movement: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1,
+) -> Result<(), PalwStateV2Error> {
+    gate(b, &movement.claim, movement.reserver, movement.reserved_daa, ctx.daa_score)?;
+    let key = (movement.claim, movement.reserver);
+    let row = b.state.staged_owned_constraint_v1(key.0, key.1).ok_or_else(|| stage_refused(key.0, "staged move lacks owned seed"))?;
+    let old = row.checkpoint_v1();
+    let row = match b.state.staged_courts.get_mut(&PalwStagedCourtKeyV1::Owner(key.0, key.1)) {
+        Some(PalwStagedCourtRowV1::Constraint(row)) => row,
+        _ => return Err(stage_refused(key.0, "owned staged seed disappeared")),
+    };
+    if let Err(error) = row.movement(ctx.daa_score, movement) {
+        row.restore_checkpoint_v1(&old).map_err(|e| stage_refused(key.0, e))?;
+        return Err(stage_refused(key.0, error));
+    }
+    let new = row.checkpoint_v1();
+    b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key, old, new });
+    Ok(())
+}

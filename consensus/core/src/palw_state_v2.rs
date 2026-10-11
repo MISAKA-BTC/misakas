@@ -4725,6 +4725,10 @@ pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) 
         .fold(0u128, u128::saturating_add);
     // Lane LG14-A: a reservation's deposit (live or held) sits on the free half as a session's exposure does; zero below the fence.
     courts.saturating_add(da).saturating_add(state.legacy_dispute_exposure_v1(bond))
+        .saturating_add(state.staged_courts.values().filter_map(|row| match row {
+            crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::Constraint(c) if c.reserver == *bond => Some(u128::from(c.deposit_locked)),
+            _ => None,
+        }).fold(0u128, u128::saturating_add))
 }
 
 /// **A-6: the room an accuser still has on its free half** — [`palw_rcore_gate_room_v1`] with
@@ -8780,6 +8784,9 @@ pub enum PalwConsensusObjectV2 {
     ObjectiveEvidenceChunkV1 { part: Box<crate::palw_terminal_carriage_v1::PalwTerminalPartV1> } = 163,
     /// A prospective immutable tokenizer/config/table assignment by the original class registrant.
     ClassSemanticsDeclaredV1 { declaration: Box<crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1>, signature: Vec<u8> } = 164,
+    PublicCourtStreamOpenedV1 { seed: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1> } = 165,
+    PublicCourtStreamLeafV1 { leaf: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamLeafV1> } = 166,
+    PublicCourtStreamMoveV1 { movement: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1> } = 167,
     /// **(tag 159): a non-fused step convicted by its committed leaf hash** — the one-move court's kernel over the committed inputs
     /// and the accuser's own model rows, without the output preimage. A direct objective proof: it lands whatever session or court
     /// is open on the claim. Signed by the accuser's bond. **Tag 159.**
@@ -9627,6 +9634,8 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
         // chunk that pays (a chunk carries no `count`, chunks arrive in any order, and this ceiling
         // is read where the folded state is not in hand).
         PalwConsensusObjectV2::CourtCloseDeclared { count, .. } => palw_court_close_min_fee_v1(*count as u64),
+        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()
+            .claim_terms(0, 4095, seed.binding.shape_profile.vocab_size).map(|t| t.plan.rent_sompi).unwrap_or(u64::MAX),
         PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => palw_court_close_min_fee_v1(declaration.part_digests.len() as u64)
             .saturating_add(if declaration.heavy_prompt_ids>0 { palw_relay_fee_for_mass_v1(u64::from(declaration.heavy_prompt_ids).saturating_mul(crate::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1)) } else { 0 }),
         // RFC-0003 decision 22: a held leaf challenge IS a declaration (it writes the group `CourtCloseDeclared`
@@ -36051,6 +36060,9 @@ fn apply_object(
         PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk } => {
             palw_legacy_answer_chunks_fold_v2::chunk(builder, ctx, chunk)?;
         }
+        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => palw_staged_court_fold_v1::open(builder, ctx, seed)?,
+        PalwConsensusObjectV2::PublicCourtStreamLeafV1 { leaf } => palw_staged_court_fold_v1::leaf(builder, ctx, leaf)?,
+        PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } => palw_staged_court_fold_v1::movement(builder, ctx, movement)?,
         PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => {
             palw_terminal_carriage_fold_v1::declare(builder, ctx, declaration)?;
         }

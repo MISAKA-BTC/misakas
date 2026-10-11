@@ -392,7 +392,9 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // int-12 build cannot decode them and tolerates their bytes, so refusing any shape here would mark invalid a block it accepts
         // (A-2). The fence, the signature, the bond and the rules are the acceptance layer's and the fold's.
         PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } | PalwConsensusObjectV2::DisputeReacquiredV1 { .. }
-            | PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } | PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. } => Ok(()),
+            | PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } | PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. }
+            | PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. }
+            | PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -1139,11 +1141,12 @@ pub enum PalwLifecycleKindFenceV1 {
     LegacyPublicFilerV1 = 7,
     /// Independently versioned registered semantic metadata (tag164).
     ClassSemanticsV1 = 8,
+    StagedPublicCourtV1 = 9,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1153,6 +1156,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::ExecPayloadV2,
         Self::LegacyPublicFilerV1,
         Self::ClassSemanticsV1,
+        Self::StagedPublicCourtV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1167,6 +1171,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::ExecPayloadV2 => "palw_exec_payload_v2",
             Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
             Self::ClassSemanticsV1 => "palw_class_semantics_v1",
+            Self::StagedPublicCourtV1 => "palw_staged_public_court_v1",
         }
     }
 }
@@ -1324,6 +1329,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
+        O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamLeafV1 { .. } | O::PublicCourtStreamMoveV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } | O::DisputeReacquiredV1 { .. } | O::ObjectiveEvidenceDeclaredV1 { .. } | O::ObjectiveEvidenceChunkV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
     }
@@ -1465,6 +1471,9 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (162, "ObjectiveEvidenceDeclaredV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
     (163, "ObjectiveEvidenceChunkV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
     (164, "ClassSemanticsDeclaredV1", PalwLifecycleKindFenceV1::ClassSemanticsV1),
+    (165, "PublicCourtStreamOpenedV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
+    (166, "PublicCourtStreamLeafV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
+    (167, "PublicCourtStreamMoveV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
 ];
 
 /// **The owning fences' activations, resolved once from `Params`** (`Params::palw_lifecycle_kind_fences_v1`) and asked by every site
@@ -1545,6 +1554,7 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::ExecPayloadV2 => self.palw_exec_payload_v2_fence(),
                     PalwLifecycleKindFenceV1::LegacyPublicFilerV1 => self.palw_legacy_public_filer_v1,
                     PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
+                    PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
                 },
             )
         })

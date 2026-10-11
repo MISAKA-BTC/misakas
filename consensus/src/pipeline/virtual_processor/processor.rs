@@ -13922,6 +13922,54 @@ impl VirtualStateProcessor {
                         bytes,
                     )?;
                 }
+                Obj::PublicCourtStreamOpenedV1 { seed } => {
+                    use kaspa_consensus_core::palw_constraint_stream_carriage_v1 as stage;
+                    if !self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score)) {
+                        return Err("staged public court is below its independent prospective fence".into());
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
+                    seed.check(court.max_close_bytes())?;
+                    let owner = state.bond(&seed.reserver).ok_or("staged owner has no registered bond")?;
+                    let reservation = state.legacy_dispute_reservation_v1(&seed.claim, &seed.reserver).ok_or("staged owner has no live reservation")?;
+                    if reservation.reserved_daa != seed.reserved_daa || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                        return Err("staged move changes live reservation identity or owner is inactive".into());
+                    }
+                    if !Self::verify_mldsa87_with_context_bool(&owner.pubkey, &seed.signing_message(), &seed.signature, stage::PALW_CONSTRAINT_STREAM_CONTEXT_V1) {
+                        return Err("staged move is not signed by its literal reserver".into());
+                    }
+                }
+                Obj::PublicCourtStreamLeafV1 { leaf } => {
+                    use kaspa_consensus_core::palw_constraint_stream_carriage_v1 as stage;
+                    if !self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score)) {
+                        return Err("staged public court is below its independent prospective fence".into());
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
+                    leaf.check()?;
+                    let owner = state.bond(&leaf.reserver).ok_or("staged owner has no registered bond")?;
+                    let reservation = state.legacy_dispute_reservation_v1(&leaf.claim, &leaf.reserver).ok_or("staged owner has no live reservation")?;
+                    if reservation.reserved_daa != leaf.reserved_daa || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                        return Err("staged move changes live reservation identity or owner is inactive".into());
+                    }
+                    if !Self::verify_mldsa87_with_context_bool(&owner.pubkey, &leaf.signing_message(), &leaf.signature, stage::PALW_CONSTRAINT_STREAM_CONTEXT_V1) {
+                        return Err("staged move is not signed by its literal reserver".into());
+                    }
+                }
+                Obj::PublicCourtStreamMoveV1 { movement } => {
+                    use kaspa_consensus_core::palw_constraint_stream_carriage_v1 as stage;
+                    if !self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score)) {
+                        return Err("staged public court is below its independent prospective fence".into());
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
+                    movement.check()?;
+                    let owner = state.bond(&movement.reserver).ok_or("staged owner has no registered bond")?;
+                    let reservation = state.legacy_dispute_reservation_v1(&movement.claim, &movement.reserver).ok_or("staged owner has no live reservation")?;
+                    if reservation.reserved_daa != movement.reserved_daa || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                        return Err("staged move changes live reservation identity or owner is inactive".into());
+                    }
+                    if !Self::verify_mldsa87_with_context_bool(&owner.pubkey, &movement.signing_message(), &movement.signature, stage::PALW_CONSTRAINT_STREAM_CONTEXT_V1) {
+                        return Err("staged move is not signed by its literal reserver".into());
+                    }
+                }
                 Obj::ObjectiveEvidenceDeclaredV1 { declaration } => {
                     use kaspa_consensus_core::palw_terminal_carriage_v1 as t;
                     if !self.palw_legacy_public_filer_at(point.daa_score) || !self.palw_objective_offence_at(point.daa_score) || !self.palw_offence_attribution_at(point.daa_score) {
@@ -23094,6 +23142,9 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::LegacyHeldAnswerChunkV2 { .. } => "LegacyHeldAnswerChunkV2",
         O::ObjectiveEvidenceDeclaredV1 { .. } => "ObjectiveEvidenceDeclaredV1",
         O::ObjectiveEvidenceChunkV1 { .. } => "ObjectiveEvidenceChunkV1",
+        O::PublicCourtStreamMoveV1 { .. } => "PublicCourtStreamMoveV1",
+        O::PublicCourtStreamLeafV1 { .. } => "PublicCourtStreamLeafV1",
+        O::PublicCourtStreamOpenedV1 { .. } => "PublicCourtStreamOpenedV1",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         O::ClassSemanticsDeclaredV1 { .. } => "ClassSemanticsDeclaredV1",
