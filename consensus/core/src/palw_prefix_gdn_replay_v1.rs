@@ -110,11 +110,22 @@ impl PalwPrefixGdnHeadReplayV1 {
             state: vec![0; words],
         })
     }
-    pub(crate) fn matches_contract_v1(&self, claim: Hash64, binding: &PalwStepBindingV2,
-        layer:u16, head:u32, prefix_tokens:u32) -> bool {
-        self.claim == claim && self.execution_root == binding.committed_execution_root && self.job_id == binding.job_context.job_id
-            && self.layer == layer && self.head == head && self.prefix_tokens == prefix_tokens
-            && self.d_k == binding.shape_profile.gdn_head_k_dim && self.d_v == binding.shape_profile.gdn_head_v_dim
+    pub(crate) fn matches_contract_v1(
+        &self,
+        claim: Hash64,
+        binding: &PalwStepBindingV2,
+        layer: u16,
+        head: u32,
+        prefix_tokens: u32,
+    ) -> bool {
+        self.claim == claim
+            && self.execution_root == binding.committed_execution_root
+            && self.job_id == binding.job_context.job_id
+            && self.layer == layer
+            && self.head == head
+            && self.prefix_tokens == prefix_tokens
+            && self.d_k == binding.shape_profile.gdn_head_k_dim
+            && self.d_v == binding.shape_profile.gdn_head_v_dim
             && u64::from(self.d_k) * u64::from(self.d_v) == self.state.len() as u64
     }
     pub fn next_position(&self) -> u32 {
@@ -166,6 +177,29 @@ impl PalwPrefixGdnHeadReplayV1 {
                 &inputs[ordinal],
                 maximum_leaves,
             )?);
+        }
+        self.advance_authenticated_rows_v1(target, binding, &rows)
+    }
+    /// Only the owning family court calls this after every canonical source leaf has
+    /// authenticated through the original-leaf stream. Not an externally admissible state.
+    pub(crate) fn advance_authenticated_rows_v1(
+        &mut self,
+        target: &PalwOffenceTargetV1,
+        binding: &PalwStepBindingV2,
+        rows: &[Vec<i32>],
+    ) -> Result<(), String> {
+        if !self.matches_contract_v1(target.claim_id, binding, self.layer, self.head, self.prefix_tokens)
+            || target.execution_root != self.execution_root
+            || self.next_position >= self.prefix_tokens
+            || rows.len() != 5
+            || rows[0].len() != self.d_k as usize
+            || rows[1].len() != self.d_v as usize
+            || rows[2].len() != self.d_k as usize
+            || rows[3].len() != 1
+            || rows[4].len() != 1
+            || self.resident_state_bytes() > self.maximum_working_set_bytes
+        {
+            return Err("owned authenticated head rows change context, geometry or phase".into());
         }
         let parse = |n: usize| {
             A16QuantParams::from_wire(&self.parameters[n * 17..(n + 1) * 17])

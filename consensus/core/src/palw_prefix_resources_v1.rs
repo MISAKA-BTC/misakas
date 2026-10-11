@@ -6,8 +6,55 @@ use crate::palw_class_semantics_v1::PalwPrefixStateRelationV1;
 use crate::palw_prefix_family_state_v1::PalwQwen36PrefixCachePlanV1;
 use crate::palw_prefix_state_court_v1::PalwPrefixKvPlanV1;
 use crate::palw_rendering_resources_v1::{PalwRenderingResourcePlanV1, PalwRenderingResourcePricesV1};
-use crate::palw_step::{PalwLayerKindV1, PalwShapeProfileV3};
+use crate::palw_step::{PalwLayerKindV1, PalwShapeProfileV3, PalwStepNodeRoleV1, PalwStepOutLenV1, kernel_semantics_id_v1};
 use borsh::{BorshDeserialize, BorshSerialize};
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwPrefixGdnModeV1 {
+    Whole,
+    Paged,
+}
+/// Geometry-owned resident ceiling: exact native whole-head clone/scratch if it fits this
+/// linear page envelope, otherwise exact paged recurrence. No accuser chooses a cheaper quote
+/// and later spends a more expensive representation's work.
+pub fn palw_prefix_gdn_mode_v1(profile: &PalwShapeProfileV3) -> (PalwPrefixGdnModeV1, u128) {
+    let dk = u128::from(profile.gdn_head_k_dim);
+    let dv = u128::from(profile.gdn_head_v_dim);
+    let paged = (5 * dk + 5 * dv + 4) * 4 + 196_608;
+    let whole = dk * dv * 8 + (2 * dk + 3 * dv + 2) * 4 + 256;
+    if whole <= paged { (PalwPrefixGdnModeV1::Whole, whole) } else { (PalwPrefixGdnModeV1::Paged, paged) }
+}
+fn range_cost(width: u64, tile: u32, start: u64, end: u64) -> Result<(u128, u128, u128), String> {
+    if tile == 0 || start >= end || end > width {
+        return Err("prefix quoted source range is not canonical".into());
+    }
+    let t = u64::from(tile);
+    let first = start / t;
+    let last = (end - 1) / t;
+    let leaves = last - first + 1;
+    let bytes = (width.min((last + 1) * t) - first * t) * 4;
+    let ragged = if last == width / t && width % t != 0 { width % t } else { 0 };
+    let full = leaves - u64::from(ragged != 0);
+    let moves =
+        u128::from(full) * (u128::from(tile) * 4).div_ceil(65_536) + u128::from(ragged * 4).div_ceil(65_536) + u128::from(leaves) * 2;
+    Ok((u128::from(bytes), u128::from(leaves), moves))
+}
+fn fixed_width(node: &crate::palw_step::PalwStepNodeV1) -> Result<u64, String> {
+    let PalwStepOutLenV1::Fixed { elements } = node.out_len else {
+        return Err("prefix quote source width is not fixed".into());
+    };
+    Ok(u64::from(elements))
+}
+fn full_cache_row_cost(width: u64, tile: u32, base: u64, total: u64) -> Result<(u128, u128, u128), String> {
+    let (b, l, m) = range_cost(width, tile, 0, width)?;
+    // Exact for a one-chunk unit or when source tiles align with every cache-chunk boundary.
+    // Otherwise this bounds all chunk/source boundary repeats using that source's own tiles.
+    let repeats = if total <= 16_384 || (16_384 % u64::from(tile) == 0 && base % u64::from(tile) == 0) {
+        1
+    } else {
+        u64::from(tile).div_ceil(16_384) + 1
+    };
+    Ok((b * u128::from(repeats), l * u128::from(repeats), m * u128::from(repeats)))
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwPrefixResourcePlanV1 {
     pub envelope: PalwRenderingResourcePlanV1,
@@ -47,6 +94,7 @@ impl PalwPrefixResourcePlanV1 {
         }
         if prefix_tokens == 0
             || prefix_tokens >= profile.n_ctx
+            || step_leaves == 0
             || prices.inclusion_margin_daa == 0
             || carrier_maximum < 65_536 + 16_384
         {
@@ -70,25 +118,82 @@ impl PalwPrefixResourcePlanV1 {
                 let heads = gdn_layers * u128::from(profile.gdn_heads);
                 let dk = u128::from(profile.gdn_head_k_dim);
                 let dv = u128::from(profile.gdn_head_v_dim);
+                let (mode, working) = palw_prefix_gdn_mode_v1(profile);
+                head_working = if heads == 0 { 0 } else { working };
+                let mut original_bytes = 0u128;
+                let mut leaves = 0u128;
+                let mut source_moves = 0u128;
+                if let Some(layer) = (0..profile.layer_count).find(|l| profile.layer_kind(*l) == PalwLayerKindV1::GatedDeltaNet) {
+                    let (_, node, widths) = crate::palw_prefix_gdn_replay_v1::head_geometry(profile, layer, 0)?;
+                    for head in 0..u32::from(profile.gdn_heads) {
+                        let ranges = crate::palw_step_refute::qwen36_gdn_slice_v1(profile, node, &widths, head)
+                            .ok_or("quoted head slices are not canonical")?;
+                        for (ordinal, reference) in node.input_refs.iter().enumerate() {
+                            let source = &profile.gdn_nodes[usize::from(*reference)];
+                            let (b, l, m) = range_cost(widths[ordinal], source.tile_len, ranges[ordinal].0, ranges[ordinal].1)?;
+                            original_bytes += b * k * gdn_layers;
+                            leaves += l * k * gdn_layers;
+                            source_moves += m * k * gdn_layers;
+                        }
+                    }
+                    let mut convs = profile
+                        .gdn_nodes
+                        .iter()
+                        .filter(|n| n.kernel_semantics_id == kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_SSM_CONV));
+                    let conv = convs.next().ok_or("quoted convolution absent")?;
+                    if convs.next().is_some() || conv.input_refs.len() != 3 {
+                        return Err("quoted convolution sources not unique".into());
+                    }
+                    let total = conv.input_refs.iter().try_fold(0u64, |n, r| {
+                        fixed_width(&profile.gdn_nodes[usize::from(*r)])
+                            .and_then(|w| n.checked_add(w).ok_or("convolution width overflow".into()))
+                    })?;
+                    let expected = 2
+                        * u64::from(crate::palw_step::palw_gdn_key_heads_v1(profile).map_err(|e| e.to_string())?)
+                        * u64::from(profile.gdn_head_k_dim)
+                        + u64::from(profile.gdn_heads) * u64::from(profile.gdn_head_v_dim);
+                    if total != expected {
+                        return Err("quoted convolution sources change exact cache width".into());
+                    }
+                    let rows = k.min(u128::from(profile.gdn_conv_kernel)) * gdn_layers;
+                    let mut base = 0u64;
+                    for r in &conv.input_refs {
+                        let source = &profile.gdn_nodes[usize::from(*r)];
+                        let width = fixed_width(source)?;
+                        let (b, l, m) = full_cache_row_cost(width, source.tile_len, base, total)?;
+                        original_bytes += b * rows;
+                        leaves += l * rows;
+                        source_moves += m * rows;
+                        base += width;
+                    }
+                }
+                let attention_layers = u128::from(profile.layer_count) - gdn_layers;
+                if attention_layers != 0 {
+                    let expected = u64::from(profile.attn_kv_heads) * u64::from(profile.attn_head_dim);
+                    for role in [PalwStepNodeRoleV1::KCacheWrite, PalwStepNodeRoleV1::VCacheWrite] {
+                        let mut nodes = profile.attn_nodes.iter().filter(|n| n.role == role);
+                        let node = nodes.next().ok_or("quoted KV source absent")?;
+                        if nodes.next().is_some() || fixed_width(node)? != expected {
+                            return Err("quoted KV source not unique/exact".into());
+                        }
+                        let (b, l, m) = full_cache_row_cost(expected, node.tile_len, 0, expected)?;
+                        original_bytes += b * k * attention_layers;
+                        leaves += l * k * attention_layers;
+                        source_moves += m * k * attention_layers;
+                    }
+                }
+                // Canonical inventory has one68-byte original artifact leaf per head.
+                original_bytes += heads * 68;
+                leaves += heads;
                 let pages = dk.div_ceil(crate::palw_prefix_gdn_paged_v1::PALW_GDN_PAGE_WORDS_V1 as u128) * dv;
-                // Owned continuation and its clone, all five sliced inputs plus page/path
-                // read/write scratch. Original source tiles are accounted in row/RAM below.
-                head_working = if heads == 0 { 0 } else { (5 * dk + 5 * dv + 4) * 4 + 196_608 };
-                // Head inputs can share old full tiles with other heads, but authentication
-                // must still cover those bytes. This conservative graph-wide bound counts
-                // each original step leaf once per head plus the public KV/conv pass.
-                let leaves = u128::from(step_leaves) * (heads + 1);
-                let parameters = heads * 68;
-                let original_bytes =
-                    leaves * crate::palw_step_leg::PALW_STEP_LEG_MAX_TILE_BYTES as u128 + parameters + u128::from(plan.total_bytes());
-                // Two exact recurrence passes per position and a final canonical digest
-                // pass. Conservative maximum existing-domain path depth22, no truncation.
-                let page_moves = heads * pages * (2 * k + 1);
+                let page_moves = if mode == PalwPrefixGdnModeV1::Paged { heads * pages * (2 * k + 1) } else { 0 };
                 let page_bytes = page_moves * (16_384 + 22 * 64 + 64);
                 let bytes = original_bytes + page_bytes;
-                let moves =
-                    original_bytes.div_ceil(65_536) + leaves * 3 + heads * (k + 2) + u128::from(plan.unit_count()) + page_moves + 1;
-                let work = bytes * 2 + heads * k * dk * dv * 32 + page_moves * (22 * 384 + head_working);
+                let public_chunks =
+                    (u128::from(plan.total_bytes()) - heads * dk * dv * 4).div_ceil(65_536) + u128::from(plan.unit_count());
+                let whole_digest = if mode == PalwPrefixGdnModeV1::Whole { heads * (dk * dv * 4).div_ceil(65_536) } else { 0 };
+                let moves = source_moves + heads * (k + 1) + public_chunks + whole_digest + page_moves + 1;
+                let work = bytes * 2 + heads * k * dk * dv * 32 + (page_moves + heads * k) * working;
                 (bytes, leaves, moves, work)
             }
         };
@@ -157,6 +262,28 @@ mod tests {
             deposit_per_move: 1,
             reorg_replay_moves: 3,
         }
+    }
+    #[test]
+    fn canonical_hybrid_quotes_only_required_public_sources_and_selects_efficient_whole_head() {
+        let p = crate::palw_qwen36_profile::qwen36_profile_v6(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+            crate::palw_qwen36_profile::QWEN36_35B_A3B,
+        ))
+        .unwrap();
+        assert_eq!(palw_prefix_gdn_mode_v1(&p), (PalwPrefixGdnModeV1::Whole, 133_896));
+        let quote = |leaves| {
+            PalwPrefixResourcePlanV1::derive(&p, PalwPrefixStateRelationV1::Qwen36HybridCacheV1, 2, leaves, 90_000, prices()).unwrap()
+        };
+        let a = quote(1);
+        let b = quote(1 << 40);
+        assert_eq!(a, b, "unrelated committed decode/calculation leaves are not demanded once per head");
+        assert_eq!(a.envelope.maximum_stream_bytes, 8_503_040);
+        assert_eq!(a.envelope.maximum_stream_leaves, 73_300);
+        assert!(a.envelope.resident_ram_bytes < 2 * 1024 * 1024);
+        let mut huge = p.clone();
+        huge.gdn_head_k_dim = 1 << 17;
+        huge.gdn_head_v_dim = 1 << 17;
+        assert_eq!(palw_prefix_gdn_mode_v1(&huge).0, PalwPrefixGdnModeV1::Paged);
+        assert!(palw_prefix_gdn_mode_v1(&huge).1 < 6 * 1024 * 1024);
     }
     #[test]
     fn hydrated_profile_quote_charges_original_bytes_on_every_move_and_refuses_understatement() {
