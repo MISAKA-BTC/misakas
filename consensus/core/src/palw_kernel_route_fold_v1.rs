@@ -53,6 +53,15 @@ fn key_bytes(d: &misaka_palw_kernel::hash::Digest) -> Vec<u8> {
     borsh::to_vec(d).expect("a digest serializes")
 }
 
+/// A source reserves income before its claim is revealed. The signed job and
+/// seal are its immutable subject; a later reveal cannot choose another R row.
+pub(super) fn source_income_subject_v1(job: &misaka_palw_kernel::hash::Digest, seal: &misaka_palw_kernel::hash::Digest) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/source-subject/v1");
+    hash.update(job);
+    hash.update(seal);
+    finish(hash)
+}
+
 /// The fold's signature check is the acceptance layer's (a pure transition holds no crypto): by the time a receipt reaches here its
 /// signature has verified under the seat bond's registered key, so the kernel's structural admission is asked with this.
 struct SignatureAlreadyVerified;
@@ -809,6 +818,33 @@ pub(super) fn apply_kernel_route_object_v1(
             }
         }
     }
+    // A paid opt-in reserves its fixed signed fee for the actual source bond
+    // before admission changes any native money or source rows. Roll back even
+    // initial budget creation if the recipient has no R room.
+    if let KernelRouteObjectV1::OptInPaidBeaconSource { context, producer, .. } = &object {
+        let promise =
+            ledger.beacon_source_fee_promises.get(&(*context, *producer)).ok_or_else(|| refused("paid source promise missing"))?;
+        let source = ledger.beacon_sources.get(&(*context, *producer)).ok_or_else(|| refused("paid source row missing"))?;
+        if *producer != kid || promise.accepted_daa != ctx.daa_score {
+            return Err(refused("paid source recipient or acceptance position differs"));
+        }
+        let checkpoint = builder.checkpoint();
+        if builder
+            .reserve_source_income_v1(
+                ctx,
+                Hash64::from_bytes(*context),
+                source_income_subject_v1(&source.job, &source.seal),
+                *signer,
+                source.terms.hold_until,
+                promise.fee,
+            )
+            .is_err()
+        {
+            builder.restore(checkpoint);
+            persist_budget(builder, ctx, &ledger);
+            return Ok(());
+        }
+    }
     // Reserve the shared Q/R window before any accepted claim/fee/bond write.
     // A refused plan still pays the public verification budget it already used.
     for event in &events {
@@ -1013,6 +1049,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
                 | r::TABLE_JOB_ESCROWS_V1
                 | r::TABLE_SERVED_DEMAND_BONDS_V1
                 | r::TABLE_SEG_PROGRESS_V1
+                | r::TABLE_BEACON_SOURCES_V1
+                | r::TABLE_BEACON_SOURCE_FEES_V1
+                | r::TABLE_BEACON_SOURCE_FEE_PROMISES_V1
         )
     });
     if !busy {
@@ -1027,7 +1066,44 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
             ledger.sync_bond(kid, builder.kernel_synced_collateral(&key, ctx.daa_score));
         }
     }
+    let pending_source_fees: Vec<_> =
+        ledger.beacon_source_fee_promises.iter().filter(|(_, promise)| promise.outcome.is_none()).map(|(key, _)| *key).collect();
     let events = ledger.tick();
+    // Consume the same deferred R reservation before paying the separately
+    // prepaid escrow. A principal refund cancels the entitlement and earns no
+    // income; unchanged pending promises retain their reservation through H.
+    for (context, producer) in pending_source_fees {
+        use misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeOutcomeV1;
+        let promise = &ledger.beacon_source_fee_promises[&(context, producer)];
+        let Some(outcome) = promise.outcome else { continue };
+        let source = ledger.beacon_sources.get(&(context, producer)).ok_or_else(|| refused("settled fee source missing"))?;
+        let bond = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .and_then(|route| route.bond_key_of(&producer))
+            .ok_or_else(|| refused("settled fee recipient bond missing"))?;
+        let subject = source_income_subject_v1(&source.job, &source.seal);
+        match outcome {
+            BeaconSourceFeeOutcomeV1::Paid { daa, .. } => {
+                if daa != ctx.daa_score {
+                    return Err(refused("source income payment position differs"));
+                }
+                builder.settle_source_income_v1(
+                    ctx,
+                    Hash64::from_bytes(context),
+                    subject,
+                    bond,
+                    promise.accepted_daa,
+                    source.terms.hold_until,
+                    promise.fee,
+                )?;
+            }
+            BeaconSourceFeeOutcomeV1::Refunded { .. } => {
+                builder.cancel_source_income_v1(ctx, Hash64::from_bytes(context), subject, bond, promise.accepted_daa)?;
+            }
+        }
+    }
     apply_settlements(builder, &events, false)?;
     builder.close_terminal_kernel_budgets_v1(&ledger);
     // Assignments and counted receipts of claims that can no longer be covered are dropped.
