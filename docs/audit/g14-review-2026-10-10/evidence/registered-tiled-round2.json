@@ -1,0 +1,17 @@
+{
+  "source_head": "1fd92fa70",
+  "binary_sha256": "b6e49128181a6861b65098ca0be1a056740ef3267b007267e5352ea8cfd73ed4",
+  "filter": "fresh_public_bond_service_registered_tiled_constraint_",
+  "test_threads": 2,
+  "exit_code": 101,
+  "result": {
+    "passed": 0,
+    "failed": 4,
+    "ignored": 0,
+    "elapsed_seconds": 1505.55
+  },
+  "raw_log_sha256": "548cda647c86a36c0e40d2d4329423f543a8a7ac525fe18b14f597df45e822c7",
+  "diagnosis": "All four reacquired row0 binding and public FP job but made no further progress. Held replay capture capacity can permanently starve later acquired jobs. Fair rotation repair is pending execution.",
+  "supersedes": "The second complete run replaces the earlier partial run, not the earlier entry-only PASS.",
+  "activation": "refused; full G14 incomplete"
+}
