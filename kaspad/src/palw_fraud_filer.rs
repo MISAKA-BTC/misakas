@@ -47,6 +47,8 @@ use super::*;
 use std::collections::BTreeSet;
 #[path = "palw_fraud_filer_constraint.rs"]
 mod constraint;
+#[path = "palw_fraud_filer_history.rs"]
+pub(super) mod history;
 #[path = "palw_fraud_filer_input.rs"]
 pub(super) mod input;
 #[path = "palw_fraud_filer_prefix.rs"]
@@ -235,6 +237,7 @@ pub(super) struct PalwFraudFilerWalkV1 {
     pub(super) anchor: Hash64,
     pub(super) anchor_daa: u64,
     pub(super) next: Option<Hash64>,
+    pub(super) incomplete: bool,
 }
 
 /// Only the binding read and the ONE unit a case's localizer currently reads enter the cache (lane G14-V: the subtree descent's
@@ -329,81 +332,87 @@ fn palw_fraud_filer_read_page_with_budget_v2(
     )?;
     let start = continuing.and_then(|p| p.next).unwrap_or(tip);
     let mut answers = BTreeMap::new();
-    let mut unavailable = false;
-    let next =
-        crate::palw_panel::walk_accepted_lifecycle_page_with_block_v2(consensus, start, floor, max_blocks, &mut |block, object| {
-            match object {
-                PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, .. }
-                    if wanted.get(&claim).is_some_and(|root| {
-                        kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(
-                            &unit, &answer, root,
+    let mut unavailable = continuing.is_some_and(|walk| walk.incomplete);
+    let (next, page_incomplete) = history::walk_available_v1(consensus, start, floor, max_blocks, &mut |block, object| match object {
+        PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, .. }
+            if wanted.get(&claim).is_some_and(|root| {
+                kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(&unit, &answer, root)
+            }) && (palw_fraud_filer_cache_unit_v1(&unit, rcore_wanted.get(&claim))
+                || event_wanted.get(&claim).is_some_and(|units| units.contains(&unit))) =>
+        {
+            palw_fraud_filer_cache_answer_v1(&mut answers, (claim, unit), PalwDaBuiltAnswerV1::Rcore(answer));
+        }
+        PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
+            if (legacy_wanted.get(&answer.claim) == Some(&answer.unit)
+                || legacy_rounds.get(&answer.claim).is_some_and(|round| round.contains(&answer.unit)))
+                && wanted.get(&answer.claim).is_some_and(|root| {
+                    kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
+                        root,
+                        &answer.unit,
+                        &answer.binding,
+                        &answer.answer,
+                        answer.binding.step_leaf_count,
+                        network,
+                    )
+                    .is_ok()
+                }) =>
+        {
+            answers
+                .entry((answer.claim, PalwDaUnitV1::LegacyHeldV2(answer.unit)))
+                .or_insert(PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
+        }
+        PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk }
+            if (legacy_wanted.get(&chunk.claim) == Some(&chunk.unit)
+                || legacy_rounds.get(&chunk.claim).is_some_and(|round| round.contains(&chunk.unit)))
+                && wanted.contains_key(&chunk.claim)
+                && !answers.contains_key(&(chunk.claim, PalwDaUnitV1::LegacyHeldV2(chunk.unit))) =>
+        {
+            match consensus.palw_legacy_answer_history_v2(block, chunk, maximum) {
+                Ok(Some(answer))
+                    if wanted.get(&answer.claim).is_some_and(|root| {
+                        kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
+                            root,
+                            &answer.unit,
+                            &answer.binding,
+                            &answer.answer,
+                            answer.binding.step_leaf_count,
+                            network,
                         )
-                    }) && (palw_fraud_filer_cache_unit_v1(&unit, rcore_wanted.get(&claim))
-                        || event_wanted.get(&claim).is_some_and(|units| units.contains(&unit))) =>
-                {
-                    palw_fraud_filer_cache_answer_v1(&mut answers, (claim, unit), PalwDaBuiltAnswerV1::Rcore(answer));
-                }
-                PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
-                    if (legacy_wanted.get(&answer.claim) == Some(&answer.unit)
-                        || legacy_rounds.get(&answer.claim).is_some_and(|round| round.contains(&answer.unit)))
-                        && wanted.get(&answer.claim).is_some_and(|root| {
-                            kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
-                                root,
-                                &answer.unit,
-                                &answer.binding,
-                                &answer.answer,
-                                answer.binding.step_leaf_count,
-                                network,
-                            )
-                            .is_ok()
-                        }) =>
+                        .is_ok()
+                    }) =>
                 {
                     answers
                         .entry((answer.claim, PalwDaUnitV1::LegacyHeldV2(answer.unit)))
                         .or_insert(PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
                 }
-                PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk }
-                    if (legacy_wanted.get(&chunk.claim) == Some(&chunk.unit)
-                        || legacy_rounds.get(&chunk.claim).is_some_and(|round| round.contains(&chunk.unit)))
-                        && wanted.contains_key(&chunk.claim)
-                        && !answers.contains_key(&(chunk.claim, PalwDaUnitV1::LegacyHeldV2(chunk.unit))) =>
-                {
-                    match consensus.palw_legacy_answer_history_v2(block, chunk, maximum) {
-                        Ok(Some(answer))
-                            if wanted.get(&answer.claim).is_some_and(|root| {
-                                kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
-                                    root,
-                                    &answer.unit,
-                                    &answer.binding,
-                                    &answer.answer,
-                                    answer.binding.step_leaf_count,
-                                    network,
-                                )
-                                .is_ok()
-                            }) =>
-                        {
-                            answers
-                                .entry((answer.claim, PalwDaUnitV1::LegacyHeldV2(answer.unit)))
-                                .or_insert(PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
-                        }
-                        Err(why) => {
-                            debug!("[{PALW_PANEL}] multipart public history at {block}: {why}; completion watermark unchanged");
-                            unavailable = true;
-                        }
-                        _ => {}
-                    }
+                Err(why) => {
+                    debug!("[{PALW_PANEL}] multipart public history at {block}: {why}; completion watermark unchanged");
+                    unavailable = true;
                 }
                 _ => {}
             }
-        })
-        .unwrap_or_else(|why| {
-            debug!("[{PALW_PANEL}] partial public history: {why}; completion watermark unchanged");
-            Some(anchor)
-        });
-    let next = if unavailable { Some(anchor) } else { next };
+        }
+        _ => {}
+    })
+    .unwrap_or_else(|why| {
+        debug!("[{PALW_PANEL}] partial public history: {why}; completion watermark unchanged");
+        (Some(anchor), true)
+    });
+    unavailable |= page_incomplete;
+    let next = if unavailable && next.is_none() { Some(anchor) } else { next };
+    let end = consensus.get_sink();
+    if anchor != end && !consensus.is_chain_ancestor_of(anchor, end).unwrap_or(false) {
+        // A branch switch during the page invalidates every collected answer and watermark.
+        let end_daa = consensus.get_header(end).map_err(|e| format!("history end anchor {end}: {e}"))?.daa_score;
+        return Ok((
+            PalwFraudFilerWalkV1 { floor: oldest, anchor: end, anchor_daa: end_daa, next: Some(end), incomplete: false },
+            true,
+            vec![],
+        ));
+    }
     // `next == anchor` is the unavailable-history sentinel: retain independently authenticated answers from the readable
     // prefix, never mark the floor completed, and restart at the NEW tip on the next tick so a reacquired copy is reachable.
-    Ok((PalwFraudFilerWalkV1 { floor, anchor, anchor_daa, next }, reset, answers.into_iter().collect()))
+    Ok((PalwFraudFilerWalkV1 { floor, anchor, anchor_daa, next, incomplete: unavailable }, reset, answers.into_iter().collect()))
 }
 
 /// Preserve an authenticated binding even when its event bytes are malformed, since the binding can prove a job/shape fault.
@@ -1315,7 +1324,7 @@ impl PalwFraudFilerBookV1 {
                 }
             }
         }
-        if walk.next.is_none() {
+        if walk.next.is_none() && !walk.incomplete {
             self.walked_from = Some(self.walked_from.map_or(walk.floor, |from| from.min(walk.floor)));
             self.walked_to = Some(walk.anchor_daa);
         }
@@ -4008,7 +4017,11 @@ pub(super) mod tests {
         input.ids = payload.prompt_token_ids.clone();
         input.chunk = 1;
         assert_eq!(book.next_replay_at(100), Some(a.claim_id));
-        book.walked(PalwFraudFilerWalkV1 { floor: 100, anchor: Hash64::from_u64_word(9), anchor_daa: 150, next: None }, true, vec![]);
+        book.walked(
+            PalwFraudFilerWalkV1 { floor: 100, anchor: Hash64::from_u64_word(9), anchor_daa: 150, next: None, incomplete: false },
+            true,
+            vec![],
+        );
         let case = &book.cases[&a.claim_id];
         assert_eq!(case.runs, 0);
         assert!(case.fp_bootstrap.as_ref().unwrap().ids.is_empty());
@@ -4372,6 +4385,21 @@ pub(super) mod tests {
         let executed =
             backend.execute_free_prompt(job, &payload.prompt_token_ids.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();
         misaka_palw_base0::produce::base0_material_decode_any_v1(&executed.outcome.material).unwrap().binding().clone()
+    }
+
+    #[test]
+    fn a_history_hole_never_publishes_a_completed_book_watermark() {
+        let candidate = candidate(3, 300, false);
+        let claim = candidate.claim_id;
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![candidate], 400);
+        book.judge(claim, Ok(run(Hash64::default(), Hash64::default())));
+        let walk =
+            PalwFraudFilerWalkV1 { floor: 300, anchor: Hash64::from_u64_word(999), anchor_daa: 999, next: None, incomplete: true };
+        book.walked(walk, false, vec![]);
+        assert!(book.walked_from.is_none() && book.walked_to.is_none());
+        assert!(!book.descent_failed(&claim, "an old unavailable body is not proof that the public court is unreachable".into()));
+        assert!(book.pursued().contains(&claim));
     }
 
     #[test]
@@ -4748,6 +4776,7 @@ pub(super) mod tests {
             anchor: Hash64::from_u64_word(1000),
             anchor_daa: 1000,
             next: Some(Hash64::from_u64_word(500)),
+            incomplete: false,
         };
         book.walked(page, false, vec![]);
         assert!(!book.descent_failed(&claim, "a pin is not read yet".into()));
@@ -4787,7 +4816,13 @@ pub(super) mod tests {
             case.note_sent(PalwFraudFilerSentV1::Reserve, 10);
             case.direct_handed = 2;
             case.direct_asked_at = Some(10);
-            let page = PalwFraudFilerWalkV1 { floor: 300, anchor: Hash64::from_u64_word(1000), anchor_daa: 1000, next: None };
+            let page = PalwFraudFilerWalkV1 {
+                floor: 300,
+                anchor: Hash64::from_u64_word(1000),
+                anchor_daa: 1000,
+                next: None,
+                incomplete: false,
+            };
             book.walked(page, false, vec![]);
             assert!(book.refresh(vec![old.clone()], 11).is_empty(), "an unchanged candidate retains its replay");
             assert_eq!(book.cases[&claim].frontiers.len(), 1);
@@ -4878,7 +4913,13 @@ pub(super) mod tests {
         case.note_sent(PalwFraudFilerSentV1::Reserve, 10);
         case.note_sent(PalwFraudFilerSentV1::Reserve, 40);
         assert_eq!(case.may_send(PalwFraudFilerSentV1::Reserve, 70), Err(()));
-        let page = PalwFraudFilerWalkV1 { floor: 300, anchor: Hash64::from_u64_word(2000), anchor_daa: 1000, next: Some(claim) };
+        let page = PalwFraudFilerWalkV1 {
+            floor: 300,
+            anchor: Hash64::from_u64_word(2000),
+            anchor_daa: 1000,
+            next: Some(claim),
+            incomplete: false,
+        };
         book.walked(page, true, vec![]);
         let case = &book.cases[&claim];
         assert!(case.pursued(), "unchanged job's own replay is still valid");
@@ -4901,6 +4942,7 @@ pub(super) mod tests {
             anchor: Hash64::from_u64_word(1000),
             anchor_daa: 1000,
             next: Some(Hash64::from_u64_word(600)),
+            incomplete: false,
         };
         book.walked(page, false, vec![]);
         assert_eq!(book.refresh(vec![c.clone()], 11), BTreeSet::from([other.claim_id]));
@@ -5009,7 +5051,13 @@ pub(super) mod tests {
         book.judge(Hash64::from_u64_word(4), Ok(run(Hash64::from_u64_word(1), Hash64::default())));
         assert_eq!(book.walk_floor(), Some(400));
         book.walked(
-            PalwFraudFilerWalkV1 { floor: 400, anchor: Hash64::from_u64_word(1_000), anchor_daa: 1_000, next: None },
+            PalwFraudFilerWalkV1 {
+                floor: 400,
+                anchor: Hash64::from_u64_word(1_000),
+                anchor_daa: 1_000,
+                next: None,
+                incomplete: false,
+            },
             false,
             Vec::new(),
         );
@@ -5024,7 +5072,8 @@ pub(super) mod tests {
         book.refresh(vec![candidate(3, 300, false), candidate(4, 400, false)], 10);
         book.judge(Hash64::from_u64_word(3), Ok(run(Hash64::from_u64_word(1), Hash64::default())));
         let anchor = Hash64::from_u64_word(1_000);
-        let partial = PalwFraudFilerWalkV1 { floor: 300, anchor, anchor_daa: 1_000, next: Some(Hash64::from_u64_word(800)) };
+        let partial =
+            PalwFraudFilerWalkV1 { floor: 300, anchor, anchor_daa: 1_000, next: Some(Hash64::from_u64_word(800)), incomplete: false };
         book.walked(partial, false, Vec::new());
         assert_eq!((book.walked_from, book.walked_to), (None, None));
         assert_eq!(book.walk_floor(), Some(300));
@@ -5043,7 +5092,13 @@ pub(super) mod tests {
         let claim = Hash64::from_u64_word(3);
         book.refresh(vec![candidate(3, 300, false)], 10);
         book.judge(claim, Ok(run(Hash64::from_u64_word(1), Hash64::default())));
-        let complete = PalwFraudFilerWalkV1 { floor: 300, anchor: Hash64::from_u64_word(1_000), anchor_daa: 1_000, next: None };
+        let complete = PalwFraudFilerWalkV1 {
+            floor: 300,
+            anchor: Hash64::from_u64_word(1_000),
+            anchor_daa: 1_000,
+            next: None,
+            incomplete: false,
+        };
         book.walked(complete, false, Vec::new());
         assert_eq!(book.walk_floor(), Some(936));
         let root = PalwLegacyHeldUnitV2::StepNode { level: 16, index: 0 };

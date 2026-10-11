@@ -18898,6 +18898,8 @@ mod accepted_objects_walk_tests {
         answer_history: HashMap<(BlockHash, kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, Hash64, u8),
             kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
         answer_history_unavailable: bool,
+        flip_sink_on_block: Option<(BlockHash, BlockHash)>,
+        observed_sink: std::cell::Cell<Option<BlockHash>>,
     }
 
     impl kaspa_consensus_core::api::ConsensusApi for Chain {
@@ -18920,7 +18922,7 @@ mod accepted_objects_walk_tests {
             self.targets.get(&claim).cloned()
         }
         fn get_sink(&self) -> BlockHash {
-            self.sink
+            self.observed_sink.get().unwrap_or(self.sink)
         }
         fn get_header(&self, hash: BlockHash) -> ConsensusResult<Arc<Header>> {
             self.headers.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
@@ -18940,6 +18942,9 @@ mod accepted_objects_walk_tests {
             self.acceptance.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
         }
         fn get_block(&self, hash: BlockHash) -> ConsensusResult<Block> {
+            if let Some((at, sink)) = self.flip_sink_on_block && at == hash {
+                self.observed_sink.set(Some(sink));
+            }
             self.blocks.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
         }
         fn is_chain_ancestor_of(&self, low: BlockHash, mut high: BlockHash) -> ConsensusResult<bool> {
@@ -19131,6 +19136,72 @@ mod accepted_objects_walk_tests {
         assert!(read(&chain, &candidate, c.job.network_domain).is_err(), "no noncanonical trailing bytes");
         chain.views.insert(claim, view);
         assert_eq!(read(&chain, &candidate, c.job.network_domain).unwrap().claim_id(), claim);
+    }
+
+    #[test]
+    fn public_filer_discards_authenticated_answers_if_the_native_branch_changes_during_the_page() {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        let backend = super::seat_s_tests::floor_backend();
+        let payload = super::palw_fraud_filer::input::tests::payload();
+        let run = backend.execute_free_prompt(&payload.commitment.job,
+            &payload.prompt_token_ids.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();
+        let event = backend.disclose_trace_event(&run.outcome.material, 0, 0).unwrap();
+        let claim = Hash64::from_u64_word(45);
+        let object = PalwConsensusObjectV2::MaterialDisclosedV2 {
+            claim, unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row: 0, tile: 0 },
+            answer: kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(event),
+            discloser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(payload.commitment.job.executor_bond), signature: vec![],
+        };
+        let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap());
+        let mut chain = repeated_daa_chain();
+        chain.blocks.insert(hash(8), Block::new(chain.headers[&hash(8)].as_ref().clone(), vec![tx]));
+        let wanted = BTreeMap::from([(claim, run.outcome.execution_root)]);
+        let (_, reset, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, None, 8, &wanted, &BTreeMap::new()).unwrap();
+        assert!(!reset); assert_eq!(answers.len(), 1, "the stable native branch reads the actual authenticated binding");
+        append(&mut chain, 20, 104, 3);
+        chain.sink = hash(8);
+        chain.flip_sink_on_block = Some((hash(8), hash(20)));
+        let (walk, reset, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, None, 8, &wanted, &BTreeMap::new()).unwrap();
+        assert!(reset && answers.is_empty(), "end-of-page branch recheck discards the old branch's otherwise authentic bytes");
+        assert_eq!(walk.anchor, hash(20)); assert_eq!(walk.next, Some(hash(20))); assert_eq!(walk.floor, 100);
+    }
+
+    #[test]
+    fn public_filer_skips_native_prune_holes_without_losing_older_bytes_or_completing_the_watermark() {
+        let mut chain = repeated_daa_chain();
+        chain.blocks.remove(&hash(6));
+        chain.acceptance.remove(&hash(4));
+        let mut seen = Vec::new();
+        let mut cursor = Some(chain.sink);
+        let mut incomplete = false;
+        while let Some(start) = cursor {
+            let (next, hole) = super::palw_fraud_filer::history::walk_available_v1(&chain, start, 100, 3,
+                &mut |_, object| seen.push(claim_of(&object))).unwrap();
+            incomplete |= hole;
+            cursor = next;
+        }
+        assert!(incomplete);
+        assert_eq!(seen, vec![8, 7, 5, 3, 2, 1], "missing carrier/acceptance never hides older authenticated accepted bodies");
+        assert!(walk_accepted_lifecycle_page_with_block_v2(&chain, chain.sink, 100, 8, &mut |_, _| {}).is_err(),
+            "other callers retain the original strict walker contract");
+        let mut previous = None;
+        for expected in [5, 2, 8] {
+            let (walk, reset, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+                &chain, 100, 100, previous, 3, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+            assert!(!reset && answers.is_empty());
+            assert_eq!(walk.next, Some(hash(expected)));
+            assert!(walk.incomplete, "a hole on the first page survives later pagination to the oldest floor");
+            previous = Some(walk);
+        }
+        // The finished incomplete scan starts again at a new tip, making fresh reanswers visible.
+        append(&mut chain, 9, 103, 8);
+        let (fresh, _, _) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, previous, 3, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        assert_eq!(fresh.anchor, hash(9));
+        assert_eq!(fresh.next, Some(hash(6)));
     }
 
     #[test]

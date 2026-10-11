@@ -738,7 +738,7 @@ mod tests {
             let unsolicited = PalwDaUnitV1::Event { row: 1, tile: 1 };
             offered.push(((target.claim_id, unsolicited), answer(logits_event_disclosure_v1(&binding, &rows, &ids, 1, 1).unwrap())));
             book.walked(
-                PalwFraudFilerWalkV1 { floor: 0, anchor: Hash64::from_u64_word(1), anchor_daa: 1, next: None },
+                PalwFraudFilerWalkV1 { floor: 0, anchor: Hash64::from_u64_word(1), anchor_daa: 1, next: None, incomplete: false },
                 false,
                 offered,
             );
