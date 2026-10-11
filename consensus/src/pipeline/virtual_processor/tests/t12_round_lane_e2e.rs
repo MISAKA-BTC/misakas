@@ -233,24 +233,32 @@ pub(super) fn stamp_harness_time(params: &Params, header: &mut kaspa_consensus_c
 /// Sign input 0 of `tx`, which spends `utxo`, under card `i`'s key — the P2PKH-ML-DSA-87 spend
 /// `adr0127_round_burst` builds.
 pub(super) fn sign_spend(tx: &mut Transaction, utxo: UtxoEntry, i: usize, storage_mass_parameter: u64) {
+    sign_spend_many(tx, &[(utxo, i)], storage_mass_parameter);
+}
+
+/// Each input spends a real imported card fee float or a real carrier change.
+/// Multiple inputs let a counterfactual fee equal the complete recipient R room.
+fn sign_spend_many(tx: &mut Transaction, inputs: &[(UtxoEntry, usize)], storage_mass_parameter: u64) {
     use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
     use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
     use kaspa_consensus_core::mass::MassCalculator;
     use kaspa_txscript::{MLDSA87_TX_CONTEXT, script_builder::ScriptBuilder};
+    assert_eq!(tx.inputs.len(), inputs.len());
+    let utxos: Vec<_> = inputs.iter().map(|(utxo, _)| utxo.clone()).collect();
     let storage_mass = MassCalculator::new(0, 0, 0, storage_mass_parameter)
-        .calc_contextual_masses(&PopulatedTransaction::new(tx, vec![utxo.clone()]))
-        .expect("contextual mass is computable")
-        .storage_mass;
+        .calc_contextual_masses(&PopulatedTransaction::new(tx, utxos.clone()))
+        .expect("contextual mass is computable").storage_mass;
     tx.set_mass(storage_mass);
     let reused = Mldsa87SigHashReusedValuesUnsync::new();
-    let sig_hash = calc_mldsa87_signature_hash(&PopulatedTransaction::new(tx, vec![utxo]), 0, SIG_HASH_ALL, &reused);
-    let sig =
-        libcrux_ml_dsa::ml_dsa_87::sign(&card_key(i).signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x12u8; 32])
+    for (input, (_, card)) in inputs.iter().enumerate() {
+        let sig_hash = calc_mldsa87_signature_hash(&PopulatedTransaction::new(tx, utxos.clone()), input, SIG_HASH_ALL, &reused);
+        let sig = libcrux_ml_dsa::ml_dsa_87::sign(&card_key(*card).signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x12u8; 32])
             .expect("ML-DSA-87 sign on the 64-byte sighash");
-    let mut sig_item = sig.as_ref().to_vec();
-    sig_item.push(SIG_HASH_ALL.to_u8());
-    tx.inputs[0].signature_script =
-        ScriptBuilder::new().add_data(&sig_item).expect("the signature fits").add_data(&card_pubkey(i)).expect("the key fits").drain();
+        let mut sig_item = sig.as_ref().to_vec();
+        sig_item.push(SIG_HASH_ALL.to_u8());
+        tx.inputs[input].signature_script = ScriptBuilder::new().add_data(&sig_item).expect("the signature fits")
+            .add_data(&card_pubkey(*card)).expect("the key fits").drain();
+    }
 }
 
 /// The chain under construction, with the handful of facts every step needs. `pub(super)` so the
@@ -972,25 +980,31 @@ async fn a_round_block_with_actual_fee(
     assert_eq!(palw_execution_span_v1(at.chain.sink_daa(), at.span_daa), at.target, "still the target span");
     assert_eq!(at.chain.vp().ghostdag_store.get_selected_parent(at.chain.sink()).unwrap(), at.opening);
 
-    let (change, change_entry) = {
+    let (change, change_entry, extra) = {
         let out = TransactionOutpoint::new(at.carrier.id(), 0);
         let utxos: std::collections::HashMap<_, _> =
             at.chain.ctx.consensus.get_virtual_utxos(None, 1_000_000, false).into_iter().collect();
-        (out, utxos.get(&out).cloned().expect("the carrier's change is unspent"))
+        let change = utxos.get(&out).cloned().expect("the carrier's change is unspent");
+        let extra = if change.amount <= fee.max(preflight_fee) {
+            let (outpoint, entry) = utxos.iter().find(|(_, entry)| entry.script_public_key == card_payout_spk(1)
+                && entry.amount == kaspa_consensus_core::config::premine::PALW_RC_BOND_FEE_FLOAT_SOMPI)
+                .expect("card 1's real imported fee float funds the complete R-room fee");
+            Some((*outpoint, entry.clone()))
+        } else { None };
+        (out, change, extra)
     };
-    let mut paying = {
-        let mut tx = Transaction::new(
-            crate::constants::TX_VERSION,
-            vec![TransactionInput::new(change, vec![], 0, 1)],
-            vec![TransactionOutput::new(change_entry.amount - preflight_fee, card_payout_spk(0))],
-            0,
-            kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
-            0,
-            vec![],
-        );
-        sign_spend(&mut tx, change_entry.clone(), 0, at.chain.config.params.storage_mass_parameter);
-        tx
-    };
+    let mut inputs = vec![TransactionInput::new(change, vec![], 0, 1)];
+    let mut funding = vec![(change_entry.clone(), 0)];
+    if let Some((outpoint, entry)) = extra {
+        inputs.push(TransactionInput::new(outpoint, vec![], 0, 1));
+        funding.push((entry, 1));
+    }
+    let total_input = funding.iter().map(|(entry, _)| entry.amount).sum::<u64>();
+    assert!(total_input > fee.max(preflight_fee), "fee fixture uses fully funded real inputs");
+    let mut paying = Transaction::new(crate::constants::TX_VERSION, inputs,
+        vec![TransactionOutput::new(total_input - preflight_fee, card_payout_spk(0))], 0,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE, 0, vec![]);
+    sign_spend_many(&mut paying, &funding, at.chain.config.params.storage_mass_parameter);
     let template = at
         .chain
         .ctx
@@ -1001,8 +1015,8 @@ async fn a_round_block_with_actual_fee(
         at.chain.vp().round_adapt_block_template(template, round, card_payout_spk(0)).expect("the lane adapts a template").block;
     if fee != preflight_fee {
         let old_id = paying.id();
-        paying.outputs[0].value = change_entry.amount - fee;
-        sign_spend(&mut paying, change_entry, 0, at.chain.config.params.storage_mass_parameter);
+        paying.outputs[0].value = total_input - fee;
+        sign_spend_many(&mut paying, &funding, at.chain.config.params.storage_mass_parameter);
         let excessive = at
             .chain
             .ctx
@@ -1218,14 +1232,18 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
         PALW_BUDGET_BLOCK_UNIT_V1, PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1, PalwBudgetOriginV1, PalwRoundRightsPolicyV1,
     };
     use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1;
-    const LIMIT: u64 = 500_000;
-    let preparation = |total_reward: u64| move |params: &mut kaspa_consensus_core::config::params::Params| {
+    // Fixed before any work or tested fee result: total native recipient cap
+    // is 620 permille of the pinned genesis subsidy (a private mechanics cap,
+    // not an economic proposal). The criterion is exactly the available room
+    // vs one sompi more, not a cap fitted to the observed payout.
+    const TOTAL_CAP: u64 = kaspa_consensus_core::config::params::PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI / 1_000 * 620;
+    let preparation = |params: &mut kaspa_consensus_core::config::params::Params| {
         let mut policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
         policy.window_daa = 280;
         policy.capital_unit_sompi = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
         policy.claims_per_unit = 1_000_000;
         policy.block_units_per_unit = 1_000_000 * PALW_BUDGET_BLOCK_UNIT_V1;
-        policy.reward_per_unit_sompi = total_reward;
+        policy.reward_per_unit_sompi = TOTAL_CAP;
         policy.final_weight_per_unit = 1_000_000;
         policy.max_open_claims_per_bond = 1_000_000;
         policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1 };
@@ -1235,11 +1253,9 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
         params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(264), policy });
         params.sync_palw_bond_budget_v1();
     };
-    // Prepare actual outstanding recipient money before either tested fee
-    // body exists. This includes issuer and any other already accepted native
-    // duties, not just the original producer leg. The fee limit is fixed; the
-    // generously capped preparation is an unapproved mechanics fixture.
-    let prepared = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, true, preparation(u64::MAX / 2)).await;
+    // Freeze the same cap and heartbeat payload for preparation and both fee
+    // runs. Measure existing real duties before either tested fee body exists.
+    let prepared = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, true, preparation).await;
     let (_, prepared_state) = prepared.chain.tip_state();
     let old_issuer = prepared_state.vesting_row(&prepared.claim_id).expect("actual old producer right").producer.amount;
     let old_income = prepared_state.bond_budget().unwrap().bond_row(&prepared.executor).unwrap().window.reward_sompi;
@@ -1248,11 +1264,12 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
         .filter(|(_, row)| row.bond == prepared.executor && row.in_window)
         .map(|(id, row)| (*id, row.origin, row.reserved, row.consumed))
         .collect();
-    eprintln!("[t12-round-r] before tested fee bodies: issuer={old_issuer}, full-recipient-R={old_income}, fixed-fee-limit={LIMIT}, rows={prior_rows:?}");
-    let total_cap = old_income.checked_add(LIMIT).unwrap();
+    let fee_limit = TOTAL_CAP.checked_sub(old_income).expect("the predeclared private cap covers prior recipient money");
+    assert!(fee_limit > 0);
+    eprintln!("[t12-round-r] before tested fee bodies: fixed-cap={TOTAL_CAP}, issuer={old_issuer}, full-recipient-R={old_income}, criterion=remaining-R/+1, remaining={fee_limit}, rows={prior_rows:?}");
     drop(prepared);
-    for actual_fee in [LIMIT, LIMIT + 1] {
-        let mut at = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, true, preparation(total_cap)).await;
+    for actual_fee in [fee_limit, fee_limit + 1] {
+        let mut at = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, true, preparation).await;
         let (_, before_state) = at.chain.tip_state();
         let before = *before_state.bond_budget().unwrap().bond_row(&at.executor).expect("ticket recipient has a T reservation");
         let producer = before_state.vesting_row(&at.claim_id).expect("old Final still holds its actual native payout");
@@ -1263,20 +1280,19 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
         assert_eq!(actual_rows, prior_rows, "the fixed heartbeat coinbase gives each run the same actual prior recipient duties");
         assert_eq!(before.window.reward_sompi, old_income, "every prior recipient hold matches the predeclared baseline");
         assert_eq!(before_state.bond(&at.executor).unwrap().collateral, kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI);
-        assert_eq!(total_cap - before.window.reward_sompi, LIMIT, "the fee boundary is fixed after actual issuance holds");
+        assert_eq!(TOTAL_CAP - before.window.reward_sompi, fee_limit, "the fee boundary is fixed after actual issuance holds");
         assert_eq!(before.window.block_units, 0, "fee-only ticket does not reserve reward blocks");
         assert_eq!(before.window.round_rights, 1, "dedicated execution cap is occupied before the Round");
         let ticket = at.schedule.quanta.iter().filter(|q| q.final_id == at.claim_id).min_by_key(|q| q.scheduled_round).unwrap();
         let round = ticket.scheduled_round;
         let width = at.lane.width_of_span_len(at.target, at.span_daa);
         let permit = palw_execution_permits_v1(&at.schedule, round, width).into_iter().find(|p| p.bond == at.executor).unwrap();
-        let (block, paying) = a_round_block_with_actual_fee(&mut at, round, permit.index, actual_fee, LIMIT).await;
-        let input = paying.inputs[0].previous_outpoint;
+        let (block, paying) = a_round_block_with_actual_fee(&mut at, round, permit.index, actual_fee, fee_limit).await;
         let input_before: std::collections::HashMap<_, _> =
             at.chain.ctx.consensus.get_virtual_utxos(None, 1_000_000, false).into_iter().collect();
         let merged = merge_the_round_block(&mut at, &block, &paying, round, actual_fee).await;
         assert!(merged.permitted && merged.permit_recorded, "execution permit is independent of the refused native fee body");
-        let accepted = actual_fee == LIMIT;
+        let accepted = actual_fee == fee_limit;
         assert_eq!(merged.spend_accepted, accepted);
         assert_eq!(merged.fee_paid_to_payout, accepted);
         let (_, after_state) = at.chain.tip_state();
@@ -1286,18 +1302,21 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
         assert_eq!(after.window.round_rights, before.window.round_rights);
         assert_eq!(after.open_claims, before.open_claims);
         if accepted {
-            assert_eq!(after.window.reward_sompi, total_cap);
+            assert_eq!(after.window.reward_sompi, TOTAL_CAP);
             let id = kaspa_consensus_core::palw_bond_budget_v1::palw_round_income_id_v1(block.header.hash, &at.executor);
             let income = book.claim_row(&id).expect("actual native fee collection is journaled");
             assert_eq!(income.origin, PalwBudgetOriginV1::RoundFee);
-            assert_eq!(income.reserved.reward_sompi, LIMIT);
-            assert_eq!(income.consumed.reward_sompi, LIMIT);
+            assert_eq!(income.reserved.reward_sompi, fee_limit);
+            assert_eq!(income.consumed.reward_sompi, fee_limit);
             assert!(!income.open && !income.live && income.in_window);
         } else {
             assert_eq!(after, before, "refused fee body leaves every recipient budget counter unchanged");
             let utxos: std::collections::HashMap<_, _> =
                 at.chain.ctx.consensus.get_virtual_utxos(None, 1_000_000, false).into_iter().collect();
-            assert_eq!(utxos.get(&input), input_before.get(&input), "refused native body leaves the actual input untouched");
+            for input in &paying.inputs {
+                assert_eq!(utxos.get(&input.previous_outpoint), input_before.get(&input.previous_outpoint),
+                    "refused native body leaves every real signed funding input untouched");
+            }
             assert!(!utxos.contains_key(&TransactionOutpoint::new(paying.id(), 0)), "refused native output is never created");
             let id = kaspa_consensus_core::palw_bond_budget_v1::palw_round_income_id_v1(block.header.hash, &at.executor);
             assert!(book.claim_row(&id).is_none(), "no hidden R charge for a refused native body");
