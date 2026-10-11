@@ -116,6 +116,18 @@ impl PalwGdnPagedStateV1 {
             |i: usize| A16QuantParams::from_wire(&p[i * 17..(i + 1) * 17]).map_err(|e| format!("registered parameter domain: {e:?}"));
         Ok((at(0)?, at(1)?, at(2)?, at(3)?))
     }
+    pub(crate) fn matches_contract_v1(&self, context: Hash64, prefix_tokens: u32, d_k: u32, d_v: u32, parameters: &[u8; 68]) -> bool {
+        self.context == context
+            && self.prefix_tokens == prefix_tokens
+            && self.d_k == d_k
+            && self.d_v == d_v
+            && &self.parameters == parameters
+            && self.pages_per_row == d_k.div_ceil(PALW_GDN_PAGE_WORDS_V1 as u32)
+    }
+    pub fn resident_bytes_v1(&self) -> u64 {
+        // Owned row plus authenticated read/write opening and replacement scratch.
+        1024 + (u64::from(self.d_k) + u64::from(self.d_v)) * 4 + (PALW_GDN_PAGE_WORDS_V1 as u64 * 4 + u64::from(self.depth) * 64) * 3
+    }
     pub fn root(&self) -> Hash64 {
         self.root
     }
@@ -136,7 +148,16 @@ impl PalwGdnPagedStateV1 {
         self.position == self.prefix_tokens && self.phase == PhaseV1::Idle
     }
     pub fn check(&self) -> Result<(), String> {
-        if self.position > self.prefix_tokens
+        if self.prefix_tokens == 0
+            || self.d_k == 0
+            || self.d_v == 0
+            || self.d_k > 1 << 17
+            || self.d_v > 1 << 17
+            || self.pages_per_row != self.d_k.div_ceil(PALW_GDN_PAGE_WORDS_V1 as u32)
+            || u32::from(self.depth) != (u64::from(self.pages_per_row) * u64::from(self.d_v)).next_power_of_two().trailing_zeros()
+            || self.position > self.prefix_tokens
+            || (self.position == self.prefix_tokens && self.phase != PhaseV1::Idle)
+            || (self.phase == PhaseV1::Idle && (self.row != 0 || self.page != 0))
             || self.row >= self.d_v
             || self.page >= self.pages_per_row
             || (self.phase == PhaseV1::Idle && (!self.key.is_empty() || !self.value.is_empty()))

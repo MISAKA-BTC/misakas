@@ -8,6 +8,8 @@ use crate::palw_freeprompt_v3::PalwFreePromptJobV3;
 use crate::palw_offence_attribution_v1::{PalwClaimSourceKindV1, PalwOffenceTargetV1, palw_constrained_job_target_v1};
 use crate::palw_prefix_base0_codec_v1::PalwBase0PrefixDigestV1;
 use crate::palw_prefix_family_state_v1::{PalwPrefixCacheUnitV1, PalwQwen36PrefixCacheDigestV1};
+use crate::palw_prefix_gdn_contract_v1::PalwPrefixGdnContractV1;
+use crate::palw_prefix_gdn_paged_v1::{PALW_GDN_PAGE_WORDS_V1, PalwGdnOwnedPageOpeningV1, PalwGdnPagedStateV1};
 use crate::palw_prefix_gdn_replay_v1::PalwPrefixGdnHeadReplayV1;
 use crate::palw_prefix_q36_public_rows_v1::PalwQ36PrefixPublicRowV1;
 use crate::palw_prefix_state_court_v1::PalwPrefixKvTileV1;
@@ -42,6 +44,19 @@ pub enum PalwPrefixCourtActionV1 {
     HeadDigest {
         length: u32,
     },
+    /// An alternate bounded representation of the same registered head relation.
+    BeginPagedHead {
+        parameters: Vec<crate::palw_artifact::PalwArtifactOpeningV1>,
+    },
+    HeadPageRead {
+        opening: PalwGdnOwnedPageOpeningV1,
+    },
+    HeadPageWrite {
+        opening: PalwGdnOwnedPageOpeningV1,
+    },
+    HeadPageDigest {
+        opening: PalwGdnOwnedPageOpeningV1,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwPrefixFamilyCursorV1 {
@@ -53,6 +68,8 @@ pub enum PalwPrefixFamilyCursorV1 {
     HeadInputs { layer: u16, head: u32, position: u32 },
     HeadDigest { layer: u16, head: u32, length: u64, offset: u64 },
     Complete,
+    HeadPage { layer: u16, head: u32, position: u32, index: u64, write: bool, root: Hash64 },
+    HeadPageDigest { layer: u16, head: u32, index: u64, length: u64, offset: u64, root: Hash64 },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 struct Base0PendingTileV1 {
@@ -63,10 +80,15 @@ struct Base0PendingTileV1 {
     hash: LeafHashContinuationV1,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+enum Q36HeadV1 {
+    Whole(Box<PalwPrefixGdnHeadReplayV1>),
+    Paged { contract: PalwPrefixGdnContractV1, state: Box<PalwGdnPagedStateV1> },
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 enum FamilyV1 {
     Dense(Box<PalwPrefixStateStreamV1>),
     Base0 { digest: PalwBase0PrefixDigestV1, pending: Option<Base0PendingTileV1> },
-    Q36 { digest: PalwQwen36PrefixCacheDigestV1, head: Option<Box<PalwPrefixGdnHeadReplayV1>> },
+    Q36 { digest: PalwQwen36PrefixCacheDigestV1, head: Option<Box<Q36HeadV1>> },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwPrefixFamilyCourtV1 {
@@ -87,7 +109,7 @@ pub struct PalwPrefixFamilyCourtV1 {
 enum CheckpointFamilyV1 {
     Dense(crate::palw_prefix_state_stream_v1::PalwPrefixStreamCheckpointV1),
     Base0 { digest: PalwBase0PrefixDigestV1, pending: Option<Base0PendingTileV1> },
-    Q36 { digest: PalwQwen36PrefixCacheDigestV1, head: Option<Box<PalwPrefixGdnHeadReplayV1>> },
+    Q36 { digest: PalwQwen36PrefixCacheDigestV1, head: Option<Box<Q36HeadV1>> },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwPrefixFamilyCheckpointV1 {
@@ -211,14 +233,62 @@ impl PalwPrefixFamilyCourtV1 {
                 None => Ok(PalwPrefixFamilyCursorV1::Complete),
                 Some((PalwPrefixCacheUnitV1::GdnHead { layer, head: h }, length, offset)) => Ok(match head {
                     None => PalwPrefixFamilyCursorV1::HeadParameters { layer, head: h },
-                    Some(r) if r.next_position() < self.prefix_tokens => {
-                        PalwPrefixFamilyCursorV1::HeadInputs { layer, head: h, position: r.next_position() }
-                    }
-                    Some(_) => PalwPrefixFamilyCursorV1::HeadDigest { layer, head: h, length, offset },
+                    Some(r) => match r.as_ref() {
+                        Q36HeadV1::Whole(r) if r.next_position() < self.prefix_tokens => {
+                            PalwPrefixFamilyCursorV1::HeadInputs { layer, head: h, position: r.next_position() }
+                        }
+                        Q36HeadV1::Whole(_) => PalwPrefixFamilyCursorV1::HeadDigest { layer, head: h, length, offset },
+                        Q36HeadV1::Paged { state, .. } => {
+                            if let Some((index, write)) = state.next_page() {
+                                PalwPrefixFamilyCursorV1::HeadPage {
+                                    layer,
+                                    head: h,
+                                    position: state.position(),
+                                    index,
+                                    write,
+                                    root: state.root(),
+                                }
+                            } else if !state.complete() {
+                                PalwPrefixFamilyCursorV1::HeadInputs { layer, head: h, position: state.position() }
+                            } else {
+                                PalwPrefixFamilyCursorV1::HeadPageDigest {
+                                    layer,
+                                    head: h,
+                                    index: self.completed_page_index_v1(offset)?,
+                                    length,
+                                    offset,
+                                    root: state.root(),
+                                }
+                            }
+                        }
+                    },
                 }),
                 Some((unit, length, offset)) => Ok(PalwPrefixFamilyCursorV1::PublicRow { unit, length, offset }),
             },
         }
+    }
+    fn completed_page_index_v1(&self, offset: u64) -> Result<u64, String> {
+        let dk = u64::from(self.binding.shape_profile.gdn_head_k_dim);
+        if dk == 0 || offset % 4 != 0 {
+            return Err("completed page has invalid geometry/offset".into());
+        }
+        let word = offset / 4;
+        let column = word % dk;
+        if column % PALW_GDN_PAGE_WORDS_V1 as u64 != 0 {
+            return Err("completed page is not at a canonical page boundary".into());
+        }
+        Ok((word / dk) * dk.div_ceil(PALW_GDN_PAGE_WORDS_V1 as u64) + column / PALW_GDN_PAGE_WORDS_V1 as u64)
+    }
+    /// The outsider stores only deterministic transition output; no producer matrix is used.
+    pub fn preview_page_write_v1(&self, opening: &PalwGdnOwnedPageOpeningV1) -> Result<Vec<i32>, String> {
+        self.check()?;
+        let FamilyV1::Q36 { head: Some(h), .. } = &self.family else {
+            return Err("no owned Q36 head".into());
+        };
+        let Q36HeadV1::Paged { state, .. } = h.as_ref() else {
+            return Err("head is not paged".into());
+        };
+        state.as_ref().clone().write_page(self.context, opening)
     }
     pub fn execution_root(&self) -> Hash64 {
         self.binding.committed_execution_root
@@ -250,11 +320,37 @@ impl PalwPrefixFamilyCourtV1 {
                     let Some((PalwPrefixCacheUnitV1::GdnHead { layer, head }, _, _)) = digest.next_unit() else {
                         return Err("prefix recurrence is not the owned canonical unit".into());
                     };
-                    if !h.matches_contract_v1(self.claim, &self.binding, layer, head, self.prefix_tokens)
-                        || h.next_position() > self.prefix_tokens
-                        || h.resident_state_bytes() > self.maximum_working_set_bytes
-                    {
-                        return Err("prefix recurrence changes owned canonical unit or resource bounds".into());
+                    match h.as_ref() {
+                        Q36HeadV1::Whole(h) => {
+                            if !h.matches_contract_v1(self.claim, &self.binding, layer, head, self.prefix_tokens)
+                                || h.next_position() > self.prefix_tokens
+                                || h.resident_state_bytes() > self.maximum_working_set_bytes
+                            {
+                                return Err("prefix recurrence changes owned canonical unit or resource bounds".into());
+                            }
+                        }
+                        Q36HeadV1::Paged { contract, state } => {
+                            if contract.claim != self.claim
+                                || contract.execution_root != self.execution_root()
+                                || contract.job_id != self.binding.job_context.job_id
+                                || contract.layer != layer
+                                || contract.head != head
+                                || contract.prefix_tokens != self.prefix_tokens
+                                || contract.d_k != self.binding.shape_profile.gdn_head_k_dim
+                                || contract.d_v != self.binding.shape_profile.gdn_head_v_dim
+                                || !state.matches_contract_v1(
+                                    self.context,
+                                    contract.prefix_tokens,
+                                    contract.d_k,
+                                    contract.d_v,
+                                    &contract.parameters,
+                                )
+                                || state.resident_bytes_v1() > self.maximum_working_set_bytes
+                            {
+                                return Err("paged recurrence changes immutable contract or resident bound".into());
+                            }
+                            state.check()?;
+                        }
                     }
                 }
                 Ok(())
@@ -340,7 +436,7 @@ impl PalwPrefixFamilyCourtV1 {
                 if head.is_some() {
                     return Err("Q36 recurrence already owned".into());
                 }
-                *head = Some(Box::new(PalwPrefixGdnHeadReplayV1::new(
+                *head = Some(Box::new(Q36HeadV1::Whole(Box::new(PalwPrefixGdnHeadReplayV1::new(
                     &target,
                     &self.binding,
                     &self.job,
@@ -348,18 +444,24 @@ impl PalwPrefixFamilyCourtV1 {
                     h,
                     parameters,
                     self.maximum_working_set_bytes,
-                )?));
+                )?))));
             }
             (FamilyV1::Q36 { head, .. }, PalwPrefixCourtActionV1::HeadPosition { inputs }) => {
-                head.as_mut().ok_or("Q36 owned recurrence not initialized")?.advance(
-                    &target,
-                    &self.binding,
-                    inputs,
-                    self.maximum_leaves,
-                )?;
+                match head.as_mut().ok_or("Q36 owned recurrence not initialized")?.as_mut() {
+                    Q36HeadV1::Whole(h) => h.advance(&target, &self.binding, inputs, self.maximum_leaves)?,
+                    Q36HeadV1::Paged { contract, state } => {
+                        let rows = contract.input_rows(&self.binding, state.position(), inputs, self.maximum_leaves)?;
+                        if rows[3].len() != 1 || rows[4].len() != 1 {
+                            return Err("paged recurrence gate source is not a scalar".into());
+                        }
+                        state.begin_position(context, &rows[0], &rows[1], &rows[2], i64::from(rows[3][0]), i64::from(rows[4][0]))?;
+                    }
+                }
             }
             (FamilyV1::Q36 { digest, head }, PalwPrefixCourtActionV1::HeadDigest { length }) => {
-                let h = head.as_ref().ok_or("Q36 owned recurrence not initialized")?;
+                let Q36HeadV1::Whole(h) = head.as_ref().ok_or("Q36 owned recurrence not initialized")?.as_ref() else {
+                    return Err("paged recurrence digest requires its authenticated completed page".into());
+                };
                 let matrix = h.completed_matrix()?;
                 let (unit, total, offset) = digest.next_unit().ok_or("Q36 cache complete")?;
                 if *length == 0 || *length > 65_536 || length % 4 != 0 || u64::from(*length) > total - offset {
@@ -373,6 +475,55 @@ impl PalwPrefixFamilyCourtV1 {
                 let bytes: Vec<u8> = matrix[start..end].iter().flat_map(|v| v.to_le_bytes()).collect();
                 digest.push(unit, offset, &bytes)?;
                 if offset + u64::from(*length) == total {
+                    *head = None;
+                }
+            }
+            (FamilyV1::Q36 { digest, head }, PalwPrefixCourtActionV1::BeginPagedHead { parameters }) => {
+                let Some((PalwPrefixCacheUnitV1::GdnHead { layer, head: h }, _, 0)) = digest.next_unit() else {
+                    return Err("paged head is not the next untouched canonical unit".into());
+                };
+                if head.is_some() {
+                    return Err("head already owned".into());
+                }
+                let contract = PalwPrefixGdnContractV1::new(&target, &self.binding, &self.job, layer, h, parameters)?;
+                let state =
+                    PalwGdnPagedStateV1::new(context, contract.prefix_tokens, contract.d_k, contract.d_v, contract.parameters)?;
+                if state.resident_bytes_v1() > self.maximum_working_set_bytes {
+                    return Err("paged head exceeds granted resident envelope".into());
+                }
+                *head = Some(Box::new(Q36HeadV1::Paged { contract, state: Box::new(state) }));
+            }
+            (FamilyV1::Q36 { head, .. }, PalwPrefixCourtActionV1::HeadPageRead { opening }) => {
+                let Q36HeadV1::Paged { state, .. } = head.as_mut().ok_or("head not owned")?.as_mut() else {
+                    return Err("head is not paged".into());
+                };
+                state.read_page(context, opening)?;
+            }
+            (FamilyV1::Q36 { head, .. }, PalwPrefixCourtActionV1::HeadPageWrite { opening }) => {
+                let Q36HeadV1::Paged { state, .. } = head.as_mut().ok_or("head not owned")?.as_mut() else {
+                    return Err("head is not paged".into());
+                };
+                state.write_page(context, opening)?;
+            }
+            (FamilyV1::Q36 { digest, head }, PalwPrefixCourtActionV1::HeadPageDigest { opening }) => {
+                let Q36HeadV1::Paged { contract, state } = head.as_ref().ok_or("head not owned")?.as_ref() else {
+                    return Err("head is not paged".into());
+                };
+                let (unit, total, offset) = digest.next_unit().ok_or("cache complete")?;
+                let word = offset / 4;
+                let column = word % u64::from(contract.d_k);
+                if offset % 4 != 0 || column % PALW_GDN_PAGE_WORDS_V1 as u64 != 0 {
+                    return Err("completed page starts outside canonical row/page interval".into());
+                }
+                let index = (word / u64::from(contract.d_k)) * u64::from(contract.d_k.div_ceil(PALW_GDN_PAGE_WORDS_V1 as u32))
+                    + column / PALW_GDN_PAGE_WORDS_V1 as u64;
+                let values = state.completed_page(context, index, opening)?;
+                let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+                if bytes.is_empty() || offset + bytes.len() as u64 > total {
+                    return Err("completed page exceeds canonical cache unit".into());
+                }
+                digest.push(unit, offset, &bytes)?;
+                if offset + bytes.len() as u64 == total {
                     *head = None;
                 }
             }

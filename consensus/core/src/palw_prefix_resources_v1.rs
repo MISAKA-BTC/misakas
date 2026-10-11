@@ -1,7 +1,7 @@
 //! Checked prospective family prefix work. Geometry comes from the authenticated canonical
 //! graph and job, never from a prover's asserted cache size. No historical deadline is changed.
-//! The whole-head recurrence implementation declares its actual resident requirement; paging
-//! is still necessary to provide a fixed resident bound for the largest admitted Q36 heads.
+//! Q36 paging declares linear authenticated-input scratch and fixed page buffers, never a
+//! resident whole-matrix requirement. Complete signed page carriers are priced explicitly.
 use crate::palw_class_semantics_v1::PalwPrefixStateRelationV1;
 use crate::palw_prefix_family_state_v1::PalwQwen36PrefixCachePlanV1;
 use crate::palw_prefix_state_court_v1::PalwPrefixKvPlanV1;
@@ -26,7 +26,25 @@ impl PalwPrefixResourcePlanV1 {
         carrier_maximum: u64,
         prices: PalwRenderingResourcePricesV1,
     ) -> Result<Self, String> {
+        let profile_bytes = borsh::to_vec(profile).map_err(|e| e.to_string())?.len() as u64;
+        Self::derive_with_profile_bytes(profile, relation, prefix_tokens, step_leaves, carrier_maximum, prices, profile_bytes)
+    }
+    /// Fee-equivalent stateless skeleton quoting. The rooted hydration fold must separately
+    /// require this exact original Borsh size, not a caller's smaller estimate.
+    pub fn derive_with_profile_bytes(
+        profile: &PalwShapeProfileV3,
+        relation: PalwPrefixStateRelationV1,
+        prefix_tokens: u32,
+        step_leaves: u64,
+        carrier_maximum: u64,
+        prices: PalwRenderingResourcePricesV1,
+        original_profile_bytes: u64,
+    ) -> Result<Self, String> {
         relation.check_profile(profile)?;
+        let stub_bytes = borsh::to_vec(profile).map_err(|e| e.to_string())?.len() as u64;
+        if original_profile_bytes < stub_bytes {
+            return Err("hydrated profile byte count is below quoted skeleton".into());
+        }
         if prefix_tokens == 0
             || prefix_tokens >= profile.n_ctx
             || prices.inclusion_margin_daa == 0
@@ -52,34 +70,51 @@ impl PalwPrefixResourcePlanV1 {
                 let heads = gdn_layers * u128::from(profile.gdn_heads);
                 let dk = u128::from(profile.gdn_head_k_dim);
                 let dv = u128::from(profile.gdn_head_v_dim);
-                // Exact current clone/scratch envelope of the owned zero-state replay.
-                head_working = if heads == 0 { 0 } else { dk * dv * 8 + (2 * dk + 3 * dv + 2) * 4 + 256 };
+                let pages = dk.div_ceil(crate::palw_prefix_gdn_paged_v1::PALW_GDN_PAGE_WORDS_V1 as u128) * dv;
+                // Owned continuation and its clone, all five sliced inputs plus page/path
+                // read/write scratch. Original source tiles are accounted in row/RAM below.
+                head_working = if heads == 0 { 0 } else { (5 * dk + 5 * dv + 4) * 4 + 196_608 };
                 // Head inputs can share old full tiles with other heads, but authentication
                 // must still cover those bytes. This conservative graph-wide bound counts
                 // each original step leaf once per head plus the public KV/conv pass.
                 let leaves = u128::from(step_leaves) * (heads + 1);
-                let parameters = heads * u128::from(profile.gdn_heads) * 68;
-                let bytes =
+                let parameters = heads * 68;
+                let original_bytes =
                     leaves * crate::palw_step_leg::PALW_STEP_LEG_MAX_TILE_BYTES as u128 + parameters + u128::from(plan.total_bytes());
-                let moves = bytes.div_ceil(65_536) + leaves * 3 + heads * (k + 2) + u128::from(plan.unit_count()) + 1;
-                let work = bytes * 2 + heads * k * dk * dv * 32;
+                // Two exact recurrence passes per position and a final canonical digest
+                // pass. Conservative maximum existing-domain path depth22, no truncation.
+                let page_moves = heads * pages * (2 * k + 1);
+                let page_bytes = page_moves * (16_384 + 22 * 64 + 64);
+                let bytes = original_bytes + page_bytes;
+                let moves =
+                    original_bytes.div_ceil(65_536) + leaves * 3 + heads * (k + 2) + u128::from(plan.unit_count()) + page_moves + 1;
+                let work = bytes * 2 + heads * k * dk * dv * 32 + page_moves * (22 * 384 + head_working);
                 (bytes, leaves, moves, work)
             }
         };
-        let moves = moves + u128::from(prices.reorg_replay_moves);
+        let moves = exact(moves + u128::from(prices.reorg_replay_moves))?;
+        // Current pure calls revalidate/hash the immutable graph/context. Account every
+        // move's full hydrated profile and the existing accepted commitment-tx job bound,
+        // including conservative repeated validation passes; a small stub cannot discount it.
+        let repeated_validation = exact(
+            u128::from(moves)
+                .checked_mul(u128::from(original_profile_bytes) + crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES as u128)
+                .and_then(|n| n.checked_mul(32))
+                .ok_or("prefix repeated validation budget overflows u128")?,
+        )?;
         // Complete signed carrier budget includes all old-tree openings, headers,
         // signatures and the seed, not just cache/raw bytes.
-        let carrier_bytes = exact(moves * u128::from(carrier_maximum))?;
-        let blake = bytes.div_ceil(128) + leaves * (4 + 64 * 3) + u128::from(carrier_bytes).div_ceil(128);
-        let work = work + leaves * 64 * 384 + u128::from(carrier_bytes);
-        let profile_bytes = borsh::to_vec(profile).map_err(|e| e.to_string())?.len() as u128;
+        let carrier_bytes = exact(u128::from(moves) * u128::from(carrier_maximum))?;
+        let blake =
+            bytes.div_ceil(128) + leaves * (4 + 64 * 3) + (u128::from(carrier_bytes) + u128::from(repeated_validation)).div_ceil(128);
+        let work = work + leaves * 64 * 384 + u128::from(carrier_bytes) + u128::from(repeated_validation);
+        let profile_bytes = u128::from(original_profile_bytes);
         let row = head_working + profile_bytes + 262_144 + 65_536 + 32_768 + 16_384;
         let resident = head_working + profile_bytes * 4 + 1_048_576;
         // Narrow every admitted cumulative quantity BEFORE multiplying by u64 prices.
         // Multiplication then fits u128; sums still fail explicitly instead of wrapping.
         let bytes = exact(bytes)?;
         let leaves = exact(leaves)?;
-        let moves = exact(moves)?;
         let work = exact(work)?;
         let blake = exact(blake)?;
         let row = exact(row)?;
