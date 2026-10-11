@@ -509,7 +509,19 @@ impl UtxoContext {
     }
 
     pub async fn extend_from_scan(&self, utxo_entries: Vec<UtxoEntryReference>, current_daa_score: u64) -> Result<()> {
-        let (pending, mature) = {
+        self.extend_from_scan_inner(utxo_entries, current_daa_score, None).await
+    }
+
+    pub(crate) async fn extend_from_scan_for_generation(
+        &self, utxo_entries: Vec<UtxoEntryReference>, current_daa_score: u64, generation: u64,
+    ) -> Result<()> {
+        self.extend_from_scan_inner(utxo_entries, current_daa_score, Some(generation)).await
+    }
+
+    async fn extend_from_scan_inner(
+        &self, utxo_entries: Vec<UtxoEntryReference>, current_daa_score: u64, generation: Option<u64>,
+    ) -> Result<()> {
+        let classify = || -> Result<_> {
             let mut context = self.context();
 
             let mut pending = vec![];
@@ -546,7 +558,11 @@ impl UtxoContext {
             context.mature.extend(mature.iter().cloned());
             context.mature.sort_by_key(|entry| entry.amount());
 
-            (pending, mature)
+            Ok((pending, mature))
+        };
+        let (pending, mature) = match generation {
+            Some(started) => self.processor().with_utxo_observation_generation(started, classify)?,
+            None => classify()?,
         };
 
         // cascade discovery to the processor
@@ -811,6 +827,7 @@ impl UtxoContext {
     }
 
     pub async fn scan_and_register_addresses(&self, addresses: Vec<Address>, current_daa_score: Option<u64>) -> Result<()> {
+        let generation = self.processor().utxo_observation_generation();
         self.register_addresses(&addresses).await?;
         let resp = self.processor().rpc_api().get_utxos_by_addresses(addresses).await?;
         let refs: Vec<UtxoEntryReference> = resp.into_iter().map(UtxoEntryReference::from).collect();
@@ -818,7 +835,7 @@ impl UtxoContext {
                 self.processor()
                     .current_daa_score()
             }).ok_or(Error::MissingDaaScore("Expecting DAA score or initialized UtxoProcessor when invoking scan_and_register_addresses() - You might be accessing UtxoProcessor APIs before it is initialized (see `utxo-proc-start` event)"))?;
-        self.extend_from_scan(refs, current_daa_score).await?;
+        self.extend_from_scan_for_generation(refs, current_daa_score, generation).await?;
         self.update_balance().await?;
         Ok(())
     }

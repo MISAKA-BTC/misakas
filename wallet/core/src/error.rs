@@ -77,6 +77,9 @@ pub enum Error {
     #[error("Wallet is not connected")]
     NotConnected,
 
+    #[error("UTXO observation belongs to a previous wallet RPC or network connection")]
+    StaleUtxoObservation,
+
     #[error("No network selected. Please use `network (mainnet|testnet-10|testnet-11)` to select a network.")]
     MissingNetworkId,
 

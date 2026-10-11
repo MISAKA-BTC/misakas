@@ -216,6 +216,20 @@ impl UtxoProcessor {
         }
     }
 
+    pub(crate) fn utxo_observation_generation(&self) -> u64 {
+        *self.inner.dns_anchor_connection_generation.lock().unwrap()
+    }
+
+    // Serialize the synchronous installation of an RPC response with rebind,
+    // disconnect and network changes. The guard must never span an await.
+    pub(crate) fn with_utxo_observation_generation<T>(&self, started: u64, apply: impl FnOnce() -> Result<T>) -> Result<T> {
+        let generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+        if *generation != started {
+            return Err(Error::StaleUtxoObservation);
+        }
+        apply()
+    }
+
     pub fn network_id(&self) -> Result<NetworkId> {
         (*self.inner.network_id.lock().unwrap()).ok_or(Error::MissingNetworkId)
     }
@@ -958,6 +972,67 @@ pub(crate) fn dns_shortcut_after_poll(observation: Option<(bool, u64)>) -> u64 {
 mod dns_observation_generation_tests {
     use super::*;
     use kaspa_consensus_core::dns_finality::{DnsCoinbaseSettlement, coinbase_spend_settled};
+
+    #[tokio::test]
+    async fn rfc0012_scan_reply_and_saved_selection_cannot_cross_rpc_or_network_generation() {
+        use crate::utxo::{UtxoContextBinding, UtxoIterator};
+        use kaspa_consensus_client::UtxoEntry;
+        use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionOutpoint};
+
+        let network = NetworkId::with_suffix(NetworkType::Testnet, 12);
+        // Discovery uses the actual wallet bus, so the successful import below
+        // does not require an invented RPC timestamp response.
+        let bus = Channel::unbounded();
+        let processor = UtxoProcessor::new(None, Some(network), None, Some(bus));
+        processor.mock_set_connected(true);
+        processor.inner.current_daa_score.store(1_550, Ordering::SeqCst);
+        let context = UtxoContext::new(&processor, UtxoContextBinding::default());
+        let entry: crate::utxo::UtxoEntryReference = UtxoEntry {
+            address: None,
+            outpoint: TransactionOutpoint::new(TransactionId::from_bytes([23; 64]), 0).into(),
+            amount: 2_000_000,
+            script_public_key: ScriptPublicKey::new(0, Default::default()),
+            block_daa_score: 1_000,
+            is_coinbase: false,
+        }.into();
+        let old_rpc = processor.utxo_observation_generation();
+        processor.bind_rpc(None).await.unwrap();
+        assert!(matches!(
+            context.extend_from_scan_for_generation(vec![entry.clone()], 1_550, old_rpc).await,
+            Err(Error::StaleUtxoObservation),
+        ));
+        assert!(context.context().map.is_empty());
+        assert_eq!((context.mature_utxo_size(), context.pending_utxo_size()), (0, 0));
+        assert!(processor.pending().is_empty() && processor.stasis().is_empty());
+
+        processor.mock_set_connected(true);
+        let current = processor.utxo_observation_generation();
+        context.extend_from_scan_for_generation(vec![entry.clone()], 1_550, current).await.unwrap();
+        context.update_balance().await.unwrap();
+        assert_eq!(context.balance().unwrap().mature, 2_000_000);
+        let mut saved_iterator = UtxoIterator::new(&context);
+        let change = kaspa_wallet_keys::kaspa_pq::derive_keypair("testnet-12", 0, 0, 0, &[21; 64])
+            .address(kaspa_addresses::Prefix::Testnet);
+        let settings = crate::tx::GeneratorSettings::try_new_with_context(
+            context.clone(), Some(vec![entry.clone()]), change, 1, 1,
+            crate::tx::PaymentDestination::Change, None, crate::tx::Fees::None, None, None,
+        ).unwrap();
+        let generator = crate::tx::Generator::try_new(settings, None, None).unwrap();
+        generator.stash([entry.clone()]);
+
+        processor.set_network_id(&NetworkId::new(NetworkType::Devnet));
+        assert!(matches!(
+            context.extend_from_scan_for_generation(vec![], 1_550, current).await,
+            Err(Error::StaleUtxoObservation),
+        ), "an empty old response must also refuse");
+        assert!(saved_iterator.next().is_none(), "non-coinbase saved selection also pins its network");
+        assert!(generator.generate_transaction().unwrap().is_none(), "saved priority and stash cannot fund another network");
+        assert_eq!(context.context().map.len(), 1, "refusal preserves existing lawful entries");
+        assert_eq!(context.balance().unwrap().mature, 2_000_000);
+        context.extend_from_scan_for_generation(vec![], 1_550, processor.utxo_observation_generation()).await.unwrap();
+        processor.set_network_id(&network);
+        assert!(saved_iterator.next().is_none(), "returning to the same network does not revive an earlier generation");
+    }
 
     #[tokio::test]
     async fn rfc0012_a_delayed_success_from_a_previous_rpc_cannot_restore_dns_spendability() {

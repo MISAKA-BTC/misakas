@@ -76,6 +76,7 @@ impl Scan {
 
     #[cfg(feature = "legacy-secp256k1")]
     pub async fn scan_with_address_manager(&self, address_manager: &Arc<AddressManager>, utxo_context: &UtxoContext) -> Result<()> {
+        let generation = utxo_context.processor().utxo_observation_generation();
         let params = utxo_context.processor().network_params()?;
 
         let window_size = self.window_size.unwrap_or(DEFAULT_WINDOW_SIZE) as u32;
@@ -106,6 +107,8 @@ impl Scan {
             }
             yield_executor().await;
 
+            utxo_context.processor().with_utxo_observation_generation(generation, || Ok(()))?;
+
             if !resp.is_empty() {
                 let refs: Vec<UtxoEntryReference> = resp.into_iter().map(UtxoEntryReference::from).collect();
                 for utxo_ref in refs.iter() {
@@ -130,9 +133,12 @@ impl Scan {
                     balance
                 });
 
-                utxo_context.extend_from_scan(refs, self.current_daa_score).await?;
+                utxo_context.extend_from_scan_for_generation(refs, self.current_daa_score, generation).await?;
 
-                self.balance.add(balance);
+                utxo_context.processor().with_utxo_observation_generation(generation, || {
+                    self.balance.add(balance);
+                    Ok(())
+                })?;
             } else {
                 match &extent {
                     ScanExtent::EmptyWindow => {
@@ -157,6 +163,7 @@ impl Scan {
     }
 
     pub async fn scan_with_address_set(&self, address_set: &HashSet<Address>, utxo_context: &UtxoContext) -> Result<()> {
+        let generation = utxo_context.processor().utxo_observation_generation();
         let params = utxo_context.processor().network_params()?;
         let address_vec = address_set.iter().cloned().collect::<Vec<_>>();
 
@@ -175,11 +182,14 @@ impl Scan {
         });
         yield_executor().await;
 
-        utxo_context.extend_from_scan(refs, self.current_daa_score).await?;
+        utxo_context.extend_from_scan_for_generation(refs, self.current_daa_score, generation).await?;
 
-        if !balance.is_empty() {
-            self.balance.add(balance);
-        }
+        utxo_context.processor().with_utxo_observation_generation(generation, || {
+            if !balance.is_empty() {
+                self.balance.add(balance);
+            }
+            Ok(())
+        })?;
 
         Ok(())
     }
