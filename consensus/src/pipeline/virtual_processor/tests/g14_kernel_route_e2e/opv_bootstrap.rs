@@ -1708,23 +1708,114 @@ async fn run_paid_v5_source_budget(budget_activation: u64) {
         forged.iter_mut().find(|r| r.0 == table).unwrap().2.push(0);
         assert!(paid_opt_in_sources_from_kernel_rows_v5(&header, forged, &route.ledger_root(), &route.aux_root(), &context).is_err());
     }
+    // H is inclusive: the signed fee right is still unpaid and retains R.
+    net.beat_to(terms.source.hold_until).await;
+    assert_eq!(net.ledger().beacon_source_fees[&context].paid, 0);
+    let before_paid = net.chain.tip_state().1;
+    let recipients: Vec<_> = PRODUCERS[..2]
+        .iter()
+        .map(|card| {
+            let bond = net.bond(*card);
+            let payload = before_paid.bond(&bond).unwrap().payout_payload;
+            let queue = palw_kernel_payout_key_v1(&payload);
+            let previous = before_paid.bond_budget_native_queue_income_v1(queue, &bond).copied();
+            let held_r = before_paid.bond_budget().unwrap().bond_row(&bond).unwrap().window.reward_sompi;
+            let money = minted_and_owed(&net, &net.chain, *card);
+            (*card, bond, queue, previous, held_r, money)
+        })
+        .collect();
     net.beat_to(terms.source.hold_until + 1).await;
-    assert_eq!(net.ledger().beacon_source_fees[&context].paid, 100);
+    let paid_daa = net.daa();
+    let ledger_paid = net.ledger();
+    assert_eq!(ledger_paid.beacon_source_fees[&context].paid, 100);
     let state = net.chain.tip_state().1;
-    let budget = state.bond_budget().unwrap();
-    for row in
-        budget.claims.values().filter(|row| row.origin == kaspa_consensus_core::palw_bond_budget_v1::PalwBudgetOriginV1::SourceFee)
-    {
-        assert_eq!(row.consumed.reward_sompi, 50, "source escrow payout consumes its recipient's held R once");
-        assert!(!row.open && !row.live && row.in_window);
-        let producer = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&row.bond);
-        let ledger = net.ledger();
-        let Some(misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeOutcomeV1::Paid { daa, .. }) =
-            ledger.beacon_source_fee_promises[&(context, producer)].outcome
-        else {
-            panic!("each source fee has an actual once-only payout receipt")
+    assert_eq!(
+        state
+            .bond_budget()
+            .unwrap()
+            .claims
+            .values()
+            .filter(|row| row.origin == kaspa_consensus_core::palw_bond_budget_v1::PalwBudgetOriginV1::SourceFee)
+            .count(),
+        0,
+        "both original signed fee holds move into actual queue receipts"
+    );
+    for (card, bond, queue, previous, held_r, before_money) in &recipients {
+        let row = state.bond_budget_native_queue_income_v1(*queue, bond).expect("each actual source has a durable queue receipt");
+        assert_eq!(row.origin, kaspa_consensus_core::palw_bond_budget_v1::PalwBudgetOriginV1::NativeIncomeQueued);
+        assert_eq!(row.bond, *bond);
+        assert_eq!(row.reserved.reward_sompi, previous.map_or(0, |old| old.reserved.reward_sompi) + 50);
+        assert_eq!(row.consumed.reward_sompi, previous.map_or(0, |old| old.consumed.reward_sompi) + 50);
+        assert!(!row.open && row.live && row.in_window, "logical Paid leaves the coinbase obligation live");
+        assert!(state.bond_budget_window_holds(bond, paid_daa));
+        assert_eq!(
+            state.bond_budget().unwrap().bond_row(bond).unwrap().window.reward_sompi,
+            *held_r,
+            "moving source escrow into the queue frees no recipient R"
+        );
+        let promise = &ledger_paid.beacon_source_fee_promises[&(context, net.kid(*card))];
+        let Some(misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeOutcomeV1::Paid { daa, .. }) = promise.outcome else {
+            panic!("each signed source fee has a once-only logical payment receipt")
         };
+        assert_eq!((daa, promise.fee), (paid_daa, 50));
         assert!(row.reuse_not_before >= daa + 280);
+        let (minted, owed) = minted_and_owed(&net, &net.chain, *card);
+        assert_eq!(
+            (minted, owed),
+            (before_money.0, before_money.1 + 50),
+            "logical Paid queues the fixed fee before a physical coinbase pays it"
+        );
+    }
+    // The next real node template drains the same queue into a validated
+    // coinbase. Its DAA, rather than the logical ledger Paid clock, starts W.
+    let ttpb = net.ttpb();
+    let payment_block = net.chain.heartbeat(ttpb, Vec::new()).await;
+    let payment_daa = net.chain.daa_of(payment_block.header.hash);
+    assert!(payment_daa > paid_daa);
+    let paid_state = net.chain.tip_state().1;
+    let mut releases = Vec::new();
+    for (card, bond, queue, _, held_r, before_money) in &recipients {
+        let row = paid_state.bond_budget_native_queue_income_v1(*queue, bond).expect("actual payment retains its R receipt");
+        assert!(!row.open && !row.live && row.in_window);
+        assert!(row.reuse_not_before >= payment_daa + 280);
+        assert!(paid_state.bond_budget_window_holds(bond, payment_daa));
+        assert_eq!(
+            paid_state.bond_budget().unwrap().bond_row(bond).unwrap().window.reward_sompi,
+            *held_r,
+            "the actual coinbase also keeps R until payment plus W"
+        );
+        assert_eq!(
+            minted_and_owed(&net, &net.chain, *card),
+            (before_money.0 + before_money.1 + 50, 0),
+            "the real source payee receives the queued fee exactly once"
+        );
+        releases.push((*bond, *queue, row.reuse_not_before, row.reserved.reward_sompi));
+    }
+    let release = releases.iter().map(|(_, _, daa, _)| *daa).max().unwrap();
+    net.beat_to(release - 1).await;
+    let before_release = net.chain.tip_state().1;
+    let mut held_at_boundary = Vec::new();
+    for (bond, queue, daa, reserved_r) in &releases {
+        assert_eq!(*daa, release, "both source receipts share this actual payment boundary");
+        let row = before_release.bond_budget_native_queue_income_v1(*queue, bond).expect("R remains held through W minus one");
+        assert_eq!(row.reserved.reward_sompi, *reserved_r);
+        assert!(row.in_window && !row.live);
+        held_at_boundary.push((*bond, before_release.bond_budget().unwrap().bond_row(bond).unwrap().window.reward_sompi));
+    }
+    net.beat_to(release).await;
+    let released = net.chain.tip_state().1;
+    for ((bond, queue, _, reserved_r), (_, held_r)) in releases.iter().zip(held_at_boundary) {
+        assert!(released.bond_budget_native_queue_income_v1(*queue, bond).is_none(), "R is reusable only after actual payment plus W");
+        let remaining = released.bond_budget().unwrap().bond_row(bond).map_or(0, |row| row.window.reward_sompi);
+        assert_eq!(remaining, held_r - *reserved_r);
+    }
+    assert_eq!(
+        net.ledger().beacon_source_fee_promises,
+        ledger_paid.beacon_source_fee_promises,
+        "R release never changes or re-pays the immutable signed source receipt"
+    );
+    for (card, _, _, _, _, before_money) in &recipients {
+        assert_eq!(minted_and_owed(&net, &net.chain, *card), (before_money.0 + before_money.1 + 50, 0));
     }
     let replay = net.replay().await;
     net.assert_same(&replay, "mandatory paid v5 full fee/beacon replay");
