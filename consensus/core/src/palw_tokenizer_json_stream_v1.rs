@@ -22,6 +22,7 @@ pub struct PalwTokenizerRenderingDigestV1 {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwTokenizerJsonVerdictV1 {
     Invalid,
+    WorkBoundExceeded,
     Rendering(Option<PalwTokenizerRenderingDigestV1>),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -419,6 +420,8 @@ pub struct PalwTokenizerJsonStreamV1 {
     stack: Vec<Frame>,
     lex: Lex,
     keys: PalwJsonKeySetV1,
+    key_events: u64,
+    work_overrun: bool,
     pending: Option<(u64, Hash64)>,
     next_object: u64,
     started: bool,
@@ -443,6 +446,8 @@ impl PalwTokenizerJsonStreamV1 {
             stack: Vec::new(),
             lex: Lex::Idle,
             keys: PalwJsonKeySetV1::default(),
+            key_events: 0,
+            work_overrun: false,
             pending: None,
             next_object: 0,
             started: false,
@@ -463,6 +468,24 @@ impl PalwTokenizerJsonStreamV1 {
     pub fn key_set_root(&self) -> Hash64 {
         self.keys.root()
     }
+    pub fn key_events(&self) -> u64 {
+        self.key_events
+    }
+    /// Switch to raw-hash-only exactly at the first parser-derived event over the signed
+    /// bound. The outer seed must supply the immutable claim's own bound. An unproved event
+    /// is not a duplicate-key claim; its authenticated raw grammar alone refutes the work bound.
+    pub fn mark_work_overrun(&mut self, context: Hash64, signed_bound: u64) -> Result<(), String> {
+        self.check()?;
+        if context != self.context || self.pending.is_none() || self.invalid || self.sealed || self.key_events != signed_bound {
+            return Err("work overrun needs the exact next parser event after the signed bound".into());
+        }
+        self.work_overrun = true;
+        self.invalid = true;
+        self.pending = None;
+        self.stack.clear();
+        self.lex = Lex::Idle;
+        Ok(())
+    }
     pub fn key_insertions(&self) -> u64 {
         self.keys.insertions()
     }
@@ -470,6 +493,9 @@ impl PalwTokenizerJsonStreamV1 {
         if self.stack.len() > MAX_DEPTH
             || self.offset > self.length
             || self.next_object >= ADDED_ID_NAMESPACE
+            || self.key_events > self.offset
+            || self.keys.insertions() > self.key_events
+            || (self.work_overrun && (!self.invalid || self.pending.is_some()))
             || self.hash.byte_count() != Some(128 + 8 + u128::from(self.offset))
         {
             return Err("tokenizer JSON continuation has inconsistent bounded counters".into());
@@ -504,12 +530,14 @@ impl PalwTokenizerJsonStreamV1 {
             return Err("tokenizer key proof changes context".into());
         }
         let (namespace, key) = self.pending.ok_or("tokenizer JSON does not await a key proof")?;
+        let events = self.key_events.checked_add(1).ok_or("the tokenizer event count overflows")?;
         if self.keys.contains(namespace, key, proof)? {
             self.invalid = true;
         } else {
             self.keys.insert(namespace, key, proof)?;
         }
         self.pending = None;
+        self.key_events = events;
         Ok(())
     }
     /// Consume at most65KiB, pausing at a parser-derived duplicate-key/id proof. The caller
@@ -585,6 +613,9 @@ impl PalwTokenizerJsonStreamV1 {
         }
         if self.hash.finish() != self.tokenizer {
             return Err("tokenizer bytes do not open the immutable exact-length raw hash".into());
+        }
+        if self.work_overrun {
+            return Ok(PalwTokenizerJsonVerdictV1::WorkBoundExceeded);
         }
         if self.invalid {
             return Ok(PalwTokenizerJsonVerdictV1::Invalid);
@@ -1090,6 +1121,37 @@ mod tests {
             raw.push(b'}');
             assert_eq!(derive(&raw, 0, 1), PalwTokenizerJsonVerdictV1::Invalid);
             assert_eq!(expected(&raw, 0), PalwTokenizerJsonVerdictV1::Invalid);
+        }
+    }
+    #[test]
+    fn understated_work_bound_only_convicts_after_the_original_exact_raw_hash() {
+        let raw = br#"{"model":{"vocab":{"a":0},"merges":[]}}"#;
+        let context = Hash64::from_u64_word(18);
+        for bound in [0, 1, 3] {
+            let mut stream = PalwTokenizerJsonStreamV1::new(context, palw_tokenizer_raw_commitment_v1(raw), raw.len() as u64, 0);
+            let mut book = Book::new();
+            loop {
+                if stream.pending_key().is_some() {
+                    if stream.key_events() == bound {
+                        break;
+                    }
+                    book.satisfy(&mut stream);
+                } else {
+                    let offset = stream.offset() as usize;
+                    stream.push(context, offset as u64, &raw[offset..]).unwrap();
+                }
+            }
+            let before = borsh::to_vec(&stream).unwrap();
+            assert!(stream.mark_work_overrun(context, bound + 1).is_err());
+            assert_eq!(borsh::to_vec(&stream).unwrap(), before);
+            stream.mark_work_overrun(context, bound).unwrap();
+            assert!(stream.finish().is_err());
+            let offset = stream.offset() as usize;
+            stream.push(context, offset as u64, &raw[offset..]).unwrap();
+            stream.seal().unwrap();
+            assert_eq!(stream.finish().unwrap(), PalwTokenizerJsonVerdictV1::WorkBoundExceeded);
+            stream.tokenizer = Hash64::from_u64_word(0xBAD);
+            assert!(stream.finish().is_err());
         }
     }
     #[test]

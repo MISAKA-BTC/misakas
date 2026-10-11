@@ -6,6 +6,17 @@
 
 use crate::{Hash64, palw_v2::PalwJobContextV2};
 
+/// The meaning of a named prefix is immutable class configuration, independent of its table.
+/// None in a snapshot is historical/unqualified and cannot be retroactively reinterpreted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwPrefixStateRelationV1 {
+    DenseInt32KvV1 = 1,
+    Qwen36HybridCacheV1 = 2,
+    Base0Int8KvV1 = 3,
+}
+
 pub const PALW_CLASS_SEMANTICS_VERSION_V1: u16 = 1;
 pub const PALW_CARRIAGE_CLASS_SEMANTICS_TAIL_V1: u8 = 0xF7;
 
@@ -28,6 +39,10 @@ pub struct PalwClassSemanticsV1 {
     pub rendering_rule: Option<crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1>,
     /// Exact prospective raw-file length, authenticated only when its legacy hash completes.
     pub raw_tokenizer_bytes: Option<u64>,
+    /// Maximum parser object-key plus vocabulary/added-id events. Understatement is an
+    /// objective work-contract fault only after the exact original raw hash completes.
+    pub tokenizer_key_events: Option<u64>,
+    pub prefix_state_relation: Option<PalwPrefixStateRelationV1>,
 }
 
 impl PalwClassSemanticsV1 {
@@ -45,6 +60,8 @@ impl PalwClassSemanticsV1 {
             token_table_root: None,
             rendering_rule: None,
             raw_tokenizer_bytes: None,
+            tokenizer_key_events: None,
+            prefix_state_relation: None,
         }
     }
 
@@ -54,6 +71,7 @@ impl PalwClassSemanticsV1 {
             && self.token_table_root != Some(Hash64::default())
             && (self.rendering_rule.is_none() || self.token_table_root.is_some())
             && (self.rendering_rule.is_some() == self.raw_tokenizer_bytes.is_some())
+            && (self.rendering_rule.is_some() == self.tokenizer_key_events.is_some())
     }
 
     /// Each stored value is the registration's exact statement, including zero; a caller
@@ -90,6 +108,8 @@ pub struct PalwClassSemanticsDeclarationV1 {
     pub token_table_root: Hash64,
     pub rendering_rule: crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1,
     pub raw_tokenizer_bytes: u64,
+    pub tokenizer_key_events: u64,
+    pub prefix_state_relation: Option<PalwPrefixStateRelationV1>,
 }
 
 pub const PALW_CLASS_SEMANTICS_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka/palw/class-semantics/v1";
@@ -104,6 +124,8 @@ impl PalwClassSemanticsDeclarationV1 {
             token_table_root: Some(self.token_table_root),
             rendering_rule: Some(self.rendering_rule),
             raw_tokenizer_bytes: Some(self.raw_tokenizer_bytes),
+            tokenizer_key_events: Some(self.tokenizer_key_events),
+            prefix_state_relation: self.prefix_state_relation,
         }
     }
 

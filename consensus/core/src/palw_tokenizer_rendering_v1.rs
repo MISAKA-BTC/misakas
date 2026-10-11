@@ -206,6 +206,39 @@ fn normalize_rendering_json_numbers(bytes: &[u8]) -> Result<Vec<u8>, &'static st
     Ok(out)
 }
 
+/// Exact SMT event count for a valid tokenizer: every decoded object key (also ignored
+/// metadata), plus each ordinary vocabulary id and added-token id. This descriptor builder
+/// is host-side; the court never trusts this count until the raw file hash authenticates.
+pub fn palw_tokenizer_key_events_v1(bytes: &[u8]) -> Result<u64, &'static str> {
+    fn object_keys(value: &serde_json::Value) -> Result<u64, &'static str> {
+        let mut count = 0u64;
+        match value {
+            serde_json::Value::Object(map) => {
+                count = u64::try_from(map.len()).map_err(|_| "key count overflows")?;
+                for child in map.values() {
+                    count = count.checked_add(object_keys(child)?).ok_or("key count overflows")?;
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for child in values {
+                    count = count.checked_add(object_keys(child)?).ok_or("key count overflows")?;
+                }
+            }
+            _ => {}
+        }
+        Ok(count)
+    }
+    let value = palw_unique_json_v1(bytes)?;
+    let vocab = value.get("model").and_then(|v| v.get("vocab")).and_then(|v| v.as_object()).ok_or("missing model.vocab")?;
+    let added = match value.get("added_tokens") {
+        None => 0,
+        Some(list) => {
+            u64::try_from(list.as_array().ok_or("added_tokens is not an array")?.len()).map_err(|_| "key count overflows")?
+        }
+    };
+    object_keys(&value)?.checked_add(vocab.len() as u64).and_then(|n| n.checked_add(added)).ok_or("key count overflows")
+}
+
 struct UniqueJson(serde_json::Value);
 impl<'de> serde::Deserialize<'de> for UniqueJson {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {

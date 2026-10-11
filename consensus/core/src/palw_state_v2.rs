@@ -35429,6 +35429,8 @@ fn apply_class_registration_v1(
             registered.token_table_root = previous.token_table_root;
             registered.rendering_rule = previous.rendering_rule;
             registered.raw_tokenizer_bytes = previous.raw_tokenizer_bytes;
+            registered.tokenizer_key_events = previous.tokenizer_key_events;
+            registered.prefix_state_relation = previous.prefix_state_relation;
             registered.bound_from_daa = previous.bound_from_daa;
             if *previous != registered {
                 return Err(PalwStateV2Error::ImmutableModelUpdate("class canonical semantic identities changed"));
@@ -36911,6 +36913,8 @@ fn apply_object(
                 if expected.token_table_root.is_none() { expected.token_table_root = next.token_table_root; }
                 if expected.rendering_rule.is_none() { expected.rendering_rule = next.rendering_rule; }
                 if expected.raw_tokenizer_bytes.is_none() { expected.raw_tokenizer_bytes = next.raw_tokenizer_bytes; }
+                if expected.tokenizer_key_events.is_none() { expected.tokenizer_key_events = next.tokenizer_key_events; }
+                if expected.prefix_state_relation.is_none() { expected.prefix_state_relation = next.prefix_state_relation; }
                 if expected != next {
                     return Err(PalwStateV2Error::ImmutableModelUpdate("registered semantic identities and a filled table root are immutable"));
                 }
@@ -44279,6 +44283,8 @@ impl PalwStateCarriageV2 {
                 || row.token_table_root.is_some_and(|root| Some(root) != class_row.token_table_root)
                 || row.rendering_rule.is_some_and(|rule| Some(rule) != class_row.rendering_rule)
                 || row.raw_tokenizer_bytes.is_some_and(|bytes| Some(bytes) != class_row.raw_tokenizer_bytes)
+                || row.tokenizer_key_events.is_some_and(|events| Some(events) != class_row.tokenizer_key_events)
+                || row.prefix_state_relation.is_some_and(|relation| Some(relation) != class_row.prefix_state_relation)
             {
                 return Err(PalwStateV2Error::CarriageInconsistent("malformed immutable claim semantics".into()));
             }
@@ -57374,6 +57380,8 @@ pub(crate) mod tests {
             cu_ruleset_id: row.cu_ruleset_id, token_table_root: h64(888),
             rendering_rule: crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1,
             raw_tokenizer_bytes: 16,
+            tokenizer_key_events: 8,
+            prefix_state_relation: Some(crate::palw_class_semantics_v1::PalwPrefixStateRelationV1::DenseInt32KvV1),
         };
         let declare = |d: crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1| PalwConsensusObjectV2::ClassSemanticsDeclaredV1 {
             declaration: Box::new(d), signature: vec![],
@@ -57393,6 +57401,13 @@ pub(crate) mod tests {
         assert!(fold_declaration(&state, changed, &on).is_err());
         let mut changed = declaration.clone(); changed.token_table_root = h64(999);
         assert!(fold_declaration(&filled, changed, &on).is_err());
+        let mut changed = declaration.clone(); changed.tokenizer_key_events += 1;
+        assert!(fold_declaration(&filled, changed, &on).is_err(), "a filled tokenizer work bound is immutable");
+        let mut changed = declaration.clone(); changed.prefix_state_relation = Some(
+            crate::palw_class_semantics_v1::PalwPrefixStateRelationV1::Qwen36HybridCacheV1);
+        assert!(fold_declaration(&filled, changed, &on).is_err(), "a filled family state relation is immutable");
+        assert_eq!(filled.claim_semantics_v1(&h64(0xFC)).unwrap().prefix_state_relation, None,
+            "a prospective family state relation never changes an accepted claim");
         let (prospective, _) = fold_declaration(&historical, declaration, &on).unwrap();
         assert_eq!(prospective.class_semantics_v1(&h64(1)).unwrap().bound_from_daa, 102);
         assert!(prospective.claim_semantics.is_empty(), "migration cannot stamp already accepted historical claims");
