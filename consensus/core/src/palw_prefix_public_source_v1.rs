@@ -20,9 +20,33 @@ pub struct PalwPrefixPublicDemandV1 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwPrefixPublicAnswerActionV1 {
+    Begin {
+        opening: PalwStepOpeningV1,
+    },
+    Part {
+        offset: u32,
+        bytes: Vec<u8>,
+    },
+    Finish,
+    /// Flat atomic carrier. Units have no nested packet variant.
+    Batch(Vec<PalwPrefixPublicAnswerUnitV1>),
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwPrefixPublicAnswerUnitV1 {
     Begin { opening: PalwStepOpeningV1 },
     Part { offset: u32, bytes: Vec<u8> },
     Finish,
+}
+impl PalwPrefixPublicAnswerUnitV1 {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Begin { opening } if opening.siblings.len() > 64 => Err("public prefix path exceeds64".into()),
+            Self::Part { bytes, .. } if bytes.is_empty() || bytes.len() > PALW_PREFIX_PUBLIC_PART_BYTES_V1 => {
+                Err("public prefix packet part exceeds bounded nonempty source".into())
+            }
+            _ => Ok(()),
+        }
+    }
 }
 /// The outer167 signature is the ANSWERER's signature, while reserver stays the literal
 /// court owner. The full signed envelope binds both identities, phase, claim and seed.
@@ -43,6 +67,19 @@ impl PalwPrefixPublicAnswerV1 {
                 if bytes.is_empty() || bytes.len() > PALW_PREFIX_PUBLIC_PART_BYTES_V1 =>
             {
                 Err("public prefix answer exceeds bounded nonempty part".into())
+            }
+            PalwPrefixPublicAnswerActionV1::Batch(units) => {
+                if units.is_empty() || units.len() > 64 {
+                    return Err("public prefix packet needs1..64 flat units".into());
+                }
+                for unit in units {
+                    unit.check()?;
+                }
+                let n = borsh::object_length(units).map_err(|e| e.to_string())?;
+                if n > 73_616 {
+                    return Err("public prefix packet exceeds paid signed body".into());
+                }
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -186,7 +223,11 @@ impl PalwPrefixPublicAcquisitionPlanV1 {
         envelope.maximum_moves = u(u128::from(envelope.maximum_moves) + u128::from(moves))?;
         envelope.maximum_parser_steps = u(u128::from(envelope.maximum_parser_steps) + u128::from(work))?;
         envelope.maximum_blake_blocks = u(u128::from(envelope.maximum_blake_blocks) + u128::from(work).div_ceil(128))?;
-        envelope.inclusion_daa = u(u128::from(envelope.maximum_moves) * u128::from(prices.inclusion_margin_daa))?;
+        // The family quote already prices physical packed carriers. Hostile public
+        // slots may deliberately send singleton units, so their additional worst-case
+        // physical count is NOT divided by64.
+        envelope.inclusion_daa =
+            u(u128::from(base.envelope.inclusion_daa) + u128::from(moves) * u128::from(prices.inclusion_margin_daa))?;
         envelope.rent_sompi = u(u128::from(envelope.rent_sompi) + u128::from(extra_rent))?;
         envelope.deposit_sompi = u(u128::from(envelope.deposit_sompi) + u128::from(extra_deposit))?;
         envelope.row_bytes = u(u128::from(envelope.row_bytes) + u128::from(pending))?;
@@ -420,6 +461,71 @@ impl PalwPrefixPublicPendingV1 {
         self.attempts.clear();
         Ok(true)
     }
+    /// Apply one declared signer's flat packet on a copied attempt baseline. A later
+    /// malformed unit cannot spend its slot or mutate any other protected signer.
+    pub fn packet(&mut self, signer: PalwBondKeyV2, now: u64, action: &PalwPrefixPublicAnswerActionV1) -> Result<u64, String> {
+        let units = match action {
+            PalwPrefixPublicAnswerActionV1::Begin { opening } => {
+                vec![PalwPrefixPublicAnswerUnitV1::Begin { opening: opening.clone() }]
+            }
+            PalwPrefixPublicAnswerActionV1::Part { offset, bytes } => {
+                vec![PalwPrefixPublicAnswerUnitV1::Part { offset: *offset, bytes: bytes.clone() }]
+            }
+            PalwPrefixPublicAnswerActionV1::Finish => vec![PalwPrefixPublicAnswerUnitV1::Finish],
+            PalwPrefixPublicAnswerActionV1::Batch(units) => units.clone(),
+        };
+        if units.is_empty() || units.len() > 64 || borsh::object_length(&units).map_err(|e| e.to_string())? > 73_616 {
+            return Err("public prefix answer packet exceeds flat paid carrier".into());
+        }
+        let mut next = self.clone();
+        for unit in &units {
+            unit.check()?;
+            match unit {
+                PalwPrefixPublicAnswerUnitV1::Begin { opening } => next.begin(signer, now, opening)?,
+                PalwPrefixPublicAnswerUnitV1::Part { offset, bytes } => next.part(signer, now, *offset, bytes)?,
+                PalwPrefixPublicAnswerUnitV1::Finish => {
+                    next.finish(signer, now)?;
+                }
+            }
+        }
+        next.check()?;
+        *self = next;
+        Ok(units.len() as u64)
+    }
+    pub fn deadline_daa_v1(&self) -> u64 {
+        self.deadline_daa
+    }
+    pub fn identity_v1(&self) -> (Hash64, Hash64) {
+        (self.cursor_id, self.demand_id)
+    }
+    pub fn progress_v1(&self) -> PalwPrefixPublicProgressV1 {
+        PalwPrefixPublicProgressV1 {
+            cursor_id: self.cursor_id,
+            demand_id: self.demand_id,
+            deadline_daa: self.deadline_daa,
+            source: self.source.clone(),
+            signers: self
+                .attempts
+                .iter()
+                .map(|(key, attempt)| {
+                    (
+                        *key,
+                        match attempt {
+                            PalwPrefixPublicAttemptV1::Waiting => PalwPrefixPublicSignerCursorV1::Opening,
+                            PalwPrefixPublicAttemptV1::Receiving { bytes, .. } => {
+                                if bytes.len() == self.source.byte_length as usize {
+                                    PalwPrefixPublicSignerCursorV1::Finish
+                                } else {
+                                    PalwPrefixPublicSignerCursorV1::Bytes { offset: bytes.len() as u32 }
+                                }
+                            }
+                            PalwPrefixPublicAttemptV1::Invalid => PalwPrefixPublicSignerCursorV1::Invalid,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
     pub fn authenticated_answer(&self) -> Option<(&PalwStepOpeningV1, &[u8])> {
         self.resolved.as_ref().map(|(opening, bytes)| (opening, bytes.as_slice()))
     }
@@ -428,6 +534,22 @@ impl PalwPrefixPublicPendingV1 {
     pub fn defaulted_custodians(&self, now_daa: u64) -> Option<&BTreeSet<PalwBondKeyV2>> {
         (now_daa >= self.deadline_daa && self.resolved.is_none()).then_some(&self.custodians)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwPrefixPublicSignerCursorV1 {
+    Opening,
+    Bytes { offset: u32 },
+    Finish,
+    Invalid,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwPrefixPublicProgressV1 {
+    pub cursor_id: Hash64,
+    pub demand_id: Hash64,
+    pub deadline_daa: u64,
+    pub source: PalwPrefixPublicSourceV1,
+    pub signers: BTreeMap<PalwBondKeyV2, PalwPrefixPublicSignerCursorV1>,
 }
 
 #[cfg(test)]
@@ -512,6 +634,35 @@ mod tests {
         pending = seed.clone();
         assert_eq!(pending, seed);
         pending.check().unwrap();
+    }
+    #[test]
+    fn flat_answer_packet_and_public_progress_are_atomic_and_bounded() {
+        let (mut pending, tile) = fixture();
+        let before = pending.clone();
+        let packet = PalwPrefixPublicAnswerActionV1::Batch(vec![
+            PalwPrefixPublicAnswerUnitV1::Begin { opening: tile.opening.clone() },
+            PalwPrefixPublicAnswerUnitV1::Finish,
+        ]);
+        assert!(pending.packet(bond(1), 110, &packet).is_err());
+        assert_eq!(pending, before);
+        let raw = tile.preimage.values_le.clone();
+        let good = PalwPrefixPublicAnswerActionV1::Batch(vec![
+            PalwPrefixPublicAnswerUnitV1::Begin { opening: tile.opening.clone() },
+            PalwPrefixPublicAnswerUnitV1::Part { offset: 0, bytes: raw.clone() },
+            PalwPrefixPublicAnswerUnitV1::Finish,
+        ]);
+        assert_eq!(pending.progress_v1().signers.get(&bond(7)), Some(&PalwPrefixPublicSignerCursorV1::Opening));
+        assert_eq!(pending.packet(bond(7), 110, &good).unwrap(), 3);
+        assert_eq!(pending.authenticated_answer().unwrap().1, raw.as_slice());
+        assert!(pending.defaulted_custodians(200).is_none());
+        let mut fresh = before.clone();
+        assert!(fresh.packet(bond(7), 110, &PalwPrefixPublicAnswerActionV1::Batch(vec![])).is_err());
+        assert!(
+            fresh
+                .packet(bond(7), 110, &PalwPrefixPublicAnswerActionV1::Batch(vec![PalwPrefixPublicAnswerUnitV1::Finish; 65]))
+                .is_err()
+        );
+        assert_eq!(fresh, before);
     }
     #[test]
     fn complete_acquisition_prices_all_slots_without_spending_honest_prefix_allowance() {

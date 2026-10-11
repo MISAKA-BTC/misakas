@@ -136,7 +136,7 @@ fn message(label: &[u8], fields: &[&[u8]]) -> Vec<u8> {
 fn encode<T: BorshSerialize>(t: &T) -> Vec<u8> {
     borsh::to_vec(t).expect("stream types serialize")
 }
-fn bounded_encoded_len<T: BorshSerialize>(value: &T, cap: usize) -> Result<usize, String> {
+pub(crate) fn bounded_encoded_len<T: BorshSerialize>(value: &T, cap: usize) -> Result<usize, String> {
     struct Counter {
         used: usize,
         cap: usize,
@@ -335,6 +335,7 @@ impl PalwConstraintStreamMoveV1 {
         check_signature_shape(self.version, &self.signature)?;
         if let PalwConstraintStreamActionV1::PrefixPublicAnswer(answer) = &self.action {
             answer.check()?;
+            bounded_encoded_len(self, PALW_PREFIX_BATCH_CARRIER_BYTES_V1)?;
         }
         if matches!(
             &self.action,
