@@ -59,7 +59,7 @@ full bridge fill/withdrawal/backing matrix, in-flight IBD crash fault injection,
 and authorization of live monetary/legacy-horizon policy are separate conditions.
 This driver is not yet a measured full private network result.
 
-Five oracle/socket controls are verified with:
+Six oracle/socket controls are verified with:
 
 ```sh
 python3 -m unittest discover -s scripts/tests -p test_rfc12_multiprocess.py -v
@@ -69,5 +69,13 @@ They reject dormant retirement, live DNS authority, stale generations/readiness,
 and a one-unit-short u128 work floor. The pruning oracle recognizes successful
 header-only RPC replies as missing bodies and refuses to call transport errors
 GC evidence; the socket control checks established
-transport cut and subsequent reconnection. These five tests are not node,
+transport cut and subsequent reconnection. These six tests are not node,
 pruning, P2P-protocol, release100k, or soundness evidence.
+
+The driver requires version-6 `getPalwNodeStatus` import diagnostics. An older
+sender is `BLOCKED`, not a stable import. The epoch, active point, phase and marker
+must stay identical across native/capacity/ETH observations; all completed native
+observations have no active import and a true marker. A fresh pruned JOIN must
+complete epoch > 0, and that epoch must persist after the owned forced kill and
+cold restart. These are additional coherence checks within the pinned plan; they
+do not supply a retirement policy, signed-work fixture or security approval.

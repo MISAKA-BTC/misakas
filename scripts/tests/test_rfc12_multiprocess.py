@@ -21,7 +21,8 @@ class Oracle(unittest.TestCase):
         native = dict(generation='03' * 64, rulesetId=plan['ruleset_id'], policyId=plan['policy_id'],
                       safe='04' * 64, finalized=None, uniqueWork=str(2 ** 100), depth=7)
         row = dict(dag=dict(sink=native['generation']), dns=dict(available=False),
-                   node=dict(consensusParamsId=plan['ruleset_id']),
+                   node=dict(consensusParamsId=plan['ruleset_id'], importSessionAvailable=True,
+                             importSessionEpoch=4, importSessionPoint='', importSessionPhase='idle', pruningImportStable=True),
                    settlement=dict(dnsRetiredAt=1, nativeSettlement=native,
                                    nativeReadiness=dict(generation=native['generation'], safe=native['safe'], finalized=dict(finalized=None))))
         return row, plan
@@ -42,6 +43,18 @@ class Oracle(unittest.TestCase):
                 bad['dag']['sink'] = '05' * 64
             else:
                 bad['settlement']['nativeReadiness']['safe'] = '05' * 64
+            with self.assertRaises(AssertionError):
+                drill.coherent(bad, plan)
+
+    def test_missing_diagnostics_and_mixed_or_incomplete_import_cannot_certify(self):
+        row, plan = self.fixture()
+        missing = copy.deepcopy(row)
+        missing['node'].pop('importSessionAvailable')
+        with self.assertRaises(drill.Blocked):
+            drill.coherent(missing, plan)
+        for key, value in [('pruningImportStable', False), ('importSessionPoint', 'ff' * 64), ('importSessionPhase', 'utxo-stream')]:
+            bad = copy.deepcopy(row)
+            bad['node'][key] = value
             with self.assertRaises(AssertionError):
                 drill.coherent(bad, plan)
 

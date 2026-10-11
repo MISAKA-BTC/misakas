@@ -1187,6 +1187,9 @@ impl ConsensusSessionOwned {
     pub async fn async_pruning_import_session(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<PruningImportSessionStateV1> {
         self.clone().spawn_blocking(move |c| c.pruning_import_session()).await
     }
+    pub async fn async_pruning_import_status(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<(PruningImportSessionStateV1, bool)> {
+        self.clone().spawn_blocking(move |c| c.pruning_import_status()).await
+    }
     pub async fn async_clear_pruning_utxo_set_for_session(&self, session: PruningImportSessionV1) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
         self.clone().spawn_blocking(move |c| c.clear_pruning_utxo_set_for_session(session)).await
     }

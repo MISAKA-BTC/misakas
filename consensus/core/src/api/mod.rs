@@ -814,6 +814,11 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Session and marker read under one metadata guard, for RPC diagnostics.
+    fn pruning_import_status(&self) -> PruningImportResult<(PruningImportSessionStateV1, bool)> {
+        unimplemented!()
+    }
+
     fn clear_pruning_utxo_set_for_session(&self, session: PruningImportSessionV1) -> PruningImportResult<()> {
         unimplemented!()
     }

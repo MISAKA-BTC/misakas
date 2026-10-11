@@ -34,6 +34,12 @@ def normalized(value):
     return value.removeprefix('0x') if isinstance(value, str) else value
 
 
+def import_stamp(node):
+    if node.get('importSessionAvailable') is not True:
+        raise Blocked('this node predates durable import-session diagnostics')
+    return (node['importSessionEpoch'], node['importSessionPoint'], node['importSessionPhase'], node['pruningImportStable'])
+
+
 def coherent(observation, plan, require_work=True):
     settlement = observation.get('settlement') or {}
     native = settlement.get('nativeSettlement')
@@ -45,6 +51,8 @@ def coherent(observation, plan, require_work=True):
     assert normalized(native['rulesetId']) == normalized(plan['ruleset_id']), 'unpinned consensus rules'
     assert normalized(native['policyId']) == normalized(plan['policy_id']), 'unpinned D/W/concentration policy'
     assert normalized(observation['node']['consensusParamsId']) == normalized(plan['ruleset_id'])
+    epoch, import_point, phase, stable = import_stamp(observation['node'])
+    assert stable is True and import_point == '' and phase in ('idle', 'legacy-stable'), 'import is still incomplete or active'
     readiness = settlement.get('nativeReadiness')
     assert readiness is not None, 'native readiness missing at the observed stable generation'
     assert normalized(readiness['generation']) == normalized(native['generation'])
@@ -207,6 +215,8 @@ class Drill:
             if old:
                 old_body_available = old_body_is_available(rpc, old)
             after = rpc.call('getBlockDagInfo')
+            after_node = rpc.call('getPalwNodeStatus')
+            assert import_stamp(after_node) == import_stamp(node), 'import session changed during the probe; retry'
             assert (after['sink'], after['pruningPointHash']) == (dag['sink'], dag['pruningPointHash']), 'context changed; retry'
         finally:
             rpc.close()
@@ -222,6 +232,8 @@ class Drill:
         rpc = self.rpc(role)
         try:
             after_shadow = rpc.call('getBlockDagInfo')
+            after_shadow_node = rpc.call('getPalwNodeStatus')
+            assert import_stamp(after_shadow_node) == import_stamp(node), 'import session changed during the capacity read; retry'
             assert (after_shadow['sink'], after_shadow['pruningPointHash']) == (dag['sink'], dag['pruningPointHash']), 'capacity context changed; retry'
         finally:
             rpc.close()
@@ -278,7 +290,7 @@ class Drill:
         keys = [(row['header'], native) for row, native in zip(observed, natives)]
         assert all(key == keys[0] for key in keys), 'UTXO/PALW/EVM commitment roots or native heads disagree'
         eth = []
-        for role, native in zip(roles, natives):
+        for role, native, original in zip(roles, natives, observed):
             tags = []
             for tag in ('latest', 'safe', 'finalized'):
                 request = urllib.request.Request(self.plan['nodes'][role]['eth'],
@@ -291,6 +303,14 @@ class Drill:
                 expected_hash = normalized(native[tag])[:64] if native[tag] else None
                 assert normalized(block['hash'] if block else None) == expected_hash, 'ETH/native prescribed 32-byte hash projection mismatch'
                 tags.append(block)
+            rpc = self.rpc(role)
+            try:
+                after_tags = rpc.call('getBlockDagInfo')
+                after_tags_node = rpc.call('getPalwNodeStatus')
+                assert (after_tags['sink'], after_tags['pruningPointHash']) == (original['dag']['sink'], original['dag']['pruningPointHash']), 'context changed during ETH tag reads; retry'
+                assert import_stamp(after_tags_node) == import_stamp(original['node']), 'import changed during ETH tag reads; retry'
+            finally:
+                rpc.close()
             eth.append(tags)
         assert all(tags == eth[0] for tags in eth), 'executed EVM state roots disagree across processes'
         return observed
@@ -335,12 +355,16 @@ class Drill:
         self.wait(lambda: self.probe('JOIN'), 'fresh join startup')
         self.join_link('JOIN', 'A')
         self.wait(lambda: self.convergence(('A', 'JOIN'), winner), 'actual fresh pruned P2P join')
-        assert self.probe('JOIN', old)['oldBodyAvailable'] is False, 'join secretly retained full old history'
+        joined = self.probe('JOIN', old)
+        assert joined['oldBodyAvailable'] is False, 'join secretly retained full old history'
+        joined_epoch = import_stamp(joined['node'])[0]
+        assert joined_epoch > 0, 'fresh pruned join did not complete a durable import session'
         self.kill('JOIN')
         self.start('JOIN')  # the same owned DB after a forced process crash
         self.join_link('JOIN', 'A')
         self.wait(lambda: self.convergence(('A', 'JOIN'), winner), 'cold process restart agreement')
         row = self.probe('JOIN')
+        assert import_stamp(row['node'])[0] == joined_epoch, 'completed import epoch did not survive cold restart'
         count = (row.get('shadow') or {}).get('claimsTotal', 0)
         assert count >= self.plan['minimum_claims'], '100k-scale fixture was not reached'
         assert max(self.latencies) <= self.plan['maximum_probe_ms'], 'predeclared release probe latency limit exceeded'

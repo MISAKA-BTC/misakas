@@ -1849,6 +1849,16 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // node the release?" is a read, not a grep of a log that may have rolled (ADR-0122 §6.1).
         let params = &self.config.params;
         let rt = self.flow_context.palw_runtime();
+        let session = self.consensus_manager.consensus().session().await;
+        let (import, import_stable) = session.async_pruning_import_status().await.map_err(|e| RpcError::General(e.to_string()))?;
+        let import_phase = match import.active {
+            Some(_) if import.utxos_imported => "awaiting-completion",
+            Some(_) if import.utxos_started => "utxo-stream",
+            Some(_) => "sidecars",
+            None if !import_stable => "incomplete",
+            None if import.epoch == 0 => "legacy-stable",
+            None => "idle",
+        };
         Ok(GetPalwNodeStatusResponse {
             consensus_params_id: params.consensus_params_id().to_string(),
             fence_schedule: params.fence_schedule_v1(),
@@ -1898,6 +1908,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 .copied()
                 .collect::<Vec<_>>()
                 .join(" "),
+            import_session_available: true,
+            import_session_epoch: import.epoch,
+            import_session_point: import.active.map(|token| token.point.to_string()).unwrap_or_default(),
+            import_session_phase: import_phase.into(),
+            pruning_import_stable: import_stable,
         })
     }
 

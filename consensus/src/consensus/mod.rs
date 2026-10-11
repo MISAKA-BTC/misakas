@@ -2228,6 +2228,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.pruning_import_session()
     }
 
+    fn pruning_import_status(&self) -> PruningImportResult<(PruningImportSessionStateV1, bool)> {
+        self.virtual_processor.pruning_import_status()
+    }
+
     fn append_imported_pruning_point_utxos(
         &self, chunk: &[(TransactionOutpoint, UtxoEntry)], multiset: &mut MuHash,
     ) -> PruningImportResult<()> {

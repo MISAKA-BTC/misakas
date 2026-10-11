@@ -22041,6 +22041,17 @@ impl VirtualStateProcessor {
         })
     }
 
+    pub fn pruning_import_status(&self) -> PruningImportResult<(kaspa_consensus_core::pruning::PruningImportSessionStateV1, bool)> {
+        let meta = self.pruning_meta_stores.read();
+        let state = meta.import_session().map_err(|e| {
+            PruningImportError::PruningPointImportContextUnavailable(BlockHash::default(), format!("import session: {e}"))
+        })?;
+        let stable = meta.try_pruning_utxoset_stable_flag().map_err(|e| {
+            PruningImportError::PruningPointImportContextUnavailable(BlockHash::default(), format!("import stable marker: {e}"))
+        })?;
+        Ok((state, stable))
+    }
+
     pub fn begin_pruning_point_import(
         &self,
         point: BlockHash,

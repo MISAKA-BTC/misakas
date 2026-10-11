@@ -179,6 +179,10 @@ fn from_node(i: &MinerInputs<'_>, remote: bool) -> MinerView {
         let f = catalog::network_mismatch(node_network, i.network);
         return view(MinerState::Unreachable, f.title.clone(), Some(f), "rpc");
     }
+    if let Some(rt) = i.runtime.filter(|rt| rt.import_session_available && !rt.pruning_import_stable) {
+        return view(MinerState::Syncing,
+            format!("pruning import {} (epoch {}) is incomplete", rt.import_session_phase, rt.import_session_epoch), None, "rpc");
+    }
     // The producer's own gate is not `is_synced`: with --enable-unsynced-mining, peers and open
     // participation it draws on a chain whose tip is older than the window (a fresh chain's first
     // blocks). A log showing it drawing outranks the RPC's word for the chain.
@@ -534,6 +538,12 @@ pub(crate) fn render(snap: &Snapshot, view: &MinerView, now_unix: i64) -> String
         Err((url, why)) => out.push_str(&format!("  {}  not answering at {url} ({why})\n", paint::bold("Node   "))),
     }
     // Bond
+    if let Some(rt) = snap.node_status.as_ref().filter(|rt| rt.import_session_available) {
+        let point = if rt.import_session_point.is_empty() { String::new() }
+            else { format!(" · point {}", rt.import_session_point.chars().take(12).collect::<String>()) };
+        out.push_str(&format!("  {}  {} · epoch {} · {}{point}\n", paint::bold("Import "),
+            rt.import_session_phase, rt.import_session_epoch, if rt.pruning_import_stable { "stable" } else { "incomplete" }));
+    }
     match (&p.bond, snap.facts.as_ref()) {
         (Some(bond), Some(Ok(f))) if f.bond_known => {
             let reserved = f.bond_reserved_exposure.parse::<u128>().unwrap_or(0);
@@ -808,6 +818,11 @@ pub(crate) fn document(snap: &Snapshot, view: &MinerView) -> serde_json::Value {
             "last_block_unix": r.last_block_unix,
             "panel_running": r.panel_running,
             "panel_submitter": r.panel_submitter,
+            "import_session_available": r.import_session_available,
+            "import_session_epoch": r.import_session_epoch,
+            "import_session_point": r.import_session_point,
+            "import_session_phase": r.import_session_phase,
+            "pruning_import_stable": r.pruning_import_stable,
         })),
         "round_lane": snap.round_lane.as_ref().map(|lane| match lane {
             Err(e) => json!({ "error": e }),
@@ -967,6 +982,26 @@ mod tests {
             last_ts: Some(NOW - 5),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn rfc12_an_incomplete_import_overrides_old_draw_evidence_and_unsynced_mining() {
+        let log = drawing_log();
+        let mut runtime = kaspa_rpc_core::GetPalwNodeStatusResponse {
+            producer_state: "drawing".into(), last_draw_unix: (NOW - 10) as u64,
+            import_session_available: true, import_session_epoch: 9,
+            import_session_phase: "utxo-stream".into(), pruning_import_stable: false,
+            ..Default::default()
+        };
+        let mut input = base(Some(&log), None);
+        input.runtime = Some(&runtime);
+        input.unsynced_mining = true;
+        let observed = miner_state(&input);
+        assert_eq!(observed.state, MinerState::Syncing);
+        assert!(observed.headline.contains("utxo-stream") && observed.headline.contains("epoch 9"));
+        runtime.import_session_available = false; // a v5 sender supplies no marker evidence
+        input.runtime = Some(&runtime);
+        assert_eq!(miner_state(&input).state, MinerState::Drawing, "older status is unknown, not a fabricated incomplete import");
     }
 
     /// Drawing is claimed on evidence — a recent draw report — and on nothing else.
