@@ -184,6 +184,12 @@ pub(crate) fn palw_tir_partial_dissect_build_v1(
     {
         return Err("the public evidence does not bind this court's class and roots".into());
     }
+    misaka_palw_sdk::lineages::tir::tir_authenticate_capture_metadata_v1(
+        capture,
+        duty.class_id,
+        rules.prompt_form,
+        rules.max_step_leaf_count,
+    )?;
     let phase = duty.tir_dissection.as_deref().ok_or("the public court has no IR phase")?;
     if phase.session_id() != duty.session_id || duty.terminal_index != Some(phase.leaf_index()) {
         return Err("the public court phase does not bind this session and leaf".into());

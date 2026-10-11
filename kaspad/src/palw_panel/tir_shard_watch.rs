@@ -106,6 +106,7 @@ pub(crate) fn palw_tir_shard_watch_finding_over_v1(
     {
         return Err("the public capture does not bind the watched claim's class/roots".into());
     }
+    misaka_palw_sdk::lineages::tir::tir_authenticate_capture_metadata_v1(capture, duty.class_id, form, ladder)?;
     Ok(match palw_tir_shard_outcome_over_v1(holding, capture, duty, device)? {
         PalwTirShardOutcomeV1::Valid { .. } => PalwTirShardWatchFindingV1::Valid,
         PalwTirShardOutcomeV1::Abstain(why) => PalwTirShardWatchFindingV1::Abstain(why),

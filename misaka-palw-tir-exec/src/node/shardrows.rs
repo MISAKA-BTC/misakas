@@ -144,6 +144,7 @@ impl TirShardHoldingV1 {
         if !capture.is_dense() {
             return Err("a shard-only seat builds a close from a dense capture".into());
         }
+        super::backend::tir_authenticate_capture_metadata_v1(capture, self.class_id, prompt_form, cap)?;
         let runner = super::run::TirClassRunnerV1::new(&self.space, &self.plan, &self.params, self.class_id)?;
         let store = super::evidence::TirEvidenceV1::dense(
             &runner,

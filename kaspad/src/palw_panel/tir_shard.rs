@@ -1322,6 +1322,8 @@ impl super::PalwPanelService {
             };
             let admitted = resource::reserve_v1(&crate::palw_memory_ledger::host_ledger_v1(), key, bytes.len() as u64, 0, false)?;
             let capture = TirCaptureV1::decode(bytes)?;
+            let (rules, _) = self.tir_dissection_rules_for_class_v1(duty.class_id, current_daa).ok_or("no V2 public court rules")?;
+            misaka_palw_sdk::lineages::tir::tir_authenticate_capture_metadata_v1(&capture, duty.class_id, rules.prompt_form, rules.max_step_leaf_count)?;
             if capture.binding.committed_execution_root != duty.execution_root
                 || capture.binding.full_logits_trace_root != duty.trace_root
                 || capture.binding.artifact_root != duty.artifact_root
@@ -1382,6 +1384,10 @@ impl super::PalwPanelService {
         books: &mut PalwTirShardBooksV1,
     ) {
         let Some(place) = duty.tir_shard else { return };
+        let ladder = self.seat_refutation_ladder_v1(duty.class_id, crate::palw_producer::palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, current_daa), current_daa);
+        if misaka_palw_sdk::lineages::tir::tir_authenticate_capture_metadata_v1(&capture, duty.class_id, self.class_prompt_ids_form(duty.class_id), ladder).is_err() {
+            return;
+        }
         let key = seat_duty_panel_key_v1(duty);
         let holding = books.holdings.get(&hold_key).cloned().expect("just inserted");
         let (want_device, shadow) = (self.config.tir_shard_gpu, self.config.tir_shard_shadow);

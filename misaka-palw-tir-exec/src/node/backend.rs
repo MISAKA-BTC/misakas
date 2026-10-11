@@ -145,6 +145,39 @@ impl TirCaptureV1 {
     }
 }
 
+/// Authenticate a public capture's prompt/trace before a partial verifier uses its
+/// tokens. Matching claimed root fields alone does not authenticate the carried ids.
+/// Step preimages are authenticated independently by a dense tree or requested runs.
+pub fn tir_authenticate_capture_metadata_v1(
+    capture: &TirCaptureV1,
+    class_id: Hash64,
+    prompt_form: PalwPromptIdsFormV1,
+    cap: u64,
+) -> Result<(), String> {
+    let binding = &capture.binding;
+    let verified = verify_tir_binding_v1(binding, cap).map_err(|e| e.to_string())?;
+    let ctx = &binding.job_context;
+    if binding.class.class_id(&binding.artifact_root) != class_id
+        || !prompt_token_ids_match_v1(prompt_form, &capture.prompt, &ctx.prompt_token_ids_hash)
+        || capture.prompt.len() as u64 != u64::from(ctx.declared_prefill_tokens)
+        || capture.generated.len() as u64 != u64::from(ctx.exact_decode_tokens)
+        || capture.logits_rows.len() != capture.generated.len()
+        || capture.prompt.iter().chain(&capture.generated).any(|t| *t >= verified.space.program.token_bound)
+        || capture.logits_rows.iter().any(|row| row.len() as u64 != u64::from(verified.space.program.token_bound))
+    {
+        return Err("the public capture's class, prompt, token or trace shape is not its binding".into());
+    }
+    let trace = if Hash64::from_bytes(verified.space.program.logits_scheme_id) == tiled_logits_scheme_id_v1() {
+        kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(ctx, &capture.logits_rows, &capture.generated)
+    } else {
+        Some(kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(ctx, &capture.logits_rows, &capture.generated))
+    };
+    if trace != Some(binding.full_logits_trace_root) {
+        return Err("the public capture's rows and generated ids do not produce its committed trace root".into());
+    }
+    Ok(())
+}
+
 /// **An IR capture's answer to a trace-event demand** (RFC-0002 Phase F, F6 D): the event `(row,
 /// tile)` of the committed logits trace, disclosed in the IR form from the capture's own binding,
 /// rows and ids (`tir_logits_event_disclosure_v1`) — or `OutOfRange` over the binding alone when the

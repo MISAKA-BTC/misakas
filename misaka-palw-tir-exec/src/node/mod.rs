@@ -26,7 +26,7 @@ pub use artifact::TirArtifactV1;
 pub use backend::{
     TIR_CAPTURE_MAGIC_V1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_drill_boundary_lie_v1,
     set_tir_fused_kernels_default_v1, set_tir_metal_v1, tir_dissect_choice_v1, tir_fused_kernels_default_v1,
-    tir_trace_event_disclosure_of_capture_v1,
+    tir_trace_event_disclosure_of_capture_v1, tir_authenticate_capture_metadata_v1,
 };
 pub use cell::{
     CpuKernelBackendV1, DeviceKernelBackendV1, KernelBackendV1, KernelRefusedV1, TirCaptureInputsV1, TirCellInputsV1, TirCellRequestV1,

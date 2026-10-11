@@ -30,8 +30,15 @@ use std::sync::Arc;
 
 const SESSION: Hash64 = Hash64::from_bytes([0x6D; 64]);
 fn rules() -> PalwTirCourtRulesV1 {
-    let court =
-        PalwCourtParamsV2::with_cost_ceilings(1 << 26, 10, 2, DEFAULT_MAX_CLOSE_BYTES, DEFAULT_MAX_TERMINAL_MACS, DEFAULT_MAX_OPERAND_COUNT).unwrap();
+    let court = PalwCourtParamsV2::with_cost_ceilings(
+        1 << 26,
+        10,
+        2,
+        DEFAULT_MAX_CLOSE_BYTES,
+        DEFAULT_MAX_TERMINAL_MACS,
+        DEFAULT_MAX_OPERAND_COUNT,
+    )
+    .unwrap();
     PalwTirCourtRulesV1 {
         max_step_leaf_count: 1 << 26,
         prompt_form: PalwPromptIdsFormV1::Flat,
@@ -246,6 +253,18 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
             let mut corrupt = capture.clone();
             corrupt.leaves[index as usize].values_le[0] ^= 1;
             assert!(partial.dissect_bottom(&corrupt, &phase, &rules).is_err());
+            let mut borrowed_prompt = capture.clone();
+            borrowed_prompt.prompt[0] = (borrowed_prompt.prompt[0] + 1) % program.token_bound;
+            assert!(
+                partial.named_leaf_close(&borrowed_prompt, index, &rules).is_err(),
+                "matching root fields do not authenticate a borrowed prompt"
+            );
+            let mut borrowed_trace = capture.clone();
+            borrowed_trace.logits_rows[0][0] ^= 1;
+            assert!(
+                partial.named_leaf_close(&borrowed_trace, index, &rules).is_err(),
+                "matching trace root fields do not authenticate rows"
+            );
             let mut fold = capture.clone();
             fold.leaves.clear();
             assert!(partial.dissect_round(&fold, &phase, &rules).is_err());
