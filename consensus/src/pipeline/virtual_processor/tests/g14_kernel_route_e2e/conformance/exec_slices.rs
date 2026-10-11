@@ -157,6 +157,10 @@ async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> Re
     let kernel_class = cw.kernel_class;
     let step = cw.net.ttpb();
     cw.net.chain.ctx.simulated_time += step;
+    // EVM-active templates execute against their timestamp. Pin the same
+    // simulated clock used by ordinary heartbeat templates before building;
+    // stamp_harness_time correctly preserves the builder's chosen timestamp.
+    cw.net.chain.vp().template_clock.store(cw.net.chain.ctx.simulated_time, std::sync::atomic::Ordering::Relaxed);
     let bond = cw.net.bond(card);
     let mut t = cw
         .net
