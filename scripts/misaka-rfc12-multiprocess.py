@@ -56,6 +56,25 @@ def coherent(observation, plan, require_work=True):
     return native
 
 
+def old_body_is_available(rpc, old):
+    """GetBlock deliberately serves header-only blocks; RPC success is not a body."""
+    try:
+        block = rpc.call('getBlock', {'hash': old, 'includeTransactions': True})['block']
+    except RuntimeError as error:
+        # Full header removal is valid GC too. A transport error, timeout, busy
+        # server or unrelated RPC failure is never pruning evidence.
+        if 'cannot find header ' + normalized(old) in str(error):
+            return False
+        raise
+    verbose = block.get('verboseData') or {}
+    assert isinstance(verbose.get('isHeaderOnly'), bool), 'old-block response omitted explicit body status'
+    if verbose['isHeaderOnly']:
+        assert not block['transactions'], 'header-only status contradicts a served body'
+        return False
+    assert block['transactions'], 'a full native block must contain its coinbase'
+    return True
+
+
 class Link:
     """Opaque loopback P2P link; cut closes only sockets created by this link."""
     def __init__(self, target):
@@ -186,11 +205,7 @@ class Drill:
             peers = rpc.call('getConnectedPeerInfo')
             old_body_available = None
             if old:
-                try:
-                    rpc.call('getBlock', {'hash': old, 'includeTransactions': True})
-                    old_body_available = True
-                except RuntimeError:
-                    old_body_available = False
+                old_body_available = old_body_is_available(rpc, old)
             after = rpc.call('getBlockDagInfo')
             assert (after['sink'], after['pruningPointHash']) == (dag['sink'], dag['pruningPointHash']), 'context changed; retry'
         finally:
@@ -309,7 +324,10 @@ class Drill:
         old = self.probe('A')['dag']['sink']
         self.values['OLD_BLOCK'] = old
         self.fixture('prune')
-        source = self.wait(lambda: self.probe('A', old), 'pruning source')
+        def pruned_source():
+            row = self.probe('A', old)
+            return row if row['oldBodyAvailable'] is False else None
+        source = self.wait(pruned_source, 'actual old-body garbage collection')
         assert source['dag']['pruningPointHash'] != source['node']['genesisHash'], 'pruning point never moved'
         assert source['oldBodyAvailable'] is False, 'source did not actually GC the old block body'
         winner = source['dag']['sink']

@@ -52,6 +52,24 @@ class Oracle(unittest.TestCase):
         with self.assertRaises(AssertionError):
             drill.coherent(row, plan)
 
+    def test_header_only_success_and_named_missing_header_are_gc_evidence(self):
+        class Rpc:
+            def __init__(self, answer):
+                self.answer = answer
+            def call(self, *args):
+                if isinstance(self.answer, Exception):
+                    raise self.answer
+                return {'block': self.answer}
+        old = 'aa' * 64
+        self.assertFalse(drill.old_body_is_available(Rpc(dict(verboseData=dict(isHeaderOnly=True), transactions=[])), old))
+        self.assertFalse(drill.old_body_is_available(Rpc(RuntimeError('getBlock: cannot find header ' + old)), old))
+        self.assertTrue(drill.old_body_is_available(Rpc(dict(verboseData=dict(isHeaderOnly=False), transactions=[dict(id='coinbase')])), old))
+        for error in (RuntimeError('server closed the connection'), RuntimeError('busy'), RuntimeError('cannot find header ' + 'bb' * 64)):
+            with self.assertRaises(RuntimeError):
+                drill.old_body_is_available(Rpc(error), old)
+        with self.assertRaises(AssertionError):
+            drill.old_body_is_available(Rpc(dict(verboseData=dict(isHeaderOnly=False), transactions=[])), old)
+
     def test_owned_transport_cut_closes_active_connection_and_resume_accepts(self):
         listener = socket.socket()
         listener.bind(('127.0.0.1', 0))

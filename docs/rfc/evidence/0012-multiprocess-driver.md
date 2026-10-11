@@ -59,13 +59,15 @@ full bridge fill/withdrawal/backing matrix, in-flight IBD crash fault injection,
 and authorization of live monetary/legacy-horizon policy are separate conditions.
 This driver is not yet a measured full private network result.
 
-Four oracle/socket controls are verified with:
+Five oracle/socket controls are verified with:
 
 ```sh
 python3 -m unittest discover -s scripts/tests -p test_rfc12_multiprocess.py -v
 ```
 
 They reject dormant retirement, live DNS authority, stale generations/readiness,
-and a one-unit-short u128 work floor; the socket control checks established
-transport cut and subsequent reconnection. These four tests are not node,
+and a one-unit-short u128 work floor. The pruning oracle recognizes successful
+header-only RPC replies as missing bodies and refuses to call transport errors
+GC evidence; the socket control checks established
+transport cut and subsequent reconnection. These five tests are not node,
 pruning, P2P-protocol, release100k, or soundness evidence.
