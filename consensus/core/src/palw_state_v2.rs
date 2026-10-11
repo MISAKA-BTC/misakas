@@ -15984,11 +15984,33 @@ impl PalwChainStateV2 {
                 return bad(format!("a DA session on claim {claim_id} has no DA record"));
             }
             let units: BTreeSet<_> = session.units.iter().collect();
-            if session.units.is_empty() || session.units.len() > 1 + PALW_DA_DRAWN_UNITS_V1 || units.len() != session.units.len() {
-                return bad(format!("the DA session of {accuser:?} on claim {claim_id} names {} units", session.units.len()));
-            }
-            if session.opened_daa.checked_add(window) != Some(session.deadline_daa) {
-                return bad(format!("the DA session of {accuser:?} on claim {claim_id} is not due at opened + W_disclose"));
+            // Lane G14-L: a legacy held session (no draws: one unit) of more than one unit is a LANES session — only past both
+            // legacy fences, at most 64 distinct held units, a reserved (seat-like) session, due between `opened + W_disclose` and the lane
+            // bound (the join window, `W_disclose`, one carriage DAA a further lane). Every other session keeps DA-3's shape.
+            let lanes = session.units.len() > 1
+                && session.units.iter().all(|unit| matches!(unit, crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(_)));
+            if lanes {
+                use crate::palw_legacy_parallel_v1::{PALW_LEGACY_LANES_PER_SESSION_V1, palw_legacy_lane_deadline_bound_v1};
+                let due = session.opened_daa.saturating_add(window)..=palw_legacy_lane_deadline_bound_v1(session.opened_daa, window);
+                if params.legacy_public_filer_from_daa().is_none()
+                    || session.units.len() > PALW_LEGACY_LANES_PER_SESSION_V1 as usize
+                    || units.len() != session.units.len()
+                    || !session.accuser_is_seat
+                    || !due.contains(&session.deadline_daa)
+                {
+                    return bad(format!(
+                        "the lanes session of {accuser:?} on claim {claim_id} ({} units, due {}) is not a reserver's within its bounds",
+                        session.units.len(),
+                        session.deadline_daa
+                    ));
+                }
+            } else {
+                if session.units.is_empty() || session.units.len() > 1 + PALW_DA_DRAWN_UNITS_V1 || units.len() != session.units.len() {
+                    return bad(format!("the DA session of {accuser:?} on claim {claim_id} names {} units", session.units.len()));
+                }
+                if session.opened_daa.checked_add(window) != Some(session.deadline_daa) {
+                    return bad(format!("the DA session of {accuser:?} on claim {claim_id} is not due at opened + W_disclose"));
+                }
             }
             let entry = counted.entry(*claim_id).or_insert((0, 0));
             if session.accuser_is_seat {
@@ -17217,6 +17239,29 @@ impl PalwFoldReadV1<'_> {
         accuser: &PalwBondKeyV2,
         now_daa: u64,
     ) -> Result<PalwDaAdmissionV1, PalwStateV2Error> {
+        self.da_admission_mode_v1(claim_id, accuser, now_daa, false)
+    }
+
+    /// **Lane G14-L: may `accuser` join one more LANE to its open reserved session on `claim_id`, and at what price?** Exactly
+    /// [`Self::da_admission_v1`]'s gates and DA-6 price on the free half, except the two a lane replaces: the open session is the one
+    /// it joins (DA-1), and the lane counts on the reservation's lane budget, not its session count
+    /// ([`crate::palw_legacy_parallel_v1::palw_legacy_lane_join_check_v1`]).
+    fn da_lane_admission_v1(
+        &self,
+        claim_id: &Hash64,
+        accuser: &PalwBondKeyV2,
+        now_daa: u64,
+    ) -> Result<PalwDaAdmissionV1, PalwStateV2Error> {
+        self.da_admission_mode_v1(claim_id, accuser, now_daa, true)
+    }
+
+    fn da_admission_mode_v1(
+        &self,
+        claim_id: &Hash64,
+        accuser: &PalwBondKeyV2,
+        now_daa: u64,
+        lane: bool,
+    ) -> Result<PalwDaAdmissionV1, PalwStateV2Error> {
         use crate::palw_da_rcore_v1::{
             PALW_DA_OPEN_NON_SEAT_PER_CLAIM_V1, PALW_DA_SESSIONS_PER_CLAIM_TOTAL_V1, PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1,
             PalwDaStageV1, palw_da_session_exposure_at_bps_v1, palw_da_stage_reward_base_v1,
@@ -17264,8 +17309,16 @@ impl PalwFoldReadV1<'_> {
         if record.collateral < floor {
             return Err(PalwStateV2Error::BondBelowFloor { bond: *accuser, collateral: record.collateral, floor });
         }
-        if state.da_sessions.contains_key(&(*claim_id, *accuser)) {
-            return Err(PalwStateV2Error::DaSessionAlreadyOpen { claim: *claim_id, accuser: *accuser });
+        if state.da_sessions.contains_key(&(*claim_id, *accuser)) != lane {
+            return Err(if lane {
+                PalwStateV2Error::DaSessionBudgetExhausted {
+                    claim: *claim_id,
+                    accuser: *accuser,
+                    why: "a lane joins the accuser's open reserved session, and none is open",
+                }
+            } else {
+                PalwStateV2Error::DaSessionAlreadyOpen { claim: *claim_id, accuser: *accuser }
+            });
         }
         let accuser_is_seat = panel.seats.iter().any(|seat| seat.bond == *accuser);
         let da = state.da_claims.get(claim_id);
@@ -17274,13 +17327,18 @@ impl PalwFoldReadV1<'_> {
         // budget — never DA-8's shared non-seat budget, which a producer's Sybils could exhaust. Empty below the fence.
         let reserved = (!accuser_is_seat).then(|| state.legacy_dispute_reservation_v1(claim_id, accuser)).flatten();
         if accuser_is_seat {
+            if lane {
+                return exhausted("a seat's sessions carry no lanes: lanes are a non-seat reservation's");
+            }
             if da.and_then(|record| record.opened_by_seat.get(accuser)).copied().unwrap_or(0) >= PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1 {
                 return exhausted("a seat opens at most four sessions on a claim over its life");
             }
         } else if let Some(row) = reserved {
-            if row.sessions_opened >= crate::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1 {
+            if !lane && row.sessions_opened >= crate::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1 {
                 return exhausted("a dispute reservation opens at most sixteen sessions on its claim");
             }
+        } else if lane {
+            return exhausted("a lane joins only a reserved session of a non-seat bond");
         } else {
             if da.map(|record| record.open_other_sessions).unwrap_or(0) >= PALW_DA_OPEN_NON_SEAT_PER_CLAIM_V1 {
                 return exhausted("at most three non-seat sessions are open on a claim at once");
@@ -31375,7 +31433,68 @@ fn open_da_session_legacy_held_v2(
     if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &demand.binding) {
         return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
     }
-    open_da_session_rcore_v1(builder, ctx, claim_id, demand.accuser, crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(demand.unit), None)
+    let unit = crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(demand.unit);
+    // Lane G14-L: past BOTH legacy fences a reserver's further demand joins its open reserved session as one more lane (one search
+    // round's parallel units) instead of being refused as a second session (DA-1). Below either fence the expression is the one it was.
+    if crate::palw_legacy_parallel_v1::palw_legacy_parallel_active_v1(builder.params.legacy_public_filer_active_at(ctx.daa_score), true)
+        && builder.state.da_sessions.contains_key(&(claim_id, demand.accuser))
+        && builder.state.legacy_dispute_reservation_v1(&claim_id, &demand.accuser).is_some()
+    {
+        return join_da_session_lane_legacy_held_v1(builder, ctx, claim_id, demand.accuser, unit);
+    }
+    open_da_session_rcore_v1(builder, ctx, claim_id, demand.accuser, unit, None)
+}
+
+/// **Lane G14-L: one more lane of a reserver's open reserved session** ([`crate::palw_legacy_parallel_v1`]'s rule): the join check
+/// (held units only, not a reacquisition, inside the join window, at most 64 lanes, the reservation's 128 extra lanes), the unit not
+/// yet answered (M3 review F3), DA-8's other gates and DA-6's price on the joiner's free half ([`PalwFoldReadV1::da_lane_admission_v1`]),
+/// then the deadline under G14-B's chunk rule inside the claim's retention. The session's exposure grows by the lane's price (its own
+/// deposit: refunded by a conviction or a default, held with the session's when every lane is answered); the reservation counts the
+/// lane; the row and the locks follow the new deadline (DA-5).
+fn join_da_session_lane_legacy_held_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    accuser: PalwBondKeyV2,
+    unit: crate::palw_da_rcore_v1::PalwDaUnitV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_legacy_parallel_v1::{palw_legacy_lane_deadline_v1, palw_legacy_lane_join_check_v1};
+    let now = ctx.daa_score;
+    let refused = |why: &str| PalwStateV2Error::LegacyHeldDaRefused { claim: claim_id, why: format!("lane: {why}") };
+    let mut session = builder.state.da_sessions.get(&(claim_id, accuser)).cloned().ok_or_else(|| refused("no open session"))?;
+    let row = *builder.state.legacy_dispute_reservation_v1(&claim_id, &accuser).ok_or_else(|| refused("no live reservation"))?;
+    let reacquiring = builder.state.legacy_disputes.get(&claim_id).is_some_and(|record| record.reacquiring.contains_key(&accuser));
+    let lanes_after = palw_legacy_lane_join_check_v1(&session, &unit, &row, reacquiring, now).map_err(|r| refused(r.why()))?;
+    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    if builder.state.da_claims.get(&claim_id).is_some_and(|record| {
+        crate::palw_da_rcore_v1::palw_da_unit_answered_v1(
+            record,
+            &unit,
+            crate::palw_da_rcore_v1::palw_da_in_run_rows_v1(&claim, builder.extras.fp_da_pins_active),
+        )
+    }) {
+        return Err(PalwStateV2Error::DaUnitAlreadyAnswered(claim_id));
+    }
+    let admission = builder.read().da_lane_admission_v1(&claim_id, &accuser, now)?;
+    let w_disclose = palw_da_disclose_window_daa_v1(builder.params);
+    let deadline = palw_legacy_lane_deadline_v1(session.deadline_daa, now, w_disclose, lanes_after)
+        .ok_or(PalwStateV2Error::Overflow("lane deadline"))?;
+    if deadline > claim.trace_retention_daa {
+        return Err(PalwStateV2Error::DaOutsideRetention {
+            claim: claim_id,
+            at: now,
+            window: deadline - now,
+            retention_daa: claim.trace_retention_daa,
+        });
+    }
+    session.units.push(unit);
+    session.exposure = session.exposure.saturating_add(admission.exposure);
+    session.deadline_daa = deadline;
+    builder.write_da_session((claim_id, accuser), Some(session));
+    builder.legacy_dispute_count_lane_v1(claim_id, accuser);
+    let until = deadline.saturating_add(builder.params.window_challenge_at(now));
+    builder.da_rekey_v1(claim_id, until, now);
+    Ok(())
 }
 
 /// **LG14-B (tag 158): the answer to every open session that demands a legacy held unit.** DA-4's admission

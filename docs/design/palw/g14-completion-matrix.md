@@ -214,8 +214,8 @@ gate's verdict equals the schedule's at every ceiling.
 | granite-3.1-1b, smollm2-1.7b @32,783 | — | — | — | refused by the v4 gate (verifier RAM) |
 | 9B @262,144 / @2,097,152 | — | — | — | refused (retained state / `check_plan` positions) |
 | v5 encoder (1 position) | any | any | 0: the one demand is pre-Final and holds Final | fits; Final can be held for a whole window (open item 4) |
-| Legacy held 8k (LG14-A/B) | 4 input units + 5 descent rounds (2^40 leaves) + 2 = 11 sessions | 1,200 a session (`W_disclose = window_challenge()`) | sessions open until 4,200 after acceptance | **FAIL: at most 4 sessions fit** |
-| Legacy held 2M | 1,024 input units + 7 = 1,031 sessions | — | — | **FAIL: past the 34-session budget itself** |
+| Legacy held 8k (LG14-A/B) | 4 input units + 5 descent rounds (2^40 leaves) + 2 = 11 sessions | 1,200 a session (`W_disclose = window_challenge()`) | sessions open until 4,200 after acceptance | **FAIL: at most 4 sessions fit** (sequential, one unit a session) — superseded 2026-10-11 by §2g: **fits** with parallel lanes, 4 sessions `[1, 36, 16, 1]` at the canonical 2^27-leaf row |
+| Legacy held 2M | 1,024 input units + 7 = 1,031 sessions | — | — | **FAIL: past the 34-session budget itself** — §2g: still **refused by name** (`PARALLEL_SESSIONS`: 1,024 input chunks exceed one session's 64 lanes) |
 | Legacy at the applied short window (120) | — | 120 | — | 35 sessions would fit (the 34 budget and the 8k profile) |
 
 **Tests and results** (run on this branch):
@@ -515,6 +515,138 @@ evidence; a drill pursuit needs (1)+(2) decided first.
 (codex) + V-node (engine), not V-svc. v4 deadline resume and v4 over the socket are not separately driven. Permanently pruned bodies
 (reacquisition) remain codex's. The verifier's synced collateral is read from its own bond (the tests read the node's tip; a remote
 verifier reads op 202's bond row).
+
+## 2g. G14-L: parallel reserved sessions and the k-ary descent on the legacy held route (2026-10-11, lane G14-L, branch `g14/l-parallel-sessions`)
+
+**The decision.** G14-B (§2c, open item 2) derived that the legacy V2 held route cannot finish a public pursuit: a stalling producer
+answers each reserved session on the last DAA of `W_disclose` (1,200 on testnet-12), sessions open one at a time until the claim's hard
+deadline (acceptance + 4,200), so **four** fit. The one-unit descent needs 9 sessions at the canonical 8k row (11 at G14-B's 2^40
+stand-in), and 2M needs 1,031. Of (a) parallel sessions, (b) retention extended during a pursuit, (c) a 120-DAA session window (breaks
+SA-3) and (d) refusing large legacy, **the user chose (a)**: several reserved sessions at once and several positions per search round,
+SA-3 and the liability / lifetime ceilings unchanged; 8k must fit; 2M is refused by name if no `k` fits. Overall G14 stays
+**FAIL / incomplete**; nothing is armed or armable by this lane.
+
+### 2g.1 What changed (implemented)
+
+**Consensus (dormant).** No new wire type, object tag, table, RPC or registry number; no int-12 wire type changes (A-2: nothing to
+classify — `PalwDisputeReservationRowV1` is an LG14-A type, not in the frozen int-12 manifest, and its table is written only past the
+dormant fence). The rule applies only where **both** dormant, never-armed legacy fences are in force (`palw_legacy_public_filer_v1`:
+reserved sessions exist only there; `palw_legacy_held_da_v2`: tag 157 exists only there; each is refused when armed by its own
+validator). No chain has history under either fence, so no new fence was needed for the changed session rule. Module:
+`consensus/core/src/palw_legacy_parallel_v1.rs`; fold: `join_da_session_lane_legacy_held_v1` in `palw_state_v2.rs`.
+
+| Rule | Before | Now (past both legacy fences) |
+|---|---|---|
+| A reserver's second tag-157 demand while its reserved session is open | refused (`DaSessionAlreadyOpen`, DA-1: one session per accuser per claim) | **joins** the session as one more **lane** (one more unit the producer must answer), when: every unit of the session and the new one is a legacy held unit (never an event or a reacquisition session); within 128 DAA of the session's opening (the join window: a node funds one carrier a DAA, twice `K`); at most `K` = **64 lanes** a session; at most **128 extra lanes** a reservation over its life (`PalwDisputeReservationRowV1::lanes_joined`, the bond's own budget); the reservation predates the session; the unit not already answered; the gates of an ordinary session (stage, retention, standing) |
+| Session count | each demand one of the reservation's 34 sessions | a lanes session still counts **one** of the 34; its extra lanes count on `lanes_joined` |
+| Deposit | one DA-6 price a session (A-6, free half) | **one DA-6 price per lane**, added to the session's exposure on the joiner's free half: refunded by a conviction or a default, held (and burned at retirement) when every lane was answered and nothing proved |
+| Deadline | `opened + W_disclose` | `max(deadline, now + W_disclose + (lanes − 1) × c)` at every join, `c` = 1 DAA (G14-B's chunk rule: a held answer is at most the court's close ceiling, under one block's 125,000 transaction bytes — one answer a block), never past the claim's retention |
+| Answer / default | the session is refuted when its units are answered, defaults at its deadline otherwise | unchanged, per session: every lane answered → refuted; any lane unanswered at the deadline → **DA default** (`ProducerWithholding`, DA-7) |
+| Consistency | 1–4 units, due at `opened + W_disclose` | a legacy held session of more than one unit (a lanes session: legacy held units are never drawn) — only with the public-filer fence set, ≤ 64 distinct units, seat-like (reserved), due within `[opened + W_disclose, opened + 128 + W_disclose + 63]`; reservation rows `lanes_joined ≤ 128`, zero below the fence |
+
+`da_admission_v1` is split into `da_admission_mode_v1(lane)`: a lane skips exactly the two gates it replaces (the open session is the
+one it joins; the session count) and keeps every other gate and the price; a seat's session takes no lanes.
+
+**The k-ary authenticated descent (node policy, `palw_legacy_kary_next_v1`).** A round at a focus node `(L, i)` known to differ
+demands the `2^s` nodes under it at level `L − s`; each answer authenticates its node to the claim's root and carries its frontier nine
+levels lower, so one round descends `s + 9` levels. The verifier folds a **known tree** from authenticated frontiers only (each lane's
+subtree, then every parent of two known children — across lanes) and walks from the binding's root into the **leftmost** child whose
+authenticated node differs from its own; a matching node covers its whole subtree (collision resistance), a lone matching midpoint is
+never trusted, a lie followed by correct values is found, two authenticated values for one node are a `Conflict` (never a descent),
+children that agree under a differing node are `OwnTreeInconsistent` (never a guess). The width `s` is a pure function of the focus level,
+the root round's input lanes (derived from the binding: `⌈prefill / 2,048⌉`, or 1 for a flat input) and `K`: the fewest rounds, the extra
+levels spread evenly (`palw_legacy_kary_width_bits_v1`). A restarted verifier re-derives the same round from chain answers alone.
+`PalwLegacyNodeViewV2::node` (the verifier's own opening builder) now folds a node between a focus and its lanes from its children.
+
+**rounds(k, leaves).** At `K = 2^b` lanes and no input: `⌈h / (9 + b)⌉` rounds (`h` the tree height), asserted for every `h ≤ 40` and
+`k ∈ {1, …, 64}`. With the binding read before and the fused leaf's witness after: `rounds + 2` sessions.
+
+**budget.rs.** `parallel_session_schedule_v1` (+ `ParallelSessionClockV1`, `parallel_session_max_replay_v1`): a session of `k` lanes
+opens at `t`, its lanes join one a DAA, the stalling producer answers at `t + (k − 1)(join + c) + W_disclose`; opens `≤ open span`,
+deadlines `≤ close span`, joins inside the window, the verifier's replay after the input round (declared, unmeasured), the filing by the
+close span. One lane a session is G14-B's sequential schedule exactly (asserted for 1–6 sessions).
+`palw_legacy_parallel_plan_v1` / `palw_legacy_parallel_feasible_v1` derive the worst-case plan and refuse by name (`PARALLEL_SESSIONS: …`).
+
+**The production filer (kaspad `palw_fraud_filer.rs`).** Past both fences a reserving public bond with a mismatched base0 replica runs
+`palw_fraud_filer_legacy_step_v3`: one round's lanes are demanded together (`DemandLanes`: the first to land opens the reserved session,
+the others join; a lane already in the session or answered is never re-sent; per-lane resend after 30 DAA, at most twice), answered lanes
+are read and learned one a step (`AwaitRound`/`Learn`; the history walk caches the whole round, `legacy_round`), the fused leaf's witness
+and the terminal as before. The PanelDA input bootstrap (`palw_fraud_filer_bootstrap_step_v2`) demands every input chunk **and** the root
+round's node lanes in the session after the binding (the plan's input round: the verifier replays, and the root frontiers are already
+on chain). Nothing is carried across tips: the case is rebuilt from chain answers (G14-R's property); a reset clears the round and the
+lane send-book. Seats, watchdogs, sessions below the fences and non-base0 replays keep the one-unit paths unchanged.
+
+### 2g.2 The profile table (re-derived for parallel sessions; testnet-12 lattice: bind 600, receipt 600, `W_disclose` = challenge 1,200 — unshortened, SA-3 — court 3,000; G14-B's verifier terms: first step 2, turnaround 1, filing 1, replay 0)
+
+| Profile | Plan (lanes a session) | Timeline (DAA after acceptance) | Verdict |
+|---|---|---|---|
+| **Legacy held 8k** — the canonical row (≈105.5M leaves, height 27), 4 input chunks | `[1, 36, 16, 1]`: binding; **k = 32** node lanes (s = 5) + 4 input; **k = 16** (s = 4); the fused witness | opens 2 / 1,203 / 2,474 / 3,705; deadlines 1,202 / 2,473 / 3,704 / 4,905; filed 4,906 (open span 4,200, close span 5,400) | **FITS** — 4 sessions of 34, 50 extra lanes of 128; slack 495 DAA to open, 494 to file; the verifier's own replay after the input round may take **≤ 494 DAA** |
+| Same, a verifier that holds the input (attempt claims) | `[1, 32, 16, 1]` | filed 4,898 | fits |
+| Boundary: height 29 (2^29 leaves), 4 input chunks | `[1, 36, 64, 1]` | filed 5,002 | fits (98 extra lanes) |
+| Height 30 (2^29 + 1 leaves) | 3 descent rounds → 5 sessions | the fifth would open past 4,200 | **refused by name** (`PARALLEL_SESSIONS: the worst-case rounds …`) |
+| G14-B's 2^40 ladder top (its stand-in for "8k") | 3 descent rounds → 5 sessions | — | **refused by name**; two rounds would need 2^11 lanes a round |
+| **Legacy held 2M** | 1,024 input chunks | — | **refused by name**: `PARALLEL_SESSIONS: the input's 1024 chunks exceed one session's 64 lanes` (the input must be acquired before the replay, in the root round) |
+| The one-unit descent of the 8k row (for comparison) | 4 + 3 + 2 = 9 sequential sessions | — | does not fit (G14-B: 4 fit) |
+
+Tests: `palw_legacy_parallel_v1::tests::the_legacy_profile_table_on_the_t12_lattice`, `rounds_of_k_and_the_8k_plan`,
+`budget::tests::parallel_sessions_fit_the_lattice_and_one_lane_is_the_sequential_schedule`.
+
+### 2g.3 Tests and results (this branch; `buildslot.sh … --offline`)
+
+- **Kernel + consensus-core** (`--lib -- budget:: palw_legacy palw_lifecycle_objects_v2 g14b_ palw_da_rcore`): **PASS — 9 + 68**, 0 failed.
+  New: `budget::tests::parallel_sessions_fit_the_lattice_and_one_lane_is_the_sequential_schedule`; `palw_legacy_parallel_v1::tests`
+  (7, V-unit): `the_kary_descent_finds_the_first_lie_at_every_position` (every leaf count 1–70 × frontier depths 1–3 × widths 1, 2, 4,
+  8 × a lie at EVERY position, each isolated with every later leaf honest; the last leaf; two lies → the first; rounds never past the
+  plan's), `the_kary_descent_at_the_legacy_depth_and_the_last_leaf` (depth 9, 4,133 leaves, four input lanes, stride + last leaf + 1023/1024),
+  `an_isolated_lie_after_matching_values_and_an_inconsistent_own_tree` (also a forged frontier → `Conflict`), `rounds_of_k_and_the_8k_plan`
+  (`⌈h / (9 + log2 k)⌉` for every `h ≤ 40`, `k ≤ 64`), `the_legacy_profile_table_on_the_t12_lattice`,
+  `the_lane_deadline_counts_one_carriage_daa_a_lane`. The A-2 pins (`palw_lifecycle_objects_v2::…every_int12_wire_type_is_unchanged_or_classified`
+  and the kind table) stay green; G14-B's `g14b_a_stalling_producer_…` unchanged and green.
+- **consensus-core integration** (`--test lg14a_legacy_dispute_fold --test palw_tir_da_step_fold`): **PASS — 9 + 11**.
+- **kaspad** (`--lib -- g14l_ lg14b_ palw_fraud_filer`): **PASS — 39**, 0 failed (641 s), including every existing LG14-B case and the
+  filer's unit tests. New, V-fold (the real transition with every block's delta re-applied / reverted and its carriage reloaded; the actual
+  node filer's step functions; R-core+ and both legacy fences test-armed — their shipping validators still refuse arming):
+  - `g14l_an_8k_shaped_pursuit_convicts_and_defaults_through_parallel_lanes_inside_the_t12_window` — the held 8k fixture (11,612 leaves,
+    height 14, 1 input lane) on `W_disclose` 1,200 with retention = acceptance + 5,400 (hard deadline 4,301), a producer stalling every
+    session to its last DAA: sessions `[1, 23]` (the binding read; ONE round of 23 node lanes — the tree's width at level 9), opened at
+    105 / 1,306, due 1,305 / 2,550 — **exactly** `parallel_session_schedule_v1` over those lanes; the tag-159 recompute filed at 2,551
+    (CourtFraud, producer charged, outsider whole). Twin: one deep lane withheld → `ProducerWithholding` at 2,550, producer sanctioned,
+    outsider's collateral unchanged. The fixture's worst-case plan is feasible.
+  - `g14l_a_coalition_cannot_exhaust_parallel_sessions` — 12 coalition bonds each fill a session to 64 lanes; the 65th is refused; a
+    fresh outsider reserving after them still opens its own 64-lane session (lanes price one DA-6 exposure each); a lane past the 128-DAA
+    join window is refused; one bond answering its way through three sessions reaches exactly 128 extra lanes and the next is refused.
+  - `g14l_a_restart_mid_round_resumes_without_duplicate_lanes` — the case rebuilt from scratch after the binding and three lanes of the
+    round: the round re-derives, only the missing lanes are demanded, no unit twice, one session per round, conviction.
+- **kaspad panel history reader** (`the_filer_re…`, `a_missing_header_…`): **PASS — 3** (the reader's new round-set argument).
+- **kaspa-consensus** (`--lib -- t12_a2u lg14a_ t12_legacy_held_da_gate g14b_`): **PASS — 17**, 0 failed (421 s): the `t12_a2u_*` suites,
+  every `lg14a_*` real-node case and G14-R's `g14r_lg14a_*` resume cases (IBD mid-descent, pruned import, reorg, socket), the legacy
+  held gate, G14-B's node schedule.
+- Not run: the full workspace, clippy, the `PalwPanelService` tick with lanes (V-svc), the shipping-pin suite (no params, schedule,
+  preset or fence value changed; the testnet-12 ids are untouched by construction — UNKNOWN until the integration's pin run).
+
+### 2g.4 Open, stated
+
+* **The verifier's replay time is declared, not measured.** The 8k row leaves 494 DAA for the verifier's own replay after the input
+  round (and 495 to open the last session). A real 8k replay of a large registered model may take longer on a slow host; that bound is
+  for an external measurement gate. The turnaround between rounds is 1 DAA in the derivation (as G14-B's).
+* **Inclusion under a coalition that fills blocks** (G14-B's UNKNOWN) is unchanged: the schedule assumes one carrier a DAA for the
+  verifier's lanes and one answer a block for the producer; there is no reserved byte lane. A lanes session widens the producer's window by
+  one DAA a lane, not by an inclusion guarantee.
+* **Producer load scales with reservers.** Per bond: ≤ 34 sessions and ≤ 34 + 128 units over a claim's life, each lane priced on its own
+  free half (refunded only by a conviction or a default). A coalition of `B` bonds can demand `B × 162` units of an honest producer and
+  forfeit `B × 162` DA-6 prices; whether that price deters is ECON's question, as for every per-bond budget (C6/C8: no shared cap exists
+  for an attacker to fill).
+* **The fused terminal after the witness** (the held dissection's turns) is not inside the derived timeline (as in G14-B); the plan counts
+  the witness session only.
+* **The legacy held class is not refused at registration.** The refusal by name is the planner's and the filer's (`Refused` → `Unjudged`);
+  wiring `palw_legacy_parallel_feasible_v1` into a reward gate (like G14-S's `COURT_SCOPE_INCOMPLETE`) is not done here. Legacy
+  registration is the live route's; any gate is a dormant-fence decision for its owner.
+* **The 8k-shaped node runs use the held 8k fixture** (a small model at 8k context): its tree is shallower than the canonical row's, so a
+  single k-ary round reaches its leaves; the two-round shape of the canonical row is verified by the planner, the schedule and the
+  exhaustive descent tests (V-unit), not by a node run of a 105.5M-leaf claim.
+* Checkpoint-tree k-ary descent (the planner is generic over the tree; the node runs it on the step tree only), PanelDA bootstrap lanes
+  on the fixture (`palw_fraud_filer_bootstrap_step_v2` is wired; the existing bootstrap fixture was not re-run with lanes), the actual
+  `PalwPanelService` tick with lanes (V-svc), reacquisition of a pruned round's answers (codex), and a live drill: **not done**.
 
 ## 3. Family matrices (milestone baseline)
 

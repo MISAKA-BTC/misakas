@@ -901,11 +901,29 @@ impl PalwLegacyNodeViewV2<'_> {
         if last_leaf <= self.divergent {
             return self.own.own_node(level, index);
         }
-        let frontier = self
-            .frontiers
-            .iter()
-            .find(|f| f.below <= level && level <= f.level && (index >> u32::from(f.level - level)) == f.index)?;
-        self.fold(frontier, level, index)
+        if let Some(frontier) =
+            self.frontiers.iter().find(|f| f.below <= level && level <= f.level && (index >> u32::from(f.level - level)) == f.index)
+        {
+            return self.fold(frontier, level, index);
+        }
+        // Lane G14-L: a k-ary round answers the nodes UNDER its focus, never the focus itself — a node between the focus and its
+        // lanes is folded from its children, each one a lane's (or a node wholly before the divergent leaf). Only where an answered
+        // frontier lies below it: no recursion into a subtree public material does not reach.
+        if level == 0
+            || !self
+                .frontiers
+                .iter()
+                .any(|f| f.level < level && (f.index >> u32::from(level - f.level)) == index)
+        {
+            return None;
+        }
+        let child = level - 1;
+        let width = palw_tir_step_tree_width_v1(self.leaf_count, child)?;
+        let (left, right) = (2 * index, 2 * index + 1);
+        if right >= width {
+            return self.node(child, left);
+        }
+        Some(step_merkle_node_v1(&self.node(child, left)?, &self.node(child, right)?))
     }
 
     /// Node `(level, index)` folded from `frontier`'s nodes (the tree's own rule: pairs, an odd last node promoted at the level's

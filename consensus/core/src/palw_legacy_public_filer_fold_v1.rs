@@ -135,7 +135,12 @@ impl PalwChainStateV2 {
                 return bad(format!("claim {claim_id} is voided with a live reservation (every void releases them)"));
             }
             if record.live.keys().any(|bond| record.closed.contains(bond))
-                || record.live.values().any(|row| row.sessions_opened > PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1 || row.deposit == 0)
+                || record.live.values().any(|row| {
+                    row.sessions_opened > PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1
+                        || row.deposit == 0
+                        || row.lanes_joined > crate::palw_legacy_parallel_v1::PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1
+                        || (row.lanes_joined > 0 && params.legacy_public_filer_from_daa().is_none())
+                })
                 || record.dismissed_held.iter().any(|(bond, amount)| *amount == 0 || !record.closed.contains(bond))
                 || record.dismissed_held.iter().map(|(bond, _)| *bond).collect::<BTreeSet<_>>().len() != record.dismissed_held.len()
             {
@@ -217,6 +222,15 @@ impl TransitionBuilder<'_> {
         let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return };
         let Some(row) = record.live.get_mut(&bond) else { return };
         row.sessions_opened = row.sessions_opened.saturating_add(1);
+        self.write_legacy_dispute(claim_id, Some(record));
+    }
+
+    /// **Lane G14-L: a lane joined a reserved session** (`join_da_session_lane_legacy_held_v1`): counted on its reservation's own lane
+    /// budget (the join check refused a lane past it).
+    pub(super) fn legacy_dispute_count_lane_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) {
+        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return };
+        let Some(row) = record.live.get_mut(&bond) else { return };
+        row.lanes_joined = row.lanes_joined.saturating_add(1);
         self.write_legacy_dispute(claim_id, Some(record));
     }
 
@@ -381,7 +395,7 @@ pub(super) fn apply_dispute_reserved_v1(
     builder.check_accuser_room(reserver, deposit, "dispute reservation", now)?;
     let held_before = record.holds();
     let hard = record.hard_deadline_daa;
-    record.live.insert(reserver, PalwDisputeReservationRowV1 { reserved_daa: now, deposit, sessions_opened: 0 });
+    record.live.insert(reserver, PalwDisputeReservationRowV1 { reserved_daa: now, deposit, sessions_opened: 0, lanes_joined: 0 });
     builder.write_legacy_dispute(claim_id, Some(record));
     // The hold: DL-1 gives the claim no deadline while the record holds it (`palw_rcore_deadline_v1`, `arm_deadline`).
     if !held_before {

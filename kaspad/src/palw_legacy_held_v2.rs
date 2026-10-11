@@ -272,6 +272,30 @@ impl PalwLegacyReplicaV2 {
         })
     }
 
+    /// **Lane G14-L: the k-ary descent's next round** over the authenticated public frontiers against this replica's own tree
+    /// ([`kaspa_consensus_core::palw_legacy_parallel_v1::palw_legacy_kary_next_v1`]); `root_input_lanes` the input lanes the root round
+    /// shares its session with (derived from the binding, so a restarted verifier derives the same round).
+    pub(crate) fn kary(
+        &self,
+        binding: &PalwStepBindingV2,
+        frontiers: &[kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyFrontierV2],
+        root_input_lanes: u32,
+    ) -> Result<kaspa_consensus_core::palw_legacy_parallel_v1::PalwLegacyKaryStepV1, String> {
+        self.with_step_tree(|tree| {
+            if tree.leaf_count() != binding.step_leaf_count {
+                return Err("the claim's step count is not this public job's: the job/count terminal is required".into());
+            }
+            Ok(kaspa_consensus_core::palw_legacy_parallel_v1::palw_legacy_kary_next_v1(
+                kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyTreeV2::Step,
+                binding.step_leaf_count,
+                &binding.step_merkle_root,
+                tree,
+                frontiers,
+                root_input_lanes,
+            ))
+        })
+    }
+
     /// Build an unsigned terminal only after the court's own predicate says it is guilty or needs the fused dissection.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn terminal(

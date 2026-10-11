@@ -569,6 +569,9 @@ pub mod palw_legacy_public_filer_v1;
 /// Lane G14-V: authenticated subtree descent over committed step-discipline trees (step, tiled logits rows and tiles, checkpoint
 /// leg) — node policy, consensus-inert; replaces the linear legacy scan and walks past an agreeing step tree.
 pub mod palw_auth_descent_v1;
+/// Lane G14-L (user decision 2026-10-11): parallel reserved sessions (lanes) and the k-ary authenticated descent on the legacy held
+/// route — behind both dormant legacy fences (`palw_legacy_public_filer_v1` × `palw_legacy_held_da_v2`); no new wire type.
+pub mod palw_legacy_parallel_v1;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
 /// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).

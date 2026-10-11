@@ -23,7 +23,8 @@
 //!   claim lifetime) makes `W`'s top, [`LIFETIME_CEILING_DAA_V1`] = 436, the most any admissible `W` can carry. `W` is not decided
 //!   here: a class with lifetime `L` needs `W ≥ L`; [`class_pursuit_with_ceiling_v1`] takes any ceiling and the tests sweep the range.
 //! * **Sessions** ([`session_pursuit_schedule_v1`]): the legacy route's reserved DA sessions (one open at a time, each answered at its
-//!   deadline) against the claim's hard deadline.
+//!   deadline) against the claim's hard deadline; G14-L's PARALLEL rounds ([`parallel_session_schedule_v1`]: one reserved session of
+//!   `k` lanes a search round, each lane's carriage counted in the producer's window), which carry the legacy 8k row in four sessions.
 //! * **Population** ([`concurrent_pursuits_bound_v1`]): the chain carries one chunk a DAA, whoever's.
 //!
 //! Every number here is derived from consensus constants and policy terms. Nothing is measured: verifier compute time enters only
@@ -341,6 +342,92 @@ pub fn session_pursuit_schedule_v1(c: &SessionClockV1, sessions: u32) -> Session
     }
 }
 
+/// **G14-L: the legacy route's PARALLEL reserved sessions** (user decision 2026-10-11, option (a)). A round is one reserved session
+/// holding `k` lanes: the verifier's lane carriers ride `join_daa_per_lane` apart (its node funds one priority carrier a DAA), each
+/// join resets the producer's answer window to `now + W_disclose` and the consumer adds `answer_daa_per_lane` of carriage for every
+/// further lane (G14-B's chunk rule), so a stalling producer answers the round at
+/// `open + (k − 1) · (join + answer) + W_disclose`. The session opens while `open ≤ open_span` (`now + W_disclose ≤ retention`); its
+/// last deadline stays `≤ close_span` (the join rule's retention bound); every lane joins inside `join_window_daa`. The verifier's own
+/// replay (`replay_daa`, declared) follows the round that carried the input; `turnaround` follows every round; the filing lands
+/// `prove` after the last answer, by `close_span`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParallelSessionClockV1 {
+    pub base: SessionClockV1,
+    pub join_daa_per_lane: u64,
+    pub answer_daa_per_lane: u64,
+    pub join_window_daa: u64,
+    pub replay_daa: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParallelSessionScheduleV1 {
+    /// Each session's opening DAA (after the claim's acceptance).
+    pub opens: Vec<u64>,
+    /// Each session's answer deadline (the stalling producer's last DAA).
+    pub deadlines: Vec<u64>,
+    pub last_open_daa: u64,
+    pub filed_daa: u64,
+    pub fits: bool,
+    /// The first session that breaks a bound, if any.
+    pub first_failure: Option<usize>,
+    /// `open_span − last_open` and `close_span − filed` when the schedule fits (the slack a slower verifier may spend).
+    pub open_slack_daa: u64,
+    pub close_slack_daa: u64,
+}
+
+/// **Run the legacy parallel worst case** for sessions of `lanes[j]` lanes each, the verifier replaying after `replay_after`.
+pub fn parallel_session_schedule_v1(c: &ParallelSessionClockV1, lanes: &[u32], replay_after: Option<usize>) -> ParallelSessionScheduleV1 {
+    let w = c.base.session_window_daa;
+    let mut opens = Vec::with_capacity(lanes.len());
+    let mut deadlines = Vec::with_capacity(lanes.len());
+    let mut first_failure = None;
+    let mut t = c.base.first_step_daa;
+    for (j, k) in lanes.iter().enumerate() {
+        let extra = u64::from(k.saturating_sub(1));
+        let joined = extra.saturating_mul(c.join_daa_per_lane);
+        let deadline = t.saturating_add(joined).saturating_add(w).saturating_add(extra.saturating_mul(c.answer_daa_per_lane));
+        if first_failure.is_none() && (t > c.base.open_span_daa || deadline > c.base.close_span_daa || joined > c.join_window_daa) {
+            first_failure = Some(j);
+        }
+        opens.push(t);
+        deadlines.push(deadline);
+        t = deadline.saturating_add(c.base.turnaround_daa);
+        if replay_after == Some(j) {
+            t = t.saturating_add(c.replay_daa);
+        }
+    }
+    let last_open_daa = opens.last().copied().unwrap_or(0);
+    let filed_daa = deadlines.last().copied().unwrap_or(c.base.first_step_daa).saturating_add(c.base.prove_daa);
+    if first_failure.is_none() && filed_daa > c.base.close_span_daa {
+        first_failure = Some(lanes.len().saturating_sub(1));
+    }
+    let fits = first_failure.is_none();
+    ParallelSessionScheduleV1 {
+        opens,
+        deadlines,
+        last_open_daa,
+        filed_daa,
+        fits,
+        first_failure,
+        open_slack_daa: if fits { c.base.open_span_daa - last_open_daa } else { 0 },
+        close_slack_daa: if fits { c.base.close_span_daa - filed_daa } else { 0 },
+    }
+}
+
+/// The longest verifier replay (after the input round) with which `lanes` still fits `c` (`None`: not even an instant replay).
+pub fn parallel_session_max_replay_v1(c: &ParallelSessionClockV1, lanes: &[u32], replay_after: Option<usize>) -> Option<u64> {
+    let at = |replay: u64| parallel_session_schedule_v1(&ParallelSessionClockV1 { replay_daa: replay, ..*c }, lanes, replay_after).fits;
+    if !at(0) {
+        return None;
+    }
+    let (mut lo, mut hi) = (0u64, c.base.close_span_daa);
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if at(mid) { lo = mid } else { hi = mid - 1 }
+    }
+    Some(lo)
+}
+
 /// **Population**: the most pursuits of `chunks_per_pursuit` route chunks each the chain can carry inside `span_daa` (one chunk a
 /// DAA, whoever's). A bound on what the chain CAN carry, not on what inclusion order a miner chooses.
 pub fn concurrent_pursuits_bound_v1(span_daa: u64, chunks_per_pursuit: u64) -> u64 {
@@ -466,6 +553,45 @@ mod tests {
         // At a 42-DAA turn window 34 sessions fit.
         let turn = SessionClockV1 { session_window_daa: 42, ..c };
         assert!(session_pursuit_schedule_v1(&turn, 34).fits);
+    }
+
+    /// G14-L: the testnet-12 lattice (open span 4,200, close span 5,400, `W_disclose` 1,200) with the lane terms (one carrier a DAA,
+    /// one carriage DAA a lane, join window 128). One lane a session is G14-B's sequential schedule exactly (four sessions fit, five
+    /// do not); the 8k row's four parallel rounds fit with slack; the boundary widths are exact.
+    #[test]
+    fn parallel_sessions_fit_the_lattice_and_one_lane_is_the_sequential_schedule() {
+        let base = SessionClockV1 {
+            open_span_daa: 4_200,
+            close_span_daa: 5_400,
+            session_window_daa: 1_200,
+            first_step_daa: 2,
+            turnaround_daa: 1,
+            prove_daa: 1,
+        };
+        let c = ParallelSessionClockV1 { base, join_daa_per_lane: 1, answer_daa_per_lane: 1, join_window_daa: 128, replay_daa: 0 };
+        for n in 1..=6u32 {
+            let par = parallel_session_schedule_v1(&c, &vec![1; n as usize], None);
+            let seq = session_pursuit_schedule_v1(&base, n);
+            assert_eq!(par.fits, seq.fits, "{n} one-lane sessions");
+            assert_eq!(par.last_open_daa, seq.last_open_daa);
+            assert_eq!(par.filed_daa, seq.filed_daa);
+        }
+        // The canonical 8k row: binding, 4 input + 32 nodes, 16 nodes, the terminal.
+        let s = parallel_session_schedule_v1(&c, &[1, 36, 16, 1], Some(1));
+        assert!(s.fits, "{s:?}");
+        assert_eq!(s.opens, vec![2, 1_203, 2_474, 3_705]);
+        assert_eq!(s.deadlines, vec![1_202, 1_203 + 70 + 1_200, 2_474 + 30 + 1_200, 3_705 + 1_200]);
+        assert_eq!((s.filed_daa, s.open_slack_daa, s.close_slack_daa), (4_906, 495, 494));
+        // The verifier's replay after the input round may take up to the open slack.
+        assert_eq!(parallel_session_max_replay_v1(&c, &[1, 36, 16, 1], Some(1)), Some(494));
+        // Two full rounds of 64 lanes (the widest two-round plan) still fit; a fifth session does not.
+        assert!(parallel_session_schedule_v1(&c, &[1, 64, 64, 1], Some(1)).fits);
+        let five = parallel_session_schedule_v1(&c, &[1, 6, 2, 2, 1], Some(1));
+        assert!(!five.fits && five.first_failure == Some(4), "{five:?}");
+        // A lane past the join window refuses the round.
+        let wide = ParallelSessionClockV1 { join_window_daa: 62, ..c };
+        assert!(!parallel_session_schedule_v1(&wide, &[1, 64], None).fits);
+        assert!(parallel_session_schedule_v1(&wide, &[1, 63], None).fits);
     }
 
     #[test]
