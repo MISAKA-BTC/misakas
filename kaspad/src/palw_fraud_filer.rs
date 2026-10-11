@@ -240,7 +240,8 @@ pub(super) struct PalwFraudFilerWalkV1 {
 /// Only the binding read and the ONE unit a case's localizer currently reads enter the cache (lane G14-V: the subtree descent's
 /// range or the trace descent's event — any unit the chain answered for anyone, never every range a stranger demanded). Each is
 /// learned into the case's authenticated tree and dropped, so the cache holds one binding and at most one unit per pursued claim.
-/// LG14-B separately holds only the currently selected authenticated node/witness answer.
+/// LG14-B separately holds the selected authenticated node/witness answer or one bounded G14-L
+/// round; its selected/learned legacy units retain independent host-ledger tickets.
 fn palw_fraud_filer_cache_unit_v1(unit: &PalwDaUnitV1, wanted: Option<&PalwDaUnitV1>) -> bool {
     matches!(*unit, PalwDaUnitV1::Event { row: 0, tile: 0 }) || wanted == Some(unit)
 }
@@ -438,6 +439,36 @@ pub(super) fn palw_fraud_filer_cache_answer_v1(
     }
 }
 
+/// A typed retrieval bound: node answers cannot grow to the whole terminal ceiling merely
+/// because another unit can. The frontier is at most 2^9 hashes and an u64 tree has at most
+/// 64 outer siblings. Binding and framing are counted independently of those hashes.
+fn palw_fraud_filer_legacy_material_bytes_v1(
+    binding: &PalwStepBindingV2,
+    unit: PalwLegacyHeldUnitV2,
+    maximum: u64,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<u64, String> {
+    use kaspa_consensus_core::palw_legacy_held_da_v2::*;
+    let maximum = maximum.min(kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2);
+    if maximum == 0 {
+        return Err("public legacy material has no owned answer envelope".into());
+    }
+    let binding_bytes = borsh::object_length(binding).map_err(|e| format!("legacy binding length: {e}"))? as u64;
+    let body = match unit {
+        PalwLegacyHeldUnitV2::StepNode { .. } | PalwLegacyHeldUnitV2::CheckpointNode { .. } => {
+            64 * ((1u64 << PALW_LEGACY_HELD_NODE_DEPTH_V2) + 64) + 16
+        }
+        PalwLegacyHeldUnitV2::PromptIds { chunk } => {
+            palw_legacy_prompt_answer_bound_v2(binding, chunk, form).map_err(|e| e.to_string())?
+        }
+        PalwLegacyHeldUnitV2::FpJob => PALW_LEGACY_FP_JOB_MAX_BYTES_V2 + 8,
+        PalwLegacyHeldUnitV2::KernelWitness { .. } => maximum,
+    };
+    // Even a CKW cannot exceed the owned answer ceiling. The framing allowance also covers
+    // vec/map metadata; eight simultaneous copies are conservative for the serial service.
+    Ok(8 * binding_bytes.saturating_add(body).min(maximum).saturating_add(16_384))
+}
+
 /// **One case** — a candidate claim and this node's pursuit of it.
 #[derive(Clone)]
 pub(super) struct PalwFraudFilerCaseV1 {
@@ -466,6 +497,9 @@ pub(super) struct PalwFraudFilerCaseV1 {
     /// Lane G14-L: when each lane of the current round was last queued, and how many times (a lost lane is resent after
     /// [`PALW_FRAUD_FILER_RESEND_DAA_V1`], at most [`PALW_FRAUD_FILER_SENDS_V1`] times).
     pub(super) lanes_sent: BTreeMap<PalwLegacyHeldUnitV2, (u64, u8)>,
+    // Tickets survive the history worker and every case clone while authenticated answers or
+    // their learned frontiers remain live. No new lane is submitted without its retention budget.
+    legacy_material_tickets: BTreeMap<PalwLegacyHeldUnitV2, Arc<crate::palw_memory_ledger::PalwMemoryReservationV1>>,
     pub(super) runs: u8,
     registered_preflight: bool,
     arithmetic_matched: bool,
@@ -512,6 +546,7 @@ impl PalwFraudFilerCaseV1 {
             _prefix_reservation: None,
             legacy_round: Vec::new(),
             lanes_sent: BTreeMap::new(),
+            legacy_material_tickets: BTreeMap::new(),
             runs: 0,
             registered_preflight: false,
             arithmetic_matched: false,
@@ -763,9 +798,64 @@ impl PalwFraudFilerCaseV1 {
         self.prefix_plan = learned.prefix_plan;
         self.prefix_complete = learned.prefix_complete;
         self.legacy_round = learned.legacy_round;
+        self.legacy_material_tickets = learned.legacy_material_tickets;
         self.fp_bootstrap = learned.fp_bootstrap;
         self.fp_descriptor = learned.fp_descriptor;
         self.input_retry_at = learned.input_retry_at;
+    }
+
+    /// Reserve the selected answer envelopes before reading or demanding them. Learned node
+    /// frontiers keep their old unit tickets; input/witness/job tickets retire when no cache or
+    /// selected worker can use them. The per-unit multiplier covers decode, cache, learning and
+    /// the bounded service worker copies, including leaf-to-node frontier expansion.
+    fn reserve_legacy_material_v1(
+        &mut self,
+        ledger: &Arc<crate::palw_memory_ledger::PalwMemoryLedgerV1>,
+        maximum: u64,
+        form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> Result<(), String> {
+        let selected: BTreeSet<_> = self.legacy_round.iter().copied().chain(self.legacy_wanted).collect();
+        self.legacy_material_tickets.retain(|unit, _| {
+            selected.contains(unit)
+                || matches!(unit, PalwLegacyHeldUnitV2::KernelWitness { leaf }
+                    if self.witness.as_ref().is_some_and(|w| w.refutation.output_opening.leaf_index == *leaf))
+                || unit.node().is_some_and(|(_, level, index)| self.frontiers.iter().any(|f| f.level == level && f.index == index))
+        });
+        if selected.is_empty() {
+            return Ok(());
+        }
+        let binding = self.binding.as_ref().ok_or("public legacy material waits for its authenticated binding")?;
+        let required: Vec<_> = selected
+            .iter()
+            .map(|unit| palw_fraud_filer_legacy_material_bytes_v1(binding, *unit, maximum, form).map(|bytes| (*unit, bytes)))
+            .collect::<Result<_, _>>()?;
+        let missing: Vec<_> = required
+            .into_iter()
+            .filter(|(u, bytes)| self.legacy_material_tickets.get(u).is_none_or(|ticket| ticket.bytes() < *bytes))
+            .collect();
+        let cap = usize::from(kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1)
+            + usize::from(kaspa_consensus_core::palw_legacy_parallel_v1::PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1);
+        if self.legacy_material_tickets.keys().copied().chain(selected.iter().copied()).collect::<BTreeSet<_>>().len() > cap {
+            return Err("public legacy material exceeds this reservation's session/lane envelope".into());
+        }
+        // Atomic round admission: failed reservations drop every newly acquired guard and leave
+        // the already admitted frontier guards intact. Other duties use this same host ledger.
+        let mut admitted = Vec::with_capacity(missing.len());
+        for (unit, bytes) in missing {
+            let ticket = ledger
+                .reserve(
+                    crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                        role: "public-legacy-material",
+                        class_id: self.candidate.job.class_id,
+                        job: self.candidate.claim_id,
+                    },
+                    bytes,
+                )
+                .map_err(|why| format!("public legacy material waits for memory: {why}"))?;
+            admitted.push((unit, Arc::new(ticket)));
+        }
+        self.legacy_material_tickets.extend(admitted);
+        Ok(())
     }
 
     /// Give the bounded history walk a retry interval, then explicitly reacquire a missing answered unit. A new request
@@ -874,6 +964,7 @@ impl PalwFraudFilerBookV1 {
     /// Forget cases below the fence, but drain any already-started blocking replay before another can start.
     pub(super) fn clear(&mut self) {
         let running = self.running.take();
+        self.answers.clear(); // Cached bytes retire before their case-owned guards.
         *self = Self { running, ..Self::default() };
     }
 
@@ -884,6 +975,9 @@ impl PalwFraudFilerBookV1 {
         let fresh: BTreeSet<Hash64> = candidates.iter().map(|c| c.claim_id).collect();
         let mut invalidated = BTreeSet::new();
         let mut changed = false;
+        let retired: BTreeSet<_> =
+            self.cases.iter().filter(|(claim, case)| !fresh.contains(claim) && !case.pursued()).map(|(claim, _)| *claim).collect();
+        self.answers.retain(|(claim, _), _| !retired.contains(claim));
         self.cases.retain(|claim, case| {
             let keep = fresh.contains(claim) || case.pursued();
             if !keep {
@@ -897,6 +991,7 @@ impl PalwFraudFilerBookV1 {
                 Some(case) if case.candidate != candidate => {
                     changed = true;
                     invalidated.insert(candidate.claim_id);
+                    self.answers.retain(|(claim, _), _| *claim != candidate.claim_id);
                     *case = PalwFraudFilerCaseV1::new(candidate);
                 }
                 Some(_) => {}
@@ -924,6 +1019,7 @@ impl PalwFraudFilerBookV1 {
                     .min_by_key(|case| (case.replay_turn, case.candidate.accepted_daa, case.candidate.claim_id))
                     .map(|case| case.candidate.claim_id);
                 let Some(victim) = victim else { break };
+                self.answers.retain(|(claim, _), _| *claim != victim);
                 self.cases.remove(&victim);
                 invalidated.insert(victim);
             }
@@ -1184,6 +1280,7 @@ impl PalwFraudFilerBookV1 {
                 case.constraint_done = false;
                 case.legacy_round.clear();
                 case.lanes_sent.clear();
+                case.legacy_material_tickets.clear();
                 case.sent = None;
                 case.awaiting_public = None;
                 if let Some(input) = case.fp_bootstrap.as_mut() {
@@ -1244,6 +1341,7 @@ impl PalwFraudFilerBookV1 {
 
     /// Settle a case: its run (and the capture's reservation) and cached answers are let go.
     pub(super) fn settle(&mut self, claim: &Hash64, verdict: PalwFraudFilerVerdictV1) {
+        self.answers.retain(|(held, _), _| held != claim);
         if let Some(case) = self.cases.get_mut(claim) {
             case.verdict = verdict;
             case.deferred_public = None;
@@ -1264,6 +1362,7 @@ impl PalwFraudFilerBookV1 {
             case.constraint_plan = None;
             case.legacy_round.clear();
             case.lanes_sent.clear();
+            case.legacy_material_tickets.clear();
             case.rcore_wanted = None;
             case.trace = PalwTraceDescentV1::default();
         }
@@ -2240,7 +2339,7 @@ impl PalwPanelService {
                     .collect();
                 let oldest = book.cases.values().filter(|case| case.pursued()).map(|case| case.candidate.accepted_daa).min().unwrap();
                 let previous = book.walk;
-                let legacy_wanted =
+                let mut legacy_wanted: BTreeMap<Hash64, PalwLegacyHeldUnitV2> =
                     book.cases.values().filter_map(|case| case.legacy_wanted.map(|unit| (case.candidate.claim_id, unit))).collect();
                 let event_wanted = book
                     .cases
@@ -2249,7 +2348,7 @@ impl PalwPanelService {
                         case.constraint_plan.filter(|_| !case.constraint_done).map(|plan| (case.candidate.claim_id, plan.units()))
                     })
                     .collect();
-                let legacy_rounds: BTreeMap<Hash64, BTreeSet<PalwLegacyHeldUnitV2>> = book
+                let mut legacy_rounds: BTreeMap<Hash64, BTreeSet<PalwLegacyHeldUnitV2>> = book
                     .cases
                     .values()
                     .filter(|case| !case.legacy_round.is_empty())
@@ -2263,6 +2362,23 @@ impl PalwPanelService {
                     .court
                     .max_close_bytes()
                     .min(kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2);
+                let ledger = crate::palw_memory_ledger::host_ledger_v1();
+                let mut retained = Vec::new();
+                for (claim, case) in &mut book.cases {
+                    if !case.pursued() {
+                        continue;
+                    }
+                    match case.reserve_legacy_material_v1(&ledger, history_maximum, history_form) {
+                        Ok(()) => retained.extend(case.legacy_material_tickets.values().cloned()),
+                        Err(why) => {
+                            // Memory pressure is Pending. Do not read/decode an unfunded round
+                            // and do not suppress other claims' admitted public progress.
+                            legacy_wanted.remove(claim);
+                            legacy_rounds.remove(claim);
+                            debug!("[{PALW_PANEL}] claim {claim}: {why}; retained history unchanged");
+                        }
+                    }
+                }
                 let scratch = crate::palw_memory_ledger::host_ledger_v1().reserve(
                     crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
                         role: "public-answer-history",
@@ -2291,13 +2407,14 @@ impl PalwPanelService {
                                     history_form,
                                     history_maximum,
                                 )
+                                .map(|page| (page, retained))
                             })
                             .await
                     }
                     Err(why) => Err(format!("public history waits for memory: {why}")),
                 };
                 match result {
-                    Ok((walk, reset, answers)) => {
+                    Ok(((walk, reset, answers), _retained)) => {
                         if reset {
                             let restarted: BTreeSet<Hash64> = book.pursued().into_iter().collect();
                             court_pending.retain(|(claim, round, responder, _)| {
@@ -2960,10 +3077,29 @@ impl PalwPanelService {
                     PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait) => break,
                     PalwFraudFilerStepV1::AwaitRound(round) => {
                         book.want_legacy_round(claim, round);
+                        if let Some(case) = book.cases.get_mut(&claim)
+                            && let Err(why) = case.reserve_legacy_material_v1(
+                                &crate::palw_memory_ledger::host_ledger_v1(),
+                                self.config.court.max_close_bytes(),
+                                form,
+                            )
+                        {
+                            debug!("[{PALW_PANEL}] claim {claim}: {why}; the public round remains Pending");
+                        }
                         break;
                     }
                     PalwFraudFilerStepV1::DemandLanes { round, demand } => {
                         book.want_legacy_round(claim, round);
+                        if let Some(case) = book.cases.get_mut(&claim)
+                            && let Err(why) = case.reserve_legacy_material_v1(
+                                &crate::palw_memory_ledger::host_ledger_v1(),
+                                self.config.court.max_close_bytes(),
+                                form,
+                            )
+                        {
+                            debug!("[{PALW_PANEL}] claim {claim}: {why}; no new lane is queued");
+                            break;
+                        }
                         let Some(view) = view.as_ref() else { break };
                         self.fraud_filer_queue_lanes_v1(
                             book,
@@ -4157,6 +4293,82 @@ pub(super) mod tests {
         // Successful cache rotations do not consume the bounded host-failure retry allowance.
         assert!(matches!(book.judge(first, Err("transient host error".into())), Some(PalwFraudFilerVerdictV1::Pending)));
         assert!(matches!(book.judge(first, Err("second host error".into())), Some(PalwFraudFilerVerdictV1::Unjudged(_))));
+    }
+
+    fn material_budget_binding() -> PalwStepBindingV2 {
+        let backend = crate::palw_panel::seat_s_tests::floor_backend();
+        let payload = input::tests::payload();
+        let job = &payload.commitment.job;
+        let executed =
+            backend.execute_free_prompt(job, &payload.prompt_token_ids.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();
+        misaka_palw_base0::produce::base0_material_decode_any_v1(&executed.outcome.material).unwrap().binding().clone()
+    }
+
+    #[test]
+    fn a_parallel_round_reserves_every_retained_unit_atomically_before_reading() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let mut case = PalwFraudFilerCaseV1::new(candidate(3, 300, false));
+        case.binding = Some(material_budget_binding());
+        // This tests the retrieval ledger, not admission or an authenticated 64-node fixture.
+        case.legacy_round = (0..64).map(|index| PalwLegacyHeldUnitV2::StepNode { level: 9, index }).collect();
+        let maximum = kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2;
+        let per_unit =
+            palw_fraud_filer_legacy_material_bytes_v1(case.binding.as_ref().unwrap(), case.legacy_round[0], maximum, form).unwrap();
+        assert!(per_unit < 8 * 100_000, "node material uses its typed hash frontier bound, not a whole CKW ceiling");
+        let short = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(64 * per_unit - 1), || None);
+        assert!(case.reserve_legacy_material_v1(&short, maximum, form).is_err());
+        assert_eq!(short.reserved_bytes(), 0, "the 64th refusal releases all new provisional tickets");
+        assert!(case.legacy_material_tickets.is_empty());
+        assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Pending), "memory refusal is not a verdict");
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(64 * per_unit), || None);
+        case.reserve_legacy_material_v1(&ledger, maximum, form).unwrap();
+        assert_eq!(ledger.reserved_bytes(), 64 * per_unit);
+        case.reserve_legacy_material_v1(&ledger, maximum, form).unwrap();
+        assert_eq!(ledger.reserved_bytes(), 64 * per_unit, "reread/resend never charges a second copy of the same unit");
+        let worker = case.clone();
+        case.legacy_round.clear();
+        case.reserve_legacy_material_v1(&ledger, maximum, form).unwrap();
+        assert_eq!(ledger.reserved_bytes(), 64 * per_unit, "a live worker's copies retain the same guards");
+        drop(worker);
+        assert_eq!(ledger.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn learned_frontier_memory_survives_round_rotation_until_settle_and_worker_drain() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let mut case = PalwFraudFilerCaseV1::new(candidate(3, 300, false));
+        case.binding = Some(material_budget_binding());
+        let unit = PalwLegacyHeldUnitV2::StepNode { level: 9, index: 0 };
+        case.legacy_round = vec![unit];
+        let maximum = kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2;
+        let per_unit = palw_fraud_filer_legacy_material_bytes_v1(case.binding.as_ref().unwrap(), unit, maximum, form).unwrap();
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(per_unit), || None);
+        case.reserve_legacy_material_v1(&ledger, maximum, form).unwrap();
+        // Lifetime bookkeeping only: native authentication is independently exercised by the
+        // descent tests. Allocate the learned hashes only after their ticket has been admitted.
+        case.frontiers.push(PalwLegacyFrontierV2 {
+            level: 9,
+            index: 0,
+            below: 0,
+            first: 0,
+            nodes: vec![Hash64::default(); 512],
+            leaf_hashes: None,
+        });
+        case.legacy_round = vec![PalwLegacyHeldUnitV2::StepNode { level: 9, index: 1 }];
+        assert!(case.reserve_legacy_material_v1(&ledger, maximum, form).is_err());
+        assert_eq!(ledger.reserved_bytes(), per_unit, "an unfunded new round preserves the admitted old frontier");
+        assert!(case.legacy_material_tickets.contains_key(&unit));
+        let worker = case.clone();
+        let claim = case.candidate.claim_id;
+        let mut book = PalwFraudFilerBookV1::default();
+        book.cases.insert(claim, case);
+        book.settle(&claim, PalwFraudFilerVerdictV1::Settled(PalwFilerPhaseV1::Convicted));
+        assert!(book.cases[&claim].frontiers.is_empty());
+        assert_eq!(ledger.reserved_bytes(), per_unit, "settling the book cannot release a still-running worker's bytes");
+        drop(worker);
+        assert_eq!(ledger.reserved_bytes(), 0);
     }
 
     #[test]

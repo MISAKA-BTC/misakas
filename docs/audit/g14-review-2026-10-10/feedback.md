@@ -247,3 +247,17 @@ public filerがconstraint maskのscopeを設定せずにFPを再実行してい�
 通常受理されるFP version 6のjob本体112,291 bytes、transaction transient mass 499,184／500,000で実serviceを検証した。全PanelがValidに署名した後、fresh DBを使う外部verifierが元job履歴・保存metadataなしで、署名済みmanifest＋2partから復元し、公開input取得→独立再実行→DAA 1163でreleaseまで進んだ。同じ大きなjobを隠した場合は、規定deadlineを維持してDAA 2307で客観的DA default・producerへの正額sanction徴収・reservation解放まで確認した。今回29 unique PASS。初回の誤ったmanifest差し替え試験の失敗も保存した。[詳細と生log](constraint-public-replay-status.md)。
 
 G14全域は未完了。残りは、自動producer分割回答の実service接続、最大input/profile予算、constraintの違反token選択とtable／登録モデルbindingの客観的反証、初期・prefix・non-prompt state取得、全active familyの算術／output／state終局、scope／hiding・総RAM・経済／包含条件、restart／reorg／pruned IBD／remote認証取得、最後にactivationと全域監査。ADR-0177 D7を維持し、今回のnear-limit job試験を全profile・全familyの保証に拡張して解釈しない。
+
+## G14-L並列laneの統合評価（2026-10-11、未実行checkpoint）
+
+`f8c9ed91d`／統合`105e`の34 sessionsは、一つのclaimで予約者が生涯に開くsession数である。同じ予約者の追加tag157要求は、その予約者の開いている一つのsessionへlaneとして参加する。無料の例外ではなく、sessionごと64 lanes、予約ごと追加128 lanes、joinは開始後128 DAA以内、laneごとのDA-6担保、期限`max(current, now + W_disclose + lanes-1)`、retention内という別の明示的な上限がある。再取得sessionにはjoinできない。予約ごとの最大unit数は34+128であり、他の予約者が埋めるclaim共通capはないが、B bondsの総producer負荷はB×162 unitsへ増える。
+
+現行の累積court scopeは`COURT_SCOPE_MAX_UNITS_PER_REQUESTER_V1 = 16`である。一方、canonical held 8kのplannerは`[1,36,16,1]`を使い、root roundだけで36の異なるunitを要求する。legacy側の旧scope stubが0を返すことは、この16件の規則を満たした根拠にならない。認証済みprofile/pursuit planから、byte・proof予算と正確な要求unit集合を含むroute固有のscope契約を定義し、累積guardへ接続する必要がある。16を暗黙に増やしたりguardを外したりして統合を承認しない。
+
+回復経路にも具体的な不足がある。`palw_fraud_filer_round_step_v1`は、chain上では回答済みだがlocal bytesがないlaneを`AwaitRound`へ進める。しかしactual serviceのそのarmは選択roundを登録するだけで、従来の`AwaitAnswer`と異なり署名付きtag156再取得へ進まない。派生multipart history indexはnode-localで、元block deltaをpruningすると同時に削除される。従ってpruned roundは停止し得る。また現在のtag156再取得は一件ずつで、joinできず、追加sessionを消費する。36／64件の回答を失った場合は、4つのresponse-windowに収めたparallel plannerの保証がそのまま成立しない。rooted retained bytesの取得、又は認証済みbatch再取得と期限・scope予算を閉じる必要がある。
+
+RAMも従来のhistory scratch `8×(一回答上限+16KiB)`のままでは64回答のcacheと学習済みfrontierを覆わず、scratchはworker終了時に解放される。追加修正では、selected legacy unitごとのtyped byte boundで、native read／新lane送信より前にRAII ticketを取得し、worker clone・cache・frontierが生きる間は保持する。round全件の予約が失敗すれば新しい予約だけを戻し、既に取得したfrontierを保持してPendingに留める。node frontierは512 hashesとu64 treeの最大64 siblings、実binding、framingから算定し、巨大CKW ceilingを全nodeへ一律に課さない。この修正と新しいlocal-ledger回帰はsource checkpointであり、統合build・runtimeのPASSはまだない。
+
+8kのplannerがfiled DAA 4,906／close span 5,400に収まるのは、verifier replay≦494 DAA、1 carrier／DAA、producer回答1 unit／blockを仮定した範囲である。node fixtureはheight14の11,612 leavesで、canonical height27の約105.5M leavesを実行した証拠ではない。fused terminalの追加dissectionはtimelineに含まれず、height≧30と2Mの1,024 input chunksは名前付きで拒否される。scope・RAM・回復・包含・終局・実測replayと全active profileの条件が閉じるまでG14全域完了とはしない。
+
+別途、source `501a6a2cb89da4e1fe0ba5e397a3458b796adfeb`の実service自動multipart／再起動試験は408.14sでFAILした。producerとoutside verifierが同じFlowContextの単一gossip inboxを共有し、producer serviceがdisabledになった試験構成の不備である。raw logは`/private/tmp/g14-recovery-501a-automatic-restart.log`、binary SHA256は`d942fdb1a5ecfc5d61686b5b0542ea49f15445fd9f01d149ee019ec3052aeeea`。修正`5a7fde1e4`は各producer／restartに新しいFlowContextを作り、公開consensus・mempool・address manager・hubだけを共有する。sole socket receiver verifierは実receiverのflowを一度だけ起動する。修正後のcompile／runtimeは未実行で、他の同じ構成の5件をPASSとして扱わない。
