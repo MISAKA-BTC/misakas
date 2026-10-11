@@ -1047,6 +1047,8 @@ impl KernelLedgerV1 {
             | KernelRouteObjectV1::CompleteModelConformanceV2 { .. }
             | KernelRouteObjectV1::BindModelArtifactV2 { .. }
             | KernelRouteObjectV1::RefuteModelArtifactV2 { .. }
+            | KernelRouteObjectV1::SealModelRefutationV4 { .. }
+            | KernelRouteObjectV1::RevealModelRefutationV4 { .. }
             | KernelRouteObjectV1::RegisterModelConformanceClassV2 { .. } => {
                 return Err(KernelRefusalV1::rule(name, "model artifact statements require the authenticated consensus consumer"));
             }

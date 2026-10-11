@@ -142,6 +142,8 @@ pub(super) fn post(
     Ok(())
 }
 
+/// The frozen unsealed refutation (refused past `palw_model_refutation_seal_v1` by the route dispatch; the protected reveal,
+/// `palw_model_refutation_seal_fold_v4`, calls [`refute_outcome`] with its authenticated sealer).
 pub(super) fn refute(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -149,6 +151,16 @@ pub(super) fn refute(
     vector: &Digest,
     bytes: &[u8],
 ) -> Result<(), PalwStateV2Error> {
+    refute_outcome(builder, ctx, signer, vector, bytes).map(|_| ())
+}
+
+pub(super) fn refute_outcome(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    vector: &Digest,
+    bytes: &[u8],
+) -> Result<crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4, PalwStateV2Error> {
     enabled(builder, ctx)?;
     let id = Hash64::from_bytes(*vector);
     let h = builder.state.kernel_route.as_ref().unwrap().model_vector_header_v2(&id).ok_or_else(|| refused("no vector statement"))?;
@@ -163,7 +175,7 @@ pub(super) fn refute(
     let work = model_artifact_work_v2(h.program_bytes_len as usize, bytes.len().saturating_add(h.post_bytes_len as usize))
         .and_then(|w| w.checked_add(h.max_court_work))
         .ok_or_else(|| refused("vector court envelope overflows"))?;
-    let Some(fee) = charge(builder, ctx, signer, work, true)? else { return Ok(()) };
+    let Some(fee) = charge(builder, ctx, signer, work, true)? else { return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::NotRun) };
     let proven = (|| -> Result<(), String> {
         if bytes.len() as u64 > h.max_filing_bytes {
             return Err("vector filing exceeds admitted court bound".into());
@@ -192,7 +204,7 @@ pub(super) fn refute(
     .is_ok();
     if !proven {
         builder.slash_bond(*signer, fee)?;
-        return Ok(());
+        return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::Dismissed);
     }
     let mut row = builder.state.kernel_route.as_ref().unwrap().model_vector_v2(&id).ok_or_else(|| refused("vector disappeared"))?;
     let slashed = builder.slash_bond(h.poster, h.reserved as u128)?;
@@ -200,7 +212,7 @@ pub(super) fn refute(
     row.header.refuted = true;
     row.header.reserved = 0;
     builder.write_kernel_row(MODEL_VECTOR_TABLE_V2, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&row).unwrap()));
-    Ok(())
+    Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::Proven)
 }
 
 /// One requester owns four reusable slots. Another bond cannot occupy them.

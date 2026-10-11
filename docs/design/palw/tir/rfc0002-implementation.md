@@ -1929,3 +1929,121 @@ bypass. Merely adding optional seals beside inner 32 cannot close the gap.
 Network capacity/honest inclusion, complete shared resources, execution Final,
 real checkpoint/task/fidelity/performance, A6/A8 and all full RFC02 requirements
 remain open. No frozen route/statement grammar or dormant shipping fence changes.
+
+
+## RFC02-T takeover — merge onto the G14 integration line and the protected candidate refutation (P0), 2026-10-11
+
+Lane RFC02-T (Claude) took RFC-0002 over from codex. Branch `rfc02/takeover`: the integration line
+`claude/g14-public-prosecution-integration-9bee39` @ `3076077f9` merged with `codex/rfc02-implementation` @ `392fe80f7`
+(36 commits on the older integration `123d8254e`), then the P0 below. Nothing is armed; no testnet-12 id moves.
+
+### Merge: semantic conflicts and how both behaviours were kept
+
+* **Class rows.** Registration derives G14-B's `liability_daa` and G14-S's `court_scope` for every row, then codex's admission-work
+  check, then either the execution class or the conformance-only candidate. A candidate carries both fields; an unbounded pursuit is
+  carried as `0` (`ledger::candidate_liability_daa_v1`) instead of refused, because a candidate holds no claim and every real-shape v4
+  profile is refused at one route chunk a DAA (refusing would make actual-weight candidates impossible; codex's
+  `artifact_tile` test caught it). Promotion is an ordinary registration and is refused by name. Stored candidates rebuild with the
+  same rule (`rows::candidate_class_row_of`).
+* **Claim path.** `CommitClaim` / `CommitSegmentedClaim` run G14-S's `class_court_scope_v1` gate, then codex's
+  `check_claim_carrier_v1`, then codex's duplicate → reveal → capacity → admission-work charge order.
+* **Overheads.** One derivation each: FileProof / Respond envelopes from `budget::*_ENVELOPE_BYTES_V1` (G14-B; byte-identical to
+  codex's literals), the commit envelope from `gate::CLAIM_CARRIER_OVERHEAD_BYTES_V1` (2^16, the value both lanes had).
+* **`element::PreparedV1`.** Integration's mode form (`modes`, `kept`: Clear / Withheld / Hiding) is kept; codex's `withheld` mask
+  becomes a profile: `set_candidate_v2_scope` sets the candidate trace v2 modes (withheld where `model_vector_withheld_mask_v2`,
+  else clear, never hiding — every candidate commitment is v3). Codex's `node_count` / `without_scope` / `pub(crate)` accessors are kept.
+* **Kernel ledger table 28 collision.** G14-S's `TABLE_COURT_SCOPE_V1 = 28` stays; codex's conformance candidates moved to **29**
+  (`TABLE_CONFORMANCE_CLASSES_V1`). Both root extensions apply in a fixed order (28, then 29), each only when its table is non-empty, in
+  `rows::root_of_rows` and `state::root`. Registry row appended to `remaining-rfc-integration-matrix.md`; A2U `StateEncoding` row.
+* **Semantic fixes the textual merge missed** (found by the builds/tests, not by conflict markers):
+  - G14-S raised the whole-value court price (hiding-tile operands); codex's candidate v2 pricing reused it. Candidate operands are
+    never hiding, so `seg_scope::whole_value_court_cost_in` drops the hiding-tile term for the candidate profile only.
+  - The verifier's own replay committed under the frozen modes even for candidates (C_hide vs the candidate's v3: divergence
+    everywhere). `seg_detect::replay_positions_v1` now takes the profile's modes; new candidate entry points
+    `prepare_model_vector_reexecution_v2`, `check_model_vector_by_reexecution_v2`, `reexecute_model_vector_v2` and
+    `element::prove_model_vector_element_v2`.
+  - G14-S appended `WholeOperandV1::hidden`; codex's bounded candidate fault decoder (`palw_model_vector_v2`) now reads an empty
+    vector and refuses anything else.
+  - codex tests updated to the merged APIs (`SegMaterialV1::commitments(program, p)`, `seg_commitments_of_trace_v1(program, …)`;
+    candidate producers commit v3). Codex's plan pin `0e31e5b9…` for the actual 32-position Qwen2.5 pilot is re-pinned `00df9d85…`
+    (G14-S prices are part of the plan); the allocation-free leaf pricing still equals the index-vector oracle on the real shapes.
+  - Codex's `vocabulary_sized_lookup_whole_court…` test: under the frozen profile that value is now hiding (asserted); the flat-gather
+    whole court is exercised under the candidate profile.
+  - `k2_ledger_route`'s "64 zero bytes are not an object" loop: inner 30 / 35 (settle) ARE one digest; they decode and are refused by
+    rule (pre-existing on codex's branch).
+  - `misaka-palw-sdk` encoder route lacked codex's `verification_mode_requirement`; `misaka-palw-gateway` had a duplicated `})` from
+    the textual merge.
+* **Not passed — ignored with reason:** `real_scale::actual_native::recorded_actual_weight_delivery…` replays a bundle codex recorded
+  on the pre-G14-S frozen profile (old plan, no hiding modes). Re-recording needs the actual weights (not in the repository).
+* Docs `g14-completion-matrix.md` (integration rows, codex's F3–F4 additions) and `k2-real-scale.md` (codex's §14 subsections before
+  G14-S's §15) keep both; headings stay unique.
+
+### P0: frozen candidate refutations were unsealed — the protected route
+
+**Counterexample (codex, `flat_seal6`, re-run).** Below the new fence the frozen route is unchanged:
+`flat_v3_node_preemption_counterexample_and_staged_v6_seal_rejects_equivalent_carrier` still shows the copyist's equivalent
+re-encoding (a redundant authentic prompt tile) collecting 49 and the finder zero. It is the frozen behaviour, not a protected payout.
+The same gap holds for inner 23 (model artifact binding) and 27 (model vector v2): all three pay the first included filing.
+
+**Change** (`consensus/core/src/palw_model_refutation_seal_v4.rs`, fold `palw_model_refutation_seal_fold_v4.rs`), behind the new
+dormant Params fence **`palw_model_refutation_seal_v1`** (Some-only hashed, `never()` collapse, refused when armed; needs the kernel
+route and `palw_panel_free_v1` at or below it):
+
+* inner **36** `SealModelRefutationV4 { slot, seal }`, `seal = H(kind ‖ target ‖ kernel-bond(signer) ‖ salt ‖ H(proof))` — target,
+  proof and salt hidden; the actor is the authenticated signer, never a field. Rows in kernel route aux table **64**, key
+  `(bond, slot)`, 4 slots per bond, fixed size, constant-key reads. A live row reserves the route policy's `seal_deposit` of the bond's
+  original collateral (in `palw_bond_committed_v1` and both withdrawal gates); posting spends the block's shared route budget (never
+  the proof reserve). An identical re-seal is a no-op (G14-R's rule); another seal cannot take a live slot; an expired slot is reusable.
+* inner **37** `RevealModelRefutationV4 { slot, kind, target, salt, proof }` — admitted only with the signer's OWN seal in that slot,
+  at least `claim_seal_delay_daa` old and unexpired (`seal_ttl_daa`), opening to exactly these bytes (one bounded digest before any
+  decode). Then the kind's frozen court runs unchanged (`refute_outcome`: block budget, dismissal fee, persisted envelope, same-operator
+  refusal, atomic slash-and-pay, `refuted` flag → once only). The seal is consumed when a court ran (proven or dismissed).
+* Past the fence inner 23 / 27 / 32 are refused by name before any court, fee or row. No unsealed fallback, no beneficiary search.
+* A-2: inner 36–37 ride the inner-kind gate (`PalwKernelInnerFenceV1::ModelRefutationSealV1`); below the fence the mempool and the
+  fold refuse them and nothing is written. No int-12 wire type changes (tag 110 is post-int-12; no `PALW_INT12_WIRE_CHANGES_V1` row).
+
+**Economics (interim policy values, not measured):** reservation 100, bounty 49 % = 49, seal deposit 1 (refundable, locked ≤ TTL).
+The honest finder's cost is carrier fees; its reveal pays 49. A copyist needs a mature seal of its own bytes before the finder's
+reveal is included; it learns the bytes only from that reveal, so it must keep the finder's reveal out of every block for
+`claim_seal_delay_daa` (stated censorship residual; the maturity is a policy constant to set with the economics, interim 1 DAA). A
+poster refuting itself through a bond of another operator loses 51 + fees; the same operator is refused. If a poster pre-empts an
+honest finder with its own sealed self-refutation, the finder's reveal is refused before any court (no fee): it loses only carrier
+fees and keeps its deposit — it does not recoup them (residual).
+
+**Not closed by this change (UNKNOWN / not tested here):** the kernel claim court's own `FileProof` (G14-R4 GAP-R7) pays the earliest
+sealer of the EXACT bytes, else the filer. If a `ProsecutionV1` admits an equivalent re-encoding (as the flat filing's redundant
+prompt tile does), a copyist that is included first would collect there too; that is G14's route and was not tested by this lane.
+Deferred priority across sealers (earliest seal wins within a contest window, to blunt short censorship) is not implemented.
+
+### Tests (targeted; PASS / FAIL / UNKNOWN)
+
+Merge commit (merge-only tree): kernel all targets **371 PASS / 0 FAIL / 8 ignored**; consensus-core
+`palw_lifecycle_objects_v2` 31 PASS; node `t12_a2u` 3 PASS; `g14_kernel_route_e2e::model_conformance` 14 PASS (codex's actual-node
+tests, including the frozen counterexample); `::model_artifact` 4 PASS; `::artifact_tile` 3 PASS; `::real_scale` 18 PASS + 1 ignored
+(above); `g14r_` 14 PASS; sdk `kernel_execution` 3 PASS; sdk `k2s_encoder_court` 3 PASS + 1 **UNKNOWN** (the worst-geometry frontier
+search was stopped after ≈51 CPU-minutes, not completed); `cargo check --workspace --all-targets --exclude misaka-palw-worker` PASS.
+
+P0 commit: kernel `route::` 5 PASS (seal/reveal round-trip and ceilings), `k2_ledger_route` 22 PASS; consensus-core
+`palw_model_refutation_seal` 3 PASS (seal binding, row, fence dormant / refused when armed / Some-only hashed), `palw_lifecycle_objects_v2`
+31, `fork_id` 21, `palw_verifier_pay` 2, `params::` 152 PASS; node `model_conformance` **16 PASS** — the two new actual-node tests
+`flat_v4_sealed_refutation_pays_the_original_finder_and_refuses_the_copyist_and_the_unsealed_bypass` (unsealed 32 refused for both;
+finder's seal and deposit; identical re-seal no-op; copyist without a seal refused; same-block race → finder paid 49 once, poster −100;
+copyist's later mature reveal refused before any court, no fee; self-operator reveal refused; deposits released at expiry; replay node
+identical) and `model_refutation_seal_objects_are_inert_below_their_fence` (mempool refuses 36/37 below the fence; no row) —
+`model_artifact` 4, `t12_a2u` 3, `g14r_` 14 PASS; `cargo check -p kaspa-consensus-core -p kaspa-consensus -p misaka-palw-kernel
+--all-targets` PASS. The A2U int-12 replay script (`scripts/a2u-int12-replay.sh`) was not run.
+
+Status: the protected refutation is **implemented and verified on the synthetic actual-node harness**, NOT armable (its fence is
+refused when armed, like every RFC fence until the single activation release).
+
+### What remains (RFC02-T's list, honestly)
+
+* P0 residuals above: censorship of the finder's reveal for the maturity window; a pre-empted honest finder recovers no carrier fees;
+  the kernel claim court's `FileProof` equivalent-copy question (G14); the interim policy values (maturity 1 DAA, TTL 100, deposit 1)
+  need the economics ruling; no RPC op exposes seal rows yet (the native read API does: `model_refutation_seal_v4`).
+* Item 2 (flat-v5 courts to node registration / DA / Final, RPC reads, retention, execution Final / redemption) — not started in this
+  lane's session.
+* Item 3 (all-relation verification and the complete resource vector at real sizes, consuming `budget.rs`) — not started.
+* Re-record the actual-weight delivery bundle under the merged frozen profile (needs the weights).
+* Left with codex: all-family canonical registration/eligibility without test exceptions; public bootstrap of FP job/input/initial
+  state and re-acquisition after permanent pruning.

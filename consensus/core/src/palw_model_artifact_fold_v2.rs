@@ -129,6 +129,8 @@ pub(super) fn bind(
     Ok(())
 }
 
+/// The frozen unsealed refutation (refused past `palw_model_refutation_seal_v1` by the route dispatch; the protected reveal,
+/// `palw_model_refutation_seal_fold_v4`, calls [`refute_outcome`] with its authenticated sealer).
 pub(super) fn refute(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -136,6 +138,16 @@ pub(super) fn refute(
     binding: &Digest,
     proof_bytes: &[u8],
 ) -> Result<(), PalwStateV2Error> {
+    refute_outcome(builder, ctx, signer, binding, proof_bytes).map(|_| ())
+}
+
+pub(super) fn refute_outcome(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    binding: &Digest,
+    proof_bytes: &[u8],
+) -> Result<crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4, PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
     if !builder.extras.kernel_route.as_ref().is_some_and(|e| e.opv.is_some()) {
         return Err(refused("model artifact statements require palw_panel_free_v1"));
@@ -158,7 +170,7 @@ pub(super) fn refute(
     let payout = challenger.payout_payload;
     let work = model_artifact_work_v2(row.program_bytes_len as usize, proof_bytes.len())
         .ok_or_else(|| refused("model court work overflows"))?;
-    let Some(fee) = charge(builder, ctx, signer, work, true)? else { return Ok(()) };
+    let Some(fee) = charge(builder, ctx, signer, work, true)? else { return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::NotRun) };
     let row = builder
         .state
         .kernel_route
@@ -177,7 +189,7 @@ pub(super) fn refute(
     })();
     if judgement.is_err() {
         builder.slash_bond(*signer, fee)?;
-        return Ok(());
+        return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::Dismissed);
     }
     let slashed = builder.slash_bond(row.binder, row.reserved as u128)?;
     builder.add_kernel_payout(payout, slashed.saturating_mul(PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1) / 1000)?;
@@ -187,7 +199,7 @@ pub(super) fn refute(
         borsh::to_vec(&id).unwrap(),
         Some(borsh::to_vec(&refuted).unwrap()),
     );
-    Ok(())
+    Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::Proven)
 }
 
 /// Return the ordinary candidate object and only its scoped ephemeral attestation. The PC

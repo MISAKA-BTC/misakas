@@ -131,6 +131,8 @@ pub(super) fn post(
     builder.write_kernel_row(FLAT_MODEL_VECTOR_BOND_TABLE_V3, borsh::to_vec(signer).unwrap(), Some(borsh::to_vec(&ids).unwrap()));
     Ok(())
 }
+/// The frozen unsealed refutation (refused past `palw_model_refutation_seal_v1` by the route dispatch; the protected reveal,
+/// `palw_model_refutation_seal_fold_v4`, calls [`refute_outcome`] with its authenticated sealer).
 pub(super) fn refute(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -138,6 +140,16 @@ pub(super) fn refute(
     vector: &Digest,
     bytes: &[u8],
 ) -> Result<(), PalwStateV2Error> {
+    refute_outcome(builder, ctx, signer, vector, bytes).map(|_| ())
+}
+
+pub(super) fn refute_outcome(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    vector: &Digest,
+    bytes: &[u8],
+) -> Result<crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4, PalwStateV2Error> {
     enabled(builder, ctx)?;
     let id = Hash64::from_bytes(*vector);
     let h = builder.state.kernel_route.as_ref().unwrap().flat_model_vector_header_v3(&id).ok_or_else(|| refused("no flat vector"))?;
@@ -153,7 +165,7 @@ pub(super) fn refute(
     let work = flat_model_vector_work_v3(h.program_bytes_len, h.pc_instances, bytes.len().saturating_add(h.post_bytes_len as usize))
         .and_then(|w| w.checked_add(h.max_court_work))
         .ok_or_else(|| refused("flat court work overflow"))?;
-    let Some(fee) = charge(builder, ctx, signer, work, true)? else { return Ok(()) };
+    let Some(fee) = charge(builder, ctx, signer, work, true)? else { return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::NotRun) };
     let proven = (|| -> Result<(), String> {
         if bytes.len() as u64 > h.max_filing_bytes {
             return Err("flat filing beyond stored admission".into());
@@ -169,7 +181,7 @@ pub(super) fn refute(
     .is_ok();
     if !proven {
         builder.slash_bond(*signer, fee)?;
-        return Ok(());
+        return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::Dismissed);
     }
     let mut row = builder
         .state
@@ -183,7 +195,7 @@ pub(super) fn refute(
     row.header.refuted = true;
     row.header.reserved = 0;
     builder.write_kernel_row(FLAT_MODEL_VECTOR_TABLE_V3, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&row).unwrap()));
-    Ok(())
+    Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::Proven)
 }
 
 pub(super) fn demand(

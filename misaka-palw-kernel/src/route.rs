@@ -77,6 +77,12 @@ pub const TAG_REFUTE_FLAT_MODEL_VECTOR_V3: u8 = 32;
 pub const TAG_DEMAND_FLAT_MODEL_VECTOR_V3: u8 = 33;
 pub const TAG_ANSWER_FLAT_MODEL_VECTOR_V3: u8 = 34;
 pub const TAG_SETTLE_FLAT_MODEL_VECTOR_V3: u8 = 35;
+// 36–37: RFC-0002 P0 (lane RFC02-T, 2026-10-11): the protected refutation of a candidate statement, past
+// `palw_model_refutation_seal_v1` (consumer-owned; the bare ledger refuses both by rule).
+/// A hidden, actor-bound refutation seal in one of the signer's slots.
+pub const TAG_SEAL_MODEL_REFUTATION_V4: u8 = 36;
+/// The reveal of a sealed refutation (kind, target, salt, exact proof bytes).
+pub const TAG_REVEAL_MODEL_REFUTATION_V4: u8 = 37;
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 
@@ -408,6 +414,21 @@ pub enum KernelRouteObjectV1 {
         salt: Digest,
         commit: SaltedCommitV1,
     } = 20,
+    /// **RFC-0002 P0: a hidden refutation seal** (consumer-owned, past `palw_model_refutation_seal_v1`):
+    /// `seal = H(kind ‖ target ‖ signer ‖ salt ‖ H(proof))` — the actor is the authenticated signer, never a field.
+    SealModelRefutationV4 {
+        slot: u8,
+        seal: Digest,
+    } = 36,
+    /// **RFC-0002 P0: the reveal of a sealed refutation** — admissible only with the signer's own mature seal of these exact bytes;
+    /// `kind` names the candidate court (1 artifact binding v2, 2 model vector v2, 3 flat model vector v3).
+    RevealModelRefutationV4 {
+        slot: u8,
+        kind: u8,
+        target: Digest,
+        salt: Digest,
+        proof: Vec<u8>,
+    } = 37,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -535,6 +556,8 @@ impl KernelRouteObjectV1 {
             Self::PostTiledJob { .. } => TAG_POST_TILED_JOB_V1,
             Self::PostPromptTile { .. } => TAG_POST_PROMPT_TILE_V1,
             Self::Spec { .. } => TAG_SPEC_V1,
+            Self::SealModelRefutationV4 { .. } => TAG_SEAL_MODEL_REFUTATION_V4,
+            Self::RevealModelRefutationV4 { .. } => TAG_REVEAL_MODEL_REFUTATION_V4,
         }
     }
 
@@ -642,6 +665,8 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_POST_TILED_JOB_V1 => "PostTiledJob",
         TAG_POST_PROMPT_TILE_V1 => "PostPromptTile",
         TAG_SPEC_V1 => "Spec",
+        TAG_SEAL_MODEL_REFUTATION_V4 => "SealModelRefutationV4",
+        TAG_REVEAL_MODEL_REFUTATION_V4 => "RevealModelRefutationV4",
         _ => "Unknown",
     }
 }
@@ -682,6 +707,10 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
         TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
         TAG_SPEC_V1 => MAX_SPEC_BYTES_V1,
+        // version, tag, slot, seal.
+        TAG_SEAL_MODEL_REFUTATION_V4 => 1 + 1 + 1 + 64,
+        // version, tag, slot, kind, target, salt, length, proof (the largest candidate court carrier).
+        TAG_REVEAL_MODEL_REFUTATION_V4 => 1 + 1 + 1 + 1 + 64 + 64 + 4 + MAX_FILE_PROOF_BYTES_V1,
         _ => return None,
     })
 }
@@ -738,10 +767,24 @@ mod tests {
         let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_REGISTER_CONFORMANCE_CLASS_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!(max_encoded_bytes_of_tag(36).is_none(), "36 is not allocated");
-        for tag in 22..=35 {
+        assert!(max_encoded_bytes_of_tag(38).is_none(), "38 is not allocated");
+        for tag in 22..=37 {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
+        // RFC-0002 P0 (RFC02-T): the seal and reveal round-trip at their declared discriminants and within their ceilings.
+        for o in [
+            KernelRouteObjectV1::SealModelRefutationV4 { slot: 3, seal: [5; 64] },
+            KernelRouteObjectV1::RevealModelRefutationV4 { slot: 3, kind: 3, target: [6; 64], salt: [7; 64], proof: vec![8; 100] },
+        ] {
+            let bytes = o.encode();
+            assert_eq!(bytes[1], o.tag());
+            assert!(bytes.len() <= o.max_encoded_bytes(), "{}", o.name());
+            assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
+        }
+        assert_eq!(
+            KernelRouteObjectV1::SealModelRefutationV4 { slot: 0, seal: [0; 64] }.encode().len(),
+            max_encoded_bytes_of_tag(TAG_SEAL_MODEL_REFUTATION_V4).unwrap()
+        );
         let complete = KernelRouteObjectV1::CompleteModelConformanceV2 { class: [1; 64], binding: [2; 64], proof: vec![0; 90_000] };
         assert_eq!(complete.encoded_len(), max_encoded_bytes_of_tag(25).unwrap());
         assert_eq!(KernelRouteObjectV1::decode(&complete.encode()).unwrap(), complete);

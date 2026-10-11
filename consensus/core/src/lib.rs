@@ -620,6 +620,8 @@ pub mod palw_model_conformance_v2;
 pub mod palw_model_vector_v2;
 pub mod palw_flat_model_vector_v3;
 pub mod palw_flat_model_vector_da_v3;
+/// RFC-0002 P0 (RFC02-T): the protected candidate refutation — fence `palw_model_refutation_seal_v1`, dormant, refused when armed.
+pub mod palw_model_refutation_seal_v4;
 pub mod palw_model_vector_da_v2;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.
 pub mod palw_tir_admission_v1;

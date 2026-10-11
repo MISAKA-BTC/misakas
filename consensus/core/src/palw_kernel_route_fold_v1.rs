@@ -536,8 +536,29 @@ pub(super) fn apply_kernel_route_object_v1(
     if !builder.state.bonds.get(signer).is_some_and(|b| matches!(b.status, PalwBondStatusV2::Active)) {
         return Ok(());
     }
+    // RFC-0002 P0 (RFC02-T): past `palw_model_refutation_seal_v1` a candidate refutation is only a sealed reveal (inner 37); the frozen
+    // unsealed refutations pay whoever is included first — an equivalent re-encoding of an honest finder's proof — so they are refused
+    // by name before any court, fee or row.
+    if super::palw_model_refutation_seal_fold_v4::sealed_refutations_in_force_v4(builder)
+        && matches!(
+            object,
+            KernelRouteObjectV1::RefuteFlatModelVectorV3 { .. }
+                | KernelRouteObjectV1::RefuteModelVectorV2 { .. }
+                | KernelRouteObjectV1::RefuteModelArtifactV2 { .. }
+        )
+    {
+        return Err(refused(
+            "an unsealed candidate refutation is refused past palw_model_refutation_seal_v1: seal (inner 36), then reveal (inner 37)",
+        ));
+    }
     // Inner 22/23 are consensus-owned state/collateral courts, never bare-ledger moves.
     match &object {
+        KernelRouteObjectV1::SealModelRefutationV4 { slot, seal } => {
+            return super::palw_model_refutation_seal_fold_v4::seal(builder, ctx, signer, *slot, seal);
+        }
+        KernelRouteObjectV1::RevealModelRefutationV4 { slot, kind, target, salt, proof } => {
+            return super::palw_model_refutation_seal_fold_v4::reveal(builder, ctx, signer, *slot, *kind, target, salt, proof);
+        }
         KernelRouteObjectV1::DemandFlatModelVectorV3 { vector, slot, position, occurrence, node, leaf } => {
             let unit = crate::palw_flat_model_vector_da_v3::FlatVectorUnitV3 {
                 position: *position, occurrence: *occurrence, node: *node, leaf: *leaf,

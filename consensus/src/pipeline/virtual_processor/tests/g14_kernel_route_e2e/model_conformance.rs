@@ -1585,3 +1585,160 @@ async fn flat_hash_da_node_shared_slots_response_priority_withholding_and_horizo
     net.assert_same(&replay, "shared requester slots, held liability and objective flat DA default");
 }
 
+// ---- RFC-0002 P0 (lane RFC02-T, 2026-10-11): the protected candidate refutation past `palw_model_refutation_seal_v1` -------------
+
+fn sealed_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    let (cfg, b, p, f) = config();
+    let mut params = cfg.params.clone();
+    params.palw_model_refutation_seal_v1 = Some(ForkActivation::new(1));
+    assert!(params.validate_palw_model_refutation_seal_v1().is_err(), "the fence stays refused when armed");
+    (Config::new(params), b, p, f)
+}
+
+/// **codex's `flat_seal6` counterexample, re-run past the fence.** Below it (the test above) the copyist's equivalent re-encoding of
+/// the finder's proof collects the 49 % and the finder zero. Past it: the unsealed refutations are refused by name; the finder's own
+/// mature seal admits its exact bytes; the copyist, which can seal its re-encoding only after reading the finder's reveal, is
+/// refused before any court and pays no fee; the poster's own operator is refused even with a mature seal; the bounty is paid once and
+/// a replaying node agrees.
+#[tokio::test]
+async fn flat_v4_sealed_refutation_pays_the_original_finder_and_refuses_the_copyist_and_the_unsealed_bypass() {
+    use kaspa_consensus_core::palw_model_refutation_seal_v4::*;
+    use misaka_palw_kernel::flat_court5::*;
+    let f = vector_fixture(true);
+    let mut net = Net::over_cfg(sealed_config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let (post, public) = flat_vector_post(&net, &f, binding, vec![0, 1], true);
+    let id = send_flat_vector(&mut net, &f, binding, 4, &post).await;
+    let view = net.api().unwrap().flat_model_vector_view_v3(&id).unwrap();
+    let proof = flat_first_relation_fault(&view, &public, &f.params);
+    let mut alternate = FlatFaultV5::from_bytes(&proof).unwrap();
+    match &mut alternate {
+        FlatFaultV5::Whole(w) => w.token = Some(PromptTileOpeningV1::of(&post.trace.prompt, 0).unwrap()),
+        _ => panic!("small encoder relation"),
+    }
+    let conviction = verify_flat_fault_v5(&view.context(), &FlatFaultV5::from_bytes(&proof).unwrap()).unwrap();
+    assert_eq!(verify_flat_fault_v5(&view.context(), &alternate).unwrap(), conviction, "the copy proves the same relation");
+    let alternate = alternate.to_bytes().unwrap();
+    assert_ne!(alternate, proof);
+    let refuted = |net: &Net| net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().refuted;
+    let collateral = net.collateral(4);
+
+    // 1. The frozen unsealed refutations (inner 32) are refused by name past the fence — for the copyist and the finder alike.
+    let (fee6, fee7) = (net.slashed(6), net.slashed(7));
+    send(&mut net, 6, &K::RefuteFlatModelVectorV3 { vector: id.as_bytes(), proof: alternate.clone() }).await;
+    send(&mut net, 7, &K::RefuteFlatModelVectorV3 { vector: id.as_bytes(), proof: proof.clone() }).await;
+    assert!(!refuted(&net));
+    assert_eq!(net.collateral(4), collateral);
+    assert_eq!((net.owed(6), net.owed(7), net.slashed(6), net.slashed(7)), (0, 0, fee6, fee7));
+
+    // 2. The finder seals: target, proof and salt hidden; the actor is its authenticated bond. The deposit is reserved.
+    let (finder, copyist) = (net.bond(7), net.bond(6));
+    let (salt, kind, target) = ([42u8; 64], MODEL_REFUTATION_KIND_FLAT_VECTOR_V3, id.as_bytes());
+    let seal = model_refutation_seal_v4(kind, &target, &finder, &salt, &proof);
+    send(&mut net, 7, &K::SealModelRefutationV4 { slot: 0, seal }).await;
+    let row = net.api().unwrap().model_refutation_seal_v4(&finder, 0).expect("the finder's seal row");
+    assert_eq!((row.version, row.seal, row.deposit), (4, seal, mega(1)));
+    assert_eq!(net.chain.tip_state().1.model_refutation_seal_reserved_v4(&finder, net.daa()), row.deposit as u128);
+    // An identical re-seal (a restarted finder) is a no-op: the clock stands. Another seal cannot take a live slot.
+    send(&mut net, 7, &K::SealModelRefutationV4 { slot: 0, seal }).await;
+    send(&mut net, 7, &K::SealModelRefutationV4 { slot: 0, seal: [9; 64] }).await;
+    assert_eq!(net.api().unwrap().model_refutation_seal_v4(&finder, 0), Some(row.clone()));
+
+    // 3. The copyist holds no seal: neither carrier opens anything of its own (the finder's row is keyed by the finder's bond).
+    send(&mut net, 6, &K::RevealModelRefutationV4 { slot: 0, kind, target, salt, proof: alternate.clone() }).await;
+    send(&mut net, 6, &K::RevealModelRefutationV4 { slot: 0, kind, target, salt, proof: proof.clone() }).await;
+    assert!(!refuted(&net));
+    assert_eq!((net.owed(6), net.slashed(6)), (0, fee6));
+
+    // 4. The race: the copyist reads the finder's reveal and seals its re-encoding in the same block; the finder's mature seal admits
+    //    the court. The bounty is the finder's, once.
+    let copy_seal = model_refutation_seal_v4(kind, &target, &copyist, &salt, &alternate);
+    let copy = net.route(6, &K::SealModelRefutationV4 { slot: 0, seal: copy_seal });
+    let reveal = net.route(7, &K::RevealModelRefutationV4 { slot: 0, kind, target, salt, proof: proof.clone() });
+    net.send(vec![(6, copy), (7, reveal)]).await;
+    assert!(refuted(&net));
+    assert_eq!(collateral - net.collateral(4), mega(100));
+    assert_eq!((net.owed(7), net.owed(6)), (mega(49), 0));
+    assert_eq!(net.api().unwrap().model_refutation_seal_v4(&finder, 0), None, "the consumed seal frees its slot and deposit");
+    assert_eq!(net.chain.tip_state().1.model_refutation_seal_reserved_v4(&finder, net.daa()), 0);
+
+    // 5. The copyist's seal matures; its reveal is refused before any court (the statement is refuted): no fee, no bounty.
+    let copy_row = net.api().unwrap().model_refutation_seal_v4(&copyist, 0).expect("the copyist's seal row");
+    net.beat_to(copy_row.mature_daa).await;
+    send(&mut net, 6, &K::RevealModelRefutationV4 { slot: 0, kind, target, salt, proof: alternate.clone() }).await;
+    assert_eq!((net.owed(6), net.slashed(6)), (0, fee6));
+    // (The queue may already have paid the finder through the coinbase: count what it minted and what it is still owed.)
+    let (minted, owed) = minted_and_owed(&net, &net.chain, 7);
+    assert_eq!((minted + owed, collateral - net.collateral(4)), (mega(49), mega(100)), "paid once");
+    assert_eq!(minted_and_owed(&net, &net.chain, 6), (0, 0));
+    assert_eq!(net.api().unwrap().model_refutation_seal_v4(&copyist, 0), Some(copy_row.clone()), "no court ran: the row stands");
+
+    // 6. Self-dealing: the poster's own operator is refused even with its own mature seal of an authentic proof.
+    let (post2, public2) = flat_vector_post(&net, &f, binding, vec![1, 0], true);
+    let id2 = send_flat_vector(&mut net, &f, binding, 4, &post2).await;
+    let view2 = net.api().unwrap().flat_model_vector_view_v3(&id2).unwrap();
+    let proof2 = flat_first_relation_fault(&view2, &public2, &f.params);
+    let poster = net.bond(4);
+    let self_seal = model_refutation_seal_v4(kind, &id2.as_bytes(), &poster, &salt, &proof2);
+    send(&mut net, 4, &K::SealModelRefutationV4 { slot: 1, seal: self_seal }).await;
+    let self_row = net.api().unwrap().model_refutation_seal_v4(&poster, 1).expect("the poster's seal row");
+    net.beat_to(self_row.mature_daa).await;
+    let before = net.collateral(4);
+    send(&mut net, 4, &K::RevealModelRefutationV4 { slot: 1, kind, target: id2.as_bytes(), salt, proof: proof2.clone() }).await;
+    assert!(!net.api().unwrap().flat_model_vector_header_v3(&id2).unwrap().refuted);
+    assert_eq!((net.collateral(4), net.owed(4)), (before, 0), "a self-operator reveal moves nothing");
+
+    // 7. Seals expire: the deposits come back, and an expired slot takes a new seal.
+    net.beat_to(copy_row.expires_daa.max(self_row.expires_daa)).await;
+    assert_eq!(net.chain.tip_state().1.model_refutation_seal_reserved_v4(&copyist, net.daa()), 0);
+    assert_eq!(net.chain.tip_state().1.model_refutation_seal_reserved_v4(&poster, net.daa()), 0);
+    send(&mut net, 6, &K::SealModelRefutationV4 { slot: 0, seal: [5; 64] }).await;
+    assert_eq!(net.api().unwrap().model_refutation_seal_v4(&copyist, 0).unwrap().seal, [5; 64]);
+    assert_eq!(minted_and_owed(&net, &net.chain, 7), (mega(49), 0));
+    assert_eq!(minted_and_owed(&net, &net.chain, 6), (0, 0));
+    let replay = net.replay().await;
+    net.assert_same(&replay, "sealed candidate refutation: finder paid once, copyist and bypass refused");
+    assert_eq!(minted_and_owed(&net, &replay, 7), (mega(49), 0));
+}
+
+/// Below `palw_model_refutation_seal_v1` the new inner kinds are refused by the route's inner-kind gate (the mempool runs it, and the
+/// fold drops a carried one): a seal or a reveal moves nothing and the frozen route is unchanged (the counterexample test above is
+/// that frozen route).
+#[tokio::test]
+async fn model_refutation_seal_objects_are_inert_below_their_fence() {
+    use kaspa_consensus_core::palw_model_refutation_seal_v4::*;
+    let f = vector_fixture(true);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let (post, public) = flat_vector_post(&net, &f, binding, vec![0, 1], true);
+    let id = send_flat_vector(&mut net, &f, binding, 4, &post).await;
+    let view = net.api().unwrap().flat_model_vector_view_v3(&id).unwrap();
+    let proof = flat_first_relation_fault(&view, &public, &f.params);
+    let (salt, kind) = ([7u8; 64], MODEL_REFUTATION_KIND_FLAT_VECTOR_V3);
+    let seal = model_refutation_seal_v4(kind, &id.as_bytes(), &net.bond(7), &salt, &proof);
+    let rows = net.api().unwrap().aux.clone();
+    for object in [
+        K::SealModelRefutationV4 { slot: 0, seal },
+        K::RevealModelRefutationV4 { slot: 0, kind, target: id.as_bytes(), salt, proof: proof.clone() },
+    ] {
+        let o = net.route(7, &object);
+        // A refused carrier never confirms: keep the card's funding where it was for the next one.
+        let funding = net.funding[7].clone();
+        let tx = net.carrier(7, &o);
+        net.funding[7] = funding;
+        match net.mempool(&tx) {
+            Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(why)) => {
+                assert!(why.contains("palw_model_refutation_seal_v1"), "{why}")
+            }
+            other => panic!("the inner-kind gate refuses it below its fence: {other:?}"),
+        }
+        let ttpb = net.ttpb();
+        net.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    assert_eq!(net.api().unwrap().model_refutation_seal_v4(&net.bond(7), 0), None);
+    assert_eq!(net.api().unwrap().aux, rows, "no row of the protected route below its fence");
+    assert!(!net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().refuted);
+    assert_eq!(net.owed(7), 0);
+    let replay = net.replay().await;
+    net.assert_same(&replay, "inert below the fence");
+}

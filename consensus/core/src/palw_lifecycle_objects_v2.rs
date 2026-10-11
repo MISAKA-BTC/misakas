@@ -1634,17 +1634,22 @@ pub enum PalwKernelInnerFenceV1 {
     /// 19). Its row names `palw_typed_roots_v1`; in force only where `palw_panel_free_v1` is too (as `ProviderCourtV1` needs the
     /// kernel route's).
     PanelFreeAndTypedRootsV1,
+    /// BOTH `Params::palw_panel_free_v1` and `Params::palw_model_refutation_seal_v1` (RFC-0002 P0, lane RFC02-T): the protected
+    /// refutation of a candidate statement (inner 36 seal, 37 reveal). Its row names `palw_model_refutation_seal_v1`; in force only
+    /// where `palw_panel_free_v1` is too (the candidate statements it refutes exist only there).
+    ModelRefutationSealV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 3] = [Self::PanelFreeV1, Self::TypedRootsV1, Self::PanelFreeAndTypedRootsV1];
+    pub const ALL: [Self; 4] = [Self::PanelFreeV1, Self::TypedRootsV1, Self::PanelFreeAndTypedRootsV1, Self::ModelRefutationSealV1];
 
     /// The `Params` field the fence is resolved from.
     pub const fn params_field(self) -> &'static str {
         match self {
             Self::PanelFreeV1 => "palw_panel_free_v1",
             Self::TypedRootsV1 | Self::PanelFreeAndTypedRootsV1 => "palw_typed_roots_v1",
+            Self::ModelRefutationSealV1 => "palw_model_refutation_seal_v1",
         }
     }
 }
@@ -1697,6 +1702,7 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         | K::RegisterClassV2 { .. }
         | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
         K::Spec { .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
+        K::SealModelRefutationV4 { .. } | K::RevealModelRefutationV4 { .. } => Some(PalwKernelInnerFenceV1::ModelRefutationSealV1),
     }
 }
 
@@ -1737,6 +1743,8 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (33, "DemandFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (34, "AnswerFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (35, "SettleFlatModelVectorDemandV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (36, "SealModelRefutationV4", Some(PalwKernelInnerFenceV1::ModelRefutationSealV1)),
+    (37, "RevealModelRefutationV4", Some(PalwKernelInnerFenceV1::ModelRefutationSealV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -1988,6 +1996,14 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::KernelInner { lo: 20, hi: 20 }, "palw_panel_free_v1", "G14R CommitClaimSalted (salted claim seal v2)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 21, hi: 21 }, "palw_panel_free_v1", "RFC-0002 conformance-only class preparation", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 22, hi: 35 }, "palw_panel_free_v1", "RFC-0002 model artifact role binding", true),
+    // RFC02-T (2026-10-11): RFC-0002 P0 — the protected candidate refutation (seal 36, reveal 37); past the same fence the frozen
+    // unsealed refutations 23 / 27 / 32 are refused by name (inner kinds of tag 110, never an int-12 kind).
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 36, hi: 37 },
+        "palw_model_refutation_seal_v1",
+        "RFC-0002 P0 protected candidate refutation (RFC02-T)",
+        true,
+    ),
     // K2S: a segmented fault rides a filing (inner 7) under tag 110's own fence, as the filing does, so no guarded arm is needed;
     // `ClaimBodyV1::Segmented` is the kernel ledger's state, never carried.
     a2_row(
@@ -2106,6 +2122,14 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::StateEncoding { what: "kernel ledger table 29 conformance-only candidate classes (RFC-0002)" },
         "palw_panel_free_v1",
         "RFC-0002 conformance candidates (codex; table moved at RFC02-T)",
+        true,
+    ),
+    // RFC02-T (2026-10-11): the refutation seals — kernel route aux table 64 (`(bond, slot)` rows), and their deposits in the bond
+    // committed sum and withdrawal gate. Below the fence no row exists and every sum and root is unchanged.
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux table 64 refutation seals (and their deposits in palw_bond_committed_v1)" },
+        "palw_model_refutation_seal_v1",
+        "RFC-0002 P0 protected candidate refutation (RFC02-T)",
         true,
     ),
     a2_row(
