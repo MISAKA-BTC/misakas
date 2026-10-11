@@ -406,7 +406,8 @@ fn bounded_cone_builders_match_canonical_and_refuse_at_the_whole_move_boundary()
         let f = fixture(&case);
         let rules = rules(case.form);
         let tparams = TirParams::from_map(&f.plan, &case.params).unwrap();
-        let inventory = TirHeldInventoryV1::build(&case.program, &TirParamsSourceV1(&tparams)).unwrap();
+        let source = TirParamsSourceV1(&tparams);
+        let inventory = TirHeldInventoryV1::build(&case.program, &source).unwrap();
         let runner = TirClassRunnerV1::new(&f.space, &f.plan, &tparams, f.class.class_id(&f.artifact_root)).unwrap();
         let honest = runner.retain(&f.class, f.artifact_root, &f.ctx, &f.prompt, CAP).unwrap();
         let own = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap();
@@ -458,7 +459,8 @@ fn replay_storage_and_position_caps_refuse_before_replaying_and_preserve_every_m
     for case in cases() {
         let f = fixture(&case);
         let tparams = TirParams::from_map(&f.plan, &case.params).unwrap();
-        let inventory = TirHeldInventoryV1::build(&case.program, &TirParamsSourceV1(&tparams)).unwrap();
+        let source = TirParamsSourceV1(&tparams);
+        let inventory = TirHeldInventoryV1::build(&case.program, &source).unwrap();
         let runner = TirClassRunnerV1::new(&f.space, &f.plan, &tparams, f.class.class_id(&f.artifact_root)).unwrap();
         let honest = runner.retain(&f.class, f.artifact_root, &f.ctx, &f.prompt, CAP).unwrap();
         let mut dense = BTreeMap::<u32, Vec<(u64, PalwStepTileLeafV1)>>::new();
@@ -522,7 +524,8 @@ fn replay_work_is_shared_across_all_source_requests_until_the_next_builder_move(
     let case = cases().into_iter().find(|case| case.c == 1).unwrap();
     let f = fixture(&case);
     let params = TirParams::from_map(&f.plan, &case.params).unwrap();
-    let inventory = TirHeldInventoryV1::build(&case.program, &TirParamsSourceV1(&params)).unwrap();
+    let source = TirParamsSourceV1(&params);
+    let inventory = TirHeldInventoryV1::build(&case.program, &source).unwrap();
     let runner = TirClassRunnerV1::new(&f.space, &f.plan, &params, f.class.class_id(&f.artifact_root)).unwrap();
     let job = runner.retain(&f.class, f.artifact_root, &f.ctx, &f.prompt, CAP).unwrap();
     let store = TirEvidenceV1::own(&runner, &job, &inventory, case.form, CAP).unwrap().with_replay_limits_v1(1, 1 << 30);
