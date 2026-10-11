@@ -232,9 +232,26 @@ pub struct PalwStagedPublicCourtConfigV1 {
     pub acquisition_daa: u64,
     pub collection_daa: u64,
     pub reorg_retention_daa: u64,
-    pub maximum_owned_rows_per_claim: u32,
+    pub maximum_owned_rows_per_reserver: u32,
 }
 impl PalwStagedPublicCourtConfigV1 {
+    /// Independently fingerprinted normative future contract; caller arms only its own fence.
+    pub const fn network_v1() -> Self {
+        Self {
+            prices: PalwRenderingResourcePricesV1 {
+                inclusion_margin_daa: 4,
+                rent_per_stream_byte: 1,
+                rent_per_parser_step: 1,
+                rent_per_row_byte: 1,
+                deposit_per_move: 1,
+                reorg_replay_moves: 64,
+            },
+            acquisition_daa: 4_096,
+            collection_daa: 4_096,
+            reorg_retention_daa: 256,
+            maximum_owned_rows_per_reserver: 1,
+        }
+    }
     pub fn check(&self) -> Result<(), String> {
         if self.prices.inclusion_margin_daa == 0
             || self.prices.rent_per_stream_byte == 0
@@ -243,7 +260,7 @@ impl PalwStagedPublicCourtConfigV1 {
             || self.prices.deposit_per_move == 0
             || self.acquisition_daa == 0
             || self.collection_daa == 0
-            || self.maximum_owned_rows_per_claim == 0
+            || self.maximum_owned_rows_per_reserver == 0
         {
             return Err("prospective court needs positive priced work, finite windows and owner capacity".into());
         }
