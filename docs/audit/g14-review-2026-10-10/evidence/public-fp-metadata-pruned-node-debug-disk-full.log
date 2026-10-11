@@ -1,0 +1,233 @@
+
+running 1 test
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned ... [service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+[service-public] ordinary FP Job V5 admission: claim 95b7851c07f90a37226b9c0b0122afbbd8a15a9e6db7bd907b8350b2f813a6125925e71bb1d6956ba1fa4f09866132aa328b058f60b799f8479b420480eab114, 11 quanta, 30504892 pwu, fee 329437
+
+thread 'virtual-processor' (3245584) panicked at consensus/src/pipeline/virtual_processor/processor.rs:4207:30:
+called `Result::unwrap()` on an `Err` value: Error { message: "IO error: No space left on device: While appending to file: /var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/rusty-kaspa/.tmp7dgXp2/000016.log: No space left on device" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned' (3237858) panicked at consensus/src/consensus/mod.rs:824:58:
+called `Result::unwrap()` on an `Err` value: RecvError(())
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned' (3237858) panicked at consensus/src/consensus/mod.rs:856:27:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+stack backtrace:
+   0:        0x105ab9474 - std::backtrace_rs::backtrace::libunwind::trace::h7577bad47ee3e6ee
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:        0x105ab9474 - std::backtrace_rs::backtrace::trace_unsynchronized::hf8c23094259ea49b
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:        0x105ab9474 - std::sys::backtrace::_print_fmt::hec8e3b1f0ce9dbc4
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:68:9
+   3:        0x105ab9474 - <std::sys::backtrace::BacktraceLock::print::DisplayBacktrace as core::fmt::Display>::fmt::h8c5ab870ebd4c242
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:38:26
+   4:        0x105aca270 - core::fmt::rt::Argument::fmt::hc2e0c24e74ca59ff
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/fmt/rt.rs:152:76
+   5:        0x105aca270 - core::fmt::write::h64810b21425781ec
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/fmt/mod.rs:1686:22
+   6:        0x105a9049c - std::io::default_write_fmt::h1ab19e39432de194
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/io/mod.rs:639:11
+   7:        0x105a9049c - std::io::Write::write_fmt::h947344a43c638468
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/io/mod.rs:1994:13
+   8:        0x105a9ed24 - std::sys::backtrace::BacktraceLock::print::h17b78e7978fd7389
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:41:25
+   9:        0x105a9ed24 - std::panicking::default_hook::{{closure}}::ha0993a93f6e4994d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:292:27
+  10:        0x105a9ec24 - std::panicking::default_hook::h7aae5c8c53b8a669
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:319:9
+  11:        0x105a9f11c - std::panicking::panic_with_hook::hb885411bb59bebf4
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:825:13
+  12:        0x105a9edd0 - std::panicking::panic_handler::{{closure}}::hb04320f9e43192c5
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:698:13
+  13:        0x105a9a398 - std::sys::backtrace::__rust_end_short_backtrace::ha3c55a1c4767eecf
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:176:18
+  14:        0x105a88740 - __rustc[d131491b17107b07]::rust_begin_unwind
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:689:5
+  15:        0x105bb58b8 - core::panicking::panic_fmt::h6f8816b337451651
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panicking.rs:80:14
+  16:        0x105bb5494 - core::result::unwrap_failed::h1f9c817951eee5c5
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/result.rs:1867:5
+  17:        0x102ffafc4 - core::result::Result<T,E>::unwrap::h25b226f2756affaf
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/result.rs:1233:23
+  18:        0x102ffafc4 - kaspa_consensus::consensus::Consensus::shutdown::h56273e1ac0283989
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/src/consensus/mod.rs:856:27
+  19:        0x1013c0870 - <kaspad_lib::palw_panel::palw_service_public_e2e::Chain as core::ops::drop::Drop>::drop::hb5f17279f4fdecef
+  20:        0x101396898 - core::ptr::drop_in_place<kaspad_lib::palw_panel::palw_service_public_e2e::Chain>::h194c8413f399ae38
+  21:        0x10126ec5c - kaspad_lib::palw_panel::palw_service_public_e2e::Chain::import_fresh::{{closure}}::ha84d49f4af154e2c
+  22:        0x101263598 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_service::{{closure}}::he46469b98ab86f86
+  23:        0x101274560 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned::{{closure}}::h17e771ea979575a2
+  24:        0x100733ad8 - <core::pin::Pin<P> as core::future::future::Future>::poll::h50c4317684dfb4a5
+  25:        0x100a575f0 - tokio::runtime::park::CachedParkThread::block_on::{{closure}}::h6a3841de30b67c68
+  26:        0x100a56aa4 - tokio::runtime::park::CachedParkThread::block_on::h30bac9e768157a78
+  27:        0x1013b1888 - tokio::runtime::context::blocking::BlockingRegionGuard::block_on::h2a6d10fd41bfc281
+  28:        0x1017af908 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::{{closure}}::h3915ca289de934aa
+  29:        0x100d7e044 - tokio::runtime::context::runtime::enter_runtime::h78863812518c182a
+  30:        0x1017af8bc - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::hab4006340122e0b5
+  31:        0x100b216a8 - tokio::runtime::runtime::Runtime::block_on_inner::hcf90f0bf132d5b48
+  32:        0x100b21864 - tokio::runtime::runtime::Runtime::block_on::hc8d6e82183c58592
+  33:        0x101274374 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned::h691fe1c1045b4888
+  34:        0x101274614 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned::{{closure}}::ha1826dc96ece9574
+  35:        0x1012fd2dc - core::ops::function::FnOnce::call_once::h56bee5ec17a96078
+  36:        0x1018d8c04 - core::ops::function::FnOnce::call_once::haf7fb5629e8bb7fc
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/function.rs:250:5
+  37:        0x1018d8c04 - test::__rust_begin_short_backtrace::h6ca5fe182383a98d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:663:18
+  38:        0x1018e7dec - test::run_test_in_process::{{closure}}::h7fd0520dbf9f5c0d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:686:74
+  39:        0x1018e7dec - <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once::h33a14b59f9d4a20c
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panic/unwind_safe.rs:274:9
+  40:        0x1018e7dec - std::panicking::catch_unwind::do_call::hd94bb4e1db6c1f17
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:581:40
+  41:        0x1018e7dec - std::panicking::catch_unwind::hc1bbe01e031840c5
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:544:19
+  42:        0x1018e7dec - std::panic::catch_unwind::h3beba4c837d33995
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panic.rs:359:14
+  43:        0x1018e7dec - test::run_test_in_process::he5c9072f5b93ccab
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:686:27
+  44:        0x1018e7dec - test::run_test::{{closure}}::hca48f6c40383049d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:607:43
+  45:        0x1018c8f5c - test::run_test::{{closure}}::hd4b34e9a103ba81d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:637:41
+  46:        0x1018c8f5c - std::sys::backtrace::__rust_begin_short_backtrace::h4ccc732acb10c9b8
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:160:18
+  47:        0x1018cbf5c - std::thread::lifecycle::spawn_unchecked::{{closure}}::{{closure}}::h4daedf549906e7a0
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/thread/lifecycle.rs:92:13
+  48:        0x1018cbf5c - <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once::ha943f8b8a7757ba6
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panic/unwind_safe.rs:274:9
+  49:        0x1018cbf5c - std::panicking::catch_unwind::do_call::h5255494fdd861d43
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:581:40
+  50:        0x1018cbf5c - std::panicking::catch_unwind::h35cebbca561557af
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:544:19
+  51:        0x1018cbf5c - std::panic::catch_unwind::hd2dc582535d4deb2
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panic.rs:359:14
+  52:        0x1018cbf5c - std::thread::lifecycle::spawn_unchecked::{{closure}}::h3816da6e78dd2385
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/thread/lifecycle.rs:90:26
+  53:        0x1018cbf5c - core::ops::function::FnOnce::call_once{{vtable.shim}}::h590ca23b87b969e2
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/function.rs:250:5
+  54:        0x105a97ad0 - <alloc::boxed::Box<F,A> as core::ops::function::FnOnce<Args>>::call_once::hb2e640a098bf6a07
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/alloc/src/boxed.rs:2206:9
+  55:        0x105a97ad0 - std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/thread/unix.rs:118:17
+  56:        0x18c7b3c58 - __pthread_cond_wait
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned' (3237858) panicked at database/src/utils.rs:33:9:
+assertion `left == right` failed: DB is expected to have no strong references when lifetime is dropped
+  left: 108
+ right: 0
+stack backtrace:
+   0:        0x105ab9474 - std::backtrace_rs::backtrace::libunwind::trace::h7577bad47ee3e6ee
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:        0x105ab9474 - std::backtrace_rs::backtrace::trace_unsynchronized::hf8c23094259ea49b
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:        0x105ab9474 - std::sys::backtrace::_print_fmt::hec8e3b1f0ce9dbc4
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:68:9
+   3:        0x105ab9474 - <std::sys::backtrace::BacktraceLock::print::DisplayBacktrace as core::fmt::Display>::fmt::h8c5ab870ebd4c242
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:38:26
+   4:        0x105aca270 - core::fmt::rt::Argument::fmt::hc2e0c24e74ca59ff
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/fmt/rt.rs:152:76
+   5:        0x105aca270 - core::fmt::write::h64810b21425781ec
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/fmt/mod.rs:1686:22
+   6:        0x105a9049c - std::io::default_write_fmt::h1ab19e39432de194
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/io/mod.rs:639:11
+   7:        0x105a9049c - std::io::Write::write_fmt::h947344a43c638468
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/io/mod.rs:1994:13
+   8:        0x105a9ed24 - std::sys::backtrace::BacktraceLock::print::h17b78e7978fd7389
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:41:25
+   9:        0x105a9ed24 - std::panicking::default_hook::{{closure}}::ha0993a93f6e4994d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:292:27
+  10:        0x105a9ec24 - std::panicking::default_hook::h7aae5c8c53b8a669
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:319:9
+  11:        0x105a9f11c - std::panicking::panic_with_hook::hb885411bb59bebf4
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:825:13
+  12:        0x105a9edd0 - std::panicking::panic_handler::{{closure}}::hb04320f9e43192c5
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:698:13
+  13:        0x105a9a398 - std::sys::backtrace::__rust_end_short_backtrace::ha3c55a1c4767eecf
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:176:18
+  14:        0x105a88740 - __rustc[d131491b17107b07]::rust_begin_unwind
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:689:5
+  15:        0x105bb58b8 - core::panicking::panic_fmt::h6f8816b337451651
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panicking.rs:80:14
+  16:        0x105bb57b8 - core::panicking::assert_failed_inner::hee377df488a177d4
+  17:        0x105bb560c - core::panicking::assert_failed::h2c4a26a306db510c
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panicking.rs:394:5
+  18:        0x10381c97c - <kaspa_database::utils::DbLifetime as core::ops::drop::Drop>::drop::hbd4642c78a478f69
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/database/src/utils.rs:33:9
+  19:        0x102c85e54 - core::ptr::drop_in_place<kaspa_database::utils::DbLifetime>::h19083aff49faaf18
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ptr/mod.rs:805:1
+  20:        0x102c92564 - core::ptr::drop_in_place<kaspa_consensus::consensus::test_consensus::TestConsensus>::hd0f093e979066a91
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ptr/mod.rs:805:1
+  21:        0x102c92564 - alloc::sync::Arc<T,A>::drop_slow::h1d0391283eac610c
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/alloc/src/sync.rs:2120:18
+  22:        0x100fbb020 - <alloc::sync::Arc<T,A> as core::ops::drop::Drop>::drop::h80d575fde147552e
+  23:        0x101318770 - core::ptr::drop_in_place<alloc::sync::Arc<kaspa_consensus::consensus::test_consensus::TestConsensus>>::h99888224c1cf822b
+  24:        0x1013968ac - core::ptr::drop_in_place<kaspad_lib::palw_panel::palw_service_public_e2e::Chain>::h194c8413f399ae38
+  25:        0x10126ec5c - kaspad_lib::palw_panel::palw_service_public_e2e::Chain::import_fresh::{{closure}}::ha84d49f4af154e2c
+  26:        0x101263598 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_service::{{closure}}::he46469b98ab86f86
+  27:        0x101274560 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned::{{closure}}::h17e771ea979575a2
+  28:        0x100733ad8 - <core::pin::Pin<P> as core::future::future::Future>::poll::h50c4317684dfb4a5
+  29:        0x100a575f0 - tokio::runtime::park::CachedParkThread::block_on::{{closure}}::h6a3841de30b67c68
+  30:        0x100a56aa4 - tokio::runtime::park::CachedParkThread::block_on::h30bac9e768157a78
+  31:        0x1013b1888 - tokio::runtime::context::blocking::BlockingRegionGuard::block_on::h2a6d10fd41bfc281
+  32:        0x1017af908 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::{{closure}}::h3915ca289de934aa
+  33:        0x100d7e044 - tokio::runtime::context::runtime::enter_runtime::h78863812518c182a
+  34:        0x1017af8bc - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::hab4006340122e0b5
+  35:        0x100b216a8 - tokio::runtime::runtime::Runtime::block_on_inner::hcf90f0bf132d5b48
+  36:        0x100b21864 - tokio::runtime::runtime::Runtime::block_on::hc8d6e82183c58592
+  37:        0x101274374 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned::h691fe1c1045b4888
+  38:        0x101274614 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned::{{closure}}::ha1826dc96ece9574
+  39:        0x1012fd2dc - core::ops::function::FnOnce::call_once::h56bee5ec17a96078
+  40:        0x1018d8c04 - core::ops::function::FnOnce::call_once::haf7fb5629e8bb7fc
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/function.rs:250:5
+  41:        0x1018d8c04 - test::__rust_begin_short_backtrace::h6ca5fe182383a98d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:663:18
+  42:        0x1018e7dec - test::run_test_in_process::{{closure}}::h7fd0520dbf9f5c0d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:686:74
+  43:        0x1018e7dec - <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once::h33a14b59f9d4a20c
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panic/unwind_safe.rs:274:9
+  44:        0x1018e7dec - std::panicking::catch_unwind::do_call::hd94bb4e1db6c1f17
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:581:40
+  45:        0x1018e7dec - std::panicking::catch_unwind::hc1bbe01e031840c5
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:544:19
+  46:        0x1018e7dec - std::panic::catch_unwind::h3beba4c837d33995
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panic.rs:359:14
+  47:        0x1018e7dec - test::run_test_in_process::he5c9072f5b93ccab
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:686:27
+  48:        0x1018e7dec - test::run_test::{{closure}}::hca48f6c40383049d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:607:43
+  49:        0x1018c8f5c - test::run_test::{{closure}}::hd4b34e9a103ba81d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:637:41
+  50:        0x1018c8f5c - std::sys::backtrace::__rust_begin_short_backtrace::h4ccc732acb10c9b8
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:160:18
+  51:        0x1018cbf5c - std::thread::lifecycle::spawn_unchecked::{{closure}}::{{closure}}::h4daedf549906e7a0
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/thread/lifecycle.rs:92:13
+  52:        0x1018cbf5c - <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once::ha943f8b8a7757ba6
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panic/unwind_safe.rs:274:9
+  53:        0x1018cbf5c - std::panicking::catch_unwind::do_call::h5255494fdd861d43
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:581:40
+  54:        0x1018cbf5c - std::panicking::catch_unwind::h35cebbca561557af
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:544:19
+  55:        0x1018cbf5c - std::panic::catch_unwind::hd2dc582535d4deb2
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panic.rs:359:14
+  56:        0x1018cbf5c - std::thread::lifecycle::spawn_unchecked::{{closure}}::h3816da6e78dd2385
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/thread/lifecycle.rs:90:26
+  57:        0x1018cbf5c - core::ops::function::FnOnce::call_once{{vtable.shim}}::h590ca23b87b969e2
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/function.rs:250:5
+  58:        0x105a97ad0 - <alloc::boxed::Box<F,A> as core::ops::function::FnOnce<Args>>::call_once::hb2e640a098bf6a07
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/alloc/src/boxed.rs:2206:9
+  59:        0x105a97ad0 - std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/thread/unix.rs:118:17
+  60:        0x18c7b3c58 - __pthread_cond_wait
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned' (3237858) panicked at library/core/src/panicking.rs:233:5:
+panic in a destructor during cleanup
+thread caused non-unwinding panic. aborting.

@@ -170,6 +170,9 @@ pub struct ProfileSection {
     pub policy: PolicyRec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_window: Option<u32>,
+    /// `LowerOpts::gdn_core_wide`, pinned so `verify --rebuild` lowers the same way. Absent (false) in every pack built without it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gdn_core_wide: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<usize>,
     pub calibration: CalibrationRec,

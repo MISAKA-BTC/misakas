@@ -92,12 +92,14 @@ wire/fence impact · test · real-node result · status.
 | Reporter share migration (INTF, ADR-0032 2026-10-10) | — | — | — | `palw_reporter_share_v2` (dormant; Some-only hashed) |
 | Immutable registrations (pre, ADR-0175) | — (refuses existing lifecycle tags past it) | — | — | `palw_model_immutable_v1` (dormant) |
 | `PalwVoidReasonV2` | C2 120–122; X8R 130–132 (explicit; 130 was X8's implicit 11) | — | — | — |
-| Legacy V2 Panel route G14, filer/reservation (LG14-A, RFC-0014 §6–§7, 2026-10-10) | **154–156** | **200–204** | **0xE2** | `palw_legacy_public_filer_v1` (dormant, refused); RPC **204–206** |
+| Legacy V2 Panel route G14, filer/reservation (LG14-A, RFC-0014 §6–§7, 2026-10-10) | **154–156** | **200–204** (200 disputes, 201 accepted FP metadata) | **0xE2 / 0xF0** | `palw_legacy_public_filer_v1` (dormant, refused); RPC **204–206** |
 | Legacy V2 Panel route G14, held/fused DA + localization (LG14-B, RFC-0014 §4–§5, 2026-10-10) | **157–159** | **205–209** | **0xE3** | `palw_legacy_held_da_v2` (dormant, refused); RPC **207–209** |
 | Kernel `LedgerEventV1` (2026-10-10) | 21–23 G14R, **24 G14R** (approved 10-10), 30–31 DA16 | — | — | — |
 | Verifier pay (G14R, palw_verifier_pay_v1, 2026-10-10) | kernel inner kinds **21** (verifier attestation), **22** (beacon-source opt-in) | — | — | ledger table 27, `LedgerEventV1` 25–26 |
 | `PalwVoidReasonV2` | C2 120–122; X8 one variant (assign an explicit number ≥ 130 at merge) | — | — | — |
 | Court scope + hiding tiles (G14-S, ADR-0177 D2 / DA16b §7.9, 2026-10-11) | — (no object tag, no kernel inner kind; `ProsecutionV1::Segmented` gains `SegFaultV1` 4 `HidingLeaf` / 5 `HidingDecode`, `seg_da::ChunkSpecV1::Hidden` / `ChunkBodyV1` 3 `Hidden`, all inside dormant K2-TIR-v4 bytes) | — | — | **kernel ledger table 28** `court_scope` (root extension `misaka-palw/kernel/ledger-court-scope-extension/v1`, only once non-empty), written only past `palw_provider_court_v1` (consumer-injected `CourtScopePolicyV1`); A2U `StateEncoding` row landed |
+| Conformance-only candidate classes (codex RFC-02, taken over by lane RFC02-T, 2026-10-11) | — | — | — | **kernel ledger table 29** (codex used 28 on `codex/rfc02-implementation`; 28 is G14-S's court scope, landed first) |
+| Beacon-source opt-in reservations (codex RFC-7, `beacon-source-opt-in-reservation.md`, taken over by lane R6781, 2026-10-11) | — | — | — | **kernel ledger table 30** (codex used 28 on `codex/rfc-6-7-8-12-design-audit`) |
 
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the
 skeleton first; lanes build on that commit.

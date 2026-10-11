@@ -286,6 +286,7 @@ pub(super) struct PalwEvalCommitV1<'a> {
     pub output_root: &'a Hash64,
     pub execution_root: &'a Hash64,
     pub job_pin: &'a Hash64,
+    pub public_job: Option<&'a crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
     pub eval: &'a PalwFpEvalCarriageV1,
 }
 
@@ -712,8 +713,12 @@ pub(super) fn apply_improvement_eval_commitment_v1(
         job_identity: if builder.extras.offence_attribution_active { *c.job_pin } else { Hash64::default() },
         rcore: PalwClaimRcoreV1::default(),
     };
+    let public_job_wire = builder.public_fp_job_wire_v1(c.claim_id, &claim, c.public_job)?;
     builder.reserve_for_claim(&claim)?;
     builder.write_claim(*c.claim_id, Some(claim));
+    if let Some(wire) = public_job_wire {
+        builder.write_public_fp_job_v1(*c.claim_id, Some(wire));
+    }
     builder.write_improvement_eval_job(key, Some(row));
     let deadline = daa.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
     // RFC-0010: a claim accepted under the permissionless Panel's rule is clocked by its engine, not by V2's bind window.
@@ -1409,6 +1414,7 @@ mod tests {
             trace_retention_daa: 0,
             consumed_prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(class),
             job_pin: Hash64::default(),
+            public_job: None,
             eval: Some(Box::new(PalwFpEvalCarriageV1 {
                 job,
                 tail: PalwEvalClaimTailV1 {
@@ -1539,6 +1545,7 @@ mod tests {
             trace_retention_daa: 0,
             consumed_prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(h(class)),
             job_pin: Hash64::default(),
+            public_job: None,
             eval: Some(Box::new(PalwFpEvalCarriageV1 {
                 job,
                 tail: PalwEvalClaimTailV1 { generated: reference, score, subject_layout: layout, params, read, opening },
@@ -1887,6 +1894,24 @@ mod tests {
         let PalwConsensusObjectV2::FreePromptCommitted { claim: id, .. } = &carried.object else { unreachable!() };
         assert_eq!((taken.claim_id, taken.executor, taken.accepted_daa), (*id, bond(BOB), 1_600));
         assert!(palw_improve_claim_is_evaluation_v1(s1.claims.get(id).unwrap()), "an evaluation claim: no quanta");
+        // The same ordinary extraction retains authenticated metadata for an evaluation job
+        // under the public-filer fence. Rehearsal validates it against the final claim before writing.
+        let public_params = p.clone().with_legacy_public_filer_from_daa(Some(1_600));
+        let public_extras = PalwTransitionExtrasV1 { offence_attribution_active: true, ..Default::default() };
+        let (public_state, public_delta) = at_with(&s, &public_params, 1_600, &public_extras, |b| {
+            apply_object(b, &ctx(1_600), &carried.object).expect("the ordinary extracted evaluation job folds with public metadata");
+        });
+        let PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(original), .. } = &carried.object
+            else { panic!("ordinary evaluation extractor supplies its original commitment") };
+        let wire = borsh::to_vec(original.as_ref()).unwrap();
+        assert_eq!(public_state.fp_public_jobs.get(id), Some(&wire));
+        public_state.assert_public_fp_jobs_consistency_v1(&public_params).unwrap();
+        assert!(public_delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::PublicFpJob { key, new: Some(body), .. }
+            if key == id && body == &wire)));
+        let undone = revert_delta_v2(&public_state, &public_delta, &public_params).unwrap();
+        assert_eq!(undone.state_root(), s.state_root());
+        let reapplied = apply_delta_v2(&undone, &public_delta, &public_params).unwrap();
+        assert_eq!(reapplied.state_root(), public_state.state_root());
         // The walk skips what its door refuses: below the decode rules, or unsigned — and nothing reaches the fold.
         assert!(extract(&tx, crate::palw_freeprompt_v3::PalwFpDecodeRulesV1::Dormant, true).objects.is_empty());
         assert!(extract(&tx, active, false).objects.is_empty());

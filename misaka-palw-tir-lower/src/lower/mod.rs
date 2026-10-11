@@ -117,6 +117,14 @@ pub struct LowerOpts {
     /// matmul either way, so the choice is the weight parameter's dtype: no primitive, no court change. Honoured by the
     /// convolutional-network lowering ([`cnn::lower_cnn_opts`]); any other value is refused by name.
     pub conv_weight_bits: u8,
+    /// **The gated-delta core on a fine grid** (registrant's choice of fidelity; default off, and off leaves every program and artifact
+    /// byte for byte as before). A gated-delta layer's core output is `i32` on the wire but carries ONE scale per tensor, set by the
+    /// calibrated absmax of the 16-bit grid; the gated RMS norm after it is per head, so a head whose core is far smaller than the
+    /// tensor's loudest head (Huihui-Qwen3.5-9B layer 0: head rms 1e-4 .. 1e-1) sits on one or two code steps and the norm lifts that
+    /// noise to unit scale. On this option the core is delivered at the wide rail's scale (`i32` values, the same `WIDE_RECURRENT_HEADROOM`
+    /// as a wide product's scan), which only changes the constants materialised for the core's output scale and the norm's eps: the
+    /// node graph, the primitives and the court are the same. Measured on the 9B (32 layers, 32 positions): KL 0.268 → 0.0039, corr 0.951 → 0.9993.
+    pub gdn_core_wide: bool,
 }
 
 impl Default for LowerOpts {
@@ -129,6 +137,7 @@ impl Default for LowerOpts {
             table_shift: 0,
             table_chunk_rows: None,
             conv_weight_bits: 8,
+            gdn_core_wide: false,
         }
     }
 }
@@ -460,6 +469,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         table_chunk: i64::from(opts.table_chunk_rows.unwrap_or(1 << 24).clamp(1, 1 << 24)),
         conv_weight_bits: 8,
         out_major_rows: false,
+        gdn_core_wide: opts.gdn_core_wide,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     // HL order is pre, layer kinds, post; TIR keeps it.
@@ -621,6 +631,8 @@ struct Cx<'h> {
     /// pieces) rather than a column slice through every input row (`in` pieces). Off by default (the programs every existing
     /// class and golden holds); a tower declared for a pipeline class turns it on (`vision::lower_vision_with`).
     out_major_rows: bool,
+    /// [`LowerOpts::gdn_core_wide`].
+    gdn_core_wide: bool,
 }
 
 /// A lowered value: a TIR operand, its dtype, its scale, and the HL site whose statistics
@@ -778,6 +790,15 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
     ssm_patterns(blk, &mut lb)?;
     concat_wants(blk, &mut lb);
     wide_wants(blk, &mut lb);
+    // **`LowerOpts::gdn_core_wide`**: the gated-delta core is delivered on the wide rail's finer grid (see the option).
+    if cx.gdn_core_wide {
+        for (i, n) in blk.nodes.iter().enumerate() {
+            if matches!(n.op, Op::GatedDelta { .. }) && lb.wants[i].is_none() {
+                let site = n.site.clone().unwrap_or_default();
+                lb.wants[i] = Some(Want { dt: DType::I32, key: wide_key(&site) });
+            }
+        }
+    }
     w16_inputs_unsplit(blk, &mut lb);
     let tb = pb.blocks.len() as u8;
     let mut b = pb.block(&blk.name, if blk.role == BlockRole::Pre { vec![] } else { carry_sig });

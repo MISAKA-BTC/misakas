@@ -1294,6 +1294,7 @@ where
                 trace_retention_daa: commitment.trace_retention_daa,
                 consumed_prefix_state: payload.consumed_prefix_state_v1(),
                 job_pin: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment),
+                public_job: Some(Box::new(payload.commitment.clone())),
                 eval: Some(Box::new(PalwFpEvalCarriageV1 { job, tail })),
             },
         });

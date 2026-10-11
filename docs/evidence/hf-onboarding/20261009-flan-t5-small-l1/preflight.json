@@ -1,0 +1,132 @@
+{
+ "schema": "misaka.h1.preflight.v1",
+ "command": "misaka --network testnet-12 --output json model preflight hf://REPO@REV --depth shape [--max-context N]",
+ "header_only": true,
+ "widest": {
+  "exit": 34,
+  "file": "widest.json",
+  "readable": true,
+  "input": "https://huggingface.co/google/flan-t5-small/resolve/0fc9ddf78a1e988dac52e2dac162b0ede4fd74ab",
+  "bytes_read": 23841,
+  "depth": {
+   "requested": "shape",
+   "reached": "shape",
+   "stopped_at": null
+  },
+  "network_daa": 5585,
+  "model_type": "t5",
+  "architectures": [
+   "T5ForConditionalGeneration"
+  ],
+  "frontend_level": "B",
+  "adapter": "t5",
+  "features_used": 8,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": []
+  },
+  "storage": [
+   "F32"
+  ],
+  "weights_bytes": 307844608,
+  "missing_shards": [],
+  "artifact_estimate_bytes": null,
+  "kernel": null,
+  "admission_verdict": "pipeline class",
+  "admission_gate": "TIR_EXCEEDS_CEILING",
+  "admission_gate_detail": "layout (64,Some(256),32,64): the IR program's generative close sizing work of 67108865 exceeds the ceiling 67108864 at stage 0's terminal closes",
+  "layout": null,
+  "seat_needed_bytes": 108450106,
+  "verdict": {
+   "convert": "ok",
+   "register": "blocked",
+   "mine": "ok"
+  },
+  "unknown_because": {},
+  "blockers": [
+   {
+    "stage": "register",
+    "code": "CLOSE_SIZE_OVER_CAP",
+    "arg": "generative close sizing work",
+    "what": "generative close sizing work at stage 0's terminal closes: 67108865 against a cap of 67108864",
+    "have": 67108865,
+    "need": 67108864,
+    "unit": "units",
+    "safe_paths": []
+   }
+  ],
+  "notes": [
+   "a encdec class (adapter t5): lowered to 2 RFC-0003 program(s), each admitted (194 nodes, 353894400 MACs; 278 nodes, 38961152 MACs); it registers as a pipeline class, judged below by the generative lane's admission (RFC-0003)",
+   "the seat is sized from the stages admitted alone (the class was not admitted)"
+  ]
+ },
+ "declared": {
+  "exit": 34,
+  "max_context": 512,
+  "file": "declared.json",
+  "readable": true,
+  "input": "https://huggingface.co/google/flan-t5-small/resolve/0fc9ddf78a1e988dac52e2dac162b0ede4fd74ab",
+  "bytes_read": 23841,
+  "depth": {
+   "requested": "shape",
+   "reached": "shape",
+   "stopped_at": null
+  },
+  "network_daa": 5585,
+  "model_type": "t5",
+  "architectures": [
+   "T5ForConditionalGeneration"
+  ],
+  "frontend_level": "B",
+  "adapter": "t5",
+  "features_used": 8,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": []
+  },
+  "storage": [
+   "F32"
+  ],
+  "weights_bytes": 307844608,
+  "missing_shards": [],
+  "artifact_estimate_bytes": null,
+  "kernel": null,
+  "admission_verdict": "pipeline class",
+  "admission_gate": "TIR_EXCEEDS_CEILING",
+  "admission_gate_detail": "layout (64,Some(256),32,64): the IR program's generative close sizing work of 67108865 exceeds the ceiling 67108864 at stage 0's terminal closes",
+  "layout": null,
+  "seat_needed_bytes": 108450106,
+  "verdict": {
+   "convert": "ok",
+   "register": "blocked",
+   "mine": "ok"
+  },
+  "unknown_because": {},
+  "blockers": [
+   {
+    "stage": "register",
+    "code": "CLOSE_SIZE_OVER_CAP",
+    "arg": "generative close sizing work",
+    "what": "generative close sizing work at stage 0's terminal closes: 67108865 against a cap of 67108864",
+    "have": 67108865,
+    "need": 67108864,
+    "unit": "units",
+    "safe_paths": []
+   }
+  ],
+  "notes": [
+   "a encdec class (adapter t5): lowered to 2 RFC-0003 program(s), each admitted (194 nodes, 353894400 MACs; 278 nodes, 38961152 MACs); it registers as a pipeline class, judged below by the generative lane's admission (RFC-0003)",
+   "the seat is sized from the stages admitted alone (the class was not admitted)"
+  ]
+ }
+}

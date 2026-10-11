@@ -11,6 +11,10 @@
 
 次の条件が閉じるまで「producer + 全Panel共謀でも1 verifierで全対象違反を終局まで追及できる」とは判定しない。
 
+**floorのconstraint直接反証を公開filerへ接続（2026-10-11）:** 登録floorはflat logitsで既存constraint courtはtiled専用だったため、同じ認証・選択predicateを共有するappend-only contradiction tag 15を追加。公開filerが後続位置の禁止token・早すぎる停止・負ける許可tokenをproofへ変換し、既存reporter filingへ渡す。replay後もjobを専用メモリticketとともに保持する。関連 **104件 PASS**、通常node check成功。大型proofの分割終局搬送、tiledの位置別DA接続、constraint不正そのものの実service convictionは未検証／未完成。初回synthetic proofの100KB上限超過FAILも[記録](flat-constraint-public-status.md)に残し、全域達成とはしない。
+
+**constraint直接反証のcore基盤（2026-10-11）:** append-only contradiction tag 14で、認証済みFP job／binding／row／token table openingを既存constraint courtと同じpredicateで判定する経路を追加。kind-3／kind-4、job・trace・executor一致、direct-proof precedence、既存activation fenceの分類を確認し、関連core **68件 PASS**、通常node check成功。nodeのproof生成と大型proofの分割終局搬送は未接続で、G14全域完了とはしない。fixtureと検証範囲は[記録](constrained-direct-proof-status.md)を参照。
+
 **fresh serviceの追加検証（2026-10-11）:** ordinary bondを実署名・collateral付きで新規登録し、通常1,000 DAA maturityを待ったPanel外verifierが、空DBで公開block 2,051件を再検証した後、実service自身の読み取りと登録floor modelのreplayから公開reservation／binding要求を提出できた。PQ mempool→production template→実block foldを通り、DAA 2236で`ProducerWithholding`／`DaDefault`、producer制裁と予約解放、正常service終了へ到達した。実service試験1件と関連回帰69件の **70 PASS**、通常binary check成功、shipping **361 pin差分なし**。producer秘密stateは渡していない。終了時にmodel／DBを保持する3 gossip callbackの循環参照を`Weak`へ修正した。これはfloor canonical attemptのbinding非応答1 caseで、算術不正のexact conviction、全family、socket RPC、ネットワークIBD／pruned import、restart／reorg、最大profileの期限保証を満たしたという判定ではない。下記のfresh service未検証という旧記述は、この1 caseについて更新する。例外と失敗・再試験logは[実装修正記録](implementation.md#新規公開bondとfresh-dbから実serviceでda不応答を追及する2026-10-11)を参照。
 
 1. **legacyの全対象違反と本番完走:** base0-codecの独立replayを持つ共通filerに、認証済みtag-158公開履歴、subtree descent、model-copyを開示しないtag-159 leaf recompute、CKWからfused courtを開く接続を追加した。controllerのfold試験はFinal前後のgather/matmul conviction、fused conviction、node/CKW非応答defaultを通過。公開bindingに基づくjob/trace identity、step/checkpoint countのshape違反、公開token pinに基づくoutput不正をkind-4 reporter経路へ追加した。executionとtraceが一致してもoutputだけが違えば追及する。別jobの実fold convictionはFinal前後を検証し、output/count builderとcache妨害はunitで検証した。大型canonical promptの入力不正も既存PromptNotAnchoredへ自動変換する。PublicDA／認証できるcanonical inputのFP startupを公開accepted commitmentへ接続した。PanelDAの公開court input bootstrapも追加した。ordinary V3/V4 canonical FPのcount/root不正は、認証済み公開jobとbindingからreplay前に直接証明する経路を追加した。最大入力のsession／carrier予算、別job意味論のprefix-state等のbootstrap、checkpoint/traceの残る局所化、全familyの正規eligibility、fresh-nodeのservice tick完走は残る。step treeの一致だけでMismatchをHonestへ変えない。unsupported-codecの小型fallbackは34-session枠を超えるclaimをUnjudgedとする。
@@ -36,6 +40,34 @@
 **PanelDA入力のbootstrap（今回の追加）:** 公開FP commitmentだけではUser入力が手に入らず、全Panelの配布拒否で再計算前に止まる経路を修正した。公開予約→row-0 binding→認証済みinput chunk→自身のmodel replayへ接続し、不応答は既存DA defaultとする。Merkle入力は2,048 token単位、Flat入力はwhole hash照合とし、court上限と1本のcarrier上限の小さい方を超える義務は要求時に拒否する。登録モデル保有前提は維持する。34-session予算で全contextを扱えること、FP commitment自体の恒久prune、全family・fresh-node serviceの包含は別の未達条件である。今回の関連回帰は **159 PASS**、通常node binary checkは成功。検証結果と範囲は[修正記録](implementation.md)末尾を参照。
 
 **予約の共通人数上限の修正（今回の追加）:** 64-live／256-lifetimeの先取りによる締出しを除き、closed replay guardを含む1 bondのretained recordを64に制限した。本人のreleaseでは予算を回復させず、recordのsettlement／retirementで回収する。RPCにも保持件数を追加した。これは固定global RAM上限又は全familyの包含保証を立証したものではない。最終検証は[修正記録](implementation.md)末尾を参照。
+
+## 公開job不正と全Panel追及の追加修正（2026-10-11）
+
+追加の実service試験は **PASS（394.69秒）**。ordinary mature public bondを持つPanel外の1 verifierが、公開blockから再構築したfresh DBと公開・認証済みeventだけで、別jobの実rootsに対するIdentityMismatch proofを提出した。producerの実担保減少、全 **5 Valid署名者**の正額徴収、自身のcommit/reveal、予約解放、正常service終了を確認した。producer materialはverifierへ渡していない。これはfloor canonical attemptのjob identity 1 caseであり、全familyの算術・input・output・state違反又は最大profileを完走した判定ではない。
+
+公開bindingから得た直接kind-4 proofを既存False Valid filerへ渡す接続を追加した。これまではseat replayにしか接続されず、public caseがsettleすると署名者追及が始まらない。また実H1 mempoolは、客観的なwrong-jobの証拠となる認証済みbindingまでDA回答として拒否し、公開carrierの包含を止めていた。
+
+休眠public-filer fence内の要求済みrow-0/tile-0 Eventに限り、同じbindingのIdentityMismatch proofが実acceptance／fold rehearsalで認定される場合にrelay／template包含を許す。署名・サイズ・discloser liability検査を維持し、DA answered bitやconvictionは変更しない。既存規則では最初のkind-3がproducer legも徴収するため、後続kind-4は追加額0になり得る。二重徴収を要求せず、producerの実没収、全Valid signerの制裁、外部verifierの各commit/revealを検証する。[修正と検証記録](implementation.md#公開bindingの直接証拠を全valid署名者の追及へ渡す2026-10-11)。この接続だけを全familyのG14達成とは数えない。
+
+追加の実service試験は、mempool検証がvirtual readを保持したままDNS coinbase policyで再取得し、virtual commitのqueued upgradeとdeadlockすることも示した。policyに検証中のDAA snapshotを渡し、外側のUTXO guardを保持したまま二重readを除く。停止時のnative sampleと、queued writer／旧readerのnegative controlを含む回帰試験を監査記録へ保存する。H1だけを修正して包含・終局を保証したと扱わない。
+
+最終sourceでは上記exact caseとDA非応答case、関連回帰の **77 unique PASS**、通常node binary check成功、fresh shipping harvest／再読込の **361 pin差分なし**を確認した。検証範囲と生logは[実装修正記録](implementation.md)末尾にある。
+
+## 残りの実装順序（2026-10-11）
+
+第一段階の追加として、PublicDAユーザーpromptのFP Job V3/V4は、通常の公開family証明・graph登録・価格計算・署名済みclaim受理から、fresh DBの実serviceによるproducerと全5名のValid signerの徴収・commit/revealまで通った。登録floor classのjob identity不正に限る。classの新規モデル登録、canonical prompt省略モード、PanelDAの通常pricing、全FP job/state意味論又はF9–F16全体の完了を示すものではない。詳細と失敗を含む[追加記録](implementation.md#publicda-fp-v3v4の通常受理から実serviceで全valid署名者を追及する2026-10-11)を参照。
+
+**公開job保存の追加（2026-10-11）:** 公開filer fence以降の通常FP／evaluation受理でoriginal commitment bodyをrooted stateへ保存し、元accepted transaction/bodyが失われてもConsensus APIのclaim viewからfull claim hash・job pinを照合して再取得する。公開inputのbootstrapは既存binding／PromptIds courtを利用する。core 74件、node unit 48件、通常FP V4 service 1件がPASS。LG14-Bを休眠のままにしていたfixtureを修正し、元commitmentのbody・acceptance rowを削除したV3でも実serviceからproducerと全5 Valid signerの徴収・commit/revealまで1件PASS（344.67秒）を確認した。合計124 unique PASS、fresh shipping 361 pin差分なし。これはjob identity不正の試験で、全PromptIds chunkの取得や算術faultの局所化を保証するものではない。metadata保存前に恒久消失したjob、evaluation tail/prefix-state、network prune／restart／reorg、全familyと最大profileは未達。詳細は[実装・試験記録](implementation.md#元fp履歴消失後の公開job-bootstrap2026-10-11)。
+
+ユーザー指定どおり、正しい登録モデルを保有するverifierを前提として、次の順で進める。各段階で通常経路の受入試験を追加し、後段の資源・回復条件まで通る前にG14全域を完成扱いしない。
+
+1. **公開materialの取得:** job／input／初期stateのbootstrapと、恒久pruneされたFP jobの認証済み再取得を完成させる。producer秘密stateを参照しない。
+2. **全familyの入口:** F9–F16等の登録・eligibilityを正規経路で通し、test-only admissionで埋めた空白を閉じる。
+3. **全違反の終局:** checkpoint／traceの局所化を完成させ、算術・input・output・state違反を実serviceからproof／commit／reveal／convictionへ通す。producerと全liable Valid signerの徴収も確認する。
+4. **scopeとDA gate:** `cumulative_scope_allows_v1`のstubと64要素hiding tileをresponse／court／reward判定へ接続し、ADR-0177の非再構成制約と追及到達性を同時に満たす。
+5. **最大profileと期限:** 34-session予算、全chunk、adaptive round、material／proofの上限を最大contextで検証し、責任期間内に終局できる条件を決める。
+6. **nodeの回復と接続:** restart／reorg／full・pruned IBD、実RPC／P2Pを通して、状態復旧後も同じ追及を完走させる。
+7. **実運用規模の受入:** 最大model、population、共謀負荷でRAM／処理時間／包含能力を実測し、保証できるprofileと包含・資金の前提を確定する。
 
 ## 初回レビューの判定
 
@@ -108,6 +140,24 @@ reference ledgerで、prompt 63 tokens・max new 1の正当なclaimに対し、�
 2. served responses、open/served demander metadata、proof seals、scope tallies等の全claim状態を含める。参加者・累積joinと各blockのworkにも明示的上限を置く。先着joinでhonest verifierが閉め出されない公開response・shared progressの性質を保つ。
 3. 責任期間内のfresh verifierが利用できる保持規則と、終了後のbounded cleanupを定義し、reorg/restart/IBD/pruningで同じrowsになることを検証する。
 
+## sessionに属する分割DA回答（2026-10-11、基盤の検証済み）
+
+最大job/inputの取得を単一carrierの100,000 bytesに閉じ込めないため、LG14-Bにtag 160（署名manifest）と161（chunk）を追加した。certificationのObjectChunkは8個の保存枠を共有するため、そのまま転用すると共謀側が枠を占有してDA回答を塞げる。新しい途中保存rowは、既存のDA義務のclaim/unitと責任を持つdiscloserに属し、certificationの枠を使わない。
+
+manifestはnetwork、claim、unit、discloser、全体bytes、partサイズ、各chunkのhash、元の署名付き回答全体のhashを署名する。最大32 parts、各90,000 bytes。全partが揃った時だけ元の回答を復元し、processorが元の回答署名を検査し、foldが従来のroot・job identity検査とDA-4を適用する。途中の回答は回答済みと数えず、元のDA期限を延長しない。回答完了、別の回答での解決、期限切れには途中保存rowを削除する。
+
+途中保存はdelta 202と非empty時だけのsnapshot tail 0xF1、state-root block `legacy_answers/v2`に含める。snapshot復元時はpartのhash・サイズ、未完了であること、生きた未回答のDA義務、義務の期限を超えていないことを検査する。live int-12の100 variantsの宣言pinは維持し、新tagsと既存のFP job追加により変わったdormant LG14 kindsのwire pinだけ更新する。
+
+**この段階は分割transportのconsensus側であり、最大jobの公開取得完了ではない。** producer workerの自動分割・確認済みpartからの再開、fresh verifierの複数history pageからのbounded再組立て、そのRAM予約、job/inputの全体byte admissionへの接続、最大profileでの実サービス試験が残る。64 KiBのFP job上限もまだ変更していない。armingは引き続き拒否する。ADR-0177 D7の登録モデル保有前提は維持する。
+
+このcheckpointは59 uniqueのcore/nodeテストがPASSし、最大32分割の境界、8 certification枠占有時の分割回答・partial restart・非応答defaultも確認した。shipping harvestと361 pinの機械照合もPASS／差分なし。fixtureの限界、修正前の失敗log、残る実装を[検証記録](owned-answer-status.md)に保存した。
+
+履歴readerの接続には追加の条件がある。`walk_accepted_lifecycle_page_v1`はtransaction acceptanceを走査し、PALW foldが拒否したobjectも返し得る。従って「historyにあるmanifest/chunk」をそのまま認証済み回答として扱わず、元の回答の署名・claim/unit・root/job pinを確認する必要がある。逆向きpageではchunkがmanifestより先に現れるため、任意のdigest groupを無制限に保持したり、共有先着cacheを埋められて必要な回答を捨てたりしない取得方式とRAM予約を実装する。producerの`sign`はML-DSA-87のdeterministic signingなので、同じmaterial/key/domainからの回答再構築は同じdigestとなるが、再起動時はchain側manifestと受理済みpartを照合して再開する。
+
+### producer側の分割継続（2026-10-11、checkpoint検証済み）
+
+上記checkpointに続けて、producer/covering signerのworkerがchainのmanifest・受理済みbitmapから次の1 carrierを選び、再起動時は元の署名付き回答とmanifestを再現して未受理partだけを送る経路を接続した。reader障害を「manifestなし」と扱わず、回答の全envelopeの上限を署名前に検査する。署名・分割処理はblocking taskに置き、replay予約をその間も保持し、分割の一時メモリを追加予約する。新規plannerと既存V-fold/DA policy/held builderの28 uniqueテストはPASS。小さいjobの実outsider service回帰も公開job/input認証→独立replay→予約解放までPASS（303.37 s、今回29 unique）。producer回答はfixtureから供給しているため、新workerの実service試験とは区別する。新しいworkerの最大profileでの実service試験、demand/reacquisitionの単一carrier前提の置換、公開履歴からのbounded復元は未達。native progress readerはRPC/P2P state proofではない。[検証と残項目](owned-answer-status.md#producer-continuation--2026-10-11-verified-checkpoint)。
+
 ## G14完成のために残る設計・受入条件
 
 ### 許可scopeからterminalへ到達する証明
@@ -164,3 +214,34 @@ cargo test -p misaka-palw-kernel --test g14_review_regressions --locked -- --noc
 6. v4 real-scale courtsを統合し、routing/historyを含むactive profile全域とEXEC/typed-root等の正規eligibility経路を最新HEADで検証してください。carrier-fit不能やtest seamのみのprofileは有効化しないでください。
 7. proof spamを含む期限内包含条件、ADR-0176のQ/B/R/F会計、fresh verifierの実測期限、beacon/seed再現、外部soundness/economic gateを閉じてください。feeによる抑止と必ず処理される保証を分けて報告してください。
 8. completion matrixの冒頭・family表をmilestone 2/3の結果へ更新し、最新HEADのPASS・未実行・FAIL・設計未完を区別してください。これらが閉じるまでarmingのfail-closed方針を維持してください。
+
+
+2026-10-11の公開input follow-upでは、元FP V3 commitment body・acceptance rowを削除したfresh verifierの実serviceで、正しい公開bindingの後のinput非応答からDA default／producer徴収へ1 PASS（568.20 s）、不正input carrierを採用せず正しいchunkから独立replayのHonest判定／署名付き予約解放へ1 PASS（346.73 s）を確認した。input bootstrapの完了後もnode policyがcaseを保持し、既存tag 155でlive予約を解放する。filer/input 20件、pruned identity service 1件の回帰もPASS（今回23 unique）。閉じたguard/deposit上限、最大input、全family、scope、回復・最大負荷は未達。単独releaseだけではHonestを証明せず、今回の実worker判定はlogで確認した。[証拠と限界](implementation.md#履歴消失後の公開input取得非応答予約解放2026-10-11)。
+
+
+2026-10-11のpre-replay input follow-upでは、LG14-B内のuser inputを小さいticketで先に認証し、context／full replay ticket取得前から公開binding／PromptIdsのcourtへ進める。pruned PublicDAもexact jobの公開prefixを再取得でき、capture tailはコピー・実行しない。通常の完全な公開inputはworker起動前にbootstrapを外し、余分な予約を作らない。最終filer/input 23 unit、実serviceのpruned honest（実workerのHonest判定を直接assert）、input非応答、通常PublicDA honest／対象予約なし、pruned identity／producerと全5 Valid signer徴収・revealの4件がPASS（今回27 unique）。node binary checkもPASS。context取得不能／full ticket拒否の実service負荷試験、最大inputのsession予算、pre-fence永久消失job、initial/prefix-state、全family、scope／hiding、回復・最大負荷は引き続き未達。shipping validatorとADR-0177 D7を維持する。[実装・失敗・最終証拠](implementation.md#再計算前のユーザーinput-bootstrap2026-10-11)。
+
+
+2026-10-11のmetadata無しFP follow-upでは、job保存fence前に通常受理し、元body/acceptance rowも削除したfresh outsiderが、再計算前の公開bindingだけからidentity conviction/producerと全5 Valid signerの徴収・reveal（314.21 s）、又はbinding非応答DA default（536.03 s）まで1件ずつPASSした。filer/input 26件、既存pruned honest取得/replay/release回帰1件もPASS、通常PublicDA honest回帰（290.18 s）もPASS、今回30 unique。busy replay/capture/seat枠の外でaccepted descriptorだけを確認し、実行中の同一candidateを再probeせず、prompt/signature vectorsをコピーしない。正しいbinding後のjob本体取得は依然未達で、そのcourt実装へ進む。wire/activationはこの区切りで変更せず、shipping harvestは再実行していない。[証拠と限界](implementation.md#保存metadataもないfp-claimの公開binding追及2026-10-11)。
+
+
+## 公開job取得courtの進捗と次の実装（2026-10-11）
+
+metadataと元取引が全てないケースの小さいFP jobについて、公開bindingからjob preimageとinputを認証して独立replay/予約解放へ進む実service、又はjob非応答からDA default/producer徴収へ進む実serviceを実装・確認した。Accepted commitmentとDisclosed descriptorを分け、元commitmentの付随fieldを捏造しない。metadata無しidentity convictionの実service回帰もproducerと全5 Valid signer徴収・revealまでPASS。今回63 unique PASS、以前のbatchと重複加算しない。
+
+次は最大jobのtransportとadmission/profileの適合を閉じる。現行64 KiB boundを超える最大constraint tail＋headerは回答できず、単一carrierとbindingも同時に収まる必要がある。このまま全profileへ有効化すれば不可能な義務を作り得る。wallet builderの48 KiB capはconsensus-wideな安全根拠ではない。multipart job取得、答えられる範囲の証明、追加session/期限/メモリ予算を実装・検証する。その後も初期/prefix state、non-prompt input、全familyの通常入口と算術/output/state終局、scope/hiding、最大負荷・包含期限、restart/reorg/network IBDが必要。shipping validatorとADR-0177 D7を維持し、G14全域の完了とはしない。[生log・hash・失敗を含む監査記録](implementation.md#公開fp-job-preimageの取得court2026-10-11)。
+
+## 分割回答とjob上限の追加修正（2026-10-11）
+
+単一carrier前提だったinput/job要求・再取得を、元回答のbinding・owner・MLDSA署名を含む完全なenvelopeの上限へ変更した。manifestの1本も数え、32 parts、court上限、既存DA期限に収まる条件をprocessorとcore foldで共有する。FP jobは、全shipped presetの通常non-coinbase transactionのtransient mass上限から保守的に125,000 bytesまで取得可能とした。walletの48 KiB制限を根拠にはしていない。custom mass overrideと最大profile全域の保証はまだ閉じていない。`514d9214d`は70 unique PASSで検証済み。[現在のcheckpointと証拠](owned-answer-status.md#inputjob-admission-verification-completed)。
+
+公開multipart回答の履歴復元も接続・検証した。除去されるassemblyのうち最後の1 partが欠けた公開rowをblock単位の補助indexへ保存し、accepted mergeset carrierを受理したselected-chain blockと最後のpartから元回答を復元する。巨大なdelta全体はdecodeしない。indexはlocal full-nodeの派生データであり、remote proofやcourt verdictではない。verifierは復元後もclaimのrootとの認証を行う。古いindexの不在は再取得へ、reader故障は未完了watermarkへ進む。この履歴復元のroundは72 unique PASS（store/index/gate 10、node 61、実service 1）。元body・acceptance・job metadataがないfresh outsiderが、正しいdirect job回答を使わず、実署名manifest＋2 partsからjobを復元し、public input取得・自身のmodelでHonest判定・予約releaseまで341.40 sで完走した。producer carrierは手動供給、小さいjobのfixtureなので、最大job/profileと自動producer workerの完走とは数えない。shipping integrationの13 targetも再buildしてPASS、pin 361一致・差分なし。core golden/gateの証拠は同一のstate-root sourceを使った前段runと組み合わせ、provenanceを明記した。[証拠と限界](owned-answer-status.md#authenticated-multipart-history-reconstruction---2026-10-11-verified-checkpoint)。
+
+残りは順に、最大job/input/profileの通常入口・producer/outsider service・session/時間/RAM予算、initial/prefix stateとnon-prompt material、F9–F16を含む全active familyの計算/output/state終局、scope/hidingと包含・経済/全体resource上限、restart/reorg/pruned IBD/RPC/P2Pの認証済み取得、最後に有効化と全G14の完了audit。ADR-0177 D7の正しい登録モデル保有前提を維持する。対応できないactive profileを拒否するだけでは全域の達成とは数えない。
+## 続報：constraint付きjobのpublic再実行・上限近傍の通常受理（2026-10-11）
+
+public filerがconstraint maskのscopeを設定せずにFPを再実行していたため、正しいtoken tableを保有していても実行が拒否される欠落を修正した。認証済みjobとverifier自身のtableから既存の検証済みmaskを作り、再実行後にthread scopeを復元する。table未取得・tokenizer不一致はhost errorであり、それだけをconvictionにしない。
+
+通常受理されるFP version 6のjob本体112,291 bytes、transaction transient mass 499,184／500,000で実serviceを検証した。全PanelがValidに署名した後、fresh DBを使う外部verifierが元job履歴・保存metadataなしで、署名済みmanifest＋2partから復元し、公開input取得→独立再実行→DAA 1163でreleaseまで進んだ。同じ大きなjobを隠した場合は、規定deadlineを維持してDAA 2307で客観的DA default・producerへの正額sanction徴収・reservation解放まで確認した。今回29 unique PASS。初回の誤ったmanifest差し替え試験の失敗も保存した。[詳細と生log](constraint-public-replay-status.md)。
+
+G14全域は未完了。残りは、自動producer分割回答の実service接続、最大input/profile予算、constraintの違反token選択とtable／登録モデルbindingの客観的反証、初期・prefix・non-prompt state取得、全active familyの算術／output／state終局、scope／hiding・総RAM・経済／包含条件、restart／reorg／pruned IBD／remote認証取得、最後にactivationと全域監査。ADR-0177 D7を維持し、今回のnear-limit job試験を全profile・全familyの保証に拡張して解釈しない。

@@ -1,0 +1,238 @@
+{
+ "order": 4,
+ "id": "mitsuba-27b-ptq1",
+ "family": "gemma3? (GGUF PTQ1_0 custom quant; text decoder only)",
+ "repo": "isichan-ai/Mitsuba_and_HiMitsuba-27B-GGUF",
+ "revision": "33e63d450993500144243989b6d3f1bbb240e4d0",
+ "task": "text-generation",
+ "context": 512,
+ "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/isichan-ai/Mitsuba_and_HiMitsuba-27B-GGUF/Mitsuba-ComfyUI-27B/Model-v1.18/Mitsuba-ComfyUI-27B-v1.18-PTQ1_0.gguf",
+ "full": "downloaded only the PTQ1_0 GGUF (approved, >=30 GB free)",
+ "file": "Mitsuba-ComfyUI-27B/Model-v1.18/Mitsuba-ComfyUI-27B-v1.18-PTQ1_0.gguf",
+ "source": {
+  "schema": "misaka.h1.source.v1",
+  "repo": "isichan-ai/Mitsuba_and_HiMitsuba-27B-GGUF",
+  "revision": "33e63d450993500144243989b6d3f1bbb240e4d0",
+  "resolved_sha": "33e63d450993500144243989b6d3f1bbb240e4d0",
+  "gated": false,
+  "private": false,
+  "architectures": null,
+  "model_type": null,
+  "pipeline_tag": "image-text-to-text",
+  "files": [
+   {
+    "path": ".gitattributes",
+    "size": 2387,
+    "git_oid": "ec37c7581ae859020ce355589b5622ca09c90b63",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "Mitsuba-ComfyUI-27B/HiMitsuba-Uncensored-LoRA.gguf",
+    "size": 69223968,
+    "git_oid": "099d658b4e0c14130dab0d7896116978dd8a3eaf",
+    "sha256": "289af22fbde4b7e81a69f538103bc5ee8813b99a0b5646b9d3ec61517ceef040",
+    "lfs": true
+   },
+   {
+    "path": "Mitsuba-ComfyUI-27B/Model-v1.18/Mitsuba-ComfyUI-27B-v1.18-PQ2_0.gguf",
+    "size": 7319078304,
+    "git_oid": "277733fc15a3e0776f25af0216b1b55ce02ddfeb",
+    "sha256": "cc45a52123860da817b704e3b35495e90c9a67c74ae697a6314775a4c7318791",
+    "lfs": true
+   },
+   {
+    "path": "Mitsuba-ComfyUI-27B/Model-v1.18/Mitsuba-ComfyUI-27B-v1.18-PTQ1_0.gguf",
+    "size": 5997626784,
+    "git_oid": "7b6f217d662bc2c2dc7e6f6df6714f5c7874a956",
+    "sha256": "b69c8e7cf3ff883d640479b88f7585348e8aaf3fd130a1e4217eec2f65bed934",
+    "lfs": true
+   },
+   {
+    "path": "Mitsuba-ComfyUI-27B/Model-v1.18/mmproj-Q8_0.gguf",
+    "size": 629246976,
+    "git_oid": "19ca9905c6e3ddcd06960506f4d1bf19613ce169",
+    "sha256": "6807ede61d570bb86ba34b756a0fa109edc33668604de867c6ea6d8f1d631903",
+    "lfs": true
+   },
+   {
+    "path": "Mitsuba_bridge_AMD/HiMitsuba_ComfyUI_AMD.bat",
+    "size": 793,
+    "git_oid": "1c34f2015cfe4587cc6cbcb9bf1cd909ca234c83",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "Mitsuba_bridge_AMD/HiMitsuba_diag_AMD.bat",
+    "size": 7828,
+    "git_oid": "8b86648ccadeaede3dc22559ab497dd8cd45d404",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "Mitsuba_bridge_AMD/HiMitsuba_start_AMD.bat",
+    "size": 9046,
+    "git_oid": "6e12273904e9768babee79e25a6e273170db4af8",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "Mitsuba_bridge_AMD/HiMitsuba_stop_AMD.bat",
+    "size": 1509,
+    "git_oid": "8f28d8552eed4f95cea4f59bc8610b2274357248",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "Mitsuba_bridge_AMD/Mitsuba_bridge.py",
+    "size": 15298,
+    "git_oid": "d54b5214a645b50405d9f40636246b9d569eb8c2",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "Mitsuba_bridge_NVIDIA/HiMitsuba_ComfyUI.bat",
+    "size": 1122,
+    "git_oid": "dc0aebd357cf16805837f048ec54e71773688a96",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "Mitsuba_bridge_NVIDIA/HiMitsuba_start.bat",
+    "size": 9413,
+    "git_oid": "6170e102949a284c67a7dc2726f7b67167001c1b",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "Mitsuba_bridge_NVIDIA/HiMitsuba_stop.bat",
+    "size": 1569,
+    "git_oid": "38e0bef667ef90697318b344abb88f3c989ed387",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "Mitsuba_bridge_NVIDIA/Mitsuba-Bridge_steps_EN.png",
+    "size": 338871,
+    "git_oid": "33df3349ffb48b4f83a16a131366dd83bc62e4ff",
+    "sha256": "7b335130984d9d2d41b449d8749d8c3881bf2c643e52518f683ca65c63a40c7e",
+    "lfs": true
+   },
+   {
+    "path": "Mitsuba_bridge_NVIDIA/Mitsuba-Bridge_\u624b\u9806.png",
+    "size": 356194,
+    "git_oid": "d8d71ad5123bae72b657976af7816eb0bc76cc1d",
+    "sha256": "70fae3879e6cea3f94aca504a87586df44f81a6e242f6a735ed16c70012f5f46",
+    "lfs": true
+   },
+   {
+    "path": "Mitsuba_bridge_NVIDIA/Mitsuba_bridge.py",
+    "size": 15298,
+    "git_oid": "d54b5214a645b50405d9f40636246b9d569eb8c2",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "README.md",
+    "size": 26510,
+    "git_oid": "e2c26aeb8d05a4c3ad4614487cdb511a142c2b7a",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "docs/EVALUATION.md",
+    "size": 17561,
+    "git_oid": "57ccb3cc85d8c0fb72d4998a6805276519a2d619",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "docs/LICENSE",
+    "size": 11544,
+    "git_oid": "f938136e3adacfd92be087f6e113b5d6d97f678f",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "docs/NOTICE",
+    "size": 1154,
+    "git_oid": "eb1cf45b4da29b0b03fc27ed647cdf56048b09ff",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "docs/comparison.png",
+    "size": 223948,
+    "git_oid": "e12b6d28dbe6f8e692c82198911864d75aaee7e1",
+    "sha256": "38d72ea9a23bf90d753a84502efd33b08d1e766bbb2fb5cd356aebed1849b4cf",
+    "lfs": true
+   },
+   {
+    "path": "docs/comparison_lora.png",
+    "size": 221270,
+    "git_oid": "3d400ec932686a0213bd8ec8972465a81627193a",
+    "sha256": "4226a06b059c5ef433b8596514d09a978c7858c2f564a41b868be014dddf9d60",
+    "lfs": true
+   },
+   {
+    "path": "docs/comparison_lora_mobile.png",
+    "size": 257962,
+    "git_oid": "e4d9f770a8f594b0192f6436bce7e1fff11a32e7",
+    "sha256": "7c22a51a2c62a79c48baf57ef3a17aac3d9046cb4fd18255b2fae36502790f8f",
+    "lfs": true
+   },
+   {
+    "path": "docs/noninferiority.png",
+    "size": 166849,
+    "git_oid": "0b0f9b096370db1243642afd5f90676ef8b4388e",
+    "sha256": "2f3e3f8a6a41d444f5d1e8f4547e77b9f03de9ea51a7b7aa382e7dfda23aa646",
+    "lfs": true
+   },
+   {
+    "path": "docs/two_forms.png",
+    "size": 158559,
+    "git_oid": "75b84469f74382ed85931f5d68a3081b96be90ac",
+    "sha256": "1092287909f0b4d7e34e06af1864c6dae1e5dd2882570125f4f3f2bf17b7c4a1",
+    "lfs": true
+   }
+  ],
+  "weights_bytes": 14015176032,
+  "local": {
+   "dir": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/isichan-ai/Mitsuba_and_HiMitsuba-27B-GGUF",
+   "checks": [
+    {
+     "path": "Mitsuba-ComfyUI-27B/Model-v1.18/Mitsuba-ComfyUI-27B-v1.18-PTQ1_0.gguf",
+     "status": "MATCH",
+     "sha256": "b69c8e7cf3ff883d640479b88f7585348e8aaf3fd130a1e4217eec2f65bed934",
+     "size": 5997626784
+    },
+    {
+     "path": "README.md",
+     "status": "MATCH",
+     "git_oid": "e2c26aeb8d05a4c3ad4614487cdb511a142c2b7a"
+    },
+    {
+     "path": "docs/EVALUATION.md",
+     "status": "MATCH",
+     "git_oid": "57ccb3cc85d8c0fb72d4998a6805276519a2d619"
+    },
+    {
+     "path": "docs/LICENSE",
+     "status": "MATCH",
+     "git_oid": "f938136e3adacfd92be087f6e113b5d6d97f678f"
+    },
+    {
+     "path": "docs/NOTICE",
+     "status": "MATCH",
+     "git_oid": "eb1cf45b4da29b0b03fc27ed647cdf56048b09ff"
+    }
+   ],
+   "required": [
+    "Mitsuba-ComfyUI-27B/Model-v1.18/Mitsuba-ComfyUI-27B-v1.18-PTQ1_0.gguf"
+   ],
+   "verdict": "MATCH"
+  },
+  "access_note": "Hub metadata captured 2026-10-08 ~17:15 (anonymous, HTTP 200); the file downloaded 17:20-18:13 at the pinned revision; from ~18:20 the repo answers HTTP 401 'Invalid username or password' to anonymous API and resolve requests (now private or gated). Local bytes verified against the captured metadata.",
+  "carried_over_from": "20261008-mitsuba-27b-ptq1-r1 (the Hub answers HTTP 401 anonymously since 2026-10-08 ~18:20; this metadata and the local file hashes were captured while the repository was public)"
+ }
+}

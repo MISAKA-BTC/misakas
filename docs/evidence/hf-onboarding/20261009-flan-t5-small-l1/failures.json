@@ -1,0 +1,38 @@
+[
+ {
+  "schema": "misaka.h1.failure.v1",
+  "recorded_at": "2026-10-09T08:46:58+0900",
+  "model": "flan-t5-small",
+  "stage": "preflight",
+  "category": "LAYOUT_OR_RESOURCE_REFUSED",
+  "code": "CLOSE_SIZE_OVER_CAP",
+  "command": "misaka model preflight hf://google/flan-t5-small@0fc9ddf78a1e988dac52e2dac162b0ede4fd74ab --depth shape --max-context 512",
+  "expected": "convert/register/mine ok at the declared context",
+  "observed": "CLOSE_SIZE_OVER_CAP [register] generative close sizing work \u2014 generative close sizing work at stage 0's terminal closes: 67108865 against a cap of 67108864",
+  "model_revision": "0fc9ddf78a1e988dac52e2dac162b0ede4fd74ab",
+  "integration_sha": "3b9ee24e7ed503c17cb1d7212f1a52a47dfafd9a",
+  "failing_fixture": null,
+  "owner": "C",
+  "security_consequence": "",
+  "reproduction": "RUN=20261009-flan-t5-small-l1 bash tests/hf-onboarding/onboard.sh preflight flan-t5-small",
+  "log": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261009-flan-t5-small-l1/preflight/blocker-1.txt"
+ },
+ {
+  "schema": "misaka.h1.failure.v1",
+  "recorded_at": "2026-10-09T08:46:58+0900",
+  "model": "flan-t5-small",
+  "stage": "preflight",
+  "category": "TASK_UNSUPPORTED",
+  "code": "NOT_RUN_PIPELINE_ADMISSION",
+  "command": "misaka model preflight hf://google/flan-t5-small@0fc9ddf78a1e988dac52e2dac162b0ede4fd74ab --depth shape --max-context 512",
+  "expected": "convert/register/mine ok at the declared context",
+  "observed": "NOT_RUN_PIPELINE_ADMISSION \u2014 a encdec class (adapter t5): lowered to 2 RFC-0003 program(s), each admitted (194 nodes, 353894400 MACs; 278 nodes, 38961152 MACs); it registers as a pipeline class, judged below by the generative lane's admission (RFC-0003)",
+  "model_revision": "0fc9ddf78a1e988dac52e2dac162b0ede4fd74ab",
+  "integration_sha": "3b9ee24e7ed503c17cb1d7212f1a52a47dfafd9a",
+  "failing_fixture": null,
+  "owner": "A (task profile) -> B",
+  "security_consequence": "",
+  "reproduction": "RUN=20261009-flan-t5-small-l1 bash tests/hf-onboarding/onboard.sh preflight flan-t5-small",
+  "log": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261009-flan-t5-small-l1/preflight/blocker-2.txt"
+ }
+]

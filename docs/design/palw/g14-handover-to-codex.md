@@ -119,6 +119,42 @@ ADR-0177 に従い、G14 は model を取得できた verifier を前提とす�
 ## 統合時の確認事項（2026-10-11, Lead）
 
 - `codex/g14-prosecution-bounds` @ `c306d1a76` を統合した（kind fence: `LegacyPublicFilerV1 = 8`、`ALL` は 9 要素。7 は HFX の `TaskHeadsV1`）。
-- `PalwPromptProofV1::FpCanonicalWhole`（tag 2）は live int-12 の wire 型への追記で、`PALW_INT12_WIRE_CHANGES_V1` に分類行がなかった。Lead が `CarriedReread { fence: "palw_legacy_public_filer_v1" }` として分類した（ObjectiveOffence の evidence バイト内。int-12 は decode できず拒否、本 build は fence 未満で `ContradictionNotAdmitted`）。**両者が同じ段（mempool / processor / fold）で同じ帰結になることを確認してほしい**。違う場合は guarded arm か A-2 の probe が要る。
+- `PalwPromptProofV1::FpCanonicalWhole`（tag 2）は live int-12 の wire 型への追記で、`PALW_INT12_WIRE_CHANGES_V1` に分類行がなかった。Lead が `CarriedReread { fence: "palw_legacy_public_filer_v1" }` として分類した（ObjectiveOffence の evidence バイト内。int-12 は decode できず拒否、本 build は fence 未満で `ContradictionNotAdmitted`）。→ **解決（codex `4f1120d9e`）**: isolation は int-12 のまま、受理・fold で `palw_prompt_proof_fence_v1` が解釈を保つと codex が自身の分類行に明記した。Lead の重複行は削除。同形の `PalwPanelContradictionV1` 14/15（constrained decode）も同じ扱いで Lead が分類した。
 - `tools/opv-meas` の `public_prosecution_complete_v1` 呼び出しを新しい引数順に合わせた。
 - 役割分担（ユーザー、2026-10-11）: codex = 全 family の正規登録・eligibility（試験用の特例なし）、公開情報からの起動（FP job・input・初期 state の認証取得、永久 prune 後の再取得）。Lead 側 lane = 全対象違反の追及と checkpoint/trace 探索（G14-V）、累積 scope と 64 要素 hiding tile の gate 接続（G14-S）、最大 profile の予算と期限（G14-B）、restart/reorg/IBD/実 RPC からの再開（G14-R）。
+
+## Codex追記: 公開job不正から全Valid署名者を追及する接続（2026-10-11）
+
+public bindingから作る直接kind-4 proofも、public caseのsettlement前に既存False Valid filerへ渡す。seat replayだけに接続されていたため、公開proofでproducerを追及しても全Valid signerのscanが始まらない抜けを修正した。公開licenceの認証・依拠したreceipt・liabilityを既存gateへ照会し、reporter commit/evidence/revealを使う。
+
+実PQ mempool試験は、認証済みwrong-job bindingまでH1がDA回答として拒否し、公開証拠の包含を止めることも示した。休眠public-filer fence内のrow-0/tile-0 Eventだけについて、元carrierの認証とlive demand／discloser検査を通し、同じbindingのIdentityMismatch kind-4が実acceptance／fold rehearsalを通る場合にrelay／templateへの包含を許可する。DA回答bitとconvictionは更新しない。public verifierが自分のproofを提出する必要がある。bad signature／binding、未要求unit、unliable discloserは実mempoolで拒否する。
+
+kind-3 identity convictionが先に成立すると、producerの没収もそのrecordに含まれ、後続kind-4には二重の徴収又はrewardが開かない。fixtureはproducerの実collateral減少、全Valid signerの制裁、外部verifierのcommit/reveal、公開IdentityMismatch proofの実block包含を検査する。登録floor modelを別jobで実行したrootsを使い、秘密materialはverifierへ渡さない。最終結果、失敗と再試験、fixture例外は[実装修正記録](../../audit/g14-review-2026-10-10/implementation.md)を参照。
+
+全G14は未達。開示された算術／input／output／state違反のfull service、全familyの正規eligibility、最大context／populationと期限内包含、恒久pruneされたFP job、restart／reorg／pruned IBD、累積scope・64要素hiding tileは引き続き必要である。ADR-0177 D7と有効化拒否を維持する。
+
+実serviceの停止時sampleで、mempoolの外側virtual readとDNS settlementの二重readがqueued commit upgradeとdeadlockすることを確認した。UTXO policyへ既存DAA snapshotを渡し、元のUTXO guardを保ったまま再取得を除く。旧wrapperをnegative controlとするqueued-writer試験を追加した。詳細と最終再試験は上記監査記録を参照。
+
+
+2026-10-11の公開identity追及／H1 carriage／DNS lock修正の最終sourceは、exact serviceとDA非応答serviceの2件を含む **77 unique PASS**、通常node binary check成功、fresh shipping harvest／再読込 **361 pin差分なし**。G14全域は未達である。残りは全familyの正規入口→公開job/input/初期state取得→各違反の局所化・終局→scope/DA gate→最大profile/期限→restart/reorg/IBD/RPC→実運用規模の測定の順で進める。詳細と失敗を含む生logは[監査記録](../../audit/g14-review-2026-10-10/implementation.md)、現在の順序は[フィードバック](../../audit/g14-review-2026-10-10/feedback.md#残りの実装順序2026-10-11)を参照。
+
+## Codex追記: PublicDA FP V3/V4の通常入口と実service（2026-10-11）
+
+登録floor classに対する正常な公開family drill／graph publication、価格照会、PQ署名済みPublicDAユーザーpromptのFP V3/V4 claim受理をactual-service fixtureへ追加した。新規成熟outsiderと2,065 blocksを検証したfresh DBから、公開foreign-job Eventのexact conviction、producerと全5名のValid signerの徴収・自分のcommit/reveal、予約解放・exitまで通った。V3/V4のwire整数は5/7であり、FP Job V5の試験ではない。V4はfixture内で通常decode-rules fenceをvalidated-armする。production activationは変更していない。
+
+モデルclass自体のpost-genesis登録、canonical prompt省略モード／PanelDAの通常pricing、全family eligibilityとFP V5/Gen/evaluation/prefix-stateは残る。canonical省略モードは現行derived-work pricingが意図的に拒否する。pipelineは単一stageへのconformance流用だけではstage間入力bindingが閉じず、Retrieval snapshotには通常conformanceがない。この前提をwaiveせず第一段階を続ける。試験範囲、fixtureのmempool検証済みtransaction所有修正、途中の失敗、生logは[追加監査記録](../../audit/g14-review-2026-10-10/implementation.md#publicda-fp-v3v4の通常受理から実serviceで全valid署名者を追及する2026-10-11)を参照。
+
+
+2026-10-11の公開job保存follow-upでは、ordinary FP／evaluationのoriginal commitmentをnative-only skipped metadataとして抽出し、post-fence claim-lifetime map（root block `public_fp_jobs/v1`、delta 201、tail 0xF0）へ保持する。元transaction/bodyが消えても公開claim viewからjobを再取得し、公開binding／PromptIds courtでinputを取得する。core 74件・node unit 48件・通常FP V4 service 1件はPASS。履歴消失V3はfixtureのLG14-B有効化漏れを修正し、344.67秒でproducerと全5 Valid signerの徴収・commit/revealまで1件PASSした。合計124 unique PASS、fresh shipping 361 pin差分なし。job identity不正に限る証明で、全PromptIds chunkの取得又は算術fault局所化の成功を意味しない。凍結pinは変更せず、tag-51 opaque canonical proofのA2分類はCarriedRereadへ是正した。pre-fence永久消失jobの移行、evaluation tail／prefix-state、全familyと最大資源・回復試験は残る。途中失敗も監査記録に保存する。
+
+
+2026-10-11の公開input follow-upでは、元FP V3 commitment body・acceptance rowを削除したfresh verifierの実serviceで、正しい公開bindingの後のinput非応答からDA default／producer徴収へ1 PASS（568.20 s）、不正input carrierを採用せず正しいchunkから独立replayのHonest判定／署名付き予約解放へ1 PASS（346.73 s）を確認した。input bootstrapの完了後もnode policyがcaseを保持し、既存tag 155でlive予約を解放する。filer/input 20件、pruned identity service 1件の回帰もPASS（今回23 unique）。閉じたguard/deposit上限、最大input、全family、scope、回復・最大負荷は未達。単独releaseだけではHonestを証明せず、今回の実worker判定はlogで確認した。[証拠と限界](../../audit/g14-review-2026-10-10/implementation.md#履歴消失後の公開input取得非応答予約解放2026-10-11)。
+
+
+2026-10-11のpre-replay input follow-upでは、LG14-B内のuser inputを小さいticketで先に認証し、context／full replay ticket取得前から公開binding／PromptIdsのcourtへ進める。pruned PublicDAもexact jobの公開prefixを再取得でき、capture tailはコピー・実行しない。通常の完全な公開inputはworker起動前にbootstrapを外し、余分な予約を作らない。最終filer/input 23 unit、実serviceのpruned honest（実workerのHonest判定を直接assert）、input非応答、通常PublicDA honest／対象予約なし、pruned identity／producerと全5 Valid signer徴収・revealの4件がPASS（今回27 unique）。node binary checkもPASS。context取得不能／full ticket拒否の実service負荷試験、最大inputのsession予算、pre-fence永久消失job、initial/prefix-state、全family、scope／hiding、回復・最大負荷は引き続き未達。shipping validatorとADR-0177 D7を維持する。[実装・失敗・最終証拠](../../audit/g14-review-2026-10-10/implementation.md#再計算前のユーザーinput-bootstrap2026-10-11)。
+
+
+2026-10-11のmetadata無しFP follow-upでは、job保存fence前に通常受理し、元body/acceptance rowも削除したfresh outsiderが、再計算前の公開bindingだけからidentity conviction/producerと全5 Valid signerの徴収・reveal（314.21 s）、又はbinding非応答DA default（536.03 s）まで1件ずつPASSした。filer/input 26件、既存pruned honest取得/replay/release回帰1件もPASS、通常PublicDA honest回帰（290.18 s）もPASS、今回30 unique。busy replay/capture/seat枠の外でaccepted descriptorだけを確認し、実行中の同一candidateを再probeせず、prompt/signature vectorsをコピーしない。正しいbinding後のjob本体取得は依然未達で、そのcourt実装へ進む。wire/activationはこの区切りで変更せず、shipping harvestは再実行していない。[証拠と限界](../../audit/g14-review-2026-10-10/implementation.md#保存metadataもないfp-claimの公開binding追及2026-10-11)。
+
+
+2026-10-11の公開FP job-preimage follow-upでは、保存metadataと元body/acceptance rowの全てがないfresh verifierが、公開binding→署名付きjob descriptor→公開input→実workerのHonest判定→署名付きreleaseまで実serviceでPASS（306.57 s）。正しいbinding後のjob非応答もproducer DA default/徴収までPASS（554.56 s）。filer/inputとproducer responder policy 35件、core legacy held 10件、legacy V-fold回帰15件、metadata無しidentity conviction/producerと全5 Valid signer徴収・reveal回帰1件（332.88 s）もPASS、今回63 unique（以前の30/27/23件と重複加算しない）。node binary checkもPASS。shipping fresh integration harvestと同一core binaryの3 goldensの再読込で361 pin差分なし。初回compile、旧release期待値、disk不足の失敗を監査logに保存した。unit/answerの末尾へFpJobを追加し、既存tag/ordinalと有効化拒否は維持する。64 KiBを超えるdescriptor、binding/transport/profile適合、追加session予算は未解決で、最大jobへの不可能な義務を排除するまで有効化できない。initial/prefix-state、全family、scope/hiding、回復・最大負荷・包含期限を含むG14全域は未達。[実装と証拠](../../audit/g14-review-2026-10-10/implementation.md#公開fp-job-preimageの取得court2026-10-11)。

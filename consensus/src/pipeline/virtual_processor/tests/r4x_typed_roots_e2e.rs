@@ -521,7 +521,11 @@ async fn r4x_weights_only_spec_is_byte_for_byte_the_legacy_registration_and_the_
     assert_ne!(a.api().unwrap().header.config_root, route.header.config_root, "arming schedules K2-TR-v1");
     let before = route.rows.clone();
     let spec = u.spec(1, SpecObjectV1::RegisterClass { spec: retrieval_spec(3) });
-    u.send(vec![(1, spec)]).await;
+    // The kernel route's mempool gate (K2S GAP 10) drops it by name before any template: a typed-root object below its fence.
+    let tx = u.carrier(1, &spec);
+    let refused = u.mempool(&tx).expect_err("a Spec carrier below palw_typed_roots_v1 never enters the mempool");
+    assert!(refused.to_string().contains("palw_typed_roots_v1 is not in force"), "{refused}");
+    u.chain.heartbeat(u.ttpb(), Vec::new()).await;
     let after = u.api().unwrap();
     assert_eq!(after.rows, before, "a Spec object below palw_typed_roots_v1 is dropped by name: the route's rows are untouched");
     assert!(after.ledger().unwrap().typed.is_empty());
@@ -811,3 +815,6 @@ impl DebugName for ClaimStateV1 {
 mod da16_scope;
 // Lane G14C (GAP-50/51): typed classes eligible only through their components; node recovery of the typed rows and the line.
 mod g14c;
+// Lane G14-K: the kernel service's typed pipeline (the same `pursuit` functions kaspad's verifier calls) — memory step lies pre- and
+// post-Final, an honest claim left alone.
+mod g14k;

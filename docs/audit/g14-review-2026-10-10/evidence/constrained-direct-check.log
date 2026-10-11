@@ -1,0 +1,56 @@
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+error[E0004]: non-exhaustive patterns: `&PalwPanelContradictionV1::ConstrainedDecode { .. }` not covered
+   --> consensus/core/src/palw_aggregate_liability_v1.rs:357:11
+    |
+357 |     match contradiction {
+    |           ^^^^^^^^^^^^^ pattern `&PalwPanelContradictionV1::ConstrainedDecode { .. }` not covered
+    |
+note: `PalwPanelContradictionV1` defined here
+   --> consensus/core/src/palw_offence_v1.rs:171:10
+    |
+171 | pub enum PalwPanelContradictionV1 {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+245 |     ConstrainedDecode {
+    |     ----------------- not covered
+    = note: the matched value is of type `&PalwPanelContradictionV1`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+371 ~         PalwPanelContradictionV1::PromptNotAnchored { .. } => PALW_CONTRADICTION_PROMPT_NOT_ANCHORED_V1,
+372 ~         &PalwPanelContradictionV1::ConstrainedDecode { .. } => todo!(),
+    |
+
+error[E0004]: non-exhaustive patterns: `&PalwPanelContradictionV1::ConstrainedDecode { .. }` not covered
+     --> consensus/core/src/palw_state_v2.rs:24740:15
+      |
+24740 |         match &payload.contradiction {
+      |               ^^^^^^^^^^^^^^^^^^^^^^ pattern `&PalwPanelContradictionV1::ConstrainedDecode { .. }` not covered
+      |
+note: `PalwPanelContradictionV1` defined here
+     --> consensus/core/src/palw_offence_v1.rs:171:10
+      |
+  171 | pub enum PalwPanelContradictionV1 {
+      |          ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  245 |     ConstrainedDecode {
+      |     ----------------- not covered
+      = note: the matched value is of type `&PalwPanelContradictionV1`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+      |
+24826 ~             },
+24827 +             &PalwPanelContradictionV1::ConstrainedDecode { .. } => todo!()
+      |
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+For more information about this error, try `rustc --explain E0004`.
+warning: `kaspa-consensus-core` (lib) generated 1 warning
+error: could not compile `kaspa-consensus-core` (lib) due to 2 previous errors; 1 warning emitted

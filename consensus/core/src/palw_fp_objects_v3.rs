@@ -458,6 +458,7 @@ where
             object: PalwConsensusObjectV2::FreePromptCommitted {
                 // ADR-0152 v3.1 J-1 (F1): the commitment's job pin, which the claim records as its identity.
                 job_pin: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&payload.commitment),
+                public_job: Some(Box::new(payload.commitment.clone())),
                 eval: None,
                 claim: payload.claim_id(),
                 class_id: commitment.job.class_id,
@@ -487,17 +488,9 @@ where
                 // The DA obligations and the court binding travel WITH the claim: the panel and
                 // the court read them off the state record.
                 //
-                // **TWO of the three DA fields, and the third is carried by nothing** (mainnet
-                // audit 2026-09-06 M-3). `trace_manifest_root` is not among these fields and is
-                // not on `PalwClaimStateV2` either, so no court, no seat and no transition on this
-                // lane ever reads it — the attempt lane pins it to a value the panel replays, and
-                // this lane's is `fp_trace_manifest_root_v3` over the per-chunk EVENT digests,
-                // which the chain does not hold and cannot recompute. Giving it an obligation
-                // means carrying it here and giving the DA court something to bind a disclosure
-                // to, which is a `PALW_STATE_V2_VERSION` move belonging to the record's owner.
-                // Recorded rather than repaired, and pinned by
-                // `the_free_prompt_lanes_trace_manifest_root_is_carried_by_nothing` below so the
-                // gap can neither widen nor close silently.
+                // Retention and chunk count drive the existing DA obligation. The original
+                // manifest root is retained only as authenticated public job metadata under
+                // LG14-A; it does not introduce a manifest-opening DA obligation.
                 execution_root: commitment.execution_root,
                 trace_chunk_count: commitment.trace_chunk_count,
                 trace_retention_daa: commitment.trace_retention_daa,
@@ -1045,18 +1038,11 @@ mod tests {
         }
     }
 
-    /// **The third DA field is carried by nothing, and that is pinned rather than repaired**
-    /// (ADR-0072 Decision 8; mainnet audit 2026-09-06 M-3).
-    ///
-    /// `trace_retention_daa` and `trace_chunk_count` reach the state record and are given the
-    /// chain's own values past `Params::palw_fp_da_pins`. `trace_manifest_root` reaches nothing:
-    /// it is inside `fp_claim_id_v3`, so moving it renames the claim, and it is inside NOTHING
-    /// else — the extracted object is otherwise byte-identical. This is the "pin the limitation,
-    /// not just the behaviour" form: it PASSES today, because today the field carries no
-    /// obligation, and it fails the day someone carries it, forcing them to decide what obligation
-    /// it then bears.
+    /// LG14-A retains the original manifest root as native public metadata. Normalizing the
+    /// claim name leaves the old carrier bytes unchanged; the two DA obligation fields still
+    /// have their original meanings (ADR-0072 Decision 8).
     #[test]
-    fn the_free_prompt_lanes_trace_manifest_root_is_carried_by_nothing() {
+    fn trace_manifest_root_is_retained_as_metadata_without_changing_carrier_bytes() {
         let fp = freeprompt();
         let extract = |p: &PalwFpCommitmentTxPayloadV3| {
             palw_fp_objects_from_accepted_txs_v3(
@@ -1090,14 +1076,17 @@ mod tests {
             panic!("both extractions produce a free-prompt commitment");
         };
         assert_ne!(claim_a, claim_b, "the manifest root is inside the claim id, so it names the claim");
-        // …and with the name normalised away, nothing else differs: no field of the consensus
-        // object carries the manifest root, so no rule downstream can be about it.
         *claim_b = *claim_a;
-        assert_eq!(
-            object_a, object_b,
-            "no field of the extracted object carries `trace_manifest_root` — if this fails, the field now travels and \
-             something must decide what obligation it bears (ADR-0072 Decision 8)"
-        );
+        assert_eq!(borsh::to_vec(&object_a).unwrap(), borsh::to_vec(&object_b).unwrap(),
+            "native public metadata changes no carrier bytes or DA obligation fields");
+        let (
+            PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(job_a), .. },
+            PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(job_b), .. },
+        ) = (&mut object_a, &mut object_b) else { panic!("extractor retains both original commitments") };
+        assert_eq!(job_a.as_ref(), &honest.commitment);
+        assert_eq!(job_b.as_ref(), &substituted.commitment);
+        job_b.trace_manifest_root = job_a.trace_manifest_root;
+        assert_eq!(object_a, object_b, "only the claim name and original metadata manifest root differ");
     }
 
     /// A leaf count above the ladder is refused outright by the stateless rule, so it never

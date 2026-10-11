@@ -363,6 +363,19 @@ pub struct PalwConstrainedDecodeAccusationV1 {
     pub witness: Option<u32>,
 }
 
+/// Flat-profile counterpart of the tiled accusation. The whole public pin authenticates
+/// every row and token ID; table openings authenticate only the renderings the rule reads.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwConstrainedFlatDecodeAccusationV1 {
+    pub pin: crate::palw_step_refute::PalwBase0DecodeTokensV1,
+    pub position: u32,
+    pub job: PalwFreePromptJobV3,
+    pub renderings: Vec<PalwTokenTableOpeningV1>,
+    pub eog: PalwTokenTableEogOpeningV1,
+    pub witness: Option<u32>,
+    pub beat_lane: Option<u32>,
+}
+
 // ---------------------------------------------------------------------------------------------
 // The mask
 // ---------------------------------------------------------------------------------------------

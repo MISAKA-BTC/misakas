@@ -1875,15 +1875,23 @@ async fn rfc9_a_pfs4_receipt_header_is_refused_below_the_fence_and_signature_che
 
         let verdict = |r: Result<_, RuleError>| match r {
             Err(RuleError::BadPalwCarriageAdmission { algo_id: 7, reason }) => Some(reason.to_lowercase()),
+            // A-2: below the fence a PFS4 carriage is judged as the live build judges bytes it cannot read — here its
+            // carriage-shape cap (8,192 bytes) refuses the V4 receipt carriage before admission is asked.
+            Err(RuleError::BadPalwCommitmentShape(reason)) if !armed => Some(format!("below the fence (shape): {}", reason.to_lowercase())),
             _ => None,
         };
         let signed_verdict = verdict(ctx.consensus.validate_and_insert_block(signed.to_immutable()).virtual_state_task.await.map(|_| ()));
         let junk_verdict = verdict(ctx.consensus.validate_and_insert_block(junk.to_immutable()).virtual_state_task.await.map(|_| ()));
         if !armed {
-            // Both refused, and for the fence — not for a signature and not for a size.
+            // Both refused below the fence — by the fence's name, or by the live build's own carriage-shape cap (A-2); never
+            // for a signature.
             for reason in [signed_verdict, junk_verdict] {
                 let reason = reason.expect("a PFS4 header below the fence is refused");
-                assert!(reason.contains("below") && reason.contains("palw_receipt_spend_v4"), "refused for the fence by name, got: {reason}");
+                assert!(
+                    (reason.contains("below") && reason.contains("palw_receipt_spend_v4")) || reason.starts_with("below the fence (shape)"),
+                    "refused below the fence, got: {reason}"
+                );
+                assert!(!reason.contains("signature"), "never for a signature below the fence: {reason}");
             }
         } else {
             let reason = junk_verdict.expect("a junk-signed PFS4 header is refused past the fence");
@@ -14324,6 +14332,7 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &inj_params, &cx(1, 1, 1), &reg, None).unwrap();
         let commit = Obj::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            public_job: None,
             eval: None,
             claim: claim_id,
             class_id: base_class,
@@ -14615,6 +14624,7 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &inj_params, &cx(1, 1, 1), &reg, None).unwrap();
         let commit = Obj::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            public_job: None,
             eval: None,
             claim: claim_id,
             class_id: base_class,

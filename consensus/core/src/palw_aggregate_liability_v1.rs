@@ -350,6 +350,9 @@ pub const PALW_CONTRADICTION_FORGED_OUTPUT_TILED_V1: u8 = 11;
 pub const PALW_CONTRADICTION_LOGITS_NOT_STEP_OUTPUT_V1: u8 = 12;
 /// `PromptNotAnchored` — an attempt's committed prompt is not its anchor's (F1-M).
 pub const PALW_CONTRADICTION_PROMPT_NOT_ANCHORED_V1: u8 = 13;
+/// The constrained counterpart of forged tiled output; dormant under the public-filer fence.
+pub const PALW_CONTRADICTION_CONSTRAINED_DECODE_V1: u8 = 14;
+pub const PALW_CONTRADICTION_CONSTRAINED_DECODE_FLAT_V1: u8 = 15;
 
 /// **The borsh tag of a contradiction** (`PalwPanelContradictionV1`'s `use_discriminant`), by an
 /// exhaustive match so a contradiction added later has to be classified here before this compiles.
@@ -369,6 +372,8 @@ pub fn palw_contradiction_tag_v1(contradiction: &PalwPanelContradictionV1) -> u8
         PalwPanelContradictionV1::ForgedOutputTiled { .. } => PALW_CONTRADICTION_FORGED_OUTPUT_TILED_V1,
         PalwPanelContradictionV1::LogitsNotStepOutput { .. } => PALW_CONTRADICTION_LOGITS_NOT_STEP_OUTPUT_V1,
         PalwPanelContradictionV1::PromptNotAnchored { .. } => PALW_CONTRADICTION_PROMPT_NOT_ANCHORED_V1,
+        PalwPanelContradictionV1::ConstrainedDecode { .. } => PALW_CONTRADICTION_CONSTRAINED_DECODE_V1,
+        PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => PALW_CONTRADICTION_CONSTRAINED_DECODE_FLAT_V1,
     }
 }
 
@@ -419,6 +424,8 @@ pub fn palw_offence_is_intent_class_v1(offence: PalwConvictedOffenceV1) -> bool 
                 | PALW_CONTRADICTION_OUTPUT_MISMATCH_V1
                 | PALW_CONTRADICTION_FORGED_OUTPUT_TILED_V1
                 | PALW_CONTRADICTION_PROMPT_NOT_ANCHORED_V1
+                | PALW_CONTRADICTION_CONSTRAINED_DECODE_V1
+                | PALW_CONTRADICTION_CONSTRAINED_DECODE_FLAT_V1
         ),
         PalwConvictedOffenceV1::DaDefault
         | PalwConvictedOffenceV1::CourtHeldVerdict
@@ -644,13 +651,13 @@ mod tests {
     /// **The intent class, by name** — the contract's list and nothing else; the DA default is TIER
     /// (the user's decision 1, rcore/cap-s1).
     #[test]
-    fn the_intent_class_is_the_court_fraud_and_contradictions_9_10_11_13_and_s1_is_tier() {
+    fn the_intent_class_is_the_court_fraud_and_contradictions_9_10_11_13_14_and_s1_is_tier() {
         use PalwConvictedOffenceV1 as O;
         assert!(!palw_offence_is_intent_class_v1(O::DaDefault), "decision 1: S1 keeps the tier");
         assert!(palw_offence_is_intent_class_v1(O::CourtFraud));
         for tag in 0..=20u8 {
             let intent = palw_offence_is_intent_class_v1(O::Contradiction { tag });
-            assert_eq!(intent, matches!(tag, 9 | 10 | 11 | 13), "tag {tag}");
+            assert_eq!(intent, matches!(tag, 9 | 10 | 11 | 13 | 14 | 15), "tag {tag}");
         }
         for tier in [O::CourtHeldVerdict, O::Equivocation, O::CoveringSigner, O::Contradiction { tag: 5 }, O::Contradiction { tag: 12 }] {
             assert!(!palw_offence_is_intent_class_v1(tier), "{tier:?} keeps the 3G tier");

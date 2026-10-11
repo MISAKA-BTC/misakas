@@ -207,7 +207,36 @@ pub fn plan_kernel_pursuit_v1(
     pursuit: &KernelPursuitV1,
     filing: Option<&KernelFilingV1<'_>>,
 ) -> Result<KernelPursuitStepV1, String> {
-    let ledger = route.ledger()?;
+    plan_kernel_pursuit_on_v1(route, &route.ledger()?, pursuit, filing)
+}
+
+/// **The consumer's view of the route's ledger** (lane G14-K): the rows rebuilt, then the terms the fold injects at every load and
+/// never roots — the court scope past `palw_provider_court_v1` (G14-S: 16 units per demander, the clear budget, 4 dismissed filings)
+/// and `palw_verifier_pay_v1`'s terms — so a dry run judges a filing or a demand exactly as the next block's fold will.
+/// `provider_court` / `verifier_pay`: the fences' activation DAAs where they are in force at the next block, as the consumer resolves
+/// them (`None` below them: the ledger is the rows' alone). Not injected (no filing's verdict reads them): the attested artifact set
+/// and DA16's provider-liable claims.
+pub fn kernel_consumer_ledger_v1(
+    route: &PalwKernelRouteStateV1,
+    provider_court: Option<u64>,
+    verifier_pay: Option<u64>,
+) -> Result<KernelLedgerV1, String> {
+    let mut ledger = route.ledger()?;
+    ledger.court_scope_policy =
+        provider_court.map(|activation_daa| misaka_palw_kernel::court_scope::CourtScopePolicyV1 { activation_daa });
+    ledger.verifier_pay_policy = verifier_pay.map(kaspa_consensus_core::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1);
+    Ok(ledger)
+}
+
+/// [`plan_kernel_pursuit_v1`] over a ledger the caller rebuilt (the consumer's view, [`kernel_consumer_ledger_v1`]): one rebuild a tick
+/// serves every claim the verifier pursues.
+pub fn plan_kernel_pursuit_on_v1(
+    route: &PalwKernelRouteStateV1,
+    ledger: &KernelLedgerV1,
+    pursuit: &KernelPursuitV1,
+    filing: Option<&KernelFilingV1<'_>>,
+) -> Result<KernelPursuitStepV1, String> {
+    let ledger = ledger.clone();
     let claim = pursuit.claim;
     let accuser = pursuit.accuser();
     let Some(row) = ledger.claims.get(&claim) else { return Ok(KernelPursuitStepV1::NoClaim) };
@@ -332,6 +361,292 @@ fn plan_filing(
 /// re-signs the same object after a restart produces the same bytes, the same chunk group, the same carrier.
 pub const PURSUIT_DETERMINISTIC_RND_V1: [u8; 32] = [0u8; 32];
 
+// ---- Lane G14-K: the service half — what a running verifier (kaspad's `PalwPanelService`) calls every tick ----------------------
+//
+// The planner above decides the next step from the rows and a goal. A service also needs (1) the goal — its own deterministic check
+// of the claim against public material and the registered model it holds (ADR-0177 D7), (2) for a segmented claim, the public
+// material the chain's blocks carry (the producer's `Respond` parts, the prompt tiles), and (3) the objects a planned step sends.
+// All three are pure functions of public bytes and the verifier's model: nothing here is a rule, and nothing is kept between calls.
+
+/// The fixed chunk cap a service's filings ride the route's chunk lane with (a filing that does not fit one carrier). Fixed so every
+/// rebuild after a restart derives the same group (module doc, "deterministic carriers").
+pub const KERNEL_SERVICE_CHUNK_CAP_V1: usize = 50_000;
+
+/// A public source holding no producer value: the commitments-only replay must never read one (a read is a bug, answered `None`).
+struct NoProducerValuesV1;
+
+impl misaka_palw_kernel::ledger::PublicSourceV1 for NoProducerValuesV1 {
+    fn node(&self, _: u8, _: u32, _: u16, _: u16) -> Option<misaka_palw_tir::Tensor> {
+        None
+    }
+}
+
+/// The goal a finding sets (`None`: the claim checks — an honest verifier has nothing to send).
+pub fn kernel_goal_of_finding_v1(finding: misaka_palw_kernel::ledger::OutsiderFindingV1) -> Option<KernelGoalV1> {
+    use misaka_palw_kernel::ledger::OutsiderFindingV1;
+    match finding {
+        OutsiderFindingV1::Clean => None,
+        OutsiderFindingV1::Prosecute(proof) => Some(KernelGoalV1::Prove(proof)),
+        OutsiderFindingV1::Demand(positions) => Some(KernelGoalV1::Demand(positions)),
+    }
+}
+
+/// **A single-program (K2-TIR v1/v2) or pipeline claim, checked by exact replay** from the ledger's public commitments, the job and
+/// the verifier's registered model (`OutsiderV1::check_computation`): no producer value is read, so no position is ever demanded of an
+/// honest producer and a lie is proved from what is already public. `Err`: the verifier cannot check (its model does not open to the
+/// registered commitments, a typed or segmented claim) — never producer misconduct, never a filing.
+pub fn kernel_check_program_v1(
+    ledger: &KernelLedgerV1,
+    claim: &Digest,
+    model: &dyn misaka_palw_kernel::ledger::PublicArtifactV1,
+    salt: Digest,
+) -> Result<Option<KernelGoalV1>, String> {
+    misaka_palw_kernel::ledger::OutsiderV1 { ledger, claim: *claim, material: &NoProducerValuesV1, artifact: model, salt }
+        .check_computation()
+        .map(kernel_goal_of_finding_v1)
+}
+
+/// **The registered parameter-commitment root a verifier's ONE model must open to** to check the claims of `class_binding_id`: a
+/// single-program or segmented class's own commitments; a `Memory` typed class's rule program (its base weights — the memory's M0
+/// comes from them, every later pre-state from the chain's rows). `None` where one model is not enough or none is used: a pipeline
+/// (one program a stage), a composite (a model a stage), a retrieval snapshot (no weights), an unknown class.
+pub fn kernel_class_model_root_v1(ledger: &KernelLedgerV1, class_binding_id: &Digest) -> Option<Digest> {
+    if let Some(class) = ledger.classes.get(class_binding_id) {
+        return Some(class.param_commitments.root());
+    }
+    match &ledger.typed.classes.get(class_binding_id)?.kind {
+        misaka_palw_kernel::spec::SpecClassKindV1::Memory { rule, .. } => Some(rule.param_commitments.root()),
+        _ => None,
+    }
+}
+
+/// **A typed-root claim (RFC-0004 Part II), checked by exact replay** from the public commitments, the authenticated public pre-state
+/// (the chain's carried post-state, or M0 from the verifier's model) and the model (`SpecOutsiderV1::check_computation`): no producer
+/// node value is read. A pre-state nobody publishes is a demand (the claim's DA), never a guess. No public snapshot copy is used
+/// (every retrieval slice comes from the chain).
+pub fn kernel_check_typed_v1(
+    ledger: &KernelLedgerV1,
+    claim: &Digest,
+    model: &dyn misaka_palw_kernel::ledger::PublicArtifactV1,
+    salt: Digest,
+) -> Result<Option<KernelGoalV1>, String> {
+    misaka_palw_kernel::spec::outsider::SpecOutsiderV1 {
+        ledger,
+        claim: *claim,
+        material: &NoProducerValuesV1,
+        artifact: model,
+        snapshots: &(),
+        salt,
+    }
+    .check_computation()
+    .map(kernel_goal_of_finding_v1)
+}
+
+/// The public token stream a segmented claim's replay runs on: the job's prompt (inline, or the authenticated tiles `prompt`) and every
+/// delivered id but the last (the last is selected, never fed). `None` while the prompt is not public in full.
+pub fn kernel_segmented_tokens_v1(
+    view: &misaka_palw_kernel::seg_ledger::SegClaimViewV1,
+    tiled_prompt: Option<&[u32]>,
+) -> Option<Vec<u32>> {
+    let prompt: Vec<u32> = match (&view.job.inline_prompt, tiled_prompt) {
+        (Some(ids), _) => ids.clone(),
+        (None, Some(ids)) if ids.len() == view.job.prompt_len as usize => ids.to_vec(),
+        _ => return None,
+    };
+    let fed = view.generated.len().saturating_sub(1);
+    Some(prompt.into_iter().chain(view.generated[..fed].iter().copied()).collect())
+}
+
+/// **A segmented (K2-TIR-v4/v5) claim, checked by the verifier's own replay against what the chain serves**: `own` is its replay's
+/// position roots (`seg_detect::prepare_reexecution_v1`, a pure function of the record and the model: recomputed by every new
+/// process), `served` the positions the blocks carry. Matching roots: `None`. A divergence: the adaptive search's next demand, or the
+/// element proof once the served material localizes it (`seg_detect::check_claim_by_reexecution_v1`).
+pub fn kernel_check_segmented_v1(
+    view: &misaka_palw_kernel::seg_ledger::SegClaimViewV1,
+    own: &misaka_palw_kernel::seg_detect::OwnReplayV1,
+    served: &dyn misaka_palw_kernel::element::SegMaterialV1,
+    model: &dyn misaka_palw_kernel::ledger::PublicArtifactV1,
+    tokens: &[u32],
+) -> Result<Option<KernelGoalV1>, String> {
+    use misaka_palw_kernel::element::SegFindingV1;
+    let art = |j: u16, l: Option<u16>| model.param(0, j, l);
+    let r = misaka_palw_kernel::seg_detect::check_claim_by_reexecution_v1(
+        &view.context(),
+        &own.roots,
+        own.decode_mismatch,
+        served,
+        &art,
+        tokens,
+    );
+    match r.finding {
+        SegFindingV1::Clean => Ok(None),
+        SegFindingV1::Fault(f) => Ok(Some(KernelGoalV1::Prove(misaka_palw_kernel::ledger::ProsecutionV1::Segmented(f.to_bytes())))),
+        SegFindingV1::Demand(ps) => Ok(Some(KernelGoalV1::Demand(ps.into_iter().map(|p| (0, p)).collect()))),
+        SegFindingV1::Inconsistent(why) => Err(why),
+    }
+}
+
+/// **Every object the given carrier objects make, whole**: the certification lane's `ObjectChunk`s and the route's own chunk lane
+/// (tag 113) reassembled per group once every part is present (any order; the first copy of an index wins, as the lane's), every other
+/// object as it rode. Input order is kept for whole objects; an assembled one is emitted where its last part was seen.
+pub fn kernel_reassemble_objects_v1(objects: impl IntoIterator<Item = PalwConsensusObjectV2>) -> Vec<PalwConsensusObjectV2> {
+    use std::collections::BTreeMap;
+    type Parts = (u8, BTreeMap<u8, Vec<u8>>);
+    let mut generic: BTreeMap<Hash64, Parts> = BTreeMap::new();
+    let mut lane: BTreeMap<(PalwBondKeyV2, Hash64), Parts> = BTreeMap::new();
+    let mut out = Vec::new();
+    let complete = |entry: &mut Parts, out: &mut Vec<PalwConsensusObjectV2>| {
+        if entry.1.len() == entry.0 as usize && entry.0 > 0 {
+            let whole: Vec<u8> = entry.1.values().flatten().copied().collect();
+            if let Ok(o) = borsh::from_slice::<PalwConsensusObjectV2>(&whole) {
+                out.push(o);
+            }
+            entry.1.clear();
+            entry.0 = 0; // assembled once
+        }
+    };
+    for o in objects {
+        match o {
+            PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes } => {
+                let entry = generic.entry(group).or_insert_with(|| (count, BTreeMap::new()));
+                if entry.0 == count {
+                    entry.1.entry(index).or_insert(bytes);
+                    complete(entry, &mut out);
+                }
+            }
+            PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, .. } => {
+                let entry = lane.entry((chunk.opener, chunk.group)).or_insert_with(|| (chunk.count, BTreeMap::new()));
+                if entry.0 == chunk.count {
+                    entry.1.entry(chunk.index).or_insert(chunk.bytes);
+                    complete(entry, &mut out);
+                }
+            }
+            whole => out.push(whole),
+        }
+    }
+    out
+}
+
+/// The kernel route objects (decoded strictly) among whole carrier objects.
+fn kernel_route_objects_v1(objects: &[PalwConsensusObjectV2]) -> impl Iterator<Item = KernelRouteObjectV1> + '_ {
+    objects.iter().filter_map(|o| match o {
+        PalwConsensusObjectV2::KernelRouteV1 { bytes, .. } => KernelRouteObjectV1::decode(bytes).ok(),
+        _ => None,
+    })
+}
+
+/// **A tiled job's prompt from the tiles the blocks carry**, each authenticated against the job's committed root (an inauthentic tile
+/// is skipped, the first authentic copy of an index kept). `None` until every tile is present.
+pub fn kernel_tiled_prompt_v1(
+    objects: &[PalwConsensusObjectV2],
+    job_id: &Digest,
+    prompt_len: u32,
+    prompt_root: &Digest,
+) -> Option<Vec<u32>> {
+    let tiles = misaka_palw_kernel::seg::prompt_tiles_v1(prompt_len);
+    let mut got: std::collections::BTreeMap<u32, Vec<u32>> = std::collections::BTreeMap::new();
+    for k in kernel_route_objects_v1(objects) {
+        if let KernelRouteObjectV1::PostPromptTile { job, tile } = k
+            && job == *job_id
+            && tile.authenticates(prompt_len, prompt_root)
+        {
+            got.entry(tile.index).or_insert(tile.ids);
+        }
+    }
+    (got.len() as u32 == tiles).then(|| got.into_values().flatten().collect())
+}
+
+/// **The positions of a segmented claim the chain's blocks serve** — every `Respond` part for the claim (stage 0), assembled and
+/// authenticated against the committed segment roots (`seg_da::assemble_position_full_v1`); a position whose parts do not all ride is
+/// not material. A hiding value's served leaf hashes are kept beside it (G14-S).
+#[derive(Clone, Debug, Default)]
+pub struct KernelBlockMaterialV1 {
+    pub positions: std::collections::BTreeMap<u32, misaka_palw_kernel::seg_da::AssembledPositionV1>,
+    pub hidden: std::collections::BTreeMap<u32, misaka_palw_kernel::seg_da::HiddenLeavesV1>,
+}
+
+impl KernelBlockMaterialV1 {
+    pub fn from_objects(
+        objects: &[PalwConsensusObjectV2],
+        claim: &Digest,
+        view: &misaka_palw_kernel::seg_ledger::SegClaimViewV1,
+    ) -> Self {
+        let mut parts: std::collections::BTreeMap<u32, Vec<Vec<u8>>> = std::collections::BTreeMap::new();
+        for k in kernel_route_objects_v1(objects) {
+            if let KernelRouteObjectV1::Respond { claim: c, stage: 0, position, bytes } = k
+                && c == *claim
+            {
+                parts.entry(position).or_default().push(bytes);
+            }
+        }
+        let mut out = Self::default();
+        for (p, parts) in parts {
+            if let Some((a, leaves)) =
+                misaka_palw_kernel::seg_da::assemble_position_full_v1(&view.program, &view.segment_roots, view.positions, p, &parts)
+            {
+                out.positions.insert(p, a);
+                out.hidden.insert(p, leaves);
+            }
+        }
+        out
+    }
+}
+
+impl misaka_palw_kernel::element::SegMaterialV1 for KernelBlockMaterialV1 {
+    fn position(&self, p: u32) -> Option<Vec<Vec<misaka_palw_tir::Tensor>>> {
+        self.positions.get(&p).map(|(values, _, _)| values.clone())
+    }
+    fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
+        self.positions.get(&p).map(|(_, siblings, _)| siblings.clone())
+    }
+    fn commitments(&self, _: &misaka_palw_tir::program::TirProgramV1, p: u32) -> Option<Vec<Vec<Digest>>> {
+        self.positions.get(&p).map(|(_, _, commitments)| commitments.clone())
+    }
+    fn hidden_leaves(&self, _: &misaka_palw_tir::program::TirProgramV1, p: u32) -> Option<misaka_palw_kernel::seg_da::HiddenLeavesV1> {
+        self.hidden.get(&p).cloned()
+    }
+}
+
+/// One object a planned step sends, unsigned (the service signs it deterministically: a route object over
+/// `palw_kernel_route_message_v1`, a chunk over `palw_kernel_chunk_message_v1`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KernelSendV1 {
+    Route(KernelRouteObjectV1),
+    Chunk(kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkV1),
+}
+
+/// **What `step` sends** for `pursuit` (`filing`: the signed `FileProof` carrier a `FileWhole` / `FileChunks` step sends, whole or cut
+/// at its cap). Steps that wait, end or report send nothing; a step that needs the filing and has none is an error.
+pub fn kernel_step_sends_v1(
+    step: &KernelPursuitStepV1,
+    pursuit: &KernelPursuitV1,
+    filing: Option<&KernelFilingV1<'_>>,
+) -> Result<Vec<KernelSendV1>, String> {
+    let accuser = pursuit.accuser();
+    let claim = pursuit.claim;
+    Ok(match step {
+        KernelPursuitStepV1::Seal { seal, .. } => {
+            vec![KernelSendV1::Route(KernelRouteObjectV1::SealProof { accuser, claim, seal: *seal })]
+        }
+        KernelPursuitStepV1::FileWhole { .. } => {
+            let KernelGoalV1::Prove(proof) = &pursuit.goal else { return Err("a filing step without a proof".into()) };
+            vec![KernelSendV1::Route(KernelRouteObjectV1::FileProof { accuser, claim, proof: proof.clone() })]
+        }
+        KernelPursuitStepV1::FileChunks { missing, .. } => {
+            let filing = filing.ok_or("a chunked filing step needs its signed carrier")?;
+            palw_kernel_chunks_v1(filing.signed, pursuit.bond, PalwKernelChunkTargetV1::Claim(claim), filing.chunk_cap)?
+                .into_iter()
+                .filter(|c| missing.contains(&c.index))
+                .map(KernelSendV1::Chunk)
+                .collect()
+        }
+        KernelPursuitStepV1::Demand { stage, position, .. } => {
+            vec![KernelSendV1::Route(KernelRouteObjectV1::FileDemand { demander: accuser, claim, stage: *stage, position: *position })]
+        }
+        _ => Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,6 +657,74 @@ mod tests {
         let carriage = 3u64.max(1) * ROUTE_DAA_PER_CHUNK_V1 + 1;
         assert_eq!(carriage, 4);
         assert_eq!(PURSUIT_DETERMINISTIC_RND_V1, [0u8; 32], "FIPS 204 deterministic signing");
+    }
+
+    /// G14-K: the block reader reassembles both chunk lanes whatever order the parts ride in, once, and keeps whole objects.
+    #[test]
+    fn g14k_both_chunk_lanes_reassemble_in_any_order_once() {
+        use kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkV1;
+        use kaspa_consensus_core::tx::TransactionOutpoint;
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(Default::default(), 3));
+        let object = PalwConsensusObjectV2::KernelRouteV1 {
+            bytes: (0..300u32).map(|i| i as u8).collect(),
+            signer: bond,
+            signature: vec![7; 90],
+        };
+        let other = PalwConsensusObjectV2::KernelRouteV1 { bytes: vec![1, 2, 3], signer: bond, signature: vec![9; 4] };
+        let mut generic = palw_object_chunks_with_cap_v1(&object, 64).unwrap().expect("several chunks");
+        generic.reverse();
+        let dup = generic[0].clone();
+        let lane: Vec<PalwConsensusObjectV2> = palw_kernel_chunks_v1(&object, bond, PalwKernelChunkTargetV1::Claim([5; 64]), 70)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .map(|c: PalwKernelChunkV1| PalwConsensusObjectV2::KernelRouteChunkV1 { chunk: Box::new(c), signature: vec![] })
+            .collect();
+        let mut input = vec![other.clone()];
+        input.extend(generic);
+        input.push(dup);
+        input.extend(lane);
+        let out = kernel_reassemble_objects_v1(input);
+        assert_eq!(out, vec![other, object.clone(), object], "whole first, then each lane's assembly once");
+    }
+
+    /// G14-K: what each step sends — a seal, a demand, the filing whole, the missing chunks only; waits send nothing.
+    #[test]
+    fn g14k_a_step_sends_exactly_its_objects() {
+        use kaspa_consensus_core::tx::TransactionOutpoint;
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(Default::default(), 1));
+        let proof = misaka_palw_kernel::ledger::ProsecutionV1::Kernel(vec![4; 200]);
+        let pursuit = KernelPursuitV1 { claim: [6; 64], bond, goal: KernelGoalV1::Prove(proof.clone()), synced_collateral: None };
+        let me = pursuit.accuser();
+        let seal = KernelPursuitStepV1::Seal { seal: [8; 64], by_daa: 9 };
+        assert_eq!(
+            kernel_step_sends_v1(&seal, &pursuit, None).unwrap(),
+            vec![KernelSendV1::Route(KernelRouteObjectV1::SealProof { accuser: me, claim: [6; 64], seal: [8; 64] })]
+        );
+        let whole = KernelPursuitStepV1::FileWhole { by_daa: 9 };
+        assert_eq!(
+            kernel_step_sends_v1(&whole, &pursuit, None).unwrap(),
+            vec![KernelSendV1::Route(KernelRouteObjectV1::FileProof { accuser: me, claim: [6; 64], proof })]
+        );
+        let signed = PalwConsensusObjectV2::KernelRouteV1 { bytes: vec![3; 500], signer: bond, signature: vec![1; 10] };
+        let chunks = KernelPursuitStepV1::FileChunks { group: Hash64::default(), count: 3, missing: vec![0, 2], by_daa: 9 };
+        let sent = kernel_step_sends_v1(&chunks, &pursuit, Some(&KernelFilingV1 { signed: &signed, chunk_cap: 200 })).unwrap();
+        let idx: Vec<u8> = sent.iter().map(|s| if let KernelSendV1::Chunk(c) = s { c.index } else { 99 }).collect();
+        assert_eq!(idx, vec![0, 2], "only the chunks the chain lacks");
+        assert!(kernel_step_sends_v1(&chunks, &pursuit, None).is_err(), "a chunk step needs its signed carrier");
+        let demand = KernelPursuitStepV1::Demand { stage: 0, position: 12, by_daa: 9 };
+        assert_eq!(
+            kernel_step_sends_v1(&demand, &pursuit, None).unwrap(),
+            vec![KernelSendV1::Route(KernelRouteObjectV1::FileDemand { demander: me, claim: [6; 64], stage: 0, position: 12 })]
+        );
+        for wait in [
+            KernelPursuitStepV1::AwaitSeal { file_from_daa: 1, by_daa: 2 },
+            KernelPursuitStepV1::AwaitAnswer { stage: 0, position: 1, deadline_daa: 3 },
+            KernelPursuitStepV1::Done(KernelPursuitOutcomeV1::Convicted),
+            KernelPursuitStepV1::WouldBeDismissed { why: "x".into() },
+        ] {
+            assert!(kernel_step_sends_v1(&wait, &pursuit, None).unwrap().is_empty(), "{wait:?} sends nothing");
+        }
     }
 
     #[test]

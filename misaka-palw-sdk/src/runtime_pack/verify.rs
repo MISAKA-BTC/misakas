@@ -240,6 +240,7 @@ pub fn verify(opts: &VerifyOpts, log: &dyn Fn(String)) -> Result<VerifyReport, S
                     headroom_resid: pack.profile.policy.headroom_resid,
                 };
                 req.max_window = pack.profile.max_window;
+                req.gdn_core_wide = pack.profile.gdn_core_wide;
                 req.context = pack.profile.context;
                 req.math = MathMode::parse(&pack.converter.math.mode).ok_or("the pack's math mode")?;
                 req.quant_formats = supplied.clone();

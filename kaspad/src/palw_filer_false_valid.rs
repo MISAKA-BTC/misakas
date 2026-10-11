@@ -135,6 +135,16 @@ pub(crate) const PALW_FALSE_VALID_REORG_MARGIN_DAA_V1: u64 = 64;
 
 /// The most chain blocks one walk reads (the court's own walk bound, `attn_root_filings_from_chain_v1`).
 pub(crate) const PALW_FALSE_VALID_MAX_WALK_BLOCKS_V1: u64 = 1 << 16;
+/// One page per scan. DAA scores are not a count of selected-chain blocks.
+const PALW_FALSE_VALID_HISTORY_PAGE_BLOCKS_V1: usize = 64;
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PalwFalseValidWalkV1 {
+    pub anchor: Hash64,
+    pub anchor_daa: u64,
+    pub floor: u64,
+    pub next: Option<Hash64>,
+}
 
 /// **Whether the filer runs at `daa`**: past `palw_rcore_plus` (everything Phase 2 adds lives past it;
 /// the fence requires `palw_offence_attribution`, so kind 3 exists), and on a node that carries
@@ -185,6 +195,7 @@ struct PalwFalseValidCaseV1 {
     receipts: Vec<PalwFalseValidReceiptV1>,
     /// The DAA the last walk ran at (`None`: never walked).
     walked_daa: Option<u64>,
+    walk: Option<PalwFalseValidWalkV1>,
     next_daa: u64,
     /// Seats done with for the proof's life: node policy declined, convicted past the finality
     /// depth, or given up after `PALW_FILER_HAND_OFFS_PER_OFFENCE_V1` filings ended unconvicted.
@@ -208,6 +219,8 @@ pub(crate) struct PalwFalseValidScanV1 {
     pub receipts: Vec<PalwFalseValidReceiptV1>,
     /// Walk the chain down to this DAA for licence receipts.
     pub walk_from_daa: u64,
+    pub minimum_daa: u64,
+    pub walk: Option<PalwFalseValidWalkV1>,
     /// Signers not to ask about: settled, or whose filing the reporter filer holds (in flight).
     pub skip: BTreeSet<PalwBondKeyV2>,
     /// Receipts not to ask about again: answered `NotLiable`.
@@ -223,6 +236,7 @@ pub(crate) struct PalwFalseValidScanOutcomeV1 {
     /// Whether the chain could be read at all (a tip state past the fence). A scan that could not
     /// leaves the book as it was: the receipts held stay, the walk mark does not move.
     pub walked: bool,
+    pub walk: Option<PalwFalseValidWalkV1>,
 }
 
 /// **The claims this node holds a proof against, and what it filed** (P2-8c). Bounded
@@ -304,6 +318,7 @@ impl PalwFalseValidFilerV1 {
                 expires_daa: current_daa.saturating_add(self.ttl_daa),
                 receipts: Vec::new(),
                 walked_daa: None,
+                walk: None,
                 next_daa: current_daa,
                 settled: BTreeSet::new(),
                 not_liable: BTreeSet::new(),
@@ -435,6 +450,8 @@ impl PalwFalseValidFilerV1 {
                     walk_from_daa: case.walked_daa.map_or(case.not_before_daa, |at| {
                         at.saturating_sub(PALW_FALSE_VALID_REORG_MARGIN_DAA_V1).max(case.not_before_daa)
                     }),
+                    minimum_daa: case.not_before_daa,
+                    walk: case.walk,
                     skip,
                     not_liable: case.not_liable.clone(),
                 }
@@ -462,7 +479,12 @@ impl PalwFalseValidFilerV1 {
             return Vec::new();
         }
         case.receipts = outcome.receipts;
-        case.walked_daa = Some(current_daa);
+        case.walk = outcome.walk;
+        // A partial page (including an unavailable suffix) never completes its interval.
+        // Mark the page's original tip, not a newer tip that arrived during backfill.
+        if outcome.walk.as_ref().is_none_or(|walk| walk.next.is_none()) {
+            case.walked_daa = Some(outcome.walk.map_or(current_daa, |walk| walk.anchor_daa));
+        }
         let mut queued_now = Vec::new();
         let (mut filed, mut waiting) = (false, false);
         for filing in &outcome.filings {
@@ -571,7 +593,9 @@ impl PalwFalseValidFilerV1 {
                 check => debug!("[{PALW_PANEL}] claim {}: not filing against {seat:?} now — {check:?} (P2-8c)", filing.claim_id),
             }
         }
-        case.next_daa = current_daa.saturating_add(if filed {
+        case.next_daa = current_daa.saturating_add(if case.walk.is_some_and(|walk| walk.next.is_some()) {
+            1
+        } else if filed {
             PALW_FALSE_VALID_REFILE_DAA_V1
         } else if waiting {
             PALW_FALSE_VALID_WAIT_RECHECK_DAA_V1
@@ -580,6 +604,40 @@ impl PalwFalseValidFilerV1 {
         });
         queued_now
     }
+}
+
+/// Backfill a fixed page without deriving a block budget from elapsed DAA. A replaced
+/// anchor restarts at the claim's original floor; a reader error retries the incomplete
+/// interval while retaining only independently admitted receipts found before the error.
+pub(crate) fn palw_false_valid_history_page_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    previous: Option<PalwFalseValidWalkV1>,
+    floor: u64,
+    minimum_daa: u64,
+    page_blocks: usize,
+    visit: &mut dyn FnMut(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2),
+) -> Result<PalwFalseValidWalkV1, String> {
+    let tip = consensus.get_sink();
+    let same_branch = match previous {
+        Some(walk) if walk.anchor != tip => {
+            consensus.is_chain_ancestor_of(walk.anchor, tip).map_err(|e| format!("receipt history branch: {e}"))?
+        }
+        _ => true,
+    };
+    let previous = previous.filter(|_| same_branch);
+    let continuing = previous.filter(|walk| walk.next.is_some() && walk.next != Some(walk.anchor));
+    let floor = if !same_branch { minimum_daa } else { previous.filter(|walk| walk.next.is_some()).map_or(floor, |walk| walk.floor) };
+    let anchor = continuing.map_or(tip, |walk| walk.anchor);
+    let anchor_daa = match continuing {
+        Some(walk) => walk.anchor_daa,
+        None => consensus.get_header(anchor).map_err(|e| format!("receipt history tip: {e}"))?.daa_score,
+    };
+    let start = continuing.and_then(|walk| walk.next).unwrap_or(anchor);
+    let next = crate::palw_panel::walk_accepted_lifecycle_page_v1(consensus, start, floor, page_blocks, visit).unwrap_or_else(|why| {
+        debug!("[{PALW_PANEL}] incomplete receipt history: {why}; watermark unchanged");
+        Some(anchor)
+    });
+    Ok(PalwFalseValidWalkV1 { anchor, anchor_daa, floor, next })
 }
 
 /// **One scan, on a blocking thread**: the receipts held re-admitted, then the claim's licences read
@@ -593,24 +651,33 @@ pub(crate) fn palw_false_valid_scan_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
     scan: PalwFalseValidScanV1,
     own: PalwBondKeyV2,
-    current_daa: u64,
+    _current_daa: u64,
 ) -> PalwFalseValidScanOutcomeV1 {
     let claim_id = scan.claim_id;
     // No tip state past the fence: the book stays as it was (an empty ask costs one cached tip load).
     if consensus.palw_false_valid_relied_receipts_v1(Vec::new()).is_none() {
-        return PalwFalseValidScanOutcomeV1 { claim_id, receipts: scan.receipts, filings: Vec::new(), walked: false };
+        return PalwFalseValidScanOutcomeV1 { claim_id, receipts: scan.receipts, filings: Vec::new(), walked: false, walk: scan.walk };
     }
     let relied = |batch: &[PalwFalseValidReceiptV1]| consensus.palw_false_valid_relied_receipts_v1(batch.to_vec()).unwrap_or_default();
     // The receipts held first: a reorg that took a licence's lock away takes its receipts too.
     let mut receipts = Vec::new();
     palw_false_valid_admit_receipts_v1(&mut receipts, claim_id, scan.receipts, relied);
-    let span = current_daa.saturating_sub(scan.walk_from_daa).saturating_add(64).min(PALW_FALSE_VALID_MAX_WALK_BLOCKS_V1) as usize;
-    crate::palw_panel::walk_accepted_lifecycle_objects_v1(consensus, scan.walk_from_daa, span, &mut |object| {
-        // ADR-0160 F-B: a batch licence's entry for the claim reads as `Windowed` receipts.
-        if let Some(found) = palw_false_valid_receipts_of_licence_for_v1(&object, &claim_id) {
-            palw_false_valid_admit_receipts_v1(&mut receipts, claim_id, found, relied);
-        }
-    });
+    let walk = palw_false_valid_history_page_v1(
+        consensus,
+        scan.walk,
+        scan.walk_from_daa,
+        scan.minimum_daa,
+        PALW_FALSE_VALID_HISTORY_PAGE_BLOCKS_V1.min(PALW_FALSE_VALID_MAX_WALK_BLOCKS_V1 as usize),
+        &mut |object| {
+            // ADR-0160 F-B: a batch licence's entry for the claim reads as `Windowed` receipts.
+            if let Some(found) = palw_false_valid_receipts_of_licence_for_v1(&object, &claim_id) {
+                palw_false_valid_admit_receipts_v1(&mut receipts, claim_id, found, relied);
+            }
+        },
+    );
+    let Ok(walk) = walk else {
+        return PalwFalseValidScanOutcomeV1 { claim_id, receipts, filings: Vec::new(), walked: false, walk: scan.walk };
+    };
     let filings = palw_false_valid_filings_v1(
         &scan.proof,
         &receipts,
@@ -619,7 +686,7 @@ pub(crate) fn palw_false_valid_scan_v1(
         |evidence| scan.not_liable.contains(evidence),
         |object| consensus.palw_false_valid_filing_check_v1(object.clone()).unwrap_or(PalwFalseValidFilingCheckV1::Dormant),
     );
-    PalwFalseValidScanOutcomeV1 { claim_id, receipts, filings, walked: true }
+    PalwFalseValidScanOutcomeV1 { claim_id, receipts, filings, walked: true, walk: Some(walk) }
 }
 
 /// **The tick's step** (called by the panel once a tick, past the fence, on a node that carries,
@@ -721,13 +788,36 @@ mod tests {
     }
 
     fn outcome(filings: Vec<PalwFalseValidFilingV1>) -> PalwFalseValidScanOutcomeV1 {
-        PalwFalseValidScanOutcomeV1 { claim_id: claim(), receipts: vec![receipt(1, 0b1111)], filings, walked: true }
+        PalwFalseValidScanOutcomeV1 { claim_id: claim(), receipts: vec![receipt(1, 0b1111)], filings, walked: true, walk: None }
     }
 
     fn filer_with_proof(daa: u64) -> PalwFalseValidFilerV1 {
         let mut filer = PalwFalseValidFilerV1::new(10_000, 500, DEPTH);
         assert!(filer.note_proof_v1(proof(), PalwFalseValidSourceV1::CaptureSample { leaf: 3 }, Some(40), daa));
         filer
+    }
+
+    #[test]
+    fn incomplete_receipt_history_retains_findings_without_advancing_the_interval() {
+        let mut filer = filer_with_proof(100);
+        let mut door = door();
+        let mut page = outcome(vec![filing(1, file())]);
+        page.walk = Some(PalwFalseValidWalkV1 {
+            anchor: Hash64::from_u64_word(100),
+            anchor_daa: 100,
+            floor: 40,
+            next: Some(Hash64::from_u64_word(70)),
+        });
+        assert_eq!(filer.apply_v1(page, 100, &mut door).len(), 1, "an admitted receipt can be filed before backfill completes");
+        assert_eq!(filer.cases[&claim()].walked_daa, None);
+        let scan = filer.due_v1(101, |key| door.holds(key)).remove(0);
+        assert_eq!(scan.walk_from_daa, 40);
+        assert_eq!(scan.walk.unwrap().next, Some(Hash64::from_u64_word(70)));
+        assert!(!scan.receipts.is_empty());
+        let mut complete = outcome(vec![]);
+        complete.walk = Some(PalwFalseValidWalkV1 { anchor: Hash64::from_u64_word(100), anchor_daa: 100, floor: 40, next: None });
+        filer.apply_v1(complete, 150, &mut door);
+        assert_eq!(filer.cases[&claim()].walked_daa, Some(100), "new blocks arriving during backfill remain unread");
     }
 
     /// The scan the filer asks at `daa` (exactly one is due), with the chain answering `answer` per
@@ -758,7 +848,7 @@ mod tests {
             },
         );
         let queued = filer.apply_v1(
-            PalwFalseValidScanOutcomeV1 { claim_id: claim(), receipts: receipts.to_vec(), filings, walked: true },
+            PalwFalseValidScanOutcomeV1 { claim_id: claim(), receipts: receipts.to_vec(), filings, walked: true, walk: None },
             daa,
             door,
         );
@@ -1213,7 +1303,7 @@ mod tests {
         assert!(!outcome.walked && outcome.filings.is_empty());
         filer.apply_v1(outcome, at, &mut door);
         assert_eq!(filer.cases[&claim()].receipts, held, "the book keeps what it held");
-        assert_eq!(filer.cases[&claim()].walked_daa, Some(40 + PALW_FALSE_VALID_REFILE_DAA_V1), "and the walk mark stays");
+        assert_eq!(filer.cases[&claim()].walked_daa, Some(40), "the walk mark stays at the last completely read chain tip");
     }
 
     /// **The panel's call sites, pinned where they live** (thin, as the lanes agreed): the capture

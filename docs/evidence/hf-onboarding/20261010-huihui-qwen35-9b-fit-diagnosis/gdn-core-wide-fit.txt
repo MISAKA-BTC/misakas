@@ -1,0 +1,13 @@
+# gdn_core_wide fit, measured with palw-tir-fidelity (--exec --logits-out) against the Hugging Face float32 logits (kl_compare.py)
+fid-hui-L4-c512-h1.0:  top-1 0.8125  KL mean 0.04946 max 0.1991  ppl float 9001.303 int 9063.820 (Δ +0.69%)
+fid-hui-L4-c512-h2.0:  top-1 0.7188  KL mean 0.08097 max 0.3292  ppl float 9001.303 int 10120.681 (Δ +12.44%)
+fid-hui-L4-c512-wide-h1.0:  top-1 0.8438  KL mean 0.00825 max 0.0709  ppl float 9001.303 int 8873.518 (Δ -1.42%)
+fid-hui-L4-c512-wide-h2.0:  top-1 0.9375  KL mean 0.00129 max 0.0075  ppl float 9001.303 int 8929.671 (Δ -0.80%)
+fid-q08-L4-wide0-h2.0:  top-1 0.8438  KL mean 0.01318 max 0.0642  ppl float 1155213.087 int 1198015.536 (Δ +3.71%)
+fid-q08-L4-wide1-h2.0:  top-1 0.9062  KL mean 0.00453 max 0.0198  ppl float 1155213.087 int 1206030.835 (Δ +4.40%)
+fid-hui-FULL-default-h2.0:  top-1 0.6875  KL mean 0.26754 max 1.0456  ppl float 189.155 int 157.054 (Δ -16.97%)
+fid-hui-FULL-wide-h2.0:  top-1 0.9688  KL mean 0.00388 max 0.0167  ppl float 189.155 int 187.524 (Δ -0.86%)
+positions 0..32
+      hf -> default slope 0.9451  corr 0.95069  top-1 0.688  KL 0.26754  max|d| 8.989
+      hf -> wide   slope 1.0001  corr 0.99933  top-1 0.969  KL 0.00388  max|d| 1.113
+  default -> wide   slope 0.9582  corr 0.95176  top-1 0.719  KL 0.24990  max|d| 9.105

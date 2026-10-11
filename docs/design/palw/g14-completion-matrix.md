@@ -134,6 +134,8 @@ of G14.
 Detailed changes, commands, failures and reruns are in the [audit implementation record](../../audit/g14-review-2026-10-10/implementation.md).
 The **overall G14 result remains FAIL / incomplete**; no activation or new family-wide PASS follows from these repairs.
 
+**Authenticated FP job retention follow-up (2026-10-11):** Native ordinary-FP and evaluation extraction now retain the original commitment body in a rooted claim-lifetime map after the public-filer fence. The Consensus API view permits reacquisition when original accepted transaction/body history is unavailable; the reader checks the full claim hash, job pin, class, producer and declared roots. Carrier bytes and frozen int-12 pins remain unchanged. Core 74 and node-unit 48 checks, plus one ordinary FP V4 actual-service test, pass. The pruned FP V3 service fixture required LG14-B input-bootstrap activation as well as LG14-A; the corrected runtime passes (344.67 s), reaching producer and all five Valid signer sanctions/commit-reveals after the original commitment body and acceptance rows are deleted. The binding proves job identity fraud before full input acquisition; this is not a successful all-chunk PromptIds bootstrap test. The selected core/node/service tests total 124 unique PASS, and fresh shipping harvest reports 361 unchanged pins. This does not close pre-retention permanent history loss, evaluation/prefix-state bootstrap, full pruned-network import, or full C2/C7/C8. Commands, failures and raw evidence are in the [audit record](../../audit/g14-review-2026-10-10/implementation.md#元fp履歴消失後の公開job-bootstrap2026-10-11).
+
 **Numbered public DA reacquisition follow-up:** the dormant LG14-A tag 156 now requests a fresh public copy of one historical Event/Held/LG14-B unit, signed over its reservation DAA, next session counter and expiry. Historical answered bits remain replay guards; new producer duties, authenticated answers and timeout use the pending reacquisition. Flat coverage is reported without expanding the unit list. The history reader preserves authenticated prefixes and reads new-tip answers despite an unavailable old suffix. These changes address part of the pruned-answer gap named below; they do not establish full C2/C7/C8. Permanently pruned FP job commitments, TIR/pipeline acquisition, maximum-input budgeting, full-node inclusion and largest-population response scheduling remain gaps. Final commands and evidence are in the audit implementation record.
 
 **PanelDA input follow-up:** a Pending public filer can reserve and demand the binding and authenticated input before it has its own replica. New LG14-B input chunks bind the global token count, tile indices and input root; the producer answers from its retained input and the verifier executes its own registered model afterward. Input-only withholding yields the existing DA default. The actual worker-result handoff retains the input accumulator, reorg clears it, and input waiting spends no replay attempts. The small PanelDA fixture covers pre/post-Final conviction, post-Final withholding, missing historical input copies and honest replay; it is V-fold, with signature/class admission callbacks and a supplied public accepted payload. It does not close full C2/C7/C8, maximum-context 34-session budgeting, permanently pruned FP commitments, all-family registration or largest-population response/inclusion bounds. Final evidence is recorded in the audit implementation record.
@@ -146,14 +148,20 @@ The **overall G14 result remains FAIL / incomplete**; no activation or new famil
 
 **Fresh public service DA follow-up (2026-10-11):** a newly registered non-genesis bond waits the preset 1,000 DAA maturity, with real registration/possession signatures and collateral. An empty database validates 2,051 public blocks before the actual verifier service starts, independently replays the registered floor model, discovers the all-Panel-Valid false-root attempt through public Consensus API reads and submits its own reservation and binding demand through the PQ mempool. Production templates and the actual block pipeline include both; at DAA 2236 the public reads confirm ProducerWithholding, a positive producer DaDefault sanction and reservation release. Normal service exit/join and owner release pass after replacing three gossip callbacks' strong service captures with Weak captures. This is one V-node case plus 69 regressions (70 unique PASS); the normal binary check and fresh shipping 361 pins pass without drift. Harness keys/premine, skip PoW, inert EVM and test-only dormant-fence arming are explicit; the shipping activation validator still refuses arming. This closes the fresh service/inclusion gap only for this floor canonical binding-withholding case. Disclosed arithmetic/binding conviction, all-family admission, socket RPC, network IBD/pruned import, restart/reorg and maximum-profile/population deadlines remain open. The wrong roots are synthetic commitments, not a localized model-fault injection. Full scope and raw evidence are in the audit implementation record.
 
+**Public identity evidence follow-up (2026-10-11):** public binding direct proofs now enter the existing False Valid scanner before the public case settles; the scanner independently re-admits the public licence receipts and liabilities. H1 relay/template policy permits only a demanded row-0/tile-0 Event whose authenticated binding's IdentityMismatch kind-4 passes the actual acceptance/fold rehearsal, behind the dormant public-filer fence. The DA answer remains refused and the outsider must file its own proof. This repairs a real PQ mempool inclusion gap and the missing all-signer handoff. A kind-3 identity conviction also collects the live producer's forfeit/S2 leg; later kind-4 must not double-charge it. These are node policy connections, not new block conviction rules. The new actual service test passes (394.69 s): a fresh DB, ordinary mature outsider, real registered-floor foreign-job roots, public authenticated Event, producer collateral debit, all five Valid signer debits and own commit/reveals, reservation release and normal exit. Final service evidence is in the audit record. Disclosed arithmetic/input/output/state faults, all-family registration, maximum profiles, socket RPC, recovery and cumulative scope remain open.
+
 | Scope | New evidence / correction | Still open |
 | --- | --- | --- |
 | F1–F4 generation binding | `74d59907f`: generative jobs require the exact positive `max_new_tokens` count. Short correct execution is rejected by the real block fold; the complete execution reaches Final. Kernel regression covers single, pipeline and segmented routes. | A future EOS/stop rule needs its own committed semantics; this is a dormant consensus meaning change. |
 | F3–F4 public replay and resources | `f89431d82`: authenticated public positions, independent registered-model replay, canonical tensor bytes, simultaneous RAM/state accounting, bounded whole-value courts for withheld small values. Kernel and real-node regressions pass. | 64-element hiding tiles, cumulative scope, large-profile admission, measured peak/time and maximum-response deadlines. The scope report is not a reward gate. |
 | F9–F16 common legacy machinery, tested on small fixtures | `a4a62ec21`: isolated faults cannot be skipped by a matching midpoint; public answers authenticate before caching/learning. The earlier real-node final batch has 7 PASS and a corrected reorg rerun has 1 PASS; core 10, fold 7, filer 5, A2U 3 PASS. The DA worker builds signed tag-158 step/checkpoint/CKW from verified base0-codec material. The outsider common filer now uses independent base0-codec replay, authenticated public tag-158 history, subtree step descent, tag-159 model-copy/matmul recomputes and CKW fused opening. Actual controller tests: LG14-B 7 V-fold PASS (pre/post-Final recompute, fused conviction, withheld frontier/CKW default); filer 8 and reader API adapter 5 V-unit PASS. | This is not a per-family F9–F16 result. Public binding job/count/output proofs and large canonical attempt-input proofs are wired. Authenticated PublicDA/canonical FP input now starts independent replay; a real FP fold reaches a gather conviction before/after Final and a post-Final DA default (V-fold, test admission/signature callback). Checkpoint/trace localization, maximum-context PanelDA input budgeting, extended FP job/state semantics and prefix-state bootstrap, fresh-node full-service reads and inclusion, permanently pruned answers remain. Held-court history pagination and selected authenticated chunk caching are wired and fixture-tested; full-service restart/reorg/inclusion is still required. Step agreement never clears an execution mismatch. The unsupported-codec linear fallback refuses more than 34 sessions. No maximum-profile RAM/time or deadline completion is established. |
-| C2 / C7 for legacy | A node started after the claim replays the chain and serves matching op-204/206 documents via the RPC builders and JSON roundtrip after conviction. The paginated history reader is fixture-tested. The fresh public service DA case above adds actual service reads, ordinary mature outsider registration, PQ mempool/template/block inclusion, objective default and normal exit for one floor canonical binding-withholding claim. | Full-family disclosed-fault prosecution, a socket RPC drill, network IBD/pruned import and full-service restart/reorg. Numbered reacquisition covers supported Event/Held/LG14-B units, but permanently pruned FP job commitments and TIR/pipeline bootstrap still need retrieval; reader retries alone are not retrieval. |
+| C2 / C7 for legacy | A node started after the claim replays the chain and serves matching op-204/206 documents via the RPC builders and JSON roundtrip after conviction. The paginated history reader is fixture-tested. The fresh public service DA case above adds actual service reads, ordinary mature outsider registration, PQ mempool/template/block inclusion, objective default and normal exit for one floor canonical binding-withholding claim. The public identity service case adds actual producer debit, all five Valid signer convictions and own commit/reveals from an authenticated foreign-job Event. | Full-family disclosed-fault prosecution, a socket RPC drill, network IBD/pruned import and full-service restart/reorg. Numbered reacquisition covers supported Event/Held/LG14-B units, but permanently pruned FP job commitments and TIR/pipeline bootstrap still need retrieval; reader retries alone are not retrieval. |
 | C6 / C8 under a coalition | Reserved sessions and direct-proof priority exist. Shared 64-live / 256-lifetime reservation caps were removed; a new bond uses its own retained-record budget and collateral. V-fold crosses both old thresholds and pursues public PanelDA input to conviction/default. | This is not full-family admission or a global throughput result. State/response load scales with owners; all-response/chunk inclusion, largest-population CPU/RAM and adaptive deadline bounds remain. |
 | Condition 9, beacon source set | `b6a90a0d0` merges `7d8c31270`: the eligible source set is frozen at the epoch commitment. Engine stages 7 and production fold 22 PASS; shipping repin after the merge is clean. | The new fixture supplies Reference eligibility and checks the Chain read; it does not replace real-model production eligibility or the external soundness gate. |
+
+**Mempool liveness follow-up:** native sampling of a stalled real service run found a nested virtual read in DNS coinbase settlement behind a queued virtual commit upgrade. Mempool UTXO validation now supplies its existing DAA snapshot to settlement without reacquiring the virtual lock; it retains the original UTXO guard. A queued-writer regression includes the old wrapper as a blocking negative control and releases all guards/threads before asserting. This fixes a prosecution inclusion stall, without changing block maturity or conviction rules. Final evidence is in the audit record.
+
+**Ordinary PublicDA FP V3/V4 follow-up (2026-10-11):** the registered floor class now carries normal family drill certification (six public chunks) and graph publication before chain pricing and signed FP admission. An ordinary mature outsider starts the actual service against an empty DB that validates 2,065 public blocks, independently replays its own model and prosecutes a public foreign-job Event through the PQ mempool/template/block path. Both semantic Job V3 and V4 reach positive producer and all five Valid signer debits, own reporter commit/reveals, reservation release and normal exit. V4 uses a separately validated decode-rules fence in the fixture; the dormant public-filer shipping activation guard remains closed. These are user-prompt PublicDA job-identity cases, not post-genesis model registration, arithmetic localization, maximum profiles or all F9–F16. Canonical prompt omission remains intentionally refused by ordinary derived-work pricing; no pricing gate is waived. Test-only carrier ownership was corrected to retain the storage mass set on the mempool-validated transaction. Full results and exceptions are in the audit record.
 
 ADR-0177 D7's registered-model possession premise is confirmed by the user. GAP-80 has also been decided: legacy is in scope;
 the old "awaiting user decision" descriptions below are historical. Required family coverage is not waived.
@@ -214,8 +222,8 @@ gate's verdict equals the schedule's at every ceiling.
 | granite-3.1-1b, smollm2-1.7b @32,783 | — | — | — | refused by the v4 gate (verifier RAM) |
 | 9B @262,144 / @2,097,152 | — | — | — | refused (retained state / `check_plan` positions) |
 | v5 encoder (1 position) | any | any | 0: the one demand is pre-Final and holds Final | fits; Final can be held for a whole window (open item 4) |
-| Legacy held 8k (LG14-A/B) | 4 input units + 5 descent rounds (2^40 leaves) + 2 = 11 sessions | 1,200 a session (`W_disclose = window_challenge()`) | sessions open until 4,200 after acceptance | **FAIL: at most 4 sessions fit** (sequential, one unit a session) — superseded 2026-10-11 by §2g: **fits** with parallel lanes, 4 sessions `[1, 36, 16, 1]` at the canonical 2^27-leaf row |
-| Legacy held 2M | 1,024 input units + 7 = 1,031 sessions | — | — | **FAIL: past the 34-session budget itself** — §2g: still **refused by name** (`PARALLEL_SESSIONS`: 1,024 input chunks exceed one session's 64 lanes) |
+| Legacy held 8k (LG14-A/B) | 4 input units + 5 descent rounds (2^40 leaves) + 2 = 11 sessions | 1,200 a session (`W_disclose = window_challenge()`) | sessions open until 4,200 after acceptance | **FAIL: at most 4 sessions fit** (sequential, one unit a session) — superseded 2026-10-11 by §2h: **fits** with parallel lanes, 4 sessions `[1, 36, 16, 1]` at the canonical 2^27-leaf row |
+| Legacy held 2M | 1,024 input units + 7 = 1,031 sessions | — | — | **FAIL: past the 34-session budget itself** — §2h: still **refused by name** (`PARALLEL_SESSIONS`: 1,024 input chunks exceed one session's 64 lanes) |
 | Legacy at the applied short window (120) | — | 120 | — | 35 sessions would fit (the 34 budget and the 8k profile) |
 
 **Tests and results** (run on this branch):
@@ -516,7 +524,96 @@ evidence; a drill pursuit needs (1)+(2) decided first.
 (reacquisition) remain codex's. The verifier's synced collateral is read from its own bond (the tests read the node's tip; a remote
 verifier reads op 202's bond row).
 
-## 2g. G14-L: parallel reserved sessions and the k-ary descent on the legacy held route (2026-10-11, lane G14-L, branch `g14/l-parallel-sessions`)
+## 2g. G14-K: the kernel route's public verifier inside kaspad's service (2026-10-11, lane G14-K, branch `g14/k-kernel-service`)
+
+Base: integration `3076077f9` (G14-R merged). Overall G14 stays **FAIL / incomplete**. Nothing is armed or armable: the kernel route
+sits behind `palw_probabilistic_constraints_v1` (refused by validation at every height, asserted in the tests); no consensus code
+(only two new test modules under `consensus/src/pipeline/virtual_processor/tests/`), wire type, tag, table, RPC op or registry
+number changed; no testnet-12 id moves. The court-lane round `u32::MAX − 13` is node-local bookkeeping, not a registry number. Levels as in §2e: **V-node(svc)** = kaspad's
+actual `PalwPanelService` on a node whose database was created after the claims and validated every public block, its own replay of
+the registered model, its carriers through the PQ mempool, the production template and the real block fold, outcomes read back from
+consensus; **V-node(harness)** = the canonical consensus harness (mempool → template → fold), driven here through EXACTLY the
+library functions the service calls.
+
+**What was built (implemented).**
+- `kaspad/src/palw_kernel_verifier.rs` (new, a `PalwPanelService` lane after the LG14-A filer): once a DAA it reads the route through
+  the node's read API (`ConsensusApi::palw_kernel_route_v1`, op 211's source), rebuilds the ledger as the fold will see it
+  (`pursuit::kernel_consumer_ledger_v1`: G14-S's court scope past `palw_provider_court_v1` and the verifier-pay terms injected, so the
+  16-unit / clear-budget / 4-dismissal limits are in every dry run), selects every open claim (live, or Final inside liability) not
+  produced by its own bond whose class's REGISTERED commitments one of its models opens to, re-executes, and drives
+  `misaka_palw_remote::pursuit` (plan → sends). Carriers are signed deterministically (the service's signer is FIPS 204 `rnd = 0^32`
+  = `PURSUIT_DETERMINISTIC_RND_V1`) and queued on the court lane, which funds each from the virtual UTXO set at the object's own
+  minimum (`ensure_carrier_funding_v2`: mature, unlocked, free, chained through its change) and submits it to the mempool. Items are
+  dated by the planner's `by_daa` (pre-Final deadline, else the liability horizon), so the lane's EDF carries the pursuit nearest its
+  horizon first. Nothing persists: an object on chain is never re-planned, one in this node's mempool (a restart) is never queued twice,
+  one queued is re-offered only after 6 DAA.
+- The model: `--palw-kernel-model=<file>` (repeatable; `PalwPanelConfig::kernel_models`), a `PALWKM01` file (Borsh tensors). ADR-0177
+  D7: the verifier holds the registered model; it is used for a class only when it opens to the class's registered
+  `ParamCommitmentsV1` root (v1/v2 `of`, v4/v5 `of_v3`; a memory class's rule program). A model that does not, or a class it cannot
+  check, is logged once and never filed against.
+- `misaka-palw-remote::pursuit` (extended, nothing rewritten): `plan_kernel_pursuit_on_v1` (the planner over a caller-rebuilt ledger;
+  `plan_kernel_pursuit_v1` now delegates), `kernel_consumer_ledger_v1`, `kernel_check_program_v1` (v1/v2 and pipelines:
+  `OutsiderV1::check_computation`, no producer value read, nothing demanded of an honest producer), `kernel_check_segmented_v1` (own
+  replay + adaptive search against block-served positions), `kernel_check_typed_v1` (typed memory, `SpecOutsiderV1::check_computation`),
+  `kernel_class_model_root_v1`, `kernel_reassemble_objects_v1` (generic `ObjectChunk` and tag-113 lanes, any order, once),
+  `kernel_tiled_prompt_v1` (prompt tiles authenticated against the job's root), `kernel_segmented_tokens_v1`, `KernelBlockMaterialV1`
+  (`Respond` parts → assembled, authenticated positions + hiding leaves), `kernel_step_sends_v1`, `KERNEL_SERVICE_CHUNK_CAP_V1`.
+
+**How the kaspad test registers a kernel class without a test hook.** kaspad's tests cannot reach consensus's `cfg(test)` seams
+(attestation, OPV eligibility), and none was added. The F1 class goes through the PRODUCTION onboarding path: the V2 IR class
+(`ClassRegisteredTirV1`, the SDK builder over `palw_v2_registration_terms`), `ArtifactBoundV1` (bonded), maturity (40 DAA), then
+`RegisterClass` on the kernel route over the root the matured binding attests (`onboarding_attested_roots_v1`). That works for a
+Panel-licensed K2-TIR v1/v2 class. A v4/v5 or typed class needs OPV, whose eligibility is DERIVED (conformance passed under a
+Panel-independent beacon — codex's lane); that is why those families are V-node(harness) below.
+
+**Per family × case (this branch).**
+
+| Family | Case | Level | Outcome | Test |
+|---|---|---|---|---|
+| F1 K2-TIR-v2 (`wide128`, Panel-licensed, every interim seat signing a passing receipt) | embedding gather element, wide I128 MatMul accumulator element, clamp result — **pre-Final** | **V-node(svc)** | convicted before Final by the service (one seal, one whole filing each); producer's real bond slashed `claim_collateral`; no seat charged | `kernel::g14k_the_kernel_service_convicts_covered_lies_pre_and_post_final_and_the_honest_twin_finalizes` |
+| 〃 | the same three lies **post-Final** (node and service started after Final) | **V-node(svc)** | convicted inside the liability horizon | 〃 |
+| 〃 | honest twin (same class, same Panel collusion) | **V-node(svc)** | nothing filed against it; reaches Final (its reward paid from the poster's escrow) | 〃 |
+| 〃 | service restarted mid-pursuit (after its seal is on chain; ten blocks with no service; same state dir) | **V-node(svc)** | the new process re-derives: no second seal (the seal kept its DAA), one filing, conviction before Final | `kernel::g14k_the_kernel_service_resumes_after_a_restart_without_a_second_seal` |
+| 〃 | quantization, decode, garbage | V-node(harness) (G14C/G14-V; the service runs the same `check_computation`) | — | §2a, §2e |
+| 〃 OPV mode | gather / MatMul / clamp | V-node(harness) only (§2e) | — | an OPV class cannot be registered on kaspad's test network without the derived eligibility |
+| F1 K2-TIR-v1 descriptor | — | **open**: no v1-descriptor class was run (the canonical class is v2) | | |
+| F3 K2-TIR-v4 segmented (`wide128` @8,192, OPV) | lie at position 1,200: the service core rebuilds the prompt from the chain's tiles, demands (adaptive search), reads the producer's `Respond` parts back from the blocks, localizes, seals, files | **V-node(harness)** | convicted; an honest twin of the same shape: nothing sent | `real_scale::g14k_service_core::g14k_the_service_core_convicts_a_segmented_lie_via_demands_and_respond_chunks_and_ignores_the_honest_twin` |
+| 〃 | withheld `Respond` (producer silent) | **V-node(harness)** | `Done(Defaulted)` at the counted deadline: `Unavailable { producer_defaulted }`, producer charged, demand bonds returned, never a conviction | `real_scale::g14k_service_core::g14k_the_service_core_takes_a_withheld_segmented_answer_to_the_da_default` |
+| 〃 | the service's own block walk (`walk_accepted_lifecycle_objects_v1` → reassembly) | implemented; **not executed** at V-node(svc) (no v4 class on kaspad's network) | | |
+| F4 v5 encoders / heads | — | same code path as F3 (`kernel_check_segmented_v1`); **not run** here | | |
+| F6 typed roots — memory | step lie pre-Final (pre-state from the chain's carried post-state) and post-Final (line rolls back); honest claim left alone | **V-node(harness)** | both lies convicted (the post-Final one rolls the line back to its head); the honest claim: nothing sent | `r4x_typed_roots_e2e::g14k::g14k_the_service_core_convicts_memory_step_lies_pre_and_post_final_and_leaves_an_honest_claim_alone` |
+| F6 retrieval / composite, F2 pipelines | — | **not checked by the service** (more than one model, or a snapshot copy); reported once per claim, never filed | | |
+
+**Tests and results (2026-10-11; `buildslot.sh cargo … --offline`, line-tables profile; test binaries run directly).**
+- `misaka-palw-remote --lib pursuit`: **4 PASS** (2 G14-R + 2 new: both chunk lanes reassemble in any order once; each step sends
+  exactly its objects).
+- `kaspad --lib g14k_` (the actual service): **2 PASS** (283 s single-threaded; the main test: class through onboarding at DAA 44,
+  six convictions between DAA 122 and 134 — the three pre-Final ones first, by EDF — honest twin Final at DAA 170; the restart test:
+  seal at DAA 50, conviction at 56 after the restart). An earlier run of the same code FAILED one assertion of the test itself (it
+  counted the poster's escrow payment of the honest twin's Final reward as a seat charge); the assertion was corrected, not the service.
+- `kaspa-consensus --lib g14k_ g14r_ t12_a2u --skip socket`: **17 PASS** (g14k service core 2, G14-R 12 — the planner now delegates —,
+  A2U 3).
+- `kaspa-consensus --lib r4x_ g14k` (after the typed-root addition): **14 PASS, 1 FAIL** — the new typed test and the two segmented
+  ones PASS, R4X/G14C 11 PASS; the FAIL is the known `r4x_weights_only_spec_is_byte_for_byte_the_legacy_registration_and_the_unarmed_route_is_unchanged`
+  (recorded failing by G14-V in §2e.2; this lane does not touch the gate it trips on).
+- `kaspad --lib` without the two service-e2e modules (`palw_service_public_e2e`, `palw_service_violations_e2e`, slow and untouched): **601 PASS, 3 FAIL**, the three in files this lane did not touch (pre-existing at the base, not re-run there): `palw_backends::…class_resolution_is_not_reachable_from_the_block_processing_path` (consensus/Cargo.toml already names `misaka-palw-sdk`), `palw_operator_da::…the_tick_wires_the_lane_before_the_carriers_and_behind_no_flag` (its source-text needle no longer matches the formatted line), `workspace_default_members::…` (`misaka-palw-panel` not in the default members).
+
+**Open (honest).**
+1. **V-node(svc) only for F1 Panel-licensed v2.** v4/v5, OPV-mode v1/v2 and typed classes cannot be registered on kaspad's test
+   network until a class can be made OPV-eligible there through the derived rule (codex's registration/eligibility lane). Their
+   service path is the same library code, verified at V-node(harness); the service's own accepted-block walk is not executed.
+2. **Not wired:** pipelines (F2), composites and retrieval snapshots (more than one model / a snapshot copy), a filing that needs the
+   tag-113 chunk lane at V-node(svc) (the canonical filing fits one carrier; chunking is V-unit + G14-R's V-node harness).
+3. **The synced collateral is approximate**: the service reads its bond's collateral (op 202's row) less its route chunk deposits,
+   not every non-kernel reservation the fold nets out; a bond also holding legacy reservations can see a dry run pass that the fold
+   refuses (the carrier fee is lost, nothing else).
+4. **Throughput:** the court lane carries one carrier in flight per bond (`MAX_INFLIGHT_CARRIERS = 1`); six pursuits took 12 DAA here.
+   Under a coalition that fills blocks there is still no reserved byte lane (G14-B's UNKNOWN stands).
+5. **Socket RPC**: the service reads through the in-process API (op 211's source), not a socket; G14-R's socket evidence is for the
+   harness verifier.
+6. **Live drill**: not run, for G14-R's reasons (no drill arming for the kernel route; no seat-collusion knob).
+
+## 2h. G14-L: parallel reserved sessions and the k-ary descent on the legacy held route (2026-10-11, lane G14-L, branch `g14/l-parallel-sessions`)
 
 **The decision.** G14-B (§2c, open item 2) derived that the legacy V2 held route cannot finish a public pursuit: a stalling producer
 answers each reserved session on the last DAA of `W_disclose` (1,200 on testnet-12), sessions open one at a time until the claim's hard
@@ -526,7 +623,17 @@ SA-3) and (d) refusing large legacy, **the user chose (a)**: several reserved se
 SA-3 and the liability / lifetime ceilings unchanged; 8k must fit; 2M is refused by name if no `k` fits. Overall G14 stays
 **FAIL / incomplete**; nothing is armed or armable by this lane.
 
-### 2g.1 What changed (implemented)
+**Merged with the integration head `947edefca` (codex `g14/prosecution-bounds`, G14-K).** The fold keeps codex's input transport check
+(`palw_legacy_input_answer_transport_check_v2`, PromptIds / FpJob) FIRST, then a G14-L lane join or a new session. The filer's
+history reader keeps codex's block-aware walk, multipart `LegacyHeldAnswerChunkV2` reconstruction and memory-ledger scratch budget,
+and caches a G14-L round's units in both the whole-answer and the multipart arm (`legacy_rounds` threaded through
+`palw_fraud_filer_read_page_with_budget_v2`). The bootstrap step runs for `fp_bootstrap.is_some() || fp_job_pending`; the lanes form
+applies only once the job is held (`fp_bootstrap`), the FP-job reacquisition stays on codex's one-unit path. Open: an input lane whose
+answer rides several multipart chunks is longer than the one-carriage-DAA-a-lane term of the lane deadline; codex's transport check
+bounds it inside `W_disclose`, but the parallel schedule does not count its extra chunks (the canonical 8k rows' input lanes are
+2,048-id chunks).
+
+### 2h.1 What changed (implemented)
 
 **Consensus (dormant).** No new wire type, object tag, table, RPC or registry number; no int-12 wire type changes (A-2: nothing to
 classify — `PalwDisputeReservationRowV1` is an LG14-A type, not in the frozen int-12 manifest, and its table is written only past the
@@ -576,7 +683,7 @@ round's node lanes in the session after the binding (the plan's input round: the
 on chain). Nothing is carried across tips: the case is rebuilt from chain answers (G14-R's property); a reset clears the round and the
 lane send-book. Seats, watchdogs, sessions below the fences and non-base0 replays keep the one-unit paths unchanged.
 
-### 2g.2 The profile table (re-derived for parallel sessions; testnet-12 lattice: bind 600, receipt 600, `W_disclose` = challenge 1,200 — unshortened, SA-3 — court 3,000; G14-B's verifier terms: first step 2, turnaround 1, filing 1, replay 0)
+### 2h.2 The profile table (re-derived for parallel sessions; testnet-12 lattice: bind 600, receipt 600, `W_disclose` = challenge 1,200 — unshortened, SA-3 — court 3,000; G14-B's verifier terms: first step 2, turnaround 1, filing 1, replay 0)
 
 | Profile | Plan (lanes a session) | Timeline (DAA after acceptance) | Verdict |
 |---|---|---|---|
@@ -591,7 +698,7 @@ lane send-book. Seats, watchdogs, sessions below the fences and non-base0 replay
 Tests: `palw_legacy_parallel_v1::tests::the_legacy_profile_table_on_the_t12_lattice`, `rounds_of_k_and_the_8k_plan`,
 `budget::tests::parallel_sessions_fit_the_lattice_and_one_lane_is_the_sequential_schedule`.
 
-### 2g.3 Tests and results (this branch; `buildslot.sh … --offline`)
+### 2h.3 Tests and results (this branch; `buildslot.sh … --offline`)
 
 - **Kernel + consensus-core** (`--lib -- budget:: palw_legacy palw_lifecycle_objects_v2 g14b_ palw_da_rcore`): **PASS — 9 + 68**, 0 failed.
   New: `budget::tests::parallel_sessions_fit_the_lattice_and_one_lane_is_the_sequential_schedule`; `palw_legacy_parallel_v1::tests`
@@ -624,7 +731,7 @@ Tests: `palw_legacy_parallel_v1::tests::the_legacy_profile_table_on_the_t12_latt
 - Not run: the full workspace, clippy, the `PalwPanelService` tick with lanes (V-svc), the shipping-pin suite (no params, schedule,
   preset or fence value changed; the testnet-12 ids are untouched by construction — UNKNOWN until the integration's pin run).
 
-### 2g.4 Open, stated
+### 2h.4 Open, stated
 
 * **The verifier's replay time is declared, not measured.** The 8k row leaves 494 DAA for the verifier's own replay after the input
   round (and 495 to open the last session). A real 8k replay of a large registered model may take longer on a slow host; that bound is
@@ -1182,3 +1289,21 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   (load average 10–15; reached DAA ~2,036 of the 2,231 default) and PASSED (objective DA default at 2,236) with the deadline raised
   locally to 1,500 s — the raise is not committed; the test's wall-clock bound is load-sensitive.
 * 2026-10-11 — G14-R (§2d): recovery and the external path. `misaka-palw-remote::pursuit` (kernel pursuit planner rebuilt from public rows, dry-run filings, resume bound, deterministic carriers); kernel ledger: identical proof re-seal is a no-op (dormant route); V-node recovery cases for K2-TIR v2 (Panel/OPV), K2-TIR-v4 and the legacy public filer (restart, reorg + DAG merge, full IBD, pruned import, deadline); a real gRPC/wRPC socket in front of a test node (ops 202, 204–206, 210–212, 231, submitTransaction) with disconnect/reconnect and node swap; the actual service resumes after a restart and on a fresh database. Consensus 14 + 60 regression PASS, kernel 286 PASS, kaspad service 1 PASS (+16 unit); codex's fresh-service test times out at 360 s on this host (UNKNOWN). Live drill not run (infeasible: no drill arming for the public filer / kernel route, no seat-collusion knob).
+
+
+
+2026-10-11の公開identity追及／H1 carriage／DNS lock修正の最終sourceは、exact serviceとDA非応答serviceの2件を含む **77 unique PASS**、通常node binary check成功、fresh shipping harvest／再読込 **361 pin差分なし**。G14全域は未達である。残りは全familyの正規入口→公開job/input/初期state取得→各違反の局所化・終局→scope/DA gate→最大profile/期限→restart/reorg/IBD/RPC→実運用規模の測定の順で進める。詳細と失敗を含む生logは[監査記録](../../audit/g14-review-2026-10-10/implementation.md)、現在の順序は[フィードバック](../../audit/g14-review-2026-10-10/feedback.md#残りの実装順序2026-10-11)を参照。
+
+
+2026-10-11の公開input follow-upでは、元FP V3 commitment body・acceptance rowを削除したfresh verifierの実serviceで、正しい公開bindingの後のinput非応答からDA default／producer徴収へ1 PASS（568.20 s）、不正input carrierを採用せず正しいchunkから独立replayのHonest判定／署名付き予約解放へ1 PASS（346.73 s）を確認した。input bootstrapの完了後もnode policyがcaseを保持し、既存tag 155でlive予約を解放する。filer/input 20件、pruned identity service 1件の回帰もPASS（今回23 unique）。閉じたguard/deposit上限、最大input、全family、scope、回復・最大負荷は未達。単独releaseだけではHonestを証明せず、今回の実worker判定はlogで確認した。[証拠と限界](../../audit/g14-review-2026-10-10/implementation.md#履歴消失後の公開input取得非応答予約解放2026-10-11)。
+
+
+2026-10-11のpre-replay input follow-upでは、LG14-B内のuser inputを小さいticketで先に認証し、context／full replay ticket取得前から公開binding／PromptIdsのcourtへ進める。pruned PublicDAもexact jobの公開prefixを再取得でき、capture tailはコピー・実行しない。通常の完全な公開inputはworker起動前にbootstrapを外し、余分な予約を作らない。最終filer/input 23 unit、実serviceのpruned honest（実workerのHonest判定を直接assert）、input非応答、通常PublicDA honest／対象予約なし、pruned identity／producerと全5 Valid signer徴収・revealの4件がPASS（今回27 unique）。node binary checkもPASS。context取得不能／full ticket拒否の実service負荷試験、最大inputのsession予算、pre-fence永久消失job、initial/prefix-state、全family、scope／hiding、回復・最大負荷は引き続き未達。shipping validatorとADR-0177 D7を維持する。[実装・失敗・最終証拠](../../audit/g14-review-2026-10-10/implementation.md#再計算前のユーザーinput-bootstrap2026-10-11)。
+
+
+2026-10-11のmetadata無しFP follow-upでは、job保存fence前に通常受理し、元body/acceptance rowも削除したfresh outsiderが、再計算前の公開bindingだけからidentity conviction/producerと全5 Valid signerの徴収・reveal（314.21 s）、又はbinding非応答DA default（536.03 s）まで1件ずつPASSした。filer/input 26件、既存pruned honest取得/replay/release回帰1件もPASS、通常PublicDA honest回帰（290.18 s）もPASS、今回30 unique。busy replay/capture/seat枠の外でaccepted descriptorだけを確認し、実行中の同一candidateを再probeせず、prompt/signature vectorsをコピーしない。正しいbinding後のjob本体取得は依然未達で、そのcourt実装へ進む。wire/activationはこの区切りで変更せず、shipping harvestは再実行していない。[証拠と限界](../../audit/g14-review-2026-10-10/implementation.md#保存metadataもないfp-claimの公開binding追及2026-10-11)。
+
+
+2026-10-11の公開FP job-preimage follow-upでは、保存metadataと元body/acceptance rowの全てがないfresh verifierが、公開binding→署名付きjob descriptor→公開input→実workerのHonest判定→署名付きreleaseまで実serviceでPASS（306.57 s）。正しいbinding後のjob非応答もproducer DA default/徴収までPASS（554.56 s）。filer/inputとproducer responder policy 35件、core legacy held 10件、legacy V-fold回帰15件、metadata無しidentity conviction/producerと全5 Valid signer徴収・reveal回帰1件（332.88 s）もPASS、今回63 unique（以前の30/27/23件と重複加算しない）。node binary checkもPASS。shipping fresh integration harvestと同一core binaryの3 goldensの再読込で361 pin差分なし。初回compile、旧release期待値、disk不足の失敗を監査logに保存した。unit/answerの末尾へFpJobを追加し、既存tag/ordinalと有効化拒否は維持する。64 KiBを超えるdescriptor、binding/transport/profile適合、追加session予算は未解決で、最大jobへの不可能な義務を排除するまで有効化できない。initial/prefix-state、全family、scope/hiding、回復・最大負荷・包含期限を含むG14全域は未達。[実装と証拠](../../audit/g14-review-2026-10-10/implementation.md#公開fp-job-preimageの取得court2026-10-11)。
+* 2026-10-11 — G14-K (§2g): the kernel route's public verifier inside kaspad's `PalwPanelService` (`palw_kernel_verifier`, `--palw-kernel-model`), driving `misaka-palw-remote::pursuit` (extended: consumer ledger, program / segmented / typed checks, block material, step sends). V-node(svc) for K2-TIR-v2 Panel-licensed with every seat colluding: gather / MatMul / clamp convicted pre- and post-Final, honest twin Final, restart mid-pursuit without a second seal (kaspad 2 PASS); the class registered through the production onboarding path (no test hook). v4 segmented (demand + Respond → conviction; withheld → DA default) and typed memory at V-node(harness) through the same library functions. No consensus change, nothing armed.
+* 2026-10-11 — G14-L (§2h): parallel reserved sessions (lanes, ≤ 64 a session, ≤ 128 extra a reservation, a DA-6 price a lane, deadline + 1 DAA a lane) and the k-ary authenticated descent on the legacy held route, behind both dormant legacy fences (no wire change). Legacy held 8k (2^27 leaves) fits in 4 sessions `[1, 36, 16, 1]`, filed 4,906 of 5,400; height ≥ 30, 2^40 and 2M refused by name (`PARALLEL_SESSIONS`). V-fold: 8k-shaped pursuit on the t12 lattice convicts / defaults on the derived schedule; coalition bounded; restart mid-round. Nothing armed.

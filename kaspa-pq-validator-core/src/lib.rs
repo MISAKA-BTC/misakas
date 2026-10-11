@@ -338,12 +338,22 @@ pub fn build_fp_commitment_tx_with(
         prompt_token_ids
     };
     let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature };
-    // The same stateless rules a peer will apply, applied before spending a fee on them — under
-    // the decode rules' height-free door (RFC-0001 §A.4): a builder holds no height, so a V3 and
-    // a V4 job both pass the shape here and the chain's header-context door decides which one
-    // the block's height takes.
-    payload
-        .validate_stateless_under_ruleset_v4(
+    // A builder holds no height. Constrained jobs use the same constraint shape and V3
+    // stand-in as the peer's isolation door; the header-context fence still decides whether
+    // the block admits them. Keep the original payload and its version-6 claim signature.
+    let stateless = if payload.commitment.job.is_constraint() {
+        use kaspa_consensus_core::palw_fp_constraint_job_v1::{palw_fp_constraint_shape_v1, palw_fp_constraint_stand_in_v1};
+        palw_fp_constraint_shape_v1(&payload.commitment.job).map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
+        palw_fp_constraint_stand_in_v1(&payload).validate_stateless_under_ruleset_v4(
+            network_domain,
+            false,
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+            None,
+            prompt_ids_form,
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Dormant,
+        )
+    } else {
+        payload.validate_stateless_under_ruleset_v4(
             network_domain,
             false,
             kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
@@ -351,7 +361,8 @@ pub fn build_fp_commitment_tx_with(
             prompt_ids_form,
             kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Scheduled,
         )
-        .map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
+    };
+    stateless.map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
     let (quanta, pwu) = match price {
         // **The chain's own number, not a re-derivation of it.** The 2026-09-20 Studio drill:
         // past the bundle a chat of 3,806,528 leaves that the chain priced at 17,883 quanta was
@@ -2623,6 +2634,88 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("earns no quanta"), "got {err}");
+    }
+
+    #[test]
+    fn constrained_fp_builder_keeps_the_original_signature_and_peer_shape_and_height_rules() {
+        use kaspa_consensus_core::palw_decode_constraint_v1::*;
+        use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
+        use kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1;
+        let key = compute_key();
+        let network = Hash64::from_u64_word(0xC015);
+        let (mut commitment, ids) = fp_commitment_fixture(network, &key);
+        let constraint = PalwDecodeConstraintV1 {
+            version: 1,
+            compiler_id: Hash64::from_u64_word(0xC015),
+            start_frame: 0,
+            frames: vec![PalwConstraintFrameV1 {
+                start: 0,
+                nodes: vec![PalwConstraintNodeV1 {
+                    accepting: true,
+                    edges: vec![PalwConstraintEdgeV1 { lo: b'a', hi: b'a', action: PalwConstraintActionV1::Goto(0) }],
+                }],
+            }],
+        };
+        commitment.job.version = PALW_FP_CONSTRAINT_VERSION;
+        commitment.job.tail = Some(PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 {
+            constraint: constraint.to_bytes(),
+            table_root: Hash64::from_u64_word(0x7AB1E),
+        }));
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let build = |commitment, prompt| {
+            key.build_fp_commitment_tx(
+                network,
+                form,
+                commitment,
+                prompt,
+                FpCommitmentPriceV1::Chain { quanta: 16, pwu: 80 },
+                fop(9, 0),
+                &fentry(u64::MAX / 2, 0, false),
+                SF_FEE,
+            )
+        };
+        let tx = build(commitment.clone(), ids.clone()).expect("the constrained isolation shape builds");
+        let payload: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload).unwrap();
+        assert_eq!(payload.commitment, commitment);
+        assert_eq!(payload.prompt_token_ids, ids);
+        payload
+            .validate_signature_v3(|pk, message, signature, context| {
+                verify_mldsa87_with_context(pk, message, signature, context).unwrap_or(false)
+            })
+            .unwrap();
+        let stand_in = palw_fp_constraint_stand_in_v1(&payload);
+        assert_ne!(stand_in.claim_id(), payload.claim_id());
+        assert!(!key.verify_with_context(
+            stand_in.claim_id().as_byte_slice(),
+            &payload.signature,
+            PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT
+        ));
+        validate_palw_fp_constraint_commitment_tx_v1(
+            &tx.payload,
+            false,
+            form,
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+        )
+        .unwrap();
+        assert_eq!(
+            palw_fp_constraint_refusal_at_v1(&tx.payload, false, false),
+            Some(PalwFpConstraintHeightRefusalV1::BelowConstraint)
+        );
+        assert_eq!(palw_fp_constraint_refusal_at_v1(&tx.payload, true, false), None);
+
+        let mut malformed = commitment.clone();
+        let Some(PalwFpJobTailV1::Constraint(tail)) = &mut malformed.job.tail else { unreachable!() };
+        tail.constraint = vec![0xff];
+        assert!(build(malformed, ids.clone()).unwrap_err().contains("not admissible"));
+        let mut mixed = commitment.clone();
+        mixed.job.decode = Some(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+        assert!(build(mixed, ids.clone()).unwrap_err().contains("not admissible"));
+        let mut wrong_domain = commitment.clone();
+        wrong_domain.job.network_domain = Hash64::default();
+        assert!(build(wrong_domain, ids.clone()).unwrap_err().contains("not admissible"));
+        let mut wrong_ids = ids.clone();
+        wrong_ids[0] ^= 1;
+        assert!(build(commitment, wrong_ids).unwrap_err().contains("not admissible"));
     }
 
     /// **Past the bundle the chain's price decides, not the leaves** (ADR-0148). The 2026-09-20

@@ -1,0 +1,354 @@
+{
+ "schema": "misaka.h1.conversion.v1",
+ "build_real_seconds": 2086.1,
+ "hf_fit_at_build": "slope 0.9776, corr 0.99257, top-1 0.938, KL 0.07914, max |\u0394| 13.690",
+ "cache_key": "676ac428b0afe1c9",
+ "cache_dir": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/smollm2-1.7b/676ac428b0afe1c9",
+ "clean_source": false,
+ "build_exit": 0,
+ "wall_seconds_this_invocation": 236,
+ "artifact_file": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/smollm2-1.7b/676ac428b0afe1c9/class.palwtir.testnet-12.palwtir",
+ "lowered_file": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/smollm2-1.7b/676ac428b0afe1c9/class.palwtir",
+ "lowered_bytes": 1866690816,
+ "artifact_bytes": 1866690944,
+ "artifact_sha256": "c29ae564bc3085d82ad3c733e2b8bb0a6f5e38342e50a6039787e81c99e5215c",
+ "max_rss_bytes_seen": [
+  4057300992
+ ],
+ "pack_digest": "5c127d732e8353bc41f297752ca440945b425784b16311127c75e64c0fd33d08",
+ "pack": {
+  "name": "smollm2-1.7b",
+  "model": {
+   "architectures": [
+    "LlamaForCausalLM"
+   ],
+   "config_digest": "895f233498c3220d628b10281004222053cacc0477f7df1772ed9105a75fd6f2",
+   "files": [
+    {
+     "bytes": 908,
+     "path": "config.json",
+     "sha256": "994f50b16abb4ae00880baefe03c10260b5bd608d2bf586f7056ca05a534feea"
+    },
+    {
+     "bytes": 3422777952,
+     "path": "model.safetensors",
+     "sha256": "f55217be716b6a997b97b9d8d7eb6fad02e00858f5010ec24f64603c3a98a0e8"
+    },
+    {
+     "bytes": 2104556,
+     "path": "tokenizer.json",
+     "sha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c"
+    },
+    {
+     "bytes": 800662,
+     "path": "vocab.json",
+     "sha256": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79"
+    }
+   ],
+   "format": "safetensors",
+   "label": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+   "model_type": "llama",
+   "revision": "31b70e2e869a7173562077fd711b654946d38674"
+  },
+  "frontend": {
+   "adapter": {
+    "hash": "72f42bf13844d406d06c03526b29f6a076488c77bb65ded41f2bb7b604a8a9a1b8369064ba26f59cbb9c27f7e93502f6cefbfb55cd5ff4589a14ceeba3fec861",
+    "id": "llama",
+    "kind": "built-in"
+   },
+   "assumed_defaults": [],
+   "builtin_pack_hash": "20437c8e4a8e759f21715b1b993ce5fea032e9f79f00410b859f12f2b871664a01d2489577e40d38794efbe65eefbc4753b06a6601a556668292f974a091aafb",
+   "level": "B",
+   "spec_digest": "d34288b7fa5bad83cecd43c52ebf94da52736148c4f937e842d628af03965abf"
+  },
+  "features": {
+   "registry_digest": "cb891cf3dbe05fcd93a81a1fa468022d9d9ab192ac1f720f3f468e372eb28f78",
+   "scope": {
+    "excluded": [],
+    "input": "token ids",
+    "output": "next-token logits",
+    "schema": "misaka.palw.feature-scope.v1",
+    "task": "text-generation",
+    "text_only": false
+   },
+   "used": [
+    {
+     "detail": "32q/32kv \u00d7 64 (group 1)",
+     "id": "ATTN_GQA_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ]
+    },
+    {
+     "detail": "49152 \u00d7 2048",
+     "id": "EMBED_TOKEN_V1",
+     "layers": []
+    },
+    {
+     "detail": "",
+     "id": "HEAD_TIED_V1",
+     "layers": []
+    },
+    {
+     "detail": "8192",
+     "id": "MLP_DENSE_GATED_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ]
+    },
+    {
+     "detail": "",
+     "id": "NORM_RMS_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ]
+    },
+    {
+     "detail": "",
+     "id": "OUTPUT_LOGITS_V1",
+     "layers": []
+    },
+    {
+     "detail": "",
+     "id": "RESIDUAL_PRE_NORM_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ]
+    },
+    {
+     "detail": "",
+     "id": "ROPE_DEFAULT_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ]
+    }
+   ]
+  },
+  "quant": {
+   "descriptors": []
+  },
+  "profile": {
+   "calibration": {
+    "schema": "misaka.palw.calib-stats.v1",
+    "sequences_file": "calib-tokens.json",
+    "sites": 460,
+    "source": {
+     "files": [
+      {
+       "chunks": 1,
+       "file": "docs/archival.md",
+       "sha256": "71c3c4e1386b8eaa8def15c0640277008a0a77b0691a387f3e340f23c1609909",
+       "tokens": 3980
+      },
+      {
+       "chunks": 1,
+       "file": "docs/crescendo-guide.md",
+       "sha256": "e7f4ab8be58c9715f1aff83832a80889f772ff1c5e8c75b1b7e81bbe903d9965",
+       "tokens": 1331
+      },
+      {
+       "chunks": 1,
+       "file": "CONTRIBUTING.md",
+       "sha256": "1f11326094038a50e4823bc73ff0a6e96cbf5502ab78ec737c5d969eb3ada651",
+       "tokens": 1271
+      },
+      {
+       "chunks": 1,
+       "file": "SECURITY.md",
+       "sha256": "1a4219d71ba1a6f705f502b64da01539afffa59183b4cb786dd90a6cc175a6f8",
+       "tokens": 4379
+      }
+     ],
+     "len": 512,
+     "tokenizer": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/HuggingFaceTB/SmolLM2-1.7B-Instruct/tokenizer.json"
+    },
+    "stats_digest": "eded91b611b8b3b38fa9447c84564fa79102006b86ab7719d5037a849c41d23e",
+    "stats_file": "stats.json"
+   },
+   "context": 512,
+   "policy": {
+    "headroom16": "4000000000000000",
+    "headroom32": "4010000000000000",
+    "headroom_resid": "4010000000000000"
+   }
+  },
+  "converter": {
+   "crate_version": "1.1.0",
+   "lowering": "misaka.palw.lowering.v1",
+   "math": {
+    "mode": "libm-v1"
+   },
+   "name": "palw-tir-convert"
+  },
+  "declared": [
+   {
+    "checkpoint_interval": 65536,
+    "class_id": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+    "exact_layout": {
+     "commit_tiles": [
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      512
+     ],
+     "logits_scheme_id": "e0532a21545ebcdee3e6bc9c65b963ba123667fe60b4aaf5e56a0f4378f3ca1fc58e58937e9863341a67dcbb0f000af1d77333f8dfd48135e0ebf95e71d5f5a1",
+     "state_tiles": [
+      64,
+      64
+     ],
+     "version": 1
+    },
+    "file_digest": "339f164a9d46b0cd613aeaab5fe50dcc619b1ffe7abcd481989e0a07140caf43c1a819698fe3d508f61bd68aaca5a4d2253733e84a804bf6d418a309937c0f9e",
+    "h_tile": 64,
+    "layout_digest": "ab74303999ff006ed1517d9aa25379847de070782b6198fa19fd81f62c416c36a769116b56fc53325f35ff78d315f2e4ea8bb665532f913c0c6761eb8e955efc",
+    "max_context": 512,
+    "network": "testnet-12"
+   }
+  ],
+  "conformance": {
+   "vectors": [
+    {
+     "commits_digest": "4008c39698e69ee7b3ede3ffe06d45dc8933ac92be7f388e97b8623e3976cd8f",
+     "decode": 1,
+     "label": "random 0 (1+1)",
+     "logits_digest": "7f05871076039016a589fcb2e9f0016bf9fb32bc11778c2f50b6006e10096965",
+     "positions": 2,
+     "prompt": [
+      18790
+     ],
+     "tokens": [
+      18
+     ]
+    }
+   ]
+  }
+ }
+}

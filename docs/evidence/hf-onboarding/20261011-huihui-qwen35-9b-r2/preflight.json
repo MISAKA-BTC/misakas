@@ -1,0 +1,227 @@
+{
+ "schema": "misaka.h1.preflight.v1",
+ "command": "misaka --network testnet-12 --output json model preflight hf://REPO@REV --depth shape [--max-context N]",
+ "header_only": true,
+ "widest": {
+  "exit": 34,
+  "file": "widest.json",
+  "readable": true,
+  "input": "https://huggingface.co/huihui-ai/Huihui-Qwen3.5-9B-abliterated/resolve/05b9e7c9b978ba29bdb8f50a49c30e4b91183339",
+  "bytes_read": 177247,
+  "depth": {
+   "requested": "shape",
+   "reached": "shape",
+   "stopped_at": null
+  },
+  "network_daa": 5585,
+  "model_type": "qwen3_5 (text decoder: qwen3_5_text)",
+  "architectures": [
+   "Qwen3_5ForConditionalGeneration"
+  ],
+  "frontend_level": "B",
+  "adapter": "vlm-qwen3-5",
+  "features_used": 15,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": true,
+   "excluded": [
+    {
+     "kind": "vision",
+     "what": "vision tower",
+     "why": "image input is not part of a class: the registered class is the text decoder, token ids in and logits out, so a prompt cannot carry an image",
+     "modal": true,
+     "evidence": [
+      "config.vision_config",
+      "config.image_token_id",
+      "config.vision_start_token_id",
+      "config.vision_end_token_id",
+      "config.video_token_id",
+      "tensors model.visual.* (333)",
+      "file preprocessor_config.json"
+     ],
+     "tensors": 333,
+     "bytes": 912020960
+    },
+    {
+     "kind": "mtp",
+     "what": "multi-token-prediction heads",
+     "why": "extra heads that propose further tokens (speculative decoding); the next-token distribution is the main head's, so the class does not need them",
+     "modal": false,
+     "evidence": [
+      "tensors mtp.* (15)"
+     ],
+     "tensors": 15,
+     "bytes": 486581248
+    }
+   ]
+  },
+  "storage": [
+   "BF16",
+   "F32"
+  ],
+  "weights_bytes": 19306216416,
+  "missing_shards": [],
+  "artifact_estimate_bytes": 10140887678,
+  "kernel": {
+   "kernel": "K2-TIR-v1 5b8156b3b85ac734",
+   "shipped": "KERNEL_NOT_ACTIVE",
+   "hypothetical": "ELIGIBLE_AT",
+   "detail": "ELIGIBLE_AT daa 5585: kernel 5b8156b3b85ac734\u2026, plan cd741b3b82019095\u2026, \u03b5_check \u2264 2^-224 (static admission only)",
+   "bucket": "kernel_extension_gap",
+   "max_positions": 32783
+  },
+  "admission_verdict": "ADMISSIBLE (pending admission v10's layout checks (declared tiles, C \u2264 min C_j, the canonical job, close bytes, the window court) need a declared layout)",
+  "admission_gate": "admitted",
+  "admission_gate_detail": null,
+  "layout": {
+   "max_context": 32783,
+   "checkpoint_interval": 149,
+   "h_tile": 32,
+   "commit_tiles": 43,
+   "logits_tile": 256,
+   "searched": true,
+   "widest_context": 262144
+  },
+  "seat_needed_bytes": 14548880202,
+  "verdict": {
+   "convert": "ok",
+   "register": "ok",
+   "mine": "blocked"
+  },
+  "unknown_because": {},
+  "blockers": [
+   {
+    "stage": "mine",
+    "code": "SEAT_MEMORY_SHORT",
+    "arg": null,
+    "what": "no seat tier holds the class: a seat never becomes ready for it, because it cannot replay a claim",
+    "have": 14548880202,
+    "need": 8589934592,
+    "unit": "bytes",
+    "safe_paths": [
+     "or a smaller model, or a larger seat"
+    ]
+   }
+  ],
+  "notes": [
+   "text stage only on testnet-12: vision \u2014 a vision-language or audio model registers as its text decoder; the other parts need RFC-0003's generative class",
+   "the declared context is 32,783 positions: the widest at which admission v10 admits the class (the program reads up to 262,144; --max-context N declares another)",
+   "court window: under palw_model_court_window (dormant on this network) the class would be given its own window of 3,000 DAA (the network's is 3,000 DAA)"
+  ]
+ },
+ "declared": {
+  "exit": 34,
+  "max_context": 8192,
+  "file": "declared.json",
+  "readable": true,
+  "input": "https://huggingface.co/huihui-ai/Huihui-Qwen3.5-9B-abliterated/resolve/05b9e7c9b978ba29bdb8f50a49c30e4b91183339",
+  "bytes_read": 177247,
+  "depth": {
+   "requested": "shape",
+   "reached": "shape",
+   "stopped_at": null
+  },
+  "network_daa": 5585,
+  "model_type": "qwen3_5 (text decoder: qwen3_5_text)",
+  "architectures": [
+   "Qwen3_5ForConditionalGeneration"
+  ],
+  "frontend_level": "B",
+  "adapter": "vlm-qwen3-5",
+  "features_used": 15,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": true,
+   "excluded": [
+    {
+     "kind": "vision",
+     "what": "vision tower",
+     "why": "image input is not part of a class: the registered class is the text decoder, token ids in and logits out, so a prompt cannot carry an image",
+     "modal": true,
+     "evidence": [
+      "config.vision_config",
+      "config.image_token_id",
+      "config.vision_start_token_id",
+      "config.vision_end_token_id",
+      "config.video_token_id",
+      "tensors model.visual.* (333)",
+      "file preprocessor_config.json"
+     ],
+     "tensors": 333,
+     "bytes": 912020960
+    },
+    {
+     "kind": "mtp",
+     "what": "multi-token-prediction heads",
+     "why": "extra heads that propose further tokens (speculative decoding); the next-token distribution is the main head's, so the class does not need them",
+     "modal": false,
+     "evidence": [
+      "tensors mtp.* (15)"
+     ],
+     "tensors": 15,
+     "bytes": 486581248
+    }
+   ]
+  },
+  "storage": [
+   "BF16",
+   "F32"
+  ],
+  "weights_bytes": 19306216416,
+  "missing_shards": [],
+  "artifact_estimate_bytes": 10140887678,
+  "kernel": {
+   "kernel": "K2-TIR-v1 5b8156b3b85ac734",
+   "shipped": "KERNEL_NOT_ACTIVE",
+   "hypothetical": "ELIGIBLE_AT",
+   "detail": "ELIGIBLE_AT daa 5585: kernel 5b8156b3b85ac734\u2026, plan 8895a9793d688e16\u2026, \u03b5_check \u2264 2^-226 (static admission only)",
+   "bucket": "kernel_extension_gap",
+   "max_positions": 8192
+  },
+  "admission_verdict": "ADMISSIBLE (pending admission v10's layout checks (declared tiles, C \u2264 min C_j, the canonical job, close bytes, the window court) need a declared layout)",
+  "admission_gate": "admitted",
+  "admission_gate_detail": null,
+  "layout": {
+   "max_context": 8192,
+   "checkpoint_interval": 298,
+   "h_tile": 32,
+   "commit_tiles": 43,
+   "logits_tile": 256,
+   "searched": false,
+   "widest_context": 262144
+  },
+  "seat_needed_bytes": 10541255498,
+  "verdict": {
+   "convert": "ok",
+   "register": "ok",
+   "mine": "blocked"
+  },
+  "unknown_because": {},
+  "blockers": [
+   {
+    "stage": "mine",
+    "code": "SEAT_MEMORY_SHORT",
+    "arg": null,
+    "what": "no seat tier holds the class: a seat never becomes ready for it, because it cannot replay a claim",
+    "have": 10541255498,
+    "need": 8589934592,
+    "unit": "bytes",
+    "safe_paths": [
+     "or a smaller model, or a larger seat"
+    ]
+   }
+  ],
+  "notes": [
+   "text stage only on testnet-12: vision \u2014 a vision-language or audio model registers as its text decoder; the other parts need RFC-0003's generative class",
+   "court window: under palw_model_court_window (dormant on this network) the class would be given its own window of 3,000 DAA (the network's is 3,000 DAA)"
+  ]
+ }
+}
