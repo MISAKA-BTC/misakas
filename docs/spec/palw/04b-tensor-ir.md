@@ -3544,9 +3544,23 @@ checks: 64B + 8,832P + 1,024, where B is program bytes and P is parameter
 instances. The actor MUST have the admission fee in free original collateral;
 accepted and inauthentic attempts both consume ordinary work and that fee.
 Kernel preparation MUST independently check/charge
-B² + (B+2)*512*1,024 + 8,832P + 16,384 before canonical decode/range/scope work.
-Both prices are structural admission charges, not PWU or reward weight. Neither
-charge may enter the protected proof-reserved budget.
+B² + 64B + 8,832P + 16,384 before parameter-root hashing and canonical decode.
+After a successful canonical typed decode, count scheduled nodes N from the
+pre/layer/post block references without allocating unrolled wiring or values.
+Check/charge 16N*1,024 before ranges, scope or replay derivation; reuse the paid
+decoded program. The 16 metadata passes conservatively cover three prepared
+writer/offset constructions, both scopes' TopK first/last source walks,
+occurrence bookkeeping, reference replay and framing/map traversal margins.
+Count declared real parameter instances before allocating the per-layer set
+and require equality to the submitted count.
+
+Require the combined per-attempt price and shared accumulated ordinary work
+within the admission allowance. Stage two extends the one already counted
+adjudication; it MUST NOT buy another run or enter proof-reserved work. A failed
+decode retains stage-one work, and a scope/range/declaration failure after stage
+two retains both debits. These structural prices are not PWU or reward weight.
+The earlier byte-times-maximum-schedule tariff in §14.36's historical evidence
+is superseded by these staged checks; no scope/court root or ceiling changes.
 
 Require exact ranges, complete declared real parameter instances and equality
 of every derived plan/scope/replay field. Require worst court work within

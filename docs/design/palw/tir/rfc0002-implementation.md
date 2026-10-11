@@ -2381,3 +2381,46 @@ complete-task active cohort remain required, alongside the user's >=90% A6/A8
 goal. The older delivery experiment's cfg(test) activation/attestation/eligibility
 seams are explicit: no-hook onboarding is NotOnboarded. Complete-task support
 records remain zero, and full RFC02 acceptance remains incomplete.
+
+## Verified correction — exact staged candidate metadata pricing, 2026-10-11
+
+The v7 candidate preparation tariff now reserves B² + 64B + 8,832P + 16,384
+before parameter-root hashing and canonical decode. The paid typed program
+provides its actual scheduled node count N without expanding wiring or tensor
+values; 16N*1,024 is reserved before range/scope/replay derivation, which reuses
+that decode. Declared real parameter-instance counts are checked before building
+the per-layer set. Both charges consume one attempt, require the combined
+per-attempt and shared ordinary allowance, retain work spent on rejected input
+or retries, and cannot enter the protected proof reserve. Canonical PWU, reward
+weight, valid plan identities and terminal court ceilings do not change.
+
+Five new adversarial cost tests pass on the final frozen pricing source. They
+cover the maximum repeated schedule, arithmetic overflow, malformed canonical
+bytes, invalid artifact authentication, invalid scope, shared-budget exhaustion,
+one-attempt accounting and retained proof allowance. The five existing candidate
+tests also pass on the staged tariff; their earlier log predates a later
+diagnostic-label update and redundant-borrow cleanup. The latter cleanup is
+included in the final five-test run. Compiled binaries are retained and hashed;
+the independent source/binary/build/run/input pins and this limited build scope
+are in [the pricing verdict](evidence/rfc02-staged-price-v7-verdict.json).
+The protected component pool gains five new tests, from 258 to 263. This count
+does not establish checkpoint/task or Final coverage.
+
+The actual pinned Qwen metadata has B=14,011, P=1,636, 314 template nodes and
+7,658 scheduled nodes: 211,670,361 predecode work + 125,468,672 scheduled metadata
+work = 337,139,033, within the existing 536,870,912 ordinary allowance. The frozen
+v7 ordinary scope still refuses with "flat relation exceeds court resource caps".
+Its program/parameter files are hashed before and after the metadata audit; no
+source weights are loaded or authenticated, and no class or execution right is
+created by that tool. The 307-byte synthetic candidate's complete preparation
+price is now 139,113 + 49,152 = 188,265; the historical 162,124,457 tariff and real
+Qwen's 7,557,621,401 refusal remain preserved as earlier observations.
+
+Native complete-graph postings and optional maximum/actual length rederivations
+still need their scheduled metadata included in the unified resource vector;
+bounded terminal chunk assembly also needs header-specific preallocation before
+its price can be reduced. These are separate consumer/resource work. The new
+ordinary point court and full reference/transport/economic envelope are under
+integration, not established by the candidate-price correction. Complete typed
+H/media jobs, actual tasks/contexts, independent honest execution Final and A6/A8
+remain open. The full goal is active; mode A and dormant shipping fences remain.

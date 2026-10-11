@@ -3716,3 +3716,37 @@ coverage. On that historical frame, the listed subset alone cannot supply
 denominator; obtain new admissible evidence rather than reducing it. There is
 no measured complete-task active-kernel A8 cohort or hook-free independent
 Final/redemption result. A6/A8 and the full RFC02 goal remain unmet.
+
+### §14.39 — Prepaid exact scheduled-metadata admission (2026-10-11)
+
+The v7 candidate's overly conservative byte-times-maximum-schedule price is
+replaced by two paid stages. Reserve B² + 64B + 8,832P + 16,384 before hashing
+parameter commitments or decoding the canonical program. From that typed
+decode count the actual scheduled node occurrences N without constructing
+wiring or tensor values. Reserve 16N*1,024 before range/scope/replay work, and
+reuse the decode. The conservative metadata pass count covers the actual
+prepared writer/offset constructions, TopK source walks, occurrence framing
+and reference replay. Declared instance counts are checked before building
+the per-layer set.
+
+The two debits remain one adjudication attempt. Combined per-attempt and shared
+block work must fit the ordinary allowance; neither stage borrows the proof
+reserve. Invalid canonical bytes retain the first debit. Invalid scopes,
+insufficient remaining metadata budget and retries preserve work already spent.
+This changes admission pricing only, not canonical PWU, reward weight,
+registered identities, scope/replay roots or terminal court caps.
+
+The actual Qwen metadata has 314 template nodes and 7,658 scheduled nodes.
+Its preparation price becomes 211,670,361 + 125,468,672 = 337,139,033, within
+the 536,870,912 ordinary allowance. Its frozen ordinary court scope still
+refuses independently; this removes one metadata-price obstacle and does not
+establish model registration, native execution or Final. The earlier 307-byte
+synthetic candidate's complete price is now 139,113 + 49,152 = 188,265.
+The historical tariff/refusal observations remain retained rather than edited
+to look like successful current admission.
+
+Five new staged-cost adversarial tests pass, alongside the five existing
+candidate regressions. Exact inputs, paid-attempt accounting, compiled binary
+identities and the retained Qwen scope refusal are recorded in
+[the staged-pricing verdict](../design/palw/tir/evidence/rfc02-staged-price-v7-verdict.json).
+These tests do not establish full-model execution, native Final or A6/A8.

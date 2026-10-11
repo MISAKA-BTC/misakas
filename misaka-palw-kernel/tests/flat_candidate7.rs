@@ -129,10 +129,12 @@ fn flat_candidate7_long_topk_metadata_admission_is_separate_from_legacy_plan() {
     assert!(l.apply_object(&old, &AuthV1 { signer_bond: OWNER }).is_err());
     assert!(l.conformance_classes.is_empty());
     eprintln!(
-        "FLAT_CANDIDATE7_METADATA N=10485760 max_positions={} program_bytes={} registration_work={} court_bytes={} court_work={} auxiliary_bytes={} no_weights_or_job_executed=true",
+        "FLAT_CANDIDATE7_METADATA N=10485760 max_positions={} program_bytes={} predecode_work={} scheduled_metadata_work={} total_registration_work={} court_bytes={} court_work={} auxiliary_bytes={} no_weights_or_job_executed=true",
         HISTORY_BOUND_V1_HELD,
         p.encode().len(),
         flat_candidate_registration_work_v7(p.encode().len(), 1).unwrap(),
+        flat_candidate_metadata_work_v7(&p).unwrap(),
+        flat_candidate_registration_work_v7(p.encode().len(), 1).unwrap() + flat_candidate_metadata_work_v7(&p).unwrap(),
         v.scope.worst_court_bytes,
         v.scope.worst_court_work,
         v.replay.topk_auxiliary_bytes
