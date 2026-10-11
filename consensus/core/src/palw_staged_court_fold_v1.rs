@@ -121,7 +121,20 @@ pub(super) fn open(
     if contract.panel.is_empty() {
         return Err(stage_refused(seed.claim, "staged contract has no actual bound Panel"));
     }
-    b.check_accuser_room(seed.reserver, u128::from(contract.terms.plan.deposit_sompi), "staged public court", ctx.daa_score)?;
+    // A root-authenticated profile may narrow a global fallback plan after seed admission.
+    // Claim-wide clocks/holds remain the immutable conservative envelope stamped at acceptance.
+    let mut terms = contract.terms;
+    let config = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
+    terms.plan = crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1::derive(
+        4095,
+        seed.binding.shape_profile.vocab_size,
+        config.prices,
+    )
+    .map_err(|e| stage_refused(seed.claim, e))?;
+    if terms.plan.maximum_moves > contract.terms.plan.maximum_moves || terms.plan.inclusion_daa > contract.terms.plan.inclusion_daa {
+        return Err(stage_refused(seed.claim, "authenticated seed exceeds immutable claim resource envelope"));
+    }
+    b.check_accuser_room(seed.reserver, u128::from(terms.plan.deposit_sompi), "staged public court", ctx.daa_score)?;
     // Rent is burned by this object's normative minimum carrier fee; only the deposit occupies
     // bond capital. The acceptance walk validates that fee before invoking this fold.
     let funded = contract
@@ -134,7 +147,7 @@ pub(super) fn open(
     let row = crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1::admit(
         seed,
         target.execution_root,
-        contract.terms,
+        terms,
         ctx.daa_score,
         funded,
         b.extras.terminal_evidence_max_bytes.unwrap_or(100_000),
