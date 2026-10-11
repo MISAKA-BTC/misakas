@@ -64,14 +64,17 @@ fn actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models(
     let rows = Arc::new(Mutex::new(BTreeMap::<&'static str, u64>::new()));
     let refuse_executor = Arc::new(AtomicBool::new(false));
     let refuse_tree = Arc::new(AtomicBool::new(false));
+    let refuse_replay = Arc::new(AtomicBool::new(false));
     let request_log = Arc::new(Mutex::new(Vec::new()));
     assert!(set_tir_memory_reserver_v1({
-        let (rows, reject_exec, reject_tree, log) = (rows.clone(), refuse_executor.clone(), refuse_tree.clone(), request_log.clone());
+        let (rows, reject_exec, reject_tree, reject_replay, log) =
+            (rows.clone(), refuse_executor.clone(), refuse_tree.clone(), refuse_replay.clone(), request_log.clone());
         Arc::new(move |role, class, ctx, bytes| {
             assert!(bytes > 0 && class != Hash64::from_bytes([0; 64]) && ctx != Hash64::from_bytes([0; 64]));
             log.lock().unwrap().push((role, bytes));
             if (role == "tir-executor" && reject_exec.load(Ordering::SeqCst))
                 || (role == "tir-full-tree" && reject_tree.load(Ordering::SeqCst))
+                || (role == "tir-replay-output" && reject_replay.load(Ordering::SeqCst))
             {
                 return Err("probe refusal before allocation".into());
             }
@@ -121,8 +124,18 @@ fn actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models(
             {
                 let store = TirEvidenceV1::own(&runner, &own, &inventory, PalwPromptIdsFormV1::Flat, 1 << 26).unwrap();
                 assert_eq!(held(), tree_need);
+                let last = space.job_shape(&ctx).unwrap().positions - 1;
+                let replay_need = store.replay_requested_storage_v1(last).unwrap() as u64;
+                refuse_replay.store(true, Ordering::SeqCst);
+                assert!(store.step_leaf(own.binding.step_leaf_count - 1).is_none());
+                assert_eq!(held(), tree_need, "refused replay creates no cache reservation/data");
+                refuse_replay.store(false, Ordering::SeqCst);
+                store.begin_builder_move_v1();
                 assert!(store.step_leaf(own.binding.step_leaf_count - 1).is_some());
-                assert_eq!(held(), tree_need, "replay's working lease releases without releasing the tree");
+                assert_eq!(held(), tree_need + replay_need, "the target cache keeps admission after executor work releases");
+                let calls = request_log.lock().unwrap().len();
+                assert!(store.step_leaf(own.binding.step_leaf_count - 1).is_some());
+                assert_eq!(request_log.lock().unwrap().len(), calls, "cache hits preserve the same lease");
             }
             assert_eq!(held(), 0, "dropping the evidence store releases its tree");
             let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

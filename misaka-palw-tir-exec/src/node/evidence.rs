@@ -202,6 +202,7 @@ pub struct TirEvidenceV1<'a> {
     /// One target position's replayed leaves. The admission budget also includes the
     /// transient range hashes, logits rows, generated ids and native Vec headers.
     cache: RefCell<BTreeMap<u32, Vec<PalwStepTileLeafV1>>>,
+    cache_memory: RefCell<Option<super::memory::TirMemoryLeaseV1>>,
     cache_budget: usize,
     max_replay_positions: u32,
     replay_positions_used: Cell<u64>,
@@ -231,6 +232,7 @@ impl<'a> TirEvidenceV1<'a> {
             prompt_form,
             cap,
             cache: RefCell::new(BTreeMap::new()),
+            cache_memory: RefCell::new(None),
             cache_budget: 1 << 30,
             max_replay_positions: 4096,
             replay_positions_used: Cell::new(0),
@@ -270,6 +272,7 @@ impl<'a> TirEvidenceV1<'a> {
             prompt_form,
             cap,
             cache: RefCell::new(BTreeMap::new()),
+            cache_memory: RefCell::new(None),
             cache_budget: 0,
             max_replay_positions: 0,
             replay_positions_used: Cell::new(0),
@@ -293,7 +296,7 @@ impl<'a> TirEvidenceV1<'a> {
             runner, binding: &capture.binding, prompt: &capture.prompt,
             trace: TirTraceV1::Rows { rows: &capture.logits_rows, generated: &capture.generated },
             tree: Box::new(tree), _tree_memory: None, leaves: Leaves::Sparse(inputs.preimages_v1()), params,
-            prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_budget: 0, max_replay_positions: 0, replay_positions_used: Cell::new(0),
+            prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_memory: RefCell::new(None), cache_budget: 0, max_replay_positions: 0, replay_positions_used: Cell::new(0),
         })
     }
 
@@ -359,6 +362,7 @@ impl<'a> TirEvidenceV1<'a> {
             prompt_form,
             cap,
             cache: RefCell::new(BTreeMap::new()),
+            cache_memory: RefCell::new(None),
             cache_budget: 1 << 30,
             max_replay_positions: 4096,
             replay_positions_used: Cell::new(0),
@@ -457,6 +461,7 @@ impl<'a> TirEvidenceV1<'a> {
         self.cache_budget = requested_bytes;
         self.replay_positions_used.set(0);
         self.cache.borrow_mut().clear();
+        self.cache_memory.borrow_mut().take();
         self
     }
 
@@ -516,6 +521,9 @@ impl<'a> TirEvidenceV1<'a> {
         // Drop all prior positions before transient buffers are allocated: even one
         // oversized position is refused, rather than retained beyond the cache cap.
         self.cache.borrow_mut().clear();
+        self.cache_memory.borrow_mut().take();
+        let cache_memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(),
+            "tir-replay-output", self.runner.class_id, ctx, u64::try_from(requested).ok()?).ok()?;
         let mut fresh = Vec::new();
         fresh.try_reserve_exact(count).ok()?;
         let (mut copied_bytes, mut malformed) = (0usize, false);
@@ -533,6 +541,7 @@ impl<'a> TirEvidenceV1<'a> {
             }).ok()?;
         if malformed || fresh.len() != count || copied_bytes != lane_bytes { return None; }
         self.cache.borrow_mut().insert(a, fresh);
+        *self.cache_memory.borrow_mut() = cache_memory;
         Some(())
     }
 

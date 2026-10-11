@@ -531,3 +531,14 @@ Standalone historical SDK APIs returning owned jobs/captures remain tool APIs: o
 artifact residency, encoded capture storage and whole-process allocator/OS overhead require
 their existing consumer admission or separate measurement. No whole-process resource,
 100k throughput, four-seal carriage, genuine pruned join or economic approval gate is advanced.
+
+The evidence store's surviving target-position replay cache now additionally holds a
+`tir-replay-output` host guard for its requested range/output envelope. A cache miss drops
+the old cache and guard before new admission; refusal or failed replay retains no new
+cache, while its attempted positions remain consumed for the whole move. Successful
+replay keeps the guard with cached preimages after its separate executor working guard
+releases. Cache hits reuse that guard, and store drop or an explicit tool policy reset
+releases it. The corpus lease test covers refusal, cache-hit reuse and release. This
+guards the store's cache lifetime; owned leaf copies handed to proof builders still
+require their consumer's proof construction admission and do not become an exact
+whole-process RSS certificate.
