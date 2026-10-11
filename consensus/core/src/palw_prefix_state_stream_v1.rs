@@ -90,6 +90,10 @@ impl PalwPrefixStateStreamV1 {
         }
         Ok(())
     }
+    /// Read-only acquisition cursor; no tentative digest or unauthenticated bytes escape.
+    pub fn pending_tile_v1(&self) -> Option<(u32, u32)> {
+        self.pending.as_ref().map(|p| (p.length, p.offset))
+    }
     pub fn next_tile(&self) -> u64 {
         self.next_tile
     }
@@ -240,13 +244,16 @@ mod tests {
             let mut stream = PalwPrefixStateStreamV1::new(context, binding.committed_execution_root, &binding, 2, CAP).unwrap();
             assert!(stream.finish().is_err());
             for (ordinal, tile) in tiles.iter().enumerate() {
+                assert_eq!(stream.pending_tile_v1(), None);
                 stream.begin_tile(context, ordinal as u64, &tile.opening).unwrap();
+                assert_eq!(stream.pending_tile_v1(), Some((tile.preimage.values_le.len() as u32, 0)));
                 assert!(stream.finish_tile().is_err());
                 let mut offset = 0;
                 // Ragged moves exercise continuation compression boundaries independently of tile boundaries.
                 for bytes in tile.preimage.values_le.chunks(37) {
                     stream.push_tile_bytes(context, ordinal as u64, offset, bytes).unwrap();
                     offset += bytes.len() as u32;
+                    assert_eq!(stream.pending_tile_v1(), Some((tile.preimage.values_le.len() as u32, offset)));
                     let cp = stream.checkpoint_v1();
                     let serialized = borsh::to_vec(&cp).unwrap();
                     assert!(serialized.len() < 1_024);
