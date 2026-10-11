@@ -2,6 +2,11 @@
 //! use. "A card's license field is evidence to review, not an automatic permission decision; unknown terms remain
 //! `RIGHTS_UNCONFIRMED`." A census therefore names the policy its rights column was decided under:
 //!
+//! (ADR-0177, 2026-10-10: the chain does not interfere with model acquisition. Serving, seeding and redistribution are off-chain and
+//! optional; no census bucket, preflight gate or eligibility reads whether a model is served, seeded or available. This column is the
+//! registrant's legal permission, as evidence, in the strict view (`gates`) only; the headline numbers read the technical view
+//! (`technical`), which does not read it.)
+//!
 //! * [`RightsPolicy::None`] — **the default and the headline's**: no registrant has established permission for any repository, so
 //!   nothing is confirmed. `D_rights` is empty and the strict view stops every repository at `source`.
 //! * [`RightsPolicy::PermissiveCardV0`] — **a proposal, not adopted**: a repository whose card license, and every resolved base's, is

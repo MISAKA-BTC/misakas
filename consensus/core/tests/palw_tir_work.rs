@@ -18,6 +18,69 @@ use kaspa_consensus_core::palw_tir_work_v1::{
 };
 use misaka_palw_tir::{Prim, TirProgramV1};
 
+#[test]
+fn a_shared_structural_weight_dag_does_not_expand_into_exponentially_many_paths() {
+    use misaka_palw_tir::program::{Block, Node, ParamDecl, Ref, Schedule};
+    use misaka_palw_tir::{DType, TensorType};
+    let mut p = misaka_palw_tir_sketch::fixture::dense_moe_v1(1).program;
+    p.params = vec![ParamDecl { name: "w".into(), dtype: DType::I8, shape: vec![1, 1], per_layer: false }];
+    p.consts.clear();
+    p.states.clear();
+    let cheap = Block {
+        name: "pre".into(),
+        carry_in: vec![],
+        carry_out: vec![],
+        nodes: vec![Node {
+            prim: Prim::Iota { axis: 0, start: 0, step: 1 },
+            inputs: vec![],
+            out: TensorType::fixed(DType::I32, &[1]),
+            commit: true,
+        }],
+    };
+    let mut layer = cheap.clone();
+    layer.name = "layer".into();
+    let mut post = Block { name: "post".into(), carry_in: vec![], carry_out: vec![], nodes: vec![] };
+    let mut weight = Ref::Param(0);
+    // Only 400 nodes and 1/2-element tensors, but 2^200 paths to the same param.
+    for _ in 0..200 {
+        post.nodes.push(Node {
+            prim: Prim::Concat { axis: 1 },
+            inputs: vec![weight, weight],
+            out: TensorType::fixed(DType::I8, &[1, 2]),
+            commit: false,
+        });
+        let concat = Ref::Node((post.nodes.len() - 1) as u16);
+        post.nodes.push(Node {
+            prim: Prim::Slice { axis: 1, start: 0 },
+            inputs: vec![concat],
+            out: TensorType::fixed(DType::I8, &[1, 1]),
+            commit: false,
+        });
+        weight = Ref::Node((post.nodes.len() - 1) as u16);
+    }
+    post.nodes.push(Node {
+        prim: Prim::MatMul,
+        inputs: vec![weight, Ref::Param(0)],
+        out: TensorType::fixed(DType::I128, &[1, 1]),
+        commit: false,
+    });
+    post.nodes.push(Node {
+        prim: Prim::Cast,
+        inputs: vec![Ref::Node((post.nodes.len() - 1) as u16)],
+        out: TensorType::fixed(DType::I32, &[1, 1]),
+        commit: true,
+    });
+    p.logits = (post.nodes.len() - 1) as u16;
+    p.blocks = vec![cheap, layer, post];
+    p.schedule = Schedule { pre: 0, layers: vec![1], post: 2 };
+    let p = TirProgramV1::decode_canonical(&p.encode()).expect("a valid small IR, not an invalid-size attack");
+    let vector = palw_tir_canonical_work_v1(&p, &job(1, 2, 0)).unwrap();
+    assert_eq!(vector.dense_matmul, 2);
+    assert_eq!(vector.weight_traffic_bytes, 2);
+    assert_eq!(vector.other_verified_ops, 1_206);
+    assert_eq!(vector.arithmetic_mac_eq(), 1_208);
+}
+
 fn unhex(s: &str) -> Vec<u8> {
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect()
 }

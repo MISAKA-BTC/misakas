@@ -63,7 +63,7 @@
     "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225],
     "ops": {"$var": "ops"},
     "out": "GlobalAvg",
-    "ignored": ["classifier."],
+    "ignored": {"$if": [{"$eq": [{"$var": "arch"}, "ResNetForImageClassification"]}, [], ["classifier."]]}, "head": {"$if": [{"$eq": [{"$var": "arch"}, "ResNetForImageClassification"]}, {"name": "classifier.1", "labels": {"$let": ["m", {"$cfg?": "id2label"}, {"$if": [{"$ne": [{"$var": "m"}, null]}, {"$len": {"$var": "m"}}, {"$cfg": ["num_labels", 2]}]}]}, "bias": true}, null]},
     "aliases": [["", "resnet."]]
   }
 }

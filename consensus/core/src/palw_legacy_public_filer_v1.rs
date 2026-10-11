@@ -64,6 +64,8 @@ pub const PALW_DISPUTE_LIVE_RESERVATIONS_PER_BOND_V1: usize = 64;
 /// Reserved DA sessions one reservation may open on its claim (one open at a time: DA-1): the legacy localizer's worst case over the
 /// legacy contiguous scan fits only when `PalwLegacyBisectV1::max_demands` is within this cap. Large ladders require LG14-B's
 /// authenticated frontier descent (`⌈40 / 9⌉ + 2` at 2^40 leaves); a midpoint leaf does not authenticate the preceding prefix.
+/// Lane G14-L: on the held route a session may hold up to 64 LANES (parallel units of one search round, joined by further tag-157
+/// demands, `crate::palw_legacy_parallel_v1`); it still counts one session here, its extra lanes count on the row's own lane budget.
 pub const PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1: u8 = 34;
 
 // ---- the wire -------------------------------------------------------------------------------------------------------------------
@@ -186,6 +188,10 @@ pub struct PalwDisputeReservationRowV1 {
     pub deposit: u128,
     /// Reserved DA sessions it has opened on the claim, at most [`PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1`].
     pub sessions_opened: u8,
+    /// Lane G14-L: lanes it has joined to its open reserved sessions beyond each session's first (parallel units of one search round,
+    /// `crate::palw_legacy_parallel_v1`), at most `PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1`. Written only where both dormant legacy
+    /// fences are in force.
+    pub lanes_joined: u16,
 }
 
 /// **One claim's dispute record** (`legacy_disputes`, keyed by claim): written with the claim's first reservation, deleted when nothing
@@ -538,6 +544,75 @@ pub fn palw_fraud_filer_next_descent_v1(
     }
 }
 
+/// **The worst-case reserved sessions of the authenticated `StepRange` subtree descent** (lane G14-V): the binding read, the
+/// descent's reads ([`crate::palw_auth_descent_v1::palw_auth_descent_max_reads_v1`] at 1,024-leaf reads) and the terminal.
+pub fn palw_fraud_filer_subtree_sessions_v1(leaves: u64) -> u64 {
+    crate::palw_auth_descent_v1::palw_auth_descent_max_reads_v1(leaves, PALW_LEGACY_BISECT_FINAL_RANGE_V1).saturating_add(2)
+}
+
+/// **The common filer's step over the authenticated `StepRange` subtree descent** (lane G14-V) — the codec-independent localizer
+/// that replaces the linear contiguous scan: the same prelude as [`palw_fraud_filer_next_v1`], then the descent's next move over the
+/// authenticated subtree roots the chain's range answers carried (`crate::palw_auth_descent_v1::palw_auth_descent_next_v1`). A read
+/// is a reserved `StepRange` demand at the focus subtree's left edge; the first divergent leaf is the `StepLeaf` terminal (a fused
+/// leaf is the held route's); an agreeing step tree is `Honest` for the STEP tree only — the node then localizes past it (logits
+/// trace, output) and never settles a mismatched execution as honest; an own tree that cannot judge is `Unjudged`. Fits the
+/// reservation's 34 sessions up to 2^41 leaves ([`palw_fraud_filer_subtree_sessions_v1`]).
+pub fn palw_fraud_filer_next_subtree_v1(
+    role: PalwFilerRoleV1,
+    facts: &PalwFilerClaimFactsV1,
+    mismatch: bool,
+    leaves: u64,
+    descent: crate::palw_auth_descent_v1::PalwAuthDescentV1,
+    demandable: impl Fn(u64) -> bool,
+) -> PalwFilerActionV1 {
+    use crate::palw_auth_descent_v1::PalwAuthDescentV1 as D;
+    if let Some(action) = palw_fraud_filer_prelude_v1(role, facts, mismatch) {
+        return action;
+    }
+    if palw_fraud_filer_subtree_sessions_v1(leaves) > u64::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1) {
+        return PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged);
+    }
+    match descent {
+        D::Agrees => PalwFilerActionV1::Done(PalwFilerPhaseV1::Honest),
+        D::Read { first, count } => match u32::try_from(count) {
+            Ok(count) if count >= 1 && u64::from(count) <= PALW_LEGACY_BISECT_FINAL_RANGE_V1 => {
+                PalwFilerActionV1::Demand(PalwLegacyProbeV1::Range { first, count })
+            }
+            _ => PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged),
+        },
+        D::FirstDivergentLeaf(leaf) if demandable(leaf) => PalwFilerActionV1::Demand(PalwLegacyProbeV1::Terminal { leaf }),
+        D::FirstDivergentLeaf(leaf) => PalwFilerActionV1::HeldRoute { leaf },
+        D::OwnInconsistent { .. } | D::OwnUnavailable { .. } => PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged),
+    }
+}
+
+/// **Learn one authenticated `StepRange` answer into the subtree descent's tree** — the answer must authenticate against the claim
+/// (its binding reproduces the claim's execution root, the opening folds to that binding's step root) and its binding must be the
+/// one the case read; only then are its nodes recorded. Unauthenticated bytes change nothing.
+pub fn palw_fraud_filer_learn_subtree_v1(
+    probe: PalwLegacyProbeV1,
+    answer: &crate::palw_da_rcore_v1::PalwDaAnswerV1,
+    claim_execution_root: &Hash64,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    tree: &mut crate::palw_auth_descent_v1::PalwAuthTreeV1,
+) -> Result<usize, String> {
+    use crate::palw_da_rcore_v1::PalwDaAnswerV1;
+    use crate::palw_held_da_v1::PalwHeldDisclosureV1;
+    if !palw_fraud_filer_answer_authenticates_v1(&probe.unit(), answer, claim_execution_root) {
+        return Err("the answer does not authenticate the requested unit against the claim".into());
+    }
+    let (PalwLegacyProbeV1::Range { .. }, PalwDaAnswerV1::Held(carriage)) = (probe, answer) else {
+        return Err(format!("{probe:?} is not a range the subtree descent reads"));
+    };
+    if carriage.binding != *binding || tree.root != binding.step_merkle_root || tree.leaf_count != binding.step_leaf_count {
+        return Err("the range answers another binding than the case read".into());
+    }
+    let PalwHeldDisclosureV1::StepRange { opening } = &carriage.disclosure else {
+        return Err("a range is answered by a range".into());
+    };
+    tree.learn_range(opening)
+}
+
 // ---- the engine's shared reads and builders (RFC-0014 §6.1–§6.3): the node's filer and the real-node suite run THESE ------------
 
 impl PalwLegacyProbeV1 {
@@ -741,6 +816,44 @@ pub fn palw_fraud_filer_learn_v1(
     }
 }
 
+// ---- G14-B: can a reserved pursuit FINISH before the claim's hard deadline? ------------------------------------------------------
+
+/// **G14-B: the sessions the largest legacy pursuit needs** — one per input unit a fresh verifier must acquire before it can replay
+/// (the PanelDA input bootstrap: a unit is [`crate::palw_legacy_held_da_v2::PALW_LEGACY_PROMPT_CHUNK_IDS_V2`] prompt ids), the LG14-B
+/// descent's node rounds over a step tree of `leaf_count` leaves (`⌈height / 9⌉`), the binding read and the terminal. Every one is a
+/// reserved session, one open at a time (DA-1), on the reservation's own budget of [`PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1`].
+pub fn palw_legacy_pursuit_sessions_v1(input_ids_to_acquire: u64, leaf_count: u64) -> u64 {
+    input_ids_to_acquire
+        .div_ceil(crate::palw_legacy_held_da_v2::PALW_LEGACY_PROMPT_CHUNK_IDS_V2)
+        .saturating_add(u64::from(crate::palw_legacy_held_da_v2::palw_legacy_descent_rounds_v2(leaf_count)))
+        .saturating_add(2)
+}
+
+/// **G14-B: the reserved pursuit's clock**, from a claim's lattice windows (DAA after its acceptance): a session opens only while
+/// `now + W_disclose ≤ trace_retention` (`da_admission_v1`), so by the hard deadline `retention − W_disclose`; a stalling producer
+/// answers each on the last DAA of its `W_disclose` ([`crate::palw_state_v2::palw_da_disclose_window_daa_v1`] =
+/// `window_challenge()`, the UNSHORTENED field); the filing lands by the retention's end. `first_step` (the reservation's inclusion
+/// and the verifier's own replay), `turnaround` and `prove` are the verifier's — unmeasured, parameters.
+pub fn palw_legacy_pursuit_clock_v1(
+    window_bind: u64,
+    window_receipt: u64,
+    window_challenge: u64,
+    window_court: u64,
+    first_step_daa: u64,
+    turnaround_daa: u64,
+    prove_daa: u64,
+) -> misaka_palw_kernel::budget::SessionClockV1 {
+    let retention = window_bind.saturating_add(window_receipt).saturating_add(window_challenge).saturating_add(window_court);
+    misaka_palw_kernel::budget::SessionClockV1 {
+        open_span_daa: retention.saturating_sub(window_challenge),
+        close_span_daa: retention,
+        session_window_daa: window_challenge,
+        first_step_daa,
+        turnaround_daa,
+        prove_daa,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,6 +861,43 @@ mod tests {
 
     fn bond(n: u64) -> PalwBondKeyV2 {
         PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(n), 0))
+    }
+
+    /// **G14-B (FINDING): on testnet-12's lattice a stalling producer holds a reserved pursuit to FOUR sessions.** Each reserved
+    /// session's answer window is `W_disclose = window_challenge()` = 1,200 DAA (the unshortened field), and sessions open only until
+    /// the hard deadline `retention − W_disclose` = 4,200 DAA after acceptance; one open at a time (DA-1). Even with the most favourable
+    /// verifier (first session 2 DAA after acceptance, 1-DAA turnarounds) the fifth session cannot open. The 8k held profile needs
+    /// 4 input units + 5 descent rounds (2^40 leaves) + 2 = 11 sessions; the 2M profile 1,031, past the 34-session budget itself. At
+    /// the APPLIED short window (120 DAA) the same lattice carries 34 sessions; at the court's 42-DAA turn, many more.
+    #[test]
+    fn g14b_a_stalling_producer_holds_the_reserved_pursuit_to_four_sessions_on_the_t12_lattice() {
+        use crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1 as W;
+        use misaka_palw_kernel::budget::session_pursuit_schedule_v1;
+        let clock = |challenge: u64| {
+            let mut c = palw_legacy_pursuit_clock_v1(W.window_bind, W.window_receipt, W.window_challenge, W.window_court, 2, 1, 1);
+            c.session_window_daa = challenge;
+            c
+        };
+        let live = clock(W.window_challenge);
+        assert_eq!((W.window_bind, W.window_receipt, W.window_challenge, W.window_court), (600, 600, 1_200, 3_000));
+        assert_eq!((live.open_span_daa, live.close_span_daa, live.session_window_daa), (4_200, 5_400, 1_200));
+        let held_8k = palw_legacy_pursuit_sessions_v1(8_192, 1 << 40);
+        let held_2m = palw_legacy_pursuit_sessions_v1(2_097_152, 1 << 40);
+        assert_eq!((held_8k, held_2m), (11, 1_031));
+        assert!(held_2m > u64::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1), "the 2M input alone is past the reservation's budget");
+        let s = session_pursuit_schedule_v1(&live, held_8k as u32);
+        assert!(!s.fits, "{s:?}");
+        assert_eq!(s.max_sessions, 4);
+        assert!(session_pursuit_schedule_v1(&live, 4).fits && !session_pursuit_schedule_v1(&live, 5).fits);
+        assert!(!session_pursuit_schedule_v1(&live, u32::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1)).fits);
+        // The window that would carry the whole budget: the applied short challenge window does (35 sessions fit).
+        let short = clock(crate::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1);
+        assert_eq!(short.session_window_daa, 120);
+        let budget = session_pursuit_schedule_v1(&short, u32::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1));
+        assert!(budget.fits && budget.max_sessions == 35, "{budget:?}");
+        assert!(session_pursuit_schedule_v1(&short, held_8k as u32).fits);
+        // The court's turn deadline carries far more.
+        assert!(session_pursuit_schedule_v1(&clock(W.court_turn_deadline), 34).max_sessions >= 34);
     }
 
     #[test]
@@ -831,6 +981,93 @@ mod tests {
         assert_eq!(PalwLegacyBisectV1::max_demands(1u64 << 40), (1u64 << 40).div_ceil(PALW_LEGACY_BISECT_FINAL_RANGE_V1) + 2);
     }
 
+    /// **G14-V: the subtree engine localizes any lone or sparse lie of a ladder the linear scan refused, within the 34 sessions**,
+    /// learning only authenticated range answers (a rejected carrier changes nothing), and never trusts a matching midpoint.
+    #[test]
+    fn the_subtree_engine_localizes_a_lie_anywhere_within_the_reservation() {
+        use crate::palw_auth_descent_v1::{PalwAuthDescentV1, PalwAuthTreeV1, palw_auth_descent_next_v1};
+        use crate::palw_step_leg::{step_merkle_leaf_v1, step_merkle_node_v1};
+        assert_eq!(palw_fraud_filer_subtree_sessions_v1(1 << 40), 33);
+        assert!(palw_fraud_filer_subtree_sessions_v1(1 << 41) <= 34);
+        assert!(palw_fraud_filer_subtree_sessions_v1(1 << 42) > 34);
+        assert!(PalwLegacyBisectV1::max_demands(1 << 20) > 34, "the linear scan refused this ladder");
+        let reserved = PalwFilerClaimFactsV1 {
+            reservable: true,
+            accusable: true,
+            binding_known: true,
+            reserved: true,
+            ..Default::default()
+        };
+        let whole = |leaves: &[Hash64]| {
+            let mut levels = vec![leaves.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(i as u64, h)).collect::<Vec<_>>()];
+            while levels.last().unwrap().len() > 1 {
+                let l = levels.last().unwrap();
+                let mut next: Vec<Hash64> = l.chunks_exact(2).map(|p| step_merkle_node_v1(&p[0], &p[1])).collect();
+                if l.len() % 2 == 1 {
+                    next.push(*l.last().unwrap());
+                }
+                levels.push(next);
+            }
+            levels
+        };
+        let n = 70_001u64; // 69 linear ranges: refused by the old scan.
+        let honest: Vec<Hash64> = (0..n).map(|i| Hash64::from_u64_word(i ^ 0x5A5A)).collect();
+        let own = whole(&honest);
+        for lies in [vec![0u64], vec![n - 1], vec![1_024 * 33 + 5, n - 2], vec![n / 2, n / 2 + 1_024 * 7]] {
+            let mut claim = honest.clone();
+            for lie in &lies {
+                claim[*lie as usize] = Hash64::from_u64_word(0xBAD ^ lie);
+            }
+            let committed = whole(&claim);
+            let mut tree = PalwAuthTreeV1::new(n, *committed.last().unwrap().first().unwrap()).unwrap();
+            let own_node = |l: u8, i: u64| own.get(usize::from(l))?.get(i as usize).copied();
+            let mut sessions = 1u64; // the binding read
+            let located = loop {
+                let descent = palw_auth_descent_next_v1(&tree, &own_node, PALW_LEGACY_BISECT_FINAL_RANGE_V1);
+                match palw_fraud_filer_next_subtree_v1(PalwFilerRoleV1::PublicBond, &reserved, true, n, descent, |_| true) {
+                    PalwFilerActionV1::Demand(PalwLegacyProbeV1::Range { first, count }) => {
+                        sessions += 1;
+                        assert_eq!(first % PALW_LEGACY_BISECT_FINAL_RANGE_V1, 0, "reads are 1,024-aligned left edges");
+                        let (a, b) = (first as usize, first as usize + count as usize);
+                        let opening = crate::palw_step_leg::PalwStepRangeOpeningV1 {
+                            first_leaf_index: first,
+                            leaf_hashes: claim[a..b].to_vec(),
+                            siblings: crate::palw_step_leg::step_merkle_range_siblings_v1(&claim, a, b - a).unwrap(),
+                        };
+                        tree.learn_range(&opening).unwrap();
+                    }
+                    PalwFilerActionV1::Demand(PalwLegacyProbeV1::Terminal { leaf }) => break leaf,
+                    other => panic!("{other:?}"),
+                }
+            };
+            sessions += 1; // the terminal
+            assert_eq!(located, *lies.iter().min().unwrap());
+            assert!(sessions <= palw_fraud_filer_subtree_sessions_v1(n) && sessions <= 34, "{sessions} sessions");
+        }
+        let agrees = palw_auth_descent_next_v1(
+            &PalwAuthTreeV1::new(n, own.last().unwrap()[0]).unwrap(),
+            &|l, i| own.get(usize::from(l))?.get(i as usize).copied(),
+            1024,
+        );
+        assert_eq!(agrees, PalwAuthDescentV1::Agrees);
+        assert_eq!(
+            palw_fraud_filer_next_subtree_v1(PalwFilerRoleV1::PublicBond, &reserved, true, 1 << 42, agrees, |_| true),
+            PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged),
+            "past 2^41 leaves the descent no longer fits the reservation: Unjudged, never a guess"
+        );
+        assert_eq!(
+            palw_fraud_filer_next_subtree_v1(
+                PalwFilerRoleV1::PublicBond,
+                &reserved,
+                true,
+                n,
+                PalwAuthDescentV1::FirstDivergentLeaf(9),
+                |_| false
+            ),
+            PalwFilerActionV1::HeldRoute { leaf: 9 }
+        );
+    }
+
     /// The engine's step: every role reaches the same terminal from the same facts; only a bond reserves; the binding is read first;
     /// a fused located leaf goes to the held route.
     #[test]
@@ -879,7 +1116,7 @@ mod tests {
     #[test]
     fn the_record_counts_reservers_and_exposure() {
         let mut record = PalwDisputeClaimV1 { opened_daa: 5, hard_deadline_daa: 900, ..Default::default() };
-        record.live.insert(bond(1), PalwDisputeReservationRowV1 { reserved_daa: 5, deposit: 70, sessions_opened: 0 });
+        record.live.insert(bond(1), PalwDisputeReservationRowV1 { reserved_daa: 5, deposit: 70, sessions_opened: 0, lanes_joined: 0 });
         record.closed.insert(bond(2));
         record.dismissed_held.push((bond(2), 30));
         record.dismissed_held.push((bond(1), 11));
@@ -1009,7 +1246,7 @@ mod tests {
         assert_eq!(facts, PalwFilerClaimFactsV1 { reservable: true, ..Default::default() }, "Provisional: no session may open yet");
         view.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 20 };
         let mut record = PalwDisputeClaimV1::default();
-        record.live.insert(other, PalwDisputeReservationRowV1 { reserved_daa: 21, deposit: 7, sessions_opened: 0 });
+        record.live.insert(other, PalwDisputeReservationRowV1 { reserved_daa: 21, deposit: 7, sessions_opened: 0, lanes_joined: 0 });
         record.closed.insert(me);
         view.record = Some(record);
         let facts = palw_fraud_filer_facts_v1(Some(&view), &me, false, true);
@@ -1020,7 +1257,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .live
-            .insert(me, PalwDisputeReservationRowV1 { reserved_daa: 22, deposit: 7, sessions_opened: 1 });
+            .insert(me, PalwDisputeReservationRowV1 { reserved_daa: 22, deposit: 7, sessions_opened: 1, lanes_joined: 0 });
         let session = crate::palw_da_rcore_v1::PalwDaSessionV1 {
             opened_daa: 23,
             deadline_daa: 100,

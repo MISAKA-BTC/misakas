@@ -364,3 +364,147 @@ fn a_tampered_stratified_binding_or_snapshot_does_not_load() {
     // The untouched record reloads (the control).
     assert_eq!(tamper(&|_| {}), Ok(()));
 }
+
+/// Consistency must derive commitments, not accept matching attacker-edited copies of them.
+#[test]
+fn restored_stratified_entropy_and_seal_are_derived_from_the_frozen_subject() {
+    let v = View::new(&(1..=8).collect::<Vec<_>>(), &(5..=12).collect::<Vec<_>>(), &[20, 21, 22, 23]);
+    let (state, _) = drive(&v, &[(claim(10), Some(STRATA))]);
+    let check = |edit: &dyn Fn(&mut ClaimRecordV3)| {
+        let mut changed = state.clone();
+        let mut record = changed.claim(&h(10)).unwrap().clone();
+        edit(&mut record);
+        changed.put_claim_row(h(10), Some(record));
+        changed.refresh_derived().unwrap();
+        changed.check_consistency()
+    };
+    assert_eq!(check(&|_| {}), Ok(()));
+    let mut verdicts = Vec::new();
+    for field in ["seal", "seed", "beacon"] {
+        let verdict = check(&|record| {
+            let ClaimPhaseV3::Bound(mut binding) = record.phase.clone() else { unreachable!() };
+            match field {
+                "seal" => {
+                    record.seal.as_mut().unwrap().id = h(0xFA01);
+                    binding.claim_seal_id = h(0xFA01);
+                }
+                "seed" => binding.panel_seed_v3 = h(0xFA02),
+                "beacon" => binding.beacon_id = h(0xFA03),
+                _ => unreachable!(),
+            }
+            record.binding_history[0] = binding.clone();
+            record.phase = ClaimPhaseV3::Bound(binding);
+        });
+        verdicts.push((field, verdict));
+    }
+    assert!(verdicts.iter().all(|(_, result)| *result == Err(PanelErrorV1::InvalidCarriage)), "derived commitment refusals: {verdicts:?}");
+}
+
+fn assert_invalid_checkpoint(state: &PermissionlessPanelStateV1) {
+    assert_eq!(state.check_consistency(), Err(PanelErrorV1::InvalidCarriage));
+    // A matching supplied root cannot replace structural validation. Real import additionally needs a trusted root.
+    let bytes = borsh::to_vec(state).unwrap();
+    assert_eq!(
+        PermissionlessPanelStateV1::import(&bytes, state.root(), state.network(), state.ruleset(), state.policy()).unwrap_err(),
+        PanelErrorV1::InvalidCarriage
+    );
+}
+
+#[test]
+fn terminal_flat_and_stratified_histories_keep_entropy_after_shared_epoch_pruning() {
+    let view = View::new(&(1..=8).collect::<Vec<_>>(), &(5..=12).collect::<Vec<_>>(), &[20, 21, 22, 23]);
+    for strata in [None, Some(STRATA)] {
+        let (bound, _) = drive(&view, &[(claim(10), strata)]);
+        let output = bound.claim(&h(10)).unwrap().entropy_output;
+        assert_eq!(output, Some(proof().output));
+        let mut missing = bound.clone();
+        missing.put_beacon_row(1, None);
+        assert_invalid_checkpoint(&missing);
+        let mut conflicting = bound.clone();
+        conflicting.put_beacon_row(1, Some(h(0xBAD)));
+        assert_invalid_checkpoint(&conflicting);
+        let (retry, _) = bound.advance(&step(h(5), 6, 17), &view).unwrap();
+        assert_eq!(retry.claim(&h(10)).unwrap().entropy_output, output);
+        let (terminal, _) = retry.advance(&step(h(6), 7, 21), &view).unwrap();
+        assert!(matches!(terminal.claim(&h(10)).unwrap().phase, ClaimPhaseV3::Voided { reason: NonFraudReasonV1::PanelUnavailable, .. }));
+        assert!(terminal.beacon_rows().is_empty(), "only the shared epoch row is pruned");
+        assert_eq!(terminal.claim(&h(10)).unwrap().entropy_output, output);
+        assert_eq!(terminal.claim(&h(10)).unwrap().binding_history.len(), 2);
+        let bytes = borsh::to_vec(&terminal).unwrap();
+        let restored = PermissionlessPanelStateV1::import(&bytes, terminal.root(), h(700), h(701), policy()).unwrap();
+        let next = step(h(7), 8, 22);
+        assert_eq!(restored.advance(&next, &view).unwrap(), terminal.advance(&next, &view).unwrap());
+        let parent_root = terminal.root();
+        for field in ["output", "missing output", "old seed", "retry seed", "retry beacon", "subject", "population"] {
+            let mut altered = terminal.clone();
+            let mut record = altered.claim(&h(10)).unwrap().clone();
+            match field {
+                "output" => record.entropy_output = Some(h(0xFA04)),
+                "missing output" => record.entropy_output = None,
+                "old seed" => record.binding_history[0].panel_seed_v3 = h(0xFA05),
+                "retry seed" => record.binding_history[1].panel_seed_v3 = h(0xFA06),
+                "retry beacon" => record.binding_history[1].beacon_id = h(0xFA07),
+                "subject" => record.claim.immutable_fields = h(0xFA08),
+                "population" => {
+                    let snapshot = record.snapshot.as_mut().unwrap();
+                    snapshot.candidates[0].readiness_root = h(0xFA09);
+                    snapshot.root = snapshot.computed_root();
+                    for binding in &mut record.binding_history {
+                        binding.panel_snapshot_root = snapshot.root;
+                    }
+                }
+                _ => unreachable!(),
+            }
+            altered.put_claim_row(h(10), Some(record));
+            altered.refresh_derived().unwrap();
+            assert_invalid_checkpoint(&altered);
+        }
+        assert_eq!(terminal.root(), parent_root, "failed restores never mutate the retained parent");
+    }
+}
+
+#[test]
+fn unassigned_entropy_ready_clock_and_commitments_are_validated_before_the_draw() {
+    let view = View::new(&(1..=8).collect::<Vec<_>>(), &(5..=12).collect::<Vec<_>>(), &[20, 21, 22, 23]);
+    let mut config = policy();
+    config.assignment_delay_daa = 2;
+    let state = PermissionlessPanelStateV1::new(h(700), h(701), config, h(0), 0, 0).unwrap();
+    let state = state.advance(&step(h(0), 1, 1), &view).unwrap().0;
+    let state = state.admit_with_strata(&[(claim(10), Some(STRATA))]).unwrap().0;
+    let state = state.advance(&step(h(1), 2, 2), &view).unwrap().0;
+    let state = state.advance(&step(h(2), 3, 3), &view).unwrap().0;
+    let state = state.advance(&step(h(3), 4, 10), &view).unwrap().0.accept_beacon(&proof(), &view).unwrap();
+    let (ready, events) = state.advance(&step(h(4), 5, 13), &view).unwrap();
+    assert!(events.bindings.is_empty());
+    assert!(matches!(ready.claim(&h(10)).unwrap().phase, ClaimPhaseV3::EntropyReady { assignment_point: 14, .. }));
+    let next = step(h(5), 6, 14);
+    assert!(ready.advance(&next, &view).unwrap().1.bindings.contains_key(&h(10)));
+    for field in ["seed", "beacon", "ready", "assignment", "output"] {
+        let mut changed = ready.clone();
+        let mut record = changed.claim(&h(10)).unwrap().clone();
+        let ClaimPhaseV3::EntropyReady { seed, beacon_id, ready_daa, assignment_point } = &mut record.phase else { unreachable!() };
+        match field {
+            "seed" => *seed = h(0xFA10),
+            "beacon" => *beacon_id = h(0xFA11),
+            "ready" => *ready_daa -= 1,
+            "assignment" => *assignment_point -= 1,
+            "output" => record.entropy_output = None,
+            _ => unreachable!(),
+        }
+        changed.put_claim_row(h(10), Some(record));
+        assert_invalid_checkpoint(&changed);
+        assert_eq!(changed.advance(&next, &view).unwrap_err(), PanelErrorV1::InvalidCarriage, "{field}: refused before assignment");
+    }
+}
+
+#[test]
+fn obsolete_panel_carriage_version_is_refused_even_with_its_own_root() {
+    let current = PermissionlessPanelStateV1::new(h(700), h(701), policy(), h(0), 0, 0).unwrap();
+    assert_eq!(current.cursor().version, WIRE_VERSION_V2);
+    let mut cursor = current.cursor();
+    cursor.version = WIRE_VERSION_V1;
+    assert_eq!(PermissionlessPanelStateV1::from_cursor(cursor.clone()).unwrap_err(), PanelErrorV1::InvalidCarriage);
+    let mut obsolete = current;
+    obsolete.set_cursor(cursor);
+    assert_invalid_checkpoint(&obsolete);
+}

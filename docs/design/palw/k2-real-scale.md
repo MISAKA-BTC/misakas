@@ -224,6 +224,27 @@ input, or to have the read API state the condition next to each G14-complete cla
 
 ### 4.2 Under DA16b's court scope (`palw_court_scope_v1`, `misaka_palw_kernel::scope`): hiding leaves — DESIGN, staged
 
+**2026-10-11 dependency-court update:** RFC02 §14.22 adds an explicit
+kernel flat-profile context and authenticated hash-leaf relation court using the
+frozen element evaluator. It recomputes the complete 64–127-element span from
+filer-owned dependency leaves, with source/state/history binding, derived
+per-leaf caps and bounded codecs. No node descriptor/statement selects this
+profile. Typed node admission, all-profile courts, hash-unit DA and aggregate
+resources, fresh actual-node prosecution and independent Final/redemption remain
+required; the full real-scale milestone is still open.
+
+**2026-10-11 staged material update:** RFC02 §14.21 and `merkle4` implement a
+separate flat-v4 namespace, 64–127-element leaves with tail merging, bounded
+public/filer openings, cached root descent and explicit material bounds. They
+do not change v3 or select a new execution/candidate format. Primitive relation
+courts, profile admission/resource bounds and actual-node DA/Final integration
+still have to land before this milestone can close the large withheld-value gap.
+The older in-place-v3 proposal below is historical; future selection must use
+the new namespace and a separately priced profile. A merged-tail court must
+price up to 127 output elements, not only 64. The historical status and
+sequence below are retained.
+
+
 DA16b's §7.8–§7.9 bind K2-TIR-v4/v5 to two rules. **Level 1:** a `ModelCopy` or `ModelOnly` value (an embedding row gathered by the
 token, a transposed weight) is never owed in the clear. **The clear budget:** `court_clear_position_budget_v1` is 0 for every class
 with an elementwise model relation (every LM: a norm gain is revealed by one position), so in practice every model-dependent value is
@@ -797,3 +818,144 @@ This section supersedes §13's untested `own()` plumbing proposal. The review br
 flag already prevents a class from earning was incorrect. Cumulative scope for the older route, adaptive deadlines and maximum
 chunked response inclusion remain open. These small-value court tests do not establish full G14 or authorize activation.
 - `palw_onboarding_v1::onboarding_gate_v1` was fixed here (`dbc6b24d6`).
+
+### Whole-value price revision 2 before activation (RFC02 implementation, 2026-10-10)
+
+A flat lookup (`Gather`, rank-one data, axis 0, batch_dims 0, output shape equal to index shape)
+has no coordinate transformation. Its element evaluator reads the index at the output's flat
+position, refuses an out-of-range index, then reads the table at that index. Price revision 2
+uses 16 abstract work units per output before the factor 64; the previous generic evaluator's
+32 units cover coordinate construction. Full operand authentication and the two output tree
+hashes keep their prices. This tariff is not a conversion from measured CPU time.
+
+The withholding mask still uses the revision-1 conservative bound, so material disclosure and
+commitment roots do not change. Both dormant v4/v5 descriptor semantics digests identify the
+price revision; plans and class bindings must be rebuilt under the new identities. No network
+activation or resource ceiling changes. The real pilot program's static 32-position refusal is
+closed, while its full real-weight public execution/court/Final path remains unproven. See the
+[RFC02 implementation ledger](tir/rfc0002-implementation.md) for reproducible evidence and limits.
+
+**2026-10-11 flat-v5 component update:** RFC02 §14.23 stages all-dtype internal
+flat material, including I64/I128, and leaf/whole/malformed/decode courts.
+Small nodes retain v3 and use bounded whole recomputation; parameters retain
+v3. Wide commit points remain prohibited. This adds kernel component coverage
+without selecting a node profile or establishing real-size checkpoint support,
+worst-job resource bounds, DA, fresh prosecution or Final/redemption. Evidence:
+`evidence/rfc02-flat-v5-verdict.json`.
+
+**2026-10-11 terminal-scope update:** RFC02 §14.24 derives and rechecks all-position
+flat-v5 court ceilings without tensor/tree/position arrays, retaining earlier v3
+small-node paths and larger merged tails. Constants/public inputs pay reference
+line/sort work. This is a kernel resource preflight component; typed node binding,
+complete execution/checker/DA budgets, aggregate admission and actual-node/Final
+integration remain open. See `tir/evidence/rfc02-flat-scope-v5-verdict.json`.
+
+**2026-10-11 typed node update:** RFC02 §14.25 connects flat-v5 to explicit
+non-reward candidate trace statements, inner 31/32 under dormant route/PanelFree
+fences. The node rederives and persists terminal-scope budgets, shares block
+work/court capacity and original collateral with v2, and caps both catalogs at
+eight statements per bond. Actual-node synthetic tests cover leaf/whole
+convictions, invalid declarations/proof floods, independent replay and challenger
+payout redemption. Public hash openings are supplied by a test helper, not an
+actual node acquisition protocol; no execution Final, full conformance, real
+checkpoint support or privacy/liveness acceptance is established. Public flat
+hash DA/default/session rules, proof pre-emption seals and complete shared
+resource accounting remain open. Evidence: `tir/evidence/rfc02-flat-node-v3-verdict.json`.
+
+**2026-10-11 native hash-unit acquisition update:** RFC02 §14.26 adds dormant
+inner 33/34/35. Requesters share four v2/v3 slots and original collateral;
+flat requests admit only node commitments or hash leaves, with bounded strict
+answers and public native read-API persistence. Synthetic actual-node tests
+localize a late false leaf from public replies and an independent model copy,
+convict without output values, replay payouts, survive spent court counts and
+default an unserved statement while keeping its collateral held. All 43 selected
+tests pass. This closes the native point-acquisition component, not general
+streamed verification/localization, deployed RPC transport, retention/pruning,
+pre-emption seals, complete aggregate resources, execution Final, real checkpoint
+or privacy/economic/honest-liveness acceptance. Evidence:
+`tir/evidence/rfc02-flat-hash-da-v3-verdict.json`.
+
+
+### Generic streamed flat-v5 detector component — 2026-10-11
+
+The dormant flat-v5 candidate profile now has `flat_detect5::check_flat_claim_v5`:
+exact replay from acquired registered weights and the public job, a generic
+node/hash-only read provider, first divergent relation localization and existing
+whole/leaf/decode court construction. The actual-node late-leaf trial uses this
+generic detector through native public reads and demand/answer transactions.
+
+The [component verdict](tir/evidence/rfc02-flat-stream-v5-verdict.json) records
+138 full-kernel passes (one existing manual benchmark ignored), 13 native-node
+passes and production compilation. Six new detector tests cover all 25 primitives,
+state/history/generated-token feedback, I128 and small values, encoder input
+binding, decode and bad acquisition/material. These are synthetic trials.
+Whole-job resource/retry/transport/retention and deadline proofs, proof pre-emption,
+real checkpoint fidelity/performance/tasks and execution Final remain open.
+See RFC02 §14.27; this is not full RFC02 or G14 acceptance.
+
+
+### Local replay resource/session v6 component — 2026-10-11
+
+A new `flat_replay6` projection anchors the unchanged v5 scope and prices i128
+reference tensor payload, acquired-parameter/trace hashing, public node/hash
+reads and native reply reservations. The native read API and retained local
+session independently derive/check it. Retry/hash/read quotas include cached
+and withheld responses. Acquired tensor metadata now has to match the program
+before full canonical-value scanning and commitment hashing.
+
+The [component verdict](tir/evidence/rfc02-flat-replay-v6-verdict.json) records
+77 distinct passes: 51 related kernel, one legacy descent, 12 core codec/identity
+and 13 native-node tests, plus production compilation. Seven new tests and the
+updated native late-leaf trial cover budget refusal, replay/resource forgery,
+actual tensor payloads and acquired tensor substitution. RFC02 §14.28 separates
+these local quotas from peak memory/CPU, full shared/aggregate consensus resource
+limits, transport/retention, deadlines, economic rights and execution Final.
+No shipping fence is changed and full RFC02/G14 acceptance remains unproven.
+
+**G14-B (2026-10-11):** segmented demand deadlines now count the route chunks of the position's parts, deep segmented classes get a derived liability horizon, and a class whose worst-case pursuit cannot end inside a 436-DAA lifetime is refused by name (`misaka_palw_kernel::budget`). Every real-shape v4 profile is refused at one chunk a DAA; see `g14-completion-matrix.md` §2c.
+## 15. G14-S: option (a), option (c) finished, and the court scope as a gate (2026-10-11)
+
+Branch `g14/s-scope-gates`. Supersedes §13 step 2 and §14's "Still open" for the items below. Nothing is armed; every rule is inside
+the dormant K2-TIR-v4/v5 bytes or behind `palw_provider_court_v1`.
+
+**Value modes** (`seg_scope::seg_value_modes_v1`, a pure function of the program): a committed value is **Clear** (model-independent:
+v3, served in the clear), **Withheld** (option (c): model-dependent with a whole-value court ≤ 1 MiB / work ≤ 2^36; never served) or
+**Hiding** (option (a): every other model-dependent value). No model-dependent value is ever served in the clear (`clear_masked` is 0
+for every program).
+
+**The v3 leaf rule for hiding values** (`hide.rs`): flat tiles of the value's row-major order, `tiles = max(1, ⌊len/64⌋)`, the ragged
+tail merged into the last tile (64–127 elements), `C_hide = H(dtype, rank, dims, root)` over its own leaf/node domains. A short line
+never makes a short leaf: a `[H, 16]` (wide128's `d`) or `[H, 2, 4]` (dense-MoE's rows of 4) value is tiled across its lines. A value
+under 64 elements is one leaf of its whole length — no weaker than its commitment, which is published anyway (counted as `short`).
+
+**DA** (`seg_da`): a hiding value is served as contiguous ranges of its leaf hashes with a range proof (`ChunkSpecV1::Hidden`,
+`ChunkBodyV1::Hidden = 3`), 64 bytes a tile, never an element; `assemble_position_full_v1` returns the leaf hashes beside the
+position; a kept (withheld or hiding) value is an EMPTY placeholder in an assembled position (no allocation).
+
+**Courts** (`element.rs`): `SegFaultV1::HidingLeaf = 4` authenticates the producer's leaf hash of ONE tile against the node's
+commitment (as a value of its declared type), recomputes the tile's elements from operands the filer supplies from its own
+re-execution — a hiding operand by its hiding tiles, a withheld one whole, a clear one by v3 leaves, params by v3 leaves from the
+filer's copy — and convicts iff the tile's hash differs or the semantics refuse. `SegFaultV1::HidingDecode = 5` is the decode court
+over hiding logits (two tiles). A whole-value court accepts hiding operands by their tiles. A court refuses a filing whose kind is not
+the node's mode. The verifier (`check_positions_v1`) keeps its own withheld and hiding values, finds the first node whose commitment
+differs, and for a hiding one the first tile whose hash differs from the served one.
+
+**Price** (`element::hiding_leaf_court_cost_v1`): the first and last tile, every operand in the form its source is owed in, a
+`MatMul` tile reading up to 127 columns of its right operand (the ≈ 64× column cost over one element court). A hiding court above
+`SEG_HIDING_COURT_MAX_BYTES_V1 = 1,572,864 B` (one carrier less the segmented header and envelope) or work 2^36 is **unbounded**: it
+is not in the plan's worst court, and the class's scope report is incomplete.
+
+**The gate** (`seg_scope_report_v2(program, max_positions)`, cached in `ClassRowV1::court_scope`): `court_scope_complete()` is
+`clear_masked == 0 && unbounded == 0`. `commit_segmented_claim` refuses a claim of an incomplete class by name
+(`COURT_SCOPE_INCOMPLETE …`): such a class registers but is never reward-bearing.
+
+**Resource bounds changed** (stated for G14-B, who owns the derivation): `verifier_ram_bound_v4` keeps hiding values with the
+withheld ones; since public positions no longer hold kept values, the separate `withheld × local` term is dropped
+(public (position − kept) + retained kept + replay = 2·position per local position). 9B-8k: **59,958,548,592 B** (was
+67,191,831,824 B); worst court **1,008,494 B** (a hiding FFN-down `MatMul` tile); position material (producer DA) **551,788,288 B in
+548 parts** (leaf-hash DA).
+
+**9B-8k scope (derivation over the shipped program's shapes, no 9B run):** 176 clear, 11,150 withheld, 1,997 hiding occurrences;
+**48 unbounded** in four relations — a linear-attention state `Mul [32,128,128]` (2.10 MB), the softmax `ReduceMax`/`ReduceSum` over
+8,192 scores (2.52 MB each) and the attention `P·V` `MatMul [4,4,256]` (11.29 MB). So the 9B-8k class is `COURT_SCOPE_INCOMPLETE`:
+not reward-bearing until those courts are filed in chunks (tag 113, G14-B) or lowered history-chunked.

@@ -119,34 +119,44 @@ impl Cw {
         Cw::over_floor(make, 0).await
     }
 
-    /// [`Cw::over`] on a network whose OPV fence states the effective-bits floor `floor` (the ruled value is 128).
+    /// [`Cw::over`] with an explicit OPV effective-bits floor.
     async fn over_floor(make: impl FnOnce(&Config) -> TestConsensus, floor: u16) -> Cw {
-        Cw::over_full(11, |_| {}, make, floor).await
+        Cw::over_with_floor(11, |_| {}, make, floor).await
     }
 
-    /// [`Self::over`] with the candidate built from `onb_fixture(seed)` and the ruleset edited by `edit` after the onboarding fences are
-    /// armed (RFC-0008 v2's composed run, `exec_slices`, arms its payload fence here and uses its own candidate class).
+    /// A candidate and ruleset edit for RFC-0008's composed slice run.
     async fn over_with(
         seed: u64,
         edit: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
         make: impl FnOnce(&Config) -> TestConsensus,
     ) -> Cw {
-        Cw::over_full(seed, edit, make, 0).await
+        Cw::over_with_floor(seed, edit, make, 0).await
     }
 
-    /// [`Self::over_with`] and [`Self::over_floor`] in one: the candidate seed, the ruleset edit and the OPV effective-bits floor.
-    async fn over_full(
+    async fn over_with_floor(
         seed: u64,
         edit: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
         make: impl FnOnce(&Config) -> TestConsensus,
         floor: u16,
+    ) -> Cw {
+        Cw::over_with_floor_and_kernel_mode(seed, edit, make, floor, VerificationModeV1::OptimisticPublicVerification).await
+    }
+
+    /// Keep the beacon source OPV while testing either supported candidate
+    /// kernel verification mode. Existing worlds retain their OPV mode.
+    async fn over_with_floor_and_kernel_mode(
+        seed: u64,
+        edit: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
+        make: impl FnOnce(&Config) -> TestConsensus,
+        floor: u16,
+        kernel_mode: VerificationModeV1,
     ) -> Cw {
         use super::super::g14_registration_e2e::Tensors;
         use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_operands_v1;
         let src = fixture();
         let f = onb_fixture(seed);
         let src_class = opv_class_id(&src.program, &src.plan, &src.pc);
-        let kernel_class = opv_class_id(&f.program, &f.plan, &f.pc);
+        let kernel_class = single_class_id_v1(k2_tir_v2_descriptor().digest(), &f.program.encode(), &f.plan, &f.pc, kernel_mode);
         let (config, bundle, premine, floats) =
             conformance_config(vec![Hash64::from_bytes(src_class), Hash64::from_bytes(kernel_class)], floor);
         let mut params = config.params.clone();
@@ -189,12 +199,20 @@ impl Cw {
         net.send(vec![(REGISTRANT, o)]).await;
         let matures = net.api().unwrap().artifact_binding_v1(&v2_class, &kernel_root).unwrap().matures_daa;
         net.beat_to(matures).await;
-        let register_cand = K::RegisterClassV2 {
-            mode: VerificationModeV1::OptimisticPublicVerification,
-            descriptor: d.digest(),
-            program_bytes: f.program.encode(),
-            plan: f.plan.clone(),
-            param_commitments: f.pc.clone(),
+        let register_cand = match kernel_mode {
+            VerificationModeV1::PanelLicensed => K::RegisterClass {
+                descriptor: d.digest(),
+                program_bytes: f.program.encode(),
+                plan: f.plan.clone(),
+                param_commitments: f.pc.clone(),
+            },
+            VerificationModeV1::OptimisticPublicVerification => K::RegisterClassV2 {
+                mode: kernel_mode,
+                descriptor: d.digest(),
+                program_bytes: f.program.encode(),
+                plan: f.plan.clone(),
+                param_commitments: f.pc.clone(),
+            },
         };
         let o = net.route(REGISTRANT, &register_cand);
         net.send(vec![(REGISTRANT, o)]).await;
@@ -259,6 +277,7 @@ impl Cw {
     /// and revealed by a rotating producer. They reach Final with no Panel when their window closes.
     async fn source_claims(&mut self, n: usize) -> Vec<Digest> {
         let mut jobs = Vec::new();
+        let mut payers = Vec::new();
         for _ in 0..n {
             self.jobs += 1;
             jobs.push(KernelJobV1 {
@@ -268,9 +287,12 @@ impl Cw {
                 decode: DecodeRuleV1::Greedy,
                 nonce: [self.jobs; 64],
             });
+            // The beacon's distinct rule binds the authenticated job payer too (codex d7bcb9a51: table 18's poster is the source's
+            // consumer): each source job is signed and funded by its own bond, never one payer behind several producers.
+            payers.push(PRODUCERS[self.jobs as usize % PRODUCERS.len()]);
         }
         let posts: Vec<(usize, Obj)> =
-            jobs.iter().map(|j| (REGISTRANT, self.net.route(REGISTRANT, &K::PostJob { job: j.clone() }))).collect();
+            jobs.iter().zip(&payers).map(|(j, &payer)| (payer, self.net.route(payer, &K::PostJob { job: j.clone() }))).collect();
         self.net.send(posts).await;
         let src = self.src.clone_fixture();
         let class = self.src_class;

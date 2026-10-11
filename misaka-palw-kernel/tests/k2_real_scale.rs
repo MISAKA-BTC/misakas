@@ -183,7 +183,8 @@ fn produce(w: &W, job: Digest, prompt: &[u32], lie: Option<(u32, u16, u16)>) -> 
         let v = t.data[0];
         t.data[0] = if t.dtype.contains(v + 1) { v + 1 } else { v - 1 };
     }
-    let c = seg_commitments_of_trace_v1(&misaka_palw_kernel::trace::TraceV1 { values: values.clone(), inputs: Vec::new() });
+    let c =
+        seg_commitments_of_trace_v1(&w.program, &misaka_palw_kernel::trace::TraceV1 { values: values.clone(), inputs: Vec::new() });
     let class = &w.l.classes[&w.class];
     let evidence =
         build_segmented_evidence_v1(class.header(w.class), &w.d, prompt.len() as u32, &prompt_root_of_ids_v1(prompt), &[g0], &c);
@@ -620,10 +621,10 @@ impl SegMaterialV1 for Counted<'_> {
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
         self.inner.position_siblings(p)
     }
-    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
-        self.inner.commitments(p)
+    fn commitments(&self, program: &TirProgramV1, p: u32) -> Option<Vec<Vec<Digest>>> {
+        self.inner.commitments(program, p)
     }
-    fn position_path(&self, p: u32) -> Option<(Digest, Vec<Digest>)> {
+    fn position_path(&self, _: &TirProgramV1, p: u32) -> Option<(Digest, Vec<Digest>)> {
         self.probes.set(self.probes.get() + 1);
         (p < self.inner.c.positions()).then(|| self.inner.c.position_path(p))
     }
@@ -635,7 +636,7 @@ fn reexecute(w: &W, ctx: &SegClaimContextV1<'_>, tokens: &[u32]) -> (Vec<Digest>
     let post = w.program.occurrences().len() - 1;
     let logits = |p: u32| own.values.get(p as usize).map(|v| v[post][w.program.logits as usize].clone());
     let mismatch = first_decode_mismatch_v1(ctx, &logits);
-    (seg_commitments_of_trace_v1(&own).position_roots, mismatch)
+    (seg_commitments_of_trace_v1(&w.program, &own).position_roots, mismatch)
 }
 
 /// **SOUND's SG-06: detection by re-execution, not by sampling** (`seg_detect`, design §11). A verifier that re-executes the claim
@@ -773,7 +774,7 @@ fn k2s_small_model_values_are_never_served_and_a_model_holder_convicts_from_comm
         fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
             self.0.get(&p).map(|x| x.1.clone())
         }
-        fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+        fn commitments(&self, _: &TirProgramV1, p: u32) -> Option<Vec<Vec<Digest>>> {
             self.0.get(&p).map(|x| x.2.clone())
         }
     }
@@ -855,7 +856,7 @@ fn k2s_a_position_is_served_in_parts_and_its_demand_bonds_wait_for_the_grace() {
     // A fresh verifier rebuilds the position from the served parts alone and checks it.
     let view = w.l.seg_claim_view_v1(&id).unwrap();
     let (values, siblings, commitments) = assemble_position_v1(&w.program, &view.segment_roots, view.positions, 1, &served).unwrap();
-    assert_eq!(commitments, honest.commitments(1).unwrap(), "every node commitment, withheld values' included");
+    assert_eq!(commitments, honest.commitments(&w.program, 1).unwrap(), "every node commitment, withheld values' included");
     let withheld = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&w.program);
     for (s, occ) in values.iter().enumerate() {
         for (n, t) in occ.iter().enumerate() {
@@ -1019,4 +1020,882 @@ fn k2s_every_tile_and_part_constant_fits_the_node_carrier() {
     assert!((misaka_palw_kernel::seg_da::SEG_PART_BYTES_V4 as usize) < CARRIER);
     assert!(PROMPT_TILE_IDS_V1 * 4 + 64 * 16 < misaka_palw_kernel::route::MAX_POST_PROMPT_TILE_BYTES_V1);
     assert!(misaka_palw_kernel::route::MAX_POST_PROMPT_TILE_BYTES_V1 < CARRIER);
+}
+
+// ---- G14-S (2026-10-11): DA16b option (a), flat 64-element hiding tiles; option (c) finished; the scope as a gate --------------------
+
+use misaka_palw_kernel::hide::{HIDE_TILE_V1, hide_tile_range_v1, hide_tiles_v1};
+use misaka_palw_kernel::seg_da::{ChunkBodyV1, HiddenLeavesV1, assemble_position_full_v1};
+use misaka_palw_kernel::seg_scope::{SegValueModeV1, seg_scope_report_v2, seg_value_modes_v1};
+
+/// A token embedding and an output projection of `16,384 × 64` `i8` (1 MiB each): every model-dependent value of this class is
+/// larger than a whole-value court can file, so the embedding row, the projection and the logits are HIDING values; the casts and
+/// views of the 64-element hidden vector are withheld (small whole-value courts).
+fn hide_lm_v1(seed: u8) -> (TirProgramV1, MapParams) {
+    const V: u32 = 16_384;
+    const D: u32 = 64;
+    let mut pb = ProgramBuilder::new(V, HISTORY_BOUND_V1_SMALL);
+    let tok = pb.param("tok", DType::I8, &[V, D], false);
+    let lm = pb.param("lm", DType::I8, &[V, D], false);
+    let carry = vec![TensorType::fixed(DType::I32, &[D])];
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let row = b.gather(tok, Ref::Input(INPUT_TOKEN), 0, 0);
+        let x = b.cast(row, DType::I32);
+        b.finish(&[x])
+    };
+    let post = {
+        let mut b = pb.block("post", carry);
+        let h = b.clamp(Ref::CarryIn(0), -32767, 32767, DType::I16);
+        let hc = b.reshape_fixed(h, &[D, 1]);
+        let l = b.matmul(lm, hc, DType::I32);
+        let l = b.reshape_fixed(l, &[V]);
+        b.commit(l);
+        b.finish(&[])
+    };
+    let logits = (pb.blocks[post as usize].nodes.len() - 1) as u16;
+    let program = pb.finish(pre, vec![], post, logits);
+    let mut tensors = std::collections::BTreeMap::new();
+    for (j, d) in program.params.iter().enumerate() {
+        let n: usize = d.shape.iter().map(|x| *x as usize).product();
+        let data: Vec<i128> = (0..n).map(|i| ((i as i128 * 131 + seed as i128 * 17 + j as i128 * 7) % 255) - 127).collect();
+        tensors.insert((j as u16, None), Tensor::new(d.dtype, d.shape.iter().map(|x| *x as usize).collect(), data).unwrap());
+    }
+    (program, MapParams { tensors })
+}
+
+/// A fresh verifier's view of what the chain served: the assembled positions (values, siblings, commitments) and the served leaf
+/// hashes of every hiding value — never the producer's objects.
+struct ServedParts(std::collections::BTreeMap<u32, (misaka_palw_kernel::seg_da::AssembledPositionV1, HiddenLeavesV1)>);
+
+impl SegMaterialV1 for ServedParts {
+    fn position(&self, p: u32) -> Option<Vec<Vec<Tensor>>> {
+        self.0.get(&p).map(|x| x.0.0.clone())
+    }
+    fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
+        self.0.get(&p).map(|x| x.0.1.clone())
+    }
+    fn commitments(&self, _: &TirProgramV1, p: u32) -> Option<Vec<Vec<Digest>>> {
+        self.0.get(&p).map(|x| x.0.2.clone())
+    }
+    fn hidden_leaves(&self, _: &TirProgramV1, p: u32) -> Option<HiddenLeavesV1> {
+        self.0.get(&p).map(|x| x.1.clone())
+    }
+}
+
+/// Serve every position of `claim` part by part (what a demanded producer posts) and assemble what a fresh verifier reads; asserts
+/// that no withheld or hiding value is served in the clear and that a hiding value is served as its leaf hashes alone.
+fn serve_all(w: &W, claim: &Produced) -> ServedParts {
+    let id = claim.claim.id();
+    let view = w.l.seg_claim_view_v1(&id).unwrap();
+    let modes = seg_value_modes_v1(&w.program);
+    let mut out = ServedParts(Default::default());
+    for p in 0..view.positions {
+        let mut encoded = Vec::new();
+        for part in 0..position_parts_v1(&w.program, p).unwrap().len() as u32 {
+            let response = position_part_v1(&w.program, p, &claim.values[p as usize], claim.c.position_path(p).1, part).unwrap();
+            for c in &response.chunks {
+                let mode = modes[c.occurrence as usize][c.node as usize];
+                match (&c.body, mode) {
+                    (ChunkBodyV1::Hidden(range), SegValueModeV1::Hiding) => assert!(!range.leaves.is_empty()),
+                    (ChunkBodyV1::Withheld, SegValueModeV1::Withheld) => {}
+                    (ChunkBodyV1::Whole(_) | ChunkBodyV1::Rows(_), SegValueModeV1::Clear) => {}
+                    (body, mode) => panic!("({}, {}) {mode:?} served as {body:?}", c.occurrence, c.node),
+                }
+            }
+            encoded.push(borsh::to_vec(&response).unwrap());
+        }
+        out.0.insert(p, assemble_position_full_v1(&w.program, &view.segment_roots, view.positions, p, &encoded).unwrap());
+    }
+    out
+}
+
+fn final_of(w: &mut W, id: &Digest) {
+    for _ in 0..400 {
+        let ev = w.block(vec![]);
+        if ev.iter().any(|e| matches!(e, E::Final { claim, .. } if claim == id)) {
+            return;
+        }
+    }
+    panic!("the claim never reached Final");
+}
+
+fn modes_count(program: &TirProgramV1) -> (usize, usize, usize) {
+    let m = seg_value_modes_v1(program);
+    let c = |x: SegValueModeV1| m.iter().flatten().filter(|y| **y == x).count();
+    (c(SegValueModeV1::Clear), c(SegValueModeV1::Withheld), c(SegValueModeV1::Hiding))
+}
+
+/// **Option (a), honest and lying, before and after Final.** A class whose embedding row, projection and logits are hiding: a
+/// demanded position serves them as leaf hashes only; a fresh verifier (served parts + its own registered model) dismisses nothing
+/// and convicts a one-element lie in the projection with a hiding-leaf court that recomputes ONE 64-element tile — pre-Final and
+/// post-Final. Every honest tile's filing is dismissed (and costs its filer the dismissal fee).
+#[test]
+fn g14s_a_hiding_tile_lie_is_convicted_pre_and_post_final_and_no_honest_tile_is() {
+    let (program, params) = hide_lm_v1(5);
+    let (clear, withheld, hiding) = modes_count(&program);
+    let report = seg_scope_report_v2(&program, 16);
+    eprintln!("[g14s] hide_lm: clear {clear}, withheld {withheld}, hiding {hiding}; report {report:?}");
+    assert!(hiding >= 3 && withheld >= 1, "the embedding row, the projection and the logits are hiding");
+    assert!(report.court_scope_complete() && report.clear_masked == 0, "{report:?}");
+    let mut w = W::new(program, params, 16);
+    let mm = w.program.blocks[w.program.occurrences()[1].0 as usize]
+        .nodes
+        .iter()
+        .position(|n| matches!(n.prim, misaka_palw_tir::Prim::MatMul))
+        .unwrap() as u16;
+    let prompt = [3u32, 9, 14, 2, 11];
+    // Honest: the verifier finds nothing; each honest tile filed is dismissed at the court and by the ledger.
+    let job = w.tiled_job(&prompt, 2);
+    let honest = produce(&w, job, &prompt, None);
+    commit(&mut w, &honest);
+    let hid = honest.claim.id();
+    let view = w.l.seg_claim_view_v1(&hid).unwrap();
+    let served = serve_all(&w, &honest);
+    let r = misaka_palw_kernel::seg_detect::reexecute_claim_v1(&view.context(), &served, &artifact(&w), &honest.tokens);
+    assert_eq!(r.finding, SegFindingV1::Clean, "an honest claim");
+    let len = honest.values[3][1][mm as usize].data.len() as u64;
+    assert_eq!(hide_tiles_v1(len), 256);
+    for tile in [0, 1, 255] {
+        let filing = misaka_palw_kernel::element::prove_hiding_leaf_v1(
+            &view.context(),
+            &honest,
+            &artifact(&w),
+            &honest.tokens,
+            (3, 1, mm),
+            tile,
+        )
+        .unwrap();
+        let (a, b) = hide_tile_range_v1(len, tile).unwrap();
+        assert!(b - a >= HIDE_TILE_V1, "a tile never holds fewer than 64 elements of a value that has them");
+        assert_eq!(
+            misaka_palw_kernel::element::verify_seg_fault_v1(&view.context(), &SegFaultV1::HidingLeaf(filing.clone())),
+            Err(misaka_palw_kernel::verify::DismissalV1::NoFault)
+        );
+        let bytes = SegFaultV1::HidingLeaf(filing).to_bytes();
+        assert!(bytes.len() < CARRIER, "{} B", bytes.len());
+        let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: hid, proof: ProsecutionV1::Segmented(bytes) })]);
+        assert!(ev.iter().any(|e| matches!(e, E::ProofDismissed { claim, .. } if *claim == hid)), "{ev:?}");
+    }
+    // A one-element lie in the hiding projection at position 3: convicted before Final, from what was served.
+    for post_final in [false, true] {
+        let job = w.tiled_job(&prompt, 2);
+        let lying = produce(&w, job, &prompt, Some((3, 1, mm)));
+        commit(&mut w, &lying);
+        let id = lying.claim.id();
+        if post_final {
+            final_of(&mut w, &id);
+        }
+        let view = w.l.seg_claim_view_v1(&id).unwrap();
+        let served = serve_all(&w, &lying);
+        let r = misaka_palw_kernel::seg_detect::reexecute_claim_v1(&view.context(), &served, &artifact(&w), &lying.tokens);
+        assert_eq!(r.divergent, Some(3));
+        let SegFindingV1::Fault(fault) = r.finding else { panic!("{:?}", r.finding) };
+        let SegFaultV1::HidingLeaf(h) = fault.as_ref() else { panic!("a hiding-leaf court: {fault:?}") };
+        assert_eq!((h.position, h.occurrence, h.node, h.leaf.tile), (3, 1, mm, 0));
+        let bytes = fault.to_bytes();
+        eprintln!(
+            "[g14s] hiding-leaf filing for a 64-element tile of a 16,384-element projection: {} B (tile operands: {} v3 leaves, {} \
+             hiding tiles, {} whole)",
+            bytes.len(),
+            h.inputs.iter().map(|i| i.leaves.len()).sum::<usize>(),
+            h.inputs.iter().map(|i| i.hidden.len()).sum::<usize>(),
+            h.inputs.iter().filter(|i| i.whole.is_some()).count()
+        );
+        let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(bytes) })]);
+        assert!(
+            ev.iter().any(|e| matches!(e, E::Convicted { claim, accuser, post_final: pf, .. } if *claim == id && *accuser == OUT && *pf == post_final)),
+            "post_final {post_final}: {ev:?}"
+        );
+    }
+}
+
+/// **A decode lie over hiding logits** (16,384 ids: the logits are hiding): a wrong delivered id over honest values is convicted with
+/// two hiding tiles of the verifier's own logits (which authenticate only as the producer's); an honest decode filing is dismissed.
+#[test]
+fn g14s_a_decode_lie_on_hiding_logits_is_convicted_from_two_tiles() {
+    let (program, params) = hide_lm_v1(6);
+    let mut w = W::new(program, params, 16);
+    let post = (w.program.occurrences().len() - 1) as u16;
+    assert_eq!(seg_value_modes_v1(&w.program)[post as usize][w.program.logits as usize], SegValueModeV1::Hiding);
+    let prompt = [7u32, 1, 4, 4];
+    let job = w.tiled_job(&prompt, 2);
+    let mut cheat = produce(&w, job, &prompt, None);
+    cheat.claim.generated[1] = (cheat.claim.generated[1] + 1) % 16_384;
+    let ev = commit(&mut w, &cheat);
+    assert!(ev.iter().any(|e| matches!(e, E::ClaimCommitted { .. })), "{ev:?}");
+    let id = cheat.claim.id();
+    let view = w.l.seg_claim_view_v1(&id).unwrap();
+    let served = serve_all(&w, &cheat);
+    let r = misaka_palw_kernel::seg_detect::reexecute_claim_v1(&view.context(), &served, &artifact(&w), &cheat.tokens);
+    assert_eq!(r.divergent, None, "every root agrees");
+    let SegFindingV1::Fault(fault) = r.finding else { panic!("{:?}", r.finding) };
+    let SegFaultV1::HidingDecode(d) = fault.as_ref() else { panic!("a hiding decode fault: {fault:?}") };
+    assert!(!d.tiles.is_empty() && d.tiles.len() <= 2);
+    // The same tiles naming a rival that does not beat the delivered id: dismissed.
+    let mut honest_rival = d.clone();
+    let logits = &cheat.values[view.positions as usize - 1][post as usize][w.program.logits as usize];
+    let delivered = cheat.claim.generated[1] as usize;
+    let weaker = d
+        .tiles
+        .iter()
+        .flat_map(|t| t.elements(logits.dtype, &logits.shape).unwrap())
+        .find(|(e, v)| *e as usize != delivered && *v < logits.data[delivered])
+        .map(|(e, _)| e as u32);
+    if let Some(rival) = weaker {
+        honest_rival.rival = rival;
+        assert_eq!(
+            misaka_palw_kernel::element::verify_seg_fault_v1(&view.context(), &SegFaultV1::HidingDecode(honest_rival)),
+            Err(misaka_palw_kernel::verify::DismissalV1::NoFault)
+        );
+    }
+    let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(fault.to_bytes()) })]);
+    assert!(ev.iter().any(|e| matches!(e, E::Convicted { claim, .. } if *claim == id)), "{ev:?}");
+}
+
+/// **wide128 (`d = 16`): option (c), no short leaf owed.** Every model-dependent value of the class is under 64 elements and has a
+/// bounded whole-value court: all are withheld — served as their node opening alone, never as elements, leaves or leaf hashes — so
+/// no 16-element line is ever hashed into an owed leaf. A lie is convicted by the whole-value court.
+#[test]
+fn g14s_wide128_d16_owes_no_short_leaf_and_a_lie_is_convicted_whole() {
+    let fx = wide128_v1(7);
+    let (clear, withheld, hiding) = modes_count(&fx.program);
+    let report = seg_scope_report_v2(&fx.program, 16);
+    eprintln!("[g14s] wide128: clear {clear}, withheld {withheld}, hiding {hiding}; report {report:?}");
+    assert!(withheld > 0 && hiding == 0 && report.court_scope_complete(), "{report:?}");
+    let mut w = W::new(fx.program, fx.params, 16);
+    let prompt = [1u32, 3, 5, 7, 9];
+    let (s, n) = (1u16, 0u16);
+    assert_eq!(seg_value_modes_v1(&w.program)[s as usize][n as usize], SegValueModeV1::Withheld);
+    let job = w.tiled_job(&prompt, 2);
+    let lying = produce(&w, job, &prompt, Some((3, s, n)));
+    commit(&mut w, &lying);
+    let id = lying.claim.id();
+    let view = w.l.seg_claim_view_v1(&id).unwrap();
+    let served = serve_all(&w, &lying);
+    let r = misaka_palw_kernel::seg_detect::reexecute_claim_v1(&view.context(), &served, &artifact(&w), &lying.tokens);
+    let SegFindingV1::Fault(fault) = r.finding else { panic!("{:?}", r.finding) };
+    assert!(matches!(fault.as_ref(), SegFaultV1::WholeValue(_)), "{fault:?}");
+    let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(fault.to_bytes()) })]);
+    assert!(ev.iter().any(|e| matches!(e, E::Convicted { claim, .. } if *claim == id)), "{ev:?}");
+}
+
+/// **dense-MoE, rows of 4** (`hkv · dh = 2 × 4`): (1) a 4-row window — every model-dependent value withheld, complete; (2) the
+/// 2^18-row window at a 16-position context — the windows and the attention values are hiding (a `[H, 2, 4]` window is tiled in
+/// row-major order across its 8-element rows: every leaf of a ≥ 64-element value holds ≥ 64 elements), complete, and a lie in a
+/// hiding window is convicted by a hiding-leaf court; (3) the same program at a context whose hiding attention courts no longer fit one
+/// carrier — the report is incomplete and the per-claim reward gate refuses the class's claims by name.
+#[test]
+fn g14s_dense_moe_rows_of_4_windows_hide_flat_and_an_unbounded_scope_takes_no_claim() {
+    use misaka_palw_tir_sketch::fixture::{dense_moe_v1, dense_moe_windowed_v1};
+    // (1) A window of 4 rows.
+    let small = dense_moe_windowed_v1(7, 4);
+    let (_, w4, h4) = modes_count(&small.program);
+    let r4 = seg_scope_report_v2(&small.program, 16);
+    eprintln!("[g14s] dense-MoE window 4: withheld {w4}, hiding {h4}; {r4:?}");
+    assert!(r4.court_scope_complete() && r4.masked > 0, "{r4:?}");
+    // The node's GAP-31 class (window 1,024 held at 8,192 positions) and its wide128 class at 8,192: both complete (their claims commit).
+    for (name, p) in [("window 1024", dense_moe_windowed_v1(7, 1024).program), ("wide128", wide128_v1(7).program)] {
+        let r = seg_scope_report_v2(&p, 8192);
+        eprintln!("[g14s] node fixture {name} : {r:?}");
+        assert!(r.court_scope_complete(), "{name}: {r:?}");
+    }
+    // (2) The 2^18-row window at a 16-position context.
+    let big = dense_moe_v1(7);
+    let r16 = seg_scope_report_v2(&big.program, 16);
+    eprintln!("[g14s] dense-MoE window 2^18 @16: {r16:?}");
+    assert!(r16.hiding > 0 && r16.court_scope_complete(), "{r16:?}");
+    let modes = seg_value_modes_v1(&big.program);
+    // The first HistAppend window that is hiding.
+    let (s, n) = big
+        .program
+        .occurrences()
+        .iter()
+        .enumerate()
+        .find_map(|(s, (b, _))| {
+            big.program.blocks[*b as usize].nodes.iter().enumerate().find_map(|(n, nd)| {
+                (matches!(nd.prim, misaka_palw_tir::Prim::HistAppend { .. }) && modes[s][n] == SegValueModeV1::Hiding)
+                    .then_some((s as u16, n as u16))
+            })
+        })
+        .expect("a hiding window");
+    let mut w = W::new(big.program.clone(), big.params.clone(), 16);
+    let prompt: Vec<u32> = (0..12u32).map(|i| (i * 5 + 1) % 32).collect();
+    let job = w.tiled_job(&prompt, 2);
+    let lying = produce(&w, job, &prompt, Some((9, s, n)));
+    let window = &lying.values[9][s as usize][n as usize];
+    assert!(window.data.len() as u64 >= HIDE_TILE_V1, "a [10, 2, 4] window has {} elements", window.data.len());
+    commit(&mut w, &lying);
+    let id = lying.claim.id();
+    let view = w.l.seg_claim_view_v1(&id).unwrap();
+    let served = serve_all(&w, &lying);
+    let r = misaka_palw_kernel::seg_detect::reexecute_claim_v1(&view.context(), &served, &artifact(&w), &lying.tokens);
+    assert_eq!(r.divergent, Some(9));
+    let SegFindingV1::Fault(fault) = r.finding else { panic!("{:?}", r.finding) };
+    let SegFaultV1::HidingLeaf(h) = fault.as_ref() else { panic!("a hiding-leaf court: {fault:?}") };
+    assert_eq!((h.position, h.occurrence, h.node, h.leaf.tile), (9, s, n, 0));
+    let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(fault.to_bytes()) })]);
+    assert!(ev.iter().any(|e| matches!(e, E::Convicted { claim, .. } if *claim == id)), "{ev:?}");
+    // (3) A context whose hiding attention courts exceed one carrier: incomplete, and the class takes no claim.
+    let (positions, report) = [2048u32, 4096, 8192, 16_384, 32_768]
+        .into_iter()
+        .map(|p| (p, seg_scope_report_v2(&big.program, p)))
+        .find(|(_, r)| !r.court_scope_complete())
+        .expect("some context outgrows the hiding court bound");
+    eprintln!("[g14s] dense-MoE window 2^18 @{positions}: {report:?} — {}", report.refusal().unwrap());
+    assert!(report.unbounded > 0 && report.refusal().unwrap().starts_with("COURT_SCOPE_INCOMPLETE"));
+    // With G14-B merged, a context this large is refused EARLIER: its worst-case pursuit outlasts the 436-DAA lifetime ceiling, so
+    // registration names PURSUIT_SCHEDULE and the per-claim scope gate is never reached for this class (both refusals hold; the
+    // registration one comes first). Either way the class is never reward-bearing.
+    let registered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| W::new(big.program.clone(), big.params.clone(), positions)));
+    match registered {
+        Err(panic) => {
+            let why = panic.downcast_ref::<String>().cloned().unwrap_or_default();
+            assert!(why.contains("PURSUIT_SCHEDULE"), "refused at registration by the pursuit schedule: {why}");
+        }
+        Ok(mut wide) => {
+            assert_eq!(wide.l.classes[&wide.class].court_scope.as_ref(), Some(&report), "the class row carries the gate");
+            let job = wide.tiled_job(&prompt, 2);
+            let honest = produce(&wide, job, &prompt, None);
+            let ev = commit(&mut wide, &honest);
+            let why = refusal(&ev).expect("the per-claim reward gate refuses the claim");
+            assert!(why.contains("COURT_SCOPE_INCOMPLETE"), "{why}");
+            assert!(!ev.iter().any(|e| matches!(e, E::ClaimCommitted { .. })), "{ev:?}");
+        }
+    }
+}
+
+/// **9B-scale activation sizing (a derivation over the shipped 9B-8k program's shapes, not a 9B run)**: every model-dependent value of
+/// the class is withheld or hiding (never clear); leaf-hash DA per position; the hiding courts priced at 8,192 positions — which fit one
+/// carrier and which do not — and the v4 gate's bounds with the hiding values kept.
+#[test]
+fn g14s_9b_8k_hiding_sizing_is_derived_from_the_shapes() {
+    let Some((program, ctx)) = fixture_program("huihui-qwen3.5-9b-8k.json") else {
+        eprintln!("[g14s] the 9B fixture is not present");
+        return;
+    };
+    let (clear, withheld, hiding) = modes_count(&program);
+    let report = seg_scope_report_v2(&program, ctx);
+    let modes = seg_value_modes_v1(&program);
+    let node_count: u64 = modes.iter().map(|o| o.len() as u64).sum();
+    let occ = program.occurrences();
+    // Leaf-hash DA: 64 bytes a hiding tile, at the last position.
+    let mut leaf_hash_bytes = 0u128;
+    let mut hiding_elements = 0u128;
+    let mut priced = std::collections::BTreeMap::new();
+    for (s, o) in modes.iter().enumerate() {
+        let b = occ[s].0 as usize;
+        for (n, m) in o.iter().enumerate() {
+            if *m != SegValueModeV1::Hiding {
+                continue;
+            }
+            let shape = program.blocks[b].nodes[n].out.resolve(8192usize.min(window_of(&program, b)));
+            let len: u64 = shape.iter().map(|d| *d as u64).product();
+            hiding_elements += len as u128;
+            leaf_hash_bytes += hide_tiles_v1(len) as u128 * 64;
+            priced.entry((b, n)).or_insert_with(|| {
+                let (bytes, work) =
+                    misaka_palw_kernel::element::hiding_leaf_court_cost_v1(&program, s, n, node_count, ctx, None, &modes);
+                (program.blocks[b].nodes[n].prim.clone(), shape.clone(), bytes, work)
+            });
+        }
+    }
+    eprintln!(
+        "[g14s] 9B-8k: values clear {clear}, withheld {withheld}, hiding {hiding}; report {report:?}; hiding elements a position \
+         {hiding_elements}, leaf-hash DA a position {leaf_hash_bytes} B"
+    );
+    let mut over = 0;
+    for ((b, n), (prim, shape, bytes, work)) in &priced {
+        let fits = *bytes <= misaka_palw_kernel::seg_scope::SEG_HIDING_COURT_MAX_BYTES_V1;
+        over += !fits as usize;
+        eprintln!(
+            "[g14s] 9B-8k hiding court block {b} node {n} {prim:?} {shape:?}: {bytes} B, work {work} ({})",
+            if fits { "fits" } else { "UNBOUNDED" }
+        );
+    }
+    assert_eq!(report.clear_masked, 0, "no model-dependent value is served in the clear");
+    assert_eq!(report.unbounded > 0, over > 0);
+    assert!(hiding > 0);
+    // The v4 gate with the hiding values kept by the verifier's replay.
+    let v4 = k2_tir_v4_descriptor();
+    let root = program_root_v1(&program.encode());
+    let plan = plan_for_tir_program_v1(&v4, &program, root, ctx).unwrap();
+    match public_prosecution_complete_v4(&v4, &plan, &program, &ProfileMaterialV1::kernel_route(true), &ROUTE) {
+        Ok((b, s)) => eprintln!(
+            "[g14s] 9B-8k v4 gate PASS: RAM {} B, worst court {} B, position material {} B in {} parts, carrier {:?}",
+            b.max_verifier_ram,
+            b.max_opening_bytes,
+            s.position_material_bytes,
+            s.parts_per_position,
+            carrier_fit_v1(&b, CARRIER, CARRIER, CARRIER)
+        ),
+        Err(g) => eprintln!("[g14s] 9B-8k v4 gate refuses: {g:?}"),
+    }
+}
+
+fn window_of(program: &TirProgramV1, block: usize) -> usize {
+    let mut w = 1usize;
+    for node in &program.blocks[block].nodes {
+        if let misaka_palw_tir::Prim::HistAppend { state } = node.prim
+            && let misaka_palw_tir::program::StateKind::Hist { window } = program.states[state as usize].kind
+        {
+            w = w.max(window as usize);
+        }
+    }
+    w
+}
+
+// ---- G14-B: maximum-profile budgets and deadlines (`misaka_palw_kernel::budget`) ----------------------------------------------------
+
+/// The first MatMul of the program: `(occurrence, node)`.
+fn first_matmul(program: &TirProgramV1) -> (u16, u16) {
+    program
+        .occurrences()
+        .iter()
+        .enumerate()
+        .find_map(|(s, (b, _))| {
+            program.blocks[*b as usize]
+                .nodes
+                .iter()
+                .position(|nd| matches!(nd.prim, misaka_palw_tir::Prim::MatMul))
+                .map(|n| (s as u16, n as u16))
+        })
+        .unwrap()
+}
+
+/// **G14-B, the profile table**: every shipped real-shape class at its maximum context through the v4 gate and the pursuit schedule
+/// (search rounds × chunk-counted response windows + the filing's chunks against the liability horizon), at ceilings across `W`'s
+/// range. The gate's verdict is the schedule's; the 9B-8k class is refused BY NAME at every ceiling: one position is 2,294 parts, its
+/// window alone outlasts any horizon in the range.
+#[test]
+fn g14b_every_shipped_profile_is_admitted_with_its_derived_horizon_or_refused_by_name() {
+    use misaka_palw_kernel::budget::*;
+    let (l, opv) = (policy(), opv_example());
+    let clock = PursuitClockV1::of_opv(&l, &opv);
+    let v4 = k2_tir_v4_descriptor();
+    let material = ProfileMaterialV1::kernel_route(true);
+    let ceilings = [280u64, 300, 358, 400, 436];
+    // The sketch's history-bearing dense + MoE class held at 8,192 positions, by its window (K2S GAP-31's node fixture is 1,024).
+    for window in [16u32, 64, 128, 256, 512, 1024] {
+        let fx = misaka_palw_tir_sketch::fixture::dense_moe_windowed_v1(7, window);
+        let root = program_root_v1(&fx.program.encode());
+        let Ok(plan) = plan_for_tir_program_v1(&v4, &fx.program, root, 8192) else {
+            eprintln!("[g14b] dense-MoE window {window} @8192: no v4 plan");
+            continue;
+        };
+        let bounds = match public_prosecution_complete_v4(&v4, &plan, &fx.program, &material, &ROUTE) {
+            Ok((b, _)) => b,
+            Err(g) => {
+                eprintln!("[g14b] dense-MoE window {window} @8192: refused by the v4 gate {g:?}");
+                continue;
+            }
+        };
+        let (chunks, parts) = seg_position_chunks_v1(&fx.program, 8191).unwrap();
+        let window_daa = response_window_daa_v1(l.court_deadline_daa, chunks);
+        let filing_chunks = route_object_chunks_v1(bounds.max_filing_bytes as u128 + FILE_PROOF_ENVELOPE_BYTES_V1 as u128);
+        let s = seg_pursuit_schedule_v1(&clock, seg_search_rounds_v1(8192), window_daa, filing_chunks);
+        let verdicts: Vec<(u64, bool)> = ceilings
+            .iter()
+            .map(|c| {
+                let ok = class_pursuit_with_ceiling_v1(
+                    &v4,
+                    &fx.program,
+                    &plan,
+                    bounds.max_filing_bytes,
+                    bounds.max_response_bytes,
+                    &l,
+                    &opv,
+                    *c,
+                )
+                .is_ok();
+                assert_eq!(ok, s.final_daa + l.liability_daa.max(s.liability_needed_daa) <= *c, "dense-MoE window {window} at {c}");
+                (*c, ok)
+            })
+            .collect();
+        eprintln!(
+            "[g14b] dense-MoE window {window} @8192: last position {parts} parts / {chunks} chunks -> window {window_daa} DAA; filing \
+             {filing_chunks} chunks; Final +{}; liability needed {} DAA; lifetime {} DAA; admitted at lifetime ceilings {verdicts:?}",
+            s.final_daa,
+            s.liability_needed_daa,
+            s.final_daa + l.liability_daa.max(s.liability_needed_daa)
+        );
+    }
+    for name in ["mamba-370m.json", "granite-3.1-1b-a400m.json", "qwen3.5-0.8b.json", "smollm2-1.7b.json", "huihui-qwen3.5-9b-8k.json"]
+    {
+        let Some((program, ctx)) = fixture_program(name) else {
+            eprintln!("[g14b] {name}: fixture absent");
+            continue;
+        };
+        let root = program_root_v1(&program.encode());
+        let plan = match plan_for_tir_program_v1(&v4, &program, root, ctx) {
+            Ok(p) => p,
+            Err((f, why)) => {
+                eprintln!("[g14b] {name} @{ctx}: no v4 plan ({}: {why})", f.name());
+                continue;
+            }
+        };
+        let bounds = match public_prosecution_complete_v4(&v4, &plan, &program, &material, &ROUTE) {
+            Ok((b, _)) => b,
+            Err(g) => {
+                eprintln!("[g14b] {name} @{ctx}: refused by the v4 gate {g:?}");
+                continue;
+            }
+        };
+        let (chunks, parts) = seg_position_chunks_v1(&program, ctx - 1).unwrap();
+        let window = response_window_daa_v1(l.court_deadline_daa, chunks);
+        let rounds = seg_search_rounds_v1(ctx);
+        let filing_chunks = route_object_chunks_v1(bounds.max_filing_bytes as u128 + FILE_PROOF_ENVELOPE_BYTES_V1 as u128);
+        let s = seg_pursuit_schedule_v1(&clock, rounds, window, filing_chunks);
+        let pursuit = |c: u64| {
+            class_pursuit_with_ceiling_v1(&v4, &program, &plan, bounds.max_filing_bytes, bounds.max_response_bytes, &l, &opv, c)
+        };
+        let verdicts: Vec<(u64, bool)> = ceilings.iter().map(|c| (*c, pursuit(*c).is_ok())).collect();
+        eprintln!(
+            "[g14b] {name} @{ctx}: last position {parts} parts / {chunks} route chunks -> response window {window} DAA; {rounds} rounds; \
+             filing {} B in {filing_chunks} chunks; Final +{} ({} pre-Final rounds), last demand +{}, filed +{}; liability needed {} DAA; \
+             admitted at ceilings {verdicts:?}",
+            bounds.max_filing_bytes, s.final_daa, s.pre_final_rounds, s.last_demand_daa, s.filed_daa, s.liability_needed_daa
+        );
+        for (c, ok) in &verdicts {
+            assert_eq!(
+                *ok,
+                s.final_daa + l.liability_daa.max(s.liability_needed_daa) <= *c,
+                "{name}: the gate's verdict is the schedule's at {c}"
+            );
+        }
+        if let Ok(p) = pursuit(LIFETIME_CEILING_DAA_V1) {
+            assert_eq!(p.liability_daa, l.liability_daa.max(s.liability_needed_daa));
+            assert_eq!((p.rounds, p.response_chunks, p.response_window_daa, p.filing_chunks), (rounds, chunks, window, filing_chunks));
+        }
+        if name.starts_with("huihui") {
+            // G14-S's hiding tiles serve leaf hashes, not clear values: the last position is hundreds of parts (548), still far past
+            // every horizon in W's range.
+            assert!(ctx == 8192 && parts > 500, "the 9B-8k last position is hundreds of parts: {parts}");
+            assert!(window > 436, "one position's own window outlasts every horizon in W's range: {window}");
+            for c in ceilings {
+                let g = pursuit(c).unwrap_err();
+                assert!(format!("{g:?}").contains("PURSUIT_SCHEDULE"), "refused by name at {c}: {g:?}");
+            }
+        }
+    }
+}
+
+/// **G14-B, the worst-case schedule on the ledger** (V-ref: every block through `apply_block`). A liar's segmented claim at 8,192
+/// positions; a public verifier runs the deepest search the class admits (ten probes and the court's round, 11 demands) while the
+/// producer answers every demand on the LAST DAA of its window; the claim reaches Final as early as the lifecycle lets it, and the
+/// verifier waits out the dead zone between a served demand and Final. Every demand is admitted, every answer lands, and the filing
+/// convicts inside the class's derived horizon — exactly at the times `budget::seg_pursuit_schedule_v1` derives. At the policy's own
+/// 200 the deepest round could not even have opened.
+#[test]
+fn g14b_the_worst_case_pursuit_completes_on_the_ledger_inside_the_class_horizon() {
+    use misaka_palw_kernel::budget::*;
+    let fx = wide128_v1(7);
+    let mut w = W::new(fx.program, fx.params, 8192);
+    let (l, opv) = (policy(), opv_example());
+    let clock = PursuitClockV1::of_opv(&l, &opv);
+    let class_liability = w.l.classes[&w.class].liability_daa;
+    let prompt: Vec<u32> = (0..2100u32).map(|i| (i * 7 + 1) % 32).collect();
+    let job = w.tiled_job(&prompt, 2);
+    let (s, n) = first_matmul(&w.program);
+    let lie_at = 1200u32;
+    let liar = produce(&w, job, &prompt, Some((lie_at, s, n)));
+    let ev = commit(&mut w, &liar);
+    assert!(ev.iter().any(|e| matches!(e, E::ClaimCommitted { .. })), "{ev:?}");
+    let (c, id) = (w.daa, liar.claim.id());
+    let window = w.l.demand_window_daa_v1(&id, lie_at);
+    assert_eq!(window, l.court_deadline_daa, "a 1,104-byte position is one carrier");
+    let view = w.l.seg_claim_view_v1(&id).unwrap();
+    let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &liar, &artifact(&w), &liar.tokens, &[lie_at]) else {
+        panic!("the lie is not found")
+    };
+    let filing = fault.to_bytes();
+    let filing_chunks = route_object_chunks_v1(filing.len() as u128 + FILE_PROOF_ENVELOPE_BYTES_V1 as u128);
+    let rounds = seg_search_rounds_v1(8192);
+    let plan = seg_pursuit_schedule_v1(&clock, rounds, window, filing_chunks);
+    assert_eq!(class_liability, l.liability_daa.max(plan.liability_needed_daa), "registration derived this class's horizon");
+    assert!(plan.liability_needed_daa > l.liability_daa, "the deepest search does not fit the policy's own 200");
+    // Ten probe positions in the lie's segment, then the court's two positions together.
+    let probes = [1024u32, 1536, 1280, 1152, 1088, 1120, 1136, 1144, 1148, 1150];
+    let serve = |w: &W, p: u32| {
+        let part = position_part_v1(&w.program, p, &liar.values[p as usize], liar.c.position_path(p).1, 0).unwrap();
+        obj(PROD, O::Respond { claim: id, stage: 0, position: p, bytes: borsh::to_vec(&part).unwrap() })
+    };
+    let mut t = c + clock.first_step_daa;
+    let (mut last_demand, mut last_served, mut final_daa) = (0u64, 0u64, None);
+    for round in 0..rounds as usize {
+        let positions = if round < probes.len() { vec![probes[round]] } else { vec![lie_at - 1, lie_at] };
+        w.beat_to(t - 1);
+        // In the dead zone (window closed, Final not yet reached) a demand is refused; the verifier retries the next block.
+        let opened = loop {
+            let demands =
+                positions.iter().map(|p| obj(OUT, O::FileDemand { demander: OUT, claim: id, stage: 0, position: *p })).collect();
+            let ev = w.block(demands);
+            let refused = refusal(&ev);
+            if let ClaimStateV1::Final { final_daa: f } = w.l.claims[&id].life.state {
+                final_daa.get_or_insert(f);
+            }
+            match refused {
+                None => break w.daa,
+                Some(why) => {
+                    assert!(why.contains("challenge window is closed"), "round {round} at {}: {why}", w.daa);
+                    assert!(w.daa <= final_daa.unwrap_or(u64::MAX), "after Final the demand opens (round {round} at {})", w.daa);
+                }
+            }
+        };
+        let deadline = positions.iter().map(|p| w.l.demands[&(id, 0, *p)].deadline_daa).max().unwrap();
+        assert_eq!(deadline, opened + window);
+        // The producer stalls: every answer on the last DAA of its window.
+        w.beat_to(deadline - 1);
+        let answers = positions.iter().map(|p| serve(&w, *p)).collect();
+        let ev = w.block(answers);
+        assert_eq!(ev.iter().filter(|e| matches!(e, E::Served { .. })).count(), positions.len(), "round {round}: {ev:?}");
+        if let ClaimStateV1::Final { final_daa: f } = w.l.claims[&id].life.state {
+            final_daa.get_or_insert(f);
+        }
+        (last_demand, last_served) = (opened, w.daa);
+        t = w.daa + clock.turnaround_daa;
+    }
+    let final_daa = final_daa.expect("Final during the pursuit");
+    let until = w.l.claims[&id].liability_until.unwrap();
+    assert_eq!(until, final_daa + class_liability, "the class's derived horizon");
+    // The filing's chunks land after localization, assembly and inclusion.
+    let file_at = last_served + clock.prove_daa + (filing_chunks - 1) * ROUTE_DAA_PER_CHUNK_V1;
+    assert!(file_at <= until, "the filing lands inside the horizon: {file_at} <= {until}");
+    w.beat_to(file_at - 1);
+    let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(filing) })]);
+    assert!(ev.iter().any(|e| matches!(e, E::Convicted { claim, accuser, .. } if *claim == id && *accuser == OUT)), "{ev:?}");
+    // Exactly the derived schedule.
+    assert_eq!(
+        (final_daa - c, last_demand - c, file_at - c, until - final_daa),
+        (plan.final_daa, plan.last_demand_daa, plan.filed_daa, plan.liability_needed_daa.max(l.liability_daa))
+    );
+    // At the policy's own horizon the last round's whole path would not have fit.
+    assert!(last_demand + window + l.proof_grace_daa > final_daa + l.liability_daa);
+    eprintln!(
+        "[g14b] wide128 @8192 on the ledger: {rounds} rounds, Final +{}, last demand +{}, served +{}, filed +{} <= horizon +{} (class \
+         liability {class_liability}, policy {})",
+        final_daa - c,
+        last_demand - c,
+        last_served - c,
+        file_at - c,
+        until - c,
+        l.liability_daa
+    );
+}
+
+/// **G14-B, the maximal response's terminal**: a position of two parts (a full 1 MiB part and the rest) is demanded; its window counts
+/// the route chunks of both parts, not the base deadline. A producer that sends one chunk a block, starting as late as it can, lands
+/// the last part on the window's last DAA and is SERVED; under the old fixed window it would have defaulted by size alone. A producer
+/// that withholds still defaults at the counted deadline: the declared layout fixes the window, the producer's answer cannot move it.
+#[test]
+fn g14b_a_maximal_response_lands_inside_its_chunk_counted_window_and_withholding_still_defaults() {
+    use misaka_palw_kernel::budget::*;
+    let (program, params) = fat_v1(3);
+    let mut w = W::new(program, params, 64);
+    let l = policy();
+    let prompt: Vec<u32> = vec![3, 9, 14];
+    let job = w.tiled_job(&prompt, 2);
+    let honest = produce(&w, job, &prompt, None);
+    commit(&mut w, &honest);
+    let id = honest.claim.id();
+    let sizes = misaka_palw_kernel::seg_da::position_part_bytes_v1(&w.program, 1).unwrap();
+    let parts: Vec<Vec<u8>> = (0..sizes.len() as u32)
+        .map(|i| borsh::to_vec(&position_part_v1(&w.program, 1, &honest.values[1], honest.c.position_path(1).1, i).unwrap()).unwrap())
+        .collect();
+    let per_part: Vec<u64> =
+        parts.iter().map(|b| route_object_chunks_v1(b.len() as u128 + RESPOND_ENVELOPE_BYTES_V1 as u128)).collect();
+    for (actual, bound) in parts.iter().zip(&sizes) {
+        assert!(
+            actual.len() as u64 <= *bound && *bound <= misaka_palw_kernel::seg_da::SEG_PART_BYTES_V4,
+            "the layout's bound covers the part: {} <= {bound}",
+            actual.len()
+        );
+    }
+    let (chunks, n) = seg_position_chunks_v1(&w.program, 1).unwrap();
+    assert_eq!(n as usize, parts.len());
+    assert!(per_part.iter().sum::<u64>() <= chunks, "the declared count bounds the real chunks: {per_part:?} vs {chunks}");
+    assert_eq!(per_part[0], 11, "a full part is eleven chunks: {per_part:?}");
+    let window = response_window_daa_v1(l.court_deadline_daa, chunks);
+    assert_eq!(w.l.demand_window_daa_v1(&id, 1), window);
+    let ev = w.block(vec![obj(OUT, O::FileDemand { demander: OUT, claim: id, stage: 0, position: 1 })]);
+    let opened = w.daa;
+    assert!(ev.iter().any(|e| matches!(e, E::DemandOpened { position: 1, deadline, .. } if *deadline == opened + window)), "{ev:?}");
+    // One chunk a block, from as late as possible: part i lands when its last chunk does.
+    let mut land = opened + window;
+    let mut at: Vec<u64> = vec![0; parts.len()];
+    for i in (0..parts.len()).rev() {
+        at[i] = land;
+        land -= per_part[i];
+    }
+    assert!(at[parts.len() - 1] > opened + l.court_deadline_daa, "the old fixed window would have defaulted this producer");
+    for (i, bytes) in parts.iter().enumerate() {
+        w.beat_to(at[i] - 1);
+        let ev = w.block(vec![obj(PROD, O::Respond { claim: id, stage: 0, position: 1, bytes: bytes.clone() })]);
+        assert!(refusal(&ev).is_none() && !ev.iter().any(|e| matches!(e, E::ProducerDefault { .. })), "part {i}: {ev:?}");
+        assert_eq!(ev.iter().any(|e| matches!(e, E::Served { position: 1, .. })), i + 1 == parts.len(), "part {i}: {ev:?}");
+    }
+    assert!(!w.l.claims[&id].convicted && !matches!(w.l.claims[&id].life.state, ClaimStateV1::Unavailable { .. }));
+    // The same position on a second claim, withheld: the default comes at the counted deadline, not later.
+    let job2 = w.tiled_job(&[4, 1, 15], 2);
+    let other = produce(&w, job2, &[4, 1, 15], None);
+    commit(&mut w, &other);
+    let id2 = other.claim.id();
+    let ev = w.block(vec![obj(OUT, O::FileDemand { demander: OUT, claim: id2, stage: 0, position: 1 })]);
+    assert!(refusal(&ev).is_none(), "{ev:?}");
+    let opened = w.daa;
+    let ev = w.beat_to(opened + window - 1);
+    assert!(!ev.iter().any(|e| matches!(e, E::ProducerDefault { .. })), "no default before the counted deadline");
+    let ev = w.block(Vec::new());
+    assert!(ev.iter().any(|e| matches!(e, E::ProducerDefault { claim, .. } if *claim == id2)), "{ev:?}");
+}
+
+// ---- RFC-0002 (codex): conformance-only candidate classes (table 29 since the RFC02-T merge) --------------------------------------
+fn conformance_world() -> W {
+    let fx = wide128_v1(73);
+    let mut w = W::new(fx.program, fx.params, 32);
+    w.l =
+        KernelLedgerV1::genesis(w.l.policy, w.l.schedule.clone(), w.l.known.clone()).unwrap().with_opv_policy(opv_example()).unwrap();
+    w.l.sync_bond(PROD, 1_000_000);
+    w.l.sync_bond(ANY, 1_000_000);
+    w.l.attest_artifact(w.pc.root());
+    w.l.begin_block(1).unwrap();
+    w.daa = 1;
+    w
+}
+
+fn candidate(w: &W, max_positions: u32) -> O {
+    let bytes = w.program.encode();
+    O::RegisterConformanceClass {
+        descriptor: w.d.digest(),
+        program_bytes: bytes.clone(),
+        plan: plan_for_tir_program_v1(&w.d, &w.program, program_root_v1(&bytes), max_positions).unwrap(),
+        param_commitments: w.pc.clone(),
+    }
+}
+
+#[test]
+fn conformance_candidate_is_rooted_replayable_and_grants_no_execution_rights() {
+    use misaka_palw_kernel::rows::{TABLE_CONFORMANCE_CLASSES_V1, config_root_of, diff_rows, root_of_rows};
+    let mut w = conformance_world();
+    let o = candidate(&w, 32);
+    assert_eq!(o.encode()[..2], [1, 21]);
+    assert_eq!(O::decode(&o.encode()).unwrap(), o);
+    let before = w.l.to_rows();
+    let root = w.l.root();
+    let bonds = w.l.bonds.clone();
+    let ev = w.l.apply_object(&o, &AuthV1 { signer_bond: PROD }).unwrap();
+    assert_eq!(ev, vec![E::ConformanceClassRegistered { class: w.class }]);
+    assert!(w.l.conformance_classes.contains_key(&w.class));
+    assert!(w.l.classes.is_empty() && w.l.opv.classes.is_empty() && w.l.opv.admitted.is_empty());
+    assert_eq!(w.l.bonds, bonds, "no reward, reservation or collateral transfer");
+    assert!(w.l.claims.is_empty() && w.l.claim_beacon_salts.is_empty() && w.l.seals.is_empty());
+    assert_ne!(root, w.l.root());
+    let mut empty = w.l.clone();
+    empty.conformance_classes.clear();
+    assert_eq!(empty.root(), root, "empty table preserves the historical root grammar");
+    assert!(w.l.budget_used().court_work > 0, "candidate shares admission work, not only the run limit");
+    let rows = w.l.to_rows();
+    assert!(rows.keys().any(|(t, _)| *t == TABLE_CONFORMANCE_CLASSES_V1));
+    assert_eq!(
+        root_of_rows(&w.l.policy, config_root_of(&w.l.schedule, &w.l.known), w.l.scalars(), w.l.opv_policy(), &rows),
+        w.l.root()
+    );
+    let restored = KernelLedgerV1::from_rows(&w.l, w.l.scalars(), &rows).unwrap();
+    assert_eq!(restored.root(), w.l.root());
+    assert_eq!(restored.to_rows(), rows);
+    let journal = diff_rows(&before, &rows);
+    let mut rolled = rows.clone();
+    for (k, old, _) in &journal {
+        match old {
+            Some(v) => {
+                rolled.insert(k.clone(), v.clone());
+            }
+            None => {
+                rolled.remove(k);
+            }
+        }
+    }
+    assert_eq!(rolled, before);
+    for (k, _, new) in &journal {
+        match new {
+            Some(v) => {
+                rolled.insert(k.clone(), v.clone());
+            }
+            None => {
+                rolled.remove(k);
+            }
+        }
+    }
+    assert_eq!(rolled, rows);
+    let mut wrong_key = rows.clone();
+    let value = wrong_key.remove(&(TABLE_CONFORMANCE_CLASSES_V1, borsh::to_vec(&w.class).unwrap())).unwrap();
+    wrong_key.insert((TABLE_CONFORMANCE_CLASSES_V1, borsh::to_vec(&[0xCCu8; 64]).unwrap()), value);
+    assert!(KernelLedgerV1::from_rows(&w.l, w.l.scalars(), &wrong_key).is_err());
+    let job = KernelJobV1 {
+        class_binding_id: w.class,
+        prompt: vec![1, 3, 5],
+        max_new_tokens: 1,
+        decode: DecodeRuleV1::Greedy,
+        nonce: [1; 64],
+    };
+    assert!(w.l.apply_object(&O::PostJob { job }, &AuthV1 { signer_bond: ANY }).is_err());
+    let tiled = TiledJobV1 {
+        class_binding_id: w.class,
+        prompt_len: 3,
+        prompt_root: prompt_root_of_ids_v1(&[1, 3, 5]),
+        max_new_tokens: 1,
+        decode: DecodeRuleV1::Greedy,
+        nonce: [2; 64],
+    };
+    assert!(w.l.apply_object(&O::PostTiledJob { job: tiled }, &AuthV1 { signer_bond: ANY }).is_err());
+    let registration = w.register(OPV);
+    let LedgerTxV1::Object { object, auth } = registration else { unreachable!() };
+    assert!(w.l.apply_object(&object, &auth).is_err(), "ordinary registration still needs eligibility");
+    assert_eq!(w.l.root(), restored.root(), "refusals changed no rooted state");
+    w.l.begin_block(2).unwrap();
+    w.l.admit_optimistic_class(w.class).unwrap(); // consumer-derived eligibility is tested on the actual node separately.
+    assert_eq!(w.l.apply_object(&object, &auth).unwrap(), vec![E::ClassRegistered { class: w.class }]);
+    assert!(w.l.conformance_classes.is_empty());
+    assert!(w.l.classes.contains_key(&w.class) && w.l.opv.classes.contains(&w.class));
+    w.l.opv_invariants().unwrap();
+}
+
+#[test]
+fn conformance_candidate_is_limited_by_bond_and_shared_block_work_and_refuses_bad_metadata() {
+    use misaka_palw_kernel::ledger::{BlockBudgetV1, MAX_CONFORMANCE_CLASSES_PER_BOND_V1};
+    let mut w = conformance_world();
+    for i in 1..=MAX_CONFORMANCE_CLASSES_PER_BOND_V1 {
+        w.l.begin_block(i as u64).unwrap();
+        w.l.apply_object(&candidate(&w, i as u32), &AuthV1 { signer_bond: PROD }).unwrap();
+    }
+    w.l = KernelLedgerV1::from_rows(&w.l, w.l.scalars(), &w.l.to_rows()).unwrap();
+    w.l.begin_block(9).unwrap();
+    let root = w.l.root();
+    let err = w.l.apply_object(&candidate(&w, 9), &AuthV1 { signer_bond: PROD }).unwrap_err();
+    assert!(err.why.contains("candidate limit"));
+    assert_eq!(w.l.root(), root);
+    w.l.apply_object(&candidate(&w, 9), &AuthV1 { signer_bond: ANY }).unwrap();
+    let mut w = conformance_world();
+    w.l.restore_budget(BlockBudgetV1 { adjudications: 0, court_work: w.l.policy.admission_work_limit_v1() });
+    let root = w.l.root();
+    let err = w.l.apply_object(&candidate(&w, 32), &AuthV1 { signer_bond: PROD }).unwrap_err();
+    assert_eq!(err.kind, misaka_palw_kernel::route::RefusalKindV1::OverBudget);
+    assert_eq!(w.l.root(), root);
+    assert!(w.l.conformance_classes.is_empty());
+    for kind in 0..5 {
+        w.l.begin_block(2 + kind).unwrap();
+        let mut o = candidate(&w, 32);
+        let O::RegisterConformanceClass { descriptor, program_bytes, plan, param_commitments } = &mut o else { unreachable!() };
+        match kind {
+            0 => *descriptor = [0; 64],
+            1 => program_bytes.push(0),
+            2 => plan.max_positions = 0,
+            3 => param_commitments.by_instance.clear(),
+            _ => w.l.attested_artifacts.clear(),
+        }
+        let root = w.l.root();
+        assert!(w.l.apply_object(&o, &AuthV1 { signer_bond: PROD }).is_err());
+        assert_eq!(w.l.root(), root);
+        assert!(w.l.conformance_classes.is_empty());
+    }
 }

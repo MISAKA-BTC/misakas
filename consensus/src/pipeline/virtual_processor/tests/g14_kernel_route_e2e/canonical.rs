@@ -139,7 +139,7 @@ pub(super) async fn ibd_node(main: &Net) -> Net {
 /// through `P`, discards its own PALW tip and deltas through `P`, installs the PALW state `main` serves for `P` against `T`'s
 /// committed root (tail `0xEC` carries the route), and then takes the blocks after `P` (the parent's `..._survives_a_pruned_import`,
 /// here a node that then prosecutes).
-async fn pruned_import_node(main: &mut Net) -> Net {
+pub(super) async fn pruned_import_node(main: &mut Net) -> Net {
     use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
     let p = main.chain.sink();
     let ttpb = main.ttpb();
@@ -189,7 +189,7 @@ async fn start_node(main: &mut Net, how: Start) -> Net {
 }
 
 /// `from`'s blocks that `to` lacks arrive at `to` (a peer relaying its chain); `to`'s clock continues from the later of the two.
-async fn sync(from: &Net, to: &mut Net) {
+pub(super) async fn sync(from: &Net, to: &mut Net) {
     for b in chain_blocks(&from.chain, from.chain.sink()) {
         if to.chain.ctx.consensus.get_block(b.header.hash).is_err() {
             arrive(&to.chain, b, "a peer's block").await;
@@ -201,7 +201,7 @@ async fn sync(from: &Net, to: &mut Net) {
 
 /// **Two nodes at one tip agree**: the sink, the PALW state root, the kernel route's rows (as served), and the delta root of every
 /// chain block both hold a delta for (a pruned-import node has none at or below its pruning point, by construction).
-fn agree(main: &Net, node: &Net, what: &str) {
+pub(super) fn agree(main: &Net, node: &Net, what: &str) {
     assert_eq!(node.chain.sink(), main.chain.sink(), "{what}: same sink");
     assert_eq!(node.chain.tip_state().1.state_root(), main.chain.tip_state().1.state_root(), "{what}: same PALW state root");
     assert_eq!(node.chain.ctx.consensus.palw_kernel_route_v1(), main.api(), "{what}: same kernel route rows");
@@ -333,6 +333,40 @@ impl Rpc {
         let request = Self::wire(GetPalwConformanceEvidenceRequest { class_id: class.to_string() });
         let class = palw_conformance_evidence_request_v1(&request).expect("a well-formed class id");
         Self::wire(palw_conformance_evidence_response_v1(self.api(), class).expect("op 231 answers"))
+    }
+
+    /// The SDK/CLI's common verifier input, derived solely from paged op-211 wire responses.
+    pub(super) fn onboarding(&self, class: Hash64) -> misaka_palw_sdk::onboarding_chain::PublicOnboardingReadsV1 {
+        use misaka_palw_sdk::onboarding_snapshot::{KernelRowsPageV1, KernelRowsSnapshotV1};
+        let mut snapshot = KernelRowsSnapshotV1::default();
+        let mut request = GetPalwKernelRowsRequest { max_bytes: ROWS_PAGE_BYTES, ..Default::default() };
+        loop {
+            let (after, max_bytes) = palw_kernel_rows_request_v1(&Self::wire(request)).unwrap();
+            let page = Self::wire(palw_kernel_rows_response_v1(self.api(), after, max_bytes).unwrap());
+            assert!(page.available);
+            let next = snapshot
+                .push(KernelRowsPageV1 {
+                    tip_daa: page.tip_daa,
+                    ledger_root: page.ledger_root.parse().unwrap(),
+                    aux_root: page.aux_root.parse().unwrap(),
+                    header: unhex(&page.header),
+                    total_rows: page.total_rows,
+                    rows: page.rows.into_iter().map(|r| (u8::try_from(r.table).unwrap(), unhex(&r.key), unhex(&r.row))).collect(),
+                    next: page.more.then(|| (u8::try_from(page.next_table).unwrap(), unhex(&page.next_key))),
+                })
+                .unwrap();
+            match next {
+                None => return snapshot.into_onboarding_reads_v1(class).unwrap(),
+                Some((table, key)) => {
+                    request = GetPalwKernelRowsRequest {
+                        has_cursor: true,
+                        after_table: table as u32,
+                        after_key: faster_hex::hex_string(&key),
+                        max_bytes: ROWS_PAGE_BYTES,
+                    }
+                }
+            }
+        }
     }
 
     /// **Op 211 `getPalwKernelRows`, paged to the end**: the route's header and every row, reassembled into the route state and checked
@@ -972,6 +1006,12 @@ enum Lie {
     Decode,
     /// Every weight perturbed and the whole trace and tokens recomputed consistently under them (a self-consistent garbage trace).
     Garbage,
+    /// G14-V: the embedding gather's committed row element moved (input embedding / gather).
+    Gather,
+    /// G14-V: one element of the wide I128 matmul's committed accumulator moved (MatMul element).
+    MatMul,
+    /// G14-V: a clamp's committed result moved (range / saturating nonlinearity).
+    Clamp,
 }
 
 /// **The producer's lying claim of `job`**, revealed, and (Panel) covered by every seat; returns it and its seats.
@@ -998,13 +1038,16 @@ async fn lying_claim(w: &mut World, mode: Mode, producer: usize, job: &KernelJob
     let program = w.fx.program.clone();
     let at = match lie {
         Lie::Quantize => find_node(&program, 1, |p| matches!(p, misaka_palw_tir::Prim::Div { .. })),
+        Lie::Gather => find_node(&program, 1, |p| matches!(p, misaka_palw_tir::Prim::Gather { .. })),
+        Lie::MatMul => find_node(&program, 1, |p| matches!(p, misaka_palw_tir::Prim::MatMul)),
+        Lie::Clamp => find_node(&program, 1, |p| matches!(p, misaka_palw_tir::Prim::Clamp { .. })),
         Lie::Decode | Lie::Garbage => (0, 0, 0),
     };
     let produced = produce(&fx, &ledger, &w.class, job, w.net.kid(producer), generated, |t| {
         let v = &mut t.values[at.0 as usize][at.1 as usize][at.2 as usize];
         let before = v.clone();
         match lie {
-            Lie::Quantize => bump(v, 0),
+            Lie::Quantize | Lie::Gather | Lie::MatMul | Lie::Clamp => bump(v, 0),
             Lie::Decode | Lie::Garbage => return,
         }
         assert_ne!(*v, before, "the lie changes the committed value");
@@ -1087,6 +1130,21 @@ async fn lie_convicted_using(mode: Mode, start: Start, lie: Lie, commitments_onl
     w.net.chain.heartbeat(ttpb, Vec::new()).await;
     sync(&w.net, &mut node).await;
     agree(&w.net, &node, "the participant's node");
+}
+
+/// **G14-V: the remaining element faults of the canonical class at V-node** — an embedding-gather element, a wide matmul
+/// accumulator element and a clamp (range / saturating nonlinearity) result, each an isolated lie in one committed node, convicted
+/// by the post-genesis participant on a node started after the claim (pruned import, commitments only — no producer value read),
+/// Panel-licensed (every seat covering) and OPV, before and after Final.
+#[tokio::test]
+async fn g14_canonical_g14v_gather_matmul_and_clamp_lies_pre_and_post_final() {
+    for mode in [Mode::Panel, Mode::Opv] {
+        for after_final in [false, true] {
+            for lie in [Lie::Gather, Lie::MatMul, Lie::Clamp] {
+                lie_convicted_using(mode, Start::PrunedImport, lie, true, after_final).await;
+            }
+        }
+    }
 }
 
 #[tokio::test]

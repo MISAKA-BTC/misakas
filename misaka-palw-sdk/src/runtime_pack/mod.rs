@@ -19,8 +19,11 @@ pub mod cli;
 pub mod commit;
 pub mod conformance;
 pub mod facts;
+pub mod frontend_fidelity;
 pub mod hfref;
 pub mod manifest;
+/// Generic primitive/state frontends, independently of the ModelSpec runtime-pack schema.
+pub mod primitive;
 pub mod provenance;
 pub mod verify;
 

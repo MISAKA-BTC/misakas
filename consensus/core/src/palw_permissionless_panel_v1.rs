@@ -57,8 +57,9 @@ impl crate::palw_state_v2::PalwStateParamsV2 {
 }
 
 impl PalwPermissionlessPanelV1 {
+    /// Names the dormant engine carriage version as well as its policy; absent/never remains unhashed.
     pub fn commitment_bytes(self) -> Vec<u8> {
-        let mut bytes = WIRE_VERSION_V1.to_le_bytes().to_vec();
+        let mut bytes = WIRE_VERSION_V2.to_le_bytes().to_vec();
         bytes.extend(self.activation.daa_score().to_le_bytes());
         bytes.extend(borsh::to_vec(&self.policy).expect("canonical Panel policy"));
         bytes

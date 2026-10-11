@@ -126,8 +126,8 @@ follow-up added. **Nothing here changes a shipped preset, a params / schedule / 
 | `palw_native_readiness_v1`: a **pure** explanation of the certificate (which effect holds `safe` back, every unmet condition, running clocks, named history gaps) | `consensus/core/src/palw_native_readiness_v1.rs` (new), `lib.rs` | item 4: the snapshot says one stop; a reader waiting on a transaction needs the reasons |
 | `native_facts_and_skips_v1`: the one fact conversion, now also counting what it skipped (`voided`, `baseClass`, `openDa`, `unpriced`, `bondNotHeld`); `native_facts_of_block_v1` is it with the counters dropped | `palw_native_settlement_v1.rs` | evidence seen and not counted must be visible, not silent |
 | `native_evaluate` returns the snapshot AND the material it was weighed from (or why nothing was); `native_evm_settlement_snapshot` is `native_evaluate(..).snapshot`; walk faults carry a cause and a block | `consensus/src/pipeline/virtual_processor/native_settlement.rs` | the explanation can never be about other evidence than the certificate; the snapshot path pays nothing for it |
-| `native_safe_readiness(sink)`, memoized per sink; `ConsensusApi::get_native_safe_readiness` (default `Ok(None)`), `Consensus` impl, `async_get_native_safe_readiness` | `native_settlement.rs`, `processor.rs` (the memo field), `consensus/src/consensus/mod.rs`, `consensus/core/src/api/mod.rs`, `components/consensusmanager/src/session.rs` | one evaluation per virtual change, however often the RPC is called |
-| `getPalwSettlement.nativeReadiness` (**no new op**): wRPC response v3 only when present, gRPC field 12, JSON/wasm key + TypeScript types; served only when its `generation` equals the snapshot's | `rpc/core/src/model/message.rs`, `rpc/core/src/wasm/message.rs`, `rpc/grpc/core/proto/rpc.proto`, `rpc/grpc/core/src/convert/message.rs`, `rpc/service/src/service.rs` | item 4 on the existing RFC-0012 RPC |
+| `native_safe_readiness(sink)`, memoized by sink plus its evaluated pruning point; `ConsensusApi::get_native_safe_readiness` (default `Ok(None)`), `Consensus` impl, `async_get_native_safe_readiness` | `native_settlement.rs`, `processor.rs` (the memo field), `consensus/src/consensus/mod.rs`, `consensus/core/src/api/mod.rs`, `components/consensusmanager/src/session.rs` | reuse while sink and pruning point both agree; context change requires a fresh evaluation |
+| `getPalwSettlement.nativeReadiness` (**no new op**): wRPC response v3 only when present, gRPC field 12, JSON/wasm key + TypeScript types; served only when version, policy and shared generation/head/stop statements agree with the snapshot | `rpc/core/src/model/message.rs`, `rpc/core/src/wasm/message.rs`, `rpc/grpc/core/proto/rpc.proto`, `rpc/grpc/core/src/convert/message.rs`, `rpc/service/src/service.rs` | item 4 on the existing RFC-0012 RPC |
 | `misaka palw settlement` prints the reasons | `misaka-cli/src/palw_settlement.rs` | operators read it in a terminal |
 | The real-fold fixture moves to a shared module; the existing fold test is unchanged in behaviour | `consensus/core/tests/rfc0012_fold_fixture/mod.rs` (new), `rfc0012_native_evidence_fold.rs` | two test files drive the same claim life |
 
@@ -139,7 +139,7 @@ follow-up added. **Nothing here changes a shipped preset, a params / schedule / 
 | D1-2 | Compare 5,400 / 3,000 / 1,000 / 600: attacks, EVM finality time, what else must change | 10.2, 10.3.4 | `d1_a` (exact instants), `d1_f` (lags against the node's 600-blue bound) | IMPLEMENTED (analysis + tests); hours are DERIVED from 24 and 30 DAA/h |
 | D1-3a | Producer + every Panel seat colluding | `rfc0012_safe_maturity_attacks.rs` (rules exist only there) | `d1_d`: v1 and `Final + 3,000` never retracted; `Final + 1,000` / `+ 600` retract for 2,000 / 2,400 blocks of convictions; `d1_b`: the last reversing block is `Final + 3,000` | IMPLEMENTED_AND_TESTED at the fold level; a fork **race** is a **GAP** |
 | D1-3b | Evidence / material withholding | same | `d1_c` (DA accusation admitted through `Final + 3,000`; an open session holds the claim past retirement; default as late as `Final + 4,201`), `d1_e` (no rule counts a claim under accusation); `rfc12_r3` (the node's own lost history is a named retention gap) | IMPLEMENTED_AND_TESTED; **corrects an inference in 10.2** (stated there) |
-| D1-3c | A private fork released late | none new (fork choice unchanged) | existing `hb_probe_e` (322 s) and `hb_probe_d` (629 s) re-run: both PASS — the comparator refuses a branch lacking a `Final` claim from `Final` on, and only the 600-blue finality depth stops a heartbeat-only reorg; `rfc12_r5` (labels withdrawn, no conflict alarm) | IMPLEMENTED_AND_TESTED for a branch that lacks the claim; a branch carrying its OWN `Final` claim is a **GAP** (capacity security) |
+| D1-3c | A private fork released late | fork choice unchanged; §8 adds a complete-params private Final race | recorded `hb_probe_e` (322 s) / `hb_probe_d` (629 s) and `rfc12_r5`; §8's private floor claim reaches actual node Final and wins a pre-safe race | Own Final pre-safe race MEASURED (§8); certified useful-work / 5,400-DAA effect attacks and capacity security remain OPEN |
 | D1-3d | Deep reorg across the would-be `safe` point; what `safe` / `finalized` do per value | `native_evaluate` (labels are recomputed; the conflict alarm is only for abandoning the finalized block) | `rfc12_r5` (two worlds: mature / not yet), `d1_f` | IMPLEMENTED_AND_TESTED; the harness has no real clock (`matured_daa` against DAA 1 to 2) |
 | D1-4 | `safe` readiness as structured reasons on the existing RFC-0012 RPC; ask before a new op | `palw_native_readiness_v1.rs`, `native_settlement.rs`, rpc files above | core 11 (agreement with the certificate on 400 generated chains, exact and tight promise, non-monotone evidence), processor `rfc12_r1`–`r4`, wRPC v3 byte-compat, gRPC round trip, CLI | IMPLEMENTED_AND_TESTED; **no new op was needed** |
 | D1-5 | The explorer renders the reasons | — | — | **CODE_GAP** (small; `contrib/misakascan-t12` reads the snapshot only) |
@@ -186,8 +186,8 @@ shown. No params / schedule / identity id moves, and `palw_dns_retirement_v1` is
 | C3 | Market orders across the fence with ADR-0162 armed (a TEST copy) | none | `rfc12_c3_a` (80 MSK lock, 50 MSK buy, two one-unit sells) | **PASS as restated (7.2)**: the buy is refused at the call, the sells settle `Refused EXCEEDS_POSITION`, the ledger conserves on every block. **A FILL is a GAP**: ADR-0162 trades only an approved class, and no t12 genesis class is approved (status `Active`, lifecycle `Prefetching`) |
 | C4 | Re-measure D1 with the other lanes armed | fixture: `ExtrasEdit`, `live_life_with`, `try_step_with`, `try_step_for` | `d1_g` (tripwire) | **PASS** against the merged tree (baseline and `palw_model_court_window` armed: F_off 123, the last reversing conviction and the last DA accusation at `Final + claim_retirement`, the latest default `W_disclose + 1` later). OPV / permissionless panel / kernel route / RFC-0008 slices / K2 classes are not armable in the fixture: **redo at integration** |
 | C5 | The maturity rule v2 | - | - | SKIPPED (no D1 other than v1 chosen) |
-| C6 | A class's own court window extends retention | `palw_native_settlement_v1.rs`: `live_retention` in `native_facts_and_skips_v1` | `d1_h` | **PASS** |
-| C7 | Preset and release wiring; **requires `palw_fork_choice_rule_e_v1` (ADR-0178) armed at or below** the retirement height (Lead, 2026-10-09) | none (checklist only) | - | READY-TO-APPLY CHECKLIST (policy proposal 12.8, step 3) |
+| C6 | A class's own court window extends retention | `palw_native_settlement_v1.rs`: `live_retention` in `native_facts_and_skips_v1` | `d1_h`; current admission/retirement coverage in §9 | **Historical reader PASS**; `d1_h` planted the extension, and did not prove admission after Final. Current `CourtOpened` refuses terminal claims |
+| C7 | Preset and release wiring; the recorded 2026-10-09 acquisition-fence prerequisite is superseded under ADR-0177; current complete-params validation and claim-specific security gates apply (§8) | none (checklist only) | - | READY-TO-APPLY CHECKLIST (policy proposal 12.8, step 3) |
 | C8 | Explorer renders `nativeReadiness` | `contrib/misakascan-t12/app.js` | `tests/native-settlement.cjs` | **PASS** |
 | C9 | Release-build cost at 100k+ blocks | none | `rfc0012_c9_release_cost.rs` (two `#[ignore]`d tests) | DESIGNED; compiles; NOT RUN (by order: fleet-class hardware, release profile) |
 | C10 | DNS all-equivocating case | none | `rfc12_x16` | **PASS** |
@@ -243,3 +243,284 @@ node contrib/misakascan-t12/tests/native-settlement.cjs
 
 **Still open for this lane's items:** the C3 fill (GAP above); `rfc12_c1_c` and the C9 measurement (once, on the release candidate); C4 again at
 integration with the in-flight lanes' fences armed; C2's UTXO-set / overlay / P2P halves (the multi-node drill on the shipped binary); C7 (release only).
+
+## 8. Complete fixture validation and private Final race (2026-10-11)
+
+ADR-0177 withdrew the old model-acquisition Rule E fence; `palw_fork_choice_rule_e_v1` and its prerequisite
+are absent from current Params. The bypass described in §7.2 item 1 is historical, not a current requirement.
+`rfc12_zero_dns_matrix::parts_custom` now validates the full copy including retirement before constructing
+the node. The standalone `rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor` does likewise.
+No production validation or fence is weakened. Passing structural validation does not approve claim-specific
+Final/court, economic, provenance or PRINCIPLES §6 gates. Those remain prerequisites for release.
+
+`hb_fork_choice_probe/private_final.rs` adds the predeclared private-Final case omitted by D1-3c:
+two nodes share a prefix, then carry conflicting payments and their own distinct post-fork claims. The test
+controls all genesis Panel keys, supplies an actual signed quorum on each branch and advances each claim
+through node processing to Final. It does not plant a Final, frontier or evidence fact. The private claim is
+delayed, so its frontier can be deeper; the expected outcome is a valid private branch reversing the pre-safe
+payment despite the incumbent's own Final claim. Release and capacity fence sets are all armed at DAA 1 in
+the private copy, along with retirement. ConfigBuilder and complete `validate_palw_v2` run before either node.
+
+This is a scoped residual measurement, not a proof of an invalid computation or a settled-effect reversal:
+the parent harness skips PoW, grinds synthetic floor trace commitments, simulates the clock and keeps EVM
+inert. The D=1/W=1/1000-permille policy and finite horizon 5 are TEST values only. Floor claims are excluded
+from the native useful-work certificate. A 5,400-DAA certified effect, real native execution validity,
+effective detection/collection floors, multi-process transport and actual pruning remain separate gates.
+
+Run evidence (Rust 1.93.0, macOS aarch64, jobs 2, dev/test debug 0, incremental 0; every command `--locked`):
+
+* `cargo test --locked -p kaspa-consensus --features evm --lib -- rfc12_x rfc12_r rfc12_c1_a rfc12_c1_b rfc12_c2 rfc12_c3 --test-threads=1`:
+  **25 passed, 0 failed, 0 ignored**, 10.71 s, build 5m14s. `/tmp/rfc12-full-params-matrix.log`.
+  Every shared matrix/C-item setup validates retirement as part of the full params. Existing planted-fact/frontier,
+  relabelled-work and partial pruning-import seams remain; their PASS is not live fleet or genuine useful-work evidence.
+* `cargo test --locked -p kaspa-consensus --features evm --lib -- rfc12_private_final rfc0012_retirement_uses_incumbent --test-threads=1 --nocapture`:
+  **2 passed, 0 failed, 0 ignored**, 5.19 s, build 2m56s including lock wait. `/tmp/rfc12-private-final-evm.log`.
+  The complete-params standalone retirement fixture passes. In the new fork race, both safe/live weights are
+  6,042,506,112; public/private frontiers are 8/24. All 302 offered private blocks validate. The victim stays public
+  while private work is immature, then switches at block 302 when the private claim is Final. X is absent and Y present.
+  EVM is compiled in but intentionally inert for this fork race. No actual native Safe/Finalized label is certified.
+
+The first default-feature build of the new test failed on the existing harness's private `beat_until` method;
+the test now uses its own bounded heartbeat loop. The final runs above compile and execute that correction.
+`git diff --check` and rustfmt checks of the new small test and matrix pass. No production gate, wire id, preset,
+network identity or monetary/comparator behavior is changed. Multi-process/private certified-effect security,
+100k release costs, market fills and the other RFC6/7/8/12 gates are not marked complete by this regression.
+
+## 9. Model-court maturity: actual admission versus synthetic reader input (2026-10-11)
+
+The old C6 explanation described a legacy court admitted at `Final + 2,900`. Inspection of the current fold
+contradicts that premise: `CourtOpened`, `ShardCourtAccused`, `TirShardCourtAccused` and `GenShardCourtAccused`
+refuse terminal claims before their court-opening branches. Wave 2's `d1_h` wrote an extension into a Final
+carriage by hand. It is retained and renamed `rfc0012_d1_h_reader_uses_later_live_retention_in_a_synthetic_snapshot`:
+its PASS means the reader takes the later live value, not that a court can open after Final. The production
+reader's comment and policy proposal C6 / §10.2 are corrected. No executable production behavior changes.
+
+`rfc0012_court_maturity` branches from the existing fixture's real licensed snapshot. It installs a 9,000-DAA
+class-window registry row by delta, then applies ordinary `CourtOpened` and a responder disclosure through the
+fold. The court extends trace retention, remains open across the original Final boundary, and closes when the
+challenger misses its own turn. The responder is not slashed; the challenger is. Final resumes through the
+ordinary deadline sweep, and its actual delta preserves the extended retention even after the claim retires.
+The same test checks opening delta apply/undo and carriage restore. A separate case confirms the specific
+`WrongPhase { edge: "CourtOpened" }` refusal at Final + 2,900 without changing retention.
+
+Scope: linear floor-only fold, signature acceptance seams, a registry row installed by delta, and a REAL-class
+relabel applied only to extracted evidence. The court, its deadlines, Final and retention extension are not
+planted. This is not a live native computation, a signed node admission, a class-registration proof, a full
+release-fence configuration, a post-Final kernel prosecution or a certified-effect attack. Those gates remain open.
+
+Final validation (Rust 1.93.0, macOS aarch64, jobs 2, dev/test debug 0, incremental 0):
+
+`cargo test --locked -p kaspa-consensus-core --test rfc0012_court_maturity --test rfc0012_safe_maturity_attacks --test rfc0012_native_evidence_fold --test rfc0012_evidence_window -- --nocapture --test-threads=1`
+
+**17 passed, 0 failed, 0 ignored**: court maturity 2 (2.41 s), maturity attacks 8 (33.22 s), native evidence fold 6
+(3.20 s), evidence window 1 (0.01 s); build 16.23 s. Log `/tmp/rfc12-court-evidence-regression.log`.
+Observed C6: original Final DAA 1,124; court opening 1,123; responder answers at inclusive deadline 1,165;
+challenger deadline 1,207; Final resumes at 1,209; retention and fact maturity remain 10,123 after retirement.
+Certificate arithmetic counts none at baseline retention or at 10,122, and counts that fact at 10,123.
+
+The first new test run failed its declared Final-crossing premise: a court opened just after licensing ended
+before the original Final. Opening was moved to the last pre-Final DAA, and the crossing assertion retained.
+The failure is recorded in `/tmp/rfc12-court-maturity.log`, not counted as success. The corrected standalone run
+passed 2 tests (2.45 s), then the final command above recompiled all four targets and passed the current code.
+`git diff --check` and rustfmt checks of the reader and small test files pass. No full node, release benchmark,
+multi-process transport or new class security approval is claimed.
+
+
+## Publication-history correction (2026-10-11 design audit)
+
+The earlier C11 implementation retained `withdrawnFrom` only in memory and compared reorgs against the
+current snapshot's `finalized`. Once that snapshot withdrew the label, a later abandoning branch was no
+longer detected; restart also forgot the withdrawal. Two regressions failed before the repair at those
+exact assertions: `FrontierNotCovered` instead of `FinalizedConflict`, and `None` instead of the published
+head after reopening the processor over the same database.
+
+`DbEvmCanonicalHeadsStore` now retains `Option<NativeSettlementSnapshotV1>` at prefix 209 plus
+`/native/finalized-publication/v1`. Its finalized hash is the deepest previously published conflict anchor;
+version/ruleset/policy/retirement fence and positive-head shape are checked. A stop beyond a certified
+prefix may coexist with a positive publication and is not rejected wholesale. This local row is never
+transported as a certificate, never counted as work and never consulted by fork choice. Its update is in
+the virtual-state batch with the native snapshot and canonical heads. The original three-hash singleton
+codec and native wire types are unchanged.
+
+Withdrawal retains this row; its committed negative snapshot yields `withdrawnFrom` after restart.
+Before-fence rollback preserves both this row and the native incident snapshot, while public readers use
+the legacy heads under their existing fence gate. Thus re-entry cannot erase a sticky conflict merely by
+returning to the originally published branch. Only the existing root-verified execution-state import
+clears both rows with its state/head batch, and invalidates the readiness memo after commit even at the
+same sink. Rejected commitment/state-root imports preserve the incident and memo. Corrupt or incompatible
+publication data is preserved, public readers fail closed, and readiness reports `PersistedSnapshotIncompatible`.
+
+A missing new row beside a legacy **positive** snapshot bootstraps that publication on the next commit.
+A legacy **negative** snapshot cannot establish whether a publication was forgotten: readers fail closed,
+the writer preserves it, and validated recovery installs explicit absence. Fresh state with no prior native
+snapshot can initialize normally. This conservative migration condition is required before any deployment;
+current public retirement fences remain dormant. It does not reconstruct history already lost by old code.
+
+New node cases exercise withdrawal followed by a heavier fork, fresh-processor reopen, eight incompatible
+metadata/shape cases, undecodable bytes, legacy-positive bootstrap and legacy-negative recovery. The existing
+x7 case also primes the memo, rejects invalid header/state imports without clearing history, checks the direct
+legacy-side writer boundary, and checks immediate same-sink readiness after a valid import. A store test
+checks positive publication, withdrawal and explicit reset across committed versus staged batches and fresh
+store readers. The retirement unit's synthetic no-publication fixture now records explicit absence.
+
+These are in-process real virtual-processor/EVM tests over harness parameters. Publications and several
+frontier/work facts are fixture-controlled; they do not prove genuine Final-work soundness, OS-process
+crash recovery, a mined below-fence deep rollback, real transport, pruning-proof IBD, 5,400-DAA maturity,
+common-prefix security or release resource bounds. The existing explicitly ignored long probe remains a
+separate gate. A root-verified import called directly is not evidence for the full resync protocol. The
+four-RFC audit retains those acceptance gates and the broad goal remains active.
+
+Final validation (Rust 1.93.0, macOS aarch64, jobs 2, dev/test debug 0, incremental 0):
+
+`cargo test --locked -p kaspa-consensus --features evm --lib -- rfc12_ rfc0012_ --test-threads=1`
+
+**36 passed, 0 failed, 1 ignored**; build 2m04s, runtime 16.06s. Matrix 28, C-items 3, existing private-Final
+probe 1, store 2, retirement unit 1, row-size unit 1. The ignored case is the existing explicit 5,400-DAA
+long probe, not a success. Log `/tmp/rfc12-publication-regression.log`. Earlier focused smoke results are
+not counted again. The fixture iteration failures (hash/address types, bond index, heartbeat clock-lead)
+were corrected without weakening production validation.
+
+`cargo check --locked -p kaspad --features evm` succeeded in 35.20s with existing warnings; log
+`/tmp/rfc12-publication-daemon.log`. Scoped formatting and `git diff --check` pass. No source logic changed
+after this validation; only the documentation records were completed. No public activation, push or deployment.
+
+
+## Pruning-import authority and repeatable recovery (2026-10-11 design audit)
+
+The publication-history repair made a root-verified import the explicit incident-reset path. A new
+negative test showed that the import itself did not require the established pruning point: valid EVM
+data for another locally executed block could clear the incident. The first regression failed at that
+refusal assertion. Its companion retry failed earlier in setup because the pruning-history context
+import unconditionally inserted an already-present immutable sample. Log `/tmp/rfc12-import-before.log`
+records **0 passed, 2 failed**; the second failure is not evidence for an EVM-row retry yet.
+
+An isolated retry with fixture-installed context then reproduced a distinct EVM-header
+`KeyAlreadyExists` panic after reopening the processor over the same DB (**0 passed, 1 failed**,
+`/tmp/rfc12-import-retry-before.log`). Production IBD already passes the validated proof pruning point,
+the established session pruning point, or the negotiated catch-up point into `sync_new_utxo_set`.
+The core importer now enforces that caller contract itself; commitment validity alone supplies no
+import authority. It checks the actual pruning store before root validation, then rechecks and holds
+its read guard through the durable EVM batch. Missing/unreadable context is a named error.
+
+The importer serializes retries in the existing memo → pruning → heads lock order. Before flat-state
+seeding or persistent changes, it checks every existing execution header, canonical snapshot and V1
+checkpoint against the root-verified input. Identical rows are reused, missing rows are completed, and
+contradictions or read errors refuse without clearing the publication/incident, changing heads, rewinding
+the flat pointer or invalidating the readiness memo. Whole-checkpoint equality includes block, EVM number,
+state root, deterministic payload and checksum. Incoming canonicality and code/hash checks remain active.
+Successful imports retain the existing atomic EVM state/head/history reset and post-commit memo reset.
+
+The prerequisite `import_pruning_points` now validates the entire list before input-dependent writes:
+nonempty, actual network genesis, unique hashes, strictly increasing blue scores, existing sample
+consistency and required unknown-header shapes. Identical samples and known headers are reused.
+The pruning write lock keeps target consumers and another context import out through the final
+pruning-point/retention batch. The individual history/header/sample writes remain separate from that
+batch; this is not a new transaction spanning them, UTXO and PALW sidecars. Full interrupted-proof
+adoption and cross-ledger recovery remain explicit acceptance gates.
+
+Six new node tests cover another block's valid execution, identical retry after processor reopen,
+three partial-row combinations, three conflicting row kinds with the flat backend enabled, missing
+context header, and repeatable context import with empty/genesis/order/duplicate/shape/sample refusals.
+The existing x7 and legacy-negative recovery tests now establish context through the actual history
+import API before EVM import. The final fixture uses normally processed samples and that real API;
+it does not supply a fully validated long-range proof or actually prune the DB. Publication/incident
+facts remain fixture-controlled, and reopening uses the same Arc DB in one process. No OS crash,
+real transport, IBD stable-flag interruption, complete resync protocol, long-horizon work soundness,
+common-prefix proof or public activation is established by these tests. RFC §4.3 records the contract.
+
+A first post-repair compile found a nonexistent test-only latest-pointer reader trait import; removing
+it allowed use of the store's existing inherent reader. Production validation was not weakened.
+
+
+Final validation (Rust 1.93.0, macOS aarch64, jobs 2, dev/test debug 0, incremental 0):
+
+* `cargo test --locked -p kaspa-consensus --features evm --lib -- rfc12_ rfc0012_ --test-threads=1`:
+  **42 passed, 0 failed, 1 ignored**, build 2m05s, runtime 17.39s. Matrix 34, C-items 3,
+  existing private-Final probe 1, store 2, retirement unit 1, row-size unit 1. The ignored case is the
+  existing explicit 5,400-DAA long probe. Log `/tmp/rfc12-import-regression.log`.
+* `cargo test --locked -p kaspa-consensus-core --features evm --lib --test pruning_proof_strict_economic_fence --test rfc0012_evidence_window --test rfc0012_native_evidence_fold --test rfc0012_court_maturity --test rfc0012_safe_maturity_attacks -- --test-threads=2`:
+  library **3,643 passed, 0 failed, 13 ignored** (69.78s); integrations **22 passed, 0 failed,
+  0 ignored** (economic fence 5, court maturity 2, evidence window 1, native fold 6, maturity attacks 8).
+  Build 4m50s. Log `/tmp/rfc12-import-core.log`. The existing explicitly ignored probes are not successes.
+* `cargo test --locked -p kaspa-consensus --features evm --lib -- t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225 hb_regression_the_same_chain_rule_colors_the_same_through_the_pruning_proof --test-threads=1`:
+  **2 passed, 0 failed, 0 ignored**, build 0.42s, runtime 1.73s; log
+  `/tmp/rfc12-import-proof-roundtrip.log`. These existing shrunk-depth, archival-source node tests validate,
+  apply and rebuild a proof with context import; the latter checks identical fork coloring with its fence
+  dormant and armed. They establish this path's regression compatibility, not real P2P, actual GC or
+  interrupted EVM-sidecar recovery. No source changes or weakening of those tests was needed.
+* `cargo check --locked -p kaspad --features evm`: succeeded in 37.70s with existing warnings;
+  log `/tmp/rfc12-import-daemon.log`.
+
+The independent passing total in these final commands is **3,709**, excluding 14 ignored cases and
+all earlier failed/smoke runs. Scoped rustfmt and `git diff --check` pass. The new error variants are local
+import errors; no wire codecs, network parameters, fingerprints, Round tickets, selection rule or public
+activation changed. Source logic was not edited after validation; only documentation was completed.
+No push or deployment. The four-RFC goal remains active with its recorded open acceptance gates.
+
+
+## Pruning-boundary cache and RPC coherence correction (2026-10-11 design audit)
+
+Two node regressions failed on the preceding import repair. A checkpoint-only row was cached under its
+block hash with no own delta. After context import moved the boundary below that block, a hot walk reused
+that row and reported a positive Safe head over the now-required but missing delta; a cold walk stopped
+at `MissingHistory`. Separately, a same-sink context advance reused the old readiness memo, still naming
+the earlier Finalized/checkpoint while a fresh evaluation withheld it. Log `/tmp/rfc12-cache-before.log`:
+**0 passed, 2 failed**, build 2m06s, runtime 0.30s, at the intended warm/cold and memo-equality assertions.
+
+The current checkpoint row now bypasses and evicts the ordinary row cache, is read/root-checked separately,
+and is never inserted as an ordinary row. Its missing delta is legitimate only at that boundary. Returning
+it above a later boundary loads its delta again; missing history stops certification, and restoration works
+without flushing all memory. Other required immutable rows retain their cache. Readiness memo reuse checks
+both the sink and the pruning point contained by the saved evaluation. Import's explicit post-commit reset
+and durable publication/incident history are unchanged. This adds constant checkpoint reads per walk rather
+than discarding the whole history cache on every virtual change; it is not a new release resource approval.
+
+Refreshing readiness exposed a companion RPC issue: `getPalwSettlement` paired readings by sink alone.
+A current evaluation at the same sink could contradict the still-committed snapshot before the next virtual
+publication. `NativeSafeReadinessV1::agrees_with_snapshot` now checks supported versions, the policy id derived
+from exact policy values, and shared generation/Safe/Finalized/stop statements. The RPC includes the advisory
+explanation only when that predicate holds; it omits contradictory advice and resumes after coherent
+publication. The predicate pairs already validated local readings; it is not a certificate/root verifier,
+a proof of complete context identity or a replacement for snapshot provenance. No wire fields change.
+
+The new tests use the actual context import API over fixture histories, normally executed node rows,
+synthetic frontier/useful-work facts and an intentionally removed checkpoint delta. They cover a same-sink
+advance, a context rewind, hot versus cold evaluation, restored data without memory flushing, coherent
+RPC-pairing eligibility before/after publication, and policy mismatch/u128 overflow. The pairing predicate
+is called by the production RPC filter, but these tests are not a live wRPC request or a full service
+transport drill. They do not validate the fixture history as a long-range proof, perform actual GC, crash
+an OS process, establish genuine Final-work soundness or close the external four-RFC gates. Existing
+publication/incident tests remain required; this cache repair must not erase an alarm or add selection weight.
+
+The core readiness comment claiming that restart forgets withdrawal is corrected to describe the durable
+publication row introduced earlier. RFC §4.3, the dormant implementation and the policy cost discussion now
+state the boundary/memo/RPC contracts. The first cache-only candidate passed 46 node/proof tests, but that
+smoke precedes RPC-pairing integration and is not counted again as final evidence.
+
+
+Final validation (Rust 1.93.0, macOS aarch64, jobs 2, dev/test debug 0, incremental 0):
+
+* `cargo test --locked -p kaspa-consensus --features evm --lib -- rfc12_ rfc0012_ t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225 hb_regression_the_same_chain_rule_colors_the_same_through_the_pruning_proof --test-threads=1`:
+  **46 passed, 0 failed, 1 ignored**, build 4m06s, runtime 18.12s; log
+  `/tmp/rfc12-cache-final-node.log`. Matrix 36, C-items 3, private-Final probe 1, store 2,
+  retirement unit 1, row-size unit 1, existing proof round trips 2. The ignored explicit 5,400-DAA
+  long probe is not a success. This final run includes the RPC-pairing/restoration assertions;
+  `/tmp/rfc12-cache-regression.log` was the earlier cache-only smoke (46 pass, 21.22s), not counted again.
+* `cargo test --locked -p kaspa-consensus-core --features evm --lib palw_native_readiness_v1 -- --test-threads=2`:
+  **11 passed, 0 failed, 0 ignored**, build 4m01s, runtime 0.00s as reported; log
+  `/tmp/rfc12-cache-core-readiness.log`. Includes generated-chain agreement and maturity/stop/wire properties.
+* `cargo test --locked -p kaspa-rpc-core -p kaspa-consensus-core --features kaspa-consensus-core/evm --lib rfc0012_response_v3_carries_the_readiness_and_older_wire_is_byte_identical_without_it -- --test-threads=1`:
+  RPC **1 passed, 0 failed, 0 ignored**, build 2m23s, runtime 0.00s as reported; log
+  `/tmp/rfc12-cache-wire.log`. Core matches zero tests in this command and adds no successes.
+  The existing codec test covers readiness present as v3 and absent with unchanged older bytes.
+* `cargo check --locked -p kaspad --features evm`: succeeded, 3m45s including artifact-lock wait;
+  log `/tmp/rfc12-cache-daemon.log`. This compiles the production service's coherence filter.
+
+The independent final passing total is **58**, excluding the long probe, zero-match selection and all
+smoke/failure runs. Serialized fields of ReadinessPolicyV1, FinalizedReadinessV1 and NativeSafeReadinessV1
+were mechanically compared to HEAD and are identical. Rustfmt for the modified small modules/new test
+block and `git diff --check` pass. Source logic was not edited after final validation. No network parameter,
+fingerprint, Round ticket, selection rule, public fence or deployment changed. The user requested a push;
+verified preceding commit `9f520f62a` was pushed and confirmed by ls-remote while this work was in flight,
+and this validated correction is then committed/pushed on the same audit branch. The four-RFC goal remains
+active; all previously recorded external soundness/economics/P2P/pruned/crash/resource gates remain open.

@@ -1,0 +1,166 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "modernbert-seqcls",
+  "doc": "ModernBertForSequenceClassification (classifiers, rerankers: tomaarsen/reranker-ModernBERT-*): the ModernBERT encoder, the pooled row ([CLS], or the mean of the real rows when `classifier_pooling` is `mean`) through `head` (dense, `classifier_activation`, LayerNorm) and `classifier` (always with a bias; `classifier_bias` is the head's dense layer's) to num_labels logits (OUTPUT_CLASSIFY_V1). HFX 2026-10-10.",
+  "extends": [
+    "modernbert"
+  ],
+  "match": {
+    "architectures": [
+      "ModernBertForSequenceClassification"
+    ],
+    "model_types": [
+      "modernbert"
+    ]
+  },
+  "vars": [
+    {
+      "name": "cbias",
+      "value": {
+        "$cfg": [
+          "classifier_bias",
+          false
+        ]
+      }
+    },
+    {
+      "name": "labels",
+      "value": {
+        "$let": [
+          "m",
+          {
+            "$cfg?": "id2label"
+          },
+          {
+            "$if": [
+              {
+                "$ne": [
+                  {
+                    "$var": "m"
+                  },
+                  null
+                ]
+              },
+              {
+                "$len": {
+                  "$var": "m"
+                }
+              },
+              {
+                "$cfg": [
+                  "num_labels",
+                  2
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "pooling",
+      "value": {
+        "$cfg": [
+          "classifier_pooling",
+          "cls"
+        ]
+      }
+    },
+    {
+      "name": "pooling_ok",
+      "value": {
+        "$check": [
+          {
+            "$or": [
+              {
+                "$eq": [
+                  {
+                    "$var": "pooling"
+                  },
+                  "cls"
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$var": "pooling"
+                  },
+                  "mean"
+                ]
+              }
+            ]
+          },
+          "classifier_pooling other than cls or mean is not modelled"
+        ]
+      }
+    },
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.tok_embeddings",
+        "embed_norm": "embeddings.norm",
+        "final_norm": "final_norm",
+        "attn.qkv": "layers.{L}.attn.Wqkv",
+        "attn.o": "layers.{L}.attn.Wo",
+        "norm.mix": "layers.{L}.attn_norm",
+        "mlp.gate_up": "layers.{L}.mlp.Wi",
+        "mlp.down": "layers.{L}.mlp.Wo",
+        "norm.ffn": "layers.{L}.mlp_norm",
+        "cls_pre": "head.dense",
+        "cls_pre_norm": "head.norm",
+        "cls_out": "classifier"
+      }
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "decoder.",
+        "drop."
+      ]
+    }
+  ],
+  "spec": {
+    "output": {
+      "Embedding": {
+        "$unset": true
+      },
+      "Classify": {
+        "labels": {
+          "$var": "labels"
+        },
+        "bias": true,
+        "pre": {
+          "bias": {
+            "$var": "cbias"
+          },
+          "act": {
+            "$act": {
+              "$cfg": [
+                "classifier_activation",
+                "gelu"
+              ]
+            }
+          },
+          "norm": {
+            "kind": "Layer",
+            "eps": {
+              "$var": "eps"
+            },
+            "gain": "W",
+            "bias": {
+              "$var": "nbias"
+            }
+          }
+        },
+        "mean": {
+          "$eq": [
+            {
+              "$var": "pooling"
+            },
+            "mean"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -22,6 +22,9 @@ use misaka_palw_kernel::seg_da::{assemble_position_v1, position_part_v1, positio
 use misaka_palw_kernel::seg_ledger::SegmentedClaimRecordV1;
 use std::cell::Cell;
 
+#[path = "real_scale_actual_native.rs"]
+mod actual_native;
+
 const SEG_MAX_POSITIONS: u32 = 8192;
 
 struct SegFixture {
@@ -85,7 +88,7 @@ impl SegMaterialV1 for SegDa<'_> {
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
         (!self.withhold.contains(&p) && p < self.claim.c.positions()).then(|| self.claim.c.position_path(p).1)
     }
-    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+    fn commitments(&self, _: &misaka_palw_tir::program::TirProgramV1, p: u32) -> Option<Vec<Vec<Digest>>> {
         if self.withhold.contains(&p) {
             return None;
         }
@@ -93,9 +96,11 @@ impl SegMaterialV1 for SegDa<'_> {
     }
 }
 
-/// Positions assembled from the parts the chain's blocks carry, with the bytes a verifier reads counted.
+/// Positions assembled from the parts the chain's blocks carry, with the bytes a verifier reads counted (and, G14-S, the served leaf
+/// hashes of every hiding value, when the reader kept them).
 struct FromBlocks {
     positions: BTreeMap<u32, misaka_palw_kernel::seg_da::AssembledPositionV1>,
+    hidden: BTreeMap<u32, misaka_palw_kernel::seg_da::HiddenLeavesV1>,
     read: Cell<u128>,
 }
 
@@ -109,8 +114,11 @@ impl SegMaterialV1 for FromBlocks {
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
         self.positions.get(&p).map(|(_, siblings, _)| siblings.clone())
     }
-    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+    fn commitments(&self, _: &misaka_palw_tir::program::TirProgramV1, p: u32) -> Option<Vec<Vec<Digest>>> {
         self.positions.get(&p).map(|(_, _, commitments)| commitments.clone())
+    }
+    fn hidden_leaves(&self, _: &misaka_palw_tir::program::TirProgramV1, p: u32) -> Option<misaka_palw_kernel::seg_da::HiddenLeavesV1> {
+        self.hidden.get(&p).cloned()
     }
 }
 
@@ -122,9 +130,14 @@ impl Net {
     /// [`Net::send`] for objects of any size: one carrier when the object fits [`SEG_CARRIER_CAP`], else its generic `ObjectChunk`s
     /// (judged on the assembled whole), each card's in order.
     async fn send_all(&mut self, items: Vec<(usize, Obj)>) -> Block {
+        self.send_all_with_cap(items, SEG_CARRIER_CAP).await
+    }
+
+    /// A smaller transport chunk for objects whose storage mass also constrains carriage.
+    async fn send_all_with_cap(&mut self, items: Vec<(usize, Obj)>, cap: usize) -> Block {
         let mut out = Vec::new();
         for (card, o) in items {
-            match kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&o, SEG_CARRIER_CAP).expect("chunks") {
+            match kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&o, cap).expect("chunks") {
                 None => out.push((card, o)),
                 Some(chunks) => out.extend(chunks.into_iter().map(|c| (card, c))),
             }
@@ -198,7 +211,11 @@ impl SegWorld {
     }
 
     /// The K2-TIR-v4 class registered on `net` through the real path (a Panel registration of it is dropped first).
-    async fn register(mut net: Net, f: SegFixture) -> SegWorld {
+    async fn register(net: Net, f: SegFixture) -> SegWorld {
+        SegWorld::register_with_cap(net, f, SEG_CARRIER_CAP).await
+    }
+
+    async fn register_with_cap(mut net: Net, f: SegFixture, cap: usize) -> SegWorld {
         // The class is derived-eligible for OPV through the test seam (no onboarding binding on this node), as the parent's are.
         crate::pipeline::virtual_processor::processor::kernel_route_test_opv_eligible_v1(seg_class_id(&f));
         net.beat_to(1).await;
@@ -208,7 +225,7 @@ impl SegWorld {
         let panel =
             K::RegisterClass { descriptor, program_bytes: f.program.encode(), plan: f.plan.clone(), param_commitments: f.pc.clone() };
         let o = net.route(1, &panel);
-        net.send(vec![(1, o)]).await;
+        net.send_all_with_cap(vec![(1, o)], cap).await;
         assert!(net.api().is_none_or(|k| k.ledger().unwrap().classes.is_empty()), "no Panel route for a K2-TIR-v4 class");
         let register = K::RegisterClassV2 {
             mode: VerificationModeV1::OptimisticPublicVerification,
@@ -218,7 +235,7 @@ impl SegWorld {
             param_commitments: f.pc.clone(),
         };
         let o = net.route(1, &register);
-        net.send(vec![(1, o)]).await;
+        net.send_all_with_cap(vec![(1, o)], cap).await;
         let class = seg_class_id(&f).as_bytes();
         assert!(net.ledger().classes.contains_key(&class), "the K2-TIR-v4 class registered through the real path under OPV");
         SegWorld { net, f, class, jobs: 0 }
@@ -341,7 +358,7 @@ impl SegWorld {
         tokens.push(g0);
         let mut values = trace.values;
         edit(&mut values);
-        let c = seg_commitments_of_trace_v1(&TraceV1 { values: values.clone(), inputs: Vec::new() });
+        let c = seg_commitments_of_trace_v1(&self.f.program, &TraceV1 { values: values.clone(), inputs: Vec::new() });
         let ledger = self.net.ledger();
         let class = &ledger.classes[&self.class];
         let evidence = build_segmented_evidence_v1(
@@ -368,7 +385,10 @@ impl SegWorld {
         assert_eq!(read.kind, "segmented");
         assert_eq!(read.ledger_root, api.ledger_root());
         let header: EvidenceHeaderV1 = borsh::from_slice(&read.record_header).expect("the class header");
-        SegmentedClaimRecordV1::from_bytes(&read.public_record).expect("the record").view(&header).expect("the record is the claim's")
+        SegmentedClaimRecordV1::from_bytes(&read.public_record)
+            .expect("the record")
+            .view_for_claim(&header, claim, &read.producer_bond)
+            .expect("the record is the requested claim's")
     }
 }
 
@@ -537,7 +557,7 @@ async fn g14_k2s_a_short_correct_claim_is_refused_before_it_can_earn_the_fixed_r
     let trace = trace_v1(&w.f.program, &w.f.params, &prompt).unwrap();
     let last = trace.values.last().unwrap().last().unwrap();
     let generated = vec![DecodeRuleV1::Greedy.select(&last[w.f.program.logits as usize]).unwrap()];
-    let c = seg_commitments_of_trace_v1(&trace);
+    let c = seg_commitments_of_trace_v1(&w.f.program, &trace);
     let ledger = w.net.ledger();
     let class = &ledger.classes[&w.class];
     let evidence = build_segmented_evidence_v1(
@@ -670,7 +690,7 @@ async fn g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_
             .expect("every part of the position is in the blocks and authentic");
         positions.insert(p, assembled);
     }
-    let chain = FromBlocks { positions, read: Cell::new(0) };
+    let chain = FromBlocks { positions, hidden: BTreeMap::new(), read: Cell::new(0) };
     let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &lie.tokens, &[1200]) else {
         panic!("the served lie is found")
     };
@@ -791,14 +811,16 @@ impl SegWorld {
             }
         }
         self.net.send_all(answers).await;
-        let mut positions = BTreeMap::new();
+        let (mut positions, mut hidden) = (BTreeMap::new(), BTreeMap::new());
         for &p in missing {
             let parts = served_parts_from_blocks(&self.net, &claim.id, p);
-            let assembled =
-                assemble_position_v1(&self.f.program, &view.segment_roots, view.positions, p, &parts).expect("authentic parts");
+            let (assembled, leaves) =
+                misaka_palw_kernel::seg_da::assemble_position_full_v1(&self.f.program, &view.segment_roots, view.positions, p, &parts)
+                    .expect("authentic parts");
             positions.insert(p, assembled);
+            hidden.insert(p, leaves);
         }
-        FromBlocks { positions, read: Cell::new(0) }
+        FromBlocks { positions, hidden, read: Cell::new(0) }
     }
 }
 
@@ -846,7 +868,7 @@ async fn g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_
     let params = w.f.params.clone();
     let art = move |j: u16, l: Option<u16>| params.tensors.get(&(j, l)).cloned();
     let own = misaka_palw_kernel::seg_detect::prepare_reexecution_v1(&view.context(), &art, &lie.tokens).unwrap();
-    let mut chain = FromBlocks { positions: BTreeMap::new(), read: Cell::new(0) };
+    let mut chain = FromBlocks { positions: BTreeMap::new(), hidden: BTreeMap::new(), read: Cell::new(0) };
     let mut demanded = std::collections::BTreeSet::new();
     let fault = loop {
         let r = misaka_palw_kernel::seg_detect::check_claim_by_reexecution_v1(
@@ -868,6 +890,7 @@ async fn g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_
                 assert!(demanded.len() <= 12 && demanded.len() <= 16, "the single bond's distinct DA units are bounded");
                 let served = w.demand_served_and_read(outsider, &lie, &missing).await;
                 chain.positions.extend(served.positions);
+                chain.hidden.extend(served.hidden);
             }
             other => panic!("the public prosecution stopped: {other:?}"),
         }
@@ -1265,7 +1288,7 @@ async fn g14_k2s_survives_a_node_restart_with_live_tiled_job_and_progress_rows()
         let parts = served_parts_from_blocks(&w.net, &lie.id, p);
         served.insert(p, assemble_position_v1(&w.f.program, &view.segment_roots, view.positions, p, &parts).expect("authentic"));
     }
-    let chain = FromBlocks { positions: served, read: Cell::new(0) };
+    let chain = FromBlocks { positions: served, hidden: BTreeMap::new(), read: Cell::new(0) };
     let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &lie.tokens, &[1200]) else { panic!("found") };
     w.file(outsider, &lie.id, &fault).await;
     assert!(w.net.ledger().claims[&lie.id].convicted, "convicted by the restarted node");
@@ -1377,13 +1400,14 @@ impl SegWorld {
         let mut values: Vec<Vec<Vec<Tensor>>> = vec![Vec::new(); prompt.len()];
         let mut g0 = 0u32;
         let started = std::time::Instant::now();
+        // G14-S: each value under its mode (a hiding value's flat hiding commitment, every other one's v3).
+        let modes = misaka_palw_kernel::seg_scope::seg_value_modes_v1(&self.f.program);
         misaka_palw_kernel::trace::trace_streaming_v1(&self.f.program, &self.f.params, prompt, &mut |p, honest| {
             let mut committed = honest.to_vec();
             if p == lie.0 {
                 bump(&mut committed[lie.1 as usize][lie.2 as usize], 0);
             }
-            commitments
-                .push(committed.iter().map(|o| o.iter().map(misaka_palw_kernel::merkle3::tensor_commitment_v3).collect()).collect());
+            commitments.push(misaka_palw_kernel::seg_scope::seg_position_commitments_v1(&modes, &committed));
             if p == last {
                 g0 = DecodeRuleV1::Greedy.select(&committed[post][logits]).expect("logits");
             }
@@ -1542,7 +1566,7 @@ impl SegWorld {
         if let Some((s, n)) = lie {
             bump(&mut values[0][s as usize][n as usize], 0);
         }
-        let c = seg_commitments_of_trace_v1(&TraceV1 { values: values.clone(), inputs: Vec::new() });
+        let c = seg_commitments_of_trace_v1(&self.f.program, &TraceV1 { values: values.clone(), inputs: Vec::new() });
         let ledger = self.net.ledger();
         let class = &ledger.classes[&self.class];
         let evidence = build_segmented_evidence_v1(
@@ -1660,3 +1684,113 @@ async fn g14_k2s_v5_an_encoder_class_on_the_node_convicts_its_lies_and_finalizes
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay of the v5 class's convictions and Final");
 }
+
+/// **G14-B on the real node: the worst-case pursuit of the deepest search completes before the class's liability horizon.** The wide
+/// class at 8,192 positions; a liar's claim; the producer and every other bond collude. Two public bonds outside them (the verifier's
+/// two cards, so the court's round of two positions rides one block) run the deepest search the class admits — ten probe demands and
+/// the court's round — on the schedule `misaka_palw_kernel::budget::seg_pursuit_schedule_v1` derives from the route's own policies,
+/// while the producer answers every demand on the LAST DAA of its window. Everything rides the mempool, the node's template and the
+/// chain block's fold; the claim reaches Final as early as the lifecycle lets it (between a served demand and Final the verifier waits
+/// out the dead zone). Every demand is admitted and served, and the filing convicts inside the horizon registration derived for the
+/// class (`ClassRowV1::liability_daa`) — at the derived DAAs exactly. The policy's own 200 could not have carried the last round.
+#[tokio::test]
+async fn g14b_the_worst_case_pursuit_completes_on_the_node_inside_the_class_horizon() {
+    use misaka_palw_kernel::budget::*;
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = SegWorld::new().await;
+    let (verifier, second) = (w.net.chain.bonds.len() - 1, w.net.chain.bonds.len() - 2);
+    let prompt: Vec<u32> = (0..2100u32).map(|i| (i * 7 + 1) % 32).collect();
+    let job = w.tiled_job(&prompt).await;
+    let (_, s, n) = matmul_at(&w.f.program, 0);
+    let lie_at = 1200u32;
+    let lie = w.claim(0, job, &prompt, Some((lie_at, s, n))).await;
+    let ledger = w.net.ledger();
+    let (policy, opv) = (ledger.policy, ledger.opv.policy.expect("an OPV network"));
+    let clock = PursuitClockV1::of_opv(&policy, &opv);
+    let class_liability = ledger.classes[&w.class].liability_daa;
+    let c = ledger.claims[&lie.id].committed_daa;
+    let window = ledger.demand_window_daa_v1(&lie.id, lie_at);
+    let fault = w.fault_from_published(&lie);
+    let filing = fault.to_bytes();
+    let filing_chunks = route_object_chunks_v1(filing.len() as u128 + FILE_PROOF_ENVELOPE_BYTES_V1 as u128);
+    let rounds = seg_search_rounds_v1(SEG_MAX_POSITIONS);
+    let plan = seg_pursuit_schedule_v1(&clock, rounds, window, filing_chunks);
+    assert_eq!(class_liability, policy.liability_daa.max(plan.liability_needed_daa), "registration derived the class horizon");
+    assert!(plan.liability_needed_daa > policy.liability_daa, "the deepest search outlasts the policy's own 200");
+    // An object sent at tip DAA d is folded at d+1 (the ledger reads it at the carrying block's DAA); a card's k-th object of one send at d+1+k.
+    const LAG: u64 = 1;
+    let probes = [1024u32, 1536, 1280, 1152, 1088, 1120, 1136, 1144, 1148, 1150];
+    let window_end = c + clock.window_daa;
+    let final_at = c + plan.final_daa;
+    let mut t = c + clock.first_step_daa;
+    let (mut last_demand, mut last_served) = (0u64, 0u64);
+    for round in 0..rounds as usize {
+        if t >= window_end {
+            t = t.max(final_at + 1); // the dead zone: the window is closed and Final not reached
+        }
+        let positions = if round < probes.len() { vec![probes[round]] } else { vec![lie_at - 1, lie_at] };
+        w.net.beat_to(t - LAG).await;
+        let demands: Vec<(usize, Obj)> = positions
+            .iter()
+            .zip([verifier, second])
+            .map(|(p, card)| {
+                (card, w.net.route(card, &K::FileDemand { demander: w.net.kid(card), claim: lie.id, stage: 0, position: *p }))
+            })
+            .collect();
+        w.net.send_all(demands).await;
+        let ledger = w.net.ledger();
+        for p in &positions {
+            let d = ledger.demands.get(&(lie.id, 0, *p)).unwrap_or_else(|| panic!("round {round}: the demand on {p} is open"));
+            assert_eq!((d.filed_daa, d.deadline_daa), (t, t + window), "round {round}");
+        }
+        // The producer stalls: the last answer lands on the deadline (two answers of one card ride two blocks).
+        let answers: Vec<(usize, Obj)> = positions
+            .iter()
+            .map(|p| {
+                let part = position_part_v1(&w.f.program, *p, &lie.values[*p as usize], lie.c.position_path(*p).1, 0).unwrap();
+                (0usize, w.net.route(0, &K::Respond { claim: lie.id, stage: 0, position: *p, bytes: borsh::to_vec(&part).unwrap() }))
+            })
+            .collect();
+        w.net.beat_to(t + window - LAG - (positions.len() as u64 - 1)).await;
+        w.net.send_all(answers).await;
+        let ledger = w.net.ledger();
+        for p in &positions {
+            let g = ledger.seg_progress.get(&(lie.id, 0, *p));
+            assert!(g.is_some_and(|g| g.complete_daa.is_some()), "round {round}: position {p} served on chain");
+        }
+        assert!(!ledger.claims[&lie.id].convicted && !matches!(ledger.claims[&lie.id].life.state, ClaimStateV1::Unavailable { .. }));
+        (last_demand, last_served) = (t, t + window);
+        t = last_served + clock.turnaround_daa;
+    }
+    let ledger = w.net.ledger();
+    let ClaimStateV1::Final { final_daa } = ledger.claims[&lie.id].life.state else {
+        panic!("Final during the pursuit: {:?}", ledger.claims[&lie.id].life.state)
+    };
+    let until = ledger.claims[&lie.id].liability_until.expect("a Final claim is liable");
+    assert_eq!((final_daa, until), (final_at, final_at + class_liability));
+    let file_at = last_served + clock.prove_daa + (filing_chunks - 1) * ROUTE_DAA_PER_CHUNK_V1;
+    assert!(file_at <= until);
+    w.net.beat_to(file_at - LAG).await;
+    let slashed = w.net.slashed(0);
+    w.file(verifier, &lie.id, &fault).await;
+    let ledger = w.net.ledger();
+    assert!(ledger.claims[&lie.id].convicted, "convicted inside the class horizon");
+    assert!(ledger.daa <= until && w.net.slashed(0) > slashed);
+    assert_eq!((last_demand - c, file_at - c, until - final_daa), (plan.last_demand_daa, plan.filed_daa, class_liability));
+    assert!(last_demand + window + policy.proof_grace_daa > final_daa + policy.liability_daa, "200 could not carry the last round");
+    eprintln!(
+        "[g14b] node: {rounds} rounds, Final +{}, last demand +{}, filed +{} <= horizon +{} (class liability {class_liability})",
+        final_daa - c,
+        last_demand - c,
+        file_at - c,
+        until - c
+    );
+}
+
+// Lane G14-R: the segmented pursuit resumes across a restart between `Respond` parts, a pruned import after a partial answer set, a
+// reorg that removes the demand and a full IBD mid-search: `real_scale/g14r_seg.rs`.
+mod g14r_seg;
+
+// Lane G14-K: kaspad's kernel-route verifier's segmented pipeline (the same `pursuit` functions the service calls), driven on the
+// canonical harness — a v4 class cannot be registered on kaspad's test network (derived OPV eligibility is codex's).
+mod g14k_service_core;

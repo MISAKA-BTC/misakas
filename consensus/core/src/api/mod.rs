@@ -977,6 +977,17 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    fn palw_reward_vesting_v2(
+        &self,
+        query: crate::palw_vesting_read_v1::PalwVestingQueryV1,
+        limit: usize,
+        after: Option<(u64, crate::Hash64)>,
+        exec_after: Option<crate::palw_reward_vesting_read_v2::PalwExecRewardCursorV2>,
+    ) -> Option<crate::palw_reward_vesting_read_v2::PalwRewardVestingReadV2> {
+        let _ = (query, limit, after, exec_after);
+        None
+    }
+
     /// **ADR-0160 §7.5: the capacity shadow at the tip** (`getPalwCapacityShadow`; kaspad's
     /// interval log): what the capacity formulas would reserve, weigh and allow for every live
     /// claim and bond, per ramp step, next to today's values — asked at the next block's DAA with
@@ -1629,6 +1640,18 @@ pub trait ConsensusApi: Send + Sync {
         Err("this consensus serves no PALW state proof".to_string())
     }
 
+    /// **RFC-0009 L2: the fork-choice openings of `blocks`' post-states** (op 203), with this node's sink and DAG tips. Empty `blocks`: the
+    /// sink and every tip. At most [`crate::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1`] blocks; each
+    /// entry is the opening or the reason this node cannot weigh that block (no V2 ruleset, a block it never held as a chain block, a
+    /// block too far behind the sink). The client checks every opening against a root it trusts; nothing here is believed as served.
+    fn palw_fork_choice_openings_v1(
+        &self,
+        blocks: &[BlockHash],
+    ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let _ = blocks;
+        Err("this consensus serves no fork-choice opening".to_string())
+    }
+
     /// Import: persist the pruning point's DNS/PoS-v2 overlay snapshot.
     fn import_pruning_point_overlay_snapshot(
         &self,
@@ -1682,6 +1705,13 @@ pub trait ConsensusApi: Send + Sync {
     /// Deliberately the sink's and not the header download hint's: the hint is a download
     /// heuristic that says so in its own name, and a consensus decision reading it reopens P0-5.
     fn get_palw_candidate_order_v2(&self) -> Option<crate::palw_fork_choice::PalwCandidateOrderV1> {
+        None
+    }
+
+    /// **ADR-0178 rule E: this consensus's standing for the IBD commit** — the PALW state at the block it is weighed at (its sink; a
+    /// staging consensus's imported pruning point, exactly as [`Self::get_palw_candidate_order_v2`] chooses) and that block's DAA
+    /// score. `None` off a ConsensusV2 network or where the state cannot be read; the IBD flow fails closed on it.
+    fn get_palw_rule_e_weighing_v1(&self) -> Option<crate::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1> {
         None
     }
 

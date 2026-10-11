@@ -1,0 +1,508 @@
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+warning: function `lanes_le_v1` is never used
+   --> misaka-palw-tir-exec/src/node/run.rs:114:15
+    |
+114 | pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
+    |               ^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir-exec` (lib) generated 1 warning
+warning: value assigned to `out_node` is never read
+   --> misaka-palw-tir-lower/src/lower/cross.rs:194:24
+    |
+194 |     let mut out_node = None;
+    |                        ^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir-lower` (lib) generated 1 warning
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/backend.rs:323:13
+    |
+323 |         let ctx_hash = job.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/backend.rs:1256:9
+     |
+1256 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2008:9
+     |
+2008 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2186:9
+     |
+2186 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2425:13
+     |
+2425 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2456:9
+     |
+2456 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2905:13
+     |
+2905 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3107:9
+     |
+3107 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3282:9
+     |
+3282 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3558:9
+     |
+3558 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4310:9
+     |
+4310 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4353:9
+     |
+4353 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4473:17
+     |
+4473 |             let ctx_hash = binding.job_context.context_hash();
+     |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4561:9
+     |
+4561 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4640:9
+     |
+4640 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:199:13
+    |
+199 |         let ctx_hash = ctx.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:437:9
+    |
+437 |     let ctx_hash = ctx.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/legs.rs:2056:9
+     |
+2056 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1043:9
+     |
+1043 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1351:9
+     |
+1351 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1734:9
+     |
+1734 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2078:14
+     |
+2078 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2215:14
+     |
+2215 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4336:13
+     |
+4336 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4386:9
+     |
+4386 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2885:13
+     |
+2885 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2935:9
+     |
+2935 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/segment_opening.rs:618:9
+    |
+618 |     let ctx_hash = job.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: `misaka-palw-base0` (lib) generated 28 warnings (run `cargo fix --lib -p misaka-palw-base0` to apply 28 suggestions)
+warning: unused imports: `PalwClassAdmissionCarriageV2` and `PalwPwuRuleV2`
+  --> misaka-palw-remote/src/bundle.rs:43:103
+   |
+43 |     PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwClassAdmissionCarriageV2,
+   |                                                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+44 |     PalwConsensusObjectV2, PalwPwuRuleV2, palw_class_registration_message_v2,
+   |                            ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-remote` (lib) generated 1 warning (run `cargo fix --lib -p misaka-palw-remote` to apply 1 suggestion)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-sdk)
+warning: unused doc comment
+   --> misaka-palw-sdk/src/tir_layout.rs:147:1
+    |
+147 | / /// **The search declare-layout runs**, over the gate `admit`: the logits tiles in order (the caller
+148 | | /// has dropped any whose close is estimated past the carriage); for each, the history tile from
+149 | | /// `h_chunk`, halved while the refusal is one a narrower history tile fixes; at each, the court's
+150 | | /// checkpoint interval (`interval`), halved while the refusal is one a narrower interval fixes — for a
+...   |
+153 | | /// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
+154 | | /// the one an operator acts on.
+    | |_-------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `routed_ok` is assigned to, but never used
+   --> misaka-palw-sdk/src/preflight/model.rs:284:9
+    |
+284 |     let mut routed_ok = false;
+    |         ^^^^^^^^^^^^^
+    |
+    = note: consider using `_routed_ok` instead
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:345:13
+    |
+345 |             routed_ok = false;
+    |             ^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:293:13
+    |
+293 |             routed_ok = true;
+    |             ^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: `misaka-palw-sdk` (lib) generated 4 warnings
+   Compiling kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/consensus)
+warning: unused imports: `PALW_FP_V3_VERSION` and `PalwReceiptSpendUnsignedV3`
+     --> consensus/src/pipeline/virtual_processor/tests.rs:14510:52
+      |
+14510 |     use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwReceiptSpendUnsignedV3, fp_quantum_ticket_v3};
+      |                                                    ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+      |
+      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `PalwVertexEquivocationV1`
+    --> consensus/src/pipeline/virtual_processor/tests/t12_capacity_verify.rs:1931:90
+     |
+1931 |     use kaspa_consensus_core::palw_vertex_v1::{PalwClaimRefV1, PalwVerificationVertexV1, PalwVertexEquivocationV1, PalwVertexLeafV1};
+     |                                                                                          ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:1349:9
+     |
+1349 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:1807:9
+     |
+1807 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:2148:9
+     |
+2148 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:2441:9
+     |
+2441 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+
+warning: value assigned to `total` is never read
+   --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/canonical.rs:381:24
+    |
+381 |         let (mut seen, mut total, mut pages) = (0u64, None, 0u32);
+    |                        ^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `len` and `clear` are never used
+  --> consensus/src/pipeline/virtual_processor/native_settlement.rs:75:19
+   |
+73 | impl NativeRowCache {
+   | ------------------- methods in this implementation
+74 |     #[cfg(test)]
+75 |     pub(super) fn len(&self) -> usize {
+   |                   ^^^
+...
+79 |     pub(super) fn clear(&mut self) {
+   |                   ^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `job` is never read
+   --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/conformance/exec_slices.rs:271:5
+    |
+270 | struct SliceClaim {
+    |        ---------- field in this struct
+271 |     job: KernelJobV1,
+    |     ^^^
+
+warning: field `sealed` is never read
+  --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/opv_bootstrap.rs:82:5
+   |
+73 | struct Onb {
+   |        --- field in this struct
+...
+82 |     sealed: bool,
+   |     ^^^^^^
+
+warning: `kaspa-consensus` (lib test) generated 10 warnings (run `cargo fix --lib -p kaspa-consensus --tests` to apply 6 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 09s
+     Running unittests src/lib.rs (target/debug/deps/kaspa_consensus-3ece596cc17e0f8c)
+
+running 5 tests
+2026-10-11 01:10:06.837+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:06.837+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:06.837+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:06.837+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:06.841+09:00 [INFO ] Importing the UTXO set of the pruning point e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708
+2026-10-11 01:10:06.841+09:00 [INFO ] Importing the UTXO set of the pruning point e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708
+2026-10-11 01:10:06.841+09:00 [INFO ] Importing the UTXO set of the pruning point e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708
+2026-10-11 01:10:06.841+09:00 [INFO ] Importing the UTXO set of the pruning point e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708
+2026-10-11 01:10:06.841+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:06.841+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:06.841+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:06.842+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:06.858+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:06.860+09:00 [INFO ] Importing the UTXO set of the pruning point e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708
+2026-10-11 01:10:06.861+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:06.899+09:00 [INFO ] Block 1c4525ac55b4ab5a2d5dcfb49903cf7c5f9511330839de62e88bcf79cdd5051da76bbedf94017039df770f8a7d316f6e20d75d85d9dc31e873cc3ada3431ab0c: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:06.906+09:00 [INFO ] Block d2d27ad3b00d3a33de4a4e3d27fe95aa4398d673817c658f5ca633c8ed819b2c1b46a9b7148c296b2a36bde9bbfabebdd71c07ad1cf1de8cedddf5bbaff09ebe: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:06.915+09:00 [INFO ] Block 18b37a9d3ceccc688b9eddb4ebeb67f96594e8e365530c034a2392315b82a61d006d4f77942569a2d4823e6490d9c1e6e7cc8100a7cfb715fd525e2919ff33b0: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:06.935+09:00 [INFO ] Block 19f053d425d5ac79ce03c72fd1f936aee2824fbc86648a698ea8043a7ca34d162a80b5fa5726e470a4e5ceff5290aabb20ca11a9580ace7de7512d76fb30ca61: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:06.955+09:00 [INFO ] Block ef624a53da18218e418919f2f3f59cf8923f825596fd70110302acbabea960fa8f083415ec16a43bab402988a86f5a4406727a1f72b99c74118b4acb16f88a30: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:06.967+09:00 [INFO ] Block cccb6df06df7d052703888f5641a1bfb258d60af369d7ba16c71e13090d0181eeda6e12e8b2af4ad7067a82fc70cf522c70cf3b8559cd79521935882f8de16f5: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:06.978+09:00 [INFO ] Block fbe10fedf3340996872c484b147ce66bc49651d63acef0e6a5cdee387daf52e533072ef20014fee1d017e7bc448e98802c1cec35e2dc376bdd229276cb6f412e: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:06.978+09:00 [INFO ] Block b5f4ea3ba2bdaeb9153782997421a8a70f59b85cd81172abce30208276becff298a6379b8d5d3392501185d2478ee5c02f84525c60523559eed94c5e8e88b272: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:07.026+09:00 [INFO ] Block a788dc13f580da9ce5e587faa7d72fc692a76b7ed26fefb2ceef56924a08843af2404e39ebd446ed68584b884969318fc6eb18d29426bb5c90a60613f38ca5d9: PALW lifecycle carried 1× ArtifactBindingChallengedV1
+2026-10-11 01:10:07.033+09:00 [INFO ] Block 218bb89fbef7fd0ee690dff16fadf033b91d83322d9d3cb8512c09129472305b47a205e48b127c7ef4d5222eab32a1a5c0566897bedbd8403318b28c69cbb7a2: a PALW lifecycle object was dropped, and the block stands: a kernel route move is refused: a binding is refuted by an operator other than its binder's
+2026-10-11 01:10:07.067+09:00 [INFO ] Block fc4e245ed49876f0823f5aba9875864c65f711e76cb9caac627a30b0a5384aeba3854a625276aaa769d13cdae8cddd98fa5ba7145417bccbe034ea32aeb7c77d: a PALW lifecycle object was dropped, and the block stands: a kernel route move is refused: the binding is already refuted
+2026-10-11 01:10:07.073+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:07.075+09:00 [INFO ] Importing the UTXO set of the pruning point e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708
+2026-10-11 01:10:07.076+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:07.076+09:00 [INFO ] Block aa35dc32290a323a5884eb40d296feae441e0891688ac718089c327848fd218da49a520649c48d25a84d726a8adc2d1f7f422ca51864e3d0af6de46e4e1a614b: a PALW lifecycle object was dropped, and the block stands: a kernel route move is refused: the carried commitments do not root to the bound kernel root
+2026-10-11 01:10:07.107+09:00 [INFO ] Block 18b37a9d3ceccc688b9eddb4ebeb67f96594e8e365530c034a2392315b82a61d006d4f77942569a2d4823e6490d9c1e6e7cc8100a7cfb715fd525e2919ff33b0: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:07.127+09:00 [INFO ] Block b5f4ea3ba2bdaeb9153782997421a8a70f59b85cd81172abce30208276becff298a6379b8d5d3392501185d2478ee5c02f84525c60523559eed94c5e8e88b272: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:07.145+09:00 [INFO ] Block a3a4058c3a74d834d0cd0e901610339e539d5fbdb522cd5fb32cc69f674b7ad182c6cae2a76e284be6424c3161c09a37c6297f15363c5dee07affdb9f15ad522: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:07.148+09:00 [INFO ] Block a788dc13f580da9ce5e587faa7d72fc692a76b7ed26fefb2ceef56924a08843af2404e39ebd446ed68584b884969318fc6eb18d29426bb5c90a60613f38ca5d9: PALW lifecycle carried 1× ArtifactBindingChallengedV1
+2026-10-11 01:10:07.156+09:00 [INFO ] Block d071c701f2b93e78fbd221c44b63b15a2581b0e7ba255e566544a51ab697f7d9f2b03d72058f7a4741b10d88aa0aa7a8558cab8b74a8002ea4959b59f370da1d: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:07.167+09:00 [INFO ] Block fc4e245ed49876f0823f5aba9875864c65f711e76cb9caac627a30b0a5384aeba3854a625276aaa769d13cdae8cddd98fa5ba7145417bccbe034ea32aeb7c77d: a PALW lifecycle object was dropped, and the block stands: a kernel route move is refused: the binding is already refuted
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::artifact_tile::artifact_binding_tile_false_bytes_convict_once_through_signed_carriers ... ok
+2026-10-11 01:10:07.229+09:00 [INFO ] Block fe2ad8aafa1a953a84e442bd176b965ee1bc798e4db576618613820e4be842f13fd0db09771ff755467427d1d92e0a16421f9f3220b5fbc5f45bb18792f456da: PALW lifecycle carried 6× ArtifactBindingChallengedV1
+2026-10-11 01:10:07.248+09:00 [INFO ] Block 805cd11e7ff9928e60c9413e0183e6000b4c0a7c1ac0ed14b709740b6045dac87417454948dd0e4c79aab41eecff73abf743ade9cad9dd72c524e4969a0312c8: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:07.291+09:00 [INFO ] Block b27660ac8c900972288be17a5bbb3552c8c3b70cc956c57e6ab3e07b0ea6434a9543eb9025935faeecf7462a6b12ef5ca9228cf357e5efef6315ef00cf1c9640: PALW lifecycle carried 1× ArtifactBindingChallengedV1
+2026-10-11 01:10:07.296+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:07.298+09:00 [INFO ] Importing the UTXO set of the pruning point e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708
+2026-10-11 01:10:07.298+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:07.302+09:00 [INFO ] Block f50770a3d1c7f0e5a6782c43bef4689fd1c9a31d9d90fd40a9a3dea245fe734069b1fb01d0d14f5fad81a47226057a84d482edf7e5c801158100c0b0261f19a6: PALW lifecycle carried 1× KernelBoundV1
+2026-10-11 01:10:07.329+09:00 [INFO ] Block d2d27ad3b00d3a33de4a4e3d27fe95aa4398d673817c658f5ca633c8ed819b2c1b46a9b7148c296b2a36bde9bbfabebdd71c07ad1cf1de8cedddf5bbaff09ebe: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:07.346+09:00 [INFO ] Block eb7cf4a37b8c9ad8e373dc6c60e34a9d59d3990a8324149af9a4b0054e3cd815c1206abe91baaf81e787a20d01c65d3e77f2d4c9400fa296f641e10b24740fb8: PALW lifecycle carried 1× ConformanceCommittedV1
+2026-10-11 01:10:07.348+09:00 [INFO ] Block cccb6df06df7d052703888f5641a1bfb258d60af369d7ba16c71e13090d0181eeda6e12e8b2af4ad7067a82fc70cf522c70cf3b8559cd79521935882f8de16f5: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:07.400+09:00 [INFO ] Block 04132333e92e510397fc08d9349d714b8d1c15420104f1e2452da975d1262988b67f2e1acad52cb9825c8fbf53f5ba66e8d019219de7e9d2657c55af354a5a05: PALW lifecycle carried 1× ConformanceEvidenceV1
+2026-10-11 01:10:07.416+09:00 [INFO ] Block 03526f4b33dd1cf0b8d7eaff2d4ed19d65f9def19333ca7a0a3aeeaae486fe3d0762e1226f852943f4b6923544a263b35808ec1f4c459e44845f3c6c80d67b17: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:07.427+09:00 [INFO ] Block fe2ad8aafa1a953a84e442bd176b965ee1bc798e4db576618613820e4be842f13fd0db09771ff755467427d1d92e0a16421f9f3220b5fbc5f45bb18792f456da: PALW lifecycle carried 6× ArtifactBindingChallengedV1
+2026-10-11 01:10:07.446+09:00 [INFO ] Block b27660ac8c900972288be17a5bbb3552c8c3b70cc956c57e6ab3e07b0ea6434a9543eb9025935faeecf7462a6b12ef5ca9228cf357e5efef6315ef00cf1c9640: PALW lifecycle carried 1× ArtifactBindingChallengedV1
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::artifact_tile::artifact_binding_tile_invalid_flood_spends_shared_budget_and_cannot_slash_honest_binder ... ok
+2026-10-11 01:10:07.470+09:00 [INFO ] Block 12a36b241c0d3ea30434e013ea54b8a50dd71e27bedaec6a336fda52da9c488139984156933e224ee6407ef16ee77ba5579bf524444397e32aa1ff7cd79e0e05: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:07.593+09:00 [INFO ] Block 4eb123755f24641e187f7de337eb386412a3dd5fba6790124c2c44e75d40d2cd66aad2ad7fe00bb872e97305ae5ef3d44bc7f907682ea7d441fd9a4588fe53e6: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:07.607+09:00 [INFO ] Block 58ca0ed18c6b1baf3c8e9a526938431bc91b15fea7818cc7e4017f4621e3b7d42a14c00775899c0608a58c83ef56e881ffe18b6b0721822994eb01d823ab4b84: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:07.674+09:00 [INFO ] Block 7144c343aeb8460230a1ed29a2323ba1548fbe2bd42e7e1b6fff79800bd75767bb2ed1b1c58e7eb6d66214dc7ffa9a60c416d7b667d5cfad82ef4c9a469eed5c: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:07.733+09:00 [INFO ] Block 41d1b12ce4033cbbe806a24af8b79174fcd6742356ab56c053280422941384684e43df7c759faed61eb1cc2c726f095cb1eb8a4eeead82b30f7467c7a6482fcb: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:07.898+09:00 [INFO ] Block 79ce6991b4eefe6378124e0e87d0181875db319d6d411f88295b3c24fcd98dc72f019710a5237a4d184c66aa783bea8717f7ae2fb55aa73090b92014a5b1d967: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:07.940+09:00 [INFO ] Block bc84e6751b460bdee7ab1fd3e8770fb99ae67c2a25f69023aa9330801b95fb812828e2e12adcfd95e21588721f8aa919cd1f1050e014ddb1946da567bcd29328: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:08.026+09:00 [INFO ] Block 12ec48be39c07afd8d1f4ea9647657661ca207a3fcb82e8a60f5a8f69d83a5f08a50672dc2dfc00cb87e2625a9c00f04e0f8627d58822c690f0bf2907c681a18: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:08.036+09:00 [INFO ] Block bf189ed03fc7775dbbbef130b659b05d58658201988b93d6a948928f956b89320ac22d0f74d3cc4efd259151b625e464193c3ef4209a1656bab0828a1f000c5f: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:08.046+09:00 [INFO ] Block a05efa10466635bd7be872dce867c5faf3f537cb9ec6b83206616d40f0cb59369068a2225bae289f9bd4881a27e583b4f886fbfc42ea088e9c398a9809d9a227: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:08.058+09:00 [INFO ] Block 96d8ac823f144a4a6da2d7d980ac10498b046409cd58baac665d04c741cbbf085657bc0a66997c242f8f9ef60378f98e142a6a985ea1e34d44afc3c853527b86: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:08.245+09:00 [INFO ] Block bd0fe685741756beb5e934375dfebc35871eb5fd8cd35f5e2f71982cd2000dfc62974c8f44774f8bed07c6e9c44221ed863d2cad53908be1445b9d146e1b20a7: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:08.315+09:00 [INFO ] Block de5cb2f391a652fda4016cdf700c5a58306dd4eada93b39e7a1ab7f3eb7b1575423a5e8acaef346bce94ae446ebcad6fe71050edc6f6351d1fee46f570db20a7: PALW lifecycle carried 1× KernelBoundV1
+2026-10-11 01:10:08.381+09:00 [INFO ] Block 9194c05bd2294d1b7ca645067426b20cd4ce83d689c4b55e8aed4fd3f259aaddc013edc18f8d29050b62da3f85001cf27e9dffa273b6b379db5007d42e1577b0: PALW lifecycle carried 1× ConformanceCommittedV1
+2026-10-11 01:10:08.509+09:00 [INFO ] Block 30edf029491740af3601bb1d9a9d299db26d62606ae4fb8fe8dba16026380e4b211bcfa054a003d6d072930df9f9b0bbadf095e6cda4175228c8847c91e6a8d0: PALW lifecycle carried 2× KernelRouteV1
+2026-10-11 01:10:08.627+09:00 [INFO ] Block 619fe82cc61e11f45254614f27a73b8a738788de44d1e66f065a5e974ee03b8c6be27e93b1ace52196012202ad0220e3f0feb39e3d74229ad32d1d968f2cd9fa: PALW lifecycle carried 2× KernelRouteV1
+2026-10-11 01:10:09.091+09:00 [INFO ] Block a5ea376fbbb1e2bc7c3b6dd4237b6de09c5e338f0ba55c47cc36446705ca95ce00499e174cd79ad2d493ba2eab340bdf6eb595749790085c71fce8972d7d6504: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:09.138+09:00 [INFO ] Block 8ce0c0ae9db7fceec6b4618e4317069ce6f8bf0bef871fdec8b70dfc7dc2ce3ec63f80942a6d0c788828906c20bf74d3a9c1f479dc834b9ce7bf7449027b13c4: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:09.236+09:00 [INFO ] Block b083213da84e574ceeaaffd146cc160ec9b2110aca8611db5dcb9bb2c55dcea37ab1a52ce5884bef4f28c1b0cfcbc5dadc6a9fa0a3ba51587563d9c828ddc925: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:09.247+09:00 [INFO ] Block 23a75a885539ab4dffce48599d9b9a10fff1b9b543427d64cbf295ff7e2be0c72dbc344741ad2587dd9643fc396772073df914f686c61d4cf0c8648ae3803546: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:09.258+09:00 [INFO ] Block cc87497b0d7b6d0b78bbd31b2473853bde300b7507aa955f5038445c76daafac42bbf4196dbb367aa7fb3b805c994f340185b4ea651048a330c9786569a57757: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:09.270+09:00 [INFO ] Block 3581d036e4c8f856545c794b1b6e8987708aa66b18bd7c9d5ac21a82dafcf13d0015b356d38663f6650eeb2e84ca4343722dde1711064a28c76add04bc8a413e: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:09.353+09:00 [INFO ] Block 38563d663cac9d4859b6400ead4d6a841663dbfca02203769c4947025e8236a7593b8a5d9600c7836e259c84d126b98dfa197b7090416dbe2322ce0832999f5a: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:09.364+09:00 [INFO ] Block 6c0a72c7479ef5efe0fe4270e6966e1a99ade02263c0690d3820ca4533fe78e174278082bf9575bdc5c52e97001513235344a1e3832cff447fc9c9d7356026a0: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:09.375+09:00 [INFO ] Block 5162315b1d67c97560b89345910811f6f8fb9b09276dd86f3a76b12a96fbdf6461037fb99bda7eca14969d239ac2de8ae90137fb707757542ee28e548e291b38: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:09.386+09:00 [INFO ] Block f1776bbdeb6a779f46677314e6260e493e58488c4cb3712a799d15b7f9ec889d4fcf3bb6747bc09bf6dd84491c9e39ef4bb4d82dd0891811e1360344313d82b3: a PALW lifecycle object was dropped, and the block stands: a kernel route move is refused: the binding is already refuted
+2026-10-11 01:10:09.690+09:00 [INFO ] Block 6a265aea31843f50fd1e2e862b479c1f6b682ab385550814db6572ca53c29d1aa95a770a520f183a99345c9c2bfa9578a6d25cec8b26159952aec88905e1a304: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:09.703+09:00 [INFO ] Block 5e0d16a633d084d953ff6bf72b01adcefd9c2523d2e5bad19fe113bb75d8c2d32d09c3c6dc35b8834f7ee1c693738ef50d59d3e92f3eb38889b41e0fa341b287: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:09.716+09:00 [INFO ] Block 1e2eb548e31b3455a842ac7a9b0a994737a2dced86d5b483bae49d8186a5af68fe16db8da9811ca2a586f486586858eaf79adfef8fdf0becc5627eed51d08a52: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:09.730+09:00 [INFO ] Block eccfa1d2fa580fefd5b9f9eada41f31f7e29141e557eeb212a978ce8e87680c89f4ca066d9d43fca08cc3a72dc84c9c46d0da9b4123a24ca48922bfd62bc71df: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:09.858+09:00 [INFO ] Block 769f12233cc48c68f4e2eeb96c7f9171a5f80bd85b385593c39f6992da79f910353fe1dd29479228e54b79f6f69589842ace58c59801342c129e12c2d855c51d: PALW lifecycle carried 1× ConformanceEvidenceV1
+2026-10-11 01:10:10.119+09:00 [INFO ] Block e7da777d699b9b8d7cdf9eafc4d82501e5914baf55106f0e8000f90cb577be40b3f2b46941bdbd503399dee553448f09d207f52d85d35091c2f5e48bac7d45ea: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:11.436+09:00 [INFO ] Block 34c010664b9adba23fa9ed793e0f6305bcb321f56c36ad268adcd7e78fdca725bb7f367f43655bbfea6ce7a0000f7144368f1bff9337970950dbef95852bdfc1: PALW lifecycle carried 1× KernelBoundV1
+2026-10-11 01:10:11.443+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:11.445+09:00 [INFO ] Importing the UTXO set of the pruning point e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708
+2026-10-11 01:10:11.446+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:12.423+09:00 [INFO ] Block 79ce6991b4eefe6378124e0e87d0181875db319d6d411f88295b3c24fcd98dc72f019710a5237a4d184c66aa783bea8717f7ae2fb55aa73090b92014a5b1d967: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:12.445+09:00 [INFO ] Block bc84e6751b460bdee7ab1fd3e8770fb99ae67c2a25f69023aa9330801b95fb812828e2e12adcfd95e21588721f8aa919cd1f1050e014ddb1946da567bcd29328: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:12.466+09:00 [INFO ] Block 12ec48be39c07afd8d1f4ea9647657661ca207a3fcb82e8a60f5a8f69d83a5f08a50672dc2dfc00cb87e2625a9c00f04e0f8627d58822c690f0bf2907c681a18: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:12.477+09:00 [INFO ] Block bf189ed03fc7775dbbbef130b659b05d58658201988b93d6a948928f956b89320ac22d0f74d3cc4efd259151b625e464193c3ef4209a1656bab0828a1f000c5f: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:12.487+09:00 [INFO ] Block a05efa10466635bd7be872dce867c5faf3f537cb9ec6b83206616d40f0cb59369068a2225bae289f9bd4881a27e583b4f886fbfc42ea088e9c398a9809d9a227: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:12.499+09:00 [INFO ] Block 96d8ac823f144a4a6da2d7d980ac10498b046409cd58baac665d04c741cbbf085657bc0a66997c242f8f9ef60378f98e142a6a985ea1e34d44afc3c853527b86: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:12.532+09:00 [INFO ] Block ed8881cd742fc24d8145b3057fab26f09b8b96742312f3d2695e69a79f95f1e2188a5d633cbd7a4e00e1e582584acb50f4ab977d7e0d461dfa567112586a6edf: a PALW lifecycle object was dropped, and the block stands: a kernel route move is refused: the binding is already refuted
+2026-10-11 01:10:12.542+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:12.543+09:00 [INFO ] Importing the UTXO set of the pruning point e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708
+2026-10-11 01:10:12.544+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:12.577+09:00 [INFO ] Block 19f053d425d5ac79ce03c72fd1f936aee2824fbc86648a698ea8043a7ca34d162a80b5fa5726e470a4e5ceff5290aabb20ca11a9580ace7de7512d76fb30ca61: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:12.596+09:00 [INFO ] Block fbe10fedf3340996872c484b147ce66bc49651d63acef0e6a5cdee387daf52e533072ef20014fee1d017e7bc448e98802c1cec35e2dc376bdd229276cb6f412e: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:12.616+09:00 [INFO ] Block 218bb89fbef7fd0ee690dff16fadf033b91d83322d9d3cb8512c09129472305b47a205e48b127c7ef4d5222eab32a1a5c0566897bedbd8403318b28c69cbb7a2: a PALW lifecycle object was dropped, and the block stands: a kernel route move is refused: a binding is refuted by an operator other than its binder's
+2026-10-11 01:10:12.636+09:00 [INFO ] Block aa35dc32290a323a5884eb40d296feae441e0891688ac718089c327848fd218da49a520649c48d25a84d726a8adc2d1f7f422ca51864e3d0af6de46e4e1a614b: a PALW lifecycle object was dropped, and the block stands: a kernel route move is refused: the carried commitments do not root to the bound kernel root
+2026-10-11 01:10:12.655+09:00 [INFO ] Block a3a4058c3a74d834d0cd0e901610339e539d5fbdb522cd5fb32cc69f674b7ad182c6cae2a76e284be6424c3161c09a37c6297f15363c5dee07affdb9f15ad522: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:12.664+09:00 [INFO ] Block d071c701f2b93e78fbd221c44b63b15a2581b0e7ba255e566544a51ab697f7d9f2b03d72058f7a4741b10d88aa0aa7a8558cab8b74a8002ea4959b59f370da1d: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:12.826+09:00 [INFO ] Block 03526f4b33dd1cf0b8d7eaff2d4ed19d65f9def19333ca7a0a3aeeaae486fe3d0762e1226f852943f4b6923544a263b35808ec1f4c459e44845f3c6c80d67b17: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:12.889+09:00 [INFO ] Block 396f92b9e4192c722c9fe76e872b9f5de449c241406cfc46d9fe5e90db8aa10d0a0b3ad29f7b73a19cd960c34ef63506dbb138a98ef7b2394abb5a0a79a5a758: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:12.978+09:00 [INFO ] Block 9195debea32e5bb2f3579f43107351df98e04bc1a5ce74c7d6c10aefa3b3520cc7076546e8d6c42a856c7c0f82b5a7373955b1695e73e7d3582e5355c4f13eac: PALW lifecycle carried 1× ArtifactBindingChallengedV1
+2026-10-11 01:10:13.086+09:00 [INFO ] Block 8f52707c8a8c78ec06d3a24312fb6c36ee8bfe491bb8faf77b5dca1a243d272cf48332e473fe90b83ca3dc5d68f6e3ba8c089dd070d256918bfda1d1ee163c95: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:13.211+09:00 [INFO ] Block 778a280a3a700087a2fe2cd152d9c69420bef176a35340ff7187cbfd0683e15977c28b1d86f74093bf35b7ae7ea4d999cdc82737f7e258900c43941f63216126: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:13.334+09:00 [INFO ] Block 151d445666ce44f42908d14146d3f8450aee337ee19a2c89f34b88ca2d3f38f57579e39bc2817854ed3befcdbc0558d63cc75e1a9c7fa8ef2ba4b24b32d78e20: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:13.348+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:13.350+09:00 [INFO ] Importing the UTXO set of the pruning point e0ccec53cbf9b481a07bb70e1b47eee7c01f832c7cd0240b123d9e0e16e78cceda99830ee098a743a16462ec0a11167a92b513a9518fd58102c33e156bbbb708
+2026-10-11 01:10:13.350+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-11 01:10:13.384+09:00 [INFO ] Block 1c4525ac55b4ab5a2d5dcfb49903cf7c5f9511330839de62e88bcf79cdd5051da76bbedf94017039df770f8a7d316f6e20d75d85d9dc31e873cc3ada3431ab0c: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:13.404+09:00 [INFO ] Block ef624a53da18218e418919f2f3f59cf8923f825596fd70110302acbabea960fa8f083415ec16a43bab402988a86f5a4406727a1f72b99c74118b4acb16f88a30: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:13.506+09:00 [INFO ] Block a5ea376fbbb1e2bc7c3b6dd4237b6de09c5e338f0ba55c47cc36446705ca95ce00499e174cd79ad2d493ba2eab340bdf6eb595749790085c71fce8972d7d6504: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:13.527+09:00 [INFO ] Block 8ce0c0ae9db7fceec6b4618e4317069ce6f8bf0bef871fdec8b70dfc7dc2ce3ec63f80942a6d0c788828906c20bf74d3a9c1f479dc834b9ce7bf7449027b13c4: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:13.547+09:00 [INFO ] Block b083213da84e574ceeaaffd146cc160ec9b2110aca8611db5dcb9bb2c55dcea37ab1a52ce5884bef4f28c1b0cfcbc5dadc6a9fa0a3ba51587563d9c828ddc925: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:13.555+09:00 [INFO ] Block 805cd11e7ff9928e60c9413e0183e6000b4c0a7c1ac0ed14b709740b6045dac87417454948dd0e4c79aab41eecff73abf743ade9cad9dd72c524e4969a0312c8: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:13.557+09:00 [INFO ] Block 23a75a885539ab4dffce48599d9b9a10fff1b9b543427d64cbf295ff7e2be0c72dbc344741ad2587dd9643fc396772073df914f686c61d4cf0c8648ae3803546: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:13.567+09:00 [INFO ] Block cc87497b0d7b6d0b78bbd31b2473853bde300b7507aa955f5038445c76daafac42bbf4196dbb367aa7fb3b805c994f340185b4ea651048a330c9786569a57757: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:13.576+09:00 [INFO ] Block f50770a3d1c7f0e5a6782c43bef4689fd1c9a31d9d90fd40a9a3dea245fe734069b1fb01d0d14f5fad81a47226057a84d482edf7e5c801158100c0b0261f19a6: PALW lifecycle carried 1× KernelBoundV1
+2026-10-11 01:10:13.579+09:00 [INFO ] Block 3581d036e4c8f856545c794b1b6e8987708aa66b18bd7c9d5ac21a82dafcf13d0015b356d38663f6650eeb2e84ca4343722dde1711064a28c76add04bc8a413e: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:13.598+09:00 [INFO ] Block eb7cf4a37b8c9ad8e373dc6c60e34a9d59d3990a8324149af9a4b0054e3cd815c1206abe91baaf81e787a20d01c65d3e77f2d4c9400fa296f641e10b24740fb8: PALW lifecycle carried 1× ConformanceCommittedV1
+2026-10-11 01:10:13.599+09:00 [INFO ] Block 38563d663cac9d4859b6400ead4d6a841663dbfca02203769c4947025e8236a7593b8a5d9600c7836e259c84d126b98dfa197b7090416dbe2322ce0832999f5a: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:13.609+09:00 [INFO ] Block 6c0a72c7479ef5efe0fe4270e6966e1a99ade02263c0690d3820ca4533fe78e174278082bf9575bdc5c52e97001513235344a1e3832cff447fc9c9d7356026a0: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:13.621+09:00 [INFO ] Block 5162315b1d67c97560b89345910811f6f8fb9b09276dd86f3a76b12a96fbdf6461037fb99bda7eca14969d239ac2de8ae90137fb707757542ee28e548e291b38: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:13.625+09:00 [INFO ] Block 04132333e92e510397fc08d9349d714b8d1c15420104f1e2452da975d1262988b67f2e1acad52cb9825c8fbf53f5ba66e8d019219de7e9d2657c55af354a5a05: PALW lifecycle carried 1× ConformanceEvidenceV1
+2026-10-11 01:10:13.632+09:00 [INFO ] Block f1776bbdeb6a779f46677314e6260e493e58488c4cb3712a799d15b7f9ec889d4fcf3bb6747bc09bf6dd84491c9e39ef4bb4d82dd0891811e1360344313d82b3: a PALW lifecycle object was dropped, and the block stands: a kernel route move is refused: the binding is already refuted
+2026-10-11 01:10:13.652+09:00 [INFO ] Block 12a36b241c0d3ea30434e013ea54b8a50dd71e27bedaec6a336fda52da9c488139984156933e224ee6407ef16ee77ba5579bf524444397e32aa1ff7cd79e0e05: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:13.683+09:00 [INFO ] Block 4eb123755f24641e187f7de337eb386412a3dd5fba6790124c2c44e75d40d2cd66aad2ad7fe00bb872e97305ae5ef3d44bc7f907682ea7d441fd9a4588fe53e6: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:13.695+09:00 [INFO ] Block 58ca0ed18c6b1baf3c8e9a526938431bc91b15fea7818cc7e4017f4621e3b7d42a14c00775899c0608a58c83ef56e881ffe18b6b0721822994eb01d823ab4b84: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:13.728+09:00 [INFO ] Block 7144c343aeb8460230a1ed29a2323ba1548fbe2bd42e7e1b6fff79800bd75767bb2ed1b1c58e7eb6d66214dc7ffa9a60c416d7b667d5cfad82ef4c9a469eed5c: PALW lifecycle carried 1× ClassRegisteredTirV1
+2026-10-11 01:10:13.751+09:00 [INFO ] Block 41d1b12ce4033cbbe806a24af8b79174fcd6742356ab56c053280422941384684e43df7c759faed61eb1cc2c726f095cb1eb8a4eeead82b30f7467c7a6482fcb: PALW lifecycle carried 1× ArtifactBoundV1
+2026-10-11 01:10:13.812+09:00 [INFO ] Block 6a265aea31843f50fd1e2e862b479c1f6b682ab385550814db6572ca53c29d1aa95a770a520f183a99345c9c2bfa9578a6d25cec8b26159952aec88905e1a304: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:13.823+09:00 [INFO ] Block 5e0d16a633d084d953ff6bf72b01adcefd9c2523d2e5bad19fe113bb75d8c2d32d09c3c6dc35b8834f7ee1c693738ef50d59d3e92f3eb38889b41e0fa341b287: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:13.835+09:00 [INFO ] Block 1e2eb548e31b3455a842ac7a9b0a994737a2dced86d5b483bae49d8186a5af68fe16db8da9811ca2a586f486586858eaf79adfef8fdf0becc5627eed51d08a52: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:13.848+09:00 [INFO ] Block eccfa1d2fa580fefd5b9f9eada41f31f7e29141e557eeb212a978ce8e87680c89f4ca066d9d43fca08cc3a72dc84c9c46d0da9b4123a24ca48922bfd62bc71df: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:14.077+09:00 [INFO ] Block bd0fe685741756beb5e934375dfebc35871eb5fd8cd35f5e2f71982cd2000dfc62974c8f44774f8bed07c6e9c44221ed863d2cad53908be1445b9d146e1b20a7: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:14.103+09:00 [INFO ] Block de5cb2f391a652fda4016cdf700c5a58306dd4eada93b39e7a1ab7f3eb7b1575423a5e8acaef346bce94ae446ebcad6fe71050edc6f6351d1fee46f570db20a7: PALW lifecycle carried 1× KernelBoundV1
+2026-10-11 01:10:14.130+09:00 [INFO ] Block 9194c05bd2294d1b7ca645067426b20cd4ce83d689c4b55e8aed4fd3f259aaddc013edc18f8d29050b62da3f85001cf27e9dffa273b6b379db5007d42e1577b0: PALW lifecycle carried 1× ConformanceCommittedV1
+2026-10-11 01:10:14.166+09:00 [INFO ] Block 30edf029491740af3601bb1d9a9d299db26d62606ae4fb8fe8dba16026380e4b211bcfa054a003d6d072930df9f9b0bbadf095e6cda4175228c8847c91e6a8d0: PALW lifecycle carried 2× KernelRouteV1
+2026-10-11 01:10:14.203+09:00 [INFO ] Block 619fe82cc61e11f45254614f27a73b8a738788de44d1e66f065a5e974ee03b8c6be27e93b1ace52196012202ad0220e3f0feb39e3d74229ad32d1d968f2cd9fa: PALW lifecycle carried 2× KernelRouteV1
+2026-10-11 01:10:14.241+09:00 [INFO ] Block e7da777d699b9b8d7cdf9eafc4d82501e5914baf55106f0e8000f90cb577be40b3f2b46941bdbd503399dee553448f09d207f52d85d35091c2f5e48bac7d45ea: PALW lifecycle carried 1× ObjectChunk
+2026-10-11 01:10:14.648+09:00 [INFO ] Block 34c010664b9adba23fa9ed793e0f6305bcb321f56c36ad268adcd7e78fdca725bb7f367f43655bbfea6ce7a0000f7144368f1bff9337970950dbef95852bdfc1: PALW lifecycle carried 1× KernelBoundV1
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::artifact_tile::artifact_binding_tile_actual_weights_register_refute_and_prepare_without_identity_hooks ... ok
+2026-10-11 01:10:14.961+09:00 [INFO ] Block 769f12233cc48c68f4e2eeb96c7f9171a5f80bd85b385593c39f6992da79f910353fe1dd29479228e54b79f6f69589842ace58c59801342c129e12c2d855c51d: PALW lifecycle carried 1× ConformanceEvidenceV1
+2026-10-11 01:10:16.067+09:00 [INFO ] Block ed8881cd742fc24d8145b3057fab26f09b8b96742312f3d2695e69a79f95f1e2188a5d633cbd7a4e00e1e582584acb50f4ab977d7e0d461dfa567112586a6edf: a PALW lifecycle object was dropped, and the block stands: a kernel route move is refused: the binding is already refuted
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_onboarding_a_false_artifact_binding_is_refuted_by_two_disagreeing_openings ... ok
+2026-10-11 01:10:16.763+09:00 [INFO ] Block 396f92b9e4192c722c9fe76e872b9f5de449c241406cfc46d9fe5e90db8aa10d0a0b3ad29f7b73a19cd960c34ef63506dbb138a98ef7b2394abb5a0a79a5a758: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:16.813+09:00 [INFO ] Block 9195debea32e5bb2f3579f43107351df98e04bc1a5ce74c7d6c10aefa3b3520cc7076546e8d6c42a856c7c0f82b5a7373955b1695e73e7d3582e5355c4f13eac: PALW lifecycle carried 1× ArtifactBindingChallengedV1
+2026-10-11 01:10:16.866+09:00 [INFO ] Block 8f52707c8a8c78ec06d3a24312fb6c36ee8bfe491bb8faf77b5dca1a243d272cf48332e473fe90b83ca3dc5d68f6e3ba8c089dd070d256918bfda1d1ee163c95: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:16.917+09:00 [INFO ] Block 778a280a3a700087a2fe2cd152d9c69420bef176a35340ff7187cbfd0683e15977c28b1d86f74093bf35b7ae7ea4d999cdc82737f7e258900c43941f63216126: PALW lifecycle carried 1× KernelRouteV1
+2026-10-11 01:10:16.969+09:00 [INFO ] Block 151d445666ce44f42908d14146d3f8450aee337ee19a2c89f34b88ca2d3f38f57579e39bc2817854ed3befcdbc0558d63cc75e1a9c7fa8ef2ba4b24b32d78e20: PALW lifecycle carried 1× KernelRouteV1
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refuted ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 798 filtered out; finished in 10.30s

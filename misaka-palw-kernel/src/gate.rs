@@ -59,6 +59,45 @@ pub struct ProsecutionBoundsV1 {
     pub deadline_daa: u64,
 }
 
+/// Structural claim admission shares the court's deterministic byte-work tariff. This is not
+/// producer execution work, PWU or economic credit. Price the largest registered carrier and the
+/// public class schema read by the structure checker, before cloning or authenticating a trace.
+/// Keep this derived value outside the frozen plan/bounds wire grammar.
+pub fn claim_admission_work_v1(bounds: &ProsecutionBoundsV1, schema_bytes: u128) -> Result<u64, String> {
+    bounds
+        .max_commit_bytes
+        .checked_add(CLAIM_CARRIER_OVERHEAD_BYTES_V1)
+        .and_then(|bytes| bytes.checked_add(schema_bytes))
+        .and_then(|bytes| bytes.checked_mul(16))
+        .and_then(|work| u64::try_from(work).ok())
+        .ok_or_else(|| "claim admission byte work exceeds u64".into())
+}
+
+pub const CLAIM_CARRIER_OVERHEAD_BYTES_V1: u128 = 1 << 16;
+
+/// A shared upper bound for a single-program schema, independent of which unused artifact
+/// parameters the registrar supplies. Each declared commitment instance has at most 69 wire bytes.
+pub fn program_claim_admission_work_v1(
+    bounds: &ProsecutionBoundsV1,
+    program_bytes: usize,
+    program: &TirProgramV1,
+    plan: &VerificationPlanV1,
+) -> Result<u64, String> {
+    let instances = program
+        .params
+        .iter()
+        .try_fold(0u128, |sum, p| sum.checked_add(if p.per_layer { program.schedule.layers.len() as u128 } else { 1 }))
+        .ok_or("parameter instance count overflow")?;
+    let plan_bytes = borsh::object_length(plan).map_err(|e| e.to_string())? as u128;
+    let schema = instances
+        .checked_mul(69)
+        .and_then(|bytes| bytes.checked_add(program_bytes as u128))
+        .and_then(|bytes| bytes.checked_add(plan_bytes))
+        .and_then(|bytes| bytes.checked_add(8))
+        .ok_or("class schema byte overflow")?;
+    claim_admission_work_v1(bounds, schema)
+}
+
 /// One reason a plan/profile is not publicly prosecutable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProsecutionGapV1 {
@@ -451,7 +490,11 @@ fn verifier_ram_bound_v4(program: &TirProgramV1, plan: &VerificationPlanV1, posi
     let mut max_params = 0u128;
     let mut max_operands = 0u128;
     let mut max_trees = 0u128;
-    let mask = crate::seg_scope::seg_withheld_mask_v1(program);
+    // The values a verifier keeps from its own replay: withheld (option (c)) and hiding (option (a)) ones (G14-S: hiding added).
+    let mask: Vec<Vec<bool>> = crate::seg_scope::seg_value_modes_v1(program)
+        .into_iter()
+        .map(|o| o.into_iter().map(|m| m != crate::seg_scope::SegValueModeV1::Clear).collect())
+        .collect();
     let mut withheld = 0u128;
     let mut history_rows = 0u128;
     for (s, (b, _)) in program.occurrences().into_iter().enumerate() {
@@ -497,9 +540,12 @@ fn verifier_ram_bound_v4(program: &TirProgramV1, plan: &VerificationPlanV1, posi
     let local_positions = plan.max_positions.min(2) as u128;
     // The second replay runs while the authenticated public positions are retained: two public + current/previous replay
     // positions for a decoder; only one public + one replay position for a one-position encoder. History rows are separate.
+    // G14-S: a public position holds NO kept (withheld or hiding) value — the assembler leaves an empty placeholder
+    // (`crate::seg_da::assemble_position_full_v1`) — so the replay's retained kept values take exactly the room their public copies
+    // no longer use: public (position − kept) + retained kept + replay position = 2 · position, per local position.
+    let _ = withheld;
     position.saturating_mul(local_positions.saturating_mul(2))
         .saturating_add(history_rows)
-        .saturating_add(withheld.saturating_mul(local_positions))
         .saturating_add(max_params) // evaluator borrows the same owned allocations; hashing scratch is priced with trees
         .saturating_add(max_operands.saturating_mul(2))
         .saturating_add(max_node.saturating_mul(4)) // output, evaluator scratch, copied history window

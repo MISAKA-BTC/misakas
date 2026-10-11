@@ -58,7 +58,7 @@
     "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225],
     "ops": {"$var": "ops"},
     "out": {"GlobalAvgNorm": {"name": "layernorm", "eps": {"$cfg": "layer_norm_eps"}}},
-    "ignored": ["classifier."],
+    "ignored": {"$if": [{"$eq": [{"$var": "arch"}, "ConvNextForImageClassification"]}, [], ["classifier."]]}, "head": {"$if": [{"$eq": [{"$var": "arch"}, "ConvNextForImageClassification"]}, {"name": "classifier", "labels": {"$let": ["m", {"$cfg?": "id2label"}, {"$if": [{"$ne": [{"$var": "m"}, null]}, {"$len": {"$var": "m"}}, {"$cfg": ["num_labels", 2]}]}]}, "bias": true}, null]},
     "aliases": [["", "convnext."]]
   }
 }

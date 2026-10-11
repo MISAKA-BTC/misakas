@@ -48,6 +48,8 @@ _CODE = {
     "CONFIG_INVALID": ("NO_MODEL_TASK", "external"),
     "MODALITY_PROFILE_MISSING": ("NEW_KERNEL", "protocol-envelope"),
     "PARTIAL_TASK_ONLY": ("NEW_KERNEL", "protocol-envelope"),
+    # HFX 2026-10-08: the task's profile exists (the dormant `Head` profile) and its fence is armed by no judged ruleset
+    "PROFILE_NOT_ARMED": ("NEW_KERNEL", "protocol-envelope"),
     # lower: the artifact's form and quantisation
     "FORMAT_UNSUPPORTED": ("QUANT_FORMAT", "frontend-only"),
     "QUANT_DESCRIPTOR_MISSING": ("QUANT_FORMAT", "feature-only"),

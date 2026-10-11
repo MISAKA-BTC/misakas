@@ -230,7 +230,14 @@ fn a_vision_language_model_is_its_text_decoder_and_the_vision_tower_need_not_be_
 
 #[test]
 fn a_described_quantisation_is_read_through_its_descriptor_and_named_in_the_storage_table() {
-    for (name, descriptor, stored) in [("hf-quant/gptq_b4_g32", "GPTQ", "I32"), ("hf-quant/bnb_int8", "BNB_INT8", "I8")] {
+    // MLX (MLX_QUANT_V1): no quant_method, the codes under the float export's own `.weight` name, `quantization` read by the
+    // lowering's own reader — alone (an older mlx-lm), or beside an equal `quantization_config` with per-module entries.
+    for (name, descriptor, stored) in [
+        ("hf-quant/gptq_b4_g32", "GPTQ", "I32"),
+        ("hf-quant/bnb_int8", "BNB_INT8", "I8"),
+        ("hf-quant/mlx_b3_g64_bf16", "MLX_AFFINE", "U32"),
+        ("hf-quant/mlx_b6_mixed", "MLX_AFFINE", "U32"),
+    ] {
         let dir = copy_fixture(&fixture(name), "quant", true);
         let r = run(&dir, &opts(Depth::Headers)).expect("preflight");
         assert_eq!(r.verdict.convert.status, StageStatus::Ok, "{name}: {}", r.render());

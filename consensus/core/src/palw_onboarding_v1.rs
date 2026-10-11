@@ -53,6 +53,7 @@ use crate::palw_artifact::{PalwArtifactOpeningV1, verify_artifact_opening_v1};
 use crate::palw_conformance_evidence_v1::ConformanceEvidencePostV1;
 use crate::palw_kernel_route_v1::PalwKernelRouteStateV1;
 use crate::palw_mode_v2::PalwModeV2Error;
+pub use crate::palw_onboarding_tile_v3::ArtifactTileOpeningV3;
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_tir_artifact_v1::{palw_tir_inventory_leaf_count_v1, palw_tir_leaf_index_v1, palw_tir_param_instances_v1};
 use misaka_palw_challenge::{BeaconContextV1, ConformanceCommitmentV1, OnboardingFailureV1, OnboardingRecordV1, OnboardingStateV1};
@@ -426,11 +427,17 @@ impl PalwKernelRouteStateV1 {
             .fold(0u64, |acc, r| acc.saturating_add(r))
     }
 
-    /// Whether the route's ledger holds the kernel class (it registered only after `PUBLIC_PROSECUTION_COMPLETE`).
+    /// Checked metadata for onboarding: an execution registration or a conformance-only candidate.
+    /// Both passed `PUBLIC_PROSECUTION_COMPLETE`; this read alone grants no execution or payment rights.
     pub fn kernel_class_record_v1(&self, kernel_class: &Hash64) -> Option<misaka_palw_kernel::state::ClassRecordV1> {
         let key = borsh::to_vec(&kernel_class.as_bytes()).expect("a digest serializes");
-        let row = self.rows.get(&(misaka_palw_kernel::rows::TABLE_CLASSES_V1, key))?;
-        borsh::from_slice(row).ok()
+        if let Some(row) = self.rows.get(&(misaka_palw_kernel::rows::TABLE_CLASSES_V1, key.clone())) {
+            return borsh::from_slice(row).ok();
+        }
+        // A prepared class can acquire conformance evidence, but is absent from every execution registry.
+        let row = self.rows.get(&(misaka_palw_kernel::rows::TABLE_CONFORMANCE_CLASSES_V1, key))?;
+        let (_, record): (misaka_palw_kernel::hash::Digest, misaka_palw_kernel::state::ClassRecordV1) = borsh::from_slice(row).ok()?;
+        Some(record)
     }
 
     /// **The activation gate of a V2 class** (`activate_due_classes`): a class with no kernel binding follows the legacy path; a
@@ -641,8 +648,8 @@ impl PalwKernelRouteStateV1 {
     /// **The v3 beacon's facts**: every claim seal the kernel ledger holds — live, revealed with its salt, or forfeited (G14-R4's
     /// tables 25–26, `claim_beacon_seals_v1`) — as `SealedSourceV3`: the profile is the sealed job's class (job rows are permanent),
     /// the producer the sealing bond, and a reveal's fate is its claim's (Final, with its op-212 facts; failed when convicted, timed
-    /// out or unavailable; live otherwise). The consumer is `Absent` until the ledger keeps the job's poster (F-C4R4-08, G14-R4's
-    /// table 18). `Err` only if the stored rows do not rebuild.
+    /// out or unavailable; live otherwise). The consumer is the retained job poster (table 18), including after payment, expiry
+    /// and re-seal; only historical jobs without a poster row use `Absent`. `Err` only if the stored rows do not rebuild.
     pub fn beacon_sealed_sources_v1(&self) -> Result<Vec<misaka_palw_challenge::SealedSourceV3>, String> {
         use misaka_palw_challenge::{RootV1, SealRevealV3, SealedSourceV3, SourceAttributionV1, SourceFateV3};
         let ledger = self.ledger()?;
@@ -679,7 +686,10 @@ impl PalwKernelRouteStateV1 {
             });
             out.push(SealedSourceV3 {
                 source_profile_id: profile,
-                attribution: SourceAttributionV1 { producer_id: s.producer, consumer_id: RootV1::Absent },
+                attribution: SourceAttributionV1 {
+                    producer_id: s.producer,
+                    consumer_id: s.poster.map_or(RootV1::Absent, RootV1::Present),
+                },
                 seal: s.seal,
                 seal_position: s.sealed_daa,
                 reveal,
@@ -860,6 +870,15 @@ pub enum ArtifactMismatchProofV1 {
         kernel_row: TensorOpeningV1,
         v2_opening: PalwArtifactOpeningV1,
     },
+    /// Appended wire variant 2: a bounded v3 row or column tile against the registered V2
+    /// inventory. Variants 0 and 1 retain their original encoding and judgement.
+    TileV3 {
+        commitments: ParamCommitmentsV1,
+        param: u16,
+        layer: Option<u16>,
+        kernel_tile: ArtifactTileOpeningV3,
+        v2_opening: PalwArtifactOpeningV1,
+    },
 }
 
 /// **Verify a refutation** against what the chain holds: the V2 class's program and registered `artifact_root`, and the bound kernel
@@ -871,18 +890,152 @@ pub fn verify_artifact_mismatch_v1(
     kernel_param_root: Hash64,
     proof: &ArtifactMismatchProofV1,
 ) -> Result<(), &'static str> {
+    verify_artifact_mismatch_inventory(ArtifactInventory::Legacy(program), v2_artifact_root, kernel_param_root, proof)
+}
+
+/// Pure judge for a descriptor-scoped model inventory. The scope must come from the authenticated
+/// statement, never from a challenger-selected descriptor. This API does not reinterpret 104/105
+/// or grant attestation, conformance, execution or reward eligibility.
+pub fn verify_artifact_mismatch_v2(
+    inventory: &crate::palw_tir_artifact_v1::PalwTirModelInventoryV2<'_>,
+    model_inventory_root: Hash64,
+    kernel_param_root: Hash64,
+    proof: &ArtifactMismatchProofV1,
+) -> Result<(), &'static str> {
+    if matches!(proof, ArtifactMismatchProofV1::Row { .. }) {
+        return Err("a model-only v2 binding requires a bounded v3 tile, not a legacy tensor row");
+    }
+    verify_artifact_mismatch_inventory(ArtifactInventory::Model(inventory), model_inventory_root, kernel_param_root, proof)
+}
+
+enum ArtifactInventory<'a> {
+    Legacy(&'a TirProgramV1),
+    Model(&'a crate::palw_tir_artifact_v1::PalwTirModelInventoryV2<'a>),
+}
+
+impl ArtifactInventory<'_> {
+    fn program(&self) -> &TirProgramV1 {
+        match self {
+            Self::Legacy(p) => p,
+            Self::Model(i) => i.program(),
+        }
+    }
+    fn instances(&self) -> Vec<Vec<Option<u16>>> {
+        match self {
+            Self::Legacy(p) => palw_tir_param_instances_v1(p),
+            Self::Model(i) => i.instances(),
+        }
+    }
+    fn leaf_index(&self, param: u16, layer: Option<u16>, offset: u64) -> Option<u32> {
+        match self {
+            Self::Legacy(p) => palw_tir_leaf_index_v1(p, param, layer, offset),
+            Self::Model(i) => i.leaf_index(param, layer, offset),
+        }
+    }
+    fn leaf_count(&self) -> Option<u32> {
+        match self {
+            Self::Legacy(p) => palw_tir_inventory_leaf_count_v1(p).ok(),
+            Self::Model(i) => Some(i.leaf_count()),
+        }
+    }
+}
+
+fn verify_artifact_mismatch_inventory(
+    inventory: ArtifactInventory<'_>,
+    v2_artifact_root: Hash64,
+    kernel_param_root: Hash64,
+    proof: &ArtifactMismatchProofV1,
+) -> Result<(), &'static str> {
+    let program = inventory.program();
     let commitments = match proof {
-        ArtifactMismatchProofV1::Instances { commitments } | ArtifactMismatchProofV1::Row { commitments, .. } => commitments,
+        ArtifactMismatchProofV1::Instances { commitments }
+        | ArtifactMismatchProofV1::Row { commitments, .. }
+        | ArtifactMismatchProofV1::TileV3 { commitments, .. } => commitments,
     };
     if commitments.root() != kernel_param_root.as_bytes() {
         return Err("the carried commitments do not root to the bound kernel root");
     }
-    let declared: BTreeSet<(u16, Option<u16>)> = palw_tir_param_instances_v1(program)
-        .into_iter()
-        .enumerate()
-        .flat_map(|(j, layers)| layers.into_iter().map(move |l| (j as u16, l)))
-        .collect();
+    let declared: BTreeSet<(u16, Option<u16>)> =
+        inventory.instances().into_iter().enumerate().flat_map(|(j, layers)| layers.into_iter().map(move |l| (j as u16, l))).collect();
     match proof {
+        ArtifactMismatchProofV1::TileV3 { commitments, param, layer, kernel_tile, v2_opening } => {
+            if !declared.contains(&(*param, *layer)) {
+                return Err("the program declares no such tensor instance");
+            }
+            let decl = program.params.get(*param as usize).ok_or("the program declares no such param")?;
+            let commitment = commitments.by_instance.get(&(*param, *layer)).ok_or("the bound commitments hold no such instance")?;
+            let leaf = kernel_tile.leaf();
+            if !leaf.authenticates(commitment) {
+                return Err("the kernel tile does not authenticate against the bound commitment");
+            }
+            let op = &v2_opening.operand;
+            // Reject oversize inventory material before hashing it. An inventory of
+            // u32 leaves can have no path deeper than 32.
+            if op.bytes.len() > crate::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1 as usize || v2_opening.path.len() > 32 {
+                return Err("the inventory opening exceeds the tile court's bounds");
+            }
+            verify_artifact_opening_v1(v2_opening, v2_artifact_root)
+                .map_err(|_| "the V2 opening does not reach the registered artifact root")?;
+            if op.tensor_name != decl.name || op.layer != *layer {
+                return Err("the V2 opening names another tensor instance");
+            }
+            if Some(v2_opening.leaf_index) != inventory.leaf_index(*param, *layer, op.row_start as u64)
+                || inventory.leaf_count() != Some(v2_opening.leaf_count)
+            {
+                return Err("the V2 opening is not at the leaf the program's layout puts these bytes in");
+            }
+            let row_bytes = crate::palw_tir_artifact_v1::palw_tir_row_bytes_v1(program, *param);
+            let within_row = (op.row_start as u64).checked_rem(row_bytes).ok_or("an empty declared inventory row")?;
+            let piece = crate::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1;
+            if !within_row.is_multiple_of(piece) || op.bytes.len() as u64 != (row_bytes - within_row).min(piece) {
+                return Err("the inventory opening is not a whole canonical inventory piece");
+            }
+            let shape: Vec<u64> = decl.shape.iter().map(|d| *d as u64).collect();
+            if leaf.dtype != decl.dtype.tag() || leaf.shape != shape {
+                return Ok(());
+            }
+            let layout = leaf.layout().ok_or("the kernel tile's shape overflows")?;
+            let width = decl.dtype.width() as u64;
+            let (leaf_start, leaf_end) = (op.row_start as u64, op.row_start as u64 + op.bytes.len() as u64);
+            let mut shared = false;
+            // A column tile is strided. Comparing its bounding byte interval would
+            // confuse intervening columns with opened values. Map every bounded
+            // element to its exact row-major coordinate instead, without another
+            // index vector. Authentication already checked axis, count and shape.
+            for (i, value) in leaf.values.iter().enumerate() {
+                let within = leaf
+                    .tile
+                    .checked_mul(misaka_palw_kernel::merkle3::TILE_V3)
+                    .and_then(|n| n.checked_add(i as u64))
+                    .ok_or("the kernel tile's element offset overflows")?;
+                let flat = if leaf.axis == AXIS_ROW || leaf.shape.len() <= 1 {
+                    leaf.line.checked_mul(layout.row_len).and_then(|n| n.checked_add(within))
+                } else {
+                    (leaf.line / layout.n)
+                        .checked_mul(layout.m)
+                        .and_then(|n| n.checked_add(within))
+                        .and_then(|n| n.checked_mul(layout.n))
+                        .and_then(|n| n.checked_add(leaf.line % layout.n))
+                }
+                .ok_or("the kernel tile's element index overflows")?;
+                let start = flat.checked_mul(width).ok_or("the kernel tile's byte offset overflows")?;
+                let end = start.checked_add(width).ok_or("the kernel tile's byte range overflows")?;
+                let (lo, hi) = (start.max(leaf_start), end.min(leaf_end));
+                if lo < hi {
+                    shared = true;
+                    let raw = value.to_le_bytes();
+                    for at in lo..hi {
+                        if op.bytes[(at - leaf_start) as usize] != raw[(at - start) as usize] {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            if !shared {
+                return Err("the two openings cover no common byte");
+            }
+            Err("the two openings agree on every byte they share")
+        }
         ArtifactMismatchProofV1::Instances { commitments } => {
             let committed: BTreeSet<(u16, Option<u16>)> = commitments.by_instance.keys().copied().collect();
             if committed == declared { Err("the bound commitments hold exactly the program's declared instances") } else { Ok(()) }
@@ -905,8 +1058,8 @@ pub fn verify_artifact_mismatch_v1(
             if op.tensor_name != decl.name || op.layer != *layer {
                 return Err("the V2 opening names another tensor instance");
             }
-            if Some(v2_opening.leaf_index) != palw_tir_leaf_index_v1(program, *param, *layer, op.row_start as u64)
-                || palw_tir_inventory_leaf_count_v1(program).ok() != Some(v2_opening.leaf_count)
+            if Some(v2_opening.leaf_index) != inventory.leaf_index(*param, *layer, op.row_start as u64)
+                || inventory.leaf_count() != Some(v2_opening.leaf_count)
             {
                 return Err("the V2 opening is not at the leaf the program's layout puts these bytes in");
             }

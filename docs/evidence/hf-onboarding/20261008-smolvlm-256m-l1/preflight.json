@@ -1,0 +1,170 @@
+{
+ "schema": "misaka.h1.preflight.v1",
+ "command": "misaka --network testnet-12 --output json model preflight hf://REPO@REV --depth shape [--max-context N]",
+ "header_only": true,
+ "widest": {
+  "exit": 34,
+  "file": "widest.json",
+  "readable": true,
+  "input": "https://huggingface.co/HuggingFaceTB/SmolVLM-256M-Instruct/resolve/7e3e67edbbed1bf9888184d9df282b700a323964",
+  "bytes_read": 66305,
+  "depth": {
+   "requested": "shape",
+   "reached": "headers",
+   "stopped_at": "no program to judge: the convert stage is blocked"
+  },
+  "network_daa": null,
+  "model_type": "idefics3 (text decoder: llama)",
+  "architectures": [
+   "Idefics3ForConditionalGeneration"
+  ],
+  "frontend_level": "C",
+  "adapter": null,
+  "features_used": 0,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": true,
+   "excluded": [
+    {
+     "kind": "vision",
+     "what": "vision tower",
+     "why": "image input is not part of a class: the registered class is the text decoder, token ids in and logits out, so a prompt cannot carry an image",
+     "modal": true,
+     "evidence": [
+      "config.vision_config",
+      "config.image_token_id",
+      "tensors model.vision_model.* (197)",
+      "file preprocessor_config.json"
+     ],
+     "tensors": 197,
+     "bytes": 172866048
+    }
+   ]
+  },
+  "storage": [
+   "BF16"
+  ],
+  "weights_bytes": 512969856,
+  "missing_shards": [],
+  "artifact_estimate_bytes": null,
+  "kernel": null,
+  "admission_verdict": null,
+  "admission_gate": null,
+  "admission_gate_detail": null,
+  "layout": null,
+  "seat_needed_bytes": null,
+  "verdict": {
+   "convert": "blocked",
+   "register": "unknown",
+   "mine": "unknown"
+  },
+  "unknown_because": {
+   "register": "no program to judge: the convert stage is blocked",
+   "mine": "no program to judge: the convert stage is blocked"
+  },
+  "blockers": [
+   {
+    "stage": "convert",
+    "code": "ARCH_NEEDS_FEATURE",
+    "arg": "an adapter for `Idefics3ForConditionalGeneration`",
+    "what": "the model needs `an adapter for `Idefics3ForConditionalGeneration``, which the generic lowerer does not lower yet",
+    "have": null,
+    "need": null,
+    "unit": null,
+    "safe_paths": [
+     "a data adapter (--adapter) can map a missing key or tensor name, never a missing computation"
+    ]
+   }
+  ],
+  "notes": [
+   "text stage only on testnet-12: vision \u2014 a vision-language or audio model registers as its text decoder; the other parts need RFC-0003's generative class"
+  ]
+ },
+ "declared": {
+  "exit": 34,
+  "max_context": 512,
+  "file": "declared.json",
+  "readable": true,
+  "input": "https://huggingface.co/HuggingFaceTB/SmolVLM-256M-Instruct/resolve/7e3e67edbbed1bf9888184d9df282b700a323964",
+  "bytes_read": 66305,
+  "depth": {
+   "requested": "shape",
+   "reached": "headers",
+   "stopped_at": "no program to judge: the convert stage is blocked"
+  },
+  "network_daa": null,
+  "model_type": "idefics3 (text decoder: llama)",
+  "architectures": [
+   "Idefics3ForConditionalGeneration"
+  ],
+  "frontend_level": "C",
+  "adapter": null,
+  "features_used": 0,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": true,
+   "excluded": [
+    {
+     "kind": "vision",
+     "what": "vision tower",
+     "why": "image input is not part of a class: the registered class is the text decoder, token ids in and logits out, so a prompt cannot carry an image",
+     "modal": true,
+     "evidence": [
+      "config.vision_config",
+      "config.image_token_id",
+      "tensors model.vision_model.* (197)",
+      "file preprocessor_config.json"
+     ],
+     "tensors": 197,
+     "bytes": 172866048
+    }
+   ]
+  },
+  "storage": [
+   "BF16"
+  ],
+  "weights_bytes": 512969856,
+  "missing_shards": [],
+  "artifact_estimate_bytes": null,
+  "kernel": null,
+  "admission_verdict": null,
+  "admission_gate": null,
+  "admission_gate_detail": null,
+  "layout": null,
+  "seat_needed_bytes": null,
+  "verdict": {
+   "convert": "blocked",
+   "register": "unknown",
+   "mine": "unknown"
+  },
+  "unknown_because": {
+   "register": "no program to judge: the convert stage is blocked",
+   "mine": "no program to judge: the convert stage is blocked"
+  },
+  "blockers": [
+   {
+    "stage": "convert",
+    "code": "ARCH_NEEDS_FEATURE",
+    "arg": "an adapter for `Idefics3ForConditionalGeneration`",
+    "what": "the model needs `an adapter for `Idefics3ForConditionalGeneration``, which the generic lowerer does not lower yet",
+    "have": null,
+    "need": null,
+    "unit": null,
+    "safe_paths": [
+     "a data adapter (--adapter) can map a missing key or tensor name, never a missing computation"
+    ]
+   }
+  ],
+  "notes": [
+   "text stage only on testnet-12: vision \u2014 a vision-language or audio model registers as its text decoder; the other parts need RFC-0003's generative class"
+  ]
+ }
+}

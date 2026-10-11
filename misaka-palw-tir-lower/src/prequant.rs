@@ -207,6 +207,12 @@ pub struct QuantConfig {
     /// GGUF: the layout of each quantised module (an HF module-name template with `{L}`), from the
     /// file's tensor types; every other module is float.
     pub per_module: std::collections::BTreeMap<String, QLayout>,
+    /// A described format's per-module parameters (MLX's per-module entries, by module name): `Some(params)` — the module is
+    /// stored in the format with these instead of the configuration's; `None` — the configuration keeps it in float (a packed
+    /// module of that name is refused). Empty for every format that has no such entries, and then not serialised, so a
+    /// configuration read before this field existed serialises as it always did.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub module_params: BTreeMap<String, Option<BTreeMap<String, i64>>>,
 }
 
 impl QuantConfig {
@@ -424,6 +430,141 @@ fn group_of(g: Option<i64>) -> Result<usize> {
     }
 }
 
+/// The `quant_method` an MLX quantisation block is read under (`MLX_QUANT_V1`): MLX writes none, so [`quant_block`] names it.
+pub const MLX_QUANT_METHOD: &str = "mlx";
+
+/// The keys of an MLX quantisation block that are the configuration's own (every other key is a module's entry).
+const MLX_TOP_KEYS: &[&str] = &["group_size", "bits", "mode"];
+
+/// **Is `v` MLX's quantisation block** (`MLX_QUANT_V1`): what mlx-lm writes as `quantization` (and, since it also writes it, as
+/// `quantization_config`): an object without a `quant_method`, whose `group_size` and `bits` are integers, whose `mode`, when
+/// present, is a string, and whose every other key is a module's own entry — `true` / `false` (quantised with the defaults / kept
+/// in float), or an object of `group_size`, `bits` and `mode` alone. Anything else is not read as MLX's.
+pub fn is_mlx_block(v: &Value) -> bool {
+    let Some(o) = v.as_object() else { return false };
+    let int = |k: &str| o.get(k).is_some_and(|x| x.as_i64().is_some());
+    if o.contains_key("quant_method") || !int("group_size") || !int("bits") {
+        return false;
+    }
+    o.iter().all(|(k, x)| match k.as_str() {
+        "group_size" | "bits" => true,
+        "mode" => x.is_string(),
+        _ => match x {
+            Value::Bool(_) => true,
+            Value::Object(m) => m.iter().all(|(mk, mv)| match mk.as_str() {
+                "group_size" | "bits" => mv.as_i64().is_some(),
+                "mode" => mv.is_string(),
+                _ => false,
+            }),
+            _ => false,
+        },
+    })
+}
+
+/// **The quantisation block a configuration announces**, read once for every reader (the lowering, the preflight):
+///
+/// * `quantization_config` with a `quant_method` — as it stands;
+/// * an MLX block (`MLX_QUANT_V1`, [`is_mlx_block`]) — `quantization` (what mlx-lm writes, and what an older mlx-lm writes
+///   alone) and/or a `quantization_config` without a `quant_method` — as that block with `quant_method: "mlx"`; when both
+///   are given they must be the same block;
+/// * a `quantization_config` without a `quant_method` that is not MLX's — as it stands (refused later, by name);
+/// * none — `None`.
+///
+/// A `quantization` that is not an MLX block, or one beside a `quantization_config` that says something else, is refused by
+/// name: the key is the reader's (`crate::hf_schema::ROOT_READER_KEYS`), so it is never passed over as inert.
+pub fn quant_block(root: &serde_json::Map<String, Value>) -> Result<Option<Value>> {
+    let get = |k: &str| root.get(k).filter(|v| !v.is_null());
+    let (qc, mq) = (get("quantization_config"), get("quantization"));
+    if let Some(q) = qc
+        && q.get("quant_method").is_some()
+    {
+        if mq.is_some() {
+            return Err(nl(
+                "the configuration carries a `quantization` block beside a `quantization_config` that names a quant_method: two announcements of how the weights are stored"
+                    .to_string(),
+            ));
+        }
+        return Ok(Some(q.clone()));
+    }
+    if let Some(m) = mq
+        && !is_mlx_block(m)
+    {
+        return Err(nl(format!(
+            "config key `quantization` is not an MLX quantisation block (group_size, bits, mode and per-module entries): {}",
+            short_json(m)
+        )));
+    }
+    let block = match (qc, mq) {
+        (None, None) => return Ok(None),
+        (Some(q), None) if !is_mlx_block(q) => return Ok(Some(q.clone())),
+        (Some(q), Some(m)) if q != m => {
+            return Err(nl(format!(
+                "MLX's `quantization` and `quantization_config` differ ({} against {}): which one the weights follow is not said",
+                short_json(m),
+                short_json(q)
+            )));
+        }
+        (Some(q), _) => q,
+        (None, Some(m)) => m,
+    };
+    let mut o = block.as_object().cloned().unwrap_or_default();
+    o.insert("quant_method".into(), Value::String(MLX_QUANT_METHOD.into()));
+    Ok(Some(Value::Object(o)))
+}
+
+fn short_json(v: &Value) -> String {
+    let s = v.to_string();
+    if s.len() > 160 {
+        format!("{}…", &s[..s.char_indices().take_while(|(i, _)| *i < 160).last().map_or(0, |(i, c)| i + c.len_utf8())])
+    } else {
+        s
+    }
+}
+
+/// An MLX block (`MLX_QUANT_V1`, after [`quant_block`] named it): the configuration's own `group_size`, `bits` and `mode` are read
+/// by the `mlx` descriptor (`MLX_AFFINE`); each module's entry is read by the same descriptor over the configuration's values with
+/// the module's own in place (`Some(params)`), or keeps that module in float (`false`: `None`); `true` is the defaults. A module
+/// entry with a key MLX does not write, or a value that is neither, is refused by name.
+fn mlx_config(q: &serde_json::Map<String, Value>, arch: &str, reg: &QuantRegistry) -> Result<QuantConfig> {
+    let mut top = serde_json::Map::new();
+    let mut entries: Vec<(&String, &Value)> = Vec::new();
+    for (k, v) in q {
+        if k == "quant_method" || MLX_TOP_KEYS.contains(&k.as_str()) {
+            top.insert(k.clone(), v.clone());
+        } else {
+            entries.push((k, v));
+        }
+    }
+    let mut qc = described_config(&Value::Object(top.clone()), MLX_QUANT_METHOD, arch, reg)?;
+    let QFormat::Described(d) = &qc.fmt else { unreachable!("a described format") };
+    let format = d.format.clone();
+    for (module, v) in entries {
+        let params = match v {
+            Value::Bool(true) => Some(d.params.clone()),
+            Value::Bool(false) => None,
+            Value::Object(own) => {
+                let mut merged = top.clone();
+                for (k, x) in own {
+                    if !MLX_TOP_KEYS.contains(&k.as_str()) {
+                        return Err(nl(format!("{arch}: MLX's entry for `{module}` has a key MLX does not write: `{k}`")));
+                    }
+                    merged.insert(k.clone(), x.clone());
+                }
+                let r = format.read_config(&Value::Object(merged)).map_err(|e| match e {
+                    LowerError::NotLowerable(m) => nl(format!("{arch}: `{module}`: {m}")),
+                    other => other,
+                })?;
+                Some(r.params)
+            }
+            other => {
+                return Err(nl(format!("{arch}: MLX's entry for `{module}` is neither a bool nor an object: {}", short_json(other))));
+            }
+        };
+        qc.module_params.insert(module.clone(), params);
+    }
+    Ok(qc)
+}
+
 /// Parse `quantization_config` against the built-in descriptors.
 pub fn parse_quant_config(q: &Value, arch: &str, model_type: &str) -> Result<QuantConfig> {
     parse_quant_config_with(q, arch, model_type, QuantRegistry::builtin())
@@ -449,7 +590,7 @@ fn described_config(q: &Value, method: &str, arch: &str, reg: &QuantRegistry) ->
     for e in &r.skip {
         check_skip_pattern(e)?;
     }
-    Ok(QuantConfig { fmt: QFormat::Described(Described::new(f.clone(), r.params)?), lm_head: r.lm_head, skip: r.skip, only: None, per_module: Default::default() })
+    Ok(QuantConfig { fmt: QFormat::Described(Described::new(f.clone(), r.params)?), lm_head: r.lm_head, skip: r.skip, only: None, per_module: Default::default(), module_params: Default::default() })
 }
 
 /// Parse `quantization_config` (GPTQ and AWQ by hand; any other method through the descriptor in
@@ -473,6 +614,7 @@ pub fn parse_quant_config_with(q: &Value, arch: &str, model_type: &str, reg: &Qu
             "is_marlin_format",
         ],
         "awq" => &["bits", "group_size", "zero_point", "version", "format", "modules_to_not_convert", "desc_act"],
+        MLX_QUANT_METHOD => return mlx_config(q, arch, reg),
         other => return described_config(qv, other, arch, reg),
     };
     let inert = if method == "gptq" { GPTQ_INERT } else { AWQ_INERT };
@@ -530,6 +672,7 @@ pub fn parse_quant_config_with(q: &Value, arch: &str, model_type: &str, reg: &Qu
             skip: Vec::new(),
             only,
             per_module: Default::default(),
+            module_params: Default::default(),
         })
     } else {
         if bits != 4 {
@@ -558,7 +701,14 @@ pub fn parse_quant_config_with(q: &Value, arch: &str, model_type: &str, reg: &Qu
                 .collect::<Result<_>>()?,
             Some(_) => return Err(LowerError::bad("modules_to_not_convert is not a list")),
         };
-        Ok(QuantConfig { fmt: QFormat::Awq { bits: 4, group }, lm_head: false, skip, only: None, per_module: Default::default() })
+        Ok(QuantConfig {
+            fmt: QFormat::Awq { bits: 4, group },
+            lm_head: false,
+            skip,
+            only: None,
+            per_module: Default::default(),
+            module_params: Default::default(),
+        })
     }
 }
 

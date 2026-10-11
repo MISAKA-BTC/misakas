@@ -1,0 +1,308 @@
+{
+ "schema": "misaka.palw.quant-format.v1",
+ "name": "MLX_AFFINE",
+ "doc": "MLX's affine quantisation (mlx.core.quantize, mode affine; what mlx-lm saves, MLX_QUANT_V1): a quantised module keeps its codes under the float export's own name, `<module>.weight` uint32 [out, in * bits / 32] \u2014 per row a little-endian bit stream, code i in bits [i * bits, (i + 1) * bits), so 3, 5 and 6 bits straddle the words \u2014 beside `<module>.scales` and `<module>.biases` [out, in / group_size] in the model's float type. W[o, i] = scales[o, g] * q[o, i] + biases[o, g], g = i / group_size: served as the float `<module>.weight` (f64, exact for float16 / bfloat16 operands, rounded once to float32), so every binding that reads the float export \u2014 projections, the embedding table, a tied head \u2014 reads it unchanged. A module MLX left in float has a float `.weight` and no companions, and passes through. MLX writes no quant_method; the reader names an MLX block `mlx` (prequant::quant_block). Its other modes (mxfp4, mxfp8, nvfp4) store other tensors and are refused by name. The vectors are MLX 0.32's own quantize, and its dequantize on the GPU with the scales and biases widened to float32 (a fused multiply-add: the same single rounding), checked against the definition when they were made (tools/gen_mlx_fixtures.py vectors).",
+ "ids": [
+  {
+   "scheme": "config",
+   "method": "mlx"
+  }
+ ],
+ "params": {
+  "bits": {
+   "config": "bits",
+   "allowed": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    8
+   ]
+  },
+  "group_size": {
+   "config": "group_size",
+   "allowed": [
+    32,
+    64,
+    128
+   ]
+  },
+  "affine": {
+   "config": "mode",
+   "default": 1,
+   "map": {
+    "affine": 1
+   },
+   "allowed": [
+    1
+   ]
+  }
+ },
+ "layout": {
+  "kind": "virtual",
+  "serve_suffix": ".weight",
+  "roles": [
+   {
+    "name": "weight",
+    "suffix": ".weight",
+    "dtypes": [
+     "U32"
+    ],
+    "rank": 2
+   },
+   {
+    "name": "scales",
+    "suffix": ".scales",
+    "dtypes": [
+     "F16",
+     "BF16",
+     "F32"
+    ],
+    "rank": 2
+   },
+   {
+    "name": "biases",
+    "suffix": ".biases",
+    "dtypes": [
+     "F16",
+     "BF16",
+     "F32"
+    ],
+    "rank": 2
+   }
+  ],
+  "axes": [
+   "o",
+   "i"
+  ],
+  "shape": [
+   "dim_weight[0]",
+   "dim_weight[1] * 32 / bits"
+  ],
+  "checks": [
+   {
+    "expr": "(dim_weight[1] * 32) % bits == 0",
+    "message": "a packed row is not a whole number of codes"
+   },
+   {
+    "expr": "dim_scales[0] == dim_weight[0] && dim_biases[0] == dim_weight[0]",
+    "message": "the scales and biases are not one row per output"
+   },
+   {
+    "expr": "dim_scales[1] * group_size == dim_weight[1] * 32 / bits && dim_biases[1] == dim_scales[1]",
+    "message": "the scales and biases are not one per group of the input"
+   }
+  ]
+ },
+ "decode": {
+  "target": "tensor",
+  "value": "scales[o, i / group_size] * ((((i * bits) % 32 + bits <= 32) ? (weight[o, (i * bits) / 32] >> ((i * bits) % 32)) : ((weight[o, (i * bits) / 32] >> ((i * bits) % 32)) | (weight[o, (i * bits) / 32 + 1] << (32 - (i * bits) % 32)))) & ((1 << bits) - 1)) + biases[o, i / group_size]"
+ },
+ "tests": [
+  {
+   "config": {
+    "quant_method": "mlx",
+    "group_size": 32,
+    "bits": 2
+   },
+   "roles": {
+    "weight": {
+     "dtype": "U32",
+     "shape": [
+      2,
+      4
+     ],
+     "hex": "a895a556db757f8a66a66aa61beb6ea6d3ab331527ba7da83bb9b69abb5eff54"
+    },
+    "scales": {
+     "dtype": "F16",
+     "shape": [
+      2,
+      2
+     ],
+     "hex": "31ade6ac54a90bac"
+    },
+    "biases": {
+     "dtype": "F16",
+     "shape": [
+      2,
+      2
+     ],
+     "hex": "3131e630542d0b30"
+    }
+   },
+   "values_f32_hex": "0020263e0000000000000000000000000020a63d0020a63d0020a63d000000000020a63d0020a63d0000000000000000000000000020a63d0020a63d0020a63d0020a6bd000000000020a63d0020a6bd0020a63d0020a63d0020a6bd0020a63d0020a6bd0020a6bd0020a6bd0020a63d00000000000000000020263e000000000000000000c09c3d0000000000c09c3d0000000000c09c3d000000000000000000000000000000000000000000c09c3d0000000000c09c3d000000000000000000c09cbd0000000000c09c3d00c01c3e00c09cbd000000000000000000c09cbd0000000000c09cbd0000000000c09c3d0000000000c09c3d000000000000000000802abd0080aa3d00802a3d00802abd00802abd00000000000000000000000000802abd0080aa3d00802abd0080aa3d00802a3d00802a3d00802a3d0080aa3d00802abd00802a3d000000000080aa3d000000000000000000802abd0000000000802a3d00802abd00802abd00802a3d0080aa3d000000000000000000000000006081bd00000000006081bd0060013e0060813d00000000006081bd00000000000000000060813d006081bd0000000000000000000000000060813d00000000006081bd00000000006081bd0000000000000000006081bd0060813d0060813d006081bd006081bd006081bd006081bd0060013e0060813d0060813d0060813d"
+  },
+  {
+   "config": {
+    "quant_method": "mlx",
+    "group_size": 32,
+    "bits": 3
+   },
+   "roles": {
+    "weight": {
+     "dtype": "U32",
+     "shape": [
+      2,
+      6
+     ],
+     "hex": "8dddb513cdf9fddbd225bc9ea8caede62866dcd67ddcfd85efd25d6dad49934d4c9ad4559c5d1b3bbd5e946d7f5b4d54"
+    },
+    "scales": {
+     "dtype": "BF16",
+     "shape": [
+      2,
+      2
+     ],
+     "hex": "c23cf0bceebcacbc"
+    },
+    "biases": {
+     "dtype": "BF16",
+     "shape": [
+      2,
+      2
+     ],
+     "hex": "f3bdf03dee3dd73d"
+    }
+   },
+   "values_f32_hex": "000080b90080c2bd0000c03c0000c03c000080b9000043bd000080b9000080b9000043bd000092bd0000c4bc0000c03c0000c4bc000043bd0000c03c0000413d000080b90000413d0000413d000080b9000080b9000080b90000c4bc0000c03c000080b90000c4bc0000f3bd0000c03c000043bd000080b90000413d0000c4bc0000f03d0000f0bc0000703d0000f0bc000000000000f03c0000f03c0000b4bd000070bd000000000000f03c000000000000703d000000000000b43d0000f03c000000000000f03c0000f03c0000f03c0000f0bc0000f03c0000b4bd0000f03c000000000000f03c0000b4bd000070bd0000b4bd0000f03c0000b43d000000000080b2bd0000eebc0000ee3c0080b23d0000eebc0000ee3c0080b2bd00006e3d0000eebc0000eebc0000eebc00006ebd00006e3d0000ee3c00006e3d00006e3d0000ee3c00006e3d00006ebd00006ebd000000000000ee3d0000ee3c00006e3d00006e3d0000ee3c00006e3d00006e3d0000eebc0000ee3c0000eebc00006e3d0000ac3c00002c3d0000acbc0000acbc000000000000acbc0000acbc0000d73d00002c3d00002cbd0000ac3c0000acbc00002c3d0000000000002cbd0000813d0000ac3c0000813d0000acbc0000acbc0000acbc0000acbc00002cbd00002c3d00002c3d00002c3d000000000000acbc0000ac3c0000d73d000000000000813d"
+  },
+  {
+   "config": {
+    "quant_method": "mlx",
+    "group_size": 64,
+    "bits": 4
+   },
+   "roles": {
+    "weight": {
+     "dtype": "U32",
+     "shape": [
+      2,
+      8
+     ],
+     "hex": "f794a778887a94bc067a76a6bb547d7688175c398697c665896d95b6b7639ba8db76a3472a345f777c5908928d34a8265ad7a680c834d6687582692c4896ab26"
+    },
+    "scales": {
+     "dtype": "F16",
+     "shape": [
+      2,
+      1
+     ],
+     "hex": "bc24bca2"
+    },
+    "biases": {
+     "dtype": "F16",
+     "shape": [
+      2,
+      1
+     ],
+     "hex": "bcb0bc2e"
+    }
+   },
+   "values_f32_hex": "008097bc0090043e008097bd0080973c008097bc0080173d00000000008097bc00000000000000000080173d008097bc008097bd0080973c0080973d0040633d008017bd008017be0080173d008097bc008017bd008097bc008017bd0080173d0040633d0040633d008097bd004063bd0060bd3d008097bc008017bd008097bc0000000000000000008097bc009004be0080973d004063bd0080973c0060bdbd008017bd00000000008097bc0080973c008017bd0080973d004063bd008017bd0080973c000000000060bd3d008017bd004063bd0080973c008017bd0040633d008097bc0040633d0060bdbd008017bd0040633d0080973c000000000080173d00a021bd00b086bd0080d73c0080573c00b0863d0080d7bc0080573c0080573d0080d7bc00a0a13d0080573d00b0863d0090bcbd00a0213d0080573c0080573c008057bd0080573c008057bc00a0213d000000000080d73d00a0a13d008057bc00b086bd000000000080573d00b0863d000000000080d7bc0080d73c00a0a13d0080d7bc00a0213d0080573c00b086bd0080d73c0080d7bc0080d73d0000000000000000008057bd0080573d00b0863d0080d73c00b086bd000000000080d73c00a0213d0080573c00a0a13d00000000008057bc0080d73c008057bd00a0a13d000000000080573d0080d73c008057bc00a021bd0080d7bc0080d73c00a0a13d"
+  },
+  {
+   "config": {
+    "quant_method": "mlx",
+    "group_size": 32,
+    "bits": 5
+   },
+   "roles": {
+    "weight": {
+     "dtype": "U32",
+     "shape": [
+      2,
+      10
+     ],
+     "hex": "ea252801c393a61a4d4bee43b82da692517d9e8dad52f681847f4bc930ad1a42f765fa3abee9474d8dfbd8f5dc8cd64cdde4bcff0325acf1032c597d07d0676d8612b62aeb5b142e731f7c53abb5e3f3"
+    },
+    "scales": {
+     "dtype": "F16",
+     "shape": [
+      2,
+      2
+     ],
+     "hex": "941fe39da39fe21e"
+    },
+    "biases": {
+     "dtype": "F16",
+     "shape": [
+      2,
+      2
+     ],
+     "hex": "94af5c2f403116b0"
+    }
+   },
+   "values_f32_hex": "00e035bd0080f2bb003054bd000000000080723c0080f2bd0080f2bc0080723d00e0b53c0080f23c003054bd0090173d0080f23b009097bd00e0b5bc003054bd008072bc0058e33d000000000000000000b8a63d00e0353d0080723d0080f23c0080723c0080f2bc0080f23c0090973d006888bd0080f2bb00e0353d0080f23b00e4243d00e0bbbb0000803700703c3d007a81bd0080eb3d00a03c3c0080bc3c007a81bd00c424bd00a03c3c00a03c3c00703c3d0040bcbc0000803700e0bbbb00380dbd0080bc3c0080bc3c00580d3d007a81bd00a03c3c008a813d007a81bd00380dbd00688d3c0098eb3c00e0bc3b00686bbd002ec83d00e0bbbb008a813d0072893d005037bd006874bd00b4183d00dc55bd0070f4bc0038b73c00c418bd00b8983d0040743c0020f43b0058b7bc0040743c0058743d0038b73c005037bd005037bd00dc55bd007a89bd0016e53d0040373d0050f43c0040373d0020f43b00b4183d007a89bd0000283e008074bc0050f43c00b8983d0020f43b00cc553d0024a5bd00c002be0000dd3b0010dcbc0060a53c0060a53c0048253d0000a5bc0080dbbb0000a5bc001825bd00a05c3c0080dbbb00a05c3c0010dcbc00285cbd0000dd3b0000a5bc00285cbd00e8b2bd0070dc3c0010dcbc0000a5bc0010dcbc0000c03700d0403d00b077bd00285cbd00585c3d00e05bbc0010dcbc0078973d"
+  },
+  {
+   "config": {
+    "quant_method": "mlx",
+    "group_size": 64,
+    "bits": 6
+   },
+   "roles": {
+    "weight": {
+     "dtype": "U32",
+     "shape": [
+      2,
+      12
+     ],
+     "hex": "f414cf970a69fa02891aafe2e20cc29636a610b9c61ada1dd05f28b455980f7a4c72b6605a96afd1f115d3572940068dfcb9d276d7225c847daf059c674ba2bdd88752d7d6170ab29f24fe729d4d6e9251a4997ee0098221a5969b36856cbcae"
+    },
+    "scales": {
+     "dtype": "BF16",
+     "shape": [
+      2,
+      1
+     ],
+     "hex": "463b7c3b"
+    },
+    "biases": {
+     "dtype": "BF16",
+     "shape": [
+      2,
+      1
+     ],
+     "hex": "c6bd0abe"
+    }
+   },
+   "values_f32_hex": "0080773d00e020bd0060523d00206b3d00c0debc0080f73c000046bd008094bc00e0a03d00f081bd000046bd0000c63b008094bc0040ad3d0080f73c0080943d0000c63b00206b3d000000000000463d0080f7bc008094bc0080143c00c0de3c000046bd0000463c0020083d0060523d008094bc0000c63c008014bc00b09abd000046bd00d0bf3d0010a7bd002088bd0080773d0080f7bc0010a7bd0080943c006052bd0000c63c00b09abd00e020bd00c05e3d0040adbc00f081bd0000c6bc008094bc0040adbc00b09a3d0020083d00a039bd00b09abd000046bb0010a7bd00e020bd000046bb002008bd002088bd0000c6bd0040adbc000046bd0080143c0080c43d0000793c0080fa3c0080853d0040953d0080bebc00c01c3d0000d5bd0000debc00208ebd00002ebd00007fbc00403c3d00804dbd00000abe0000793c0000793c00c01c3d0000703b00009c3c0060cc3d000084bb0060cc3d000001bc004086bd0080bebc00c01c3d00608d3d00c03dbd00009c3c000040bc00000d3d00007fbc004086bd000084bb0020dc3d00806b3d00608d3d00401ebd00c07cbd00802c3d0020cdbd00401ebd00006dbd0000703b00003a3c0080bb3c00007fbc000040bc0000793c000040bc000040bc000001bc00006dbd0000db3c0000f63b0080fdbc00800ebd00c07cbd000001bc00000d3d00c05b3d0080fa3c0080fa3c"
+  },
+  {
+   "config": {
+    "quant_method": "mlx",
+    "group_size": 32,
+    "bits": 8
+   },
+   "roles": {
+    "weight": {
+     "dtype": "U32",
+     "shape": [
+      2,
+      16
+     ],
+     "hex": "d042329eada87d87ecd2923300978f99451198a1245c5da86a6121ff8537e0cf83a38478b98ab4797aa67aff6600989ab4360520f9da60b8a66652379948d93100952fac75edc96e9442a8a8648ffd376eff528697ca79d3596989cb6e60a98fe1a1ae5dc0ca5176814fa2a17692ff1452e7c890c0a695d6974be97a7a0046d3"
+    },
+    "scales": {
+     "dtype": "F16",
+     "shape": [
+      2,
+      2
+     ],
+     "hex": "8013e89103945412"
+    },
+    "biases": {
+     "dtype": "F16",
+     "shape": [
+      2,
+      2
+     ],
+     "hex": "0bb00b2e9c30d3ae"
+    }
+   },
+   "values_f32_hex": "0040833d000087bd0000a5bd0000963c0040033d0000e13c000043bc000034bb00c0b73d0000873d0000f03b0020a3bd006001be0000433c0000963b0000613c006081bd00e0e2bd0000523c0080ac3c0040bfbd00802cbd00c028bd0000e13c0000f0bc00c019bd00e0c4bd0060db3d000096bb00a09bbd0040a13d0060813d0000e0b70038bdbc000044ba0080013c00941fbd0040a6bb00d010bd0060eb3b00c0d33b00f0cebc00c0d33b0026b7bd0010ab3c0060c13d008078bc001088bc00d010bd0048633d00feb93d0020923d004aaebd008480bd0080ce3c00a01cbd00f0cebc0010ab3c0098103d0054603d002882bc00202e3d00147ebd000c723d0080133e00e0f7ba80b9c83d0008c8bc0042f13c8063b4bd005b58bd00b6143d00006fba009da23d00f0a7bc00f0a7bc00d43c3d0098823b807bd4bd80adb83d00b6143d807ed8bd0085823d00b8513c00507cbb005e5cbd002ad13c803c80bd00f5683d00c5283d0094213c006160bd00b6143d00e04c3d00f6afbc0098823b0095893d0054913c0098e33c007e0ebd00c02a3d00644a3d007634bd00907dbc00b0e4bb00ca3abd00a8973c0054913c00907dbc00a0c93b000bb93d00bcbabd004c31bd0013933d0010443d0000973b00c02a3d00f8b03c00c80a3c005c703d0018243c007247bd003d963d00f04abc00f04abc0060dabd004457bd00de663d"
+  }
+ ]
+}

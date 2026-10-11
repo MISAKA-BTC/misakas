@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// `f64` as the hex of its bits (see the module docs).
-mod f64_bits {
+pub(crate) mod f64_bits {
     use serde::{Deserialize, Deserializer, Serializer};
     pub fn serialize<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&format!("{:016x}", v.to_bits()))
@@ -170,6 +170,9 @@ pub struct ProfileSection {
     pub policy: PolicyRec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_window: Option<u32>,
+    /// `LowerOpts::gdn_core_wide`, pinned so `verify --rebuild` lowers the same way. Absent (false) in every pack built without it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gdn_core_wide: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<usize>,
     pub calibration: CalibrationRec,

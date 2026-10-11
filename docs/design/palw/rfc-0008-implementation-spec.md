@@ -318,7 +318,8 @@ and only that route can verify, convict or default it.** Concretely:
 2. **Each slice names its verification claim.** `slice.evidence_root` is the id of a kernel-route *program* claim, and admission rule
    5 gains the **verification binding** (refused by name, no write): the route holds that claim; it is not failed (convicted,
    unavailable, timed out); its producer is the slice executor's kernel bond (`palw_kernel_bond_id_v1`); its job's class is the
-   bound kernel class; its job's `nonce` is the **slice job nonce** `H("misaka-palw/exec-v2/slice-job-nonce/v1"; root claim ‖ index ‖
+   bound kernel class; its job's `nonce` uses the **retention-bound slice job nonce** of §15.6. Its v1 base is
+   `H("misaka-palw/exec-v2/slice-job-nonce/v1"; root claim ‖ index ‖
    range ‖ canonical job ‖ plan root)` — so one kernel job, hence one kernel claim, can back exactly one
    `(root, index, range)`; `slice.predecessor_state_root` is the **token state** `H("misaka-palw/exec-v2/token-state/v1"; n ‖ tokens)`
    of the job's prompt; `slice.result_state_root` is the token state of the prompt followed by the claim's generated tokens;
@@ -348,8 +349,9 @@ A proven-false or defaulted slice voids **itself and every later accepted slice 
 becomes `Voided { from_index }` and the root claim is voided — `WorkSliceProvenFalse` (void reason 131) or `WorkSliceDefaulted` (132).
 Neither reason charges at the V2 level: the evidence-bound liability is the kernel route's conviction or default penalty on the slice
 executor's kernel reservation, already collected; a second V2 forfeit would charge the root bond for another bond's lie. No prefix or
-partial payment is made (section 6: "no independent prefix payment"); the extra executors' exposure returns; the job's one-use
-tombstone stays until the claim retires. A slice that was `Verified` and whose claim is convicted later (inside the route's liability
+partial payment is made (section 6: "no independent prefix payment"); the extra executors' exposure returns.
+Active execution rows stay until claim retirement; the independent authenticated job-use history
+then survives until the original authorization closes (§12.6). A slice that was `Verified` and whose claim is convicted later (inside the route's liability
 horizon), or whose claim forfeits its reservation to a post-Final default (10.5's revision), is handled the same way while its root has
 not settled.
 
@@ -385,8 +387,8 @@ the root's settlement is capped at the sum of its slices' caps; the excess stays
 `sum(paid) == allocation` still holds). **Why:** section 6 requires retention "to cover … collectible liability after Final"; an
 uncapped leg larger than the collateral that backs it would be an uncollectible gain. The route's own invariant is `claim_reward <
 claim_collateral` (what one claim gains stays below what it puts at risk); a slice leg is a second gain on the same claim, so the two
-together are held under the same reservation. The legs stay unvested (`add_panel_payout`): vesting would add a second, V2-side forfeiture
-path for a fault the kernel route already convicts.
+together are held under the same reservation. Section 15 supersedes the original immediate-payment design: an independently
+funded EXEC reward row holds slice and fee legs without inventing an additional collateral offence against another actor.
 
 **Revision (X8R round 2, 2026-10-09).** The first text capped each leg at the reservation the route held *at the root's settlement*. The
 route releases a Final claim's reservation once its liability horizon passes, so that cap fell to zero for every slice verified long
@@ -458,28 +460,16 @@ DA protocol. **Limit:** it binds the REAL claim's *output*; the REAL claim's V2 
 That is G14C's GAP-81, and this binding is the shape GAP-81's option "bind the V2 claim 1:1 to a kernel claim of the same job" would
 take.
 
-**ADR-0176 D2 — one work, one right, one budget.** A session's work is paid once, from the root claim's single allocation `A`: the
-root executor's reward leg that its REAL `Final` releases (BUDGET clips it before any split, §2.6 of its design). The kernel claims
-that verify the prefix and the slices are verification vehicles. Each draws `Q` from its own producer's window, because a claim is a
-claim (D2's `m·N` claims), but no reward right of its own. Their route `Final` reward is an advance on the same work's share of `A`.
-At settlement, with `e_i` a piece's work share (capped as in 10.5) and `r_i` the route reward paid on its bound claim:
+**ADR-0176 D2 — one work, one right, one budget.** The round-3 advance/netting design recorded here is superseded by §13.
+Bound kernel claims are verification vehicles: their computation Final cannot pay the producer or spend the poster's job escrow.
+At root Final, their actual fee payments replace native issuance inside the executor's share of the root's one allocation.
+Already-paid standalone work cannot attach later. EXEC weight remains 0 and carriers mint nothing.
 
-```text
-slice executor's leg  = e_i − min(e_i, r_i)        (aggregated per bond)
-root executor's leg   = A − Σ r_i (prefix included) − Σ slice legs
-Σ legs + root leg + Σ r_i = A                      (when Σ r_i ≤ A; nothing minted, the withheld Σ r_i is never paid twice)
-```
-
-A piece whose share is at least its route reward is paid exactly its share in total; a piece whose share is smaller keeps its route
-reward and the root executor bears the difference. EXEC weight stays 0; carriers pay no worker share (`B` = 0 per carrier).
-
-**Hooks for lane BUDGET (`palw_bond_budget_v1`; the engine is BUDGET's, not built here).**
-
-| Hook | Called / read where | What the engine does |
+| Hook | Current consumer | Conservation |
 | --- | --- | --- |
-| H-3 (BUDGET's name) | an `EXEC_SLICE` carrier | nothing: the lane mints nothing, so no carrier calls `bond_budget_consume_block_v1` |
-| H-3a `palw_bond_budget_bind_vehicle_v1(kernel_claim, root_claim)` | the declaration (the prefix claim) and slice admission (the slice's claim); the read `PalwChainStateV2::exec_v2_root_of_kernel_claim_v1` answers it at any time | re-attributes the bound kernel claim's `R` (and `F`, 0 today) to the root claim's reservation: its route `FinalReward` is consumed from the ROOT's `R` (Clip), never from a fresh reservation on the executor's bond; its own `Q` and `d + W` stay as they are (D4). A route reward paid before the binding was charged to the executor's own budget; the settlement still nets it from `A`, so the right is never doubled |
-| H-3b | the root claim's `Final` | the reward is clipped before the split; `settle_at_final_v2` splits the clipped amount and nets the bound claims' route rewards, so `consume(root, R, A, Clip)` covers the whole session |
+| H-3 | `EXEC_SLICE` carrier | no block/reward issuance from the carrier |
+| H-3a | root declaration / slice admission → `bind_exec_reward_v1` | rooted table-27 hold; no additional root reward reservation, no early fee debit |
+| H-3b | native `finalize_claim` → `bond_budget_final_reward_v1` → `settle_at_final_v2` | clip the root's allocation once before splitting; actual fee payments reduce native issuance by the same amount |
 
 **GAP-61 — superseded by the Lead's GAP-81 decision; the seam is re-scoped, not replaced.** OPVB's reward gate is now per claim
 verification route (`opv/bootstrap-beacon` `c3221bc34`, unbuilt at this writing): the gate's `Onboarded` grants a V2-root claim nothing
@@ -504,9 +494,876 @@ gates passes today, and the unified EXEC stays unarmable (`PALW_EXEC_PAYLOAD_V2_
 
 | Gate | Owner | What this branch already shows (implemented; verified only where a run is named) | Open |
 | --- | --- | --- | --- |
-| SLICE | X8R (the Lead) | a plan is a partition with no gap or overlap (`a_plan_is_a_partition_with_no_gap_and_no_overlap`); more slices pay no more (`splitting_a_range_into_more_slices_pays_no_more`); a used index, a skip, an overlap and a replay credit nothing (`a_used_index_a_skip_an_overlap_and_a_replay_credit_nothing`); the root settles once and the allocation is conserved (`the_root_settles_once_…`); one job work id per root (`JobWorkAlreadyUsed`); the prefix claim's job nonce binds the root claim id, so another root cannot reuse a prefix (GAP-62); one budget per work, legs net of the route reward (ADR-0176 D2, §10.9) | a node test that a second root naming the same prefix claim, and a duplicate Final of one kernel claim backing two slices, are refused / credited once; the X8R round-3 build itself (queued) |
+| SLICE | X8R (the Lead) | a plan is a partition with no gap or overlap (`a_plan_is_a_partition_with_no_gap_and_no_overlap`); more slices pay no more (`splitting_a_range_into_more_slices_pays_no_more`); a used index, a skip, an overlap and a replay credit nothing (`a_used_index_a_skip_an_overlap_and_a_replay_credit_nothing`); the root settles once and the allocation is conserved (`the_root_settles_once_…`); one job work id per root (`JobWorkAlreadyUsed`); the prefix nonce binds the root claim id (GAP-62); one budget per work, legs net of route reward (ADR-0176 D2, §10.9); node controls for two REAL roots, cross-index claim reuse and signed reveal replay after computation Final (§15.8, measured 2026-10-11) | a second composed write of the same Final claim row, native root Final and one capped settlement, including restart/reorg; the node controls in §15.8 do not substitute for those requirements |
 | RECOVERY (EXEC half) | X8R | restart / replay / IBD / reorg of the carriage and the ledgers (`t12_exec_v2_carriage`), the salted-seal and slice-verification reorg cases | the prefix stage across a reorg |
 | BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, RECOVERY (budget half) | BUDGET (`palw_bond_budget_v1`) | — (EXEC carriers mint nothing: `B` = 0 per carrier; hooks H-3 / H-3a / H-3b, §10.9) | the pre-draw cap `T_candidate <= min(T_earned, BondRemainingRoundRights)` on the shared window; fee-only Rounds under B_max or an explicit execution cap (POLICY); split invariance; role-swap neutrality |
 | ECON | ECON | — | small/large model economics before/after the cap and window saturation, with criteria fixed before the run |
 
 EXEC_TX / EXEC_SLICE weight, blue score and DAA contribution stay 0; a slice's verification and reward aggregate to its root.
+
+## 12. WORK design correction — execution cost is not lottery weight (2026-10-10 audit)
+
+This section resolves the unit ambiguity in §§3–4 and §10's prefix/range accounting.
+`palw_exec_work_plan_v1` now feeds declaration acceptance, slice admission, node statement generation
+and root-plan restart consistency through `palw_exec_v2_fold`. These rules remain behind the dormant
+EXEC fence. The pruning / authorization history and release resource evidence below is still required for WORK.
+
+### 12.1 Two quantities and a fixed cost basis
+
+`W_REAL` is the REAL claim's accepted canonical lottery weight, including the attempt's lottery
+scaling. `C_EXEC` is the registered IR's useful execution cost for one frozen semantic job. Never
+compare a prefix `C_EXEC` with `W_REAL`, add the two, or multiply a suffix by the prefix's lottery
+factor. Root chain-position credit continues to be exactly `W_REAL`; EXEC adds zero weight / DAA.
+Work partitioning affects the allocation of the root's one funded reward, not the allocation itself.
+
+Use the existing ten-dimensional canonical TIR work vector. The reference carries its seven
+arithmetic dimensions in MAC-equivalents and its three traffic dimensions in bytes separately.
+It uses the existing arithmetic sum for range coordinates; this is **not** approval of a final
+economic price or a new byte-to-MAC coefficient. The accepted class fixes `AllNodesV1` or the
+existing `MinSelectArmsV2` policy from the class's registration DAA; the producer cannot choose or switch it between
+cells. Any future scalar price must have a versioned, checked, additive conversion of the whole
+vector and pass the existing cost/arbitrage gates. Do not round each cell before aggregating.
+
+### 12.2 Absolute positions and exact job scope
+
+Freeze prompt length `P > 0`, REAL prefix decode `G_p > 0`, whole decode `G > G_p`, and strictly
+increasing cumulative suffix decode ends `G_p < G_1 < … < G_n = G`. Obtain `P` and `G_p` from the
+REAL context, and bound `P + G - 1` by both the accepted class's position limit and the registered IR's history bound. Bound `n` before allocation
+by the existing 128-slice limit, and the cumulative arithmetic cost by the existing `2^48` root bound.
+Whole job inputs and exact `G` must be authenticated before the declaration is accepted; the
+producer's MAC interval alone is not that authentication.
+
+All costs use **one** `PalwCanonicalExecutionFactsV1::uncached(P, G)` and the registered IR:
+
+```text
+prefix positions: [0, P + G_p - 1)
+suffix i positions: [P + G_(i-1) - 1, P + G_i - 1), with G_0 = G_p
+prefix vector + Σ suffix vector = whole-job vector, in every dimension
+boundaries[0] = C(prefix); boundaries[i+1] = C(prefix) + Σ_(j<=i) C(suffix j)
+total_work = C(whole job)
+```
+
+`post` / logits execute only where the original whole-job schedule requires them. Attention's
+prefill/decode split remains at original `P`, and KV/history length remains the absolute position
+with the registered history window. Recomputing the preceding prompt or history to build a slice
+trace is physical overhead, not newly credited work. A slice that follows cumulative decode
+`G_prev` must have exactly `P + G_prev` prompt tokens and generate exactly `G_end - G_prev` tokens,
+in addition to the existing token-state, nonce, class, executor, output and evidence bindings.
+The prefix job's maximum and actual generated-token counts must both equal the REAL context's
+nonzero exact decode. A matching output commitment alone does not validate those counts.
+
+### 12.3 Identity, plan material and refusal obligations
+
+The authenticated semantic job must commit the accepted class / immutable computation identity,
+canonical full inputs and any admitted cache state, the exact whole decode and execution/cost
+versions. Keep its useful-work identity independent of output values, slice cuts, executor/bond,
+carrier, root id and nonsemantic scheduling nonce. `job_work_id` now binds the immutable class,
+the REAL job authorization and its authenticated input. It excludes cuts, output state, verification
+metadata and continuation extent: one REAL job authorization opens at most one root, even if the
+producer requests more or fewer continuation tokens. Declaration acceptance derives its input
+commitment from the REAL job's public prompt. A new root or a different partition must not authorize
+fresh useful credit. Legitimate repeated jobs require existing admission/ticket
+authorization that binds fresh semantic work; neither a new root id nor an owner label proves it.
+
+The existing signed cumulative-cost plan authenticates its generated-token ends without new wire
+fields. All credited arithmetic coefficients are nonnegative and each accepted prefix has positive
+cost. The committed logits node is never in a discounted Select arm, has positive arithmetic cost,
+and runs once for each emitted token. Every subsequent token runs the same recurring occurrences
+with nonnegative coefficients and nondecreasing capped history, so cumulative arithmetic cost is
+strictly increasing after the prefix. Binary search
+over the accepted context finds the unique decode end for each boundary; reject an off-grid value.
+The search is bounded by `min(class_max_positions, program.history_bound)`, at most `2^21` positions,
+and the plan by 128 suffixes. `palw_exec_work_plan_from_boundaries_v1` reconstructs the full vector and
+scalar plan once these ends are found. The signature already binds all boundaries and total cost.
+
+At slice admission and statement generation, the actual prompt and generated-token lengths derive
+the absolute preceding / ending decode positions. Their cumulative costs must equal the root's two
+boundaries. The slice's input commitment must match the actual prompt's token-state commitment;
+repeated prompt execution earns no extra range cost. Restart consistency repeats the registered-cost
+derivation and useful-work key from REAL inputs, and checks the actual lengths of retained slice jobs
+against that one reconstructed plan. This does not solve missing pruned dependency material.
+Reject missing admission material, unavailable cost version, changed shape,
+inflated costs, out-of-class positions, overflow, empty/non-increasing cuts and a zero-cost cell.
+No fallback to producer-declared work is permitted. The shape calculator retains its existing
+saturating arithmetic; §12.5 bounds its intermediates for these validated EXEC inputs. The planner
+also rejects saturated output dimensions and checked sum overflow. Wider formats or cost tables
+require a new proof and version before use.
+
+`JobWorkUse` must survive the earliest legal reuse window and pruning as authenticated history,
+with an explicit finite retention / expiry rule from the canonical job authorization. Define its
+cross-snapshot generation and reorg rollback with the existing carriage ledgers. Do not claim that
+an indefinitely growing tombstone set is a bounded design or that a missing pruned row allows reuse.
+
+### 12.4 Evidence and remaining implementation work
+
+`consensus/core/tests/palw_exec_work_plan.rs` checks each cell against a position-by-position IR walk
+for all seven checked-in architecture fixtures; coarse/fine partitions preserve the full vector
+under both existing cost policies. It also exercises prompt replay, a tiny run claiming a large
+cell, fabricated declared cost, invalid partitions/context bounds, out-of-artifact positions and a
+valid 1,024-layer IR whose execution exceeds the root cost bound without enumerating its positions.
+The signed-boundary roundtrip covers all seven architectures and both cost policies. The fold's
+tiny-run attack passes the prior nonce/class/token/evidence binding but is refused by the new cost
+scope; statement generation refuses it too. A signed tiny-run carrier also exercises node admission
+without relying on the producer helper. A declaration with off-grid cost or a fabricated input
+commitment is refused, while REAL lottery weight stays unchanged. The prefix exact-decode refusal
+has a fold regression that accepted the wrong shape before the fix. Test results for each layer are
+recorded in the design audit; these checks do not substitute for pruned history evidence. The
+structural-cap test combines 16 blocks, 512 nodes per block, 1,024 layers, `2^21` positions and 128
+suffixes, using small committable operations that fit the program byte cap. A separate valid
+Concat/Slice DAG represents `2^200` paths to one weight with only 400 structural nodes; its work
+derivation visits each node once rather than expanding those paths.
+
+Section 12.6 implements finite authorization and retirement-independent history. The remaining WORK
+work includes release measurements for the most expensive graph shapes and root populations,
+source-header availability across pruning, and stronger multi-process pruned replay attack evidence.
+BUDGET and WINDOW remain separate blockers: correct costs alone do not stop early payout
+or retain post-Final collectible liability.
+
+### 12.5 Arithmetic and algorithm bounds for the registered v1 IR
+
+This proof applies to canonical normal-form programs accepted by `misaka-palw-tir::validate`,
+the two existing work policies, cost table v1, and EXEC's checked `P + G - 1 <= 2^21` position bound.
+The planner has compile-time guards on the structural limits and the cost-table entries below.
+It does not authorize larger histories, tensor formats or prices.
+
+At the shape calculator's samples `H = 1, 2, 3`, a computed tensor has at most `3 * 2^28` elements:
+normal form bounds it at its positive window, and it has at most one H dimension. Static params
+have at most `2^40` elements; every dimension is at most `2^24`, and every dtype is at most 16 bytes.
+MatMul therefore has fewer than `2^54` MACs. For TopK, `input_elements * k = input_axis *
+output_elements`, so its comparisons also number fewer than `2^54`, even when reading a large
+param. Reduction/elementwise/transcendental counts are smaller. At most eight operands contribute
+fewer than `2^47` bytes; all `node_cost` u64 products and sums are below u64 saturation.
+Multiplying MACs by the weight width and the v1 arithmetic prices (1, 1, 4) leaves each sampled
+work dimension below `2^58`.
+
+The nonnegative affine coefficients `c0`, `c1` satisfy `c0 + c1 = sample(1)`. Summing at most
+512 nodes gives each block coefficient sum below `2^67`. Select arm-only regions are disjoint or
+nested: all uses of a member must remain in that arm until its Select. An inner region is wholly
+inside an outer one that contains its Select. Ascending Select order discounts the inner region
+first; the region accumulator has already included those preceding members when subtracting the
+inner discount. Componentwise max removes no more than the credited arm union, and no addition
+exceeds the undiscounted block sum. Thus neither the region calculations nor block accumulation
+can saturate; discounting cannot increase a coefficient.
+
+For at most `N = 2^21` positions and `H <= 2^21`, `sum H <= 2^42`. The triangular products in
+`sum_h` are below `2^43`. A block dimension is below `2^67 * 2^42 = 2^109`, and fewer than
+`2^11` occurrences give a whole dimension below `2^120`. Even summing all ten dimensions is
+below `2^124`. Param inventory bytes are below `2^12 * 2^11 * 2^40 * 16 = 2^67`. All are within
+u128. The planner separately enforces the much smaller `2^48` arithmetic allocation limit;
+traffic bytes never enter that scalar without a separately approved conversion.
+
+The boundary inverse builds one shape, performs at most 21 binary decisions and one endpoint
+check per suffix, and then checks vector conservation. A vector evaluation visits at most 1,026
+occurrences; it never enumerates positions or tensor elements. Structural weight-view traversal
+uses a visited set, so shared Concat/Slice paths do not expand exponentially. The bounded
+structural-cap measurement is evidence for this algorithm, not proof that every allowed graph
+and 256-root restart fits the node's release latency budget.
+
+
+### 12.6 Finite REAL authorization and retirement-independent job-use history
+
+The original REAL header, identified by the native claim's accepted block hash, authorizes root opening
+only while `max(source_daa, accepted_daa) <= opening_daa < source_daa + 100_000`. The sum is checked;
+an overflow or a terminal `u64::MAX` deadline is refused. This is a fixed v1 authorization profile,
+not a lease renewed by later acceptance, claim retirement or root opening. It does not shorten an
+already opened root's signed execution/material terms or extend any collateral hold.
+
+Section 12.7 captures this clock when the native claim is accepted. Root opening reads only that
+authenticated state row; later header availability or caller-supplied bytes cannot change it.
+The fold recomputes the carrying header's full hash, requires a REAL attempt algorithm, decodes the
+attempt, and binds its attempt id, class, executor bond and recomputed execution anchor to the
+native claim at capture. The anchor check applies when native attribution recorded an anchor;
+a zero legacy native attribution is not itself a new native refusal. Missing or substituted bytes
+are refused at capture. The cached header hash alone is insufficient. Core arithmetic fixtures
+have an explicitly named test-only source-time seam at native capture; it is absent from the
+production extras type. An execution anchor may repeat among same-template,
+same-nonce-bucket sibling headers; uniqueness of a hash or a different claim id is not a replay proof.
+
+`exec_v2_job_uses[job_work_id]` stores the first owner root, class, canonical REAL job, authenticated
+input, source block and immutable source/expiry DAA. Native claim retirement removes the active
+root/slices/job index but retains this separate authenticated history. A later root with the same
+work key is refused while its recorded authorization is open. Once the record is deleted, opening
+still requires a valid original authorization, so absence is never permission to renew old work.
+Fresh authorization may repeat legitimate inputs; a new root id or owner label alone cannot.
+
+The map admits at most 100,000 rows and refuses admission when full; it never evicts unexpired
+history. A derived ordered expiry index contains only rows whose owner root has retired. A block
+removes at most 256 expired rows, ordered by deadline and work key. Retained roots keep their rows
+even after authorization closes, to authenticate their live execution ledger. Index updates are
+incremental in ordinary writes and journal application/rollback; restore rebuilds the index from
+primary rows. One encoded key and row uses 400 bytes before map overhead, so the structural cap is
+40 MB of primary entries before carriage framing, clones, journal and allocator costs. This is
+not an approved release-memory/latency budget or an economic admission cap.
+
+The history has a conditional state-root domain `exec_v2_job_uses/v1`, optional carriage tail `0xF2`,
+and inner `ExecV2Row` table 7. No new top-level object tag or existing root/slice wire field is added.
+Empty history adds no bytes/domain; existing optional tails keep their encoding. The decoder refuses a count above the cap before reading rows and requires strictly ordered unique
+keys. Duplicate or truncated tails and live roots without history are refused. Private armed snapshots from before
+this profile cannot synthesize authorization terms; their migration/replay needs an explicit
+procedure. Public activation remains refused. Snapshot authentication and journal rollback are
+local recovery evidence, not proof of transport/pruning availability or multi-process P2P replay.
+Local header presence must never decide root admission differently between a full node and a
+pruned joiner. The original-history profile alone did not meet that requirement; the capture
+mechanism below removes that lookup for newly recorded claims. Legacy migration and actual
+pruned P2P transfer/replay remain required before activation.
+
+The source header's DAA and the native claim's acceptance DAA are different authenticated facts.
+No ordering between them is required: DAA is derived from the selected parent and counted mergeset,
+not a wall-clock timestamp or a proof of the source/acceptance inequality. Neither fact may lie
+after root opening. In particular, a source DAA above acceptance DAA waits until opening reaches
+the source clock; it is not permanently excluded. Snapshot consistency checks the source clock
+against the root's own opening DAA, even if the latest state point is later. The expiry continues
+to derive solely from the original source DAA. Moving acceptance later cannot renew authorization,
+and acceptance at or after expiry leaves no valid opening interval. Deleting expired one-use
+history cannot authorize the same old source: opening at the deletion point is already expired.
+This order-independent profile replaces the earlier unproven `source_daa <= accepted_daa` guard.
+It does not assert that a reversed pair has been observed in a validated live DAG. Arithmetic
+fixtures and actual multi-process DAG evidence must be distinguished.
+
+### 12.7 Native capture of the original clock
+
+`exec_v2_origins[native_claim_id] = { source_block, issued_daa }` is populated atomically with
+native claim acceptance while the EXEC fence is active. The production walk retains the very
+header used for admission and key derivation, for both its own attempt and merged attempts.
+It supplies its serialized bytes to the capture check in §12.6 before native financial writes.
+Root readers and folds never look up the original header or reconstruct its clock later.
+A rider has no independent REAL carrying header and records no root authorization, as in the
+prior header-backed root rule. Fresh native admission already needs its source header; recording
+the clock does not introduce a new historical-header requirement at root opening.
+
+The raw source clock is data, not a new cap on native admission, weight or income. Capture imposes
+no new source/acceptance DAA ordering, authorization-expiry or overflow condition on native work.
+Root authorization separately enforces the fixed finite profile in §12.6. Proving that profile's
+source/acceptance ordering covers all eligible DAG work remains an activation requirement.
+
+This map has no independent EXEC population cap: at most one row belongs to each live native
+claim. Retirement deletes the row through the same claim writer and journal; the independent
+job-use history continues until its original deadline. Restore rejects orphan rows, non-attempt
+owners, zero source hashes and source blocks differing from the native claim. Decoding bounds
+the count by the carried live-claim population before allocation and requires strictly ordered
+unique keys. One primary key/row encodes to 136 bytes before allocator, clone and journal costs;
+release resource approval for the live native population is still required.
+
+The conditional root domain is `exec_v2_origins/v1`, optional carriage tail is `0xF3`, and inner
+`ExecV2Row` table is 8. F3 is emitted before the existing F2 history tail. Empty origin state
+adds no root domain or tail; existing root/slice wire fields and top-level object tags are unchanged.
+Application, undo and authenticated carriage restore preserve the original clock. Observation
+reports `authorizationOriginsTotal` separately from active roots and job-use history.
+
+Claims accepted before this fence or restored without a recorded clock are refused for new
+root opening with an explicit `AuthorizationUnrecorded` reason. A late header supplied by a full
+node cannot backfill the row or renew the deadline. This is a fail-closed interim implementation,
+not approval to exclude legacy eligible work permanently. Section 12.8 provides an explicit carried
+proof for a missing clock; its availability and largest-header coverage remain activation requirements.
+Already opened roots with F2 history keep their
+authenticated original clock even when no F3 row exists; absence never authorizes a new root.
+
+A real-node reader/fold regression removes the original header and admits the same signed root
+from an authenticated snapshot, producing the same state root and delta as the full-header control.
+It restores the header before further DAG processing. That proves local root-lookup independence;
+it does not prove actual pruning, multi-process P2P transport, legacy migration or native Final.
+
+### 12.8 Carried original-header proof for legacy claims
+
+`ExecOriginRecordedV1` (object tag 131, under `palw_exec_payload_v2`) carries
+`PalwExecOriginWitnessV1 { claim, header: borsh(Header) }`. It is ordinary fee-market registry
+traffic and requires no new owner signature: the immutable carrying hash of the already accepted
+native claim authenticates the full header. It cannot authorize a new claim or execution by itself.
+The reader and fold use the same state-based admission function, without local header lookups or
+clock extras. Claim presence, native attempt source, an absent clock row and the complete proof
+checks of §12.6 precede the origin write. Existing recorded rows cannot be overwritten. For an
+already opened F2 root, the supplied clock/source must also equal its authenticated history.
+The object records raw original DAA, including when supplied late; Root opening still applies
+the original finite deadline. Migration never replaces it with the migration/acceptance block's
+DAA and never creates native income, weight, reservations or a longer material/collateral term.
+Root signatures, job bindings, consent and every other eligibility rule remain required.
+
+The ordinary decoder for proof headers checks all vector counts against bytes actually present.
+At most 255 compressed-parent runs are possible; cumulative levels must start above zero and
+strictly increase, and consecutive equal runs are rejected through `CompressedParents::try_from`.
+This validation occurs before expanded hashing, which would otherwise panic on malformed Borsh
+parent runs. Fixed fields follow the ordinary Header Borsh layout; the REAL commitment is bounded
+by its existing 8,192-byte header rule and must consume the remainder exactly. The cached hash
+remains untrusted. The same safe header decoder is used at fresh native clock capture.
+
+The witness byte cap is the existing assembled-object budget less its 69-byte tag/key/length
+overhead: `16 × 100,000 − 69 = 1,599,931` header bytes. Its decoder checks the declared length
+before allocating. An empty header may decode and ride unjudged below the fence, preserving A2;
+stateful acceptance rejects it after the fence. Tag 131 is in the new-kind/owner/wire-pin tables,
+without changing any frozen live kind. Generic `ObjectChunk` carriage accepts this proof and
+validates it only after complete assembly; partial chunks supply no authorization. Below the
+EXEC fence, the completing payload is refused as the old build's unknown kind. The origin uses
+the existing F3 / table 8 journal, with exact apply, undo and snapshot recovery.
+
+This bounded implementation does not approve permanent exclusion of a legacy header too large
+for that carriage. Prove coverage of every eligible historical header, or supply a bounded larger
+migration transport, before activation. Compressed input size also does not approve hash latency:
+one run can expand across 255 levels, so the largest proof can feed nearly 408 MB of parent bytes
+to each header digest (and both full and pre-PoW digests are needed for a valid proof). Measure
+that cost and the shared chunk lane's availability under load. Existing eight-slot chunk traffic
+can delay a proof; no floor on timely migration is claimed. A producer/archive must supply the
+original bytes before pruning destroys all copies, or an authenticated pre-activation migration
+must preserve them. Actual multi-process activation/pruning/P2P recovery remains unverified.
+
+Origin verification uses a byte-identical parent-run writer for its two digests. A repeated run
+of at most 32,768 hashes serializes its hash bytes once, then writes the same length and bytes at
+each expanded level. The scratch is at most 2 MiB per invocation and is discarded after that run;
+larger runs use the original streaming writer. This is a performance scratch bound, not an
+admission or historical-header size limit. Ordinary block identity, PoW and Round hashing keep
+their original streaming parent writer; both paths share the unchanged remaining header preimage.
+No representation cast or new digest domain is used. The original writer already borrowed the
+compressed parents: the nearly 408 MB above describes repeated hash input, not a materialized
+408-MB vector. The optimization reduces update/iteration overhead, not that cryptographic byte work.
+It cannot substitute for worst-case release latency, resident-memory or shared-lane availability gates.
+
+The origin verifier first checks the attempt algo, decodes the envelope against actual remaining
+bytes, and rejects an attempt id, class or executor-bond mismatch before either expanded header
+digest. Both envelope byte vectors are length-checked before allocation; no current admission
+version/key/signature policy is added to this legacy provenance reader. These early checks can
+only reject. A passing proof still recomputes the full accepted header identity, then the pre-PoW
+digest and the existing anchor binding before exposing its source DAA. A cached header hash is
+never trusted. All refusals retain `AuthorizationOrigin`, and the accepted predicate is unchanged.
+An adversary can copy matching public envelope fields and still reach the identity digest, so
+this ordering does not establish the worst-case CPU/fee bound or transport availability.
+
+Resource accounting must cover all invocations, not just the origin reader once. For tag 131,
+H1/rehearsal use the core's read-only Origin verdict: authenticate the exact state/proof/point
+once, then run the same common object guards as the writer. Origin's writer has no additional
+fallible operation after those guards and authentication. The query creates no transition builder,
+state copy or discarded write journal. Extras are loaded only after authentication succeeds; the
+node's no-V2-bundle refusal and the distinction between `NotAccepted` and `Refused` remain intact.
+This removes the former second authentication from each successful H1/rehearsal call. It supplies
+no validated flag, reusable permit or cache to a writer: actual object acceptance, block folding
+and native capture continue to authenticate independently. Other object rehearsal paths retain
+their writer. Any new fallible Origin writer condition must also enter the read-only verdict.
+
+The block filter and the whole fold additionally share the same explicit Origin work-accounting
+rule: at most **two eligible header decode/authentication attempts per block**, direct and
+chunk-completed together. This is the initial dormant-lane ceiling, matching Origin's former
+incidental two-completion limit below the grading-accounting fences; it is not a calibrated
+latency, fee, throughput or availability approval. `PalwExecOriginBudgetV1` is ephemeral, not
+state/carriage or an authentication hint. The node charges before the existing acceptance/writer
+checks; the whole fold charges independently before its own header reader. Refused header work
+is not refunded or reset by state restore. A new block starts a fresh budget. The node drops
+excess attempts while the carrier block stands; a raw unfiltered fold refuses a third attempt.
+A single-object rehearsal has a fresh budget, so its one proof always fits this ceiling.
+
+Only cheap metadata is examined before charging: owning fence, nonempty bounded header bytes,
+an existing Attempt claim and no clock already recorded. Passing these checks authenticates
+nothing; the full identity and anchor checks still follow. Wrong nonce/class/body and other
+eligible decode/authentication failures consume the attempt. The node rejects metadata failures
+before cloning a writer. A completed Origin chunk has its own budget and consumes no
+`FamilyCertified` grading slot. Before its owning fence, the inner remains undecodable and the
+old unknown-chunk accounting remains unchanged. The inner-object classifier also refuses invalid
+chunk count/index/size before assembly, matching the writer's structural limits.
+
+Pool, template, reorg and chunk-completion repetitions, actual block folding and native capture
+still need their own resource inventory. The standalone origin-reader resource probe does not
+measure those composite paths. Eight active chunk groups are a concurrency bound, not by themselves
+a bound on all validations/completions in a block or on unaccepted traffic. An inclusion fee does
+not pay for a refused proof. Approval therefore requires bounded admission work and repeat-call
+accounting at each actual consumer without weakening validation. Historical-header coverage and
+permissionless migration must remain intact; a smaller arbitrary header cap is not a substitute.
+
+For a carried header of `B <= 1,599,931` bytes, each parent hash consumes 64 encoded bytes and
+each compressed run expands at most 255 times. Thus parent input is at most `255 B` per digest
+(`407,982,405` bytes at this cap), `510 B` per successful reader or current H1/rehearsal query
+(`815,964,810` bytes). These are conservative cryptographic input bounds, not allocated vectors,
+elapsed-time bounds, per-block bounds or bounds for uncapped fresh native capture. Header footer
+bytes, level length prefixes, decoding, extras, state loading and repeated consumers add work.
+For **one acceptance-filter pass plus one committed fold** processing these carried proofs,
+the conservative parent-input bound is `2 × (1,020B + 510B) = 3,060B`, at most
+`4,895,788,860` bytes at the header cap. The direct path may check once at acceptance, once in
+its rehearsal writer, then once in the committed fold; a chunk completion checks no more than
+that. This bounds this particular sequence's carried-Origin cryptographic input, including
+charged refusals, not raw chunk assembly/group hashing, cheap rejected metadata traffic, repeated
+invocations of the sequence, fresh native capture, state clones/roots, elapsed time or node RSS.
+The ceiling of two alone does not prove sufficient service rate or honest migration liveness.
+The outstanding admission/rate/fee and historical coverage gates still apply.
+
+The release origin-reader probe measures the actual public admission function on structural
+fixtures. Its large pinned control is not native-admitted; its eight-refusal sequence is not
+chunk/P2P or block admission evidence. A median and whole-process RSS observation cannot establish
+maximum latency, incremental memory, participation probability, collectible fees or activation.
+
+The node regression re-folds an actually admitted signed REAL header with EXEC dormant, proving
+the native row is unchanged and has no clock. It then uses a legacy-shaped authenticated snapshot
+with the same native data and prefix, deletes the actual source header from the node store, and
+accepts the carried proof through the node reader/fold. The result equals the normal step on an
+already recorded state, and undo restores the missing-clock snapshot. This is local provenance
+and recovery evidence, not an actual historical activation, chunk transport or pruning drill.
+
+
+## 13. BUDGET correction — root Final authorizes bound kernel fees
+
+The kernel computation lifecycle and the EXEC reward lifecycle have different Finals. A bound kernel claim reaching
+computation Final emits reward 0, remains `rewarded = false`, and retains its poster's escrow. It may verify the corresponding
+prefix or slice but cannot create a producer payout before the root's REAL Final. No untrusted kernel route object can bind,
+finish or cancel a hold: the EXEC consumer calls those hooks only after its execution-binding checks.
+
+### 13.1 Rooted hold and retention
+
+Kernel table 31 (codex used 27, G14R's verifier pay; renumbered at the R6781 merge) is `kernel claim digest → ExecRewardHoldV1 { owner_root, expires_daa }`.
+Its collection domain is `misaka-palw/kernel/ledger-collection/exec-reward-holds/v1`; its root extension domain is
+`misaka-palw/kernel/ledger-exec-reward-holds-extension/v1`. The extension is absent when table 31 is empty,
+so all unarmed preset rows, existing wire records and historical roots are unchanged. Direct ledger roots, row roots,
+restoration and the consumer's journal compose the same extension, after the beacon extension.
+
+At most `256 × (128 + 1)` holds exist. Consumer consistency requires exactly one hold for the prefix and every accepted slice
+of each open/complete bound root, no duplicate owner and no hold for a closed root. An already-paid prefix is refused at root
+declaration; an already-paid slice is refused with code 29; a conflicting reward owner uses code 30. Existing refusal codes stay
+pinned. Computation Final with no prior payout may attach. Binding to a different owner, finishing twice or finishing an expired,
+non-Final or failed claim refuses without a write.
+
+The escrow reservation remains on the poster's actual collateral until the root settles or cancels. Idle-job expiry cannot
+release a held escrow first. The root's existing bounded expiry is the latest permitted root Final, including when all pieces
+are verified but REAL Final is delayed by a court. The block's initial expiry sweep voids such a root and refunds its bound
+escrows. This is a financial hold deadline, not a reduction in the native finality delay or the required fraud liability window.
+
+The financial hold protects the entire **job escrow**, although table 31 names the bound claim. In PanelLicensed mode,
+several producers can commit claims before the first Panel pass assigns the job. A pending EXEC-bound claim does not
+win that assignment by binding: another producer may obtain coverage and computation Final first. That sibling Final
+must emit reward 0, leave `rewarded = false`, and retain the held job escrow. It cannot bypass the hold by naming a
+different claim digest. Derive the bounded set of held job IDs once per kernel closing tick and use it for both standalone
+Final payouts and idle-escrow expiry. Unrelated jobs retain their normal payment path. This does not relax the one-job
+Panel ownership rule; the uncovered EXEC dependency remains pending, then times out, and the root cancels/refunds
+without paying either producer. Normal eligible bound work still uses the root-Final capped settlement hook.
+
+OPV assigns job ownership earlier, at reveal. Its refusal of a competing claim proves that admission guard, not the
+Panel financial guard above. These two verification modes require separate regression evidence.
+
+### 13.2 Source and cap accounting
+
+Let `A` be the root executor allocation after the native bond-budget clip, buyback and panel split. Aggregate each executor's
+registered IR work before rounding, apply its frozen slice leg caps, and obtain gross shares `e_b` with `Σ e_b = A`.
+For each bound claim, in prefix-then-slice-index order:
+
+```
+f_i = min(job escrow amount, actual poster collateral remaining, executor share remaining)
+executor share remaining -= f_i
+native leg_b = e_b - Σ fee payments to b
+Σ native legs + Σ f_i = A
+Σ actual poster debits = Σ f_i
+```
+
+A single ledger batch releases the FULL escrow reservation, debits only `f_i`, funds exactly `f_i` for the claim producer,
+and releases the unused reservation to its poster. Re-sync poster collateral against the consumer's real bonds before the batch.
+`apply_settlements` matches a FinalReward to PayJobEscrow of the SAME claim; another claim's debit cannot fund it.
+The actual amounts, rather than `policy.claim_reward`, are saved in the existing prefix/slice `route_reward` fields at root Final.
+When `A = 0`, every escrow is released and every producer leg is 0. No additional R reservation is created for a bound claim;
+consuming the root's gross allocation once covers native and fee funding together.
+
+All ledger rows, poster debits, funded vesting rows, exposure releases and the root `Settled` marker are journaled by the same transition.
+The existing delta/carriage rules apply and revert them together. A second root Final returns no new payment. A voided root pays
+zero; an incomplete root cannot invoke settlement. Default, conviction or expiry cancels every bound hold and releases escrow
+without reward or collateral debit. A previously verified piece receives no partial payment from an unsuccessful root.
+
+### 13.3 Remaining acceptance boundaries
+
+Section 14 prevents a bound kernel reservation's ordinary expiry before the root's base liability/court path. Section 15 connects
+settled-root verdicts and delayed native/slice/kernel payments in the fold; its remaining WINDOW boundaries still block activation.
+Standalone kernel budget consumers, fee-only Round B policy,
+market-fee R policy, whole-model soundness, economics, pruned authorization history and worst-case resources retain their
+separate requirements in the full RFC6/7/8/12 audit. No preset or public activation validation is armed by this change.
+
+## 14. WINDOW correction — a consumer cannot inherit expired collateral
+
+### 14.1 Consumer floor and inclusive release
+
+Before writing an EXEC reward hold or executor exposure, freeze the following floor in the bound prefix/slice claim's existing
+`liability_until` row:
+
+```
+H_exec = root.expiry_daa
+       + max(native window_court, kernel liability_daa)
+       + kernel court_deadline_daa
+       + kernel proof_grace_daa
+liability_until = max(existing liability_until, H_exec)
+```
+
+`root.expiry_daa` is the latest possible REAL root Final, bounded by the existing root admission limits. The native window
+protects the base post-root-Final evidence path. The deadline and grace allow a kernel material demand begun at the end of that
+window to finish without making its public response unprosecutable. Every host addition is checked; an overflowing floor refuses
+before a write. This is a retention floor on actual collateral, not a new reservation, a payout authorization or a soundness claim.
+
+The trusted kernel hook refuses a paid, convicted, unavailable, timed-out or zero-reservation dependency. A computation-Final
+claim may attach only while its existing liability is still open; an expired-but-unswept positive reservation is also refused.
+Declaration, slice admission and the producer's statement helper make the same liability eligibility checks. A past expiry cannot
+be reopened by attaching already released work to a later consumer.
+
+Computation Final and a pre-Final availability default set `liability_until` to the maximum of its existing value and their normal
+kernel horizon. Neither overwrites the consumer floor. A root fee settlement or cancellation removes its reward hold without
+shortening this claim horizon. A healthy Final/defaulted claim's ordinary collateral release requires `daa > liability_until`;
+the inclusive last day remains available for a proof. Conviction or an availability penalty can consume collateral earlier, and a
+claim that times out without ever passing remains the existing terminal failure. Those outcomes cannot earn an EXEC reward.
+
+### 14.2 Restoration and defensive failure
+
+No row layout, wire field or new collection is added: table 31 still identifies the root and its expiry, and the existing claim row
+roots the extended liability. Kernel restoration requires each reward hold's claim to retain a horizon at least as long as its
+hold. EXEC restoration additionally rederives `H_exec` for every open/complete root and refuses a shorter dependency horizon.
+The network's native and kernel time parameters must remain stable while such roots are live; any later parameter transition
+must specify how outstanding commitments retain their originally admitted policy before that transition can be armed.
+
+A verified piece whose reservation disappears while its liability remains open defaults the root; its frozen leg cap cannot make
+lost collateral collectible. No partial native or job-fee payout follows. Release at the protected horizon remains finite.
+
+### 14.3 Evidence scope and remaining WINDOW work
+
+Real kernel lifecycle tests cover computation Final, post-old-horizon public conviction, a late material demand/default,
+root fee settlement, row restoration, inclusive last-day retention and following-day release. The public proof in the kernel
+test is constructed from the committed statement before the trusted consumer binding and filed later; it does not claim a fresh
+post-binding outsider replay of the complete host. The actual-node suite verifies consumer binding, extended kernel Final
+retention, existing outsider verdict propagation before root Final and replay. A fold regression refuses shortened restored
+liability and an early lost reservation. The actual node still uses the existing REAL Panel admission seam and reaches ready,
+not native root Final.
+
+This floor alone does not close WINDOW. Section 15 addresses the first two items in the fold, with the stated evidence limits:
+
+- Propagate settled-root prefix/slice conviction and post-Final availability default into native Final evidence and exact safe
+  weight reversal, and burn every still-unreleased native/kernel/slice reward leg consistently.
+- Hold every payout through the same collectible consumer window; current root-Final job fees and slice legs can still be paid
+  immediately. Retain dependency records through retirement, pruned join, restart and reorg.
+- Couple any native DA/court extension beyond the base window to dependency collateral, vesting and public material/provider
+  TTL. Extending `liability_until` does not extend a provider's signed service commitment.
+- Specify the worker's authorization for the consumer's longer retention and its capital cost before activation. A root's
+  admission limit is a bound, not proof that the existing signed job contract has agreed to that obligation.
+
+These requirements retain their separate acceptance evidence in the full RFC6/7/8/12 audit. Public fences remain dormant.
+
+## 15. Composite reward vesting and settled-root retraction
+
+This revision supersedes the immediate slice/fee payment statements in sections 10 and 13. A native root Final funds its
+allocation once. Native producer/Panel/reserve legs remain in the existing native vesting row. Additional executor legs use a
+separate root-keyed row whose `(bond, NativeSlice | KernelFee)` keys preserve their role and funding source. A Panel-seat-only
+burn cannot accidentally treat a slice executor as a seat. Kernel fee entitlement requires the matching actual poster debit;
+funding occurs at Final, while spendable payout waits. Rounded zero additional legs still retain a zero-value receipt while the
+forced native row exists. A native actor-specific cancellation also retains this zero-value receipt until the remaining native
+legs finish or are burned; cancelling the additional fund cannot strand that native row. This forces every composite root to
+vest even if the independent rcore fence is off, while leaving
+off-fence histories without an EXEC receipt unchanged.
+
+The row freezes `final_daa`, `allocation_sompi`, fixed payout payloads and the maximum of `H_exec` and every stored dependency's
+liability horizon. The native row's expiry is strictly after this inclusive horizon. Additional payments wait until that day
+has passed AND the native row has left its second-clock/DA/freeze hold. An existing queue budget reserves up to two market keys;
+the release planner merges existing payout keys and admits only the remaining new keys, partially draining an old additional
+row before new native moves. Native and additional counter totals satisfy `created = live + moved + burned`. A retired root's
+unpaid receipt still occupies the global execution quota, so admission reserves a Final slot before writing a new root.
+
+Prefix and slice verdict sync includes Settled roots. A failed dependency voids the affected prefix/suffix and composite root,
+reverses exactly the native Final's budgeted/scaled safe contribution and native evidence, forfeits this claim's minted Round
+rights, and burns every unreleased native and additional reward leg once. Kernel prosecution supplies the offending executor's
+collateral charge; this propagation creates no offence or extra slash against the other actors. Exposure returned at Final is
+never returned again. A native Final reversal also closes its settled EXEC root and cancels the additional earnings; the native
+actor-specific penalty paths retain their existing attribution rules and need the separate compatibility acceptance below.
+
+Claim retirement waits strictly past the dependency horizon. Native Safe facts and the node's lifecycle/readiness paths use the
+same effective deadline, taking the maximum with the original signed trace retention. The Final journal freezes the consumer
+deadline for native evidence after live-root retirement; no producer-signed trace lease is silently rewritten. The optional
+`0xF4` state-carriage tail (codex used `0xF0`, LG14-A's public FP jobs; renumbered at the R6781 merge) and a separate state-root collection carry additional rows. Existing native vesting row bytes,
+existing note tags and empty EXEC state-root/carriage bytes retain their layouts. All mutations use the common transition
+journal, including apply/revert and restore consistency checks.
+
+### 15.1 Acceptance boundaries
+
+Fold tests exercise native root Final, exact funding, prefix/middle-slice post-Final fraud/default verdicts, duplicate retraction,
+inclusive horizon, bounded queue release, native retirement, frozen maturity evidence, malformed tails, shortened allocation/
+horizon refusal, and per-transition apply/revert/carriage restoration. Verdict injections isolate propagation from prosecution;
+real kernel lifecycle and actual-node tests establish prosecution and binding separately. Combining those tests is not an
+actual-node post-native-Final public-proof demonstration. Pruned P2P provenance and worst-case release latency remain open.
+
+The complete WINDOW gate still requires native DA/computation-court extension to retain dependency collateral and public
+material/provider TTL, worker consent and capital cost, the full actor-specific/tier/B-3/RPC reader compatibility matrix, and
+actual-node native root Final followed by public conviction/default and payment recovery. The complete reward RPC in §15.3 pages both native rows and independent executor funds. Standalone kernel budgets, R6/R7/R12 and economic gates
+remain independent blockers. This change neither enables a public preset nor approves an activation height.
+
+
+### 15.2 Additional executor funds under aggregate liability and B-3
+
+AG-2 includes both additional `NativeSlice` and `KernelFee` funds of the forfeited bond. It burns only that actor's
+unpaid legs, even after their clocks have spent while awaiting payout capacity. The unrelated root producer, Panel,
+reserve, other executors and already-moved payouts remain governed by their existing attribution rules. The burn
+journal identifies the actual aggregate offence key and original fund; `forfeited_sompi` includes these earnings.
+A previously verified slice settling after its executor's final freeze cannot recreate either fee or issuance:
+settlement accounts for creation and forfeiture atomically, retaining the allocation receipt while Final is in progress.
+
+AG-3 extends still-unmatured additional funds with an actor-specific earliest-release DAA. It does not extend another
+executor's additional funds or rearm spent clocks merely because their payout has not moved. Shared native row clocks
+still apply to all funds as in §15; this extension is independent of that shared hold. The extension survives the end-of-block
+freeze sweep and restart, releases at its lift, and is removed when the actor has no remaining additional fund.
+
+B-3 reads each executor's inclusive liability horizon, actor extension and the unlatched native row's bounded V-4(a)
+clocks. A halt, DA/queue presence or a spent native latch alone does not rearm collateral. Actual EXEC vesting also holds
+its native and additional payees below R-core+, because composite Final forces vesting there. Without any EXEC receipt
+that extra path is empty. The derived additional-payee index is maintained by reward writes and delta replay, rebuilt
+on import and checked against the primary fund rows.
+
+The optional actor-extension carriage tail is `0xF5` (codex used `0xF1`, codex G14's legacy answers; renumbered at the R6781 merge), the independent root collection is `exec_v2_reward_holds`, and delta
+180 table 6 journals the extension. The earlier `0xF4` reward-row layout and action tags 0/1/2 remain unchanged; aggregate
+forfeiture appends action tag 3. Missing, orphan, non-extending and malformed holds fail restore or committed-root validation.
+These are dormant EXEC/capacity-liability paths; shipped activation heights remain unchanged. A funded-Final conviction-funnel
+test establishes actor isolation and accounting, not admission of a public offence against the native/kernel claim.
+
+
+### 15.3 Complete reward read and financial client compatibility
+
+`getPalwRewardVesting` (op 241) takes one committed consensus snapshot. `stateRoot` identifies it;
+`native` is the explicitly scoped legacy native component. Global `outstandingSompi` is native live money plus all unpaid
+`NativeSlice` and `KernelFee` legs. It satisfies `created = moved + burned + outstanding` for vesting counters; reporter
+income is reported separately and is never inserted into those counters. Whole-query outstanding, additional pending/ready
+money, and collateral-holding sources are computed before either page is truncated.
+
+The existing native `after` cursor is independent of `execAfter`, whose exact form is
+`<final_daa>:<root>:<bond_txid>:<bond_index>:<slice|kernel_fee>`. Additional legs are ordered by those four typed values;
+fund participates in the cursor so two funds of one actor cannot disappear between pages. Each page defaults to and is capped
+at 500 details. `execRowsTotal`, money and hold totals always cover the entire match, including earlier/later pages.
+A holding source is one native row or one additional `(root, bond)` obligation, regardless of its number of funds.
+`lastLockDaa` is a DAA-clock lower bound, not a guarantee against a shared second clock. Each additional leg also exposes its
+native pending/clock state, native expiry and bounded second-clock escape, own earliest DAA, B-3 hold and readiness.
+Ready means the inclusive dependency horizon and own actor extension have spent and the native row is gone. It still awaits
+payout capacity; it has not been minted. `inNextBlock` uses the fold's additional-fund planner after simulating the first queue
+drain, with no new block objects. It is a snapshot forecast, not a promise about subsequent blocks or newly included objects.
+
+Whole-query reporter pending and awarded amounts include details beyond the reporter cap. A chain query counts all pending/
+awarded sources, a payee query retains existing reporter attribution, and a claim query does not attribute unrelated reporter
+income. Decimal-string amounts preserve u128 sums on both transports and in financial client JSON.
+
+Op 199's fixed binary layout remains unchanged. When any live additional EXEC leg exists it returns an explicit error directing
+clients to op 241, rather than an incomplete financial answer. Both transports route the new typed request/response; malformed
+selectors and either cursor are errors even on a non-V2 network, while a well-formed unavailable read echoes its selector.
+The CLI vesting, wallet observation and operator snapshot use op 241;
+financial CLI envelopes are version 2 and the dashboard adds decimal-string funds with BigInt; observed unpaid rewards are never selectable UTXOs.
+A claim with no native row but unpaid additional funds is `exec_pending`, including after native retirement; operators keep it
+pending until all funds move. Forced native EXEC vesting is displayed below R-core+ as well. This observation change neither
+alters any consensus activation height nor changes historical op 199 field order or native monetary policy.
+
+### 15.4 Finite native dispute admission for composite work
+
+A native DA session or computation court cannot enlarge an EXEC dependency's frozen obligation by itself. While the root is
+retained, the session bound is the minimum of the admitted base `H_exec` (§14) and every prefix/slice claim's rooted
+`liability_until`. This differs intentionally from the reward/maturity reader's maximum. A longer-lived dependency cannot
+substitute for another executor's collateral or material. If only a retired root's unpaid receipt remains, its frozen horizon
+bounds admission; retirement already requires the inclusive dependency window to have spent.
+
+R-core+ DA admission requires `deadline + window_challenge_at(opened_daa) <= bound`, with checked arithmetic. This includes
+DA-5's post-session lock/vesting tail, rather than checking disclosure alone. The shared public admission reader and the fold
+use the same predicate. Legacy DA admission and both native court-opening paths require their whole session deadline to fit.
+DA re-keying checks again at Final before extending native vesting or signer locks. The network policy remains stable while
+roots are retained (§14.2); this is not authority to change outstanding commitments through a parameter transition.
+
+At the inclusive boundary a session can be accepted. One DAA beyond it is refused before accusation exposure/session writes;
+no kernel collateral, liability row, additional entitlement, or signed provider commitment is enlarged. Restore also checks
+open DA, legacy disputed phases and computation-court sessions against the same bound. Ordinary native work with no EXEC
+root/receipt retains its existing admission and saturation behavior. No wire field, state-root collection or activation height
+changes; this rule belongs to the dormant EXEC path.
+
+This restriction prevents the extension mismatch but does not establish WINDOW or economic security. Admission of the base
+consumer horizon itself still needs an explicit worker retention authorization, a sufficient signed provider TTL/public-material
+contract, and its capital/retention price before activation. Supporting a session beyond that horizon requires a separately
+specified, bounded authorization and funding transition covering every dependency and provider; there is currently no such
+transition. A larger native class court window is not that authorization. Public native post-Final conviction, the complete
+actor matrix, pruned material and worst-case resource/latency evidence remain separate acceptance requirements.
+
+### 15.5 Provider terms and transferred post-Final material failure
+
+A provider's tag-150 lease signs a claim-specific subject, reservation and `serve_until_daa`. Tag 153 moves material
+responsibility; it does not authorize a consumer to extend that signed term. When EXEC binds an already-transferred prefix
+or slice, its providers must satisfy the existing transfer predicate again through `max(H_exec, claim.liability_until)`:
+at least two live leases of distinct non-producer operator ids, with enough total reserved collateral for the kernel claim.
+A lapsed transfer or missing producer mapping fails admission. Operator-id distinctness is not proof of real-world independence.
+Claims that have not transferred retain the producer's existing DA path; no model-artifact lease or acquisition gate is introduced.
+
+The shared slice-admission reader uses the same provider predicate as the write hook. Refusal code 31 is
+`verification_provider_horizon`; codes 0–30 are unchanged. This is a carrier lane refusal, not an error that invalidates
+an otherwise valid block. The carrier reserves no slice/index or fee entitlement, and can be retried after sufficient new
+signed leases are committed. Existing leases are neither rewritten nor lengthened, and a new lease alone does not move
+responsibility. A transfer made after consumer binding already reads the claim's rooted extended horizon under tag 153.
+
+Transferred material failure after computation Final can leave the kernel claim row in `Final` with its worker reservation
+intact. EXEC therefore reads the provider subject's `lapsed_daa` as well as the kernel claim's outcome. The verdict sync's
+journal input includes table-45 subject writes, not only claims-table writes. A transferred lapse inside the claim's
+collectible horizon defaults its prefix/slice, voids the composite root, reverses native Final evidence/weight, and burns
+all still-unreleased native/slice/kernel-fee entitlements through the existing single-settlement path. Computation conviction
+keeps priority; provider failure does not convict or slash a worker. Restore refuses a retained live/settled root whose
+provider lapse has not been propagated.
+
+Provider expiry itself is lawful and uncharged. If a transferred claim still owes material and expiry leaves no live
+provider, the claim lapses; a fully spent Final does not lapse merely because its completed leases are retired. This does
+not resurrect a released reservation or promise an extended service term.
+
+These changes do not close the complete WINDOW gate. Explicit worker authorization and the capital/retention price of
+consumer binding, provider transport/retrieval through restart and pruning, full public actor/tier evidence and worst-case
+resources remain required before activation. This section does not establish `p_check`, a conviction floor, economical
+provider independence, or 128-bit soundness. All public activation validation and fence heights remain unchanged.
+
+
+### 15.6 Worker consent to reservation and retention
+
+An extra-executor allow-list is the root owner's permission, not the listed workers' consent. Opening a root checks that
+listed bonds are distinct, canonical and active, but reserves no extra worker's collateral. An executor's first accepted
+signature-bearing slice reserves the root's native reservation once, using that block's Work gate and raw second-clock
+depth. Further slices by that executor reserve nothing more. Insufficient current room is lane refusal 32,
+`executor_unfunded`; no slice/index, reward entitlement or consumer extension is written. Codes 0–31 are unchanged.
+
+The node producer uses the authenticated tip's required second-clock depth, matching canonical fold admission.
+`None` means the DAA-only profile; it is not an unknown-depth conservative value. A standalone legacy preflight
+without that receipt uses `Some(u64::MAX)` and the existing bounded DAA escape, so it cannot release held capital
+early by assuming a missing clock. The depth is the required settlement threshold, not an observed settlement count.
+
+The accepted slice rows identify participating extra executors. Live-root exposure is re-derived from this distinct set,
+not from the allow-list. Root Final/void returns exactly these reservations, including when the last slice is missing;
+unused listed workers have nothing to return. Replay and carriage validation use the same projection. A retained live
+root's reservation must match its native claim, its roster is canonical and each recorded executor remains authorized.
+These checks do not permit a root owner to consume a third party's bond merely by naming it.
+
+A worker's kernel job uses the v2 slice-nonce domain. Define the canonical terms before signing:
+
+```
+H_exec = expiry + max(native_window_court, kernel_liability) + kernel_court_deadline + kernel_proof_grace
+policy_root = H(retention-policy/v1; native_window_court || Borsh(full kernel LedgerPolicyV1))
+nonce_v2 = H(slice-job-nonce/v2; nonce_v1 || expiry || H_exec || executor_exposure_sompi || policy_root)
+```
+
+Additions are checked and reject overflow/MAX. Integers use canonical little-endian bytes (DAAs u64, exposure u128),
+with full 64-byte digests. The executor's signed kernel claim commits its job id, which commits this nonce; its signed
+WorkSlice names that same claim. An old v1 nonce is not a fallback. A truthful trace/valid signature cannot attach to a
+different expiry, reservation or policy. Fresh consent requires a new job id and signed claim. The root bond's own prefix
+retains its existing nonce: the same bond directly signs the declaration including expiry under the network's fixed policy.
+
+A job prepared before root declaration must preserve the proposed expiry when filling the subsequently obtained
+prefix claim id. Refreshing expiry after job signing changes the authorized terms and requires a fresh job and claim.
+
+Admission, the producer statement helper and restoration check the v2 terms against the actual rooted interval and
+network policy. The pure worker helpers also prepare jobs before declaration. Op 240 appends `retentionTerms` and
+`nextJobNonce` from the node's actual native window. Exposure is a decimal sompi string, not a lossy JSON number.
+Missing policy/window data produces unknown terms/nonce; a terminal root has no next nonce. The historical observation
+wrapper cannot infer a native window and must not fabricate one. These fields do not create consensus authority.
+
+This profile is required under the still-dormant EXEC-v2 fence. No public activation height, Round ticket rule, wire tag,
+root/slice carriage layout or state collection is changed. Historical v1 hash/work-binding helpers remain for readers;
+production admission uses only v2. A private harness that bypassed public activation validation must rebuild old unsigned
+retention fixtures; this is not a migration of a publicly armed EXEC-v2 network.
+
+Cryptographic consent to a finite reservation/retention term is not a sufficient price contract. Workers must inspect the
+terms before signing. A minimum offered compensation, capital/retention cost, abort/timeout economics and measured class
+costs remain required; neither voluntary signing nor a policy hash proves profitability or positive detection probability.
+This section does not resolve the full WINDOW/ECON or pruned public-material/actor/resource acceptance gates.
+
+### 15.7 Worker price criterion and allocation freeze
+
+Worker computation Final is not the event that pays an EXEC-bound job. Collection requires the native root's Final and
+survival of every applicable dependency/default and vesting condition through release. If the native root expires,
+§13 cancels its fee holds and returns the remaining job escrow to the poster. This is no worker income, even when all
+worker computations were truthful and reached kernel Final. Their retained kernel liability is not cancelled with the
+root. A signature authorizing these terms proves consent; it does not establish a profitable price.
+
+Fix the criterion before a class measurement or model comparison. For an honest worker define:
+
+```
+C_upper = compute + recomputation + material/acquisition + carriers/filing
+          + capital_rate * distinct_capital_time_area + other_outcome_costs
+p_collect_lower = proven lower bound of the JOINT native-Final-and-collectible-at-release event
+M_net_min = funded minimum actually collectible on that joint event, after all clips and charges
+p_collect_lower * M_net_min >= C_upper
+required_M = ceil(C_upper / p_collect_lower)   // only if p_collect_lower > 0
+```
+
+Costs include abort/default outcomes, retention after a root's cancellation, transport and retrieval conditions, and
+second-clock/exit delay. Count each locked unit of capital once at each instant, using the actual composite reservations
+and holds; adding every named row's amount can double count the same collateral. A finite DAA horizon is not a proved
+wall-clock bound when chain progress or material retrieval is unavailable. Cost/time assumptions and their evidence
+must therefore be explicit; an unbounded or unmeasured relevant cost remains unknown.
+
+`M_net_min` is a minimum, not the root's allocation ceiling, a displayed leg estimate or the poster's gross job escrow.
+It must cover Native BUDGET clipping, each executor's share, all fee/issuance substitutions and applicable deductions.
+The fee path replaces native issuance inside the one allocation (§13); it cannot be added to native income a second
+time. A future minimum-price contract must bind the funded amount, work scope, worker, policy, deadline and hold/release
+conditions before signature, refuse insufficient funding before reserving the worker, and make its stated minimum
+enforceable at settlement. §15.6's retention nonce does not currently commit such a minimum. No new approval or money
+parameter is inferred here.
+
+`p_min` for conviction and `p_check` for checks are different quantities. Native Final and healthy-release marginal
+floors cannot be multiplied without a justified independence argument. With only two marginal floors `a` and `b`, the
+conservative joint floor is `max(0, a + b - 1)`. If the actual joint floor is zero and honest work has positive cost,
+no finite Final-only conditional offer finances that cost. Missing cost, collection or minimum-contract evidence yields
+UNKNOWN, not a positive class verdict. A zero-cost example is vacuous; it is not economic security approval. Quotes
+above the u64 sompi range are unrepresentable and must not wrap or clamp into a payable offer.
+
+An EXEC root also freezes the native claim's existing allocation basis. A Provisional lead can normally split its
+escrow among riders within the rider window, but once a retained EXEC root names that lead, both the cheap rider reader
+and the full writer refuse that split before financial writes. Root objects are applied before queued rider batches:
+opening a root and attaching riders in the same block is refused in either object order. Refusal skips the rider batch
+without invalidating the block. Legitimate rider splitting before root declaration is preserved. This prevents later
+re-attribution of a root's budget; it does not turn that budget ceiling into a guaranteed minimum contract.
+
+`scripts/misaka-palw-econ-verifier-model.py` §14 checks exact-rational arithmetic, one-sompi underpricing, omitted capital
+cost, zero collection, dependent outcomes and overflow using declared ASSUMED scenarios. It supplies no measured class
+cost, collection floor, funded minimum or policy approval. The node expiry regression uses actual signed kernel runs
+and Final transitions, with the native REAL admission harness's synthetic trace commitment/Panel seam; it proves the
+worker/non-native-Final payout rule, not a production owner-only veto or an all-honest native Final probability floor.
+The allocation-freeze regression exercises the core reader, writer, full fold, both audit profiles and both object orders,
+including journal replay, undo and carriage restore; core header signatures remain a fixture seam.
+
+No public fence height, live Round ticket rule, wire tag or carriage layout changes. WINDOW/ECON remains unapproved until
+the evidence and enforceable contract above, native post-Final public-court paths, material/restart/pruning and resource
+acceptance conditions are closed.
+
+### 15.8 Public prefix and kernel-claim replay controls
+
+The prefix job nonce binds the native root claim, canonical job, prefix work and kernel plan. A second REAL claim of
+the same class and producer cannot name the first root's prefix. The declaration must keep the second REAL's own
+input, output and initial boundary; changing those to match the stolen prefix is not a valid positive control.
+`x8_g14_a_second_real_root_cannot_reuse_the_first_roots_prefix_claim` checks the named `job nonce` refusal and submits
+the signed declaration through node blocks. Its positive control posts, seals and reveals a distinct prefix for the
+second REAL and opens that root with its original plan. Both reward holds must retain their independent root owners,
+and a second node must replay to the same state. The control posts only the needed prefix: unrelated uncarried slice
+claims must not exhaust the real route's concurrent-admission caps or justify relaxing those caps.
+
+The honest-slices node regression also tries to reuse slice 0's claim at index 2, whose authorized executor is the
+same bond. It keeps the root's next predecessor to reach verification binding, checks the durable refusal for that
+carrier, and then admits the genuine slice 2. Once all four kernel computations have reached Final, it carries each
+genuine signed reveal twice more in fresh transactions and runs additional closing ticks. The root's verified work,
+slice stages and caps, kernel claim rows, escrow reservations, reward holds and public Final receipts must remain
+unchanged. The attack lane block and duplicate-reveal transactions are included in the independent node replay.
+
+A kernel Final is generated by the closing tick; there is no external Final object. Public reveal replay and
+repeated closing ticks therefore test the reachable carrier path. They do not inject a second journal write of an
+identical Final claim row. `a_repeated_kernel_final_credits_a_slice_once` retains that separate fold-level control.
+These regressions do not prove native root Final, a second composed Final-row write, settlement after reorg/restart,
+or a pruned/P2P join. The module's native admission/Panel and synthetic native trace-commitment seams still apply.
+SLICE and the other acceptance gates remain open until the full requirements are verified; no fence is activated.
+
+On 2026-10-11 the final EVM-enabled consensus run of the two named node controls passed: **2 passed, 0 failed,
+0 ignored**, build 2m08s, runtime 100.69s. The separate consensus-core prefix-reuse and repeated-Final-row controls
+passed: **2 passed, 0 failed, 0 ignored**, cached build 0.31s, runtime 0.09s. Commands and intermediate fixture
+failure are recorded in the four-RFC design audit. Earlier candidate runs are not additional independent coverage.
+
+### 15.9 Computation-Final recovery and public conviction
+
+`x8_g14_kernel_finals_holds_and_credit_survive_restart_and_two_actual_reorgs` uses an on-disk consensus database.
+Its prefix deliberately commits a false matrix value; the slices execute truthfully. All four OPV computations reach
+Final unrefuted, so the bound root is ready but the native REAL claim remains live. This is an optimistic fraud case,
+not an honest native Final control. Capture the root/slice credit and caps, four claim/escrow/hold rows, Final facts,
+each selected block's delta root, collateral, slash/bounty state and the complete virtual UTXO set.
+
+Drop Consensus and reopen the same database. Compare the stored state before a new block can regenerate it.
+Then exercise two actual selected-chain reorgs: a public cold-checker proof convicts the prefix after computation
+Final and cancels the root; the unrefuted branch returns and restores its original credit and funded holds. Inspect
+the actual conviction journal: the same claim keeps its Final lifecycle state while its conviction flag and remaining
+reservation change. The consumer must treat that write as a failure, never as additional verified credit. Returning
+to the unrefuted branch must undo the slash and queued bounty, restore every escrow/hold and leave credit unchanged.
+
+Keep the existing strict economic reorg rule. The incumbent depth must fit its two-DAA shallow tie exception on each
+reorg; extra heartbeat blue work cannot authorize a deeper all-economic tie. Exchange the competing DAG tips before
+requiring full virtual-parent/UTXO agreement: common selected sink alone does not establish equal virtual state.
+The UTXO read must reject truncation. Selected-chain PALW/delta comparisons retain their separate scope.
+
+This control does not inject a duplicate identical Final row; the public proof changes its verdict/reservation fields.
+The node admission/Panel and synthetic native trace-commitment seams from the module still apply. Native root Final
+and capped settlement, their subsequent public-court/recovery paths, OS-crash atomicity, deep economic reorgs and
+pruned/P2P joins remain acceptance requirements. No public fence or legacy Round rule changes.
+
+On 2026-10-11 the final EVM-enabled node command containing this control, honest slices and the two existing standalone
+kernel restart/reorg controls passed: **4 passed, 0 failed, 0 ignored**, build 2m02s, runtime 38.52s. The four-RFC audit
+records the rejected deep-heartbeat fixture, intermediate compile repairs and candidate run separately. None substitutes
+for the native-root Final and settlement requirements above.

@@ -46,6 +46,12 @@ name = "palw-remote-miner"
 path = "src/bin/palw-remote-miner.rs"
 required-features = ["rpc"]
 
+# RFC-0009 L2 option D, the issuer side: attests the fork-choice roots the issuer's own full node served (op 203).
+[[bin]]
+name = "palw-fork-choice-issuer"
+path = "src/bin/palw-fork-choice-issuer.rs"
+required-features = ["rpc"]
+
 [dev-dependencies]
 # DA16: the sketch's fixture weights (an artifact, its inventory, its kernel commitments).
 misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }

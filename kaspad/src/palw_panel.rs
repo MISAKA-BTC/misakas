@@ -67,6 +67,10 @@ use kaspa_utils::triggers::SingleTrigger;
 #[path = "palw_service_public_e2e.rs"]
 mod palw_service_public_e2e;
 
+#[cfg(test)]
+#[path = "palw_service_violations_e2e.rs"]
+mod palw_service_violations_e2e;
+
 #[path = "palw_carrier_fees.rs"]
 mod palw_carrier_fees;
 
@@ -91,6 +95,12 @@ mod palw_operator_da;
 /// policy; a clean no-op below `palw_legacy_public_filer_v1`, which no shipped preset arms).
 #[path = "palw_fraud_filer.rs"]
 mod palw_fraud_filer;
+
+/// Lane G14-K: the kernel route's public verifier — any funded bond holding a registered kernel model re-executes the route's claims
+/// and pursues a refuted one (seal, file, demand) through `misaka_palw_remote::pursuit` and the court lane (node policy; a clean no-op
+/// below `palw_probabilistic_constraints_v1`, which no shipped preset arms).
+#[path = "palw_kernel_verifier.rs"]
+pub(crate) mod palw_kernel_verifier;
 
 /// ADR-0160 F-Q (stage 2, rcore/cap-s1): the operator's audit duty — an operator node in a credited
 /// claim's audit pool replays it and posts a receipt batch when it reproduces (a child module, so it
@@ -4041,6 +4051,10 @@ pub struct PalwPanelConfig {
     /// these — a manifest any provider holds for the claim that agrees with the claim's own roots, every chunk checked against it — in addition
     /// to the producer pull, which is unchanged and stays the fallback. Empty: no provider source, the node behaves as before.
     pub evidence_provider_dirs: Vec<PathBuf>,
+    /// **Lane G14-K: the registered kernel models this node's verifier holds** (`--palw-kernel-model`, one `PALWKM01` file a model;
+    /// ADR-0177 D7). A model is used for a kernel class only when it opens to the class's REGISTERED parameter commitments. Empty: the
+    /// kernel-route verifier (`palw_kernel_verifier`) does nothing.
+    pub kernel_models: Vec<PathBuf>,
     /// **Register this node's worker class on the running chain, once** (ADR-0049 Decision H).
     ///
     /// A network is born with the classes its ruleset id commits to, and every later one arrives
@@ -8413,6 +8427,8 @@ impl PalwPanelService {
         ));
         // Lane LG14-A: the common fraud filer's book — a cache of the chain and this node's replays; nothing persists (§6.3).
         let mut fraud_filer = palw_fraud_filer::PalwFraudFilerBookV1::default();
+        // Lane G14-K: the kernel route's public verifier's book — a cache of the chain and this process's replays; nothing persists.
+        let mut kernel_verifier = palw_kernel_verifier::PalwKernelVerifierBookV1::default();
         // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
         let mut audit_duty = palw_audit_duty::PalwAuditDutyV1::new();
         audit_duty.replays.configure_slots(self.config.seat_replay_slots);
@@ -13064,6 +13080,24 @@ impl PalwPanelService {
             )
             .await;
 
+            // --- lane G14-K: the kernel route's public verifier (`palw_kernel_verifier`; G14) ---
+            //
+            // Past `palw_probabilistic_constraints_v1`, a funded bond holding a registered kernel model re-executes every open kernel claim
+            // of a class its model opens to, and pursues a refuted one through `misaka_palw_remote::pursuit` (seal, file, demand), each
+            // object dry-run against the rebuilt ledger before it is queued on the court lane. Identity and a model arm it; a clean no-op
+            // below the fence.
+            self.kernel_verifier_tick_v1(
+                &session,
+                &mut kernel_verifier,
+                current_daa,
+                network_domain,
+                bond_key,
+                &mut court_pending,
+                &mut court_due,
+                &mut court_moved,
+            )
+            .await;
+
             // --- ADR-0160 F-Q (stage 2): the operator's audit duty (`palw_audit_duty`) ---
             //
             // Past `palw_capacity_audit_door` a credited claim reaches Final only through `k_aud` receipts
@@ -14671,6 +14705,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::MaterialDisclosedV2 { .. } => "MaterialDisclosedV2",
         PalwConsensusObjectV2::PanelUnavailableQuorum { .. } => "PanelUnavailableQuorum",
         PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } => "ExecWorkRootOpenedV2",
+        PalwConsensusObjectV2::ExecOriginRecordedV1 { .. } => "ExecOriginRecordedV1",
         PalwConsensusObjectV2::SeatReadinessProvedV2 { .. } => "SeatReadinessProvedV2",
         PalwConsensusObjectV2::ModelLineBenefitsDeclared { .. } => "ModelLineBenefitsDeclared",
         PalwConsensusObjectV2::ModelBuy { .. } => "ModelBuy",
@@ -19316,7 +19351,7 @@ mod accepted_objects_walk_tests {
         chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), txs));
         let input_selected = BTreeMap::from([(claim, input_unit)]);
         let (_, _, input_answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_with_form_v1(
-            &chain, 100, 100, None, 100, &wanted, &input_selected, backend.prompt_ids_form(),
+            &chain, 100, 100, None, 100, &wanted, &input_selected, &BTreeMap::new(), &BTreeMap::new(), backend.prompt_ids_form(),
         ).unwrap();
         assert_eq!(input_answers.len(), 1, "only the valid reacquired input is cached before the missing suffix");
         assert_eq!(input_answers[0].0, (claim, PalwDaUnitV1::LegacyHeldV2(input_unit)));

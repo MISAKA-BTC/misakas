@@ -131,6 +131,16 @@ pub fn segment_roots_of_position_roots_v1(position_roots: &[Digest]) -> Vec<Dige
         .collect()
 }
 
+/// A streamed producer's position path, using only the retained position roots. No earlier
+/// node values or node commitments are required. The path uses the established segment tree.
+pub fn position_path_of_roots_v1(position_roots: &[Digest], p: u32) -> Option<(Digest, Vec<Digest>)> {
+    let positions = u32::try_from(position_roots.len()).ok()?;
+    let root = *position_roots.get(p as usize)?;
+    let (first, end) = segment_bounds_v1(positions, p / SEG_LEN_V4)?;
+    let leaves = (first..end).map(|q| segment_leaf_v1(q, &position_roots[q as usize])).collect();
+    Some((root, tree_path(leaves, (p - first) as usize, seg_node)))
+}
+
 /// **A producer's segmented commitments**: every node commitment of every position, `commitments[p][occurrence][node]`
 /// (v3 tensor commitments), and the trees over them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -248,6 +258,22 @@ pub struct NodeOpeningV1 {
 }
 
 impl NodeOpeningV1 {
+    /// Same authentication with only the committed segment containing this position.
+    /// A bounded DA request can retain that root without copying all segment roots.
+    pub fn authenticates_segment_v1(&self, segment_root: &Digest, positions: u32, node_index: u64, node_count: u64) -> bool {
+        let index = self.position / SEG_LEN_V4;
+        let Some((first, end)) = segment_bounds_v1(positions, index) else { return false };
+        self.position_root_ok(node_index, node_count)
+            && tree_root_from_path(
+                segment_leaf_v1(self.position, &self.position_root),
+                (self.position - first) as u64,
+                (end - first) as u64,
+                &self.position_siblings,
+                seg_node,
+            )
+            .is_some_and(|tree| segment_root_of_tree(index, first, end, &tree) == *segment_root)
+    }
+
     /// Does this opening put `commitment` at `(position, occurrence, node)` of the claim? `node_index` is the flat index of
     /// `(occurrence, node)` among the program's `node_count` committed values a position.
     pub fn authenticates(&self, segment_roots: &[Digest], positions: u32, node_index: u64, node_count: u64) -> bool {
@@ -452,15 +478,14 @@ impl TiledJobRowV1 {
     }
 }
 
-/// **A producer's segmented commitments of its trace**: the v3 commitment of every committed value of every position.
-pub fn seg_commitments_of_trace_v1(trace: &crate::trace::TraceV1) -> SegmentedCommitmentsV1 {
-    SegmentedCommitmentsV1::new(
-        trace
-            .values
-            .iter()
-            .map(|p| p.iter().map(|o| o.iter().map(crate::merkle3::tensor_commitment_v3).collect()).collect())
-            .collect(),
-    )
+/// **A producer's segmented commitments of its trace**: the commitment of every committed value of every position under the program's
+/// value modes (`crate::seg_scope`: a hiding value's flat hiding commitment, every other one's v3).
+pub fn seg_commitments_of_trace_v1(
+    program: &misaka_palw_tir::program::TirProgramV1,
+    trace: &crate::trace::TraceV1,
+) -> SegmentedCommitmentsV1 {
+    let modes = crate::seg_scope::seg_value_modes_v1(program);
+    SegmentedCommitmentsV1::new(trace.values.iter().map(|p| crate::seg_scope::seg_position_commitments_v1(&modes, p)).collect())
 }
 
 /// **The evidence object a producer commits** for a segmented claim of `prompt_len` prompt ids (root `prompt_root`) and the fed ids.
@@ -486,6 +511,26 @@ pub fn build_segmented_evidence_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streamed_position_paths_match_retained_commitments_at_segment_and_odd_boundaries() {
+        for count in [1, 3, 1024, 1025, 2049] {
+            let c = commitments(count, &[1, 2]);
+            let roots = c.segment_roots();
+            for p in [0, count / 2, count - 1] {
+                let (root, path) = position_path_of_roots_v1(&c.position_roots, p).unwrap();
+                assert_eq!((root, path.clone()), c.position_path(p));
+                assert!(position_in_segment(p, &root, &path, &roots, count));
+                let mut wrong = path.clone();
+                if let Some(first) = wrong.first_mut() {
+                    first[0] ^= 1;
+                    assert!(!position_in_segment(p, &root, &wrong, &roots, count));
+                }
+            }
+            assert!(position_path_of_roots_v1(&c.position_roots, count).is_none());
+        }
+        assert!(position_path_of_roots_v1(&[], 0).is_none());
+    }
 
     fn commitments(positions: u32, per: &[usize]) -> SegmentedCommitmentsV1 {
         SegmentedCommitmentsV1::new(

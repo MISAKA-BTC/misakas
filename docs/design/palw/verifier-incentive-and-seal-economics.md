@@ -45,9 +45,9 @@ An attacker that merely loses money is not enough: that loss does not show that 
 | **B** | Split the bounty equally among every covering watcher | **COUNTEREXAMPLE** outside a parameter band that the protocol cannot observe (§2.3) |
 | **T1** | Self-dealing (self-fraud, self-accusation and bounty receipt by one party) loses at least `(1 − a)·K·β_d` today and at least `(K − B_d)·β_d` under M* | **PROVEN** (§3.2) |
 | **T2** | Stake-weighted watcher draws after the commit are Sybil-neutral: the result depends on stake, not on the bond count | **PROVEN** under A-BEACON (§3.3) |
-| **T3** | Under M*, an honest drawn watcher recovers fetch, check, localization, attestation and filing | **PROVEN** under A-COST, A-INC, A-FEE (§3.4) |
+| **T3** | Conditional running-cost recovery under M*: net collectible fees cover actual bounded costs, including filing not covered by a proven bounty minimum | Bound under A-COST, A-INC, A-FEE and actual receipt floors (§3.4); epoch/startup guarantees need successor §5f |
 | **T4** | Deterrence under M*: `K ≥ B_d + D·(1 − β_d) + G·(1 − P_dc)/P_dc` with `P_dc = q·(1 − (1 − θ)^m)` | **PROVEN given θ** (§3.5) |
-| **T5** | Bribery floor: if `B_d ≥ m·G`, a drawn watcher that found the lie never does better by taking a bribe | **PROVEN** under A-BRIBE (§3.5) |
+| **T5** | Anti-bribe condition: collectible receipt net of incremental prosecution costs exceeds affordable bribe upper bound | Conditional bound under A-BRIBE/A-RAT (§3.5); `B_cap ≥ m·G` alone is insufficient |
 | **T6** | θ, the share of drawn slots that really check, can be derived from chain state (the lazy-watcher problem) | **OPEN** (§3.6) |
 | **F-ECON-1** | A re-seal keeps its one deposit, so ONE deposit vetoes all `R + 1` attempts of a class and is never forfeited | **COUNTEREXAMPLE**, measured (§4.2) |
 | **F-ECON-2** | A re-seal in the reveal window withdraws a mixed seal, without counting as a veto: with `a` attacker seals, `2^a` lockable beacons, against v3's accounting `G = F` | **COUNTEREXAMPLE**, measured (§4.2) |
@@ -61,7 +61,8 @@ An attacker that merely loses money is not enough: that loss does not show that 
   * stake-weighted watcher slots, drawn after the commit;
   * a small capped bounty, split among the drawn slots that sealed a convicting proof, with the rest of the slash burned.
 
-  M* satisfies both of the user's requirements (T1, T3), subject to θ (T6, OPEN). It is not built; it needs allocations (§3.8).
+  T1 is a conditional conservation proof; T3 needs the actual receipt/cost minima in §3.4. Whole-epoch participation also needs
+  startup/capital funding and diligence evidence (T6, OPEN). M* is not built; it needs allocations (§3.8).
 * **Problem 2 (GAP-B12).**
   * Today the deposit does not even enter the attacker's cost (F-ECON-1).
   * The re-seal that causes this also breaks v3's grinding claim (F-ECON-2).
@@ -323,7 +324,8 @@ checks that are really run (T6).
      the conviction. The rest of `S` is burned.
    * A non-drawn filer still convicts, so detection is unchanged. It is paid nothing, and it pays no fee: a convicting proof is never
      charged.
-   * `B_cap = max(m·ĉ_file, m·G)`: the filing allowance or the bribery floor (§3.5), whichever is larger.
+   * The former `B_cap = max(m·ĉ_file, m·G)` was a gross illustration. Actual collectible filing/net-bribe minima must satisfy
+     §3.4–3.5; an advertised cap alone proves neither. No revised numeric cap is approved here.
 5. **Unchanged:** anyone can demand, file and convict; defaults, liability and post-Final conviction stay as they are.
 
 ### 3.2 T1 — self-dealing does not pay (PROVEN)
@@ -396,26 +398,24 @@ its own with probability 0.0625, in both cases.
 
 Remedies A and B pay per bond, by coverage or by share, so their outcome grows with the bond count.
 
-### 3.4 T3 — an honest drawn watcher recovers its costs (PROVEN under A-COST, A-INC, A-FEE)
+### 3.4 T3 — conditional running-cost recovery (corrected 2026-10-11)
 
-**Statement.** Let an honest watcher hold a drawn slot. Then:
+**Statement.** Let `C_run,+` bound all actual running costs, including fetch/check/localisation/attestation, carrier and demand
+costs on aborted paths. Let `P_-` be a proven minimum remaining reporter pool actually collectible after prior splits, in sompi.
+For a drawn slot with an accepted convicting seal, at most `m` slots share `min(B_cap, P_-)`, so
+`b_- = floor(min(B_cap, P_-)/m)` is a conservative receipt minimum. Where that eligibility/collection cannot be established, use
+zero. Require a net collectible fee on every relevant ordering (A-FEE/A-INC):
 
 ```text
-net ≥ F − (c_fetch + c_check + c_loc + c_attest) + 1[it sealed a convicting proof]·(B_d/m − c_file)
+F_minimum ≥ C_run,+ + max(0, c_file,+ − b_-)
+net ≥ F_minimum − C_run,+ + 1[it incurs filing cost]·(b_- − c_file,+) ≥ 0
 ```
 
-So if `F ≥ c_fetch + c_check + c_loc + c_attest` and `B_cap/m ≥ c_file`, its net is at least 0 on every claim, honest or lying,
-whatever `C` does.
-
-**Proof.**
-* `F` is escrowed when the job is posted (A-FEE). It is paid when the attestation is included (A-INC), whatever the claim's fate and
-  whatever other parties do.
-* The bounty is split among at most `m` drawn sealing slots, so each gets at least `B_d/m`.
-* `C`'s non-drawn bonds get nothing when they file first, and that does not shrink the drawn split. `C`'s drawn slots share like any
-  other slot.
-* If `C` convicts before the honest watcher seals, the watcher sees the conviction and stops. By then it has spent no more than `F`
-  covers, because the fee includes localization.
-* Filing costs arise only on the sealed branch, and `B_d/m` covers them there. □
+Substitution proves the bound. Filing that does not earn the bounty uses `b_- = 0`; a cap or conditional receipt cannot subsidise
+those costs. The earlier inference from `B_cap/m ≥ c_file` to a minimum payout was invalid: a cap gives no collectible pool floor,
+and integer rounding matters. Costs already paid for first acquisition, idle stake and exit capital-time also need funding; this
+running-cost proof does not cover them. The successor's §5f and executable model §15 give expected/each-epoch criteria, stranded
+acquisition and undrawn-watcher counterexamples. Pay-on-fate is itself a proposed funding assumption, not node payout evidence.
 
 **What the costs include** (A-COST).
 * **The check.** `c_check` is one re-execution at real scale: K2S route B reads 8.19 GB at 9B-8k, and finds any lie with certainty
@@ -440,11 +440,14 @@ E[Π(lie)] − E[Π(honest)] ≤ (1 − P_dc)·G − P_dc·(K − B_cap − D·(
   ⇔  K ≥ B_cap + D·(1 − β_d) + G·(1 − P_dc)/P_dc
 ```
 
-**T5 (PROVEN under A-BRIBE, A-RAT).** If `B_cap ≥ m·G`, a drawn watcher that has found the lie and seals it gets at least
-`B_cap/m ≥ G`. Any bribe the liar can afford is at most `G`. So taking the bribe is dominated. □
+**T5 (conditional under A-BRIBE, A-RAT; corrected 2026-10-11).** Compare actual net receipts on reporting and suppressing the lie.
+With other income equal, a collectible reporting floor `b_-` strictly dominates every affordable bribe only if
+`b_- − c_incremental_prosecution,+ > G_bribe,+`. Include saved filing/carrier costs, differential fees and collection/liability
+conditions in the comparison. Equality permits indifference and does not force a diligent report. Missing bounds remain UNKNOWN.
 
-This sets `B_cap`. It is the bribery floor `m·G`, above the filing allowance, and well under `K`: 40 against 1,000 at the interim
-terms.
+The former `B_cap = m·G = 40` illustration only set a gross ceiling. It supplied neither a collectible floor nor the additional
+prosecution cost. Do not use it as an anti-bribe proof, even if advertised collateral is 1,000; prior splits/collectibility and
+integer payout rounding must be established first. No new bounty rate or policy is approved by this correction.
 
 ### 3.6 T6 — the lazy watcher (OPEN)
 
@@ -477,7 +480,7 @@ Settings: `m = 2`, `θ = 1/2` (an input), `B_cap = m·G = 40`, `K = 1,000`, `G =
 | `q` needed (`θ = 1/4`) | ≥ 4.92 % |
 | self-dealing loop | −960 direct, −910 after a default, supremum −480 |
 | what the user pays for checking, per claim (`q·m·F`, at `F` = 5 BILI) | 0.29 BILI (5.7 % of `R`) |
-| an honest drawn slot | ≥ 0 whenever `F` covers its costs; below them it loses, so the inequality is tight |
+| an honest drawn slot | conditional running net ≥ 0 only with the actual fee/bounty minima in §3.4; epoch/startup recovery not established |
 
 `F` is a cost relation, not a number: `F ≥ c_fetch + c_check + c_loc + c_attest`. At real scale `c_check` is about the producer's own
 cost of the claim. The user therefore pays about `q·m` times the work to have that work watched.
@@ -632,12 +635,14 @@ The honest-race ceiling is 1 BILI, so every row above is infeasible.
 
 | | Change | Effect | Where | Size |
 |---|---|---|---|---|
-| **S1** (required) | **A re-seal past `palw_panel_free_v1` forfeits the seal it replaces.** The replaced seal goes into table 26 at its own `sealed_daa` (that key already exists), its deposit is burned, and the new seal takes a fresh deposit. Once a seal position is accepted, it stays in the beacon read for good | closes F-ECON-1 (each veto costs `d`) and F-ECON-2 (a withdrawal becomes a veto). Restores v3's `G = F` | the kernel ledger (G14R); a v3 test (OPVB) | small |
+| **S1** (required) | **A re-seal past `palw_panel_free_v1` forfeits the seal it replaces.** The replaced seal goes into table 26 at its own `sealed_daa` (that key already exists), its deposit is burned, and the new seal takes a fresh deposit. Once a seal position is accepted, it stays in the beacon read for good | charges each replacement and retains veto facts at distinct accepted DAA; ordinary table 26 still has a same-DAA key collision, so full F-ECON-2 / v3 `G = F` closure is not proven | the kernel ledger (G14R); a v3 test (OPVB) | small |
 | **S2** (required against exhaustion) | **Vetoes do not count against `R`.** The soundness accounting states the attempts that time allows instead: `R_eff = R + ⌈T_life/T_a⌉`, with `T_life` the class registration's lifetime, a hard cap (OPV-BOOT's option 2) | removes the permanent kill. Costs `⌈log2 (R_eff + 1)⌉` bits: about 12 at a one-year lifetime (210,240 DAA / 83 ≈ 2,533). A registrant re-rolling itself through its own Sybil sealer is then bounded by time, not by deposits | onboarding fold, E6 (OPVB) | small |
 | **S3** | **Split the two prices.** The job-race seal stays cheap (`d`) and is **not mixed**. An opt-in **beacon-source seal** carries `d_src`, priced for the DoS, and only it can veto. Honest race losers that did not opt in never veto. Sources must then be paid (from the registrants' onboarding fees); a source is a public good, and the incentive question is §3's | `d_src` can be derived by §4.6 with no honest-race ceiling | ledger + v3 | medium |
 | **S4** | **Bound the reach.** Either charge a vetoing source `d_src` per attempt it vetoes (reserving up to `N_max·d_src` when it seals), or cap the concurrent sampled attempts per seal window at `N_max` | the attack's cost grows linearly with the victims | onboarding fold | medium |
 | **S5** | **Rate-limit the vetoes.** A producer bond with a withheld or abandoned mixed seal is not mixed for `T_ban` afterwards. This is decided from facts before the window opens, so it is not a choice made after the reveals. A source must also hold stake `≥ s_min` and be at least `A_min` old | a sustained freeze needs `⌈T_ban/W⌉` aged bonds in rotation | v3 + consumer | small |
 | **S6** | **The registrant's escape:** the complete-check policy draws no beacon, so nothing can veto it | feasible for small classes (`≤ 2^26` work units per complete check) | existing | — |
+
+**Current implementation qualification (2026-10-11).** The per-attempt [source reservation foundation](beacon-source-opt-in-reservation.md) now has separate collateral, a permanent target/producer row, source Final and liability deadlines, once-only forfeit/refund, and its own closed native fence. Its kernel tests include withheld contributions, same-position reseals and post-Final public conviction. Native frozen-target inputs, a new source-only collector/policy and collectible source fees are still unconnected: **S3/S4 are not node/economic PASS**. Ordinary v3 still mixes cheap race seals, and its table 26 can overwrite a prior forfeit at the same `(job, producer, sealed_daa)`; that older collision is not repaired by the new table 28. A returned source deposit is principal, not income or watcher funding.
 
 **Recommendation.**
 * **S1 and S2 now.** Both are small code changes. Together they close the exhaustion and the grinding lever.
@@ -657,8 +662,8 @@ With S1–S4 in place:
 
 | Item | Kind | Status |
 |---|---|---|
-| T0, T1, T2, T5, B12-D | proof | PROVEN (this note) |
-| T3, T4 | proof under labelled inputs | PROVEN under A-COST / A-INC / A-FEE; T4 for a given `θ` |
+| T0, T1, T2, B12-D | proof | PROVEN under named assumptions (this note) |
+| T3, T4, T5 | bounds under labelled inputs | T3 needs actual cost/receipt minima; T4 for given `θ`; T5 needs collectible NET bounty greater than affordable bribe (§3.4–3.5) |
 | M0 capture, remedies A and B | attack | COUNTEREXAMPLE (PoC + model) |
 | F-ECON-1, -2, -3 | finding | measured; fix S1 (and S2) for G14R / OPVB |
 | T6 (lazy watcher, `θ` from chain state) | design | **OPEN** |

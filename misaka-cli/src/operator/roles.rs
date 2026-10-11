@@ -149,7 +149,7 @@ pub(crate) async fn rewards(ctx: &crate::node::Ctx, profile: Profile) -> CliResu
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "schema": "misaka.rewards.v1",
+                "schema": "misaka.rewards.v2",
                 "network": snap.profile.network,
                 "wallet": snap.wallet.as_ref().and_then(|w| w.as_ref().ok()),
                 "claims": r,
@@ -210,12 +210,12 @@ pub(crate) async fn rewards(ctx: &crate::node::Ctx, profile: Profile) -> CliResu
             if v.reporter_pending_sompi + v.reporter_awarded_sompi > 0 {
                 line(
                     "reporter",
-                    msk(v.reporter_pending_sompi + v.reporter_awarded_sompi),
+                    crate::operator::catalog::msk(v.reporter_pending_sompi + v.reporter_awarded_sompi),
                     "—".into(),
                     &format!(
                         "reporter rewards to the pay address: {} in their reveal window, {} awarded and moving first",
-                        msk(v.reporter_pending_sompi),
-                        msk(v.reporter_awarded_sompi)
+                        crate::operator::catalog::msk(v.reporter_pending_sompi),
+                        crate::operator::catalog::msk(v.reporter_awarded_sompi)
                     ),
                 );
             }

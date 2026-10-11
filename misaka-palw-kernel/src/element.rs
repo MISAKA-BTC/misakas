@@ -28,12 +28,17 @@ use misaka_palw_tir::types::strides;
 use misaka_palw_tir::{DType, Prim, Tensor};
 
 use crate::hash::Digest;
+use crate::hide::{
+    HIDE_TILE_V1, HidingLeafHashV1, HidingLeafOpeningV1, HidingTreeV1, hide_commitment_of_leaves_v1, hide_leaf_hash_v1,
+    hide_tile_of_v1, hide_tile_range_v1, hide_tiles_v1, hiding_leaf_opening_bytes_v1,
+};
 use crate::job::DecodeRuleV1;
 use crate::merkle::{AXIS_COL, AXIS_ROW};
 use crate::merkle3::{LayoutV3, LeafOpeningV3, TreesV3, commit_v3, tensor_commitment_v3};
 use crate::seg::{
     NodeOpeningV1, PROMPT_TILE_IDS_V1, PromptTileOpeningV1, position_in_segment, position_node_opening_v1, position_root_of_v1,
 };
+use crate::seg_scope::{SegValueModeV1, seg_position_commitments_v1, seg_value_commitment_v1, seg_value_modes_v1};
 use crate::trace::{ParamCommitmentsV1, SourceV1, WiringV1, const_tensor, eval_node};
 use crate::verify::DismissalV1;
 
@@ -125,12 +130,39 @@ impl WholeTensorV1 {
     }
 }
 
-/// One operand of a whole-value court: its node opening, and either leaves or the whole value.
+/// One operand of a whole-value or a hiding-leaf court: its node opening, and v3 leaves (a clear value or a param), the whole value
+/// (a withheld one), or hiding tiles (a hiding one, [`crate::hide`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WholeOperandV1 {
     pub node: Option<NodeOpeningV1>,
     pub leaves: Vec<LeafOpeningV3>,
     pub whole: Option<WholeTensorV1>,
+    pub hidden: Vec<HidingLeafOpeningV1>,
+}
+
+/// **A hiding value whose tile is not its relation's** (DA16b option (a), [`crate::hide`]): the court authenticates the producer's leaf
+/// hash of ONE tile against the committed value, recomputes the tile's ≤ 127 elements from the operands (the filer's own earlier
+/// values, authenticated against their commitments, and param leaves from the filer's own copy against the registered v3
+/// commitments) and convicts iff the recomputed tile's hash is not the producer's, or the semantics refuse an element.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct HidingLeafFaultV1 {
+    pub position: u32,
+    pub occurrence: u16,
+    pub node: u16,
+    pub output: NodeOpeningV1,
+    pub leaf: HidingLeafHashV1,
+    pub inputs: Vec<WholeOperandV1>,
+    pub token: Option<PromptTileOpeningV1>,
+}
+
+/// **A delivered id that is not the decode of its HIDING logits**: the logits' tiles holding the delivered id and its rival (the filer's
+/// own logits, which authenticate only as the producer's).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SegHidingDecodeFaultV1 {
+    pub index: u32,
+    pub rival: u32,
+    pub logits: NodeOpeningV1,
+    pub tiles: Vec<HidingLeafOpeningV1>,
 }
 
 /// **A withheld value whose commitment is not the value's relation** (`crate::seg_scope`, DA16b option (c)): the court recomputes
@@ -154,6 +186,10 @@ pub enum SegFaultV1 {
     Decode(SegDecodeFaultV1) = 2,
     /// A withheld value's whole-value court (`crate::seg_scope`).
     WholeValue(WholeValueFaultV1) = 3,
+    /// A hiding value's hiding-leaf court (DA16b option (a), `crate::hide`).
+    HidingLeaf(HidingLeafFaultV1) = 4,
+    /// A decode fault on hiding logits.
+    HidingDecode(SegHidingDecodeFaultV1) = 5,
 }
 
 impl SegFaultV1 {
@@ -162,8 +198,19 @@ impl SegFaultV1 {
         match self {
             Self::Element(e) => Some((e.position, e.occurrence, e.node)),
             Self::WholeValue(w) => Some((w.position, w.occurrence, w.node)),
+            Self::HidingLeaf(h) => Some((h.position, h.occurrence, h.node)),
             Self::Malformed(m) => Some((m.opening.position, m.opening.occurrence, m.opening.node)),
-            Self::Decode(_) => None,
+            Self::Decode(_) | Self::HidingDecode(_) => None,
+        }
+    }
+
+    /// **The claim position a filing names** (its court-scope unit, `(stage 0, position)`): the value's position, or a decode fault's
+    /// selecting position (`prompt_len − 1 + index`).
+    pub fn position_v1(&self, prompt_len: u32) -> Option<u32> {
+        match self {
+            Self::Decode(d) => prompt_len.checked_sub(1)?.checked_add(d.index),
+            Self::HidingDecode(d) => prompt_len.checked_sub(1)?.checked_add(d.index),
+            _ => self.at().map(|(p, _, _)| p),
         }
     }
 
@@ -172,6 +219,7 @@ impl SegFaultV1 {
         match self {
             Self::Element(e) => e.token.as_ref(),
             Self::WholeValue(w) => w.token.as_ref(),
+            Self::HidingLeaf(h) => h.token.as_ref(),
             _ => None,
         }
     }
@@ -201,6 +249,8 @@ pub enum SegConvictionKindV1 {
     Decode { index: u32 },
     /// A withheld value's commitment is not its relation's (or the semantics refuse an element of it).
     WholeValue,
+    /// A hiding value's tile hash is not its relation's (or the semantics refuse an element of the tile).
+    HidingLeaf { tile: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -275,6 +325,13 @@ pub fn element_value_v1(
     e: u64,
     ops: &dyn OperandsV1,
 ) -> Result<Option<i128>, MissingV1> {
+    // A rank-one lookup table gathered by an arbitrary-shaped index tensor has no
+    // coordinate transform: its output's flat position IS the index tensor's position.
+    // Check the index before touching the table, exactly as the generic branch does.
+    if flat_gather_v1(node, &sh.inputs, &sh.out) {
+        let index = ops.get(1, e)?;
+        return Ok(if index < 0 || index >= sh.inputs[0][0] as i128 { None } else { Some(ops.get(0, index as u64)?) });
+    }
     let out_dtype = node.out.dtype;
     let ost = strides(&sh.out);
     let o = unravel(e, &ost);
@@ -400,17 +457,35 @@ pub fn element_value_v1(
     })
 }
 
+/// The shared structural predicate for the allocation-free element lookup and its price.
+/// Other Gather axes/batch dimensions retain the general coordinate evaluator.
+pub(crate) fn flat_gather_v1(node: &Node, inputs: &[Vec<usize>], out: &[usize]) -> bool {
+    matches!(node.prim, Prim::Gather { axis: 0, batch_dims: 0 }) && inputs.len() == 2 && inputs[0].len() == 1 && inputs[1] == out
+}
+
 /// The program's per-position structure the courts read: the wiring and the flat index of each occurrence's first node.
-struct PreparedV1<'a> {
-    w: WiringV1<'a>,
+pub(crate) struct PreparedV1<'a> {
+    pub(crate) w: WiringV1<'a>,
     offsets: Vec<u64>,
-    node_count: u64,
-    /// `[occurrence][node]`: values never served (`crate::seg_scope`).
-    withheld: Vec<Vec<bool>>,
+    pub(crate) node_count: u64,
+    /// `[occurrence][node]`: how each value is owed (`crate::seg_scope`).
+    modes: Vec<Vec<SegValueModeV1>>,
+    /// `[occurrence][node]`: the values a verifier keeps from its own replay (withheld or hiding: never served in the clear).
+    kept: Vec<Vec<bool>>,
 }
 
 impl<'a> PreparedV1<'a> {
     fn new(program: &'a TirProgramV1, encoder: Option<&crate::seg_encoder::EncoderBindingV1>) -> Result<Self, String> {
+        let mut prepared = Self::without_scope(program, encoder)?;
+        prepared.set_modes(seg_value_modes_v1(program));
+        Ok(prepared)
+    }
+
+    /// Shared validated wiring without choosing the frozen disclosure/court profile.
+    pub(crate) fn without_scope(
+        program: &'a TirProgramV1,
+        encoder: Option<&crate::seg_encoder::EncoderBindingV1>,
+    ) -> Result<Self, String> {
         let w = match encoder {
             Some(e) => WiringV1::for_stage(program, Some(&e.stage())),
             None => WiringV1::new(program),
@@ -422,11 +497,40 @@ impl<'a> PreparedV1<'a> {
             offsets.push(at);
             at += program.blocks[*b as usize].nodes.len() as u64;
         }
-        Ok(Self { w, offsets, node_count: at, withheld: crate::seg_scope::seg_withheld_mask_v1(program) })
+        // No scope chosen: every value is served in the clear until a profile sets its modes.
+        Ok(Self { w, offsets, node_count: at, modes: Vec::new(), kept: Vec::new() })
+    }
+
+    /// Choose the disclosure/court profile: the frozen v4/v5 one ([`seg_value_modes_v1`], with G14-S hiding tiles) or a
+    /// candidate trace profile.
+    fn set_modes(&mut self, modes: Vec<Vec<SegValueModeV1>>) {
+        self.kept = modes.iter().map(|o| o.iter().map(|m| *m != SegValueModeV1::Clear).collect()).collect();
+        self.modes = modes;
+    }
+
+    /// The non-reward candidate trace v2 profile (`crate::seg_scope::model_vector_withheld_mask_v2`): commitment-only values are
+    /// withheld (v3 commitment), every other value is served in the clear. It has no hiding tiles: candidate traces are not the
+    /// frozen v4/v5 claim court contract.
+    fn set_candidate_v2_scope(&mut self, program: &TirProgramV1) {
+        let mask = crate::seg_scope::model_vector_withheld_mask_v2(program);
+        self.set_modes(
+            mask.iter()
+                .map(|o| o.iter().map(|w| if *w { SegValueModeV1::Withheld } else { SegValueModeV1::Clear }).collect())
+                .collect(),
+        );
+    }
+
+    fn mode(&self, s: u16, n: u16) -> SegValueModeV1 {
+        self.modes.get(s as usize).and_then(|o| o.get(n as usize)).copied().unwrap_or(SegValueModeV1::Clear)
     }
 
     fn is_withheld(&self, s: u16, n: u16) -> bool {
-        self.withheld.get(s as usize).and_then(|o| o.get(n as usize)).copied().unwrap_or(false)
+        self.mode(s, n) == SegValueModeV1::Withheld
+    }
+
+    /// Never served in the clear (withheld or hiding): the verifier's own value stands in for it once its commitment matches.
+    fn is_kept(&self, s: u16, n: u16) -> bool {
+        self.mode(s, n) != SegValueModeV1::Clear
     }
 
     fn nodes_in(&self, s: u16) -> Option<u16> {
@@ -434,22 +538,22 @@ impl<'a> PreparedV1<'a> {
         Some(self.w.program.blocks[*b as usize].nodes.len() as u16)
     }
 
-    fn valid(&self, s: u16, n: u16) -> bool {
+    pub(crate) fn valid(&self, s: u16, n: u16) -> bool {
         self.nodes_in(s).is_some_and(|c| n < c)
     }
 
-    fn index(&self, s: u16, n: u16) -> u64 {
+    pub(crate) fn index(&self, s: u16, n: u16) -> u64 {
         self.offsets[s as usize] + n as u64
     }
 
     /// The declared type of `(s, n)`'s value at `p`.
-    fn declared(&self, s: u16, n: u16, p: u32) -> (DType, Vec<usize>) {
+    pub(crate) fn declared(&self, s: u16, n: u16, p: u32) -> (DType, Vec<usize>) {
         let node = self.w.node(s, n);
         (node.out.dtype, node.out.resolve(self.w.h(s, p)))
     }
 
     /// The shapes `(p, s, n)`'s element is evaluated at.
-    fn shapes(&self, p: u32, s: u16, n: u16) -> ElementShapesV1 {
+    pub(crate) fn shapes(&self, p: u32, s: u16, n: u16) -> ElementShapesV1 {
         let block = self.w.occurrences[s as usize].0 as usize;
         let node = self.w.node(s, n);
         let h = self.w.h(s, p);
@@ -478,13 +582,13 @@ impl<'a> PreparedV1<'a> {
 
 /// Where an operand of `(p, s, n)` comes from, `i` counting a `HistAppend`'s previous window as operand 1.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum OperandSourceV1 {
+pub(crate) enum OperandSourceV1 {
     Source(SourceV1),
     Token,
     Position,
 }
 
-fn operand_sources(pr: &PreparedV1<'_>, p: u32, s: u16, n: u16) -> Result<Vec<OperandSourceV1>, String> {
+pub(crate) fn operand_sources(pr: &PreparedV1<'_>, p: u32, s: u16, n: u16) -> Result<Vec<OperandSourceV1>, String> {
     let node = pr.w.node(s, n);
     let mut out = Vec::new();
     for (i, r) in node.inputs.iter().enumerate() {
@@ -542,7 +646,7 @@ fn header_of(l: &LeafOpeningV3) -> Option<(DType, Vec<usize>)> {
 }
 
 /// The token a node reads at `p` (the job's prompt, a tile, or a delivered id).
-fn token_at(c: &SegClaimContextV1<'_>, p: u32, tile: Option<&PromptTileOpeningV1>) -> Option<u32> {
+pub(crate) fn token_at(c: &SegClaimContextV1<'_>, p: u32, tile: Option<&PromptTileOpeningV1>) -> Option<u32> {
     if p < c.prompt_len {
         match c.inline_prompt {
             Some(ids) => ids.get(p as usize).copied(),
@@ -554,11 +658,150 @@ fn token_at(c: &SegClaimContextV1<'_>, p: u32, tile: Option<&PromptTileOpeningV1
     }
 }
 
+/// A segmented court's check of a node opening: it names `(p, s, n)` and authenticates against the claim's segment roots.
+fn node_opening_ok(
+    c: &SegClaimContextV1<'_>,
+    pr: &PreparedV1<'_>,
+    o: &NodeOpeningV1,
+    p: u32,
+    s: u16,
+    n: u16,
+) -> Result<(), DismissalV1> {
+    if (o.position, o.occurrence, o.node) != (p, s, n) || p >= c.positions || !pr.valid(s, n) {
+        return Err(DismissalV1::NotAuthentic(format!(
+            "an opening of ({}, {}, {}) where ({p}, {s}, {n}) is read",
+            o.position, o.occurrence, o.node
+        )));
+    }
+    if !o.authenticates(c.segment_roots, c.positions, pr.index(s, n), pr.node_count) {
+        return Err(DismissalV1::NotAuthentic(format!("({p}, {s}, {n}): the commitment is not the claim's")));
+    }
+    Ok(())
+}
+
+/// **The authenticated operands of a whole-value or hiding-leaf court of `(p, s, n)`**: per operand, a committed value whole (its
+/// commitment recomputed under its source's mode), by v3 leaves (a clear value or a param) or by hiding tiles (a hiding value), each
+/// against its commitment; a token or the job's ids through their tile; consts, zeros and public scalars from the program.
+fn court_whole_operands(
+    c: &SegClaimContextV1<'_>,
+    pr: &PreparedV1<'_>,
+    (p, s, n): (u32, u16, u16),
+    inputs: &[WholeOperandV1],
+    token: Option<&PromptTileOpeningV1>,
+) -> Result<CourtOperands, DismissalV1> {
+    let na = DismissalV1::NotAuthentic;
+    let sources = operand_sources(pr, p, s, n).map_err(na)?;
+    if inputs.len() != sources.len() {
+        return Err(na(format!("{} operands where the node reads {}", inputs.len(), sources.len())));
+    }
+    let mut ops = Vec::with_capacity(sources.len());
+    for (i, (src, opening)) in sources.iter().zip(inputs).enumerate() {
+        // A committed operand: whole (its commitment recomputed under the source's mode), by authenticated v3 leaves, or by
+        // authenticated hiding tiles (a hiding source's only leaf form).
+        let committed = |commitment: &Digest, want: (DType, Vec<usize>), mode: SegValueModeV1| -> Result<CourtOperand, DismissalV1> {
+            if let Some(w) = &opening.whole {
+                let t = w.tensor().ok_or_else(|| na(format!("operand {i}: a malformed whole value")))?;
+                if (t.dtype, t.shape.clone()) != want || seg_value_commitment_v1(mode, &t) != *commitment {
+                    return Err(na(format!("operand {i}: the whole value is not the committed one")));
+                }
+                return Ok(CourtOperand::Full(t));
+            }
+            if opening.leaves.iter().any(|l| !l.authenticates(commitment) || header_of(l) != Some(want.clone())) {
+                return Err(na(format!("operand {i}: a leaf is not the committed value's")));
+            }
+            if opening.hidden.iter().any(|t| !t.authenticates(want.0, &want.1, commitment)) {
+                return Err(na(format!("operand {i}: a hiding tile is not the committed value's")));
+            }
+            let mut m = leaf_map(&opening.leaves)
+                .map_err(|_| na(format!("operand {i}: two authenticated leaves disagree (file against the source)")))?;
+            for t in &opening.hidden {
+                for (e, v) in t.elements(want.0, &want.1).unwrap_or_default() {
+                    if m.insert(e, v).is_some_and(|old| old != v) {
+                        return Err(na(format!("operand {i}: two authenticated openings disagree (file against the source)")));
+                    }
+                }
+            }
+            Ok(CourtOperand::Leaves(m))
+        };
+        let op = match src {
+            OperandSourceV1::Token => {
+                CourtOperand::Scalar(token_at(c, p, token).ok_or_else(|| na("the token at the position is not opened".into()))? as i128)
+            }
+            OperandSourceV1::Position => CourtOperand::Scalar(p as i128),
+            OperandSourceV1::Source(SourceV1::Node { position, occurrence, node }) => {
+                let o = opening.node.as_ref().ok_or_else(|| na(format!("operand {i}: its node is not opened")))?;
+                node_opening_ok(c, pr, o, *position, *occurrence, *node)?;
+                committed(&o.commitment, pr.declared(*occurrence, *node, *position), pr.mode(*occurrence, *node))?
+            }
+            OperandSourceV1::Source(SourceV1::Param { index, layer }) => {
+                let commitment =
+                    *c.params.by_instance.get(&(*index, *layer)).ok_or_else(|| na(format!("no commitment for param {index}")))?;
+                let d = &c.program.params[*index as usize];
+                if !opening.hidden.is_empty() {
+                    return Err(na(format!("operand {i}: a param is opened by v3 leaves")));
+                }
+                committed(&commitment, (d.dtype, d.shape.iter().map(|x| *x as usize).collect()), SegValueModeV1::Clear)?
+            }
+            OperandSourceV1::Source(SourceV1::Const(j)) => {
+                CourtOperand::Full(const_tensor(c.program, *j).map_err(|e| na(e.to_string()))?)
+            }
+            OperandSourceV1::Source(SourceV1::Zeros { .. }) => CourtOperand::Zeros,
+            OperandSourceV1::Source(SourceV1::Public(v)) => CourtOperand::Scalar(*v as i128),
+            OperandSourceV1::Source(SourceV1::Input { k, .. }) => {
+                let e = c.encoder.as_ref().ok_or_else(|| na("a pipeline stage input on a single-program claim".into()))?;
+                if *k == 1 {
+                    CourtOperand::Full(e.count(c.prompt_len).map_err(na)?)
+                } else {
+                    let prompt: Vec<u32> = match c.inline_prompt {
+                        Some(ids) => ids.to_vec(),
+                        None => {
+                            let t = token.ok_or_else(|| na("the job's ids are not opened".into()))?;
+                            if t.index != 0 || t.ids.len() != c.prompt_len as usize || !t.authenticates(c.prompt_len, &c.prompt_root) {
+                                return Err(na("the opened ids are not the job's".into()));
+                            }
+                            t.ids.clone()
+                        }
+                    };
+                    CourtOperand::Full(e.ids(&prompt).map_err(na)?)
+                }
+            }
+        };
+        ops.push(op);
+    }
+    Ok(CourtOperands(ops))
+}
+
 /// **The segmented court.** Every opening authenticated against the claim's segment roots or the class's param commitments; nothing
 /// read from the producer.
 pub fn verify_seg_fault_v1(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Result<SegConvictionV1, DismissalV1> {
+    let pr = PreparedV1::new(c.program, c.encoder.as_ref()).map_err(DismissalV1::NotAuthentic)?;
+    verify_prepared_fault(c, fault, &pr)
+}
+
+/// Non-reward candidate trace v2 court. Its commitment-only scope and Gather
+/// dependency price are distinct from the frozen v4/v5 claim court contract.
+pub fn verify_model_vector_fault_v2(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Result<SegConvictionV1, DismissalV1> {
+    let mut pr = PreparedV1::new(c.program, c.encoder.as_ref()).map_err(DismissalV1::NotAuthentic)?;
+    pr.set_candidate_v2_scope(c.program);
+    if let SegFaultV1::WholeValue(f) = fault {
+        if !pr.valid(f.occurrence, f.node) || !pr.is_withheld(f.occurrence, f.node) {
+            return Err(DismissalV1::NotAuthentic("candidate whole court is not bounded for this node".into()));
+        }
+        let (bytes, _) =
+            crate::seg_scope::model_vector_whole_court_cost_v2(c.program, f.occurrence as usize, f.node as usize, pr.node_count);
+        // Redundant, duplicate and unrelated openings cannot spend another
+        // relation's larger envelope on this dependency-priced court.
+        let wire =
+            borsh::to_vec(fault).map_err(|e| DismissalV1::NotAuthentic(format!("candidate whole filing has no wire form: {e}")))?;
+        if wire.len() as u64 > bytes {
+            return Err(DismissalV1::NotAuthentic("candidate whole filing exceeds its dependency bound".into()));
+        }
+    }
+    verify_prepared_fault(c, fault, &pr)
+}
+
+fn verify_prepared_fault(c: &SegClaimContextV1<'_>, fault: &SegFaultV1, pr: &PreparedV1<'_>) -> Result<SegConvictionV1, DismissalV1> {
     let na = DismissalV1::NotAuthentic;
-    let pr = PreparedV1::new(c.program, c.encoder.as_ref()).map_err(na)?;
     let node_ok = |o: &NodeOpeningV1, p: u32, s: u16, n: u16| -> Result<(), DismissalV1> {
         if (o.position, o.occurrence, o.node) != (p, s, n) || p >= c.positions || !pr.valid(s, n) {
             return Err(DismissalV1::NotAuthentic(format!(
@@ -635,79 +878,9 @@ pub fn verify_seg_fault_v1(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Res
                 return Err(na("a whole-value court is not priced for this node".into()));
             }
             let convicted = || Ok(SegConvictionV1 { position: p, occurrence: s, node: n, kind: SegConvictionKindV1::WholeValue });
-            let sources = operand_sources(&pr, p, s, n).map_err(na)?;
-            if f.inputs.len() != sources.len() {
-                return Err(na(format!("{} operands where the node reads {}", f.inputs.len(), sources.len())));
-            }
-            let mut ops = Vec::with_capacity(sources.len());
-            for (i, (src, opening)) in sources.iter().zip(&f.inputs).enumerate() {
-                // A committed operand: whole (its commitment recomputed) or by authenticated leaves.
-                let committed = |commitment: &Digest, want: (DType, Vec<usize>)| -> Result<CourtOperand, DismissalV1> {
-                    if let Some(w) = &opening.whole {
-                        let t = w.tensor().ok_or_else(|| na(format!("operand {i}: a malformed whole value")))?;
-                        if (t.dtype, t.shape.clone()) != want || tensor_commitment_v3(&t) != *commitment {
-                            return Err(na(format!("operand {i}: the whole value is not the committed one")));
-                        }
-                        return Ok(CourtOperand::Full(t));
-                    }
-                    if opening.leaves.iter().any(|l| !l.authenticates(commitment) || header_of(l) != Some(want.clone())) {
-                        return Err(na(format!("operand {i}: a leaf is not the committed value's")));
-                    }
-                    leaf_map(&opening.leaves)
-                        .map(CourtOperand::Leaves)
-                        .map_err(|_| na(format!("operand {i}: two authenticated leaves disagree (file against the source)")))
-                };
-                let op = match src {
-                    OperandSourceV1::Token => CourtOperand::Scalar(
-                        token_at(c, p, f.token.as_ref()).ok_or_else(|| na("the token at the position is not opened".into()))? as i128,
-                    ),
-                    OperandSourceV1::Position => CourtOperand::Scalar(p as i128),
-                    OperandSourceV1::Source(SourceV1::Node { position, occurrence, node }) => {
-                        let o = opening.node.as_ref().ok_or_else(|| na(format!("operand {i}: its node is not opened")))?;
-                        node_ok(o, *position, *occurrence, *node)?;
-                        committed(&o.commitment, pr.declared(*occurrence, *node, *position))?
-                    }
-                    OperandSourceV1::Source(SourceV1::Param { index, layer }) => {
-                        let commitment = *c
-                            .params
-                            .by_instance
-                            .get(&(*index, *layer))
-                            .ok_or_else(|| na(format!("no commitment for param {index}")))?;
-                        let d = &c.program.params[*index as usize];
-                        committed(&commitment, (d.dtype, d.shape.iter().map(|x| *x as usize).collect()))?
-                    }
-                    OperandSourceV1::Source(SourceV1::Const(j)) => {
-                        CourtOperand::Full(const_tensor(c.program, *j).map_err(|e| na(e.to_string()))?)
-                    }
-                    OperandSourceV1::Source(SourceV1::Zeros { .. }) => CourtOperand::Zeros,
-                    OperandSourceV1::Source(SourceV1::Public(v)) => CourtOperand::Scalar(*v as i128),
-                    OperandSourceV1::Source(SourceV1::Input { k, .. }) => {
-                        let e = c.encoder.as_ref().ok_or_else(|| na("a pipeline stage input on a single-program claim".into()))?;
-                        if *k == 1 {
-                            CourtOperand::Full(e.count(c.prompt_len).map_err(na)?)
-                        } else {
-                            let prompt: Vec<u32> = match c.inline_prompt {
-                                Some(ids) => ids.to_vec(),
-                                None => {
-                                    let t = f.token.as_ref().ok_or_else(|| na("the job's ids are not opened".into()))?;
-                                    if t.index != 0
-                                        || t.ids.len() != c.prompt_len as usize
-                                        || !t.authenticates(c.prompt_len, &c.prompt_root)
-                                    {
-                                        return Err(na("the opened ids are not the job's".into()));
-                                    }
-                                    t.ids.clone()
-                                }
-                            };
-                            CourtOperand::Full(e.ids(&prompt).map_err(na)?)
-                        }
-                    }
-                };
-                ops.push(op);
-            }
+            let ops = court_whole_operands(c, &pr, (p, s, n), &f.inputs, f.token.as_ref())?;
             let sh = pr.shapes(p, s, n);
             let (dtype, shape) = pr.declared(s, n, p);
-            let ops = CourtOperands(ops);
             let len = LayoutV3::of(&shape).len;
             let mut data = Vec::with_capacity(len as usize);
             for e in 0..len {
@@ -719,6 +892,75 @@ pub fn verify_seg_fault_v1(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Res
             }
             let recomputed = Tensor::new(dtype, shape, data).map_err(|e| na(e.to_string()))?;
             if tensor_commitment_v3(&recomputed) == f.output.commitment { Err(DismissalV1::NoFault) } else { convicted() }
+        }
+        SegFaultV1::HidingLeaf(f) => {
+            let (p, s, n) = (f.position, f.occurrence, f.node);
+            node_ok(&f.output, p, s, n)?;
+            if pr.mode(s, n) != SegValueModeV1::Hiding {
+                return Err(na("a hiding-leaf court is not this node's (its value is not hiding)".into()));
+            }
+            let (dtype, shape) = pr.declared(s, n, p);
+            // The producer's leaf hash, authenticated as a tile of a value of the node's declared type.
+            if !f.leaf.authenticates(dtype, &shape, &f.output.commitment) {
+                return Err(na("the leaf hash is not the committed value's".into()));
+            }
+            let tile = f.leaf.tile;
+            let (a, b) = hide_tile_range_v1(LayoutV3::of(&shape).len, tile).ok_or_else(|| na("no such tile".into()))?;
+            let convicted =
+                || Ok(SegConvictionV1 { position: p, occurrence: s, node: n, kind: SegConvictionKindV1::HidingLeaf { tile } });
+            let ops = court_whole_operands(c, &pr, (p, s, n), &f.inputs, f.token.as_ref())?;
+            let sh = pr.shapes(p, s, n);
+            let mut values = Vec::with_capacity((b - a) as usize);
+            for e in a..b {
+                match element_value_v1(c.program, pr.w.node(s, n), &sh, e, &ops) {
+                    Err(MissingV1(i, x)) => return Err(na(format!("operand {i}: element {x} is not opened"))),
+                    Ok(None) => return convicted(),
+                    Ok(Some(v)) if !dtype.contains(v) => return convicted(),
+                    Ok(Some(v)) => values.push(v),
+                }
+            }
+            if hide_leaf_hash_v1(dtype, tile, &values) == f.leaf.leaf { Err(DismissalV1::NoFault) } else { convicted() }
+        }
+        SegFaultV1::HidingDecode(f) => {
+            let r = f.index as usize;
+            let delivered = *c.generated.get(r).ok_or_else(|| na("no such delivered id".into()))?;
+            let p =
+                c.prompt_len.checked_sub(1).and_then(|x| x.checked_add(f.index)).ok_or_else(|| na("no selecting position".into()))?;
+            let post = (pr.w.occurrences.len() - 1) as u16;
+            let logits = c.program.logits;
+            node_ok(&f.logits, p, post, logits)?;
+            if pr.mode(post, logits) != SegValueModeV1::Hiding {
+                return Err(na("the logits are not hiding: file a decode fault".into()));
+            }
+            let (dtype, shape) = pr.declared(post, logits, p);
+            if f.tiles.is_empty() || f.tiles.iter().any(|t| !t.authenticates(dtype, &shape, &f.logits.commitment)) {
+                return Err(na("a logits tile is not the committed value's".into()));
+            }
+            let convicted = || {
+                Ok(SegConvictionV1 {
+                    position: p,
+                    occurrence: post,
+                    node: logits,
+                    kind: SegConvictionKindV1::Decode { index: f.index },
+                })
+            };
+            let len = LayoutV3::of(&shape).len;
+            if delivered as u64 >= len {
+                return convicted();
+            }
+            let m: BTreeMap<u64, i128> = f.tiles.iter().filter_map(|t| t.elements(dtype, &shape)).flatten().collect();
+            match c.decode {
+                DecodeRuleV1::Greedy => {
+                    if f.rival as u64 >= len || f.rival == delivered {
+                        return Err(na("the rival is not another id of the logits".into()));
+                    }
+                    let (vt, vj) = match (m.get(&(delivered as u64)), m.get(&(f.rival as u64))) {
+                        (Some(a), Some(b)) => (*a, *b),
+                        _ => return Err(na("the delivered id or the rival is not opened".into())),
+                    };
+                    if vj > vt || (vj == vt && f.rival < delivered) { convicted() } else { Err(DismissalV1::NoFault) }
+                }
+            }
         }
         SegFaultV1::Element(f) => {
             let (p, s, n) = (f.position, f.occurrence, f.node);
@@ -830,24 +1072,48 @@ pub fn verify_seg_fault_v1(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Res
 /// **Where an outsider reads committed values**: every committed value of a position (derived windows included), and the position
 /// root's path to its segment root. Served off-chain, or on chain in answer to a demand.
 pub trait SegMaterialV1 {
-    /// Every value of position `p` as served (a withheld value may be any tensor: it is never served — `crate::seg_scope`).
+    /// Every value of position `p` as served (a withheld or hiding value may be any tensor: it is never served in the clear —
+    /// `crate::seg_scope`).
     fn position(&self, p: u32) -> Option<Vec<Vec<Tensor>>>;
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>>;
-    /// Every node commitment of position `p` (served beside the values; a withheld value's is all that is served of it). By default
-    /// derived from the values.
-    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+    /// Every node commitment of position `p` (served beside the values; a withheld value's is all that is served of it, a hiding
+    /// value's beside its leaf hashes). By default derived from the values under `program`'s value modes (a source holding the real
+    /// values: a producer's own, a test's).
+    fn commitments(&self, program: &TirProgramV1, p: u32) -> Option<Vec<Vec<Digest>>> {
         let values = self.position(p)?;
         if !values.iter().flatten().all(crate::verify::canonical_tensor_v1) {
             return None;
         }
-        Some(values.iter().map(|occ| occ.iter().map(tensor_commitment_v3).collect()).collect())
+        Some(seg_position_commitments_v1(&seg_value_modes_v1(program), &values))
     }
     /// Position `p`'s root and its path to its segment root, **without its values** where the source keeps them apart (part 0 of a
     /// demand, a stream's position-root list): what the re-execution check descends a segment with (`crate::seg_detect`). By default
     /// it is derived from the values.
-    fn position_path(&self, p: u32) -> Option<(Digest, Vec<Digest>)> {
-        let commitments = self.commitments(p)?;
+    fn position_path(&self, program: &TirProgramV1, p: u32) -> Option<(Digest, Vec<Digest>)> {
+        let commitments = self.commitments(program, p)?;
         Some((position_root_of_v1(p, &commitments), self.position_siblings(p)?))
+    }
+    /// **The producer's leaf hashes of every hiding value of position `p`** (`[occurrence][node]`, `None` for a value that is not
+    /// hiding) — what a demanded position serves of a hiding value (`ChunkBodyV1::Hidden`). By default derived from the values (a source
+    /// holding the real values); a source reading served parts returns what was served
+    /// (`crate::seg_da::assemble_hidden_leaves_v1`).
+    fn hidden_leaves(&self, program: &TirProgramV1, p: u32) -> Option<Vec<Vec<Option<Vec<Digest>>>>> {
+        let values = self.position(p)?;
+        let modes = seg_value_modes_v1(program);
+        Some(
+            values
+                .iter()
+                .enumerate()
+                .map(|(s, occ)| {
+                    occ.iter()
+                        .enumerate()
+                        .map(|(n, t)| {
+                            (modes.get(s).and_then(|o| o.get(n)) == Some(&SegValueModeV1::Hiding)).then(|| HidingTreeV1::of(t).leaves)
+                        })
+                        .collect()
+                })
+                .collect(),
+        )
     }
 }
 
@@ -866,8 +1132,11 @@ struct Loaded {
     values: Vec<Vec<Tensor>>,
     commitments: Vec<Vec<Digest>>,
     siblings: Vec<Digest>,
-    /// Withheld values the verifier's own value does not authenticate (or it has none): the first one is a whole-value fault.
+    /// Withheld or hiding values the verifier's own value does not authenticate (or it has none): the first one is a whole-value
+    /// (withheld) or a hiding-leaf (hiding) fault.
     unmatched: BTreeSet<(u16, u16)>,
+    /// The verifier's own values of the unmatched hiding ones (to find the first tile whose hash differs).
+    own_unmatched: BTreeMap<(u16, u16), Tensor>,
     /// Whether the verifier's own position differs from the committed one anywhere (`None`: it supplied none).
     diverges: Option<bool>,
 }
@@ -913,6 +1182,34 @@ pub fn check_positions_v1(
         Ok(pr) => pr,
         Err(why) => return SegFindingV1::Inconsistent(why),
     };
+    check_prepared_positions(c, material, artifact, tokens, positions, &pr)
+}
+
+/// A model holder checks candidate traces using exactly their commitment-only
+/// court scope. No producer value is needed for a bounded Gather's output.
+pub fn check_model_vector_positions_v2(
+    c: &SegClaimContextV1<'_>,
+    material: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    positions: &[u32],
+) -> SegFindingV1 {
+    let mut pr = match PreparedV1::new(c.program, c.encoder.as_ref()) {
+        Ok(pr) => pr,
+        Err(why) => return SegFindingV1::Inconsistent(why),
+    };
+    pr.set_candidate_v2_scope(c.program);
+    check_prepared_positions(c, material, artifact, tokens, positions, &pr)
+}
+
+fn check_prepared_positions(
+    c: &SegClaimContextV1<'_>,
+    material: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    positions: &[u32],
+    pr: &PreparedV1<'_>,
+) -> SegFindingV1 {
     let mut ps: Vec<u32> = positions.to_vec();
     ps.sort_unstable();
     ps.dedup();
@@ -925,7 +1222,7 @@ pub fn check_positions_v1(
         Ok(l) => l,
         Err(missing) => return SegFindingV1::Demand(missing),
     };
-    let own = match crate::seg_detect::replay_positions_v1(c, artifact, tokens, &needed_positions(&ps), &pr.withheld) {
+    let own = match crate::seg_detect::replay_positions_v1(c, artifact, tokens, &needed_positions(&ps), &pr.modes, &pr.kept) {
         Ok(own) => own,
         Err(why) => return SegFindingV1::Inconsistent(why),
     };
@@ -934,10 +1231,16 @@ pub fn check_positions_v1(
         here.diverges = Some(own.commitments != here.commitments);
         for s in 0..here.values.len() {
             for n in 0..here.values[s].len() {
-                if pr.is_withheld(s as u16, n as u16) {
+                if pr.is_kept(s as u16, n as u16) {
                     match own.withheld[s][n].take() {
                         Some(t) if own.commitments[s][n] == here.commitments[s][n] => here.values[s][n] = t,
-                        _ => {
+                        Some(t) => {
+                            here.unmatched.insert((s as u16, n as u16));
+                            if pr.mode(s as u16, n as u16) == SegValueModeV1::Hiding {
+                                here.own_unmatched.insert((s as u16, n as u16), t);
+                            }
+                        }
+                        None => {
                             here.unmatched.insert((s as u16, n as u16));
                         }
                     }
@@ -951,7 +1254,7 @@ pub fn check_positions_v1(
         return SegFindingV1::Inconsistent("an earlier position differs: localize it with the public root descent".into());
     }
     for &p in &ps {
-        match check_one(c, &pr, &loaded, artifact, tokens, p) {
+        match check_one(c, &pr, &loaded, material, artifact, tokens, p) {
             Ok(None) => {}
             Ok(Some(f)) => return SegFindingV1::Fault(Box::new(f)),
             Err(why) => return SegFindingV1::Inconsistent(why),
@@ -1067,18 +1370,20 @@ fn build_element_fault(
     Ok(ElementFaultV1 { position: p, occurrence: s, node: n, element: e, output, inputs, token })
 }
 
-/// **The whole-value filing for `(p, s, n)`**: the output's node opening and, per operand, what every element of the value reads — a
-/// withheld committed operand whole (the verifier's own value, which matches its commitment), a served one by the leaves covering its
-/// reads, a param by leaves from the filer's own copy, the token or the job's ids by their tile.
+/// **What a whole-value or hiding-leaf filing opens of every operand of `(p, s, n)`** for the output elements `elements`: a withheld
+/// committed operand whole (the verifier's own value, which matches its commitment), a hiding one by the hiding tiles covering its
+/// reads, a clear one by the v3 leaves covering its reads, a param by v3 leaves from the filer's own copy, the token or the job's ids
+/// by their tile.
 #[allow(clippy::too_many_arguments)]
-fn build_whole_value_fault(
+fn whole_operand_openings(
     c: &SegClaimContextV1<'_>,
     pr: &PreparedV1<'_>,
     loaded: &BTreeMap<u32, Loaded>,
     resolved: &OperandsResolvedV1,
     tokens: &[u32],
     (p, s, n): (u32, u16, u16),
-) -> Result<WholeValueFaultV1, String> {
+    elements: std::ops::Range<u64>,
+) -> Result<(Vec<WholeOperandV1>, Option<PromptTileOpeningV1>), String> {
     let (sources, owned, scalars) = resolved;
     let opening = |q: u32, s: u16, n: u16| -> Option<NodeOpeningV1> {
         let l = loaded.get(&q)?;
@@ -1090,7 +1395,7 @@ fn build_whole_value_fault(
         scalars: scalars.clone(),
         reads: RefCell::new(vec![BTreeSet::new(); owned.len()]),
     };
-    for e in 0..LayoutV3::of(&sh.out).len {
+    for e in elements {
         element_value_v1(c.program, pr.w.node(s, n), &sh, e, &ops)
             .map_err(|MissingV1(i, f)| format!("({p}, {s}, {n}) operand {i} element {f}"))?;
     }
@@ -1102,10 +1407,10 @@ fn build_whole_value_fault(
         match (src, owned[i].as_ref()) {
             (OperandSourceV1::Source(SourceV1::Node { position, occurrence, node }), Some(t)) => {
                 operand.node = opening(*position, *occurrence, *node);
-                if pr.is_withheld(*occurrence, *node) {
-                    operand.whole = Some(WholeTensorV1::of(t));
-                } else {
-                    operand.leaves = leaves_covering_v1(t, &TreesV3::of(t), &reads[i]);
+                match pr.mode(*occurrence, *node) {
+                    SegValueModeV1::Withheld => operand.whole = Some(WholeTensorV1::of(t)),
+                    SegValueModeV1::Hiding => operand.hidden = hiding_tiles_covering_v1(t, &reads[i]),
+                    SegValueModeV1::Clear => operand.leaves = leaves_covering_v1(t, &TreesV3::of(t), &reads[i]),
                 }
             }
             (OperandSourceV1::Source(SourceV1::Param { .. }), Some(t)) => {
@@ -1121,14 +1426,78 @@ fn build_whole_value_fault(
         }
         inputs.push(operand);
     }
-    Ok(WholeValueFaultV1 {
-        position: p,
-        occurrence: s,
-        node: n,
-        output: opening(p, s, n).ok_or("no opening of the value")?,
-        inputs,
-        token,
-    })
+    Ok((inputs, token))
+}
+
+/// The hiding tiles of `t` holding every flat index of `reads`, in tile order.
+pub fn hiding_tiles_covering_v1(t: &Tensor, reads: &BTreeSet<u64>) -> Vec<HidingLeafOpeningV1> {
+    let len = t.data.len() as u64;
+    let tiles: BTreeSet<u64> = reads.iter().filter_map(|e| hide_tile_of_v1(len, *e)).collect();
+    if tiles.is_empty() {
+        return Vec::new();
+    }
+    let tree = HidingTreeV1::of(t);
+    tiles.into_iter().filter_map(|tile| HidingLeafOpeningV1::of(t, &tree, tile)).collect()
+}
+
+/// **The whole-value filing for `(p, s, n)`**: the output's node opening and, per operand, what every element of the value reads.
+#[allow(clippy::too_many_arguments)]
+fn build_whole_value_fault(
+    c: &SegClaimContextV1<'_>,
+    pr: &PreparedV1<'_>,
+    loaded: &BTreeMap<u32, Loaded>,
+    resolved: &OperandsResolvedV1,
+    tokens: &[u32],
+    (p, s, n): (u32, u16, u16),
+) -> Result<WholeValueFaultV1, String> {
+    let len = LayoutV3::of(&pr.shapes(p, s, n).out).len;
+    let (inputs, token) = whole_operand_openings(c, pr, loaded, resolved, tokens, (p, s, n), 0..len)?;
+    let l = loaded.get(&p).ok_or("the position is not loaded")?;
+    let output = position_node_opening_v1(p, &l.commitments, l.siblings.clone(), s, n).ok_or("no opening of the value")?;
+    Ok(WholeValueFaultV1 { position: p, occurrence: s, node: n, output, inputs, token })
+}
+
+/// **The hiding-leaf filing for tile `tile` of `(p, s, n)`** (DA16b option (a)): the output's node opening, the producer's leaf hash of
+/// the tile with its path (`served`: the producer's leaf hashes, authenticated against its commitment by the caller), and per operand
+/// what the tile's elements read.
+#[allow(clippy::too_many_arguments)]
+fn build_hiding_leaf_fault(
+    c: &SegClaimContextV1<'_>,
+    pr: &PreparedV1<'_>,
+    loaded: &BTreeMap<u32, Loaded>,
+    resolved: &OperandsResolvedV1,
+    tokens: &[u32],
+    (p, s, n): (u32, u16, u16),
+    served: &[Digest],
+    tile: u64,
+) -> Result<HidingLeafFaultV1, String> {
+    let len = LayoutV3::of(&pr.shapes(p, s, n).out).len;
+    let (a, b) = hide_tile_range_v1(len, tile).ok_or("no such tile")?;
+    let (inputs, token) = whole_operand_openings(c, pr, loaded, resolved, tokens, (p, s, n), a..b)?;
+    let l = loaded.get(&p).ok_or("the position is not loaded")?;
+    let output = position_node_opening_v1(p, &l.commitments, l.siblings.clone(), s, n).ok_or("no opening of the value")?;
+    let leaf = HidingLeafHashV1::of_leaves(served, tile).ok_or("no such served leaf")?;
+    Ok(HidingLeafFaultV1 { position: p, occurrence: s, node: n, output, leaf, inputs, token })
+}
+
+/// **The hiding-leaf filing for ANY tile** of a hiding value (right or wrong), from fully opened material authenticated against the
+/// claim's roots (the producer's values: a soundness test puts every honest tile to the court, which must dismiss each one).
+pub fn prove_hiding_leaf_v1(
+    c: &SegClaimContextV1<'_>,
+    material: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    (p, s, n): (u32, u16, u16),
+    tile: u64,
+) -> Result<HidingLeafFaultV1, String> {
+    let pr = PreparedV1::new(c.program, c.encoder.as_ref())?;
+    if !pr.valid(s, n) || p >= c.positions || pr.mode(s, n) != SegValueModeV1::Hiding {
+        return Err("no such hiding value".into());
+    }
+    let loaded = load_opened_positions_for_element(c, &pr, material, &[p])?;
+    let resolved = resolve_operands(c, &pr, &loaded, artifact, tokens, (p, s, n))?;
+    let served = HidingTreeV1::of(&loaded[&p].values[s as usize][n as usize]).leaves;
+    build_hiding_leaf_fault(c, &pr, &loaded, &resolved, tokens, (p, s, n), &served, tile)
 }
 
 /// **The filing for ANY element** of a committed value (right or wrong) — what a prover sends, and what a soundness test puts to the
@@ -1142,6 +1511,26 @@ pub fn prove_element_v1(
     e: u64,
 ) -> Result<ElementFaultV1, String> {
     let pr = PreparedV1::new(c.program, c.encoder.as_ref())?;
+    if !pr.valid(s, n) || p >= c.positions {
+        return Err("no such value".into());
+    }
+    let loaded = load_opened_positions_for_element(c, &pr, material, &[p])?;
+    let resolved = resolve_operands(c, &pr, &loaded, artifact, tokens, (p, s, n))?;
+    build_element_fault(c, &pr, &loaded, &resolved, tokens, (p, s, n), e)
+}
+
+/// [`prove_element_v1`] for an RFC-0002 candidate trace v2 statement (the candidate court scope: every value committed v3, no hiding
+/// values) — RFC02-T merge, 2026-10-11.
+pub fn prove_model_vector_element_v2(
+    c: &SegClaimContextV1<'_>,
+    material: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    (p, s, n): (u32, u16, u16),
+    e: u64,
+) -> Result<ElementFaultV1, String> {
+    let mut pr = PreparedV1::new(c.program, c.encoder.as_ref())?;
+    pr.set_candidate_v2_scope(c.program);
     if !pr.valid(s, n) || p >= c.positions {
         return Err("no such value".into());
     }
@@ -1168,11 +1557,14 @@ fn load_opened_positions_for_element(
         {
             return Err(format!("position {q} is malformed"));
         }
-        let commitments = values.iter().map(|o| o.iter().map(tensor_commitment_v3).collect()).collect::<Vec<_>>();
+        let commitments = seg_position_commitments_v1(&pr.modes, &values);
         if !position_in_segment(q, &position_root_of_v1(q, &commitments), &siblings, c.segment_roots, c.positions) {
             return Err(format!("position {q}'s opened values do not authenticate"));
         }
-        loaded.insert(q, Loaded { values, commitments, siblings, unmatched: BTreeSet::new(), diverges: None });
+        loaded.insert(
+            q,
+            Loaded { values, commitments, siblings, unmatched: BTreeSet::new(), own_unmatched: BTreeMap::new(), diverges: None },
+        );
     }
     Ok(loaded)
 }
@@ -1192,7 +1584,7 @@ fn load_positions_or_demand(
     let mut missing = Vec::new();
     for q in need {
         let (Some(values), Some(siblings), Some(commitments)) =
-            (material.position(q), material.position_siblings(q), material.commitments(q))
+            (material.position(q), material.position_siblings(q), material.commitments(c.program, q))
         else {
             missing.push(q);
             continue;
@@ -1210,10 +1602,10 @@ fn load_positions_or_demand(
             missing.push(q);
             continue;
         }
-        // A served (clear) value must be its commitment's; a withheld one is never served.
+        // A served (clear) value must be its commitment's; a withheld or hiding one is never served in the clear.
         let served_ok = values.iter().enumerate().all(|(s, occ)| {
             occ.iter().enumerate().all(|(n, t)| {
-                pr.is_withheld(s as u16, n as u16)
+                pr.is_kept(s as u16, n as u16)
                     || (crate::verify::canonical_tensor_v1(t) && tensor_commitment_v3(t) == commitments[s][n])
             })
         });
@@ -1221,7 +1613,10 @@ fn load_positions_or_demand(
             missing.push(q);
             continue;
         }
-        loaded.insert(q, Loaded { values, commitments, siblings, unmatched: BTreeSet::new(), diverges: None });
+        loaded.insert(
+            q,
+            Loaded { values, commitments, siblings, unmatched: BTreeSet::new(), own_unmatched: BTreeMap::new(), diverges: None },
+        );
     }
     if missing.is_empty() { Ok(loaded) } else { Err(missing) }
 }
@@ -1231,6 +1626,7 @@ fn check_one(
     c: &SegClaimContextV1<'_>,
     pr: &PreparedV1<'_>,
     loaded: &BTreeMap<u32, Loaded>,
+    material: &dyn SegMaterialV1,
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],
     p: u32,
@@ -1243,6 +1639,43 @@ fn check_one(
     for s in 0..pr.w.occurrences.len() as u16 {
         for n in 0..pr.nodes_in(s).unwrap_or(0) {
             let node = pr.w.node(s, n);
+            if pr.mode(s, n) == SegValueModeV1::Hiding {
+                // A hiding value: the verifier's own value authenticates it, or it is the first one that does not — then the first
+                // tile whose hash is not the producer's served one is the fault (DA16b option (a)).
+                if here.unmatched.contains(&(s, n)) {
+                    if here.diverges.is_none() {
+                        return Err(format!("({p}, {s}, {n}) is hiding and the verifier has no value of its own to check it with"));
+                    }
+                    let own = here.own_unmatched.get(&(s, n)).ok_or_else(|| format!("({p}, {s}, {n}): no own value kept"))?;
+                    let (dtype, shape) = pr.declared(s, n, p);
+                    let served = material
+                        .hidden_leaves(c.program, p)
+                        .and_then(|h| h.get(s as usize)?.get(n as usize)?.clone())
+                        .filter(|leaves| {
+                            hide_commitment_of_leaves_v1(dtype, &shape, leaves) == Some(here.commitments[s as usize][n as usize])
+                        })
+                        .ok_or_else(|| format!("({p}, {s}, {n}): the producer's leaf hashes are not in hand (demand the position)"))?;
+                    let own_tree = HidingTreeV1::of(own);
+                    if (own.dtype, own.shape.clone()) != (dtype, shape.clone()) {
+                        return Err(format!("({p}, {s}, {n}): the verifier's own value is not of the declared type"));
+                    }
+                    let tile = own_tree
+                        .first_differing_tile(&served)
+                        .ok_or_else(|| format!("({p}, {s}, {n}): the commitments differ and no tile does"))?;
+                    let resolved = resolve_operands(c, pr, loaded, artifact, tokens, (p, s, n))?;
+                    return Ok(Some(SegFaultV1::HidingLeaf(build_hiding_leaf_fault(
+                        c,
+                        pr,
+                        loaded,
+                        &resolved,
+                        tokens,
+                        (p, s, n),
+                        &served,
+                        tile,
+                    )?)));
+                }
+                continue;
+            }
             if pr.is_withheld(s, n) {
                 // A withheld value: the verifier's own value authenticates it, or it is the first one that does not.
                 if here.unmatched.contains(&(s, n)) {
@@ -1334,6 +1767,24 @@ fn check_one(
             let post = (pr.w.occurrences.len() - 1) as u16;
             let logits = &here.values[post as usize][c.program.logits as usize];
             let chosen = c.decode.select(logits);
+            if chosen != Some(delivered) && pr.mode(post, c.program.logits) == SegValueModeV1::Hiding {
+                // Hiding logits (DA16b option (a)): the tiles holding the delivered id and its rival, from the verifier's own logits
+                // (which matched the producer's commitment to get here).
+                let rival = chosen.unwrap_or(0);
+                let len = logits.data.len() as u64;
+                let tree = HidingTreeV1::of(logits);
+                let tiles: BTreeSet<u64> = [delivered as u64, rival as u64]
+                    .into_iter()
+                    .filter_map(|e| hide_tile_of_v1(len, e))
+                    .chain((len > 0 && delivered as u64 >= len).then_some(0))
+                    .collect();
+                return Ok(Some(SegFaultV1::HidingDecode(SegHidingDecodeFaultV1 {
+                    index: r as u32,
+                    rival,
+                    logits: opening(p, post, c.program.logits).ok_or("no opening of the logits")?,
+                    tiles: tiles.into_iter().filter_map(|t| HidingLeafOpeningV1::of(logits, &tree, t)).collect(),
+                })));
+            }
             if chosen != Some(delivered) {
                 let rival = chosen.unwrap_or(0);
                 let trees = TreesV3::of(logits);
@@ -1393,7 +1844,7 @@ fn axis_cover(l: &LayoutV3, rank: usize, width: u64, axis: u8, reads: &BTreeSet<
         .map(|(a, b, _)| (a, b))
         .collect();
     let path = (crate::merkle::depth(l.leaves(axis)) + 1) * 64 + 8 * rank as u64 + 32;
-    let bytes = set.iter().map(|(line, tile)| l.leaf_elements(axis, *line, *tile).map_or(0, |v| v.len() as u64) * width + path).sum();
+    let bytes = set.iter().map(|(line, tile)| l.leaf_element_count(axis, *line, *tile).unwrap_or(0) * width + path).sum();
     (set, bytes)
 }
 
@@ -1439,15 +1890,7 @@ pub fn element_court_cost_in_v1(
     max_positions: u32,
     encoder: Option<&crate::seg_encoder::EncoderBindingV1>,
 ) -> (u64, u64) {
-    element_court_cost_masked_v1(
-        program,
-        block,
-        node,
-        node_count,
-        max_positions,
-        encoder,
-        &crate::seg_scope::seg_withheld_mask_v1(program),
-    )
+    element_court_cost_modes_v1(program, block, node, node_count, max_positions, encoder, &seg_value_modes_v1(program))
 }
 
 /// [`element_court_cost_in_v1`] with the program's withheld mask (`crate::seg_scope::seg_withheld_mask_v1`) computed once by the caller.
@@ -1470,6 +1913,227 @@ pub fn element_court_cost_masked_v1(
         }
     }
     worst
+}
+
+/// **The price of every court a relation's value can be filed in, under the program's value modes** (`crate::seg_scope`): the element
+/// court; for a withheld value its whole-value court; for a hiding value its hiding-leaf court ([`hiding_leaf_court_cost_v1`]) when
+/// that court is bounded ([`crate::seg_scope::SEG_HIDING_COURT_MAX_BYTES_V1`]) — an unbounded one is no court a claim can rely on, and
+/// its class's court scope is incomplete (`crate::seg_scope::seg_scope_report_v2`: the class takes no claim).
+pub fn element_court_cost_modes_v1(
+    program: &TirProgramV1,
+    block: usize,
+    node: usize,
+    node_count: u64,
+    max_positions: u32,
+    encoder: Option<&crate::seg_encoder::EncoderBindingV1>,
+    modes: &[Vec<SegValueModeV1>],
+) -> (u64, u64) {
+    let mut worst = element_court_cost_core(program, block, node, node_count, max_positions, encoder);
+    let mut hiding: BTreeMap<Vec<Option<SegValueModeV1>>, (u64, u64)> = BTreeMap::new();
+    for (s, (b, _)) in program.occurrences().iter().enumerate() {
+        if *b as usize != block {
+            continue;
+        }
+        match modes.get(s).and_then(|o| o.get(node)).copied().unwrap_or(SegValueModeV1::Clear) {
+            SegValueModeV1::Clear => {}
+            SegValueModeV1::Withheld => {
+                let whole = crate::seg_scope::whole_value_court_cost_v1(program, s, node, node_count);
+                worst = (worst.0.max(whole.0), worst.1.max(whole.1));
+            }
+            SegValueModeV1::Hiding => {
+                let key = operand_source_modes_v1(program, modes, s, node);
+                let h = *hiding
+                    .entry(key)
+                    .or_insert_with(|| hiding_leaf_court_cost_v1(program, s, node, node_count, max_positions, encoder, modes));
+                if h.0 <= crate::seg_scope::SEG_HIDING_COURT_MAX_BYTES_V1 && h.1 <= crate::seg_scope::SEG_HIDING_COURT_MAX_WORK_V1 {
+                    worst = (worst.0.max(h.0), worst.1.max(h.1));
+                }
+            }
+        }
+    }
+    worst
+}
+
+/// The mode of each committed operand's source of `(occurrence s, node)` (`None`: not a committed value, or a source this price does
+/// not resolve — a state — which is then priced at the largest of every form): an earlier node of the occurrence, the previous
+/// occurrence's carry, and a `HistAppend`'s previous window (the node itself at `p − 1`) as a last operand.
+pub(crate) fn operand_source_modes_v1(
+    program: &TirProgramV1,
+    modes: &[Vec<SegValueModeV1>],
+    s: usize,
+    node: usize,
+) -> Vec<Option<SegValueModeV1>> {
+    let occurrences = program.occurrences();
+    let block = occurrences[s].0 as usize;
+    let n = &program.blocks[block].nodes[node];
+    let mode = |s: usize, i: usize| modes.get(s).and_then(|o| o.get(i)).copied();
+    let mut out: Vec<Option<SegValueModeV1>> = n
+        .inputs
+        .iter()
+        .map(|r| match *r {
+            Ref::Node(i) => mode(s, i as usize),
+            Ref::CarryIn(k) => s.checked_sub(1).and_then(|q| {
+                let prev = occurrences[q].0 as usize;
+                program.blocks[prev].carry_out.get(k as usize).and_then(|i| mode(q, *i as usize))
+            }),
+            _ => None,
+        })
+        .collect();
+    if matches!(n.prim, Prim::HistAppend { .. }) {
+        out.push(mode(s, node));
+    }
+    out
+}
+
+/// A dummy operand source recording every read in plain vectors (a hiding tile reads up to 127 dependency lines: sorted once, later).
+struct TileCountingOperands {
+    shapes: Vec<Vec<usize>>,
+    reads: RefCell<Vec<Vec<u64>>>,
+}
+
+impl OperandsV1 for TileCountingOperands {
+    fn get(&self, operand: usize, flat: u64) -> Result<i128, MissingV1> {
+        let len = self.shapes.get(operand).map(|s| LayoutV3::of(s).len).unwrap_or(1);
+        if flat >= len {
+            return Err(MissingV1(operand, flat));
+        }
+        if let Some(r) = self.reads.borrow_mut().get_mut(operand) {
+            r.push(flat);
+        }
+        Ok(0)
+    }
+}
+
+/// **What one hiding-leaf court of `(occurrence s, node)` can cost** (`(bytes, work)`, DA16b option (a)), at the history
+/// `min(window, max_positions)`: the filing's fixed fields, the output's node opening and the producer's leaf hash with its path at
+/// the hiding tree's full depth, and per operand what the tile's elements read — a committed operand by the form its source is owed
+/// in (a clear one's v3 leaves on the prover's tree, a withheld one whole, a hiding one's hiding tiles at full size and depth; a source
+/// the price does not resolve at the largest of the three), a param by its v3 leaves (the filer's copy), a token or the job's ids by
+/// their tile. The first and the last tile are priced (the last holds up to 127 elements); a `Concat` prices every input. A `MatMul`
+/// tile reads up to 127 columns of its right operand: the ≈ 64× column-opening cost over one element court is in this price.
+pub fn hiding_leaf_court_cost_v1(
+    program: &TirProgramV1,
+    s: usize,
+    node: usize,
+    node_count: u64,
+    max_positions: u32,
+    encoder: Option<&crate::seg_encoder::EncoderBindingV1>,
+    modes: &[Vec<SegValueModeV1>],
+) -> (u64, u64) {
+    let block = program.occurrences()[s].0 as usize;
+    let n = &program.blocks[block].nodes[node];
+    let h = crate::plan::worst_h(program, block).min(max_positions.max(1) as usize);
+    let token_tile = prompt_tile_bytes_v1(
+        PROMPT_TILE_IDS_V1.min(max_positions.max(1) as usize) as u64,
+        crate::merkle::depth(crate::seg::prompt_tiles_v1(max_positions.max(1)) as u64),
+    );
+    let job_tile = encoder.map_or(0, |b| prompt_tile_bytes_v1(b.l as u64, 0));
+    let source_modes = operand_source_modes_v1(program, modes, s, node);
+    let mut shapes = Vec::new();
+    let mut dtypes = Vec::new();
+    let mut kinds = Vec::new();
+    for r in &n.inputs {
+        let t = crate::plan::ref_type(program, block, r);
+        shapes.push(t.resolve(h));
+        dtypes.push(t.dtype);
+        kinds.push(match r {
+            Ref::Node(_) | Ref::CarryIn(_) | Ref::State(_) => 1u8,
+            Ref::Param(j) => match encoder {
+                Some(b) if *j == b.first_input => 4,
+                Some(b) if *j == b.first_input + 1 => 0,
+                _ => 2,
+            },
+            Ref::Input(j) if *j == INPUT_TOKEN => 3,
+            _ => 0,
+        });
+    }
+    let hist = match n.prim {
+        Prim::HistAppend { state } => {
+            let row: usize = program.states[state as usize].shape.iter().map(|d| *d as usize).product();
+            shapes.push(n.out.resolve(h));
+            dtypes.push(n.out.dtype);
+            kinds.push(1);
+            Some((h, h, row))
+        }
+        _ => None,
+    };
+    let out = n.out.resolve(h);
+    let len = LayoutV3::of(&out).len;
+    let tiles = hide_tiles_v1(len);
+    if tiles == 0 {
+        return (0, 0);
+    }
+    let sh = ElementShapesV1 { out, inputs: shapes.clone(), in_dtypes: dtypes.clone(), hist };
+    let node_bytes = node_opening_bytes_v1(node_count);
+    // `HidingLeafHashV1`: tile, leaf, the siblings' vector at the hiding tree's depth.
+    let leaf_hash = 8 + 64 + 4 + 64 * crate::merkle::depth(tiles);
+    // A `WholeOperandV1` shell: its node `Option` tag, the leaf and hidden vectors' lengths and its `whole` tag.
+    const SHELL: u64 = 10;
+    let mut worst = (0u64, 0u64);
+    for tile in [0, tiles - 1] {
+        let (a, b) = hide_tile_range_v1(len, tile).expect("in range");
+        let ops = TileCountingOperands { shapes: shapes.clone(), reads: RefCell::new(vec![Vec::new(); shapes.len()]) };
+        for e in a..b {
+            let _ = element_value_v1(program, n, &sh, e, &ops);
+        }
+        let mut reads = ops.reads.into_inner();
+        let evaluated: u64 = reads.iter().map(|r| r.len() as u64).sum();
+        if matches!(n.prim, Prim::Concat { .. }) {
+            for r in reads.iter_mut() {
+                r.push(0);
+            }
+        }
+        let mut bytes = FAULT_FIXED_BYTES_V1 + node_bytes + leaf_hash + 4 + 1;
+        let mut work = evaluated + (b - a) * HASH_WORK_V1 + HASH_WORK_V1 * (crate::merkle::depth(node_count) + 12);
+        for (i, r) in reads.iter_mut().enumerate() {
+            bytes += SHELL
+                + match kinds[i] {
+                    1 => node_bytes,
+                    3 => token_tile,
+                    4 => job_tile,
+                    _ => 0,
+                };
+            if !matches!(kinds[i], 1 | 2) || r.is_empty() {
+                continue;
+            }
+            r.sort_unstable();
+            r.dedup();
+            let set: BTreeSet<u64> = r.iter().copied().collect();
+            let (v3_leaves, v3) = cover_cost(&shapes[i], dtypes[i], &set);
+            if kinds[i] == 2 {
+                bytes += v3;
+                work += set.len() as u64 + v3_leaves * HASH_WORK_V1 * 24;
+                continue;
+            }
+            let l = LayoutV3::of(&shapes[i]).len;
+            let width = dtypes[i].width() as u64;
+            let read_tiles = r.iter().filter_map(|e| hide_tile_of_v1(l, *e)).collect::<BTreeSet<u64>>().len() as u64;
+            let hidden = read_tiles * hiding_leaf_opening_bytes_v1(l, width);
+            let whole = crate::seg_scope::whole_tensor_bytes_v1(&shapes[i], dtypes[i]);
+            let (b_op, hashed) = match source_modes.get(i).copied().flatten() {
+                Some(SegValueModeV1::Clear) => (v3, v3_leaves * HASH_WORK_V1 * 24),
+                Some(SegValueModeV1::Withheld) => (whole, whole),
+                Some(SegValueModeV1::Hiding) => (hidden, read_tiles * HASH_WORK_V1 * 24),
+                None => (v3.max(whole).max(hidden), (v3_leaves + read_tiles) * HASH_WORK_V1 * 24 + whole),
+            };
+            bytes += b_op;
+            work += set.len() as u64 + hashed;
+        }
+        worst = (worst.0.max(bytes), worst.1.max(work));
+    }
+    worst
+}
+
+/// What a hiding decode filing of a class can cost (`(bytes, work)`): the logits' node opening and two hiding tiles of the logits.
+pub fn hiding_decode_court_cost_v1(program: &TirProgramV1, node_count: u64, max_positions: u32) -> (u64, u64) {
+    let Some((b, _)) = program.occurrences().last().copied() else { return (0, 0) };
+    let Some(node) = program.blocks.get(b as usize).and_then(|blk| blk.nodes.get(program.logits as usize)) else { return (0, 0) };
+    let h = crate::plan::worst_h(program, b as usize).min(max_positions.max(1) as usize);
+    let len = LayoutV3::of(&node.out.resolve(h)).len;
+    let tile = hiding_leaf_opening_bytes_v1(len, node.out.dtype.width() as u64);
+    let bytes = 1 + 8 + node_opening_bytes_v1(node_count) + 4 + 2 * tile;
+    let work = 2 * (2 * HIDE_TILE_V1 + HASH_WORK_V1 * 24) + HASH_WORK_V1 * (crate::merkle::depth(node_count) + 12);
+    (bytes, work)
 }
 
 fn element_court_cost_core(
@@ -1568,16 +2232,208 @@ pub fn decode_court_cost_v1(program: &TirProgramV1, node_count: u64, max_positio
     // The variant tag, the index and the rival, and the opening's shell around the node opening.
     let bytes = 1 + 8 + OPERAND_SHELL_BYTES_V1 + node_opening_bytes_v1(node_count) + 2 * row;
     let work = 2 * (crate::merkle3::TILE_V3 + HASH_WORK_V1 * 24) + HASH_WORK_V1 * (crate::merkle::depth(node_count) + 12);
-    (bytes, work)
+    // Hiding logits (DA16b option (a)) are filed as two hiding tiles: the larger of the two forms.
+    let (hb, hw) = hiding_decode_court_cost_v1(program, node_count, max_positions);
+    (bytes.max(hb), work.max(hw))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allocation_free_leaf_pricing_matches_index_vector_oracle_on_real_weight_shapes() {
+        let cases = [
+            (vec![], BTreeSet::from([0])),
+            (vec![0], BTreeSet::from([0])),
+            (vec![4097], BTreeSet::from([0, 4095, 4096, 4097])),
+            (vec![3, 8193], (0..8193).step_by(997).collect()),
+            (vec![2, 4097, 3], (0..24_582).step_by(997).collect()),
+            // The actual pilot's vocabulary projection: a full strided MatMul column.
+            (vec![1536, 151_936], (0..1536).map(|k| k * 151_936).collect()),
+            // The actual embedding shape: a Gather reads one complete 1,536-value row.
+            (vec![151_936, 1536], (0..1536).collect()),
+        ];
+        for (shape, reads) in cases {
+            let l = LayoutV3::of(&shape);
+            for dtype in DType::ALL {
+                for axis in [AXIS_ROW, AXIS_COL] {
+                    let leaves: BTreeSet<(u64, u64)> = reads
+                        .iter()
+                        .filter_map(|e| if axis == AXIS_ROW { l.row_leaf_of(*e) } else { l.col_leaf_of(*e) })
+                        .map(|(a, b, _)| (a, b))
+                        .collect();
+                    let path = (crate::merkle::depth(l.leaves(axis)) + 1) * 64 + 8 * shape.len() as u64 + 32;
+                    let original: u64 = leaves
+                        .iter()
+                        .map(|(line, tile)| l.leaf_elements(axis, *line, *tile).unwrap().len() as u64 * dtype.width() as u64 + path)
+                        .sum();
+                    assert_eq!(axis_cover(&l, shape.len(), dtype.width() as u64, axis, &reads), (leaves, original));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn allocation_free_pricing_preserves_the_exact_actual_32_position_plan_root() {
+        let bytes =
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"));
+        let program = TirProgramV1::decode_canonical(bytes).unwrap();
+        let descriptor = crate::descriptor::k2_tir_v4_descriptor();
+        let plan = crate::plan::plan_for_tir_program_v1(&descriptor, &program, crate::public::program_root_v1(bytes), 32).unwrap();
+        let hex: String = plan.root().iter().map(|b| format!("{b:02x}")).collect();
+        // Re-pinned at the RFC02-T merge (2026-10-11): codex pinned `0e31e5b9…` on its older base; G14-S's court prices (hiding-tile
+        // operands, whole-operand shells) are part of the plan, so the merged root differs. That the allocation-free leaf count
+        // equals the index-vector oracle is checked separately on the real shapes (the test above), not by this pin.
+        assert_eq!(
+            hex,
+            "00df9d85b7b28dfc9fc3bea5da1749e102d1446d969b5fd2bd1363669a0e69beab114230fa5aa170d6444599bf541cb227832c6e87785d2d59def8684de2a793"
+        );
+    }
     use crate::seg::{SegmentedCommitmentsV1, prompt_root_of_ids_v1};
     use crate::trace::trace_v1;
     use misaka_palw_tir::MapParams;
     use misaka_palw_tir_sketch::fixture::dense_moe_v1;
+
+    /// Deliberately retains the old coordinate algorithm as a differential oracle. The
+    /// independently implemented whole-tensor TIR evaluator is checked as well.
+    fn coordinate_gather(node: &Node, sh: &ElementShapesV1, e: u64, ops: &dyn OperandsV1) -> Result<Option<i128>, MissingV1> {
+        let Prim::Gather { axis, batch_dims } = node.prim else { panic!("not Gather") };
+        let (a, b) = (axis as usize, batch_dims as usize);
+        let o = unravel(e, &strides(&sh.out));
+        let m = sh.inputs[1].len() - b;
+        let mut xi = o[..b].to_vec();
+        xi.extend_from_slice(&o[a..a + m]);
+        let v = ops.get(1, ravel(&xi, &strides(&sh.inputs[1])))?;
+        if v < 0 || v >= sh.inputs[0][a] as i128 {
+            return Ok(None);
+        }
+        let mut di = o[..a].to_vec();
+        di.push(v as usize);
+        di.extend_from_slice(&o[a + m..]);
+        Ok(Some(ops.get(0, ravel(&di, &strides(&sh.inputs[0])))?))
+    }
+
+    struct LookupOperands {
+        tensors: Vec<Tensor>,
+        missing: Option<MissingV1>,
+        reads: RefCell<Vec<(usize, u64)>>,
+    }
+    impl OperandsV1 for LookupOperands {
+        fn get(&self, i: usize, e: u64) -> Result<i128, MissingV1> {
+            self.reads.borrow_mut().push((i, e));
+            if self.missing == Some(MissingV1(i, e)) {
+                return Err(MissingV1(i, e));
+            }
+            self.tensors.get(i).and_then(|t| t.data.get(e as usize)).copied().ok_or(MissingV1(i, e))
+        }
+    }
+
+    #[test]
+    fn flat_gather_preserves_results_and_dependency_reads_for_all_dtypes_and_ranks() {
+        let program = dense_moe_v1(7).program;
+        for dtype in DType::ALL {
+            let data = Tensor::new(dtype, vec![7], vec![dtype.min_value(), dtype.max_value(), 0, 1, 2, 3, 4]).unwrap();
+            for shape in [vec![], vec![19], vec![3, 5], vec![2, 3, 4], vec![2, 2, 3, 4]] {
+                let len = shape.iter().product::<usize>();
+                let indices = Tensor::new(DType::Idx, shape.clone(), (0..len).map(|e| ((e * 11 + 3) % 7) as i128).collect()).unwrap();
+                let node = Node {
+                    prim: Prim::Gather { axis: 0, batch_dims: 0 },
+                    inputs: vec![Ref::Param(0), Ref::Param(1)],
+                    out: misaka_palw_tir::TensorType::fixed(dtype, &shape.iter().map(|n| *n as u32).collect::<Vec<_>>()),
+                    commit: true,
+                };
+                let sh = ElementShapesV1 {
+                    out: shape.clone(),
+                    inputs: vec![data.shape.clone(), shape.clone()],
+                    in_dtypes: vec![dtype, DType::Idx],
+                    hist: None,
+                };
+                let expected = eval_primitive(&node.prim, &[data.clone(), indices.clone()], dtype, &shape).unwrap();
+                let ops = LookupOperands { tensors: vec![data.clone(), indices], missing: None, reads: RefCell::new(vec![]) };
+                assert!(flat_gather_v1(&node, &sh.inputs, &sh.out));
+                for e in 0..len as u64 {
+                    ops.reads.borrow_mut().clear();
+                    let fast = element_value_v1(&program, &node, &sh, e, &ops);
+                    let reads = ops.reads.take();
+                    let old = coordinate_gather(&node, &sh, e, &ops);
+                    assert_eq!(fast, old, "{dtype:?} {shape:?} {e}");
+                    assert_eq!(fast, Ok(Some(expected.data[e as usize])));
+                    assert_eq!(reads, ops.reads.take(), "proof dependencies changed");
+                    assert_eq!(reads.len(), 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn flat_gather_refuses_invalid_indices_before_table_reads_and_preserves_missing_operands() {
+        let program = dense_moe_v1(7).program;
+        let node = Node {
+            prim: Prim::Gather { axis: 0, batch_dims: 0 },
+            inputs: vec![Ref::Param(0), Ref::Param(1)],
+            out: misaka_palw_tir::TensorType::fixed(DType::I16, &[6]),
+            commit: true,
+        };
+        let sh =
+            ElementShapesV1 { out: vec![6], inputs: vec![vec![3], vec![6]], in_dtypes: vec![DType::I16, DType::I128], hist: None };
+        let tensors = vec![
+            Tensor::new(DType::I16, vec![3], vec![-7, 0, 32767]).unwrap(),
+            Tensor::new(DType::I128, vec![6], vec![-1, 3, i128::MIN, i128::MAX, 0, 2]).unwrap(),
+        ];
+        for missing in [None, Some(MissingV1(1, 0)), Some(MissingV1(1, 5)), Some(MissingV1(0, 2))] {
+            let ops = LookupOperands { tensors: tensors.clone(), missing, reads: RefCell::new(vec![]) };
+            for e in 0..6 {
+                ops.reads.borrow_mut().clear();
+                let fast = element_value_v1(&program, &node, &sh, e, &ops);
+                let reads = ops.reads.take();
+                assert_eq!(fast, coordinate_gather(&node, &sh, e, &ops));
+                assert_eq!(reads, ops.reads.take());
+                if e < 4 {
+                    assert!(reads.iter().all(|(operand, _)| *operand == 1));
+                }
+            }
+        }
+        // Neither an axis/batch variant nor a mismatched output shape enters the specialization.
+        for prim in [Prim::Gather { axis: 1, batch_dims: 0 }, Prim::Gather { axis: 0, batch_dims: 1 }, Prim::Reshape] {
+            let mut other = node.clone();
+            other.prim = prim;
+            assert!(!flat_gather_v1(&other, &sh.inputs, &sh.out));
+        }
+        assert!(!flat_gather_v1(&node, &[vec![3, 1], vec![6]], &[6]));
+        assert!(!flat_gather_v1(&node, &sh.inputs, &[2, 3]));
+    }
+
+    #[test]
+    fn nonflat_gather_axes_and_batches_still_match_the_independent_reference() {
+        let program = dense_moe_v1(7).program;
+        for (axis, batch, data_shape, index_shape, out_shape, indices) in [
+            (0, 0, vec![3, 2], vec![2], vec![2, 2], vec![2, 0]),
+            (1, 0, vec![2, 3], vec![2], vec![2, 2], vec![2, 0]),
+            (1, 1, vec![2, 3], vec![2, 2], vec![2, 2], vec![2, 0, 1, 2]),
+        ] {
+            let data = Tensor::new(DType::I32, data_shape.clone(), (0..6).map(|i| i * 71 - 120).collect()).unwrap();
+            let ix = Tensor::new(DType::Idx, index_shape.clone(), indices).unwrap();
+            let node = Node {
+                prim: Prim::Gather { axis, batch_dims: batch },
+                inputs: vec![Ref::Param(0), Ref::Param(1)],
+                out: misaka_palw_tir::TensorType::fixed(DType::I32, &out_shape.iter().map(|n| *n as u32).collect::<Vec<_>>()),
+                commit: true,
+            };
+            let sh = ElementShapesV1 {
+                out: out_shape.clone(),
+                inputs: vec![data_shape, index_shape],
+                in_dtypes: vec![DType::I32, DType::Idx],
+                hist: None,
+            };
+            assert!(!flat_gather_v1(&node, &sh.inputs, &sh.out));
+            let expected = eval_primitive(&node.prim, &[data.clone(), ix.clone()], DType::I32, &out_shape).unwrap();
+            let ops = LookupOperands { tensors: vec![data, ix], missing: None, reads: RefCell::new(vec![]) };
+            for e in 0..expected.len() as u64 {
+                assert_eq!(element_value_v1(&program, &node, &sh, e, &ops), Ok(Some(expected.data[e as usize])));
+            }
+        }
+    }
 
     /// The claim a producer committed, as values (honest or not), with its segment roots.
     struct Committed {
@@ -1586,10 +2442,15 @@ mod tests {
     }
 
     impl Committed {
-        fn of(values: Vec<Vec<Vec<Tensor>>>) -> Self {
-            let c = SegmentedCommitmentsV1::new(
-                values.iter().map(|p| p.iter().map(|o| o.iter().map(tensor_commitment_v3).collect()).collect()).collect(),
-            );
+        fn of(program: &TirProgramV1, values: Vec<Vec<Vec<Tensor>>>) -> Self {
+            let modes = seg_value_modes_v1(program);
+            let c = SegmentedCommitmentsV1::new(values.iter().map(|p| seg_position_commitments_v1(&modes, p)).collect());
+            Self { values, c }
+        }
+
+        /// Every value committed v3 (the candidate trace v2 profile: no hiding values).
+        fn v3(values: Vec<Vec<Vec<Tensor>>>) -> Self {
+            let c = SegmentedCommitmentsV1::new(values.iter().map(|p| seg_position_commitments_v1(&[], p)).collect());
             Self { values, c }
         }
     }
@@ -1600,6 +2461,11 @@ mod tests {
         }
         fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
             (p < self.c.positions()).then(|| self.c.position_path(p).1)
+        }
+        /// The commitments the claim was built with (frozen modes, or every value v3 for the candidate profile) — never re-derived
+        /// under the frozen modes from the values.
+        fn commitments(&self, _: &TirProgramV1, p: u32) -> Option<Vec<Vec<Digest>>> {
+            self.c.commitments.get(p as usize).cloned()
         }
     }
 
@@ -1643,10 +2509,177 @@ mod tests {
     }
 
     #[test]
+    fn vocabulary_sized_flat_lookup_roots_match_the_frozen_coordinate_evaluator() {
+        const N: usize = 151_936;
+        struct Direct(Vec<Tensor>);
+        impl OperandsV1 for Direct {
+            fn get(&self, i: usize, e: u64) -> Result<i128, MissingV1> {
+                self.0.get(i).and_then(|t| t.data.get(e as usize)).copied().ok_or(MissingV1(i, e))
+            }
+        }
+        let p = dense_moe_v1(7).program;
+        let node = Node {
+            prim: Prim::Gather { axis: 0, batch_dims: 0 },
+            inputs: vec![Ref::Param(0), Ref::Param(1)],
+            out: misaka_palw_tir::TensorType::fixed(DType::I64, &[N as u32]),
+            commit: true,
+        };
+        let sh =
+            ElementShapesV1 { out: vec![N], inputs: vec![vec![63], vec![N]], in_dtypes: vec![DType::I64, DType::I32], hist: None };
+        let ops = Direct(vec![
+            Tensor::new(DType::I64, vec![63], (0..63).map(|i| i * 1051 - 1798).collect()).unwrap(),
+            Tensor::new(DType::I32, vec![N], (0..N).map(|i| ((i * 37 + 19) % 63) as i128).collect()).unwrap(),
+        ]);
+        let evaluate = |fast: bool| {
+            (0..N as u64)
+                .map(|e| {
+                    let e = std::hint::black_box(e);
+                    if fast { element_value_v1(&p, &node, &sh, e, &ops) } else { coordinate_gather(&node, &sh, e, &ops) }
+                        .unwrap()
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        let old = evaluate(false);
+        let new = evaluate(true);
+        let reference = eval_primitive(&node.prim, &ops.0, DType::I64, &[N]).unwrap();
+        assert_eq!(old, reference.data);
+        assert_eq!(new, old);
+        let root = tensor_commitment_v3(&reference);
+        // Alternating warmed trials include both output commitment trees. Timings are a
+        // local diagnostic, never a hardware-dependent consensus or test threshold.
+        let mut times = [Vec::new(), Vec::new()];
+        for trial in 0..6 {
+            for fast in if trial % 2 == 0 { [false, true] } else { [true, false] } {
+                let start = std::time::Instant::now();
+                let data = evaluate(fast);
+                let t = Tensor::new(DType::I64, vec![N], data).unwrap();
+                assert_eq!(tensor_commitment_v3(&t), root);
+                times[fast as usize].push(start.elapsed().as_nanos());
+            }
+        }
+        for values in &mut times {
+            values.sort_unstable()
+        }
+        eprintln!(
+            "151936-output lookup + both commitment trees: frozen median {} ns, flat median {} ns; six alternating trials, all roots equal",
+            times[0][3], times[1][3]
+        );
+    }
+
+    /// Actual vocabulary-sized court, deliberately synthetic weights. This exercises the
+    /// proof format/authentication at 151,936 outputs; it is not checkpoint fidelity evidence.
+    #[test]
+    fn vocabulary_sized_lookup_whole_court_dismisses_honest_convicts_lie_and_refuses_missing_or_substituted_inputs() {
+        use misaka_palw_tir::builder::ProgramBuilder;
+        use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
+        use misaka_palw_tir::{Dim, TensorType};
+        const VOCAB: u32 = 151_936;
+        let mut pb = ProgramBuilder::new(VOCAB, HISTORY_BOUND_V1_SMALL);
+        let embeddings = pb.param("embedding", DType::I16, &[VOCAB, 1], false);
+        let table = pb.param("lookup", DType::I16, &[63], false);
+        let indices = pb.param("indices", DType::I32, &[VOCAB], false);
+        let carry = vec![TensorType::fixed(DType::I32, &[1])];
+        let pre = {
+            let mut b = pb.block("pre", vec![]);
+            let x = b.gather(embeddings, Ref::Input(INPUT_TOKEN), 0, 0);
+            let x = b.cast(x, DType::I32);
+            b.finish(&[x])
+        };
+        let post = {
+            let mut b = pb.block("post", carry);
+            let x = b.broadcast(Ref::CarryIn(0), &[Dim::Fixed(VOCAB)]);
+            let x = b.add(x, indices, DType::I32);
+            let x = b.clamp(x, 0, 62, DType::I32);
+            let y = b.gather(table, x, 0, 0);
+            b.commit(y);
+            let logits = b.cast(y, DType::I32);
+            b.commit(logits);
+            b.finish(&[])
+        };
+        let node = pb.blocks[post as usize]
+            .nodes
+            .iter()
+            .position(|n| flat_gather_v1(n, &[vec![63], vec![VOCAB as usize]], &[VOCAB as usize]))
+            .unwrap() as u16;
+        let logits = (pb.blocks[post as usize].nodes.len() - 1) as u16;
+        let program = pb.finish(pre, vec![], post, logits);
+        misaka_palw_tir::validate::validate(&program).unwrap();
+        let params = MapParams {
+            tensors: BTreeMap::from([
+                ((0, None), Tensor::new(DType::I16, vec![VOCAB as usize, 1], vec![0; VOCAB as usize]).unwrap()),
+                ((1, None), Tensor::new(DType::I16, vec![63], (0..63).map(|i| i * 31 - 900).collect()).unwrap()),
+                ((2, None), Tensor::new(DType::I32, vec![VOCAB as usize], (0..VOCAB).map(|i| (i % 63) as i128).collect()).unwrap()),
+            ]),
+        };
+        let tokens = vec![3, 62];
+        let f = Fx { pc: ParamCommitmentsV1::of_v3(&params), program, params, tokens, prompt: vec![3], generated: vec![62, 62] };
+        let values = trace_v1(&f.program, &f.params, &f.tokens).unwrap().values;
+        // RFC02-T merge (2026-10-11): G14-S prices a committed operand at the largest of its whole, v3-leaf and hiding-tile forms, so
+        // under the FROZEN v4/v5 profile this vocabulary-sized value is no longer withheld but hiding (its court is the hiding-leaf
+        // court). The flat-gather whole court is exercised under the candidate trace v2 profile, which has no hiding values.
+        let frozen = PreparedV1::new(&f.program, None).unwrap();
+        assert_eq!(frozen.mode(1, node), SegValueModeV1::Hiding);
+        let honest = Committed::v3(values.clone());
+        let roots = honest.c.segment_roots();
+        let hc = ctx(&f, &roots);
+        let mut pr = PreparedV1::new(&f.program, None).unwrap();
+        pr.set_candidate_v2_scope(&f.program);
+        assert!(pr.is_withheld(1, node));
+        let art = |j: u16, l: Option<u16>| f.params.tensors.get(&(j, l)).cloned();
+        let loaded = load_opened_positions_for_element(&hc, &pr, &honest, &[0]).unwrap();
+        let resolved = resolve_operands(&hc, &pr, &loaded, &art, &f.tokens, (0, 1, node)).unwrap();
+        let whole = build_whole_value_fault(&hc, &pr, &loaded, &resolved, &f.tokens, (0, 1, node)).unwrap();
+        let proof = SegFaultV1::WholeValue(whole.clone());
+        let count = f.program.occurrences().iter().map(|(b, _)| f.program.blocks[*b as usize].nodes.len() as u64).sum();
+        let (bytes, work) = crate::seg_scope::model_vector_whole_court_cost_v2(&f.program, 1, node as usize, count);
+        assert!(proof.to_bytes().len() as u64 <= bytes);
+        assert!(work <= 536_870_912, "whole court exceeds default proof reservation: {work}");
+        let started = std::time::Instant::now();
+        assert_eq!(verify_model_vector_fault_v2(&hc, &proof), Err(DismissalV1::NoFault));
+        eprintln!(
+            "151936-output whole court: {} proof bytes, {} abstract work, {:?} honest verification",
+            proof.to_bytes().len(),
+            work,
+            started.elapsed()
+        );
+        // Bounds are compared to the pre-specialization price, without changing disclosure.
+        let conservative_work = work + VOCAB as u64 * 16 * 64;
+        let model_mask = crate::scope::court_model_dependent_mask_v1(&f.program, crate::seg_scope::seg_model_params_v1(&f.program));
+        assert!(model_mask[1][node as usize]);
+        assert!(
+            bytes <= crate::seg_scope::SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1
+                && conservative_work <= crate::seg_scope::SEG_WHOLE_VALUE_COURT_MAX_WORK_V1
+        );
+        for missing in [false, true] {
+            let mut tampered = whole.clone();
+            if missing {
+                tampered.inputs[0].leaves.clear()
+            } else {
+                tampered.inputs[0].leaves[0].values[0] ^= 1;
+            }
+            assert!(matches!(verify_model_vector_fault_v2(&hc, &SegFaultV1::WholeValue(tampered)), Err(DismissalV1::NotAuthentic(_))));
+        }
+        let mut lying_values = values;
+        lying_values[0][1][node as usize].data[VOCAB as usize - 1] += 1;
+        let lying = Committed::v3(lying_values);
+        let lr = lying.c.segment_roots();
+        let lc = ctx(&f, &lr);
+        let SegFindingV1::Fault(fault) = check_model_vector_positions_v2(&lc, &lying, &art, &f.tokens, &[0]) else {
+            panic!("fresh verifier missed lookup lie")
+        };
+        assert!(matches!(fault.as_ref(), SegFaultV1::WholeValue(_)));
+        assert_eq!(fault.at(), Some((0, 1, node)));
+        assert!(fault.to_bytes().len() as u64 <= bytes);
+        assert_eq!(verify_model_vector_fault_v2(&lc, &fault).unwrap().kind, SegConvictionKindV1::WholeValue);
+        assert!(matches!(verify_model_vector_fault_v2(&hc, &fault), Err(DismissalV1::NotAuthentic(_))));
+    }
+
+    #[test]
     fn the_element_evaluator_agrees_with_the_reference_on_every_element_of_every_value() {
         let f = fx(5);
         let trace = trace_v1(&f.program, &f.params, &f.tokens).unwrap();
-        let honest = Committed::of(trace.values.clone());
+        let honest = Committed::of(&f.program, trace.values.clone());
         let roots = honest.c.segment_roots();
         let c = ctx(&f, &roots);
         let pr = PreparedV1::new(&f.program, None).unwrap();
@@ -1686,7 +2719,7 @@ mod tests {
         let f = fx(4);
         let trace = trace_v1(&f.program, &f.params, &f.tokens).unwrap();
         let art = |j: u16, l: Option<u16>| f.params.tensors.get(&(j, l)).cloned();
-        let honest = Committed::of(trace.values.clone());
+        let honest = Committed::of(&f.program, trace.values.clone());
         let honest_roots = honest.c.segment_roots();
         let hc = ctx(&f, &honest_roots);
         assert_eq!(check_positions_v1(&hc, &honest, &art, &f.tokens, &[0, 1, 2, 3]), SegFindingV1::Clean);
@@ -1696,13 +2729,27 @@ mod tests {
         for p in [0u32, 3] {
             for s in 0..pr.w.occurrences.len() as u16 {
                 for n in 0..pr.nodes_in(s).unwrap() {
-                    // Soundness: the filing for an honest element of the honest claim is dismissed.
-                    let honest_filing = prove_element_v1(&hc, &honest, &art, &f.tokens, (p, s, n), 0).unwrap();
-                    assert_eq!(
-                        verify_seg_fault_v1(&hc, &SegFaultV1::Element(honest_filing.clone())),
-                        Err(DismissalV1::NoFault),
-                        "({p}, {s}, {n})"
-                    );
+                    // Soundness: the filing for an honest element of the honest claim is dismissed — for a hiding value
+                    // (DA16b option (a)) every tile's hiding-leaf filing.
+                    if pr.mode(s, n) == SegValueModeV1::Hiding {
+                        let len = trace.values[p as usize][s as usize][n as usize].data.len() as u64;
+                        for tile in 0..hide_tiles_v1(len) {
+                            let h = prove_hiding_leaf_v1(&hc, &honest, &art, &f.tokens, (p, s, n), tile).unwrap();
+                            assert_eq!(
+                                verify_seg_fault_v1(&hc, &SegFaultV1::HidingLeaf(h)),
+                                Err(DismissalV1::NoFault),
+                                "an honest hiding tile ({p}, {s}, {n}) {tile}"
+                            );
+                        }
+                    } else if pr.mode(s, n) == SegValueModeV1::Clear {
+                        // (A withheld value is judged by its whole-value court below; its element court cannot open a hiding operand.)
+                        let honest_filing = prove_element_v1(&hc, &honest, &art, &f.tokens, (p, s, n), 0).unwrap();
+                        assert_eq!(
+                            verify_seg_fault_v1(&hc, &SegFaultV1::Element(honest_filing.clone())),
+                            Err(DismissalV1::NoFault),
+                            "({p}, {s}, {n})"
+                        );
+                    }
                     if pr.is_withheld(s, n) {
                         let resolved = resolve_operands(&hc, &pr, &opened, &art, &f.tokens, (p, s, n)).unwrap();
                         let whole = build_whole_value_fault(&hc, &pr, &opened, &resolved, &f.tokens, (p, s, n)).unwrap();
@@ -1717,17 +2764,17 @@ mod tests {
                     let t = &mut values[p as usize][s as usize][n as usize];
                     let v = t.data[0];
                     t.data[0] = if t.dtype.contains(v + 1) { v + 1 } else { v - 1 };
-                    let lying = Committed::of(values);
+                    let lying = Committed::of(&f.program, values);
                     let roots = lying.c.segment_roots();
                     let lc = ctx(&f, &roots);
                     let SegFindingV1::Fault(fault) = check_positions_v1(&lc, &lying, &art, &f.tokens, &[p]) else {
                         panic!("({p}, {s}, {n}) {:?}: the lie is not found", pr.w.node(s, n).prim)
                     };
                     // A served value is judged by an element court, a withheld one (`crate::seg_scope`) by its whole-value court.
-                    let kind_ok = if pr.is_withheld(s, n) {
-                        matches!(fault.as_ref(), SegFaultV1::WholeValue(_))
-                    } else {
-                        matches!(fault.as_ref(), SegFaultV1::Element(_))
+                    let kind_ok = match pr.mode(s, n) {
+                        SegValueModeV1::Withheld => matches!(fault.as_ref(), SegFaultV1::WholeValue(_)),
+                        SegValueModeV1::Hiding => matches!(fault.as_ref(), SegFaultV1::HidingLeaf(_)),
+                        SegValueModeV1::Clear => matches!(fault.as_ref(), SegFaultV1::Element(_)),
                     };
                     assert!(kind_ok, "({p}, {s}, {n}): {fault:?}");
                     assert_eq!(fault.at(), Some((p, s, n)), "{:?}", pr.w.node(s, n).prim);
@@ -1753,19 +2800,20 @@ mod tests {
         let pr = PreparedV1::new(&f.program, None).unwrap();
         let (ms, mn) = (1..pr.w.occurrences.len() as u16)
             .flat_map(|s| (0..pr.nodes_in(s).unwrap()).map(move |n| (s, n)))
-            .find(|(s, n)| !pr.is_withheld(*s, *n))
+            .find(|(s, n)| pr.mode(*s, *n) == SegValueModeV1::Clear)
             .expect("a served value");
         let mut values = trace.values.clone();
         let t = &values[2][ms as usize][mn as usize];
         values[2][ms as usize][mn as usize] = Tensor::zeros(t.dtype, &[t.len() + 1]);
-        let lying = Committed::of(values);
+        let lying = Committed::of(&f.program, values);
         let roots = lying.c.segment_roots();
         let lc = ctx(&f, &roots);
         let SegFindingV1::Fault(fault) = check_positions_v1(&lc, &lying, &art, &f.tokens, &[2]) else { panic!() };
         assert!(matches!(fault.as_ref(), SegFaultV1::Malformed(_)));
         assert_eq!(verify_seg_fault_v1(&lc, &fault).unwrap().kind, SegConvictionKindV1::Malformed);
         // A tiny filing cannot select an unpriced whole-value execution on a public/large node.
-        let output = position_node_opening_v1(2, &lying.commitments(2).unwrap(), lying.c.position_path(2).1, ms, mn).unwrap();
+        let output =
+            position_node_opening_v1(2, &lying.commitments(&f.program, 2).unwrap(), lying.c.position_path(2).1, ms, mn).unwrap();
         let unpriced = SegFaultV1::WholeValue(WholeValueFaultV1 {
             position: 2,
             occurrence: ms,
@@ -1777,7 +2825,7 @@ mod tests {
         assert!(matches!(verify_seg_fault_v1(&lc, &unpriced), Err(DismissalV1::NotAuthentic(why))
             if why.contains("not priced")));
         // A delivered id that is not the greedy decode of its logits (position prompt_len - 1 selects generated[0]).
-        let honest = Committed::of(trace.values.clone());
+        let honest = Committed::of(&f.program, trace.values.clone());
         let hroots = honest.c.segment_roots();
         let mut f2 = fx(4);
         let post = (f2.program.occurrences().len() - 1) as usize;
@@ -1887,7 +2935,7 @@ mod tests {
         let f = fx(5);
         let trace = trace_v1(&f.program, &f.params, &f.tokens).unwrap();
         let art = |j: u16, l: Option<u16>| f.params.tensors.get(&(j, l)).cloned();
-        let honest = Committed::of(trace.values.clone());
+        let honest = Committed::of(&f.program, trace.values.clone());
         let roots = honest.c.segment_roots();
         let c = ctx(&f, &roots);
         let pr = PreparedV1::new(&f.program, None).unwrap();

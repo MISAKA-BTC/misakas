@@ -1875,15 +1875,23 @@ async fn rfc9_a_pfs4_receipt_header_is_refused_below_the_fence_and_signature_che
 
         let verdict = |r: Result<_, RuleError>| match r {
             Err(RuleError::BadPalwCarriageAdmission { algo_id: 7, reason }) => Some(reason.to_lowercase()),
+            // A-2: below the fence a PFS4 carriage is judged as the live build judges bytes it cannot read — here its
+            // carriage-shape cap (8,192 bytes) refuses the V4 receipt carriage before admission is asked.
+            Err(RuleError::BadPalwCommitmentShape(reason)) if !armed => Some(format!("below the fence (shape): {}", reason.to_lowercase())),
             _ => None,
         };
         let signed_verdict = verdict(ctx.consensus.validate_and_insert_block(signed.to_immutable()).virtual_state_task.await.map(|_| ()));
         let junk_verdict = verdict(ctx.consensus.validate_and_insert_block(junk.to_immutable()).virtual_state_task.await.map(|_| ()));
         if !armed {
-            // Both refused, and for the fence — not for a signature and not for a size.
+            // Both refused below the fence — by the fence's name, or by the live build's own carriage-shape cap (A-2); never
+            // for a signature.
             for reason in [signed_verdict, junk_verdict] {
                 let reason = reason.expect("a PFS4 header below the fence is refused");
-                assert!(reason.contains("below") && reason.contains("palw_receipt_spend_v4"), "refused for the fence by name, got: {reason}");
+                assert!(
+                    (reason.contains("below") && reason.contains("palw_receipt_spend_v4")) || reason.starts_with("below the fence (shape)"),
+                    "refused below the fence, got: {reason}"
+                );
+                assert!(!reason.contains("signature"), "never for a signature below the fence: {reason}");
             }
         } else {
             let reason = junk_verdict.expect("a junk-signed PFS4 header is refused past the fence");
@@ -16844,6 +16852,9 @@ mod g14_kernel_route_e2e;
 // Lane LG14-A: the legacy V2 route under G14 -- a bond registered after genesis reserves, localizes and convicts a lie every seat
 // signed Valid (before and after Final), defaults a withheld unit, is dismissed on an honest claim, survives restart / reorg / replay.
 mod lg14a_legacy_filer_e2e;
+// Lane G14-R: the PALW read ops (202, 204-206, 210-212, 231) and submitTransaction over a REAL socket — gRPC server and wRPC proxy
+// on 127.0.0.1 in front of a test node, driven by the real clients (used by the kernel and legacy resume cases).
+mod g14r_socket_rpc;
 // RFC-0004 Part II: computation specifications with typed roots on the real node -- Weights byte for byte, Memory, Retrieval,
 // Composite, each lie convicted by an outsider and each withholding a default.
 mod r4x_typed_roots_e2e;
@@ -16918,6 +16929,8 @@ mod t46_false_valid_real_claim;
 mod t12_capacity_shadow;
 // RFC-0009 stage D (lane C1): the node proves the PALW state its header commits, a client checks it against the block it pinned.
 mod t12_state_proof;
+// RFC-0009 L2 (lane L2FC): the fork-choice commitment crosses its fence; the node serves openings and a remote client verifies the tip.
+mod t12_fork_choice_commitment;
 // RFC-0009 stage C (lane C1): public receipt redemption (V4) with the miner and the builder different bonds, on the processor's own methods.
 mod rfc9_redemption_v4;
 // ADR-0152 Phase 2, P2-1: B-3's vesting term at every UTXO site (T23 processor half, T05 bond half).
@@ -17390,8 +17403,9 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     };
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle(&catalog);
-    // Validated WITHOUT the retirement, which is set afterwards: the release's validation requires `palw_fork_choice_rule_e_v1` armed
-    // at or below it (ADR-0175), a fence this fixture does not arm; the test is about the retirement's own behaviour.
+    // Validated WITHOUT the retirement by the builder, then again WITH it before constructing the node (codex RFC-12: the
+    // retirement's params are never bypassed); the one tolerated refusal is ADR-0178's ordering rule (rule E armed at or below the
+    // retirement), a fence this fixture does not arm and this binary refuses — `validate_palw_v2` checks it after every other refusal.
     let mut config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
@@ -17416,6 +17430,12 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
         },
         legacy_evidence_horizon_daa: 10,
     });
+    match config.params.validate_palw_v2() {
+        Ok(()) => {}
+        Err(kaspa_consensus_core::palw_mode_v2::PalwModeV2Error::Invalid(why))
+            if why == kaspa_consensus_core::palw_fork_choice_rule_e_v1::PALW_DNS_RETIREMENT_NEEDS_RULE_E_V1 => {}
+        Err(other) => panic!("complete retirement params validate before creating the node (rule E's order aside): {other:?}"),
+    }
     let mut ctx = TestContext::new(TestConsensus::new(&config));
     for _ in 0..16 {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
@@ -17495,6 +17515,8 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     };
     let publish = |s| {
         let mut batch = rocksdb::WriteBatch::default();
+        // This fixture has never published native finalized: persist that fact explicitly.
+        consensus.storage.evm_heads_store.write().set_native_finalized_publication_batch(&mut batch, None).unwrap();
         consensus.storage.evm_heads_store.write().set_native_batch(&mut batch, Some(s)).unwrap();
         vp.db.write(batch).unwrap();
     };

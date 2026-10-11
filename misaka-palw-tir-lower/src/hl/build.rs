@@ -130,7 +130,9 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
         output: match spec.output {
             OutputSpec::Logits => HlOutput::Logits,
             OutputSpec::Embedding { normalize, .. } => HlOutput::Embedding { normalized: normalize },
-            OutputSpec::Classify { .. } => HlOutput::Embedding { normalized: false },
+            // A task head over a bidirectional encoder: its output is a unit-of-its-own tensor, not next-token logits in Q24 (the
+            // masked-LM head's params are the language-model head's, declared by the post block below; the label is the output's).
+            OutputSpec::Classify { .. } | OutputSpec::TokenLogits { .. } | OutputSpec::MaskedLm => HlOutput::Embedding { normalized: false },
         },
         vocab: spec.vocab_size,
         hidden: spec.hidden_size,
@@ -653,13 +655,35 @@ impl Builder<'_> {
             x = self.full_norm(&mut bk, x, n, "final_norm", d, false)?;
         }
         // A sequence classifier: the final row through the optional dense + activation and the classification layer; no head.
-        if let OutputSpec::Classify { labels, bias, pre } = &s.output {
+        if let OutputSpec::Classify { labels, bias, pre, .. } = &s.output {
             if h.transform.is_some() {
                 return Err(LowerError::not_lowerable("HEAD_TRANSFORM_V1 under a classification output: the transform belongs to a language-model head"));
             }
             if let Some(p) = pre {
                 x = self.linear(&mut bk, x, "classifier.pre", d, d, p.bias, false, "classifier.pre")?;
                 x = bk.f(Op::Act(plain_act(p.act, "a classifier head")?), vec![x], d, "classifier.act");
+                if let Some(n) = p.norm {
+                    x = self.full_norm(&mut bk, x, n, "classifier.pre.norm", d, false)?;
+                }
+            }
+            x = self.linear(&mut bk, x, "classifier.out", *labels, d, *bias, false, "classifier.out")?;
+            if !matches!(x, Ref::Node(..)) {
+                x = bk.f(Op::Scale { c: 1.0 }, vec![x], *labels, "classifier.logits");
+            }
+            self.blocks.push(Block { name: "post".into(), role: BlockRole::Post, nodes: bk.nodes, outputs: vec![x] });
+            return Ok(self.blocks.len() - 1);
+        }
+        // Per-token logits (`OUTPUT_TOKEN_LOGITS_V1`): the position's final row through the classification layer; no pooling, no head.
+        if let OutputSpec::TokenLogits { labels, bias, pre } = &s.output {
+            if h.transform.is_some() {
+                return Err(LowerError::not_lowerable("HEAD_TRANSFORM_V1 under per-token logits: the transform belongs to a language-model head"));
+            }
+            if let Some(p) = pre {
+                x = self.linear(&mut bk, x, "classifier.pre", d, d, p.bias, false, "classifier.pre")?;
+                x = bk.f(Op::Act(plain_act(p.act, "a token head")?), vec![x], d, "classifier.act");
+                if let Some(n) = p.norm {
+                    x = self.full_norm(&mut bk, x, n, "classifier.pre.norm", d, false)?;
+                }
             }
             x = self.linear(&mut bk, x, "classifier.out", *labels, d, *bias, false, "classifier.out")?;
             if !matches!(x, Ref::Node(..)) {

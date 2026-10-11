@@ -550,6 +550,33 @@ fn deepseek_v3_2_fp8_scale_fmt_is_refused_by_name() {
     }
 }
 
+/// **GLM-5 / GLM-5.3 (FR-09, GLM-MoE-DSA)**: the full adapter checks live in `dsa_glm.rs`; here, the names. GLM-5 reads (every layer's
+/// token indexer is its own, 78 layers); GLM-5.3 shares its top-k across layers and is refused by that name, never misread.
+#[test]
+fn glm_5_reads_and_glm_5_3_is_refused_by_its_shared_indexer() {
+    let read = |name: &str| {
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/configs/real/{name}.json"))).expect("config")
+    };
+    let spec = parse_config_str(&read("glm-5")).expect("GLM-5 reads");
+    assert_eq!(spec.num_layers(), 78);
+    match parse_config_str(&read("glm-5.3")) {
+        Err(LowerError::NotLowerable(m)) => assert!(m.contains("ATTN_TOKEN_INDEXER_SHARED_V1"), "{m}"),
+        other => panic!("GLM-5.3: {other:?}"),
+    }
+}
+
+#[test]
+fn glm_token_indexers_keep_their_geometry_and_refuse_shared_selection() {
+    // Configuration/HL evidence only. Real weights, fidelity and the node path are separate gates.
+    let (spec, _) = ok("glm-5");
+    assert_eq!(spec.num_layers(), 78);
+    let Mixer::Mla(mla) = &spec.layers[0].mixer else { panic!("GLM uses MLA") };
+    let indexer = mla.indexer.as_ref().expect("a token indexer");
+    assert_eq!((indexer.heads, indexer.head_dim, indexer.topk), (32, 128, 2048));
+    assert_eq!(indexer.rope.style, crate_rope::RopeStyle::Interleaved);
+    refused("glm-5.3", "ATTN_TOKEN_INDEXER_SHARED_V1");
+}
+
 #[test]
 fn every_real_config_has_a_named_expectation() {
     // A config dropped into tests/configs/real must be exercised by a test above.

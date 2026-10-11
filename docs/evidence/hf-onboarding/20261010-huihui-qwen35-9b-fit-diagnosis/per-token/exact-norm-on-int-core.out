@@ -1,0 +1,10 @@
+['model.language_model.layers.0.linear_attn.norm.weight']
+eps 1e-06 gamma (128,) [0.88476562 0.92822266 0.90917969 0.86328125]
+check float chain vs dumped float normed: max rel 7.156063677375936e-08
+exact norm on int core          : rel err vs float normed: median over (tok,head) 0.0790; share of heads>0.5: 0.317; overall energy-weighted 0.0831
+exact norm on int core, int z   : rel err vs float normed: median over (tok,head) 0.0790; share of heads>0.5: 0.317; overall energy-weighted 0.0831
+int program (dumped)            : rel err vs float normed: median over (tok,head) 0.0815; share of heads>0.5: 0.317; overall energy-weighted 0.0830
+exact norm on int core bad heads' median rel err [0.85, 0.71, 0.99, 0.94, 1.0, 0.99, 1.0, 0.99, 1.0, 1.0]
+int program bad heads' median rel err [0.85, 0.71, 0.99, 0.94, 1.0, 0.99, 1.0, 0.99, 1.0, 1.0]
+float core head rms (bad heads, med) [0.00238, 0.00663, 0.00115, 0.00109, 0.00016, 0.00019, 0.0003, 0.00028, 0.00029, 0.00026]
+eps vs ms: median ms/eps for bad heads [5.66, 44.0, 1.32, 1.18, 0.02, 0.04, 0.09, 0.08, 0.08, 0.07]

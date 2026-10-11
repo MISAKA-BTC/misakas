@@ -163,6 +163,8 @@ fn the_value_is_fingerprinted_profile_by_profile() {
                 PalwGenProfileV1::Audio => &mut f.ceilings.audio,
                 PalwGenProfileV1::Video => &mut f.ceilings.video,
                 PalwGenProfileV1::Text => &mut f.ceilings.text,
+                // Not one of `ALL`: the head profile's ceilings are its own fence's (`palw_task_heads_v1`).
+                PalwGenProfileV1::Head => unreachable!("ALL does not hold Head"),
             };
             c.max_job_macs -= 1;
         });

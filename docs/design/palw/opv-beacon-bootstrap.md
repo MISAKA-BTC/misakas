@@ -203,8 +203,11 @@ producer), and is withheld only by a default (penalty 100 BILI, 10 % burned) or 
 | `…/distinct-producer-consumer-class-capped/v2` | the distinct rule, and at most `⌈k/2⌉` sources from one class | available; not interim (it needs two bootstrap classes) |
 
 Attribution (`AttributedWorkV1 { event, attribution: { producer_id, consumer_id } }`) is built by the consumer from authenticated state
-(`finals_read_v1`: the Final claim's producer bond; the consumer is `Absent` until G14-R4's user-pays escrow records a job's payer, so
-the consumer clause is a no-op until then — GAP-B2). The plain collector refuses a policy whose rule needs attribution.
+(`finals_read_v1`: the Final claim's producer bond and `job_posters` table 18's authenticated payer). The payer survives escrow
+payment/refund and is `Present` in v2 Final facts and v3 live/revealed/forfeited seals; `Absent` is only the explicit fallback for a
+historical job without a payer row. The 2026-10-11 adapter correction connects that already-retained fact: both adapters had still
+unconditionally emitted `Absent`, allowing multiple producers paid by one bond to fill the distinct-consumer quorum. The plain
+collector refuses a policy whose rule needs attribution. Distinct payer/producer bonds are not proof of independent economic parties.
 
 ### 6.2 The levers, in bits
 
@@ -485,8 +488,9 @@ drill floor (§12).
 * **GAP-B17: v3 has no public seal read.** Op 212 serves Finals, not seals, so the SDK's fresh verifier refuses a v3 attempt. A
   seal-facts read (an RPC op) is an allocation.
 * **GAP-B12 (POLICY): v3's liveness price.** A withheld seal vetoes, counted; `R + 1` seal deposits exhaust a class's attempts (§6.3).
-* **GAP-B2: consumer distinctness is a no-op** until the route records a job's payer (G14-R4's user-pays escrow); then `finals_read_v1`
-  fills `consumer_id`.
+* **GAP-B2:** table 18 already retains the payer. The 2026-10-11 correction makes `finals_read_v1` and `beacon_sealed_sources_v1`
+  export it, including after escrow payment. Historical jobs with no authenticated payer remain explicitly unknown; never guess
+  the producer, registrant or a genesis operator as their consumer. This closes the missing adapter connection, not economic independence.
 * **GAP-B3: RFC-0010 V3** does not read the route's OPV Finals or the derived eligible set (`ChainPanelBeaconHistoryV1` serves V2-lattice
   Finals and `eligible_profiles = ∅`), and no panel scheme is approved: V3 stays unavailable.
 * **GAP-B4: pipelines** have no onboarding path, so no OPV pipeline class is ever derived-eligible (only the test seam names one).
@@ -600,7 +604,12 @@ rewards, consensus weight or Panel=0 is armed.
 **GAP-70 (the Lead's decision, 2026-10-10): only the complete check gates rewards in the release.** A sampled conformance (v2 or v3) is
 a non-reward signal. It still runs and records G14_ELIGIBLE, but it satisfies E6 only once a digest court exists: a court for a
 vector's logits and commit digests (OB-P0 GAP 2), a vector refutation for a new class (GAP-B6), and closure of the self-reported
-implementation results (GAP-B7). That court stays on the DESIGN list. In code:
+implementation results (GAP-B7). That legacy court stays on the DESIGN list. RFC02 §14.18–14.20 now has a separate typed candidate
+trace statement, bounded element/type/decode/whole-value refutation (including selected
+parameter-Gather dependencies) and point-unit trace
+availability demands, requiring no execution Final. It does not reinterpret these legacy
+flat `a`/`b` digests, prove implementation independence, or satisfy E6. The sampled reward switch remains
+refused in production. In code:
 
 * E6 refuses a sampled attempt with `POLICY_NOT_VERIFIED`, citing GAP-70, whatever its effective bits;
 * the switch is the fence's `sampled_conformance_gates_reward`. It is `false` in `interim_v1` and hashed Some-only, and
@@ -674,7 +683,14 @@ Sybil posters own every v2 source position and grind all of them offline (`misak
 - **The poster.** Once a job's escrow is spent, no ledger state recorded its poster, so the consumer clause never bound. G14R and OPVB
   agreed kernel ledger table 18 `job_posters` (job → poster bond), written past `palw_panel_free_v1` and permanent like job rows, with
   `KernelLedgerV1::job_poster` and `ClaimBeaconSealV1::poster`.
-- **Once it lands (GAP-B2):** op 212's attribution and v3's seals carry `consumer = Present(poster)` for post-fence jobs.
+- **Adapter connection (GAP-B2, 2026-10-11):** op 212's attribution and v3's seals now carry `consumer = Present(poster)` for
+  post-fence jobs. The ledger row had landed while both consumers still emitted `Absent`; the correction restores the existing
+  distinct rule. The SDK derives sealed facts from authenticated served rows with the same function. Quorum-success fixtures must
+  actually sign/fund their source jobs under distinct payer bonds; no policy waiver admits a shared-payer quorum.
+  Corrected attributed facts can change source selection/output or make a formerly locked private drill unavailable. Pre-fix
+  private beacon/evidence snapshots must be rederived/reverified, not assumed compatible. This introduces no new table, field,
+  source-policy approval or public activation height; the kernel/beacon gates remain dormant. It does not implement the opt-in
+  source price or shared-attempt cap, and a distinct payer bond is not evidence of independent participation or entropy.
 - **GAP-B16:** a typed `Spec` claim (R4X) passes `opv_gate_v1`. Its class's eligibility path is RFC-0004 Part II's.
 
 ## 14. The user's design changes of 2026-10-10 (ADR-0175, ADR-0176, ADR-0177, ADR-0032 49 %)

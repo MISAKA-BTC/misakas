@@ -1995,6 +1995,12 @@ impl IbdFlow {
         // exactly as the deep-reorg fence reads it at the incumbent's DAA. `Ok(0)` on a missing
         // header falls to the unfenced rule below rather than failing the sync.
         let incumbent_daa = consensus.async_get_header(incumbent_sink).await.map(|h| h.daa_score).unwrap_or(0);
+        // **ADR-0178: past rule E's fence the commit is rule E's**, over the claim-set difference of the two states (the two
+        // consensus instances share no DAG) — the same comparator the relay path's deep-reorg gate runs, so the two paths decide a
+        // pair alike. Fail closed exactly as below.
+        if self.ctx.config.params.palw_fork_choice_rule_e_active_at(incumbent_daa) {
+            return self.validate_staging_palw_rule_e(consensus, staging_consensus).await;
+        }
         let incumbent = consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
         let challenger = staging_consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
         // **Fail CLOSED.** This used to be a let-else returning `Ok(())`, and the challenger was
@@ -2035,6 +2041,50 @@ impl IbdFlow {
             kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2::KeepIncumbent => Err(ProtocolError::OtherOwned(format!(
                 "the staged chain does not win the PALW fork-choice order (staged frontier {} weight {}, local frontier {}                      weight {}); keeping the local chain",
                 challenger.safe_frontier_blue_score, challenger.safe_weight, incumbent.safe_frontier_blue_score, incumbent.safe_weight
+            ))),
+        }
+    }
+
+    /// **ADR-0178: the IBD commit under rule E** — [`kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_ibd_commit_v1`]
+    /// over each consensus's weighing state (the local sink; the staged pruning point). The challenger is weighed at its pruning
+    /// point, so it is understated as under the economic rule, never overstated. A side that cannot be weighed keeps the local chain.
+    async fn validate_staging_palw_rule_e(
+        &self,
+        consensus: &ConsensusProxy,
+        staging_consensus: &ConsensusProxy,
+    ) -> Result<(), ProtocolError> {
+        use kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2;
+        let incumbent = consensus.clone().spawn_blocking(|c| c.get_palw_rule_e_weighing_v1()).await;
+        let challenger = staging_consensus.clone().spawn_blocking(|c| c.get_palw_rule_e_weighing_v1()).await;
+        let (incumbent, challenger) = match (incumbent, challenger) {
+            (Some(i), Some(c)) => (i, c),
+            (Some(_), None) => {
+                return Err(ProtocolError::Other(
+                    "the staged chain carries no PALW state rule E can weigh, so it cannot be shown to outrank the local one; keeping the local chain",
+                ));
+            }
+            (None, _) => {
+                return Err(ProtocolError::Other(
+                    "this node is past genesis on a ConsensusV2 network but holds no PALW state of its own; refusing to replace a chain it cannot weigh",
+                ));
+            }
+        };
+        match kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_ibd_commit_v1(
+            &self.ctx.config.params,
+            &incumbent,
+            &challenger,
+        ) {
+            Ok((PalwIbdCommitV2::Commit, _)) => Ok(()),
+            Ok((PalwIbdCommitV2::KeepIncumbent, pair)) => Err(ProtocolError::OtherOwned(format!(
+                "the staged chain does not outrank the local one over their exclusive pasts (staged: participation {}, keys {:?}; \
+                 local: participation {}, keys {:?}); keeping the local chain",
+                pair.a.participation,
+                pair.a.economic(),
+                pair.b.participation,
+                pair.b.economic()
+            ))),
+            Err(e) => Err(ProtocolError::OtherOwned(format!(
+                "the staged chain cannot be weighed against the local one ({e:?}); keeping the local chain"
             ))),
         }
     }

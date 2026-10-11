@@ -64,6 +64,8 @@ pub mod embedding;
 pub mod error;
 pub mod fidelity;
 pub mod float_ref;
+/// Independent, bounded primitive/state templates; no ModelSpec or model-name dispatch.
+pub mod frontend_pack;
 pub mod gguf;
 pub mod hf_config;
 pub mod hf_schema;

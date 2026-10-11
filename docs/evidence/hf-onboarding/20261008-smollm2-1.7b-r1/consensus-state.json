@@ -1,0 +1,442 @@
+{
+ "schema": "misaka.h1.consensus-state.v1",
+ "class_id": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+ "pin": "e5d705c36d90e310d1b3cd173c33c5d6f452138a0e6c096b0220a971064fa8f48f19316bd5d14b7d99d9a32e128d7e43fec00fbcf70a48163fd3d8f873bcb87d",
+ "nodes_holding_pin": [
+  "A",
+  "B",
+  "C"
+ ],
+ "observed_at": "2026-10-08T21:11:28+0900",
+ "nodes": {
+  "A": {
+   "port": 63100,
+   "virtual_daa": 119,
+   "sink": "e5d705c36d90e310d1b3cd173c33c5d6f452138a0e6c096b0220a971064fa8f48f19316bd5d14b7d99d9a32e128d7e43fec00fbcf70a48163fd3d8f873bcb87d",
+   "error": null,
+   "class_row": {
+    "artifactRoot": "6b3399022d27c009ba204b53586567c467a38bfc0b536922259d4603c884cd5348fd37402a1542f4808517879e12e3afe67789760b6ac6d86c490aa768ae2ecc",
+    "budgetBlocks": 0,
+    "canonicalLeaves": 1281792,
+    "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+    "fpCertified": false,
+    "held": false,
+    "isBaseClass": false,
+    "registeredDaa": 117,
+    "sharePermille": 0,
+    "status": "Active"
+   },
+   "registry_row": {
+    "admissionClaimsPerSpanMilli": 56,
+    "admissionMilli": 0,
+    "artifactBytes": 1866642528,
+    "artifactPrefetchSpans": 1,
+    "artifactRoot": "6b3399022d27c009ba204b53586567c467a38bfc0b536922259d4603c884cd5348fd37402a1542f4808517879e12e3afe67789760b6ac6d86c490aa768ae2ecc",
+    "capUtilizationPermille": 0,
+    "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+    "classTarget": "1218938590613259230285389391303016447",
+    "economicCcuPerClaim": "105796944239",
+    "expectedForwardsQ32": "0",
+    "finalWorkShare100Permille": 0,
+    "finalWorkShare10Permille": 0,
+    "hasRow": true,
+    "inflightClaims": 0,
+    "inflightNow": 0,
+    "isBaseClass": false,
+    "maxInflightClaims": 43,
+    "noCapablePanelVoids": 0,
+    "opsSupported": true,
+    "panelRoom": 0,
+    "pricedSharePermille": 0,
+    "probesFailed": 0,
+    "probesPassed": 0,
+    "readySeats": 0,
+    "readySeatsNow": 0,
+    "reason": "candidate: registered, and not admitted \u2014 no seat outside the registrant's own identity has proved it is ready to verify this class",
+    "recommendedPoolSompi": 240000000000,
+    "registrationBondSompi": 200000000000,
+    "requiredReadySeats": 7,
+    "sharePermille": 0,
+    "sinceSpan": 117,
+    "state": "Candidate",
+    "utilizationPermille": 0,
+    "verificationCcu": "107687680294",
+    "verificationWindowSpans": 2,
+    "workRatioPermille": 0,
+    "workTicketTarget": "0"
+   },
+   "model": {
+    "admissionPermille": 0,
+    "artifactRoot": "6b3399022d27c009ba204b53586567c467a38bfc0b536922259d4603c884cd5348fd37402a1542f4808517879e12e3afe67789760b6ac6d86c490aa768ae2ecc",
+    "available": true,
+    "certifiedFamily": "",
+    "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+    "classStatus": "Active",
+    "fenceActive": true,
+    "found": true,
+    "inflightClaims": 0,
+    "modelName": "",
+    "nCtx": 512,
+    "readySeats": 0,
+    "reason": "candidate: registered, and not admitted \u2014 no seat outside the registrant's own identity has proved it is ready to verify this class",
+    "registryState": "Candidate",
+    "requiredReadySeats": 7,
+    "sharePermille": 0,
+    "tipDaa": 119
+   },
+   "registration_status": {
+    "available": true,
+    "found": true,
+    "registration": {
+     "accepted": true,
+     "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+     "constructed": true,
+     "dropReason": "",
+     "folded": true,
+     "included": true,
+     "includedBlock": "",
+     "includedDaa": 117,
+     "mempoolAccepted": false,
+     "objectId": "",
+     "processorVerdict": "ADMISSION_OK",
+     "registryState": "Candidate",
+     "rejectCode": "",
+     "submissionState": "folded",
+     "submitted": true,
+     "transactionId": ""
+    },
+    "tipDaa": 119
+   },
+   "state_proof_classes_at_pin": {
+    "available": true,
+    "reason": "",
+    "blockHash": "e5d705c36d90e310d1b3cd173c33c5d6f452138a0e6c096b0220a971064fa8f48f19316bd5d14b7d99d9a32e128d7e43fec00fbcf70a48163fd3d8f873bcb87d",
+    "collection": "classes",
+    "rows": 6,
+    "answer_sha256": "c15098cbb334a698757a59cd47a08f3ca17cf280305910d23a512257fcda2a11"
+   }
+  },
+  "B": {
+   "port": 63101,
+   "virtual_daa": 119,
+   "sink": "e5d705c36d90e310d1b3cd173c33c5d6f452138a0e6c096b0220a971064fa8f48f19316bd5d14b7d99d9a32e128d7e43fec00fbcf70a48163fd3d8f873bcb87d",
+   "error": null,
+   "class_row": {
+    "artifactRoot": "6b3399022d27c009ba204b53586567c467a38bfc0b536922259d4603c884cd5348fd37402a1542f4808517879e12e3afe67789760b6ac6d86c490aa768ae2ecc",
+    "budgetBlocks": 0,
+    "canonicalLeaves": 1281792,
+    "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+    "fpCertified": false,
+    "held": false,
+    "isBaseClass": false,
+    "registeredDaa": 117,
+    "sharePermille": 0,
+    "status": "Active"
+   },
+   "registry_row": {
+    "admissionClaimsPerSpanMilli": 56,
+    "admissionMilli": 0,
+    "artifactBytes": 1866642528,
+    "artifactPrefetchSpans": 1,
+    "artifactRoot": "6b3399022d27c009ba204b53586567c467a38bfc0b536922259d4603c884cd5348fd37402a1542f4808517879e12e3afe67789760b6ac6d86c490aa768ae2ecc",
+    "capUtilizationPermille": 0,
+    "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+    "classTarget": "1218938590613259230285389391303016447",
+    "economicCcuPerClaim": "105796944239",
+    "expectedForwardsQ32": "0",
+    "finalWorkShare100Permille": 0,
+    "finalWorkShare10Permille": 0,
+    "hasRow": true,
+    "inflightClaims": 0,
+    "inflightNow": 0,
+    "isBaseClass": false,
+    "maxInflightClaims": 43,
+    "noCapablePanelVoids": 0,
+    "opsSupported": true,
+    "panelRoom": 0,
+    "pricedSharePermille": 0,
+    "probesFailed": 0,
+    "probesPassed": 0,
+    "readySeats": 0,
+    "readySeatsNow": 0,
+    "reason": "candidate: registered, and not admitted \u2014 no seat outside the registrant's own identity has proved it is ready to verify this class",
+    "recommendedPoolSompi": 240000000000,
+    "registrationBondSompi": 200000000000,
+    "requiredReadySeats": 7,
+    "sharePermille": 0,
+    "sinceSpan": 117,
+    "state": "Candidate",
+    "utilizationPermille": 0,
+    "verificationCcu": "107687680294",
+    "verificationWindowSpans": 2,
+    "workRatioPermille": 0,
+    "workTicketTarget": "0"
+   },
+   "model": {
+    "admissionPermille": 0,
+    "artifactRoot": "6b3399022d27c009ba204b53586567c467a38bfc0b536922259d4603c884cd5348fd37402a1542f4808517879e12e3afe67789760b6ac6d86c490aa768ae2ecc",
+    "available": true,
+    "certifiedFamily": "",
+    "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+    "classStatus": "Active",
+    "fenceActive": true,
+    "found": true,
+    "inflightClaims": 0,
+    "modelName": "",
+    "nCtx": 512,
+    "readySeats": 0,
+    "reason": "candidate: registered, and not admitted \u2014 no seat outside the registrant's own identity has proved it is ready to verify this class",
+    "registryState": "Candidate",
+    "requiredReadySeats": 7,
+    "sharePermille": 0,
+    "tipDaa": 119
+   },
+   "registration_status": {
+    "available": true,
+    "found": true,
+    "registration": {
+     "accepted": true,
+     "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+     "constructed": true,
+     "dropReason": "",
+     "folded": true,
+     "included": true,
+     "includedBlock": "",
+     "includedDaa": 117,
+     "mempoolAccepted": false,
+     "objectId": "",
+     "processorVerdict": "ADMISSION_OK",
+     "registryState": "Candidate",
+     "rejectCode": "",
+     "submissionState": "folded",
+     "submitted": true,
+     "transactionId": ""
+    },
+    "tipDaa": 119
+   },
+   "state_proof_classes_at_pin": {
+    "available": true,
+    "reason": "",
+    "blockHash": "e5d705c36d90e310d1b3cd173c33c5d6f452138a0e6c096b0220a971064fa8f48f19316bd5d14b7d99d9a32e128d7e43fec00fbcf70a48163fd3d8f873bcb87d",
+    "collection": "classes",
+    "rows": 6,
+    "answer_sha256": "c15098cbb334a698757a59cd47a08f3ca17cf280305910d23a512257fcda2a11"
+   }
+  },
+  "C": {
+   "port": 63102,
+   "virtual_daa": 119,
+   "sink": "e5d705c36d90e310d1b3cd173c33c5d6f452138a0e6c096b0220a971064fa8f48f19316bd5d14b7d99d9a32e128d7e43fec00fbcf70a48163fd3d8f873bcb87d",
+   "error": null,
+   "class_row": {
+    "artifactRoot": "6b3399022d27c009ba204b53586567c467a38bfc0b536922259d4603c884cd5348fd37402a1542f4808517879e12e3afe67789760b6ac6d86c490aa768ae2ecc",
+    "budgetBlocks": 0,
+    "canonicalLeaves": 1281792,
+    "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+    "fpCertified": false,
+    "held": false,
+    "isBaseClass": false,
+    "registeredDaa": 117,
+    "sharePermille": 0,
+    "status": "Active"
+   },
+   "registry_row": {
+    "admissionClaimsPerSpanMilli": 56,
+    "admissionMilli": 0,
+    "artifactBytes": 1866642528,
+    "artifactPrefetchSpans": 1,
+    "artifactRoot": "6b3399022d27c009ba204b53586567c467a38bfc0b536922259d4603c884cd5348fd37402a1542f4808517879e12e3afe67789760b6ac6d86c490aa768ae2ecc",
+    "capUtilizationPermille": 0,
+    "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+    "classTarget": "1218938590613259230285389391303016447",
+    "economicCcuPerClaim": "105796944239",
+    "expectedForwardsQ32": "0",
+    "finalWorkShare100Permille": 0,
+    "finalWorkShare10Permille": 0,
+    "hasRow": true,
+    "inflightClaims": 0,
+    "inflightNow": 0,
+    "isBaseClass": false,
+    "maxInflightClaims": 43,
+    "noCapablePanelVoids": 0,
+    "opsSupported": true,
+    "panelRoom": 0,
+    "pricedSharePermille": 0,
+    "probesFailed": 0,
+    "probesPassed": 0,
+    "readySeats": 0,
+    "readySeatsNow": 0,
+    "reason": "candidate: registered, and not admitted \u2014 no seat outside the registrant's own identity has proved it is ready to verify this class",
+    "recommendedPoolSompi": 240000000000,
+    "registrationBondSompi": 200000000000,
+    "requiredReadySeats": 7,
+    "sharePermille": 0,
+    "sinceSpan": 117,
+    "state": "Candidate",
+    "utilizationPermille": 0,
+    "verificationCcu": "107687680294",
+    "verificationWindowSpans": 2,
+    "workRatioPermille": 0,
+    "workTicketTarget": "0"
+   },
+   "model": {
+    "admissionPermille": 0,
+    "artifactRoot": "6b3399022d27c009ba204b53586567c467a38bfc0b536922259d4603c884cd5348fd37402a1542f4808517879e12e3afe67789760b6ac6d86c490aa768ae2ecc",
+    "available": true,
+    "certifiedFamily": "",
+    "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+    "classStatus": "Active",
+    "fenceActive": true,
+    "found": true,
+    "inflightClaims": 0,
+    "modelName": "",
+    "nCtx": 512,
+    "readySeats": 0,
+    "reason": "candidate: registered, and not admitted \u2014 no seat outside the registrant's own identity has proved it is ready to verify this class",
+    "registryState": "Candidate",
+    "requiredReadySeats": 7,
+    "sharePermille": 0,
+    "tipDaa": 119
+   },
+   "registration_status": {
+    "available": true,
+    "found": true,
+    "registration": {
+     "accepted": true,
+     "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+     "constructed": true,
+     "dropReason": "",
+     "folded": true,
+     "included": true,
+     "includedBlock": "",
+     "includedDaa": 117,
+     "mempoolAccepted": false,
+     "objectId": "",
+     "processorVerdict": "ADMISSION_OK",
+     "registryState": "Candidate",
+     "rejectCode": "",
+     "submissionState": "folded",
+     "submitted": true,
+     "transactionId": ""
+    },
+    "tipDaa": 119
+   },
+   "state_proof_classes_at_pin": {
+    "available": true,
+    "reason": "",
+    "blockHash": "e5d705c36d90e310d1b3cd173c33c5d6f452138a0e6c096b0220a971064fa8f48f19316bd5d14b7d99d9a32e128d7e43fec00fbcf70a48163fd3d8f873bcb87d",
+    "collection": "classes",
+    "rows": 6,
+    "answer_sha256": "c15098cbb334a698757a59cd47a08f3ca17cf280305910d23a512257fcda2a11"
+   }
+  }
+ },
+ "agreement": {
+  "A~B": {
+   "class_row": true,
+   "registry_static": true,
+   "state_proof_at_pin": true
+  },
+  "A~C": {
+   "class_row": true,
+   "registry_static": true,
+   "state_proof_at_pin": true
+  }
+ },
+ "class_present_everywhere": true,
+ "all_agree": true,
+ "reorg": {
+  "register_exit": 0,
+  "while_isolated": {
+   "B_class_row": [
+    {
+     "artifactRoot": "6b3399022d27c009ba204b53586567c467a38bfc0b536922259d4603c884cd5348fd37402a1542f4808517879e12e3afe67789760b6ac6d86c490aa768ae2ecc",
+     "budgetBlocks": 0,
+     "canonicalLeaves": 1281792,
+     "classId": "585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580",
+     "fpCertified": false,
+     "held": false,
+     "isBaseClass": false,
+     "registeredDaa": 75,
+     "sharePermille": 0,
+     "status": "Active"
+    }
+   ],
+   "A_class_row": [],
+   "B_dag": {
+    "virtualDaaScore": 75,
+    "sink": "a9627639f6806c7cc64d91301e31d0cd493fc00092751cd2877d3d5fe0c2b751cb3a0a521b3bf73f50a024683d34da78fc8fd922eae606b4ad850e0c4aee64b7",
+    "blockCount": 75
+   },
+   "A_dag": {
+    "virtualDaaScore": 80,
+    "sink": "2b13670f5051d47aceccd4148968f20555c07b300e1fc5f9ed64ce2db3342917af485de1ce2bce7eb85b7fa994dfca366b4376e3910766c3e300ca105f043c31",
+    "blockCount": 80
+   }
+  },
+  "majority_extended_to": {
+   "virtualDaaScore": 84,
+   "sink": "6fe8e4d4d69576b7673b506e99cd87357d77f82488e50c1323b9d10af528079cfd33b48c3c84d9068fbad7add19756b9cfcee2366504b29735fe91f3622e64f1",
+   "blockCount": 84
+  },
+  "minority_tip_before_rejoin": {
+   "virtualDaaScore": 77,
+   "sink": "9c2eb76080f084c9d37d878da027a234582e360f0cf8af4010ce9ed77230bee7d517c5d63b934a0fbf223650bd5265096d1898fa3181bcaf5ef66f31fc2c5bb2",
+   "blockCount": 77
+  },
+  "after_rejoin": {
+   "A_class_row": [],
+   "B_class_row": [],
+   "seconds_to_A_sink": 2084
+  },
+  "carrier_status_on_A_after": {
+   "accepted": false,
+   "classId": "",
+   "constructed": false,
+   "dropReason": "",
+   "folded": false,
+   "included": false,
+   "includedBlock": "",
+   "includedDaa": 0,
+   "mempoolAccepted": false,
+   "objectId": "",
+   "processorVerdict": "",
+   "registryState": "",
+   "rejectCode": "",
+   "submissionState": "submitted",
+   "submitted": true,
+   "transactionId": "1d1b2801c109c974daa5acf9052d70446b50262e2ff6ddd0a2444a83ebb2fdaa408ea4441559c1fe917bdad13b37ebfc79350fa9b19e38bc5d01f773956dde42"
+  },
+  "verdict": {
+   "B_had_it_alone_while_isolated": true,
+   "A_equals_B_after": true,
+   "registered_once_after": true,
+   "registered_daa_moved": false,
+   "note": "FAIL: 'A_equals_B_after' holds only because the class was absent on BOTH after the rejoin \u2014 the registration folded on the minority (DAA 75) was reverted on B and never reached the majority; B stayed wedged (DominanceViolation) until its DB was wiped. The L4 checks above are from a SECOND registration (DAA 117) on the restored network. See failures.json MINORITY_WEDGED_DominanceViolation / REGISTRATION_LOST_AFTER_PARTITION.",
+   "converged": false
+  }
+ },
+ "user_queries": {
+  "status": "{\n  \"available\": true,\n  \"tipDaa\": 119,\n  \"found\": true,\n  \"classId\": \"585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580\",\n  \"modelName\": \"\",\n  \"nCtx\": 512,\n  \"artifactRoot\": \"6b3399022d27c009ba204b53586567c467a38bfc0b536922259d4603c884cd5348fd37402a1542f4808517879e12e3afe67789760b6ac6d86c490aa768ae2ecc\",\n  \"classStatus\": \"Active\",\n  \"registryState\": \"Candidate\",\n  \"readySeats\": 0,\n  \"requiredReadySeats\": 7,\n  \"inflightClaims\": 0,\n  \"admissionPermille\": 0,\n  \"sharePermille\": 0,\n  \"certifiedFamily\": \"\",\n  \"fenceActive\": true,\n  \"reason\": \"candidate: registered, and not admitted \u2014 no seat outside the registrant's own identity has proved it is ready to verify this class\"\n}\n",
+  "registration": "{\n  \"available\": true,\n  \"tipDaa\": 119,\n  \"found\": true,\n  \"registration\": {\n    \"objectId\": \"585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580\",\n    \"classId\": \"585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580\",\n    \"constructed\": true,\n    \"submitted\": true,\n    \"accepted\": true,\n    \"included\": true,\n    \"folded\": true,\n    \"submissionState\": \"folded\",\n    \"processorVerdict\": \"ADMISSION_OK\",\n    \"rejectCode\": \"\",\n    \"mempoolAccepted\": false,\n    \"includedBlock\": \"\",\n    \"includedDaa\": 117,\n    \"registryState\": \"Candidate\",\n    \"transactionId\": \"585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580\",\n    \"dropReason\": \"\"\n  }\n}\n",
+  "readiness": "{\n  \"available\": true,\n  \"tipDaa\": 118,\n  \"found\": true,\n  \"classId\": \"585bbe2e35f47861387b8f21beab1b1bcfaf39e58947f910ec08cf3f90e8515847870723702aff7c29e8b7c826a1b1b27eb95a765f5c439732999fff7c26b580\",\n  \"registryState\": \"Candidate\",\n  \"readySeats\": 0,\n  \"requiredReadySeats\": 7,\n  \"seats\": []\n}\n",
+  "verify_against_pin_via_B": {
+   "exit": 0,
+   "out": "MISAKA model verify\n                  trust root: the block you pinned, e5d705c36d90e310\u2026; nothing the node says is believed until it opens against it\n  \u2713 proven        class 585bbe2e35f47861\u2026 is registered under this root and this bond \u2014 PROVEN against pinned block e5d705c36d90e310\u2026 (header DAA 118); trust root = your pin\n\n\u25cf verified against your pin\n"
+  },
+  "verify_against_pin_via_A": {
+   "exit": 0,
+   "out": "MISAKA model verify\n                  trust root: the block you pinned, e5d705c36d90e310\u2026; nothing the node says is believed until it opens against it\n  \u2713 proven        class 585bbe2e35f47861\u2026 is registered under this root and this bond \u2014 PROVEN against pinned block e5d705c36d90e310\u2026 (header DAA 118); trust root = your pin\n\n\u25cf verified against your pin\n"
+  }
+ },
+ "checks": {
+  "u_proves_registration_at_pin": true,
+  "restart_B_agrees": true,
+  "fresh_Z_ibd_agrees": true,
+  "modified_artifact_refused": {
+   "pack_verify_exit": 2,
+   "registration_gate_exit": 34,
+   "refused": true
+  }
+ }
+}

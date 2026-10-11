@@ -119,11 +119,10 @@ pub enum PalwDeepReorgV2 {
     Refuse,
 }
 
-/// The deep-reorg rule: one comparator, here too. A private fork can pile blue work without
-/// limit, but its frontier died at the fork point (piles do not mature — no one could collect
-/// receipts on a chain nobody saw), so frontier-first ordering refuses it HERE with the same
-/// three keys the virtual tip used. A gate that consulted anything else would be the second
-/// authority coming back through the basement.
+/// The base deep-reorg comparison uses the virtual tip's same PALW order. Raw blue work or stake
+/// cannot replace it. Active strict-win and provenance guards are applied by the caller.
+/// Unproven work alone cannot advance a frontier; this does not prove that a private branch with
+/// colluding producers and Panel seats cannot obtain its own Final claims (RFC-0012).
 pub fn decide_deep_reorg_v2(incumbent: &PalwCandidateOrderV1, challenger: &PalwCandidateOrderV1) -> PalwDeepReorgV2 {
     match compare_palw_candidates_v1(challenger, incumbent) {
         Ordering::Greater => PalwDeepReorgV2::Allow,

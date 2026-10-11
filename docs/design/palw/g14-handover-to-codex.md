@@ -75,7 +75,7 @@ whole-rootの課金済みrootが共有FIFOから退避され再計算される�
 
 その後、canonical harness への移設と、LG14-B の descent の配線が要る。
 
-**番号の注意（10-10 Lead）:** 統合では lifecycle kind fence の 6 を X8R の `ExecPayloadV2` が使った（`66597500a`）。LG14-A を merge するときは `PalwLifecycleKindFenceV1` の 7 を使い、`ALL` を 8 要素にすること（discriminant は連番必須）。詳細は `docs/design/palw/legacy-route-g14-filer.md` §12。
+**番号の注意（10-10 Lead）:** 統合では lifecycle kind fence の 6 を X8R の `ExecPayloadV2` が使った（`66597500a`）。LG14-A を merge するときは `PalwLifecycleKindFenceV1` の 8 を使い、`ALL` を 9 要素にすること（7 は HFX の `TaskHeadsV1`）（discriminant は連番必須）。詳細は `docs/design/palw/legacy-route-g14-filer.md` §12。
 
 ### LG14-B（`g14/legacy-held-da` @ `19522bc01`）
 
@@ -114,6 +114,14 @@ ADR-0177 に従い、G14 は model を取得できた verifier を前提とす�
 `codex/g14-prosecution-bounds`の`20c746436`以後、回答済みunitの公開carrierが失われても追及できるよう、休眠LG14-Aへ署名付き予約DAA・次session番号・期限・unitのtag 156を追加した。historical answeredは保持し、古いaccusationと旧番号を再送して担保や枠を消費することを拒否する。Event／Held／LG14-Bのみ対象で、同じunitの認証済み再公開又はDA defaultへ進める。公開viewのFlat回答範囲も反映する。readerは古いsuffixの欠落を完了とせず、新tipの再公開を読む。最終検証結果は[実装修正記録](../../audit/g14-review-2026-10-10/implementation.md)を参照。
 
 これは全G14達成ではない。次はPanelDA inputを持たないverifierのbootstrap、pruneされたFP jobの認証済み再取得、TIR／pipelineへの接続、全familyの正規registrationとfresh-node実service／包含、累積scopeと最大profile・期限・枠飽和を閉じる。有効化は変更していない。
+
+
+## 統合時の確認事項（2026-10-11, Lead）
+
+- `codex/g14-prosecution-bounds` @ `c306d1a76` を統合した（kind fence: `LegacyPublicFilerV1 = 8`、`ALL` は 9 要素。7 は HFX の `TaskHeadsV1`）。
+- `PalwPromptProofV1::FpCanonicalWhole`（tag 2）は live int-12 の wire 型への追記で、`PALW_INT12_WIRE_CHANGES_V1` に分類行がなかった。Lead が `CarriedReread { fence: "palw_legacy_public_filer_v1" }` として分類した（ObjectiveOffence の evidence バイト内。int-12 は decode できず拒否、本 build は fence 未満で `ContradictionNotAdmitted`）。→ **解決（codex `4f1120d9e`）**: isolation は int-12 のまま、受理・fold で `palw_prompt_proof_fence_v1` が解釈を保つと codex が自身の分類行に明記した。Lead の重複行は削除。同形の `PalwPanelContradictionV1` 14/15（constrained decode）も同じ扱いで Lead が分類した。
+- `tools/opv-meas` の `public_prosecution_complete_v1` 呼び出しを新しい引数順に合わせた。
+- 役割分担（ユーザー、2026-10-11）: codex = 全 family の正規登録・eligibility（試験用の特例なし）、公開情報からの起動（FP job・input・初期 state の認証取得、永久 prune 後の再取得）。Lead 側 lane = 全対象違反の追及と checkpoint/trace 探索（G14-V）、累積 scope と 64 要素 hiding tile の gate 接続（G14-S）、最大 profile の予算と期限（G14-B）、restart/reorg/IBD/実 RPC からの再開（G14-R）。
 
 ## Codex追記: 公開job不正から全Valid署名者を追及する接続（2026-10-11）
 

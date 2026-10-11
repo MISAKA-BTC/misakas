@@ -54,15 +54,19 @@ impl QuantFormat {
     pub fn from_json(text: &str) -> Result<QuantFormat> {
         let bad = |e: expr::DslError| LowerError::bad(format!("quant-format descriptor: {e}"));
         let desc = QuantFormatDesc::from_json(text).map_err(bad)?;
+        let f = Self::compile_desc(desc)?;
+        f.run_tests()?;
+        Ok(f)
+    }
+
+    pub(crate) fn compile_desc(desc: QuantFormatDesc) -> Result<QuantFormat> {
         let bad = |e: expr::DslError| LowerError::bad(format!("quant format `{}`: {e}", desc.name));
         let (blocks, tensors, virt) = match &desc.layout {
             LayoutDesc::Blocks { .. } => (Some(BlocksFormat::compile(&desc).map_err(bad)?), None, None),
             LayoutDesc::Tensors { .. } => (None, Some(TensorsFormat::compile(&desc).map_err(bad)?), None),
             LayoutDesc::Virtual { .. } => (None, None, Some(VirtualFormat::compile(&desc).map_err(bad)?)),
         };
-        let f = QuantFormat { digest: desc.digest(), desc, blocks, tensors, virt };
-        f.run_tests()?;
-        Ok(f)
+        Ok(QuantFormat { digest: desc.digest(), desc, blocks, tensors, virt })
     }
 
     pub fn name(&self) -> &str {
@@ -101,7 +105,7 @@ impl QuantFormat {
     }
 
     /// The descriptor's own vectors: each block's bytes must decode to its `f32` values, bit for bit.
-    fn run_tests(&self) -> Result<()> {
+    pub(crate) fn run_tests(&self) -> Result<()> {
         if let Some(t) = &self.tensors {
             return self.run_tensor_tests(t);
         }
@@ -314,7 +318,7 @@ macro_rules! builtin {
 const BUILTIN: &[&str] = builtin!(
     "f32", "f16", "bf16", "f64", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "q2_k", "q3_k", "q4_k", "q5_k", "q6_k", "iq4_nl", "iq4_xs",
     "tq1_0", "tq2_0", "ptq1_0", "pq2_0", "mxfp4", "nvfp4", "q1_0", "q2_0", "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq1_s", "iq1_m", "gptq", "awq",
-    "fp8_block", "ct_pack", "ct_fp8", "ct_int8", "mxfp4_hf", "bnb_nf4", "bnb_fp4", "bnb_int8",
+    "fp8_block", "ct_pack", "ct_fp8", "ct_int8", "mxfp4_hf", "bnb_nf4", "bnb_fp4", "bnb_int8", "mlx_affine",
 );
 
 impl QuantRegistry {

@@ -725,7 +725,7 @@ fn next_step(view: &MinerView) -> String {
     }
 }
 
-/// The JSON document (`misaka.mining.status.v1`) the dashboard and the Studio read.
+/// The JSON document (`misaka.mining.status.v2`) the dashboard and the Studio read.
 pub(crate) fn document(snap: &Snapshot, view: &MinerView) -> serde_json::Value {
     let p = &snap.profile;
     let works: Vec<serde_json::Value> = snap
@@ -761,7 +761,7 @@ pub(crate) fn document(snap: &Snapshot, view: &MinerView) -> serde_json::Value {
     };
     let log = snap.boot_log();
     json!({
-        "schema": "misaka.mining.status.v1",
+        "schema": "misaka.mining.status.v2",
         "network": p.network,
         "miner": {
             "state": view.state,

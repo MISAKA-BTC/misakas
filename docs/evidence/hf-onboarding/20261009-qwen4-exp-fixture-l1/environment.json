@@ -1,0 +1,36 @@
+{
+ "integration_sha": "3b9ee24e7ed503c17cb1d7212f1a52a47dfafd9a",
+ "branch": "onboard/h1-hf-closed-loop",
+ "dirty": true,
+ "binaries": {
+  "misaka": {
+   "path": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/bin/int-2c89ca386/misaka",
+   "sha256": "c9005b3265bdd8b00a5c6d505d15b48ca8d7865a53f602a85c4eb6483f4fc3ed"
+  },
+  "palw-class": {
+   "path": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/bin/int-2c89ca386/palw-class",
+   "sha256": "da87d655dcedaabe2cbf64d92ab05193e5924a83f2e907263ed4fb7286d2ec36"
+  }
+ },
+ "network": "testnet-12 salted drill (private, loopback)",
+ "genesis_hash": "76a7e10dc287ac79207b90e32a8ff1579ce037465276b8c8eb7a08c7f551bf0cb348fe982cbc007b907f555ed5bf546658284e592ba3970f62009d45a5bcacf3",
+ "consensus_params_id": "f2da0947fc0cca31b6b406b650857c4e45fda14e729669039a9ef4b44f9107a0",
+ "salt_id": "a709b5f5a390a076",
+ "hardware": {
+  "machine": "arm64",
+  "os": "macOS-26.7-arm64-arm-64bit-Mach-O",
+  "ram_bytes": 34359738368
+ },
+ "disk_free_gib": 20,
+ "devnet_work_dir": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/devnet-r1",
+ "fences": {
+  "fence_at": 6,
+  "fence2_at": 10,
+  "fence3_at": 14,
+  "tir_at": 16,
+  "tir2_at": 24,
+  "int11_at": 26,
+  "fence4_at": "unmoved (5300 in the shipped schedule; int-11 carries palw_gdn_key_heads)"
+ },
+ "cli_version": "misaka 1.1.0"
+}

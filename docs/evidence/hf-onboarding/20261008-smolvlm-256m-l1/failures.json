@@ -1,0 +1,20 @@
+[
+ {
+  "schema": "misaka.h1.failure.v1",
+  "recorded_at": "2026-10-08T16:27:15+0900",
+  "model": "smolvlm-256m",
+  "stage": "preflight",
+  "category": "FRONTEND_REQUIRED",
+  "code": "ARCH_NEEDS_FEATURE(adapter)",
+  "command": "misaka model preflight hf://HuggingFaceTB/SmolVLM-256M-Instruct@7e3e67edbbed1bf9888184d9df282b700a323964 --depth shape --max-context 512",
+  "expected": "convert/register/mine ok at the declared context",
+  "observed": "ARCH_NEEDS_FEATURE [convert] an adapter for `Idefics3ForConditionalGeneration` \u2014 the model needs `an adapter for `Idefics3ForConditionalGeneration``, which the generic lowerer does not lower yet\nUNKNOWN [register] no program to judge: the convert stage is blocked\nUNKNOWN [mine] no program to judge: the convert stage is blocked",
+  "model_revision": "7e3e67edbbed1bf9888184d9df282b700a323964",
+  "integration_sha": "89ffb1fb717166ccc9810464605939f95d8acc2f",
+  "failing_fixture": null,
+  "owner": "A",
+  "security_consequence": "",
+  "reproduction": "RUN=20261008-smolvlm-256m-l1 bash tests/hf-onboarding/onboard.sh preflight smolvlm-256m",
+  "log": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261008-smolvlm-256m-l1/preflight/declared.blockers.txt"
+ }
+]

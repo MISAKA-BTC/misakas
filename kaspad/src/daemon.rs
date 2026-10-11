@@ -1951,6 +1951,8 @@ Do you confirm? (y/n)";
                             .as_deref()
                             .map(|dirs| dirs.split(',').map(str::trim).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).collect())
                             .unwrap_or_default(),
+                        // Lane G14-K: the kernel-route verifier's registered models (empty: it does nothing).
+                        kernel_models: args.palw_kernel_model.iter().map(std::path::PathBuf::from).collect(),
                         drill_answer_only: {
                             let drill = palw_private_drill;
                             if (args.palw_drill_answer_only || args.palw_drill_refuse_leaf_evidence) && !drill {

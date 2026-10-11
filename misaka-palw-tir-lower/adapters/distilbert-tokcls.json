@@ -1,0 +1,47 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "distilbert-tokcls",
+  "doc": "DistilBertForTokenClassification: a token classifier (NER, POS): the encoder, then every row through `classifier` to num_labels logits per token (OUTPUT_TOKEN_LOGITS_V1). HFX 2026-10-08.",
+  "extends": [
+    "distilbert",
+    "mixin-tokcls-encoder"
+  ],
+  "match": {
+    "architectures": [
+      "DistilBertForTokenClassification"
+    ],
+    "model_types": [
+      "distilbert"
+    ]
+  },
+  "vars": [
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.word_embeddings",
+        "pos_embed": "embeddings.position_embeddings",
+        "embed_norm": "embeddings.LayerNorm",
+        "attn.q": "transformer.layer.{L}.attention.q_lin",
+        "attn.k": "transformer.layer.{L}.attention.k_lin",
+        "attn.v": "transformer.layer.{L}.attention.v_lin",
+        "attn.o": "transformer.layer.{L}.attention.out_lin",
+        "norm.mix": "transformer.layer.{L}.sa_layer_norm",
+        "mlp.up": "transformer.layer.{L}.ffn.lin1",
+        "mlp.down": "transformer.layer.{L}.ffn.lin2",
+        "norm.ffn": "transformer.layer.{L}.output_layer_norm",
+        "cls_out": "classifier"
+      }
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "cls.",
+        "lm_head.",
+        "vocab_transform.",
+        "vocab_layer_norm.",
+        "vocab_projector.",
+        "pooler."
+      ]
+    }
+  ]
+}

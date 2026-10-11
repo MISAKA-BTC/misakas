@@ -773,11 +773,23 @@ mod tests {
             // FP Job V5 (RFC-0003 §II.2.1): a bare height.
             "palw_fp_job_v5" => params.palw_fp_job_v5 = Some(at),
             "palw_gen_range_twin_v1" => params.palw_gen_range_twin_v1 = Some(at),
+            // The task-head profile (HFX): a fence with a value — testnet-12's, at the probed height.
+            "palw_task_heads_v1" => {
+                params.palw_task_heads_v1 = Some(crate::palw_task_heads_v1::PalwTaskHeadsFenceV1::testnet12_v1(at))
+            }
             // RFC-0011 §15.7's dormant kernel-route fence: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_probabilistic_constraints_v1" => params.palw_probabilistic_constraints_v1 = Some(at),
+            // ADR-0178's rule E: refused when armed (and the DNS retirement's order checked) by `validate_palw_v2`, which the probe
+            // does not run.
+            "palw_fork_choice_rule_e_v1" => params.palw_fork_choice_rule_e_v1 = Some(at),
             // RFC-0004 Part II's dormant typed-roots fence: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_typed_roots_v1" => params.palw_typed_roots_v1 = Some(at),
+            // RFC-0009 L2's dormant fork-choice commitment fence: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_fork_choice_commitment_v1" => params.palw_fork_choice_commitment_v1 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
+            "palw_model_refutation_seal_v1" => params.palw_model_refutation_seal_v1 = Some(at),
+            // codex RFC-7's per-attempt beacon source opt-in (inner 40): refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_beacon_source_opt_in_v1" => params.palw_beacon_source_opt_in_v1 = Some(at),
             "palw_panel_free_v1" => params.palw_panel_free_v1 = Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(at)),
             "palw_signed_registration_v1" => params.palw_signed_registration_v1 = Some(at),
             // RFC-0006 per-segment pricing (SHARD): refused when armed by `validate_palw_v2`, which the probe does not run.

@@ -71,7 +71,7 @@
     "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5],
     "ops": {"$var": "ops"},
     "out": "GlobalAvg",
-    "ignored": ["classifier."],
+    "ignored": {"$if": [{"$eq": [{"$var": "arch"}, "MobileNetV2ForImageClassification"]}, [], ["classifier."]]}, "head": {"$if": [{"$eq": [{"$var": "arch"}, "MobileNetV2ForImageClassification"]}, {"name": "classifier", "labels": {"$let": ["m", {"$cfg?": "id2label"}, {"$if": [{"$ne": [{"$var": "m"}, null]}, {"$len": {"$var": "m"}}, {"$cfg": ["num_labels", 2]}]}]}, "bias": true}, null]},
     "aliases": [["", "mobilenet_v2."]]
   }
 }

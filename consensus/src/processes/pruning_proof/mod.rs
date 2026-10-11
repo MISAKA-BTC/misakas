@@ -336,50 +336,67 @@ impl PruningProofManager {
         Ok(())
     }
 
+    /// Import the context of an already validated proof/catch-up. Identical retransmission is legal;
+    /// invalid history and incompatible immutable samples fail before any persistent change.
     pub fn import_pruning_points(&self, pruning_points: &[Arc<Header>]) -> PruningImportResult<()> {
+        let Some(first) = pruning_points.first() else {
+            return Err(PruningImportError::PruningProofNotEnoughHeaders);
+        };
+        if first.hash != self.genesis_hash {
+            return Err(PruningImportError::PruningPointsWrongGenesis(first.hash, self.genesis_hash));
+        }
         let unique_count = pruning_points.iter().map(|h| h.hash).unique().count();
         if unique_count < pruning_points.len() {
             return Err(PruningImportError::DuplicatedPastPruningPoints(pruning_points.len() - unique_count));
         }
+        for (i, pair) in pruning_points.windows(2).enumerate() {
+            if pair[0].blue_score >= pair[1].blue_score {
+                return Err(PruningImportError::InconsistentPastPruningPoints(i, i + 1, pair[0].blue_score, pair[1].blue_score));
+            }
+        }
+        // Keep context consumers and another import out until the target/retention batch commits.
+        let mut pruning_point_write = self.pruning_point_store.write();
+        let mut insert_samples = Vec::with_capacity(pruning_points.len());
+        let mut insert_headers = Vec::with_capacity(pruning_points.len());
+        use crate::model::stores::pruning_samples::PruningSamplesStoreReader;
+        for (i, header) in pruning_points.iter().enumerate() {
+            let unavailable = |e| PruningImportError::PruningPointImportContextUnavailable(header.hash, format!("history: {e}"));
+            let needs_sample = if i == 0 {
+                false
+            } else {
+                let expected = pruning_points[i - 1].hash;
+                match self.pruning_samples_store.pruning_sample_from_pov(header.hash).optional().map_err(unavailable)? {
+                    None => true,
+                    Some(recorded) if recorded == expected => false,
+                    Some(recorded) => return Err(PruningImportError::ImportedPruningPointHistoryMismatch(header.hash, recorded, expected)),
+                }
+            };
+            insert_samples.push(needs_sample);
+            let needs_header = !self.headers_store.has(header.hash).map_err(unavailable)?;
+            if needs_header {
+                // Shape-check all peer headers before changing history or computing their PoW.
+                self.check_proof_header_shape(header, 0)?;
+            }
+            insert_headers.push(needs_header);
+        }
         for (i, header) in pruning_points.iter().enumerate() {
             self.past_pruning_points_store.set(i as u64, header.hash).unwrap();
-
-            if i > 0 {
-                let prev_blue_score = pruning_points[i - 1].blue_score;
-                // This is a sufficient condition for running expected pruning point algo (v2)
-                // over blocks B s.t. pruning point ∈ chain(B) w/o a risk of not converging
-                if prev_blue_score >= header.blue_score {
-                    return Err(PruningImportError::InconsistentPastPruningPoints(i - 1, i, prev_blue_score, header.blue_score));
-                }
-                // Store the i-1 pruning point as the last pruning sample from POV of the i'th pruning point.
-                // If this data is inconsistent, then blocks above the pruning point will fail the expected
-                // pruning point validation performed at are_pruning_points_in_valid_chain
+            if insert_samples[i] {
                 self.pruning_samples_store.insert(header.hash, pruning_points[i - 1].hash).unwrap();
             }
-
-            if self.headers_store.has(header.hash).unwrap() {
-                continue;
+            if insert_headers[i] {
+                let block_level = calc_block_level_layer0(header, &self.network_id, self.max_block_level);
+                self.headers_store.insert(header.hash, header.clone(), block_level).unwrap();
             }
-
-            // Gate the peer-supplied pruning-point header BEFORE its PoW is computed (audit P0-1 /
-            // P0-2). `import_pruning_points` is a distinct entry from proof validation, so these
-            // headers are not otherwise pre-checked. Pruning points are level-0 blocks.
-            self.check_proof_header_shape(header, 0)?;
-            let block_level = calc_block_level_layer0(header, &self.network_id, self.max_block_level);
-            self.headers_store.insert(header.hash, header.clone(), block_level).unwrap();
         }
-
         let new_pruning_point = pruning_points.last().unwrap().hash;
         info!("Setting {new_pruning_point} as the staging pruning point");
-
-        let mut pruning_point_write = self.pruning_point_store.write();
         let mut batch = WriteBatch::default();
         pruning_point_write.set_batch(&mut batch, new_pruning_point, (pruning_points.len() - 1) as u64).unwrap();
         pruning_point_write.set_retention_checkpoint(&mut batch, new_pruning_point).unwrap();
         pruning_point_write.set_retention_period_root(&mut batch, new_pruning_point).unwrap();
         self.db.write(batch).unwrap();
         drop(pruning_point_write);
-
         Ok(())
     }
 

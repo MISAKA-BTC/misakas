@@ -1,0 +1,36 @@
+{
+  "schema": "misaka.rfc02.real-node-execution-protocol.v1",
+  "fixed_before_run_utc": "2026-10-10T13:37:08.982110+00:00",
+  "base_commit": "a29ff0e0521fcf79aaacda8efff1fca962979dbb",
+  "checkpoint": "Qwen/Qwen2.5-1.5B-Instruct",
+  "source_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+  "prepared_map_sha256": "a45721593036993c53eb29ad1526906ca190fcdf7d7272fbf7aa3f0b62d19ef1",
+  "positions": 2,
+  "expected_tokens": [
+    13,
+    7932
+  ],
+  "hash_workspace_mib": 64,
+  "payload_limit_mib": 4096,
+  "reference_tensor_mib": 8192,
+  "reference_tensor_cap_scope": "Largest raw tensor and i128 decoding plus allocation allowance, not total process/verifier RAM.",
+  "profile": "debug; workspace default package optimizations, no new overrides",
+  "acceptance": [
+    "all 1636 parameter instances match the prepared v3 map before execution",
+    "exactly 2 positions, never clamped",
+    "every compared commit point and full-vocabulary logits match integer reference"
+  ],
+  "scope": "Local node typed executor against integer reference, actual full weights. No latency/throughput admission criterion; no full-context/task/source-floating fidelity, chain registration, public conviction or Final claim.",
+  "command": [
+    "/usr/bin/time",
+    "-l",
+    "target/debug/examples/check-kernel-node-execution",
+    "target/rfc02-real/qwen25-pilot/qwen25-32.palwtir",
+    "target/rfc02-real/qwen25-pilot/kernel-params-v3.borsh",
+    "2",
+    "64",
+    "4096",
+    "8192"
+  ]
+}

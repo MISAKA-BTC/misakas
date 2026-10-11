@@ -93,3 +93,34 @@ fn the_rule_renames_a_layer_norm_leaf_and_nothing_else() {
         assert_eq!(legacy_layer_norm_name(not), None, "{not}");
     }
 }
+
+/// **The legacy spelling is found under the checkpoint's prefix too** (HFX 2026-10-10): a TASK model's tensors live under the base's
+/// prefix (`bert.embeddings.LayerNorm.gamma`), which the binder reaches through the spec's prefix alias (`"" → bert.`); the rename was
+/// tried on the un-prefixed name only, so every `…ForSequenceClassification` / `…ForTokenClassification` checkpoint with the old
+/// spellings was `TENSOR_MISSING(embed.norm.gain)` — about 4 % of the head-task repositories the census fetched.
+#[test]
+fn a_task_models_prefixed_legacy_layernorm_names_bind() {
+    for (rel, adapter_arch) in [("hf-cls/bert_cls", "BertForSequenceClassification"), ("hf-heads/bert_tokcls", "BertForTokenClassification")] {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(rel);
+        let (dir, renamed) = legacy_copy(&src, &format!("pfx-{}", rel.replace('/', "-")));
+        assert!(renamed > 0, "{rel}: nothing renamed");
+        let cfg: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
+        assert_eq!(cfg["architectures"][0], adapter_arch);
+        let r = misaka_palw_tir_lower::hf_schema::read_model(&cfg, None, &misaka_palw_tir_lower::hf_schema::ReadOptions::default())
+            .unwrap_or_else(|f| panic!("{rel}: {}", f.error));
+        let hl = misaka_palw_tir_lower::hl::build_program(&r.spec).unwrap();
+        let binding = misaka_palw_tir_lower::hf_weights::bind(&r.spec, &hl).unwrap();
+        let ck = Checkpoint::open(&dir).unwrap();
+        let rep = check_weights(&hl, &binding, &ck);
+        assert!(rep.errors.is_empty(), "{rel}: {:?}", rep.errors);
+        assert!(rep.unused.is_empty(), "{rel}: unread {:?}", rep.unused);
+        // …and the original spelling reads the same bytes.
+        let orig = Checkpoint::open(&src).unwrap();
+        let (a, _) = ParamStore::from_source(&hl, &binding, &ck).unwrap();
+        let (b, _) = ParamStore::from_source(&hl, &binding, &orig).unwrap();
+        let fetch = |s: &ParamStore, i: u32| s.get(i, None).or_else(|_| s.get(i, Some(0))).map(|t| t.data.clone());
+        for i in 0..hl.params.len() as u32 {
+            assert_eq!(fetch(&a, i).unwrap(), fetch(&b, i).unwrap(), "{rel}: param {i}");
+        }
+    }
+}

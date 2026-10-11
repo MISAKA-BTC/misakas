@@ -15,7 +15,7 @@
 //! ## The order, and why `live_total` is a sum
 //!
 //! ```text
-//! 1. safe frontier      — deeper is better; a chain that matured further has more nobody disputes
+//! 1. safe frontier      — deeper is better under the active claim settlement rules
 //! 2. safe weight        — matured work only
 //! 3. live total         — safe + bounded immature, among candidates sharing a frontier
 //! 4. deterministic tie-break
@@ -38,9 +38,9 @@ use core::cmp::Ordering;
 pub struct PalwCandidateOrderV1 {
     /// Blue score of the deepest block on this chain whose PALW work is `Final`.
     ///
-    /// The ordering's first key, ahead of weight, because matured work is the thing an attacker
-    /// cannot manufacture privately: a fork nobody could see collects no receipts, so it has no
-    /// frontier however much unproven work it piles up.
+    /// The ordering's first key, ahead of weight. Unproven work alone cannot advance it, but colluding
+    /// producers and Panel seats may mature claims on a private branch. This key is a rule, not a
+    /// proof against that attack; RFC-0012 requires separate adversarial evaluation.
     pub safe_frontier_blue_score: u64,
     /// Σ pwu over `Final` blocks.
     pub safe_weight: u128,
@@ -85,12 +85,8 @@ mod tests {
         Hash64::from_u64_word(v)
     }
 
-    /// The frontier outranks weight, and that ordering is the anti-fabrication rule.
-    ///
-    /// A private fork can pile up unproven work without limit — it just cannot mature any of it,
-    /// because a chain nobody could see collects no receipts. Ordering by weight first would let
-    /// that pile outrank a shorter chain that actually matured, which is the fabrication the ramp
-    /// exists to stop, arriving through fork choice instead.
+    /// The frontier outranks weight for this unproven-pile fixture. The test does not cover a private
+    /// branch that obtains its own Final claims through colluding Panel receipts.
     #[test]
     fn a_deeper_matured_frontier_beats_a_heavier_unproven_pile() {
         let matured = PalwCandidateOrderV1::new(100, 10, 0, h(1));

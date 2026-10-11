@@ -84,9 +84,20 @@ No SDK code changes. The class is data:
 
 ## Adding a new model family (a new lineage)
 
-A new architecture needs real new code regardless — a profile builder in `kaspa-consensus-core`
-whose kernels the adjudicator catalogs, an engine, an artifact container, a converter. The SDK's
-contribution is that the INTEGRATION is one impl:
+A model expressible with the registered typed primitives can use a data frontend or canonical
+TIR directly. It does not need a model-specific consensus profile, official compiler or a new
+SDK lineage. `palw-class kernel-preflight <program.tir> --positions N --json` checks canonical
+bytes and the node's hypothetical public-prosecution/carrier/block bounds at exactly N positions;
+the report also exposes the dormant shipping schedule. It checks neither weights nor source
+fidelity/economics, and does not activate a fence. `misaka model onboard verify <class> --artifact
+<file>` derives verifier inputs from one root-consistent public row snapshot: sampled policies
+rebuild the beacon/evidence and re-read selected leaves; complete-check policies re-execute all
+enumerable inputs and artifact leaves. Served roots still require caller chain/state-proof trust.
+
+The custom native-family container integration described below is a separate optional route.
+An operation outside the registered semantics needs a versioned shared primitive/kernel extension
+with its checker and terminal court. For a native engine/container outside the generic TIR path,
+the SDK integration is one impl:
 
 1. Implement `PalwModelLineageV1` in `misaka-palw-sdk/src/lineages/<family>.rs`, delegating to the
    family's own crates (the built-in `dense.rs` / `qwen36.rs` are the worked examples; the

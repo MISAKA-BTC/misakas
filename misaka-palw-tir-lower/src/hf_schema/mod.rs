@@ -183,6 +183,11 @@ fn fail(error: LowerError, adapter: AdapterSource) -> ReadFailure {
 pub const READER_KEYS: &[&str] =
     &["auto_map", "quantization_config", "is_encoder_decoder", "add_cross_attention", "transformers.js_config"];
 
+/// Keys the reader accounts for at the configuration's ROOT only (`MLX_QUANT_V1`): MLX's `quantization` block, which
+/// `crate::prequant::quant_block` reads (and refuses when it is not MLX's) before the decoder adapter runs. Nested in a
+/// wrapper's `text_config` it is nobody's, and stays unread.
+pub const ROOT_READER_KEYS: &[&str] = &["quantization"];
+
 fn source_of(a: &Adapter) -> AdapterSource {
     match a.origin {
         Origin::BuiltIn => AdapterSource::BuiltIn { id: a.id.clone(), hash: a.hash.clone() },
@@ -192,6 +197,14 @@ fn source_of(a: &Adapter) -> AdapterSource {
 
 /// Read a Hugging Face `config.json` (and, optionally, the checkpoint's tensor names and shapes)
 /// into a [`ModelSpec`].
+/// **The built-in adapter id that reads a `…ForMaskedLM` configuration's head** (the `fill-mask` task; HFX 2026-10-10), or `None`:
+/// the caller that knows the task passes it as `ReadOptions { adapter: AdapterChoice::BuiltIn(id) }`. Chosen by task and never by
+/// architecture alone, because the same checkpoint is also read as its encoder (a sentence embedder).
+pub fn masked_lm_adapter_for(config: &Value) -> Option<&'static str> {
+    let arch = config.get("architectures")?.as_array()?.first()?.as_str()?;
+    builtin::find_masked_lm_for(arch).map(|a| a.id.as_str())
+}
+
 pub fn read_model(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> Result<ModelRead, ReadFailure> {
     read_model_with(config, tensors, opts, crate::quantfmt::QuantRegistry::builtin())
 }
@@ -537,12 +550,12 @@ fn read_with(
     if root.get("add_cross_attention").and_then(Value::as_bool) == Some(true) {
         return Err(f(LowerError::not_lowerable(format!("{arch}: cross-attention is out of scope for v1"))));
     }
-    // A pre-quantised checkpoint (GPTQ, AWQ): its integers are lowered as stored; every other
-    // method is refused there.
-    let quant = match root.get("quantization_config").filter(|q| !q.is_null()) {
+    // A pre-quantised checkpoint (GPTQ, AWQ, a described format, MLX's block): read through its descriptor; a method no
+    // descriptor reads is refused there.
+    let quant = match crate::prequant::quant_block(root).map_err(f)? {
         Some(q) => {
             let mt = root.get("model_type").and_then(Value::as_str).unwrap_or("");
-            Some(crate::prequant::parse_quant_config_with(q, arch, mt, reg).map_err(f)?)
+            Some(crate::prequant::parse_quant_config_with(&q, arch, mt, reg).map_err(f)?)
         }
         None => None,
     };

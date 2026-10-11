@@ -171,7 +171,7 @@ pub fn open_model_full(
             let source: Box<dyn crate::weights::TensorSource + Sync> = match prepared.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()) {
                 Some(q) => {
                     let (f, params) = q.fmt.binding().expect("a described format");
-                    Box::new(crate::weights::described::DescribedSource::new(Box::new(ck), f, params)?)
+                    Box::new(crate::weights::described::DescribedSource::new_with(Box::new(ck), f, params, &q.module_params)?)
                 }
                 None => Box::new(ck),
             };
@@ -630,6 +630,9 @@ pub fn site_errors_windows(
     seq: &[usize],
     windows: &[(usize, usize)],
     progress: &dyn Fn(usize),
+    // Called for every site occurrence at every position the run reaches: `(site key, position, float values, integer codes, scales)`.
+    // A diagnosis hook (the caller keeps what it wants); the errors returned do not depend on it.
+    dump: &mut dyn FnMut(&str, usize, &[f32], &[i128], &[f64]),
 ) -> Result<Vec<(String, Vec<f64>)>> {
     use crate::lower::{FillCtx, IntData};
     use misaka_palw_tir_exec::{NodeValue, ParamData, StepSink, TirExecutor, TirParams, TirPlan};
@@ -700,6 +703,7 @@ pub fn site_errors_windows(
                     scales.entry((block, layer, node)).or_insert(v)
                 }
             };
+            dump(&k, p, fv, &vals, sv);
             let e = acc.entry(k).or_insert_with(|| vec![(0.0, 0.0); windows.len()]);
             let (mut dd, mut bb) = (0.0, 0.0);
             for (i, (iv, f)) in vals.iter().zip(fv).enumerate() {

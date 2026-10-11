@@ -1185,6 +1185,25 @@ async fn sanity_test() {
                     assert!(!read.available && read.bonds.is_empty() && read.claims.is_empty() && read.steps.is_empty());
                 })
             }
+            KaspadPayloadOps::GetPalwRewardVesting => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let two = GetPalwRewardVestingRequest {
+                        bond: format!("{}:0", "00".repeat(64)),
+                        claim_id: "00".repeat(64),
+                        ..Default::default()
+                    };
+                    assert!(rpc_client.get_palw_reward_vesting_call(None, two).await.is_err());
+                    for (after, exec_after) in [("x", ""), ("", "x")] {
+                        let bad = GetPalwRewardVestingRequest { after: after.into(), exec_after: exec_after.into(), ..Default::default() };
+                        assert!(rpc_client.get_palw_reward_vesting_call(None, bad).await.is_err());
+                    }
+                    let bad = GetPalwRewardVestingRequest { claim_id: "not-hex".into(), ..Default::default() };
+                    assert!(rpc_client.get_palw_reward_vesting_call(None, bad).await.is_err());
+                    let read = rpc_client.get_palw_reward_vesting_call(None, GetPalwRewardVestingRequest::default()).await.unwrap();
+                    assert!(!read.available && !read.native.available && read.exec_rows.is_empty());
+                })
+            }
             KaspadPayloadOps::GetPalwExecV2Status => {
                 let rpc_client = client.clone();
                 tst!(op, {
@@ -1316,6 +1335,25 @@ async fn sanity_test() {
                         .await
                         .unwrap();
                     assert!(!read.available && read.rows.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwForkChoiceOpening => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0009 L2 (op 203): a malformed block hash is an error before any state is read; simnet has no PALW V2 bundle,
+                    // so a well-formed request serves no opening.
+                    assert!(
+                        rpc_client
+                            .get_palw_fork_choice_opening_call(
+                                None,
+                                GetPalwForkChoiceOpeningRequest { block_hashes: vec!["zz".to_string()] }
+                            )
+                            .await
+                            .is_err()
+                    );
+                    let read =
+                        rpc_client.get_palw_fork_choice_opening_call(None, GetPalwForkChoiceOpeningRequest::default()).await.unwrap();
+                    assert!(!read.available && read.entries.is_empty());
                 })
             }
             KaspadPayloadOps::GetPalwOnboarding => {

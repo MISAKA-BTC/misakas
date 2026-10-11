@@ -51,6 +51,9 @@ pub enum VisionOut {
     ClipPooled { proj: Option<usize> },
     /// SigLIP: `post_layernorm` over every row, then the attention-pooling head.
     SiglipHead,
+    /// **An image classifier** (`ViTForImageClassification`; HFX 2026-10-10): the CLS row through the final `layernorm` (`post_norm`),
+    /// then the linear `classifier` to `labels` logits (with its bias): `[1, labels]` in a power-of-two unit. The pooler is not read.
+    Classify { labels: usize },
     /// Qwen2-VL / Qwen2.5-VL: the merger to `out` columns.
     Merger { out: usize },
     /// LLaVA: the rows (CLS dropped) through the projector to `out` columns.
@@ -128,7 +131,7 @@ impl VisionSpec {
     pub fn out_rows(&self) -> usize {
         match self.out {
             VisionOut::Rows => self.rows(),
-            VisionOut::ClipPooled { .. } | VisionOut::SiglipHead => 1,
+            VisionOut::ClipPooled { .. } | VisionOut::SiglipHead | VisionOut::Classify { .. } => 1,
             VisionOut::Merger { .. } => self.patches() / (self.merge * self.merge) as usize,
             VisionOut::Projector { .. } => self.patches(),
         }
@@ -136,6 +139,7 @@ impl VisionSpec {
     pub fn out_width(&self) -> usize {
         match self.out {
             VisionOut::ClipPooled { proj } => proj.unwrap_or(self.d),
+            VisionOut::Classify { labels } => labels,
             VisionOut::SiglipHead | VisionOut::Rows => self.d,
             VisionOut::Merger { out } | VisionOut::Projector { out, .. } => out,
         }
@@ -527,6 +531,10 @@ fn param_table(s: &VisionSpec) -> Result<Vec<(String, Vec<usize>, bool, Src)>> {
             if let Some(p) = proj {
                 lin(&mut v, "proj", "proj", *p, d, false, false)?;
             }
+        }
+        VisionOut::Classify { labels } => {
+            norm(&mut v, "post_norm", "post_norm", d, true, false)?;
+            lin(&mut v, "classifier", "classifier", *labels, d, true, false)?;
         }
         VisionOut::SiglipHead => {
             norm(&mut v, "post_norm", "post_norm", d, true, false)?;
@@ -972,6 +980,12 @@ pub fn float_forward(
                 None => vec![pooled],
             }
         }
+        VisionOut::Classify { labels } => {
+            let (g, b) = (p("post_norm.gain", None)?, p("post_norm.bias", None)?);
+            let pooled = ln(&x[0], &g, Some(&b), s.eps, false);
+            observe("post.post_norm".into(), std::slice::from_ref(&pooled));
+            vec![lin(&pooled, &p("classifier.w", None)?, Some(&p("classifier.b", None)?), *labels)]
+        }
         VisionOut::SiglipHead => {
             let (g, b) = (p("post_norm.gain", None)?, p("post_norm.bias", None)?);
             let xn: Vec<Vec<f64>> = x.iter().map(|r| ln(r, &g, Some(&b), s.eps, false)).collect();
@@ -1077,6 +1091,7 @@ pub fn lower_vision_with(hl: &HlProgram, s: &VisionSpec, out_major: bool) -> Res
         table_chunk: 1 << 24,
         conv_weight_bits: 8,
         out_major_rows: out_major,
+        gdn_core_wide: false,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];
@@ -1489,6 +1504,12 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                         }
                         None => norm_rows_kind(&mut b, cx, &mut lb, &row, NormKind::Layer, s.eps, "post_norm", true, &Want { dt: DType::I32, key: ok.clone() })?,
                     }
+                }
+                VisionOut::Classify { .. } => {
+                    let row = b.slice(x.r, 0, 0, 1);
+                    let row = Val { r: row, ..x.clone() };
+                    let n = norm_rows_kind(&mut b, cx, &mut lb, &row, NormKind::Layer, s.eps, "post_norm", true, &codes_want("post_norm"))?;
+                    linear_rows(&mut b, cx, &mut lb, &n, "classifier.w", Some("classifier.b"), "out", &Want { dt: DType::I32, key: ok.clone() })?
                 }
                 VisionOut::SiglipHead => {
                     let xn = norm_rows_kind(&mut b, cx, &mut lb, &x, NormKind::Layer, s.eps, "post_norm", true, &codes_want("post_norm"))?;

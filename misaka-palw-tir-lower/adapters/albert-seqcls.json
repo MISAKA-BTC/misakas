@@ -1,0 +1,68 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "albert-seqcls",
+  "doc": "AlbertForSequenceClassification: the albert encoder, then the [CLS] row through the pooler (`pooler` + activation) and `classifier` to num_labels logits (OUTPUT_CLASSIFY_V1). HFX 2026-10-10.",
+  "extends": [
+    "albert",
+    "mixin-seqcls-encoder"
+  ],
+  "match": {
+    "architectures": [
+      "AlbertForSequenceClassification"
+    ],
+    "model_types": [
+      "albert"
+    ]
+  },
+  "vars": [
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.word_embeddings",
+        "pos_embed": "embeddings.position_embeddings",
+        "type_embed": "embeddings.token_type_embeddings",
+        "embed_norm": "embeddings.LayerNorm",
+        "proj_in": "encoder.embedding_hidden_mapping_in",
+        "attn.q": "encoder.albert_layer_groups.0.albert_layers.0.attention.query",
+        "attn.k": "encoder.albert_layer_groups.0.albert_layers.0.attention.key",
+        "attn.v": "encoder.albert_layer_groups.0.albert_layers.0.attention.value",
+        "attn.o": "encoder.albert_layer_groups.0.albert_layers.0.attention.dense",
+        "norm.mix": "encoder.albert_layer_groups.0.albert_layers.0.attention.LayerNorm",
+        "mlp.up": "encoder.albert_layer_groups.0.albert_layers.0.ffn",
+        "mlp.down": "encoder.albert_layer_groups.0.albert_layers.0.ffn_output",
+        "norm.ffn": "encoder.albert_layer_groups.0.albert_layers.0.full_layer_layer_norm",
+        "cls_pre": "pooler",
+        "cls_out": "classifier"
+      }
+    },
+    {
+      "name": "cls_act",
+      "value": "Tanh"
+    },
+    {
+      "name": "cls_pre_on",
+      "value": true
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "predictions.",
+        "sop_classifier."
+      ]
+    },
+    {
+      "name": "prefix_aliases",
+      "value": [
+        [
+          "",
+          "albert."
+        ]
+      ]
+    }
+  ],
+  "config": {
+    "inert": [
+      "classifier_dropout_prob"
+    ]
+  }
+}

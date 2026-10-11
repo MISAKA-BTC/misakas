@@ -183,6 +183,8 @@ pub struct Life {
     /// The state at the block that finalized it, and the first state without the claim.
     pub at_final: PalwChainStateV2,
     pub after_retirement: PalwChainStateV2,
+    /// Before the challenge window closes, for an actual pre-Final court branch.
+    pub at_licensed: PalwChainStateV2,
     /// For every DAA the claim was in state: whether the old reader (Final and retention lapsed) saw it.
     pub old_reader_saw: Vec<(u64, bool)>,
     pub class: Hash64,
@@ -255,6 +257,7 @@ pub fn live_life_with(extras_edit: ExtrasEdit) -> Life {
         &*extras_edit,
     );
     assert!(matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "licensed");
+    let at_licensed = s.clone();
     let mut daa = 1_003u64;
     let mut old_reader_saw = Vec::new();
     let mut extraction = (std::time::Duration::ZERO, 0usize);
@@ -294,6 +297,7 @@ pub fn live_life_with(extras_edit: ExtrasEdit) -> Life {
         retire_delta,
         at_final: at_final.unwrap(),
         after_retirement,
+        at_licensed,
         old_reader_saw,
         class: floor,
         retention_daa,
@@ -311,7 +315,7 @@ pub fn rules<'a>(l: &'a Life, state: &'a PalwChainStateV2, open: &'a BTreeSet<Ha
         params: &l.sp,
         canonical_work_daa: l.p.palw_canonical_work_daa(),
         quantum_maturity_daa: 120,
-        claims_with_open_da: open,
+        claims_with_open_disputes: open,
     }
 }
 
