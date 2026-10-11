@@ -335,10 +335,17 @@ impl UtxoContext {
             local.clear();
         }
 
-        self.context().clear();
-        *self.inner.network_id.lock().unwrap() = None;
-
-        Ok(())
+        self.processor().with_current_utxo_generation(|| {
+            let mut context = self.context();
+            // Explicit clear releases this context's tracking only. Old global
+            // rows must not survive its later binding to another network.
+            self.processor().pending().retain(|_, row| row.utxo_context() != self);
+            self.processor().stasis().retain(|_, row| row.utxo_context() != self);
+            self.processor().outgoing().retain(|_, row| row.originating_context() != self);
+            context.clear();
+            *self.inner.network_id.lock().unwrap() = None;
+            Ok(())
+        })
     }
 
     pub async fn update_balance(&self) -> Result<Balance> {

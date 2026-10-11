@@ -1053,6 +1053,16 @@ mod dns_observation_generation_tests {
         assert_eq!(context.context().mature.len(), 3, "long-DAA jump may promote directly from stasis");
         assert!(context.context().pending.is_empty() && context.context().stasis.is_empty());
         assert_eq!(context.balance().unwrap().mature, 6_000_000);
+        let clearing = make_entry(30, true, 1_600);
+        context.insert(clearing.clone(), 1_610, false).await.unwrap();
+        assert!(processor.stasis().contains_key(&clearing.id()));
+        context.clear().await.unwrap();
+        assert!(processor.pending().is_empty() && processor.stasis().is_empty());
+        assert!(context.context().map.is_empty());
+        processor.set_network_id(&NetworkId::new(NetworkType::Devnet));
+        context.insert(make_entry(31, false, 1_000), 1_550, false).await.unwrap();
+        assert_eq!(context.context().map.len(), 1, "explicit cleared context may bind its new ledger without old global rows");
+
     }
 
     #[tokio::test]
