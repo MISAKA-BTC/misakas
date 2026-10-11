@@ -1492,7 +1492,7 @@ impl crate::config::params::Params {
                 match fence {
                     PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1 => self.palw_probabilistic_constraints_v1,
                     PalwLifecycleKindFenceV1::SignedRegistrationV1 => self.palw_signed_registration_v1,
-                    PalwLifecycleKindFenceV1::PermissionlessPanelV1 => self.palw_permissionless_panel_v1.map(|rule| rule.activation),
+                    PalwLifecycleKindFenceV1::PermissionlessPanelV1 => self.palw_permissionless_panel_activation_v1(),
                     // In force where BOTH the court's and the kernel route's fences are (the processor's `palw_provider_court_at`).
                     PalwLifecycleKindFenceV1::ProviderCourtV1 => {
                         let never = crate::config::params::ForkActivation::never();

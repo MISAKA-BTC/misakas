@@ -7,6 +7,12 @@ use std::collections::BTreeMap;
 pub const WIRE_VERSION_V1: u16 = 1;
 /// Dormant engine carriage with a per-claim retained entropy output. V1 is not silently upgraded.
 pub const WIRE_VERSION_V2: u16 = 2;
+/// Complete-population carriage; version 2 retains its 4096 eligibility and ordering.
+pub const WIRE_VERSION_COMPLETE_V1: u16 = 3;
+pub const MAX_COMPLETE_CANDIDATES_V1: u32 = 100_000;
+pub const MAX_COMPLETE_RETAINED_CANDIDATES_V1: u64 = 400_000;
+pub const MAX_COMPLETE_HISTORY_SEATS_V1: u64 = 65_536;
+pub const MAX_COMPLETE_STATE_BYTES_V1: u64 = 256 << 20;
 pub const CLASS_ROLE_V1: u8 = 1;
 pub const OUTSIDER_ROLE_V1: u8 = 2;
 pub const MAX_CANDIDATES_V1: u32 = 4096;
@@ -129,6 +135,25 @@ impl PanelPolicyV1 {
             return Err(PanelErrorV1::InvalidPolicy);
         }
         Ok(())
+    }
+
+    /// Separate experimental resource profile; the historical policy validator is unchanged.
+    pub fn validate_for_version(&self, version: u16) -> Result<(), PanelErrorV1> {
+        if version == WIRE_VERSION_V2 {
+            return self.validate();
+        }
+        if version != WIRE_VERSION_COMPLETE_V1
+            || self.max_candidates > MAX_COMPLETE_CANDIDATES_V1
+            || self.max_pending > 128
+            || self.max_tracked_claims > 1024
+            || self.max_assignments_per_block != 1
+            || self.max_admissions_per_block != 1
+        {
+            return Err(PanelErrorV1::InvalidPolicy);
+        }
+        let mut historical = *self;
+        historical.max_candidates = self.max_candidates.min(MAX_CANDIDATES_V1);
+        historical.validate()
     }
 
     pub fn id(&self) -> Hash64 {
@@ -313,6 +338,8 @@ pub enum NonFraudReasonV1 {
     BeaconUnavailable,
     NoCapablePanel,
     PanelUnavailable,
+    /// Complete-profile capacity refusal before any population is truncated or seed is drawn.
+    PopulationResourceLimit,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]

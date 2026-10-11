@@ -41,7 +41,8 @@ use super::*;
 use crate::palw_panel_beacon_v1::{self as beacon, PanelBeaconHistoryV1};
 use crate::palw_panel_v2::PalwPanelDrawPolicyV1;
 use crate::palw_permissionless_panel_v1::{
-    PalwPanelV3ParamsV1, panel_admitted_claim_v1, panel_bond_key_v1, panel_snapshot_candidates_v1, panel_stratified_candidates_v1,
+    PalwPanelV3ParamsV1, panel_admitted_claim_v1, panel_bond_key_v1, panel_snapshot_candidates_for_version_v1,
+    panel_stratified_candidates_for_version_v1,
 };
 use misaka_palw_challenge::hash::Digest;
 use misaka_palw_challenge::{
@@ -341,7 +342,7 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
     fn candidates(&self, claim: &AdmittedClaimV1) -> Result<Vec<SeatCandidateV1>, PanelErrorV1> {
         let policy = self.mirror.policy;
         let checkpoint_daa = self.engine.daa();
-        let mut rows = panel_snapshot_candidates_v1(
+        let mut rows = panel_snapshot_candidates_for_version_v1(
             self.parent,
             claim.claim_id,
             self.inputs.floor_class,
@@ -349,11 +350,12 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
             policy,
             self.inputs.draw,
             self.inputs.capability_proof,
+            self.mirror.wire_version,
         )
         // A claim the checkpoint does not hold seals an empty population (and ends non-fraud), never a failed block.
-        .unwrap_or_default();
+        .or_else(|e| if self.mirror.wire_version == eng::WIRE_VERSION_COMPLETE_V1 { Err(e) } else { Ok(Vec::new()) })?;
         rows.retain(|seat| self.admissible(seat, claim));
-        if rows.len() > policy.max_candidates as usize {
+        if self.mirror.wire_version == eng::WIRE_VERSION_V2 && rows.len() > policy.max_candidates as usize {
             rows.sort_by(|a, b| b.collateral.cmp(&a.collateral).then(a.bond.cmp(&b.bond)));
             rows.truncate(policy.max_candidates as usize);
         }
@@ -370,7 +372,7 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
         strata: &PanelStrataV1,
     ) -> Result<(Vec<SeatCandidateV1>, Vec<u64>), PanelErrorV1> {
         let policy = self.mirror.policy;
-        let mut rows = panel_stratified_candidates_v1(
+        let mut rows = panel_stratified_candidates_for_version_v1(
             self.parent,
             claim.claim_id,
             self.inputs.floor_class,
@@ -379,10 +381,11 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
             self.inputs.draw,
             self.inputs.capability_proof,
             strata,
+            self.mirror.wire_version,
         )
-        .unwrap_or_default();
+        .or_else(|e| if self.mirror.wire_version == eng::WIRE_VERSION_COMPLETE_V1 { Err(e) } else { Ok(Vec::new()) })?;
         rows.retain(|(seat, _)| self.admissible(seat, claim));
-        if rows.len() > policy.max_candidates as usize {
+        if self.mirror.wire_version == eng::WIRE_VERSION_V2 && rows.len() > policy.max_candidates as usize {
             rows.sort_by(|(a, _), (b, _)| b.collateral.cmp(&a.collateral).then(a.bond.cmp(&b.bond)));
             rows.truncate(policy.max_candidates as usize);
         }
@@ -465,7 +468,7 @@ fn active_mirror(builder: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> O
 
 fn create_engine(parent: &PalwChainStateV2, mirror: &PalwPanelV3ParamsV1) -> Result<PermissionlessPanelStateV1, PalwStateV2Error> {
     PermissionlessPanelStateV1::from_cursor(PanelCursorV1 {
-        version: eng::WIRE_VERSION_V2,
+        version: mirror.wire_version,
         network: mirror.network,
         ruleset: mirror.ruleset,
         policy: mirror.policy,
@@ -483,6 +486,7 @@ fn v2_reason_of(reason: NonFraudReasonV1) -> PalwVoidReasonV2 {
         NonFraudReasonV1::BeaconUnavailable => PalwVoidReasonV2::BeaconUnavailable,
         NonFraudReasonV1::NoCapablePanel => PalwVoidReasonV2::PermissionlessNoCapablePanel,
         NonFraudReasonV1::PanelUnavailable => PalwVoidReasonV2::PanelUnavailable,
+        NonFraudReasonV1::PopulationResourceLimit => PalwVoidReasonV2::PermissionlessNoCapablePanel,
     }
 }
 
@@ -495,7 +499,13 @@ pub(super) fn advance_v1(
     let Some(mirror) = active_mirror(builder, ctx) else { return Ok(()) };
     let inputs = builder.extras.panel_v3.clone().unwrap_or_default();
     let engine = match builder.state.panel_v3.take() {
-        Some(engine) => engine,
+        Some(engine) if engine.cursor().version == mirror.wire_version => engine,
+        Some(_) => {
+            return Err(inconsistent(
+                "profile migration",
+                "an existing carriage cannot be silently reinterpreted as a complete population",
+            ));
+        }
         None => create_engine(parent, &mirror)?,
     };
     let step = SelectedChainStepV1 {
@@ -908,7 +918,11 @@ impl PalwChainStateV2 {
         engine.check_consistency().map_err(|e| bad(format!("the engine: {e}")))?;
         let mirror = params.panel_v3().ok_or_else(|| bad("an engine exists but the fence is not configured".into()))?;
         let cursor = engine.cursor();
-        if cursor.network != mirror.network || cursor.ruleset != mirror.ruleset || cursor.policy != mirror.policy {
+        if cursor.version != mirror.wire_version
+            || cursor.network != mirror.network
+            || cursor.ruleset != mirror.ruleset
+            || cursor.policy != mirror.policy
+        {
             return Err(bad("the engine's identity or policy differs from the fence's".into()));
         }
         for (id, record) in engine.claim_rows() {

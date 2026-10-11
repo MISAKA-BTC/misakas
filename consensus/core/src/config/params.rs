@@ -2373,6 +2373,8 @@ pub struct Params {
 
     /// RFC-0010 permissionless Panel policy. Dormant; every activation is refused until its beacon and release gates pass.
     pub palw_permissionless_panel_v1: Option<crate::palw_permissionless_panel_v1::PalwPermissionlessPanelV1>,
+    /// RFC06 complete-population/100k experiment. No shipped preset assigns it; activation is refused.
+    pub palw_permissionless_panel_complete_v1: Option<crate::palw_permissionless_panel_v1::PalwPermissionlessPanelCompleteV1>,
 
     /// **ADR-0130: the seat exposure floor** — see [`PalwPanelExposureFloorV1`]. Resolved at the
     /// claim's anchor for the draw and at the binding block's DAA for the reservation, which the
@@ -6809,6 +6811,9 @@ impl Params {
         if self.palw_permissionless_panel_v1.is_some_and(|r| r.activation == ForkActivation::never()) {
             self.palw_permissionless_panel_v1 = None;
         }
+        if self.palw_permissionless_panel_complete_v1.is_some_and(|r| r.activation == ForkActivation::never()) {
+            self.palw_permissionless_panel_complete_v1 = None;
+        }
         if self.palw_dns_retirement.is_some_and(|r| r.activation == ForkActivation::never()) {
             self.palw_dns_retirement = None;
         }
@@ -10303,6 +10308,7 @@ impl Params {
             palw_overlay_carve,
             palw_dns_retirement,
             palw_permissionless_panel_v1,
+            palw_permissionless_panel_complete_v1,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_model_market,
@@ -10583,6 +10589,7 @@ impl Params {
             ("palw_overlay_carve", palw_overlay_carve.map(|carve| carve.activation)),
             ("palw_dns_retirement_v1", palw_dns_retirement.map(|r| r.activation)),
             ("palw_permissionless_panel_v1", palw_permissionless_panel_v1.map(|r| r.activation)),
+            ("palw_permissionless_panel_complete_v1", palw_permissionless_panel_complete_v1.map(|r| r.activation)),
             ("palw_panel_exposure_floor", palw_panel_exposure_floor.map(|floor| floor.activation)),
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
@@ -11360,6 +11367,10 @@ impl Params {
             h.write(b"palw_permissionless_panel_v1");
             h.write(r.commitment_bytes());
         }
+        if let Some(r) = self.palw_permissionless_panel_complete_v1.filter(|r| r.activation != ForkActivation::never()) {
+            h.write(b"palw_permissionless_panel_complete_v1");
+            h.write(r.commitment_bytes());
+        }
         if let Some(carve) = self.palw_overlay_carve {
             h.write(b"palw_overlay_carve");
             h.write(carve.activation.daa_score().to_le_bytes());
@@ -11729,6 +11740,7 @@ impl Params {
             palw_overlay_carve,
             palw_dns_retirement,
             palw_permissionless_panel_v1,
+            palw_permissionless_panel_complete_v1,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
@@ -12644,6 +12656,9 @@ impl Params {
         if let Some(r) = palw_permissionless_panel_v1.as_mut().filter(|r| r.activation != ForkActivation::never()) {
             fork(&mut r.activation, visit);
         }
+        if let Some(r) = palw_permissionless_panel_complete_v1.as_mut().filter(|r| r.activation != ForkActivation::never()) {
+            fork(&mut r.activation, visit);
+        }
         if let Some(r) = palw_dns_retirement.as_mut() {
             fork(&mut r.activation, visit);
         }
@@ -13066,6 +13081,7 @@ impl Params {
             palw_overlay_carve,
             palw_dns_retirement,
             palw_permissionless_panel_v1,
+            palw_permissionless_panel_complete_v1,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
@@ -14168,6 +14184,10 @@ impl Params {
             h.write(b"palw_permissionless_panel_v1");
             h.write(r.commitment_bytes());
         }
+        if let Some(r) = palw_permissionless_panel_complete_v1.filter(|r| r.activation != ForkActivation::never()) {
+            h.write(b"palw_permissionless_panel_complete_v1");
+            h.write(r.commitment_bytes());
+        }
         if let Some(carve) = palw_overlay_carve {
             h.write(b"palw_overlay_carve/v1");
             h.write(carve.activation.daa_score().to_le_bytes());
@@ -14737,6 +14757,7 @@ impl Params {
             palw_overlay_carve: self.palw_overlay_carve,
             palw_dns_retirement: self.palw_dns_retirement,
             palw_permissionless_panel_v1: self.palw_permissionless_panel_v1,
+            palw_permissionless_panel_complete_v1: self.palw_permissionless_panel_complete_v1,
             palw_panel_exposure_floor: self.palw_panel_exposure_floor,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
@@ -15841,6 +15862,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_overlay_carve: None,
     palw_dns_retirement: None,
     palw_permissionless_panel_v1: None,
+    palw_permissionless_panel_complete_v1: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -16142,6 +16164,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_overlay_carve: None,
     palw_dns_retirement: None,
     palw_permissionless_panel_v1: None,
+    palw_permissionless_panel_complete_v1: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -16425,6 +16448,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_overlay_carve: None,
     palw_dns_retirement: None,
     palw_permissionless_panel_v1: None,
+    palw_permissionless_panel_complete_v1: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -24050,6 +24074,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_overlay_carve: None,
     palw_dns_retirement: None,
     palw_permissionless_panel_v1: None,
+    palw_permissionless_panel_complete_v1: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).

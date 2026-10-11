@@ -19,11 +19,30 @@ pub struct PalwPermissionlessPanelV1 {
     pub policy: PanelPolicyV1,
 }
 
+/// A separate dormant profile: complete authenticated populations, version-3 carriage,
+/// streaming operator draw and explicit whole-state resource limits. These limits are
+/// experimental refusal bounds, not economic/latency approval; activation always fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPermissionlessPanelCompleteV1 {
+    pub activation: ForkActivation,
+    pub policy: PanelPolicyV1,
+}
+
+impl PalwPermissionlessPanelCompleteV1 {
+    pub fn commitment_bytes(self) -> Vec<u8> {
+        let mut bytes = WIRE_VERSION_COMPLETE_V1.to_le_bytes().to_vec();
+        bytes.extend(self.activation.daa_score().to_le_bytes());
+        bytes.extend(borsh::to_vec(&self.policy).expect("canonical complete Panel policy"));
+        bytes
+    }
+}
+
 /// **The fence, mirrored on the V2 bundle's state params** (`PalwStateParamsV2::panel_v3`), which the fold reads: its height, its
 /// complete policy, and the engine's chain and ruleset identities. Not Borsh and not hashed — the fence itself is what the params
 /// and schedule ids name (Some-only), and `validate_palw_permissionless_panel_v1` refuses an armed one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwPanelV3ParamsV1 {
+    pub wire_version: u16,
     pub from_daa: u64,
     pub policy: PanelPolicyV1,
     /// `palw_network_domain_v2_for(network, genesis)`: a chain, not a name.
@@ -73,12 +92,47 @@ impl Params {
         let network = crate::palw_attempt_v2::palw_network_domain_v2_for(self.net.to_string().as_bytes(), Some(self.genesis.hash));
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             let ruleset = palw_ruleset_id_v2(bundle);
-            let mirror = fence.map(|fence| PalwPanelV3ParamsV1 { from_daa: fence.activation.daa_score(), policy: fence.policy, network, ruleset });
+            let mirror = self
+                .palw_permissionless_panel_complete_v1
+                .filter(|f| f.activation != ForkActivation::never())
+                .map(|f| PalwPanelV3ParamsV1 {
+                    wire_version: WIRE_VERSION_COMPLETE_V1,
+                    from_daa: f.activation.daa_score(),
+                    policy: f.policy,
+                    network,
+                    ruleset,
+                })
+                .or_else(|| {
+                    fence.map(|f| PalwPanelV3ParamsV1 {
+                        wire_version: WIRE_VERSION_V2,
+                        from_daa: f.activation.daa_score(),
+                        policy: f.policy,
+                        network,
+                        ruleset,
+                    })
+                });
             bundle.state = bundle.state.clone().with_panel_v3(mirror);
         }
     }
 
+    pub fn palw_permissionless_panel_activation_v1(&self) -> Option<ForkActivation> {
+        self.palw_permissionless_panel_v1
+            .map(|r| r.activation)
+            .into_iter()
+            .chain(self.palw_permissionless_panel_complete_v1.map(|r| r.activation))
+            .filter(|a| *a != ForkActivation::never())
+            .min_by_key(|a| a.daa_score())
+    }
+
     pub fn validate_palw_permissionless_panel_v1(&self) -> Result<(), PalwModeV2Error> {
+        if let Some(rule) = self.palw_permissionless_panel_complete_v1.filter(|r| r.activation != ForkActivation::never()) {
+            rule.policy
+                .validate_for_version(WIRE_VERSION_COMPLETE_V1)
+                .map_err(|_| PalwModeV2Error::Invalid("complete Panel resource/timing policy is invalid"))?;
+            return Err(PalwModeV2Error::Invalid(
+                "palw_permissionless_panel_complete_v1 cannot be armed: 100k population/RSS/latency and retained-population liveness, complete-candidate pruned transport, all-model court/DA cost and beacon/soundness/economics reviews are unapproved",
+            ));
+        }
         if let Some(rule) = self.palw_permissionless_panel_v1.filter(|r| r.activation != ForkActivation::never()) {
             rule.policy.validate().map_err(|_| {
                 PalwModeV2Error::Invalid("palw_permissionless_panel_v1 has invalid timing, capacity or beacon parameters")
@@ -177,12 +231,36 @@ pub fn panel_snapshot_candidates_v1(
     draw: PalwPanelDrawPolicyV1,
     capability_proof: bool,
 ) -> Result<Vec<SeatCandidateV1>, PanelErrorV1> {
-    policy.validate()?;
+    panel_snapshot_candidates_for_version_v1(
+        state,
+        claim_id,
+        floor_class,
+        checkpoint_daa,
+        policy,
+        draw,
+        capability_proof,
+        WIRE_VERSION_V2,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn panel_snapshot_candidates_for_version_v1(
+    state: &PalwChainStateV2,
+    claim_id: Hash64,
+    floor_class: Hash64,
+    checkpoint_daa: u64,
+    policy: PanelPolicyV1,
+    draw: PalwPanelDrawPolicyV1,
+    capability_proof: bool,
+    version: u16,
+) -> Result<Vec<SeatCandidateV1>, PanelErrorV1> {
+    policy.validate_for_version(version)?;
     let claim = state.claim(&claim_id).ok_or(PanelErrorV1::InvalidSnapshot)?;
     let registered_by = checkpoint_daa.checked_sub(policy.bond_maturity_daa);
     if registered_by.is_none() {
         return Ok(Vec::new());
     }
+    let checkpoint_root = state.state_root();
     let mut seats = std::collections::BTreeMap::<BondIdV1, SeatCandidateV1>::new();
     for (class, role) in [(claim.class_id, CLASS_ROLE_V1), (floor_class, OUTSIDER_ROLE_V1)] {
         if role == OUTSIDER_ROLE_V1 && policy.outsider_seats == 0 {
@@ -210,10 +288,13 @@ pub fn panel_snapshot_candidates_v1(
                 collateral: row.collateral,
                 registered_daa: row.registered_daa,
                 capability_root: commitment(b"misaka-palw/panel-v3/capability", &row.capable_classes),
-                readiness_root: commitment(b"misaka-palw/panel-v3/readiness", &(state.state_root(), class)),
+                readiness_root: commitment(b"misaka-palw/panel-v3/readiness", &(checkpoint_root, class)),
                 roles: 0,
             });
             entry.roles |= role;
+            if version == WIRE_VERSION_COMPLETE_V1 && seats.len() > policy.max_candidates as usize {
+                return Err(PanelErrorV1::ResourceLimit);
+            }
         }
     }
     if seats.len() > policy.max_candidates as usize {
@@ -239,13 +320,42 @@ pub fn panel_stratified_candidates_v1(
     capability_proof: bool,
     strata: &PanelStrataV1,
 ) -> Result<Vec<(SeatCandidateV1, u64)>, PanelErrorV1> {
-    policy.validate()?;
+    panel_stratified_candidates_for_version_v1(
+        state,
+        claim_id,
+        floor_class,
+        checkpoint_daa,
+        policy,
+        draw,
+        capability_proof,
+        strata,
+        WIRE_VERSION_V2,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn panel_stratified_candidates_for_version_v1(
+    state: &PalwChainStateV2,
+    claim_id: Hash64,
+    floor_class: Hash64,
+    checkpoint_daa: u64,
+    policy: PanelPolicyV1,
+    draw: PalwPanelDrawPolicyV1,
+    capability_proof: bool,
+    strata: &PanelStrataV1,
+    version: u16,
+) -> Result<Vec<(SeatCandidateV1, u64)>, PanelErrorV1> {
+    policy.validate_for_version(version)?;
     strata.validate()?;
     let claim = state.claim(&claim_id).ok_or(PanelErrorV1::InvalidSnapshot)?;
     let Some(registered_by) = checkpoint_daa.checked_sub(policy.bond_maturity_daa) else { return Ok(Vec::new()) };
     let mut populations: Vec<(Hash64, u8, u64)> = (0..strata.count)
         .map(|stratum| {
-            (crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1(&claim.class_id, strata.count, stratum), CLASS_ROLE_V1, 1u64 << stratum)
+            (
+                crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1(&claim.class_id, strata.count, stratum),
+                CLASS_ROLE_V1,
+                1u64 << stratum,
+            )
         })
         .collect();
     if strata.outsider {
@@ -284,6 +394,9 @@ pub fn panel_stratified_candidates_v1(
             });
             entry.0.roles |= role;
             entry.1 |= bit;
+            if version == WIRE_VERSION_COMPLETE_V1 && seats.len() > policy.max_candidates as usize {
+                return Err(PanelErrorV1::ResourceLimit);
+            }
         }
     }
     Ok(seats.into_values().collect())
@@ -397,6 +510,8 @@ pub struct PanelV3SnapshotSummaryV1 {
     pub checkpoint: Hash64,
     pub checkpoint_daa: u64,
     pub candidates: u32,
+    pub population_complete: bool,
+    pub carriage_version: u16,
     pub policy_id: Hash64,
 }
 
@@ -457,6 +572,7 @@ pub fn panel_v3_reason_code_v1(reason: NonFraudReasonV1) -> &'static str {
         NonFraudReasonV1::BeaconUnavailable => "BEACON_UNAVAILABLE",
         NonFraudReasonV1::NoCapablePanel => "NO_CAPABLE_PANEL",
         NonFraudReasonV1::PanelUnavailable => "PANEL_UNAVAILABLE",
+        NonFraudReasonV1::PopulationResourceLimit => "POPULATION_RESOURCE_LIMIT",
     }
 }
 
@@ -508,6 +624,8 @@ pub fn panel_v3_claim_status_v1(
         checkpoint: snapshot.checkpoint,
         checkpoint_daa: snapshot.checkpoint_daa,
         candidates: snapshot.candidates.len() as u32,
+        population_complete: engine.cursor().version == WIRE_VERSION_COMPLETE_V1,
+        carriage_version: engine.cursor().version,
         policy_id: snapshot.policy_id,
     });
     let policy = engine.policy();
@@ -560,6 +678,10 @@ pub struct PanelV3OverviewV1 {
     pub version: u16,
     /// Whether the fence's engine exists on this chain.
     pub active: bool,
+    pub carriage_version: Option<u16>,
+    pub retained_candidates: u64,
+    pub candidate_limit: Option<u32>,
+    pub retained_candidate_limit: Option<u64>,
     pub tip: Option<Hash64>,
     pub height: Option<u64>,
     pub daa: Option<u64>,
@@ -579,6 +701,10 @@ pub fn panel_v3_overview_v1(state: &PalwChainStateV2) -> PanelV3OverviewV1 {
     let mut overview = PanelV3OverviewV1 {
         version: PANEL_V3_OBSERVATION_VERSION_V1,
         active: false,
+        carriage_version: None,
+        retained_candidates: 0,
+        candidate_limit: None,
+        retained_candidate_limit: None,
         tip: None,
         height: None,
         daa: None,
@@ -595,6 +721,12 @@ pub fn panel_v3_overview_v1(state: &PalwChainStateV2) -> PanelV3OverviewV1 {
     };
     let Some(engine) = state.panel_v3() else { return overview };
     overview.active = true;
+    overview.carriage_version = Some(engine.cursor().version);
+    overview.retained_candidates =
+        engine.claim_rows().values().filter_map(|r| r.snapshot.as_ref()).map(|s| s.candidates.len() as u64).sum();
+    overview.candidate_limit = Some(engine.policy().max_candidates);
+    overview.retained_candidate_limit =
+        (engine.cursor().version == WIRE_VERSION_COMPLETE_V1).then_some(MAX_COMPLETE_RETAINED_CANDIDATES_V1);
     overview.tip = Some(engine.tip());
     overview.height = Some(engine.height());
     overview.daa = Some(engine.daa());
