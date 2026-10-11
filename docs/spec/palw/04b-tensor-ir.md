@@ -3854,3 +3854,64 @@ Owner withdrawal MUST retain candidate metadata while protected traces, pending
 own proofs or DA still depend on it, including legacy v7 claims. Catalog reuse
 requires expiry and absence of all such dependencies. Conformance settlement
 and original-collateral finder payout do not establish funded execution Final.
+
+### §18.17 — Native class/preparation/header trust boundaries, v11
+
+An original native candidate9 already independently commits its class resource10
+root. The private native class view shall recheck canonical program, complete
+scope, replay, exact source binding and compiled policy, without fabricating or
+materializing an unused class resource vector. Public candidate imports remain
+full independent checks. An actual-job plan shall be independently derived;
+the native preparation root shall bind class/input/requester/producer/nonce/
+reward/plan, and Fund shall authenticate that original row plus exact current
+block eligibility, canonical monotone operator nonce and original atomic debit.
+A same-length plan is not a prompt or actor authorization.
+
+Class identity includes the independently derived source court proof/work/
+scratch bound. It uses original PC bytes 4 +Σ(67+2 when layered), the frozen
+128KiB native2 proof allowance, seven wrapper bytes, program bytes B and exact
+PC instance count N. Work is B²+64B+8832N+64(maxProof+7)+65536; scratch is
+8B+512N+8(maxProof+7)+65536. Quota Court/Chunk must cover both computation and
+source bounds. Native shall authenticate its original binding bound and pay
+restore, copy, codec and fixed selected-row costs before processing. Normal
+per-action and carrier limits are unchanged.
+
+A rooted fixed class header is readonly. Existing job restoration shall validate
+original job/state roots and conserved funding; it confers no baseline or
+eligibility. Late collection of an established computation/source court requires
+an exact authenticated original proof identity and inclusion within this claim's
+liability. Native may specialize a verified global exact R/PC theorem to an
+already-live claim without another heavy verifier on Close. It shall pin the
+original finder and check operator independence for that claim; same-operator
+collection refunds the requester and burns the entire actual slash.
+
+[26 pure component tests](../../design/palw/tir/evidence/rfc02-execution11-native-headers-verdict.json)
+cover these fixed-record/money rules with owned-source preimages and immutable
+replay. They are not actual native coin/Final/redemption evidence. The
+[12 streaming outsider controls](../../design/palw/tir/evidence/rfc02-mapped-R-ordinary9-local-consumer-verdict.json)
+are SDK controls; a distinct actual fresh-node diagnostic now authenticates
+complete original R/PC, runs its own model, locates an unknown ordinary fault
+through public DA and obtains original-collateral finder payout plus IBD replay.
+The original model is acquired externally under mode A and special-court
+relations remain explicit. This is not funded honest Final or requester escrow
+redemption evidence. Actual native cohort and A6/A8 completion remain open.
+
+### §18.18 — Discovery reservation and fixed terminal work
+
+A proof-root-bound seal MUST NOT be treated as pre-proof discovery capacity.
+Before unknown-fault acquisition can claim protection from ordinary traffic
+exhaustion, native shall authenticate an independently paid bounded discovery
+owner/session against the original funded job, vector, actor/operator and
+nonce. Conversion shall bind the same owner's exact proof and new maturity;
+ordinary requests cannot consume another owner's reservation. Producer answer
+count, bytes, retries and all resource axes shall be independently reserved for
+the full admitted lifetime. A successful ordinary43-demand diagnostic alone
+does not establish this guarantee.
+
+Native terminal reservation shall cover actual fixed readonly class/job/plan,
+source-fact, bounded seal/DA headers, selected quota rows and atomic payout
+processing before their codecs/hashes/copies run. Whole program, resource vector
+or quota-map restoration cannot be charged as a small fixed terminal action.
+Failed expensive attempts retain their debit. Existing escrow settlement shall
+remain accessible after source revocation and shall spend original funds once.
+The native11 carrier module grants no live Fund/Final route by itself.

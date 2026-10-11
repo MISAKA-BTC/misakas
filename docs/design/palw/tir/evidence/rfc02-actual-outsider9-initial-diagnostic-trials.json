@@ -1,0 +1,30 @@
+{
+  "schema": "misaka.rfc02.actual-outsider9-initial-diagnostic-trials.v1",
+  "binary": "/tmp/rfc02-actual-outsider9-initial-immutable-9f226cbef467/kaspa_consensus-678bc0334014b538",
+  "binary_sha256": "9f226cbef46741258ccb64775a3bfc15ad0b50f4f24f44650fc73bea54056617",
+  "build": "Initial failed absent dev-only executor import; second --locked no-run succeeded1m58s after exactdev dependency and alreadyresolvedCargo.lock package entry.",
+  "execution_trials": [
+    {
+      "selected_tests": 0,
+      "accepted_tests": 0,
+      "log": "rfc02-actual-outsider9-initial-node-tests.log",
+      "verdict": "Exact short-name filter matched no fullyqualified unit test. Excluded from acceptance."
+    },
+    {
+      "selected_tests": 1,
+      "accepted_tests": 0,
+      "log": "rfc02-actual-outsider9-second-node-tests.log",
+      "time_log": "rfc02-actual-outsider9-second-node-time.log",
+      "verdict": "FAILED9.49s: local reference10 IndexSteps ceiling2^36 before own source open, completeR/PC or ownmodel replay. Producer executed the genuine mappedsource but no finder evidence succeeded."
+    }
+  ],
+  "v2_protocol": "rfc02-actual-outsider9-protocol-v2.json",
+  "v2_protocol_sha256": "1d9dd3bbdeeb204fa62108c153777cf4470a4ae553658bbb14df763f3c41a0cf",
+  "v2_change": "Only local IndexSteps operation-count budget2^38 fixed upfront, every native scope/admission/court/network cap unchanged.",
+  "limits": [
+    "No componentPASS claim for actual native trial.",
+    "Mixed concurrent helper preimages; no coherent fulldependency closure claim.",
+    "SourceR/PC all-source verification was not reached by the failed first selected trial.",
+    "No claims/classes/Final/cohort/originalHFfidelity acceptance."
+  ]
+}

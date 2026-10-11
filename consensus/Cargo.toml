@@ -79,6 +79,9 @@ misaka-palw-base0.workspace = true
 # G14 lane D: the E2E builds a producer, seats and a fresh verifier from the kernel's public API, over the sketch's tiny fixtures.
 misaka-palw-kernel.workspace = true
 misaka-palw-tir.workspace = true
+# RFC02 actual fresh finder: mapped execution is test-only; consensus courts
+# continue to authenticate bounded public operands without loading weights.
+misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec", features = ["node"] }
 misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
 # Lane K2S (GAP-40): the K2-TIR-v5 node E2E lowers a tiny HF encoder fixture with its weights (dev-only, as the SDK does).
 misaka-palw-tir-lower = { path = "../misaka-palw-tir-lower" }

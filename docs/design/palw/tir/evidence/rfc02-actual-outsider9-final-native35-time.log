@@ -1,0 +1,19 @@
+FLAT_CANDIDATE7_NATIVE_METADATA N=10485760 max_positions=2097152 court_bytes=37875 court_work=4964969 auxiliary_bytes=128 no_weights_or_job_executed=true
+       52.40 real       329.93 user        24.03 sys
+          1686880256  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              160113  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   2  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+               14676  voluntary context switches
+             6036985  involuntary context switches
+       3675983112297  instructions retired
+       1219452121478  cycles elapsed
+          1538313792  peak memory footprint

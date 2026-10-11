@@ -4084,3 +4084,108 @@ Existing regression tests and previous quota snapshots are not counted again.
 Exact source preimages, immutable binaries, trial failures and test-only
 inventory corrections are retained in
 [the native milestone verdict](../design/palw/tir/evidence/rfc02-native9-typed-da-node-verdict.json).
+
+### §14.49 — Rooted native execution headers and staged request funding, v11
+
+The native-only class checker rechecks the canonical program, complete class
+scope and replay against the original independently admitted candidate9. It
+retains the original class resource10 root without materializing its quantity
+vector. Public imports and SDK candidate checking still independently derive
+that vector. Actual-job preparation independently derives resources once; its
+fixed record binds class, prompt/input, requester, producer, canonical nonce,
+reward and quota-plan root. Fund restores that exact original native preparation
+and rechecks live source/policy eligibility at the current block hash and DAA,
+original debit and the whole admitted liability interval. A plan for the same
+position count cannot substitute another prompt or actor.
+
+The immutable class record additionally commits the exact original native2
+R/PC proof bound. For canonical program size B and N committed instances,
+PC bytes are 4 + the sum of 67 bytes per unlayered instance or 69 per layered
+instance; max proof bytes are PC bytes +128KiB. Source-court work is
+B² +64B +8832N +64(max proof bytes +7) +65536; owned scratch is
+8B +512N +8(max proof bytes +7) +65536. Computation and source bounds must both
+be represented in the independently derived Court/Chunk quota plan. Native
+must compare the proof bound with the authenticated original binding header
+and prepay all actual restores and fixed-row processing under unchanged action
+limits; these formulas do not prove any actual model fits those limits.
+
+A separately rooted fixed class header can restore and settle an existing
+funded book without reconstructing its program/scope/resource vector. It is
+readonly and cannot grant admission. Source revocation cannot strand original
+escrow. Historical settlement requires an authenticated, originally verified
+court identity with exact R/PC, subject, proof and original inclusion time
+within claim liability. A refuted flag or new late proof is insufficient. An
+existing global R/PC theorem may stop another exact-scope claim's Final; only
+its original paid finder can receive a bounty. Native checks operator identity,
+and a finder who is that claim's producer receives no bounty: the whole actual
+collected slash is burned and the requester is refunded.
+
+[The component verdict](../design/palw/tir/evidence/rfc02-execution11-native-headers-verdict.json)
+records 26 pure tests and an immutable replay, with stable owned-source
+preimages. The initial17/23/25 trials and the compiler refusal are retained.
+Concurrent dependencies were not uniformly frozen for this component run.
+Authenticated original state and actual coin debit/payout remain native boundary
+fixtures in these tests; funded native Final/redemption, the accepted native
+model cohort and the A6/A8 90% requirement remain unproven.
+
+### §14.50 — Public-snapshot streaming outsider consumer, v9
+
+[The local consumer verdict](../design/palw/tir/evidence/rfc02-mapped-R-ordinary9-local-consumer-verdict.json)
+records 12 SDK controls for an ordinary-point outsider. It authenticates the
+public candidate/binding/trace and complete original R windows before its own
+model execution, uses bounded selected DA and unknown-node/leaf descent, and
+predebits local reference, source, metadata, hash, delivery and retry budgets.
+It does not receive a prepared fraud coordinate or proof. Source acquisition
+remains external under mode A; this is not a consensus source-distribution duty.
+Special TopK/history/Decode relations return an explicit separate-court demand.
+
+The actual Qwen fresh-node run now authenticates all1,445,797 R leaves and
+all1,636 PC instances before executing its own7,658 nodes. The finder receives
+no prepared fault coordinates, proof or archived replies. It obtains43 public
+DA demands through44 attempts, locates an unknown ordinary fault and constructs
+its own17,816-byte proof. Native scope9 seal/maturity/reveal, the original100
+collateral slash, its own49-unit actual UTXO and independent IBD replay pass.
+The final immutable run takes155.22s, with2,669,395,968B maximum RSS. Selected
+service reserves123 callbacks and962,560 wire bytes; it does not claim an
+unmeasured discovery guarantee under malicious ordinary traffic exhaustion.
+
+Its first run refused the explicit local IndexSteps budget before opening the
+model; that refusal is retained. The next local budget was fixed in
+[protocol v2](../design/palw/tir/evidence/rfc02-actual-outsider9-protocol-v2.json)
+before the next finder output, without changing network or court limits.
+Coordinated prebuild capture and actual Cargo/.d selection preserve1,442 local
+compiled inputs for the immutable node and SDK binaries. The actual1, SDK12 and
+existing35 native regressions all pass in
+[the final outsider receipt](../design/palw/tir/evidence/rfc02-actual-outsider9-final-verdict.json).
+This ordinary-point,
+class-maximum32/actual-position1 result adds no honest funded execution Final,
+requester escrow redemption, accepted model cohort or A6/A8 acceptance.
+
+### §14.51 — Protected quota rows and bounded execution11 carriers
+
+[The quota receipt](../design/palw/tir/evidence/rfc02-protected-quota11-isolated-verdict.json)
+supersedes20 pure controls with40, including protected paid-seal/fragment
+reservation, fixed authenticated selected rows, operator nonce witnesses and
+source-court costs across21 resource axes. It does not substitute a whole-map
+restore for the priced four selected rows. Expensive failed attempts stay paid;
+unused expired reservations cannot recreate same-interval credits.
+
+[Five carrier controls](../design/palw/tir/evidence/rfc02-native11-bounded-carriers-verdict.json)
+check bounded framing, exact actors/nonces, job-specific outer trace identity,
+salted own proof identity and source/computation wrappers. The carrier module
+is compiled, but execution11 Fund/Commit/court/DA/Final routes are not activated.
+Its unexported fold draft is excluded from the compiled source receipt.
+
+Proof-root-bound protected DA2 begins only after a proof exists. It does not
+guarantee unknown-coordinate discovery after ordinary demand exhaustion.
+Native execution11 must reserve and authenticate a separate bounded paid
+discovery entitlement before proof construction, then bind its conversion to
+the same owner's exact proof and new maturity. Producer delivery and fixed
+readonly terminal costs must be independently reserved before admission.
+These remaining guarantees and actual Fund→Final→redemption remain required.
+
+The protected distinct component pool is413: prior361 plus14 execution,
+20 quota,12 SDK, five carrier and one actual fresh-node test functions.
+Repeated35 regressions, local intermediate8/33/37 snapshots and immutable
+replays add zero. This engineering test count is not a model denominator or
+completion percentage; accepted native honest-Final model records remain0.

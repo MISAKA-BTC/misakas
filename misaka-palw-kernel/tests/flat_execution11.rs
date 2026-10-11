@@ -179,6 +179,161 @@ fn execution_class_requires_exact_mature_source_policy_and_full_candidate() {
         assert!(derive_execution_class_v11(&c, &s, &p, &q, now).is_err());
     }
 }
+
+#[test]
+fn native_nonce_encoding_and_operator_counter_have_no_padding_or_rotation_alias() {
+    for n in [0, 1, 255, 256, u64::MAX] {
+        assert_eq!(canonical_nonce_v11(&nonce_bytes_v11(n)).unwrap(), n);
+    }
+    let nonce = nonce_bytes_v11(7);
+    for i in 8..64 {
+        let mut bad = nonce;
+        bad[i] = 1;
+        assert!(canonical_nonce_v11(&bad).is_err());
+    }
+    assert_ne!(native_requester_nonce_counter_root_v11(&[1; 64], 7), native_requester_nonce_counter_root_v11(&[1; 64], 8));
+    assert_ne!(native_requester_nonce_counter_root_v11(&[1; 64], 7), native_requester_nonce_counter_root_v11(&[2; 64], 7));
+    assert_eq!(
+        native_requester_nonce_counter_root_v11(&[1; 64], 7),
+        misaka_palw_kernel::hash::object_id(b"misaka-palw/kernel/native-requester-nonce-counter/v11", &([1u8; 64], 7u64))
+    );
+}
+
+#[test]
+fn rooted_resource_frame_bounds_counts_before_allocation_and_rejects_foreign_roots() {
+    use misaka_palw_kernel::flat_resources10::*;
+    let (class, _, _, _, _) = fixture();
+    let resource = &class.view().resources;
+    let bytes = borsh::to_vec(resource).unwrap();
+    let count = resource.primitives.len();
+    assert_eq!(decode_rooted_flat_resources_v10(&bytes, resource.root(), count).unwrap(), *resource);
+    let maximum = flat_resource_vector_max_bytes_v10(count).unwrap();
+    assert_eq!(maximum, 545 + 117 * count);
+    assert_eq!(bytes.len() + 6, maximum);
+    assert_eq!(flat_resource_vector_restore_work_v10(count).unwrap(), maximum as u64 * 64 + count as u64 * 512 + 65536);
+    assert!(flat_resource_vector_max_bytes_v10(usize::MAX).is_none());
+    assert!(flat_resource_vector_restore_work_v10(usize::MAX).is_none());
+    assert!(decode_rooted_flat_resources_v10(&bytes, [99; 64], count).is_err());
+    assert!(decode_rooted_flat_resources_v10(&bytes, resource.root(), count + 1).is_err());
+    for case in 0..6 {
+        let mut bad = bytes.clone();
+        match case {
+            0 => bad[199..203].copy_from_slice(&u32::MAX.to_le_bytes()),
+            1 => bad[198] = 2,
+            2 => bad[0] = 0,
+            3 => bad[194..198].fill(0),
+            4 => bad.push(0),
+            _ => {
+                bad.pop();
+            }
+        }
+        // Even if a corrupt local anchor matched these bytes, the fixed frame
+        // grammar still cannot allocate a declared huge vector or accept tails.
+        let bad_root = misaka_palw_kernel::hash::id(b"misaka-palw/kernel/reference-resource-vector/v10", &bad);
+        assert!(decode_rooted_flat_resources_v10(&bad, bad_root, count).is_err(), "case {case}");
+    }
+}
+
+#[test]
+fn fast_native_class_restore_preserves_original_funding_after_source_revocation() {
+    let (class, quota, policy, mut source, candidate) = fixture();
+    let original = class.record().clone();
+    let resources = borsh::to_vec(&class.view().resources).unwrap();
+    let job = funded(&class, &quota).job;
+    source.refuted = true;
+    let restored = restore_native_execution_class_v11(&candidate, &source, &original, &policy, &quota, &resources, 12).unwrap();
+    assert!(!restored.can_admit());
+    assert_eq!(restored.record(), &original);
+    assert_eq!(restored.view().resources, class.view().resources);
+    let old = ExecutionJobStateV11::from_native_funded_job(job).unwrap();
+    let mut book = ExecutionJobStateV11::from_bytes(&borsh::to_vec(&old).unwrap(), &restored, old.job().root(), old.root()).unwrap();
+    assert_eq!(book.terminal(), ExecutionTerminalV11::Funded);
+    assert_eq!(book.cancel_unclaimed(restored.record(), 2001).unwrap().requester_refund, 100);
+    assert!(book.cancel_unclaimed(restored.record(), 2002).is_err());
+}
+
+#[test]
+fn fast_native_restore_rejects_rooted_but_wrong_resource_namespace_and_primitives() {
+    let (class, quota, policy, source, candidate) = fixture();
+    for case in 0..8 {
+        let mut resource = class.view().resources.clone();
+        match case {
+            0 => resource.program = [99; 64],
+            1 => resource.parameters = [99; 64],
+            2 => resource.court_scope = [99; 64],
+            3 => resource.positions += 1,
+            4 => resource.encoder = Some((0, 1)),
+            5 => resource.primitives[0].occurrence += 1,
+            6 => resource.primitives[0].node += 1,
+            _ => resource.primitives[0].prim_tag ^= 1,
+        }
+        // Consistent forged root declarations are not enough: the decoded
+        // namespace must also match the independently rechecked full scope.
+        let mut c = candidate.clone();
+        c.plan.resource_root = resource.root();
+        let mut original = class.record().clone();
+        original.resource10_root = resource.root();
+        original.candidate9_id = c.id();
+        assert!(
+            restore_native_execution_class_v11(&c, &source, &original, &policy, &quota, &borsh::to_vec(&resource).unwrap(), 12)
+                .is_err(),
+            "case {case}"
+        );
+    }
+    let raw = borsh::to_vec(&class.view().resources).unwrap();
+    let mut original = class.record().clone();
+    original.resource10_root = [99; 64];
+    assert!(restore_native_execution_class_v11(&candidate, &source, &original, &policy, &quota, &raw, 12).is_err());
+    let mut c = candidate.clone();
+    c.scope_bytes.push(0);
+    assert!(restore_native_execution_class_v11(&c, &source, class.record(), &policy, &quota, &raw, 12).is_err());
+}
+
+#[test]
+fn native_eligibility_is_exact_ephemeral_and_cannot_be_reused_in_another_block() {
+    let (class, quota, policy, source, candidate) = fixture();
+    let raw = borsh::to_vec(&class.view().resources).unwrap();
+    let restore = || restore_native_execution_class_v11(&candidate, &source, class.record(), &policy, &quota, &raw, 12).unwrap();
+    let witness = NativeClassEligibilityV11 {
+        class_id: class.record().id(),
+        active_descriptor: class.record().descriptor,
+        active_binding: class.record().binding_id,
+        execution_policy_root: policy.root(),
+        quota_policy_root: quota.root(),
+        block_hash: [3; 64],
+        current_daa: 12,
+    };
+    for case in 0..12 {
+        let mut s = source.clone();
+        let mut w = witness.clone();
+        match case {
+            0 => s.refuted = true,
+            1 => s.matures_daa = 13,
+            2 => s.inventory_root = [99; 64],
+            3 => s.program_root = [99; 64],
+            4 => s.parameter_root = [99; 64],
+            5 => s.descriptor = [99; 64],
+            6 => w.active_binding = [99; 64],
+            7 => w.execution_policy_root = [99; 64],
+            8 => w.quota_policy_root = [99; 64],
+            9 => w.class_id = [99; 64],
+            10 => w.active_descriptor = [99; 64],
+            _ => s.bound_daa = s.matures_daa + 1,
+        }
+        assert!(authorize_native_execution_class_v11(restore(), &s, &w).is_err(), "case {case}");
+    }
+    let authorized = authorize_native_execution_class_v11(restore(), &source, &witness).unwrap();
+    assert!(authorized.can_admit());
+    let input = funded(&class, &quota).job.input;
+    let epoch = TrustedEpochV11::from_chain(&quota, [3; 64], 12).unwrap();
+    let prepare = |epoch: &TrustedEpochV11, nonce| {
+        prepare_execution_job_v11(&authorized, &quota, epoch, input.clone(), [6; 64], [7; 64], nonce, 100, 100, [9; 64])
+    };
+    assert!(prepare(&epoch, nonce_bytes_v11(0)).is_ok());
+    assert!(prepare(&epoch, [8; 64]).is_err());
+    assert!(prepare(&TrustedEpochV11::from_chain(&quota, [4; 64], 12).unwrap(), nonce_bytes_v11(0)).is_err());
+    assert!(prepare(&TrustedEpochV11::from_chain(&quota, [3; 64], 13).unwrap(), nonce_bytes_v11(0)).is_err());
+}
 #[test]
 fn revoked_original_class_restores_existing_escrow_but_cannot_admit_another_job() {
     let (class, quota, policy, mut source, candidate) = fixture();
@@ -484,4 +639,309 @@ fn trusted_daa_jump_can_close_or_refund_expired_funding_without_reopening_courts
         assert!(live.adjudicate(class.record(), &late, 130).is_err());
         assert_eq!(before, live.root());
     }
+}
+
+fn light_fixture() -> (CheckedNativeExecutionClassV11, QuotaPolicyV11, NativeSourceBindingV11) {
+    let (full, quota, policy, source, candidate) = fixture();
+    let light = restore_native_execution_class_header_v11(&candidate, &source, Some(full.record()), &policy, &quota, 10).unwrap();
+    assert_eq!(full.record(), light.record());
+    assert!(!light.can_admit());
+    let witness = NativeClassEligibilityV11 {
+        class_id: light.record().id(),
+        active_descriptor: source.descriptor,
+        active_binding: source.id(),
+        execution_policy_root: policy.root(),
+        quota_policy_root: quota.root(),
+        block_hash: [3; 64],
+        current_daa: 10,
+    };
+    (authorize_native_execution_class_header_v11(light, &source, &witness).unwrap(), quota, source)
+}
+fn light_preparation(light: &CheckedNativeExecutionClassV11, quota: &QuotaPolicyV11) -> CheckedExecutionPreparationV11 {
+    let (full, _, _, _, _) = fixture();
+    let actual = funded(&full, quota);
+    bind_native_execution_preparation_v11(light, quota, actual.job.input, actual.quota_plan, [6; 64], [7; 64], nonce_bytes_v11(0), 100)
+        .unwrap()
+}
+
+#[test]
+fn source_court_quote_binds_exact_pc_namespace_and_original_class_identity() {
+    let (class, quota, policy, source, candidate) = fixture();
+    let bound = &class.record().source_court_bound;
+    assert_eq!(bound.max_proof_bytes, 4 + 67 + (128 << 10));
+    let b = candidate.program_bytes.len() as u64;
+    assert_eq!(bound.work, b * b + 64 * b + 8832 + 64 * (bound.max_proof_bytes + 7) + 65536);
+    assert_eq!(bound.scratch_bytes, 8 * b + 512 + 8 * (bound.max_proof_bytes + 7) + 65536);
+    let mut layered = candidate.param_commitments.clone();
+    layered.by_instance.insert((1, Some(0)), [11; 64]);
+    let layered_quote = native_source_court_bound_v11(candidate.program_bytes.len(), &layered).unwrap();
+    assert_eq!(layered_quote.max_proof_bytes, bound.max_proof_bytes + 69);
+    assert_eq!(layered_quote.work, bound.work + 8832 + 64 * 69);
+    assert!(native_source_court_bound_v11(usize::MAX, &layered).is_err());
+    for field in 0..3 {
+        let mut original = class.record().clone();
+        match field {
+            0 => original.source_court_bound.max_proof_bytes += 1,
+            1 => original.source_court_bound.work += 1,
+            _ => original.source_court_bound.scratch_bytes += 1,
+        }
+        assert_ne!(original.id(), class.record().id());
+        assert!(restore_native_execution_class_header_v11(&candidate, &source, Some(&original), &policy, &quota, 10).is_err());
+    }
+}
+
+#[test]
+fn native_fixed_header_checks_existing_book_without_granting_new_admission() {
+    let (light, quota, _) = light_fixture();
+    let original_header = light.header();
+    let header = original_header.restore(original_header.root()).unwrap();
+    assert!(!header.can_admit());
+    assert!(header.native_admission_epoch().is_none());
+    let epoch = TrustedEpochV11::from_chain(&quota, [3; 64], 10).unwrap();
+    let prepared =
+        prepare_execution_job_from_checked_plan_v11(&light, &quota, &epoch, light_preparation(&light, &quota), 100, [9; 64]).unwrap();
+    let mut state = ExecutionJobStateV11::from_native_funded_job(prepared.job).unwrap();
+    let bytes = borsh::to_vec(&state).unwrap();
+    let mut restored = ExecutionJobStateV11::from_bytes(&bytes, &header, state.job().root(), state.root()).unwrap();
+    assert_eq!(restored, state);
+    let prep = light_preparation(&light, &quota);
+    assert!(prepare_execution_job_from_checked_plan_v11(&header, &quota, &epoch, prep, 100, [9; 64]).is_err());
+    state.cancel_unclaimed(header.record(), 16).unwrap();
+    restored.cancel_unclaimed(header.record(), 16).unwrap();
+    assert_eq!(state, restored);
+    let closed = ExecutionJobStateV11::from_bytes(&borsh::to_vec(&state).unwrap(), &header, state.job().root(), state.root()).unwrap();
+    assert_eq!(closed.settlement().unwrap().requester_refund, 100);
+    assert!(ExecutionJobStateV11::from_bytes(&bytes, &header, state.job().root(), closed.root()).is_err());
+}
+
+#[test]
+fn native_fixed_header_refuses_foreign_anchor_and_inconsistent_encoder_frame() {
+    let (light, _, _) = light_fixture();
+    let header = light.header();
+    assert!(header.restore([0; 64]).is_err());
+    for case in 0..5 {
+        let mut corrupt = header.clone();
+        match case {
+            0 => corrupt.version = 12,
+            1 => corrupt.record.version = 12,
+            2 => corrupt.record.max_positions = 0,
+            3 => corrupt.encoder_input_limit = Some(10),
+            _ => {
+                corrupt.record.encoder = true;
+                corrupt.encoder_input_limit = Some(0);
+            }
+        }
+        assert!(corrupt.restore(header.root()).is_err());
+        assert!(corrupt.restore(corrupt.root()).is_err());
+    }
+}
+
+#[test]
+fn staged_native_fund_restores_exact_prompt_actors_nonce_reward_and_actual_plan() {
+    let (light, quota, _) = light_fixture();
+    let preparation = light_preparation(&light, &quota);
+    let record = preparation.record().clone();
+    let plan = preparation.quota_plan().record();
+    let root = record.root();
+    for case in 0..10 {
+        let mut changed = record.clone();
+        match case {
+            0 => changed.version = 12,
+            1 => changed.class_id[0] ^= 1,
+            2 => changed.input.prompt_root[0] ^= 1,
+            3 => changed.input.prompt_len += 1,
+            4 => changed.input.generated_count += 1,
+            5 => changed.requester[0] ^= 1,
+            6 => changed.producer[0] ^= 1,
+            7 => changed.nonce = nonce_bytes_v11(1),
+            8 => changed.reward -= 1,
+            _ => changed.quota_plan_root[0] ^= 1,
+        }
+        assert!(CheckedExecutionPreparationV11::restore(&changed, &plan, root).is_err());
+    }
+    let epoch = TrustedEpochV11::from_chain(&quota, [3; 64], 10).unwrap();
+    let restored = CheckedExecutionPreparationV11::restore(&record, &plan, root).unwrap();
+    let funded = prepare_execution_job_from_checked_plan_v11(&light, &quota, &epoch, restored, 100, [9; 64]).unwrap();
+    assert_eq!(funded.job.input, record.input);
+    assert_eq!(funded.job.requester, record.requester);
+    assert_eq!(funded.job.producer, record.producer);
+    assert_eq!(funded.job.nonce, record.nonce);
+    assert_eq!(funded.job.reward, record.reward);
+    assert_eq!(funded.job.quota_plan_root, record.quota_plan_root);
+    assert_eq!(funded.job.actual_resource10_root, plan.resource_root);
+    assert_eq!(funded.job.actual_scope9_root, plan.actual_scope_root);
+}
+
+#[test]
+fn staged_native_fund_rechecks_current_epoch_original_debit_and_plan_namespace() {
+    let (light, quota, _) = light_fixture();
+    let prep = light_preparation(&light, &quota);
+    let record = prep.record().clone();
+    let plan = prep.quota_plan().record();
+    for case in 0..6 {
+        let mut epoch = TrustedEpochV11::from_chain(&quota, [3; 64], 10).unwrap();
+        let mut debit = 100;
+        match case {
+            0 => epoch.block_hash[0] ^= 1,
+            1 => epoch.block_daa += 1,
+            2 => epoch.network_interval += 1,
+            3 => debit = 99,
+            4 => debit = 101,
+            _ => epoch.block_daa = 2001,
+        }
+        let restored = CheckedExecutionPreparationV11::restore(&record, &plan, record.root()).unwrap();
+        assert!(prepare_execution_job_from_checked_plan_v11(&light, &quota, &epoch, restored, debit, [9; 64]).is_err());
+    }
+    // Even a consistently rooted synthetic corrupted native record cannot cross
+    // the class/input namespace. Real anchors come from native state only.
+    for case in 0..5 {
+        let mut changed_plan = plan.clone();
+        match case {
+            0 => changed_plan.program_root[0] ^= 1,
+            1 => changed_plan.parameter_root[0] ^= 1,
+            2 => changed_plan.class_scope_root[0] ^= 1,
+            3 => changed_plan.positions += 1,
+            _ => changed_plan.source_court_bound.work -= 1,
+        }
+        let mut changed_prep = record.clone();
+        changed_prep.quota_plan_root = changed_plan.root();
+        let restored = CheckedExecutionPreparationV11::restore(&changed_prep, &changed_plan, changed_prep.root()).unwrap();
+        let epoch = TrustedEpochV11::from_chain(&quota, [3; 64], 10).unwrap();
+        assert!(prepare_execution_job_from_checked_plan_v11(&light, &quota, &epoch, restored, 100, [9; 64]).is_err());
+    }
+}
+
+#[test]
+fn revoked_source_allows_native_light_book_refund_but_refuses_fresh_eligibility() {
+    let (full, quota, policy, mut source, candidate) = fixture();
+    source.refuted = true;
+    let light = restore_native_execution_class_header_v11(&candidate, &source, Some(full.record()), &policy, &quota, 10).unwrap();
+    let witness = NativeClassEligibilityV11 {
+        class_id: light.record().id(),
+        active_descriptor: source.descriptor,
+        active_binding: source.id(),
+        execution_policy_root: policy.root(),
+        quota_policy_root: quota.root(),
+        block_hash: [3; 64],
+        current_daa: 10,
+    };
+    let header_record = light.header();
+    assert!(authorize_native_execution_class_header_v11(light, &source, &witness).is_err());
+    let header = header_record.restore(header_record.root()).unwrap();
+    let mut state = ExecutionJobStateV11::from_native_funded_job(funded(&full, &quota).job).unwrap();
+    state.check_restored(&header, state.job().root()).unwrap();
+    assert_eq!(state.cancel_unclaimed(header.record(), 16).unwrap().requester_refund, 100);
+}
+
+fn established_court(j: &NativeExecutionJudgmentV11) -> NativeEstablishedExecutionCourtV11 {
+    NativeEstablishedExecutionCourtV11 {
+        job_id: j.job_id,
+        claim_id: j.claim_id,
+        vector: j.vector,
+        class_id: j.class_id,
+        inventory_root: j.inventory_root,
+        parameter_root: j.parameter_root,
+        established_daa: j.established_daa,
+        proof_id: j.proof_id,
+        kind: j.kind,
+        original_finder: j.finder,
+        eligible_finder: Some(j.finder),
+    }
+}
+
+#[test]
+fn original_verified_court_can_settle_late_once_without_granting_a_new_late_court() {
+    let (class, quota, _, _, _) = fixture();
+    for kind in [NativeAdjudicationKindV11::SourceMismatch, NativeAdjudicationKindV11::ComputationFault] {
+        let mut state = committed(&class, &quota);
+        let mut j = judgment(&class, &state, kind);
+        let original = established_court(&j);
+        j.current_daa = 2001;
+        let before = state.root();
+        assert!(state.adjudicate(class.record(), &j, 130).is_err());
+        assert_eq!(state.root(), before);
+        let settlement = state.adjudicate_established(class.record(), &j, &original, 130).unwrap();
+        assert_eq!(settlement.requester_refund, 100);
+        assert_eq!(settlement.finder_credit, 63);
+        assert_eq!(settlement.burned, 67);
+        let bytes = borsh::to_vec(&state).unwrap();
+        let mut restored = ExecutionJobStateV11::from_bytes(&bytes, &class, state.job().root(), state.root()).unwrap();
+        let after = restored.root();
+        assert!(restored.adjudicate_established(class.record(), &j, &original, 130).is_err());
+        assert_eq!(restored.root(), after);
+    }
+}
+
+#[test]
+fn historical_court_rejects_foreign_subject_proof_or_backdated_liability_atomically() {
+    let (class, quota, _, _, _) = fixture();
+    for case in 0..14 {
+        let mut state = committed(&class, &quota);
+        let mut j = judgment(&class, &state, NativeAdjudicationKindV11::SourceMismatch);
+        j.current_daa = 2001;
+        let mut original = established_court(&j);
+        match case {
+            0 => original.job_id[0] ^= 1,
+            1 => original.claim_id[0] ^= 1,
+            2 => original.vector[0] ^= 1,
+            3 => original.class_id[0] ^= 1,
+            4 => original.inventory_root[0] ^= 1,
+            5 => original.parameter_root[0] ^= 1,
+            6 => original.proof_id[0] ^= 1,
+            7 => original.kind = NativeAdjudicationKindV11::ComputationFault,
+            8 => original.established_daa += 1,
+            9 => {
+                j.established_daa = state.claim().unwrap().retention_until + 1;
+                original.established_daa = j.established_daa;
+            }
+            10 => {
+                j.established_daa = state.claim().unwrap().committed_daa - 1;
+                original.established_daa = j.established_daa;
+            }
+            11 => j.current_daa = j.established_daa - 1,
+            12 => original.original_finder[0] ^= 1,
+            _ => original.eligible_finder = Some([99; 64]),
+        }
+        let before = state.root();
+        assert!(state.adjudicate_established(class.record(), &j, &original, 130).is_err());
+        assert_eq!(state.root(), before);
+    }
+    let mut state = committed(&class, &quota);
+    let mut j = judgment(&class, &state, NativeAdjudicationKindV11::DataUnavailable);
+    let anchor = established_court(&j);
+    j.current_daa = 2001;
+    assert!(state.adjudicate_established(class.record(), &j, &anchor, 130).is_err());
+    assert!(state.adjudicate(class.record(), &j, 130).is_ok());
+}
+
+#[test]
+fn historical_source_theorem_burns_same_operator_bounty_and_never_pays_a_close_caller() {
+    let (class, quota, _, _, _) = fixture();
+    for same_bond in [false, true] {
+        let mut state = committed(&class, &quota);
+        let mut j = judgment(&class, &state, NativeAdjudicationKindV11::SourceMismatch);
+        if same_bond {
+            j.finder = state.job().producer;
+        }
+        let mut original = established_court(&j);
+        // Native authenticates equal operator IDs, even when their bonds differ.
+        original.eligible_finder = None;
+        j.current_daa = 2001;
+        let result = state.adjudicate_established(class.record(), &j, &original, 130).unwrap();
+        assert_eq!(result.requester_refund, 100);
+        assert_eq!(result.collected_original_slash, 130);
+        assert_eq!(result.finder, None);
+        assert_eq!(result.finder_credit, 0);
+        assert_eq!(result.burned, 130);
+        assert_eq!(result.producer_credit, 0);
+        ExecutionJobStateV11::from_bytes(&borsh::to_vec(&state).unwrap(), &class, state.job().root(), state.root()).unwrap();
+    }
+    let mut state = committed(&class, &quota);
+    let mut j = judgment(&class, &state, NativeAdjudicationKindV11::SourceMismatch);
+    j.finder = state.job().producer;
+    j.current_daa = 2001;
+    let original = established_court(&j); // Attempted self entitlement.
+    let before = state.root();
+    assert!(state.adjudicate_established(class.record(), &j, &original, 130).is_err());
+    assert_eq!(state.root(), before);
 }

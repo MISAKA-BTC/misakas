@@ -1,6 +1,6 @@
 {
   "schema": "misaka.rfc02.acceptance-checkpoint-cohort-audit.v1",
-  "observed_at_utc": "2026-10-11T11:43:25.158965+00:00",
+  "observed_at_utc": "2026-10-11T12:59:42.706570+00:00",
   "mode": "conditional-external-verification-A; no distribution-consensus requirement",
   "user_current_target": {
     "A6_minimum_percent": 90,
@@ -186,10 +186,10 @@
   "A8_L_listed_L_files_dated_end_to_end_cohort_available": false,
   "whole_goal_complete": false,
   "remaining": [
-    "Frozen v7 ordinary scope refusal remains historical; v9 staged metadata fits the unchanged cap and actual candidate/DA/prepared-proof prosecution pass. Fresh own-execution outsider whole-claim prosecution and funded Final remain required.",
+    "Frozen v7 ordinary scope refusal remains historical; v9 staged metadata fits the unchanged cap and actual candidate/DA/fresh own-execution ordinary prosecution pass. Specialized whole-claim prosecution and funded Final remain required.",
     "Complete tasks and original contexts across pinned dense/hybrid/MoE/sparse/multimodal checkpoints; context128 logit PASS does not satisfy original32768 context.",
     "Independent source fidelity, routing agreement, state saturation/continuity and complete task quality; historical context32 free-running FAIL retained.",
-    "Actual funded native class/job eligibility plus fresh outsider whole-claim prosecution and honest independent Final/redemption.",
+    "Actual funded native class/job eligibility, specialized fresh outsider whole-claim prosecution, discovery protection under ordinary exhaustion, and honest independent Final/requester escrow redemption.",
     "Retained full A6/A8 denominators, real-size active cohort, confidence and sustained issuance evidence; listed-file historical subset remains only72.081687% of D_all.",
     "Native shared resources/economics, protected reservations, original escrow, transport/retention and bounded catalog lifecycle."
   ],
@@ -215,9 +215,12 @@
     "actual_native_service_and_execution_final_pending": true,
     "actual_native_service_conformance_passed": true,
     "actual_execution_final_pending": true,
-    "fresh_own_execution_outsider_prosecution_pending": true,
+    "fresh_own_execution_outsider_prosecution_pending": false,
     "native_evidence": "rfc02-native9-typed-da-node-verdict.json",
-    "combined_pending_flag_reason": "Native service/prepared actual-model proof passes; fresh own-execution finder and funded execution Final remain pending."
+    "combined_pending_flag_reason": "Fresh own-execution unknown ordinary proof/native seal/reveal/original finder UTXO/IBD now pass. Specialized whole-claim courts, funded honest execution Final and requester escrow redemption remain pending.",
+    "fresh_own_execution_ordinary_prosecution_passed": true,
+    "whole_claim_specialized_court_prosecution_pending": true,
+    "fresh_own_execution_native_evidence": "rfc02-actual-outsider9-final-verdict.json"
   },
   "retained_greedy_task_failure": {
     "file": "qwen25-independent-greedy-task-verdict.json",
@@ -228,5 +231,39 @@
     "cohort_credit": false
   },
   "offline_complete_task_diagnostic_records": 3,
-  "full_task_checkpoint_revision_task_context_storage_arithmetic_kernel_plan_record_definition": "Accepted active-kernel/native-Final population cohort records only; the three offline complete-task diagnostics are tracked separately and add no A6/A8 coverage."
+  "full_task_checkpoint_revision_task_context_storage_arithmetic_kernel_plan_record_definition": "Accepted active-kernel/native-Final population cohort records only; the three offline complete-task diagnostics are tracked separately and add no A6/A8 coverage.",
+  "actual_fresh_outsider_ordinary_diagnostic": {
+    "file": "rfc02-actual-outsider9-final-verdict.json",
+    "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+    "class_max_positions": 32,
+    "actual_positions": 1,
+    "authenticated_R_leaves": 1445797,
+    "authenticated_PC_instances": 1636,
+    "own_executed_nodes": 7658,
+    "public_DA_demands": 43,
+    "attempts": 44,
+    "proof_bytes": 17816,
+    "original_producer_slash": 100,
+    "own_actual_UTXO_and_owed_finder_credit": 49,
+    "unknown_coordinates_discovered_from_public_data": true,
+    "prepared_proof_or_coordinates_supplied_to_finder": false,
+    "external_source_acquisition_mode": "A",
+    "native_finder_UTXO_and_IBD_passed": true,
+    "native_honest_Final_or_escrow_redemption": false,
+    "ordinary_only_not_whole_claim": true,
+    "flood_resilient_discovery_guarantee_proven": false,
+    "cohort_credit": false,
+    "sha256": "97d9ef8dbc1d9e85e93aa5426bbd7da50df9411c003fdb64059905cd26edfd08"
+  },
+  "protected_distinct_component_test_pool": {
+    "prior_pushed": 361,
+    "new_execution_controls": 14,
+    "new_quota_controls": 20,
+    "new_SDK_controls_relative_pushed_baseline": 12,
+    "new_native_carrier_controls": 5,
+    "new_actual_fresh_node_case": 1,
+    "current": 413,
+    "repeated_regression_or_intermediate_snapshot_tests_added": 0,
+    "model_or_A6_A8_denominator_credit": 0
+  }
 }

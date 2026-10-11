@@ -34,6 +34,22 @@ impl FlatPublicSnapshotV9 {
     pub fn anchor(&self) -> &FlatSnapshotAnchorV9 {
         &self.anchor
     }
+    /// The exact fixed-size descriptor/R/PC statement in this anchored public
+    /// snapshot. Its identity is checked independently of any local model file.
+    /// Maturity and source continuity remain separate admission/court conditions.
+    pub fn model_binding(
+        &self,
+        binding: Hash64,
+    ) -> Result<kaspa_consensus_core::palw_model_artifact_v2::ModelArtifactBindingHeaderV2, Refusal> {
+        let header = self
+            .route
+            .model_artifact_binding_header_v2(&binding)
+            .ok_or_else(|| Refusal::new("NO_MODEL_BINDING", "model artifact statement absent"))?;
+        if header.id() != binding {
+            return Err(Refusal::new("MODEL_BINDING_ID", "anchored model artifact statement has another identity"));
+        }
+        Ok(header)
+    }
     pub fn from_snapshot(snapshot: KernelRowsSnapshotV1, anchor: FlatSnapshotAnchorV9) -> Result<Self, Refusal> {
         let (tip, route) = snapshot.into_route_v1()?;
         if tip != anchor.tip_daa

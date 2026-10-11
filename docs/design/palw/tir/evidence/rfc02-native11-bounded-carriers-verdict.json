@@ -1,0 +1,43 @@
+{
+  "schema": "misaka.rfc02.native11-bounded-carrier-component.v1",
+  "created_at": "2026-10-11T12:43:52.727923+00:00",
+  "source": [
+    {
+      "path": "consensus/core/src/palw_flat_execution_v11.rs",
+      "sha256": "cacd1f8958ea20bb1d48ae261f911ede62f7d4b4dfd1621db797e048f53c5beb"
+    },
+    {
+      "path": "consensus/core/src/lib.rs",
+      "sha256": "bbeb72f966299d15146e8c3555784b67a06f5acbd8be2a2f0ade1dd9445d20c5"
+    }
+  ],
+  "source_preimages_unchanged_during_owned_carrier_runtime_build": true,
+  "tests": {
+    "passed": 5,
+    "failed": 0,
+    "runtime_seconds": 0.0,
+    "tests_scope": "fund hostile exact codec; monotone operator nonce; job/nonce/quota outer trace alias refusal; original source/computation wrapper; salted exact own proof identity"
+  },
+  "binary": {
+    "immutable_path": "/tmp/rfc02-native11-carriers-final-five-test-binary",
+    "sha256": "d86d7f1a70158036e62fce9a7efacf5c28af88237bb18ccedf1e00da71438eb6"
+  },
+  "logs": [
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native11-carriers-initial-enospc.log",
+      "sha256": "a1cc755963543230aa4a8534c235d156b0fba61563a86c87d57f614746d7e5e2"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native11-carriers-five-tests.log",
+      "sha256": "02a0382fb7e0ddda3bd95ea604f0e164dd30a77ccd12850fd6882dbe49eb9d1c"
+    }
+  ],
+  "native11_live_route_consumer": false,
+  "real_funded_honest_Final": false,
+  "full_rfc02_complete": false,
+  "limitations": [
+    "Five carrier/identity controls only, no v11 native fund/court/Final consumer is activated.",
+    "Unexported palw_flat_execution_fold_v11.rs remains excluded; later full dependency/source-closure node build is separately required.",
+    "Retain initial ENOSPC refusal; retry used normal locked profile and unchanged owned source."
+  ]
+}

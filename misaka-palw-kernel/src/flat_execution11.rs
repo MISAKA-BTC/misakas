@@ -11,11 +11,29 @@ use crate::{
         CheckedJobQuotaPlanV11, QuotaPolicyV11, SubjectBindingV11, TrustedEpochV11, derive_job_quota_plan_from_checked_class_v11,
     },
     hash::{Digest, object_id},
-    ledger::flat_candidate9::{FlatCandidateRecordV9, FlatCandidateViewV9},
+    ledger::flat_candidate9::{FlatCandidateNativeViewV9, FlatCandidateRecordV9, FlatCandidateViewV9},
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub const EXECUTION_STATE_MAX_BYTES_V11: usize = 4096;
+
+/// Native11 uses one monotone counter per authenticated requester operator.
+/// Pure offline records can retain arbitrary diagnostic nonces; native funding
+/// accepts only this fixed encoding and authenticates the exact next counter.
+pub fn canonical_nonce_v11(nonce: &Digest) -> Result<u64, String> {
+    if nonce[8..].iter().any(|b| *b != 0) {
+        return Err("native execution nonce is not canonical u64 plus zero padding".into());
+    }
+    Ok(u64::from_le_bytes(nonce[..8].try_into().expect("fixed nonce prefix")))
+}
+pub fn nonce_bytes_v11(nonce: u64) -> Digest {
+    let mut bytes = [0; 64];
+    bytes[..8].copy_from_slice(&nonce.to_le_bytes());
+    bytes
+}
+pub fn native_requester_nonce_counter_root_v11(operator: &Digest, next_nonce: u64) -> Digest {
+    object_id(b"misaka-palw/kernel/native-requester-nonce-counter/v11", &(*operator, next_nonce))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ExecutionHorizonsV11 {
@@ -117,6 +135,42 @@ impl NativeSourceBindingV11 {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeSourceCourtBoundV11 {
+    /// Exact PC-map bytes plus the frozen native2 identity-proof allowance.
+    pub max_proof_bytes: u64,
+    pub work: u64,
+    pub scratch_bytes: u64,
+}
+/// Independently quote the native R/PC court from canonical original metadata.
+/// B is the program byte count, never an adversary's proof byte declaration.
+/// Native compares max_proof_bytes with its authenticated original binding.
+pub fn native_source_court_bound_v11(
+    program_bytes: usize,
+    pc: &crate::trace::ParamCommitmentsV1,
+) -> Result<NativeSourceCourtBoundV11, String> {
+    let b = u64::try_from(program_bytes).map_err(|_| "native source program size overflow")?;
+    let n = u64::try_from(pc.by_instance.len()).map_err(|_| "native source PC count overflow")?;
+    let pc_bytes = pc.by_instance.keys().try_fold(4u64, |bytes, (_, layer)| {
+        bytes.checked_add(67 + u64::from(layer.is_some()) * 2).ok_or("native source PC bytes overflow")
+    })?;
+    let max_proof_bytes = pc_bytes.checked_add(128 << 10).ok_or("native source proof bound overflow")?;
+    let carried = max_proof_bytes.checked_add(7).ok_or("native source wrapper overflow")?;
+    let work = b
+        .checked_mul(b)
+        .and_then(|w| w.checked_add(b.checked_mul(64)?))
+        .and_then(|w| w.checked_add(n.checked_mul(8832)?))
+        .and_then(|w| w.checked_add(carried.checked_mul(64)?))
+        .and_then(|w| w.checked_add(65536))
+        .ok_or("native source court work overflow")?;
+    let scratch_bytes = b
+        .checked_mul(8)
+        .and_then(|w| w.checked_add(n.checked_mul(512)?))
+        .and_then(|w| w.checked_add(carried.checked_mul(8)?))
+        .and_then(|w| w.checked_add(65536))
+        .ok_or("native source court scratch overflow")?;
+    Ok(NativeSourceCourtBoundV11 { max_proof_bytes, work, scratch_bytes })
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ExecutionClassRecordV11 {
     pub version: u16,
     pub candidate9_id: Digest,
@@ -130,6 +184,7 @@ pub struct ExecutionClassRecordV11 {
     pub class_scope9_root: Digest,
     pub replay9_root: Digest,
     pub resource10_root: Digest,
+    pub source_court_bound: NativeSourceCourtBoundV11,
     pub execution_policy_root: Digest,
     pub quota_policy_root: Digest,
     pub horizons: ExecutionHorizonsV11,
@@ -142,11 +197,25 @@ impl ExecutionClassRecordV11 {
         object_id(b"misaka-palw/kernel/execution-class/v11", self)
     }
 }
+
+mod execution_class_sealed_v11 {
+    pub trait Sealed {}
+}
+/// Private constructors distinguish full public checking, native full-scope
+/// checking and readonly fixed headers. A wire carrier cannot implement this
+/// trait or grant admission by supplying a raw record or eligibility boolean.
+pub trait ExecutionClassContextV11: execution_class_sealed_v11::Sealed {
+    fn record(&self) -> &ExecutionClassRecordV11;
+    fn encoder_input_limit(&self) -> Option<u32>;
+    fn can_admit(&self) -> bool;
+    fn native_admission_epoch(&self) -> Option<(Digest, u64)>;
+}
 pub struct CheckedExecutionClassV11 {
     record: ExecutionClassRecordV11,
     view: FlatCandidateViewV9,
     parameters: crate::trace::ParamCommitmentsV1,
     can_admit: bool,
+    native_admission_epoch: Option<(Digest, u64)>,
 }
 impl CheckedExecutionClassV11 {
     pub fn record(&self) -> &ExecutionClassRecordV11 {
@@ -163,6 +232,150 @@ impl CheckedExecutionClassV11 {
     pub fn can_admit(&self) -> bool {
         self.can_admit
     }
+}
+impl execution_class_sealed_v11::Sealed for CheckedExecutionClassV11 {}
+impl ExecutionClassContextV11 for CheckedExecutionClassV11 {
+    fn record(&self) -> &ExecutionClassRecordV11 {
+        &self.record
+    }
+    fn encoder_input_limit(&self) -> Option<u32> {
+        self.view.encoder.map(|e| e.l)
+    }
+    fn can_admit(&self) -> bool {
+        self.can_admit
+    }
+    fn native_admission_epoch(&self) -> Option<(Digest, u64)> {
+        self.native_admission_epoch
+    }
+}
+
+/// Native authenticates the independently admitted candidate9 row and prepays
+/// its full-scope restore. Resource quantities at the class maximum were
+/// independently derived on original admission; this view does not deserialize
+/// or recompute them. Each actual job derives its own resource vector once.
+pub struct CheckedNativeExecutionClassV11 {
+    record: ExecutionClassRecordV11,
+    view: FlatCandidateNativeViewV9,
+    parameters: crate::trace::ParamCommitmentsV1,
+    can_admit: bool,
+    native_admission_epoch: Option<(Digest, u64)>,
+}
+impl CheckedNativeExecutionClassV11 {
+    pub fn record(&self) -> &ExecutionClassRecordV11 {
+        &self.record
+    }
+    pub fn view(&self) -> &FlatCandidateNativeViewV9 {
+        &self.view
+    }
+    pub fn parameters(&self) -> &crate::trace::ParamCommitmentsV1 {
+        &self.parameters
+    }
+    pub fn can_admit(&self) -> bool {
+        self.can_admit
+    }
+    pub fn header(&self) -> NativeExecutionClassHeaderV11 {
+        NativeExecutionClassHeaderV11 { version: 11, record: self.record.clone(), encoder_input_limit: self.encoder_input_limit() }
+    }
+}
+impl execution_class_sealed_v11::Sealed for CheckedNativeExecutionClassV11 {}
+impl ExecutionClassContextV11 for CheckedNativeExecutionClassV11 {
+    fn record(&self) -> &ExecutionClassRecordV11 {
+        &self.record
+    }
+    fn encoder_input_limit(&self) -> Option<u32> {
+        self.view.encoder.map(|e| e.l)
+    }
+    fn can_admit(&self) -> bool {
+        self.can_admit
+    }
+    fn native_admission_epoch(&self) -> Option<(Digest, u64)> {
+        self.native_admission_epoch
+    }
+}
+
+/// Fixed native class frame. Its expected root comes from original native
+/// state independently of a Close carrier. Restoring it permits checking and
+/// settling existing money only; it cannot prepare or fund a new job.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionClassHeaderV11 {
+    pub version: u16,
+    pub record: ExecutionClassRecordV11,
+    pub encoder_input_limit: Option<u32>,
+}
+impl NativeExecutionClassHeaderV11 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/kernel/native-class-header/v11", self)
+    }
+    pub fn restore(&self, expected_root: Digest) -> Result<CheckedNativeExecutionClassHeaderV11, String> {
+        if self.root() != expected_root
+            || self.version != 11
+            || self.record.version != 11
+            || self.record.max_positions == 0
+            || self.record.encoder != self.encoder_input_limit.is_some()
+            || self.encoder_input_limit == Some(0)
+            || self.record.encoder && self.record.max_positions != 1
+        {
+            return Err("native fixed class header differs from its independent original anchor".into());
+        }
+        self.record.horizons.check()?;
+        Ok(CheckedNativeExecutionClassHeaderV11 { header: self.clone() })
+    }
+}
+pub struct CheckedNativeExecutionClassHeaderV11 {
+    header: NativeExecutionClassHeaderV11,
+}
+impl CheckedNativeExecutionClassHeaderV11 {
+    pub fn record(&self) -> &ExecutionClassRecordV11 {
+        &self.header.record
+    }
+}
+impl execution_class_sealed_v11::Sealed for CheckedNativeExecutionClassHeaderV11 {}
+impl ExecutionClassContextV11 for CheckedNativeExecutionClassHeaderV11 {
+    fn record(&self) -> &ExecutionClassRecordV11 {
+        &self.header.record
+    }
+    fn encoder_input_limit(&self) -> Option<u32> {
+        self.header.encoder_input_limit
+    }
+    fn can_admit(&self) -> bool {
+        false
+    }
+    fn native_admission_epoch(&self) -> Option<(Digest, u64)> {
+        None
+    }
+}
+
+pub fn restore_native_execution_class_header_v11(
+    candidate: &FlatCandidateRecordV9,
+    source: &NativeSourceBindingV11,
+    original_class: Option<&ExecutionClassRecordV11>,
+    original_policy: &ExecutionPolicyV11,
+    original_quota: &QuotaPolicyV11,
+    current_daa: u64,
+) -> Result<CheckedNativeExecutionClassV11, String> {
+    check_execution_source_v11(candidate, source, original_policy, original_quota, current_daa, false)?;
+    let view = candidate.checked_native()?;
+    let record = execution_class_record_v11(candidate, source, original_policy, original_quota, view.encoder.is_some())?;
+    if original_class.is_some_and(|original| *original != record) {
+        return Err("native original class header differs from exact checked candidate/source/policy".into());
+    }
+    Ok(CheckedNativeExecutionClassV11 {
+        record,
+        view,
+        parameters: candidate.param_commitments.clone(),
+        can_admit: false,
+        native_admission_epoch: None,
+    })
+}
+pub fn authorize_native_execution_class_header_v11(
+    mut restored: CheckedNativeExecutionClassV11,
+    source: &NativeSourceBindingV11,
+    eligibility: &NativeClassEligibilityV11,
+) -> Result<CheckedNativeExecutionClassV11, String> {
+    check_native_execution_eligibility_v11(&restored, source, eligibility)?;
+    restored.can_admit = true;
+    restored.native_admission_epoch = Some((eligibility.block_hash, eligibility.current_daa));
+    Ok(restored)
 }
 /// Native must prepay candidate metadata and authenticate binding/schedule and
 /// policy first. Structural admission is not exhaustive source-model fidelity.
@@ -194,14 +407,122 @@ pub fn restore_execution_class_v11(
     }
     Ok(restored)
 }
-fn derive_execution_class_inner_v11(
+
+/// Native-only restoration of an independently admitted original class. Native
+/// authenticates the original class/resource/policy rows and prepays both the
+/// candidate9 restore and the separate bounded resource-row restore tariff.
+/// Public import and SDK validation must use the full independent derivation.
+/// This path rechecks the complete scope, original roots and resource framing
+/// but never recomputes resource quantities or grants fresh job admission.
+pub fn restore_native_execution_class_v11(
+    candidate: &FlatCandidateRecordV9,
+    source: &NativeSourceBindingV11,
+    original_class: &ExecutionClassRecordV11,
+    original_policy: &ExecutionPolicyV11,
+    original_quota: &QuotaPolicyV11,
+    original_resource_bytes: &[u8],
+    current_daa: u64,
+) -> Result<CheckedExecutionClassV11, String> {
+    check_execution_source_v11(candidate, source, original_policy, original_quota, current_daa, false)?;
+    let native = candidate.checked_native()?;
+    let resources = crate::flat_resources10::decode_rooted_flat_resources_v10(
+        original_resource_bytes,
+        original_class.resource10_root,
+        native.scope.relations.len(),
+    )?;
+    if resources.program != object_id(b"misaka-palw/kernel/reference-resource-program/v10", &native.program)
+        || resources.parameters != source.parameter_root
+        || resources.court_scope != native.plan.scope_root
+        || resources.positions != native.plan.max_positions
+        || resources.encoder != native.plan.encoder
+        || resources.primitives.iter().zip(&native.scope.relations).any(|(p, r)| {
+            p.occurrence != r.occurrence
+                || p.node != r.node
+                || native
+                    .program
+                    .blocks
+                    .get(r.block as usize)
+                    .and_then(|b| b.nodes.get(r.node as usize))
+                    .is_none_or(|n| n.prim.tag() != p.prim_tag)
+        })
+    {
+        return Err("original native resource header or primitive namespace differs from the complete scope".into());
+    }
+    let view = FlatCandidateViewV9 {
+        plan: native.plan,
+        program: native.program,
+        encoder: native.encoder,
+        scope: native.scope,
+        replay: native.replay,
+        resources,
+    };
+    let restored = checked_execution_class_from_view_v11(candidate, source, original_policy, original_quota, view, false)?;
+    if restored.record != *original_class {
+        return Err("restored native execution class differs from its independent original record".into());
+    }
+    Ok(restored)
+}
+
+/// Non-wire witness constructed only from native authenticated current state.
+/// It asserts exact live descriptor/binding and compiled policy selection at
+/// this DAA. No carrier may construct it from raw hashes or eligibility flags.
+#[derive(Clone, Debug)]
+pub struct NativeClassEligibilityV11 {
+    pub class_id: Digest,
+    pub active_descriptor: Digest,
+    pub active_binding: Digest,
+    pub execution_policy_root: Digest,
+    pub quota_policy_root: Digest,
+    pub block_hash: Digest,
+    pub current_daa: u64,
+}
+/// A readonly original-class restore cannot authorize another funded job by
+/// itself. Native separately checks live source eligibility and active fence,
+/// then supplies this exact non-wire witness; public/SDK checking stays full.
+pub fn authorize_native_execution_class_v11(
+    mut restored: CheckedExecutionClassV11,
+    source: &NativeSourceBindingV11,
+    eligibility: &NativeClassEligibilityV11,
+) -> Result<CheckedExecutionClassV11, String> {
+    check_native_execution_eligibility_v11(&restored, source, eligibility)?;
+    restored.can_admit = true;
+    restored.native_admission_epoch = Some((eligibility.block_hash, eligibility.current_daa));
+    Ok(restored)
+}
+fn check_native_execution_eligibility_v11<C: ExecutionClassContextV11>(
+    restored: &C,
+    source: &NativeSourceBindingV11,
+    eligibility: &NativeClassEligibilityV11,
+) -> Result<(), String> {
+    let c = restored.record();
+    if restored.can_admit()
+        || source.refuted
+        || source.bound_daa > source.matures_daa
+        || eligibility.current_daa < source.matures_daa
+        || eligibility.class_id != c.id()
+        || eligibility.active_descriptor != c.descriptor
+        || eligibility.active_binding != c.binding_id
+        || eligibility.execution_policy_root != c.execution_policy_root
+        || eligibility.quota_policy_root != c.quota_policy_root
+        || source.id() != c.binding_id
+        || source.descriptor != c.descriptor
+        || source.program_root != c.program_root
+        || source.parameter_root != c.parameter_root
+        || source.inventory_root != c.inventory_root
+    {
+        return Err("native class eligibility differs from its original scope or live source/policy fence".into());
+    }
+    Ok(())
+}
+
+fn check_execution_source_v11(
     candidate: &FlatCandidateRecordV9,
     source: &NativeSourceBindingV11,
     policy: &ExecutionPolicyV11,
     quota: &QuotaPolicyV11,
     current_daa: u64,
     can_admit: bool,
-) -> Result<CheckedExecutionClassV11, String> {
+) -> Result<(), String> {
     policy.check(quota)?;
     if source.refuted && can_admit
         || source.bound_daa > source.matures_daa
@@ -213,8 +534,45 @@ fn derive_execution_class_inner_v11(
     {
         return Err("execution class differs from matured authenticated source scope".into());
     }
+    Ok(())
+}
+fn derive_execution_class_inner_v11(
+    candidate: &FlatCandidateRecordV9,
+    source: &NativeSourceBindingV11,
+    policy: &ExecutionPolicyV11,
+    quota: &QuotaPolicyV11,
+    current_daa: u64,
+    can_admit: bool,
+) -> Result<CheckedExecutionClassV11, String> {
+    check_execution_source_v11(candidate, source, policy, quota, current_daa, can_admit)?;
     let view = candidate.checked()?;
-    let record = ExecutionClassRecordV11 {
+    checked_execution_class_from_view_v11(candidate, source, policy, quota, view, can_admit)
+}
+fn checked_execution_class_from_view_v11(
+    candidate: &FlatCandidateRecordV9,
+    source: &NativeSourceBindingV11,
+    policy: &ExecutionPolicyV11,
+    quota: &QuotaPolicyV11,
+    view: FlatCandidateViewV9,
+    can_admit: bool,
+) -> Result<CheckedExecutionClassV11, String> {
+    let record = execution_class_record_v11(candidate, source, policy, quota, view.encoder.is_some())?;
+    Ok(CheckedExecutionClassV11 {
+        record,
+        view,
+        parameters: candidate.param_commitments.clone(),
+        can_admit,
+        native_admission_epoch: None,
+    })
+}
+fn execution_class_record_v11(
+    candidate: &FlatCandidateRecordV9,
+    source: &NativeSourceBindingV11,
+    policy: &ExecutionPolicyV11,
+    quota: &QuotaPolicyV11,
+    encoder: bool,
+) -> Result<ExecutionClassRecordV11, String> {
+    Ok(ExecutionClassRecordV11 {
         version: 11,
         candidate9_id: candidate.id(),
         binding_id: source.id(),
@@ -222,19 +580,19 @@ fn derive_execution_class_inner_v11(
         program_root: source.program_root,
         parameter_root: source.parameter_root,
         inventory_root: source.inventory_root,
-        max_positions: view.plan.max_positions,
-        encoder: view.encoder.is_some(),
-        class_scope9_root: view.plan.scope_root,
-        replay9_root: view.plan.replay_root,
-        resource10_root: view.plan.resource_root,
+        max_positions: candidate.plan.max_positions,
+        encoder,
+        class_scope9_root: candidate.plan.scope_root,
+        replay9_root: candidate.plan.replay_root,
+        resource10_root: candidate.plan.resource_root,
+        source_court_bound: native_source_court_bound_v11(candidate.program_bytes.len(), &candidate.param_commitments)?,
         execution_policy_root: policy.root(),
         quota_policy_root: quota.root(),
         horizons: policy.horizons.clone(),
         reward_cap: policy.reward_cap,
         required_producer_reserve: policy.required_producer_reserve,
         finder_permille: policy.finder_permille,
-    };
-    Ok(CheckedExecutionClassV11 { record, view, parameters: candidate.param_commitments.clone(), can_admit })
+    })
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ExecutionJobInputV11 {
@@ -249,8 +607,8 @@ impl ExecutionJobInputV11 {
     pub fn root(&self) -> Digest {
         object_id(b"misaka-palw/kernel/execution-job-input/v11", &(self, crate::job::DecodeRuleV1::Greedy))
     }
-    fn check(&self, class: &CheckedExecutionClassV11) -> Result<(), String> {
-        let record = &class.record;
+    fn check<C: ExecutionClassContextV11>(&self, class: &C) -> Result<(), String> {
+        let record = class.record();
         if self.version != 11
             || self.prompt_len == 0
             || self.lengths.patch != 0
@@ -260,8 +618,11 @@ impl ExecutionJobInputV11 {
         {
             return Err("initial funded execution11 requires exact bounded text input".into());
         }
-        if let Some(encoder) = class.view.encoder {
-            if self.generated_count != 0 || self.positions != 1 || self.prompt_len > encoder.l || self.lengths.token != self.prompt_len
+        if let Some(input_limit) = class.encoder_input_limit() {
+            if self.generated_count != 0
+                || self.positions != 1
+                || self.prompt_len > input_limit
+                || self.lengths.token != self.prompt_len
             {
                 return Err("funded encoder lengths differ from input declaration".into());
             }
@@ -336,14 +697,181 @@ pub struct PreparedExecutionJobV11 {
     pub job: ExecutionJobRecordV11,
     pub quota_plan: CheckedJobQuotaPlanV11,
 }
-/// `original_debit` and receipt come from an actual atomic native coin debit,
-/// after duplicate-job/nonce and requester authorization checks. Never from a
-/// carrier's claimed balance. Native must prepay full job scope derivation.
-pub fn prepare_execution_job_v11(
-    class: &CheckedExecutionClassV11,
+
+/// Native writes this fixed record only after independently deriving the actual
+/// quota/resource plan. Its root also binds prompt and actors; a plan root alone
+/// cannot authorize funding a different request at the same position count.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionPreparationRecordV11 {
+    pub version: u16,
+    pub class_id: Digest,
+    pub input: ExecutionJobInputV11,
+    pub requester: Digest,
+    pub producer: Digest,
+    pub nonce: Digest,
+    pub reward: u64,
+    pub quota_plan_root: Digest,
+}
+impl NativeExecutionPreparationRecordV11 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/kernel/native-execution-preparation/v11", self)
+    }
+}
+pub struct CheckedExecutionPreparationV11 {
+    record: NativeExecutionPreparationRecordV11,
+    plan: CheckedJobQuotaPlanV11,
+}
+impl CheckedExecutionPreparationV11 {
+    pub fn record(&self) -> &NativeExecutionPreparationRecordV11 {
+        &self.record
+    }
+    pub fn quota_plan(&self) -> &CheckedJobQuotaPlanV11 {
+        &self.plan
+    }
+    /// Both expected roots ultimately originate in the independently checked
+    /// native preparation row, never in the untrusted Fund body.
+    pub fn restore(
+        record: &NativeExecutionPreparationRecordV11,
+        plan_record: &crate::flat_quota11::QuotaPlanRecordV11,
+        expected_preparation_root: Digest,
+    ) -> Result<Self, String> {
+        if record.version != 11 || record.root() != expected_preparation_root {
+            return Err("native preparation differs from its independently admitted request".into());
+        }
+        canonical_nonce_v11(&record.nonce)?;
+        let plan = CheckedJobQuotaPlanV11::restore(plan_record, &record.quota_plan_root)?;
+        Ok(Self { record: record.clone(), plan })
+    }
+}
+pub fn bind_native_execution_preparation_v11<C: ExecutionClassContextV11>(
+    class: &C,
+    quota: &QuotaPolicyV11,
+    input: ExecutionJobInputV11,
+    plan: CheckedJobQuotaPlanV11,
+    requester: Digest,
+    producer: Digest,
+    nonce: Digest,
+    reward: u64,
+) -> Result<CheckedExecutionPreparationV11, String> {
+    quota.check()?;
+    input.check(class)?;
+    canonical_nonce_v11(&nonce)?;
+    if !class.can_admit()
+        || class.native_admission_epoch().is_none()
+        || quota.root() != class.record().quota_policy_root
+        || reward == 0
+        || reward > class.record().reward_cap
+    {
+        return Err("native preparation lacks exact live native source/policy eligibility".into());
+    }
+    check_native_execution_plan_v11(class, &input, &plan)?;
+    Ok(CheckedExecutionPreparationV11 {
+        record: NativeExecutionPreparationRecordV11 {
+            version: 11,
+            class_id: class.record().id(),
+            input,
+            requester,
+            producer,
+            nonce,
+            reward,
+            quota_plan_root: plan.record().root(),
+        },
+        plan,
+    })
+}
+fn check_native_execution_plan_v11<C: ExecutionClassContextV11>(
+    class: &C,
+    input: &ExecutionJobInputV11,
+    plan: &CheckedJobQuotaPlanV11,
+) -> Result<(), String> {
+    let p = plan.record();
+    let c = class.record();
+    if p.version != 11
+        || p.program_root != c.program_root
+        || p.parameter_root != c.parameter_root
+        || p.class_scope_root != c.class_scope9_root
+        || p.source_court_bound != c.source_court_bound
+        || p.positions != input.positions
+    {
+        return Err("native prepared actual plan differs from its class/input namespace".into());
+    }
+    Ok(())
+}
+
+/// Fund performs only fixed-record checking. Native authenticates preparation,
+/// current eligibility, exact next operator nonce and the atomic original coin
+/// debit first. Expensive actual-scope derivation was paid by Prepare once.
+pub fn prepare_execution_job_from_checked_plan_v11<C: ExecutionClassContextV11>(
+    class: &C,
+    quota: &QuotaPolicyV11,
+    epoch: &TrustedEpochV11,
+    preparation: CheckedExecutionPreparationV11,
+    original_debit: u64,
+    debit_receipt: Digest,
+) -> Result<PreparedExecutionJobV11, String> {
+    let p = preparation.record;
+    if p.version != 11
+        || p.class_id != class.record().id()
+        || p.quota_plan_root != preparation.plan.record().root()
+        || class.native_admission_epoch().is_none()
+    {
+        return Err("Fund does not use its exact original native preparation".into());
+    }
+    check_native_execution_plan_v11(class, &p.input, &preparation.plan)?;
+    build_prepared_execution_job_v11(
+        class,
+        quota,
+        epoch,
+        p.input,
+        preparation.plan,
+        p.requester,
+        p.producer,
+        p.nonce,
+        p.reward,
+        original_debit,
+        debit_receipt,
+    )
+}
+
+fn check_execution_funding_v11<C: ExecutionClassContextV11>(
+    class: &C,
+    quota: &QuotaPolicyV11,
+    epoch: &TrustedEpochV11,
+    input: &ExecutionJobInputV11,
+    nonce: &Digest,
+    reward: u64,
+    original_debit: u64,
+) -> Result<(u64, u64), String> {
+    quota.check()?;
+    input.check(class)?;
+    let c = class.record();
+    if !class.can_admit()
+        || class.native_admission_epoch().is_some_and(|(hash, daa)| hash != epoch.block_hash || daa != epoch.block_daa)
+        || class.native_admission_epoch().is_some() && canonical_nonce_v11(nonce).is_err()
+        || quota.root() != c.quota_policy_root
+        || epoch.network_interval != epoch.block_daa / quota.interval_daa
+        || reward == 0
+        || reward > c.reward_cap
+        || original_debit != reward
+    {
+        return Err("funded job policy, epoch, reward or original escrow differs".into());
+    }
+    let commit_deadline = epoch.block_daa.checked_add(c.horizons.commit_window).ok_or("commit deadline overflow")?;
+    let deadline = epoch.block_daa.checked_add(c.horizons.maximum_job_horizon()?).ok_or("job deadline overflow")?;
+    let interval_end =
+        epoch.network_interval.checked_add(1).and_then(|n| n.checked_mul(quota.interval_daa)).ok_or("quota interval overflow")?;
+    if deadline >= interval_end {
+        return Err("entire funded liability must fit its immutable quota interval".into());
+    }
+    Ok((commit_deadline, deadline))
+}
+
+fn build_prepared_execution_job_v11<C: ExecutionClassContextV11>(
+    class: &C,
     quota: &QuotaPolicyV11,
     epoch: &TrustedEpochV11,
     input: ExecutionJobInputV11,
+    plan: CheckedJobQuotaPlanV11,
     requester: Digest,
     producer: Digest,
     nonce: Digest,
@@ -351,34 +879,12 @@ pub fn prepare_execution_job_v11(
     original_debit: u64,
     debit_receipt: Digest,
 ) -> Result<PreparedExecutionJobV11, String> {
-    quota.check()?;
-    input.check(class)?;
-    if !class.can_admit
-        || quota.root() != class.record.quota_policy_root
-        || epoch.network_interval != epoch.block_daa / quota.interval_daa
-        || reward == 0
-        || reward > class.record.reward_cap
-        || original_debit != reward
-    {
-        return Err("funded job policy, epoch, reward or original escrow differs".into());
-    }
-    let h = &class.record.horizons;
-    let commit_deadline = epoch.block_daa.checked_add(h.commit_window).ok_or("commit deadline overflow")?;
-    let deadline = epoch.block_daa.checked_add(h.maximum_job_horizon()?).ok_or("job deadline overflow")?;
-    let interval_end =
-        epoch.network_interval.checked_add(1).and_then(|n| n.checked_mul(quota.interval_daa)).ok_or("quota interval overflow")?;
-    if deadline >= interval_end {
-        return Err("entire funded liability must fit its immutable quota interval".into());
-    }
-    let plan = derive_job_quota_plan_from_checked_class_v11(class, input.positions)?;
-    // Class metadata is rooted at its maximum; actual job resources are a
-    // separate authenticated derivation and never silently replace that root.
-    if class.view.resources.root() != class.record.resource10_root || plan.class_scope_root() != class.record.class_scope9_root {
-        return Err("funded actual/class resource namespace mismatch".into());
-    }
+    let (commit_deadline, deadline) = check_execution_funding_v11(class, quota, epoch, &input, &nonce, reward, original_debit)?;
+    check_native_execution_plan_v11(class, &input, &plan)?;
+    let c = class.record();
     let job = ExecutionJobRecordV11 {
         version: 11,
-        class_id: class.record.id(),
+        class_id: c.id(),
         input,
         actual_scope9_root: plan.actual_scope_root(),
         actual_resource10_root: plan.resource_root(),
@@ -395,6 +901,41 @@ pub fn prepare_execution_job_v11(
         escrow_debit_receipt: debit_receipt,
     };
     Ok(PreparedExecutionJobV11 { job, quota_plan: plan })
+}
+/// `original_debit` and receipt come from an actual atomic native coin debit,
+/// after duplicate-job/nonce and requester authorization checks. Never from a
+/// carrier's claimed balance. Native must prepay full job scope derivation.
+pub fn prepare_execution_job_v11(
+    class: &CheckedExecutionClassV11,
+    quota: &QuotaPolicyV11,
+    epoch: &TrustedEpochV11,
+    input: ExecutionJobInputV11,
+    requester: Digest,
+    producer: Digest,
+    nonce: Digest,
+    reward: u64,
+    original_debit: u64,
+    debit_receipt: Digest,
+) -> Result<PreparedExecutionJobV11, String> {
+    check_execution_funding_v11(class, quota, epoch, &input, &nonce, reward, original_debit)?;
+    // The public path still independently derives the class resource quantities.
+    if class.view.resources.root() != class.record.resource10_root {
+        return Err("funded class resource namespace mismatch".into());
+    }
+    let plan = derive_job_quota_plan_from_checked_class_v11(class, input.positions)?;
+    build_prepared_execution_job_v11(
+        class,
+        quota,
+        epoch,
+        input,
+        plan,
+        requester,
+        producer,
+        nonce,
+        reward,
+        original_debit,
+        debit_receipt,
+    )
 }
 
 /// Derived from a native checked protected9 posting, not from a caller's
@@ -484,6 +1025,43 @@ pub struct NativeExecutionJudgmentV11 {
     pub finder: Digest,
     pub kind: NativeAdjudicationKindV11,
 }
+/// Non-wire original court snapshot from authenticated native state. Native
+/// writes it only after paying for and verifying the actual exact-scope court.
+/// A source binding's refuted flag cannot produce this witness. Immutable
+/// proof identity and original inclusion time allow later collection without
+/// accepting a new late court or silently repeating an expensive verifier.
+pub struct NativeEstablishedExecutionCourtV11 {
+    pub job_id: Digest,
+    pub claim_id: Digest,
+    pub vector: Digest,
+    pub class_id: Digest,
+    pub inventory_root: Digest,
+    pub parameter_root: Digest,
+    pub established_daa: u64,
+    pub proof_id: Digest,
+    pub kind: NativeAdjudicationKindV11,
+    pub original_finder: Digest,
+    /// Native compares the original finder and this job's producer operators.
+    /// Same-operator collection burns the full slash. Otherwise only the
+    /// original paid finder may be entitled; a Close caller cannot replace it.
+    pub eligible_finder: Option<Digest>,
+}
+impl NativeEstablishedExecutionCourtV11 {
+    fn matches(&self, result: &NativeExecutionJudgmentV11) -> bool {
+        self.job_id == result.job_id
+            && self.claim_id == result.claim_id
+            && self.vector == result.vector
+            && self.class_id == result.class_id
+            && self.inventory_root == result.inventory_root
+            && self.parameter_root == result.parameter_root
+            && self.established_daa == result.established_daa
+            && self.proof_id == result.proof_id
+            && self.kind == result.kind
+            && self.original_finder == result.finder
+            && self.eligible_finder.is_none_or(|finder| finder == self.original_finder)
+            && self.kind != NativeAdjudicationKindV11::DataUnavailable
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ExecutionSettlementV11 {
     pub job_id: Digest,
@@ -522,7 +1100,7 @@ impl ExecutionSettlementV11 {
         Ok(())
     }
 }
-/// Native stores one row per job and a permanent requester/nonce spent index.
+/// Native stores one row per job and one monotone counter per requester operator.
 /// It applies transition plus actual UTXO credits atomically with quota receipts.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ExecutionJobStateV11 {
@@ -535,9 +1113,9 @@ pub struct ExecutionJobStateV11 {
 impl ExecutionJobStateV11 {
     /// Expected funded-job root comes from authenticated native state, never
     /// from the bytes being restored. The grammar contains no variable vectors.
-    pub fn from_bytes(
+    pub fn from_bytes<C: ExecutionClassContextV11>(
         bytes: &[u8],
-        class: &CheckedExecutionClassV11,
+        class: &C,
         expected_job_root: Digest,
         expected_state_root: Digest,
     ) -> Result<Self, String> {
@@ -551,17 +1129,18 @@ impl ExecutionJobStateV11 {
         state.check_restored(class, expected_job_root)?;
         Ok(state)
     }
-    pub fn check_restored(&self, class: &CheckedExecutionClassV11, expected_job_root: Digest) -> Result<(), String> {
-        self.class(&class.record)?;
+    pub fn check_restored<C: ExecutionClassContextV11>(&self, class: &C, expected_job_root: Digest) -> Result<(), String> {
+        let record = class.record();
+        self.class(record)?;
         let j = &self.job;
         j.input.check(class)?;
         if j.root() != expected_job_root
             || j.version != 11
             || j.reward == 0
-            || j.reward > class.record.reward_cap
+            || j.reward > record.reward_cap
             || j.escrow_original_debit != j.reward
-            || j.admitted_daa.checked_add(class.record.horizons.commit_window) != Some(j.commit_deadline)
-            || j.admitted_daa.checked_add(class.record.horizons.maximum_job_horizon()?) != Some(j.deadline_daa)
+            || j.admitted_daa.checked_add(record.horizons.commit_window) != Some(j.commit_deadline)
+            || j.admitted_daa.checked_add(record.horizons.maximum_job_horizon()?) != Some(j.deadline_daa)
         {
             return Err("restored execution job funding, identity or clock differs".into());
         }
@@ -570,9 +1149,9 @@ impl ExecutionJobStateV11 {
                 || c.producer != j.producer
                 || c.committed_daa < j.admitted_daa
                 || c.committed_daa > j.commit_deadline
-                || c.reserved_original != class.record.required_producer_reserve
-                || c.committed_daa.checked_add(class.record.horizons.challenge_window) != Some(c.challenge_end)
-                || c.challenge_end.checked_add(class.record.horizons.tail()?) != Some(c.retention_until)
+                || c.reserved_original != record.required_producer_reserve
+                || c.committed_daa.checked_add(record.horizons.challenge_window) != Some(c.challenge_end)
+                || c.challenge_end.checked_add(record.horizons.tail()?) != Some(c.retention_until)
                 || c.retention_until >= j.deadline_daa
                 || c.terminal != self.terminal
                 || c.credit_paid != (self.terminal == ExecutionTerminalV11::Final)
@@ -777,8 +1356,34 @@ impl ExecutionJobStateV11 {
         result: &NativeExecutionJudgmentV11,
         collected_original_slash: u64,
     ) -> Result<ExecutionSettlementV11, String> {
+        self.adjudicate_inner(class, result, None, collected_original_slash)
+    }
+    /// Collect an already verified immutable court. Original inclusion must be
+    /// within this exact claim's liability; current time cannot backdate a new
+    /// proof. Native authenticates the original court row before minting this
+    /// witness and applies the once-only book transition and actual payout.
+    pub fn adjudicate_established(
+        &mut self,
+        class: &ExecutionClassRecordV11,
+        result: &NativeExecutionJudgmentV11,
+        original_court: &NativeEstablishedExecutionCourtV11,
+        collected_original_slash: u64,
+    ) -> Result<ExecutionSettlementV11, String> {
+        if !original_court.matches(result) {
+            return Err("historical settlement differs from exact original verified native court".into());
+        }
+        self.adjudicate_inner(class, result, Some(original_court), collected_original_slash)
+    }
+    fn adjudicate_inner(
+        &mut self,
+        class: &ExecutionClassRecordV11,
+        result: &NativeExecutionJudgmentV11,
+        original_court: Option<&NativeEstablishedExecutionCourtV11>,
+        collected_original_slash: u64,
+    ) -> Result<ExecutionSettlementV11, String> {
         self.class(class)?;
         let c = self.claim.as_ref().ok_or("no execution claim to adjudicate")?;
+        let eligible_finder = original_court.map(|court| court.eligible_finder).unwrap_or(Some(result.finder));
         if self.terminal != ExecutionTerminalV11::Challengeable
             || c.credit_paid
             || result.job_id != self.job.id()
@@ -790,8 +1395,10 @@ impl ExecutionJobStateV11 {
             || result.established_daa < c.committed_daa
             || result.established_daa > c.retention_until
             || result.current_daa < result.established_daa
-            || result.current_daa > c.retention_until && result.kind != NativeAdjudicationKindV11::DataUnavailable
-            || result.finder == self.job.producer
+            || result.current_daa > c.retention_until
+                && result.kind != NativeAdjudicationKindV11::DataUnavailable
+                && original_court.is_none()
+            || eligible_finder == Some(self.job.producer)
             || collected_original_slash > c.reserved_original
         {
             return Err("native execution judgment subject, liability or collected original funds differ".into());
@@ -801,8 +1408,12 @@ impl ExecutionJobStateV11 {
             NativeAdjudicationKindV11::SourceMismatch => ExecutionTerminalV11::SourceMismatch,
             NativeAdjudicationKindV11::DataUnavailable => ExecutionTerminalV11::DataUnavailable,
         };
-        let finder_credit = u64::try_from((collected_original_slash as u128 * class.finder_permille as u128) / 1000)
-            .map_err(|_| "finder amount overflow")?;
+        let finder_credit = if eligible_finder.is_some() {
+            u64::try_from((collected_original_slash as u128 * class.finder_permille as u128) / 1000)
+                .map_err(|_| "finder amount overflow")?
+        } else {
+            0
+        };
         self.finish(ExecutionSettlementV11 {
             job_id: self.job.id(),
             claim_id: Some(c.id()),
@@ -812,7 +1423,7 @@ impl ExecutionJobStateV11 {
             requester_refund: self.escrow_remaining,
             producer_credit: 0,
             collected_original_slash,
-            finder: Some(result.finder),
+            finder: eligible_finder,
             finder_credit,
             burned: collected_original_slash.checked_sub(finder_credit).ok_or("finder exceeds collected slash")?,
             release_producer_reserve: c.reserved_original,

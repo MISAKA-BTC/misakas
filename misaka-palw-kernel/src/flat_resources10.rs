@@ -16,7 +16,7 @@ use crate::{
     seg_encoder::EncoderBindingV1,
     trace::{ParamCommitmentsV1, trace_streaming_v1},
 };
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_tir::{
     DType, ParamSource, Prim, Tensor,
     program::{Ref, TirProgramV1},
@@ -150,6 +150,94 @@ impl FlatResourceVectorV10 {
     pub fn root(&self) -> Digest {
         object_id(b"misaka-palw/kernel/reference-resource-vector/v10", self)
     }
+}
+
+/// Fixed resource records contain no tensor values. Bound the complete frame
+/// before hashing or allocating the primitive vector. The count comes from an
+/// independently authenticated native class header, never a carrier's length.
+pub const FLAT_RESOURCE_VECTOR_MAX_BYTES_V10: usize = 8 << 20;
+pub const FLAT_RESOURCE_PRIMITIVE_BYTES_V10: usize = 2 + 2 + 1 + 7 * 16;
+const FLAT_RESOURCE_FIXED_MAX_BYTES_V10: usize = 2 + 3 * 64 + 4 + 1 + 6 + 4 + RESOURCE_DIMENSIONS_V10 * 16;
+
+pub fn flat_resource_vector_max_bytes_v10(primitives: usize) -> Option<usize> {
+    if primitives as u128 > crate::flat_scope9::MAX_SCOPE_RELATION_VISITS_V9 {
+        return None;
+    }
+    let bytes = primitives.checked_mul(FLAT_RESOURCE_PRIMITIVE_BYTES_V10)?.checked_add(FLAT_RESOURCE_FIXED_MAX_BYTES_V10)?;
+    (bytes <= FLAT_RESOURCE_VECTOR_MAX_BYTES_V10).then_some(bytes)
+}
+
+/// Additional native fee for the bounded resource row: raw copy/root hashing,
+/// fixed scalar decoding and coordinate checks. This is separate from the
+/// candidate9 complete-scope restore tariff and must be paid before that row is
+/// copied/decoded. It is not a resource derivation or an eligibility grant.
+pub fn flat_resource_vector_restore_work_v10(primitives: usize) -> Option<u64> {
+    u64::try_from(flat_resource_vector_max_bytes_v10(primitives)?)
+        .ok()?
+        .checked_mul(64)?
+        .checked_add(u64::try_from(primitives).ok()?.checked_mul(512)?)?
+        .checked_add(65536)
+}
+
+/// Decode only an original native-anchored admitted resource record. Public
+/// import still independently derives every quantity with derive_flat_resources.
+/// An expected root supplied by the same untrusted body is not an authority.
+pub fn decode_rooted_flat_resources_v10(
+    bytes: &[u8],
+    expected_root: Digest,
+    primitives: usize,
+) -> Result<FlatResourceVectorV10, String> {
+    let max = flat_resource_vector_max_bytes_v10(primitives).ok_or("resource frame count exceeds fixed byte cap")?;
+    if bytes.len() > max || bytes.len() < FLAT_RESOURCE_FIXED_MAX_BYTES_V10 - 6 {
+        return Err("resource frame exceeds its authenticated primitive-count bound".into());
+    }
+    // Exact canonical Borsh bytes hash directly: no duplicate serialization or
+    // primitive allocation before independent native-root authentication.
+    if crate::hash::id(b"misaka-palw/kernel/reference-resource-vector/v10", bytes) != expected_root {
+        return Err("resource frame differs from its independent native root".into());
+    }
+    fn read<T: BorshDeserialize>(r: &mut std::io::Cursor<&[u8]>) -> Result<T, String> {
+        T::deserialize_reader(r).map_err(|_| "truncated fixed resource frame".into())
+    }
+    let mut r = std::io::Cursor::new(bytes);
+    let version = read::<u16>(&mut r)?;
+    let program = read::<Digest>(&mut r)?;
+    let parameters = read::<Digest>(&mut r)?;
+    let court_scope = read::<Digest>(&mut r)?;
+    let positions = read::<u32>(&mut r)?;
+    let encoder = match read::<u8>(&mut r)? {
+        0 => None,
+        1 => Some((read::<u16>(&mut r)?, read::<u32>(&mut r)?)),
+        _ => return Err("noncanonical resource encoder tag".into()),
+    };
+    let count = read::<u32>(&mut r)? as usize;
+    let rest = count
+        .checked_mul(FLAT_RESOURCE_PRIMITIVE_BYTES_V10)
+        .and_then(|n| n.checked_add(RESOURCE_DIMENSIONS_V10 * 16))
+        .ok_or("resource primitive frame overflow")?;
+    if version != 10 || positions == 0 || count != primitives || bytes.len() - r.position() as usize != rest {
+        return Err("resource primitive count or exact fixed frame differs from its native header".into());
+    }
+    let mut rows = Vec::with_capacity(count);
+    for _ in 0..count {
+        rows.push(PrimitiveResourcesV10 {
+            occurrence: read(&mut r)?,
+            node: read(&mut r)?,
+            prim_tag: read(&mut r)?,
+            output_elements: read(&mut r)?,
+            input_elements: read(&mut r)?,
+            macs: read(&mut r)?,
+            scalar_steps: read(&mut r)?,
+            index_steps: read(&mut r)?,
+            validated_elements: read(&mut r)?,
+            copied_reference_bytes: read(&mut r)?,
+        });
+    }
+    let mut quantities = ResourceQuantitiesV10::default();
+    for axis in ResourceAxisV10::ALL {
+        quantities.set(axis, read(&mut r)?);
+    }
+    Ok(FlatResourceVectorV10 { version, program, parameters, court_scope, positions, encoder, primitives: rows, quantities })
 }
 pub struct FlatResourcePlanV10 {
     pub vector: FlatResourceVectorV10,

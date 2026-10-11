@@ -18,6 +18,12 @@ use crate::{
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_tir::program::TirProgramV1;
 use std::{collections::BTreeMap, io::Cursor};
+mod protected;
+pub use protected::*;
+mod sharded;
+pub use sharded::*;
+#[cfg(test)]
+mod protected_tests;
 
 pub const QUOTA_AXES_V11: usize = 21;
 pub const FUTURE_ACTION_KINDS_V11: usize = 6;
@@ -26,8 +32,8 @@ pub const MAX_DA_REQUEST_BYTES_V11: u64 = 1024;
 pub const MAX_DA_ANSWER_BYTES_V11: u64 = 16 << 10;
 pub const MAX_FIXED_ACTION_BYTES_V11: u64 = 256;
 const QUOTA_ACTOR_ROW_BYTES_V11: u64 = 64 + 2 * 21 * 16;
-const QUOTA_SUBJECT_ROW_BYTES_V11: u64 = 64 + 2 + 11 * 64 + 4 + 8 + 8 + 3 * 21 * 16 + 6 * 4 + 1;
-const QUOTA_STATE_FIXED_BYTES_V11: u64 = 64 + 64 + 8 + 8 + 4 * 21 * 16 + 4 + 4;
+const QUOTA_SUBJECT_ROW_BYTES_V11: u64 = 64 + 2 + 11 * 64 + 4 + 8 + 8 + 3 * 21 * 16 + 6 * 4 + 1 + 4;
+const QUOTA_STATE_FIXED_BYTES_V11: u64 = 64 + 64 + 8 + 8 + 4 * 21 * 16 + 4 + 4 + 4;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct QuotaQuantitiesV11(pub [u128; QUOTA_AXES_V11]);
@@ -87,7 +93,7 @@ pub fn quota_ruleset_id_v11() -> Digest {
             MAX_DA_REQUEST_BYTES_V11,
             MAX_DA_ANSWER_BYTES_V11,
             MAX_FIXED_ACTION_BYTES_V11,
-            b"cumulative21;baseline-once;used+reserved;deadline-in-one-interval;block-holds-remaining;failed-attempts-spent;no-terminal-refund;producer-reserved-only;public-challenger-own-pool;expired-close-current-ordinary;Close-prepaid-open;mark-after-genuine-terminal;baseline-native-unspent-token;GC-closed-earlier-interval-only;permanent-native-nonce-terminal-anchors;rooted-native-state-restore;court-class-max;native9-class-restore;bounded-stored-typed-post;wholeChunk-assembly-copies".to_vec(),
+            b"cumulative21;baseline-once;used+reserved;deadline-in-one-interval;block-holds-remaining;failed-attempts-spent;no-terminal-refund;producer-reserved-only;public-challenger-own-pool;expired-close-current-ordinary;Close-prepaid-open;mark-after-genuine-terminal;baseline-native-unspent-token;GC-closed-earlier-interval-only;permanent-native-operator-highwater-terminal-anchors;protected-paid-seal-pre-reserved;Court2-Chunk1-DARequest2;fragment32KiB-two-attempts;protected-live-GC-guard;rooted-native-state-restore;court-class-max;native9-class-restore;bounded-stored-typed-post;wholeChunk-assembly-copies;source-court-original-PCmap-plus128KiB;Court-and-assembly-max-computation-source-plus7;source-PC-tile-inventory-hash-payload-tree-axes;protected-retained-per-job4-native-producer-answer-ordinary-plus8;fixed-native-selected-row-journal;selected-original-plus-seal-reserve-sum".to_vec(),
         ),
     )
 }
@@ -110,6 +116,20 @@ pub struct QuotaPolicyV11 {
     pub future_attempts: [u32; FUTURE_ACTION_KINDS_V11],
 }
 impl QuotaPolicyV11 {
+    /// Native supplies its independently fixed ordinary lifetime request cap
+    /// from compiled authenticated network configuration, never an action
+    /// caller. Quote all ordinary plus protected producer answers at Fund.
+    /// This checker alone neither authenticates configuration nor admits a job.
+    pub fn check_native_protected_capacity(&self, ordinary_lifetime_requests: u32) -> Result<(), String> {
+        self.check()?;
+        let required = ordinary_lifetime_requests
+            .checked_add(PROTECTED_DA_REQUESTS_PER_JOB_MAX_V11)
+            .ok_or("native producer answer count overflow")?;
+        if self.future_attempts[2] < required {
+            return Err("native producer answers do not cover ordinary and all protected demand slots".into());
+        }
+        Ok(())
+    }
     pub fn root(&self) -> Digest {
         object_id(b"misaka-palw/kernel/resource-quota-policy/v11", self)
     }
@@ -180,30 +200,49 @@ impl SubjectBindingV11 {
     }
 }
 
-/// Non-wire native view of aux87's authenticated book and aux88's permanent
-/// request/nonce binding. Native reads these rows from its actual chain state;
-/// neither carrier fields nor caller-declared flags may construct this view.
-/// Aux88 is never removed/rebound when a compact terminal aux87 replaces a book.
+/// Non-wire native view of aux87's ORIGINAL requester/operator and aux88's
+/// permanent monotone counter. Native reads original fields from authenticated
+/// aux87, and counter/root from actual aux88; the caller's current rotated bond
+/// and action carrier cannot supply them. The counter is never deleted/reset.
+#[derive(Clone, Debug)]
+pub struct NativeRequesterNonceWitnessV11 {
+    pub requester: Digest,
+    pub requester_operator_id: Digest,
+    pub counter_root: Digest,
+    pub next_nonce: u64,
+}
+impl NativeRequesterNonceWitnessV11 {
+    fn check(&self, job: &crate::flat_execution11::ExecutionJobRecordV11) -> Result<(), String> {
+        use crate::flat_execution11::{canonical_nonce_v11, native_requester_nonce_counter_root_v11};
+        if self.requester != job.requester
+            || self.next_nonce <= canonical_nonce_v11(&job.nonce)?
+            || self.counter_root != native_requester_nonce_counter_root_v11(&self.requester_operator_id, self.next_nonce)
+        {
+            return Err("quota native original requester/monotone nonce counter mismatch".into());
+        }
+        Ok(())
+    }
+}
 pub struct NativeQuotaAdmissionAnchorV11 {
     pub job_id: Digest,
     pub funded_job_root: Digest,
     pub book_root: Digest,
     pub request_key: Digest,
-    pub indexed_job_id: Digest,
-    pub indexed_funded_job_root: Digest,
+    pub nonce_witness: NativeRequesterNonceWitnessV11,
     pub terminal_book_root: Option<Digest>,
 }
-/// The same permanent index with a genuine authenticated terminal aux87 root.
+/// A genuine authenticated original terminal aux87 and the same operator's
+/// permanent monotone counter. No per-job index or unbounded tombstone is added.
 pub struct NativeQuotaTerminalAnchorV11 {
     pub job_id: Digest,
     pub funded_job_root: Digest,
     pub terminal_book_root: Digest,
     pub request_key: Digest,
-    pub indexed_job_id: Digest,
-    pub indexed_funded_job_root: Digest,
+    pub nonce_witness: NativeRequesterNonceWitnessV11,
 }
 pub struct CheckedQuotaAdmissionV11 {
     binding: SubjectBindingV11,
+    native_admission_epoch: Option<(Digest, u64)>,
 }
 impl CheckedQuotaAdmissionV11 {
     pub fn binding(&self) -> &SubjectBindingV11 {
@@ -219,8 +258,8 @@ pub struct CheckedQuotaTerminalV11 {
 /// Mint only from a fresh fully checked class and a live original funded book.
 /// An authenticated restoration class has can_admit=false. Native authenticates
 /// aux87/88 first; this constant record check does not verify a claimed chain.
-pub fn check_native_quota_admission_v11(
-    class: &crate::flat_execution11::CheckedExecutionClassV11,
+pub fn check_native_quota_admission_v11<C: crate::flat_execution11::ExecutionClassContextV11>(
+    class: &C,
     book: &crate::flat_execution11::ExecutionJobStateV11,
     native: &NativeQuotaAdmissionAnchorV11,
 ) -> Result<CheckedQuotaAdmissionV11, String> {
@@ -235,20 +274,22 @@ pub fn check_native_quota_admission_v11(
         || native.funded_job_root != job.root()
         || native.book_root != book.root()
         || native.request_key != job.request_key()
-        || native.indexed_job_id != job.id()
-        || native.indexed_funded_job_root != job.root()
         || native.terminal_book_root.is_some()
     {
         return Err("quota baseline lacks a fresh checked class and authenticated original unspent native job/index".into());
     }
+    native.nonce_witness.check(job)?;
     book.check_restored(class, native.funded_job_root)?;
-    Ok(CheckedQuotaAdmissionV11 { binding: job.quota_subject(class.record())? })
+    Ok(CheckedQuotaAdmissionV11 {
+        binding: job.quota_subject(class.record())?,
+        native_admission_epoch: class.native_admission_epoch(),
+    })
 }
 /// A restored class is sufficient for cleanup of an already authenticated
 /// terminal; it confers no new baseline or payout. Native preserves aux88 and
 /// the exact compact terminal aux87 root after quota row collection.
-pub fn check_native_quota_terminal_v11(
-    class: &crate::flat_execution11::CheckedExecutionClassV11,
+pub fn check_native_quota_terminal_v11<C: crate::flat_execution11::ExecutionClassContextV11>(
+    class: &C,
     book: &crate::flat_execution11::ExecutionJobStateV11,
     native: &NativeQuotaTerminalAnchorV11,
 ) -> Result<CheckedQuotaTerminalV11, String> {
@@ -260,11 +301,10 @@ pub fn check_native_quota_terminal_v11(
         || native.funded_job_root != job.root()
         || native.terminal_book_root != book.root()
         || native.request_key != job.request_key()
-        || native.indexed_job_id != job.id()
-        || native.indexed_funded_job_root != job.root()
     {
         return Err("quota collection lacks the exact original terminal native book/index".into());
     }
+    native.nonce_witness.check(job)?;
     book.check_restored(class, native.funded_job_root)?;
     Ok(CheckedQuotaTerminalV11 {
         binding: job.quota_subject(class.record())?,
@@ -328,6 +368,7 @@ pub struct CheckedJobQuotaPlanV11 {
     actual_scope_root: Digest,
     native_restore_work: u64,
     native_post_carrier_cap: u64,
+    source_court_bound: crate::flat_execution11::NativeSourceCourtBoundV11,
     positions: u32,
     baseline: QuotaQuantitiesV11,
     action_envelopes: [QuotaQuantitiesV11; FUTURE_ACTION_KINDS_V11],
@@ -345,6 +386,7 @@ pub struct QuotaPlanRecordV11 {
     pub actual_scope_root: Digest,
     pub native_restore_work: u64,
     pub native_post_carrier_cap: u64,
+    pub source_court_bound: crate::flat_execution11::NativeSourceCourtBoundV11,
     pub positions: u32,
     pub baseline: QuotaQuantitiesV11,
     pub action_envelopes: [QuotaQuantitiesV11; FUTURE_ACTION_KINDS_V11],
@@ -366,6 +408,7 @@ impl CheckedJobQuotaPlanV11 {
             actual_scope_root: self.actual_scope_root,
             native_restore_work: self.native_restore_work,
             native_post_carrier_cap: self.native_post_carrier_cap,
+            source_court_bound: self.source_court_bound.clone(),
             positions: self.positions,
             baseline: self.baseline.clone(),
             action_envelopes: self.action_envelopes.clone(),
@@ -387,6 +430,7 @@ impl CheckedJobQuotaPlanV11 {
             actual_scope_root: record.actual_scope_root,
             native_restore_work: record.native_restore_work,
             native_post_carrier_cap: record.native_post_carrier_cap,
+            source_court_bound: record.source_court_bound.clone(),
             positions: record.positions,
             baseline: record.baseline.clone(),
             action_envelopes: record.action_envelopes.clone(),
@@ -408,6 +452,9 @@ impl CheckedJobQuotaPlanV11 {
     /// Guard the stored typed post before copying/decoding it on a future
     /// court action. Fixed post/evidence/outer overhead fits the 16KiB reserve;
     /// decoder prompt+generated count is P+1, encoder input count is at most L.
+    pub fn source_court_bound(&self) -> &crate::flat_execution11::NativeSourceCourtBoundV11 {
+        &self.source_court_bound
+    }
     pub fn native_post_carrier_cap(&self) -> u64 {
         self.native_post_carrier_cap
     }
@@ -514,6 +561,8 @@ pub(crate) fn derive_job_quota_plan_from_checked_class_v11(
         || view.resources.parameters != record.parameter_root
         || view.resources.root() != record.resource10_root
         || view.encoder.is_some() != record.encoder
+        || crate::flat_execution11::native_source_court_bound_v11(view.program.encode().len(), class.parameters())?
+            != record.source_court_bound
     {
         return Err("checked quota class context differs from exact admitted roots".into());
     }
@@ -526,6 +575,45 @@ pub(crate) fn derive_job_quota_plan_from_checked_class_v11(
         class.parameters(),
         actual_positions,
         plan,
+        &view.scope,
+        view.plan.native_restore_work,
+        view.encoder.as_ref(),
+    )
+}
+
+/// Native checked canonical class context reuses its independently verified
+/// maximum scope. It contains no invented class-max resource quantity vector.
+/// This is a readonly metadata factory; only checked native eligibility and
+/// original coin/book/nonce admission can confer a new baseline entitlement.
+pub fn derive_job_quota_plan_from_checked_native_class_v11(
+    class: &crate::flat_execution11::CheckedNativeExecutionClassV11,
+    actual_positions: u32,
+) -> Result<CheckedJobQuotaPlanV11, String> {
+    let record = class.record();
+    let view = class.view();
+    if actual_positions == 0
+        || actual_positions > record.max_positions
+        || view.plan.max_positions != record.max_positions
+        || view.plan.program_root != record.program_root
+        || view.plan.scope_root != record.class_scope9_root
+        || view.scope.root() != record.class_scope9_root
+        || view.plan.resource_root != record.resource10_root
+        || class.parameters().root() != record.parameter_root
+        || view.encoder.is_some() != record.encoder
+        || crate::flat_execution11::native_source_court_bound_v11(view.program.encode().len(), class.parameters())?
+            != record.source_court_bound
+    {
+        return Err("native checked quota class differs from its exact admitted roots/source bounds".into());
+    }
+    let actual = derive_flat_resources_v10(&view.program, class.parameters(), actual_positions, view.encoder.as_ref())?;
+    if actual.vector.parameters != record.parameter_root {
+        return Err("native actual quota PC root differs from original class".into());
+    }
+    build_job_quota_plan_v11(
+        &view.program,
+        class.parameters(),
+        actual_positions,
+        actual,
         &view.scope,
         view.plan.native_restore_work,
         view.encoder.as_ref(),
@@ -602,6 +690,50 @@ fn include_native_post_io_v11(q: &mut QuotaQuantitiesV11, post: u64) -> Result<(
     Ok(())
 }
 
+/// Source proof2's bounded decoder carries one PC map, one 4096-value tiled
+/// opening, one 32KiB inventory piece, rank <=4 and paths <=64 / <=32. Charge
+/// their hashing and copied decoded payload on parameter axes independently of
+/// court CPU and ordinary carrier hashing; no complete tensor/tree is built.
+fn include_source_court_io_v11(q: &mut QuotaQuantitiesV11, pc: &ParamCommitmentsV1) -> Result<(), String> {
+    let pc_body = pc.by_instance.keys().try_fold(4u128, |n, (_, layer)| {
+        n.checked_add(67 + u128::from(layer.is_some()) * 2).ok_or("quota source PC extent overflow")
+    })?;
+    let pc_hash = pc_body.checked_add(4).ok_or("quota source PC hash overflow")?;
+    let tile_payload = crate::merkle3::TILE_V3 as u128 * 16;
+    let inventory_payload = 32u128 << 10;
+    let shape_payload = misaka_palw_tir::types::MAX_RANK as u128 * 8;
+    let paths = (64 + 32) * 64u128;
+    let payload = pc_body
+        .checked_add(tile_payload + inventory_payload + shape_payload + paths)
+        .ok_or("quota source decoded payload overflow")?;
+    // PC root, tile prefix/raw-width values, 64 kernel node preimages,
+    // tensor dtype/rank/dimensions/two roots, named inventory leaf and32 nodes.
+    let hash = pc_hash
+        .checked_add(26 + tile_payload + 64 * 128 + 1 + 4 + shape_payload + 128)
+        .and_then(|n| n.checked_add(16 + misaka_palw_tir::program::MAX_NAME_BYTES as u128 + inventory_payload + 32 * 128))
+        .ok_or("quota source parameter hash overflow")?;
+    let tree = tile_payload + shape_payload + paths + 4096 + 4096;
+    let container = (pc.by_instance.len() as u128)
+        .checked_mul(512)
+        .and_then(|n| n.checked_add(4096))
+        .ok_or("quota source map/container overflow")?;
+    let copies = payload.checked_mul(3).ok_or("quota source copies overflow")?;
+    for (axis, extra) in [
+        (ResourceAxisV10::ParameterHashBytes, hash),
+        (ResourceAxisV10::RawParameterStorage, pc_body + tile_payload + inventory_payload),
+        (ResourceAxisV10::ParameterTreeScratch, tree),
+        (ResourceAxisV10::CopiedReferenceBytes, copies),
+        (ResourceAxisV10::ContainerAllocatorAllowance, container),
+        (
+            ResourceAxisV10::OwnedPeakBytes,
+            copies.checked_add(tree).and_then(|n| n.checked_add(container)).ok_or("quota source peak overflow")?,
+        ),
+    ] {
+        q.set(axis, q.get(axis).checked_add(extra).ok_or("quota source axis overflow")?);
+    }
+    Ok(())
+}
+
 fn build_job_quota_plan_v11(
     program: &TirProgramV1,
     pc: &ParamCommitmentsV1,
@@ -613,10 +745,24 @@ fn build_job_quota_plan_v11(
 ) -> Result<CheckedJobQuotaPlanV11, String> {
     // Native court9 restores/independently checks the registered class-max
     // scope. Actual job scope/resource remains an explicitly distinct root.
-    let court = complete_scope_api_bounds_v9(class_scope).map_err(|e| format!("{e:?}"))?;
+    let computation_court = complete_scope_api_bounds_v9(class_scope).map_err(|e| format!("{e:?}"))?;
+    let source_court_bound = crate::flat_execution11::native_source_court_bound_v11(program.encode().len(), pc)?;
+    let filing = computation_court
+        .filing_bytes
+        .max(source_court_bound.max_proof_bytes)
+        .checked_add(7)
+        .ok_or("quota court wrapper extent overflow")?;
+    let work = computation_court.work.max(source_court_bound.work);
+    let scratch = computation_court.scratch_bytes.max(source_court_bound.scratch_bytes);
+    if filing > crate::flat_court4::FLAT_FAULT_MAX_BYTES_V4
+        || work > crate::flat_court4::FLAT_FAULT_MAX_WORK_V4
+        || scratch > crate::flat_court4::FLAT_FAULT_MAX_SCRATCH_V4
+    {
+        return Err("combined computation/source court exceeds frozen resource caps".into());
+    }
     // The assembled proof limit comes from the independently derived header,
     // including a fixed bounded outer carrier; it is not an unguarded 1MiB.
-    let assembled = court.filing_bytes.checked_add(ACTION_OUTER_ALLOWANCE_V11).ok_or("quota filing bound overflow")?;
+    let assembled = filing.checked_add(ACTION_OUTER_ALLOWANCE_V11).ok_or("quota filing bound overflow")?;
     let metadata_carrier = (program.encode().len() as u64)
         .checked_add((pc.by_instance.len() as u64).checked_mul(80).ok_or("quota PC carrier overflow")?)
         .and_then(|b| b.checked_add(ACTION_OUTER_ALLOWANCE_V11))
@@ -630,17 +776,18 @@ fn build_job_quota_plan_v11(
         action_envelope(
             native_action_metadata_v11(native_restore_work, native_post_carrier_cap, assembled, false)?,
             assembled,
-            Some((court.work, court.filing_bytes, court.scratch_bytes)),
+            Some((work, filing, scratch)),
         )?,
         action_envelope(
             native_action_metadata_v11(native_restore_work, native_post_carrier_cap, assembled, true)?,
             assembled,
-            Some((court.work, court.filing_bytes, court.scratch_bytes)),
+            Some((work, filing, scratch)),
         )?,
         action_envelope(16 << 10, MAX_FIXED_ACTION_BYTES_V11, None)?,
     ];
     for action in &mut envelopes[3..5] {
         include_native_post_io_v11(action, native_post_carrier_cap)?;
+        include_source_court_io_v11(action, pc)?;
     }
     Ok(CheckedJobQuotaPlanV11 {
         // Native classes use the frozen program-byte root. The resource vector
@@ -652,6 +799,7 @@ fn build_job_quota_plan_v11(
         actual_scope_root: plan.court.root(),
         native_restore_work,
         native_post_carrier_cap,
+        source_court_bound,
         positions: actual_positions,
         baseline: QuotaQuantitiesV11::from(&plan.vector.quantities),
         action_envelopes: envelopes,
@@ -719,6 +867,9 @@ pub struct QuotaSubjectSummaryV11 {
     pub guarantee_remaining: QuotaQuantitiesV11,
     pub future_attempts_used: [u32; FUTURE_ACTION_KINDS_V11],
     pub closed: bool,
+    /// Retained paid seal rows, including spent rows in this interval. This
+    /// rooted count bounds protected DA requests against producer answers.
+    pub retained_protected_seals: u32,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct QuotaStateV11 {
@@ -728,6 +879,7 @@ pub struct QuotaStateV11 {
     network: QuotaIntervalSummaryV11,
     actors: BTreeMap<Digest, QuotaIntervalSummaryV11>,
     subjects: BTreeMap<Digest, QuotaSubjectSummaryV11>,
+    protected_seals: BTreeMap<Digest, ProtectedSealSummaryV11>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct QuotaReceiptV11 {
@@ -804,6 +956,7 @@ impl QuotaStateV11 {
                 QUOTA_ACTOR_ROW_BYTES_V11.checked_mul(policy.max_actors as u64).ok_or("quota snapshot actor extent overflow")?,
             )
             .and_then(|n| n.checked_add(QUOTA_SUBJECT_ROW_BYTES_V11.checked_mul(policy.max_subjects as u64)?))
+            .and_then(|n| n.checked_add(PROTECTED_SEAL_ROW_BYTES_V11.checked_mul(PROTECTED_SEALS_MAX_V11 as u64)?))
             .ok_or("quota snapshot maximum extent overflow")?;
         if bytes.len() as u128 > maximum as u128 {
             return Err("quota snapshot exceeds fixed policy extent".into());
@@ -850,10 +1003,22 @@ impl QuotaStateV11 {
             previous = Some(key);
             subjects.insert(key, read(&mut reader)?);
         }
+        let protected_count: u32 = read(&mut reader)?;
+        check_rows(&reader, protected_count, PROTECTED_SEALS_MAX_V11, PROTECTED_SEAL_ROW_BYTES_V11)?;
+        let mut protected_seals = BTreeMap::new();
+        previous = None;
+        for _ in 0..protected_count {
+            let key: Digest = read(&mut reader)?;
+            if previous.is_some_and(|old| old >= key) {
+                return Err("quota snapshot protected keys are not canonical".into());
+            }
+            previous = Some(key);
+            protected_seals.insert(key, read(&mut reader)?);
+        }
         if reader.position() != bytes.len() as u64 {
             return Err("quota snapshot has trailing bytes".into());
         }
-        let state = Self { policy_root, epoch, block, network, actors, subjects };
+        let state = Self { policy_root, epoch, block, network, actors, subjects, protected_seals };
         state.check_restored(policy)?;
         Ok(state)
     }
@@ -867,6 +1032,7 @@ impl QuotaStateV11 {
             network: QuotaIntervalSummaryV11::default(),
             actors: BTreeMap::new(),
             subjects: BTreeMap::new(),
+            protected_seals: BTreeMap::new(),
         })
     }
     pub fn root(&self) -> Digest {
@@ -893,6 +1059,7 @@ impl QuotaStateV11 {
         if self.policy_root != policy.root()
             || self.subjects.len() > policy.max_subjects as usize
             || self.actors.len() > policy.max_actors as usize
+            || self.protected_seals.len() > PROTECTED_SEALS_MAX_V11 as usize
         {
             return Err("restored quota policy/count mismatch".into());
         }
@@ -912,6 +1079,9 @@ impl QuotaStateV11 {
             if subject.future_attempts_used.iter().zip(policy.future_attempts).any(|(used, cap)| *used > cap) {
                 return Err("restored quota attempts exceeded".into());
             }
+            if subject.retained_protected_seals > PROTECTED_SEALS_PER_JOB_V11 {
+                return Err("restored quota original job seal count exceeded".into());
+            }
             if subject.binding.admitted_interval == self.epoch.network_interval {
                 if subject.binding.deadline_daa >= self.epoch.interval_end(policy)? {
                     return Err("restored quota liability crosses interval".into());
@@ -923,6 +1093,7 @@ impl QuotaStateV11 {
                 actor_subject_consumed.insert(subject.binding.producer, old.checked_add(&subject.consumed)?);
             }
         }
+        self.check_protected_restored(policy, &mut reserved, &mut actor_reserved, &mut actor_subject_consumed)?;
         if self.block.reserved != reserved || self.network.reserved != reserved {
             return Err("restored quota lost a subject guarantee".into());
         }
@@ -973,7 +1144,7 @@ impl QuotaStateV11 {
         self.debit_unreserved(policy, epoch, actor, &action.quantities)
     }
     /// Collect one closed earlier-interval row only after native authenticates
-    /// its permanent nonce index and genuine original terminal state. Charge
+    /// its permanent operator nonce counter and genuine original terminal state. Charge
     /// current ordinary work; neither current consumed/reserved counters nor an
     /// old guarantee is returned. Same-interval collection is forbidden because
     /// unused guarantees must stay held until trusted interval rollover.
@@ -992,6 +1163,7 @@ impl QuotaStateV11 {
             || !subject.closed
             || binding.admitted_interval >= epoch.network_interval
             || epoch.block_daa <= binding.deadline_daa
+            || self.protected_seals.values().any(|seal| seal.key.job_id == binding.job_id)
         {
             return Err("quota collection requires an exact closed earlier-expired-interval subject".into());
         }
@@ -1078,12 +1250,12 @@ impl QuotaStateV11 {
     /// through an authenticated full-state root; never take it from a close
     /// carrier. Fixed beneficiaries cannot be changed by the paying public bond.
     /// Old committed/consumed/remaining vectors are retained without refunds.
-    pub fn mark_expired_terminal_closed(
+    pub fn mark_expired_terminal_closed<C: crate::flat_execution11::ExecutionClassContextV11>(
         &mut self,
         policy: &QuotaPolicyV11,
         epoch: &TrustedEpochV11,
         binding: &SubjectBindingV11,
-        class: &crate::flat_execution11::CheckedExecutionClassV11,
+        class: &C,
         terminal: &crate::flat_execution11::ExecutionJobStateV11,
         paid: &ExpiredTerminalDebitV11,
     ) -> Result<(), String> {
@@ -1271,7 +1443,7 @@ impl QuotaStateV11 {
         Ok(())
     }
     /// The sole public baseline path requires a private native checked token.
-    /// Native retains permanent request/nonce and compact terminal anchors,
+    /// Native retains permanent operator nonce counters and compact terminal anchors,
     /// even after collect_closed_expired removes the quota subject row.
     pub fn admit_baseline(
         &mut self,
@@ -1281,6 +1453,9 @@ impl QuotaStateV11 {
         admission: &CheckedQuotaAdmissionV11,
         plan: &CheckedJobQuotaPlanV11,
     ) -> Result<QuotaReceiptV11, String> {
+        if admission.native_admission_epoch.is_some_and(|(hash, daa)| hash != epoch.block_hash || daa != epoch.block_daa) {
+            return Err("native quota baseline eligibility is stale for this trusted block".into());
+        }
         self.debit_inner(policy, epoch, actor, &admission.binding, plan, &plan.baseline())
     }
     fn debit_inner(
@@ -1362,6 +1537,7 @@ impl QuotaStateV11 {
                     guarantee_remaining: guarantee.clone(),
                     future_attempts_used: [0; FUTURE_ACTION_KINDS_V11],
                     closed: false,
+                    retained_protected_seals: 0,
                 },
                 guarantee.clone(),
                 block_old.admit(&action.quantities, &guarantee, &policy.block)?,
@@ -1421,7 +1597,7 @@ mod tests {
     use super::*;
     use crate::flat_court4::tests::primitive_fixture;
 
-    fn fixture() -> (CheckedJobQuotaPlanV11, QuotaPolicyV11, TrustedEpochV11, SubjectBindingV11) {
+    pub(super) fn fixture() -> (CheckedJobQuotaPlanV11, QuotaPolicyV11, TrustedEpochV11, SubjectBindingV11) {
         let (program, params, _) = primitive_fixture(11);
         let pc = ParamCommitmentsV1::of_v3(&params);
         let plan = derive_job_quota_plan_v11(&program, &pc, 3, 1, None).unwrap();
@@ -1470,7 +1646,7 @@ mod tests {
     // Private synthetic tokens exercise counter algebra only. Real native
     // admission/collection authority is exercised independently below.
     fn synthetic_admission(binding: &SubjectBindingV11) -> CheckedQuotaAdmissionV11 {
-        CheckedQuotaAdmissionV11 { binding: binding.clone() }
+        CheckedQuotaAdmissionV11 { binding: binding.clone(), native_admission_epoch: None }
     }
     fn admit(
         state: &mut QuotaStateV11,
@@ -1509,8 +1685,8 @@ mod tests {
         }
         assert!(derive_job_quota_plan_v11(&program, &pc, 1, 2, None).is_err());
     }
-    fn checked_class_fixture() -> (crate::flat_execution11::CheckedExecutionClassV11, TirProgramV1, ParamCommitmentsV1, QuotaPolicyV11)
-    {
+    pub(super) fn checked_class_fixture()
+    -> (crate::flat_execution11::CheckedExecutionClassV11, TirProgramV1, ParamCommitmentsV1, QuotaPolicyV11) {
         checked_class_fixture_with_limit(4)
     }
     fn checked_class_fixture_with_limit(
@@ -1615,16 +1791,27 @@ mod tests {
         .unwrap();
         assert_eq!(plan.native_restore_work(), candidate.plan.native_restore_work);
         assert_eq!(plan.native_post_carrier_cap(), ACTION_OUTER_ALLOWANCE_V11 + 2 * 4 + 64);
-        let assembled = class_court.filing_bytes + ACTION_OUTER_ALLOWANCE_V11;
+        let source = crate::flat_execution11::native_source_court_bound_v11(program.encode().len(), &pc).unwrap();
+        let filing = class_court.filing_bytes.max(source.max_proof_bytes) + 7;
+        let assembled = filing + ACTION_OUTER_ALLOWANCE_V11;
         for kind in [QuotaActionKindV11::Court, QuotaActionKindV11::Chunk] {
             let action = plan.action(kind, &[]).unwrap();
-            assert_eq!(action.quantities.get(ResourceAxisV10::CourtWork), class_court.work as u128);
-            assert_eq!(action.quantities.get(ResourceAxisV10::CourtBytes), class_court.filing_bytes as u128);
-            assert_eq!(action.quantities.get(ResourceAxisV10::CourtScratchBytes), class_court.scratch_bytes as u128);
+            assert_eq!(action.quantities.get(ResourceAxisV10::CourtWork), class_court.work.max(source.work) as u128);
+            assert_eq!(action.quantities.get(ResourceAxisV10::CourtBytes), filing as u128);
+            assert_eq!(
+                action.quantities.get(ResourceAxisV10::CourtScratchBytes),
+                class_court.scratch_bytes.max(source.scratch_bytes) as u128
+            );
             assert!(action.quantities.get(ResourceAxisV10::MetadataWork) > plan.native_restore_work() as u128);
             assert_eq!(
                 action.quantities.get(ResourceAxisV10::CopiedReferenceBytes),
-                3 * (assembled + plan.native_post_carrier_cap()) as u128
+                3 * ((assembled + plan.native_post_carrier_cap()) as u128
+                    + 4
+                    + 67 * pc.by_instance.len() as u128
+                    + 4096 * 16
+                    + 32768
+                    + 4 * 8
+                    + 96 * 64)
             );
             assert_eq!(plan.action_carrier_cap(kind).unwrap(), assembled);
         }
@@ -1667,34 +1854,42 @@ mod tests {
         quota.debit(&policy, &epoch, binding.producer, &binding, &plan, &court).unwrap();
         quota.check_restored(&policy).unwrap();
     }
-    fn native_admission(book: &crate::flat_execution11::ExecutionJobStateV11) -> NativeQuotaAdmissionAnchorV11 {
+    fn nonce_witness(book: &crate::flat_execution11::ExecutionJobStateV11) -> NativeRequesterNonceWitnessV11 {
+        let next_nonce = crate::flat_execution11::canonical_nonce_v11(&book.job().nonce).unwrap().checked_add(1).unwrap();
+        let operator = [119; 64];
+        NativeRequesterNonceWitnessV11 {
+            requester: book.job().requester,
+            requester_operator_id: operator,
+            counter_root: crate::flat_execution11::native_requester_nonce_counter_root_v11(&operator, next_nonce),
+            next_nonce,
+        }
+    }
+    pub(super) fn native_admission(book: &crate::flat_execution11::ExecutionJobStateV11) -> NativeQuotaAdmissionAnchorV11 {
         let job = book.job();
         NativeQuotaAdmissionAnchorV11 {
             job_id: job.id(),
             funded_job_root: job.root(),
             book_root: book.root(),
             request_key: job.request_key(),
-            indexed_job_id: job.id(),
-            indexed_funded_job_root: job.root(),
+            nonce_witness: nonce_witness(book),
             terminal_book_root: None,
         }
     }
-    fn native_terminal(book: &crate::flat_execution11::ExecutionJobStateV11) -> NativeQuotaTerminalAnchorV11 {
+    pub(super) fn native_terminal(book: &crate::flat_execution11::ExecutionJobStateV11) -> NativeQuotaTerminalAnchorV11 {
         let job = book.job();
         NativeQuotaTerminalAnchorV11 {
             job_id: job.id(),
             funded_job_root: job.root(),
             terminal_book_root: book.root(),
             request_key: job.request_key(),
-            indexed_job_id: job.id(),
-            indexed_funded_job_root: job.root(),
+            nonce_witness: nonce_witness(book),
         }
     }
-    fn prepared_native_job(
+    pub(super) fn prepared_native_job(
         class: &crate::flat_execution11::CheckedExecutionClassV11,
         policy: &QuotaPolicyV11,
         epoch: &TrustedEpochV11,
-        nonce: u8,
+        nonce: u64,
     ) -> crate::flat_execution11::PreparedExecutionJobV11 {
         use crate::flat_execution11::{ExecutionJobInputV11, prepare_execution_job_v11};
         prepare_execution_job_v11(
@@ -1711,7 +1906,7 @@ mod tests {
             },
             [113; 64],
             [114; 64],
-            [nonce; 64],
+            crate::flat_execution11::nonce_bytes_v11(nonce),
             10,
             10,
             [116; 64],
@@ -1733,8 +1928,8 @@ mod tests {
                 1 => wrong.funded_job_root[0] ^= 1,
                 2 => wrong.book_root[0] ^= 1,
                 3 => wrong.request_key[0] ^= 1,
-                4 => wrong.indexed_job_id[0] ^= 1,
-                5 => wrong.indexed_funded_job_root[0] ^= 1,
+                4 => wrong.nonce_witness.requester[0] ^= 1,
+                5 => wrong.nonce_witness.counter_root[0] ^= 1,
                 _ => wrong.terminal_book_root = Some(book.root()),
             }
             assert!(check_native_quota_admission_v11(&class, &book, &wrong).is_err(), "anchor field {field}");
@@ -1938,7 +2133,7 @@ mod tests {
         assert_ne!(reused.job.root(), prepared.job.root());
         let reused_book = ExecutionJobStateV11::from_native_funded_job(reused.job).unwrap();
         let mut old_index = native_admission(&reused_book);
-        old_index.indexed_funded_job_root = prepared.job.root();
+        old_index.funded_job_root = prepared.job.root();
         old_index.terminal_book_root = Some(book.root());
         assert!(check_native_quota_admission_v11(&class, &reused_book, &old_index).is_err());
         quota.admit_baseline(&policy, &next, fresh.job.producer, &fresh_admission, &fresh.quota_plan).unwrap();
@@ -2006,8 +2201,8 @@ mod tests {
                 1 => wrong.funded_job_root[0] ^= 1,
                 2 => wrong.terminal_book_root[0] ^= 1,
                 3 => wrong.request_key[0] ^= 1,
-                4 => wrong.indexed_job_id[0] ^= 1,
-                _ => wrong.indexed_funded_job_root[0] ^= 1,
+                4 => wrong.nonce_witness.requester[0] ^= 1,
+                _ => wrong.nonce_witness.counter_root[0] ^= 1,
             }
             assert!(check_native_quota_terminal_v11(&restored, &book, &wrong).is_err(), "terminal field {field}");
         }
@@ -2068,8 +2263,19 @@ mod tests {
             lengths: crate::flat_lengths7::FlatJobLengthsV7 { token: 1, patch: 0, audio: 0 },
             positions: 1,
         };
-        let prepared =
-            prepare_execution_job_v11(&class, &policy, &original, input, [113; 64], [114; 64], [115; 64], 10, 10, [116; 64]).unwrap();
+        let prepared = prepare_execution_job_v11(
+            &class,
+            &policy,
+            &original,
+            input,
+            [113; 64],
+            [114; 64],
+            crate::flat_execution11::nonce_bytes_v11(115),
+            10,
+            10,
+            [116; 64],
+        )
+        .unwrap();
         let binding = prepared.job.quota_subject(class.record()).unwrap();
         let mut state = QuotaStateV11::new(&policy, original.clone()).unwrap();
         admit(&mut state, &prepared.quota_plan, &policy, &original, &binding);
@@ -2134,7 +2340,7 @@ mod tests {
         // Unclaimed original escrow refunds after the same jump without ever
         // creating a full-model quota baseline or another subject catalogue row.
         let mut unclaimed_job = prepared.job.clone();
-        unclaimed_job.nonce = [124; 64];
+        unclaimed_job.nonce = crate::flat_execution11::nonce_bytes_v11(124);
         let unclaimed_binding = unclaimed_job.quota_subject(r).unwrap();
         let mut unclaimed = ExecutionJobStateV11::from_native_funded_job(unclaimed_job).unwrap();
         let paid = state.debit_expired_terminal(&policy, &after_jump, [123; 64], &unclaimed_binding, &prepared.quota_plan).unwrap();

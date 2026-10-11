@@ -814,4 +814,5 @@ mod tests {
 }
 
 pub mod palw_flat_model_vector_v9;
+pub mod palw_flat_execution_v11;
 pub mod palw_flat_model_vector_da_v9;

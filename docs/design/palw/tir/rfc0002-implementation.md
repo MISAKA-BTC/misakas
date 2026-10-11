@@ -2762,3 +2762,88 @@ Existing regression tests and previous quota snapshots are not counted again.
 Exact source preimages, immutable binaries, trial failures and test-only
 inventory corrections are retained in
 [the native milestone verdict](evidence/rfc02-native9-typed-da-node-verdict.json).
+
+## Native11 fixed headers, preparation/Fund and streaming outsider components
+
+[The native header component receipt](evidence/rfc02-execution11-native-headers-verdict.json)
+records26 pure tests (14 additional test functions relative to execution12),
+8.40s compilation and0.01s reported test runtime, plus a26-test immutable replay.
+Executable SHA256 is
+`4f78af6225b6228883e8e05893c5a7f19f270e7e14d85211a69995b3049f4988`.
+Owned execution/resources/test sources were archived before this compile and
+stable afterward. The full concurrent dependency closure is not claimed;
+initial17/23/25 trial outputs, initial source archive and compile refusal remain.
+
+The light private native class rechecks the original complete candidate scope
+without reading an unused class resource quantity vector. Actual resources are
+independently derived during Prepare. The fixed preparation record binds the
+exact prompt/input, actors, canonical nonce, reward and plan; Fund checks its
+independent original native root, current block hash/DAA eligibility and original
+debit. A readonly fixed class header supports existing book/refund/terminal
+checks without scope reconstruction and grants no new admission. Immutable
+class identity commits original PC-derived source court bounds, and the quota
+factory covers computation and source maxima. Native must prepay its actual
+selected-row reads/codecs/hash/copies under normal limits.
+
+Historical original court settlement pins exact subject/R/PC/proof/inclusion,
+so a newly submitted late proof or refuted source flag cannot obtain a refund or
+bounty. A verified global R/PC theorem can block another live exact-scope Final;
+the original finder alone receives a reward when native operator identity is
+independent. Same-operator collection burns the full slash and refunds original
+requester escrow. Pure native anchors and coins remain trusted boundary fixtures;
+no actual native funded Final/redemption is credited by this receipt.
+
+[The streaming R outsider receipt](evidence/rfc02-mapped-R-ordinary9-local-consumer-verdict.json)
+records12 stable-owned-source SDK controls, executable SHA256
+`2174f2857d1f7112767d4b0cc6c378887399b56418f013b5ec13f20f9295b006`.
+The consumer authenticates the exact public snapshot and original R window
+before its own execution and bounded unknown-node/leaf search. It predebits all
+local source/reference/reply/hash/retry axes, keeps source acquisition external
+(mode A), and explicitly returns a separate-court requirement for TopK/history/
+Decode. It has no prepared fraud proof or coordinate input. The final immutable
+fresh-node test now passes: all1,445,797 R leaves and1,636 PC instances are
+authenticated, its own7,658-node execution locates the unknown ordinary fault
+through43 demands/44 attempts, and its own17,816-byte proof passes native
+seal/maturity/reveal, original100 slash,49 actual finder UTXO and independent
+IBD. Runtime155.22s/RSS2,669,395,968B describes this exact diagnostic, not model
+throughput. Its initial local IndexSteps refusal and diagnostic rebuilds are
+retained; protocolv2 changed that local budget before the next output while
+preserving network/court limits.
+
+The coordinated immutable node/SDK build preserves1,442 actual local compiled
+inputs selected from Cargo JSON artifacts and .d dependency files. Full prebuild
+source preimages are archived; the unexported native11 fold is explicitly
+excluded. The actual1, SDK12 and existing35 native regressions all pass in
+[the final coherent outsider receipt](evidence/rfc02-actual-outsider9-final-verdict.json).
+The actual-model test is selected explicitly with `--ignored --exact`; the
+ordinary regression filter cannot substitute for that run. The earlier local
+SDK8 and intermediate quota33/37 counts are superseded, not added again.
+
+[The protected quota receipt](evidence/rfc02-protected-quota11-isolated-verdict.json)
+records40 passing controls,20 additional functions over the pushed quota20.
+Fixed selected rows are1500/749/1763/1716 bytes before roots/framing; an actual
+native consumer must authenticate their keys, roots and absence and apply their
+small journal writes. The full2.4MiB map cannot be hidden under this row tariff.
+The rooted per-job retained-seal cap is4, independently of global1024/actor4.
+Source court costs include bounded PC, parameter tile/inventory and hash axes.
+
+[The native carrier receipt](evidence/rfc02-native11-bounded-carriers-verdict.json)
+records five bounded-codec/identity controls. Only the carrier module is
+exported: native11 live Fund/Commit/court/DA/Final routes remain unactivated.
+The unexported fold draft has no implementation-completion credit.
+
+Unknown-coordinate discovery still needs a paid pre-proof entitlement when
+ordinary DA is exhausted. Current protected DA2 applies only to a known-proof
+owner; the actual diagnostic uses43 ordinary demands and therefore proves no
+flood-resilient discovery guarantee. Admission must independently price the
+producer's lifetime deliveries and the fixed readonly terminal reserve before
+these new routes can become live. The accepted native Final model cohort
+remains0; long-context/model/task/storage/kernel coverage, full funded native
+execution and A6/A8≥90% remain open.
+
+The protected distinct component pool increases361→413:14 execution,20 quota,
+12 SDK, five carrier and one actual fresh-node functions. Existing35 regression
+cases, the26 post-quota40 repeat, prior local snapshots and immutable replays
+add zero. These413 tests measure component engineering controls, not model
+coverage or a completion percentage. The dated acceptance audit preserves all
+population denominators and native honest-Final record count0.
