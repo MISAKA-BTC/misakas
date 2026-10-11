@@ -534,6 +534,7 @@ pub mod palw_prefix_resources_v1;
 pub mod palw_prefix_base0_codec_v1;
 pub mod palw_prefix_q36_public_rows_v1;
 pub mod palw_prefix_gdn_replay_v1;
+pub mod palw_prefix_gdn_contract_v1;
 pub mod palw_prefix_gdn_paged_v1;
 pub mod palw_prefix_state_court_v1;
 /// RFC-0001 §2.9: the job's tokenizer must be the class's listed one; dormant behind `palw_fp_tokenizer_match`.

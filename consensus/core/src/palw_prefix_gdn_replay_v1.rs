@@ -189,7 +189,7 @@ impl PalwPrefixGdnHeadReplayV1 {
     }
 }
 
-fn head_geometry(
+pub(crate) fn head_geometry(
     profile: &PalwShapeProfileV3,
     layer: u16,
     head: u32,
