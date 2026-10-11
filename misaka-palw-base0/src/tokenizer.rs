@@ -33,7 +33,7 @@
 //! (combining marks), so approximating with it puts `Ⅷ` in the letter branch where the pattern
 //! puts it in the number branch.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use unicode_normalization::UnicodeNormalization;
 use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
 
@@ -94,20 +94,7 @@ impl std::error::Error for TokenizerError {}
 /// is a string the BPE can merge over. The holes (control bytes, space, and the two Latin-1 gaps)
 /// are filled from U+0100 upward in byte order.
 fn byte_to_char_table() -> [char; 256] {
-    let mut assigned = [false; 256];
-    let mut table = ['\0'; 256];
-    for b in (b'!'..=b'~').chain(0xA1..=0xAC).chain(0xAE..=0xFF) {
-        table[b as usize] = char::from_u32(b as u32).expect("a byte is a valid code point");
-        assigned[b as usize] = true;
-    }
-    let mut next = 0u32;
-    for (b, slot) in table.iter_mut().enumerate() {
-        if !assigned[b] {
-            *slot = char::from_u32(256 + next).expect("in range");
-            next += 1;
-        }
-    }
-    table
+    kaspa_consensus_core::palw_tokenizer_rendering_v1::palw_qwen_byte_alphabet_v1()
 }
 
 fn is_letter(c: char) -> bool {
@@ -134,7 +121,8 @@ pub struct AddedToken {
 pub struct QwenTokenizer {
     vocab: HashMap<String, u32>,
     /// id → token string, for decoding.
-    tokens: Vec<String>,
+    tokens: BTreeMap<u32, String>,
+    token_count: usize,
     /// `(left, right)` → rank. Lower merges first.
     merges: HashMap<(String, String), u32>,
     added: Vec<AddedToken>,
@@ -147,7 +135,10 @@ pub struct QwenTokenizer {
 impl QwenTokenizer {
     /// Parse a `tokenizer.json`.
     pub fn from_json(bytes: &[u8]) -> Result<Self, TokenizerError> {
-        let root: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| TokenizerError::Malformed("not JSON"))?;
+        kaspa_consensus_core::palw_tokenizer_rendering_v1::PalwQwenRenderingMapV1::parse(bytes)
+            .map_err(TokenizerError::Malformed)?;
+        let root = kaspa_consensus_core::palw_tokenizer_rendering_v1::palw_unique_json_v1(bytes)
+            .map_err(TokenizerError::Malformed)?;
         let model = root.get("model").ok_or(TokenizerError::Malformed("no model"))?;
         let vocab_json = model.get("vocab").and_then(|v| v.as_object()).ok_or(TokenizerError::Malformed("no model.vocab"))?;
 
@@ -196,17 +187,18 @@ impl QwenTokenizer {
         // happens to be its prefix.
         added.sort_by(|a, b| b.content.len().cmp(&a.content.len()).then(a.id.cmp(&b.id)));
 
-        let mut tokens = vec![String::new(); highest as usize + 1];
+        let token_count = usize::try_from(u64::from(highest) + 1).map_err(|_| TokenizerError::Malformed("tokenizer id space exceeds this host"))?;
+        let mut tokens = BTreeMap::new();
         for (token, id) in &vocab {
-            tokens[*id as usize] = token.clone();
+            tokens.insert(*id, token.clone());
         }
         for a in &added {
-            tokens[a.id as usize] = a.content.clone();
+            tokens.insert(a.id, a.content.clone());
         }
 
         let byte_to_char = byte_to_char_table();
         let char_to_byte = byte_to_char.iter().enumerate().map(|(b, c)| (*c, b as u8)).collect();
-        Ok(Self { vocab, tokens, merges, added, byte_to_char, char_to_byte, source_len: bytes.len() })
+        Ok(Self { vocab, tokens, token_count, merges, added, byte_to_char, char_to_byte, source_len: bytes.len() })
     }
 
     /// Build from a GGUF's `tokenizer.ggml.*` metadata.
@@ -251,18 +243,24 @@ impl QwenTokenizer {
         let byte_to_char = byte_to_char_table();
         let char_to_byte = byte_to_char.iter().enumerate().map(|(b, c)| (*c, b as u8)).collect();
         let source_len = tokens.iter().map(|t| t.len()).sum::<usize>() + merges.iter().map(|m| m.len()).sum::<usize>();
-        Ok(Self { vocab, tokens: tokens.to_vec(), merges: table, added, byte_to_char, char_to_byte, source_len })
+        Ok(Self { vocab, tokens: tokens.iter().enumerate().map(|(id, token)| (id as u32, token.clone())).collect(),
+            token_count: tokens.len(), merges: table, added, byte_to_char, char_to_byte, source_len })
     }
 
     /// Ids this tokenizer can produce, one past the highest. Not the model's `vocab_size`, which
     /// is padded — a mismatch between the two is normal and is why the engine's logit row is wider
     /// than this.
     pub fn len(&self) -> usize {
-        self.tokens.len()
+        self.token_count
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tokens.is_empty()
+        self.token_count == 0
+    }
+
+    fn token_string(&self, id: u32) -> Option<&str> {
+        if u64::from(id) >= self.token_count as u64 { return None; }
+        Some(self.tokens.get(&id).map(String::as_str).unwrap_or(""))
     }
 
     /// The bytes the loader consumed, for the caller that commits to them.
@@ -415,20 +413,16 @@ impl QwenTokenizer {
     /// worker's streamed pieces and its final `rendered` field be the same bytes by construction
     /// rather than by two decoders agreeing.
     pub fn token_bytes(&self, id: u32) -> Option<Vec<u8>> {
-        let token = self.tokens.get(id as usize)?;
-        if self.added.iter().any(|a| a.id == id) {
-            return Some(token.as_bytes().to_vec());
-        }
-        // A token holding a character outside the byte table has no byte spelling; it is skipped
-        // rather than substituted, for the same reason `decode` refuses U+FFFD.
-        token.chars().map(|c| self.char_to_byte.get(&c).copied()).collect()
+        let token = self.token_string(id)?;
+        kaspa_consensus_core::palw_tokenizer_rendering_v1::palw_qwen_token_rendering_v1(
+            token, self.added.iter().any(|a| a.id == id))
     }
 
     /// Decode ids back to text.
     pub fn decode(&self, ids: &[u32]) -> Result<String, TokenizerError> {
         let mut bytes = Vec::with_capacity(ids.len() * 4);
         for id in ids {
-            let token = self.tokens.get(*id as usize).ok_or(TokenizerError::Malformed("id past the vocabulary"))?;
+            let token = self.token_string(*id).ok_or(TokenizerError::Malformed("id past the vocabulary"))?;
             if self.added.iter().any(|a| a.id == *id) {
                 bytes.extend_from_slice(token.as_bytes());
                 continue;
@@ -457,7 +451,7 @@ impl QwenTokenizer {
     pub fn decode_lossy_tail(&self, ids: &[u32]) -> String {
         let mut bytes = Vec::with_capacity(ids.len() * 4);
         for id in ids {
-            let Some(token) = self.tokens.get(*id as usize) else { continue };
+            let Some(token) = self.token_string(*id) else { continue };
             if self.added.iter().any(|a| a.id == *id) {
                 bytes.extend_from_slice(token.as_bytes());
                 continue;
@@ -680,6 +674,23 @@ pub(crate) fn byte_level_fixture_v1() -> (QwenTokenizer, u32, u32) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn json_rendering_uses_the_consensus_rule_and_refuses_duplicate_ids_without_dense_allocation() {
+        use kaspa_consensus_core::palw_tokenizer_rendering_v1::PalwQwenRenderingMapV1;
+        let raw = r#"{"model":{"vocab":{"a":0,"b":2},"merges":[]},"added_tokens":[{"id":2,"content":"漢"}]}"#.as_bytes();
+        let tokenizer = super::QwenTokenizer::from_json(raw).unwrap();
+        let canonical = PalwQwenRenderingMapV1::parse(raw).unwrap();
+        for id in 0..4 { assert_eq!(tokenizer.token_bytes(id), canonical.rendering(id)); }
+        for raw in [
+            br#"{"model":{"vocab":{"a":0,"b":0},"merges":[]}}"#.as_slice(),
+            br#"{"model":{"vocab":{"a":4294967296},"merges":[]}}"#,
+            br#"{"model":{"vocab":{"a":0,"a":1},"merges":[]}}"#,
+        ] { assert!(super::QwenTokenizer::from_json(raw).is_err()); }
+        let sparse = super::QwenTokenizer::from_json(br#"{"model":{"vocab":{"a":4294967295},"merges":[]}}"#).unwrap();
+        assert_eq!(sparse.token_bytes(u32::MAX), Some(b"a".to_vec()));
+        assert_eq!(sparse.token_bytes(0), Some(vec![]));
+    }
+
     /// **A kanji that straddles two tokens must not reach the user as a replacement character.**
     ///
     /// The streaming server decodes the whole run each step and emits the new suffix. When the run

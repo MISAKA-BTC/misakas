@@ -99,23 +99,37 @@ pub fn palw_prefix_kv_state_root_v1(
     let mut digest = blake2b_simd::Params::new().hash_length(64).key(PALW_A16_PREFIX_KV_DIGEST_DOMAIN_V1).to_state();
     digest.update(&u64::from(plan.layer_count).to_le_bytes());
     for (ordinal, tile) in tiles.iter().enumerate() {
-        let (coord, values) = plan.coordinate(&binding.shape_profile, ordinal as u64)
-            .ok_or("the prefix cache coordinate is absent")?;
-        let expected_index = crate::palw_step::canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &coord)
-            .ok_or("the prefix cache tile is not a canonical step")?;
-        let preimage = &tile.preimage;
-        if tile.opening.leaf_index != expected_index || preimage.coord != coord
-            || preimage.version != crate::palw_step::PALW_STEP_OBJECT_VERSION_V1
-            || preimage.value_count != values || preimage.values_le.len() as u64 != u64::from(values) * 4
-        { return Err("the prefix cache tile is not the exact canonical preimage"); }
-        if crate::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, preimage) != tile.opening.leaf_hash
-            || crate::palw_step_leg::step_opening_root_capped_v1(binding.step_leaf_count, &tile.opening, maximum_leaves)
-                .map_err(|_| "the prefix cache path does not verify")? != binding.step_merkle_root
-        { return Err("the prefix cache preimage is not committed by this claim"); }
-        digest.update(&preimage.values_le);
+        let values_le = palw_prefix_kv_authenticated_bytes_v1(binding, &plan, ordinal as u64, tile, maximum_leaves)?;
+        digest.update(values_le);
     }
     let digest = Hash64::from_bytes(digest.finalize().as_bytes().try_into().expect("a 64-byte digest"));
     Ok(crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&profile_hash, prefix_tokens, &digest))
+}
+
+/// The staged court uses the same exact coordinate, byte count and claim-bound opening as
+/// the finite proof. Only these authenticated bytes may enter an incremental prefix digest.
+pub fn palw_prefix_kv_authenticated_bytes_v1<'a>(
+    binding: &PalwStepBindingV2, plan: &PalwPrefixKvPlanV1, ordinal: u64,
+    tile: &'a PalwPrefixKvTileV1, maximum_leaves: u64,
+) -> Result<&'a [u8], &'static str> {
+    if *plan != PalwPrefixKvPlanV1::of_profile(&binding.shape_profile, plan.prefix_tokens)? {
+        return Err("the prefix plan is not canonical");
+    }
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    let (coord, values) = plan.coordinate(&binding.shape_profile, ordinal)
+        .ok_or("the prefix cache coordinate is absent")?;
+    let expected_index = crate::palw_step::canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &coord)
+        .ok_or("the prefix cache tile is not a canonical step")?;
+    let preimage = &tile.preimage;
+    if tile.opening.leaf_index != expected_index || preimage.coord != coord
+        || preimage.version != crate::palw_step::PALW_STEP_OBJECT_VERSION_V1
+        || preimage.value_count != values || preimage.values_le.len() as u64 != u64::from(values) * 4
+    { return Err("the prefix cache tile is not the exact canonical preimage"); }
+    if crate::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, preimage) != tile.opening.leaf_hash
+        || crate::palw_step_leg::step_opening_root_capped_v1(binding.step_leaf_count, &tile.opening, maximum_leaves)
+            .map_err(|_| "the prefix cache path does not verify")? != binding.step_merkle_root
+    { return Err("the prefix cache preimage is not committed by this claim"); }
+    Ok(&preimage.values_le)
 }
 
 #[cfg(test)]

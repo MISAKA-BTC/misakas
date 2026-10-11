@@ -9310,6 +9310,8 @@ mod prefix_cache_serving {
                 j.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 {
                     state_root: if false_root { Hash64::from_u64_word(0xBAD17) } else { true_state.state_root }, ..true_state
                 }));
+                assert_eq!(producer.verify_prefix_state_v1(&j, &ids32).is_err(), false_root,
+                    "the seat checks the named prefix even though full replay remains available");
                 let run = producer.execute_free_prompt(&j, &ids).unwrap();
                 let retained = crate::produce::base0_material_decode_any_v1(&run.outcome.material).unwrap();
                 let binding = retained.binding();

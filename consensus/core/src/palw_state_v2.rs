@@ -24920,7 +24920,8 @@ impl<'a> TransitionBuilder<'a> {
             | PalwPanelContradictionV1::ConstrainedDecode { .. }
             | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. }
             | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
-            | PalwPanelContradictionV1::PrefixStateMismatch { .. } => {
+            | PalwPanelContradictionV1::PrefixStateMismatch { .. }
+            | PalwPanelContradictionV1::TokenizerTableMismatch { .. } => {
                 return Err(refused("PanelFalseValid evidence does not decode".into()));
             }
         }
@@ -35380,6 +35381,7 @@ fn apply_class_registration_v1(
         if let Some(previous) = builder.state.class_semantics.get(class_id) {
             let mut registered = next.clone();
             registered.token_table_root = previous.token_table_root;
+            registered.rendering_rule = previous.rendering_rule;
             registered.bound_from_daa = previous.bound_from_daa;
             if *previous != registered {
                 return Err(PalwStateV2Error::ImmutableModelUpdate("class canonical semantic identities changed"));
@@ -36856,6 +36858,7 @@ fn apply_object(
                 next.bound_from_daa = previous.bound_from_daa;
                 let mut expected = previous.clone();
                 if expected.token_table_root.is_none() { expected.token_table_root = next.token_table_root; }
+                if expected.rendering_rule.is_none() { expected.rendering_rule = next.rendering_rule; }
                 if expected != next {
                     return Err(PalwStateV2Error::ImmutableModelUpdate("registered semantic identities and a filled table root are immutable"));
                 }
@@ -44184,6 +44187,7 @@ impl PalwStateCarriageV2 {
                 || row.cu_ruleset_id != class_row.cu_ruleset_id
                 || row.bound_from_daa != class_row.bound_from_daa
                 || row.token_table_root.is_some_and(|root| Some(root) != class_row.token_table_root)
+                || row.rendering_rule.is_some_and(|rule| Some(rule) != class_row.rendering_rule)
             {
                 return Err(PalwStateV2Error::CarriageInconsistent("malformed immutable claim semantics".into()));
             }
@@ -57272,6 +57276,7 @@ pub(crate) mod tests {
             model_profile_id: row.model_profile_id, runtime_manifest_hash: row.runtime_manifest_hash,
             runtime_class_id: row.runtime_class_id, tokenizer_id: row.tokenizer_id,
             cu_ruleset_id: row.cu_ruleset_id, token_table_root: h64(888),
+            rendering_rule: crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1,
         };
         let declare = |d: crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1| PalwConsensusObjectV2::ClassSemanticsDeclaredV1 {
             declaration: Box::new(d), signature: vec![],
@@ -57284,6 +57289,8 @@ pub(crate) mod tests {
         assert_eq!(filled.class_semantics_v1(&h64(1)).unwrap().token_table_root, Some(h64(888)));
         assert_eq!(filled.class_semantics_v1(&h64(1)).unwrap().bound_from_daa, 100);
         assert_eq!(filled.claim_semantics_v1(&h64(0xFC)).unwrap().token_table_root, None);
+        assert_eq!(filled.claim_semantics_v1(&h64(0xFC)).unwrap().rendering_rule, None,
+            "a prospective declaration never assigns a renderer to an existing claim");
         assert!(fold_declaration(&state, declaration.clone(), &Default::default()).is_err());
         let mut changed = declaration.clone(); changed.tokenizer_id = h64(99);
         assert!(fold_declaration(&state, changed, &on).is_err());

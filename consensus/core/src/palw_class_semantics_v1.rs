@@ -24,6 +24,8 @@ pub struct PalwClassSemanticsV1 {
     /// None until an independently signed immutable table descriptor is admitted. A job's
     /// self-selected table root is not a registered canonical table.
     pub token_table_root: Option<Hash64>,
+    /// A prospective canonical rendering rule; None is an unqualified historical statement.
+    pub rendering_rule: Option<crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1>,
 }
 
 impl PalwClassSemanticsV1 {
@@ -39,6 +41,7 @@ impl PalwClassSemanticsV1 {
             tokenizer_id: canonical.tokenizer_id,
             cu_ruleset_id: canonical.cu_ruleset_id,
             token_table_root: None,
+            rendering_rule: None,
         }
     }
 
@@ -46,6 +49,7 @@ impl PalwClassSemanticsV1 {
         self.version == PALW_CLASS_SEMANTICS_VERSION_V1
             && self.class_id == *class_id && self.artifact_root == *artifact_root
             && self.token_table_root != Some(Hash64::default())
+            && (self.rendering_rule.is_none() || self.token_table_root.is_some())
     }
 
     /// Each stored value is the registration's exact statement, including zero; a caller
@@ -80,6 +84,7 @@ pub struct PalwClassSemanticsDeclarationV1 {
     pub tokenizer_id: Hash64,
     pub cu_ruleset_id: Hash64,
     pub token_table_root: Hash64,
+    pub rendering_rule: crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1,
 }
 
 pub const PALW_CLASS_SEMANTICS_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka/palw/class-semantics/v1";
@@ -92,6 +97,7 @@ impl PalwClassSemanticsDeclarationV1 {
             runtime_manifest_hash: self.runtime_manifest_hash, runtime_class_id: self.runtime_class_id,
             tokenizer_id: self.tokenizer_id, cu_ruleset_id: self.cu_ruleset_id,
             token_table_root: Some(self.token_table_root),
+            rendering_rule: Some(self.rendering_rule),
         }
     }
 

@@ -748,13 +748,7 @@ impl Base0ArtifactV1 {
 
     /// The commitment for a tokenizer file's bytes.
     pub fn tokenizer_commitment_of(tokenizer_bytes: &[u8]) -> Hash64 {
-        let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_TOKENIZER_DOMAIN).to_state();
-        state.update(&(tokenizer_bytes.len() as u64).to_le_bytes());
-        state.update(tokenizer_bytes);
-        let out = state.finalize();
-        let mut bytes = [0u8; 64];
-        bytes.copy_from_slice(out.as_bytes());
-        Hash64::from_bytes(bytes)
+        kaspa_consensus_core::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(tokenizer_bytes)
     }
 
     /// True when the weights came from [`derive_deterministic`] rather than from a real model.

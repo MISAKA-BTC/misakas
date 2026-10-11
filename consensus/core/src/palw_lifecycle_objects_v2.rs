@@ -1751,7 +1751,7 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     ),
     (
         "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1",
-        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0x247d3edb52d194ab },
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0x7e843e3ab74906b2 },
     ),
     (
         "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1",
@@ -1967,7 +1967,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::CoinbaseTrailer { magic: *b"PXA2" }, "palw_exec_payload_v2", "X8R anchor trailer", false),
     a2_row(
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1" },
-        "palw_class_semantics_v1",
+        "palw_legacy_public_filer_v1",
         "G14 registered table mismatch in opaque ObjectiveOffence evidence; old unstamped targets refuse and the public proof fence preserves the old acceptance stage",
         true,
     ),
@@ -4247,7 +4247,7 @@ pub(crate) mod tests {
             (161, 0xec0447b18452362b),
             (162, 0x16fdc18dd12bd954),
             (163, 0x51ac8be8e6561cbd),
-            (164, 0xbb72a90c08f862db),
+            (164, 0x5a76e53094e12967),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline
