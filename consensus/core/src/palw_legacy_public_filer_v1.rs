@@ -64,6 +64,8 @@ pub const PALW_DISPUTE_LIVE_RESERVATIONS_PER_BOND_V1: usize = 64;
 /// Reserved DA sessions one reservation may open on its claim (one open at a time: DA-1): the legacy localizer's worst case over the
 /// legacy contiguous scan fits only when `PalwLegacyBisectV1::max_demands` is within this cap. Large ladders require LG14-B's
 /// authenticated frontier descent (`⌈40 / 9⌉ + 2` at 2^40 leaves); a midpoint leaf does not authenticate the preceding prefix.
+/// Lane G14-L: on the held route a session may hold up to 64 LANES (parallel units of one search round, joined by further tag-157
+/// demands, `crate::palw_legacy_parallel_v1`); it still counts one session here, its extra lanes count on the row's own lane budget.
 pub const PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1: u8 = 34;
 
 // ---- the wire -------------------------------------------------------------------------------------------------------------------
@@ -186,6 +188,10 @@ pub struct PalwDisputeReservationRowV1 {
     pub deposit: u128,
     /// Reserved DA sessions it has opened on the claim, at most [`PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1`].
     pub sessions_opened: u8,
+    /// Lane G14-L: lanes it has joined to its open reserved sessions beyond each session's first (parallel units of one search round,
+    /// `crate::palw_legacy_parallel_v1`), at most `PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1`. Written only where both dormant legacy
+    /// fences are in force.
+    pub lanes_joined: u16,
 }
 
 /// **One claim's dispute record** (`legacy_disputes`, keyed by claim): written with the claim's first reservation, deleted when nothing
@@ -1110,7 +1116,7 @@ mod tests {
     #[test]
     fn the_record_counts_reservers_and_exposure() {
         let mut record = PalwDisputeClaimV1 { opened_daa: 5, hard_deadline_daa: 900, ..Default::default() };
-        record.live.insert(bond(1), PalwDisputeReservationRowV1 { reserved_daa: 5, deposit: 70, sessions_opened: 0 });
+        record.live.insert(bond(1), PalwDisputeReservationRowV1 { reserved_daa: 5, deposit: 70, sessions_opened: 0, lanes_joined: 0 });
         record.closed.insert(bond(2));
         record.dismissed_held.push((bond(2), 30));
         record.dismissed_held.push((bond(1), 11));
@@ -1239,7 +1245,7 @@ mod tests {
         assert_eq!(facts, PalwFilerClaimFactsV1 { reservable: true, ..Default::default() }, "Provisional: no session may open yet");
         view.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 20 };
         let mut record = PalwDisputeClaimV1::default();
-        record.live.insert(other, PalwDisputeReservationRowV1 { reserved_daa: 21, deposit: 7, sessions_opened: 0 });
+        record.live.insert(other, PalwDisputeReservationRowV1 { reserved_daa: 21, deposit: 7, sessions_opened: 0, lanes_joined: 0 });
         record.closed.insert(me);
         view.record = Some(record);
         let facts = palw_fraud_filer_facts_v1(Some(&view), &me, false, true);
@@ -1250,7 +1256,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .live
-            .insert(me, PalwDisputeReservationRowV1 { reserved_daa: 22, deposit: 7, sessions_opened: 1 });
+            .insert(me, PalwDisputeReservationRowV1 { reserved_daa: 22, deposit: 7, sessions_opened: 1, lanes_joined: 0 });
         let session = crate::palw_da_rcore_v1::PalwDaSessionV1 {
             opened_daa: 23,
             deadline_daa: 100,

@@ -252,6 +252,7 @@ pub(super) fn palw_fraud_filer_read_page_v1(
         wanted,
         legacy_wanted,
         &BTreeMap::new(),
+        &BTreeMap::new(),
         kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
     )
 }
@@ -265,6 +266,7 @@ pub(super) fn palw_fraud_filer_read_page_with_form_v1(
     max_blocks: usize,
     wanted: &BTreeMap<Hash64, Hash64>,
     legacy_wanted: &BTreeMap<Hash64, PalwLegacyHeldUnitV2>,
+    legacy_rounds: &BTreeMap<Hash64, BTreeSet<PalwLegacyHeldUnitV2>>,
     rcore_wanted: &BTreeMap<Hash64, PalwDaUnitV1>,
     network: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<(PalwFraudFilerWalkV1, bool, Vec<((Hash64, PalwDaUnitV1), PalwDaBuiltAnswerV1)>), String> {
@@ -276,12 +278,14 @@ pub(super) fn palw_fraud_filer_read_page_with_form_v1(
         max_blocks,
         wanted,
         legacy_wanted,
+        legacy_rounds,
         rcore_wanted,
         network,
         kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn palw_fraud_filer_read_page_with_budget_v2(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
     oldest: u64,
@@ -290,6 +294,7 @@ fn palw_fraud_filer_read_page_with_budget_v2(
     max_blocks: usize,
     wanted: &BTreeMap<Hash64, Hash64>,
     legacy_wanted: &BTreeMap<Hash64, PalwLegacyHeldUnitV2>,
+    legacy_rounds: &BTreeMap<Hash64, BTreeSet<PalwLegacyHeldUnitV2>>,
     rcore_wanted: &BTreeMap<Hash64, PalwDaUnitV1>,
     network: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     maximum: u64,
@@ -320,7 +325,8 @@ fn palw_fraud_filer_read_page_with_budget_v2(
                     palw_fraud_filer_cache_answer_v1(&mut answers, (claim, unit), PalwDaBuiltAnswerV1::Rcore(answer));
                 }
                 PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
-                    if legacy_wanted.get(&answer.claim) == Some(&answer.unit)
+                    if (legacy_wanted.get(&answer.claim) == Some(&answer.unit)
+                        || legacy_rounds.get(&answer.claim).is_some_and(|round| round.contains(&answer.unit)))
                         && wanted.get(&answer.claim).is_some_and(|root| {
                             kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
                                 root,
@@ -338,7 +344,8 @@ fn palw_fraud_filer_read_page_with_budget_v2(
                         .or_insert(PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
                 }
                 PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk }
-                    if legacy_wanted.get(&chunk.claim) == Some(&chunk.unit)
+                    if (legacy_wanted.get(&chunk.claim) == Some(&chunk.unit)
+                        || legacy_rounds.get(&chunk.claim).is_some_and(|round| round.contains(&chunk.unit)))
                         && wanted.contains_key(&chunk.claim)
                         && !answers.contains_key(&(chunk.claim, PalwDaUnitV1::LegacyHeldV2(chunk.unit))) =>
                 {
@@ -429,6 +436,11 @@ pub(super) struct PalwFraudFilerCaseV1 {
     pub(super) frontiers: Vec<PalwLegacyFrontierV2>,
     pub(super) witness: Option<Box<PalwCommittedKernelWitnessV2>>,
     pub(super) legacy_wanted: Option<PalwLegacyHeldUnitV2>,
+    /// Lane G14-L: the current k-ary round's units (the lanes of one reserved session) — the history reader caches their answers.
+    pub(super) legacy_round: Vec<PalwLegacyHeldUnitV2>,
+    /// Lane G14-L: when each lane of the current round was last queued, and how many times (a lost lane is resent after
+    /// [`PALW_FRAUD_FILER_RESEND_DAA_V1`], at most [`PALW_FRAUD_FILER_SENDS_V1`] times).
+    pub(super) lanes_sent: BTreeMap<PalwLegacyHeldUnitV2, (u64, u8)>,
     pub(super) runs: u8,
     input_retry_at: u64,
     pub(super) fp_bootstrap: Option<PalwFraudFilerFpBootstrapV1>,
@@ -461,6 +473,8 @@ impl PalwFraudFilerCaseV1 {
             frontiers: Vec::new(),
             witness: None,
             legacy_wanted: None,
+            legacy_round: Vec::new(),
+            lanes_sent: BTreeMap::new(),
             runs: 0,
             input_retry_at: 0,
             fp_bootstrap: None,
@@ -563,9 +577,12 @@ impl PalwFraudFilerCaseV1 {
                                 return Err("conflicting frontiers of one authenticated node".into());
                             }
                         } else {
-                            let cap =
-                                kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_descent_rounds_v2(binding.step_leaf_count);
-                            if self.frontiers.len() >= cap as usize {
+                            // Lane G14-L: a k-ary round holds up to 64 node lanes; a descent never runs more rounds than the
+                            // one-node descent would (each round covers at least the nine levels one node does).
+                            let cap = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_descent_rounds_v2(binding.step_leaf_count)
+                                as usize
+                                * kaspa_consensus_core::palw_legacy_parallel_v1::PALW_LEGACY_LANES_PER_SESSION_V1 as usize;
+                            if self.frontiers.len() >= cap {
                                 return Err("more frontiers than this descent can consume".into());
                             }
                             self.frontiers.push(frontier);
@@ -645,6 +662,7 @@ impl PalwFraudFilerCaseV1 {
         self.frontiers = learned.frontiers;
         self.witness = learned.witness;
         self.legacy_wanted = learned.legacy_wanted;
+        self.legacy_round = learned.legacy_round;
         self.fp_bootstrap = learned.fp_bootstrap;
         self.fp_descriptor = learned.fp_descriptor;
         self.input_retry_at = learned.input_retry_at;
@@ -938,6 +956,8 @@ impl PalwFraudFilerBookV1 {
                 case.trace = PalwTraceDescentV1::default();
                 case.rcore_wanted = None;
                 case.legacy_wanted = None;
+                case.legacy_round.clear();
+                case.lanes_sent.clear();
                 case.sent = None;
                 case.awaiting_public = None;
                 if let Some(input) = case.fp_bootstrap.as_mut() {
@@ -964,7 +984,7 @@ impl PalwFraudFilerBookV1 {
                         }
                         PalwDaBuiltAnswerV1::LegacyHeldV2(answer) => {
                             let PalwDaUnitV1::LegacyHeldV2(unit) = key.1 else { return false };
-                            case.legacy_wanted == Some(unit)
+                            (case.legacy_wanted == Some(unit) || case.legacy_round.contains(&unit))
                                 && kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
                                     &case.candidate.job.execution_root,
                                     &unit,
@@ -1004,6 +1024,8 @@ impl PalwFraudFilerBookV1 {
             case.frontiers.clear();
             case.witness = None;
             case.legacy_wanted = None;
+            case.legacy_round.clear();
+            case.lanes_sent.clear();
             case.rcore_wanted = None;
             case.trace = PalwTraceDescentV1::default();
         }
@@ -1043,7 +1065,29 @@ impl PalwFraudFilerBookV1 {
             return;
         }
         case.legacy_wanted = Some(unit);
-        self.answers.retain(|(held, unit), _| *held != claim || !matches!(unit, PalwDaUnitV1::LegacyHeldV2(_)));
+        let round = case.legacy_round.clone();
+        self.answers.retain(|(held, held_unit), _| {
+            *held != claim || !matches!(held_unit, PalwDaUnitV1::LegacyHeldV2(u) if !round.contains(u))
+        });
+        self.walked_from = None;
+        self.walked_to = None;
+        self.walk = None;
+        self.read_at = None;
+    }
+
+    /// **Lane G14-L: the current k-ary round's units** — their historical answers are read (backfilled like a selected legacy unit);
+    /// answers of the previous round's other units leave the cache (each learned one lives on in the case's frontiers).
+    pub(super) fn want_legacy_round(&mut self, claim: Hash64, units: Vec<PalwLegacyHeldUnitV2>) {
+        let Some(case) = self.cases.get_mut(&claim) else { return };
+        if case.legacy_round == units {
+            return;
+        }
+        case.lanes_sent.retain(|unit, _| units.contains(unit));
+        case.legacy_round = units;
+        let (round, single) = (case.legacy_round.clone(), case.legacy_wanted);
+        self.answers.retain(|(held, held_unit), _| {
+            *held != claim || !matches!(held_unit, PalwDaUnitV1::LegacyHeldV2(u) if !round.contains(u) && single != Some(*u))
+        });
         self.walked_from = None;
         self.walked_to = None;
         self.walk = None;
@@ -1066,6 +1110,175 @@ pub(super) enum PalwFraudFilerStepV1 {
     /// G14-V: the claim's step tree is the verifier's own and its execution is not — localize past the step tree (the logits
     /// trace, the committed tokens) instead of settling a mismatched execution as honest.
     PastStepTree,
+    /// Lane G14-L: demand these lanes of one k-ary round (each joins this bond's reserved session; the first to land opens it);
+    /// `round` is the whole round, whose answers the history reader caches.
+    DemandLanes { round: Vec<PalwLegacyHeldUnitV2>, demand: Vec<PalwLegacyProbeV1> },
+    /// Lane G14-L: the chain answered lanes of this round that the walk has not read yet.
+    AwaitRound(Vec<PalwLegacyHeldUnitV2>),
+}
+
+/// **Lane G14-L: the parallel-lane rule's inputs to a step** — `None` below either legacy fence (the one-unit descent, unchanged).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PalwFraudFilerLanesV1 {
+    pub(super) now_daa: u64,
+    pub(super) form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+}
+
+/// **Lane G14-L: one round's next move**, from the chain and this node's reads alone (a restart re-derives it): a lane the chain
+/// answered, this node read and may consume now is learned (one a step); the unanswered ones are demanded as lanes of this bond's
+/// reserved session — opened by the first to land, joined by the others while the session's join window is open and it holds fewer
+/// than 64 — never a lane already in the session; answered lanes the walk has not read yet are awaited; else wait.
+pub(super) fn palw_fraud_filer_round_step_v1(
+    view: Option<&PalwLegacyDisputeViewV1>,
+    me: &PalwBondKeyV2,
+    round: Vec<PalwLegacyHeldUnitV2>,
+    learnable: &dyn Fn(&PalwLegacyHeldUnitV2) -> bool,
+    answer_read: &dyn Fn(&PalwDaUnitV1) -> bool,
+    now_daa: u64,
+) -> PalwFraudFilerStepV1 {
+    use kaspa_consensus_core::palw_legacy_parallel_v1::{PALW_LEGACY_LANE_JOIN_WINDOW_DAA_V1, PALW_LEGACY_LANES_PER_SESSION_V1};
+    let unit = |u: &PalwLegacyHeldUnitV2| PalwDaUnitV1::LegacyHeldV2(*u);
+    let answered = |u: &PalwLegacyHeldUnitV2| view.is_some_and(|v| v.unit_was_answered_v1(&unit(u)));
+    if let Some(u) = round.iter().find(|u| answered(u) && answer_read(&unit(u)) && learnable(u)) {
+        return PalwFraudFilerStepV1::Learn(PalwLegacyProbeV1::HeldNode { unit: *u });
+    }
+    let pending = round.iter().filter(|u| !answered(u)).copied();
+    let mine = view.and_then(|v| v.sessions.iter().find(|(bond, _)| bond == me)).map(|(_, session)| session);
+    let demand: Vec<PalwLegacyProbeV1> = match mine {
+        None => pending.take(PALW_LEGACY_LANES_PER_SESSION_V1 as usize).map(|unit| PalwLegacyProbeV1::HeldNode { unit }).collect(),
+        Some(session) => {
+            let joinable = session.units.iter().all(|u| matches!(u, PalwDaUnitV1::LegacyHeldV2(_)))
+                && now_daa <= session.opened_daa.saturating_add(PALW_LEGACY_LANE_JOIN_WINDOW_DAA_V1);
+            let room = (PALW_LEGACY_LANES_PER_SESSION_V1 as usize).saturating_sub(session.units.len());
+            if joinable {
+                pending
+                    .filter(|u| !session.units.contains(&unit(u)))
+                    .take(room)
+                    .map(|unit| PalwLegacyProbeV1::HeldNode { unit })
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        }
+    };
+    if !demand.is_empty() {
+        return PalwFraudFilerStepV1::DemandLanes { round, demand };
+    }
+    if round.iter().any(|u| answered(u) && !answer_read(&unit(u)) && learnable(u)) {
+        return PalwFraudFilerStepV1::AwaitRound(round);
+    }
+    PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait)
+}
+
+/// **Lane G14-L: the bootstrap's parallel round** — after the binding, every input chunk AND the root round's node lanes ride ONE
+/// reserved session (the plan's input round: the verifier replays after it, and the root round's frontiers are already on chain).
+/// Chunks are learned in order; the root nodes are read after the replay. Falls back to the one-unit bootstrap below the fences, before
+/// the binding, or where the claim needs no reservation step.
+pub(super) fn palw_fraud_filer_bootstrap_step_v2(
+    role: PalwFilerRoleV1,
+    view: Option<&PalwLegacyDisputeViewV1>,
+    me: &PalwBondKeyV2,
+    reservable: bool,
+    case: &PalwFraudFilerCaseV1,
+    lanes: Option<PalwFraudFilerLanesV1>,
+    read: impl Fn(&PalwDaUnitV1) -> bool,
+) -> PalwFraudFilerStepV1 {
+    let facts = palw_fraud_filer_facts_v1(view, me, reservable, case.binding.is_some());
+    let parallel = match (lanes, case.binding.as_ref(), case.fp_bootstrap.as_ref()) {
+        (Some(lanes), Some(binding), Some(input))
+            if facts.outcome.is_none()
+                && !facts.ended
+                && facts.reserved
+                && facts.accusable
+                && !input.ready()
+                && input.payload.job().prompt_mode != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL =>
+        {
+            Some((lanes, binding, input))
+        }
+        _ => None,
+    };
+    let Some((lanes, binding, input)) = parallel else {
+        return palw_fraud_filer_bootstrap_step_v1(role, view, me, reservable, case, read);
+    };
+    use kaspa_consensus_core::palw_legacy_parallel_v1::{
+        palw_legacy_input_lanes_v1, palw_legacy_kary_round_units_v1, palw_legacy_kary_width_bits_v1,
+    };
+    let chunks = palw_legacy_input_lanes_v1(binding, lanes.form);
+    let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count);
+    let Ok(s) = palw_legacy_kary_width_bits_v1(height, chunks) else {
+        return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged));
+    };
+    let mut round: Vec<PalwLegacyHeldUnitV2> = (0..chunks).map(|chunk| PalwLegacyHeldUnitV2::PromptIds { chunk }).collect();
+    if height > 0 {
+        round.extend(palw_legacy_kary_round_units_v1(
+            kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyTreeV2::Step,
+            binding.step_leaf_count,
+            height,
+            0,
+            s,
+        ));
+    }
+    let next = PalwLegacyHeldUnitV2::PromptIds { chunk: input.chunk };
+    palw_fraud_filer_round_step_v1(view, me, round, &|u| *u == next, &read, lanes.now_daa)
+}
+
+/// **Lane G14-L: the node's LG14-B step with parallel lanes** — past both legacy fences a reserving public bond with a mismatched
+/// base0 replica runs the k-ary descent ([`PalwLegacyReplicaV2::kary`]): one round's node lanes in one reserved session, the fused
+/// leaf's witness and the terminal as before. Everything else (no binding yet, a seat, below the fences) is the one-unit step.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn palw_fraud_filer_legacy_step_v3(
+    role: PalwFilerRoleV1,
+    view: Option<&PalwLegacyDisputeViewV1>,
+    me: &PalwBondKeyV2,
+    reservable: bool,
+    own_court_open: bool,
+    case: &PalwFraudFilerCaseV1,
+    lanes: Option<PalwFraudFilerLanesV1>,
+    answer_read: impl Fn(&PalwDaUnitV1) -> bool,
+) -> Result<PalwFraudFilerStepV1, String> {
+    use kaspa_consensus_core::palw_legacy_parallel_v1::{PalwLegacyKaryStepV1 as K, palw_legacy_input_lanes_v1};
+    let facts = palw_fraud_filer_facts_v1(view, me, reservable, case.binding.is_some());
+    let applies = lanes.is_some()
+        && facts.outcome.is_none()
+        && !facts.ended
+        && !own_court_open
+        && facts.reserved
+        && facts.accusable
+        && case.binding.is_some()
+        && matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.legacy.is_some());
+    let (Some(lanes), true) = (lanes, applies) else {
+        return palw_fraud_filer_legacy_step_v2(role, view, me, reservable, own_court_open, case, answer_read);
+    };
+    let binding = case.binding.as_ref().expect("checked above");
+    let PalwFraudFilerVerdictV1::Mismatch(run) = &case.verdict else { unreachable!("checked above") };
+    let replica = run.legacy.as_ref().expect("checked above");
+    let step = replica.kary(binding, &case.frontiers, palw_legacy_input_lanes_v1(binding, lanes.form))?;
+    let probe = match step {
+        K::Round { units, .. } => {
+            // A lane whose frontier the case already holds is consumed: never learned again.
+            let fresh = |u: &PalwLegacyHeldUnitV2| {
+                u.node().is_none_or(|(_, level, index)| !case.frontiers.iter().any(|f| f.level == level && f.index == index))
+            };
+            return Ok(palw_fraud_filer_round_step_v1(view, me, units, &fresh, &answer_read, lanes.now_daa));
+        }
+        _ if facts.session_open => return Ok(PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait)),
+        K::Agrees => return Ok(PalwFraudFilerStepV1::PastStepTree),
+        K::FirstDivergentLeaf(leaf) => {
+            if !palw_legacy_leaf_is_fused_v2(binding, leaf) || case.witness.is_some() {
+                return Ok(PalwFraudFilerStepV1::LegacyTerminal { leaf });
+            }
+            PalwLegacyProbeV1::HeldNode { unit: PalwLegacyHeldUnitV2::KernelWitness { leaf } }
+        }
+        K::OwnTreeInconsistent { .. } | K::OwnTreeUnavailable { .. } | K::Conflict { .. } | K::Refused(_) => {
+            return Ok(PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged)));
+        }
+    };
+    let unit = probe.unit();
+    Ok(match (view.is_some_and(|view| view.unit_was_answered_v1(&unit)), answer_read(&unit)) {
+        (true, true) => PalwFraudFilerStepV1::Learn(probe),
+        (true, false) => PalwFraudFilerStepV1::AwaitAnswer(probe),
+        _ => PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(probe)),
+    })
 }
 
 pub(super) fn palw_fraud_filer_bootstrap_step_v1(
@@ -1601,6 +1814,12 @@ impl PalwPanelService {
                 let previous = book.walk;
                 let legacy_wanted =
                     book.cases.values().filter_map(|case| case.legacy_wanted.map(|unit| (case.candidate.claim_id, unit))).collect();
+                let legacy_rounds: BTreeMap<Hash64, BTreeSet<PalwLegacyHeldUnitV2>> = book
+                    .cases
+                    .values()
+                    .filter(|case| !case.legacy_round.is_empty())
+                    .map(|case| (case.candidate.claim_id, case.legacy_round.iter().copied().collect()))
+                    .collect();
                 let rcore_wanted: BTreeMap<Hash64, PalwDaUnitV1> =
                     book.cases.values().filter_map(|case| case.rcore_wanted.map(|unit| (case.candidate.claim_id, unit))).collect();
                 let history_form = params.palw_prompt_ids_form_at(current_daa);
@@ -1631,6 +1850,7 @@ impl PalwPanelService {
                                     PALW_FRAUD_FILER_WALK_BLOCKS_V1,
                                     &wanted,
                                     &legacy_wanted,
+                                    &legacy_rounds,
                                     &rcore_wanted,
                                     history_form,
                                     history_maximum,
@@ -1897,10 +2117,20 @@ impl PalwPanelService {
             }
             // A queued item can have landed on another branch/read, or another public party may have answered its unit.
             // Query the chain before a pending carrier suppresses progression; discard duplicates before paying to resend them.
-            court_pending.retain(|(held, round, responder, _)| {
+            let lanes_on = params.palw_legacy_held_da_v2_active_at(current_daa);
+            let lanes = lanes_on.then_some(PalwFraudFilerLanesV1 { now_daa: current_daa, form });
+            court_pending.retain(|(held, round, responder, object)| {
                 if *held != claim || !palw_fraud_filer_queued_v1(*round, *responder) { return true; }
                 if *round == PALW_FRAUD_FILER_RESERVE_ROUND_V1 { return !facts.reserved; }
                 if *round == PALW_FRAUD_FILER_TERMINAL_ROUND_V2 { return !own_court_open; }
+                // Lane G14-L: a queued lane stays until it lands in this bond's session or its unit is answered.
+                if lanes_on && let PalwConsensusObjectV2::LegacyHeldDemandedV2 { demand } = object {
+                    let unit = PalwDaUnitV1::LegacyHeldV2(demand.unit);
+                    return !view.as_ref().is_some_and(|v| {
+                        v.unit_was_answered_v1(&unit)
+                            || v.sessions.iter().any(|(bond, session)| *bond == bond_key && session.units.contains(&unit))
+                    });
+                }
                 if facts.session_open { return false; }
                 if let Some((PalwFraudFilerSentV1::Reacquire { session_number, .. }, _, _)) = book.cases.get(&claim).and_then(|c| c.sent) {
                     return view.as_ref().and_then(|v| v.record.as_ref()).and_then(|r| r.live.get(&bond_key))
@@ -1913,12 +2143,14 @@ impl PalwPanelService {
             {
                 continue;
             }
-            for _ in 0..4 {
+            // Lane G14-L: a k-ary round's lanes are read one a step; give a round of 64 its reads in one tick.
+            let steps = if lanes_on { 4 + kaspa_consensus_core::palw_legacy_parallel_v1::PALW_LEGACY_LANES_PER_SESSION_V1 as usize } else { 4 };
+            for _ in 0..steps {
                 let Some(case) = book.cases.get(&claim) else { break };
                 let legacy = params.palw_legacy_held_da_v2_active_at(current_daa)
                     && matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.legacy.is_some());
                 let step = if case.fp_bootstrap.is_some() || case.fp_job_pending {
-                    palw_fraud_filer_bootstrap_step_v1(role, view.as_ref(), &bond_key, reservable, case, |unit| {
+                    palw_fraud_filer_bootstrap_step_v2(role, view.as_ref(), &bond_key, reservable, case, lanes, |unit| {
                         book.answers.contains_key(&(claim, *unit))
                     })
                 } else if legacy {
@@ -1927,7 +2159,7 @@ impl PalwPanelService {
                     let read: BTreeSet<PalwDaUnitV1> =
                         book.answers.keys().filter(|(held, _)| *held == claim).map(|(_, unit)| *unit).collect();
                     match tokio::task::spawn_blocking(move || {
-                        palw_fraud_filer_legacy_step_v2(role, view.as_ref(), &bond_key, reservable, own_court_open, &owned, |unit| {
+                        palw_fraud_filer_legacy_step_v3(role, view.as_ref(), &bond_key, reservable, own_court_open, &owned, lanes, |unit| {
                             read.contains(unit)
                         })
                     })
@@ -2021,6 +2253,35 @@ impl PalwPanelService {
                         break;
                     }
                     PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait) => break,
+                    PalwFraudFilerStepV1::AwaitRound(round) => {
+                        book.want_legacy_round(claim, round);
+                        break;
+                    }
+                    PalwFraudFilerStepV1::DemandLanes { round, demand } => {
+                        book.want_legacy_round(claim, round);
+                        let Some(view) = view.as_ref() else { break };
+                        self.fraud_filer_queue_lanes_v1(
+                            book,
+                            claim,
+                            &demand,
+                            current_daa,
+                            court_pending,
+                            court_due,
+                            |probe, binding| {
+                                palw_fraud_filer_demand_object_v1(
+                                    &network_domain,
+                                    claim,
+                                    &view.execution_root,
+                                    probe,
+                                    binding,
+                                    bond_key,
+                                    form,
+                                    |message, context| self.sign(message, context),
+                                )
+                            },
+                        );
+                        break;
+                    }
                     PalwFraudFilerStepV1::PastStepTree => {
                         // G14-V: the step tree is the verifier's own and the execution is not — localize the logits trace or
                         // the committed tokens from the binding read, public events and the own run; never settle as honest.
@@ -2295,6 +2556,62 @@ impl PalwPanelService {
                 warn!("[{PALW_PANEL}] claim {claim}: the fraud filer cannot build {item:?}: {why} (LG14-A)");
                 book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(why));
             }
+        }
+    }
+
+    /// **Lane G14-L: queue a round's lanes** — each a tag-157 demand under the filer's own key, dated now; a lane is resent only after
+    /// [`PALW_FRAUD_FILER_RESEND_DAA_V1`] and at most [`PALW_FRAUD_FILER_SENDS_V1`] times (a lane whose sends are spent, or that cannot
+    /// be built, ends this node's pursuit loudly, as one item does).
+    #[allow(clippy::too_many_arguments)]
+    fn fraud_filer_queue_lanes_v1(
+        &self,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        demand: &[PalwLegacyProbeV1],
+        current_daa: u64,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+        build: impl Fn(PalwLegacyProbeV1, Option<&PalwStepBindingV2>) -> Result<PalwConsensusObjectV2, String>,
+    ) {
+        let Some(case) = book.cases.get_mut(&claim) else { return };
+        let binding = case.binding.clone();
+        let mut queued = 0usize;
+        let mut failed = None;
+        for probe in demand {
+            let PalwLegacyProbeV1::HeldNode { unit } = *probe else { continue };
+            match case.lanes_sent.get(&unit) {
+                Some((at, _)) if current_daa.saturating_sub(*at) < PALW_FRAUD_FILER_RESEND_DAA_V1 => continue,
+                Some((_, sends)) if *sends >= PALW_FRAUD_FILER_SENDS_V1 => {
+                    warn!(
+                        "[{PALW_PANEL}] claim {claim}: the fraud filer's lane {unit:?} was sent {PALW_FRAUD_FILER_SENDS_V1} times and never \
+                         landed (G14-L)"
+                    );
+                    failed = Some(format!("lane {unit:?} never landed"));
+                    break;
+                }
+                _ => {}
+            }
+            match build(*probe, binding.as_ref()) {
+                Ok(object) => {
+                    court_due.insert((claim, PALW_FRAUD_FILER_DEMAND_ROUND_V1, false), current_daa);
+                    court_pending.push((claim, PALW_FRAUD_FILER_DEMAND_ROUND_V1, false, object));
+                    let sends = case.lanes_sent.get(&unit).map_or(1, |(_, sends)| sends.saturating_add(1));
+                    case.lanes_sent.insert(unit, (current_daa, sends));
+                    queued += 1;
+                }
+                Err(why) => {
+                    warn!("[{PALW_PANEL}] claim {claim}: the fraud filer cannot build lane {unit:?}: {why} (G14-L)");
+                    failed = Some(why);
+                    break;
+                }
+            }
+        }
+        if let Some(why) = failed {
+            book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(why));
+            return;
+        }
+        if queued > 0 {
+            info!("[{PALW_PANEL}] claim {claim}: the fraud filer queues {queued} lanes of one round (G14-L, k-ary descent)");
         }
     }
 
@@ -2799,7 +3116,7 @@ pub(super) mod tests {
         });
         let mut v = view(3, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 300 });
         let mut record = PalwDisputeClaimV1::default();
-        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 300, deposit: 1, sessions_opened: 0 });
+        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 300, deposit: 1, sessions_opened: 0, lanes_joined: 0 });
         v.record = Some(record);
         let step = |case: &PalwFraudFilerCaseV1| {
             palw_fraud_filer_bootstrap_step_v1(PalwFilerRoleV1::PublicBond, Some(&v), &me, true, case, |_| false)
@@ -2917,7 +3234,7 @@ pub(super) mod tests {
         v.trace_root = c.job.trace_root;
         let me = bond(1);
         let mut record = PalwDisputeClaimV1::default();
-        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 300, deposit: 1, sessions_opened: 0 });
+        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 300, deposit: 1, sessions_opened: 0, lanes_joined: 0 });
         v.record = Some(record);
         let probe = PalwLegacyProbeV1::Binding { row: 0, tile: 0 };
         assert_eq!(
@@ -3245,7 +3562,7 @@ pub(super) mod tests {
         };
         assert_eq!(step(&v, true, false), PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve));
         let mut record = PalwDisputeClaimV1::default();
-        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 151, deposit: 1, sessions_opened: 0 });
+        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 151, deposit: 1, sessions_opened: 0, lanes_joined: 0 });
         v.record = Some(record);
         let binding = PalwLegacyProbeV1::Binding { row: 0, tile: 0 };
         assert_eq!(step(&v, false, false), PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(binding)));
