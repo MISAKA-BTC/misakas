@@ -641,7 +641,18 @@ impl TirCellInputsV1 for TirRunInputsV1 {
 /// leaves]` where they are adjacent, plus the checkpoint and history runs of the instances the cell writes. A seat builds its
 /// `TirStepRun` demands from these; a producer builds the answers.
 pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &TirCellV1) -> Result<Vec<(u64, u32, usize)>, String> {
+    cell_runs_capped_v1(space, ctx, cell, usize::MAX)
+}
+
+/// Node-policy planning bound, checked before allocating a position's leaf list or
+/// an unbounded descriptor vector. It does not alter consensus class eligibility.
+pub fn cell_runs_capped_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &TirCellV1, cap: usize) -> Result<Vec<(u64, u32, usize)>, String> {
     let job = space.job_shape(ctx).map_err(|e| e.to_string())?;
+    let listed_at = |a: u32| -> Result<Vec<kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafV1>, String> {
+        let leaves = space.running_total(&job, a.saturating_add(1)).saturating_sub(space.running_total(&job, a));
+        if leaves > cap as u128 { return Err("the node's position leaf planning budget is full".into()); }
+        Ok(space.leaves_of_position(ctx, a))
+    };
     let n_occ = space.occurrences().len();
     if cell.occ.start >= cell.occ.end || cell.occ.end > n_occ {
         return Err(format!("a cell of occurrences {:?} of {n_occ}", cell.occ));
@@ -659,7 +670,7 @@ pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &T
     let (owned_fixed, owned_hist) = written_instances(space, &cell.occ);
     let mut runs: Vec<(u64, u32, usize)> = Vec::new();
     for a in cell.positions.start..cell.positions.end.min(job.positions) {
-        let listed = space.leaves_of_position(ctx, a);
+        let listed = listed_at(a)?;
         let mut wanted: Vec<(u64, bool)> = Vec::new(); // (index, preimage needed)
         let carry_nodes: Vec<u16> = if cell.occ.start > 0 {
             let (block, _) = space.occurrences()[cell.occ.start - 1];
@@ -695,7 +706,8 @@ pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &T
             }
             // A run's preimages are a PREFIX of it: the carry-in tiles lead it (they sit just before the cell's own leaves).
             let pre = wanted[i..j].iter().take_while(|(_, needs)| *needs).count();
-            runs.push((wanted[i].0, (j - i) as u32, pre));
+            if runs.len() >= cap { return Err("the node's cell run descriptor budget is full".into()); }
+            runs.push((wanted[i].0, u32::try_from(j - i).map_err(|_| "the requested run leaf count exceeds u32")?, pre));
             i = j;
         }
     }
@@ -705,10 +717,11 @@ pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &T
     if p > 0 {
         let layout = &space.layout;
         let mut handed: Vec<u64> = Vec::new();
-        for leaf in space.leaves_of_position(ctx, p - 1) {
+        for leaf in listed_at(p - 1)? {
             if let PalwTirLeafKindV1::State { instance, .. } = leaf.kind
                 && owned_fixed.contains(&(instance as usize))
             {
+                if handed.len() >= cap { return Err("the node's restore leaf planning budget is full".into()); }
                 handed.push(leaf.index);
             }
         }
@@ -719,11 +732,12 @@ pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &T
             let tiles = need.div_ceil(layout.h_tile as usize).min((p / layout.h_tile) as usize);
             for t in 0..tiles {
                 let last = p - 1 - t as u32 * layout.h_tile;
-                for leaf in space.leaves_of_position(ctx, last) {
+                for leaf in listed_at(last)? {
                     if let PalwTirLeafKindV1::HistTile { instance, .. } = leaf.kind
                         && instance as usize == *k
                     {
-                        handed.push(leaf.index);
+                        if handed.len() >= cap { return Err("the node's restore leaf planning budget is full".into()); }
+                handed.push(leaf.index);
                     }
                 }
             }
@@ -736,7 +750,8 @@ pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &T
             while j < handed.len() && handed[j] == handed[j - 1] + 1 {
                 j += 1;
             }
-            runs.push((handed[i], (j - i) as u32, j - i));
+            if runs.len() >= cap { return Err("the node's restore run descriptor budget is full".into()); }
+            runs.push((handed[i], u32::try_from(j - i).map_err(|_| "the restore run count exceeds u32")?, j - i));
             i = j;
         }
     }

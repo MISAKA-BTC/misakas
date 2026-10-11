@@ -31,7 +31,7 @@ pub use backend::{
 };
 pub use cell::{
     CpuKernelBackendV1, DeviceKernelBackendV1, KernelBackendV1, KernelRefusedV1, TirCaptureInputsV1, TirCellInputsV1, TirCellRequestV1,
-    TirCellV1, TirCellVerdictV1, TirRunInputsV1, cell_runs_v1, register_device_v1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1,
+    TirCellV1, TirCellVerdictV1, TirRunInputsV1, cell_runs_v1, cell_runs_capped_v1, register_device_v1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1,
     tir_shard_cells_over_v1, tir_shard_cells_v1, tir_shard_geometry_over_v1, tir_shard_geometry_v1, tir_verify_capture_cells_over_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1, tokens_of_capture_v1,
     verify_cell_stepping_v1, verify_cell_v1,
 };

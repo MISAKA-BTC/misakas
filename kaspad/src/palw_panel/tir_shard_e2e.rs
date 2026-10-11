@@ -973,3 +973,68 @@ fn a_partial_public_challenger_plays_the_actual_choice_and_close_consumers_witho
     assert!(palw_tir_partial_dissect_build_v1(&rows, &capture, &borrowed, PalwTirDissectMoveV1::Close, &rules).is_err());
     assert!(palw_tir_partial_dissect_build_v1(&rows, &capture, &court_duty, PalwTirDissectMoveV1::Round, &rules).is_err());
 }
+
+
+#[test]
+fn bounded_requested_cell_runs_reject_hostile_lengths_and_verify_a_fold_without_full_tree_or_backend() {
+    use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
+    use misaka_palw_tir_exec::node::{TirCaptureV1, TirFileMirrorV1, fetch_shard_params_v1, tir_shard_cells_over_v1};
+    use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+    use std::collections::HashMap;
+    use std::time::Instant;
+    let ir = shard_class("sparse-cell-runs");
+    let tir = ir.tir();
+    let (job, prompt) = tir.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let honest = tir.execute(&job, &prompt).unwrap();
+    let capture = TirCaptureV1::decode(&honest.material).unwrap();
+    let mut fold = capture.clone(); fold.leaves.clear();
+    for shard in 0..2 {
+        let mut d = duty(&ir, shard, 2, 2, PalwSegmentMaskV2::single(1), false);
+        d.execution_root = capture.binding.committed_execution_root; d.trace_root = capture.binding.full_logits_trace_root;
+        let holding = fetch_shard_params_v1(&capture.binding.class, ir.class_id, ir.root, 2, shard,
+            &TirFileMirrorV1(ir.dir.join("tiny.palwtir"))).unwrap();
+        let positions = holding.space.job_shape(&job).unwrap().positions;
+        let cells = tir_shard_cells_over_v1(&holding.space, positions, shard, 2, 2, d.tir_shard.unwrap().segments).unwrap();
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(512 << 20), || None);
+        let mut pursuit = super::tir_shard::cell_runs::CellRunPursuitV1::new_with_ledger(d.claim_id, &fold, &cells, 700, &ledger).unwrap();
+        let reserved = ledger.reserved_bytes(); assert!(reserved > 0);
+        let mut poison_tested = false;
+        while !pursuit.complete() {
+            let asks = pursuit.asks_due(Instant::now()); assert!(!asks.is_empty()); assert!(asks.len() <= 4);
+            let mut pool = HashMap::new();
+            for (first, count) in asks {
+                let PalwDaAnswerV1::TirStepRun(answer) = tir.step_unit_answer(&honest.material,
+                    PalwDaUnitV1::TirStepRun { first, count }).unwrap() else { panic!("run answer") };
+                let index = kaspa_consensus_core::palw_tir_shard_v1::palw_tir_runs_request_index_v1(first as u32).unwrap();
+                let good = borsh::to_vec(&answer).unwrap();
+                let mut replies = Vec::new();
+                if !poison_tested {
+                    let mut malicious = borsh::to_vec(&answer.binding).unwrap(); malicious.extend_from_slice(&u32::MAX.to_le_bytes());
+                    let mut trailing = good.clone(); trailing.push(0);
+                    let mut borrowed = good.clone(); borrowed[0] ^= 1;
+                    replies.extend([malicious, trailing, borrowed, good[..good.len()-1].to_vec()]); poison_tested = true;
+                }
+                replies.push(good); pool.insert((d.claim_id, index), replies);
+            }
+            let (kept, refused) = pursuit.drain(d.claim_id, &mut pool, LADDER);
+            assert!(kept > 0); if poison_tested && refused > 0 { assert_eq!(refused, 4); }
+            assert!(pool.is_empty());
+        }
+        let inputs = pursuit.finish(); assert_eq!(ledger.reserved_bytes(), reserved);
+        assert!(inputs.leaves() < capture.binding.step_leaf_count as usize);
+        assert_eq!(super::tir_shard::palw_tir_shard_outcome_runs_over_v1(&holding, &fold, &inputs, &d,
+            PalwPromptIdsFormV1::Flat, LADDER, &mut kaspa_cpu()).unwrap(),
+            palw_tir_shard_outcome_over_v1(&holding, &capture, &d, &mut kaspa_cpu()).unwrap());
+        let mut books = PalwTirShardBooksV1::default();
+        let key = (d.claim_id, 2, shard, 2, d.tir_shard.unwrap().segments.0);
+        books.cell_run_inputs.insert(key, (inputs.clone(), d.execution_root, 700));
+        books.keep_public_court_rows_v1(d.claim_id, 0, (ir.class_id, 2, shard), 900).unwrap();
+        books.retain_row_interests_v1(&[], &[], 900); assert!(books.cell_run_inputs.contains_key(&key));
+        books.retain_row_interests_v1(&[], &[], 901); assert!(books.cell_run_inputs.is_empty());
+        assert_eq!(ledger.reserved_bytes(), reserved, "an in-flight proof still holds the inputs");
+        drop(inputs); assert_eq!(ledger.reserved_bytes(), 0);
+        let small = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(1), || None);
+        assert!(super::tir_shard::cell_runs::CellRunPursuitV1::new_with_ledger(d.claim_id, &fold, &cells, 700, &small).is_err());
+        assert_eq!(small.reserved_bytes(), 0);
+    }
+}

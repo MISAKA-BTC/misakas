@@ -126,6 +126,19 @@ pub(crate) fn palw_tir_shard_outcome_over_v1(
     Ok(outcome_of_verdict(ctx.declared_prefill_tokens, verdict))
 }
 
+pub(crate) fn palw_tir_shard_outcome_runs_over_v1(
+    holding: &TirShardHoldingV1, capture: &TirCaptureV1,
+    inputs: &misaka_palw_tir_exec::node::TirRunInputsV1, duty: &PalwSeatDutyV2,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1, ladder: u64,
+    device: &mut dyn KernelBackendV1,
+) -> Result<PalwTirShardOutcomeV1, String> {
+    let place = duty.tir_shard.ok_or("the duty has no shard")?;
+    let positions = holding.space.job_shape(&capture.binding.job_context).map_err(|e| e.to_string())?.positions;
+    let cells = tir_shard_cells_over_v1(&holding.space, positions, place.shard, place.s_l, place.s_p, place.segments)?;
+    let verdict = holding.verify_cells_from_runs(capture, inputs, &cells, form, ladder, device)?;
+    Ok(outcome_of_verdict(capture.binding.job_context.declared_prefill_tokens, verdict))
+}
+
 fn outcome_of_verdict(prefill: u32, verdict: TirCellVerdictV1) -> PalwTirShardOutcomeV1 {
     match verdict {
         TirCellVerdictV1::Verified { leaves, positions } => PalwTirShardOutcomeV1::Valid { leaves, positions },
@@ -197,12 +210,24 @@ pub(crate) fn palw_tir_shard_accusation_over_v1(
     ladder: u64,
     form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Option<(&'static str, PalwTirOneMoveAccusationV1)>, String> {
+    palw_tir_shard_accusation_inputs_over_v1(holding, capture, None, leaf, row, target, accuser, court, rules, ladder, form)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn palw_tir_shard_accusation_inputs_over_v1(
+    holding: &TirShardHoldingV1, capture: &TirCaptureV1,
+    inputs: Option<&misaka_palw_tir_exec::node::TirRunInputsV1>, leaf: Option<u64>, row: Option<u32>,
+    target: &PalwDisputableClaimV2, accuser: PalwBondKeyV2,
+    court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2,
+    rules: &PalwTirCourtRulesV1, ladder: u64,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<Option<(&'static str, PalwTirOneMoveAccusationV1)>, String> {
     let mut candidates: Vec<PalwTirCloseCandidateV1> = Vec::new();
     if let Some(l) = leaf {
         if super::tir_court::palw_tir_space_leaf_is_dissected_v1(&holding.space, &capture.binding.job_context, l) {
-            candidates.push((super::tir_court::PALW_TIR_NAMED_LEAF_LABEL_V1, holding.named_leaf_close(capture, l, rules)));
+            candidates.push((super::tir_court::PALW_TIR_NAMED_LEAF_LABEL_V1, match inputs { Some(inputs) => holding.named_leaf_close_from_runs(capture, inputs, l, rules), None => holding.named_leaf_close(capture, l, rules) }));
         } else {
-            candidates.push(("cone", holding.cone_close(capture, l, rules)));
+            candidates.push(("cone", match inputs { Some(inputs) => holding.cone_close_from_runs(capture, inputs, l, rules), None => holding.cone_close(capture, l, rules) }));
         }
     }
     if let Some(row) = row
@@ -712,6 +737,8 @@ pub(crate) struct PalwTirShardBooksV1 {
     demanded: HashSet<Hash64>,
     /// The pursuit of each claim's leaves through `TirStepRun` demands (RFC-0006 §3, D-S4).
     run_pursuits: HashMap<Hash64, PalwTirRunPursuitV1>,
+    pub(super) cell_run_pursuits: HashMap<cell_runs::CellRunKeyV1, cell_runs::CellRunPursuitV1>,
+    pub(super) cell_run_inputs: HashMap<cell_runs::CellRunKeyV1, (std::sync::Arc<resource::ReservedRowsV1<misaka_palw_tir_exec::node::TirRunInputsV1>>, Hash64, u64)>,
     /// Captures reassembled from answered runs: this seat's material for a claim whose executor served none.
     synthesised: HashMap<Hash64, Vec<u8>>,
     /// The shards this node holds the rows of without holding the class: fetched once, proven, kept.
@@ -754,6 +781,12 @@ impl PalwTirShardBooksV1 {
             .filter_map(|d| d.tir_shard.map(|p| (d.class_id, p.s_l, p.shard)))
             .collect();
         keep.extend(self.court_row_interests.values().map(|(key, _)| *key));
+        let live: HashSet<_> = seats.iter().chain(watch).filter(|d| daa <= d.receipt_deadline)
+            .filter_map(|d| d.tir_shard.map(|p| (d.claim_id, p.s_l, p.shard, p.s_p, p.segments.0))).collect();
+        let court_keeps = |key: &cell_runs::CellRunKeyV1| self.court_row_interests.iter()
+            .any(|((claim, _), ((_, s_l, shard), _))| *claim == key.0 && *s_l == key.1 && *shard == key.2);
+        self.cell_run_pursuits.retain(|key, p| daa <= p.until && (live.contains(key) || court_keeps(key)));
+        self.cell_run_inputs.retain(|key, (_, _, until)| daa <= *until && (live.contains(key) || court_keeps(key)));
         self.holdings.retain(|k, _| keep.contains(k));
         self.row_fetches.retain(|k, _| keep.contains(k));
     }
@@ -773,6 +806,12 @@ impl PalwTirShardBooksV1 {
     pub(super) fn keep_public_court_rows_v1(&mut self, claim: Hash64, leaf: u64, key: (Hash64, u16, u16), until: u64) -> Result<(), String> {
         if self.court_row_interests.len() >= PALW_TIR_SHARD_POOL_CLAIMS_V1 && !self.court_row_interests.contains_key(&(claim, leaf)) {
             return Err("the node's partial public court retention budget is full".into());
+        }
+        for (cell, (_, _, expiry)) in &mut self.cell_run_inputs {
+            if cell.0 == claim && cell.1 == key.1 && cell.2 == key.2 { *expiry = (*expiry).max(until); }
+        }
+        for (cell, pursuit) in &mut self.cell_run_pursuits {
+            if cell.0 == claim && cell.1 == key.1 && cell.2 == key.2 { pursuit.until = pursuit.until.max(until); }
         }
         self.court_row_interests.entry((claim, leaf)).and_modify(|old| {
             if old.0 == key { old.1 = old.1.max(until); } else { *old = (key, until); }
@@ -1040,6 +1079,14 @@ impl super::PalwPanelService {
                 }
                 continue;
             };
+            if TirCaptureV1::decode(&material).is_ok_and(|capture| !capture.is_dense())
+                && (self.config.tir_shard_mirror.is_some() || self.config.tir_shard_fetch)
+            {
+                let mirror = self.config.tir_shard_mirror.clone();
+                self.tir_shard_holder_duty_v1(bond_key, network_domain, current_daa, duty, mirror.as_deref(), materials,
+                    interval_openings, books).await;
+                continue;
+            }
             let (want_device, shadow) = (self.config.tir_shard_gpu, self.config.tir_shard_shadow);
             if want_device && !books.said_no_device && !tir_kernel_backend_registered_v1() {
                 books.said_no_device = true;
@@ -1196,7 +1243,18 @@ impl super::PalwPanelService {
         {
             return;
         }
-        self.tir_shard_holder_judge_v1(bond_key, network_domain, current_daa, duty, capture, hold_key, books).await;
+        let inputs = if capture.is_dense() { None } else {
+            let Ok(space) = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(&capture.binding.class) else { return };
+            let Ok(shape) = space.job_shape(&capture.binding.job_context) else { return };
+            let Ok(cells) = tir_shard_cells_over_v1(&space, shape.positions, place.shard, place.s_l, place.s_p, place.segments) else { return };
+            let ladder = crate::palw_producer::palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, current_daa);
+            if misaka_palw_sdk::lineages::tir::tir_authenticate_capture_metadata_v1(&capture, duty.class_id, self.class_prompt_ids_form(duty.class_id), ladder).is_err() { return; }
+            let key = (duty.claim_id, place.s_l, place.shard, place.s_p, place.segments.0);
+            let Ok(Some(inputs)) = self.tir_shard_ensure_cell_runs_v1(network_domain, current_daa, key, &capture, &cells,
+                duty.receipt_deadline, interval_openings, books, ladder).await else { return };
+            Some(inputs)
+        };
+        self.tir_shard_holder_judge_v1(bond_key, network_domain, current_daa, duty, capture, inputs, hold_key, books).await;
     }
 
     /// Obtain this duty's proven shard rows for either a seat or a public watcher. This
@@ -1299,6 +1357,36 @@ impl super::PalwPanelService {
         due.checked_add(bundle.state.window_court())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn tir_shard_ensure_cell_runs_v1(
+        &self, network_domain: Hash64, current_daa: u64, key: cell_runs::CellRunKeyV1,
+        capture: &TirCaptureV1, cells: &[misaka_palw_tir_exec::node::TirCellV1], until: u64,
+        interval_openings: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>, books: &mut PalwTirShardBooksV1, ladder: u64,
+    ) -> Result<Option<std::sync::Arc<resource::ReservedRowsV1<misaka_palw_tir_exec::node::TirRunInputsV1>>>, String> {
+        if let Some((inputs, root, expiry)) = books.cell_run_inputs.get_mut(&key) {
+            if *root == capture.binding.committed_execution_root { *expiry = (*expiry).max(until); return Ok(Some(inputs.clone())); }
+        }
+        books.cell_run_inputs.remove(&key);
+        if books.cell_run_pursuits.get(&key).is_some_and(|p| !p.matches(capture)) { books.cell_run_pursuits.remove(&key); }
+        if !books.cell_run_pursuits.contains_key(&key) {
+            if books.cell_run_pursuits.len() + books.cell_run_inputs.len() >= PALW_TIR_SHARD_POOL_CLAIMS_V1 {
+                return Err("the node's public cell run pursuit/cache budget is full".into());
+            }
+            books.cell_run_pursuits.insert(key, cell_runs::CellRunPursuitV1::new(key.0, capture, cells, until)?);
+        }
+        let p = books.cell_run_pursuits.get_mut(&key).expect("admitted pursuit"); p.until = p.until.max(until);
+        let (_, refused) = p.drain(key.0, interval_openings, ladder);
+        if refused > 0 { warn!("[{PALW_PANEL}] claim {}: {refused} public cell run replies refused whole", key.0); }
+        if p.complete() {
+            let inputs = books.cell_run_pursuits.remove(&key).expect("completed pursuit").finish();
+            books.cell_run_inputs.insert(key, (inputs.clone(), capture.binding.committed_execution_root, until));
+            return Ok(Some(inputs));
+        }
+        let asks = p.asks_due(std::time::Instant::now());
+        for (first, count) in asks { self.request_tir_run_v1(network_domain, key.0, first, count, current_daa).await; }
+        Ok(None)
+    }
+
     /// Actual challenger consumer before full-model backend resolution. Row acquisition
     /// uses a node partition of the immutable registered class, so a restart/replan needs
     /// no expired receipt duty. Every fetched parameter still opens the registered root.
@@ -1336,7 +1424,7 @@ impl super::PalwPanelService {
         let (capture, admitted) = materials.get(&duty.claim_id).and_then(|pool| pool.iter().find_map(|bytes| decode(bytes).ok()))
             .or_else(|| books.synthesised.get(&duty.claim_id).and_then(|bytes| decode(bytes).ok()))
             .or_else(|| self.retained_capture(&duty.claim_id).and_then(|bytes| decode(&bytes).ok()))
-            .ok_or("the partial public court has no admitted authenticated dense capture")?;
+            .ok_or("the partial public court has no admitted authenticated capture")?;
         let phase = duty.tir_dissection.as_deref().ok_or("the public court has no phase")?;
         let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(&capture.binding.class).map_err(|e| e.to_string())?;
         let leaf = space.leaf_at(&capture.binding.job_context, phase.leaf_index()).ok_or("the court leaf is outside this capture")?;
@@ -1360,10 +1448,19 @@ impl super::PalwPanelService {
         let holding = self.tir_shard_ensure_row_request_v1(network_domain, current_daa, request, &capture, self.config.tir_shard_mirror.as_deref(), interval_openings, books)
             .await.ok_or("the public court's proven rows are not held yet")?;
         let (rules, arity) = self.tir_dissection_rules_for_class_v1(duty.class_id, current_daa).ok_or("the public court has no V2 rules")?;
+        let inputs = if capture.is_dense() { None } else {
+            let shape = holding.space.job_shape(&capture.binding.job_context).map_err(|e| e.to_string())?;
+            let cells = tir_shard_cells_over_v1(&holding.space, shape.positions, shard, s_l, 1,
+                kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::full(1))?;
+            let key = (duty.claim_id, s_l, shard, 1, 1);
+            Some(self.tir_shard_ensure_cell_runs_v1(network_domain, current_daa, key, &capture, &cells,
+                duty.session_deadline_daa, interval_openings, books, rules.max_step_leaf_count).await?
+                .ok_or("the public court's bounded committed runs are not held yet")?)
+        };
         let task_duty = duty.clone();
         let built = tokio::task::spawn_blocking(move || {
             let _admission = admitted;
-            super::tir_dissect::palw_tir_partial_dissect_build_v1(&holding, &capture, &task_duty, mv, &rules)
+            super::tir_dissect::palw_tir_partial_dissect_inputs_build_v1(&holding, &capture, inputs.as_deref().map(|reserved| &**reserved), &task_duty, mv, &rules)
         }).await.map_err(|e| format!("the public court builder did not finish: {e}"))??;
         super::tir_dissect::palw_tir_dissect_object_v1(built, duty, arity,
             &|message, context| self.sign(message, context),
@@ -1380,6 +1477,7 @@ impl super::PalwPanelService {
         current_daa: u64,
         duty: &PalwSeatDutyV2,
         capture: TirCaptureV1,
+        inputs: Option<std::sync::Arc<resource::ReservedRowsV1<misaka_palw_tir_exec::node::TirRunInputsV1>>>,
         hold_key: (Hash64, u16, u16),
         books: &mut PalwTirShardBooksV1,
     ) {
@@ -1392,7 +1490,8 @@ impl super::PalwPanelService {
         let holding = books.holdings.get(&hold_key).cloned().expect("just inserted");
         let (want_device, shadow) = (self.config.tir_shard_gpu, self.config.tir_shard_shadow);
         let task_duty = duty.clone();
-        let (accuse_holding, accuse_capture) = (holding.clone(), capture.clone());
+        let (accuse_holding, accuse_capture, accuse_inputs) = (holding.clone(), capture.clone(), inputs.clone());
+        let form = self.class_prompt_ids_form(duty.class_id);
         let outcome = tokio::task::spawn_blocking(move || {
             let (parts, _) = misaka_palw_tir_exec::node::tir_shard_geometry_over_v1(&holding.space, place.s_l)?;
             let part = parts.get(usize::from(place.shard)).ok_or("the holder's shard is out of range")?;
@@ -1407,7 +1506,10 @@ impl super::PalwPanelService {
                 u64::try_from(weights.of_range(part.start, part.end)).unwrap_or(u64::MAX),
                 want_device,
             )?;
-            let outcome = palw_tir_shard_outcome_over_v1(&holding, &capture, &task_duty, admitted.backend.as_mut())?;
+            let outcome = match inputs.as_deref() {
+                Some(inputs) => palw_tir_shard_outcome_runs_over_v1(&holding, &capture, inputs, &task_duty, form, ladder, admitted.backend.as_mut())?,
+                None => palw_tir_shard_outcome_over_v1(&holding, &capture, &task_duty, admitted.backend.as_mut())?,
+            };
             Ok::<_, String>((outcome, admitted))
         })
         .await;
@@ -1469,9 +1571,10 @@ impl super::PalwPanelService {
                     let built = {
                         let target = target.clone();
                         tokio::task::spawn_blocking(move || {
-                            palw_tir_shard_accusation_over_v1(
+                            palw_tir_shard_accusation_inputs_over_v1(
                                 &accuse_holding,
                                 &accuse_capture,
+                                accuse_inputs.as_deref().map(|reserved| &**reserved),
                                 leaf,
                                 row,
                                 &target,
@@ -2105,3 +2208,6 @@ pub(super) mod watch;
 // One admission policy for seats, shard-only holders, public watchers and shadow runs.
 #[path = "tir_shard_resource.rs"]
 pub(super) mod resource;
+
+#[path = "tir_cell_runs.rs"]
+pub(super) mod cell_runs;

@@ -173,6 +173,14 @@ pub(crate) fn palw_tir_partial_dissect_build_v1(
     mv: PalwTirDissectMoveV1,
     rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwTirDissectBuiltV1, String> {
+    palw_tir_partial_dissect_inputs_build_v1(holding, capture, None, duty, mv, rules)
+}
+
+pub(crate) fn palw_tir_partial_dissect_inputs_build_v1(
+    holding: &misaka_palw_sdk::lineages::tir::TirShardHoldingV1, capture: &TirCaptureV1,
+    inputs: Option<&misaka_palw_tir_exec::node::TirRunInputsV1>, duty: &PalwCourtDutyV2,
+    mv: PalwTirDissectMoveV1, rules: &PalwTirCourtRulesV1,
+) -> Result<PalwTirDissectBuiltV1, String> {
     if duty.i_am_responder || palw_tir_dissect_move_of_duty_v1(duty) != Some(mv) {
         return Err("the partial public holder owes no move on this turn".into());
     }
@@ -196,7 +204,10 @@ pub(crate) fn palw_tir_partial_dissect_build_v1(
     }
     match mv {
         PalwTirDissectMoveV1::Choice => {
-            let truth = holding.dissect_round(capture, phase, rules)?;
+            let truth = match inputs {
+                Some(inputs) => holding.dissect_round_from_runs(capture, inputs, phase, rules)?,
+                None => holding.dissect_round(capture, phase, rules)?,
+            };
             let child = tir_dissect_choice_v1(phase, &truth).ok_or("all filed children equal the local constraint")?;
             Ok(PalwTirDissectBuiltV1::Choice(PalwTirDissectChoiceV1 {
                 version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
@@ -206,7 +217,10 @@ pub(crate) fn palw_tir_partial_dissect_build_v1(
             }))
         }
         PalwTirDissectMoveV1::Close => {
-            let bottom = holding.dissect_bottom(capture, phase, rules)?;
+            let bottom = match inputs {
+                Some(inputs) => holding.dissect_bottom_from_runs(capture, inputs, phase, rules)?,
+                None => holding.dissect_bottom(capture, phase, rules)?,
+            };
             let mut proof = PalwCourtVerdictProofV2::TirDissection { bottom: Box::new(bottom) };
             proof.tir_strip_program_v1();
             Ok(PalwTirDissectBuiltV1::Close(proof))
