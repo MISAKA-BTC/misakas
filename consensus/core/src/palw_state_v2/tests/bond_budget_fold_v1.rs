@@ -944,3 +944,60 @@ fn alpha_two_divides_the_realized_carve_four_to_one_and_every_block_replays() {
     assert_eq!((budget.model_available(&h64(1)), budget.model_available(&h64(2))), (496, 124), "4:1 of the realized carve");
     budget.check_consistency().expect("the engine's invariants");
 }
+
+
+/// Physical native queue confirmation, retirement, import and journal reorg share
+/// the same material receipt. These fixtures use the existing toy execution seam.
+#[test]
+fn material_v3_native_final_retires_only_at_actual_payment_plus_w_and_reorg_restores_the_hold() {
+    for w in [280, 436] {
+        for material_from in [100, 125] {
+            let p = params().with_worker_carve_permille(620).unwrap()
+                .with_claim_retirement_daa(50).unwrap()
+                .with_bond_budget(Some(PalwBondBudgetMirrorV1 {
+                    from_daa: 100, policy: PalwBondBudgetPolicyV1 { window_daa: w, ..test_policy(1) }, allocation: None,
+                }))
+                .with_reporter_income_from(Some(100)).with_material_income_from(Some(material_from));
+            let walked = walk(&p);
+            let id = attempt_id_v2(&attempt(40, 1).attempt);
+            for pair in walked.windows(2) { assert_replayable(&p, &pair[0].0, &pair[1].0, &pair[1].1); }
+            let (finalized, _) = &walked[4];
+            assert!(matches!(finalized.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { final_daa: 124 }));
+            assert_eq!(finalized.pending_payouts_iter().map(|(_, payout)| payout.amount).sum::<u64>(), 620);
+            if material_from == 100 {
+                assert_eq!(finalized.material_income_hold_until_v1(&p, id), Some(u64::MAX), "unpaid cash has no expiry clock");
+            }
+            let (paid, _) = &walked[5];
+            assert!(paid.pending_payouts_iter().next().is_none(), "actual fold drains the funded native queue");
+            assert_eq!(paid.material_income_hold_until_v1(&p, id), Some(125 + w));
+            let (held, _) = &walked[6];
+            assert!(held.claim(&id).is_some(), "ordinary retirement at 174 cannot erase collectible material");
+            assert_eq!(held.material_income_hold_until_v1(&p, id), Some(125 + w));
+            let (boundary, delta) = apply(held, &p, &ctx(8, 124 + w, 8), &[], None);
+            assert_replayable(&p, held, &boundary, &delta);
+            assert!(boundary.claim(&id).is_some());
+            let (released, release) = apply(&boundary, &p, &ctx(9, 125 + w, 9), &[], None);
+            assert_replayable(&p, &boundary, &released, &release);
+            assert!(released.claim(&id).is_none(), "no perpetual same-bond material hold");
+            assert_eq!(released.material_income_hold_until_v1(&p, id), None);
+            assert!(released.bond_budget().unwrap().material_income.is_empty());
+            assert_eq!(revert_delta_v2(&released, &release, &p).unwrap(), boundary);
+            assert_eq!(boundary.material_income_hold_until_v1(&p, id), Some(125 + w));
+            assert_eq!(released.safe_weight(), held.safe_weight(), "retirement preserves finalized weight");
+        }
+    }
+}
+
+#[test]
+fn material_v3_future_fence_leaves_existing_v2_fold_bytes_and_roots_identical() {
+    let base = params().with_worker_carve_permille(620).unwrap()
+        .with_bond_budget(Some(mirror(100, None))).with_reporter_income_from(Some(100));
+    let future = base.clone().with_material_income_from(Some(1_000_000));
+    for ((a, da), (b, db)) in walk(&base).iter().zip(walk(&future).iter()) {
+        assert_eq!(da, db);
+        assert_eq!(a.state_root(), b.state_root());
+        assert_eq!(carriage_bytes(a), carriage_bytes(b));
+        assert_eq!(a.bond_budget().unwrap().header.version, PALW_BOND_BUDGET_STATE_VERSION_V2);
+        assert!(a.bond_budget().unwrap().material_income.is_empty());
+    }
+}

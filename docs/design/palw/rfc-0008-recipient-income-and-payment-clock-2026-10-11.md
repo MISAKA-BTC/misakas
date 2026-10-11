@@ -112,13 +112,13 @@ vector. An overfull accepted legacy window issues no new ticket. A reservation
 failure rolls back the whole draw and clears its tickets; it cannot panic the
 virtual processor or keep a partially reserved permit.
 
-The native fee boundary fixture first prepares the same genuine signed floor
-Final/anchor with a generous, unapproved R cap and no tested fee body. It records
-every actual recipient migration row and their common R total. Baseline plus
-the fixed 500,000 fee limit is then frozen in genesis Params before both actual
-fee runs. Both must match the same baseline before carrying either fee; the
-criterion never changes after a tested fee outcome. This is mechanics evidence,
-not an economic profitability or soundness approval.
+The native fee boundary fixture predeclares the same private cap and fixed heartbeat
+payload before preparation and both signed fee runs. Its criterion is the actual
+migrated recipient's remaining R exactly, then remaining R + 1. It records all
+prior monetary rows before either tested fee body; cap, genesis and draw preparation
+never change after the baseline. Central native v7 reported this actual boundary
+case PASS. This is mechanics evidence, not an economic profitability or soundness
+approval.
 
 ## Positive all-fund native settlement fixture
 
@@ -239,3 +239,65 @@ availability, or yet connect root-exact physical monetary payment+W to that chai
 
 Verification at commit: Rust parser and `git diff --check` passed; runtime tests await the parent's
 central build.
+
+
+## Root-exact material monetary schema v3 (candidate)
+
+`palw_material_income_v3` has an independent Some-only identity/schedule field,
+`None` on every public preset. It requires earlier budget and reporter schemas;
+validation refuses every public arming pending signed retention and complete
+consumer lifecycle acceptance. State v1/v2 keep their exact old wires and roots.
+State v3 adds typed table7 under the header commitment; derived root, queue and
+release indexes rebuild on carriage import and exact journal apply/revert.
+
+Every authenticated native issuer, Panel recipient, extra EXEC executor and
+standalone kernel hold binds its actual execution claim to the same funded income
+subject. Kernel→EXEC fee reclassification removes the standalone marker and binds
+the composite allocation; the retained dependency relation also lets providers of
+the kernel claim read the composite obligation. The source consumer must supply
+the actual standing source claim from the authenticated Paid outcome; its signed
+job/seal subject remains the distinct monetary ID, never an invented execution ID.
+
+Partial native funds and reporter tranches move exact positive amounts into their
+actual queue receipt. Coalesced recipients retain each root's contribution. An
+unpaid remainder/queue has no physical clock; the actual native coinbase drain
+starts payment+W independently for every receipt. Cancellation removes only unpaid
+rights and preserves queued cash. Root retirement, janitor age/space pruning and
+foreign provider pruning read that rooted obligation. Kernel subjects without a
+native claim view also remain pinned. Payment+W releases completed material rows
+through a derived ordered index, so a recipient's unrelated later income does not
+retain every prior root. Import rejects orphaned pending subjects and amounts
+exceeding actual unpaid monetary receipts.
+
+Reporter provenance requires the immutable objective terminal verdict and real
+collateral debit before debt creation. A successful work Final is unnecessary for
+a convicted fraudulent root. Generic pre-verdict kernel settlement cannot authorize
+an award. Native court binding freezes the actual consumed-offence claim; kernel
+conviction/default receipt freezes the proved claim, recipient and funded amount.
+The synthetic court seam used by focused tests does not prove native court soundness.
+
+Migration freezes only old live income IDs, each exact old pending native queue,
+and a first-fence+W historical uncertainty boundary. Known held native subjects are
+bound from actual claim/Panel/executor/consumed-verdict records. Old source promises
+also authenticate their execution claim through the rooted reveal/Paid receipt:
+pending income and exact current queues bind that claim, while older Paid receipts
+with no physical coinbase DAA get a root-specific first-fence+W uncertainty record
+with no invented paid timestamp. Other old obligations
+pin only already accepted roots. No address matching or historical physical payment
+clock is guessed. An unpaid old queue remains through its own eventual actual drain+W;
+ongoing new queues cannot extend it. Accepted money continues to settle when current
+caps are lower. Signed provider TTLs and court deadlines are not extended by this index;
+finite paid-consumer admission contracts and consent/funding remain separate work.
+
+Candidate tests cover exact v1/v2 wires/roots, independent dormant fence, W280/436,
+partial FD/FE/coalesced cash, unrelated later same-bond income, post-Final cancellation,
+physical sparse drain, restart/reorg, old exact queues, funded reporter 50/50/25 tranches,
+and actual production-fold Final→coinbase→material retirement/reorg. The native
+all-positive fixture now predeclares the second signed work lifetime as the first
+lifetime+W to isolate each physical queue window; aggregate R otherwise legitimately
+allows both roots to pay. This fixture preparation correction preserves cap, amounts,
+Final criteria and exact cash assertions; its fresh runtime remains pending.
+
+Verification at this candidate: Rust parser and diff checks only; central compile/runtime
+is required. This does not complete all-model execution, measured economics, arbitrary
+H160 EVM ownership/gas-income caps, finite signed material lifecycle or pruned P2P evidence.

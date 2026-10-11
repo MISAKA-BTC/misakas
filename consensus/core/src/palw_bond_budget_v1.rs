@@ -65,6 +65,9 @@ pub const PALW_BUDGET_TABLE_ASSIGNMENTS_V1: u8 = 4;
 pub const PALW_BUDGET_TABLE_MODELS_V1: u8 = 5;
 pub const PALW_BUDGET_TABLE_REPORTER_INCOME_V1: u8 = 6;
 
+mod material;
+pub use material::{PalwMaterialIncomeV1, PalwMaterialPaymentV1, PALW_BOND_BUDGET_STATE_VERSION_V3, PALW_BUDGET_TABLE_MATERIAL_INCOME_V1, material_pending_id_v1};
+
 // ---- the four dimensions ------------------------------------------------------------------------------------------------------
 
 /// A dimension of the budget (ADR-0176 D1).
@@ -536,6 +539,19 @@ impl Params {
         Err(PalwModeV2Error::Invalid("palw_reporter_income_v2 cannot be armed: monetary schema v2 and legacy cash migration are dormant pending complete activation validation"))
     }
 
+    pub fn palw_material_income_active_at(&self, daa: u64) -> bool {
+        self.palw_reporter_income_active_at(daa) && self.palw_material_income_v3.is_some_and(|at| at != ForkActivation::never() && at.is_active(daa))
+    }
+
+    pub fn validate_palw_material_income_v3(&self) -> Result<(), PalwModeV2Error> {
+        let Some(at) = self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
+        if !self.palw_bond_budget_v1.as_ref().is_some_and(|f| f.activation != ForkActivation::never() && f.activation.daa_score() <= at.daa_score())
+            || !self.palw_reporter_income_v2.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at.daa_score()) {
+            return Err(PalwModeV2Error::Invalid("palw_material_income_v3 requires budget and reporter schema at or below it"));
+        }
+        Err(PalwModeV2Error::Invalid("palw_material_income_v3 cannot be armed: complete signed material/TTL and all consumer lifecycle validation remain pending"))
+    }
+
     /// Whether the model-bond allocation is in force at `daa_score` — never, in this binary (it needs the budget too).
     pub fn palw_model_bond_allocation_active_at(&self, daa_score: u64) -> bool {
         self.palw_bond_budget_active_at(daa_score)
@@ -623,7 +639,8 @@ impl Params {
             });
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_bond_budget(mirror).with_reporter_income_from(
-                self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()));
+                self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()))
+                .with_material_income_from(self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()));
         }
     }
 }
@@ -978,6 +995,10 @@ pub struct PalwBondBudgetStateV1 {
     pub assignments: BTreeMap<PalwBondKeyV2, PalwCapitalAssignmentRowV1>,
     pub models: BTreeMap<Hash64, PalwModelBudgetRowV1>,
     pub reporter_income: BTreeMap<Hash64, PalwReporterIncomeBindingV1>,
+    pub material_income: BTreeMap<Hash64, PalwMaterialIncomeV1>,
+    material_roots: BTreeMap<Option<Hash64>, BTreeSet<Hash64>>,
+    material_sources: BTreeMap<Hash64, BTreeSet<Hash64>>,
+    material_due: BTreeSet<(u64, Hash64)>,
     /// Derived withdrawal hold: no extra serialized/rooted field or history scan.
     deferred_by_bond: BTreeMap<PalwBondKeyV2, usize>,
     deferred_awards: BTreeSet<Hash64>,
@@ -994,8 +1015,9 @@ impl BorshSerialize for PalwBondBudgetStateV1 {
         self.assignments.serialize(writer)?;
         self.models.serialize(writer)?;
         match self.header.version {
-            PALW_BOND_BUDGET_STATE_VERSION_V1 if self.reporter_income.is_empty() => Ok(()),
-            PALW_BOND_BUDGET_STATE_VERSION_V2 => self.reporter_income.serialize(writer),
+            PALW_BOND_BUDGET_STATE_VERSION_V1 if self.reporter_income.is_empty() && self.material_income.is_empty() => Ok(()),
+            PALW_BOND_BUDGET_STATE_VERSION_V2 if self.material_income.is_empty() => self.reporter_income.serialize(writer),
+            PALW_BOND_BUDGET_STATE_VERSION_V3 => { self.reporter_income.serialize(writer)?; self.material_income.serialize(writer) },
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid budget monetary state version")),
         }
     }
@@ -1004,7 +1026,7 @@ impl BorshSerialize for PalwBondBudgetStateV1 {
 impl BorshDeserialize for PalwBondBudgetStateV1 {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let header: PalwBondBudgetHeaderV1 = BorshDeserialize::deserialize_reader(reader)?;
-        if !matches!(header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2) {
+        if !matches!(header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2 | PALW_BOND_BUDGET_STATE_VERSION_V3) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid budget monetary state version"));
         }
         let version = header.version;
@@ -1015,14 +1037,18 @@ impl BorshDeserialize for PalwBondBudgetStateV1 {
             releases: BorshDeserialize::deserialize_reader(reader)?,
             assignments: BorshDeserialize::deserialize_reader(reader)?,
             models: BorshDeserialize::deserialize_reader(reader)?,
-            reporter_income: if version == PALW_BOND_BUDGET_STATE_VERSION_V2 {
+            reporter_income: if version >= PALW_BOND_BUDGET_STATE_VERSION_V2 {
                 BorshDeserialize::deserialize_reader(reader)?
             } else { BTreeMap::new() },
+            material_income: if version >= PALW_BOND_BUDGET_STATE_VERSION_V3 { BorshDeserialize::deserialize_reader(reader)? } else { BTreeMap::new() },
+            material_roots: BTreeMap::new(), material_sources: BTreeMap::new(), material_due: BTreeSet::new(),
             deferred_by_bond: BTreeMap::new(),
             deferred_awards: BTreeSet::new(),
             unattributed_income: 0,
             pending_reporters: BTreeMap::new(),
         };
+        let materials: Vec<_> = state.material_income.iter().map(|(id, row)| (*id, *row)).collect();
+        for (id, row) in materials { state.material_index_replace_v1(id, None, Some(&row)); }
         for (id, row) in &state.claims {
             if Self::unpaid_reporter_debt(row) {
                 *state.deferred_by_bond.entry(row.bond).or_default() += 1;
@@ -1101,6 +1127,7 @@ impl PalwBondBudgetStateV1 {
             assignments: BTreeMap::new(),
             models: BTreeMap::new(),
             reporter_income: BTreeMap::new(),
+            material_income: BTreeMap::new(), material_roots: BTreeMap::new(), material_sources: BTreeMap::new(), material_due: BTreeSet::new(),
             deferred_by_bond: BTreeMap::new(),
             deferred_awards: BTreeSet::new(),
             unattributed_income: 0,
@@ -1118,6 +1145,7 @@ impl PalwBondBudgetStateV1 {
             assignments: BTreeMap::new(),
             models: BTreeMap::new(),
             reporter_income: BTreeMap::new(),
+            material_income: BTreeMap::new(), material_roots: BTreeMap::new(), material_sources: BTreeMap::new(), material_due: BTreeSet::new(),
             deferred_by_bond: BTreeMap::new(),
             deferred_awards: BTreeSet::new(),
             unattributed_income: 0,
@@ -1167,10 +1195,13 @@ impl PalwBondBudgetStateV1 {
     /// The table roots and the header digest the V2 root block writes, in table order.
     pub fn root_parts(&self) -> (Hash64, [Hash64; 5]) {
         use crate::palw_state_v2::palw_collection_root_of_entries_v1 as root;
-        let header = if self.header.version == PALW_BOND_BUDGET_STATE_VERSION_V2 {
+        let header = if self.header.version >= PALW_BOND_BUDGET_STATE_VERSION_V2 {
             let income = root(b"bond_budget_reporter_income/v1", self.reporter_income.len(),
                 self.reporter_income.iter().map(|(k, v)| (enc(k), enc(v))));
-            keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice()])
+            if self.header.version == PALW_BOND_BUDGET_STATE_VERSION_V3 {
+                let material = root(b"bond_budget_material_income/v1", self.material_income.len(), self.material_income.iter().map(|(k, v)| (enc(k), enc(v))));
+                keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice(), b"material_income/v1", material.as_byte_slice()])
+            } else { keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice()]) }
         } else { keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header)]) };
         (
             header,
@@ -1221,13 +1252,21 @@ impl PalwBondBudgetStateV1 {
             PALW_BUDGET_TABLE_ASSIGNMENTS_V1 => swap_row(&mut self.assignments, key, expected, install),
             PALW_BUDGET_TABLE_MODELS_V1 => swap_row(&mut self.models, key, expected, install),
             PALW_BUDGET_TABLE_REPORTER_INCOME_V1 => {
-                if self.header.version != PALW_BOND_BUDGET_STATE_VERSION_V2 { return Err("reporter income needs monetary state v2"); }
+                if self.header.version < PALW_BOND_BUDGET_STATE_VERSION_V2 { return Err("reporter income needs monetary state v2"); }
                 let id: Hash64 = borsh::from_slice(key).map_err(|_| "reporter income key does not decode")?;
                 let old = self.reporter_income.get(&id).copied();
                 swap_row(&mut self.reporter_income, key, expected, install)?;
                 let new = self.reporter_income.get(&id).copied();
                 self.update_reporter_binding_index_v1(old.as_ref(), new.as_ref());
                 Ok(())
+            }
+            PALW_BUDGET_TABLE_MATERIAL_INCOME_V1 => {
+                if self.header.version != PALW_BOND_BUDGET_STATE_VERSION_V3 { return Err("material income needs monetary state v3"); }
+                let id: Hash64 = borsh::from_slice(key).map_err(|_| "material income key does not decode")?;
+                let old = self.material_income.get(&id).copied();
+                swap_row(&mut self.material_income, key, expected, install)?;
+                let new = self.material_income.get(&id).copied();
+                self.material_index_replace_v1(id, old.as_ref(), new.as_ref()); Ok(())
             }
             _ => Err("a budget row names an unknown table"),
         }
@@ -1240,7 +1279,7 @@ impl PalwBondBudgetStateV1 {
             && self.releases.is_empty()
             && self.assignments.is_empty()
             && self.models.is_empty()
-            && self.reporter_income.is_empty()
+            && self.reporter_income.is_empty() && self.material_income.is_empty()
     }
 
     // ---- journaled writers ----
@@ -1309,7 +1348,7 @@ impl PalwBondBudgetStateV1 {
     }
 
     pub fn activate_reporter_income_v2(&mut self, j: &mut Vec<PalwBudgetWriteV1>) {
-        if self.header.version != PALW_BOND_BUDGET_STATE_VERSION_V2 {
+        if self.header.version < PALW_BOND_BUDGET_STATE_VERSION_V2 {
             let mut header = self.header.clone();
             header.version = PALW_BOND_BUDGET_STATE_VERSION_V2;
             self.put_header(header, j);
@@ -1654,6 +1693,7 @@ impl PalwBondBudgetStateV1 {
                 // payment can remain once EXEC owns this funded right.
                 self.put_release((row.reuse_not_before, id), false, j);
                 self.put_claim(&id, None, j);
+                self.cancel_material_pending_v1(id, j);
             } else {
                 row.reserved.reward_sompi = 0;
                 self.put_claim(&id, Some(row), j);
@@ -1736,6 +1776,7 @@ impl PalwBondBudgetStateV1 {
             queued.accepted_daa = queued.accepted_daa.min(old.accepted_daa);
             queued.reuse_not_before = queued.reuse_not_before.max(old.reuse_not_before);
         }
+        let material = self.material_transfer_plan_v1(*income_id, queue_id, now, amount, false)?;
         // Every destination and arithmetic check precedes the first journal write.
         remaining.origin = PalwBudgetOriginV1::NativeIncomePartial;
         remaining.reserved.reward_sompi = left;
@@ -1745,6 +1786,7 @@ impl PalwBondBudgetStateV1 {
         }
         self.put_claim(&queue_id, Some(queued), j);
         self.put_release((queued.reuse_not_before, queue_id), true, j);
+        self.apply_material_plan_v1(material, j);
         Ok(())
     }
 
@@ -1799,6 +1841,10 @@ impl PalwBondBudgetStateV1 {
             }
             None => None,
         };
+        let material = match queue_id {
+            Some(id) => self.material_transfer_plan_v1(*income_id, id, now, amount, true)?,
+            None => Vec::new(),
+        };
         if let Some((id, old, next)) = queued {
             self.put_release((row.reuse_not_before, *income_id), false, j);
             self.put_claim(income_id, None, j);
@@ -1816,6 +1862,7 @@ impl PalwBondBudgetStateV1 {
             row.consumed.reward_sompi = paid;
             self.put_claim(income_id, Some(row), j);
         }
+        self.apply_material_plan_v1(material, j);
         Ok(())
     }
 
@@ -1879,6 +1926,7 @@ impl PalwBondBudgetStateV1 {
         let vector = PalwBudgetVectorV1 { reward_sompi: amount, ..PalwBudgetVectorV1::ZERO };
         bond.window = bond.window.checked_add(vector).ok_or(PalwBudgetRefusalV1::Overflow)?;
         bond.latest_release_daa = u64::MAX;
+        let material = self.material_transfer_plan_v1(*award, queue_id, now, amount, amount == remaining)?;
         debt.consumed.reward_sompi += amount; // bounded by immutable remaining above
         self.put_claim(award, Some(debt), j);
         self.put_claim(&queue_id, Some(PalwBudgetClaimRowV1 {
@@ -1888,6 +1936,7 @@ impl PalwBondBudgetStateV1 {
         }), j);
         self.put_release((release, queue_id), true, j);
         self.put_bond(&debt.bond, bond, j);
+        self.apply_material_plan_v1(material, j);
         Ok(amount)
     }
 
@@ -1905,8 +1954,10 @@ impl PalwBondBudgetStateV1 {
             .get(income_id)
             .filter(|row| row.origin == PalwBudgetOriginV1::NativeIncomeQueued && row.live)
             .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        let material = self.material_payment_plan_v1(*income_id, now, policy.window_daa)?;
         self.extend_income_window_v1(income_id, release, j);
         self.forget(income_id, j);
+        self.apply_material_plan_v1(material, j);
         Ok(())
     }
 
@@ -1918,6 +1969,7 @@ impl PalwBondBudgetStateV1 {
             .filter(|row| matches!(row.origin, PalwBudgetOriginV1::NativeIncome | PalwBudgetOriginV1::NativeIncomePartial) && row.live && !row.open)
             .ok_or(PalwBudgetRefusalV1::NotOpen)?;
         self.forget(income_id, j);
+        self.cancel_material_pending_v1(*income_id, j);
         Ok(())
     }
 
@@ -2039,6 +2091,9 @@ impl PalwBondBudgetStateV1 {
         if now <= liability_until || fee == 0 || fee != claim.reserved.reward_sompi || claim.consumed.reward_sompi != 0 {
             return Err(PalwBudgetRefusalV1::Assignment("source fee has not matured or differs from its funded promise"));
         }
+        if self.material_income.contains_key(&material_pending_id_v1(*income_id)) {
+            return Err(PalwBudgetRefusalV1::Assignment("rooted material source income requires its actual native queue"));
+        }
         self.extend_income_window_v1(income_id, release, j);
         claim = *self.claims.get(income_id).expect("extended checked income");
         claim.consumed.reward_sompi = fee;
@@ -2083,6 +2138,7 @@ impl PalwBondBudgetStateV1 {
             .ok_or(PalwBudgetRefusalV1::NotOpen)?;
         debug_assert!(!row.open && row.in_window);
         self.forget(income_id, j);
+        self.cancel_material_pending_v1(*income_id, j);
         Ok(())
     }
 
@@ -2265,7 +2321,8 @@ impl PalwBondBudgetStateV1 {
     /// in-window reservations and its open count the number of its open rows; every in-window row has its release and no other release
     /// exists; consumption within reservation; a model's reservations this epoch within its availability base.
     pub fn check_consistency(&self) -> Result<(), &'static str> {
-        if !matches!(self.header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2)
+        self.material_consistent_v1()?;
+        if !matches!(self.header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2 | PALW_BOND_BUDGET_STATE_VERSION_V3)
             || (self.header.version == PALW_BOND_BUDGET_STATE_VERSION_V1 && !self.reporter_income.is_empty()) {
             return Err("invalid reporter monetary state version");
         }

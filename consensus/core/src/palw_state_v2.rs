@@ -1790,6 +1790,8 @@ pub struct PalwStateParamsV2 {
     /// Separate dormant monetary schema v2 fence, synchronized with Params.
     #[borsh(skip)]
     reporter_income_from_daa: Option<u64>,
+    #[borsh(skip)]
+    material_income_from_daa: Option<u64>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
     /// 2026-10-04 audit's fixes read it). `None` on every shipped preset.
     #[borsh(skip)]
@@ -2039,6 +2041,7 @@ impl PalwStateParamsV2 {
             panel_v3: None,
             bond_budget: None,
             reporter_income_from_daa: None,
+            material_income_from_daa: None,
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,
         })
@@ -2480,6 +2483,12 @@ impl PalwStateParamsV2 {
 
     pub fn reporter_income_active_at(&self, daa: u64) -> bool {
         self.bond_budget_active_at(daa) && self.reporter_income_from_daa.is_some_and(|from| daa >= from)
+    }
+
+    pub fn with_material_income_from(mut self, from: Option<u64>) -> Self { self.material_income_from_daa = from; self }
+    pub fn material_income_from(&self) -> Option<u64> { self.material_income_from_daa }
+    pub fn material_income_active_at(&self, daa: u64) -> bool {
+        self.reporter_income_active_at(daa) && self.material_income_from_daa.is_some_and(|from| daa >= from)
     }
 
     pub fn bond_budget(&self) -> Option<&crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1> {
@@ -29741,6 +29750,7 @@ pub fn palw_v2_pre_object_base_v1(
     palw_improve_material_fold_v1::settle_improvement_material_v1(&mut builder, ctx)?;
     // RFC-0010: the permissionless Panel's engine against the pre-object base, as the fold's step 2f does.
     palw_panel_v3_fold_v1::advance_v1(&mut builder, parent, ctx)?;
+    builder.rearm_material_retirements_v1(ctx.daa_score)?;
     Ok(builder.checkpoint().0)
 }
 
@@ -29764,6 +29774,7 @@ pub fn palw_v2_apply_one_object_v1(
     // `PalwTransitionExtrasV1::own_attempt_class`).
     builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
     apply_object(&mut builder, ctx, object)?;
+    builder.rearm_material_retirements_v1(ctx.daa_score)?;
     Ok(builder.checkpoint().0)
 }
 
@@ -30642,6 +30653,7 @@ pub fn apply_palw_transition_v7(
     //    the next block. A no-op below the fence and while the breaker holds no row.
     apply_rho_breaker_epoch_v1(&mut builder, ctx);
 
+    builder.rearm_material_retirements_v1(ctx.daa_score)?;
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
         builder.entries.push(PalwDeltaEntryV2::Weights {
@@ -34680,6 +34692,12 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
             PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } if builder.params.claim_retirement_daa > 0 => {
                 // Launch blockers §8: the retirement. Nothing reads a terminal claim, and keeping
                 // it costs a re-hash and a re-serialization of the whole registry on every block.
+                let effective = palw_exec_v2_rewards_v1::retirement(&builder.state, builder.params, &claim_id,
+                    terminal_deadline_at_v1(&claim, builder.params, Some(ctx.daa_score))?, &claim)?;
+                if let Some(at) = effective.filter(|at| *at >= ctx.daa_score) {
+                    builder.arm_deadline(at, claim_id);
+                    continue;
+                }
                 builder.retire_claim(claim_id, &claim)?;
             }
             PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {

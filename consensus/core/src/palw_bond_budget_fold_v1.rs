@@ -23,6 +23,7 @@
 
 use super::*;
 use crate::palw_bond_budget_v1::*;
+mod material;
 
 impl PalwChainStateV2 {
     /// UTXO validation and producer preflight use the same first-fence legacy
@@ -258,7 +259,8 @@ impl TransitionBuilder<'_> {
             )
         })
         .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("native income admission has no budget engine".into()))?
-        .map_err(|why| budget_refused(bond, why))
+        .map_err(|why| budget_refused(bond, why))?;
+        self.bind_material_income_root_v1(now, root, native_income_id_v1(root, &bond, kind))
     }
 
     /// Freeze the actual named/valid-reveal winner's full maximum before an
@@ -285,6 +287,12 @@ impl TransitionBuilder<'_> {
         &mut self, now: u64, offence: Hash64, winner: PalwRewardWinnerV1, amount: u64,
     ) -> Result<bool, PalwStateV2Error> {
         if !self.params.reporter_income_active_at(now) { return Ok(false); }
+        let verdict = self.state.consumed_offences.get(&offence).ok_or_else(|| PalwStateV2Error::BondBudgetRefused("reporter award has no rooted terminal verdict".into()))?;
+        if verdict.accepted_daa > now || amount > verdict.collected {
+            return Err(PalwStateV2Error::BondBudgetRefused("reporter award precedes verdict or exceeds collected collateral".into()));
+        }
+        let subject = verdict.claim_id;
+        let material = self.params.material_income_active_at(now) && subject != Hash64::default();
         let id = native_reporter_binding_id_v1(offence);
         let policy = self.bond_budget_mirror_at(now).expect("checked active mirror").policy;
         let reporter_from = self.params.reporter_income_from().expect("checked reporter fence");
@@ -302,10 +310,12 @@ impl TransitionBuilder<'_> {
                     0, native_income_id_v1(offence, &winner.reporter, 3), winner.reporter,
                     binding.accepted_daa, now, amount, &[], false, j)?;
                 budget.mark_reporter_awarded_v1(id, now, j)?;
+                if material { budget.bind_material_income_v1(subject, native_income_id_v1(offence, &winner.reporter, 3), j)?; }
                 return Ok(false);
             }
             budget.stage_reporter_income_v1(id, winner.reporter, now, amount, j)?;
             budget.mark_reporter_awarded_v1(id, now, j)?;
+            if material { budget.bind_material_income_v1(subject, id, j)?; }
             Ok(true)
         }).ok_or_else(|| PalwStateV2Error::BondBudgetRefused("native reporter award has no budget engine".into()))?
             .map_err(|why| budget_refused(winner.reporter, why))
@@ -315,11 +325,12 @@ impl TransitionBuilder<'_> {
     /// recorded even when the recipient has no R room. Conviction has already
     /// collected this exact award from real collateral; no money is issued here.
     pub(super) fn stage_reporter_recipient_v1(
-        &mut self, award: Hash64, bond: PalwBondKeyV2, now: u64, amount: u64,
+        &mut self, award: Hash64, bond: PalwBondKeyV2, now: u64, amount: u64, subject: Hash64,
     ) -> Result<(), PalwStateV2Error> {
         if !self.params.reporter_income_active_at(now) { return Ok(()); }
         if amount == 0 { return Ok(()); }
         let payload = self.state.bonds.get(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.payout_payload;
+        let material = self.params.material_income_active_at(now);
         self.bond_budget_op(|budget, _, j| {
             // Preflight the existing immutable receipt before changing either
             // rooted table. Its payee is frozen now, never looked up by address.
@@ -331,7 +342,9 @@ impl TransitionBuilder<'_> {
                 recipient: Some(bond), payload, maximum: amount, accepted_daa: now,
                 awarded_daa: Some(now), queue: None, paid_daa: None, historical_boundary: None,
             }, j)?;
-            budget.stage_reporter_income_v1(award, bond, now, amount, j)
+            budget.stage_reporter_income_v1(award, bond, now, amount, j)?;
+            if material { budget.bind_material_income_v1(subject, award, j)?; }
+            Ok(())
         })
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("reporter award has no budget engine".into()))?
             .map_err(|why| budget_refused(bond, why))
@@ -354,6 +367,7 @@ impl TransitionBuilder<'_> {
             }
             return Ok(());
         }
+        self.bind_material_income_root_v1(now, root, native_income_id_v1(root, &bond, kind))?;
         self.bond_budget_op(|budget, _, j| {
             budget.pay_native_income_v1(
                 &mirror.policy,
@@ -518,7 +532,8 @@ impl TransitionBuilder<'_> {
             )
         })
         .expect("claim engine")
-        .map_err(|why| budget_refused(row.bond, why))
+        .map_err(|why| budget_refused(row.bond, why))?;
+        self.bind_material_income_root_v1(ctx.daa_score, claim_id, native_income_id_v1(claim_id, &row.bond, 0))
     }
 
     pub(super) fn reserve_round_income_v1(
@@ -1191,7 +1206,8 @@ impl TransitionBuilder<'_> {
             )
         })
         .expect("kernel claim engine")
-        .map_err(|why| budget_refused(row.bond, why))
+        .map_err(|why| budget_refused(row.bond, why))?;
+        self.bind_material_income_root_v1(ctx.daa_score, claim, native_income_id_v1(claim, &row.bond, 3))
     }
 
     /// Called only after the kernel verified the consumer-frozen EXEC owner
@@ -1229,7 +1245,8 @@ impl TransitionBuilder<'_> {
             budget.hold_native_income_v1(&mirror.policy, capital, id, bond, now, until, maximum, &[source], false, j)
         })
         .expect("kernel transfer engine")
-        .map_err(|why| budget_refused(bond, why))
+        .map_err(|why| budget_refused(bond, why))?;
+        self.bind_material_income_root_v1(now, root, id)
     }
 
     /// Kernel carriers create no reward block or consensus weight. Their one
@@ -1568,6 +1585,10 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
         && builder.state.bond_budget.as_ref().expect("created").header.version == PALW_BOND_BUDGET_STATE_VERSION_V1 {
         builder.initialize_reporter_income_v2(ctx, &mirror)?;
     }
+    if builder.params.material_income_active_at(now)
+        && builder.state.bond_budget.as_ref().expect("created").header.version < PALW_BOND_BUDGET_STATE_VERSION_V3 {
+        builder.initialize_material_income_v3(ctx, &mirror.policy)?;
+    }
     // Step 1b drained these exact obligations into the validated coinbase.
     // Queued credits stay held through sparse DAA jumps until that payment.
     let drained: BTreeSet<_> = builder
@@ -1602,6 +1623,11 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
         builder.bond_budget_op(|budget, _, j| budget.confirm_unattributed_payment_v1(id, now, j))
             .expect("created").map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
     }
+    for queue in &drained {
+        builder.bond_budget_op(|budget, _, j| budget.confirm_legacy_material_queue_v1(*queue, now, mirror.policy.window_daa, j))
+            .expect("created").map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
+    }
+    builder.bond_budget_op(|budget, _, j| budget.release_material_income_v1(now, j));
     builder.bond_budget_op(|budget, _, j| budget.release_reporter_income_v1(&mirror.policy, now, j));
     builder.bond_budget_op(|budget, _, j| budget.release_due(now, j));
     // Funded court debt is redeemed only after the real queue drain and its
@@ -1636,6 +1662,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
         )).expect("created").map_err(|why| budget_refused(bond, why))?;
         if amount > 0 { builder.write_payout(queue, Some(PalwPayoutV2 { payload, amount })); }
     }
+    builder.rearm_material_retirements_v1(now)?;
     if let (Some(policy), Some(epoch)) = (mirror.allocation_at(now).cloned(), mirror.allocation_epoch_at(now)) {
         let rolled = builder.state.bond_budget.as_ref().and_then(|b| b.header.allocation).is_some_and(|a| a.index >= epoch);
         if !rolled {

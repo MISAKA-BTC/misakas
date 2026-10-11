@@ -1371,6 +1371,12 @@ impl ConsensusApi for Consensus {
         palw_derived_claim_view_v1(&state, claim_id)
     }
 
+    fn palw_material_income_hold_until_v1(&self, claim: kaspa_hashes::Hash64) -> Option<u64> {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode else { return None };
+        let (_, state) = self.virtual_processor.palw_v2_reader_state(&bundle.state).ok().flatten()?;
+        state.material_income_hold_until_v1(&bundle.state, claim)
+    }
+
     /// ADR-0080 design A, on the node: the materialized tip, then the row itself. The tip read is
     /// the same snapshot every other `palw_*` answer here takes.
     fn palw_model_market_v1(

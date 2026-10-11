@@ -103,10 +103,23 @@ pub(crate) fn retention_prune_plan_v1(
     free: u64,
     reserve: u64,
 ) -> (Vec<usize>, u64) {
+    retention_prune_plan_with_material_v1(claims, chain, |_| false, attempt_horizon, free, reserve)
+}
+
+/// The monetary root oracle also applies to kernel/provider subjects which have
+/// no native claim row. A missing native view cannot discharge an actual queue hold.
+fn retention_prune_plan_with_material_v1(
+    claims: &[RetainedClaimV1],
+    chain: impl Fn(&Hash64) -> Option<RetainedChainViewV1>,
+    material_owed: impl Fn(&Hash64) -> bool,
+    attempt_horizon: Duration,
+    free: u64,
+    reserve: u64,
+) -> (Vec<usize>, u64) {
     let mut doomed: Vec<usize> = Vec::new();
     let mut freed = 0u64;
     for (i, c) in claims.iter().enumerate() {
-        if chain(&c.claim).as_ref().is_some_and(|view| view.da_owed) {
+        if material_owed(&c.claim) || chain(&c.claim).as_ref().is_some_and(|view| view.da_owed) {
             continue;
         }
         let due = match c.kind {
@@ -145,6 +158,7 @@ pub(crate) fn retention_prune_plan_v1(
         for kind in [RetainedKindV1::Attempt, RetainedKindV1::Foreign] {
             let mut order: Vec<usize> = (0..claims.len())
                 .filter(|i| claims[*i].kind == kind && !doomed.contains(i)
+                    && !material_owed(&claims[*i].claim)
                     && !chain(&claims[*i].claim).as_ref().is_some_and(|view| view.da_owed))
                 .collect();
             order.sort_by(|a, b| (rank[*a], age(&claims[*b])).cmp(&(rank[*b], age(&claims[*a]))));
@@ -310,7 +324,9 @@ impl PalwRetentionJanitor {
                 phase: state.phase,
             })
         };
-        let (doomed, short) = retention_prune_plan_v1(&claims, &chain, self.attempt_horizon, free, reserve);
+        let owed = |claim: &Hash64| session.palw_material_income_hold_until_v1(*claim)
+            .is_some_and(|until| until == u64::MAX || now_daa < until);
+        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, &chain, owed, self.attempt_horizon, free, reserve);
         let mut removed = 0usize;
         let mut bytes = 0u64;
         for i in doomed {
@@ -400,6 +416,20 @@ mod tests {
     }
 
     /// **The floor is 8 GiB, or 5 % of a volume big enough for that to be more.**
+    #[test]
+    fn material_only_kernel_subject_pins_old_own_and_foreign_files_without_a_native_claim() {
+        let claims = vec![
+            RetainedClaimV1 { claim: Hash64::from_u64_word(1), paths: vec![], bytes: 40, age: Some(Duration::MAX), kind: RetainedKindV1::Attempt },
+            RetainedClaimV1 { claim: Hash64::from_u64_word(2), paths: vec![], bytes: 30, age: Some(Duration::MAX), kind: RetainedKindV1::Foreign },
+        ];
+        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, |_| None, |_| true, 60 * MIN, 0, 100);
+        assert!(doomed.is_empty());
+        assert_eq!(short, 100, "owed material cannot satisfy space reclamation");
+        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, |_| None, |_| false, 60 * MIN, 0, 100);
+        assert_eq!(doomed, vec![0, 1]);
+        assert_eq!(short, 30, "both copies become reclaimable after their exact release");
+    }
+
     #[test]
     fn the_reserve_is_eight_gib_or_five_percent() {
         assert_eq!(retention_reserve_bytes_v1(0), 8 * GIB);

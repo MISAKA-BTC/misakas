@@ -676,13 +676,22 @@ fn apply_settlements_to_exec_vesting(
                     // No recipient cap refusal is allowed to erase an objective
                     // conviction/default. Preserve the whole funded entitlement
                     // and let pre-object ticks redeem exact R-limited tranches.
+                    let claim = s.claim.ok_or_else(|| refused("reporter award has no terminal court subject"))?;
+                    let terminal = events.iter().any(|event| match event {
+                        LedgerEventV1::Convicted { claim: proved, accuser, accuser_reward, .. }
+                            if s.kind == SettlementKindV1::AccuserReward => *proved == claim && *accuser == s.bond && *accuser_reward == amount,
+                        LedgerEventV1::ProducerDefault { claim: defaulted, .. } | LedgerEventV1::PostFinalDefault { claim: defaulted, .. }
+                            if s.kind == SettlementKindV1::DemanderShare => *defaulted == claim,
+                        _ => false,
+                    });
+                    if !terminal { return Err(refused("reporter award has no objective terminal verdict receipt")); }
                     let funded = reporter_funded.entry(s.claim).or_default();
                     *funded = funded.checked_sub(amount).ok_or_else(|| refused("reporter award lacks collected collateral"))?;
                     let bond = key.ok_or_else(|| refused("reporter award recipient has no native bond"))?;
                     let mut hash = keyed(b"misaka-palw/bond-budget/kernel-reporter-award/v1");
                     hash.update(batch.as_byte_slice());
                     hash.update(&(ordinal as u64).to_le_bytes());
-                    builder.stage_reporter_recipient_v1(finish(hash), bond, now, amount)?;
+                    builder.stage_reporter_recipient_v1(finish(hash), bond, now, amount, Hash64::from_bytes(claim))?;
                     continue;
                 }
                 if s.kind == SettlementKindV1::FinalReward

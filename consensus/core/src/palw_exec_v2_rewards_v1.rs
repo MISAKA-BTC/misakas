@@ -532,6 +532,8 @@ pub(super) fn retirement(
     if at != ordinary {
         return Ok(at);
     }
+    let monetary = state.material_income_hold_until_v1(params, *id);
+    let at = at.map(|at| monetary.map_or(at, |until| at.max(if until == u64::MAX { u64::MAX } else { until.saturating_sub(1) })));
     match horizon(state, params, id)? {
         Some(until) => {
             let after = until.checked_add(1).ok_or(PalwStateV2Error::Overflow("EXEC retirement horizon"))?;

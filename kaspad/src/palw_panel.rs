@@ -7212,7 +7212,23 @@ impl PalwPanelService {
             }
             *last = now;
         }
-        let pinned = self.foreign_pinned.lock().unwrap().clone();
+        let mut pinned = self.foreign_pinned.lock().unwrap().clone();
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let now_daa = session.get_virtual_daa_score();
+        if self.consensus_config.params.palw_material_income_active_at(now_daa) {
+            // Re-read each retained file's rooted physical-payment obligation. The
+            // seat's old finite duty cache cannot discharge a later queue + W hold.
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    if let Some(name) = name.to_str() && let Some(stem) = name.split('.').next()
+                        && let Ok(claim) = stem.parse::<Hash64>()
+                        && session.palw_material_income_hold_until_v1(claim).is_some_and(|until| until == u64::MAX || now_daa < until) {
+                        pinned.insert(claim);
+                    }
+                }
+            }
+        }
         prune_foreign_retention_v1(dir, &pinned, std::time::SystemTime::now(), FOREIGN_RETENTION_MAX_FILES);
     }
 

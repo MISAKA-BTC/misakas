@@ -476,6 +476,11 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Material retention through an authenticated root/dependency's actual monetary
+    /// payment + W. MAX is a funded queue whose payment has not occurred yet.
+    /// None means this dormant path owes no additional material hold.
+    fn palw_material_income_hold_until_v1(&self, _claim: kaspa_hashes::Hash64) -> Option<u64> { None }
+
     /// **ADR-0080 design A: one side's declared court close, mid-assembly.**
     ///
     /// The row `(session_id, side)` holds — count, `present` bitmap, deadlines, digest, deposit —
