@@ -22078,8 +22078,10 @@ impl VirtualStateProcessor {
         // actual locked table before clearing a single virtual UTXO. Memory stays
         // bounded to 1,000 rows; this extra scan runs only during an import.
         let mut staged_multiset = MuHash::new();
-        for chunk in &pruning_meta_read.utxo_set.iterator().map(|row| row.unwrap()).chunks(1000) {
-            let rows: Vec<_> = chunk.collect();
+        for chunk in &pruning_meta_read.utxo_set.iterator().chunks(1000) {
+            let rows: Vec<_> = chunk.map(|row| row.map_err(|e| {
+                PruningImportError::PruningPointImportContextUnavailable(new_pruning_point, format!("UTXO staged table row: {e}"))
+            })).collect::<PruningImportResult<_>>()?;
             let chunk_multiset = self.install(|| {
                 rows.par_iter().map(|(outpoint, entry)| MuHash::from_utxo(outpoint, entry)).reduce(MuHash::new, |mut a, b| {
                     a.combine(&b);
