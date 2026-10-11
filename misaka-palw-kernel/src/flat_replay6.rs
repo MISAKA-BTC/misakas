@@ -58,18 +58,28 @@ pub fn flat_replay_envelope_v6(
     encoder: Option<&EncoderBindingV1>,
 ) -> Result<FlatReplayEnvelopeV6, String> {
     check_flat_resource_scope_v5(program, base.max_positions, encoder, base).map_err(|e| format!("{e:?}"))?;
+    replay_costs_v6(program, base.max_positions, base.root(), encoder)
+}
+/// Shared reference-cost model, called only after the versioned consumer has
+/// independently authenticated its complete scope. This is not admission.
+pub(crate) fn replay_costs_v6(
+    program: &TirProgramV1,
+    max_positions: u32,
+    base_scope: Digest,
+    encoder: Option<&EncoderBindingV1>,
+) -> Result<FlatReplayEnvelopeV6, String> {
     let pr = PreparedV1::without_scope(program, encoder)?;
-    let p = base.max_positions - 1;
+    let p = max_positions - 1;
     let mut out = FlatReplayEnvelopeV6 {
         version: 6,
-        base_scope: base.root(),
-        max_positions: base.max_positions,
+        base_scope,
+        max_positions,
         position_tensor_bytes: 0,
         largest_operand_tensor_bytes: 0,
         history_rows_tensor_bytes: 0,
         parameter_hash_bytes_per_attempt: 0,
         trace_hash_bytes_per_attempt: 0,
-        node_reads_per_attempt: add(base.relation_instances_per_claim, 10)?,
+        node_reads_per_attempt: add(pr.node_count as u128 * max_positions as u128, 10)?,
         hash_reads_per_attempt: 0,
         reply_bytes_per_attempt: 0,
     };
@@ -92,7 +102,7 @@ pub fn flat_replay_envelope_v6(
                 node_hash = v3_hash_allowance(&sh.out, node.out.dtype)?;
             }
             max_node_hash = max_node_hash.max(node_hash);
-            out.trace_hash_bytes_per_attempt = add(out.trace_hash_bytes_per_attempt, mul(node_hash, base.max_positions as u128)?)?;
+            out.trace_hash_bytes_per_attempt = add(out.trace_hash_bytes_per_attempt, mul(node_hash, max_positions as u128)?)?;
             for shape in &sh.inputs {
                 let layout = LayoutV3::try_of(shape).ok_or("invalid replay operand shape")?;
                 out.largest_operand_tensor_bytes = out.largest_operand_tensor_bytes.max(mul(layout.len as u128, 16)?);
@@ -105,8 +115,7 @@ pub fn flat_replay_envelope_v6(
                 let param = &program.params[*i as usize];
                 let shape: Vec<_> = param.shape.iter().map(|d| *d as usize).collect();
                 let hash = v3_hash_allowance(&shape, param.dtype)?;
-                out.parameter_hash_bytes_per_attempt =
-                    add(out.parameter_hash_bytes_per_attempt, mul(hash, base.max_positions as u128)?)?;
+                out.parameter_hash_bytes_per_attempt = add(out.parameter_hash_bytes_per_attempt, mul(hash, max_positions as u128)?)?;
                 max_param_hash = max_param_hash.max(hash);
             }
             if let misaka_palw_tir::Prim::HistAppend { state } = node.prim {
@@ -114,7 +123,7 @@ pub fn flat_replay_envelope_v6(
                 let StateKind::Hist { window } = d.kind else { return Err("history on fixed state".into()) };
                 let shape: Vec<_> = d.shape.iter().map(|d| *d as usize).collect();
                 let l = LayoutV3::try_of(&shape).ok_or("invalid history row")?;
-                let rows = base.max_positions.min(window.saturating_sub(1)) as u128;
+                let rows = max_positions.min(window.saturating_sub(1)) as u128;
                 out.history_rows_tensor_bytes = add(out.history_rows_tensor_bytes, mul(mul(l.len as u128, 16)?, rows)?)?;
             }
         }

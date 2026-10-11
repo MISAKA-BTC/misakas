@@ -1,0 +1,395 @@
+    Blocking waiting for file lock on artifact directory
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+warning: function `lanes_le_v1` is never used
+   --> misaka-palw-tir-exec/src/node/run.rs:114:15
+    |
+114 | pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
+    |               ^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir-exec` (lib) generated 1 warning
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/backend.rs:323:13
+    |
+323 |         let ctx_hash = job.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/backend.rs:1256:9
+     |
+1256 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2008:9
+     |
+2008 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2186:9
+     |
+2186 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2425:13
+     |
+2425 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2456:9
+     |
+2456 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2905:13
+     |
+2905 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3107:9
+     |
+3107 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3282:9
+     |
+3282 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3558:9
+     |
+3558 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4310:9
+     |
+4310 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4353:9
+     |
+4353 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4473:17
+     |
+4473 |             let ctx_hash = binding.job_context.context_hash();
+     |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4561:9
+     |
+4561 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4640:9
+     |
+4640 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:199:13
+    |
+199 |         let ctx_hash = ctx.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:437:9
+    |
+437 |     let ctx_hash = ctx.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/legs.rs:2056:9
+     |
+2056 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1043:9
+     |
+1043 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1351:9
+     |
+1351 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1734:9
+     |
+1734 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2078:14
+     |
+2078 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2215:14
+     |
+2215 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4336:13
+     |
+4336 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4386:9
+     |
+4386 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2885:13
+     |
+2885 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2935:9
+     |
+2935 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/segment_opening.rs:618:9
+    |
+618 |     let ctx_hash = job.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: `misaka-palw-base0` (lib) generated 28 warnings (run `cargo fix --lib -p misaka-palw-base0` to apply 28 suggestions)
+warning: value assigned to `out_node` is never read
+   --> misaka-palw-tir-lower/src/lower/cross.rs:194:24
+    |
+194 |     let mut out_node = None;
+    |                        ^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir-lower` (lib) generated 1 warning
+warning: unused doc comment
+   --> misaka-palw-sdk/src/tir_layout.rs:147:1
+    |
+147 | / /// **The search declare-layout runs**, over the gate `admit`: the logits tiles in order (the caller
+148 | | /// has dropped any whose close is estimated past the carriage); for each, the history tile from
+149 | | /// `h_chunk`, halved while the refusal is one a narrower history tile fixes; at each, the court's
+150 | | /// checkpoint interval (`interval`), halved while the refusal is one a narrower interval fixes — for a
+...   |
+153 | | /// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
+154 | | /// the one an operator acts on.
+    | |_-------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `routed_ok` is assigned to, but never used
+   --> misaka-palw-sdk/src/preflight/model.rs:284:9
+    |
+284 |     let mut routed_ok = false;
+    |         ^^^^^^^^^^^^^
+    |
+    = note: consider using `_routed_ok` instead
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:345:13
+    |
+345 |             routed_ok = false;
+    |             ^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:293:13
+    |
+293 |             routed_ok = true;
+    |             ^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-sdk)
+warning: `misaka-palw-sdk` (lib) generated 4 warnings
+warning: `misaka-palw-sdk` (lib test) generated 4 warnings (4 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.11s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_sdk-a2a6cc1c258b5adf)
+
+running 130 tests
+test census::codes::tests::every_published_preflight_code_has_a_gate ... ok
+test census::codes::tests::task_level_codes_outrank_the_architecture_and_the_tensors ... ok
+test census::listing::tests::a_missing_task_is_inferred_from_a_head_class_or_a_gguf_architecture_and_nothing_else ... ok
+test census::listing::tests::a_nested_checkpoint_is_the_shallowest_then_the_first ... ok
+test census::listing::tests::a_peft_adapter_declares_its_task_by_the_head_it_was_trained_with ... ok
+test census::listing::tests::a_gguf_repository_selects_one_described_single_file_and_never_a_projector ... ok
+test census::listing::tests::an_adapter_s_base_is_its_peft_config_s_through_a_rename_and_never_a_guess ... ok
+test census::gates::tests::a_task_without_a_profile_fails_lower_from_the_listing_alone ... ok
+test census::gates::tests::a_vlm_task_is_a_partial_task ... ok
+test census::gates::tests::an_unsampled_text_model_is_not_run_never_passed ... ok
+test census::gates::tests::a_gated_repository_fails_source_and_every_later_gate_is_not_run_after_it ... ok
+test census::listing::tests::an_adapter_without_a_checkpoint_of_its_own_is_an_adapter ... ok
+test census::listing::tests::other_formats_and_no_weights_are_named ... ok
+test census::listing::tests::the_task_is_declared_or_inferred_from_the_head_class ... ok
+test census::onboarding::tests::an_undeclared_task_is_the_frontends_only_when_a_configuration_names_a_model_class ... ok
+test census::gates::tests::an_undeclared_task_says_whether_a_configuration_names_a_model_class ... ok
+test census::onboarding::tests::a_gate_that_was_not_run_is_never_a_gap_of_any_kind ... ok
+test census::gates::tests::a_shard_set_with_a_part_missing_from_the_listing_is_incomplete ... ok
+test census::listing::tests::the_transformers_checkpoint_at_the_root_is_selected_before_a_gguf_beside_it ... ok
+test census::onboarding::tests::the_importers_refusals_are_frontend_required_and_never_kernel_extensions ... ok
+test census::gates::tests::a_pytorch_checkpoint_is_not_run_never_an_unsupported_format ... ok
+test census::onboarding::tests::bounds_layout_fence_task_profile_and_source_codes_have_their_own_classes ... ok
+test census::tasks::tests::a_task_appears_once_and_an_unknown_tag_has_no_profile ... ok
+test census::onboarding::tests::every_published_code_has_a_class ... ok
+test census::onboarding::tests::a_feature_is_classified_by_the_registrys_protocol_requirement_and_not_by_its_name ... ok
+test census::onboarding::tests::the_tokens_are_the_lifecycles_and_the_kernels ... ok
+test census::rights::tests::the_default_policy_confirms_nothing_and_the_proposal_needs_every_base ... ok
+test census::gates::tests::every_gate_of_a_row_carries_who_has_to_change_something ... ok
+test census::gates::tests::the_format_the_adapter_and_the_missing_weights_are_named ... ok
+test census::codes::tests::the_preflight_raises_no_code_outside_the_table ... ok
+test class_manifest::tests::a_manifest_about_another_file_is_refused_by_name ... ok
+test census::store::tests::an_adapter_with_no_declared_task_carries_the_task_of_its_pinned_bases_head_class ... ok
+test class_manifest::tests::a_manifest_survives_the_round_trip ... ok
+test class_manifest::tests::a_root_disagreement_prints_both_roots ... ok
+test class_manifest::tests::an_absent_class_is_named_rather_than_defaulted ... ok
+test class_manifest::tests::an_unknown_schema_is_refused ... ok
+test class_manifest::tests::the_sidecar_sits_beside_the_artifact ... ok
+test improve::tests::a_job_whose_floor_is_past_its_share_of_the_epoch_s_position_budget_is_not_planned ... ok
+test improve::tests::a_node_prefetches_the_adapter_over_its_parent_and_full_weights_only_where_admitted ... ok
+test improve::tests::a_task_is_derived_only_from_the_epoch_s_own_seed_and_the_policy_s_stages ... ok
+test improve::tests::an_evaluating_node_plans_every_unclaimed_task_it_can_run_as_the_chain_derives_it ... ok
+test improve::tests::the_state_readers_are_the_same_view_as_the_rows ... ok
+test class_manifest::tests::a_qwen36_sidecar_is_bound_by_the_mappings_root_and_an_unknown_lineage_is_refused ... ok
+test improve_eval::tests::a_capture_rebuilds_the_accused_and_names_the_first_divergent_leaf ... ok
+test improve_eval::tests::a_generating_job_runs_binds_and_a_seat_replays_it ... ok
+test improve_eval::tests::a_teacher_forced_job_commits_the_reference_log_likelihood ... ok
+test improve_eval::tests::a_lying_executor_files_a_consistent_claim_and_a_replay_disputes_it_where_the_lie_is ... ok
+test improve_eval::tests::an_accused_evaluation_is_convicted_by_the_close_the_node_builds_from_its_capture ... ok
+test improve_objects::tests::the_specs_parse_into_the_chains_payloads_and_a_bad_one_is_refused ... ok
+test improve_objects::tests::each_object_is_signed_as_the_chain_verifies_it_and_its_ids_are_derived ... ok
+test kernel_execution::tests::forged_plans_contexts_tokens_caps_and_callback_failures_do_not_complete_a_trace ... ok
+test census::vlm::tests::a_panic_at_one_size_is_that_sizes_refusal_and_smaller_sizes_still_run ... ok
+test census::vlm::tests::qwen3_5_needs_192_px_where_the_14_px_towers_take_196 ... ok
+test kernel_params::tests::encoder_job_inputs_are_excluded_only_by_the_explicit_encoder_descriptor ... ok
+test kernel_execution::tests::public_logits_convict_delivery_lies_and_refuse_copied_or_tampered_bindings ... ok
+test lineages::dense::tests::a_chain_registered_graph_v5_row_resolves_to_its_inventory_root ... ok
+test kernel_params::tests::all_preparation_limits_and_wrong_kernel_are_checked_before_any_payload_is_read ... ok
+test lineages::tir::tests::a_recurrent_class_is_declared_within_its_calibration ... ok
+test kernel_execution::tests::every_native_node_value_and_root_match_reference_through_sliding_history_and_moe ... ok
+test census::vlm::tests::every_vlm_fixture_stages_at_some_probe_size_and_a_size_refusal_never_ends_the_walk ... ok
+test kernel_params::tests::independent_range_source_produces_all_layer_bound_roots_and_refuses_missing_or_changed_weights ... ok
+test lineages::tir::tests::the_battery_names_an_inadmissible_ir_class ... ok
+test onboarding_chain::tests::the_envelope_round_trips_through_detached_signing_and_binds_every_field ... ok
+test preflight::kernel::tests::a_vision_pipeline_needs_v3_and_is_eligible_if_armed ... ok
+test preflight::kernel::tests::artifact_graph_domains_and_oversized_jobs_do_not_admit_a_kernel_plan ... ok
+test preflight::kernel::tests::node_bounds_choose_segmented_moe_and_keep_the_proven_i128_relation ... ok
+test lineages::tir::tests::an_ir_class_runs_the_same_with_the_fused_kernels_on ... ok
+test preflight::kernel::tests::semantic_eligibility_cannot_skip_the_node_prosecution_limits ... ok
+test preflight::pipeline::tests::a_ceiling_is_a_resource_blocker_and_a_malformed_declaration_is_the_tools ... ok
+test runtime_pack::provenance::tests::a_converters_record_prints_scope_adapter_descriptors_math_and_logits ... ok
+test sdk::chain_arm_ladder_pin::the_chain_arm_applies_the_rulesets_ladder_like_every_lineage ... ok
+test preflight::kernel::tests::real_qwen25_pilot_tir_fits_unchanged_node_proof_reservation_but_remains_inactive ... ok
+test sdk::chain_arm_tests::arming_stays_off_because_an_unpaid_panel_is_the_cheapest_thing_on_the_chain_to_buy ... ok
+test sdk::chain_arm_tests::the_fence_refuses_until_armed_and_the_armed_arm_serves ... ok
+test check_architecture::tests::a_program_whose_wide_patterns_are_all_fused_is_admissible_and_one_with_unfused_wide_work_is_admissible_generic ... ok
+test sdk::chain_arm_tests::the_refusals_name_their_boundaries ... ok
+test check_architecture::tests::chatglm3_is_lowerable_unverified_and_the_report_says_which_file_it_follows_or_that_none_is_pinned ... ok
+test sdk::mmap_chain_arm_tests::a_dense_declaration_on_a_mapped_root_is_refused_by_the_mmap_engine ... ok
+test sdk::mmap_chain_arm_tests::a_chain_registered_graph_v6_class_resolves_by_its_inventory_root ... ok
+test check_architecture::tests::legacy_mode_projects_a_new_geometry_and_names_a_missing_kernel ... ok
+test sdk::revision_row_tests::a_named_register_class_picks_that_row_alone ... ok
+test sdk::revision_row_tests::a_siblings_registered_weights_admit_only_the_sibling ... ok
+test check_architecture::tests::a_remote_code_architecture_is_lowerable_unverified_and_keeps_the_programs_own_verdict ... ok
+test sdk::revision_row_tests::base_model_id_is_strict ... ok
+test sdk::revision_row_tests::fresh_weights_offer_everything ... ok
+test sdk::revision_row_tests::registered_weights_admit_their_own_models_revision_and_nothing_else ... ok
+test sdk::revision_row_tests::registered_weights_with_no_known_owner_seed_nothing ... ok
+test sdk::mmap_chain_arm_tests::the_v1_declaration_is_refused_with_the_node_named ... ok
+test tests::a_fused_row_preflights_under_t11s_court_with_the_ladder_dormant ... ok
+test sdk::revision_row_tests::the_bounded_loader_asks_its_loader_once_per_admitted_path ... ok
+test tests::candidates_refuse_known_weights_and_registered_classes ... ok
+test sdk::chain_arm_tests::the_chain_arm_and_the_table_path_produce_the_same_execution ... ok
+test sdk::mmap_chain_arm_tests::the_chain_arm_serves_the_mmap_family_and_matches_the_compiled_path ... ok
+test tests::every_builtin_lineage_conforms ... ok
+test tests::the_2m_dense_row_preflights_when_t11s_held_regime_is_armed ... ok
+test tests::the_ledger_names_the_shipped_classes ... ok
+test tests::the_preflight_reads_the_legal_job_bound_the_chain_reads ... ok
+test tests::two_lineages_may_not_share_an_id - should panic ... ok
+test tests::t12_030_a_table_canonical_registration_is_refused_before_it_is_paid_for ... ok
+test tests::a_fused_row_preflights_under_the_court_the_ruleset_arms_and_not_without_it ... ok
+test tir_equiv::tests::a_changed_param_is_found_at_its_row ... ok
+test tir_layout::tests::a_root_claim_refusal_halves_h_tile_and_halts_at_the_first_admissible ... ok
+test tir_layout::tests::a_canonical_job_no_producer_could_answer_is_refused_until_the_second_fence ... ok
+test tir_layout::tests::the_history_tile_search_stops_at_one_and_reports_the_widest_refusal ... ok
+test tests::preflight_admission_answers_before_submission ... ok
+test lineages::tir::tests::an_ir_registration_is_built_signed_and_gated ... ok
+test check_architecture::tests::legacy_mode_lands_on_the_processor_verdicts_for_the_shipped_lineages ... ok
+test tir_manifest::tests::the_lowerer_binds_the_tokenizer_commitment_base0_binds ... ok
+test check_architecture::tests::ir_verdicts_on_real_configs_name_what_they_refuse ... ok
+test tir_manifest::tests::a_declared_layout_gives_the_class_id_a_registration_must_carry ... ok
+test tir_equiv::tests::the_mirror_commits_every_graph_v7_row_and_equals_the_legacy_engine_row_for_row ... ok
+test tir_manifest::tests::a_manifest_round_trips_and_catches_a_changed_file ... ok
+test tir_merkle_index::tests::a_multiproof_from_the_index_is_the_consensus_proof_and_reads_only_the_drawn_leaves ... ok
+test tir_manifest::tests::the_container_and_the_consensus_inventory_agree_on_instances_and_root ... ok
+test tir_merkle_index::tests::a_file_that_is_not_this_artifacts_index_is_refused_by_name ... ok
+test tir_merkle_index::tests::an_authenticated_read_hashes_only_the_covering_leaves_and_refuses_a_changed_byte ... ok
+test tir_merkle_index::tests::the_built_index_folds_to_the_consensus_root_and_survives_a_round_trip_through_a_file ... ok
+test tir_stream::tests::a_range_past_a_tensor_is_refused ... ok
+test tir_rows::tests::rows_are_the_whole_tensors_rows_and_the_index_authenticates_only_what_was_read ... ok
+test tir_stream::tests::streamed_openings_match_the_consensus_paths_including_promoted_tails ... ok
+test tir_stream::tests::the_streamed_root_over_chunks_is_the_same_root ... ok
+test tir_stream::tests::the_streamed_root_is_the_consensus_root_over_a_container ... ok
+test tests::the_floor_resolves_from_nothing_and_unknown_classes_are_refused ... ok
+test lineages::tir::tests::ir_artifacts_load_conform_and_resolve ... ok
+test sdk::chain_only_lattice_tests::a_chain_only_class_certifies_and_earns_a_receipt_block_admission ... ok
+test lineages::tir::tests::an_ir_family_certification_is_built_and_graded ... ok
+test tir_stream::tests::a_container_the_lowerer_streamed_has_the_same_manifest_derived_either_way ... ok
+test check_architecture::tests::ir_verdicts_on_every_hf_tiny_fixture ... ok
+test tir_stream::tests::a_libm_v1_conversion_has_one_root_on_any_thread_count ... ok
+test tir_layout::tests::the_declared_interval_is_the_court_s_exact_bound_with_elementwise_replay_counted ... ok
+
+test result: ok. 130 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 48.23s
+
+     Running tests/flat_candidate_v9.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate_v9-669a0452c105eaaf)
+
+running 4 tests
+test candidate9_preparation_binds_generated_metadata_resource_and_explicit_new_namespace ... ok
+test stored_class_consistency_is_insufficient_without_complete_independent_geometry_and_tariff_checks ... ok
+test bounded_record_codec_refuses_nested_count_namespace_layer_truncation_and_trailing_floods ... ok
+test candidate9_signing_independently_checks_all_roots_and_network_actor_signature ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

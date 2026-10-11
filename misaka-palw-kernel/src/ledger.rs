@@ -98,6 +98,10 @@ use crate::pipeline_public::{
     StageCommitmentsV1,
 };
 use crate::plan::VerificationPlanV1;
+#[path = "flat_candidate7.rs"]
+pub mod flat_candidate7;
+#[path = "flat_candidate9.rs"]
+pub mod flat_candidate9;
 use crate::public::{
     FreshVerifierV1, ProfileMaterialV1, PublicClaimRecordV1, ServedPositionV1, TensorWireV1, classify_position_response_v1,
     program_root_v1,
@@ -517,6 +521,10 @@ pub enum LedgerEventV1 {
     ConformanceClassRegistered {
         class: Digest,
     } = 32,
+    FlatConformanceClassRegisteredV7 {
+        class: Digest,
+    } = 33,
+    FlatConformanceClassRegisteredV9 { class: Digest } = 34,
     ClassRegistered {
         class: Digest,
     } = 1,
@@ -662,6 +670,20 @@ pub enum LedgerEventV1 {
         claim: Digest,
         post_final: bool,
     } = 31,
+    /// **RFC-0002 P0 residual (`crate::sealed_bounty`, past `palw_model_refutation_seal_v1`)**: a conviction by bytes nobody had sealed
+    /// holds its filer's share until `until_daa` for an earlier sealer's reveal. (Discriminants 40–41: lane RFC02-T, 2026-10-11.)
+    BountyHeld {
+        claim: Digest,
+        filer: Digest,
+        amount: u64,
+        until_daa: u64,
+    } = 40,
+    /// A held share paid: to an earlier sealer whose own sealed proof convicted, or to the filer once the window closed.
+    HeldBountyPaid {
+        claim: Digest,
+        accuser: Digest,
+        amount: u64,
+    } = 41,
 }
 
 /// One block.
@@ -782,6 +804,10 @@ pub const MAX_CONFORMANCE_CLASSES_PER_BOND_V1: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct KernelLedgerV1 {
+    pub flat_conformance_classes_v9: BTreeMap<Digest, (Digest, flat_candidate9::FlatCandidateRecordV9)>,
+    /// Derived native projection index; never serialized/hashed or a checker of remote data.
+    pub(crate) native_flat_candidate_ids_v9: BTreeSet<Digest>,
+    pub flat_conformance_classes_v7: BTreeMap<Digest, (Digest, flat_candidate7::FlatCandidateRecordV7)>,
     pub policy: LedgerPolicyV1,
     pub schedule: KernelScheduleV1,
     /// Descriptors this binary implements (never bytes from a transaction).
@@ -865,6 +891,9 @@ pub struct KernelLedgerV1 {
     /// **Table 28** (`crate::court_scope`): per claim, the units each requester named and each accuser's dismissed filings (written
     /// only past the court scope; in the root only once non-empty).
     pub court_scope: BTreeMap<Digest, crate::court_scope::CourtScopeRowV1>,
+    /// **RFC-0002 P0 residual**: the sealed-bounty terms (`crate::sealed_bounty`), consumer-injected past
+    /// `palw_model_refutation_seal_v1` at every load — never part of the state or its root.
+    pub sealed_bounty_policy: Option<crate::sealed_bounty::SealedBountyPolicyV1>,
     budget: BlockBudgetV1,
 }
 
@@ -917,6 +946,9 @@ impl KernelLedgerV1 {
             bonds: BTreeMap::new(),
             classes: BTreeMap::new(),
             conformance_classes: BTreeMap::new(),
+            flat_conformance_classes_v7: BTreeMap::new(),
+            flat_conformance_classes_v9: BTreeMap::new(),
+            native_flat_candidate_ids_v9: BTreeSet::new(),
             conformance_class_owners: BTreeMap::new(),
             pipeline_classes: BTreeMap::new(),
             jobs: BTreeMap::new(),
@@ -946,6 +978,7 @@ impl KernelLedgerV1 {
             verifier_pay_policy: None,
             verifier_pay: BTreeMap::new(),
             court_scope_policy: None,
+            sealed_bounty_policy: None,
             court_scope: BTreeMap::new(),
             budget: BlockBudgetV1::default(),
         })
@@ -1048,7 +1081,25 @@ impl KernelLedgerV1 {
         self.authorize(obj, auth)?;
         let mut out = Vec::new();
         match obj {
-            KernelRouteObjectV1::DemandFlatModelVectorV3 { .. }
+            KernelRouteObjectV1::PostFlatModelVectorV9 {..}
+            | KernelRouteObjectV1::SealFlatModelProofV9 {..}
+            | KernelRouteObjectV1::RevealFlatModelProofV9 {..}
+            | KernelRouteObjectV1::ExpireFlatModelSealV9 {..}
+            | KernelRouteObjectV1::DemandFlatModelUnitV9 {..}
+            | KernelRouteObjectV1::AnswerFlatModelUnitV9 {..}
+            | KernelRouteObjectV1::SettleFlatModelDemandV9 {..}
+            | KernelRouteObjectV1::PostFlatModelVectorV7 {..}
+            | KernelRouteObjectV1::SealFlatModelProofV7 {..}
+            | KernelRouteObjectV1::RevealFlatModelProofV7 {..}
+            | KernelRouteObjectV1::ExpireFlatModelSealV7 {..}
+            | KernelRouteObjectV1::DemandFlatModelUnitV7 {..}
+            | KernelRouteObjectV1::AnswerFlatModelUnitV7 {..}
+            | KernelRouteObjectV1::SettleFlatModelDemandV7 {..}
+            | KernelRouteObjectV1::PostFlatModelVectorV6 { .. }
+            | KernelRouteObjectV1::SealFlatModelProofV6 { .. }
+            | KernelRouteObjectV1::RevealFlatModelProofV6 { .. }
+            | KernelRouteObjectV1::ExpireFlatModelSealV6 { .. }
+            | KernelRouteObjectV1::DemandFlatModelVectorV3 { .. }
             | KernelRouteObjectV1::AnswerFlatModelVectorV3 { .. }
             | KernelRouteObjectV1::SettleFlatModelVectorDemandV3 { .. }
             | KernelRouteObjectV1::PostFlatModelVectorV3 { .. }
@@ -1065,6 +1116,50 @@ impl KernelLedgerV1 {
             | KernelRouteObjectV1::RevealModelRefutationV4 { .. }
             | KernelRouteObjectV1::RegisterModelConformanceClassV2 { .. } => {
                 return Err(KernelRefusalV1::rule(name, "model artifact statements require the authenticated consensus consumer"));
+            }
+            KernelRouteObjectV1::RegisterFlatModelCandidateV7 {
+                binding,
+                descriptor,
+                program_bytes,
+                param_commitments,
+                max_positions,
+                scope_root,
+                replay_root,
+            } => {
+                let class = self.register_flat_candidate_v7(
+                    *binding,
+                    *descriptor,
+                    program_bytes,
+                    param_commitments,
+                    *max_positions,
+                    *scope_root,
+                    *replay_root,
+                    auth.signer_bond,
+                )?;
+                out.push(LedgerEventV1::FlatConformanceClassRegisteredV7 { class });
+            }
+            KernelRouteObjectV1::RegisterFlatModelCandidateV9 {
+                binding,
+                descriptor,
+                program_bytes,
+                param_commitments,
+                max_positions,
+                scope_root,
+                replay_root,
+                resource_root,
+            } => {
+                let class = self.register_flat_candidate_v9(
+                    *binding,
+                    *descriptor,
+                    program_bytes,
+                    param_commitments,
+                    *max_positions,
+                    *scope_root,
+                    *replay_root,
+                    *resource_root,
+                    auth.signer_bond,
+                )?;
+                out.push(LedgerEventV1::FlatConformanceClassRegisteredV9 { class });
             }
             KernelRouteObjectV1::RegisterConformanceClass { descriptor, program_bytes, plan, param_commitments } => {
                 let class = self.register_class_impl(
@@ -1309,6 +1404,9 @@ impl KernelLedgerV1 {
                         if let Some(classes) = self.conformance_class_owners.remove(bond) {
                             for class in classes {
                                 self.conformance_classes.remove(&class);
+                                self.flat_conformance_classes_v7.remove(&class);
+                                self.flat_conformance_classes_v9.remove(&class);
+                                self.native_flat_candidate_ids_v9.remove(&class);
                             }
                         }
                         out.push(LedgerEventV1::Withdrawn { bond: *bond, amount });
@@ -2419,6 +2517,10 @@ impl KernelLedgerV1 {
         }
         let Some(row) = self.claims.get(claim) else { return Err(rule("no such claim")) };
         if row.convicted {
+            // RFC-0002 P0 residual: a conviction by unsealed bytes holds its bounty; an earlier sealer may contest it with its own proof.
+            if self.sealed_bounty_in_force().is_some() && self.held_bounty_v1(claim).is_some() {
+                return self.contest_held_bounty_v1(accuser, claim, proof, out);
+            }
             // A second filing of the same fault, in this block or after a replay: one conviction, no second slash, no fee.
             out.push(LedgerEventV1::Duplicate { claim: *claim });
             return Ok(());
@@ -2476,7 +2578,9 @@ impl KernelLedgerV1 {
                 let paid = self.bounty_holder(claim, accuser, proof);
                 // M*-49: the drawn slots that sealed these bytes share up to `bounty_cap` of the bounty first.
                 let drawn = self.drawn_sealers_v1(claim, &self.proof_sealers(claim, proof));
-                self.convict(claim, &paid, &drawn, is_final, out)
+                // RFC-0002 P0 residual (`crate::sealed_bounty`): past the fence, bytes nobody had sealed have their share held.
+                let hold = self.sealed_bounty_in_force().is_some() && !self.proof_is_sealed_v1(claim, proof);
+                self.convict(claim, &paid, &drawn, is_final, hold, out)
             }
         }
         Ok(())
@@ -2526,7 +2630,52 @@ impl KernelLedgerV1 {
             .collect()
     }
 
-    fn convict(&mut self, claim: &Digest, accuser: &Digest, drawn: &[Digest], post_final: bool, out: &mut Vec<LedgerEventV1>) {
+    /// **A contest of a held bounty** (`crate::sealed_bounty`): refused free unless the accuser's own seal predates the conviction and
+    /// opens to `proof`; then the court runs on the convicted claim like any filing (budget, scaled fee on dismissal).
+    fn contest_held_bounty_v1(
+        &mut self,
+        accuser: &Digest,
+        claim: &Digest,
+        proof: &ProsecutionV1,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), KernelRefusalV1> {
+        const NAME: &str = "FileProof";
+        let rule = |why: &str| KernelRefusalV1::rule(NAME, why);
+        self.held_bounty_contest_allows_v1(accuser, claim, proof).map_err(rule)?;
+        let class = self.claims.get(claim).map(|r| r.class_binding_id).ok_or_else(|| rule("no such claim"))?;
+        let bounds = self.bounds_of(&class);
+        if let Some(why) = bounds.and_then(|b| oversized(proof, &b)) {
+            return Err(rule(&why));
+        }
+        let work = bounds.map(|b| b.max_court_work).unwrap_or(0);
+        let fee = self.policy.dismissal_fee_v1(work);
+        if self.bonds.get(accuser).is_none_or(|b| b.free() < fee) {
+            return Err(rule("the accuser's free collateral does not cover the filing fee"));
+        }
+        self.charge(NAME, work)?;
+        match self.adjudicate(claim, proof) {
+            Ok(()) => self.pay_held_bounty_v1(claim, accuser, out),
+            Err(why) => {
+                let b = self.bonds.get_mut(accuser).expect("checked");
+                b.collateral -= fee;
+                self.burned += fee;
+                out.push(LedgerEventV1::ProofDismissed { claim: *claim, accuser: *accuser, why, fee });
+                settle(out, *accuser, fee, SettlementKindV1::SlashFiling, Some(*claim));
+                settle(out, *accuser, fee, SettlementKindV1::Burn, Some(*claim));
+            }
+        }
+        Ok(())
+    }
+
+    fn convict(
+        &mut self,
+        claim: &Digest,
+        accuser: &Digest,
+        drawn: &[Digest],
+        post_final: bool,
+        hold: bool,
+        out: &mut Vec<LedgerEventV1>,
+    ) {
         let daa = self.daa;
         let producer_collateral = self.claims.get(claim).and_then(|r| self.bonds.get(&r.producer)).map_or(0, |b| b.collateral);
         // What a pre-Final default already took of this claim's reservation (0 for any other claim: before Final a reservation
@@ -2575,31 +2724,41 @@ impl KernelLedgerV1 {
         let reward = ((basis * self.policy.accuser_reward_permille as u128 / 1000) as u64).min(slashed);
         self.burned += slashed - reward;
         out.push(LedgerEventV1::Convicted { claim: *claim, accuser: *accuser, slashed, accuser_reward: reward, post_final });
-        settle(out, producer, slashed, SettlementKindV1::SlashFraud, Some(*claim));
-        // What the bond no longer holds was not slashed: the rest of the reservation is released, so the consumer's mirror matches.
-        settle(out, producer, reserved - slashed, SettlementKindV1::ReleaseClaim, Some(*claim));
         // M*-49: the drawn sealers of the convicting bytes share up to `bounty_cap` first (equally); the earliest sealer keeps the rest.
-        let to_drawn = match self.verifier_pay_in_force() {
-            Some(p) if !drawn.is_empty() => {
-                let each = reward.min(p.bounty_cap) / drawn.len() as u64;
-                for d in drawn {
-                    settle(out, *d, each, SettlementKindV1::AccuserReward, Some(*claim));
-                }
-                each * drawn.len() as u64
-            }
+        let each_drawn = match self.verifier_pay_in_force() {
+            Some(p) if !drawn.is_empty() => reward.min(p.bounty_cap) / drawn.len() as u64,
             _ => 0,
         };
-        settle(out, *accuser, reward - to_drawn, SettlementKindV1::AccuserReward, Some(*claim));
+        let to_drawn = each_drawn * drawn.len() as u64;
+        // RFC-0002 P0 residual (`crate::sealed_bounty`): a held share is not slashed yet — it stays RESERVED on the producer's bond
+        // (it cannot leave) until the contest resolves, when it is slashed and paid in one step (every batch stays balanced).
+        let held = if hold { reward - to_drawn } else { 0 };
+        if held > 0
+            && let Some(b) = self.bonds.get_mut(&producer)
+        {
+            b.reserved += held;
+            b.collateral += held;
+        }
+        settle(out, producer, slashed - held, SettlementKindV1::SlashFraud, Some(*claim));
+        // What the bond no longer holds was not slashed: the rest of the reservation is released, so the consumer's mirror matches.
+        settle(out, producer, reserved - slashed, SettlementKindV1::ReleaseClaim, Some(*claim));
+        for d in drawn {
+            settle(out, *d, each_drawn, SettlementKindV1::AccuserReward, Some(*claim));
+        }
+        if hold {
+            self.hold_bounty_v1(claim, accuser, &producer, held, out);
+        } else {
+            settle(out, *accuser, reward - to_drawn, SettlementKindV1::AccuserReward, Some(*claim));
+        }
         settle(out, producer, slashed - reward, SettlementKindV1::Burn, Some(*claim));
         self.settle_demands_moot(claim, out);
         // The demands that led here are never penalised: the bonds of every served position of the claim return now.
         self.settle_served_demand_bonds(claim, false, out);
         self.opv_sync_live(claim);
-        // A convicted claim takes no further filing: its proof seals are spent.
-        let spent: Vec<(Digest, Digest)> =
-            self.proof_seals.range((*claim, [0u8; 64])..=(*claim, [0xFFu8; 64])).map(|(k, _)| *k).collect();
-        for k in spent {
-            self.proof_seals.remove(&k);
+        // A convicted claim takes no further filing: its proof seals are spent — unless its bounty is held, when the earlier
+        // sealers' rows are what a contest is judged against (spent when the held share is paid).
+        if !hold {
+            self.spend_proof_seals_v1(claim);
         }
         if post_final {
             self.spec_on_post_final_conviction(claim);
@@ -2892,6 +3051,8 @@ impl KernelLedgerV1 {
             self.seals.remove(&(job, producer));
             self.forfeit_claim_seal(job, producer, row, out);
         }
+        // RFC-0002 P0 residual: held bounties whose contest window closed go to their filers.
+        self.expire_held_bounties_v1(out);
         self.proof_seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
         // EXEC holds are keyed by claim, but the poster's escrow is keyed by job. A pending Panel claim may be bound before
         // another producer wins coverage of that same job. Neither its sibling's Final nor idle expiry may spend the held escrow.

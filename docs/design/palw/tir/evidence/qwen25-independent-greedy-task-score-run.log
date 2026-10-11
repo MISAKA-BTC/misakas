@@ -1,0 +1,2 @@
+{"generated_token_agreement": 0.9166666666666666, "exact_generated_job_fraction": 0.6666666666666666, "source_task_answer_fraction": 0.3333333333333333, "integer_task_answer_fraction": 0.3333333333333333, "predeclared_generation_and_answer_thresholds_met": false}
+predeclared generation/answer diagnostic failed; result retained

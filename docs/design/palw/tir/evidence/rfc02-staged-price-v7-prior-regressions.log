@@ -1,0 +1,25 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.42s
+     Running tests/flat_candidate7.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate7-0efcccad22c33f84)
+
+running 5 tests
+test flat_candidate7_codec_counts_exact_ranges_and_complete_parameter_instances ... ok
+test flat_candidate7_identity_rows_rollback_and_no_execution_rights ... ok
+test flat_candidate7_declared_and_stored_scope_mutations_are_refused ... ok
+test flat_candidate7_shared_old_new_catalog_and_block_budget_cannot_be_bypassed ... ok
+test flat_candidate7_long_topk_metadata_admission_is_separate_from_legacy_plan has been running for over 60 seconds
+FLAT_CANDIDATE7_METADATA N=10485760 max_positions=2097152 program_bytes=307 registration_work=139113 court_bytes=37875 court_work=4964969 auxiliary_bytes=128 no_weights_or_job_executed=true
+test flat_candidate7_long_topk_metadata_admission_is_separate_from_legacy_plan ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 67.87s
+
+     Running tests/flat_candidate7_costs.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate7_costs-c272e49074bfba06)
+
+running 5 tests
+test staged_cost_is_exact_schedule_count_and_never_allocates_tensor_extent ... ok
+test invalid_artifact_hash_attempt_is_paid_before_authentication ... ok
+test malformed_canonical_decode_pays_only_first_debit_and_consumes_retry ... ok
+test two_debits_are_one_attempt_and_leave_ordinary_proof_reserve ... ok
+test scheduled_work_is_reserved_before_scope_or_range_and_shared_budget_refusals_keep_parse_debit ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

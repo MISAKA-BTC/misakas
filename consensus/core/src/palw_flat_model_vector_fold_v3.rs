@@ -13,14 +13,14 @@ use misaka_palw_kernel::hash::Digest;
 fn refused(s: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(s.into())
 }
-fn enabled(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+pub(super) fn enabled(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
     if !builder.extras.kernel_route.as_ref().is_some_and(|r| r.opv.is_some()) {
         return Err(refused("flat vectors require palw_panel_free_v1"));
     }
     Ok(())
 }
-fn charge(
+pub(super) fn charge(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     signer: &PalwBondKeyV2,
@@ -50,6 +50,27 @@ pub(super) fn post(
     binding: &Digest,
     bytes: &[u8],
 ) -> Result<(), PalwStateV2Error> {
+    post_inner(builder, ctx, signer, class, binding, bytes, false)
+}
+pub(super) fn post_protected(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    class: &Digest,
+    binding: &Digest,
+    bytes: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    post_inner(builder, ctx, signer, class, binding, bytes, true)
+}
+fn post_inner(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    class: &Digest,
+    binding: &Digest,
+    bytes: &[u8],
+    protected: bool,
+) -> Result<(), PalwStateV2Error> {
     enabled(builder, ctx)?;
     let (class, binding) = (Hash64::from_bytes(*class), Hash64::from_bytes(*binding));
     let route = builder.state.kernel_route.as_ref().unwrap();
@@ -71,10 +92,43 @@ pub(super) fn post(
         .ok_or_else(|| refused("flat vector work overflow"))?;
     let Some(fee) = charge(builder, ctx, signer, work, false)? else { return Ok(()) };
     builder.slash_bond(*signer, fee)?;
+    // RFC-0002 item 3 (RFC02-T): past `palw_model_refutation_seal_v1` (the protected candidate route) a statement is admitted only if
+    // its worst-case public pursuit — G14-B's clock and carriage, the sealed filing included — lands inside its liability horizon.
+    let pursuit_gate = if super::palw_model_refutation_seal_fold_v4::sealed_refutations_in_force_v4(builder) {
+        let ledger_policy = route_ledger_policy_v1(builder)?;
+        builder.extras.kernel_route.as_ref().and_then(|r| r.opv.as_ref()).map(|o| (ledger_policy, o.policy.clone()))
+    } else {
+        None
+    };
     let checked = (|| -> Result<_, String> {
         let route = builder.state.kernel_route.as_ref().unwrap();
-        let post = decode_flat_model_vector_post_v3(bytes).map_err(|e| e.to_string())?;
-        let view = checked_flat_model_vector_v3(route, class, binding, &post)?;
+        let (post, root) = if protected {
+            let p = crate::palw_flat_model_seal_v6::decode_flat_model_vector_post_v6(bytes).map_err(|e| e.to_string())?;
+            let root = p.trace_root(class.as_bytes(), binding.as_bytes());
+            (p.body, root)
+        } else {
+            let p = decode_flat_model_vector_post_v3(bytes).map_err(|e| e.to_string())?;
+            let root = p.trace_root(class.as_bytes(), binding.as_bytes());
+            (p, root)
+        };
+        let view = checked_flat_model_vector_with_root(route, class, binding, &post, root)?;
+        if let Some((ledger_policy, opv_policy)) = &pursuit_gate {
+            let positions = route.kernel_class_record_v1(&class).ok_or("flat candidate disappeared")?.plan.max_positions;
+            let p = misaka_palw_kernel::flat_pursuit5::flat_pursuit_v5(
+                &view.trace.program,
+                positions,
+                view.scope.worst_court_bytes,
+                ledger_policy,
+                opv_policy,
+            )
+            .map_err(|g| format!("{g:?}"))?;
+            if !p.fits(PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1) {
+                return Err(format!(
+                    "FLAT_PURSUIT: the worst-case pursuit lands at DAA {} past the {}-DAA statement horizon",
+                    p.filed_daa, PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1
+                ));
+            }
+        }
         if view.trace.params.by_instance.len() != statement.pc_instances as usize {
             return Err("flat PC count changed".into());
         }
@@ -84,16 +138,24 @@ pub(super) fn post(
             bytes.len().checked_add(view.scope.worst_court_bytes as usize).ok_or("flat carrier overflow")?,
         )
         .and_then(|w| w.checked_add(view.scope.worst_court_work))
+        .and_then(|w| {
+            if protected {
+                super::palw_flat_model_seal_fold_v6::metadata_work(view.scope.worst_court_bytes as usize)
+                    .and_then(|m| w.checked_add(m))
+            } else {
+                Some(w)
+            }
+        })
         .ok_or("flat worst court overflow")?;
         if worst > route_ledger_policy_v1(builder).map_err(|e| e.to_string())?.guaranteed_proof_work_v1()
             || view.scope.worst_court_bytes > FLAT_MODEL_VECTOR_MAX_PROOF_BYTES_V3 as u64
         {
             return Err("flat court exceeds shared guaranteed budget/carrier".into());
         }
-        Ok((post, view.scope))
+        Ok((post, root, view.scope))
     })();
-    let Ok((post, scope)) = checked else { return Ok(()) };
-    let id = post.id(class.as_bytes(), binding.as_bytes());
+    let Ok((post, root, scope)) = checked else { return Ok(()) };
+    let id = vector_id(root);
     if builder.state.kernel_route.as_ref().unwrap().flat_model_vector_header_v3(&id).is_some() {
         return Ok(());
     }
@@ -102,7 +164,7 @@ pub(super) fn post(
         return Ok(());
     }
     let h = FlatModelVectorHeaderV3 {
-        trace_root: post.trace_root(class.as_bytes(), binding.as_bytes()),
+        trace_root: root,
         class,
         binding,
         profile: post.profile,
@@ -129,6 +191,13 @@ pub(super) fn post(
         Some(borsh::to_vec(&FlatModelVectorRowV3 { header: h, post: bytes.to_vec() }).unwrap()),
     );
     builder.write_kernel_row(FLAT_MODEL_VECTOR_BOND_TABLE_V3, borsh::to_vec(signer).unwrap(), Some(borsh::to_vec(&ids).unwrap()));
+    if protected {
+        builder.write_kernel_row(
+            crate::palw_flat_model_seal_v6::FLAT_PROTECTED_TABLE_V6,
+            borsh::to_vec(&id).unwrap(),
+            Some(borsh::to_vec(&true).unwrap()),
+        );
+    }
     Ok(())
 }
 /// The frozen unsealed refutation (refused past `palw_model_refutation_seal_v1` by the route dispatch; the protected reveal,
@@ -152,6 +221,12 @@ pub(super) fn refute_outcome(
 ) -> Result<crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4, PalwStateV2Error> {
     enabled(builder, ctx)?;
     let id = Hash64::from_bytes(*vector);
+    if builder.state.kernel_route.as_ref().unwrap().flat_model_vector_protected_v6(&id)
+        || builder.state.kernel_route.as_ref().unwrap().flat_model_vector_protected_v7(&id)
+        || builder.state.kernel_route.as_ref().unwrap().flat_model_vector_protected_v9(&id)
+    {
+        return Err(refused("protected flat vector requires its actor's mature seal/reveal"));
+    }
     let h = builder.state.kernel_route.as_ref().unwrap().flat_model_vector_header_v3(&id).ok_or_else(|| refused("no flat vector"))?;
     if h.refuted || builder.state.kernel_route.as_ref().unwrap().flat_vector_unavailable_v3(&id) || ctx.daa_score >= h.liability_until
     {
@@ -224,7 +299,13 @@ pub(super) fn demand(
     if builder.state.bonds.get(&h.poster).map(|b| b.operator_id) == builder.state.bonds.get(signer).map(|b| b.operator_id) {
         return Err(refused("flat poster operator cannot demand its own bounty"));
     }
+    if route.flat_vector_slot_v9(signer,slot).and_then(|id|route.flat_vector_demand_v9(&id)).is_some_and(|d|!d.settled) {
+        return Err(refused("shared typed9 requester slot held"));
+    }
     let prior_slot = route.flat_vector_slot_v3(signer, slot);
+    if route.flat_vector_slot_v7(signer, slot).and_then(|d| route.flat_vector_demand_v7(&d)).is_some_and(|d| !d.settled) {
+        return Err(refused("shared v7 requester slot held"));
+    }
     if route.flat_vector_served_v3(&id, &unit).is_some()
         || prior_slot.and_then(|d| route.flat_vector_demand_v3(&d)).is_some_and(|d| !d.settled)
         || route.model_vector_demand_slot_v2(signer, slot).and_then(|d| route.model_vector_demand_v2(&d)).is_some_and(|d| !d.settled)

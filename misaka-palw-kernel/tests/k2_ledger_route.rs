@@ -355,19 +355,32 @@ fn malformed_and_oversized_objects_are_refused_transactionally_through_the_stric
     let ev = w.l.apply_encoded(&good, &a).unwrap();
     assert!(ev.iter().any(|e| matches!(e, E::ClaimCommitted { .. })));
     assert_ne!(w.l.root(), before);
-    // PanelCovered is not an object: no declared tag decodes to it, and its old shape is not a route object.
-    for tag in 0u8..=40 {
+    // PanelCovered is not an object. The old 64-byte body is truncated for
+    // every other tested carrier except the three declared digest-only demand
+    // settlements. Those name unknown demands in this state and refuse by
+    // rule; neither a valid settlement tag nor an unknown tag grants coverage.
+    let after_good = w.l.root();
+    for tag in 0u8..=61 {
         if !(1..=11).contains(&tag) {
             let mut b = vec![KERNEL_ROUTE_VERSION_V1, tag];
             b.extend([0u8; 64]);
-            // RFC02's settle objects (inner 30 / 35) are exactly one digest: those bytes ARE a canonical settle object, which the bare
-            // ledger refuses by rule (consumer-owned courts). Every other tag's 64 zero bytes are not an object.
-            let expect = if [TAG_SETTLE_MODEL_VECTOR_DEMAND_V2, TAG_SETTLE_FLAT_MODEL_VECTOR_V3].contains(&tag) {
+            // RFC-02's settle objects (inner 30 / 35, and codex's flat v7 / v9 settles, 52 / 60 since `rfc02/merge-final`) are exactly
+            // one digest: those bytes ARE a canonical settle object, which the bare ledger refuses by rule (consumer-owned courts). Every
+            // other tag's 64 zero bytes are not an object.
+            let expected = if [
+                TAG_SETTLE_MODEL_VECTOR_DEMAND_V2,
+                TAG_SETTLE_FLAT_MODEL_VECTOR_V3,
+                misaka_palw_kernel::route::TAG_SETTLE_FLAT_MODEL_DEMAND_V7,
+                misaka_palw_kernel::route::TAG_SETTLE_FLAT_MODEL_DEMAND_V9,
+            ]
+            .contains(&tag)
+            {
                 RefusalKindV1::Rule
             } else {
                 RefusalKindV1::Malformed
             };
-            assert_eq!(w.l.apply_encoded(&b, &a).unwrap_err().kind, expect, "tag {tag}");
+            assert_eq!(w.l.apply_encoded(&b, &a).unwrap_err().kind, expected, "tag {tag}");
+            assert_eq!(w.l.root(), after_good, "tag {tag}: a refused carrier changed the state");
         }
     }
     assert_eq!(TAG_FILE_DEMAND_V1, 8);

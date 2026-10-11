@@ -1,0 +1,17 @@
+{
+  "recorded_utc": "2026-10-11T12:05:46.771657+00:00",
+  "kind": "initial no-run diagnostic source pins, no concurrent closure claim",
+  "files": {
+    "misaka-palw-sdk/src/flat_streamed_locator_v9.rs": "c1de63f5778384cb28ba8b75cb605871cb51343b9192d920eda4e9b2cfabeafd",
+    "misaka-palw-sdk/src/flat_snapshot_v9.rs": "0acb109048acda9edbfbc8ef0bd79e8198b5734727c24ab1061777aad47677a9",
+    "misaka-palw-sdk/src/lib.rs": "e1f858fc092343d084f3a006f9c8b1fcdde8325e299c8181267188a6545de645",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9.rs": "67ccfb982ac1fc638c611f9feece6b68f28f379580bce4c12e93070ff78004d8",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9/actual_outsider.rs": "a5af287bddcd81a4153e08da0b9acf28ef56bfaebb3e8569e81fbe612f7deaea",
+    "misaka-palw-kernel/src/flat_resources10.rs": "6293bb15b61db93d1cab36a4559c071741c465bf4efe720e6e7c672b964d2c87",
+    "misaka-palw-kernel/src/flat_execution11.rs": "7c012b3ccd73d1979a8d953dcdd3fc793a6d0fb1f3a02d4b000edae8554277a7",
+    "misaka-palw-kernel/src/flat_quota11.rs": "c2a6d852fa86a4271ecf40ff9a1e0225a9727893e798c15a81e2ae5ee348ada0",
+    "consensus/core/src/lib.rs": "9e7a6b65112b893b291e9861f00000c525b6af8e9fa55b328ef7344abf34683d",
+    "Cargo.lock": "b37cef757e460f652b1c4d885930f6e7ce846f5660c2e788d18b72c8b5ef6429"
+  },
+  "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p kaspa-consensus --lib --no-run"
+}

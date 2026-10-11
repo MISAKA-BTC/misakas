@@ -1,0 +1,22 @@
+
+thread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v9::actual_outsider::flat_v9_actual_qwen_fresh_node_unknown_ordinary_public_discovery_own_proof_redemption_and_ibd' (4376750) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9/actual_outsider.rs:235:102:
+called `Result::unwrap()` on an `Err` value: "local reference10 axis IndexSteps"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+        9.52 real        29.00 user         1.92 sys
+          2135015424  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               24642  page reclaims
+              112031  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                 125  voluntary context switches
+              204056  involuntary context switches
+        376713738089  instructions retired
+        108616315787  cycles elapsed
+           347784272  peak memory footprint

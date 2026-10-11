@@ -1,0 +1,14 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 39s
+     Running tests/flat_candidate9.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate9-25059127372bf198)
+
+running 5 tests
+test candidate9_bounded_nested_codec_rejects_counts_before_allocation ... ok
+test candidate9_duplicate_refusal_and_projected_shared_owner_catalog ... ok
+test candidate9_complete_roots_rows_rollback_and_no_execution_eligibility ... ok
+test candidate9_import_forged_scope_replay_resource_and_rooted_tariff_refuse ... ok
+test candidate9_global128_catalog_and_raw_import_caps_precede_untrusted_decode ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

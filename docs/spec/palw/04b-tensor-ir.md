@@ -3147,3 +3147,771 @@ variant to be refused with the GPU path in front of it. A node whose build or ma
   program's un-fused nodes. The verdict is a statement about speed and blocks no registration.
 * `LOWERABLE_UNVERIFIED (the program's own verdict: V)`: the architecture's float reference is remote code this tool cannot run offline, so
   the fidelity column is empty; `V` is the verdict the program earned, which holds.
+
+## 18. Protected flat candidate evidence v6 (dormant versioned consumer)
+
+This explicit version is a non-reward candidate statement, under the existing
+unarmed kernel-route and panel-free gates. It does not change TIR v1 primitives,
+flat-v5 commitment/resource semantics or historical v3 candidate encodings.
+
+`FlatModelVectorPostV6 = borsh(version=6, body: FlatModelVectorPostV3)`. Decode
+requires the exact version, existing bounded v3 nested grammar, no trailing
+bytes, and a total body within the v3 post ceiling. Its trace root is
+`object_id("misaka-palw/flat-model-vector/protected-trace/v6", (version,
+body.trace_root(class,binding), 3:u64, 100:u64, 4:u32, 1024:u32))`. The existing
+statement-id domain hashes this distinct root. The three declared implementation
+roots must equal this protected trace root. Header/body/resource validation
+reconstructs this root independently. Protected and historical statements share
+the eight-entry bond catalog, the original vector collateral and public DA
+paths. A protected marker in aux table 64 selects the exact v6 body decoder.
+Inner 32 MUST refuse a protected statement before invoking its unsealed court.
+
+| Inner kind | Fields | Rule |
+| --- | --- | --- |
+| 36 `PostFlatModelVectorV6` | class, binding, bounded post bytes | Same model/candidate/admission and vector collateral rules; separate protected root |
+| 37 `SealFlatModelProofV6` | vector, seal | Signature-derived actor; immutable fixed slot and original deposit |
+| 38 `RevealFlatModelProofV6` | vector, salt, bounded proof bytes | Actor's own mature exact-carrier seal, independently bound court, atomic settlement |
+| 39 `ExpireFlatModelSealV6` | vector, actor | Any authenticated active bond closes one eligible fixed row |
+
+Persist seal rows in table 65 keyed by `(vector, actor)`, bounded four-vector
+bond catalogs in table 66 and a total row count in table 67. Each row binds
+version 6, vector, actor, seal, posting/maturity/expiry DAA, spent flag, the actual
+bond and its reserved deposit. The actor MUST equal the existing kernel bond-id
+mapping of that bond. Posting requires an open protected vector, an independent
+poster/challenger operator, a free actor slot, fewer than 1,024 total rows, enough
+original free collateral for the route policy's `seal_deposit`, and
+`mature = posted + 3 < expires = min(posted + 100, liability_until)`, with checked
+arithmetic. Existing rows cannot be replaced. Posting pays the shared admission
+dismissal tariff. Live-duty, retirement, withdrawal and committed-capital queries
+include the deposit, even after expiry until it is explicitly settled.
+
+A reveal reserves ONE run and work debit from the common proof-reserve budget
+before raw proof hashing or any stored program/PC/body/fault decode. The debit is
+the v3 structural court tariff plus the immutable terminal scope's maximum court
+work and `model_artifact_work_v2(0, proof_bytes + 1024)` for metadata/raw hashing.
+Protected registration MUST price the worst possible such debit within the same
+guaranteed proof allowance. A missing, borrowed, immature, expired or mismatched
+seal pays the same bounded dismissal tariff without entering the terminal court.
+A successful seal check is `check_flat_seal_v6`: exact version/vector/actor,
+unspent, `mature <= now < expires`, and the existing actor/vector/salt/exact-proof
+digest commitment. Context, court bytes/work/scratch and evidence authentication
+remain independently checked against the persisted admitted scope. A malformed
+or fault-free court pays the authenticated filer's fee and leaves the seal
+unspent. An over-budget filing is dropped without decoding or consuming the seal.
+
+Success atomically marks the vector refuted, zeroes its original reservation,
+slashes that original collateral once, credits the existing 490-permille
+challenger share to the authenticated revealing bond's payout, and marks its
+seal spent with zero reserved deposit. No second successful reveal or historical
+refutation may credit that vector. The statement confers no model conformance,
+execution Final or reward eligibility.
+
+Explicit expiry deletes exactly one row, updates its bounded actor catalog and
+decrements the total count. Before expiry it is allowed only when the vector is
+already refuted or unavailable; those decided cases return the pending deposit.
+Otherwise expiry forfeits an unspent deposit from its original bond. The caller
+pays the shared metadata admission tariff. No global deadline scan, alternate
+payout actor or unbounded seal history is part of this version. These rules bound
+this consumer component; deployment, aggregate transport/retention, worst-job
+inclusion and honest liveness remain independent RFC02 completion gates.
+
+### 18.1 Protected preparation interface (non-consensus tooling)
+
+The reference SDK's `prepare_flat_model_post_v6` takes an exact bounded v3 body
+and explicit class/binding. It MUST refuse a wrong profile/version, excess bytes
+or source implementation records that do not all equal the original v3 trace
+root for those coordinates. Only after this check may the wrapper's three
+records be rebound to the v6 protected root. The job/evidence/scope fields retain
+their values; this rebinding does not prove that three programs ran independently.
+
+`FlatProofSecretV6` is a private local Borsh record, not a consensus object:
+`(6:u16, network_domain:Hash64, vector:Hash64, bond:PalwBondKeyV2, salt:Digest,
+proof:Vec<u8>)`. Its fixed header including the proof count is 266 bytes and its
+maximum total is that header plus the existing one-MiB proof ceiling. Decode
+checks raw length, exact version, fixed fields, bounded count, exact remainder
+and bounded flat-v5 proof grammar before returning it. It retains the exact
+carrier bytes. An SDK caller supplies a fresh secret salt; CLI `seal` generates
+64 bytes with the OS RNG and keeps them out of the public object/report.
+
+`seal_object` and `reveal_object` require the selected network domain and signing
+bond to match the private record. Reveal also requires the supplied native row's
+bond to match, and passes its fixed seal to the common actor/vector/exact-proof/
+clock checker. A supplied row/height is `UNVERIFIED_REMOTE_STATE` until obtained
+from authenticated local chain state; this precheck MUST NOT replace the
+consumer's own persisted-row and DAA checks. The SDK signs only inner 36–39 under
+the existing outer 110 message/context. The signing key's ownership of the bond
+is checked at native acceptance.
+
+`palw-class flat-v6 --help` describes the offline `post|seal|reveal|expire` workflow.
+It takes explicit network, signing
+key file, bond and output. `post` takes a v3 body/class/binding; `seal` takes a
+vector/proof/private output; `reveal` takes the private record/supplied row/DAA;
+`expire` takes a vector/actor. All output paths are reserved with exclusive
+creation before writing, existing files/symlinks are never replaced, and files
+are mode 0600 on Unix. Ordinary write failures remove only newly created outputs.
+The whole signed object and its listed carriers remain available for review.
+
+The reference splitter retains the exact signed assembled object in existing
+generic chunks at the unchanged byte/count caps. Reassembly and signature tests
+are transport-codec evidence, not court authenticity or timely inclusion tests.
+This interface does not implement new RPC transport, whole-job acquisition,
+retention or a capacity guarantee for the shared generic chunk table. Those and
+aggregate honest-liveness/deadline bounds remain RFC02 completion gates. No new
+consensus grammar, policy constant, resource root or shipping activation is
+introduced by the tooling interface.
+
+### 18.2 Protected reveal target in the existing kernel chunk lane
+
+Append target discriminant 3, `FlatProofV6 { vector:Hash64, actor:Digest }`, to
+`PalwKernelChunkTargetV1`. Targets 0–2, outer 113 and its signature message/context,
+table 41, stored groups, per-bond two-group limit, per-part deposit and 64-DAA
+maximum TTL retain their encodings/rules. No generic shared chunk slot is used.
+
+Each protected part requires an active opener, `actor = kernel_bond_id(opener)`,
+the existing panel-free context, an open protected vector and its actor's
+persisted unspent seal with `mature <= now < expires` and `now < liability_until`.
+The last valid target DAA is `min(seal.expires, liability_until) - 1`; the group
+TTL is clipped to that deadline. Every continuation rechecks the fixed target.
+Before opening/continuing, the conservative completing-part metadata debit plus
+the admitted maximum protected reveal debit MUST fit together within the policy's
+guaranteed proof work, with at least two proof runs (or two full-block runs for
+an explicitly zero-reserve policy). Overflow or an insufficient envelope refuses
+the target without opening a deposit-backed group. This is a transport capability
+check; source candidate admission alone does not certify split-proof inclusion.
+Missing, borrowed or no-longer-live targets cannot open/continue a group. Fixed
+target authentication precedes variable stored-group decoding and assembly.
+
+A protected group's accumulated bytes MUST remain at most
+`FLAT_SEAL_MAX_PROOF_BYTES_V6 + 16 KiB`. Both acceptance assembly and the fold
+check this bound before whole-object variable decoding. The assembled object's
+group hash, target vector and signature-derived actor must match; its inner kind
+must be 38 and its signer the chunk opener. The completing carrier authenticates
+both the part signature and the assembled reveal signature. The reveal's own
+seal, context, immutable admitted resource scope and atomic settlement checks
+remain mandatory; partial bytes confer no court or payout rights.
+
+Protected part processing reserves metadata work before variable group decode:
+`metadata_work(part_bytes + 3 * max_assembled_bytes)`, with the same 1024-byte
+metadata allowance as §18. A live mature target uses the proof reserve; a refused
+fixed target uses admission capacity, pays the filer's dismissal tariff and
+returns without a group. A valid part pays that tariff before group handling.
+Completion additionally incurs the protected reveal's existing one-run/work
+debit. Other malformed chunk errors retain existing rehearsal/drop and carrier
+fee behavior. Existing group deposits are refunded on delivery and forfeited
+after an unfinished group's TTL; common committed capital includes them.
+
+Per-bond count/deposit queries use the exact serialized bond-key prefix and fixed
+target/count/clock/deposit/part-count headers. They do not allocate stored parts
+or scan/decode other actors' proof rows during free-collateral calculations.
+Stored accepted groups remain bounded by their existing per-bond/part limits.
+The closing sweep also reads fixed expiry/deposit headers without cloning proof
+payloads. It retains the strict `now > expires` forfeiture rule. Its global fixed-
+row scan and all-target aggregate resource costs remain separate requirements;
+this optimization establishes no whole-network liveness bound.
+
+The SDK's `flat_reveal_carriers_v6` checks supplied own seal metadata and the
+assembled network/key signature, then signs the existing kernel parts. The
+offline CLI uses it for large reveals and keeps the exact whole object plus the
+listed `.chunkN` files for review/submission. `flat_object_carriers_v6` refuses
+large protected reveals rather than allocating generic shared-group parts.
+Offline row/height trust, worst-job inclusion, real-size resource accounting,
+public acquisition/retention, fidelity/tasks, execution Final and A6/A8 remain
+RFC02 completion gates. Deployment fences remain dormant.
+
+### 18.3 Anchored protected candidate and seal reads (non-consensus tooling)
+
+The public protected reader MUST use the unchanged op-211 row-response grammar.
+`KernelRowsSnapshotV1::into_route_v1` exposes the common complete-snapshot rebuild:
+identical tip/roots/header/count across pages, exact ordered row coverage, both
+reconstructed roots, and a header clock no later than the served tip. Existing
+onboarding reads use this same rebuild and retain their policy/program checks.
+
+`FlatPublicSnapshotV6::from_snapshot` additionally requires a separately supplied
+`FlatSnapshotAnchorV6` with exact `tipDaa`, `networkDomain`, `rulesetDigest`,
+`ledgerRoot` and `auxRoot`. The anchor MUST be authenticated to the caller's local
+chain or state proof outside this reader. Matching remote pages to their own
+reported roots is not evidence of chain membership. The checked reader retains
+an immutable anchor; callers cannot change the clock or domains after validation.
+
+`candidate(vector,class,binding)` MUST bind those requested identities to a
+protected v6 marker and independently rebuild the native typed context and
+resource scope. `reveal_row` MUST additionally refuse a refuted/unavailable/expired
+candidate and require that bond's exact persisted unspent seal with
+`mature_daa <= anchor.tip_daa < expires_daa`. Exported bytes are the existing
+`FlatNativeSealRowV6`, without a new row or wire version. Native acceptance still
+checks the current authenticated signer/bond, state/clock, exact proof/salt and
+terminal court; snapshot reads do not grant admission, availability or Final.
+
+The SDK `flat_rpc_page_v6` bounds one JSON response to
+`2 * MAX_SNAPSHOT_BYTES_V1 + 1 MiB`; its header remains at most 64 KiB decoded.
+Before hex-to-binary copies, it checks declared/actual row counts and aggregate
+hex bytes against the unchanged 128-MiB local snapshot ceiling. Malformed hex,
+u8 table overflow, unknown fields, unavailable routes and stray terminal cursors
+MUST be refused. The common snapshot applies aggregate binary-key/row/metadata
+accounting across pages. These limits are local reader ceilings, not peak RAM,
+producer constraints or aggregate network/consensus budgets.
+
+Offline `palw-class flat-v6 snapshot --network ID --bond TXID:INDEX --out ROW
+--pages NDJSON --anchor JSON --vector HEX --class HEX --binding HEX` uses no signing
+seed. NDJSON contains one complete JSON response per line. All pages are validated
+before an output is created exclusively, with Unix mode 0600; outputs are never
+overwritten. Its report MUST retain
+`MATCHED_SUPPLIED_ANCHOR_CHAIN_TRUST_REQUIRED`, identify the anchored height, and
+explain that the caller authenticates the anchor. Existing `flat-v6 reveal` uses
+the exported row and reported height but independently checks its private material.
+No carrier is submitted by either preparation command.
+
+Actual op-211 builder/JSON component evidence and synthetic SDK fixtures remain
+separate. Automatic local chain/state-proof anchor acquisition, live public
+transport, retention/pruning and whole-job honest inclusion/deadline guarantees
+remain required by RFC02; no dormant activation fence is armed by this reader.
+
+
+### 18.4 Explicit v7 TopK point court component (not a node route)
+
+The v1 TopK semantic rule, shape/type rules, primitive/program identity, canonical
+work and history/job limits MUST remain unchanged. The current reference and
+native backend use a heap for K <= 64, or repeated at-most-2K-index partitions for larger K. Full-axis selection
+emits its known index set directly. Source scores stay in their original
+storage. The native-storage implementation compares the stored integer values
+directly through the source layout; view offsets, transpose/slice strides,
+zero broadcast strides and i128 extrema MUST preserve exact selection and tie
+rules. An implementation may optimize work without changing economic credit.
+
+`TopKContextV7` MUST carry `topk_court_id_v7()` and the unchanged flat-v5 bound
+claim context. The selected relation MUST be TopK with a registered parameter or
+authenticated node as its score source. Fixed-axis N and K follow v1 validation.
+This component does not extend H, job lengths, public full-tensor source courts
+or existing network descriptors. Existing flat-v5 scope and proof grammars MUST
+retain their previous admission and refusal behavior.
+
+`TopKFaultV7` encodes `version:u16 = 7`, `row:u64`, a fault kind, and separate
+output/score operands. The fault discriminants are `Range = 0 {slot:u32}`,
+`Order = 1 {left:u32}` and `Dominance = 2 {selected:u32,rival:u32,gap:u32}`.
+Output requires the exact selected node opening. At most three output and two
+score leaves are accepted in total across flat/legacy lists; lists are strictly
+ordered and duplicate-free. Range and Order carry no score operand. The bounded
+exact decoder rejects oversized counts before reserving vectors, invalid shapes,
+paths, typed values, unsupported versions, truncated objects and trailing bytes.
+The filing maximum is 128 KiB. Registered parameters retain the frozen v1
+parameter rule: i128 parameters are forbidden, i64 parameters remain legal, and
+i128 scores are legal as computed internal nodes.
+
+Coordinates use the same axis row for output and score points. With trailing
+product S, an extent A and row r, the flat index of slot t is
+`((r / S) * A + t) * S + r % S`; both r and t MUST be in range. The output grammar
+is IDX, with flat-v5 leaves for a node of at least 64 elements and v3 row leaves
+otherwise. Parameters retain v3 row leaves; internal score nodes use their exact
+flat-v5/small-v3 grammar. Every opening MUST authenticate to the bound source,
+segment and parameter roots with the declared dtype/shape.
+
+Range convicts an emitted id >= N. Order convicts `id[left] >= id[left+1]`.
+Dominance requires in-range distinct a=`id[selected]` and b=`rival`, and
+`0 <= gap <= K`. When present, `id[gap-1] < b < id[gap]` authenticates the omitted
+member gap. Its score at that row convicts iff `score[b] > score[a]`, or equal
+scores with b < a. A correct ascending set cannot convict; range/order defects
+cover malformed sets, and any different valid-size set has a dominated member.
+No whole-axis allocation or evaluation is permitted in the terminal court.
+
+For `L = bit_length(K)`, derive per-row selection work
+`(N+K) * (4L+16)` and auxiliary bytes `64K`. Multiply work by the derived row count;
+source/output residency is excluded from this temporary-memory price. The local
+scanner checks shape, selected count, remaining work and auxiliary ceiling
+(including its 32-MiB ceiling) before its first callback, then debits the complete
+attempt. An incomplete acquisition consumes that work. Caller acquisition must
+authenticate score/set reads to the same roots; terminal authentication remains
+independent.
+
+For bounded program bytes B, unrolled node count M and derived node/source/output
+opening ceilings U/V/W, derive filing ceiling `F = 1024+2U+2V+3W`, court work
+`B^2+64B+128F+1024M`, and scratch `16F+32B+64M+4096`. Require F <= 128 KiB, work
+<= 2^30 and scratch <= 32 MiB. Derivation validates metadata without allocating
+axis tensors or trees. A declaration MUST equal the independent derivation in
+all fields; its root uses the separate v7 scope domain. These are relation
+component prices, not a whole-program/network/retention/transport guarantee.
+
+Missing source material MUST dismiss the point proof; it grants no producer
+default or availability conviction. Existing conditional external-verification
+mode A is unchanged. This court introduces no consensus availability obligation.
+
+No current node route or protected-v6 reveal decoder accepts this codec. Before
+activation, a new consumer must explicitly bind the court id, derive all-relation
+normal-verifier/court/resource bounds, provide authenticated public acquisition
+and localization, preserve actor-cost/capital/aggregate liveness rules and test
+honest execution Final independently. Synthetic fixed-axis trials do not satisfy
+checkpoint/task/context/fidelity/performance or A6/A8 requirements. All existing
+shipping fences stay dormant.
+
+### 18.5 Explicit v7 mixed-court graph and replay contract (no native route)
+
+The new `flat-court-set/v7` identity binds the flat-v5 commitment profile, the
+exact `topk-point-court/v7` identity, ordinary v5 courts, all positions/relations,
+decode and malformed-header kinds, and the outer v7 grammar. The program and
+resource scope use separate v7 domains. Neither an existing profile digest nor
+an old vector identity selects this court set.
+
+`FlatResourceScopeV7` MUST be derived from a canonical validated program, exact
+maximum positions and exact optional encoder binding. Extents remain within
+the frozen v1 history bound; an encoder has its exact derived inputs and one
+position. Include one record per reachable block node with exact occurrence
+multiplicity, selected court policy, filing/work/scratch/operand-leaf bounds,
+TopK selection work/auxiliary memory and selected-value reads. Include total
+relation instances; worst terminal bounds across ordinary, TopK, malformed and
+decode courts; storage/reference tensor payloads, node commitments, flat tree
+and hash material; and complete TopK scan/read/reply quantities. Any changed,
+omitted, underpriced, rebound or surplus declaration MUST be refused.
+
+For TopK, inspect both initial and last-position source wiring in every unrolled
+occurrence. A registered parameter or authenticated node selects point v7;
+other sources select ordinary v5. A mixed state policy MUST price both and
+dispatch from the exact relation's derived source. An ordinary relation proof
+MUST NOT substitute for a point-selected relation. A malformed-header proof
+and delivered decode proof remain v5 kinds within the v7 envelope. Account for
+all earlier sub-64 internal legacy layouts across an H threshold, not only the
+first and last flat layouts. Derivation MUST allocate neither tensor images nor
+position arrays and MUST NOT hash/serialize the program per TopK occurrence.
+
+For the v5 raw bound before its own version/discriminant, the mixed wrapper
+adds 6 filing bytes, 768 work and 96 scratch bytes. For a complete TopK-v7
+bound, it adds 3 filing bytes, 384 work and 48 scratch bytes. Apply the existing
+1-MiB/2^30/32-MiB/1,024-leaf terminal ceilings to the complete envelope. Require
+the ordinary TopK scanner's selection auxiliary bytes <= 32 MiB. All-position
+scope may reject a graph even when an isolated point filing fits.
+
+The exact mixed wire format is `u16=7`, `u8 kind`, and the complete inner bytes:
+kind 0 is bounded `FlatFaultV5` including its version, kind 1 is bounded
+`TopKFaultV7` including its version. Unknown versions/kinds, oversized input,
+truncations, surplus bytes and inner count/path/type failures MUST be refused
+before variable-size allocation. Courts MUST rederive the full graph scope,
+the exact wiring-selected kind and the filing's actual bounds before judgment.
+
+The ordinary replay acquires registered parameters independently and checks
+every node and delivered id. A differing point-selected TopK reads its selected
+ids through `FlatValueV7`: `u16=7` and a bounded `FlatOperandV5` containing its
+exact output node plus exactly one flat OR legacy output leaf. The entire reply
+MUST be <= 16 KiB. Node identity, declared IDX type/shape, leaf coordinates and
+typed root MUST authenticate before using an id. A fault obtains at most three
+selected leaves and two own score leaves, then roundtrips and independently
+verifies the terminal proof. Public selected values never replace own scores.
+Missing/bad/substituted replies MUST yield a value demand, not correctness.
+
+`FlatReplayEnvelopeV7` binds the exact v7 scope and reuses the frozen v6 reference
+cost formulas as data, not v6 admission. In addition reserve the scope's complete
+TopK scan work and auxiliary bytes. For each point relation, price
+`rows * (K+3)` selected-value reads at maximum H, times occurrence multiplicity
+and maximum positions, each at 16 KiB. Add those reply bytes to the ordinary
+reply envelope and four times those bytes to the trace-authentication hashing
+allowance. All quantities use checked bounded metadata and separate i128
+reference containers from declared storage width.
+
+The same local session MUST reserve the whole parameter/trace hash and TopK scan
+attempt before any provider callback. A failed artifact/read/demand consumes
+the attempt. Node, hash and selected-value reads MUST consume their read and
+maximum reply allowance before calling providers. Missing acquisition and
+retry MUST NOT reset counters. Underpriced declarations and shape/work/byte/
+temporary-memory limits MUST stop before dependent callbacks.
+
+These remain component tensor/hash/read/scan prices: they are not whole-process
+peak memory, complete primitive CPU, inclusion/deadline, public storage or shared
+network-resource/economic guarantees. No current node post, protected seal or
+reveal, chunk, DA, activation or Final route accepts this contract. A consumer
+must explicitly bind it and complete the remaining RFC02 acceptance requirements.
+Conditional external mode A and dormant fences remain unchanged; no consensus
+availability obligation or reward/ExecutionFinal right is introduced.
+
+### §18.6 — Explicit native mixed-court candidate registration, v7
+
+Object tag 40 MUST carry the model binding, artifact/job role descriptor,
+canonical program bytes, complete parameter commitments, maximum positions
+and declared scope/replay roots. The artifact descriptor MUST be the known v4
+decoder or v5 encoder role. This does not select its historical court: the plan
+MUST independently bind version 7, program root, v7 court set/profile, extent,
+exact encoder binding and complete v7 scope/replay roots. Use distinct
+`flat-candidate-plan/v7` and `flat-candidate-class/v7` hash domains. The class
+id binds the model binding, complete plan root, parameter root and OPV mode.
+
+Canonical decode MUST bound the entire native object to 1,583,616 bytes, program
+bytes to 256 KiB and parameter-entry counts by the remaining byte payload
+before allocating either variable collection. Refuse invalid option tags,
+truncation, surplus bytes and noncanonical reencoding. Native authentication
+MUST require a Matured/Final binding with the exact descriptor, canonical
+program root and submitted parameter-instance root. A legacy or borrowed
+binding/scope, an official compiler label and synthetic attestation do not
+satisfy these checks.
+
+Native binding work MUST be reserved before parameter-root hashing/binding
+checks: 64B + 8,832P + 1,024, where B is program bytes and P is parameter
+instances. The actor MUST have the admission fee in free original collateral;
+accepted and inauthentic attempts both consume ordinary work and that fee.
+Kernel preparation MUST independently check/charge
+B² + 64B + 8,832P + 16,384 before parameter-root hashing and canonical decode.
+After a successful canonical typed decode, count scheduled nodes N from the
+pre/layer/post block references without allocating unrolled wiring or values.
+Check/charge 16N*1,024 before ranges, scope or replay derivation; reuse the paid
+decoded program. The 16 metadata passes conservatively cover three prepared
+writer/offset constructions, both scopes' TopK first/last source walks,
+occurrence bookkeeping, reference replay and framing/map traversal margins.
+Count declared real parameter instances before allocating the per-layer set
+and require equality to the submitted count.
+
+Require the combined per-attempt price and shared accumulated ordinary work
+within the admission allowance. Stage two extends the one already counted
+adjudication; it MUST NOT buy another run or enter proof-reserved work. A failed
+decode retains stage-one work, and a scope/range/declaration failure after stage
+two retains both debits. These structural prices are not PWU or reward weight.
+The earlier byte-times-maximum-schedule tariff in §14.36's historical evidence
+is superseded by these staged checks; no scope/court root or ceiling changes.
+
+Require exact ranges, complete declared real parameter instances and equality
+of every derived plan/scope/replay field. Require worst court work within
+guaranteed proof allowance and each priced reference position/operand/history/
+selection component within consumer memory policy. These component checks do
+not certify total RSS, all primitive CPU/deadlines or shared network resources.
+
+Store candidates in table 29 (`flat-conformance-v7`). Add the conditional
+`ledger-flat-conformance-extension/v7` root domain only when that collection is
+nonempty, after the existing conformance extension; row-root and live-state
+root MUST agree. Restore MUST rederive the complete plan/policy and check the
+class key/owner. Share the existing eight-entry conformance-owner quota across
+old and new candidates in both admission orders. Withdrawal MUST remove both
+catalogs. These candidates MUST NOT appear in the execution-class table or
+create execution eligibility, jobs, rewards or ExecutionFinal rights.
+
+### §18.7 — Bounded token/patch/audio specialization contract, v7
+
+The declarative length wire is version u16=7, three maximum u32 counts, a
+canonical maximum-shape v1 program and strictly ordered shape-slot bindings.
+Bound the entire wire to 320 KiB, program to 256 KiB and binding count to 4,096;
+check counts against remaining bytes before allocation. A shape slot selects
+one fixed axis of a parameter, state, block carry or block node. Duplicate,
+unordered, unknown, absent or non-fixed slots MUST fail. Attributes, constant
+bytes, scheduling and frozen H MUST NOT change.
+
+Each actual count MUST be nonzero iff its maximum is nonzero and MUST NOT
+exceed that maximum or 2^24. Independently derive canonical type/ranges and
+complete scope/replay for the maximum and requested graph. Bind version,
+template root, actual counts, specialized program root, positions, scope root
+and replay root in `flat-length-admission/v7`; compare the entire derivation
+when restoring/checking an admission. Text decoder token count MUST equal
+prompt count + generated count - 1 and the execution positions. One-position
+encoder token count MUST equal its prompt count. Text admission MUST reject
+nonzero patch/audio counts until their typed input count/root contract exists.
+
+All trace artifact and stage-input parameter reads MUST check exact declared
+dtype, shape, payload length and representable values before node evaluation.
+Artifact reads MUST additionally match the declared per-layer namespace.
+Reject a larger provider tensor even if the primitive could evaluate it; it
+would invalidate the admitted semantics and resource envelope. Preserve the
+frozen interpreter's valid results and commitment grammar.
+
+### §18.8 — Bounded history-selection relation component, v8
+
+This section defines an isolated extension relation, not a complete v8 TIR
+graph, registered class or native activation. Frozen v1 H-axis TopK remains
+invalid. Bind version 8, outer graph root, exact source/output occurrence,
+node/slot coordinates, nodes per position, source dtype, rank<=3 row shape,
+window, selection cap and maximum positions. Refuse maximum positions above
+10,485,760, zero/out-of-range window or selection cap, source after output,
+invalid node slots and source element products above 2^28.
+
+At p, source shape MUST be [min(p+1,window),..row_shape]; output MUST be IDX
+[min(Kcap,H),..row_shape]. Select by descending score and ascending window-local
+id for ties. An id's absolute position is p+1-H+id; id MUST be less than H.
+Check source/output i128 reference payloads, work and auxiliary limits before
+output allocation. Reserve O(N log K) work and 64K auxiliary bytes<=32 MiB.
+Metadata scope derivation MUST allocate no position arrays or tensor images.
+
+Fault version 8 MUST bind the plan/job roots, row and range/order/dominance kind
+to the exact authenticated source/output nodes and segmented roots. Bound its
+plan wire to 256 bytes, terminal filing to 128 KiB, work to 2^30 and scratch to
+32 MiB. Authenticate at most two source leaves and three output leaves;
+reconstruction of an N-element source MUST NOT be required by the court.
+Reject unknown versions/kinds/counts, truncation and surplus bytes before
+variable allocation. Historical v7 decoders MUST NOT implicitly accept v8.
+
+The relation's session MUST precharge source hashing and complete reference
+selection work before public callbacks. Every selected-value reply is bounded
+at 16 KiB and charged before acquisition, including authentication hashing;
+failed callbacks and retries MUST NOT restore allowance. A source HistAppend,
+state reset or history-continuity fault remains a separate graph relation:
+the selection proof alone MUST NOT claim that continuity was established.
+Complete typed v8 execution/checker/graph admission/native court integration,
+shared resources/economics and RFC02 checkpoint/Final acceptance remain open.
+
+### §18.9 — Native protected mixed scope/court/DA, v7
+
+Append inner tags 41..47 for post, own seal, own reveal, seal expiry, public
+demand, answer and demand settlement. Require a matured bound candidate and
+active descriptor; independently rederive the complete registered scope7 and
+replay7. A post MUST bind the entire admitted program, PC, token/trace namespace
+and both envelopes. An optional fixed text specialization MUST match its
+maximum template, current program, exact counts and both derived roots.
+Nonzero patch/audio counts MUST fail. These candidates do not grant execution
+eligibility or ExecutionFinal rights.
+
+Use tables 68..76 for the protected marker, seals, seal actor/count catalogs,
+demands, requester slots, served units, open count and unavailable marker.
+Bind a seal to version7/vector/actor/salt/exact proof bytes. Maturity is three
+DAA; expiry is at most 100 DAA and the original vector liability horizon.
+Share four seals per bond and 1,024 globally with v6. A copied, spent, early,
+expired or wrong-version seal MUST NOT authenticate a prosecution. Share the
+eight-vector original-capital catalog with older routes. Protect v7 vectors
+against unsealed old refutations.
+
+Public units are committed node headers, flat hash leaves and admitted IDX
+TopK output elements. Bound replies to 16 KiB, open demands to 32 per vector
+and shared requester slots to four. Save exact node index/count, dtype/shape
+and segment root at demand admission; authenticate replies against these
+fixed fields without decoding variable program/PC rows. Preserve the original
+liability through answer grace and any pending own seal or demand. Once-only
+fraud/default credit MUST use the actual collected original poster slash and
+the existing 490-permille finder share. It MUST NOT create another reserve or
+pay a second conviction/default reward.
+
+Append tag113 target4 for FlatProofV7{vector,actor}. Admit chunks only for the
+same actor's mature unspent seal and protected vector. Bound the terminal by
+the persisted scope and 1 MiB ceiling; reserve stored cloning/assembly before
+allocation. The last chunk and nested court MUST fit two guaranteed proof runs
+and their combined work. Generic lane exhaustion MUST NOT take an own protected
+slot. Bound and charge decode, scope/PC work, hashes and retries before work;
+an invalid paid filing MUST NOT poison the stored honest statement. Shipping
+fences and mode-A external source acquisition remain unchanged.
+
+### §18.10 — Explicit complete mixed graph scope/court and replay, v9
+
+Use a distinct ordinary-point court ID and mixed court-set/root domains. Keep
+frozen TIR25, v3 parameters and flat-v5 internal commitments unchanged. For
+ordinary relations authenticate one exact output element and the scalar
+evaluator's complete dependency leaves. A MatMul second registered parameter
+MUST use PC-v3 column openings; other parameters and internal legacy nodes use
+their registered row layout. Committed TopK MUST use point7; public/initial
+TopK, malformed and decode MUST use their admitted v5 relation. Old decoders
+MUST NOT accept the v9 envelope implicitly.
+
+Independently derive all scheduled relation prices before accepting a declared
+scope. Bound metadata visits at2^20 before allocating the relation receipts.
+Cover p=0, initialization p=1, both sides of every input/output 63/64-element
+history grammar boundary, and the maximum H. Price flat tails at127 values.
+Bind full program, profile, court set, extent and optional encoder namespace.
+Recheck the full scope for the complete court API, and add its derived metadata
+work plus8 MiB+512 bytes per relation to the terminal scratch. The combined API
+MUST remain within1 MiB proof,2^30 work,32 MiB scratch and1,024 leaves. The pure
+complete-scope bound helper alone MUST NOT authenticate a submitted scope.
+
+Mixed wire version9/tag0 ordinary, tag1 TopK and tag2 legacy MUST have bounded
+nested codecs, exact counts and no trailing bytes. Typed replies bind version,
+scope and exact committed node; values support all six dtypes with one leaf
+bounded at16 KiB, headers are bounded at512 bytes and rank4. Authenticate dtype,
+shape, requested element/leaf and node/segment namespace. Missing or borrowed
+material MUST NOT become a conviction. Independent full replay MUST use own
+acquired registered parameters and actual bound job inputs. Reserve the local
+scope/reference/hash/read/selection/reply/attempt envelope before callbacks;
+failed reads and retries MUST consume allowance. These local contracts grant
+no native execution eligibility or Final right.
+
+### §18.11 — Reference resource vector and settlement corrections, v10
+
+Bind program/complete scope9/PC/exact positions/encoder and every primitive
+resource row in the resource-vector-v10 root. Independently derive the21
+dimensions listed in ResourceAxisV10; canonical PWU and reward weight are
+separate. A local streaming reservation MUST bind actor/job/vector/exact tokens
+and fixed policy ceilings. Atomically compare accumulated plan/block/bond/
+network allowances before invoking providers; no retry may increase ceilings,
+change the subject or restore spent work. Borrowed parameter dtype/shape/byte
+extent MUST match declarations before allocating i128 values, and each returned
+parameter MUST authenticate to its exact PC namespace. Parameter-provider
+external work and process RSS are not certified by these payload bounds.
+
+All reference settlement accumulated slashed/routed/burned/paid/escrow-spent/
+FinalReward amounts MUST use checked arithmetic before mutation. Payouts and
+burns MUST NOT exceed prior debited original collateral; FinalReward MUST also
+be bounded by spent escrow. Apply receipt batches atomically and require debit/
+route balance before committing the cloned result. A failed instruction or
+unbalanced batch MUST preserve the original book. An externally slashed existing
+reservation may use the remaining collected collateral and release the rest;
+new allocation MUST reject an existing reservation above collateral. Aggregate
+reference settlement is not job-specific native reward provenance. Persistent
+native policy/retention/quota/escrow integration remains a separate contract.
+
+### §18.12 — Opt-in bounded authenticated external inputs, component v12
+
+Bind the exact frozen-v2 stage, maximum canonical v1 view, real source-PC root,
+maximum positions and explicit token/patch/audio axis map in the template root.
+Every present modality MUST bind an external stage input axis. Refuse source
+weight or persistent-state resizing, random sources and post-write stages.
+Maximum and actual graphs MUST independently pass frozen validation, range
+analysis and full scope9. Actual lengths and positions become immutable job
+admission fields. Present modalities MUST have nonzero lengths, absent modalities
+MUST remain zero, and over-maximum lengths MUST refuse.
+
+At most16 external inputs and16,384 real PC instances are allowed. Both maximum
+and actual raw payload MUST be at most16 MiB and i128 payload at most32 MiB.
+Authenticate exact real PC keys/root and job/admission/input-root counts before
+callbacks. Atomically reserve the entire local raw/i128/attempt allowance before
+acquisition. Refuse wrong dtype/shape/exact byte extent before expansion, then
+check external intervals and PC-v3 tensor commitments against exact job roots.
+Expensive failures retain the full allowance. Keep authenticated values and
+combined PC immutable; virtual input parameters follow real source parameters
+in the canonical view and MUST NOT substitute a source-weight namespace.
+
+The initial component authenticates job-constant tensors for all admitted
+positions and Rows/Final stages without post-write effects. Its local budget
+does not price scope preparation, PC/tree hashing, scratch or provider work.
+Native consumers MUST bind the job-root/admission/combined-PC contract and
+charge the independently derived full resource/quota envelope before those
+operations. Native wire/retention, per-position input sources, stage edges,
+escrow and media Final are not supplied by this component.
+
+### §18.13 — Public ordinary localization and checkpoint evidence
+
+Before ordinary locator callbacks, independently check the complete scope9 and
+exact requested relation coordinates. Authenticate public node headers and
+hash replies against the committed namespace before descending to an unknown
+leaf. Headers MUST cover all six frozen dtypes and retain authentic malformed
+metadata for its admitted header court. Missing evidence MUST request acquisition
+or dismiss; it MUST NOT fabricate a value or conviction.
+
+Changing a checkpoint history bound creates a distinct canonical program and
+scope/resource/replay roots. Borrowing old raw payloads MUST independently check
+every registered parameter instance, positional fill and declared recipe against
+the new program before execution. Record whether calibration is reused. Freeze
+context, input sequences, original-model reference and fidelity gates before
+outputs; preserve prior failed protocols. A teacher-forced logit diagnostic and
+its process RSS/timing MUST NOT substitute for completed tasks, maximum source
+context, native Final or the unchanged A6/A8 denominator.
+
+### §18.14 — Funded job and persisted quota component contracts, v11
+
+Bind exact native-authenticated mature source identities, candidate9 maximum
+scope/replay/resource10 and immutable execution/quota policy in the class.
+Fix actual input lengths, positions and independently derived actual scope/
+resource/quota roots at job admission. Native MUST authorize an actual original
+requester debit and permanent requester/nonce uniqueness before atomic funding.
+Admission time, funding receipt, producer/class substitutions MUST NOT permit
+reuse of that nonce. The initial funded grammar admits exact text jobs only.
+
+One job admits one protected claim. Native MUST authenticate its exact trace
+and original producer reserve before committing. Final requires completed
+retention, no pending own proof or DA, and elapsed latest-answer grace; pay
+original escrow only once. Fault refunds use that same escrow, and finder/burn
+MUST use actually collected original slash with checked balance before mutation.
+Restore fixed job state against independent native job/state anchors, never
+anchors supplied by the same body. Preserve access to settlement of existing
+jobs if source eligibility is later revoked, while refusing new admission.
+
+Persist all21 consumed/reserved axes under trusted chain-derived block and
+interval context. Prepay expensive work and retain failed attempts. Reserved
+actions MUST authenticate the exact producer; challenger attempts MUST spend
+only their ordinary unreserved pool. Mature protected challenger entitlements
+require their own native reservation. Expired closing MAY debit a fixed current
+ordinary envelope without old quota refunds; mark terminal only using its exact
+private prepaid token and genuinely conserved native terminal book. A DAA jump
+MUST NOT strand escrow or reopen computation/source proofs. Late trace-DA
+default collection MUST authenticate its original unanswered deadline.
+
+Restore quota state against an independent native root; a structurally valid
+conserved snapshot alone grants no credits. Paying a terminal attempt MUST leave
+its subject open until the native terminal book and actual payout authorize the
+private close token. Reserve class-maximum court/chunk/restore costs separately
+from actual job resources, and guard the priced native stored-post cap before
+copying or decoding.
+
+Native MUST apply quota, original debits/reservations, job state and UTXO payouts
+atomically. Bound retained catalogs and reclaim terminal rows only with permanent
+native spent-request anchors, preserving same-interval consumed work and unused
+guarantees. Clearing a catalog MUST NOT recreate baseline credit or reopen a
+spent job. Unavailable externally acquired R has no source-fault entitlement.
+
+### §18.15 — Complete-task diagnostic evidence and stopping grammar
+
+Freeze task membership, maximum generation, stopping rule, semantic answer
+rules and fidelity/quality gates before source or integer outputs. A protocol
+that stops at first EOS MUST include that EOS in output agreement and count a
+missing EOS at its cap as incomplete. Count missing output IDs as unequal.
+Independently score both original-model correctness and integer correctness,
+separately from token agreement and fixed-count trace bit equality. Preserve
+prior failed protocols and record the exact program/context/calibration.
+
+An offline EOS-stop diagnostic MUST NOT silently change a native fixed-count
+job/court contract. Native variable stopping needs its own immutable admission,
+bounded maximum resource reservation, exact claimed actual extent and checked
+stop/output relation before it can receive native Final or active-cohort credit.
+Small completed diagnostics do not establish A6/A8 population coverage.
+
+### §18.16 — Native v9 conformance and candidate metadata lifetime
+
+Bind candidate registration, post, selected DA, own seal/reveal/chunks and court
+to the exact same full v9 scope, replay and immutable resource root. Preserve
+legacy empty-table roots and require explicit opt-in for the new route.
+Independent public import MUST derive full candidate metadata; authenticated
+local restoration MAY reuse admitted rooted resource metadata only while
+rechecking the complete scope and paying its bounded native restore tariff.
+
+Prepay bounded candidate-prefix projection before reading headers, and retain
+large unmodified raw rows outside local ledger journal diffs. Bound aggregate
+row count, raw bytes and independent derivation work before public bulk import.
+Owner withdrawal MUST retain candidate metadata while protected traces, pending
+own proofs or DA still depend on it, including legacy v7 claims. Catalog reuse
+requires expiry and absence of all such dependencies. Conformance settlement
+and original-collateral finder payout do not establish funded execution Final.
+
+### §18.17 — Native class/preparation/header trust boundaries, v11
+
+An original native candidate9 already independently commits its class resource10
+root. The private native class view shall recheck canonical program, complete
+scope, replay, exact source binding and compiled policy, without fabricating or
+materializing an unused class resource vector. Public candidate imports remain
+full independent checks. An actual-job plan shall be independently derived;
+the native preparation root shall bind class/input/requester/producer/nonce/
+reward/plan, and Fund shall authenticate that original row plus exact current
+block eligibility, canonical monotone operator nonce and original atomic debit.
+A same-length plan is not a prompt or actor authorization.
+
+Class identity includes the independently derived source court proof/work/
+scratch bound. It uses original PC bytes 4 +Σ(67+2 when layered), the frozen
+128KiB native2 proof allowance, seven wrapper bytes, program bytes B and exact
+PC instance count N. Work is B²+64B+8832N+64(maxProof+7)+65536; scratch is
+8B+512N+8(maxProof+7)+65536. Quota Court/Chunk must cover both computation and
+source bounds. Native shall authenticate its original binding bound and pay
+restore, copy, codec and fixed selected-row costs before processing. Normal
+per-action and carrier limits are unchanged.
+
+A rooted fixed class header is readonly. Existing job restoration shall validate
+original job/state roots and conserved funding; it confers no baseline or
+eligibility. Late collection of an established computation/source court requires
+an exact authenticated original proof identity and inclusion within this claim's
+liability. Native may specialize a verified global exact R/PC theorem to an
+already-live claim without another heavy verifier on Close. It shall pin the
+original finder and check operator independence for that claim; same-operator
+collection refunds the requester and burns the entire actual slash.
+
+[26 pure component tests](../../design/palw/tir/evidence/rfc02-execution11-native-headers-verdict.json)
+cover these fixed-record/money rules with owned-source preimages and immutable
+replay. They are not actual native coin/Final/redemption evidence. The
+[12 streaming outsider controls](../../design/palw/tir/evidence/rfc02-mapped-R-ordinary9-local-consumer-verdict.json)
+are SDK controls; a distinct actual fresh-node diagnostic now authenticates
+complete original R/PC, runs its own model, locates an unknown ordinary fault
+through public DA and obtains original-collateral finder payout plus IBD replay.
+The original model is acquired externally under mode A and special-court
+relations remain explicit. This is not funded honest Final or requester escrow
+redemption evidence. Actual native cohort and A6/A8 completion remain open.
+
+### §18.18 — Discovery reservation and fixed terminal work
+
+A proof-root-bound seal MUST NOT be treated as pre-proof discovery capacity.
+Before unknown-fault acquisition can claim protection from ordinary traffic
+exhaustion, native shall authenticate an independently paid bounded discovery
+owner/session against the original funded job, vector, actor/operator and
+nonce. Conversion shall bind the same owner's exact proof and new maturity;
+ordinary requests cannot consume another owner's reservation. Producer answer
+count, bytes, retries and all resource axes shall be independently reserved for
+the full admitted lifetime. A successful ordinary43-demand diagnostic alone
+does not establish this guarantee.
+
+Native terminal reservation shall cover actual fixed readonly class/job/plan,
+source-fact, bounded seal/DA headers, selected quota rows and atomic payout
+processing before their codecs/hashes/copies run. Whole program, resource vector
+or quota-map restoration cannot be charged as a small fixed terminal action.
+Failed expensive attempts retain their debit. Existing escrow settlement shall
+remain accessible after source revocation and shall spend original funds once.
+The native11 carrier module grants no live Fund/Final route by itself.

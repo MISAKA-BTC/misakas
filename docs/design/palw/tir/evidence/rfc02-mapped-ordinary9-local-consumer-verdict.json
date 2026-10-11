@@ -1,0 +1,74 @@
+{
+  "schema": "misaka.rfc02.mapped-ordinary9-local-consumer-verdict.v1",
+  "captured_utc": "2026-10-11T11:42:24.358683+00:00",
+  "status": "eight independently mapped synthetic controls pass; unexported ordinary-only SDK draft; actual native outsider uncompiled/unrun",
+  "pre_execution_owned_source_binary_receipt": {
+    "schema": "misaka.rfc02.mapped-ordinary9-final-owned-preimage.v1",
+    "captured_utc": "2026-10-11T11:41:17.599801+00:00",
+    "binary": "/tmp/rfc02-mapped-ordinary9-immutable-32e33d83a00e/flat_streamed_locator_v9-6ee75760eb45fb1b",
+    "binary_sha256": "32e33d83a00ef34530a2c1bd8698651ffcb64dc178ae78a839f28b276cd72f71",
+    "owned_sources_sha256": {
+      "misaka-palw-sdk/src/flat_streamed_locator_v9.rs": "e451c8c10156341d22ac86266335ba36af982a5d890eb38fc442d48a2367e4c9",
+      "misaka-palw-sdk/tests/flat_streamed_locator_v9.rs": "482080ae3ae752f8d72b0dad09864495489199b5c2357395cd46bcc45a8c6daa",
+      "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9/actual_outsider.rs": "56f40608d7e899567826de03598103e90ac1ae3a65b8d96d7797e5c42e89f4f1"
+    },
+    "compile_completed": true,
+    "build_log": "/tmp/rfc02-mapped-ordinary9-fifth-tests.log",
+    "exact_binary_run_command": "/tmp/rfc02-mapped-ordinary9-immutable-32e33d83a00e/flat_streamed_locator_v9-6ee75760eb45fb1b --nocapture",
+    "source_freeze": "shared source barrier preserved; module imported only by its dedicated test path, not exported into SDK/native",
+    "limits": [
+      "owned source/immutable control binary preimage; no complete compiler dependency closure claim",
+      "actual native outsider child is frozen but has not compiled/run; excluded from existing native9 milestone"
+    ]
+  },
+  "post_execution_owned_sha256": {
+    "misaka-palw-sdk/src/flat_streamed_locator_v9.rs": "e451c8c10156341d22ac86266335ba36af982a5d890eb38fc442d48a2367e4c9",
+    "misaka-palw-sdk/tests/flat_streamed_locator_v9.rs": "482080ae3ae752f8d72b0dad09864495489199b5c2357395cd46bcc45a8c6daa",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9/actual_outsider.rs": "56f40608d7e899567826de03598103e90ac1ae3a65b8d96d7797e5c42e89f4f1"
+  },
+  "post_execution_binary_sha256": "32e33d83a00ef34530a2c1bd8698651ffcb64dc178ae78a839f28b276cd72f71",
+  "owned_source_binary_unchanged_before_after": true,
+  "controls_passed": 8,
+  "controls_failed": 0,
+  "controls": [
+    "unknown nonfirst output leaf localized after absent header/value demands, then independently generated court proof",
+    "complete correct own roots and exact decoder produce Clean without public callbacks",
+    "reference10/retained memory preflight before missing file and read count cap before callback",
+    "borrowed node reply produces Demand and retries/whole attempt quota consumed",
+    "changed subject refused before callback and wrong actual PC bytes rejected",
+    "TopK and decode mismatches become explicit composable NeedsSpecial",
+    "authenticated matching prefix reused only for exact subject; incorrect public prompt refused before file reads",
+    "selected source preparation and wire quota exhausted before additional source/public work"
+  ],
+  "trial_repairs": [
+    "first compile stopped at public API boundaries: crate-private constant helper replaced by exact typed constant decoding, encoder subject uses public fields, workspace uses u64 and IO errors explicitly mapped",
+    "second compiled trial fixtures violated committable carry normal form; fixed test preClamp/castI32 before carrying",
+    "third trial passed5/6; expected own node count4 was incorrect because Commit declares logits rather than adding node; corrected expected3",
+    "fourth compile stopped because newly added prefix-provider initializer omitted hide_prefix:false; test initializer repaired",
+    "fifth8/8 pass and final immutable direct-binary8/8 pass; previous logs retained"
+  ],
+  "contract": {
+    "source": "independently opened same canonical mapped graph; exact instance namespace, all registered PC authenticated via bounded streamed commitment; file hash before/after two capped passes",
+    "resources": "all21 reference10 axes quoted independently before model opens; retained whole job tensors, source workspace, selected source copy total, file hashes, parameter/trace hashes, metadata, attempts, public calls and reserved wire bytes capped separately",
+    "public": "caller supplies independently anchored complete op211 candidate/job/replies; each Node opening authenticated against declared segment roots and exact ordinal",
+    "localization": "unknown first ordinary differing relation from linear own node roots and authenticated prefix; then generic9 Merkle descent selects unknown leaf/element",
+    "specials": "TopK, derived history and decode returned as NeedsSpecial with unit/reason, sourceproof over local selected whole-parameter cap returned NeedsSpecial::StreamedParameter; owned node/parameter APIs allow composition with separately paid specialized detector"
+  },
+  "limits": [
+    "synthetic local API/control coverage; no actual checkpoint run by this test binary and no native or cohort credit",
+    "new consumer/child not exported into frozen native9 milestone; existing real_checkpoint fixture prosecution native result is separate",
+    "ordinary-only; caller separately anchors public chain snapshot; this consumer does not infer chain inclusion from remote copied roots",
+    "retained tensor and wire/source byte bounds are component payload allowances, not whole-process RSS or arbitrary provider code work guarantees",
+    "no execution-class promotion, honest actual job Final, sparse/media real-model acceptance, A6/A8 full population or shipping activation"
+  ],
+  "evidence_sha256": {
+    "rfc02-mapped-ordinary9-owned-source-preimages.tar.gz": "62c046910e2cc4f04c076aabd6e07ebd7d83fd8b81ba8e1b5ae1f6275f840862",
+    "rfc02-mapped-ordinary9-fifth-tests.log": "05eb3d543316788a7de0ea8539afc5f1013f61851ab8cc97fa4ff3922875ce3a",
+    "rfc02-mapped-ordinary9-final-tests-time.log": "c87e45e7ffcbe9a772f90c5eb7e7db2544ba419e1c87d5cf3f35194020f292b4",
+    "rfc02-mapped-ordinary9-second-tests.log": "10e8227ff45f70416fb161f4bcd2ea2f8413a86b9ad4f2417d0b14e8f1d0f6fa",
+    "rfc02-mapped-ordinary9-fourth-tests.log": "37f12e2ec1437fa50058f56900ce99ef70fe4b11788d6b038369a758b1616861",
+    "rfc02-mapped-ordinary9-initial-tests.log": "ba8b4a8eea41fe333764dd510a144146ecbf5d26cb8339ba746ecf8000a912d1",
+    "rfc02-mapped-ordinary9-third-tests.log": "860d75adcf467ee09efb4bc1ac4b3ef6cabf1c517a4162e760eb2b003db2f283",
+    "rfc02-mapped-ordinary9-final-tests.log": "f55d82f0ab499958a929d2bf9c2d142387182450c27458841101b49f2b09bbd6"
+  }
+}

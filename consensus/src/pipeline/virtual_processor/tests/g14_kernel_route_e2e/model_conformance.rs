@@ -1639,6 +1639,28 @@ async fn flat_v4_sealed_refutation_pays_the_original_finder_and_refuses_the_copy
     let row = net.api().unwrap().model_refutation_seal_v4(&finder, 0).expect("the finder's seal row");
     assert_eq!((row.version, row.seal, row.deposit), (4, seal, mega(1)));
     assert_eq!(net.chain.tip_state().1.model_refutation_seal_reserved_v4(&finder, net.daa()), row.deposit as u128);
+    // RPC op 213 (`getPalwModelRefutationSeals`): the request parser and the node's own builder, carried through the JSON wire form.
+    {
+        use kaspa_rpc_core::convert::palw_kernel::{palw_model_refutation_seals_request_v1, palw_model_refutation_seals_response_v1};
+        let request = kaspa_rpc_core::GetPalwModelRefutationSealsRequest {
+            bond: format!("{}:{}", finder.0.transaction_id, finder.0.index),
+        };
+        assert_eq!(palw_model_refutation_seals_request_v1(&request).unwrap(), finder);
+        assert!(
+            palw_model_refutation_seals_request_v1(&kaspa_rpc_core::GetPalwModelRefutationSealsRequest { bond: "nope".into() })
+                .is_err()
+        );
+        let read = palw_model_refutation_seals_response_v1(net.chain.ctx.consensus.consensus_clone().as_ref(), finder);
+        let read: kaspa_rpc_core::GetPalwModelRefutationSealsResponse =
+            serde_json::from_slice(&serde_json::to_vec(&read).unwrap()).unwrap();
+        assert!(read.available);
+        assert_eq!(read.seals.len(), 1);
+        let s = &read.seals[0];
+        let mut wire = [0u8; 64];
+        faster_hex::hex_decode(s.seal.as_bytes(), &mut wire).unwrap();
+        assert_eq!((s.slot, wire, s.posted_daa, s.expires_daa, s.deposit_sompi, s.live), (0, seal, row.posted_daa, row.expires_daa, row.deposit, true));
+        assert_eq!(read.reserved_sompi, row.deposit);
+    }
     // An identical re-seal (a restarted finder) is a no-op: the clock stands. Another seal cannot take a live slot.
     send(&mut net, 7, &K::SealModelRefutationV4 { slot: 0, seal }).await;
     send(&mut net, 7, &K::SealModelRefutationV4 { slot: 0, seal: [9; 64] }).await;
@@ -1742,3 +1764,453 @@ async fn model_refutation_seal_objects_are_inert_below_their_fence() {
     let replay = net.replay().await;
     net.assert_same(&replay, "inert below the fence");
 }
+
+async fn send_protected_flat_vector(
+    net: &mut Net,
+    f: &Fixture,
+    binding: Hash64,
+    card: usize,
+    body: &kaspa_consensus_core::palw_flat_model_vector_v3::FlatModelVectorPostV3,
+) -> Hash64 {
+    let (id, object) =
+        misaka_palw_sdk::flat_candidate_v6::prepare_flat_model_post_v6(Hash64::from_bytes(f.class), binding, body.clone()).unwrap();
+    send(net, card, &object).await;
+    id
+}
+#[tokio::test]
+async fn flat_v6_native_seal_blocks_equivalent_preemption_legacy_bypass_and_pays_finder_once() {
+    use kaspa_consensus_core::palw_flat_model_seal_v6::*;
+    use misaka_palw_kernel::flat_court5::*;
+    use misaka_palw_kernel::flat_seal6::*;
+    for encoder in [true, false] {
+        let f = vector_fixture(encoder);
+        let mut net = Net::over_cfg(config(), TestConsensus::new);
+        let binding = prepare(&mut net, &f).await;
+        let (post, public) = flat_vector_post(&net, &f, binding, vec![0, 1], true);
+        let id = send_protected_flat_vector(&mut net, &f, binding, 4, &post).await;
+        assert!(net.api().unwrap().flat_model_vector_protected_v6(&id));
+        assert_ne!(id, post.id(f.class, binding.as_bytes()));
+        let view = net.api().unwrap().flat_model_vector_view_v3(&id).unwrap();
+        let proof = flat_first_relation_fault(&view, &public, &f.params);
+        let mut alternate = FlatFaultV5::from_bytes(&proof).unwrap();
+        if encoder {
+            match &mut alternate {
+                FlatFaultV5::Whole(f) => f.token = Some(PromptTileOpeningV1::of(&post.trace.prompt, 0).unwrap()),
+                _ => panic!(),
+            }
+            assert_eq!(
+                verify_flat_fault_v5(&view.context(), &alternate),
+                verify_flat_fault_v5(&view.context(), &FlatFaultV5::from_bytes(&proof).unwrap())
+            );
+        }
+        let alternate = alternate.to_bytes().unwrap();
+        let (finder, thief, salt) = (net.kid(7), net.kid(6), [42; 64]);
+        let private =
+            misaka_palw_sdk::flat_candidate_v6::FlatProofSecretV6::new(net.domain, id, net.bond(7), salt, proof.clone()).unwrap();
+        let seal = flat_proof_seal_v6(&id.as_bytes(), &finder, &salt, &proof).unwrap();
+        let collateral = net.collateral(4);
+        // The old unsealed consumer must refuse this new statement identity.
+        send(&mut net, 6, &K::RefuteFlatModelVectorV3 { vector: id.as_bytes(), proof: alternate.clone() }).await;
+        send(&mut net, 6, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: alternate.clone() }).await;
+        assert_eq!(net.owed(6), 0);
+        assert_eq!(net.collateral(4), collateral);
+        let seal_object = private.seal_object(net.domain, &net.bond(7)).unwrap();
+        assert_eq!(seal_object, K::SealFlatModelProofV6 { vector: id.as_bytes(), seal });
+        send(&mut net, 7, &seal_object).await;
+        let row = net.api().unwrap().flat_model_seal_v6(&id, &finder).unwrap();
+        assert_eq!(row.seal.mature_daa, row.seal.posted_daa + FLAT_NATIVE_SEAL_MATURITY_DAA_V6);
+        assert_eq!(net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(7)), row.reserved as u128);
+        assert!(row.reserved > 0);
+        // Copying the seal cannot bind another authenticated signer to its bytes.
+        send(&mut net, 6, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal }).await;
+        net.beat_to(row.seal.mature_daa).await;
+        send(&mut net, 6, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: alternate.clone() }).await;
+        assert!(!net.api().unwrap().flat_model_seal_v6(&id, &thief).unwrap().seal.spent);
+        // An equivalent proof learned at reveal cannot get a new mature seal first.
+        let fresh = flat_proof_seal_v6(&id.as_bytes(), &net.kid(5), &salt, &alternate).unwrap();
+        send(&mut net, 5, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal: fresh }).await;
+        send(&mut net, 5, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: alternate }).await;
+        assert_eq!(net.owed(5), 0);
+        assert_eq!(net.collateral(4), collateral);
+        if encoder {
+            let before = net.slashed(7);
+            let altered = match FlatFaultV5::from_bytes(&proof).unwrap() {
+                FlatFaultV5::Whole(mut f) => {
+                    f.token = Some(PromptTileOpeningV1::of(&post.trace.prompt, 0).unwrap());
+                    FlatFaultV5::Whole(f).to_bytes().unwrap()
+                }
+                _ => panic!(),
+            };
+            send(&mut net, 7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: altered }).await;
+            assert!(net.slashed(7) > before);
+        }
+        let reveal_object = private
+            .reveal_object(net.domain, &net.bond(7), &net.api().unwrap().flat_model_seal_v6(&id, &finder).unwrap(), net.daa())
+            .unwrap();
+        send(&mut net, 7, &reveal_object).await;
+        assert!(net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().refuted);
+        assert!(net.api().unwrap().flat_model_seal_v6(&id, &finder).unwrap().seal.spent);
+        assert_eq!(net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(7)), 0);
+        assert_eq!(collateral - net.collateral(4), mega(100));
+        let (minted, owed) = minted_and_owed(&net, &net.chain, 7);
+        assert_eq!(minted + owed, mega(49));
+        assert_eq!((net.owed(5), net.owed(6)), (0, 0));
+        send(&mut net, 7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof }).await;
+        let (minted, owed) = minted_and_owed(&net, &net.chain, 7);
+        assert_eq!(minted + owed, mega(49));
+        assert_eq!(net.collateral(4), collateral - mega(100));
+        // Closing a decided vector returns the copyist's unused deposit, once.
+        send(&mut net, 3, &K::ExpireFlatModelSealV6 { vector: id.as_bytes(), actor: thief }).await;
+        assert!(net.api().unwrap().flat_model_seal_v6(&id, &thief).is_none());
+        assert_eq!(net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(6)), 0);
+        assert_eq!(minted_and_owed(&net, &net.chain, 7), (mega(49), 0));
+        let replay = net.replay().await;
+        net.assert_same(&replay, "protected seal/reveal conviction, original capital and one finder payout");
+        assert_eq!(minted_and_owed(&net, &replay, 7), (mega(49), 0));
+    }
+}
+#[tokio::test]
+async fn flat_v6_native_seals_bound_actor_slots_hold_capital_and_forfeit_expired_false_seals() {
+    use kaspa_consensus_core::palw_flat_model_seal_v6::*;
+    use misaka_palw_kernel::flat_seal6::flat_proof_seal_v6;
+    let f = vector_fixture(false);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let mut ids = Vec::new();
+    for n in 0..5 {
+        let (body, _) = flat_vector_post(&net, &f, binding, vec![n, n + 1], false);
+        let id = send_protected_flat_vector(&mut net, &f, binding, 4, &body).await;
+        assert!(net.api().unwrap().flat_model_vector_header_v3(&id).is_some());
+        let seal = flat_proof_seal_v6(&id.as_bytes(), &net.kid(7), &[1; 64], b"bad proof").unwrap();
+        send(&mut net, 7, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal }).await;
+        ids.push(id);
+    }
+    assert_eq!(net.api().unwrap().flat_model_seals_of_v6(&net.bond(7)).len(), FLAT_NATIVE_SEALS_PER_BOND_V6);
+    assert_eq!(net.api().unwrap().flat_model_seal_count_v6(), FLAT_NATIVE_SEALS_PER_BOND_V6 as u32);
+    assert!(net.api().unwrap().flat_model_seal_v6(&ids[4], &net.kid(7)).is_none());
+    let row = net.api().unwrap().flat_model_seal_v6(&ids[0], &net.kid(7)).unwrap();
+    let held = net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(7));
+    let state = net.chain.tip_state().1;
+    assert!(kaspa_consensus_core::palw_state_v2::palw_bond_backs_live_duty_v1(&state, &net.bond(7), net.daa(), None));
+    assert!(kaspa_consensus_core::palw_state_v2::palw_bond_backs_live_duty_v2(&state, &net.bond(7), net.daa(), None, 10));
+    assert_eq!(held, row.reserved as u128 * FLAT_NATIVE_SEALS_PER_BOND_V6 as u128);
+    let before = net.slashed(7);
+    // A mature seal of malformed bytes enters a bounded court and charges its signer.
+    net.beat_to(row.seal.mature_daa).await;
+    send(&mut net, 7, &K::RevealFlatModelProofV6 { vector: ids[0].as_bytes(), salt: [1; 64], proof: b"bad proof".to_vec() }).await;
+    assert!(net.slashed(7) > before);
+    assert!(!net.api().unwrap().flat_model_seal_v6(&ids[0], &net.kid(7)).unwrap().seal.spent);
+    // Re-sealing does not replace or extend another pending immutable slot.
+    send(&mut net, 7, &K::SealFlatModelProofV6 { vector: ids[0].as_bytes(), seal: [0; 64] }).await;
+    assert_eq!(net.api().unwrap().flat_model_seal_v6(&ids[0], &net.kid(7)).unwrap(), row);
+    let actor = net.kid(7);
+    send(&mut net, 3, &K::ExpireFlatModelSealV6 { vector: ids[0].as_bytes(), actor }).await;
+    assert!(net.api().unwrap().flat_model_seal_v6(&ids[0], &actor).is_some());
+    net.beat_to(row.seal.expires_daa).await;
+    assert_eq!(
+        net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(7)),
+        held,
+        "unsettled expiry cannot free the original capital"
+    );
+    let collateral = net.collateral(7);
+    send(&mut net, 3, &K::ExpireFlatModelSealV6 { vector: ids[0].as_bytes(), actor }).await;
+    assert_eq!(collateral - net.collateral(7), row.reserved);
+    assert!(net.api().unwrap().flat_model_seal_v6(&ids[0], &actor).is_none());
+    assert_eq!(net.api().unwrap().flat_model_seal_count_v6(), 3);
+    send(&mut net, 3, &K::ExpireFlatModelSealV6 { vector: ids[0].as_bytes(), actor }).await;
+    assert_eq!(net.collateral(7), collateral - row.reserved);
+    let replay = net.replay().await;
+    net.assert_same(&replay, "protected bounded slots, invalid court fees and explicit deposit forfeiture");
+}
+
+#[tokio::test]
+async fn flat_v6_native_mature_proof_uses_reserved_budget_after_admission_flood() {
+    use kaspa_consensus_core::palw_flat_model_seal_v6::*;
+    use misaka_palw_kernel::flat_seal6::flat_proof_seal_v6;
+    let f = vector_fixture(false);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let (body, public) = flat_vector_post(&net, &f, binding, vec![0, 1], true);
+    let mut post = FlatModelVectorPostV6 { version: 6, body: body.clone() };
+    post.body.trace.implementation_roots = [post.trace_root(f.class, binding.as_bytes()); 3];
+    let id = send_protected_flat_vector(&mut net, &f, binding, 4, &body).await;
+    let view = net.api().unwrap().flat_model_vector_view_v3(&id).unwrap();
+    let proof = flat_first_relation_fault(&view, &public, &f.params);
+    let actor = net.kid(7);
+    let salt = [11; 64];
+    let seal = flat_proof_seal_v6(&id.as_bytes(), &actor, &salt, &proof).unwrap();
+    send(&mut net, 7, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal }).await;
+    let mature = net.api().unwrap().flat_model_seal_v6(&id, &actor).unwrap().seal.mature_daa;
+    net.beat_to(mature).await;
+    let collateral = net.collateral(4);
+    let cards = [2, 3, 5, 6];
+    let before: Vec<_> = cards.iter().map(|c| net.slashed(*c)).collect();
+    let mut objects = Vec::new();
+    for card in cards {
+        objects.push((
+            card,
+            net.route(
+                card,
+                &K::PostFlatModelVectorV6 { class: f.class, binding: binding.as_bytes(), post: borsh::to_vec(&post).unwrap() },
+            ),
+        ));
+    }
+    objects.push((7, net.route(7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof })));
+    net.send(objects).await;
+    assert_eq!(
+        cards.iter().zip(before).filter(|(c, b)| net.slashed(**c) > *b).count(),
+        (net.ledger().policy.max_adjudications_per_block - net.ledger().policy.prosecution_reserved_runs()) as usize
+    );
+    assert!(net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().refuted);
+    assert_eq!(net.owed(7), mega(49));
+    assert_eq!(collateral - net.collateral(4), mega(100));
+    let replay = net.replay().await;
+    net.assert_same(&replay, "admission load cannot spend the mature proof's reserved run/work");
+}
+
+fn signed_flat_chunk(net: &mut Net, card: usize, chunk: kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkV1) -> Obj {
+    use kaspa_consensus_core::palw_kernel_route_v1::*;
+    let message = palw_kernel_chunk_message_v1(net.domain, &chunk);
+    net.rnd = net.rnd.wrapping_add(1);
+    let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &key.signing_key,
+        message.as_byte_slice(),
+        PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1,
+        [net.rnd; 32],
+    )
+    .unwrap()
+    .as_ref()
+    .to_vec();
+    Obj::KernelRouteChunkV1 { chunk: Box::new(chunk), signature }
+}
+
+#[tokio::test]
+async fn flat_v6_native_own_sealed_chunks_survive_generic_saturation_and_refuse_borrowed_actors() {
+    use kaspa_consensus_core::palw_kernel_route_v1::*;
+    use kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_GROUPS;
+    use misaka_palw_kernel::flat_seal6::*;
+    use misaka_palw_sdk::flat_candidate_v6::snapshot::FlatSnapshotAnchorV6;
+    let f = vector_fixture(true);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let (post, public) = flat_vector_post(&net, &f, binding, vec![0, 1], true);
+    let id = send_protected_flat_vector(&mut net, &f, binding, 4, &post).await;
+    // Anchor comes from authenticated local consensus, separately from remote op-211 JSON.
+    let public_snapshot = |net: &Net| {
+        let local = net.api().unwrap();
+        canonical::Rpc::of(&net.chain).flat_snapshot(FlatSnapshotAnchorV6 {
+            tip_daa: net.daa(),
+            network_domain: Hash64::from_bytes(local.header.policy.network_domain),
+            ruleset_digest: Hash64::from_bytes(local.header.policy.ruleset_digest),
+            ledger_root: local.ledger_root(),
+            aux_root: local.aux_root(),
+        })
+    };
+    let snapshot = public_snapshot(&net);
+    let (_, view) = snapshot.candidate(id, Hash64::from_bytes(f.class), binding).unwrap();
+    let proof = flat_first_relation_fault(&view, &public, &f.params);
+    let (actor, salt) = (net.kid(7), [71; 64]);
+    let reveal = net.route(7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: proof.clone() });
+    let target = PalwKernelChunkTargetV1::FlatProofV6 { vector: id, actor };
+    let parts = palw_kernel_chunks_v1(&reveal, net.bond(7), target, 1024).unwrap();
+    assert!(parts.len() > 1);
+    let missing = signed_flat_chunk(&mut net, 7, parts[0].clone());
+    net.send(vec![(7, missing)]).await;
+    assert_eq!(net.api().unwrap().chunk_groups_of_v1(&net.bond(7)), 0);
+    let seal = flat_proof_seal_v6(&id.as_bytes(), &actor, &salt, &proof).unwrap();
+    send(&mut net, 7, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal }).await;
+    net.beat_to(net.api().unwrap().flat_model_seal_v6(&id, &actor).unwrap().seal.mature_daa).await;
+    let snapshot = public_snapshot(&net);
+    let checked_row = snapshot.reveal_row(id, Hash64::from_bytes(f.class), binding, &net.bond(7)).unwrap();
+    assert_eq!(checked_row, net.api().unwrap().flat_model_seal_v6(&id, &actor).unwrap());
+    assert!(snapshot.reveal_row(id, Hash64::from_bytes(f.class), binding, &net.bond(6)).is_err());
+    let mut borrowed = parts[0].clone();
+    borrowed.opener = net.bond(6);
+    let borrowed = signed_flat_chunk(&mut net, 6, borrowed);
+    net.send(vec![(6, borrowed)]).await;
+    assert_eq!(net.api().unwrap().chunk_groups_of_v1(&net.bond(6)), 0);
+    let garbage: Vec<_> = (0..PALW_OBJECT_CHUNK_MAX_GROUPS)
+        .map(|n| {
+            (1, Obj::ObjectChunk { group: Hash64::from_u64_word(9100 + n as u64), index: 0, count: 16, bytes: vec![n as u8; 1024] })
+        })
+        .collect();
+    net.send(garbage).await;
+    for n in 0..PALW_OBJECT_CHUNK_MAX_GROUPS {
+        assert!(net.chain.tip_state().1.pending_chunk_group(&Hash64::from_u64_word(9100 + n as u64)).is_some());
+    }
+    let collateral = net.collateral(4);
+    let first = signed_flat_chunk(&mut net, 7, parts[0].clone());
+    net.send(vec![(7, first)]).await;
+    assert_eq!(net.api().unwrap().chunk_groups_of_v1(&net.bond(7)), 1);
+    assert_eq!(
+        net.api().unwrap().chunk_deposits_of_v1(&net.bond(7)),
+        parts.len() as u64 * PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1
+    );
+    let remaining: Vec<_> = parts[1..].iter().map(|p| (7, signed_flat_chunk(&mut net, 7, p.clone()))).collect();
+    net.send(remaining).await;
+    assert!(net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().refuted);
+    assert_eq!(net.api().unwrap().chunk_groups_of_v1(&net.bond(7)), 0);
+    assert_eq!(net.api().unwrap().chunk_deposits_of_v1(&net.bond(7)), 0);
+    assert_eq!(collateral - net.collateral(4), mega(100));
+    let (minted, owed) = minted_and_owed(&net, &net.chain, 7);
+    assert_eq!(minted + owed, mega(49));
+    let again = signed_flat_chunk(&mut net, 7, parts[0].clone());
+    net.send(vec![(7, again)]).await;
+    let (minted, owed) = minted_and_owed(&net, &net.chain, 7);
+    assert_eq!(minted + owed, mega(49));
+    assert_eq!(net.api().unwrap().chunk_groups_of_v1(&net.bond(7)), 0);
+    net.chain.heartbeat(net.ttpb(), Vec::new()).await;
+    let other = net.replay().await;
+    net.assert_same(&other, "sealed actor-owned chunks bypass the saturated generic table, settle once and replay");
+}
+
+#[tokio::test]
+async fn flat_candidate7_native_mature_binding_independent_plan_paid_refusals_and_replay() {
+    use misaka_palw_sdk::flat_candidate_v7::prepare_flat_candidate_v7;
+    for encoder in [false, true] {
+        let f = fixture(encoder);
+        let mut net = Net::over_cfg(config(), TestConsensus::new);
+        net.beat_to(1).await;
+        let (b, id) = binding(&f, f.r);
+        send(&mut net, 1, &b).await;
+        let prepared =
+            prepare_flat_candidate_v7(id.as_bytes(), f.d.digest(), &f.p.encode(), &f.pc, if encoder { 1 } else { 3 }).unwrap();
+        let before = net.slashed(0);
+        send(&mut net, 0, &prepared.object).await;
+        assert!(net.ledger().flat_conformance_classes_v7.is_empty(), "pending binding grants no preparation");
+        assert!(net.slashed(0) > before, "invalid metadata consumes its own fee");
+        net.beat_to(net.api().unwrap().model_artifact_binding_v2(&id).unwrap().matures_daa).await;
+        let mut old_scope = prepared.object.clone();
+        let K::RegisterFlatModelCandidateV7 { scope_root, .. } = &mut old_scope else { unreachable!() };
+        let e = if encoder { Some(misaka_palw_kernel::seg_encoder::encoder_binding_v1(&f.p).unwrap()) } else { None };
+        *scope_root =
+            misaka_palw_kernel::flat_scope5::flat_resource_scope_v5(&f.p, if encoder { 1 } else { 3 }, e.as_ref()).unwrap().root();
+        let before = net.slashed(0);
+        send(&mut net, 0, &old_scope).await;
+        assert!(net.ledger().flat_conformance_classes_v7.is_empty());
+        assert!(net.slashed(0) > before);
+        send(&mut net, 0, &prepared.object).await;
+        let ledger = net.ledger();
+        let (owner, record) = &ledger.flat_conformance_classes_v7[&prepared.class];
+        assert_eq!(*owner, net.kid(0));
+        assert_eq!(record.binding, id.as_bytes());
+        assert_eq!(record.plan, prepared.plan);
+        record.checked().unwrap();
+        assert_eq!(net.api().unwrap().model_artifact_candidate_binding_v2(&Hash64::from_bytes(prepared.class)), Some(id));
+        assert!(
+            net.api().unwrap().kernel_class_record_v1(&Hash64::from_bytes(prepared.class)).is_none(),
+            "old execution/candidate reader never adopts7"
+        );
+        assert!(!ledger.attested_artifacts.contains(&f.pc.root()), "native scope is temporary");
+        assert!(ledger.classes.is_empty() && ledger.opv.classes.is_empty() && ledger.claims.is_empty());
+        let job = TiledJobV1 {
+            class_binding_id: prepared.class,
+            prompt_len: 1,
+            prompt_root: prompt_root_of_ids_v1(&[0]),
+            max_new_tokens: 1,
+            decode: DecodeRuleV1::Greedy,
+            nonce: [3; 64],
+        };
+        send(&mut net, 2, &K::PostTiledJob { job }).await;
+        assert!(net.ledger().tiled_jobs.is_empty());
+        let mut borrowed = prepared.object.clone();
+        let K::RegisterFlatModelCandidateV7 { binding, .. } = &mut borrowed else { unreachable!() };
+        *binding = [0; 64];
+        let before = net.slashed(2);
+        send(&mut net, 2, &borrowed).await;
+        assert!(net.slashed(2) > before);
+        assert_eq!(net.ledger().flat_conformance_classes_v7.len(), 1);
+        let replay = net.replay().await;
+        net.assert_same(&replay, "native v7 candidate paid refusal, scoped identity and no execution rights");
+    }
+}
+
+#[tokio::test]
+async fn flat_candidate7_native_long_topk_is_registered_as_metadata_without_legacy_execution_rights() {
+    use misaka_palw_sdk::flat_candidate_v7::prepare_flat_candidate_v7;
+    let n = 10_485_760;
+    let max = misaka_palw_tir::program::HISTORY_BOUND_V1_HELD;
+    let mut b = ProgramBuilder::new(256, max);
+    let scores = b.param("independent.scores", DType::I32, &[n], false);
+    let mut pre = b.block("topk", vec![]);
+    let x = pre.topk(scores, 0, 2);
+    let x = pre.cast(x, DType::I32);
+    let pre = pre.finish(&[x]);
+    let mut post = b.block("post", vec![TensorType::fixed(DType::I32, &[2])]);
+    let x = post.cast(Ref::CarryIn(0), DType::I32);
+    post.commit(x);
+    let post = post.finish(&[]);
+    let p = b.finish(pre, vec![], post, 0);
+    let d = k2_tir_v4_descriptor();
+    // Deliberately metadata only: no checkpoint or parameter values are read.
+    let pc = ParamCommitmentsV1 { by_instance: [((0, None), [8; 64])].into() };
+    let r = Hash64::from_bytes([9; 64]);
+    let id = model_artifact_binding_id_v2(d.digest(), program_root_v1(&p.encode()), r, Hash64::from_bytes(pc.root()));
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    net.beat_to(1).await;
+    send(
+        &mut net,
+        1,
+        &K::BindModelArtifactV2 {
+            descriptor: d.digest(),
+            program_bytes: p.encode(),
+            model_inventory_root: r.as_bytes(),
+            param_commitments: pc.clone(),
+        },
+    )
+    .await;
+    net.beat_to(net.api().unwrap().model_artifact_binding_header_v2(&id).unwrap().matures_daa).await;
+    let prepared = prepare_flat_candidate_v7(id.as_bytes(), d.digest(), &p.encode(), &pc, max).unwrap();
+    send(&mut net, 0, &prepared.object).await;
+    let ledger = net.ledger();
+    let v = ledger.flat_conformance_classes_v7[&prepared.class].1.checked().unwrap();
+    assert_eq!(v.scope.max_positions, max);
+    assert_eq!(v.replay.topk_auxiliary_bytes, 128);
+    assert!(v.scope.worst_court_bytes < 1 << 20);
+    assert!(ledger.classes.is_empty() && ledger.claims.is_empty() && ledger.opv.admitted.is_empty());
+    eprintln!(
+        "FLAT_CANDIDATE7_NATIVE_METADATA N={n} max_positions={max} court_bytes={} court_work={} auxiliary_bytes=128 no_weights_or_job_executed=true",
+        v.scope.worst_court_bytes, v.scope.worst_court_work
+    );
+    let replay = net.replay().await;
+    net.assert_same(&replay, "long TopK explicitly registered metadata, not legacy execution");
+}
+
+#[tokio::test]
+async fn flat_candidate7_native_shares_legacy_catalog_and_cannot_spend_reserved_proof_budget() {
+    use kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1;
+    use misaka_palw_sdk::flat_candidate_v7::prepare_flat_candidate_v7;
+    let f = fixture(false);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let id = prepare(&mut net, &f).await;
+    for max in 1..=7 {
+        let p = prepare_flat_candidate_v7(id.as_bytes(), f.d.digest(), &f.p.encode(), &f.pc, max).unwrap();
+        send(&mut net, 0, &p.object).await;
+    }
+    assert_eq!(net.ledger().conformance_classes.len(), 1);
+    assert_eq!(net.ledger().flat_conformance_classes_v7.len(), 7);
+    let extra = prepare_flat_candidate_v7(id.as_bytes(), f.d.digest(), &f.p.encode(), &f.pc, 8).unwrap();
+    let before = net.slashed(0);
+    send(&mut net, 0, &extra.object).await;
+    assert!(net.slashed(0) > before);
+    assert!(!net.ledger().flat_conformance_classes_v7.contains_key(&extra.class));
+    let mut bad = extra.object.clone();
+    let K::RegisterFlatModelCandidateV7 { scope_root, .. } = &mut bad else { unreachable!() };
+    scope_root[0] ^= 1;
+    let mut objects = Vec::new();
+    for _ in 0..8 {
+        objects.push((2, net.route(2, &bad)));
+    }
+    net.send(objects).await;
+    let (_, _, work): (u64, u32, u64) = net.api().unwrap().aux_row(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]).unwrap();
+    assert!(work <= net.ledger().policy.admission_work_limit_v1());
+    assert!(!net.ledger().flat_conformance_classes_v7.contains_key(&extra.class));
+    assert!(net.ledger().classes.is_empty());
+    let replay = net.replay().await;
+    net.assert_same(&replay, "old/new shared catalog and registration flood preserves proof reserve");
+}
+
+mod flat_native_v7;
+
+mod flat_native_v9;

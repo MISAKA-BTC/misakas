@@ -2,11 +2,12 @@
 
 use misaka_palw_tir::{DType, Prim, TirError, TirErrorKind, TirResult};
 
-use super::{Opd, Scratch, Wide, WideScratch, out_vec, overflow, widen};
+use super::{Opd, Scratch, out_vec, overflow, widen};
 use crate::elem::{Buf, Elem, Slice};
 use crate::layout::{Joint, Layout, numel, row_major};
-use crate::plan::{NodePlan, Work};
+use crate::plan::NodePlan;
 use crate::with_slice;
+use std::{cmp::Reverse, collections::BinaryHeap};
 
 fn index_err(v: i64, n: usize) -> TirError {
     TirError::new(TirErrorKind::Index, format!("Gather: index {v} outside [0, {n})"))
@@ -113,42 +114,72 @@ pub fn scalar_index(idx: &Opd<'_>, n: usize) -> TirResult<usize> {
 
 /// `TopK { axis, k }`: per row, the `k` largest by (value descending, index ascending), emitted
 /// in ascending index order.
-pub fn topk(node: &NodePlan, x: &Opd<'_>, out: &mut Buf, scratch: &mut Scratch) -> TirResult<()> {
-    match node.work {
-        Work::I64 => topk_w::<i64>(node, x, out, scratch),
-        Work::I128 => topk_w::<i128>(node, x, out, scratch),
-    }
-}
-
-fn topk_w<W: Wide>(node: &NodePlan, x: &Opd<'_>, out: &mut Buf, scratch: &mut Scratch) -> TirResult<()>
-where
-    Scratch: WideScratch<W>,
-{
+pub fn topk(node: &NodePlan, x: &Opd<'_>, out: &mut Buf, _scratch: &mut Scratch) -> TirResult<()> {
     let Prim::TopK { axis, k } = node.prim else { return Err(TirError::new(TirErrorKind::Shape, "not a TopK")) };
-    let (ws, _) = scratch.parts();
-    let [s0, _, _] = ws;
-    let xv = widen::<W>(x, s0);
-    let sh = x.shape();
-    let a = axis as usize;
-    let k = k as usize;
-    let (outer, n, inner): (usize, usize, usize) = (sh[..a].iter().product(), sh[a], sh[a + 1..].iter().product());
+    // Compare the native storage directly through its view. No whole-source
+    // widening/gather or axis-sized candidate vector is needed for selection.
+    with_slice!(x.data, values => topk_t(values, &x.layout, axis as usize, k as usize, out))
+}
+fn topk_t<T: Elem>(values: &[T], layout: &Layout, axis: usize, k: usize, out: &mut Buf) -> TirResult<()> {
+    let sh = layout.shape();
+    let (outer, n, inner): (usize, usize, usize) = (sh[..axis].iter().product(), sh[axis], sh[axis + 1..].iter().product());
+    let rm = row_major(sh);
     let o = out_vec::<u32>(out);
     o.clear();
     o.resize(outer * k * inner, 0);
-    let mut order: Vec<usize> = Vec::with_capacity(n);
+    let mut kept: BinaryHeap<(Reverse<T>, usize)> = BinaryHeap::with_capacity(if k <= 64 && k < n { k } else { 0 });
+    let mut chosen = Vec::with_capacity(if k == n {
+        0
+    } else if k <= 64 {
+        k
+    } else {
+        (2 * k).min(n)
+    });
     for oo in 0..outer {
         for ii in 0..inner {
-            let at = |t: usize| xv[(oo * n + t) * inner + ii];
-            order.clear();
-            order.extend(0..n);
-            let cmp = |p: &usize, q: &usize| at(*q).cmp(&at(*p)).then(p.cmp(q));
-            if k < n {
-                order.select_nth_unstable_by(k - 1, cmp);
-                order.truncate(k);
+            if k == n {
+                for slot in 0..k {
+                    o[(oo * k + slot) * inner + ii] = slot as u32;
+                }
+                continue;
             }
-            order.sort_unstable();
-            for (s, idx) in order.iter().enumerate() {
-                o[(oo * k + s) * inner + ii] = *idx as u32;
+            let mut rem = oo * n * inner + ii;
+            let mut base = layout.offset;
+            for (d, stride) in rm.iter().enumerate().take(sh.len()) {
+                base += (rem / stride) * layout.strides[d];
+                rem %= stride;
+            }
+            let at = |t: usize| values[base + t * layout.strides[axis]];
+            chosen.clear();
+            if k <= 64 {
+                kept.clear();
+                for idx in 0..n {
+                    let candidate = (Reverse(at(idx)), idx);
+                    if kept.len() < k {
+                        kept.push(candidate);
+                    } else if candidate < *kept.peek().expect("validated positive k") {
+                        *kept.peek_mut().unwrap() = candidate;
+                    }
+                }
+                chosen.extend(kept.drain().map(|(_, idx)| idx));
+            } else {
+                // Each linear partition folds k new indices into k retained
+                // indices. Scores stay in native strided storage throughout.
+                for idx in 0..n {
+                    chosen.push(idx);
+                    if chosen.len() == 2 * k {
+                        chosen.select_nth_unstable_by(k - 1, |p, q| at(*q).cmp(&at(*p)).then(p.cmp(q)));
+                        chosen.truncate(k);
+                    }
+                }
+                if chosen.len() > k {
+                    chosen.select_nth_unstable_by(k - 1, |p, q| at(*q).cmp(&at(*p)).then(p.cmp(q)));
+                    chosen.truncate(k);
+                }
+            }
+            chosen.sort_unstable();
+            for (slot, idx) in chosen.iter().enumerate() {
+                o[(oo * k + slot) * inner + ii] = *idx as u32;
             }
         }
     }

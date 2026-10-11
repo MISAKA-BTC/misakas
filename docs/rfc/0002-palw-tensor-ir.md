@@ -3289,3 +3289,903 @@ fees, aggregate capacity and honest inclusion/deadline feasibility must be
 verified before this path is accepted for rewards. Frozen candidate/route grammar,
 resource roots and dormant shipping fences remain unchanged. Full RFC02, real
 checkpoint/task/fidelity, execution Final and A6/A8 acceptance remain open.
+
+### §14.30 — Protected native flat candidate statements and evidence seals v6 (2026-10-11)
+
+The v6 protected statement wraps the unchanged v3 candidate body. Its separate
+trace-root domain binds the v3 root and the fixed v6 maturity, TTL and capacity
+policy. It retains the admitted flat-v5 resource scope and candidate-only status.
+Append inner kinds 36 `PostFlatModelVectorV6`, 37 `SealFlatModelProofV6`, 38
+`RevealFlatModelProofV6` and 39 `ExpireFlatModelSealV6` behind the existing dormant
+kernel-route/panel-free fences. Formal rules are in spec 04b §18. Existing v3
+bytes, root preimages, inner 31–35 semantics and resource scopes retain their
+meaning; the protected statement cannot enter inner 32's unsealed court.
+
+The consumer derives the actor from its authenticated signing bond and persists
+one immutable fixed row per `(vector, actor)`. The salt-bearing seal binds actor,
+vector and exact proof bytes. A reveal requires that actor's own mature seal;
+there is no unsealed fallback, borrowed beneficiary or earliest-byte-sealer
+search. Wrong salt, copied seal, changed equivalent carrier, immature/expired
+seal, changed context or an honest/malformed proof cannot settle the vector.
+
+Posting burns the shared admission tariff and holds the route policy's original
+seal deposit. Four rows per bond and 1,024 total rows bound simultaneous pending
+seals. Retirement/withdrawal and all common capital accounting read this same
+reservation. Expired pending deposits remain held until a bounded explicit close
+forfeits them; a decided vector releases deposits on close. Occupied slots cannot
+be replaced or extend their clocks. Maturity is three DAA; expiry is the lesser
+of posting plus 100 DAA and the immutable vector liability horizon.
+
+One proof-reserve debit covers fixed metadata, bounded raw hashing, stored
+program/PC/body work and the admitted terminal court, before variable decoding.
+Registration includes this debit in its worst-court admission. This avoids a
+normal-admission flood consuming the honest reveal's reserved capacity. Refused
+proofs charge the authenticated filer. A successful fold spends the seal,
+releases its deposit, settles the original vector collateral once and credits
+49 percent to the authenticated finder atomically. It grants no execution Final,
+conformance certificate or model/task support PASS.
+
+This is the consensus consumer implementation of the previously local §14.29
+contract. Native synthetic trials, exact commands and results belong in the
+implementation ledger. Whole-network invalid-proof/seal saturation, transport,
+retention, worst-job inclusion/deadlines and honest liveness still need evidence.
+The full resource contract, real-checkpoint fidelity/task/performance, independent
+execution Final/redemption and A6/A8 are unchanged completion requirements. No
+shipping fence is activated by this increment.
+
+### §14.31 — Protected candidate SDK and offline CLI (2026-10-11)
+
+`misaka-palw-sdk::flat_candidate_v6` and `palw-class flat-v6` expose the protected
+post, seal, reveal and explicit-expiry operations. Preparing a v6 post first
+requires all three source implementation records to agree on the original v3
+root for the selected class and binding. It preserves the job, trace and scope,
+then rebinds those agreed records to the protected root. It cannot convert
+divergent implementation results into declared agreement. Native admission
+still derives and checks the actual bound context and resource scope.
+
+Sealing produces a public signed commitment and separate private material that
+binds network domain, vector, signing bond, fresh OS-random salt and exact proof
+bytes. The CLI creates the private file with mode 0600 on Unix, refuses existing
+outputs, bounds input bytes and nested counts, and omits the proof/salt from its
+report. Reveal preparation refuses a different network/bond, borrowed row,
+changed proof or salt, immature/expired/spent row before writing a public proof.
+The supplied row and height are an offline precheck; the native consumer remains
+responsible for authenticated chain state and authoritative clocks.
+
+The SDK signs the existing network/bond/bytes message under the existing ML-DSA
+context. The CLI writes reviewable objects and, when needed, the existing bounded
+generic `ObjectChunk` parts for `misaka palw submit-object`; it sends no carrier.
+Generic shared-group capacity does not establish honest proof inclusion before
+the seal/vector horizon. Public RPC acquisition, authenticated snapshot/row
+discovery, whole-job retention, protected large-proof liveness and aggregate
+invalid-proof/seal saturation therefore remain completion requirements.
+
+SDK codec/signature/file trials and actual-node admission/court/payout replay
+using these helpers belong in the implementation ledger. These convenience APIs
+grant no conformance, checkpoint fidelity, model/task coverage, reward eligibility
+or execution Final, and activate no shipping fence. Full RFC02 acceptance stays
+open until all independent requirements have evidence.
+
+### §14.32 — Mature actor-owned protected proof chunks (2026-10-11)
+
+Append `FlatProofV6 { vector, actor } = 3` to the existing kernel chunk target
+grammar. It carries only the protected reveal of that vector signed by the
+sealing actor, and each part is signed by that same bond. Opening/continuing
+requires an open protected vector and that actor's mature unspent seal; the
+target deadline is strictly before seal expiry and vector liability. Completion
+still requires the exact salt/proof seal and independently bound native court.
+
+The existing two kernel chunk slots per bond, per-part original collateral,
+64-DAA clipped TTL and completion/refund/expiry-forfeiture apply. These are the
+bond's own slots, separate from the generic shared eight-group table. Bound
+protected assembly to one MiB plus 16 KiB of signed envelope before variable
+decode. Charge the part and a conservative three-assembly-byte allowance for
+own stored-group handling before decoding that group. Opening/continuing also
+needs capacity for the completing part and terminal court together, including
+two runs. Candidate admission alone does not grant that transport capability.
+An authenticated mature
+target uses the proof reserve; missing/borrowed/expired targets use admission
+capacity and do not open a group. Completion also pays the native reveal debit.
+
+Common chunk-count/deposit queries now read only the bond-key prefix and fixed
+headers; they do not decode all actors' variable payloads while calculating free
+capital. Stored parts and signatures retain their existing serialization. The
+SDK/CLI directs large protected reveals through signed kernel parts and refuses
+a silent generic split; large posts retain generic carriage. Supplied offline
+seal rows remain unverified until authenticated locally.
+
+The actual-node saturation trial forces a synthetic valid court into multiple
+parts and holds all generic slots open. It checks absent/borrowed seals, owned
+deposits, one conviction/payment, cleanup and independent replay. This tests
+the route, not a real large checkpoint or whole-network saturation bound. Shared
+invalid-proof load, all-target aggregate metadata/state and expiry-sweep costs,
+worst-job deadlines, transport/acquisition/retention and complete resources still
+need evidence. No shipping fence or full RFC02 acceptance is granted.
+
+### §14.33 — Protected candidate reads from one anchored public snapshot (2026-10-11)
+
+The protected SDK reader consumes the existing `getPalwKernelRows` (op 211)
+response grammar; no new RPC allocation or consensus object is introduced. One
+complete snapshot must preserve the tip, both roots, header and declared row
+count across all pages, with strictly advancing rows/cursors. The common snapshot
+rebuild checks both served roots and refuses a header newer than the tip.
+
+`FlatSnapshotAnchorV6` separately supplies the locally authenticated tip,
+network/ruleset domains and ledger/aux roots. All five must match before protected
+reads become available. A caller must authenticate that anchor to its own chain
+or a state proof. Copying the anchor from the same remote pages proves only
+consistency; the SDK/CLI must not report independent chain membership in that
+case. An offline file cannot attest its own chain trust.
+
+Candidate reads bind the requested vector/class/model statement to the explicit
+protected profile and independently rebuild the same program, parameter/input
+bindings and immutable resource scope used by the native court. Seal export
+requires the authenticated signing bond's row, an open candidate, and an unspent
+mature seal before its expiry at the anchored tip. Private salt/exact-proof guards,
+current bond status, clocks and terminal fault validity remain rechecked by reveal
+preparation and native acceptance. Snapshot membership grants no fidelity,
+execution rights, reward eligibility or Final.
+
+`palw-class flat-v6 snapshot` accepts one op-211 JSON response per NDJSON line and
+a separate anchor JSON file, then exclusively writes the checked native seal row
+and reports its anchored height for `flat-v6 reveal`. It uses the existing local
+128-MiB decoded snapshot ceiling plus a bounded JSON page envelope. JSON byte,
+row-count and hex bounds precede allocation of additional binary copies; this
+is not a peak-memory, consensus capacity or network-wide load guarantee. Unknown
+fields, malformed hex/tables, stray terminal cursors, incomplete/moved snapshots,
+root/anchor/context substitutions, unavailable routes and closed/immature/spent
+seals fail without publishing an output. Files are never overwritten.
+
+The node component trial uses the actual op-211 response builder and JSON grammar,
+a separately authenticated local consensus anchor, a reconstructed protected
+candidate/seal, and the existing own-chunk terminal court/settlement/replay.
+Synthetic/offline fixture roots establish reader behavior, not chain admission or
+actual-checkpoint/full-task acceptance. Public network transport, automatic local
+anchor/state-proof acquisition, retention/pruning, whole-job deadline/liveness,
+shared aggregate resources and the rest of §II.14 remain completion requirements.
+
+
+### §14.34 — Bounded TopK point counterexamples and native-storage selection (2026-10-11)
+
+The frozen v1 rule remains score descending with lower index first on a tie,
+followed by ascending selected indices. The reference evaluator now uses a
+K-candidate heap for K <= 64 and at most 2K indices in bounded partition blocks for larger K. Selecting the whole axis
+emits its known index set directly. The typed execution backend uses the same
+bounded-memory strategy and reads the original storage through offset/strides,
+including transpose, slice and broadcast views. It does not widen or gather the whole score
+source for TopK. Both changes preserve primitive identities, canonical work,
+existing program/job limits and exact results; they are backend improvements.
+Repeated bounded partitions retain the best K indices of each prefix and cost
+O(N) in total before the O(K log K) index ordering. The implementation uses the
+in-place linear-time contract in the pinned
+[Rust 1.93.0 slice implementation](https://raw.githubusercontent.com/rust-lang/rust/1.93.0/library/core/src/slice/mod.rs).
+The ordinary callback-based verifier below retains its separately priced heap
+scan; it does not assume cheap repeated reads of remote score material.
+
+An explicitly selected `topk-point-court/v7` adds a separate bounded fault codec
+over the unchanged flat-v5 internal/v3 parameter commitments. It is **not**
+selected by an existing class, vector, protected reveal, descriptor or default
+proof decoder. Its context must bind the exact new court id and the ordinary
+program/job/segment/parameter context. Registered parameters or authenticated
+node scores are supported; uncommitted/public full-tensor sources retain the
+existing court and are refused by this point contract.
+
+Range faults open one selected id outside N; order faults open an adjacent
+non-increasing pair, including duplicates. A dominance fault opens a selected
+member, a rival score at the same axis row, and the adjacent selected members
+around the rival's claimed insertion gap. Those neighbors authenticate omission
+from a correct ascending set. A larger rival score, or an equal score with a
+smaller rival index, convicts. Every wrong set either has a range/order defect or
+excludes a true TopK member that outranks one of its members. A correct set cannot
+produce any of these authentic counterexamples. All requested points are bound
+to their exact typed roots, coordinates and source wiring; missing, borrowed or
+malformed material dismisses. The court opens at most three output and two score
+leaves and never reconstructs the N-element axis.
+
+The versioned relation scope derives selection work/auxiliary memory separately
+from proof bytes, court work and scratch. The local checker precharges a complete
+scan attempt before any score callback; missing acquisition consumes that attempt.
+Its 32-MiB selection auxiliary ceiling is a local ordinary-verifier limit, not a
+producer memory limit. The 128-KiB filing cap bounds legal parameter and
+internal-node score widths; byte, nested-count, shape and path bounds precede allocations. Frozen v1
+continues to forbid i128 parameters; i64 parameters and i128 internal-node scores
+retain their existing types. Selection/source residency, hashing, evidence acquisition/retention and aggregate
+load remain separate prices. A consumer must bind the complete all-relation
+scope, normal verification, DA and reserved transport before selecting this court
+in a node/reward route.
+
+Missing score material does not convict or default the producer in this court.
+Conditional external-verification mode A remains unchanged; this component adds
+no consensus availability obligation.
+
+The synthetic 10,485,760-score, K=2 trial executes the reference/backend and scans
+an incorrect committed selection. Its terminal filing is 17,485 bytes, below the
+independently derived 37,744-byte envelope. This proves a large **fixed axis**
+component, not a ten-million-token checkpoint or maximum-length job. Frozen
+flat-v5 whole-axis admission still refuses that relation, and existing native
+proof routes still refuse v7 bytes. Bounded token/patch/audio lengths, H-axis
+selection, all-plan/shared network budgets, full model/task/fidelity/performance,
+independent execution Final/redemption and A6/A8 remain required. No shipping
+fence or full RFC02 acceptance is activated by this increment.
+
+### §14.35 — Explicit mixed-court graph scope and prepaid independent replay (2026-10-11)
+
+`flat-resource-scope/v7` now selects the point court through an independently
+derived **complete graph** contract. The commitment grammar remains flat-v5
+internal/v3 parameter; the separately domain-bound court-set id and scope root
+select the v7 terminal semantics. Every reachable block node, every unrolled
+layer occurrence, the admitted maximum positions, decode and malformed-header
+courts are included. A declaration must equal the complete derivation in every
+field. A small TopK filing cannot admit another oversized relation or replace
+the graph's exact program, mode, extent or resource ceilings.
+
+Committed TopK sources select the v7 point court. Public/constant/initial-zero
+sources retain bounded v5 courts. When initial state and a later state writer
+require different courts, the scope prices both and selects the court from the
+exact typed wiring at that position and occurrence; neither a registrant nor a
+filer chooses the cheaper kind. Frozen state roles, per-layer state namespaces,
+history windows, source coordinates and v1 type/shape rules remain unchanged.
+Admission visits metadata, not model images or position arrays. It accounts for
+earlier sub-64 legacy layouts when monotone H crosses into flat commitments,
+including the case where an earlier legacy row tree has more paths than the last
+flat tree. It serializes/hashes the program once for the unrolled TopK prices.
+
+`flat-fault/v7` wraps either the exact bounded v5 court bytes or v7 TopK point
+bytes under a new version and discriminant. The mixed court rederives complete
+scope, checks the wiring-selected kind and exact filing bounds, then dispatches
+the existing authenticating court. All historical v5/v6 decoders and routes
+retain their previous acceptance behavior; none implicitly accepts this wrapper.
+
+The ordinary v7 verifier reexecutes from independently acquired registered
+parameters and authenticated public job ids. Its shared replay engine still
+checks ordinary relations and delivered decode ids. When TopK differs, it reads
+selected ids through a new **16-KiB, single-output-leaf, bounded byte codec**,
+authenticates every reply to the same node/type/shape/root, scans its own scores
+under the derived budget and builds a bounded point counterexample. A public
+value reply is evidence for the selected member, never the reference score or
+the correctness of the computation. Missing, oversized, wrong-version or
+borrowed material yields a demand, never a Clean verdict or conviction.
+
+The versioned local replay session independently binds the complete scope and
+prices reference i128 tensor payloads, parameter/trace hashing, history rows,
+node/hash/value reads, reply bytes, TopK scan work, temporary selection memory
+and attempts. The full hashing/scan attempt is reserved before artifact or public
+callbacks; missing material or an inconsistent artifact consumes that attempt.
+Each response consumes its read and byte allowance before delegation. Retries
+share the same counters. Storage bytes, the reference i128 representation and
+temporary selection bytes are distinct quantities. These component prices do
+not yet certify total allocator/RSS, all-primitive CPU/deadlines, public storage/
+delivery, per-block/per-bond or network-wide economic and load admission.
+
+An actual synthetic N=10,485,760, K=2, **one-position graph** now passes honest
+independent replay and prosecutes a wrong selection through the mixed court.
+The mixed filing is 17,488 bytes; its reference source occupies 167,772,160 bytes,
+and its scan charge remains 251,658,288 with 128 temporary selection bytes.
+Separately, metadata-only admission covers TopK→Gather→state update with 1,024
+layers and the existing 2,097,152-position ceiling; this is a derived envelope,
+not execution or a materialized maximum-length job. Synthetic graphs exercise
+range/duplicate/dominance faults, state and history transitions, all sub-64/64/127
+thresholds, decode, encoder inputs, substitution refusal and prepaid retries.
+
+No consensus post/seal/reveal/chunk/DA or reward route selects the mixed v7
+contract yet. The protected-v6 actual-node regressions remain compatibility
+evidence, not v7 native acceptance. A subsequent consumer must bind the new
+court set and complete scope to admission, public acquisition, actor-owned
+prosecution, reserved transport, shared resources and original-capital payout.
+Versioned token/patch/audio job lengths, H-axis sparsity/state semantics, the full
+shared resource vector and economics, real checkpoint/task/context/fidelity/
+performance, fresh outsiders, independent execution Final/redemption and A6/A8
+remain required. Conditional external-verification mode A remains unchanged;
+this increment adds no consensus model-availability obligation. Full RFC02 stays
+active and shipping fences stay dormant.
+
+### §14.36 — Explicit v7 native candidate registration (2026-10-11)
+
+Native object 40, `RegisterFlatModelCandidateV7`, now registers a **non-reward
+conformance candidate** for the complete mixed-court contract. The v4 decoder
+or v5 encoder descriptor identifies the artifact/job role; the independently
+derived v7 court-set, profile, maximum positions, encoder binding, resource
+scope and replay envelope identify its verification semantics. The consumer
+requires a Matured/Final model binding with exactly the submitted descriptor,
+canonical program root and complete registered parameter-instance root. Neither
+an official compiler nor a model-family name substitutes for that binding.
+
+The kernel independently validates canonical normal form, exact range proof,
+every real parameter instance and the complete scope/replay declaration. It
+checks guaranteed court work and component reference-memory policy. Table 29,
+`flat-conformance-v7`, stores the binding and complete derived plan separately
+from execution classes. Its conditional state-root extension preserves the
+historical root when empty; row restoration rederives the stored contract.
+Old and new candidates share the same eight-entry bonded-owner catalog and
+withdrawal cleanup. Registration creates no execution class, OPV eligibility,
+job, reward weight or execution Final right.
+
+The bounded canonical object decoder checks the program and parameter counts
+before allocation. Native binding hashing is charged to ordinary block budget
+and the actor's original collateral before checking authenticity, including
+failed attempts. Canonical preparation has its own conservative metadata debit
+before decode/range/unrolling. It cannot consume proof-reserved work. The SDK
+prepares the exact plan and signs object 40 under its actual network/lifecycle
+signature domain; historical v6 preparation and signing do not silently opt in.
+
+Five kernel candidate tests, three new actual-node tests and two new SDK tests
+cover identity/codec, complete declarations, rows/root/rollback/withdrawal,
+shared old/new quotas, paid refusals and protected proof-budget headroom. The
+actual-node suite includes all 18 prior conformance regressions and replays its
+resulting state on an independent node. A synthetic 10,485,760-score candidate
+at 2,097,152 maximum positions is accepted from bounded metadata. Its source
+weights, tokens and maximum-length trace are not materialized; this is not an
+executed long-context checkpoint.
+
+The actual pinned Qwen2.5-1.5B checkpoint's 14,011-byte program and 1,636
+parameter instances still fail this candidate contract: the present admission
+tariff is 7,557,621,401 against the 536,870,912 ordinary allowance, and complete
+scope derivation independently refuses an ordinary relation exceeding terminal
+court caps. These are recorded refusal results, not model admission passes.
+Pricing and bounded ordinary-relation court refinement must be completed
+without raising the caps merely to admit this model.
+
+This registration increment does not yet connect v7 posts, actor-owned
+seal/reveal, chunk transport or selected-value DA. Those consumers, complete
+shared resources/economics, real tasks and independent source fidelity, fresh
+outsiders and honest execution Final/redemption remain required. Keep the
+original A6 denominator and confidence/participation conditions and A8 complete
+task cohort. The user's current goal additionally requires A6/A8 at least 90%;
+no inaccessible checkpoint or failure is removed to manufacture that rate.
+Conditional external mode A and dormant shipping fences remain unchanged.
+
+### §14.37 — Frozen bounded job lengths and history-selection component (2026-10-11)
+
+`FlatLengthTemplateV7` adds a bounded declarative specialization contract for
+token, patch and audio counts. It binds a canonical maximum-shape v1 program
+and a strictly ordered map of fixed parameter/state/carry/node axes. Both the
+maximum graph and every requested actual specialization independently pass
+normal form, exact ranges and complete scope/replay derivation. The immutable
+admission binds the template, actual counts, specialized program, positions and
+scope/replay roots; enlarged/rebound declarations fail. Zero means an absent
+modality. Existing H, primitive attributes, constant bytes and state roles are
+not rewritten. Text decoder counts include the prompt and all fed-back tokens;
+the final delivered token is excluded. Encoder counts bind its prompt at one
+position. Patch/audio inputs still require their separate typed stage/root
+binding and are refused on the text-only route.
+
+Adversarial length execution exposed a production trace bug: a provider's
+larger or differently typed parameter could reach evaluation despite a smaller
+declaration. Buffered, streaming and stage traces now check exact declared
+shape, dtype, payload length, representable values and layer namespace before
+evaluation. The frozen interpreter already required this contract. Correct
+executions, roots and tie semantics remain unchanged. Five length tests and
+three trace regressions exercise the actual shared runtime, not a substitute
+executor.
+
+`flat_history8` separately implements a **version 8 history-selection
+relation**, without relaxing the frozen v1 prohibition on H-axis TopK. At
+position p, its source has H=min(p+1,window) rows and its IDX output has
+min(Kcap,H) selected rows. Selection is score-descending with lower local id
+breaking ties. Explicit window-local-to-absolute coordinates prevent treating
+rolled-window ids as global token positions. Work is O(N log K), selection
+auxiliary memory is O(K), and exact source/output node coordinates and roots
+bind bounded range/order/dominance counterexamples. Its independent court
+authenticates at most two source leaves and three output leaves. The session
+precharges reference scan/hash and every bounded selected-value callback;
+failed acquisitions and retries consume their shared allowance.
+
+Eight history-component tests cover all six dtypes, warmup H=1 with Kcap>H,
+flat layout thresholds, window rollovers, i128 extrema, prepaid failures,
+hostile codecs, coordinate substitutions and 966 exhaustively enumerated small
+selection tuples. Metadata reaches 10,485,760 maximum positions without
+allocating position arrays or history images. This does not execute a
+ten-million-token checkpoint. It does not prove the source HistAppend/state
+continuity, define a complete typed v8 model graph, register/execute that graph
+in a node, bind media stages, or close the shared economic/resource vector.
+Those obligations remain open alongside full RFC02 acceptance.
+
+### §14.38 — Independent actual-checkpoint source diagnostic (2026-10-11)
+
+Qwen/Qwen2.5-1.5B-Instruct revision
+`989aa7980e4cf806f80c7fef2b1adb7bc71aa306` now has an independent Hugging Face
+Transformers 4.48.3 / Torch 2.5.1 float32 eager-CPU reference from its actual
+BF16 safetensors. Source file bytes are pinned and checked before and after
+execution. The reference uses the installed built-in model class, offline
+loading and no remote code. The diagnostic protocol fixes exact artifact,
+source manifest, tokens, arithmetic units, jobs and thresholds before the
+integer comparison. Revision labels are informational to this tool; chain
+authentication and checkpoint provenance remain separate obligations.
+
+For four fed-token sequences of lengths 30/31/32/30, all 123 next-token-logit
+positions meet the predeclared thresholds. Top1 agreement is 96.747967%, mean
+KL 0.001367878, slope 0.998682249, correlation 0.999847941, maximum absolute
+logit difference 1.506592512 and RMSE 0.070122785. This is empirical original
+source fidelity, separately from bit equality between integer implementations.
+It supersedes the need to treat the previous local HL comparison as an
+independent HF reference; it does not extend its diagnostic scope.
+
+Measured whole-process wall time/RSS are 26.67 seconds/6,366,314,496 bytes for
+the source reference and 242.18 seconds/2,151,088,128 bytes for the integer
+comparison. These separate processes include import/load/hash overhead and
+may be affected by concurrent builds. They are observations, not a service
+throughput guarantee or complete execution/evidence/hash/store/delivery cost
+certificate. The diagnostic's context is 32; original context 32,768,
+complete chat/code/translation tasks, routing/state fidelity and public native
+verification/Final remain untested by this run.
+
+The dated census frame still has D_all=3,117,871 and D_files_listing=2,247,414
+(72.081687%). These are listing/shape observations, not registration/Final
+coverage. On that historical frame, the listed subset alone cannot supply
+90% of D_all. Keep inaccessible/gated/missing entries and nonresponses in the
+denominator; obtain new admissible evidence rather than reducing it. There is
+no measured complete-task active-kernel A8 cohort or hook-free independent
+Final/redemption result. A6/A8 and the full RFC02 goal remain unmet.
+
+### §14.39 — Prepaid exact scheduled-metadata admission (2026-10-11)
+
+The v7 candidate's overly conservative byte-times-maximum-schedule price is
+replaced by two paid stages. Reserve B² + 64B + 8,832P + 16,384 before hashing
+parameter commitments or decoding the canonical program. From that typed
+decode count the actual scheduled node occurrences N without constructing
+wiring or tensor values. Reserve 16N*1,024 before range/scope/replay work, and
+reuse the decode. The conservative metadata pass count covers the actual
+prepared writer/offset constructions, TopK source walks, occurrence framing
+and reference replay. Declared instance counts are checked before building
+the per-layer set.
+
+The two debits remain one adjudication attempt. Combined per-attempt and shared
+block work must fit the ordinary allowance; neither stage borrows the proof
+reserve. Invalid canonical bytes retain the first debit. Invalid scopes,
+insufficient remaining metadata budget and retries preserve work already spent.
+This changes admission pricing only, not canonical PWU, reward weight,
+registered identities, scope/replay roots or terminal court caps.
+
+The actual Qwen metadata has 314 template nodes and 7,658 scheduled nodes.
+Its preparation price becomes 211,670,361 + 125,468,672 = 337,139,033, within
+the 536,870,912 ordinary allowance. Its frozen ordinary court scope still
+refuses independently; this removes one metadata-price obstacle and does not
+establish model registration, native execution or Final. The earlier 307-byte
+synthetic candidate's complete price is now 139,113 + 49,152 = 188,265.
+The historical tariff/refusal observations remain retained rather than edited
+to look like successful current admission.
+
+Five new staged-cost adversarial tests pass, alongside the five existing
+candidate regressions. Exact inputs, paid-attempt accounting, compiled binary
+identities and the retained Qwen scope refusal are recorded in
+[the staged-pricing verdict](../design/palw/tir/evidence/rfc02-staged-price-v7-verdict.json).
+These tests do not establish full-model execution, native Final or A6/A8.
+
+### §14.40 — Native protected mixed-graph prosecution, v7 (2026-10-11)
+
+The registered v7 scope/replay now has explicit native post, own seal/reveal,
+expiry and public node/hash/selected-TopK-value demand/answer/default carriers
+(inner tags 41..47, following candidate tag 40). The complete stored candidate,
+scope and replay are rederived for posting and prosecution. Ordinary v5 faults
+and bounded point TopK7 faults share that exact namespace; v3/v6 carriers cannot
+bypass the protected route. An optional text length admission fixes one current
+program specialization and its exact token count, scope and replay. It does not
+make one registered class dynamically shaped or accept patch/audio inputs.
+
+Protected v7 seals share the v6 four-per-bond and 1,024-global limits. The
+original vector catalog still shares eight statements per bond with v2/v3/v6.
+Requester slots are shared in both admission orders with old DA routes. Public
+answers authenticate fixed saved coordinates and type/shape/root without
+decoding the stored program. There are at most 32 open demands per vector and
+16 KiB per answer. Invalid filings retain actor processing costs; only an own
+mature seal enters guaranteed proof work. Own tag113 target4 chunks bind the
+same actor and vector and survive saturation of the generic chunk catalog.
+The last chunk plus its court requires two guaranteed runs, without increasing
+the ordinary or proof ceilings.
+
+A fresh, non-genesis bond registered on an independently synced node acquires
+public op211 pages and requested evidence, independently checks a synthetic
+sparse/state graph, seals its own proof, convicts and redeems the actual UTXO
+credit. Full IBD independently recreates that credit; pruning import checks all
+retained deltas and complete tip/rows. The original poster reserve funds one
+49% finder/default share and the remaining burn. The paged RPC conversion is
+exercised locally; this is not a live TCP service measurement.
+
+The recorded build set passes 27 native, 16 SDK, 41 core and 155 kernel tests
+(239 distinct; one hardware benchmark ignored). Thirteen tests are new. Kernel
+trace-parameter and staged-pricing changes are included. The later resource10,
+checked-settlement and graph9 changes are not included; the native-to-core
+source difference is a static allocation inventory/test pin only. Compiled
+source preimages, immutable binary hashes, repaired fixture trials and scope
+limits are preserved in
+[the native verdict](../design/palw/tir/evidence/rfc02-native-mixed-v7-verdict.json).
+
+An honest protected candidate has clean verification but still creates no
+execution class, reward eligibility or ExecutionFinal right. This evidence uses
+a synthetic 65-axis TopK/Gather/state program, not the actual checkpoint. Honest
+execution Final, complete typed H/media jobs, shared resources/economics and
+actual-model A6/A8 acceptance remain open. Mode A and dormant shipping fences
+remain unchanged.
+
+### §14.41 — Independent free-running task diagnostic failure (2026-10-11)
+
+An additional frozen context-32 protocol runs the actual pinned Qwen source
+and integer artifact on three arithmetic/translation/code prompts, each with
+eight requested output tokens. Each implementation feeds its own generated
+tokens. All 75 fed positions and 24 generated outputs remain in the denominator;
+EOS affects answer display/scoring only, not the fixed execution count.
+
+The generated-token agreement is 22/24 (91.666667%), below the predeclared 95%
+threshold. Exact generated jobs are 2/3, meeting only that separate threshold.
+Both source and integer task-answer fractions are 1/3, below the predeclared
+100% answer threshold. Arithmetic differs at two positions after EOS; translation
+outputs `Hello.` instead of the exact frozen `Hello`; the eight-token code job
+does not finish its fenced answer or emit EOS. These failures are retained;
+output formatting, thresholds and job membership are not revised after scoring.
+
+The source process completes in 15.62s at 6,367,248,384B maximum RSS; the integer
+process completes its computation in 206.33s at 1,974,124,544B RSS and returns
+failure for the unmet threshold. The independent tokenizer-based scorer also
+returns failure. These are separate diagnostic observations, not service
+throughput or task/cohort acceptance. Four bounded-protocol/scoring refusal
+tests pass, but do not turn the measured result into a pass. Frozen protocol,
+all source/integer/scorer outputs, process logs, tool/binary identities and
+limitations are recorded in
+[the failed generation verdict](../design/palw/tir/evidence/qwen25-independent-greedy-task-verdict.json).
+The earlier 123-position teacher-forced logit diagnostic remains a distinct
+passing result. Neither result establishes complete task benchmarks, maximum
+context, native execution Final or A6/A8 coverage.
+
+### §14.42 — Complete ordinary point graph and resource components, v9/v10
+
+An explicit v9 graph contract now uses authenticated scalar output and exact
+dependency openings for all 24 ordinary frozen primitives. Registered MatMul
+second operands use the existing PC-v3 column layout; internal nodes retain
+flat-v5 or small legacy commitments. Committed TopK uses point7 and public/
+initial TopK, malformed headers and decode use their separately checked v5
+relations. The complete scope covers all scheduled occurrences, history
+initialization, both sides of the 63/64-element grammar boundary and maximum
+H, with conservative 127-element flat tails. No frozen v5/v7 scope or resource
+ceiling is changed.
+
+The mixed court independently rederives that full scope and prices both its
+metadata preparation and the terminal. Its locator replays from acquired
+registered parameters and authenticated job input, then requests bounded
+typed output/header/hash evidence for the first mismatch; it needs no supplied
+fault coordinate. Typed value replies support all six dtypes. Missing evidence
+creates a demand, not a fabricated conviction. Retry/hash/read/TopK work is
+prepaid by the local replay session. These are versioned components; native9
+and execution-class/job11 integration are separate acceptance steps.
+
+Resource10 independently binds that complete scope and derives 21 dimensions
+for primitive operations, validation/copy/index traffic, hashes, provider calls,
+reference payload/container allowance, evidence storage, delivery/reply/retry,
+complete court/metadata work, raw parameter storage/tree scratch and owned
+peak payload. Its streaming reference consumer checks borrowed raw byte width,
+dtype and shape before i128 expansion, authenticates parameters, and atomically
+reserves plan/block/bond/network allowances before callbacks. Failed callbacks
+and retries retain the debit. This local component neither installs persistent
+native quotas nor measures process RSS, transport retention or coin fees.
+
+Checked reference settlement preflights every accumulated u64 total, funds
+payouts/burns from prior original collateral debits and FinalReward from spent
+escrow, and rolls back a rejected or unbalanced receipt batch atomically.
+Existing reservations remain releasable after another lane slashes collateral;
+only new allocation rejects a collateral overhang. Seven new conservation
+tests and 58 existing route/OPV/verifier/pipeline tests pass, alongside eight
+resource tests and seven point/four mixed-graph tests. Exact build scopes and
+retained failures are recorded separately; the earlier native7 full-library
+run does not include these later changes. Actual measured point/parameter
+checkpoint evidence follows in its own observation. Complete native resource/
+escrow enforcement, typed H/media jobs, honest Final and A6/A8 remain open.
+
+### §14.43 — Actual checkpoint point court and parameter continuity, v9
+
+The pinned Qwen2.5-1.5B integer artifact is executed twice through independently
+opened mapped executors for one fed token (4498), with all 7,658 nodes. A finder
+without the producer's mutation coordinates locates the first divergent node
+after 35 agreeing prior roots. A fixed first-leaf typed reply supplies the
+divergent element; this trial does not establish arbitrary-leaf public hash
+descent or live transport. It independently authenticates the selected real
+matrix parameter against PC-v3, convicts the ordinary point and dismisses
+missing source. The proof is17,944 bytes, with combined court work151,708,672
+and scratch21,316,001 bytes. Whole-process time/RSS is16.30s/3,995,418,624B.
+The earlier quadratic node-directory localization trial also passed at76.06s;
+its source and result are retained rather than rewritten as the linear trial.
+
+A separate streamed check authenticates every one of the1,636 registered
+parameter instances against the exact mapped integer artifact:1,835,516,100
+raw payload bytes read,27,275,264-byte maximum derived helper workspace below
+32 MiB,81.07s whole-process time and1,853,112,320B maximum RSS. Artifact SHA is
+checked before and after both trials. This is complete integer-artifact-to-PC
+continuity, separately from empirical original BF16 fidelity; it is neither
+original arithmetic bit equality nor a native source-binding substitution.
+
+[The checkpoint observation](../design/palw/tir/evidence/qwen25-real-courts9-observation.json)
+records immutable executable/source hashes, commands, actual/max positions,
+the exact proof and limitations. Scope metadata covers32 positions, whereas
+this prosecution executes one position. No model admission, real native
+execution Final, maximum-context or cohort/A6/A8 credit follows from these
+component results. Those acceptance steps remain open.
+
+### §14.44 — Bounded authenticated external stage inputs, component v12
+
+The opt-in `flat_inputs12` component binds a frozen program-v2 external stage,
+its exact maximum v1 view, the immutable real source-PC namespace and bounded
+token/patch/audio axis map. Every present modality must bind an actual external
+input axis. Job admission fixes actual lengths and positions; maximum and actual
+graphs independently pass validation, interval analysis and complete scope9.
+Source-weight and persistent-state axes cannot be resized by the input map.
+Both maximum and actual input payloads are bounded at16 MiB raw/32 MiB expanded
+i128, with at most16 inputs and16,384 real parameter instances.
+
+Acquisition checks job/admission/root counts and real source PC before provider
+calls. It atomically prepays a local input attempt and its complete raw/expanded
+payload. Dtype, shape and exact bytes are checked before expansion, followed by
+the declared interval and each exact job-input root. Failed expensive reads
+retain their complete allowance. Authenticated input values and combined PC
+are private, with immutable accessors; virtual input roots occupy the canonical
+v1-view parameter namespace after the real weights.
+
+Five synthetic tests pass. A three-position patch3/audio5 stage produces
+16/32/48 under independent arithmetic, the v2 interpreter and exact v1 trace.
+Patch/audio reductions, an explicit previous-position state read and its write
+use the same full scope9/court9: honest proofs dismiss, wrong committed outputs
+convict, and borrowed input/state openings refuse. Wrong job/source/scope/count
+and insufficient allowances refuse before callbacks. Immutable binary, exact
+dependency preimages and selected commands are retained in
+[the component verdict](../design/palw/tir/evidence/rfc02-typed-inputs12-verdict.json).
+
+This component serves job-constant external tensors across admitted positions.
+Per-position media inputs, random/earlier-stage sources, post-write stages,
+native transport/retention/codec, resource10/quota11 integration, job funding
+and media Final remain open. Its local allowance bounds input callbacks and
+raw/i128 payload only; metadata, PC/tree hashing, scratch and provider-internal
+work require the shared native resource contract. Real source-PC continuity is
+distinct from original-model fidelity. No real-media task or A6/A8 credit is
+added; RFC02 completion remains open.
+
+### §14.45 — Generic public checkpoint localization and fresh context128
+
+The complete ordinary locator now authenticates its full scope and requested
+relation before any evidence callback. Public hash descent locates an unknown
+divergent leaf, and authenticated headers cover all six dtypes, including
+malformed metadata needed for prosecution. Two additional graph tests pass
+(six graph tests total); this does not repeat the four earlier tests as new.
+
+The actual pinned Qwen checkpoint trial independently matches all7,658 honest
+node roots, then finds occurrence1/node27/element1500 after35 agreeing roots.
+Nine public queries return5,853 bytes; the17,816-byte proof convicts through
+the same complete scope9/court9. Missing headers/values require acquisition or
+dismissal. The fixture retains an authentic and a false R/PC tile pair, separately
+from full integer-artifact PC continuity. Its frozen fixture, executables,
+source identities and diagnostic limitations are recorded in
+[the generic checkpoint observation](../design/palw/tir/evidence/qwen25-real-generic9-observation.json).
+The public service and actual native prosecution remain separate checks.
+
+A newly lowered context128 program changes both history windows from32 to128
+while retaining the exact parameter declarations, all1,636 registered parameter
+instances, schedule and quantization recipes. All four positional table fills
+are independently reconstructed. Borrowed mapped payloads authenticate against
+the same PC; no second1.835-GB integer artifact is produced. The earlier32-position
+calibration is reused explicitly.
+
+The frozen128-position diagnostic evaluates two complete128-token sequences
+against independently loaded original source weights. It passes the unchanged
+predeclared logit gates: top1 agreement252/256 (98.4375%), mean KL0.00230502,
+slope0.99773344 and correlation0.99953118. Integer auditing plus execution takes
+574.41s at2,438,201,344B maximum RSS; source inference takes8.61s at6,544,982,016B.
+These different diagnostic processes are not a controlled performance comparison.
+[The context observation](../design/palw/tir/evidence/qwen25-borrowed-context128-observation.json)
+retains failed scale-decoding and disk-space trials, exact protocol/tokens,
+immutable executable hashes and source outputs. This establishes context128
+logit fidelity, not original context32768, a completed free-running task,
+native Final, media support or A6/A8. The prior frozen greedy-task failure
+remains unchanged. RFC02 completion remains open.
+
+### §14.46 — Funded execution and persisted quota components, v11
+
+The independently checked class binds a matured native source header, exact
+candidate9 program/PC, maximum scope/replay/resource10, trusted quota policy,
+fixed liability horizons, reward ceiling and original producer reserve. The
+text-job record separately fixes requester/producer/nonce, prompt and complete
+fed positions, actual scope/resource/quota roots and an original escrow debit.
+Its semantic request identity cannot change with admission time or a funding
+carrier; native also needs a permanent requester/nonce once-only index.
+
+Private job state permits one protected claim and one terminal settlement.
+Final pays only original escrow after all retained evidence, pending own proofs,
+DA and latest-answer grace close. Fault settlement refunds that escrow and funds
+finder/burn only from actually collected original producer collateral. Amount
+overflow, wrong roots, duplicate settlement and anchored state rewind refuse
+before mutation. A trusted DAA jump may close/refund an expired job without
+reopening computation/source proof windows. Late trace-DA default requires its
+immutable establishment time within liability; unavailable external R is not
+a source-mismatch judgment. Twelve synthetic execution tests pass against the
+final20-test quota snapshot, with both the initial disk refusal and immutable
+passing executable retained in
+[the execution verdict](../design/palw/tir/evidence/rfc02-execution11-verdict.json).
+Original-class restoration independently rechecks all original candidate/source/
+policy roots, fixes private admission permission to false and preserves access
+to funded-job settlement after source revocation. It creates no fault from a
+revocation flag. Fresh funded policies require every future guarantee kind.
+
+The quota component persists cumulative consumed/reserved amounts for21 axes
+at subject, block, producer and network scopes under a rooted trusted policy.
+Baseline is once-only; producer actions alone spend their reserved allowance.
+Public challenger attempts spend their own ordinary allowance. Failed expensive
+work stays spent, and admission floods cannot consume matured own court/DA/chunk/
+close guarantees. Expired terminal collection prepays a fixed current ordinary
+close envelope and uses a private token bound to current state and the genuine
+terminal book; it restores no old credits. Twenty synthetic quota tests pass,
+superseding earlier10/11/12/14/17/19 counts rather than adding them, in
+[the quota verdict](../design/palw/tir/evidence/rfc02-persisted-quota11-isolated-verdict.json).
+
+Quota restoration requires an independently rooted native state anchor. A paid
+terminal attempt leaves the subject open until the genuine terminal book and
+atomic payout authorize its private close token. Class-maximum court/chunk and
+native metadata-restore costs are reserved independently of the smaller actual
+job scope; native must guard the priced stored-post cap before copying/decoding.
+
+These components do not authenticate carriers or spend native coins themselves.
+Atomic native policy/nonce/quota/escrow/UTXO application, protected challenger
+entitlements and retained-source lifecycle remain required. Bounded terminal
+quota-row collection now requires authenticated permanent spent-request/job
+anchors and a paid row operation; same-interval consumption is preserved. This first funded-job grammar refuses patch/audio. No native
+honest execution Final, actual complete-task or A6/A8 credit follows; the full
+goal remains active.
+
+### §14.47 — Predeclared complete free-running task diagnostic, context128
+
+A distinct protocol is fixed before source/integer outputs: arithmetic,
+translation and a complete Python addition function, maximum32 generated tokens,
+first predicted EOS included, and no EOS at the cap counted as incomplete.
+Answer rules,95% same-position token agreement, at least2/3 exact jobs and100%
+task success for both models are predeclared. Missing output tokens count as
+unequal. This protocol does not change the prior fixed-eight-output failure.
+
+Independently loaded original source and the fresh context128 integer program
+both complete all three tasks correctly. Generated counts are3/2/12 including
+EOS; all17 output token IDs and all three jobs match exactly. An independent
+tokenizer/semantic scorer passes the frozen rules. Six bounded-policy/scoring
+controls pass. Source inference takes12.28s at6,480,707,584B maximum RSS; integer
+source-PC auditing and dev-profile execution take261.35s at2,009,333,760B.
+The differing processes do not certify production throughput. Exact protocol,
+immutable executable/source identities, outputs, scorer and earlier trials are
+retained in
+[the complete-task observation](../design/palw/tir/evidence/qwen25-borrowed-context128-complete-task-observation.json).
+
+This is a three-task offline diagnostic with short24/20/36-token prompts. It is
+neither original32768-context coverage nor a probability-sampled active cohort.
+Its EOS-stop grammar is distinct from the first native fixed-count job contract;
+native execution Final, public fresh-node acquisition, other models/modalities
+and A6/A8>=90% remain required. Neither its success nor the earlier context32
+failure is substituted for the retained population denominators.
+
+### §14.48 — Native mixed-court conformance and bounded candidate restoration, v9
+
+The explicit opt-in v9 route registers the candidate, posts its rooted typed
+trace, serves selected values, and connects own seal/reveal/chunk and settlement
+to the same candidate scope and court. Legacy roots remain unchanged when the
+new tables are empty; v9 grants conformance rights without activating a funded
+execution descriptor. SDK checking independently derives the full candidate
+scope/replay/resource10 rather than trusting transmitted plan metadata.
+
+Ordinary native ledger restoration prepays and reads at most128 fixed candidate
+headers. It preserves large raw rows outside the journal diff; candidate-local
+DA/court paths reconstruct only their authenticated candidate scope. Public
+bulk import independently validates rows but first bounds row count, total raw
+bytes and aggregate derivation work. Owner withdrawal is refused while either
+v7 or v9 protected traces or pending own proofs/DA still need that candidate's
+metadata. Expired candidates with no dependencies may retire without expanding
+the catalog or deleting live evidence.
+
+The actual Qwen fixture reaches authenticated selected DA, own seal/reveal,
+original-collateral finder payout and independent IBD replay. Its node finder
+uses a prepared actual-model proof; a fresh finder running the model and locating
+an unknown bad coordinate through only public node data remains separate work.
+This result grants no honest funded execution Final or A6/A8 coverage.
+
+The coherent native milestone passes51 selected core regressions,35 real-node
+conformance regressions,134 SDK tests and five candidate-import/adversarial
+tests. The new distinct tests are five candidate, four SDK, three typed-DA and
+eight node tests; these20 increase the protected component pool from341 to361.
+Existing regression tests and previous quota snapshots are not counted again.
+Exact source preimages, immutable binaries, trial failures and test-only
+inventory corrections are retained in
+[the native milestone verdict](../design/palw/tir/evidence/rfc02-native9-typed-da-node-verdict.json).
+
+### §14.49 — Rooted native execution headers and staged request funding, v11
+
+The native-only class checker rechecks the canonical program, complete class
+scope and replay against the original independently admitted candidate9. It
+retains the original class resource10 root without materializing its quantity
+vector. Public imports and SDK candidate checking still independently derive
+that vector. Actual-job preparation independently derives resources once; its
+fixed record binds class, prompt/input, requester, producer, canonical nonce,
+reward and quota-plan root. Fund restores that exact original native preparation
+and rechecks live source/policy eligibility at the current block hash and DAA,
+original debit and the whole admitted liability interval. A plan for the same
+position count cannot substitute another prompt or actor.
+
+The immutable class record additionally commits the exact original native2
+R/PC proof bound. For canonical program size B and N committed instances,
+PC bytes are 4 + the sum of 67 bytes per unlayered instance or 69 per layered
+instance; max proof bytes are PC bytes +128KiB. Source-court work is
+B² +64B +8832N +64(max proof bytes +7) +65536; owned scratch is
+8B +512N +8(max proof bytes +7) +65536. Computation and source bounds must both
+be represented in the independently derived Court/Chunk quota plan. Native
+must compare the proof bound with the authenticated original binding header
+and prepay all actual restores and fixed-row processing under unchanged action
+limits; these formulas do not prove any actual model fits those limits.
+
+A separately rooted fixed class header can restore and settle an existing
+funded book without reconstructing its program/scope/resource vector. It is
+readonly and cannot grant admission. Source revocation cannot strand original
+escrow. Historical settlement requires an authenticated, originally verified
+court identity with exact R/PC, subject, proof and original inclusion time
+within claim liability. A refuted flag or new late proof is insufficient. An
+existing global R/PC theorem may stop another exact-scope claim's Final; only
+its original paid finder can receive a bounty. Native checks operator identity,
+and a finder who is that claim's producer receives no bounty: the whole actual
+collected slash is burned and the requester is refunded.
+
+[The component verdict](../design/palw/tir/evidence/rfc02-execution11-native-headers-verdict.json)
+records 26 pure tests and an immutable replay, with stable owned-source
+preimages. The initial17/23/25 trials and the compiler refusal are retained.
+Concurrent dependencies were not uniformly frozen for this component run.
+Authenticated original state and actual coin debit/payout remain native boundary
+fixtures in these tests; funded native Final/redemption, the accepted native
+model cohort and the A6/A8 90% requirement remain unproven.
+
+### §14.50 — Public-snapshot streaming outsider consumer, v9
+
+[The local consumer verdict](../design/palw/tir/evidence/rfc02-mapped-R-ordinary9-local-consumer-verdict.json)
+records 12 SDK controls for an ordinary-point outsider. It authenticates the
+public candidate/binding/trace and complete original R windows before its own
+model execution, uses bounded selected DA and unknown-node/leaf descent, and
+predebits local reference, source, metadata, hash, delivery and retry budgets.
+It does not receive a prepared fraud coordinate or proof. Source acquisition
+remains external under mode A; this is not a consensus source-distribution duty.
+Special TopK/history/Decode relations return an explicit separate-court demand.
+
+The actual Qwen fresh-node run now authenticates all1,445,797 R leaves and
+all1,636 PC instances before executing its own7,658 nodes. The finder receives
+no prepared fault coordinates, proof or archived replies. It obtains43 public
+DA demands through44 attempts, locates an unknown ordinary fault and constructs
+its own17,816-byte proof. Native scope9 seal/maturity/reveal, the original100
+collateral slash, its own49-unit actual UTXO and independent IBD replay pass.
+The final immutable run takes155.22s, with2,669,395,968B maximum RSS. Selected
+service reserves123 callbacks and962,560 wire bytes; it does not claim an
+unmeasured discovery guarantee under malicious ordinary traffic exhaustion.
+
+Its first run refused the explicit local IndexSteps budget before opening the
+model; that refusal is retained. The next local budget was fixed in
+[protocol v2](../design/palw/tir/evidence/rfc02-actual-outsider9-protocol-v2.json)
+before the next finder output, without changing network or court limits.
+Coordinated prebuild capture and actual Cargo/.d selection preserve1,442 local
+compiled inputs for the immutable node and SDK binaries. The actual1, SDK12 and
+existing35 native regressions all pass in
+[the final outsider receipt](../design/palw/tir/evidence/rfc02-actual-outsider9-final-verdict.json).
+This ordinary-point,
+class-maximum32/actual-position1 result adds no honest funded execution Final,
+requester escrow redemption, accepted model cohort or A6/A8 acceptance.
+
+### §14.51 — Protected quota rows and bounded execution11 carriers
+
+[The quota receipt](../design/palw/tir/evidence/rfc02-protected-quota11-isolated-verdict.json)
+supersedes20 pure controls with40, including protected paid-seal/fragment
+reservation, fixed authenticated selected rows, operator nonce witnesses and
+source-court costs across21 resource axes. It does not substitute a whole-map
+restore for the priced four selected rows. Expensive failed attempts stay paid;
+unused expired reservations cannot recreate same-interval credits.
+
+[Five carrier controls](../design/palw/tir/evidence/rfc02-native11-bounded-carriers-verdict.json)
+check bounded framing, exact actors/nonces, job-specific outer trace identity,
+salted own proof identity and source/computation wrappers. The carrier module
+is compiled, but execution11 Fund/Commit/court/DA/Final routes are not activated.
+Its unexported fold draft is excluded from the compiled source receipt.
+
+Proof-root-bound protected DA2 begins only after a proof exists. It does not
+guarantee unknown-coordinate discovery after ordinary demand exhaustion.
+Native execution11 must reserve and authenticate a separate bounded paid
+discovery entitlement before proof construction, then bind its conversion to
+the same owner's exact proof and new maturity. Producer delivery and fixed
+readonly terminal costs must be independently reserved before admission.
+These remaining guarantees and actual Fund→Final→redemption remain required.
+
+The protected distinct component pool is413: prior361 plus14 execution,
+20 quota,12 SDK, five carrier and one actual fresh-node test functions.
+Repeated35 regressions, local intermediate8/33/37 snapshots and immutable
+replays add zero. This engineering test count is not a model denominator or
+completion percentage; accepted native honest-Final model records remain0.

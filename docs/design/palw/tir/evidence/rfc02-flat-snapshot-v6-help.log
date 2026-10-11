@@ -1,0 +1,23 @@
+palw-class flat-v6 — prepare protected native candidates offline
+
+All commands: --network ID [--drill-salt HEX] --bond TXID:INDEX --out PATH
+Signing commands also require --key-file SEED
+    post   --class HEX --binding HEX --post FLAT_V3_BODY
+    seal   --vector HEX --proof FLAT_V5_FAULT --secret-out PRIVATE_PATH
+    reveal --secret PRIVATE_PATH --row NATIVE_SEAL_ROW --height DAA
+    expire --vector HEX --actor HEX
+    snapshot --pages NDJSON --anchor JSON --vector HEX --class HEX --binding HEX
+             (no --key-file; --out receives the checked native seal row)
+
+seal writes only the public seal to --out. It creates --secret-out with a fresh OS-random
+salt and the exact proof, network and signing bond, with mode 0600 on Unix. Keep it private.
+reveal checks the supplied row and height before writing a public proof. Supplied rows are
+UNVERIFIED_REMOTE_STATE; the node authenticates its own row and clocks at acceptance.
+Outputs are never overwritten. Large objects have .chunkN parts beside --out. Large posts
+use generic carriage; large reveals use the sealing bond's kernel slots. Timely inclusion
+and retention are not established by this tool.
+Submit the listed carriers with `misaka palw submit-object --object PATH`. Review them first.
+snapshot reads one op-211 JSON response per line, checks one complete coherent snapshot and
+compares its roots, network, ruleset and tip to the separately supplied anchor. Authenticate
+that anchor to your local chain or a state proof; the CLI does not establish chain membership.
+Preparation grants no activation, admission, fidelity, reward eligibility or execution Final.

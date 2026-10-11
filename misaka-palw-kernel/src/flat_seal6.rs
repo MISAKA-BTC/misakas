@@ -9,7 +9,7 @@
 //! integration, network capacity, inclusion, retention or liveness requirements.
 use crate::flat_court5::{FlatConvictionV5, FlatFaultV5, FlatSegContextV5, verify_flat_fault_v5};
 use crate::hash::{Digest, id, object_id};
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeMap;
 
 pub const FLAT_SEAL_MAX_PROOF_BYTES_V6: usize = 1 << 20;
@@ -70,7 +70,7 @@ fn seal_of_digest(vector: &Digest, actor: &Digest, salt: &Digest, digest: &Diges
     object_id(b"misaka-palw/kernel/flat-proof-seal/v6", &(*vector, *actor, *salt, *digest))
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FlatSealRowV6 {
     pub version: u16,
     pub vector: Digest,
@@ -80,6 +80,35 @@ pub struct FlatSealRowV6 {
     pub mature_daa: u64,
     pub expires_daa: u64,
     pub spent: bool,
+}
+
+/// Authenticate persisted fixed metadata before reconstructing a court context.
+/// The consumer supplies the signature-derived actor and authoritative clock.
+pub fn check_flat_seal_v6(
+    row: &FlatSealRowV6,
+    vector: &Digest,
+    actor: &Digest,
+    salt: &Digest,
+    proof: &[u8],
+    now: u64,
+) -> Result<Digest, FlatSealErrorV6> {
+    if row.version != 6 || row.vector != *vector || row.actor != *actor {
+        return Err(FlatSealErrorV6::SealMismatch);
+    }
+    if row.spent {
+        return Err(FlatSealErrorV6::Spent);
+    }
+    if now < row.mature_daa {
+        return Err(FlatSealErrorV6::Immature);
+    }
+    if now >= row.expires_daa {
+        return Err(FlatSealErrorV6::Expired);
+    }
+    let digest = flat_proof_digest_v6(proof)?;
+    if seal_of_digest(vector, actor, salt, &digest) != row.seal {
+        return Err(FlatSealErrorV6::SealMismatch);
+    }
+    Ok(digest)
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FlatSealedConvictionV6 {
@@ -170,19 +199,7 @@ impl FlatSealBookV6 {
         court: impl FnOnce(&[u8]) -> Result<FlatConvictionV5, String>,
     ) -> Result<FlatSealedConvictionV6, FlatSealErrorV6> {
         let row = self.row(vector, actor).ok_or(FlatSealErrorV6::Missing)?;
-        if row.spent {
-            return Err(FlatSealErrorV6::Spent);
-        }
-        if now < row.mature_daa {
-            return Err(FlatSealErrorV6::Immature);
-        }
-        if now >= row.expires_daa {
-            return Err(FlatSealErrorV6::Expired);
-        }
-        let digest = flat_proof_digest_v6(proof)?;
-        if seal_of_digest(vector, actor, salt, &digest) != row.seal {
-            return Err(FlatSealErrorV6::SealMismatch);
-        }
+        let digest = check_flat_seal_v6(row, vector, actor, salt, proof, now)?;
         let conviction = court(proof).map_err(FlatSealErrorV6::InvalidCourt)?;
         self.rows.get_mut(&(*vector, *actor)).unwrap().spent = true;
         Ok(FlatSealedConvictionV6 { vector: *vector, actor: *actor, proof_digest: digest, conviction })
@@ -214,6 +231,25 @@ mod tests {
     }
     fn yes(_: &[u8]) -> Result<FlatConvictionV5, String> {
         Ok(FlatConvictionV5 { position: 0, occurrence: 0, node: 1, kind: FlatConvictionKindV5::Whole })
+    }
+    #[test]
+    fn flat_seal_v6_persisted_rows_refuse_version_vector_and_actor_substitution() {
+        let (v, a, salt) = ([1; 64], [2; 64], [3; 64]);
+        let mut b = book();
+        b.post(v, a, flat_proof_seal_v6(&v, &a, &salt, b"proof").unwrap(), 10, 100).unwrap();
+        let row = b.row(&v, &a).unwrap();
+        let decoded: FlatSealRowV6 = borsh::from_slice(&borsh::to_vec(row).unwrap()).unwrap();
+        assert_eq!(&decoded, row);
+        assert!(check_flat_seal_v6(&decoded, &v, &a, &salt, b"proof", 13).is_ok());
+        for field in 0..3 {
+            let mut changed = decoded.clone();
+            match field {
+                0 => changed.version = 5,
+                1 => changed.vector[0] ^= 1,
+                _ => changed.actor[0] ^= 1,
+            }
+            assert_eq!(check_flat_seal_v6(&changed, &v, &a, &salt, b"proof", 13), Err(FlatSealErrorV6::SealMismatch));
+        }
     }
     #[test]
     fn flat_seal_v6_binds_every_coordinate_salt_and_exact_carrier() {

@@ -84,6 +84,10 @@ pub mod challenge;
 pub mod check;
 pub mod claim_subject;
 pub mod court_scope;
+/// RFC-0002 P0 residual (RFC02-T): the sealed-bounty rule for kernel filings (table 31), past `palw_model_refutation_seal_v1`.
+pub mod sealed_bounty;
+/// RFC-0002 item 3 (RFC02-T): a flat-v5 candidate's worst-case public pursuit on G14-B's clock and carriage.
+pub mod flat_pursuit5;
 pub mod descriptor;
 pub mod element;
 pub mod evidence;
@@ -107,12 +111,31 @@ pub mod merkle5;
 pub mod flat_court4;
 /// Staged flat-v5 complete court-kind set, not selected by a shipping route.
 pub mod flat_court5;
+pub mod flat_court7;
 pub mod flat_detect5;
+pub mod flat_detect7;
+pub mod flat_history8;
+pub mod flat_point9;
+pub mod flat_scope9;
+pub mod flat_resources10;
+pub mod flat_quota11;
+pub mod flat_court9;
+pub mod flat_detect9;
+pub mod flat_replay9;
+pub mod flat_lengths7;
+pub mod flat_inputs12;
+pub mod flat_execution11;
 pub mod flat_replay6;
+pub mod flat_replay7;
 /// Staged actor-bound sealed flat evidence; not a consensus route or payout.
 pub mod flat_seal6;
+pub mod flat_seal7;
 /// Staged complete flat-v5 court resource admission.
 pub mod flat_scope5;
+pub mod flat_scope7;
+/// Explicit opt-in point-counterexample TopK courts over the frozen flat-v5 commitments.
+/// No consensus route implicitly accepts the new v7 proof grammar.
+pub mod flat_topk7;
 /// Bounded raw-width producer hashing of the unchanged v3 tensor commitments.
 pub mod merkle3_stream;
 pub mod mode;
@@ -152,3 +175,5 @@ pub use plan::{VerificationPlanV1, plan_for_tir_program_v1};
 pub use verify::{
     ClaimVerdictV1, KernelFaultProofV1, ScopeV1, ScopeVerdictV1, verify_claim_v1, verify_fault_proof_v1, verify_scope_v1,
 };
+
+pub mod flat_seal9;

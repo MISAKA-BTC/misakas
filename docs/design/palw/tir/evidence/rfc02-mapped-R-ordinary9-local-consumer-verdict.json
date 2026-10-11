@@ -1,0 +1,50 @@
+{
+  "schema": "misaka.rfc02.mapped-ordinary-public-consumer-R-verdict.v1",
+  "recorded_utc": "2026-10-11T11:59:39.636728+00:00",
+  "status": "PASS",
+  "tests": 12,
+  "new_cases_over_previous_R_unchecked_8": 4,
+  "preimage": {
+    "recorded_utc": "2026-10-11T11:59:16.695942+00:00",
+    "head": "ba872cc5fdb27628080d49052fce56ee41796695",
+    "binary": "/tmp/rfc02-mapped-R-ordinary9-immutable-2174f2857d1f/flat_streamed_locator_v9-6ee75760eb45fb1b",
+    "binary_sha256": "2174f2857d1f7112767d4b0cc6c378887399b56418f013b5ec13f20f9295b006",
+    "files": {
+      "misaka-palw-sdk/src/flat_streamed_locator_v9.rs": "c1de63f5778384cb28ba8b75cb605871cb51343b9192d920eda4e9b2cfabeafd",
+      "misaka-palw-sdk/src/flat_snapshot_v9.rs": "0acb109048acda9edbfbc8ef0bd79e8198b5734727c24ab1061777aad47677a9",
+      "misaka-palw-sdk/src/lib.rs": "e1f858fc092343d084f3a006f9c8b1fcdde8325e299c8181267188a6545de645",
+      "misaka-palw-sdk/tests/flat_streamed_locator_v9.rs": "69d21d24e50ef0546b1155bb731f733c178225bbad2ae943cc2777ce98546691",
+      "docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1",
+      "Cargo.lock": "b37cef757e460f652b1c4d885930f6e7ce846f5660c2e788d18b72c8b5ef6429"
+    },
+    "boundary": "Owned SDK source and metadata preimages. Concurrent kernel/core helpers are not represented as a frozen dependency closure."
+  },
+  "preimages_unchanged_after": true,
+  "command": "/tmp/rfc02-mapped-R-ordinary9-immutable-2174f2857d1f/flat_streamed_locator_v9-6ee75760eb45fb1b --nocapture",
+  "actual_qwen_metadata_quote": {
+    "leaves": 1445797,
+    "raw_bytes": 1835516100,
+    "hash_bytes": 2057608295,
+    "local_work": 95152839108,
+    "workspace_bytes": 186752
+  },
+  "results": {
+    "rfc02-mapped-R-ordinary9-final-tests.log": "36451a085d19638558ad72f6c4cebcc63ab89330db6e9ab4d0009d6a350b707d",
+    "rfc02-mapped-R-ordinary9-final-time.log": "32727c1efb9b8d04d67cce8e3ee048af60ee8fb771cda37a49fa3b3a16ff8825",
+    "rfc02-mapped-R-ordinary9-owned-source-preimages.tar.gz": "d95c52a75ca4ed8b1654ecf3a43c7863a94de85e1bd028dfaebf5001d2ae41d2"
+  },
+  "trials_preserved": {
+    "R_unchecked_8_controls": "rfc02-mapped-ordinary9-local-consumer-verdict.json",
+    "first_R_trial": "10PASS/1FAIL: split-row test fixture declared unused parameter, NormalForm refusal. Fixed used rank-3 axis-0 fixture without changing accepted geometry/prices.",
+    "second_R_trial": "12PASS; current source before immutable rerun"
+  },
+  "limits": [
+    "Synthetic controls and actual Qwen typed metadata only; no weights loaded for the metadata quote.",
+    "R is now independently derived over all local model leaves during prepare under explicit preflight leaf/raw/hash/work/workspace quotas; original R-unchecked source archived separately.",
+    "Own R quote local units never replace consensus PWU, rewards, source continuity or original-source fidelity.",
+    "Consumer is ordinary-only; TopK, derived history and Decode return NeedsSpecial; no full mixed-court finding/Final/cohort certificate.",
+    "Public snapshot anchor must be authenticated independently by the caller.",
+    "No frozen full concurrent Rust dependency closure claimed by these component controls.",
+    "Fresh actual native outsider test is connected but uncompiled and unrun as of this receipt."
+  ]
+}

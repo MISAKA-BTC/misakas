@@ -409,6 +409,36 @@ pub(crate) fn const_tensor(program: &TirProgramV1, j: u16) -> TirResult<Tensor> 
     Tensor::from_le_bytes(c.dtype, &c.shape.iter().map(|d| *d as usize).collect::<Vec<_>>(), &c.data)
 }
 
+/// Trace construction has the same typed-operand requirement as Interpreter.
+/// Check metadata before walking a provider's values or evaluating a node;
+/// accepting a larger tensor would change TopK/Gather/state semantics while
+/// retaining the admitted program's smaller declared resource envelope.
+fn typed_parameter_tensor(program: &TirProgramV1, index: u16, tensor: Tensor) -> TirResult<Tensor> {
+    let d = program.params.get(index as usize).ok_or_else(|| malformed("no declared parameter"))?;
+    let shape: Vec<_> = d.shape.iter().map(|n| *n as usize).collect();
+    let len = shape.iter().try_fold(1usize, |n, d| n.checked_mul(*d));
+    if tensor.dtype != d.dtype || tensor.shape != shape || len != Some(tensor.data.len()) {
+        return Err(TirError::new(
+            misaka_palw_tir::TirErrorKind::Operand,
+            format!("param {index}: tensor metadata differs from declaration"),
+        ));
+    }
+    if tensor.data.iter().any(|v| !d.dtype.contains(*v)) {
+        return Err(TirError::new(misaka_palw_tir::TirErrorKind::Operand, format!("param {index}: value outside declared dtype")));
+    }
+    Ok(tensor)
+}
+
+fn parameter_tensor(program: &TirProgramV1, params: &dyn ParamSource, index: u16, layer: Option<u16>) -> TirResult<Tensor> {
+    let d = program.params.get(index as usize).ok_or_else(|| malformed("no declared parameter"))?;
+    if (d.per_layer && layer.is_none_or(|l| l as usize >= program.schedule.layers.len())) || (!d.per_layer && layer.is_some()) {
+        return Err(malformed("parameter instance differs from declared layer namespace"));
+    }
+    let tensor =
+        params.param(index, layer).ok_or_else(|| TirError::new(misaka_palw_tir::TirErrorKind::Missing, format!("param {index}")))?;
+    typed_parameter_tensor(program, index, tensor)
+}
+
 /// **One node, from its inputs** — the exact semantics every check and court shares.
 pub fn eval_node(
     program: &TirProgramV1,
@@ -485,9 +515,7 @@ pub fn trace_streaming_v1(
                         SourceV1::Node { .. } => {
                             Err(malformed("a source older than the previous position (a streamed trace holds one)"))
                         }
-                        SourceV1::Param { index, layer } => params
-                            .param(index, layer)
-                            .ok_or_else(|| TirError::new(misaka_palw_tir::TirErrorKind::Missing, format!("param {index}"))),
+                        SourceV1::Param { index, layer } => parameter_tensor(program, params, index, layer),
                         SourceV1::Const(j) => const_tensor(program, j),
                         SourceV1::Zeros { dtype, shape } => Ok(Tensor::zeros(dtype, &shape)),
                         SourceV1::Public(v) => Tensor::scalar(DType::Idx, v as i128),
@@ -557,7 +585,12 @@ pub fn trace_stage_v1(
         if n_inputs > 0 {
             stage_inputs.push(
                 (0..n_inputs)
-                    .map(|k| inputs(k, p).ok_or_else(|| TirError::new(misaka_palw_tir::TirErrorKind::Missing, format!("input {k}"))))
+                    .map(|k| {
+                        let index = w.first_input.checked_add(k).ok_or_else(|| malformed("stage input parameter overflow"))?;
+                        let tensor =
+                            inputs(k, p).ok_or_else(|| TirError::new(misaka_palw_tir::TirErrorKind::Missing, format!("input {k}")))?;
+                        typed_parameter_tensor(program, index, tensor)
+                    })
                     .collect::<TirResult<_>>()?,
             );
         }
@@ -580,9 +613,7 @@ pub fn trace_stage_v1(
                         SourceV1::Node { position, occurrence, node } => {
                             Ok(values[position as usize][occurrence as usize][node as usize].clone())
                         }
-                        SourceV1::Param { index, layer } => params
-                            .param(index, layer)
-                            .ok_or_else(|| TirError::new(misaka_palw_tir::TirErrorKind::Missing, format!("param {index}"))),
+                        SourceV1::Param { index, layer } => parameter_tensor(program, params, index, layer),
                         SourceV1::Const(j) => const_tensor(program, j),
                         SourceV1::Zeros { dtype, shape } => Ok(Tensor::zeros(dtype, &shape)),
                         SourceV1::Public(v) => Tensor::scalar(DType::Idx, v as i128),

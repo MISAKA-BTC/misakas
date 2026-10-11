@@ -1,0 +1,39 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/consensus/core)
+error[E0425]: cannot find value `PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V9` in module `crate::palw_kernel_route_v1`
+   --> consensus/core/src/palw_flat_model_vector_fold_v9.rs:261:56
+    |
+261 |                     + 3 * crate::palw_kernel_route_v1::PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V9,
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: a constant with a similar name exists: `PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6`
+    |
+   ::: consensus/core/src/palw_kernel_route_v1.rs:898:1
+    |
+898 | pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6: usize = misaka_palw_kernel::flat_seal6::FLAT_SEAL_MAX_PROOF_BYTES_V6 + (16 << 10);
+    | -------------------------------------------------------------------------------------------------------------------------------- similarly named constant `PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6` defined here
+
+error[E0603]: function `header_commitment` is private
+   --> consensus/core/src/palw_flat_model_vector_da_v9.rs:168:54
+    |
+168 |                         misaka_palw_kernel::merkle4::header_commitment::<5>(dtype,shape,root),
+    |                                                      ^^^^^^^^^^^^^^^^^ private function
+    |
+note: the function `header_commitment` is defined here
+   --> /Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel/src/merkle4.rs:148:1
+    |
+148 | pub(crate) fn header_commitment<const V: u8>(tag: u8, shape: &[u64], root: &Digest) -> Option<Digest> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0425, E0603.
+For more information about an error, try `rustc --explain E0425`.
+warning: `kaspa-consensus-core` (lib) generated 1 warning
+error: could not compile `kaspa-consensus-core` (lib) due to 2 previous errors; 1 warning emitted

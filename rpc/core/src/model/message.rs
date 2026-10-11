@@ -13575,6 +13575,115 @@ impl Deserializer for GetPalwKernelFinalsResponse {
 }
 
 
+/// **`getPalwModelRefutationSeals` (op 213, RFC02-T)**: one bond's candidate-refutation seal rows.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelRefutationSealsRequest {
+    /// A bond `txid_hex:index`.
+    pub bond: String,
+}
+
+impl Serializer for GetPalwModelRefutationSealsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelRefutationSealsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { bond: load!(String, reader)? })
+    }
+}
+
+/// One seal row (`ModelRefutationSealRowV4`): the hidden seal, its clock and the original collateral it reserves while live.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelRefutationSeal {
+    pub slot: u32,
+    pub seal: String,
+    pub posted_daa: u64,
+    pub mature_daa: u64,
+    pub expires_daa: u64,
+    pub deposit_sompi: u64,
+    /// Unexpired at the tip (its deposit is reserved).
+    pub live: bool,
+    /// Mature and unexpired at the tip (a reveal opening it is admissible).
+    pub revealable: bool,
+}
+
+impl Serializer for RpcPalwModelRefutationSeal {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u32, &self.slot, writer)?;
+        store!(String, &self.seal, writer)?;
+        store!(u64, &self.posted_daa, writer)?;
+        store!(u64, &self.mature_daa, writer)?;
+        store!(u64, &self.expires_daa, writer)?;
+        store!(u64, &self.deposit_sompi, writer)?;
+        store!(bool, &self.live, writer)?;
+        store!(bool, &self.revealable, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelRefutationSeal {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            slot: load!(u32, reader)?,
+            seal: load!(String, reader)?,
+            posted_daa: load!(u64, reader)?,
+            mature_daa: load!(u64, reader)?,
+            expires_daa: load!(u64, reader)?,
+            deposit_sompi: load!(u64, reader)?,
+            live: load!(bool, reader)?,
+            revealable: load!(bool, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelRefutationSealsResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub bond: String,
+    pub seals: Vec<RpcPalwModelRefutationSeal>,
+    /// The original collateral the bond's live seals reserve at the tip.
+    pub reserved_sompi: u64,
+    pub aux_root: String,
+}
+
+impl Serializer for GetPalwModelRefutationSealsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.bond, writer)?;
+        serialize!(Vec<RpcPalwModelRefutationSeal>, &self.seals, writer)?;
+        store!(u64, &self.reserved_sompi, writer)?;
+        store!(String, &self.aux_root, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelRefutationSealsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            bond: load!(String, reader)?,
+            seals: deserialize!(Vec<RpcPalwModelRefutationSeal>, reader)?,
+            reserved_sompi: load!(u64, reader)?,
+            aux_root: load!(String, reader)?,
+        })
+    }
+}
+
 /// **`getPalwOnboarding` (op 230)**: where one V2 class stands on the onboarding path.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

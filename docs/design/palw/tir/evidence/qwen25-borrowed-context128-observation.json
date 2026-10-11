@@ -1,0 +1,220 @@
+{
+  "schema": "misaka.rfc02.borrowed-context128-observation.v1",
+  "captured_utc": "2026-10-11T10:22:45.693695+00:00",
+  "stage": "fixed actual source and newly lowered borrowed context128 logits satisfy unchanged predeclared diagnostic gates",
+  "own_source_binary_receipt": {
+    "schema": "misaka.rfc02.context128-example-preimage.v1",
+    "captured_utc": "2026-10-11T10:17:54.733623+00:00",
+    "source": "/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-sdk/examples/check-borrowed-checkpoint-context.rs",
+    "source_sha256": "4f75b5f52e337352f1380bb8bd1d708a1457880c6bcd53f08308ac3e8050bd93",
+    "binary": "/tmp/rfc02-next9-immutable-897ae4d1443e/check-borrowed-checkpoint-context",
+    "binary_sha256": "897ae4d1443e6673a4c8abaab74363ca9509b987fe7591ea11c08dfe7ac332f4",
+    "build_log": "/tmp/rfc02-context128-build-3.log",
+    "build_completed": true,
+    "limits": [
+      "owned example source and immutable executable pins; no claim that all concurrently changing dependency preimages were frozen before compiler reads"
+    ]
+  },
+  "result": {
+    "a6_a8_cohort_credit": false,
+    "artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+    "block_changes": [
+      {
+        "block": 0,
+        "carry_types_equal": true,
+        "nodes_equal": true
+      },
+      {
+        "block": 1,
+        "carry_types_equal": true,
+        "nodes_equal": true
+      },
+      {
+        "block": 2,
+        "carry_types_equal": true,
+        "nodes_equal": true
+      }
+    ],
+    "config_sha256": "98d2ff8cc47488d08a2b0b3acf4eb99ef210779b42bd48605f6b8e36acdbf670",
+    "consts_equal": true,
+    "each_borrowed_instance_matches_registered_root": true,
+    "elapsed_ms": 574361,
+    "fresh_context_recalibration_performed": false,
+    "full_rfc02_complete": false,
+    "independently_reconstructed_rope_tables": 4,
+    "logits_scale_as_parsed": 5.960464477539064e-08,
+    "logits_scale_pinned_decimal": "5.960464477539063e-8",
+    "lowering_options": {
+      "history_bound": 262144,
+      "math": "libm-v1",
+      "new_max_window": 128,
+      "old_max_window": 32
+    },
+    "native_registration_or_final_proven": false,
+    "new_context": 128,
+    "new_full_artifact_created": false,
+    "new_params_borrow_mapped_native_slices": true,
+    "new_program_root": "684a56a6ac253d29c251f1baa2be0e57a7a3a27eeb7cd0a08c0f09aa436e44609d276b45e80616e3053fda33aac7006f8bcbf9cf3fa2f630a75b05803856e132",
+    "new_program_sha256": "245b31fc77e8ddc730c91acc5d92cf7c6b771348a5e27a81693a7a31d780bca2",
+    "new_states": [
+      "StateDecl { name: \"attn.k_hist\", kind: Hist { window: 128 }, dtype: I16, shape: [256], per_layer: true }",
+      "StateDecl { name: \"attn.v_hist\", kind: Hist { window: 128 }, dtype: I16, shape: [256], per_layer: true }"
+    ],
+    "old_context": 32,
+    "old_states": [
+      "StateDecl { name: \"attn.k_hist\", kind: Hist { window: 32 }, dtype: I16, shape: [256], per_layer: true }",
+      "StateDecl { name: \"attn.v_hist\", kind: Hist { window: 32 }, dtype: I16, shape: [256], per_layer: true }"
+    ],
+    "parameter_declarations_equal": true,
+    "parameter_instances": 1636,
+    "parameter_instances_equal": true,
+    "parameter_map_sha256": "a45721593036993c53eb29ad1526906ca190fcdf7d7272fbf7aa3f0b62d19ef1",
+    "parameter_root": "1c07cbbadb1ec7166361a6ffdda43c7c5740183dbb8ecd9659e7c4c5c906cf5495ac5df4fd25617829628b3cec7969e43eeee06bed08c0beeaa51d76b023f729",
+    "raw_parameter_bytes_read": 1835516100,
+    "reused_calibration_context": 32,
+    "row_parameter_and_scale_site_recipes_equal": true,
+    "schedule_equal": true,
+    "schema": "misaka.rfc02.borrowed-checkpoint-context.v1",
+    "scope9": {
+      "admitted": true,
+      "court_bytes": 141228,
+      "court_scratch_bytes": 12036889,
+      "court_work": 108375040,
+      "relations": 7658,
+      "scope_root": "6f7a6262445b6ee7cc75b6161271127b4a28019fd9b6831633dce1189a3bc1be06596dba7551ca776a178a5db411ce3572b739ff40e88fc645f22aa3ce3238cb"
+    },
+    "source_fidelity": {
+      "complete_task_or_original_maximum_context_proven": false,
+      "correlation": 0.99953118101942,
+      "failures": [],
+      "kl_mean": 0.002305021558196732,
+      "max_abs": 4.122131109237671,
+      "positions": 256,
+      "predeclared_gates_passed": true,
+      "protocol_sha256": "fe0b870c413ac18736c5beb9de1426c1d8cc6074c3e3db328a24f6ed75bdb1cc",
+      "reference_json_sha256": "df22cc3e0b320ee89e7ae4f026f554b7573bcc27c9f9d85f26b1dc401bd90104",
+      "reference_logits_sha256": "c9228c90161a4104303cf7a1afcfbbf11908a3f3670c1661f1ff4a65f35a0092",
+      "rmse": 0.12651300046350328,
+      "sequences": 2,
+      "slope": 0.9977334374639023,
+      "top1": 0.984375
+    },
+    "source_program_sha256": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1"
+  },
+  "paths_sha256": {
+    "qwen25-borrowed-context128-build.log": "3b81525dff313f352af758f791db5375b70c36dc436f52cc293f8f93fc564f07",
+    "qwen25-borrowed-context128-empty-policy-trial.json": "ab3cc370a3f0129ff24fae91f795031b2c3bda9ac5f6761bad49b6b64876d247",
+    "qwen25-borrowed-context128-fidelity-time.log": "30e5831f39b5340b4069cb21985eaa3bd94ecb548c075cee9a66d3ea30adcb3c",
+    "qwen25-borrowed-context128-fidelity.json": "b915dc16e8b19d82d76aba62ae68029c4ae533f61b9a31297c6ee7b5210f7c96",
+    "qwen25-borrowed-context128-hf-first-refusal.log": "412299bd6dd453d65cb3ae88e17e56dca11cdb99c6dd75a203bb559c3591f406",
+    "qwen25-borrowed-context128-metadata-time.log": "0648857f4053c1125bd8cbb89809b51e4b78e95c0140467a834f1a3327186331",
+    "qwen25-borrowed-context128-metadata.json": "862fa5b9636edc9dd4fbecaf1c9940db7d9825569eb93a672d6c0b48fb5fd55d",
+    "qwen25-borrowed-context128-preallocation-controls.json": "54152022ca169bc5325374241e98b3aeca0907452f4ef49c8797e7d2d096e526",
+    "qwen25-borrowed-context128-pricing-time.log": "d4fc0528b60b00471ef68f8d406c964a4d1ce62ba41529d5c515d7a1ed6e0fef",
+    "qwen25-borrowed-context128-pricing.json": "e5a62068969035e3fba8676c9f176045fbadbfc8630308ec1037a3e413b6f3ab",
+    "qwen25-borrowed-context128-program.tir": "245b31fc77e8ddc730c91acc5d92cf7c6b771348a5e27a81693a7a31d780bca2",
+    "qwen25-borrowed-context128-scale-debug-refusal.log": "e225bbc0fe09ff66cbdc4083a5e4e8533c9e63b59f58f1781e73da624882da70",
+    "qwen25-borrowed-context128-scale-first-refusal.log": "6bafad9db1910ec91fc2a1f715b5d3b92153de1a101200e50e8ef744593338cc",
+    "qwen25-borrowed-context128-source-protocol.json": "fe0b870c413ac18736c5beb9de1426c1d8cc6074c3e3db328a24f6ed75bdb1cc",
+    "qwen25-borrowed-context128-source-reference.json": "df22cc3e0b320ee89e7ae4f026f554b7573bcc27c9f9d85f26b1dc401bd90104",
+    "qwen25-borrowed-context128-source-result.json": "1dd5f9657a7cba94aa5c3d712840b082cb3590ffe42ad84ae519f2789d31abe1",
+    "qwen25-borrowed-context128-source-time.log": "cb767b9013980b4fcf62b2571ada9ba321d173188340aebc60f39ea20f4a2c4e",
+    "qwen25-borrowed-context128-tokens.json": "fb51019f7168977cfd629edf4c339a4f28b8d4f960d90da47f22f9a6d5f99b78"
+  },
+  "pricing_binary": "/tmp/rfc02-next9-immutable-20cbc8b37315/check-flat-checkpoint-admission9-pricing",
+  "pricing_binary_sha256": "20cbc8b3731567437a1dcad8bcc2d27a816f420361df55c453d3cab3435aa03e",
+  "pricing_observation_limits": [
+    "candidate9 source changed after pricing snapshot; scope9/replay9/resources10/example sources match; current-native production identity must be checked separately",
+    "metadata only, source weights not loaded by the pricing process, no actual native registration/Final claimed",
+    "Native implementation author reviewed the changed candidate9 code as bounded128 registry/import helpers only, preserving derive/plan/tariffs; current frozen requote remains a separate native receipt"
+  ],
+  "preallocation_controls": {
+    "schema": "misaka.rfc02.context128-preallocation-controls.v1",
+    "captured_utc": "2026-10-11T10:18:58.769040+00:00",
+    "binary": "/tmp/rfc02-next9-immutable-897ae4d1443e/check-borrowed-checkpoint-context",
+    "cases": [
+      {
+        "case": "out-of-range token",
+        "exit_code": 1,
+        "stderr": "Error: \"preallocation policy bounds and pins\"",
+        "elapsed_seconds": 0.00747062498703599,
+        "passed": true
+      },
+      {
+        "case": "nonpositive slope",
+        "exit_code": 1,
+        "stderr": "Error: \"preallocation policy bounds and pins\"",
+        "elapsed_seconds": 0.007297250005649403,
+        "passed": true
+      },
+      {
+        "case": "declared positions mismatch",
+        "exit_code": 1,
+        "stderr": "Error: \"preallocation policy bounds and pins\"",
+        "elapsed_seconds": 0.009187624993501231,
+        "passed": true
+      }
+    ],
+    "passed": true,
+    "limits": [
+      "three diagnostic policy controls refuse before nonexistent model inputs; no full model or total resource claim",
+      "the earlier empty-object trial had an inaccurate harness expected message; serde rejected missing sequences even earlier, retained separately"
+    ]
+  },
+  "retained_trials": [
+    "first math metadata refusal: separately computed powi literal differs one ulp from pinned decimal JSON decoder; no arithmetic/threshold change",
+    "debug math metadata refusal retained in /tmp/rfc02-qwen25-context128-meta-parse-trial.log",
+    "HF first trial failed ENOSPC before emitting any reference logits/JSON; raw file0B retained in /tmp/rfc02-qwen25-hf-reference128",
+    "Empty-object preallocation harness expected a gates error but Rust correctly rejected missing sequences earlier; retained test assertion result and later3 exact policy controls"
+  ],
+  "limits": [
+    "context128, not original source32768",
+    "borrowed old32 calibration with new128 Hist declarations; no fresh128 quantization calibration",
+    "same parameter declarations and all1636 source roots, all4 positional table fills independently reconstructed; this does not itself establish model task fidelity",
+    "no full task, native Final, cohort or complete RFC02 credit"
+  ],
+  "source_reference_completed": {
+    "completed_utc": "2026-10-11T10:30:30.840519+00:00",
+    "hf_json": "docs/design/palw/tir/evidence/qwen25-borrowed-context128-source-reference.json",
+    "hf_json_sha256": "df22cc3e0b320ee89e7ae4f026f554b7573bcc27c9f9d85f26b1dc401bd90104",
+    "local_logits": "/tmp/rfc02-qwen25-hf-reference128-v2/hf-reference.f32",
+    "logits_sha256": "c9228c90161a4104303cf7a1afcfbbf11908a3f3670c1661f1ff4a65f35a0092",
+    "logits_bytes": 155582464,
+    "original_source_weights_full_loaded": true,
+    "source_run_wall_seconds": 8.61,
+    "source_run_max_rss_bytes": 6544982016,
+    "wholeprocesspeak_limit_claimed": false,
+    "integer_fidelity_verdict": "PASS"
+  },
+  "completed_utc": "2026-10-11T10:34:41.416565+00:00",
+  "measured_performance": {
+    "integer_diagnostic_wall_seconds": 574.41,
+    "integer_diagnostic_max_rss_bytes": 2438201344,
+    "integer_diagnostic_includes_full_mapped_parameter_PC_auth": true,
+    "source_reference_wall_seconds": 8.61,
+    "source_reference_max_rss_bytes": 6544982016,
+    "comparison_limits": [
+      "integer dev-profile sequential execution with parameter auditing versus source float32 whole-sequence eager inference; these timings are diagnostics, not a controlled backend benchmark",
+      "concurrent other repository builds/threads may affect timing; no resource-policy peak enforcement or production speed certification"
+    ]
+  },
+  "exact_commands": {
+    "build": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo build --locked -p misaka-palw-sdk --example check-borrowed-checkpoint-context",
+    "metadata": "/usr/bin/time -l /tmp/rfc02-next9-immutable-897ae4d1443e/check-borrowed-checkpoint-context /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/qwen25-32.palwtir docs/design/palw/tir/evidence/qwen25-real-params-v3-commitments.borsh /Users/wata/Downloads/Qwen2.5-1.5B-Instruct/config.json 128 /tmp/rfc02-qwen25-borrowed-context128-program.tir",
+    "source": "HF_HUB_OFFLINE=1 /usr/bin/time -l /tmp/rfc02-source-reference-venv/bin/python misaka-palw-tir-lower/tools/hf_checkpoint_reference.py /Users/wata/Downloads/Qwen2.5-1.5B-Instruct docs/design/palw/tir/evidence/qwen25-real-pilot-protocol.json docs/design/palw/tir/evidence/qwen25-borrowed-context128-tokens.json /tmp/rfc02-qwen25-hf-reference128-v2 --context 128 --max-positions 256 --max-logit-values 38895616 --max-source-bytes 3095000000 --max-model-parameter-bytes 6200000000",
+    "integer_fit": "/usr/bin/time -l /tmp/rfc02-next9-immutable-897ae4d1443e/check-borrowed-checkpoint-context /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/qwen25-32.palwtir docs/design/palw/tir/evidence/qwen25-real-params-v3-commitments.borsh /Users/wata/Downloads/Qwen2.5-1.5B-Instruct/config.json 128 docs/design/palw/tir/evidence/qwen25-borrowed-context128-source-protocol.json /tmp/rfc02-qwen25-hf-reference128-v2",
+    "pricing": "/usr/bin/time -l /tmp/rfc02-next9-immutable-20cbc8b37315/check-flat-checkpoint-admission9-pricing docs/design/palw/tir/evidence/qwen25-borrowed-context128-program.tir docs/design/palw/tir/evidence/qwen25-real-params-v3-commitments.borsh 128"
+  },
+  "protocol_frozen_before_outputs": {
+    "utc": "2026-10-11T10:20:00.047059+00:00",
+    "sha256": "fe0b870c413ac18736c5beb9de1426c1d8cc6074c3e3db328a24f6ed75bdb1cc",
+    "gates_unchanged_from_context32": true
+  },
+  "source_tools_sha256": {
+    "misaka-palw-tir-lower/tools/hf_checkpoint_reference.py": "b76a7afc0a23386e8923f83a73f9cb6f76549c8dc9e268456045007d6d767253",
+    "misaka-palw-sdk/examples/check-borrowed-checkpoint-context.rs": "4f75b5f52e337352f1380bb8bd1d708a1457880c6bcd53f08308ac3e8050bd93",
+    "/tmp/rfc02-source-reference-venv/lib/python3.12/site-packages/transformers/models/qwen2/modeling_qwen2.py": "01ec0246d209092fd79507270a5d58d25392231e8ba2cfd8661433327b80e897",
+    "/tmp/rfc02-source-reference-venv/lib/python3.12/site-packages/transformers/configuration_utils.py": "928b493592af43ff930cfbcd63619f93cd09ce522ca9482a54bd11a7a8fce825"
+  },
+  "source_own_example_unchanged_after_run": true
+}

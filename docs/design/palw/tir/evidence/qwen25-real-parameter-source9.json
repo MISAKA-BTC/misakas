@@ -1,0 +1,18 @@
+{
+  "artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+  "canonical_program_sha256": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1",
+  "declared_stream_workspace_limit_bytes": 33554432,
+  "each_parameter_instance_compared_against_registered_root": true,
+  "elapsed_ms": 80685,
+  "full_rfc02_complete": false,
+  "independent_registered_parameter_root": "1c07cbbadb1ec7166361a6ffdda43c7c5740183dbb8ecd9659e7c4c5c906cf5495ac5df4fd25617829628b3cec7969e43eeee06bed08c0beeaa51d76b023f729",
+  "maximum_derived_stream_workspace_bytes": 27275264,
+  "native_registration_or_execution_final_or_a6_a8_credit": false,
+  "parameter_instances": 1636,
+  "parameter_map_sha256": "a45721593036993c53eb29ad1526906ca190fcdf7d7272fbf7aa3f0b62d19ef1",
+  "raw_parameter_bytes_read": 1835516100,
+  "raw_source_float_fidelity_this_run": false,
+  "schema": "misaka.rfc02.actual-checkpoint-parameter-source-continuity.v1",
+  "source_artifact_sha256_before_after_match": true,
+  "source_dtype_semantics": "integer artifact storage, not original BF16 source bit equality"
+}

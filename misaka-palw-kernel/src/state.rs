@@ -238,7 +238,7 @@ impl KernelLedgerV1 {
             )
         };
         // The same fixed order as `rows::root_of_rows`: table 29 (RFC-02 conformance candidates), 30 (beacon sources), 31 (EXEC reward
-        // holds), each only once it holds a row.
+        // holds), then codex's flat-v7 (table 0) and flat-v9 (table 19), each only once it holds a row.
         let base = if self.conformance_classes.is_empty() {
             base
         } else {
@@ -257,12 +257,36 @@ impl KernelLedgerV1 {
                 &collection_root(&d("beacon-sources"), self.beacon_sources.len(), self.beacon_sources.iter()),
             )
         };
-        if self.exec_reward_holds.is_empty() {
+        let base = if self.exec_reward_holds.is_empty() {
             base
         } else {
             crate::rows::exec_reward_root_extension_v1(
                 &base,
                 &collection_root(&d("exec-reward-holds"), self.exec_reward_holds.len(), self.exec_reward_holds.iter()),
+            )
+        };
+        let base = if self.flat_conformance_classes_v7.is_empty() {
+            base
+        } else {
+            crate::rows::flat_conformance_root_extension_v7(
+                &base,
+                &collection_root(
+                    &d("flat-conformance-v7"),
+                    self.flat_conformance_classes_v7.len(),
+                    self.flat_conformance_classes_v7.iter(),
+                ),
+            )
+        };
+        if self.flat_conformance_classes_v9.is_empty() {
+            base
+        } else {
+            crate::rows::flat_conformance_root_extension_v9(
+                &base,
+                &collection_root(
+                    &d("flat-conformance-v9"),
+                    self.flat_conformance_classes_v9.len(),
+                    self.flat_conformance_classes_v9.iter(),
+                ),
             )
         }
     }
