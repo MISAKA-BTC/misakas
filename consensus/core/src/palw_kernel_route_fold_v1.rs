@@ -235,6 +235,12 @@ pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
             .map(|c| c.as_bytes())
             .collect();
     }
+    // Each load reconstructs authenticated open targets. No object supplies this inventory.
+    if let Some(fence) = extras.beacon_source.filter(|f| f.activation.is_active(ctx.daa_score)) {
+        let inputs =
+            builder.state.kernel_route.as_ref().expect("created").beacon_source_inputs_v4(fence, ctx.daa_score).map_err(refused)?;
+        ledger.set_beacon_source_inputs(inputs).map_err(refused)?;
+    }
     // RFC-0015 admission is no longer a list read here: a class is admitted to the mode at its own registration, and only while
     // DERIVED-eligible (`opv_gate_v1`), so the ledger's admitted rows are exactly the classes that were eligible when they registered.
     Ok(ledger)

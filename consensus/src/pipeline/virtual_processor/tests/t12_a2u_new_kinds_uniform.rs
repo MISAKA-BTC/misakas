@@ -164,7 +164,10 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.palw_panel_free_v1 =
                     Some(kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1::interim_v1(at, Vec::new()));
             }
-            PalwKernelInnerFenceV1::BeaconSourceOptInV1 => params.palw_beacon_source_opt_in_v1 = Some(at),
+            PalwKernelInnerFenceV1::BeaconSourceOptInV1 => {
+                params.palw_beacon_source_opt_in_v1 =
+                    Some(kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1::unapproved_probe_at(at))
+            }
             PalwKernelInnerFenceV1::TypedRootsV1 | PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
                 params.palw_typed_roots_v1 = Some(at)
             }

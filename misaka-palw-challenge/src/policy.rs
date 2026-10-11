@@ -97,6 +97,10 @@ impl ImplementedV1 {
     pub fn randomness_sealed_source() -> Digest {
         named_id("palw-work-beacon/sealed-source/v3")
     }
+    /// Context-bound paid-collateral opt-ins, with a distinct accumulator domain and finite source Final deadline.
+    pub fn randomness_opt_in_source() -> Digest {
+        named_id("palw-work-beacon/opt-in-source/v4")
+    }
     /// **No randomness: a complete check.** Every input of the subject's (small, finite) domain and every artifact leaf is checked,
     /// so nothing is sampled and no beacon exists (the OPV bootstrap, `docs/design/palw/opv-beacon-bootstrap.md` §4).
     pub fn randomness_none_complete() -> Digest {
@@ -215,12 +219,16 @@ impl PostCommitChallengePolicyV1 {
 
     /// Whether challenges of this policy are drawn from a PALW Work Beacon (`false`: a complete check, which draws nothing).
     pub fn needs_beacon(&self) -> bool {
-        self.randomness_source_policy_id == ImplementedV1::randomness_source() || self.is_sealed_source()
+        self.randomness_source_policy_id == ImplementedV1::randomness_source() || self.is_sealed_source() || self.is_opt_in_source()
     }
 
     /// Whether the beacon is the sealed-source v3 one ([`crate::sealed::collect_sealed_work_beacon_v3`]).
     pub fn is_sealed_source(&self) -> bool {
         self.randomness_source_policy_id == ImplementedV1::randomness_sealed_source()
+    }
+
+    pub fn is_opt_in_source(&self) -> bool {
+        self.randomness_source_policy_id == ImplementedV1::randomness_opt_in_source()
     }
 
     /// Whether this is a complete-check policy (no randomness, the whole domain enumerated).
@@ -248,11 +256,16 @@ impl PostCommitChallengePolicyV1 {
             return Err(R::UnknownId("source_eligibility_policy_id"));
         }
         // v3 mixes every qualifying seal, one per producer (and per known consumer): the distinct rule and no other.
-        if self.is_sealed_source() && self.source_rule() != Some(SourceRuleV1::Distinct) {
+        if (self.is_sealed_source() || self.is_opt_in_source()) && self.source_rule() != Some(SourceRuleV1::Distinct) {
             return Err(R::UnknownId("source_eligibility_policy_id"));
         }
-        let randomness =
-            if self.is_sealed_source() { ImplementedV1::randomness_sealed_source() } else { ImplementedV1::randomness_source() };
+        let randomness = if self.is_opt_in_source() {
+            ImplementedV1::randomness_opt_in_source()
+        } else if self.is_sealed_source() {
+            ImplementedV1::randomness_sealed_source()
+        } else {
+            ImplementedV1::randomness_source()
+        };
         let ids: [(&'static str, Digest, Digest); 10] = [
             ("randomness_source_policy_id", self.randomness_source_policy_id, randomness),
             ("anchor_settlement_policy_id", self.anchor_settlement_policy_id, ImplementedV1::anchor_settlement()),
@@ -488,5 +501,13 @@ pub fn complete_check_policy_v1(security_bits: u16, retry_limit: u32) -> PostCom
         transcript_transform_id: ImplementedV1::transcript_none(),
         resource_schedule_id: named_id("resources/complete-check/v1"),
         retention_policy_id: named_id("retention/complete-check/v1"),
+    }
+}
+
+/// Source opt-ins are a new contract, never a filter over the v3 policy's historical mix.
+pub fn opt_in_source_policy_v4(k: u32, delay: u64, window: u64, depth: u64, repetitions: u32) -> PostCommitChallengePolicyV1 {
+    PostCommitChallengePolicyV1 {
+        randomness_source_policy_id: ImplementedV1::randomness_opt_in_source(),
+        ..sealed_source_policy_v3(k, delay, window, depth, repetitions)
     }
 }

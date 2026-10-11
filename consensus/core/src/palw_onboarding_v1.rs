@@ -325,11 +325,16 @@ impl ConformanceAttemptRowV1 {
         self.commitment.challenge_policy_id == crate::palw_conformance_evidence_v1::palw_onboarding_sealed_policy_v1().id()
     }
 
-    /// The network policy the attempt was committed under: the complete-check one, the sealed-source (v3) one, or the sampled (v2)
-    /// one.
+    pub fn is_opt_in_source(&self) -> bool {
+        self.commitment.challenge_policy_id == crate::palw_conformance_evidence_v1::palw_onboarding_opt_in_policy_v4().id()
+    }
+
+    /// The exact implemented network policy committed by the attempt: complete-check, sampled v2, sealed v3 or opt-in v4.
     pub fn policy(&self) -> misaka_palw_challenge::PostCommitChallengePolicyV1 {
         if self.is_complete_check() {
             crate::palw_opv_bootstrap_v1::palw_onboarding_complete_check_policy_v1()
+        } else if self.is_opt_in_source() {
+            crate::palw_conformance_evidence_v1::palw_onboarding_opt_in_policy_v4()
         } else if self.is_sealed_source() {
             crate::palw_conformance_evidence_v1::palw_onboarding_sealed_policy_v1()
         } else {
@@ -699,25 +704,30 @@ impl PalwKernelRouteStateV1 {
             return Err("a complete check draws no beacon".into());
         }
         let ctx = attempt.beacon_context(&policy);
-        if attempt.is_sealed_source() {
+        if attempt.is_sealed_source() || attempt.is_opt_in_source() {
             use misaka_palw_challenge::SealedBeaconStateV3 as B;
-            return Ok(
-                match misaka_palw_challenge::collect_sealed_work_beacon_v3(&ctx, &self.beacon_sealed_sources_v1()?, daa)
-                    .map_err(|e| e.to_string())?
-                {
-                    B::Sealing { sealed, .. } => AttemptBeaconV1::Waiting { state: "SEALING", have: sealed, lock_position: None },
-                    B::Revealing { revealed, .. } => {
-                        AttemptBeaconV1::Waiting { state: "REVEALING", have: revealed, lock_position: None }
-                    }
-                    B::Settling { finals, .. } => AttemptBeaconV1::Waiting { state: "SETTLING", have: finals, lock_position: None },
-                    B::Candidate { mixed, lock_position } => {
-                        AttemptBeaconV1::Waiting { state: "CANDIDATE", have: mixed, lock_position: Some(lock_position) }
-                    }
-                    B::Locked(b) => AttemptBeaconV1::Locked(b),
-                    B::Unavailable { mixed, need } => AttemptBeaconV1::Unavailable { have: mixed, need },
-                    B::Vetoed { withheld, failed } => AttemptBeaconV1::Vetoed { withheld, failed },
-                },
-            );
+            let collected = if attempt.is_opt_in_source() {
+                let target = self.beacon_source_target_v4(&ctx.id())?;
+                let contract = misaka_palw_challenge::OptInContractV4 {
+                    context_id: ctx.id(),
+                    terms_id: target.terms.id(),
+                    source_final_by: target.terms.final_by,
+                };
+                misaka_palw_challenge::collect_opt_in_work_beacon_v4(&ctx, &contract, &self.beacon_opt_in_sources_v4(&ctx.id())?, daa)
+            } else {
+                misaka_palw_challenge::collect_sealed_work_beacon_v3(&ctx, &self.beacon_sealed_sources_v1()?, daa)
+            };
+            return Ok(match collected.map_err(|e| e.to_string())? {
+                B::Sealing { sealed, .. } => AttemptBeaconV1::Waiting { state: "SEALING", have: sealed, lock_position: None },
+                B::Revealing { revealed, .. } => AttemptBeaconV1::Waiting { state: "REVEALING", have: revealed, lock_position: None },
+                B::Settling { finals, .. } => AttemptBeaconV1::Waiting { state: "SETTLING", have: finals, lock_position: None },
+                B::Candidate { mixed, lock_position } => {
+                    AttemptBeaconV1::Waiting { state: "CANDIDATE", have: mixed, lock_position: Some(lock_position) }
+                }
+                B::Locked(b) => AttemptBeaconV1::Locked(b),
+                B::Unavailable { mixed, need } => AttemptBeaconV1::Unavailable { have: mixed, need },
+                B::Vetoed { withheld, failed } => AttemptBeaconV1::Vetoed { withheld, failed },
+            });
         }
         use misaka_palw_challenge::WorkBeaconStateV1 as B;
         Ok(

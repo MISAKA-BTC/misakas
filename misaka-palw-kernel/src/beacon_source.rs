@@ -53,7 +53,7 @@ impl BeaconSourceTermsV1 {
 }
 
 /// A target is trusted input, like Panel coverage: no transaction can create one.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BeaconSourceTargetV1 {
     pub context: BeaconContextV1,
     pub terms: BeaconSourceTermsV1,
@@ -68,7 +68,7 @@ impl BeaconSourceTargetV1 {
         {
             return Err("a source conformance context must bind its candidate".into());
         }
-        if !self.context.policy.is_sealed_source() {
+        if !self.context.policy.is_sealed_source() && !self.context.policy.is_opt_in_source() {
             return Err("source target needs a sealed-source context".into());
         }
         let start =

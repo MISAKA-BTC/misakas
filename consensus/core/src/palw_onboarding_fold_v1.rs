@@ -13,8 +13,8 @@ use super::*;
 use crate::palw_conformance_evidence_v1::{
     ConformanceEvidenceActionV1, ConformanceFaultV1, PALW_CONFORMANCE_CHALLENGE_WINDOW_DAA_V1,
     PALW_CONFORMANCE_EVIDENCE_DEADLINE_DAA_V1, PostVerdictV1, SelectedCheckV1, derive_selection_v1, judge_leaf_fault_v1,
-    judge_posted_evidence_v1, judge_vector_fault_v1, palw_onboarding_challenge_policy_v1, palw_onboarding_sealed_policy_v1,
-    selected_check_v1,
+    judge_posted_evidence_v1, judge_vector_fault_v1, palw_onboarding_challenge_policy_v1, palw_onboarding_opt_in_policy_v4,
+    palw_onboarding_sealed_policy_v1, selected_check_v1,
 };
 use crate::palw_onboarding_v1::*;
 use crate::palw_opv_bootstrap_v1::{
@@ -203,6 +203,20 @@ pub(super) fn apply_kernel_bound_v1(
             .map_err(|_| refused("the class's stored program does not decode"))?;
         palw_complete_check_domain_v1(&program, record.plan.max_positions)
             .map_err(|why| refused(format!("the complete-check policy needs a class it can check whole: {why}")))?;
+    } else if challenge_policy_id.as_bytes() == palw_onboarding_opt_in_policy_v4().id() {
+        let extras = builder.extras.kernel_route.as_ref().ok_or_else(|| refused("the kernel route is not in force"))?;
+        let fence = extras
+            .beacon_source
+            .filter(|f| f.activation.is_active(ctx.daa_score))
+            .ok_or_else(|| refused("the opt-in source policy needs its dedicated fence"))?;
+        let ledger = route.ledger().map_err(refused)?;
+        if !misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(
+            &ledger.policy,
+            palw_onboarding_opt_in_policy_v4().beacon_window_slots,
+        ) || fence.policy.deposit_sompi == 0
+        {
+            return Err(refused("invalid opt-in source TTL or deposit"));
+        }
     } else if challenge_policy_id.as_bytes() == palw_onboarding_sealed_policy_v1().id() {
         // * the SEALED-SOURCE policy (v3, `palw_onboarding_sealed_policy_v1`): its reveal window must fit the ledger's seal TTL, so
         //   every in-window reveal is legal (`2W ≤ seal_ttl_daa`).
@@ -289,6 +303,7 @@ pub(super) fn apply_conformance_committed_v1(
     }
     let complete = binding.challenge_policy_id.as_bytes() == palw_onboarding_complete_check_policy_v1().id();
     let sealed = binding.challenge_policy_id.as_bytes() == palw_onboarding_sealed_policy_v1().id();
+    let opt_in = binding.challenge_policy_id.as_bytes() == palw_onboarding_opt_in_policy_v4().id();
     // A complete-check class re-commits only in a LATER block than the one that closed its last attempt: one judgement per class
     // per block, so the block's cap (`complete_checks_judged_at_v1`, counted from the attempt rows) is exact.
     if complete && prior.as_ref().and_then(|a| a.last_end).is_some_and(|(_, at)| at == ctx.daa_score) {
@@ -296,6 +311,8 @@ pub(super) fn apply_conformance_committed_v1(
     }
     let policy = if complete {
         palw_onboarding_complete_check_policy_v1()
+    } else if opt_in {
+        palw_onboarding_opt_in_policy_v4()
     } else if sealed {
         palw_onboarding_sealed_policy_v1()
     } else {
@@ -353,6 +370,15 @@ pub(super) fn apply_conformance_committed_v1(
         last_end: prior.and_then(|a| a.last_end),
         refuters_judged: Vec::new(),
     };
+    let source_target = if opt_in {
+        let fence = extras
+            .beacon_source
+            .filter(|f| f.activation.is_active(ctx.daa_score) && ctx.daa_score >= f.activation.daa_score())
+            .ok_or_else(|| refused("the opt-in source fence is absent"))?;
+        Some(fence.policy.target(attempt.beacon_context(&policy), &ledger.policy).map_err(refused)?)
+    } else {
+        None
+    };
     let artifact_root = state.artifact_root;
     builder.write_kernel_row(
         PALW_ONBOARDING_TABLE_CONFORMANCE_V1,
@@ -360,6 +386,13 @@ pub(super) fn apply_conformance_committed_v1(
         Some(borsh::to_vec(&row).expect("a conformance row serializes")),
     );
     write_attempt(builder, &class, &attempt);
+    if let Some(target) = source_target {
+        builder.write_kernel_row(
+            crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4,
+            borsh::to_vec(&target.terms.context).expect("context serializes"),
+            Some(borsh::to_vec(&target).expect("target serializes")),
+        );
+    }
     // The previous attempt's material goes with it (its id stays in the record's history only as `last_end`).
     builder.write_kernel_row(PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1, class_key(&class), None);
     Ok(())

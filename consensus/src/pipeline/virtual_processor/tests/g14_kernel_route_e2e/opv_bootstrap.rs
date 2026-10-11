@@ -103,11 +103,12 @@ struct Spec {
     card: usize,
     complete: bool,
     sealed: bool,
+    opt_in: bool,
 }
 
 impl Spec {
     fn honest(seed: u64, card: usize, complete: bool) -> Spec {
-        Spec { v2: onb_fixture(seed), kernel: onb_fixture(seed), card, complete, sealed: false }
+        Spec { v2: onb_fixture(seed), kernel: onb_fixture(seed), card, complete, sealed: false, opt_in: false }
     }
 
     /// A candidate bound under the network's sealed-source (v3) policy.
@@ -205,6 +206,8 @@ async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
         assert!(net.ledger().classes.contains_key(&legacy), "the legacy kernel class registered over the matured binding");
         let policy = Hash64::from_bytes(if s.complete {
             complete
+        } else if s.opt_in {
+            kaspa_consensus_core::palw_conformance_evidence_v1::palw_onboarding_opt_in_policy_v4().id()
         } else if s.sealed {
             sealed
         } else {
@@ -852,11 +855,13 @@ async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refu
     // The bootstrap's jobs wait posted (a job is no source; its claim, after C's start, is).
     let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0x50).await;
     // A false binding: the V2 artifact is seed 37's weights, the kernel class runs seed 38's (the same program).
-    let c =
-        onboard_all(&mut net, vec![Spec { v2: onb_fixture(37), kernel: onb_fixture(38), card: CAND, complete: false, sealed: false }])
-            .await
-            .pop()
-            .unwrap();
+    let c = onboard_all(
+        &mut net,
+        vec![Spec { v2: onb_fixture(37), kernel: onb_fixture(38), card: CAND, complete: false, sealed: false, opt_in: false }],
+    )
+    .await
+    .pop()
+    .unwrap();
     commit(&mut net, &c, 0x22).await;
     assert_eq!(net.attempt(c.v2).eligible_profiles, vec![Hash64::from_bytes(b.opv)]);
     claims(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
@@ -1057,7 +1062,7 @@ fn fresh_v3(net: &Net, o: &Onb) -> misaka_palw_sdk::onboarding_chain::FreshRepor
     let sealed_sources = sealed_sources_from_kernel_rows_v1(&header, rows.clone(), &api.ledger_root(), &api.aux_root())
         .expect("the served rows are the chain's");
     // One row changed: the reader's copy no longer roots to the served root, and it is refused.
-    let mut forged = rows;
+    let mut forged = rows.clone();
     if let Some(r) = forged.iter_mut().find(|(table, _, _)| *table < PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1) {
         r.2.push(0);
     }
@@ -1072,7 +1077,7 @@ fn fresh_v3(net: &Net, o: &Onb) -> misaka_palw_sdk::onboarding_chain::FreshRepor
         .into_iter()
         .filter_map(|f| f.event.map(|e| borsh::from_slice(&e).expect("a beacon event")))
         .collect();
-    let reads = PublicConformanceReadsV1 {
+    let mut reads = PublicConformanceReadsV1 {
         attempt_row: read.attempt_row.expect("the attempt row"),
         evidence_row: read.evidence_row,
         events,
@@ -1080,7 +1085,60 @@ fn fresh_v3(net: &Net, o: &Onb) -> misaka_palw_sdk::onboarding_chain::FreshRepor
         tip_daa: net.daa(),
         program: read.program.expect("the class's program"),
     };
-    fresh_verify_from_reads_v1(&reads, None).expect("the SDK verifier runs a v3 attempt")
+    if net.attempt(o.v2).is_opt_in_source() {
+        use misaka_palw_sdk::onboarding_chain::{fresh_verify_from_reads_v4, opt_in_sources_from_kernel_rows_v4};
+        let a = net.attempt(o.v2);
+        let context = a.beacon_context(&a.policy()).id();
+        let sources = opt_in_sources_from_kernel_rows_v4(&header, rows.clone(), &api.ledger_root(), &api.aux_root(), &context)
+            .expect("v4 target and reservations are rooted to the chain");
+        let mut corrupt = rows;
+        corrupt
+            .iter_mut()
+            .find(|r| r.0 == kaspa_consensus_core::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4)
+            .expect("a target row")
+            .2
+            .push(0);
+        assert!(opt_in_sources_from_kernel_rows_v4(&header, corrupt, &api.ledger_root(), &api.aux_root(), &context).is_err());
+        assert!(fresh_verify_from_reads_v1(&reads, None).is_err(), "the legacy SDK path refuses v4 without rooted reservations");
+        let original = reads.attempt_row.clone();
+        let mut substituted: ConformanceAttemptRowV1 = borsh::from_slice(&original).unwrap();
+        substituted.record.state =
+            if substituted.record.state == S::ActiveRewardable { S::RegisteredDormant } else { S::ActiveRewardable };
+        reads.attempt_row = borsh::to_vec(&substituted).unwrap();
+        assert!(
+            fresh_verify_from_reads_v4(&reads, &sources, None).is_err(),
+            "a substituted lifecycle state must not agree against rooted source facts"
+        );
+        reads.attempt_row = original;
+        let original = reads.evidence_row.take();
+        reads.evidence_row = Some(vec![0]);
+        assert!(fresh_verify_from_reads_v4(&reads, &sources, None).is_err(), "unrooted evidence is refused");
+        reads.evidence_row = original;
+        fresh_verify_from_reads_v4(&reads, &sources, None).expect("the SDK verifier runs v4")
+    } else {
+        let a = net.attempt(o.v2);
+        let policy = a.policy();
+        let ctx = a.beacon_context(&policy);
+        let program = misaka_palw_tir::TirProgramV1::decode_canonical(&reads.program).unwrap();
+        let post = reads.evidence_row.as_ref().map(|p| borsh::from_slice(p).unwrap());
+        let wrong_version = kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v4(
+            &kaspa_consensus_core::palw_conformance_evidence_v1::FreshInputV1 {
+                commitment: &a.commitment,
+                policy: &policy,
+                ctx: &ctx,
+                events: &reads.events,
+                sealed: &reads.sealed_sources,
+                tip_daa: reads.tip_daa,
+                program: &program,
+                post: post.as_ref(),
+                leaf_source: None,
+            },
+            &misaka_palw_challenge::OptInContractV4 { context_id: ctx.id(), terms_id: [0; 64], source_final_by: u64::MAX },
+            &[],
+        );
+        assert!(wrong_version.beacon_output.is_none(), "the v4 entry point must not fall back to the v3 collector");
+        fresh_verify_from_reads_v1(&reads, None).expect("the SDK verifier runs a v3 attempt")
+    }
 }
 
 fn beacon_of(net: &Net, o: &Onb) -> AttemptBeaconV1 {
@@ -1284,4 +1342,172 @@ async fn g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_an
     };
     let refusal = fresh_verify_complete_check_v1(&reads, &ops_of(&onbs[1].f)).expect_err("another model's artifact");
     assert_eq!(refusal.code, "ARTIFACT_NOT_REGISTERED");
+}
+
+// ---- v4 opt-in source contract: ordinary race seals cannot veto this target --------------------------------------------------
+fn opt_in_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    let (cfg, bundle, premine, floats) = boot_config(0, Vec::new());
+    let mut params = cfg.params.clone();
+    params.palw_beacon_source_opt_in_v1 =
+        Some(kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(1)));
+    assert!(params.validate_palw_v2().is_err(), "private drill configuration stays unarmable on every real network");
+    (Config::new(params), bundle, premine, floats)
+}
+
+async fn opt_in_world(mut net: Net, seed: u64) -> (Net, Onb, Onb) {
+    net.beat_to(1).await;
+    let mut onbs =
+        onboard_all(&mut net, vec![Spec::honest(seed, BOOT, true), Spec { opt_in: true, ..Spec::honest(seed + 1, CAND, false) }])
+            .await;
+    let c = onbs.pop().unwrap();
+    let b = onbs.pop().unwrap();
+    commit(&mut net, &b, 0x22).await;
+    let p = complete_post(&net, &b);
+    let o = net.evidence(BOOT, b.v2, ConformanceEvidenceActionV1::PostComplete(Box::new(p)));
+    net.send(vec![(BOOT, o)]).await;
+    assert!(register_opv(&mut net, BOOT, &b).await);
+    commit(&mut net, &c, 0x22).await;
+    let a = net.attempt(c.v2);
+    assert!(a.is_opt_in_source());
+    let target = net.api().unwrap().beacon_source_target_v4(&a.beacon_context(&a.policy()).id()).unwrap();
+    assert_eq!(target.context, a.beacon_context(&a.policy()));
+    assert_eq!(a.eligible_profiles, vec![Hash64::from_bytes(b.opv)]);
+    (net, b, c)
+}
+
+async fn opt_sources(net: &mut Net, c: &Onb, jobs: &[KernelJobV1], producers: &[usize]) -> Digest {
+    let a = net.attempt(c.v2);
+    let context = a.beacon_context(&a.policy()).id();
+    let target = net.api().unwrap().beacon_source_target_v4(&context).unwrap();
+    let before = net.ledger();
+    let mut objects = Vec::new();
+    for (j, p) in jobs.iter().zip(producers) {
+        let producer = net.kid(*p);
+        let seal = before.seals[&(j.id(), producer)].seal;
+        let k = K::OptInBeaconSource { producer, job: j.id(), seal, context, terms: target.terms.id() };
+        objects.push((*p, net.route(*p, &k)));
+    }
+    net.send(objects).await;
+    for (j, p) in jobs.iter().zip(producers) {
+        let ledger = net.ledger();
+        let r = &ledger.beacon_sources[&(context, net.kid(*p))];
+        assert_eq!(r.job, j.id());
+        assert_eq!(r.terms, target.terms);
+        assert_eq!(r.held, target.terms.deposit);
+        assert_eq!(
+            net.kernel_reserved(*p),
+            u128::from(ledger.bonds[&net.kid(*p)].reserved),
+            "native reservations match the standalone book"
+        );
+    }
+    context
+}
+
+#[tokio::test]
+async fn g14_opv_bootstrap_v4_ordinary_withholding_is_excluded_and_rooted_opt_ins_lock_replay_restart() {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    kaspa_core::log::try_init_logger("warn");
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, receiver) = async_channel::unbounded();
+    let mut net = Net::over_cfg(opt_in_config(), |cfg| TestConsensus::with_db(db.clone(), cfg, sender));
+    net._keep.push(Box::new(receiver));
+    let (mut net, b, c) = opt_in_world(net, 61).await;
+    let a = net.attempt(c.v2);
+    let target = net.api().unwrap().beacon_source_target_v4(&a.beacon_context(&a.policy()).id()).unwrap();
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..3], b.opv, 0x90).await;
+    net.beat_to(target.terms.seal_start).await;
+    let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..3]).await;
+    assert!(net.ledger().beacon_sources.is_empty(), "ordinary signed race seals are not automatic opt-ins");
+    let context = opt_sources(&mut net, &c, &jobs[..2], &PRODUCERS[..2]).await;
+    assert_eq!(net.api().unwrap().beacon_opt_in_sources_v4(&context).unwrap().len(), 2);
+    assert!(matches!(beacon_of(&net, &c), AttemptBeaconV1::Waiting { state: "SEALING", have: 2, .. }));
+    net.beat_to(target.terms.seal_end).await;
+    reveal_now(&mut net, &reveals[..2]).await;
+    for p in &PRODUCERS[..2] {
+        assert_eq!(
+            net.ledger().beacon_sources[&(context, net.kid(*p))].held,
+            target.terms.deposit,
+            "ordinary seal refund retains the source deposit"
+        );
+    }
+    let ttpb = net.ttpb();
+    let mut locked = None;
+    for _ in 0..400 {
+        match beacon_of(&net, &c) {
+            AttemptBeaconV1::Locked(b) => {
+                locked = Some(b);
+                break;
+            }
+            AttemptBeaconV1::Waiting { .. } => {
+                net.chain.heartbeat(ttpb, Vec::new()).await;
+            }
+            other => panic!("ordinary withheld seal must not veto v4: {other:?}"),
+        }
+    }
+    let locked = locked.expect("opted-in sources reached Final and v4 locked");
+    assert_eq!(locked.sources.len(), 2);
+    let ordinary = net.api().unwrap().beacon_sealed_sources_v1().unwrap();
+    assert!(
+        ordinary.iter().any(|s| s.attribution.producer_id == net.kid(PRODUCERS[2]) && s.reveal.is_none()),
+        "the withheld ordinary seal was really present"
+    );
+    let post = sampled_post(&net, &c);
+    let o = net.evidence(CAND, c.v2, ConformanceEvidenceActionV1::Post(Box::new(post)));
+    net.send(vec![(CAND, o)]).await;
+    let posted = net.attempt(c.v2).evidence.expect("v4 evidence admitted");
+    let fresh = fresh_v3(&net, &c);
+    assert_eq!(fresh.verdict.beacon_output, Some(locked.output));
+    assert_eq!(fresh.verdict.seed, Some(posted.seed.as_bytes()));
+    assert_eq!(fresh.verdict.posted, Some(Ok(())));
+    assert!(fresh.agrees);
+    net.beat_to(posted.window_end_daa + 1).await;
+    assert_eq!(
+        attempt_effective_bits_v1(&net.api().unwrap(), &c.v2, &net.attempt(c.v2)),
+        misaka_palw_challenge::EffectiveBitsV1::Bits(0)
+    );
+    let fresh = fresh_v3(&net, &c);
+    assert!(fresh.chain_says_passed && fresh.agrees);
+    let z = net.replay().await;
+    net.assert_same(&z, "v4 replay");
+    // Reopen the accepted DB, not merely a second collector over copied in-memory facts.
+    let route = net.api().unwrap();
+    let roots = (route.ledger_root(), route.aux_root());
+    let facts = route.beacon_opt_in_sources_v4(&context).unwrap();
+    let net = net.restart(db);
+    let route = net.api().unwrap();
+    assert_eq!((route.ledger_root(), route.aux_root()), roots, "v4 roots survive actual DB reopen");
+    assert_eq!(route.beacon_opt_in_sources_v4(&context).unwrap(), facts);
+    assert_eq!(fresh_v3(&net, &c).verdict, fresh.verdict);
+}
+
+#[tokio::test]
+async fn g14_opv_bootstrap_v4_opted_in_withholding_vetoes_and_burns_its_own_reservation() {
+    kaspa_core::log::try_init_logger("warn");
+    let (mut net, b, c) = opt_in_world(Net::over_cfg(opt_in_config(), TestConsensus::new), 63).await;
+    let a = net.attempt(c.v2);
+    let target = net.api().unwrap().beacon_source_target_v4(&a.beacon_context(&a.policy()).id()).unwrap();
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..3], b.opv, 0x98).await;
+    net.beat_to(target.terms.seal_start).await;
+    let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..3]).await;
+    let context = opt_sources(&mut net, &c, &jobs, &PRODUCERS[..3]).await;
+    let slashed = net.slashed(PRODUCERS[2]);
+    net.beat_to(target.terms.seal_end).await;
+    reveal_now(&mut net, &reveals[..2]).await;
+    let money_before = kernel_money_v1(&net.chain);
+    net.beat_to(target.terms.reveal_end + 1).await;
+    let money_after = kernel_money_v1(&net.chain);
+    assert_kernel_conserved_v1(money_before, money_after, "native source withholding burn");
+    assert_eq!(money_after.burned - money_before.burned, u128::from(target.terms.deposit));
+    let a = net.attempt(c.v2);
+    assert_eq!((a.record.state, a.record.attempts()), (S::RegisteredDormant, 1));
+    assert!(matches!(a.last_end, Some((ConformanceAttemptEndV1::BeaconVetoed, _))));
+    let row = net.ledger().beacon_sources[&(context, net.kid(PRODUCERS[2]))].clone();
+    assert_eq!(row.held, 0);
+    assert!(matches!(row.outcome, Some(misaka_palw_kernel::beacon_source::BeaconSourceOutcomeV1::Forfeited { .. })));
+    assert_eq!(net.slashed(PRODUCERS[2]) - slashed, target.terms.deposit, "only the source deposit burned at its reveal deadline");
+    assert_eq!(net.api().unwrap().beacon_opt_in_sources_v4(&context).unwrap().len(), 3, "forfeited source never disappears");
+    let fresh = fresh_v3(&net, &c);
+    assert!(fresh.verdict.beacon.starts_with("Vetoed"), "{}", fresh.verdict.beacon);
+    let z = net.replay().await;
+    net.assert_same(&z, "v4 veto replay");
 }

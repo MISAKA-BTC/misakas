@@ -359,6 +359,11 @@ pub fn attempt_effective_bits_v1(
     }
     // v3 (sealed sources): the adversary's only post-reveal move is a counted veto, so G = F = 1 — and the beacon's own failure,
     // `ε_src` (every honest seal censored out of the seal window), is a second term (§6.3). v2: the last contributor, G = 2^128.
+    // v4's algorithm is implemented, but participation, fee funding and its composed bound have no approval.
+    // Never inherit v3's source assumptions merely because the collectors share mechanics.
+    if attempt.is_opt_in_source() {
+        return EffectiveBitsV1::Bits(0);
+    }
     let sealed = attempt.is_sealed_source();
     let grinding =
         if sealed { misaka_palw_challenge::sealed_beacon_grinding_choices_v3(1) } else { palw_onboarding_grinding_choices_v1() };

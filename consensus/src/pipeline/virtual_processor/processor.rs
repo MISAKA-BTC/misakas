@@ -708,7 +708,7 @@ pub struct VirtualStateProcessor {
     /// the route's schedule holds `K2-TR-v1` Active. Resolved in ONE place ([`Self::palw_kernel_typed_roots_at`]). Never armable by a
     /// real network (its validation refuses every height); a test builds the config without that validation.
     pub(super) palw_typed_roots_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_beacon_source_opt_in_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_beacon_source_opt_in_v1: Option<kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
     pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -14314,7 +14314,7 @@ impl VirtualStateProcessor {
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceOptInV1 => {
                 self.palw_beacon_source_opt_in_v1
-                    .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score))
+                    .is_some_and(|f| f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score))
                     && self.palw_kernel_opv_at(daa_score)
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
@@ -15953,6 +15953,8 @@ impl VirtualStateProcessor {
                     }),
                 }),
                 typed_roots: self.palw_kernel_typed_roots_activation(),
+                beacon_source: self.palw_beacon_source_opt_in_v1.filter(|f|
+                    f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score)),
                 // DA16: the provider court's activation, where its (never armable) fence is in force at this block.
                 provider_court: self
                     .palw_provider_court_at(daa_score)

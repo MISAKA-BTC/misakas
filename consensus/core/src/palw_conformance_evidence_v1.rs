@@ -623,6 +623,14 @@ pub const PALW_ONBOARDING_SEALED_PARTICIPATION_BITS_V1: u16 = 0;
 /// **The network's sealed-source (v3) onboarding policy** (`docs/design/palw/opv-beacon-bootstrap.md` §6.3): the sampled policy's
 /// numbers under `palw-work-beacon/sealed-source/v3` — commit-reveal over salted claim seals, every qualifying seal of the window
 /// mixed, a withheld or abandoned mixed seal a counted veto. INTERIM like the v2 one (2 bits, a drill), and a different id.
+/// Unapproved v4 policy; ordinary job-race seals have no contribution or veto.
+pub fn palw_onboarding_opt_in_policy_v4() -> PostCommitChallengePolicyV1 {
+    PostCommitChallengePolicyV1 {
+        randomness_source_policy_id: misaka_palw_challenge::policy::ImplementedV1::randomness_opt_in_source(),
+        ..palw_onboarding_sealed_policy_v1()
+    }
+}
+
 pub fn palw_onboarding_sealed_policy_v1() -> PostCommitChallengePolicyV1 {
     PostCommitChallengePolicyV1 {
         security_bits: PALW_ONBOARDING_POLICY_SECURITY_BITS_V1,
@@ -965,6 +973,26 @@ pub struct FreshVerdictV1 {
 /// **Rebuild the verdict from public material alone** (no node-private state): the beacon from the Final facts, the seed, the
 /// selection, the evidence re-assembled from its posted material, and — given the artifact — every selected leaf re-read.
 pub fn fresh_verify_v1(input: &FreshInputV1<'_>) -> FreshVerdictV1 {
+    fresh_verify_inner(input, None)
+}
+
+/// v4 requires the frozen contract and facts derived from authenticated opt-in reservations.
+/// It cannot reuse ordinary v3 seals or a caller-supplied output/seed.
+pub fn fresh_verify_v4(
+    input: &FreshInputV1<'_>,
+    contract: &misaka_palw_challenge::OptInContractV4,
+    sources: &[misaka_palw_challenge::OptInSourceV4],
+) -> FreshVerdictV1 {
+    use misaka_palw_challenge::SealedBeaconStateV3 as S;
+    let derived = match misaka_palw_challenge::collect_opt_in_work_beacon_v4(input.ctx, contract, sources, input.tip_daa) {
+        Ok(S::Locked(b)) => Ok(b),
+        Ok(state) => Err(format!("{state:?}")),
+        Err(e) => Err(format!("POLICY_INVALID {e}")),
+    };
+    fresh_verify_inner(input, Some(derived))
+}
+
+fn fresh_verify_inner(input: &FreshInputV1<'_>, opt_in: Option<Result<VerifiedWorkBeaconV1, String>>) -> FreshVerdictV1 {
     let mut out = FreshVerdictV1 {
         beacon: String::new(),
         beacon_output: None,
@@ -976,7 +1004,11 @@ pub fn fresh_verify_v1(input: &FreshInputV1<'_>) -> FreshVerdictV1 {
         vectors_selected: 0,
     };
     // The beacon under the attempt's own policy: v3 from the seal facts, v2 from the Final facts — the chain's two collectors.
-    let beacon = if input.policy.is_sealed_source() {
+    let beacon = if opt_in.is_some() && !input.policy.is_opt_in_source() {
+        Err("POLICY_INVALID opt-in v4 verifier requires its own policy".into())
+    } else if input.policy.is_opt_in_source() {
+        opt_in.unwrap_or_else(|| Err("OPT_IN_ROWS_REQUIRED".into()))
+    } else if input.policy.is_sealed_source() {
         use misaka_palw_challenge::SealedBeaconStateV3 as S3;
         match misaka_palw_challenge::collect_sealed_work_beacon_v3(input.ctx, input.sealed, input.tip_daa) {
             Ok(S3::Locked(b)) => Ok(b),

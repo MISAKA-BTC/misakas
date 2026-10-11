@@ -2960,8 +2960,8 @@ pub struct Params {
     /// until the single full-activation release names a height for it with the others.
     pub palw_typed_roots_v1: Option<ForkActivation>,
     /// Per-attempt source reservation, inner 21. Independent, None on every preset, Some-only fingerprints.
-    /// Every real activation is refused until the target, source-only beacon and funded fee consumers are complete.
-    pub palw_beacon_source_opt_in_v1: Option<ForkActivation>,
+    /// Every real activation is refused until funded fees, timing/resource bounds and source security approval are complete.
+    pub palw_beacon_source_opt_in_v1: Option<crate::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
 
     /// **RFC-0015: Panel=0 (`OptimisticPublicVerification`) on the kernel route** ([`crate::palw_panel_free_v1`]): the separately named
     /// fence under which a network admits classes registered under the Panel-free verification mode (a fixed public challenge window,
@@ -6587,7 +6587,7 @@ impl Params {
         if self.palw_typed_roots_v1 == Some(ForkActivation::never()) {
             self.palw_typed_roots_v1 = None;
         }
-        if self.palw_beacon_source_opt_in_v1 == Some(ForkActivation::never()) {
+        if self.palw_beacon_source_opt_in_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_beacon_source_opt_in_v1 = None;
         }
         // The Panel-free fence, likewise.
@@ -10620,7 +10620,7 @@ impl Params {
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
-            ("palw_beacon_source_opt_in_v1", *palw_beacon_source_opt_in_v1),
+            ("palw_beacon_source_opt_in_v1", palw_beacon_source_opt_in_v1.map(|f| f.activation)),
             ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_tir_shard_segment_v2", *palw_tir_shard_segment_v2),
@@ -10920,7 +10920,8 @@ impl Params {
         }
         if let Some(at) = self.palw_beacon_source_opt_in_v1 {
             h.write(b"palw_beacon_source_opt_in_v1");
-            h.write(at.daa_score().to_le_bytes());
+            h.write(at.activation.daa_score().to_le_bytes());
+            h.write(at.policy.id());
         }
         // The Panel-free fence, NAMED likewise.
         if let Some(fence) = &self.palw_panel_free_v1 {
@@ -12420,8 +12421,8 @@ impl Params {
         if let Some(activation) = palw_typed_roots_v1.as_mut() {
             fork(activation, visit);
         }
-        if let Some(activation) = palw_beacon_source_opt_in_v1.as_mut() {
-            fork(activation, visit);
+        if let Some(fence) = palw_beacon_source_opt_in_v1.as_mut() {
+            fork(&mut fence.activation, visit);
         }
         // The Panel-free fence. Some-only.
         if let Some(fence) = palw_panel_free_v1.as_mut() {
@@ -13811,7 +13812,8 @@ impl Params {
         }
         if let Some(activation) = palw_beacon_source_opt_in_v1 {
             h.write(b"palw_beacon_source_opt_in_v1");
-            h.write(activation.daa_score().to_le_bytes());
+            h.write(activation.activation.daa_score().to_le_bytes());
+            h.write(activation.policy.id());
         }
         // The Panel-free fence, Some-only for the same reason.
         if let Some(fence) = palw_panel_free_v1 {
