@@ -37,10 +37,10 @@ use kaspa_muhash::MuHash;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
 use std::{collections::BTreeSet, sync::Arc, thread::JoinHandle, time::Duration};
 
-#[path = "palw_service_tiled_e2e.rs"]
-mod tiled;
 #[path = "palw_service_terminal_e2e.rs"]
 mod terminal;
+#[path = "palw_service_tiled_e2e.rs"]
+mod tiled;
 
 pub(super) struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,
@@ -523,6 +523,41 @@ pub(super) async fn pool_heartbeat(chain: &mut Chain, manager: &Arc<ConsensusMan
     pool.clone().handle_new_block_transactions(&session, block.header.daa_score, block.transactions.clone()).await.unwrap();
     block
 }
+/// Recovery hooks surround the exact immutable template/accepted block. An earlier
+/// mempool query and a pair of heartbeats can both miss a producer's short partial phase.
+async fn pool_heartbeat_observed(
+    chain: &mut Chain,
+    manager: &Arc<ConsensusManager>,
+    pool: &MiningManagerProxy,
+    claim: Hash64,
+    recovery: &mut Option<recovery::RecoveryRun>,
+    verifier: &mut ServiceRun,
+) -> Block {
+    let session = manager.consensus().unguarded_session();
+    let mut template = pool.clone().get_block_template(&session, MinerData::new(card_payout_spk(0), vec![])).await.unwrap();
+    chain.stamp(&mut template.block);
+    let (template, _) = chain.tc.heartbeat_adapt_block_template(template).unwrap();
+    if let Some(recovery) = recovery.as_mut() {
+        recovery
+            .before_carriers(
+                claim,
+                template
+                    .block
+                    .transactions
+                    .iter()
+                    .filter_map(|t| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&t.payload).ok().map(|p| p.object)),
+                verifier,
+            )
+            .await;
+    }
+    chain.time = chain.time.max(template.block.header.timestamp);
+    let block = chain.insert(template.block).await;
+    pool.clone().handle_new_block_transactions(&session, block.header.daa_score, block.transactions.clone()).await.unwrap();
+    if let Some(recovery) = recovery.as_mut() {
+        recovery.after_accepted_carrier(chain, claim).await;
+    }
+    block
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fresh_public_bond_service_carries_reserved_da_to_objective_default() {
     fresh_public_service(PublicCase::Withholding).await;
@@ -732,7 +767,11 @@ impl PublicCase {
         }
     }
     fn prefix_fault(self) -> Option<u8> {
-        match self {Self::TiledPrefixInitial=>Some(5),Self::TiledPrefixInherited=>Some(6),_=>None}
+        match self {
+            Self::TiledPrefixInitial => Some(5),
+            Self::TiledPrefixInherited => Some(6),
+            _ => None,
+        }
     }
     fn constraint(self) -> bool {
         self.large_constraint() || self.constraint_fault().is_some()
@@ -749,7 +788,13 @@ impl PublicCase {
     fn tiled(self) -> bool {
         matches!(
             self,
-            Self::TiledConstraintForbidden | Self::TiledConstraintStop | Self::TiledConstraintBeaten | Self::TiledConstraintWithheld | Self::TiledConstraintLargeJob | Self::TiledPrefixInitial | Self::TiledPrefixInherited
+            Self::TiledConstraintForbidden
+                | Self::TiledConstraintStop
+                | Self::TiledConstraintBeaten
+                | Self::TiledConstraintWithheld
+                | Self::TiledConstraintLargeJob
+                | Self::TiledPrefixInitial
+                | Self::TiledPrefixInherited
         )
     }
 }
@@ -1532,12 +1577,12 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                     );
                 }
             }
-            let block = pool_heartbeat(&mut chain, &manager, &pool).await;
+            let block = pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
             assert!(
                 ids.iter().any(|id| block.transactions.iter().any(|tx| tx.id() == *id)),
                 "production template includes an actual service carrier"
             );
-            pool_heartbeat(&mut chain, &manager, &pool).await;
+            pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
         }
         if let Some(recovery) = recovery.as_mut() {
             recovery
@@ -1685,14 +1730,14 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
             eprintln!("[service-public] foreign-job authenticated event submitted through the real PQ mempool");
             let mut included = false;
             for _ in 0..8 {
-                let block = pool_heartbeat(&mut chain, &manager, &pool).await;
+                let block = pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
                 if block.transactions.iter().any(|t| t.id() == tx.id()) {
                     included = true;
                     break;
                 }
             }
             assert!(included, "the production template carries the authenticated fault disclosure");
-            pool_heartbeat(&mut chain, &manager, &pool).await;
+            pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
             let disclosed = chain.view(claim);
             assert_eq!(disclosed.unit_was_answered_v1(&PalwDaUnitV1::Event { row: 0, tile: 0 }), !case.identity_fault());
             assert!(!disclosed.executor_refuted && !disclosed.da_defaulted, "carriage itself is neither a DA answer nor conviction");
@@ -1708,7 +1753,8 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
             PublicCase::UnretainedHonestFpV3Job
                 | PublicCase::UnretainedMultipartHonestFpV3Job
                 | PublicCase::UnretainedLargeConstraintJob
-        ) || case.constraint_fault().is_some() || case.prefix_fault().is_some())
+        ) || case.constraint_fault().is_some()
+            || case.prefix_fault().is_some())
             && !automatic_recovery
             && !job_preimage_submitted
             && chain.view(claim).sessions.iter().any(|(who, s)| {
@@ -1801,14 +1847,14 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                         .expect("the signed descriptor carrier passes ordinary PQ admission");
                     let mut included = false;
                     for _ in 0..8 {
-                        let block = pool_heartbeat(&mut chain, &manager, &pool).await;
+                        let block = pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
                         if block.transactions.iter().any(|t| t.id() == tx.id()) {
                             included = true;
                             break;
                         }
                     }
                     assert!(included, "the job descriptor was actually carried");
-                    pool_heartbeat(&mut chain, &manager, &pool).await;
+                    pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
                     let output = tx.outputs.last().unwrap();
                     floats[0] = (
                         TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
@@ -1889,14 +1935,14 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                     .expect("the signed invalid input carrier can be published without becoming an answer");
                 let mut included = false;
                 for _ in 0..8 {
-                    let block = pool_heartbeat(&mut chain, &manager, &pool).await;
+                    let block = pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
                     if block.transactions.iter().any(|t| t.id() == tx.id()) {
                         included = true;
                         break;
                     }
                 }
                 assert!(included, "the malformed signed input was actually carried");
-                pool_heartbeat(&mut chain, &manager, &pool).await;
+                pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
                 let still_waiting = chain.view(claim);
                 assert!(
                     !still_waiting.unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk })),
@@ -1930,14 +1976,14 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                     .expect("the authenticated public input is admitted by the ordinary PQ mempool");
                 let mut included = false;
                 for _ in 0..8 {
-                    let block = pool_heartbeat(&mut chain, &manager, &pool).await;
+                    let block = pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
                     if block.transactions.iter().any(|t| t.id() == tx.id()) {
                         included = true;
                         break;
                     }
                 }
                 assert!(included, "ordinary mining template includes the requested public input");
-                pool_heartbeat(&mut chain, &manager, &pool).await;
+                pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
                 assert!(
                     chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk }))
                 );
@@ -1994,16 +2040,33 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         if case.prefix_fault().is_some() {
             use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
             use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
-            let requested: Vec<_> = chain.view(claim).sessions.iter().filter(|(who,_)|*who==bond)
-                .flat_map(|(_,session)|session.units.iter())
-                .filter_map(|unit|match unit {PalwDaUnitV1::LegacyHeldV2(u @ PalwLegacyHeldUnitV2::KernelWitness {..})=>Some(*u),_=>None})
+            let requested: Vec<_> = chain
+                .view(claim)
+                .sessions
+                .iter()
+                .filter(|(who, _)| *who == bond)
+                .flat_map(|(_, session)| session.units.iter())
+                .filter_map(|unit| match unit {
+                    PalwDaUnitV1::LegacyHeldV2(u @ PalwLegacyHeldUnitV2::KernelWitness { .. }) => Some(*u),
+                    _ => None,
+                })
                 .collect();
             for unit in requested {
-                if prefix_tiles_submitted.contains(&unit) {continue;}
+                if prefix_tiles_submitted.contains(&unit) {
+                    continue;
+                }
                 let (binding, answer) = prefix_answers.get(&unit).expect("only canonical prefix output CKWs are answered").clone();
                 let object = crate::palw_legacy_held_v2::palw_legacy_held_answer_object_v2(
-                    &chain.network_domain,claim,unit,binding,answer,chain.bonds[0],|message,context|Some(signed(0,message,context))).unwrap();
-                tiled::carry_public_rpc_answer(&mut chain,&manager,&pool,&retained_flow,&object,&mut floats[0]).await;
+                    &chain.network_domain,
+                    claim,
+                    unit,
+                    binding,
+                    answer,
+                    chain.bonds[0],
+                    |message, context| Some(signed(0, message, context)),
+                )
+                .unwrap();
+                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[0]).await;
                 assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit)));
                 prefix_tiles_submitted.insert(unit);
                 eprintln!("[service-prefix] canonical public CKW {unit:?} authenticated through ordinary H1/PQ");
@@ -2090,22 +2153,31 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                     for seat in &all_seats {
                         let key = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim);
                         let panel = chain.tc.palw_reporter_filing_read_v1(key, Hash64::default(), bond, None).unwrap();
-                        let winner=panel.pending.and_then(|p|p.best);
-                        if let Some(consumed)=panel.consumed {
-                            if winner.is_none() && case!=PublicCase::TiledConstraintLargeJob {continue;}
+                        let winner = panel.pending.and_then(|p| p.best);
+                        if let Some(consumed) = panel.consumed {
+                            if winner.is_none() && case != PublicCase::TiledConstraintLargeJob {
+                                continue;
+                            }
                             assert_eq!(consumed.kind, kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2);
                             assert_eq!(consumed.accused, seat.0);
                             assert!(consumed.amount > 0);
                             assert!(consumed.collected > 0, "each relied-on Valid signer actually loses collateral");
-                            if let Some(winner)=winner.as_ref() {
-                                assert_eq!(winner.reporter,bond);assert!(winner.committed_daa<consumed.accepted_daa);
-                            } else {assert_eq!(case,PublicCase::TiledConstraintLargeJob,"only the existing rooted-void route forgoes a separate R reward");}
-                            panels.push((*seat,key,winner));
+                            if let Some(winner) = winner.as_ref() {
+                                assert_eq!(winner.reporter, bond);
+                                assert!(winner.committed_daa < consumed.accepted_daa);
+                            } else {
+                                assert_eq!(
+                                    case,
+                                    PublicCase::TiledConstraintLargeJob,
+                                    "only the existing rooted-void route forgoes a separate R reward"
+                                );
+                            }
+                            panels.push((*seat, key, winner));
                         }
                     }
                     if panels.len() != all_seats.len() {
                         for _ in 0..10 {
-                            pool_heartbeat(&mut chain, &manager, &pool).await;
+                            pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
                         }
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         continue;
@@ -2145,23 +2217,48 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                             }
                             _ => None,
                         })
-                        .or_else(||terminal::included_executor_evidence_v1(&carriers,claim,view.producer))
+                        .or_else(|| terminal::included_executor_evidence_v1(&carriers, claim, view.producer))
                         .expect("the verifier's exact proof is included in an actual block");
                     assert_eq!(evidence.claim_id, claim);
-                    if let Some(fault)=case.prefix_fault() {
-                        let kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::PrefixStateMismatch {binding,job,tiles}=evidence.contradiction
-                        else {panic!("the actual registered prefix fault must reach exact court17")};
-                        assert_eq!(job.version,if fault==6 {kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_INHERIT_VERSION}
-                            else {kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION});
-                        let named=kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&job).unwrap();
-                        assert_eq!(named.prefix_tokens,2);assert_eq!(named.state_root,Hash64::from_u64_word(0xBAD17));
-                        let plan=kaspa_consensus_core::palw_prefix_state_court_v1::PalwPrefixKvPlanV1::of_profile(&binding.shape_profile,2).unwrap();
-                        assert_eq!(tiles.len() as u64,plan.tile_count);
-                        assert_eq!(prefix_tiles_submitted.len(),prefix_answers.len());
-                        assert_eq!(all_seats.len(),5,"the complete colluding Panel is charged");
-                        assert!(job_preimage_submitted&&!input_chunks.is_empty());
-                        assert_ne!(kaspa_consensus_core::palw_prefix_state_court_v1::palw_prefix_kv_state_root_v1(
-                            &binding,2,&tiles,chain.bundle.court.max_step_leaf_count()).unwrap(),named.state_root);
+                    if let Some(fault) = case.prefix_fault() {
+                        let kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::PrefixStateMismatch {
+                            binding,
+                            job,
+                            tiles,
+                        } = evidence.contradiction
+                        else {
+                            panic!("the actual registered prefix fault must reach exact court17")
+                        };
+                        assert_eq!(
+                            job.version,
+                            if fault == 6 {
+                                kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_INHERIT_VERSION
+                            } else {
+                                kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION
+                            }
+                        );
+                        let named = kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&job).unwrap();
+                        assert_eq!(named.prefix_tokens, 2);
+                        assert_eq!(named.state_root, Hash64::from_u64_word(0xBAD17));
+                        let plan = kaspa_consensus_core::palw_prefix_state_court_v1::PalwPrefixKvPlanV1::of_profile(
+                            &binding.shape_profile,
+                            2,
+                        )
+                        .unwrap();
+                        assert_eq!(tiles.len() as u64, plan.tile_count);
+                        assert_eq!(prefix_tiles_submitted.len(), prefix_answers.len());
+                        assert_eq!(all_seats.len(), 5, "the complete colluding Panel is charged");
+                        assert!(job_preimage_submitted && !input_chunks.is_empty());
+                        assert_ne!(
+                            kaspa_consensus_core::palw_prefix_state_court_v1::palw_prefix_kv_state_root_v1(
+                                &binding,
+                                2,
+                                &tiles,
+                                chain.bundle.court.max_step_leaf_count()
+                            )
+                            .unwrap(),
+                            named.state_root
+                        );
                     } else if case.tiled() {
                         let kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::ConstrainedDecode { accusation, .. } =
                             evidence.contradiction
@@ -2170,7 +2267,10 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                         };
                         assert_eq!(accusation.pin.position, 2);
                         assert!(job_preimage_submitted && !input_chunks.is_empty());
-                        assert_eq!(selected_tiles_submitted.len(), if matches!(case.constraint_fault(),Some(3)|Some(4)) { 2 } else { 1 });
+                        assert_eq!(
+                            selected_tiles_submitted.len(),
+                            if matches!(case.constraint_fault(), Some(3) | Some(4)) { 2 } else { 1 }
+                        );
                         match case.constraint_fault().unwrap() {
                             1 => assert_eq!(accusation.pin.generated_token_ids[2], 2),
                             2 => assert!(accusation.witness.is_some()),
@@ -2200,15 +2300,25 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                     }
                     for (seat, key, winner) in &panels {
                         assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ObjectiveOffence { kind, accused, .. } if *kind == kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 && *accused == *seat)));
-                        if let Some(winner)=winner {
+                        if let Some(winner) = winner {
                             assert!(carriers.iter().any(|o| matches!(o,PalwConsensusObjectV2::ReporterCommitted {commitment,reporter,..} if *commitment==winner.commitment && *reporter==bond)));
                             assert!(carriers.iter().any(|o| matches!(o,PalwConsensusObjectV2::ReporterRevealed {offence_key,reporter,..} if *offence_key==*key && *reporter==bond)));
                         } else {
-                            assert!(carriers.iter().any(|o|match o {
-                                PalwConsensusObjectV2::ObjectiveOffence {accused,evidence,..} if *accused==*seat=>
-                                    borsh::from_slice::<kaspa_consensus_core::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2>(evidence)
-                                        .is_ok_and(|p|p.claim_id==claim && matches!(p.contradiction,kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::CourtFraud {..})),_=>false,
-                            }),"each collected fullPanel continuation names the actual rooted court outcome");
+                            assert!(
+                                carriers.iter().any(|o| match o {
+                                    PalwConsensusObjectV2::ObjectiveOffence { accused, evidence, .. } if *accused == *seat =>
+                                        borsh::from_slice::<
+                                            kaspa_consensus_core::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2,
+                                        >(evidence)
+                                        .is_ok_and(|p| p.claim_id == claim
+                                            && matches!(
+                                                p.contradiction,
+                                                kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::CourtFraud { .. }
+                                            )),
+                                    _ => false,
+                                }),
+                                "each collected fullPanel continuation names the actual rooted court outcome"
+                            );
                         }
                     }
                     assert!(reserved && demanded);
@@ -2296,16 +2406,16 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         }
         if demanded {
             for _ in 0..50 {
-                pool_heartbeat(&mut chain, &manager, &pool).await;
+                pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
             }
         } else if reserved {
             for _ in 0..10 {
-                pool_heartbeat(&mut chain, &manager, &pool).await;
+                pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
             }
         } else {
             // Public history/input retries are paced in DAA. Keep the ordinary chain
             // producing before the target reserves, including while another claim is pursued.
-            pool_heartbeat(&mut chain, &manager, &pool).await;
+            pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

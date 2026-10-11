@@ -239,6 +239,7 @@ impl RecoveryRun {
             verifier.finish().await;
             // The carrier is recovered from actual accepted history in tick, after native validation.
             self.paused_input = true;
+            eprintln!("[service-recovery] outsider paused before exact template input carrier inclusion");
         }
     }
 
@@ -281,30 +282,8 @@ impl RecoveryRun {
         let view = chain.view(claim);
         *job_preimage_submitted = view.unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::FpJob));
         let progress = chain.tc.palw_legacy_answer_progress_v2((claim, PalwLegacyHeldUnitV2::FpJob, chain.bonds[0])).unwrap();
-        // Stop after a genuinely accepted partial assembly. Restarting the producer discards all
-        // private sent keys; the native manifest/bitmap must select only the missing carrier.
         let partial = progress.as_ref().is_some_and(|p| p.received != 0 && p.next_index().is_some());
-        if self.honest && partial && !self.producer_restarted {
-            self.producer.finish().await;
-            // Simulate a lost capture after a genuinely accepted part, preserving only the
-            // producer's original public descriptor/input. A fresh backend must remake it
-            // within its constraint scope before reproducing the accepted signed manifest.
-            let (path, descriptor) = self.job_only_recovery.as_ref().unwrap();
-            std::fs::write(path, descriptor).unwrap();
-            if self.mode == RecoveryMode::Reorg {
-                self.reorg_partial_answer(chain, claim).await;
-            }
-            self.producer = launch(
-                self.producer_config.clone(),
-                self.manager.clone(),
-                self.flow.clone(),
-                self.config.clone(),
-                self.notification_root.clone(),
-            )
-            .await;
-            self.producer_restarted = true;
-            eprintln!("[service-recovery] producer restarted from accepted partial manifest at DAA {}", chain.daa());
-        }
+        self.after_accepted_carrier(chain, claim).await;
         if self.verifier_paused()
             && view.unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk: 0 }))
             && !view.sessions.iter().any(|(bond, _)| *bond == self.verifier_bond)
@@ -406,6 +385,36 @@ impl RecoveryRun {
                 "verifier starts with an empty retention directory and never receives producer capture"
             );
             eprintln!("[service-recovery] public verifier restarted with empty capture cache at DAA {}", chain.daa());
+        }
+    }
+
+    /// Called immediately after ONE native block is accepted, before another template can
+    /// finish the assembly. This observes the rooted bitmap, never mempool submission.
+    pub(super) async fn after_accepted_carrier(&mut self, chain: &mut Chain, claim: Hash64) {
+        let progress = chain.tc.palw_legacy_answer_progress_v2((claim, PalwLegacyHeldUnitV2::FpJob, chain.bonds[0])).unwrap();
+        // Stop after a genuinely accepted partial assembly. Restarting the producer discards all
+        // private sent keys; the native manifest/bitmap must select only the missing carrier.
+        let partial = progress.as_ref().is_some_and(|p| p.received != 0 && p.next_index().is_some());
+        if self.honest && partial && !self.producer_restarted {
+            self.producer.finish().await;
+            // Simulate a lost capture after a genuinely accepted part, preserving only the
+            // producer's original public descriptor/input. A fresh backend must remake it
+            // within its constraint scope before reproducing the accepted signed manifest.
+            let (path, descriptor) = self.job_only_recovery.as_ref().unwrap();
+            std::fs::write(path, descriptor).unwrap();
+            if self.mode == RecoveryMode::Reorg {
+                self.reorg_partial_answer(chain, claim).await;
+            }
+            self.producer = launch(
+                self.producer_config.clone(),
+                self.manager.clone(),
+                self.flow.clone(),
+                self.config.clone(),
+                self.notification_root.clone(),
+            )
+            .await;
+            self.producer_restarted = true;
+            eprintln!("[service-recovery] producer restarted from accepted partial manifest at DAA {}", chain.daa());
         }
     }
 
