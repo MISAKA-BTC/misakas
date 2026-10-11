@@ -32,6 +32,7 @@ pub(super) struct RecoveryRun {
     producer_restarted: bool,
     verifier_restarted: bool,
     honest: bool,
+    job_only_recovery: Option<(std::path::PathBuf, Vec<u8>)>,
 }
 
 async fn launch(
@@ -65,6 +66,7 @@ impl RecoveryRun {
         producer_config.retention_dir = directory.path().join("producer-retention");
         std::fs::create_dir_all(&producer_config.retention_dir).unwrap();
         let honest = case == PublicCase::UnretainedLargeConstraintJob;
+        let mut job_only_recovery = None;
         if honest {
             let (outcome, _, Some((commitment, prompt))) = foreign.unwrap() else { unreachable!() };
             assert!(!outcome.material.is_empty(), "the producer keeps actual executed family material");
@@ -72,7 +74,9 @@ impl RecoveryRun {
                 kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_encode_v1(&commitment.job, prompt, &outcome.material);
             let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment);
             let path = crate::palw_producer::palw_retained_material_path(&producer_config.retention_dir, &claim);
-            std::fs::write(path, capture).unwrap();
+            std::fs::write(&path, capture).unwrap();
+            job_only_recovery =
+                Some((path, kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(&commitment.job, prompt)));
         }
         let config = Arc::new(chain.config.clone());
         let producer = launch(producer_config.clone(), manager.clone(), flow.clone(), config.clone()).await;
@@ -88,6 +92,7 @@ impl RecoveryRun {
             producer_restarted: false,
             verifier_restarted: false,
             honest,
+            job_only_recovery,
         }
     }
 
@@ -128,6 +133,11 @@ impl RecoveryRun {
         let partial = progress.as_ref().is_some_and(|p| p.received != 0 && p.next_index().is_some());
         if self.honest && partial && !self.producer_restarted {
             self.producer.finish().await;
+            // Simulate a lost capture after a genuinely accepted part, preserving only the
+            // producer's original public descriptor/input. A fresh backend must remake it
+            // within its constraint scope before reproducing the accepted signed manifest.
+            let (path, descriptor) = self.job_only_recovery.as_ref().unwrap();
+            std::fs::write(path, descriptor).unwrap();
             self.producer = launch(self.producer_config.clone(), self.manager.clone(), self.flow.clone(), self.config.clone()).await;
             self.producer_restarted = true;
             eprintln!("[service-recovery] producer restarted from accepted partial manifest at DAA {}", chain.daa());
