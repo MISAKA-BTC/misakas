@@ -135,6 +135,34 @@ impl PalwPrefixPublicSourceV1 {
             hash_header,
         })
     }
+    /// Only the rooted family court derives this descriptor and exact original hash
+    /// header; no wire caller supplies either as an authentication shortcut.
+    pub(crate) fn from_owned_cursor_v1(
+        source: crate::palw_prefix_family_court_v1::PalwPrefixPublicSourceV1,
+        hash_header: LeafHashContinuationV1,
+        maximum_leaves: u64,
+    ) -> Result<Self, String> {
+        if !source.needs_opening
+            || source.offset != 0
+            || hash_header.byte_count() != Some(282)
+            || source.value_count.checked_mul(4) != Some(source.length)
+            || source.length as usize > crate::palw_step_leg::PALW_STEP_LEG_MAX_TILE_BYTES
+            || source.leaf_index >= source.step_leaf_count
+            || source.step_leaf_count > maximum_leaves
+        {
+            return Err("public demand does not name exact derived next original source".into());
+        }
+        Ok(Self {
+            coordinate: source.coordinate,
+            leaf_index: source.leaf_index,
+            value_count: source.value_count,
+            byte_length: source.length,
+            step_root: source.step_root,
+            step_leaves: source.step_leaf_count,
+            maximum_leaves,
+            hash_header,
+        })
+    }
     fn authenticates_opening(&self, opening: &PalwStepOpeningV1) -> Result<(), String> {
         if opening.leaf_index != self.leaf_index
             || crate::palw_step_leg::step_opening_root_capped_v1(self.step_leaves, opening, self.maximum_leaves)
@@ -494,6 +522,9 @@ impl PalwPrefixPublicPendingV1 {
     }
     pub fn deadline_daa_v1(&self) -> u64 {
         self.deadline_daa
+    }
+    pub(crate) fn custodians_v1(&self) -> &BTreeSet<PalwBondKeyV2> {
+        &self.custodians
     }
     pub fn identity_v1(&self) -> (Hash64, Hash64) {
         (self.cursor_id, self.demand_id)
