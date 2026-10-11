@@ -264,6 +264,8 @@ pub(super) struct T12Chain {
     nonce: u64,
     heartbeats: u64,
     attempts: u64,
+    /// Only counterfactual mechanics fixtures freeze the otherwise random coinbase.
+    heartbeat_payload: Option<Hash64>,
 }
 
 impl T12Chain {
@@ -338,7 +340,8 @@ impl T12Chain {
     /// **A heartbeat (algo 8)**, `step_ms` after the simulated clock — the lane testnet-12's clock
     /// runs on: past `palw_anchor_clock` no other lane moves the DAA score.
     pub(super) async fn heartbeat(&mut self, step_ms: u64, txs: Vec<Transaction>) -> Block {
-        self.heartbeat_paying(new_miner_data(), step_ms, txs).await
+        let miner = self.heartbeat_payload.map(|payload| MinerData::new(p2pkh_mldsa87_spk(payload.as_bytes()), vec![])).unwrap_or_else(new_miner_data);
+        self.heartbeat_paying(miner, step_ms, txs).await
     }
 
     /// [`Self::heartbeat`] whose coinbase pays `miner` — so two nodes' heartbeats at one position can be compared output for output
@@ -583,7 +586,7 @@ pub(super) fn t12_genesis_chain_on(
         Some(config.params.genesis.hash),
     );
     let chain =
-        T12Chain { ctx, config: config.clone(), bundle: bundle.clone(), bonds, network_domain, nonce: 0, heartbeats: 0, attempts: 0 };
+        T12Chain { ctx, config: config.clone(), bundle: bundle.clone(), bonds, network_domain, nonce: 0, heartbeats: 0, attempts: 0, heartbeat_payload: None };
     {
         let utxos: std::collections::HashMap<_, _> =
             chain.ctx.consensus.get_virtual_utxos(None, 1_000_000, false).into_iter().collect();
@@ -619,7 +622,7 @@ pub(super) fn t12_reopened_chain(
         config.params.net.to_string().as_bytes(),
         Some(config.params.genesis.hash),
     );
-    T12Chain { ctx, config: config.clone(), bundle: bundle.clone(), bonds, network_domain, nonce, heartbeats: 0, attempts: 0 }
+    T12Chain { ctx, config: config.clone(), bundle: bundle.clone(), bonds, network_domain, nonce, heartbeats: 0, attempts: 0, heartbeat_payload: None }
 }
 
 /// The harness's heartbeat nonce, so a reopened node continues the stopped one's.
@@ -681,12 +684,13 @@ async fn a_floor_final_scheduled(draw: SeedDraw) -> AtTheTargetSpan {
 /// fence validator refuses every real height, so the harness arms what validation refuses — see `t12_exec_v2_carriage`). `None` is the
 /// chain exactly as before.
 pub(super) async fn a_floor_final_scheduled_with(draw: SeedDraw, exec_v2_fence: Option<u64>) -> AtTheTargetSpan {
-    a_floor_final_scheduled_with_edit(draw, exec_v2_fence, |_| {}).await
+    a_floor_final_scheduled_with_edit(draw, exec_v2_fence, false, |_| {}).await
 }
 
 async fn a_floor_final_scheduled_with_edit(
     draw: SeedDraw,
     exec_v2_fence: Option<u64>,
+    fixed_heartbeat: bool,
     edit: impl FnOnce(&mut Params),
 ) -> AtTheTargetSpan {
     use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecSeedAnchorV1, palw_execution_span_seed_v1, palw_execution_span_v1};
@@ -736,6 +740,7 @@ async fn a_floor_final_scheduled_with_edit(
 
     // ---- genesis: the node's own premine import, against the recomputed commitment ----------------
     let mut chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    if fixed_heartbeat { chain.heartbeat_payload = Some(Hash64::from_u64_word(0xC0FF_EE08)); }
     let network_domain = chain.network_domain;
 
     // ---- 1. the floor attempt ---------------------------------------------------------------------
@@ -1234,7 +1239,7 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
     // body exists. This includes issuer and any other already accepted native
     // duties, not just the original producer leg. The fee limit is fixed; the
     // generously capped preparation is an unapproved mechanics fixture.
-    let prepared = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, preparation(u64::MAX / 2)).await;
+    let prepared = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, true, preparation(u64::MAX / 2)).await;
     let (_, prepared_state) = prepared.chain.tip_state();
     let old_issuer = prepared_state.vesting_row(&prepared.claim_id).expect("actual old producer right").producer.amount;
     let old_income = prepared_state.bond_budget().unwrap().bond_row(&prepared.executor).unwrap().window.reward_sompi;
@@ -1247,11 +1252,15 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
     let total_cap = old_income.checked_add(LIMIT).unwrap();
     drop(prepared);
     for actual_fee in [LIMIT, LIMIT + 1] {
-        let mut at = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, preparation(total_cap)).await;
+        let mut at = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, true, preparation(total_cap)).await;
         let (_, before_state) = at.chain.tip_state();
         let before = *before_state.bond_budget().unwrap().bond_row(&at.executor).expect("ticket recipient has a T reservation");
         let producer = before_state.vesting_row(&at.claim_id).expect("old Final still holds its actual native payout");
         assert_eq!(producer.producer.amount, old_issuer, "the original signed producer income is conserved");
+        let actual_rows: Vec<_> = before_state.bond_budget().unwrap().claims.iter()
+            .filter(|(_, row)| row.bond == at.executor && row.in_window)
+            .map(|(id, row)| (*id, row.origin, row.reserved, row.consumed)).collect();
+        assert_eq!(actual_rows, prior_rows, "the fixed heartbeat coinbase gives each run the same actual prior recipient duties");
         assert_eq!(before.window.reward_sompi, old_income, "every prior recipient hold matches the predeclared baseline");
         assert_eq!(before_state.bond(&at.executor).unwrap().collateral, kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI);
         assert_eq!(total_cap - before.window.reward_sompi, LIMIT, "the fee boundary is fixed after actual issuance holds");
