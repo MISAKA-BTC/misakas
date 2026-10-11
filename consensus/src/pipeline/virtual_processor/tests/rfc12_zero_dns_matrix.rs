@@ -3132,3 +3132,33 @@ async fn rfc12_partial_import_invalidates_same_sink_memo_until_completion() {
     assert_eq!(readiness_of(&a), before, "the negative memo cannot survive completion at the same sink and pruning point");
     assert!(a.api().get_evm_canonical_heads().is_ok());
 }
+
+/// The caller's stream hash can remain authentic while a second stream changes
+/// the shared staged table. The actual native importer must refuse before any
+/// virtual money moves. This is an API interleaving control, not P2P evidence.
+#[tokio::test]
+async fn rfc12_utxo_import_verifies_the_actual_staged_table_before_replacing_virtual_money() {
+    use kaspa_consensus_core::errors::pruning::PruningImportError;
+    use kaspa_muhash::MuHash;
+    let p = parts(None);
+    let rig = Rig::new(&p, 0x12_ee20_0000);
+    let vp = rig.vp();
+    let point = rig.config.params.genesis.hash;
+    let staged: Vec<_> = vp.pruning_meta_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect();
+    assert!(!staged.is_empty(), "the real imported genesis has funded UTXOs");
+    let mut legitimate_stream = MuHash::new();
+    for (outpoint, entry) in &staged {
+        legitimate_stream.combine(&MuHash::from_utxo(outpoint, entry));
+    }
+    let mut check = legitimate_stream.clone();
+    assert_eq!(check.finalize(), rig.api().get_header(point).unwrap().utxo_commitment, "the original stream really matches the pinned header");
+    let before_virtual: Vec<_> = vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect();
+    let mut changed = (*staged[0].1).clone();
+    changed.amount = changed.amount.checked_add(1).unwrap();
+    rig.api().append_imported_pruning_point_utxos(&[(staged[0].0, changed)], &mut MuHash::new());
+    let err = rig.api().import_pruning_point_utxo_set(point, legitimate_stream).unwrap_err();
+    assert!(matches!(err, PruningImportError::ImportedMultisetHashMismatch(expected, got) if expected != got), "the actual table root is refused by name: {err}");
+    assert_eq!(vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(), before_virtual,
+        "the authentic argument cannot authorize copying a different staged balance");
+    assert!(!rig.api().is_pruning_utxoset_stable(), "the inconsistent stream remains incomplete");
+}

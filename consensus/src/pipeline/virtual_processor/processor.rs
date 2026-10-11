@@ -22073,6 +22073,25 @@ impl VirtualStateProcessor {
             PruningImportError::PruningPointImportContextUnavailable(new_pruning_point, "UTXO pruning target is changing; retry import".into())
         })?;
         require_target(pruning_point_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
+        // The supplied incremental hash describes a stream, not necessarily the
+        // shared staging table after another append stream interleaved. Verify the
+        // actual locked table before clearing a single virtual UTXO. Memory stays
+        // bounded to 1,000 rows; this extra scan runs only during an import.
+        let mut staged_multiset = MuHash::new();
+        for chunk in &pruning_meta_read.utxo_set.iterator().map(|row| row.unwrap()).chunks(1000) {
+            let rows: Vec<_> = chunk.collect();
+            let chunk_multiset = self.install(|| {
+                rows.par_iter().map(|(outpoint, entry)| MuHash::from_utxo(outpoint, entry)).reduce(MuHash::new, |mut a, b| {
+                    a.combine(&b);
+                    a
+                })
+            });
+            staged_multiset.combine(&chunk_multiset);
+        }
+        let staged_hash = staged_multiset.finalize();
+        if staged_hash != new_pruning_point_header.utxo_commitment {
+            return Err(PruningImportError::ImportedMultisetHashMismatch(new_pruning_point_header.utxo_commitment, staged_hash));
+        }
         {
             // Copy the pruning-point UTXO set into virtual's UTXO set.
             virtual_write.utxo_set.clear().unwrap();
