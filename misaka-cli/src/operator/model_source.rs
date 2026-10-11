@@ -43,7 +43,8 @@ pub(crate) async fn inspect(ctx: &Ctx, context: &str, ledger_root: &str, aux_roo
     let (sources, promises) = material.as_ref().map_or((0, 0), |(_, s, p)| (s.len(), p.len()));
     let report = serde_json::json!({
         "schema":"misaka.palw.source-contract.inspect.v1",
-        "context":hex(&context), "tipDaa":snapshot.tip_daa,
+        "context":hex(&context), "servedTipDaa":snapshot.tip_daa,
+        "rootedLedgerDaa":route.header.scalars.daa,
         "ledgerRoot":expected_ledger.to_string(), "auxRoot":expected_aux.to_string(),
         "verification":"caller-pinned-route-roots", "subject":format!("{:?}",target.target.context.subject_kind),
         "sealStartDaa":source.seal_start, "sealEndDaa":source.seal_end,
@@ -56,6 +57,8 @@ pub(crate) async fn inspect(ctx: &Ctx, context: &str, ledger_root: &str, aux_roo
             "materialSompi":costs.material_sompi, "publicCourtSompi":costs.public_court_sompi,
             "lockedCapitalSompi":costs.locked_capital_sompi,
             "minimumNetReceiptSompi":costs.minimum_net_receipt_sompi, "reportRoot":hex(&costs.report_root),
+            "maximumSourceDepositSompi":costs.maximum_source_deposit_sompi,
+            "maximumLiabilityDaa":costs.maximum_liability_daa,
         },
         "funding":funding, "sourceInventory":sources, "promiseInventory":promises,
         "nativeCoinbasePaymentsVerified":false, "economicApproval":false, "soundnessApproval":false,
@@ -65,6 +68,7 @@ pub(crate) async fn inspect(ctx: &Ctx, context: &str, ledger_root: &str, aux_roo
     } else {
         println!("source context    {}", hex(&context));
         println!("verified roots    {} / {}", expected_ledger, expected_aux);
+        println!("rooted clock      DAA {}; served tip DAA {} is observational", route.header.scalars.daa, snapshot.tip_daa);
         println!("admission window  DAA {}..{}; Final by {}; liability through {}",
             source.seal_start, source.seal_end, source.final_by, source.hold_until);
         println!("fee floor         {} sompi/source; deposit {} sompi", target.minimum_fee, source.deposit);
