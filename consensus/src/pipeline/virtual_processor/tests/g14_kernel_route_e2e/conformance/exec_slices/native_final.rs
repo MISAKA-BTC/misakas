@@ -308,7 +308,9 @@ async fn x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_r
         panic!("real post-Final prefix proof")
     };
     let objection = cw.net.route(ACCUSER, &K::FileProof { accuser: cw.net.kid(ACCUSER), claim: s.prefix.claim.id, proof });
+    eprintln!("[x8-native-reorg] first public proof on funded Final");
     cw.net.send(vec![(ACCUSER, objection.clone())]).await;
+    let proof_change = cw.net.funding[ACCUSER].clone();
     let convicted_tip = cw.net.chain.sink();
     let convicted_blocks: Vec<_> = chain_blocks(&cw.net.chain, convicted_tip).into_iter().skip(prefix_len).collect();
     assert!(
@@ -354,6 +356,15 @@ async fn x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_r
     // Actor change chains follow the winning branch, exactly as an external
     // wallet observes its unspent funding after rollback.
     cw.net.funding = healthy.funding;
+    // The competing proof carrier may be accepted as an ordinary native
+    // transaction by a later mergeset even when its PALW conviction is undone.
+    // Its old input then stays spent. Follow its real unspent change rather
+    // than manufacturing a resurrected wallet input from the selected chain.
+    if Net::utxos_of(&cw.net.chain).contains_key(&proof_change.0) {
+        cw.net.funding[ACCUSER] = proof_change;
+    }
+    assert!(Net::utxos_of(&cw.net.chain).contains_key(&cw.net.funding[ACCUSER].0), "proof retry uses actual unspent wallet change");
+    eprintln!("[x8-native-reorg] reapply public proof after actual financial recovery");
     cw.net.send(vec![(ACCUSER, objection)]).await;
     let failed_again = cw.net.chain.tip_state().1;
     assert!(cw.net.ledger().claims[&s.prefix.claim.id].convicted);
