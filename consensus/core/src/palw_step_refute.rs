@@ -7946,6 +7946,17 @@ pub fn check_constrained_decode_token_v1(
     accusation: &crate::palw_fp_constraint_job_v1::PalwConstrainedDecodeAccusationV1,
     max_step_leaf_count: u64,
 ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_constrained_decode_token_at_v2(binding, accusation, max_step_leaf_count, false)
+}
+
+/// Public-filer block-context rule: no committed token may follow an authenticated EOG.
+/// The height-free checker retains its prior stop reading.
+pub fn check_constrained_decode_token_at_v2(
+    binding: &PalwStepBindingV2,
+    accusation: &crate::palw_fp_constraint_job_v1::PalwConstrainedDecodeAccusationV1,
+    max_step_leaf_count: u64,
+    public_filer_active: bool,
+) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     let pin = &accusation.pin;
     let (ctx_hash, vocab, tiles) = tiled_row_authenticate_v1(
         binding, &pin.generated_token_ids, pin.position, &pin.row_root, &pin.row_opening, max_step_leaf_count,
@@ -7953,7 +7964,7 @@ pub fn check_constrained_decode_token_v1(
     let beat = (!pin.committed_tile_lanes.is_empty() || !pin.beat_tile_lanes.is_empty()).then_some(pin.beat_lane);
     constrained_decode_decision_v1(
         binding, &accusation.job, &pin.generated_token_ids, pin.position, &accusation.renderings,
-        &accusation.eog, accusation.witness, beat, |committed, beat_lane| {
+        &accusation.eog, accusation.witness, beat, public_filer_active, |committed, beat_lane| {
             let open_tile = |lanes: &[i32], opening: &crate::palw_step_leg::PalwStepOpeningV1, lane: usize| -> Result<i32, PalwStepRefuteError> {
                 tiled_tile_authenticate_v1(&ctx_hash, pin.position, vocab, tiles, &pin.row_root,
                     (lane / PALW_LOGITS_TILE_LANES) as u64, lanes, opening, max_step_leaf_count)?;
@@ -7972,13 +7983,24 @@ pub fn check_constrained_flat_decode_token_v1(
     accusation: &crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1,
     max_step_leaf_count: u64,
 ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_constrained_flat_decode_token_at_v2(binding, accusation, max_step_leaf_count, false)
+}
+
+/// Public-filer block-context rule: no committed token may follow an authenticated EOG.
+/// The height-free checker retains its prior stop reading.
+pub fn check_constrained_flat_decode_token_at_v2(
+    binding: &PalwStepBindingV2,
+    accusation: &crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1,
+    max_step_leaf_count: u64,
+    public_filer_active: bool,
+) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     if u64::from(binding.job_context.exact_decode_tokens) > max_step_leaf_count {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the flat decode count exceeds the proof ladder"));
     }
     check_base0_decode_pin(binding, &accusation.pin)?;
     constrained_decode_decision_v1(
         binding, &accusation.job, &accusation.pin.generated_token_ids, accusation.position,
-        &accusation.renderings, &accusation.eog, accusation.witness, accusation.beat_lane,
+        &accusation.renderings, &accusation.eog, accusation.witness, accusation.beat_lane, public_filer_active,
         |committed, beat_lane| {
             let row = accusation.pin.logits_rows.get(accusation.position as usize)
                 .ok_or(PalwStepRefuteError::InputSetNotCanonical("the challenged row is absent"))?;
@@ -7999,6 +8021,7 @@ fn constrained_decode_decision_v1(
     eog_opening: &crate::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1,
     witness: Option<u32>,
     beat_lane: Option<u32>,
+    public_filer_active: bool,
     values: impl FnOnce(usize, usize) -> Result<(i32, i32), PalwStepRefuteError>,
 ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     use crate::palw_decode_constraint_v1::{constraint_admits_lane_v1, constraint_state_after_v1};
@@ -8051,6 +8074,12 @@ fn constrained_decode_decision_v1(
     // The committed token's own rendering must be OPENED (or be an eog id): a missing opening is not an admission either way.
     if !renders.contains_key(&committed) && !eog(committed) {
         return Err(bad("the committed token carries no opened rendering"));
+    }
+    // The IDs and EOG list are authenticated above. Every EOG ends this constrained run;
+    // a suffix after it is invalid even when no admitted lane exists (a legitimate stop).
+    // Challenge the first EOG: later positions have a dead prefix and cannot supply a state.
+    if public_filer_active && eog(committed) && position + 1 < generated.len() {
+        return Ok(convicted());
     }
     // 2. Not admitted.
     if constraint_admits_lane_v1(&constraint, &state, rendering(committed)).is_none() {

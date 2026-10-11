@@ -2310,6 +2310,18 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_da_accusation_check_v1_impl(claim, accuser)
     }
 
+    fn palw_staged_owned_progress_v1(&self,key:(kaspa_consensus_core::Hash64,kaspa_consensus_core::palw_state_v2::PalwBondKeyV2))
+        ->Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>,String> {
+        self.virtual_processor.palw_staged_owned_progress_v1_impl(key)
+    }
+
+    fn palw_terminal_progress_v1(
+        &self,
+        key: kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalKeyV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalProgressV1>, String> {
+        self.virtual_processor.palw_terminal_progress_v1_impl(&key)
+    }
+
     fn palw_legacy_answer_progress_v2(
         &self,
         key: kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2,
@@ -2357,6 +2369,14 @@ impl ConsensusApi for Consensus {
         me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1> {
         self.virtual_processor.palw_fraud_filer_candidates_v1_impl(&me)
+    }
+
+    fn palw_fraud_filer_candidates_for_claims_v1(
+        &self,
+        me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        claims: Vec<kaspa_consensus_core::Hash64>,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1> {
+        self.virtual_processor.palw_fraud_filer_candidates_for_claims_v1_impl(&me, &claims)
     }
 
     fn palw_fraud_filer_status_v1(

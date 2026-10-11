@@ -1,0 +1,7 @@
+
+running 2 tests
+test palw_tokenizer_witness::tests::compressed_book_matches_full_512_bit_core_membership_and_retains_only_two_nodes_per_key ... ok
+test palw_tokenizer_witness::tests::own_large_raw_file_packets_replay_after_restart_and_signed_work_overrun_hashes_to_eof ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 694 filtered out; finished in 0.98s
+

@@ -391,7 +391,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // Lane LG14-A (tags 154–155): the dispute reservation and its release ride at every height with NO stateless refusal — the live
         // int-12 build cannot decode them and tolerates their bytes, so refusing any shape here would mark invalid a block it accepts
         // (A-2). The fence, the signature, the bond and the rules are the acceptance layer's and the fold's.
-        PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } | PalwConsensusObjectV2::DisputeReacquiredV1 { .. } => Ok(()),
+        PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } | PalwConsensusObjectV2::DisputeReacquiredV1 { .. }
+            | PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } | PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. }
+            | PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. }
+            | PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -403,6 +406,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // (A2U finding #1: an isolation-time refusal of bytes an older build tolerates is a split). The fence, the signature and ADR-0177
         // D3's rules are the acceptance walk's and the fold's, which DROP it; the block stands.
         PalwConsensusObjectV2::BondCapitalAssignedV1 { .. } => Ok(()),
+        PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { .. } => Ok(()),
         PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
             if signature.is_empty() {
                 Err("a signed registration envelope must carry its signer's signature")
@@ -1147,11 +1151,14 @@ pub enum PalwLifecycleKindFenceV1 {
     TaskHeadsV1 = 7,
     /// `Params::palw_legacy_public_filer_v1` — lane LG14-A's dispute reservation and its release (tags 154–156).
     LegacyPublicFilerV1 = 8,
+    /// Independently versioned registered semantic metadata (tag164).
+    ClassSemanticsV1 = 9,
+    StagedPublicCourtV1 = 10,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1161,6 +1168,8 @@ impl PalwLifecycleKindFenceV1 {
         Self::ExecPayloadV2,
         Self::TaskHeadsV1,
         Self::LegacyPublicFilerV1,
+        Self::ClassSemanticsV1,
+        Self::StagedPublicCourtV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1175,6 +1184,8 @@ impl PalwLifecycleKindFenceV1 {
             Self::ExecPayloadV2 => "palw_exec_payload_v2",
             Self::TaskHeadsV1 => "palw_task_heads_v1",
             Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
+            Self::ClassSemanticsV1 => "palw_class_semantics_v1",
+            Self::StagedPublicCourtV1 => "palw_staged_public_court_v1",
         }
     }
 }
@@ -1195,6 +1206,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
     use PalwConsensusObjectV2 as O;
     use PalwLifecycleKindFenceV1 as F;
     match object {
+        O::ObjectiveOffence { kind, evidence, .. } if crate::palw_staged_court_state_v1::palw_is_staged_evidence_v1(*kind,evidence) => PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1),
+
         // LG14-B's guarded arms: an int-12 kind carrying the appended `PalwDaUnitV1::LegacyHeldV2` (the live build cannot decode it)
         // is owned by `palw_legacy_held_da_v2` (`PALW_INT12_WIRE_CHANGES_V1`'s `CarriedAppended`).
         // HFX: an int-12 kind carrying a `Head` variant (the live build cannot decode it) is owned by `palw_task_heads_v1`
@@ -1342,10 +1355,12 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         }
         // Lane BUDGET: a bond's capital assignment (140).
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
+        O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
+        O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamLeafV1 { .. } | O::PublicCourtStreamMoveV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
-        O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } | O::DisputeReacquiredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
+        O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } | O::DisputeReacquiredV1 { .. } | O::ObjectiveEvidenceDeclaredV1 { .. } | O::ObjectiveEvidenceChunkV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
     }
 }
 
@@ -1482,6 +1497,12 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (159, "LegacyLeafRecomputedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (160, "LegacyHeldAnswerDeclaredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (161, "LegacyHeldAnswerChunkV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
+    (162, "ObjectiveEvidenceDeclaredV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
+    (163, "ObjectiveEvidenceChunkV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
+    (164, "ClassSemanticsDeclaredV1", PalwLifecycleKindFenceV1::ClassSemanticsV1),
+    (165, "PublicCourtStreamOpenedV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
+    (166, "PublicCourtStreamLeafV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
+    (167, "PublicCourtStreamMoveV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
 
@@ -1564,6 +1585,8 @@ impl crate::config::params::Params {
                     // RFC-0008 v2: only on a `ConsensusV2` network (`palw_exec_payload_v2_fence` folds the mode in).
                     PalwLifecycleKindFenceV1::ExecPayloadV2 => self.palw_exec_payload_v2_fence(),
                     PalwLifecycleKindFenceV1::LegacyPublicFilerV1 => self.palw_legacy_public_filer_v1,
+                    PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
+                    PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
                 },
             )
         })
@@ -1826,6 +1849,10 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         PalwInt12WireChangeV1::NotCarried("the fold's journal (stored deltas), never a block's carriage"),
     ),
     (
+        "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1",
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0xf024b12c046c9d4c },
+    ),
+    (
         "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1",
         PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0x14f2c2b7896b15f4 },
     ),
@@ -1848,13 +1875,6 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1",
         PalwInt12WireChangeV1::CarriedReread { fence: "palw_task_heads_v1", digest: 0x12222f873f5f85a5 },
     ),
-    // codex G14 (constrained-token direct proofs, 2026-10-11): `PalwPanelContradictionV1` 14 `ConstrainedDecode` and 15
-    // `ConstrainedDecodeFlat` appended inside an ObjectiveOffence's opaque evidence bytes (tag 51), as `PalwPromptProofV1` above:
-    // isolation stays int-12; acceptance / fold refuse both below the public-filer (and constraint) fences (ContradictionNotAdmitted).
-    (
-        "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1",
-        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0xf6c76ea7f70d9f96 },
-    ),
     (
         "consensus/core/src/palw_state_v2.rs::PalwVoidReasonV2",
         PalwInt12WireChangeV1::NotCarried("a claim row's terminal reason, written by the fold; no carried object names one"),
@@ -1875,12 +1895,6 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         ),
     ),
     // SMALL (RFC-0009 RDA4, RFC-0001 P1): the signer protocol and the worker frame — node-local wire forms, never a block's.
-    (
-        "consensus/core/src/dns_finality.rs::TakeoverToken",
-        PalwInt12WireChangeV1::NotCarried(
-            "the removed HA takeover's node-local signer credential; no lifecycle object carries it (retired paths, 27252fa18)",
-        ),
-    ),
     (
         "consensus/core/src/dns_finality.rs::SigningPurpose",
         PalwInt12WireChangeV1::NotCarried(
@@ -2013,6 +2027,9 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // LG14-A: reservation, release and nonce-bound public DA reacquisition (RFC-0014 §6–§7).
     a2_row(PalwA2SlotV1::ObjectTags { lo: 154, hi: 156 }, "palw_legacy_public_filer_v1", "LG14-A dispute reservation", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 161 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 162, hi: 163 }, "palw_legacy_public_filer_v1", "LG14 terminal objective evidence", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 164, hi: 164 }, "palw_class_semantics_v1", "G14 prospective registered semantics", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 165, hi: 167 }, "palw_staged_public_court_v1", "G14 owned public court stream", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
@@ -2075,6 +2092,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 7, magic: *b"PFS4" }, "palw_receipt_spend_v4", "RFC-0009 V4 receipt carriage", true),
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 10, magic: *b"PXE2" }, "palw_exec_payload_v2", "X8R EXEC envelope", true),
     a2_row(PalwA2SlotV1::CoinbaseTrailer { magic: *b"PXA2" }, "palw_exec_payload_v2", "X8R anchor trailer", false),
+    a2_row(
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1" },
+        "palw_legacy_public_filer_v1",
+        "G14 contradiction14..19 inside opaque tag51: public-filer re-read; constrained14/15, immutable semantics16..18 and rooted staged19 retain their own admission predicates. Staged19 additionally requires palw_staged_public_court_v1 at acceptance and fold; old unstamped targets refuse",
+        true,
+    ),
     // ---- forms appended inside kinds int-12 decodes (tag 68 is ARMED on testnet-12: `palw_gen_v1`) ----
     a2_row(
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1" },
@@ -2092,12 +2115,6 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" },
         "palw_task_heads_v1",
         "HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read)",
-        true,
-    ),
-    a2_row(
-        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1" },
-        "palw_legacy_public_filer_v1",
-        "codex G14: PalwPanelContradictionV1 14/15 (constrained decode, flat) inside opaque tag-51 evidence; isolation remains int-12, refused below the public-filer and constraint fences at acceptance/fold (re-read)",
         true,
     ),
     a2_row(
@@ -2212,6 +2229,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "LG14-B multipart answers",
         true,
     ),
+    a2_row(PalwA2SlotV1::StateEncoding { what: "reservation-owned terminal evidence (deltas 203/205, tail 0xF2, root terminal_evidence/v1)" }, "palw_legacy_public_filer_v1", "LG14 terminal objective evidence", true),
     // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
     a2_row(
         PalwA2SlotV1::Int12RefusedByName {
@@ -2249,6 +2267,9 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (150, 153, "DA16 provider court", &["palw_provider_court_v1"]),
     (154, 156, "LG14-A dispute reservation", &["palw_legacy_public_filer_v1"]),
     (157, 161, "LG14-B legacy held DA", &["palw_legacy_held_da_v2"]),
+    (162, 163, "LG14 terminal objective evidence", &["palw_legacy_public_filer_v1"]),
+    (164, 164, "G14 prospective registered semantics", &["palw_class_semantics_v1"]),
+    (165, 167, "G14 owned public court stream", &["palw_staged_public_court_v1"]),
 ];
 
 #[cfg(test)]
@@ -3665,11 +3686,15 @@ pub(crate) mod tests {
         }
 
         fn canonical_fp_prompt_objects() -> Vec<PalwConsensusObjectV2> {
-            let mut samples = Vec::new();
             let contradiction = crate::palw_offence_v1::PalwPanelContradictionV1::PromptNotAnchored {
                 binding: zeros(),
                 proof: crate::palw_offence_v1::PalwPromptProofV1::FpCanonicalWhole { job: Box::new(zeros()) },
             };
+            attributed_contradiction_objects(contradiction)
+        }
+
+        fn attributed_contradiction_objects(contradiction: crate::palw_offence_v1::PalwPanelContradictionV1) -> Vec<PalwConsensusObjectV2> {
+            let mut samples = Vec::new();
             let mut v1: crate::palw_offence_v1::PalwPanelFalseValidEvidenceV1 = zeros();
             v1.contradiction = contradiction.clone();
             let mut v2: crate::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2 = zeros();
@@ -3699,6 +3724,47 @@ pub(crate) mod tests {
                 let armed = unarmed.with(PalwLifecycleKindFenceV1::LegacyPublicFilerV1, Some(ForkActivation::new(1_000)));
                 for at in [999, 1_000] {
                     assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, at), Ok(()));
+                }
+            }
+        }
+
+        #[test]
+        fn registered_opaque_contradictions_and_staged_fenced_forms_keep_their_isolation_rules() {
+            use crate::palw_offence_v1::PalwPanelContradictionV1 as C;
+            let cases = [
+                (16, C::RegisteredTableMismatch { binding: zeros(), job: Box::new(zeros()) }),
+                (17, C::PrefixStateMismatch { binding: zeros(), job: Box::new(zeros()), tiles: vec![] }),
+                (18, C::TokenizerTableMismatch { binding: zeros(), job: Box::new(zeros()), tokenizer_bytes: vec![0], table_opening: zeros() }),
+                (19, C::StagedCourt { reference: zeros() }),
+            ];
+            for (tag, contradiction) in cases {
+                assert_eq!(borsh::to_vec(&contradiction).unwrap()[0], tag);
+                assert!(contradiction.is_attribution_only_v1());
+                for object in attributed_contradiction_objects(contradiction) {
+                    // Legacy V1 evidence remains opaque even for19. V2/Executor staged19
+                    // is an explicitly guarded new form, undecodable below its F8 fence.
+                    use crate::palw_offence_v1::PalwOffenceKindV1 as K;
+                    let staged = tag == 19 && !matches!(&object, PalwConsensusObjectV2::ObjectiveOffence { kind: K::PanelFalseValid, .. });
+                    let expected_owner = if staged { PalwLifecycleKindOwnerV1::Fence(PalwLifecycleKindFenceV1::StagedPublicCourtV1) }
+                        else { PalwLifecycleKindOwnerV1::Int12 };
+                    assert_eq!(palw_lifecycle_kind_owner_v1(&object), expected_owner);
+                    let payload = payload_of(&object);
+                    let mut undecodable = borsh::to_vec(&PALW_LIFECYCLE_TX_VERSION_V2).unwrap();
+                    undecodable.extend_from_slice(&[254, 1, 2, 3]);
+                    for tolerate in [false, true] {
+                        let expected = if staged { validate_palw_lifecycle_tx(&undecodable, tolerate) } else { Ok(()) };
+                        assert_eq!(validate_palw_lifecycle_tx(&payload, tolerate), expected);
+                    }
+                    let unarmed = PalwLifecycleKindFencesV1::default();
+                    let armed = unarmed.with(PalwLifecycleKindFenceV1::LegacyPublicFilerV1, Some(ForkActivation::new(1_000)))
+                        .with(PalwLifecycleKindFenceV1::StagedPublicCourtV1, Some(ForkActivation::new(1_000)));
+                    for at in [999, 1_000] {
+                        // Header context is a second-stage check: below the owner fence
+                        // it asks nothing. Isolation above supplies undecodable parity.
+                        assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &unarmed, at), Ok(()));
+                        assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, at), Ok(()));
+                        assert_eq!(armed.kind_in_force_at(&object, at), !staged || at >= 1_000);
+                    }
                 }
             }
         }
@@ -4255,6 +4321,10 @@ pub(crate) mod tests {
                 eprintln!("[a2u] wrote {} wire types of {tree} to {out}", manifest.len());
                 return;
             }
+            let mut unique = std::collections::BTreeSet::new();
+            for (key, _) in PALW_INT12_WIRE_CHANGES_V1 {
+                assert!(unique.insert(*key), "duplicate wire classification shadows an earlier row: {key}");
+            }
             let frozen = int12_manifest();
             assert!(frozen.len() > 500, "the frozen manifest is the live build's ({} types)", frozen.len());
             assert!(frozen.contains_key("consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2"));
@@ -4416,6 +4486,12 @@ pub(crate) mod tests {
             (159, 0x0395636b651f74fa),
             (160, 0x730c4ce9aa0ff75e),
             (161, 0xec0447b18452362b),
+            (162, 0x16fdc18dd12bd954),
+            (163, 0x51ac8be8e6561cbd),
+            (164, 0x1328fec2bbe52c00),
+            (165, 0xf78925778e6fd91f),
+            (166, 0xe436b43fd3c3e30b),
+            (167, 0x54d7108306324203),
             (131, 0xab59e37a222e6f74),
         ];
 

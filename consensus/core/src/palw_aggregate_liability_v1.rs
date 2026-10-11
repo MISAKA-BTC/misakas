@@ -353,6 +353,12 @@ pub const PALW_CONTRADICTION_PROMPT_NOT_ANCHORED_V1: u8 = 13;
 /// The constrained counterpart of forged tiled output; dormant under the public-filer fence.
 pub const PALW_CONTRADICTION_CONSTRAINED_DECODE_V1: u8 = 14;
 pub const PALW_CONTRADICTION_CONSTRAINED_DECODE_FLAT_V1: u8 = 15;
+/// The accepted job contradicts its immutable registered canonical table assignment.
+pub const PALW_CONTRADICTION_REGISTERED_TABLE_MISMATCH_V1: u8 = 16;
+pub const PALW_CONTRADICTION_PREFIX_STATE_MISMATCH_V1: u8 = 17;
+pub const PALW_CONTRADICTION_TOKENIZER_TABLE_MISMATCH_V1: u8 = 18;
+/// A completed prospective rooted court, never a supplied continuation checkpoint.
+pub const PALW_CONTRADICTION_STAGED_COURT_V1: u8 = 19;
 
 /// **The borsh tag of a contradiction** (`PalwPanelContradictionV1`'s `use_discriminant`), by an
 /// exhaustive match so a contradiction added later has to be classified here before this compiles.
@@ -374,6 +380,10 @@ pub fn palw_contradiction_tag_v1(contradiction: &PalwPanelContradictionV1) -> u8
         PalwPanelContradictionV1::PromptNotAnchored { .. } => PALW_CONTRADICTION_PROMPT_NOT_ANCHORED_V1,
         PalwPanelContradictionV1::ConstrainedDecode { .. } => PALW_CONTRADICTION_CONSTRAINED_DECODE_V1,
         PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => PALW_CONTRADICTION_CONSTRAINED_DECODE_FLAT_V1,
+        PalwPanelContradictionV1::RegisteredTableMismatch { .. } => PALW_CONTRADICTION_REGISTERED_TABLE_MISMATCH_V1,
+        PalwPanelContradictionV1::PrefixStateMismatch { .. } => PALW_CONTRADICTION_PREFIX_STATE_MISMATCH_V1,
+        PalwPanelContradictionV1::TokenizerTableMismatch { .. } => PALW_CONTRADICTION_TOKENIZER_TABLE_MISMATCH_V1,
+        PalwPanelContradictionV1::StagedCourt { .. } => PALW_CONTRADICTION_STAGED_COURT_V1,
     }
 }
 
@@ -426,6 +436,8 @@ pub fn palw_offence_is_intent_class_v1(offence: PalwConvictedOffenceV1) -> bool 
                 | PALW_CONTRADICTION_PROMPT_NOT_ANCHORED_V1
                 | PALW_CONTRADICTION_CONSTRAINED_DECODE_V1
                 | PALW_CONTRADICTION_CONSTRAINED_DECODE_FLAT_V1
+                | PALW_CONTRADICTION_REGISTERED_TABLE_MISMATCH_V1
+                | PALW_CONTRADICTION_PREFIX_STATE_MISMATCH_V1
         ),
         PalwConvictedOffenceV1::DaDefault
         | PalwConvictedOffenceV1::CourtHeldVerdict

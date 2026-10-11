@@ -1,0 +1,64 @@
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/utils)
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/hashes)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/math)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/muhash)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-panel)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+warning: unused import: `crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict`
+  --> consensus/core/src/palw_state_v2/tests/mesh_fold_v1.rs:10:5
+   |
+10 | use crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_pipeline_da_fold_v1.rs:472:14
+    |
+472 |         let (mut run, claim_id) = claimed(&binding, false);
+    |              ----^^^
+    |              |
+    |              help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `seed`
+   --> consensus/core/src/palw_improve_state_v1.rs:960:29
+    |
+960 |     pub(crate) fn result_v1(seed: u8) -> PalwEvalResultV1 {
+    |                             ^^^^ help: if this is intentional, prefix it with an underscore: `_seed`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: method `input_rows` is never used
+   --> consensus/core/src/palw_prefix_gdn_contract_v1.rs:112:12
+    |
+ 27 | impl PalwPrefixGdnContractV1 {
+    | ---------------------------- method in this implementation
+...
+112 |     pub fn input_rows(
+    |            ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `owner_batch_v1` is never used
+   --> consensus/core/src/palw_prefix_public_owned_v1.rs:288:19
+    |
+ 55 | impl PalwOwnedPublicPrefixCourtV1 {
+    | --------------------------------- method in this implementation
+...
+288 |     pub(crate) fn owner_batch_v1(
+    |                   ^^^^^^^^^^^^^^
+
+warning: `kaspa-consensus-core` (lib test) generated 6 warnings (run `cargo fix --lib -p kaspa-consensus-core --tests` to apply 4 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 56.72s
+  Executable unittests src/lib.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-c66bdeec30fc90cf)

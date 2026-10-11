@@ -868,12 +868,12 @@ fn rebuild_linear_map(rows: &[(Vec<i128>, Vec<i128>)], inp: usize, out: usize) -
 /// This is the G14 / ADR-0177 tension in one test: G14 needs the faulty position demandable (the outsider cannot know which), and
 /// ADR-0177 forbids the union of demands from rebuilding the model. SAFE: the served values rebuild no registered weight tensor.
 #[test]
-#[ignore = "FAIL F-C4R4-17 on a Panel-licensed K2-TIR-v1 class (this world): demanding every position rebuilds the projection weights. G14-S enforces DA16b's clear budget on the OPV route past palw_provider_court_v1 (g14s_court_scope.rs: PASS there); Panel-licensed v1/v2 classes are open — the Lead's decision (applying it at palw_provider_court_v1 refuses every DA16 Panel-licensed claim)"]
 fn f_c4r4_17_claim_specific_demands_must_not_rebuild_the_registered_weights() {
     use misaka_palw_kernel::trace::tensor_commitment;
     use misaka_palw_tir::Tensor;
     use misaka_palw_tir::program::Ref;
     let mut w = World::new();
+    w.l.commitment_scope_from_daa = Some(0);
     let pol = w.l.policy.clone();
     // A prompt of the extractor's choice: 20 distinct tokens (7 is prime to the 32-token vocabulary).
     let prompt: Vec<u32> = (0..20u32).map(|i| (i * 7 + 3) % 32).collect();
@@ -886,8 +886,22 @@ fn f_c4r4_17_claim_specific_demands_must_not_rebuild_the_registered_weights() {
     let demands = (0..positions).map(|p| T::FileDemand { demander: SPAM1, claim: id, stage: 0, position: p }).collect();
     w.block(11, demands);
     // An honest producer must serve each demanded position (or be defaulted).
+    let mask = w.l.derived_mask(&w.l.claims[&id], 0);
     let responses = (0..positions)
-        .map(|p| T::Respond { claim: id, stage: 0, position: p, bytes: position(&trace, p, |_| {}) })
+        .map(|p| T::Respond {
+            claim: id,
+            stage: 0,
+            position: p,
+            bytes: position(&trace, p, |values| {
+                for (occ, hidden) in values.iter_mut().zip(&mask) {
+                    for (value, omitted) in occ.iter_mut().zip(hidden) {
+                        if *omitted {
+                            *value = misaka_palw_kernel::public::MaterialResponseV1::Omitted;
+                        }
+                    }
+                }
+            }),
+        })
         .collect::<Vec<_>>();
     let ev = w.block(12, responses);
     assert_eq!(ev.iter().filter(|e| matches!(e, E::Served { .. })).count() as u32, positions, "{ev:?}");

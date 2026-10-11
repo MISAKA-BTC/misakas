@@ -1,0 +1,92 @@
+--- a/kaspad/src/palw_service_public_e2e.rs
++++ b/kaspad/src/palw_service_public_e2e.rs
+@@ -39,6 +39,8 @@
+ 
+ #[path = "palw_service_tiled_e2e.rs"]
+ mod tiled;
++#[path = "palw_service_terminal_e2e.rs"]
++mod terminal;
+ 
+ struct OnetimeTxSelector {
+     txs: Option<Vec<Transaction>>,
+@@ -644,6 +646,7 @@
+     UnretainedConstraintForbidden,
+     UnretainedConstraintStop,
+     UnretainedConstraintBeaten,
++    TiledConstraintLargeJob,
+     TiledConstraintForbidden,
+     TiledConstraintStop,
+     TiledConstraintBeaten,
+@@ -706,6 +709,7 @@
+             Self::UnretainedConstraintForbidden | Self::TiledConstraintForbidden => Some(1),
+             Self::UnretainedConstraintStop | Self::TiledConstraintStop => Some(2),
+             Self::UnretainedConstraintBeaten | Self::TiledConstraintBeaten | Self::TiledConstraintWithheld => Some(3),
++            Self::TiledConstraintLargeJob => Some(4),
+             _ => None,
+         }
+     }
+@@ -719,12 +723,12 @@
+         self.reacquire_honest() || self.constraint_fault().is_some()
+     }
+     fn large_constraint(self) -> bool {
+-        matches!(self, Self::UnretainedLargeConstraintJob | Self::UnretainedWithheldLargeConstraintJob)
++        matches!(self, Self::UnretainedLargeConstraintJob | Self::UnretainedWithheldLargeConstraintJob | Self::TiledConstraintLargeJob)
+     }
+     fn tiled(self) -> bool {
+         matches!(
+             self,
+-            Self::TiledConstraintForbidden | Self::TiledConstraintStop | Self::TiledConstraintBeaten | Self::TiledConstraintWithheld
++            Self::TiledConstraintForbidden | Self::TiledConstraintStop | Self::TiledConstraintBeaten | Self::TiledConstraintWithheld | Self::TiledConstraintLargeJob
+         )
+     }
+ }
+@@ -2057,6 +2061,7 @@
+                             }
+                             _ => None,
+                         })
++                        .or_else(||terminal::included_executor_evidence_v1(&carriers,claim,view.producer))
+                         .expect("the verifier's exact proof is included in an actual block");
+                     assert_eq!(evidence.claim_id, claim);
+                     if case.tiled() {
+@@ -2067,11 +2072,11 @@
+                         };
+                         assert_eq!(accusation.pin.position, 2);
+                         assert!(job_preimage_submitted && !input_chunks.is_empty());
+-                        assert_eq!(selected_tiles_submitted.len(), if case.constraint_fault() == Some(3) { 2 } else { 1 });
++                        assert_eq!(selected_tiles_submitted.len(), if matches!(case.constraint_fault(),Some(3)|Some(4)) { 2 } else { 1 });
+                         match case.constraint_fault().unwrap() {
+                             1 => assert_eq!(accusation.pin.generated_token_ids[2], 2),
+                             2 => assert!(accusation.witness.is_some()),
+-                            3 => assert_ne!(accusation.pin.committed_opening.leaf_index, accusation.pin.beat_opening.leaf_index),
++                            3 | 4 => assert_ne!(accusation.pin.committed_opening.leaf_index, accusation.pin.beat_opening.leaf_index),
+                             _ => unreachable!(),
+                         }
+                     } else if case.constraint_fault().is_some() {
+--- a/kaspad/src/palw_service_tiled_e2e.rs
++++ b/kaspad/src/palw_service_tiled_e2e.rs
+@@ -240,6 +240,7 @@
+         };
+         // Use the same DFA as the flat fixture, with the actual tokenizer-derived table.
+         selection_constraint_job_with_table(&mut job, self.table.clone());
++        if fault==Some(4) {super::terminal::enlarge_selection_job_v1(&mut job);}
+         let mask = palw_fp_constraint_mask_for_host_v1(&job, Some(self.table.clone())).unwrap();
+         let run = palw_fp_with_constraint_scope_v1(mask, || {
+             backend.execute_free_prompt(&job, &ids.iter().map(|id| *id as usize).collect::<Vec<_>>())
+@@ -255,7 +256,7 @@
+         generated[2] = match fault {
+             Some(1) => 2,
+             Some(2) => self.profile.vocab_size - 1,
+-            Some(3) => {
++            Some(3) | Some(4) => {
+                 if generated[2] == 0 {
+                     PALW_LOGITS_TILE_LANES as u32
+                 } else {
+@@ -284,7 +285,7 @@
+         // The native DA session also draws a unit beside the named binding. Answer this
+         // authenticated initial-row tile before testing withholding at the selected row.
+         events.insert(PalwDaUnitV1::Event { row: 0, tile: 1 }, logits_event_disclosure_v1(&binding, rows, &generated, 0, 1).unwrap());
+-        for tile in 0..=u8::from(fault == Some(3)) {
++        for tile in 0..=u8::from(matches!(fault,Some(3)|Some(4))) {
+             events.insert(
+                 PalwDaUnitV1::Event { row: 2, tile },
+                 logits_event_disclosure_v1(&binding, rows, &generated, 2, tile).unwrap(),

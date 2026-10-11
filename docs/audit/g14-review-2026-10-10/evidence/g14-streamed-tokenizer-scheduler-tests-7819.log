@@ -1,0 +1,8 @@
+
+running 3 tests
+test palw_panel::palw_fraud_filer::tokenizer_scheduler::tests::guarded_tokenizer_scheduler_restarts_retries_and_closes_only_the_real_core_court ... ok
+test palw_panel::palw_fraud_filer::tokenizer_scheduler::tests::streamed_nomination_uses_fixed_raw_scratch_and_respects_added_override_and_sparse_ids ... ok
+test palw_panel::palw_fraud_filer::tokenizer_scheduler::tests::tokenizer_scheduler_refuses_wrong_operands_changed_job_and_unfunded_heap_before_seed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 691 filtered out; finished in 1.63s
+

@@ -234,6 +234,8 @@ pub struct Args {
     /// the node can say once that it is ignored; nothing reads it to decide whether the lane runs.
     pub palw_round_lane: Option<bool>,
     pub palw_producer_key: Option<String>,
+    /// Exact public claim IDs for bounded outside verification; empty keeps automatic discovery.
+    pub palw_public_claim: Vec<String>,
     pub palw_producer_bond: Option<String>,
     /// **Artifact files for classes whose weights cannot be derived** (repeatable).
     ///
@@ -872,6 +874,7 @@ impl Default for Args {
             palw_heartbeat_miner_address: None,
             palw_round_lane: None,
             palw_producer_key: None,
+            palw_public_claim: Vec::new(),
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
             palw_kernel_model: Vec::new(),
@@ -1834,6 +1837,16 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
                 .help("PALW: path to the 32-byte hex ML-DSA-87 seed whose VERIFICATION key the bond registered — a genesis bond, or one this node made with --palw-register-bond. Generate the seed with `misaka key gen`; this never creates one."),
+        )
+        .arg(
+            Arg::new("palw-public-claim")
+                .long("palw-public-claim")
+                .env("KASPAD_PALW_PUBLIC_CLAIM")
+                .require_equals(true)
+                .action(clap::ArgAction::Append)
+                .value_delimiter(',')
+                .value_parser(clap::value_parser!(String))
+                .help("PALW: exact 128-hex public claim IDs this ordinary bonded verifier prioritizes. At most16; repeat or comma-separate. Avoids network-wide discovery under unrelated claim spam; authenticated public material, existing reservations, funding and court limits still apply. Empty: automatic discovery."),
         )
         .arg(
             Arg::new("palw-producer-bond")
@@ -3631,6 +3644,10 @@ impl Args {
             palw_panel: arg_match_named_flag(&m, "palw-panel").or(defaults.palw_panel),
             palw_fee_outpoint: m.get_one::<String>("palw-fee-outpoint").cloned().or(defaults.palw_fee_outpoint),
             palw_producer_key: m.get_one::<String>("palw-producer-key").cloned().or(defaults.palw_producer_key),
+            palw_public_claim: m
+                .get_many::<String>("palw-public-claim")
+                .map(|values| values.cloned().collect())
+                .unwrap_or(defaults.palw_public_claim),
             palw_producer_bond: m.get_one::<String>("palw-producer-bond").cloned().or(defaults.palw_producer_bond),
             palw_class_artifact: m
                 .get_many::<String>("palw-class-artifact")
@@ -4026,6 +4043,22 @@ fn arg_match_named_flag(m: &clap::ArgMatches, arg_id: &str) -> Option<bool> {
 
 /// The built-in IBD checkpoints plus the `--checkpoint` strings, sorted by DAA score, duplicates
 /// folded; an unparsable string or two different blocks at one DAA score is an error.
+/// Parse local public-verifier targets before starting its service. Never truncate a request.
+pub fn parse_palw_public_claims_v1(values: &[String]) -> Result<Vec<kaspa_hashes::Hash64>, String> {
+    let limit = kaspa_consensus_core::palw_state_v2::PALW_FILER_EXPLICIT_TARGETS_V1;
+    if values.len() > limit {
+        return Err(format!("at most {limit} exact public claim identifiers are allowed"));
+    }
+    let mut claims = std::collections::BTreeSet::new();
+    for value in values {
+        if value.len() != 128 {
+            return Err("each public claim identifier must contain128 hexadecimal characters".into());
+        }
+        claims.insert(value.parse::<kaspa_hashes::Hash64>().map_err(|error| format!("invalid public claim identifier: {error}"))?);
+    }
+    Ok(claims.into_iter().collect())
+}
+
 pub fn merge_ibd_checkpoints(builtin: Vec<IbdCheckpoint>, extra: &[String]) -> Result<Vec<IbdCheckpoint>, String> {
     let mut all = builtin;
     for raw in extra {
@@ -4520,4 +4553,18 @@ pub fn parse_palw_drill_tamper_boundary_v1(spec: &str) -> Result<(u32, usize), S
         return Err("the boundary is before an occurrence of at least 1".to_string());
     }
     Ok((position, occurrence))
+}
+
+#[cfg(test)]
+mod public_claim_target_tests {
+    use super::*;
+    #[test]
+    fn public_claim_targets_refuse_invalid_and_over_cap_requests_without_truncation() {
+        let id = kaspa_hashes::Hash64::from_u64_word(17).to_string();
+        assert_eq!(parse_palw_public_claims_v1(&[id.clone(), id.clone()]).unwrap().len(), 1);
+        assert!(parse_palw_public_claims_v1(&vec![id; 17]).is_err());
+        assert!(parse_palw_public_claims_v1(&["0".repeat(127)]).is_err());
+        assert!(parse_palw_public_claims_v1(&["z".repeat(128)]).is_err());
+        assert!(parse_palw_public_claims_v1(&[]).unwrap().is_empty());
+    }
 }

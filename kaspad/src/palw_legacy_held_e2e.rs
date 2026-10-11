@@ -745,6 +745,7 @@ fn service_filer_case(
         output_root: o.roots.output_root.unwrap_or_default(),
         legacy: Some(replica),
         fp_job: None,
+        own_output_ids: Vec::new(),
         _job_reservation: None,
         own_range: Box::new(|_, _| panic!("the LG14-B controller does not use the linear range fallback")),
         own: Some(Arc::new(crate::palw_panel::palw_fraud_filer::PalwFraudFilerOwnRunV1::new(
@@ -1854,6 +1855,7 @@ async fn lg14b_public_tiled_tokens_prove_output_mismatch_and_refuse_an_honest_or
         job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
         trace_root: binding.full_logits_trace_root,
         output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, ids),
+        registered_semantics: None,
     };
     let rules = PalwIdentityRulesV1 { prompt_ids_form: d.backend.prompt_ids_form(), base_class_id: h64(1), da_signer_liability: true };
     let answer = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event.clone()));
@@ -2178,6 +2180,7 @@ async fn lg14b_public_binding_proves_large_prompt_relabel_and_refuses_honest_or_
                 job_identity: anchor,
                 trace_root: binding.full_logits_trace_root,
                 output_root: h64(0x1307),
+                registered_semantics: None,
             };
             // A carrier with only an authenticated binding is sufficient; the invalid absence pin is never trusted as DA.
             let answer =
@@ -2448,6 +2451,7 @@ async fn lg14b_an_honest_claim_survives_a_malicious_outsider() {
         job_identity: h64(0),
         trace_root: honest.trace_root,
         output_root: h64(32),
+        registered_semantics: None,
     };
     match crate::palw_panel::palw_fraud_filer::palw_fraud_filer_past_step_v1(&unresolved, &target, Some(&event0), None, LADDER) {
         Err(why) => assert!(why.contains("nothing guessed"), "{why}"),

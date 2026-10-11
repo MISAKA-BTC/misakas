@@ -527,7 +527,21 @@ pub mod palw_panel_free_v1;
 pub mod palw_opv_bootstrap_v1;
 /// RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt; dormant behind `palw_fp_prefix_state`.
 pub mod palw_fp_prefix_v1;
+pub mod palw_prefix_family_state_v1;
+pub mod palw_prefix_family_court_v1;
+pub mod palw_prefix_owned_court_v1;
+pub mod palw_prefix_resources_v1;
+pub mod palw_prefix_base0_codec_v1;
+pub mod palw_prefix_q36_public_rows_v1;
+pub mod palw_prefix_gdn_replay_v1;
+pub mod palw_prefix_gdn_contract_v1;
+pub mod palw_prefix_gdn_paged_v1;
+pub mod palw_prefix_source_stream_v1;
+pub mod palw_prefix_state_court_v1;
 /// RFC-0001 §2.9: the job's tokenizer must be the class's listed one; dormant behind `palw_fp_tokenizer_match`.
+pub mod palw_class_semantics_v1;
+pub mod palw_tokenizer_json_stream_v1;
+pub mod palw_tokenizer_rendering_v1;
 pub mod palw_fp_tokenizer_v1;
 /// RFC-0001 §2.5: the decode constraint's second subset and automaton bounds; dormant behind `palw_fp_constraint_v2`.
 pub mod palw_fp_constraint_v2;
@@ -564,6 +578,7 @@ pub mod palw_court_scope_v1;
 /// fence `palw_legacy_held_da_v2` (refused when armed).
 pub mod palw_legacy_held_da_v2;
 pub mod palw_legacy_answer_chunks_v2;
+pub mod palw_terminal_carriage_v1;
 /// Lane INTF (ADR-0032's 2026-10-10 amendment): the PALW reporter share, 10% below and 49% at or past the dormant fence
 /// `palw_reporter_share_v2` (refused when armed) — R-1 fixed at the conviction's close, DA-6 at the session's open.
 pub mod palw_reporter_share_v2;
@@ -830,4 +845,27 @@ mod tests {
     }
 }
 
+pub mod palw_rendering_stream_v1;
+
+pub mod palw_rendering_resources_v1;
+
+pub mod palw_eog_stream_v1;
+pub mod palw_constraint_stream_court_v1;
+
+pub mod palw_constraint_stream_carriage_v1;
+
+pub mod palw_constraint_stream_owned_v1;
+
+pub mod palw_json_key_set_v1;
+
+pub mod palw_prefix_state_stream_v1;
+
+pub mod palw_staged_court_state_v1;
 pub mod palw_reward_vesting_read_v2;
+pub mod palw_prefix_public_owned_v1;
+pub mod palw_prefix_public_source_v1;
+pub mod palw_prefix_custody_v1;
+
+pub mod palw_tokenizer_table_stream_v1;
+
+pub mod palw_tokenizer_owned_court_v1;

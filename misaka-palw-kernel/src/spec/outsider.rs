@@ -104,7 +104,12 @@ impl SpecOutsiderV1<'_> {
         program: &misaka_palw_tir::program::TirProgramV1,
         commitments: &[Vec<Vec<Digest>>],
     ) -> Vec<(u8, u32)> {
-        let mask = derived_mask_v1(program);
+        let row = &self.ledger.claims[&self.claim];
+        let mask = if self.ledger.commitment_scope_applies_v1(row) {
+            self.ledger.derived_mask(row, stage)
+        } else {
+            derived_mask_v1(program)
+        };
         let mut out = Vec::new();
         for (p, pos) in commitments.iter().enumerate() {
             let g = offset + p as u32;
@@ -168,17 +173,18 @@ impl SpecOutsiderV1<'_> {
 
     /// **Check the claim.**
     pub fn check(&self) -> Result<OutsiderFindingV1, String> {
-        self.check_mode(false)
+        let row = self.ledger.claims.get(&self.claim).ok_or("no such claim")?;
+        self.check_mode(self.ledger.commitment_scope_applies_v1(row), true)
     }
 
     /// Check computation, output and state using the acquired registered model and authenticated public pre-state/snapshot.
     /// No producer node value is read. Snapshot/pre-state acquisition can still produce a public DA demand; `check` retains
     /// the separate node-disclosure checks of the historical response protocol.
     pub fn check_computation(&self) -> Result<OutsiderFindingV1, String> {
-        self.check_mode(true)
+        self.check_mode(true, false)
     }
 
-    fn check_mode(&self, commitments_only: bool) -> Result<OutsiderFindingV1, String> {
+    fn check_mode(&self, commitments_only: bool, enforce_node_da: bool) -> Result<OutsiderFindingV1, String> {
         let l = self.ledger;
         let row = l.claims.get(&self.claim).ok_or("no such claim")?;
         let ClaimBodyV1::Spec(body) = &row.body else { return Err("not a typed claim".into()) };
@@ -201,7 +207,7 @@ impl SpecOutsiderV1<'_> {
                     missing.push((MEMORY_PRE_STATE_STAGE_V1, 0));
                 }
                 let offsets = step_offsets_v1(&c.steps);
-                if !commitments_only {
+                if enforce_node_da {
                     for (i, st) in c.steps.iter().enumerate() {
                         missing.extend(self.missing_positions(0, offsets[i], &rule.program, &st.commitments));
                     }
@@ -289,7 +295,7 @@ impl SpecOutsiderV1<'_> {
                 for (s, (st, comp)) in c.stages.iter().zip(components).enumerate() {
                     match (st, comp) {
                         (StageClaimV1::Model { commitments, .. }, ComponentV1::Model(m)) => {
-                            if !commitments_only {
+                            if enforce_node_da {
                                 missing.extend(self.missing_positions(s as u8, 0, &m.program, commitments))
                             }
                         }

@@ -1,0 +1,22 @@
+
+running 17 tests
+test palw_lifecycle_objects_v2::tests::a2u::a_not_in_force_kind_is_undecodable_in_the_live_builds_words ... ok
+test palw_lifecycle_objects_v2::tests::a2u::an_owning_fence_needs_the_audit_fence_declared ... ok
+test palw_lifecycle_objects_v2::tests::a2u::below_its_fence_a_new_kind_is_judged_as_the_live_build_judges_undecodable_bytes ... ok
+test palw_lifecycle_objects_v2::tests::a2u::canonical_fp_evidence_keeps_the_old_opaque_carrier_isolation_rule ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_appended_form_has_a_guarded_owner_arm ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_int12_wire_type_is_unchanged_or_classified ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_kernel_inner_kind_has_exactly_one_row ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_kind_in_the_enum_has_exactly_one_owner ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_tag_row_is_inside_its_allocation ... ok
+test palw_lifecycle_objects_v2::tests::a2u::native_fp_metadata_equivalence_requires_the_exact_skipped_field ... ok
+test palw_lifecycle_objects_v2::tests::a2u::registered_opaque_contradictions_and_staged_fenced_forms_keep_their_isolation_rules ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_fence_list_is_the_enum ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kind_list_is_frozen ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kinds_refused_past_a_fence_are_the_rows ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_new_kind_table_is_the_owner_function ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 3835 filtered out; finished in 2.08s
+

@@ -1,0 +1,10 @@
+
+running 5 tests
+test palw_false_valid_filing_v1::tests::a_licences_receipts_keep_the_form_they_were_signed_in ... ok
+test palw_false_valid_filing_v1::tests::one_filing_per_seat_never_the_own_bond_and_only_what_the_chain_convicts ... ok
+test palw_false_valid_filing_v1::tests::only_relied_on_receipts_take_a_slot_and_the_cap_is_per_seat ... ok
+test palw_false_valid_filing_v1::tests::policy_declines_the_own_claim_and_names_held_partials_the_rule_reaches ... ok
+test palw_false_valid_filing_v1::tests::the_evidence_names_its_receipts_seat_and_its_object_carries_its_digest ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3625 filtered out; finished in 0.00s
+

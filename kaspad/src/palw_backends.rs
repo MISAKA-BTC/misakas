@@ -126,6 +126,16 @@ impl PalwBackendRegistry {
         &self.holdings
     }
 
+    /// The tokenizer paired with this verifier's exact serving model. This is local D7
+    /// material; callers still authenticate its raw bytes against the claim snapshot.
+    pub fn held_tokenizer_path_or_chain_v1<F>(&self, class_id: Hash64, artifact_root: Hash64, fetch: F) -> Option<PathBuf>
+    where
+        F: FnOnce(Hash64) -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)>,
+    {
+        let (holding, _) = self.serving_holding_or_chain_v1(class_id, artifact_root, fetch)?;
+        Some(holding.path.as_ref()?.parent()?.join("tokenizer.json"))
+    }
+
     /// **Resolve the class the chain named into something that can run it.**
     ///
     /// `class_id` and `artifact_root` come off the class record, so they are the chain's answer.

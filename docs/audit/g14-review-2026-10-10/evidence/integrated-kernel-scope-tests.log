@@ -1,0 +1,21 @@
+source=f01699022
+binary=court_scope-dcfebe5900c92cda sha256=fb0078ec19f4d4be325bc882b62c55a280f6710c0e9c33726525f14464613a77
+
+running 5 tests
+test combined_scope_keeps_requester_quotas_and_public_conviction_without_clear_model_values ... ok
+test commitment_scope_preserves_old_claim_contracts_and_clears_consumer_policy_on_cache_rebuild ... ok
+test f_c4r4_17_class_serves_no_clear_activation_of_a_weight_relation ... ok
+test scoped_honest_replay_refuses_a_wrong_verifier_model_and_does_not_excuse_missing_claim_material ... ok
+test scoped_ledger_serves_every_position_without_model_values_and_replay_convicts_the_hidden_lie ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+binary=g14s_court_scope-8848c36de715f2d8 sha256=cd72bfe6c3c88ce45f98f5852eed0153a8c6fb2ff2b89b0b4b1aa48d162640fd
+
+running 2 tests
+test g14s_a_filer_past_its_cumulative_scope_is_refused_and_an_honest_prosecutor_still_convicts ... ok
+test g14s_f_c4r4_17_on_the_opv_route_the_clear_budget_refuses_and_the_class_takes_no_new_claim ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.05s
+
+[{"binary": "court_scope-dcfebe5900c92cda", "exit": 0}, {"binary": "g14s_court_scope-8848c36de715f2d8", "exit": 0}]

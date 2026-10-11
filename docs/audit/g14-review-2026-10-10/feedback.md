@@ -5,6 +5,8 @@
 
 ## 現在の判定（Codex修正後）
 
+**constraint service / tiled filer follow-up（2026-10-11）:** False-Valid 事前判定を実 gate の session rule と揃え、禁止 token・premature stop・beaten token の actual fresh service 3件で producer と全5 Valid signers の conviction・徴収・reporter reveal を確認した。tiled は位置別の公開 tile 取得・認証済み proof 生成・限定 cache・算術局所化への fallback を node に追加し、builder / book / engine の回帰を確認した。tiled の登録 class での actual service、最大 proof の分割終局搬送と全 active family の保証は未達。[最新の検証範囲と残り](tiled-constraint-public-status.md)を参照。
+
 **G14全域はまだ未達。修正済みの小型・segmented court経路と、未完成の本番到達性を分けて評価する。** ユーザー確認により、正しい登録モデルを保有するverifierを前提とし、ADR-0177を維持する。
 
 `codex/g14-prosecution-bounds`では、公開materialから独立に再実行するcourt、canonical tensor検査、RAM/state/filing上限、small-value commitment court、固定報酬jobの生成長束縛を修正した。さらに`g14/legacy-filer`を統合し、単独の不正leafを見逃すmidpoint探索と、未認証carrierによる公開応答cache汚染を修正した。core・実node試験の件数、再試験、未実行の範囲は[実装修正記録](implementation.md)にまとめている。
@@ -245,3 +247,20 @@ public filerがconstraint maskのscopeを設定せずにFPを再実行してい�
 通常受理されるFP version 6のjob本体112,291 bytes、transaction transient mass 499,184／500,000で実serviceを検証した。全PanelがValidに署名した後、fresh DBを使う外部verifierが元job履歴・保存metadataなしで、署名済みmanifest＋2partから復元し、公開input取得→独立再実行→DAA 1163でreleaseまで進んだ。同じ大きなjobを隠した場合は、規定deadlineを維持してDAA 2307で客観的DA default・producerへの正額sanction徴収・reservation解放まで確認した。今回29 unique PASS。初回の誤ったmanifest差し替え試験の失敗も保存した。[詳細と生log](constraint-public-replay-status.md)。
 
 G14全域は未完了。残りは、自動producer分割回答の実service接続、最大input/profile予算、constraintの違反token選択とtable／登録モデルbindingの客観的反証、初期・prefix・non-prompt state取得、全active familyの算術／output／state終局、scope／hiding・総RAM・経済／包含条件、restart／reorg／pruned IBD／remote認証取得、最後にactivationと全域監査。ADR-0177 D7を維持し、今回のnear-limit job試験を全profile・全familyの保証に拡張して解釈しない。
+
+## G14-L並列laneの統合評価（2026-10-11、未実行checkpoint）
+
+`f8c9ed91d`／統合`105e`の34 sessionsは、一つのclaimで予約者が生涯に開くsession数である。同じ予約者の追加tag157要求は、その予約者の開いている一つのsessionへlaneとして参加する。無料の例外ではなく、sessionごと64 lanes、予約ごと追加128 lanes、joinは開始後128 DAA以内、laneごとのDA-6担保、期限`max(current, now + W_disclose + lanes-1)`、retention内という別の明示的な上限がある。再取得sessionにはjoinできない。予約ごとの最大unit数は34+128であり、他の予約者が埋めるclaim共通capはないが、B bondsの総producer負荷はB×162 unitsへ増える。
+
+kernel `FileDemand` の per-requester累積scopeは`COURT_SCOPE_MAX_UNITS_PER_REQUESTER_V1 = 16`である。定数コメントと`palw_provider_court_fold_v1::scope_guard_v1`の呼出はKernelLedger経路を対象とし、native tag157は独立のR-core reservation／lane経路である。従ってcanonical held 8kのplanner `[1,36,16,1]`をこの16件のguardが直接拒否するとは現行コードから証明できず、初回の16対36の直接衝突という解釈を訂正する。legacyはDA-8予約と34 sessions／追加128 lanesに従う。ただしこの回数上限だけで認証済みprofileからの正確な許可unit集合、byte・proofの累積予算、全familyの所要取得との対応を証明したことにはならない。kernelの16件は維持し、nativeのscope契約と到達性を別々に検証する。
+
+回復経路にも具体的な不足がある。`palw_fraud_filer_round_step_v1`は、chain上では回答済みだがlocal bytesがないlaneを`AwaitRound`へ進める。しかしactual serviceのそのarmは選択roundを登録するだけで、従来の`AwaitAnswer`と異なり署名付きtag156再取得へ進まない。派生multipart history indexはnode-localで、元block deltaをpruningすると同時に削除される。従ってpruned roundは停止し得る。また現在のtag156再取得は一件ずつで、joinできず、追加sessionを消費する。36／64件の回答を失った場合は、4つのresponse-windowに収めたparallel plannerの保証がそのまま成立しない。rooted retained bytesの取得、又は認証済みbatch再取得と期限・scope予算を閉じる必要がある。
+
+RAMも従来のhistory scratch `8×(一回答上限+16KiB)`のままでは64回答のcacheと学習済みfrontierを覆わず、scratchはworker終了時に解放される。追加修正では、selected legacy unitごとのtyped byte boundで、native read／新lane送信より前にRAII ticketを取得し、worker clone・cache・frontierが生きる間は保持する。round全件の予約が失敗すれば新しい予約だけを戻し、既に取得したfrontierを保持してPendingに留める。node frontierは512 hashesとu64 treeの最大64 siblings、実binding、framingから算定し、巨大CKW ceilingを全nodeへ一律に課さない。この修正と新しいlocal-ledger回帰はsource checkpointであり、統合build・runtimeのPASSはまだない。
+
+8kのplannerがfiled DAA 4,906／close span 5,400に収まるのは、verifier replay≦494 DAA、1 carrier／DAA、producer回答1 unit／blockを仮定した範囲である。node fixtureはheight14の11,612 leavesで、canonical height27の約105.5M leavesを実行した証拠ではない。fused terminalの追加dissectionはtimelineに含まれず、height≧30と2Mの1,024 input chunksは名前付きで拒否される。scope・RAM・回復・包含・終局・実測replayと全active profileの条件が閉じるまでG14全域完了とはしない。
+
+別途、source `501a6a2cb89da4e1fe0ba5e397a3458b796adfeb`の実service自動multipart／再起動試験は408.14sでFAILした。producerとoutside verifierが同じFlowContextの単一gossip inboxを共有し、producer serviceがdisabledになった試験構成の不備である。raw logは`/private/tmp/g14-recovery-501a-automatic-restart.log`、binary SHA256は`d942fdb1a5ecfc5d61686b5b0542ea49f15445fd9f01d149ee019ec3052aeeea`。修正`5a7fde1e4`は各producer／restartに新しいFlowContextを作り、公開consensus・mempool・address manager・hubだけを共有する。sole socket receiver verifierは実receiverのflowを一度だけ起動する。修正後のcompile／runtimeは未実行で、他の同じ構成の5件をPASSとして扱わない。
+
+
+`AwaitRound`の追加修正は、現在のphaseで未取得かつchain上で回答済みの一unitを選び、従来`AwaitAnswer`と同じ署名付きtag156・30 DAA再読込待ち・native session counter・hard deadline・bounded retryへ進める。取得済みinput／frontierは再要求しない。これは一unitの停止修正であり、全round消失時のbatch回復や全域の期限保証を閉じない。pure regressionと実producer回答blockのprune／fresh verifier試験は統合build後に実行する。

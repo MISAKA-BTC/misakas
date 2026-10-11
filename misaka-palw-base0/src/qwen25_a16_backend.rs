@@ -9281,6 +9281,78 @@ mod prefix_cache_serving {
         seat.verify_prefix_state_v1(&job(&profile, ids.len(), 4), &ids).expect("no state named");
     }
 
+    /// The objective prefix court's digest matches the actual A16 engine's cache, for both
+    /// ordinary and inherited receipts. The proof reads only committed public output tiles;
+    /// its tree is reconstructed here by the producer-side fixture, not supplied as trusted state.
+    #[test]
+    fn public_prefix_court_reconstructs_the_actual_a16_cache_and_refutes_a_false_named_root() {
+        use kaspa_consensus_core::palw_offence_attribution_v1::{PalwOffenceTargetV1, palw_prefix_state_fault_v1};
+        use kaspa_consensus_core::palw_prefix_state_court_v1::{PalwPrefixKvPlanV1, PalwPrefixKvTileV1, palw_prefix_kv_state_root_v1};
+        use kaspa_consensus_core::palw_step_leg::{PalwStepMerkleTreeV1, PalwStepOpeningV1, step_tile_leaf_hash_ctx_v1};
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFpPrefixStateV1};
+        let (artifact, _) = fixture();
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(PalwQwen25GeometryV1 {
+            layer_count: 2, hidden_dim: 32, ffn_dim: 64, attn_heads: 4, attn_kv_heads: 2,
+            attn_head_dim: 8, vocab_size: 128, n_ctx: 128, n_threads: 1, rms_eps_q: 1, tile_len: 4,
+        }).unwrap();
+        let producer = backend(&artifact, &profile).with_step_ladder_cap(1 << 22);
+        let ids = prompt(4, 3);
+        let ids32: Vec<u32> = ids.iter().map(|id| *id as u32).collect();
+        let true_state = producer.prefix_state_v1(profile.shape_profile_id(), Hash64::from_u64_word(0x70), &ids32[..2]).unwrap();
+        for inherited in [false, true] {
+            for false_root in [false, true] {
+                let mut j = job(&profile, ids.len(), 2);
+                j.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, &ids32).unwrap();
+                j.version = if inherited { kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_INHERIT_VERSION }
+                    else { kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION };
+                j.decode = Some(DecodeConfigV4::NOOP);
+                j.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 {
+                    state_root: if false_root { Hash64::from_u64_word(0xBAD17) } else { true_state.state_root }, ..true_state
+                }));
+                assert_eq!(producer.verify_prefix_state_v1(&j, &ids32).is_err(), false_root,
+                    "the seat checks the named prefix even though full replay remains available");
+                let run = producer.execute_free_prompt(&j, &ids).unwrap();
+                let retained = crate::produce::base0_material_decode_any_v1(&run.outcome.material).unwrap();
+                let binding = retained.binding();
+                let raw = retained.tiles().expect("the non-held dense fixture retains public step tiles");
+                let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(index, tile)| (*index, tile)).collect();
+                let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
+                for (index, tile) in raw {
+                    hashes[*index as usize] = step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile.shape_profile_id(), tile);
+                }
+                let tree = PalwStepMerkleTreeV1::build_capped_v1(&hashes, 1 << 22).unwrap();
+                assert_eq!(tree.root(), binding.step_merkle_root, "the public fixture reproduces the committed tree");
+                let plan = PalwPrefixKvPlanV1::of_profile(&profile, 2).unwrap();
+                let mut tiles = Vec::new();
+                for ordinal in 0..plan.tile_count {
+                    let (coord, _) = plan.coordinate(&profile, ordinal).unwrap();
+                    let leaf = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&profile, &binding.job_context, &coord).unwrap();
+                    tiles.push(PalwPrefixKvTileV1 {
+                        opening: PalwStepOpeningV1 { leaf_index: leaf, leaf_hash: hashes[leaf as usize], siblings: tree.path_v1(leaf as usize).unwrap() },
+                        preimage: (*by_index[&leaf]).clone(),
+                    });
+                }
+                assert_eq!(palw_prefix_kv_state_root_v1(binding, 2, &tiles, 1 << 22).unwrap(), true_state.state_root,
+                    "inherited={inherited}, false_root={false_root}: the court agrees with the actual cache");
+                let target = PalwOffenceTargetV1 {
+                    claim_id: Hash64::from_u64_word(0xC17), class_id: profile.shape_profile_id(),
+                    artifact_root: crate::inventory::a16_inventory_v1(&artifact, &profile).unwrap().root(),
+                    executor_bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(j.executor_bond),
+                    execution_root: binding.committed_execution_root,
+                    lane: Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt),
+                    segment_count: Some(4), phase: None,
+                    job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
+                    trace_root: binding.full_logits_trace_root, output_root: run.outcome.output_root, registered_semantics: None,
+                };
+                assert_eq!(palw_prefix_state_fault_v1(&target, binding, &j, &tiles).unwrap(), false_root);
+                let mut forged_job = j.clone();
+                forged_job.job_nonce[0] ^= 1;
+                assert!(palw_prefix_state_fault_v1(&target, binding, &forged_job, &tiles).is_err());
+            }
+        }
+    }
+
     /// A conversation: turn 2 extends turn 1's prompt AND its answer, and resumes from the whole
     /// of turn 1's state (prompt + answer ids).
     #[test]

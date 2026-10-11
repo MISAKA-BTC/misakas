@@ -105,6 +105,12 @@ wire/fence impact · test · real-node result · status.
 | EXEC v2 rewards / origins (codex RFC-8 on X8R, taken over by lane R6781, 2026-10-11) | **131** `ExecOriginRecordedV1` (fence `palw_exec_payload_v2`, `PalwLifecycleKindFenceV1::ExecPayloadV2`) | delta 180 tables **5** rewards, **6** reward holds, **7** job uses, **8** origins | **0xF2** job uses, **0xF3** origins, **0xF4** reward vesting, **0xF5** reward holds (codex used 0xF0/0xF1 for the reward tables — LG14-A's and codex G14's; renumbered) | **kernel ledger table 31** EXEC reward holds (codex used 27, G14R's), root extension `misaka-palw/kernel/ledger-exec-reward-holds-extension/v1` only once non-empty; RPC **241** `getPalwRewardVesting`, gRPC **1296/1297** |
 | Kernel ledger root extensions (order, R6781 merge 2026-10-11) | — | — | — | fixed by table number, each only when its table holds a row (an unarmed network roots as before): 25/26/18 beacon seal, 27 verifier pay, 28 court scope, (29 RFC-02, when it lands), 30 beacon sources, 31 EXEC reward holds |
 
+| G14 public terminal carriage (codex G14, registry reconciliation 2026-10-11) | **162–163** | **203** pending declaration; **212** terminal part (moved from205 to preserve LG14-B reserve) | **0xF6** (moved from0xF2; 0xF2–0xF5 remain EXEC) | `palw_legacy_public_filer_v1`; dormant and activation refused |
+| G14 immutable registered semantics (codex G14, 2026-10-11) | **164** | **213** class / **214** claim snapshot (moved from204/206) | **0xF7** (moved from0xF3) | `palw_class_semantics_v1`; dormant |
+| G14 owned public court streams (codex G14, 2026-10-11) | **165–167** | **210–211** immutable seed and mutable checkpoint (moved from207/208) | **0xF8** (moved from0xF4) | `palw_staged_public_court_v1`; independent dormant fence; objective contradiction19 is a different namespace from kernel inner19 |
+
+Registry baseline imported from integration commit `105e2ab8bd596bbca0cee4974a40d8eca8c10f5c`. The rows above reserve additions on codex G14; this document alone does not establish integration or test success of code on either branch. Legacy multipart answer uses delta202/tail0xF1; public FP metadata uses201/tail0xF0. No new kernel ledger table or kernel inner kind is allocated by this checkpoint.
+
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the
 skeleton first; lanes build on that commit.
 

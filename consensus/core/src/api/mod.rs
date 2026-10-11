@@ -1077,6 +1077,21 @@ pub trait ConsensusApi: Send + Sync {
         Default::default()
     }
 
+    /// Bounded read-only progress from one accepted staged court/reservation snapshot.
+    fn palw_staged_owned_progress_v1(&self,_key:(crate::Hash64,crate::palw_state_v2::PalwBondKeyV2))
+        ->Result<Option<crate::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>,String> {
+        Err("staged owned progress reader unavailable".into())
+    }
+
+    /// Terminal evidence progress of this verifier's own live reservation at the accepted tip.
+    /// Unavailable readers are errors; absent/closed reservations are distinct successful reads.
+    fn palw_terminal_progress_v1(
+        &self,
+        _key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1,
+    ) -> Result<Option<crate::palw_terminal_carriage_v1::PalwTerminalProgressV1>, String> {
+        Err("terminal evidence progress reader unavailable".into())
+    }
+
     /// Accepted session-owned answer progress at the local tip. An unavailable reader is an
     /// error, distinct from a successfully read tip with no assembly. No retained part bytes are copied.
     fn palw_legacy_answer_progress_v2(
@@ -1137,6 +1152,28 @@ pub trait ConsensusApi: Send + Sync {
         _me: crate::palw_state_v2::PalwBondKeyV2,
     ) -> Vec<crate::palw_state_v2::PalwFraudFilerCandidateV1> {
         Vec::new()
+    }
+
+    /// Local explicit claim discovery. Production performs direct state-key lookup; the
+    /// fallback keeps test consensus implementations compatible and retains admitted records.
+    fn palw_fraud_filer_candidates_for_claims_v1(
+        &self,
+        me: crate::palw_state_v2::PalwBondKeyV2,
+        claims: Vec<Hash64>,
+    ) -> Vec<crate::palw_state_v2::PalwFraudFilerCandidateV1> {
+        if claims.len() > crate::palw_state_v2::PALW_FILER_EXPLICIT_TARGETS_V1 {
+            return Vec::new();
+        }
+        let wanted: std::collections::BTreeSet<_> = claims.into_iter().collect();
+        self.palw_fraud_filer_candidates_v1(me)
+            .into_iter()
+            .filter(|candidate| {
+                self.palw_legacy_dispute_v1(candidate.claim_id).is_some_and(|view| {
+                    view.record.as_ref().is_some_and(|record| record.knows(&me))
+                        || (wanted.contains(&candidate.claim_id) && self.get_virtual_daa_score() <= view.hard_deadline_daa)
+                })
+            })
+            .collect()
     }
 
     /// **Lane LG14-A (RPC 206): one bond's standing as a public filer at the tip** — `None` for a bond the state does not hold.

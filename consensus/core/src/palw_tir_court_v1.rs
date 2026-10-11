@@ -3756,6 +3756,7 @@ mod da_tests {
             job_identity: identity,
             trace_root: b.full_logits_trace_root,
             output_root: Hash64::default(),
+            registered_semantics: None,
         }
     }
 

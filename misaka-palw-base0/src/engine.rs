@@ -137,6 +137,13 @@ impl KvCache {
         self.keys.get(layer).map(|l| l.len()).unwrap_or(0)
     }
 
+    /// Host-local actual cache row for the prospective typed i8 prefix codec. A public court
+    /// obtains these bytes from authenticated cache-write step rows instead.
+    pub(crate) fn prefix_row_v1(&self, value: bool, layer: usize, position: usize) -> Option<&[i8]> {
+        let rows = if value { &self.values } else { &self.keys };
+        rows.get(layer)?.get(position).map(Vec::as_slice)
+    }
+
     /// One head's slice of a cached key.
     pub(crate) fn key_at(&self, layer: usize, position: usize, offset: usize, len: usize) -> &[i8] {
         &self.keys[layer][position][offset..offset + len]

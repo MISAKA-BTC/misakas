@@ -61,6 +61,7 @@ fn target_of(
         job_identity: anchor,
         trace_root: outcome.trace_root,
         output_root: outcome.output_root,
+        registered_semantics: None,
     }
 }
 

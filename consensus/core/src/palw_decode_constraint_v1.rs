@@ -1873,6 +1873,58 @@ pub(crate) mod tests {
         assert!(matches!(check_constrained_decode_token_v1(&binding2, &forbidden, cap()), Err(PalwStepRefuteError::NoFaultFound)));
     }
 
+    /// A genuine terminal EOG cannot be followed by committed IDs. This is proved from the
+    /// public pin and EOG opening, without a witness of an admitted lane or own replay values.
+    #[test]
+    fn public_constrained_post_stop_fault_uses_the_first_authenticated_eog_and_keeps_legacy_behavior() {
+        use crate::palw_step_refute::{check_constrained_decode_token_at_v2, check_constrained_flat_decode_token_at_v2,
+            check_constrained_flat_decode_token_v1, flat_logits_scheme_id_v1, base0_logits_trace_root_v1, PalwBase0DecodeTokensV1};
+        use crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1;
+        let c = bracket_digit();
+        let table = token_table();
+        let rows = constrained_rows(6);
+        let honest = honest_run(&c, &rows, PalwDecodeSamplingV2::GREEDY);
+        assert_eq!(honest.len(), 4);
+        assert_eq!(honest[3], EOG_LOW);
+        for suffix in [false, true] {
+            let mut ids = honest.clone();
+            if suffix { ids.push(b'x' as u32); }
+            let mut job = constrained_job(&c, &table);
+            let binding = claim_binding(&job, &rows, &ids);
+            let a = accusation(&job, &table, &binding, &rows, &ids, 3, &[], None);
+            assert!(matches!(check_constrained_decode_token_v1(&binding, &a, cap()), Err(PalwStepRefuteError::NoFaultFound)));
+            let verdict = check_constrained_decode_token_at_v2(&binding, &a, cap(), true);
+            if suffix { assert_eq!(verdict.map(|v| v.fault), Ok(fault_at(3))); }
+            else { assert!(matches!(verdict, Err(PalwStepRefuteError::NoFaultFound))); }
+            for edit in 0..2 {
+                let mut bad = a.clone();
+                if edit == 0 { bad.pin.generated_token_ids[0] ^= 1; }
+                else { bad.eog.opening.leaf_hash = Hash64::default(); }
+                assert!(check_constrained_decode_token_at_v2(&binding, &bad, cap(), true).is_err());
+            }
+            if suffix {
+                let later = accusation(&job, &table, &binding, &rows, &ids, 4, &[], None);
+                assert!(matches!(check_constrained_decode_token_at_v2(&binding, &later, cap(), true),
+                    Err(PalwStepRefuteError::InputSetNotCanonical(_))), "challenge the first EOG, not a dead suffix");
+            }
+            let mut flat = binding.clone();
+            flat.shape_profile.logits_scheme_id = flat_logits_scheme_id_v1();
+            job.class_id = flat.shape_profile.shape_profile_id();
+            flat.job_context.shape_profile_id = job.class_id;
+            flat.job_context.job_id = crate::palw_freeprompt_v3::fp_job_id_v3(&job);
+            flat.full_logits_trace_root = base0_logits_trace_root_v1(&flat.job_context, &rows[..ids.len()], &ids);
+            crate::palw_step_refute::tests::rebind_committed_root(&mut flat);
+            let flat_a = PalwConstrainedFlatDecodeAccusationV1 {
+                pin: PalwBase0DecodeTokensV1 { logits_rows: rows[..ids.len()].to_vec(), generated_token_ids: ids },
+                position: 3, job, renderings: a.renderings, eog: a.eog, witness: None, beat_lane: None,
+            };
+            assert!(matches!(check_constrained_flat_decode_token_v1(&flat, &flat_a, cap()), Err(PalwStepRefuteError::NoFaultFound)));
+            let verdict = check_constrained_flat_decode_token_at_v2(&flat, &flat_a, cap(), true);
+            if suffix { assert_eq!(verdict.map(|v| v.fault), Ok(fault_at(3))); }
+            else { assert!(matches!(verdict, Err(PalwStepRefuteError::NoFaultFound))); }
+        }
+    }
+
     /// **The wire kind**: the variant round-trips, is recognised as a constrained decode close (and as nothing else), and its
     /// object is the one the fence drops by name below `palw_fp_decode_constraint`.
     #[test]

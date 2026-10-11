@@ -203,6 +203,26 @@ pub(super) fn ensure_route_header(builder: &mut TransitionBuilder<'_>, ctx: &Pal
 /// resolved), the ledger rebuilt from the rows, the block begun.
 pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<KernelLedgerV1, PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
+    let scope_table = crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1;
+    let stored_scope = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .and_then(|route| route.aux.get(&(scope_table, Vec::new())))
+        .map(|bytes| borsh::from_slice::<u64>(bytes).map_err(|_| refused("malformed authenticated court-scope activation")))
+        .transpose()?;
+    let configured_scope = builder.extras.kernel_route.as_ref().and_then(|extras| extras.commitment_scope);
+    if stored_scope.is_some() && stored_scope != configured_scope {
+        return Err(refused("the court-scope activation differs from the authenticated route"));
+    }
+    if let Some(at) = configured_scope {
+        if at > ctx.daa_score {
+            return Err(refused("the court-scope activation is not in force"));
+        }
+        if stored_scope.is_none() {
+            builder.write_kernel_row(scope_table, Vec::new(), Some(borsh::to_vec(&at).expect("an activation serializes")));
+        }
+    }
     let extras = builder.extras.kernel_route.as_ref().expect("checked by the header");
     // The artifact roots the route may attest: the test hook's list (empty outside a test) and every Matured or Final onboarding
     // binding — the least-trust source (`palw_onboarding_v1`).

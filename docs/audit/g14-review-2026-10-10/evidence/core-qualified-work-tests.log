@@ -1,0 +1,115 @@
+source=0bbbfbee3
+binary_sha256=7de2e906c54b3aebc22fe06ee8a712132f2923c1f766b175762b2da5f3196ace
+FILTER=palw_constraint_stream_
+
+running 6 tests
+test palw_constraint_stream_carriage_v1::tests::signed_move_binds_literal_owner_claim_reservation_phase_offset_and_bytes ... ok
+test palw_constraint_stream_court_v1::tests::wrong_seed_root_skip_corrupt_prefix_and_incomplete_leaf_never_convict ... ok
+test palw_constraint_stream_court_v1::tests::ordered_public_stream_matches_direct_court_fault_and_honest_refusal ... ok
+test palw_constraint_stream_owned_v1::tests::foreign_owner_and_over_budget_moves_cannot_mutate_or_poison_continuation ... ok
+test palw_constraint_stream_owned_v1::tests::admission_requires_entire_capital_and_retention_contract_before_owned_work ... ok
+test palw_constraint_stream_owned_v1::tests::small_mutable_checkpoint_reverts_and_restores_without_grammar_or_prior_bytes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 3674 filtered out; finished in 0.16s
+
+FILTER=palw_prefix_state_stream_v1::
+
+running 2 tests
+test palw_prefix_state_stream_v1::tests::tentative_corrupt_leaf_or_wrong_seed_cannot_finalize_a_prefix ... ok
+test palw_prefix_state_stream_v1::tests::chunked_prefix_matches_full_authenticated_court_and_restores_each_move ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3678 filtered out; finished in 0.06s
+
+FILTER=palw_tokenizer_json_stream_v1::
+
+running 5 tests
+test palw_tokenizer_json_stream_v1::tests::decimal_overflow_boundary_and_integer_ids_are_feature_independent ... ok
+test palw_tokenizer_json_stream_v1::tests::normative_container_depth_and_malformed_delimiters_are_exact ... ok
+test palw_tokenizer_json_stream_v1::tests::understated_work_bound_only_convicts_after_the_original_exact_raw_hash ... ok
+test palw_tokenizer_json_stream_v1::tests::unknown_large_strings_keep_the_serialized_parser_bounded_and_false_raw_hash_never_verdicts ... ok
+test palw_tokenizer_json_stream_v1::tests::exact_json_grammar_and_renderer_agree_across_every_cursor_boundary_and_restart ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3675 filtered out; finished in 3.71s
+
+FILTER=palw_json_key_set_v1::
+
+running 3 tests
+test palw_json_key_set_v1::tests::changed_key_path_depth_or_sibling_cannot_insert_and_full_width_is_used ... ok
+test palw_json_key_set_v1::tests::compact_proofs_are_full_width_canonical_and_differentially_identical ... ok
+test palw_json_key_set_v1::tests::duplicate_key_and_foreign_namespace_proofs_refuse_without_mutation_and_restore ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3677 filtered out; finished in 0.00s
+
+FILTER=immutable_registered_semantics_refute
+
+running 1 test
+test palw_offence_attribution_v1::tests::immutable_registered_semantics_refute_only_authenticated_claim_contexts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3679 filtered out; finished in 0.00s
+
+FILTER=owned_terminal_fold_
+
+running 2 tests
+
+thread 'palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation' (4201419) panicked at consensus/core/src/palw_state_v2.rs:73393:14:
+armed transition applies: SeatValidLockRefused { seat: PalwBondKeyV2(TransactionOutpoint { transaction_id: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200000000000000, index: 0 }), claim: a7589e87b9cbd6eb572d6175014b6b70bce0dc8591f525721c368fc0ad7de09ef996e00fc69f7733e5e6daac981dffdd53f9b4686ea94004a1bdb59b0f5fbcce, required: 111, available: 0 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts' (4201420) panicked at consensus/core/src/palw_state_v2.rs:73393:14:
+armed transition applies: SeatValidLockRefused { seat: PalwBondKeyV2(TransactionOutpoint { transaction_id: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200000000000000, index: 0 }), claim: a7589e87b9cbd6eb572d6175014b6b70bce0dc8591f525721c368fc0ad7de09ef996e00fc69f7733e5e6daac981dffdd53f9b4686ea94004a1bdb59b0f5fbcce, required: 111, available: 0 }
+test palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation ... FAILED
+test palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts ... FAILED
+
+failures:
+
+failures:
+    palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation
+    palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 3678 filtered out; finished in 0.01s
+
+FILTER=every_landed_kind_
+
+running 2 tests
+[a2u] rows awaiting their lane's merge:
+  CoinbaseTrailer { magic: [80, 88, 65, 50] } → palw_exec_payload_v2 (X8R anchor trailer)
+  Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read))
+  Int12Inner { key: "consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileOffersV1::Head (3), inside tag 68 (appended))
+  FpJobForm { what: "PalwGenBodyV1::Head (2) inside a generative job" } → palw_task_heads_v1 (HFX task heads)
+  HeaderFormula { what: "header.palw_state_root = H(fork-choice leaf || ADR-0043 root) past the fence" } → palw_fork_choice_commitment_v1 (L2FC)
+  StateEncoding { what: "bond budget engine Q/B/R/F (deltas 190–199, tail 0xEF, root block bond_budget/v1)" } → palw_bond_budget_v1 (BUDGET (ADR-0176))
+  StateEncoding { what: "model coinbase allocated by distinct locked miner capital f(S_m) inside the budget" } → palw_model_bond_allocation_v1 (BUDGET (ADR-0177))
+  StateEncoding { what: "R-1 reporter share and DA-6 exposure: 1,000 bps below, 4,900 bps past" } → palw_reporter_share_v2 (INTF (ADR-0032 amendment))
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3678 filtered out; finished in 1.07s
+
+FILTER=staged_public_court_has_independent
+
+running 1 test
+test config::params::consensus_params_id_tests::staged_public_court_has_independent_dormant_schedule_and_block_clock ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3679 filtered out; finished in 0.03s
+
+FILTER=staged_court_state_tests_v1::
+
+running 3 tests
+test palw_state_v2::staged_court_state_tests_v1::owner_exposure_and_holds_rebuild_and_revert_without_other_owner_scan ... ok
+
+thread 'palw_state_v2::staged_court_state_tests_v1::prospective_contract_roots_carries_and_reverts_without_historic_tail_changes' (4201436) panicked at consensus/core/src/palw_state_v2.rs:79111:9:
+assertion `left == right` failed
+  left: 210
+ right: 207
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_state_v2::staged_court_state_tests_v1::prospective_contract_roots_carries_and_reverts_without_historic_tail_changes ... FAILED
+test palw_state_v2::staged_court_state_tests_v1::certificate_reference_requires_completed_rooted_court_and_exact_identity ... ok
+
+failures:
+
+failures:
+    palw_state_v2::staged_court_state_tests_v1::prospective_contract_roots_carries_and_reverts_without_historic_tail_changes
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 3677 filtered out; finished in 0.08s
+
+[{"filter": "palw_constraint_stream_", "exit": 0}, {"filter": "palw_prefix_state_stream_v1::", "exit": 0}, {"filter": "palw_tokenizer_json_stream_v1::", "exit": 0}, {"filter": "palw_json_key_set_v1::", "exit": 0}, {"filter": "immutable_registered_semantics_refute", "exit": 0}, {"filter": "owned_terminal_fold_", "exit": 101}, {"filter": "every_landed_kind_", "exit": 0}, {"filter": "staged_public_court_has_independent", "exit": 0}, {"filter": "staged_court_state_tests_v1::", "exit": 101}]

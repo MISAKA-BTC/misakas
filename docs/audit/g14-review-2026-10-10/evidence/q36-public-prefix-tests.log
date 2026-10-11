@@ -1,0 +1,17 @@
+source=d6a578b8e
+binary_sha256=a377dbf1c5dfb95814decac169b3576788375e4cb257e3807297a1d6142c292f
+
+running 1 test
+test qwen36_backend::tests::registered_hybrid_prefix_commits_all_cache_components_and_exact_chunk_order ... 
+thread 'qwen36_backend::tests::registered_hybrid_prefix_commits_all_cache_components_and_exact_chunk_order' (4259331) panicked at misaka-palw-base0/src/qwen36_backend.rs:3167:40:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    qwen36_backend::tests::registered_hybrid_prefix_commits_all_cache_components_and_exact_chunk_order
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 499 filtered out; finished in 0.03s
+

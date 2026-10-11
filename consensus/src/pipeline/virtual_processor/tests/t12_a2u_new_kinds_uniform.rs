@@ -111,6 +111,16 @@ fn arm_the_release(params: &mut Params) {
 /// **Every owning fence at `at`** — the lifecycle kinds', the header forms' and the kernel-route inner kinds' — through exhaustive
 /// matches over their `ALL` lists, so a fence a lane adds does not compile here until this harness arms it. The documented
 /// validation bypass: `validate_palw_v2` refuses each of them at every real height.
+/// The objective-offence ledger and its attribution (ADR-0144 §9) at `at` unless the ruleset already arms them at or below it.
+fn arm_objective_offence_at_or_below(params: &mut Params, at: ForkActivation) {
+    let never = ForkActivation::never();
+    for field in [&mut params.palw_objective_offence, &mut params.palw_offence_attribution] {
+        if field.is_none_or(|f| f == never || f.daa_score() > at.daa_score()) {
+            *field = Some(at);
+        }
+    }
+}
+
 fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
     for fence in PalwLifecycleKindFenceV1::ALL {
         match fence {
@@ -129,6 +139,14 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.sync_palw_permissionless_panel_v1();
             }
             PalwLifecycleKindFenceV1::ProviderCourtV1 => params.palw_provider_court_v1 = Some(at),
+            // codex G14 (2026-10-11): class semantics declarations and the staged public court, each its own Some-only fence.
+            PalwLifecycleKindFenceV1::ClassSemanticsV1 => params.palw_class_semantics_v1 = Some(at),
+            // The staged public court and LG14-A's terminal evidence (tags 162-167) file objective offences: past their own fence
+            // they also need the objective-offence ledger and its attribution (ADR-0144 §9), armed at or below `at` here.
+            PalwLifecycleKindFenceV1::StagedPublicCourtV1 => {
+                params.palw_staged_public_court_v1 = Some(at);
+                arm_objective_offence_at_or_below(params, at);
+            }
             PalwLifecycleKindFenceV1::LegacyHeldDaV2 => params.palw_legacy_held_da_v2 = Some(at),
             // Lane HFX: the `Head` variants inside tag 68 and a generative job; the fence mirrors onto the V2 bundle.
             PalwLifecycleKindFenceV1::TaskHeadsV1 => {
@@ -139,6 +157,7 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             PalwLifecycleKindFenceV1::LegacyPublicFilerV1 => {
                 params.palw_legacy_public_filer_v1 = Some(at);
                 params.sync_palw_legacy_public_filer_v1();
+                arm_objective_offence_at_or_below(params, at);
             }
             // Lane BUDGET: the allocation needs the budget at or below it; both with the unapproved probe policies, mirrored.
             PalwLifecycleKindFenceV1::ModelBondAllocationV1 => {
@@ -206,7 +225,9 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_legacy_public_filer_v1"
             | "palw_beacon_source_opt_in_v1"
             | "palw_exec_payload_v2"
-            | "palw_model_refutation_seal_v1" => {} // armed above, through their enums
+            | "palw_model_refutation_seal_v1"
+            | "palw_class_semantics_v1"
+            | "palw_staged_public_court_v1" => {} // armed above, through their enums
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
             // ADR-0175 needs model lines at or below it (`validate_palw_model_immutable_v1`); artifact root ownership is t12's.

@@ -430,6 +430,7 @@ impl KernelLedgerV1 {
         self.restore_budget(Default::default());
         // DA16's provider-liable set is consumer-derived (re-injected before every object), never a row: the rows' ledger has none.
         self.provider_liable = Default::default();
+        self.commitment_scope_from_daa = None;
         self.beacon_source_inputs = Default::default();
         self
     }

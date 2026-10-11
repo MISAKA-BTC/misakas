@@ -1,0 +1,5 @@
+   Compiling misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/g14-commitment-scope/MISAKA-testnet/misaka-palw-challenge)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-commitment-scope/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.57s
+  Executable tests/court_scope.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/court_scope-dcfebe5900c92cda)
+  Executable tests/g14s_court_scope.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/g14s_court_scope-8848c36de715f2d8)

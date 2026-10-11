@@ -2308,7 +2308,14 @@ pub(crate) fn palw_da_material_v1(
             let mut jobs: Vec<PalwFpMaterialV1> = Vec::new();
             for bytes in kept {
                 let material = match palw_fp_capture_decode_v1(&bytes, facts.form) {
-                    Some(payload) if reproduces(&payload.capture, facts.roots_v1(Some(&payload.material.job))) => {
+                    Some(payload)
+                        if fp_verify_capture_under_job_v1(
+                            backend,
+                            &payload.material.job,
+                            &payload.capture,
+                            facts.roots_v1(Some(&payload.material.job)),
+                        ) == PalwMaterialVerdictV1::Matches =>
+                    {
                         return Ok((PalwDaCaptureV1::FreePrompt(payload), false));
                     }
                     // Decodes, and its capture is not the claim's: its job may still be.
@@ -2340,14 +2347,33 @@ pub(crate) fn palw_da_material_v1(
                     continue;
                 };
                 let prompt: Vec<usize> = ids.iter().map(|id| *id as usize).collect();
-                let capture = match backend.execute_free_prompt(&material.job, &prompt) {
+                // Recovery owns the same authenticated constraint scope as initial execution.
+                // A retained descriptor is sufficient to remake a lost capture only when this
+                // host holds the descriptor's exact token table. Host refusal never supplies DA.
+                let mask = match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(
+                    &material.job,
+                    backend.token_table_for_job_v1(&material.job),
+                ) {
+                    Ok(mask) => mask,
+                    Err(e) => {
+                        refused = format!("the kept job's constraint table is unavailable: {e}");
+                        continue;
+                    }
+                };
+                let capture = match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+                    backend.execute_free_prompt(&material.job, &prompt)
+                }) {
                     Ok(run) => run.outcome.material,
                     Err(e) => {
                         refused = format!("the kept job's replay was refused: {e}");
                         continue;
                     }
                 };
-                if !reproduces(&capture, facts.roots_v1(Some(&material.job))) {
+                // Verification must own the same authenticated job scope as execution: bare
+                // verification would compare a constrained/pipeline capture with default argmax.
+                if fp_verify_capture_under_job_v1(backend, &material.job, &capture, facts.roots_v1(Some(&material.job)))
+                    != PalwMaterialVerdictV1::Matches
+                {
                     refused = "the kept job's replay does not reproduce the claim's committed roots".to_string();
                     continue;
                 }
@@ -3912,6 +3938,7 @@ fn seat_conformance_on_v1() -> bool {
     SEAT_CONFORMANCE_V1.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+#[derive(Clone)]
 pub struct PalwPanelConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed of the bond that holds this node's seats.
     pub key_path: String,
@@ -3954,6 +3981,8 @@ pub struct PalwPanelConfig {
     /// opening a court stakes this bond the claim's own reserved amount. A network wants some
     /// nodes doing it, not all of them — which is the same shape as any other watchdog.
     pub challenge: bool,
+    /// Exact public claims this outside verifier pursues (empty: automatic discovery).
+    pub public_claims: Vec<Hash64>,
     /// **ADR-0074 Decision 1: the work queue.** When nobody is asking, run the network's own job
     /// on `canonical_class` and commit it as a canonical free-prompt claim — drawn by the chain's
     /// beacon, priced in leaves, verified and tried exactly as a user's. Funded like every other
@@ -14586,6 +14615,10 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::BondRegistered { .. } => "BondRegistered",
         PalwConsensusObjectV2::SeatReadinessProved { .. } => "SeatReadinessProved",
         PalwConsensusObjectV2::ClassManifestV2 { .. } => "ClassManifestV2",
+        PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { .. } => "ClassSemanticsDeclaredV1",
+        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } => "PublicCourtStreamOpenedV1",
+        PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. } => "PublicCourtStreamLeafV1",
+        PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => "PublicCourtStreamMoveV1",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         PalwConsensusObjectV2::VerificationVertexV1 { .. } => "VerificationVertexV1",
@@ -14637,6 +14670,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
         PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { .. } => "LegacyHeldAnswerDeclaredV2",
         PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. } => "LegacyHeldAnswerChunkV2",
+        PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } => "ObjectiveEvidenceDeclaredV1",
+        PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. } => "ObjectiveEvidenceChunkV1",
         PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         // Lane BUDGET (tag 140): a bond's capital assignment.
         PalwConsensusObjectV2::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
@@ -18863,6 +18898,8 @@ mod accepted_objects_walk_tests {
         answer_history: HashMap<(BlockHash, kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, Hash64, u8),
             kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
         answer_history_unavailable: bool,
+        flip_sink_on_block: Option<(BlockHash, BlockHash)>,
+        observed_sink: std::sync::Mutex<Option<BlockHash>>,
     }
 
     impl kaspa_consensus_core::api::ConsensusApi for Chain {
@@ -18885,7 +18922,7 @@ mod accepted_objects_walk_tests {
             self.targets.get(&claim).cloned()
         }
         fn get_sink(&self) -> BlockHash {
-            self.sink
+            self.observed_sink.lock().unwrap().unwrap_or(self.sink)
         }
         fn get_header(&self, hash: BlockHash) -> ConsensusResult<Arc<Header>> {
             self.headers.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
@@ -18905,6 +18942,9 @@ mod accepted_objects_walk_tests {
             self.acceptance.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
         }
         fn get_block(&self, hash: BlockHash) -> ConsensusResult<Block> {
+            if let Some((at, sink)) = self.flip_sink_on_block && at == hash {
+                *self.observed_sink.lock().unwrap() = Some(sink);
+            }
             self.blocks.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
         }
         fn is_chain_ancestor_of(&self, low: BlockHash, mut high: BlockHash) -> ConsensusResult<bool> {
@@ -18954,7 +18994,7 @@ mod accepted_objects_walk_tests {
             hash(n),
             Arc::new(vec![MergesetBlockAcceptanceData {
                 block_hash: hash(n),
-                accepted_transactions: vec![AcceptedTxEntry { transaction_id: Default::default(), index_within_block: 0 }],
+                accepted_transactions: vec![AcceptedTxEntry { transaction_id: chain.blocks[&hash(n)].transactions[0].id(), index_within_block: 0 }],
             }]),
         );
         chain.sink = hash(n);
@@ -18987,6 +19027,7 @@ mod accepted_objects_walk_tests {
             job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(c),
             trace_root: c.trace_root,
             output_root: c.output_root,
+            registered_semantics: None,
         };
         let mut candidate = kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1 {
             claim_id: claim,
@@ -19070,7 +19111,7 @@ mod accepted_objects_walk_tests {
             claim_id: claim, class_id: target.class_id, producer: target.executor_bond,
             phase: kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional, execution_root: target.execution_root, trace_root: target.trace_root,
             accepted_daa: candidate.accepted_daa, trace_retention_daa: 9999, job_identity: target.job_identity,
-            public_fp_job: Some(metadata), work_leaves: c.work_leaves, deadline_daa: None, hard_deadline_daa: 9990,
+            public_fp_job: Some(metadata), registered_semantics: None, work_leaves: c.work_leaves, deadline_daa: None, hard_deadline_daa: 9990,
             record: None, sessions: vec![], answered: vec![], flat_answered_rows: 0, open_courts: 0,
             executor_refuted: false, court_convicted: false, da_defaulted: false,
         };
@@ -19095,6 +19136,87 @@ mod accepted_objects_walk_tests {
         assert!(read(&chain, &candidate, c.job.network_domain).is_err(), "no noncanonical trailing bytes");
         chain.views.insert(claim, view);
         assert_eq!(read(&chain, &candidate, c.job.network_domain).unwrap().claim_id(), claim);
+    }
+
+    #[test]
+    fn public_filer_discards_authenticated_answers_if_the_native_branch_changes_during_the_page() {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        let backend = super::seat_s_tests::floor_backend();
+        let payload = super::palw_fraud_filer::input::tests::payload();
+        let run = backend.execute_free_prompt(&payload.commitment.job,
+            &payload.prompt_token_ids.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();
+        let event = backend.disclose_trace_event(&run.outcome.material, 0, 0).unwrap();
+        let claim = Hash64::from_u64_word(45);
+        let object = PalwConsensusObjectV2::MaterialDisclosedV2 {
+            claim, unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row: 0, tile: 0 },
+            answer: kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(event),
+            discloser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(payload.commitment.job.executor_bond), signature: vec![],
+        };
+        let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap());
+        let mut chain = repeated_daa_chain();
+        chain.blocks.insert(hash(8), Block::new(chain.headers[&hash(8)].as_ref().clone(), vec![tx]));
+        chain.acceptance.insert(hash(8), Arc::new(vec![MergesetBlockAcceptanceData {block_hash:hash(8),
+            accepted_transactions:vec![AcceptedTxEntry{transaction_id:chain.blocks[&hash(8)].transactions[0].id(),index_within_block:0}]}]));
+        let wanted = BTreeMap::from([(claim, run.outcome.execution_root)]);
+        let (_, reset, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, None, 8, &wanted, &BTreeMap::new()).unwrap();
+        assert!(!reset); assert_eq!(answers.len(), 1, "the stable native branch reads the actual authenticated binding");
+        append(&mut chain, 20, 104, 3);
+        chain.sink = hash(8);
+        chain.flip_sink_on_block = Some((hash(8), hash(20)));
+        let (walk, reset, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, None, 8, &wanted, &BTreeMap::new()).unwrap();
+        assert!(reset && answers.is_empty(), "end-of-page branch recheck discards the old branch's otherwise authentic bytes");
+        assert_eq!(walk.anchor, hash(20)); assert_eq!(walk.next, Some(hash(20))); assert_eq!(walk.floor, 100);
+    }
+
+    #[test]
+    fn public_filer_treats_native_body_acceptance_identity_mismatch_as_a_hole() {
+        let mut chain=repeated_daa_chain();
+        let mut row=chain.acceptance[&hash(7)].as_ref().clone();
+        row[0].accepted_transactions[0].transaction_id=hash(999);
+        chain.acceptance.insert(hash(7),Arc::new(row));
+        let mut seen=Vec::new();
+        let (next,hole)=super::palw_fraud_filer::history::walk_available_v1(&chain,chain.sink,100,8,
+            &mut |_,object|seen.push(claim_of(&object))).unwrap();
+        assert!(next.is_none() && hole);
+        assert_eq!(seen,vec![8,6,5,4,3,2,1],"an index cannot substitute another body for an accepted tx identity; older authenticated material remains reachable");
+    }
+
+    #[test]
+    fn public_filer_skips_native_prune_holes_without_losing_older_bytes_or_completing_the_watermark() {
+        let mut chain = repeated_daa_chain();
+        chain.blocks.remove(&hash(6));
+        chain.acceptance.remove(&hash(4));
+        let mut seen = Vec::new();
+        let mut cursor = Some(chain.sink);
+        let mut incomplete = false;
+        while let Some(start) = cursor {
+            let (next, hole) = super::palw_fraud_filer::history::walk_available_v1(&chain, start, 100, 3,
+                &mut |_, object| seen.push(claim_of(&object))).unwrap();
+            incomplete |= hole;
+            cursor = next;
+        }
+        assert!(incomplete);
+        assert_eq!(seen, vec![8, 7, 5, 3, 2, 1], "missing carrier/acceptance never hides older authenticated accepted bodies");
+        assert!(walk_accepted_lifecycle_page_with_block_v2(&chain, chain.sink, 100, 8, &mut |_, _| {}).is_err(),
+            "other callers retain the original strict walker contract");
+        let mut previous = None;
+        for expected in [5, 2, 8] {
+            let (walk, reset, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+                &chain, 100, 100, previous, 3, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+            assert!(!reset && answers.is_empty());
+            assert_eq!(walk.next, Some(hash(expected)));
+            assert!(walk.incomplete, "a hole on the first page survives later pagination to the oldest floor");
+            previous = Some(walk);
+        }
+        // The finished incomplete scan starts again at a new tip, making fresh reanswers visible.
+        append(&mut chain, 9, 103, 8);
+        let (fresh, _, _) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, previous, 3, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        assert_eq!(fresh.anchor, hash(9));
+        assert_eq!(fresh.next, Some(hash(6)));
     }
 
     #[test]
@@ -19258,7 +19380,7 @@ mod accepted_objects_walk_tests {
             Arc::new(vec![MergesetBlockAcceptanceData {
                 block_hash: hash(2),
                 accepted_transactions: (0..count)
-                    .map(|i| AcceptedTxEntry { transaction_id: Default::default(), index_within_block: i as u32 })
+                    .map(|i| AcceptedTxEntry { transaction_id: chain.blocks[&hash(2)].transactions[i].id(), index_within_block: i as u32 })
                     .collect(),
             }]),
         );
@@ -19290,6 +19412,8 @@ mod accepted_objects_walk_tests {
         let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
             borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: good.clone() }).unwrap());
         chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), vec![tx]));
+        chain.acceptance.insert(hash(9), Arc::new(vec![MergesetBlockAcceptanceData {block_hash:hash(9),
+            accepted_transactions:vec![AcceptedTxEntry{transaction_id:chain.blocks[&hash(9)].transactions[0].id(),index_within_block:0}]}]));
         let (fresh, _, delivered) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
             &chain, 100, 100, Some(partial), 100, &wanted, &selected_units,
         ).unwrap();
@@ -19309,7 +19433,7 @@ mod accepted_objects_walk_tests {
         )).collect();
         chain.acceptance.insert(hash(9), Arc::new(vec![MergesetBlockAcceptanceData {
             block_hash: hash(9), accepted_transactions: (0..txs.len()).map(|i| AcceptedTxEntry {
-                transaction_id: Default::default(), index_within_block: i as u32,
+                transaction_id: txs[i].id(), index_within_block: i as u32,
             }).collect(),
         }]));
         chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), txs));
@@ -19346,7 +19470,7 @@ mod accepted_objects_walk_tests {
         chain.blocks.insert(hash(40), Block::new(Header::from_precomputed_hash(hash(40), vec![]), txs));
         chain.acceptance.insert(hash(2), Arc::new(vec![MergesetBlockAcceptanceData {
             block_hash: hash(40), accepted_transactions: (0..2).map(|i| AcceptedTxEntry {
-                transaction_id: Default::default(), index_within_block: i,
+                transaction_id: chain.blocks[&hash(40)].transactions[i as usize].id(), index_within_block: i,
             }).collect(),
         }]));
         let mut previous = None;
@@ -19414,7 +19538,7 @@ mod accepted_objects_walk_tests {
                 Arc::new(vec![MergesetBlockAcceptanceData {
                     block_hash: hash(block),
                     accepted_transactions: (0..count)
-                        .map(|i| AcceptedTxEntry { transaction_id: Default::default(), index_within_block: i as u32 })
+                        .map(|i| AcceptedTxEntry { transaction_id: chain.blocks[&hash(block)].transactions[i].id(), index_within_block: i as u32 })
                         .collect(),
                 }]),
             );
@@ -19557,7 +19681,7 @@ mod accepted_objects_walk_tests {
             block_hash: hash(block),
             accepted_transactions: indices
                 .iter()
-                .map(|i| AcceptedTxEntry { transaction_id: Default::default(), index_within_block: *i })
+                .map(|i| AcceptedTxEntry { transaction_id: chain.blocks[&hash(block)].transactions[*i as usize].id(), index_within_block: *i })
                 .collect(),
         };
         chain.acceptance.insert(hash(4), Arc::new(vec![accepted(14, &[0, 1, 2])]));
@@ -23347,6 +23471,76 @@ mod p2_7_disclosure_policy {
             kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB1), 0);
         let (built, kept) = answer(&backend, &facts, vec![palw_fp_material_encode_v1(&other, &ids)], &event, false);
         assert!(built.is_err() && kept.is_none(), "another producer's job is not replayed");
+    }
+
+    #[test]
+    fn constraint_job_only_recovery_restores_the_mask_and_never_answers_from_missing_tables_or_wrong_roots() {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        use kaspa_consensus_core::palw_decode_constraint_v1::*;
+        use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, palw_fp_capture_encode_v1, palw_fp_material_encode_v1};
+        let (backend, mut facts, mut job, ids, _) = fp_claim();
+        let constraint = PalwDecodeConstraintV1 {
+            version: 1,
+            compiler_id: Hash64::from_u64_word(0xDA_C014),
+            start_frame: 0,
+            frames: vec![PalwConstraintFrameV1 {
+                start: 0,
+                nodes: vec![PalwConstraintNodeV1 {
+                    accepting: true,
+                    edges: vec![PalwConstraintEdgeV1 { lo: b'a', hi: b'a', action: PalwConstraintActionV1::Goto(0) }],
+                }],
+            }],
+        };
+        let vocab = misaka_palw_base0::rc::palw_rc_base0_shape_v1().vocab;
+        let mut table = PalwTokenTableV1 {
+            entries: vec![Some(b"b".to_vec()); vocab],
+            eog_token_ids: vec![(vocab - 1) as u32],
+            tokenizer_id: job.tokenizer_id,
+        };
+        table.entries[0] = Some(b"a".to_vec());
+        let root = palw_token_tables_v1().register(table);
+        job.version = PALW_FP_CONSTRAINT_VERSION;
+        job.decode = None;
+        job.tail = Some(PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 { constraint: constraint.to_bytes(), table_root: root }));
+        let prompt: Vec<_> = ids.iter().map(|id| *id as usize).collect();
+        assert!(backend.execute_free_prompt(&job, &prompt).is_err(), "the unscoped recovery would fail");
+        let expected = palw_fp_with_constraint_scope_v1(
+            palw_fp_constraint_mask_for_host_v1(&job, backend.token_table_for_job_v1(&job)).unwrap(),
+            || backend.execute_free_prompt(&job, &prompt),
+        )
+        .unwrap();
+        assert!(expected.output_token_ids.iter().all(|id| *id == 0));
+        facts.execution_root = expected.outcome.execution_root;
+        facts.trace_root = expected.facts.full_logits_trace_root;
+        facts.work_leaves = expected.facts.step_leaf_count;
+        let binding = backend.disclose_trace_event(&expected.outcome.material, u32::MAX, 0).unwrap().binding().clone();
+        facts.job_pin = Some(kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context));
+        let honest = palw_fp_capture_encode_v1(&job, &ids, &expected.outcome.material);
+        let event = [PalwDaUnitV1::Event { row: 0, tile: 0 }];
+        let expected_answer = answer(&backend, &facts, vec![honest.clone()], &event, false).0.unwrap().answers;
+        for kept in [palw_fp_material_encode_v1(&job, &ids), palw_fp_capture_encode_v1(&job, &ids, b"corrupt capture")] {
+            let (built, retained) = answer(&backend, &facts, vec![kept], &event, false);
+            let actual = built.expect("the descriptor and owned public table recover the lost capture");
+            assert!(actual.remade);
+            assert_eq!(actual.answers, expected_answer);
+            assert_eq!(retained.as_deref(), Some(honest.as_slice()));
+            assert!(palw_fp_constraint_scope_v1().is_none(), "recovery restores the caller's thread scope");
+        }
+        let mut wrong_tokenizer = job.clone();
+        wrong_tokenizer.tokenizer_id = Hash64::from_u64_word(0xBAD_DA_C014);
+        let mut unavailable = job.clone();
+        let Some(PalwFpJobTailV1::Constraint(tail)) = unavailable.tail.as_mut() else { unreachable!() };
+        tail.table_root = Hash64::from_u64_word(0xBAD_DA_C015);
+        for refused in [wrong_tokenizer, unavailable] {
+            let (built, retained) = answer(&backend, &facts, vec![palw_fp_material_encode_v1(&refused, &ids)], &event, false);
+            assert!(built.is_err() && retained.is_none(), "another/missing table cannot become a DA answer");
+            assert!(palw_fp_constraint_scope_v1().is_none());
+        }
+        facts.execution_root = Hash64::from_u64_word(0xBAD_DA_C016);
+        let (built, retained) = answer(&backend, &facts, vec![palw_fp_material_encode_v1(&job, &ids)], &event, false);
+        assert!(built.is_err() && retained.is_none(), "correct recovery must still reproduce the recorded claim roots");
+        assert!(palw_fp_constraint_scope_v1().is_none());
     }
 
     /// **Every due unit of a claim from one load, and one `Flat` answers the claim's run** (IMPL-16): a

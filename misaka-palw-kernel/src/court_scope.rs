@@ -99,6 +99,9 @@ impl KernelLedgerV1 {
         if !self.court_scope_clear_budget_in_force() {
             return Ok(());
         }
+        // The prospective commitment-only route withholds every model-dependent value;
+        // its executable court and admission work remain checked separately.
+        if self.commitment_scope_from_daa.is_some_and(|at| self.daa >= at) { return Ok(()); }
         let exposure = court_model_exposure_v1(&row.program, row.program.params.len());
         match court_clear_position_budget_v1(&exposure) {
             u64::MAX => Ok(()),
@@ -115,7 +118,7 @@ impl KernelLedgerV1 {
     fn served_clear_for_model_v1(&self, model: &Digest) -> u64 {
         let of_model = |claim: &Digest| {
             self.claims.get(claim).is_some_and(|r| {
-                matches!(r.body, ClaimBodyV1::Program { .. })
+                !self.commitment_scope_applies_v1(r) && matches!(r.body, ClaimBodyV1::Program { .. })
                     && self.classes.get(&r.class_binding_id).is_some_and(|c| c.param_commitments.root() == *model)
             })
         };
@@ -152,6 +155,9 @@ impl KernelLedgerV1 {
         if !matches!(claim_row.body, ClaimBodyV1::Program { .. }) {
             return Ok(());
         }
+        // Unit and dismissal quotas above still apply. A commitment-only response owes
+        // no model-dependent clear bytes and cannot spend another claim's clear allowance.
+        if self.commitment_scope_applies_v1(claim_row) { return Ok(()); }
         let Some(class) = self.classes.get(&claim_row.class_binding_id) else { return Ok(()) };
         let exposure = court_model_exposure_v1(&class.program, class.program.params.len());
         let served = self.served_clear_for_model_v1(&class.param_commitments.root());

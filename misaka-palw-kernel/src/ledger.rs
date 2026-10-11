@@ -850,6 +850,10 @@ pub struct KernelLedgerV1 {
     /// state, its rows or its root. A demand on such a claim that nobody answers by its deadline is a
     /// [`LedgerEventV1::ProviderLiableDefault`] — the providers' failure, never the producer's; and [`Self::provider_lapse`] voids it.
     pub provider_liable: BTreeSet<Digest>,
+    /// Consumer-resolved commitment-only court scope. Only claims committed at or after this
+    /// activation omit model-dependent node values. Never a ledger row; a consensus consumer
+    /// must derive it from authenticated configuration at every load, including public reads.
+    pub commitment_scope_from_daa: Option<u64>,
     /// **`palw_verifier_pay_v1`'s terms** (M\*-49 and O2), consumer-injected before every object and tick like the attested set; NOT
     /// part of this state or its root. `None`: the fence is absent (every rule below it is the historical one).
     pub verifier_pay_policy: Option<crate::verifier_pay::VerifierPayPolicyV1>,
@@ -938,6 +942,7 @@ impl KernelLedgerV1 {
             seg_progress: BTreeMap::new(),
             typed: crate::spec::TypedStateV1::default(),
             provider_liable: BTreeSet::new(),
+            commitment_scope_from_daa: None,
             verifier_pay_policy: None,
             verifier_pay: BTreeMap::new(),
             court_scope_policy: None,
@@ -2255,10 +2260,22 @@ impl KernelLedgerV1 {
 
     /// `derived[occurrence][node]` of a claim's stage: the values rebuilt from committed rows, never served or demanded.
     pub fn derived_mask(&self, row: &ClaimRowV1, stage: u8) -> Vec<Vec<bool>> {
+        let scoped = self.commitment_scope_applies_v1(row);
         match &row.body {
-            ClaimBodyV1::Program { .. } => {
-                self.classes.get(&row.class_binding_id).map(|c| derived_mask_v1(&c.program)).unwrap_or_default()
-            }
+            ClaimBodyV1::Program { .. } => self
+                .classes
+                .get(&row.class_binding_id)
+                .map(|c| {
+                    let mut mask = derived_mask_v1(&c.program);
+                    if scoped {
+                        merge_withheld_mask_v1(
+                            &mut mask,
+                            crate::scope::court_model_dependent_mask_v1(&c.program, c.program.params.len()),
+                        );
+                    }
+                    mask
+                })
+                .unwrap_or_default(),
             // Every committed value of a segmented claim (derived windows included) is served on demand.
             ClaimBodyV1::Segmented { .. } => Vec::new(),
             ClaimBodyV1::Pipeline { .. } => self
@@ -2266,11 +2283,22 @@ impl KernelLedgerV1 {
                 .get(&row.class_binding_id)
                 .and_then(|c| {
                     let st = c.pipeline.stages.get(stage as usize)?;
-                    Some(derived_mask_v1(&stage_view_v1(c.programs.get(st.program as usize)?).view))
+                    let program = c.programs.get(st.program as usize)?;
+                    let view = stage_view_v1(program).view;
+                    let mut mask = derived_mask_v1(&view);
+                    if scoped {
+                        merge_withheld_mask_v1(&mut mask, crate::scope::court_model_dependent_mask_v1(&view, program.params.len()));
+                    }
+                    Some(mask)
                 })
                 .unwrap_or_default(),
             ClaimBodyV1::Spec(b) => self.spec_derived_mask(row, b, stage),
         }
+    }
+
+    pub fn commitment_scope_applies_v1(&self, row: &ClaimRowV1) -> bool {
+        self.commitment_scope_from_daa.is_some_and(|at| row.committed_daa >= at)
+            && matches!(row.body, ClaimBodyV1::Program { .. } | ClaimBodyV1::Pipeline { .. } | ClaimBodyV1::Spec(_))
     }
 
     pub(crate) fn check_court_work_v1(&self, work: u64) -> Result<(), String> {
@@ -2695,6 +2723,8 @@ impl KernelLedgerV1 {
         if self.served.contains_key(&k) {
             return Err(rule("already served: it is public"));
         }
+        // The explicit commitment-only scope restricts what a response owes, not the
+        // demand's position. No global clear-disclosure allowance can be exhausted here.
         // ADR-0177 D2 (`crate::court_scope`): the requester's units of the claim, and a v1/v2 position's model clear budget.
         self.cumulative_scope_allows_v1(demander, claim, stage, position).map_err(|why| rule(&why))?;
         let need = self.policy.demand_bond;
@@ -3359,6 +3389,9 @@ impl OutsiderV1<'_> {
         if !missing.is_empty() {
             return Ok(OutsiderFindingV1::Demand(missing));
         }
+        if l.commitment_scope_applies_v1(row) {
+            return self.check_computation();
+        }
         match &row.body {
             ClaimBodyV1::Program { claim, .. } => self.check_program(row, claim),
             ClaimBodyV1::Pipeline { .. } => self.check_pipeline(row),
@@ -3435,6 +3468,16 @@ impl OutsiderV1<'_> {
 /// The set of claims a ledger convicted (a convenience for tests and reports).
 pub fn convicted_claims(l: &KernelLedgerV1) -> BTreeSet<Digest> {
     l.claims.iter().filter(|(_, r)| r.convicted).map(|(k, _)| *k).collect()
+}
+
+fn merge_withheld_mask_v1(mask: &mut [Vec<bool>], withheld: Vec<Vec<bool>>) {
+    assert_eq!(mask.len(), withheld.len(), "scope and trace occurrence layouts agree");
+    for (occ, hidden) in mask.iter_mut().zip(withheld) {
+        assert_eq!(occ.len(), hidden.len(), "scope and trace node layouts agree");
+        for (derived, model_dependent) in occ.iter_mut().zip(hidden) {
+            *derived |= model_dependent;
+        }
+    }
 }
 
 #[cfg(test)]

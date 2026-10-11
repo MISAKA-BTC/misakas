@@ -1,0 +1,279 @@
+//! Rooted prospective contract and owned continuation rows. Immutable contracts are stamped
+//! at claim acceptance; mutable checkpoints never contain another copy of public job/grammar.
+use crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1;
+use crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1;
+use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
+use borsh::{BorshDeserialize, BorshSerialize};
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+pub enum PalwStagedCourtKeyV1 {
+    Claim(Hash64),
+    Owner(Hash64, PalwBondKeyV2),
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStagedClaimContractV1 {
+    pub terms: PalwRenderingClaimTermsV1,
+    pub producer: PalwBondKeyV2,
+    /// All bound seats remain held even after their panel/claim rows retire.
+    pub panel: std::collections::BTreeSet<PalwBondKeyV2>,
+    pub prefix_custody: Option<crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwStagedCourtRowV1 {
+    Claim(PalwStagedClaimContractV1),
+    Constraint(Box<PalwOwnedConstraintStreamV1>),
+    Tokenizer(Box<crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1>),
+    Prefix(Box<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCourtV1>),
+}
+impl PalwStagedCourtRowV1 {
+    pub(crate) fn owner_accounting_v1(&self) -> Option<(Hash64, PalwBondKeyV2, u64, u64)> {
+        match self {
+            Self::Constraint(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
+            Self::Tokenizer(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
+            Self::Prefix(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
+            _ => None,
+        }
+    }
+    pub(crate) fn checkpoint_v1(&self) -> Result<PalwStagedCheckpointV1, String> {
+        match self {
+            Self::Constraint(c) => Ok(PalwStagedCheckpointV1::Constraint(c.checkpoint_v1())),
+            Self::Tokenizer(c) => Ok(PalwStagedCheckpointV1::Tokenizer(Box::new(c.checkpoint_v1()))),
+            Self::Prefix(c) => Ok(PalwStagedCheckpointV1::Prefix(Box::new(c.checkpoint_v1()))),
+            _ => Err("claim contract is not an owned mutable court".into()),
+        }
+    }
+    pub(crate) fn restore_checkpoint_v1(&mut self, cp: &PalwStagedCheckpointV1) -> Result<(), String> {
+        match (self, cp) {
+            (Self::Constraint(c), PalwStagedCheckpointV1::Constraint(cp)) => c.restore_checkpoint_v1(cp),
+            (Self::Tokenizer(c), PalwStagedCheckpointV1::Tokenizer(cp)) => c.restore_checkpoint_v1(cp),
+            (Self::Prefix(c), PalwStagedCheckpointV1::Prefix(cp)) => c.restore_checkpoint_v1(cp),
+            _ => Err("staged checkpoint changes immutable court type".into()),
+        }
+    }
+    pub fn check(&self, key: &PalwStagedCourtKeyV1) -> Result<(), String> {
+        match (key, self) {
+            (PalwStagedCourtKeyV1::Claim(_), Self::Claim(c))
+                if c.terms.accepted_daa < c.terms.open_until_daa
+                    && c.terms.open_until_daa < c.terms.stream_until_daa
+                    && c.terms.stream_until_daa < c.terms.collect_until_daa
+                    && c.terms.collect_until_daa <= c.terms.material_until_daa
+                    && c.terms.material_until_daa <= c.terms.bond_exit_after_daa =>
+            {
+                if c.prefix_custody.as_ref().is_some_and(|p| p.accepted_daa != c.terms.accepted_daa) {
+                    return Err("prefix custody changes immutable accepting clock".into());
+                }
+                c.prefix_custody.as_ref().map(|p| p.check(&c.panel)).unwrap_or(Ok(()))
+            }
+            (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Constraint(c)) if (*claim, *bond) == c.key() => c.check(),
+            (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Tokenizer(c)) if (*claim, *bond) == c.key() => c.check(),
+            (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Prefix(c)) if (*claim, *bond) == (c.claim, c.reserver) => c.check(),
+            _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwStagedCheckpointV1 {
+    Constraint(crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1),
+    Tokenizer(Box<crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCheckpointV1>),
+    Prefix(Box<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCheckpointV1>),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwStagedFaultV1 {
+    Constraint(crate::palw_constraint_stream_court_v1::PalwConstraintStreamFaultV1),
+    Tokenizer(crate::palw_tokenizer_owned_court_v1::PalwTokenizerCourtFaultV1),
+    Prefix(crate::palw_prefix_owned_court_v1::PalwPrefixCourtFaultV1),
+}
+/// A reference to a completed ROOTED court, not a challenger-supplied parser checkpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStagedCertificateRefV1 {
+    pub claim: Hash64,
+    pub reserver: PalwBondKeyV2,
+    pub reserved_daa: u64,
+    pub seed_id: Hash64,
+}
+impl PalwStagedCertificateRefV1 {
+    pub fn resolve(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        expected_root: Hash64,
+    ) -> Result<crate::palw_constraint_stream_court_v1::PalwConstraintStreamFaultV1, String> {
+        match self.resolve_fault_v1(state, expected_root)? {
+            PalwStagedFaultV1::Constraint(fault) => Ok(fault),
+            PalwStagedFaultV1::Tokenizer(_) | PalwStagedFaultV1::Prefix(_) => {
+                Err("claim fault is not a constrained execution fault".into())
+            }
+        }
+    }
+    pub fn resolve_fault_v1(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        expected_root: Hash64,
+    ) -> Result<PalwStagedFaultV1, String> {
+        state.staged_claim_contract_v1(&self.claim).ok_or("certificate claim has no prospective contract")?;
+        match state.staged_owned_row_v1(self.claim, self.reserver).ok_or("certificate has no rooted owned court")? {
+            PalwStagedCourtRowV1::Constraint(row) => {
+                if row.reserved_daa != self.reserved_daa || row.seed_id() != self.seed_id {
+                    return Err("certificate changes immutable owner/seed/reservation".into());
+                }
+                let fault = row.certificate()?.ok_or("rooted court completed without objective fault")?;
+                if (fault.claim_id, fault.reservation_owner, fault.reserved_daa, fault.seed_id, fault.execution_root)
+                    != (self.claim, self.reserver, self.reserved_daa, self.seed_id, expected_root)
+                {
+                    return Err("rooted certificate does not convict target execution".into());
+                }
+                Ok(PalwStagedFaultV1::Constraint(fault))
+            }
+            PalwStagedCourtRowV1::Tokenizer(row) => {
+                if row.reserved_daa != self.reserved_daa || row.seed_id() != self.seed_id {
+                    return Err("certificate changes immutable owner/seed/reservation".into());
+                }
+                let fault = row.certificate()?.ok_or("rooted tokenizer court completed honestly")?;
+                if (fault.claim, fault.reserver, fault.reserved_daa, fault.seed_id, fault.execution_root)
+                    != (self.claim, self.reserver, self.reserved_daa, self.seed_id, expected_root)
+                {
+                    return Err("rooted tokenizer certificate does not convict target claim".into());
+                }
+                Ok(PalwStagedFaultV1::Tokenizer(fault))
+            }
+            PalwStagedCourtRowV1::Prefix(row) => {
+                if row.reserved_daa != self.reserved_daa || row.seed_id() != self.seed_id {
+                    return Err("prefix certificate changes immutable owner/seed/reservation".into());
+                }
+                let fault = row.certificate()?.ok_or("rooted prefix court completed honestly")?;
+                if (fault.claim, fault.reserver, fault.reserved_daa, fault.seed_id, fault.execution_root)
+                    != (self.claim, self.reserver, self.reserved_daa, self.seed_id, expected_root)
+                {
+                    return Err("rooted prefix certificate does not convict target claim".into());
+                }
+                Ok(PalwStagedFaultV1::Prefix(fault))
+            }
+            _ => Err("claim contract alone cannot convict".into()),
+        }
+    }
+}
+pub fn palw_staged_reference_v1(
+    kind: crate::palw_offence_v1::PalwOffenceKindV1,
+    evidence: &[u8],
+) -> Option<PalwStagedCertificateRefV1> {
+    use crate::palw_offence_attribution_v1::*;
+    use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPanelContradictionV1 as C};
+    let contradiction = match kind {
+        K::ExecutorRefuted => borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok()?.contradiction,
+        K::PanelFalseValidV2 => borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok()?.contradiction,
+        _ => return None,
+    };
+    match contradiction {
+        C::StagedCourt { reference } => Some(reference),
+        _ => None,
+    }
+}
+pub fn palw_is_staged_evidence_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8]) -> bool {
+    palw_staged_reference_v1(kind, evidence).is_some()
+}
+/// The accepting block's exact clock, never the parent tip or a caller's declared timestamp.
+pub fn palw_staged_collection_open_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    reference: &PalwStagedCertificateRefV1,
+    accepting_daa: u64,
+) -> bool {
+    state
+        .staged_claim_contract_v1(&reference.claim)
+        .is_some_and(|c| accepting_daa >= c.terms.accepted_daa && accepting_daa < c.terms.collect_until_daa)
+}
+
+/// Read-only accepted snapshot. None owner cursor means this literal live reservation has
+/// not opened its one paid court. No parser checkpoint or prior operand bytes are returned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwStagedOwnedProgressV1 {
+    pub snapshot_block: crate::BlockHash,
+    pub now_daa: u64,
+    pub claim: Hash64,
+    pub reserver: PalwBondKeyV2,
+    pub reserved_daa: u64,
+    pub terms: PalwRenderingClaimTermsV1,
+    pub seed_id: Option<Hash64>,
+    pub cursor: Option<PalwStagedOwnedCursorV1>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwStagedOwnedCursorV1 {
+    Prefix {
+        moves_used: u64,
+        cursor: crate::palw_prefix_family_court_v1::PalwPrefixFamilyCursorV1,
+        completed: Option<bool>,
+    },
+    Constraint {
+        phase: crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+    },
+    Tokenizer {
+        offset: u64,
+        tokenizer_sealed: bool,
+        pending_key: Option<(u64, Hash64)>,
+        key_root: Hash64,
+        key_events: u64,
+        rendering_offset: u32,
+        /// None is incomplete or unauthenticated; Some(false) honest, Some(true) objective fault.
+        completed: Option<bool>,
+    },
+}
+pub fn palw_staged_owned_progress_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: (Hash64, PalwBondKeyV2),
+) -> Result<Option<PalwStagedOwnedProgressV1>, String> {
+    let point = state.last_point().ok_or("staged progress snapshot has no accepted clock")?;
+    let Some(contract) = state.staged_claim_contract_v1(&key.0) else { return Ok(None) };
+    let Some(reservation) = state.legacy_dispute_reservation_v1(&key.0, &key.1) else { return Ok(None) };
+    let (seed_id, cursor) = match state.staged_owned_row_v1(key.0, key.1) {
+        Some(PalwStagedCourtRowV1::Tokenizer(row)) => {
+            row.check()?;
+            if row.reserved_daa != reservation.reserved_daa {
+                return Err("staged progress reservation differs from owned seed".into());
+            }
+            let court = row.court();
+            (
+                Some(row.seed_id()),
+                Some(PalwStagedOwnedCursorV1::Tokenizer {
+                    offset: court.tokenizer_offset(),
+                    tokenizer_sealed: court.tokenizer_sealed_v1(),
+                    pending_key: court.pending_key(),
+                    key_root: court.key_set_root(),
+                    key_events: court.key_events(),
+                    rendering_offset: court.rendering_offset(),
+                    completed: row.certificate().ok().map(|r| r.is_some()),
+                }),
+            )
+        }
+        Some(PalwStagedCourtRowV1::Constraint(row)) => {
+            row.check()?;
+            if row.reserved_daa != reservation.reserved_daa {
+                return Err("staged progress reservation differs from owned seed".into());
+            }
+            (Some(row.seed_id()), Some(PalwStagedOwnedCursorV1::Constraint { phase: row.court().phase() }))
+        }
+        Some(PalwStagedCourtRowV1::Prefix(row)) => {
+            row.check()?;
+            if row.reserved_daa != reservation.reserved_daa {
+                return Err("prefix progress reservation differs from owned seed".into());
+            }
+            (
+                Some(row.seed_id()),
+                Some(PalwStagedOwnedCursorV1::Prefix {
+                    moves_used: row.moves_used,
+                    cursor: row.cursor_v1()?,
+                    completed: row.certificate().ok().map(|r| r.is_some()),
+                }),
+            )
+        }
+        Some(_) => return Err("staged owner key contains a claim contract".into()),
+        None => (None, None),
+    };
+    Ok(Some(PalwStagedOwnedProgressV1 {
+        snapshot_block: point.block,
+        now_daa: point.daa_score,
+        claim: key.0,
+        reserver: key.1,
+        reserved_daa: reservation.reserved_daa,
+        terms: contract.terms,
+        seed_id,
+        cursor,
+    }))
+}

@@ -1872,6 +1872,8 @@ Do you confirm? (y/n)";
                             crate::args::palw_host_share_bytes_v1(args),
                         ),
                         challenge: args.palw_challenge || args.palw_drill_challenge_all,
+                        public_claims: crate::args::parse_palw_public_claims_v1(&args.palw_public_claim)
+                            .unwrap_or_else(|error| panic!("--palw-public-claim: {error}")),
                         canonical_claims: args.palw_canonical_claims,
                         canonical_class: args.palw_canonical_class.clone(),
                         canonical_interval_daa: args.palw_canonical_interval_daa,

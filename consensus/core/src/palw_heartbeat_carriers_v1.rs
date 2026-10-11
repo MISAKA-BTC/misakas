@@ -117,10 +117,14 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         O::GenShardCourtAccused { .. } => true,
         // RFC-0003 decision 22: the held leaf challenge opens a session, a court opening too.
         O::HeldLeafChallengeDeclared { .. } => true,
+        O::ObjectiveEvidenceDeclaredV1 { .. } | O::ObjectiveEvidenceChunkV1 { .. } => true,
+        // Owned court continuation is checked by its prospective fence, signature and rent.
+        O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamLeafV1 { .. } | O::PublicCourtStreamMoveV1 { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }
         | O::ClassRegistered { .. }
+        | O::ClassSemanticsDeclaredV1 { .. }
         // RFC-0002 Phase F (tag 61): an IR registration is a registration, like the one above.
         | O::ClassRegisteredTirV1 { .. }
         // RFC-0003 (tag 68): a generative registration, likewise.

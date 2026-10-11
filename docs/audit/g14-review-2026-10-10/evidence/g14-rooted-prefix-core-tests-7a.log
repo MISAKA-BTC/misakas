@@ -1,0 +1,102 @@
+Compiled source7a124843d; coreopt0/debug0;64MiB debug threads.
+Binary SHA256 a7d12780ade5a590ee708e6fd488f616127826e248ea6e98b7fb2a9867ae74b0
+
+FILTER palw_prefix_
+
+running 8 tests
+test palw_prefix_family_court_v1::tests::immutable_i8_job_fixture_authenticates_the_full_prefix_and_refuses_foreign_seed ... ok
+test palw_prefix_gdn_paged_v1::tests::maximum_kernel_geometry_initializes_constant_resident_zero_root_without_a_matrix_allocation ... ok
+test palw_prefix_gdn_paged_v1::tests::paged_owned_matrix_matches_exact_native_recurrence_across_partial_pages_and_restart ... ok
+test palw_prefix_gdn_replay_v1::tests::authenticated_slice_uses_only_exact_claim_tiles_and_refuses_reordered_or_forged_rows ... ok
+test palw_prefix_resources_v1::tests::authenticated_i8_geometry_prices_every_old_i32_leaf_and_refuses_price_overflow ... ok
+test palw_prefix_state_court_v1::tests::every_committed_prefix_byte_is_required_in_both_receipt_contexts ... ok
+test palw_prefix_state_stream_v1::tests::chunked_prefix_matches_full_authenticated_court_and_restores_each_move ... ok
+test palw_prefix_state_stream_v1::tests::tentative_corrupt_leaf_or_wrong_seed_cannot_finalize_a_prefix ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 3824 filtered out; finished in 0.44s
+
+FILTER_EXIT 0
+
+FILTER staged_court_state_tests_v1::
+
+running 7 tests
+test palw_state_v2::staged_court_state_tests_v1::certificate_reference_requires_completed_rooted_court_and_exact_identity ... ok
+test palw_state_v2::staged_court_state_tests_v1::owner_exposure_and_holds_rebuild_and_revert_without_other_owner_scan ... ok
+test palw_state_v2::staged_court_state_tests_v1::paid_claim_work_extension_holds_every_bound_seat_and_restores_all_indexes ... ok
+test palw_state_v2::staged_court_state_tests_v1::prospective_contract_roots_carries_and_reverts_without_historic_tail_changes ... ok
+test palw_state_v2::staged_court_state_tests_v1::staged_progress_uses_one_accepted_snapshot_and_never_copies_parser_state ... ok
+test palw_state_v2::staged_court_state_tests_v1::tokenizer_owned_moves_root_reload_and_reorg_preserve_exact_certificate_and_capital ... ok
+test palw_state_v2::staged_court_state_tests_v1::typed_prefix_owned_journal_authenticates_eof_and_restores_all_paid_state ... 
+thread 'palw_state_v2::staged_court_state_tests_v1::typed_prefix_owned_journal_authenticates_eof_and_restores_all_paid_state' (4359684) panicked at consensus/core/src/palw_state_v2.rs:79578:17:
+assertion failed: state.staged_bond_exit_held_v1(participant, terms.material_until_daa)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    palw_state_v2::staged_court_state_tests_v1::typed_prefix_owned_journal_authenticates_eof_and_restores_all_paid_state
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 3825 filtered out; finished in 0.56s
+
+FILTER_EXIT 101
+
+FILTER every_landed_kind_
+
+running 2 tests
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... 
+thread 'palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form' (4359688) panicked at consensus/core/src/palw_lifecycle_objects_v2.rs:4570:13:
+[a2u-pins] A-2 wire pins differ (A-2 uniformity).
+* PALW_A2_INT12_VARIANTS_WIRE_V1 (pinned 0xd1982421da455cca, now 0xd1982421da455cca): a variant the live build decodes changed its declaration — classify it (an Int12Inner row and a guarded owner arm, or a re-read and its probe), never by re-pinning alone.
+* PALW_A2_NEW_KIND_WIRE_V1: a lane that creates or changes a post-int-12 kind re-pins it here and keeps the change under its row's fence. Current pins:
+[a2u-pins-begin]
+    (104, 0x98d7608e0a24ad99),
+    (105, 0xa20547aac744e0c7),
+    (106, 0x888f101d106c24bc),
+    (107, 0x0081a402000ddbf4),
+    (108, 0xac8ecc3ff97ec415),
+    (109, 0xcd35f41524be4a4f),
+    (110, 0x7da0346d0633de78),
+    (111, 0x2d490db20d075bfe),
+    (113, 0xca1188bcd2f663d2),
+    (120, 0xcbb24fb8f993e5c6),
+    (130, 0x5774ef35c9a3fdaa),
+    (140, 0xa4ab9f7696775588),
+    (150, 0x5fb8c8b2822f8386),
+    (151, 0x6a81242ebaeba7fd),
+    (152, 0xc48f175fa3456d1e),
+    (153, 0x74bac59d2cf50cd4),
+    (154, 0x047359d4d8ba0a7b),
+    (155, 0x6d9c4e7671a9cac7),
+    (156, 0xfd9ad539eab02a3c),
+    (157, 0xa5ca85bb4a3be200),
+    (158, 0x1bbcf34fe919b8c4),
+    (159, 0x0395636b651f74fa),
+    (160, 0x730c4ce9aa0ff75e),
+    (161, 0xec0447b18452362b),
+    (162, 0x16fdc18dd12bd954),
+    (163, 0x51ac8be8e6561cbd),
+    (164, 0x1328fec2bbe52c00),
+    (165, 0x4e3b547835c85ed2),
+    (166, 0xe436b43fd3c3e30b),
+    (167, 0x6cc2369c66aa4dc6),
+    (131, 0xab59e37a222e6f74),
+[a2u-pins-end]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence ... [a2u] rows awaiting their lane's merge:
+  CoinbaseTrailer { magic: [80, 88, 65, 50] } → palw_exec_payload_v2 (X8R anchor trailer)
+  HeaderFormula { what: "header.palw_state_root = H(fork-choice leaf || ADR-0043 root) past the fence" } → palw_fork_choice_commitment_v1 (L2FC)
+  StateEncoding { what: "bond budget engine Q/B/R/F (deltas 190–199, tail 0xEF, root block bond_budget/v1)" } → palw_bond_budget_v1 (BUDGET (ADR-0176))
+  StateEncoding { what: "model coinbase allocated by distinct locked miner capital f(S_m) inside the budget" } → palw_model_bond_allocation_v1 (BUDGET (ADR-0177))
+  StateEncoding { what: "R-1 reporter share and DA-6 exposure: 1,000 bps below, 4,900 bps past" } → palw_reporter_share_v2 (INTF (ADR-0032 amendment))
+ok
+
+failures:
+
+failures:
+    palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 3830 filtered out; finished in 1.82s
+
+FILTER_EXIT 101

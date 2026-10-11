@@ -590,6 +590,7 @@ pub(super) fn palw_replay_target_of_duty_v1(duty: &PalwSeatDutyV2) -> PalwOffenc
         job_identity: duty.job_identity,
         trace_root: duty.trace_root,
         output_root: duty.output_root,
+        registered_semantics: None,
     }
 }
 
