@@ -22639,7 +22639,7 @@ impl VirtualStateProcessor {
         let mut new_bonds = Vec::new();
         let mut seen_bonds = std::collections::BTreeSet::new();
         for rec in &canonical.bonds {
-            if !seen_bonds.insert(rec.bond_outpoint) {
+            if !seen_bonds.insert((rec.bond_outpoint.transaction_id, rec.bond_outpoint.index)) {
                 return Err(mismatch(format!("duplicate bond {}", rec.bond_outpoint)));
             }
             match bonds_write.get(&rec.bond_outpoint).optional()
