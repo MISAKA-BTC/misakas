@@ -416,6 +416,32 @@ async fn kernel_claims(
     (prefix, slices, out.collect())
 }
 
+/// Opening a root needs its prefix, not three uncarried worker claims. A second
+/// root's positive control must respect the same live-claim caps as a producer.
+async fn kernel_prefix_claim(cw: &mut Cw, real: &RealRun, decl: &PalwWorkRootDeclarationV2) -> SliceClaim {
+    let job = KernelJobV1 {
+        class_binding_id: cw.kernel_class,
+        prompt: real.prompt.clone(),
+        max_new_tokens: real.run.len() as u32,
+        decode: DecodeRuleV1::Greedy,
+        nonce: palw_exec_v2_prefix_job_nonce_v1(&real.claim, decl.boundaries[0], &decl.canonical_job_id, &decl.plan_root).as_bytes(),
+    };
+    let post = cw.net.route(REGISTRANT, &K::PostJob { job: job.clone() });
+    cw.net.send(vec![(REGISTRANT, post)]).await;
+    let ledger = cw.net.ledger();
+    assert!(ledger.jobs.contains_key(&job.id()));
+    let produced = produce(&cw.cand, &ledger, &cw.kernel_class, &job, cw.net.kid(ROOT_CARD), real.run.clone(), |_| {});
+    let id = produced.claim.id();
+    let (seal, reveal) = seal_and_reveal(&ledger, cw.net.kid(ROOT_CARD), &produced.object);
+    let seal = cw.net.route(ROOT_CARD, &seal);
+    cw.net.send(vec![(ROOT_CARD, seal)]).await;
+    assert!(cw.net.ledger().seals.contains_key(&(job.id(), cw.net.kid(ROOT_CARD))));
+    let reveal = cw.net.route(ROOT_CARD, &reveal);
+    cw.net.send(vec![(ROOT_CARD, reveal)]).await;
+    assert!(cw.net.ledger().claims.contains_key(&id), "the second root's own prefix was admitted within the live-claim caps");
+    SliceClaim { job, claim: Claim { id, producer: ROOT_CARD, trace: produced.trace, at: matmul_at(&cw.cand.program, 1) } }
+}
+
 /// Remove only the original REAL header while exercising root admission from an authenticated snapshot.
 /// This is a node reader/fold test, not an actual pruning/P2P transport drill; no DAG mining runs while that header is absent.
 #[tokio::test]
@@ -538,9 +564,9 @@ async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_abse
     {
         use kaspa_consensus_core::config::{ConfigBuilder, params::MAINNET_PARAMS};
         use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 as Verdict;
-        let disabled = crate::pipeline::virtual_processor::tests::TestContext::new(crate::consensus::test_consensus::TestConsensus::new(
-            &ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build(),
-        ));
+        let disabled = crate::pipeline::virtual_processor::tests::TestContext::new(
+            crate::consensus::test_consensus::TestConsensus::new(&ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build()),
+        );
         let off = disabled.consensus.virtual_processor();
         assert!(off.palw_panel_params_v2.is_none());
         let why = "PALW objects on a network with no V2 bundle";
@@ -594,7 +620,10 @@ async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_abse
         let (committed, delta) = vp.palw_v2_fold_accepted_with_delta_for_tests(&base, p, &now, &accepted).unwrap();
         assert_eq!(committed.exec_v2_origin_count_v1(), rehearsed.exec_v2_origin_count_v1());
         assert_eq!(committed.exec_v2_origin_count_v1(), base.exec_v2_origin_count_v1() + 2);
-        assert_eq!(kaspa_consensus_core::palw_state_v2::revert_delta_v2(&committed, &delta, p).unwrap().state_root(), base.state_root());
+        assert_eq!(
+            kaspa_consensus_core::palw_state_v2::revert_delta_v2(&committed, &delta, p).unwrap().state_root(),
+            base.state_root()
+        );
         // A direct third proof uses the same budget and is deferred without invalidating the block.
         mixed.insert(2, proofs[2].clone());
         let (limited, _) = vp.palw_v2_accepted_objects_and_state_for_tests(&base, p, &now, mixed, now.block);
@@ -918,6 +947,61 @@ async fn session(cw: &mut Cw, lie_prefix: bool, lie: impl Fn(usize) -> bool) -> 
     s
 }
 
+/// Two actually admitted REAL claims of the same class and bond cannot share a
+/// prefix. Keep each REAL job and output intact so the named refusal is the
+/// root-specific job nonce, with an independently signed prefix as the control.
+#[tokio::test]
+async fn x8_g14_a_second_real_root_cannot_reuse_the_first_roots_prefix_claim() {
+    use kaspa_consensus_core::palw_state_v2::PalwBlockContextV2;
+    let mut cw = active_world().await;
+    let first = opened(&mut cw, false, |_| false, |_, _, _| Vec::new()).await;
+    let class = cw.v2_class;
+    let second = real_attempt(&mut cw, ROOT_CARD, class, 0xA77F).await;
+    assert_ne!(first.real.claim, second.claim);
+    let initial = palw_exec_v2_token_state_root_v1(&[&second.stream()]);
+    let mut stolen = declaration(&cw, &second, Hash64::from_bytes(first.prefix.claim.id), initial);
+    stolen.signature = sign(ROOT_CARD, stolen.signing_message(cw.net.domain).as_byte_slice(), PALW_EXEC_V2_ROOT_MLDSA87_CONTEXT, 0x71);
+    let object = Obj::ExecWorkRootOpenedV2 { declaration: Box::new(stolen) };
+    let before = cw.net.chain.tip_state().1;
+    let point = PalwBlockContextV2 {
+        block: cw.net.chain.sink(),
+        daa_score: cw.net.daa() + 1,
+        blue_score: before.last_point().unwrap().blue_score + 1,
+        subsidy: 0,
+    };
+    let why = cw.net.chain.vp().palw_h1_carrier_refusal_on(&before, &cw.net.bundle.state, &point, &object).unwrap();
+    assert!(why.contains("job nonce"), "the root-specific binding refuses reuse: {why}");
+    let tx = cw.net.carrier(ROOT_CARD, &object);
+    let ttpb = cw.net.ttpb();
+    let carrying = cw.net.chain.heartbeat(ttpb, vec![tx.clone()]).await;
+    assert!(carrying.transactions.iter().any(|t| t.id() == tx.id()), "the signed reuse attack was actually carried");
+    cw.net.chain.heartbeat(ttpb, Vec::new()).await;
+    let refused = cw.net.chain.tip_state().1;
+    assert!(refused.exec_v2_root_v1(&second.claim).is_none(), "the block fold refuses the carried declaration");
+    assert_eq!(refused.exec_v2_root_v1(&first.real.claim), before.exec_v2_root_v1(&first.real.claim));
+    assert_eq!(refused.exec_v2_counts_v1(), before.exec_v2_counts_v1());
+    assert_eq!(refused.claim(&second.claim), before.claim(&second.claim), "the refused declaration consumes no native claim rights");
+    assert_eq!(cw.net.ledger().exec_reward_holds[&first.prefix.claim.id].owner_root, first.real.claim.as_bytes());
+
+    // The second REAL is eligible: its own job/nonce/output admits the same plan.
+    let draft = declaration(&cw, &second, Hash64::default(), initial);
+    let prefix = kernel_prefix_claim(&mut cw, &second, &draft).await;
+    assert_ne!(prefix.claim.id, first.prefix.claim.id);
+    let mut own = declaration(&cw, &second, Hash64::from_bytes(prefix.claim.id), initial);
+    own.expiry_daa = draft.expiry_daa;
+    let root = send_root(&mut cw, own).await.expect("a distinct prefix opens the second root");
+    assert_eq!(root.phase, PalwWorkRootPhaseV2::Open);
+    assert_eq!(root.prefix_claim, Hash64::from_bytes(prefix.claim.id));
+    assert_eq!(cw.net.chain.tip_state().1.exec_v2_counts_v1(), (2, 0, 2), "two independent roots and work keys, no slice credit");
+    assert_ne!(root.job_work_id, before.exec_v2_root_v1(&first.real.claim).unwrap().job_work_id);
+    let ledger = cw.net.ledger();
+    assert_eq!(ledger.exec_reward_holds[&prefix.claim.id].owner_root, second.claim.as_bytes());
+    assert_eq!(ledger.exec_reward_holds[&first.prefix.claim.id].owner_root, first.real.claim.as_bytes());
+    assert!(!ledger.claims[&prefix.claim.id].rewarded && !ledger.claims[&first.prefix.claim.id].rewarded);
+    let replay = cw.net.replay().await;
+    cw.net.assert_same(&replay, "two REAL roots, rejected prefix reuse and independent positive control");
+}
+
 /// A real signed legacy job has no worker retention consent. Its truthful trace
 /// is insufficient to attach it to EXEC; the worker must sign the v2 job instead.
 #[tokio::test]
@@ -1135,7 +1219,29 @@ async fn x8_g14_completed_worker_claims_earn_nothing_when_the_root_expires_on_th
 #[tokio::test]
 async fn x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready_on_the_real_node() {
     let mut cw = active_world().await;
-    let s = session(&mut cw, false, |_| false).await;
+    let mut s = opened(&mut cw, false, |_| false, |_, _, _| Vec::new()).await;
+    for index in 0..2 {
+        s.lane.push(carry_slice(&mut cw, s.real.claim, index, &s.slices[index as usize].claim).await);
+    }
+    // Slices 0 and 2 have the same authorized executor. Re-signing the first
+    // claim for index 2 must not turn one future kernel Final into two credits.
+    let before = cw.net.chain.tip_state().1;
+    let mut reused = untrusted_slice_statement(&cw, s.real.claim, 2, &s.slices[0]);
+    reused.predecessor_state_root = before.exec_v2_root_v1(&s.real.claim).unwrap().last_state_root;
+    reused.input_root = reused.predecessor_state_root;
+    let (under, attack, anchoring) = carry_slice_statement_raw(&mut cw, reused, EXECUTORS[2]).await;
+    s.lane.push((under, attack.clone()));
+    let refused = cw.net.chain.tip_state().1;
+    assert_eq!(refused.exec_v2_root_v1(&s.real.claim), before.exec_v2_root_v1(&s.real.claim));
+    assert!(refused.exec_v2_slice_v1(&s.real.claim, 2).is_none());
+    let read = cw.net.chain.ctx.consensus.palw_exec_v2_observation_v1(vec![s.real.claim], Some(anchoring)).unwrap();
+    assert!(
+        read.block.unwrap().verdicts.iter().any(|v| {
+            v.carrier == attack.header.hash.to_string() && v.code == PalwSliceRefusalV2::VerificationClaimNotBound("job nonce").code()
+        }),
+        "one kernel claim cannot back a second slice index"
+    );
+    s.lane.push(carry_slice(&mut cw, s.real.claim, 2, &s.slices[2].claim).await);
     let root_claim = s.real.claim;
     let state = cw.net.chain.tip_state().1;
     assert!(state.exec_v2_holds_final_v1(&root_claim), "the root holds its claim's Final while its slices are unverified");
@@ -1189,6 +1295,41 @@ async fn x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready
     for k in s.slices.iter().chain(std::iter::once(&s.prefix)) {
         assert_eq!(state.exec_v2_root_of_kernel_claim_v1(&Hash64::from_bytes(k.claim.id)), Some(root_claim), "BUDGET's H-3a read");
     }
+    // Final is generated by the route's closing tick, not a wire object. Resend
+    // each genuine signed reveal twice through blocks, then run more ticks.
+    // This is a public-carrier replay test, not injected duplicate Final rows.
+    let finals = cw.net.api().unwrap().finals_read_v1().unwrap();
+    for k in s.slices.iter().chain(std::iter::once(&s.prefix)) {
+        let misaka_palw_kernel::ledger::ClaimBodyV1::Program { claim, evidence, commitments } = &ledger.claims[&k.claim.id].body
+        else {
+            panic!("a program claim");
+        };
+        let reveal = K::CommitClaim { claim: claim.clone(), evidence: evidence.clone(), commitments: commitments.clone() };
+        let (_, reveal) = seal_and_reveal(&ledger, cw.net.kid(k.claim.producer), &reveal);
+        for _ in 0..2 {
+            let object = cw.net.route(k.claim.producer, &reveal);
+            let tx = cw.net.carrier(k.claim.producer, &object);
+            let ttpb = cw.net.ttpb();
+            let carrying = cw.net.chain.heartbeat(ttpb, vec![tx.clone()]).await;
+            assert!(carrying.transactions.iter().any(|t| t.id() == tx.id()));
+            cw.net.chain.heartbeat(ttpb, Vec::new()).await;
+        }
+    }
+    cw.net.beat_to(cw.net.daa() + 3).await;
+    let repeated = cw.net.chain.tip_state().1;
+    assert_eq!(repeated.exec_v2_root_v1(&root_claim), state.exec_v2_root_v1(&root_claim));
+    assert_eq!(repeated.exec_v2_counts_v1(), state.exec_v2_counts_v1());
+    let repeated_ledger = cw.net.ledger();
+    for index in 0..3 {
+        assert_eq!(repeated.exec_v2_slice_v1(&root_claim, index), state.exec_v2_slice_v1(&root_claim, index));
+    }
+    for k in s.slices.iter().chain(std::iter::once(&s.prefix)) {
+        assert_eq!(repeated_ledger.claims[&k.claim.id], ledger.claims[&k.claim.id]);
+        assert_eq!(repeated_ledger.job_escrows[&k.job.id()], ledger.job_escrows[&k.job.id()]);
+        assert_eq!(repeated_ledger.exec_reward_holds[&k.claim.id], ledger.exec_reward_holds[&k.claim.id]);
+    }
+    assert_eq!(cw.net.api().unwrap().finals_read_v1().unwrap(), finals, "neither replay nor closing ticks publish a second Final");
+    assert_eq!(cw.net.collateral(REGISTRANT), poster_collateral, "duplicate reveals spend no escrow");
     let z = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&z, "replay");
 }
