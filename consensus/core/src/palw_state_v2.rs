@@ -4726,10 +4726,10 @@ pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) 
         .fold(0u128, u128::saturating_add);
     // Lane LG14-A: a reservation's deposit (live or held) sits on the free half as a session's exposure does; zero below the fence.
     courts.saturating_add(da).saturating_add(state.legacy_dispute_exposure_v1(bond))
-        .saturating_add(state.staged_courts.values().filter_map(|row| match row {
-            crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::Constraint(c) if c.reserver == *bond => Some(u128::from(c.deposit_locked)),
-            _ => None,
-        }).fold(0u128, u128::saturating_add))
+        .saturating_add(state.staged_by_owner.range((*bond, ZERO_HASH64)..)
+            .take_while(|(owner, _)| owner == bond)
+            .filter_map(|(_, claim)| state.staged_owned_constraint_v1(*claim, *bond))
+            .map(|row| u128::from(row.deposit_locked)).fold(0u128, u128::saturating_add))
 }
 
 /// **A-6: the room an accuser still has on its free half** — [`palw_rcore_gate_room_v1`] with
@@ -12070,6 +12070,8 @@ pub struct PalwChainStateV2 {
     // ---- indices: rebuildable, never serialized, never hashed ----
     staged_holds: BTreeSet<(PalwBondKeyV2, u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>,
     staged_due: BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>,
+    /// Derived owner-local allowance/exposure index: other reservers cannot occupy this lane.
+    staged_by_owner: BTreeSet<(PalwBondKeyV2, Hash64)>,
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
     /// in (spec 17 §17.5.2).
     improvement_due: BTreeSet<(u64, Hash64)>,
@@ -12307,6 +12309,7 @@ impl PalwChainStateV2 {
             staged_courts: BTreeMap::new(),
             staged_holds: BTreeSet::new(),
             staged_due: BTreeSet::new(),
+            staged_by_owner: BTreeSet::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -44397,6 +44400,7 @@ impl PalwStateCarriageV2 {
             improvement_eval_jobs: self.improvement_eval_jobs,
             staged_holds: BTreeSet::new(),
             staged_due: BTreeSet::new(),
+            staged_by_owner: BTreeSet::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -78992,6 +78996,40 @@ mod audit_1004_a1_dissolved_line_carriage {
 mod staged_court_state_tests_v1 {
     use super::*;
     use crate::palw_staged_court_state_v1::*;
+    #[test]
+    fn owner_exposure_and_holds_rebuild_and_revert_without_other_owner_scan() {
+        let (row, _) = crate::palw_constraint_stream_owned_v1::tests::completed_row(true);
+        let mut state = PalwChainStateV2::genesis();
+        let claim = row.claim;
+        let owner = row.reserver;
+        let deposit = row.deposit_locked;
+        let contract = PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {
+            terms: row.terms, producer: owner, panel: BTreeSet::from([PALW_BOND_KEY_V2_MIN]),
+        });
+        let claim_entry = PalwDeltaEntryV2::StagedCourtSeed { key: PalwStagedCourtKeyV1::Claim(claim),
+            old: None, new: Some(contract) };
+        let owner_entry = PalwDeltaEntryV2::StagedCourtSeed { key: PalwStagedCourtKeyV1::Owner(claim, owner),
+            old: None, new: Some(PalwStagedCourtRowV1::Constraint(Box::new(row))) };
+        apply_delta_entry(&mut state, &claim_entry, false).unwrap();
+        apply_delta_entry(&mut state, &owner_entry, false).unwrap();
+        assert_eq!(palw_accuser_exposure_v1(&state, &owner), u128::from(deposit));
+        assert_eq!(palw_accuser_exposure_v1(&state, &PALW_BOND_KEY_V2_MIN), 0);
+        assert_eq!(state.staged_by_owner, BTreeSet::from([(owner, claim)]));
+        let holds = state.staged_holds.clone();
+        let due = state.staged_due.clone();
+        state.staged_holds.clear(); state.staged_due.clear(); state.staged_by_owner.clear();
+        palw_staged_court_fold_v1::rebuild_indices(&mut state);
+        assert_eq!(state.staged_holds, holds);
+        assert_eq!(state.staged_due, due);
+        assert_eq!(state.staged_by_owner, BTreeSet::from([(owner, claim)]));
+        apply_delta_entry(&mut state, &owner_entry, true).unwrap();
+        assert_eq!(palw_accuser_exposure_v1(&state, &owner), 0);
+        assert!(state.staged_by_owner.is_empty());
+        // Removing owner work never erases the producer's separate claim-wide hold.
+        assert!(state.staged_bond_exit_held_v1(&owner, 100));
+        apply_delta_entry(&mut state, &claim_entry, true).unwrap();
+        assert!(state.staged_holds.is_empty()); assert!(state.staged_due.is_empty());
+    }
     #[test]
     fn certificate_reference_requires_completed_rooted_court_and_exact_identity() {
         use crate::palw_constraint_stream_owned_v1::tests::completed_row;

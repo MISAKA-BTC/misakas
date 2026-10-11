@@ -105,6 +105,13 @@ pub(super) fn open(
     if b.state.staged_courts.contains_key(&key) {
         return Err(stage_refused(seed.claim, "owned staged seed is immutable"));
     }
+    let allowance = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?
+        .maximum_owned_rows_per_reserver;
+    // Only this reserver's paid rows consume its allowance. No claim-wide first-writer cap.
+    if b.state.staged_by_owner.range((seed.reserver, ZERO_HASH64)..)
+        .take_while(|(owner, _)| *owner == seed.reserver).take(allowance as usize).count() >= allowance as usize {
+        return Err(stage_refused(seed.claim, "reserver's own staged work allowance is occupied"));
+    }
     let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state, &seed.claim)
         .ok_or(PalwStateV2Error::MissingClaim(seed.claim))?;
     if crate::palw_offence_attribution_v1::palw_binding_identity_fault_v1(
@@ -227,7 +234,7 @@ fn index_rows(key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1) -> (u64, Ve
                 .chain(c.panel.iter().copied())
                 .map(|bond| (bond, c.terms.bond_exit_after_daa, key))
                 .collect();
-            (c.terms.material_until_daa, rows)
+            (c.terms.bond_exit_after_daa, rows)
         }
         PalwStagedCourtRowV1::Constraint(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
     }
@@ -241,6 +248,7 @@ pub(super) fn update_indices(
     if let Some(row) = old {
         let (due, holds) = index_rows(key, row);
         state.staged_due.remove(&(due, key));
+        if let PalwStagedCourtRowV1::Constraint(c) = row { state.staged_by_owner.remove(&(c.reserver, c.claim)); }
         for hold in holds {
             state.staged_holds.remove(&hold);
         }
@@ -248,15 +256,18 @@ pub(super) fn update_indices(
     if let Some(row) = new {
         let (due, holds) = index_rows(key, row);
         state.staged_due.insert((due, key));
+        if let PalwStagedCourtRowV1::Constraint(c) = row { state.staged_by_owner.insert((c.reserver, c.claim)); }
         state.staged_holds.extend(holds);
     }
 }
 pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
     state.staged_holds.clear();
     state.staged_due.clear();
+    state.staged_by_owner.clear();
     for (key, row) in &state.staged_courts {
         let (due, holds) = index_rows(*key, row);
         state.staged_due.insert((due, *key));
+        if let PalwStagedCourtRowV1::Constraint(c) = row { state.staged_by_owner.insert((c.reserver, c.claim)); }
         state.staged_holds.extend(holds);
     }
 }
