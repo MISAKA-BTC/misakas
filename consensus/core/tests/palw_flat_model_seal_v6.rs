@@ -32,6 +32,89 @@ fn fixture() -> FlatModelVectorPostV3 {
         },
     }
 }
+
+#[test]
+fn protected_chunk_target_binds_inner_actor_and_bond_prefix_deposits() {
+    use kaspa_consensus_core::{
+        Hash64,
+        palw_kernel_route_v1::*,
+        palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2 as O},
+        tx::TransactionOutpoint,
+    };
+    use misaka_palw_kernel::{route::KernelRouteObjectV1 as K, rows::LedgerScalarsV1};
+    let bond = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(1), 1));
+    let other = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(2), 2));
+    let vector = Hash64::from_u64_word(3);
+    let target = PalwKernelChunkTargetV1::FlatProofV6 { vector, actor: palw_kernel_bond_id_v1(&bond) };
+    let encoded = borsh::to_vec(&target).unwrap();
+    assert_eq!(encoded[0], 3);
+    assert_eq!(borsh::from_slice::<PalwKernelChunkTargetV1>(&encoded).unwrap(), target);
+    for n in 0..encoded.len() {
+        assert!(borsh::from_slice::<PalwKernelChunkTargetV1>(&encoded[..n]).is_err());
+    }
+    let mut suffix = encoded;
+    suffix.push(0);
+    assert!(borsh::from_slice::<PalwKernelChunkTargetV1>(&suffix).is_err());
+    let reveal = |signer, id| O::KernelRouteV1 {
+        signer,
+        signature: vec![1; 4],
+        bytes: K::RevealFlatModelProofV6 { vector: id, salt: [1; 64], proof: vec![5, 0] }.encode(),
+    };
+    assert!(palw_kernel_chunk_inner_matches_target_v1(&reveal(bond, vector.as_bytes()), &target));
+    assert!(!palw_kernel_chunk_inner_matches_target_v1(&reveal(other, vector.as_bytes()), &target));
+    assert!(!palw_kernel_chunk_inner_matches_target_v1(&reveal(bond, [4; 64]), &target));
+    let mut route = PalwKernelRouteStateV1::new(
+        palw_kernel_route_policy_v1(Hash64::from_u64_word(4), Hash64::from_u64_word(5)),
+        None,
+        LedgerScalarsV1::default(),
+    );
+    for (owner, n, deposit) in [(bond, 1, 7), (bond, 2, 11), (other, 3, 100)] {
+        let row = PalwKernelChunkGroupV1 {
+            target,
+            count: 2,
+            opened_daa: 10,
+            expires_daa: 20,
+            deposit,
+            parts: [(0, vec![3; 100_000])].into(),
+        };
+        route.aux.insert(
+            (PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&owner, &Hash64::from_u64_word(n))),
+            borsh::to_vec(&row).unwrap(),
+        );
+    }
+    assert_eq!(route.chunk_groups_of_v1(&bond), 2);
+    assert_eq!(route.chunk_deposits_of_v1(&bond), 18);
+    assert_eq!(route.chunk_groups_of_v1(&other), 1);
+    assert_eq!(route.chunk_deposits_of_v1(&other), 100);
+    let absent = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(2), 3));
+    assert_eq!(route.chunk_deposits_of_v1(&absent), 0);
+    assert!(route.expired_chunk_headers_v1(20).is_empty());
+    assert_eq!(route.expired_chunk_headers_v1(21).len(), 3);
+    assert_eq!(route.expired_chunk_headers_v1(21).iter().map(|(_, _, d)| d).sum::<u64>(), 118);
+    let mut h = FlatModelVectorHeaderV3 {
+        trace_root: [1; 64],
+        class: vector,
+        binding: vector,
+        profile: [2; 64],
+        scope_root: [3; 64],
+        program_bytes_len: 100,
+        pc_instances: 1,
+        post_bytes_len: 100,
+        max_filing_bytes: 1024,
+        max_court_work: 10,
+        max_court_scratch_bytes: 100,
+        poster: bond,
+        posted_daa: 10,
+        liability_until: 110,
+        reserved: 1,
+        refuted: false,
+    };
+    let small = protected_flat_chunk_finish_work_v6(&h).unwrap();
+    h.max_filing_bytes = 8192;
+    assert!(protected_flat_chunk_finish_work_v6(&h).unwrap() > small);
+    h.max_court_work = u64::MAX;
+    assert!(protected_flat_chunk_finish_work_v6(&h).is_none());
+}
 #[test]
 fn protected_flat_v6_codec_identity_and_route_fences_are_separate_from_v3() {
     use kaspa_consensus_core::palw_flat_model_seal_v6::*;

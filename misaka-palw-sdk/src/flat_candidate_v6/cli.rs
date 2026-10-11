@@ -20,8 +20,9 @@ seal writes only the public seal to --out. It creates --secret-out with a fresh 
 salt and the exact proof, network and signing bond, with mode 0600 on Unix. Keep it private.
 reveal checks the supplied row and height before writing a public proof. Supplied rows are
 UNVERIFIED_REMOTE_STATE; the node authenticates its own row and clocks at acceptance.
-Outputs are never overwritten. Large objects have .chunkN parts beside --out, using the
-existing generic carriage; timely inclusion and retention are not established by this tool.
+Outputs are never overwritten. Large objects have .chunkN parts beside --out. Large posts
+use generic carriage; large reveals use the sealing bond's kernel slots. Timely inclusion
+and retention are not established by this tool.
 Submit the listed carriers with `misaka palw submit-object --object PATH`. Review them first.
 Preparation grants no activation, admission, fidelity, reward eligibility or execution Final.";
 
@@ -98,6 +99,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let out = PathBuf::from(take(&mut flags, "--out")?);
     let hash = |value: String| crate::improve_objects::spec::hash(&value);
     let mut private = None;
+    let mut reveal_row = None;
     let (vector, object) = match kind.as_str() {
         "post" => {
             let class = hash(take(&mut flags, "--class")?)?;
@@ -128,6 +130,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let row_path = PathBuf::from(take(&mut flags, "--row")?);
             let row: FlatNativeSealRowV6 = borsh::from_slice(&read_bounded(&row_path, 512)?).map_err(|e| format!("seal row: {e}"))?;
             let daa = take(&mut flags, "--height")?.parse().map_err(|_| "--height must be a u64")?;
+            reveal_row = Some((row.clone(), daa));
             (secret.vector, secret.reveal_object(domain, &bond, &row, daa)?)
         }
         "expire" => {
@@ -143,7 +146,18 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let key = kaspa_pq_validator_core::ValidatorKey::from_seed(kaspa_pq_validator_core::load_validator_seed(&key_file)?);
     let signed = sign_flat_object_v6(&key, domain, bond, &object)?;
     let whole = borsh::to_vec(&signed).map_err(|e| e.to_string())?;
-    let carriers = flat_object_carriers_v6(signed)?;
+    let carriers = match reveal_row {
+        Some((row, daa)) => flat_reveal_carriers_v6(
+            &key,
+            domain,
+            bond,
+            signed,
+            &row,
+            daa,
+            kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES,
+        )?,
+        None => flat_object_carriers_v6(signed)?,
+    };
     let mut files = vec![(out.clone(), whole)];
     let mut paths = vec![out.clone()];
     if carriers.len() > 1 {

@@ -877,6 +877,27 @@ pub enum PalwKernelChunkTargetV1 {
     /// deadline is OPV-BOOT's `palw_conformance_chunk_target_v1(route, v2_class, daa)` (the agreed signature: the attempt's evidence
     /// deadline for a Post, its refutation window's end for a Refute; `None` when no attempt is open).
     Conformance { v2_class: Hash64 } = 2,
+    /// A protected flat reveal, opened only by its mature seal's authenticated actor.
+    FlatProofV6 { vector: Hash64, actor: Digest } = 3,
+}
+
+/// Raw protected reveal plus the bounded signed outer envelope; never an arbitrary
+/// sixteen-part object. This bounds assembly before its variable Borsh decode.
+pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6: usize = misaka_palw_kernel::flat_seal6::FLAT_SEAL_MAX_PROOF_BYTES_V6 + (16 << 10);
+
+/// A completing part and terminal court must fit together. Derive this upper
+/// debit from fixed admitted metadata before opening/continuing a group.
+pub fn protected_flat_chunk_finish_work_v6(h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3) -> Option<u64> {
+    let proof = usize::try_from(h.max_filing_bytes).ok()?.min(misaka_palw_kernel::flat_seal6::FLAT_SEAL_MAX_PROOF_BYTES_V6);
+    let metadata = |bytes: usize| crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?);
+    crate::palw_flat_model_vector_v3::flat_model_vector_work_v3(
+        h.program_bytes_len,
+        h.pc_instances,
+        proof.checked_add(h.post_bytes_len as usize)?,
+    )
+    .and_then(|w| w.checked_add(h.max_court_work))
+    .and_then(|w| w.checked_add(metadata(proof)?))
+    .and_then(|w| w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6)?))
 }
 
 /// **One chunk of a prosecution object in the route's own lane** (the body of `KernelRouteChunkV1`, tag 113). `group` is
@@ -965,6 +986,10 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
             PalwKernelChunkTargetV1::Binding { v2_class: class, kernel_param_root: root },
         ) => v2_class == class && kernel_param_root == root,
         (Obj::ConformanceEvidenceV1 { v2_class, .. }, PalwKernelChunkTargetV1::Conformance { v2_class: class }) => v2_class == class,
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV6 { vector, actor }) => {
+            palw_kernel_bond_id_v1(signer) == *actor
+                && matches!(K::decode(bytes), Ok(K::RevealFlatModelProofV6 { vector: id, .. }) if id == vector.as_bytes())
+        }
         _ => false,
     }
 }
@@ -1001,6 +1026,16 @@ pub fn palw_kernel_claim_horizon_bound_v1(
     }
 }
 
+fn chunk_fixed_header_v1(bytes: &[u8]) -> Option<(u64, u64)> {
+    let mut r = std::io::Cursor::new(bytes);
+    let _ = PalwKernelChunkTargetV1::deserialize_reader(&mut r).ok()?;
+    let count = u8::deserialize_reader(&mut r).ok()?;
+    let _ = u64::deserialize_reader(&mut r).ok()?;
+    let expires = u64::deserialize_reader(&mut r).ok()?;
+    let deposit = u64::deserialize_reader(&mut r).ok()?;
+    let parts = u32::deserialize_reader(&mut r).ok()?;
+    (count > 0 && count <= crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT && parts <= count as u32).then_some((expires, deposit))
+}
 impl PalwKernelRouteStateV1 {
     /// One group of the route's chunk lane.
     pub fn chunk_group_v1(&self, opener: &PalwBondKeyV2, group: &Hash64) -> Option<PalwKernelChunkGroupV1> {
@@ -1021,13 +1056,45 @@ impl PalwKernelRouteStateV1 {
 
     /// How many groups `opener` holds open.
     pub fn chunk_groups_of_v1(&self, opener: &PalwBondKeyV2) -> usize {
-        self.chunk_groups_v1().iter().filter(|(o, _, _)| o == opener).count()
+        self.chunk_deposit_headers_v1(opener).count()
+    }
+
+    /// Bond-prefix reads and fixed metadata only: committed capital must not decode
+    /// every actor's variable proof payload before a processing-budget reservation.
+    fn chunk_deposit_headers_v1(&self, opener: &PalwBondKeyV2) -> impl Iterator<Item = u64> + '_ {
+        let prefix = borsh::to_vec(opener).expect("fixed bond key");
+        let t = PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1;
+        self.aux.range((t, prefix.clone())..(t + 1, Vec::new())).take_while(move |((_, key), _)| key.starts_with(&prefix)).filter_map(
+            |((_, key), bytes)| {
+                if key.len() != 132 {
+                    return None;
+                }
+                chunk_fixed_header_v1(bytes).map(|(_, deposit)| deposit)
+            },
+        )
     }
 
     /// The deposits `bond`'s open groups hold against its collateral (part of what V2's committed-collateral ledger and both
     /// withdrawal gates read as the route's reservation).
     pub fn chunk_deposits_of_v1(&self, bond: &PalwBondKeyV2) -> u64 {
-        self.chunk_groups_v1().iter().filter(|(o, _, _)| o == bond).fold(0u64, |acc, (_, _, g)| acc.saturating_add(g.deposit))
+        self.chunk_deposit_headers_v1(bond).fold(0u64, u64::saturating_add)
+    }
+
+    /// Read expiry/deposit headers without cloning proof payloads on every block.
+    /// The aggregate fixed-row scan remains a separate resource requirement.
+    pub fn expired_chunk_headers_v1(&self, daa: u64) -> Vec<(PalwBondKeyV2, Hash64, u64)> {
+        let t = PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1;
+        self.aux
+            .range((t, Vec::new())..(t + 1, Vec::new()))
+            .filter_map(|((_, key), bytes)| {
+                let (expires, deposit) = chunk_fixed_header_v1(bytes)?;
+                if daa <= expires {
+                    return None;
+                }
+                let (opener, group) = borsh::from_slice(key).ok()?;
+                Some((opener, group, deposit))
+            })
+            .collect()
     }
 
     /// **The last DAA at which an object for `target` could still change anything** (`None`: nothing can — the claim is decided or
@@ -1049,6 +1116,18 @@ impl PalwKernelRouteStateV1 {
                 (!row.refuted).then(|| row.final_daa.saturating_sub(1))
             }
             PalwKernelChunkTargetV1::Conformance { v2_class } => palw_conformance_chunk_target_pending_v1(self, v2_class, daa),
+            PalwKernelChunkTargetV1::FlatProofV6 { vector, actor } => {
+                let header = self.flat_model_vector_header_v3(vector)?;
+                let seal = self.flat_model_seal_v6(vector, actor)?.seal;
+                (self.flat_model_vector_protected_v6(vector)
+                    && !header.refuted
+                    && !self.flat_vector_unavailable_v3(vector)
+                    && !seal.spent
+                    && daa >= seal.mature_daa
+                    && daa < seal.expires_daa
+                    && daa < header.liability_until)
+                    .then(|| seal.expires_daa.min(header.liability_until).saturating_sub(1))
+            }
         }
     }
 
@@ -1058,6 +1137,19 @@ impl PalwKernelRouteStateV1 {
     pub fn chunk_completion_v1(&self, chunk: &PalwKernelChunkV1) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
         if chunk.count == 0 || chunk.index >= chunk.count || chunk.bytes.is_empty() {
             return None;
+        }
+        if let PalwKernelChunkTargetV1::FlatProofV6 { vector, actor } = chunk.target {
+            let header = self.flat_model_vector_header_v3(&vector)?;
+            let seal = self.flat_model_seal_v6(&vector, &actor)?;
+            if actor != palw_kernel_bond_id_v1(&chunk.opener)
+                || seal.bond != chunk.opener
+                || seal.seal.spent
+                || !self.flat_model_vector_protected_v6(&vector)
+                || header.refuted
+                || self.flat_vector_unavailable_v3(&vector)
+            {
+                return None;
+            }
         }
         let stored = self.chunk_group_v1(&chunk.opener, &chunk.group);
         let mut parts: BTreeMap<u8, &[u8]> = BTreeMap::new();
@@ -1071,7 +1163,11 @@ impl PalwKernelRouteStateV1 {
         if parts.len() != chunk.count as usize {
             return None;
         }
-        let mut whole = Vec::with_capacity(parts.values().map(|p| p.len()).sum());
+        let size: usize = parts.values().map(|p| p.len()).sum();
+        if matches!(chunk.target, PalwKernelChunkTargetV1::FlatProofV6 { .. }) && size > PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6 {
+            return None;
+        }
+        let mut whole = Vec::with_capacity(size);
         for i in 0..chunk.count {
             whole.extend_from_slice(parts.get(&i)?);
         }

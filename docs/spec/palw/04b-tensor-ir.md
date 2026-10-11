@@ -3259,3 +3259,61 @@ retention or a capacity guarantee for the shared generic chunk table. Those and
 aggregate honest-liveness/deadline bounds remain RFC02 completion gates. No new
 consensus grammar, policy constant, resource root or shipping activation is
 introduced by the tooling interface.
+
+### 18.2 Protected reveal target in the existing kernel chunk lane
+
+Append target discriminant 3, `FlatProofV6 { vector:Hash64, actor:Digest }`, to
+`PalwKernelChunkTargetV1`. Targets 0–2, outer 113 and its signature message/context,
+table 41, stored groups, per-bond two-group limit, per-part deposit and 64-DAA
+maximum TTL retain their encodings/rules. No generic shared chunk slot is used.
+
+Each protected part requires an active opener, `actor = kernel_bond_id(opener)`,
+the existing panel-free context, an open protected vector and its actor's
+persisted unspent seal with `mature <= now < expires` and `now < liability_until`.
+The last valid target DAA is `min(seal.expires, liability_until) - 1`; the group
+TTL is clipped to that deadline. Every continuation rechecks the fixed target.
+Before opening/continuing, the conservative completing-part metadata debit plus
+the admitted maximum protected reveal debit MUST fit together within the policy's
+guaranteed proof work, with at least two proof runs (or two full-block runs for
+an explicitly zero-reserve policy). Overflow or an insufficient envelope refuses
+the target without opening a deposit-backed group. This is a transport capability
+check; source candidate admission alone does not certify split-proof inclusion.
+Missing, borrowed or no-longer-live targets cannot open/continue a group. Fixed
+target authentication precedes variable stored-group decoding and assembly.
+
+A protected group's accumulated bytes MUST remain at most
+`FLAT_SEAL_MAX_PROOF_BYTES_V6 + 16 KiB`. Both acceptance assembly and the fold
+check this bound before whole-object variable decoding. The assembled object's
+group hash, target vector and signature-derived actor must match; its inner kind
+must be 38 and its signer the chunk opener. The completing carrier authenticates
+both the part signature and the assembled reveal signature. The reveal's own
+seal, context, immutable admitted resource scope and atomic settlement checks
+remain mandatory; partial bytes confer no court or payout rights.
+
+Protected part processing reserves metadata work before variable group decode:
+`metadata_work(part_bytes + 3 * max_assembled_bytes)`, with the same 1024-byte
+metadata allowance as §18. A live mature target uses the proof reserve; a refused
+fixed target uses admission capacity, pays the filer's dismissal tariff and
+returns without a group. A valid part pays that tariff before group handling.
+Completion additionally incurs the protected reveal's existing one-run/work
+debit. Other malformed chunk errors retain existing rehearsal/drop and carrier
+fee behavior. Existing group deposits are refunded on delivery and forfeited
+after an unfinished group's TTL; common committed capital includes them.
+
+Per-bond count/deposit queries use the exact serialized bond-key prefix and fixed
+target/count/clock/deposit/part-count headers. They do not allocate stored parts
+or scan/decode other actors' proof rows during free-collateral calculations.
+Stored accepted groups remain bounded by their existing per-bond/part limits.
+The closing sweep also reads fixed expiry/deposit headers without cloning proof
+payloads. It retains the strict `now > expires` forfeiture rule. Its global fixed-
+row scan and all-target aggregate resource costs remain separate requirements;
+this optimization establishes no whole-network liveness bound.
+
+The SDK's `flat_reveal_carriers_v6` checks supplied own seal metadata and the
+assembled network/key signature, then signs the existing kernel parts. The
+offline CLI uses it for large reveals and keeps the exact whole object plus the
+listed `.chunkN` files for review/submission. `flat_object_carriers_v6` refuses
+large protected reveals rather than allocating generic shared-group parts.
+Offline row/height trust, worst-job inclusion, real-size resource accounting,
+public acquisition/retention, fidelity/tasks, execution Final and A6/A8 remain
+RFC02 completion gates. Deployment fences remain dormant.

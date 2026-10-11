@@ -1783,3 +1783,82 @@ async fn flat_v6_native_mature_proof_uses_reserved_budget_after_admission_flood(
     let replay = net.replay().await;
     net.assert_same(&replay, "admission load cannot spend the mature proof's reserved run/work");
 }
+
+fn signed_flat_chunk(net: &mut Net, card: usize, chunk: kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkV1) -> Obj {
+    use kaspa_consensus_core::palw_kernel_route_v1::*;
+    let message = palw_kernel_chunk_message_v1(net.domain, &chunk);
+    net.rnd = net.rnd.wrapping_add(1);
+    let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &key.signing_key,
+        message.as_byte_slice(),
+        PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1,
+        [net.rnd; 32],
+    )
+    .unwrap()
+    .as_ref()
+    .to_vec();
+    Obj::KernelRouteChunkV1 { chunk: Box::new(chunk), signature }
+}
+
+#[tokio::test]
+async fn flat_v6_native_own_sealed_chunks_survive_generic_saturation_and_refuse_borrowed_actors() {
+    use kaspa_consensus_core::palw_kernel_route_v1::*;
+    use kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_GROUPS;
+    use misaka_palw_kernel::flat_seal6::*;
+    let f = vector_fixture(true);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let (post, public) = flat_vector_post(&net, &f, binding, vec![0, 1], true);
+    let id = send_protected_flat_vector(&mut net, &f, binding, 4, &post).await;
+    let proof = flat_first_relation_fault(&net.api().unwrap().flat_model_vector_view_v3(&id).unwrap(), &public, &f.params);
+    let (actor, salt) = (net.kid(7), [71; 64]);
+    let reveal = net.route(7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: proof.clone() });
+    let target = PalwKernelChunkTargetV1::FlatProofV6 { vector: id, actor };
+    let parts = palw_kernel_chunks_v1(&reveal, net.bond(7), target, 1024).unwrap();
+    assert!(parts.len() > 1);
+    let missing = signed_flat_chunk(&mut net, 7, parts[0].clone());
+    net.send(vec![(7, missing)]).await;
+    assert_eq!(net.api().unwrap().chunk_groups_of_v1(&net.bond(7)), 0);
+    let seal = flat_proof_seal_v6(&id.as_bytes(), &actor, &salt, &proof).unwrap();
+    send(&mut net, 7, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal }).await;
+    net.beat_to(net.api().unwrap().flat_model_seal_v6(&id, &actor).unwrap().seal.mature_daa).await;
+    let mut borrowed = parts[0].clone();
+    borrowed.opener = net.bond(6);
+    let borrowed = signed_flat_chunk(&mut net, 6, borrowed);
+    net.send(vec![(6, borrowed)]).await;
+    assert_eq!(net.api().unwrap().chunk_groups_of_v1(&net.bond(6)), 0);
+    let garbage: Vec<_> = (0..PALW_OBJECT_CHUNK_MAX_GROUPS)
+        .map(|n| {
+            (1, Obj::ObjectChunk { group: Hash64::from_u64_word(9100 + n as u64), index: 0, count: 16, bytes: vec![n as u8; 1024] })
+        })
+        .collect();
+    net.send(garbage).await;
+    for n in 0..PALW_OBJECT_CHUNK_MAX_GROUPS {
+        assert!(net.chain.tip_state().1.pending_chunk_group(&Hash64::from_u64_word(9100 + n as u64)).is_some());
+    }
+    let collateral = net.collateral(4);
+    let first = signed_flat_chunk(&mut net, 7, parts[0].clone());
+    net.send(vec![(7, first)]).await;
+    assert_eq!(net.api().unwrap().chunk_groups_of_v1(&net.bond(7)), 1);
+    assert_eq!(
+        net.api().unwrap().chunk_deposits_of_v1(&net.bond(7)),
+        parts.len() as u64 * PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1
+    );
+    let remaining: Vec<_> = parts[1..].iter().map(|p| (7, signed_flat_chunk(&mut net, 7, p.clone()))).collect();
+    net.send(remaining).await;
+    assert!(net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().refuted);
+    assert_eq!(net.api().unwrap().chunk_groups_of_v1(&net.bond(7)), 0);
+    assert_eq!(net.api().unwrap().chunk_deposits_of_v1(&net.bond(7)), 0);
+    assert_eq!(collateral - net.collateral(4), mega(100));
+    let (minted, owed) = minted_and_owed(&net, &net.chain, 7);
+    assert_eq!(minted + owed, mega(49));
+    let again = signed_flat_chunk(&mut net, 7, parts[0].clone());
+    net.send(vec![(7, again)]).await;
+    let (minted, owed) = minted_and_owed(&net, &net.chain, 7);
+    assert_eq!(minted + owed, mega(49));
+    assert_eq!(net.api().unwrap().chunk_groups_of_v1(&net.bond(7)), 0);
+    net.chain.heartbeat(net.ttpb(), Vec::new()).await;
+    let other = net.replay().await;
+    net.assert_same(&other, "sealed actor-owned chunks bypass the saturated generic table, settle once and replay");
+}

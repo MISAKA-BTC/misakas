@@ -2032,3 +2032,59 @@ The complete shared resource/economic contract, versioned length/sparse/state
 semantics, actual checkpoint/task/context/fidelity/performance, independent
 execution Final/redemption and A6/A8 requirements are unchanged. No shipping
 fence is activated and historical v3 statements retain their unsealed semantics.
+
+## Verified increment — mature actor-owned protected proof chunks, 2026-10-11
+
+Append kernel chunk target 3 `FlatProofV6 { vector, actor }` to the existing
+outer-113 lane. Parts require the authenticated opener's own mature unspent seal
+and an open protected vector. Every continuation rechecks those fixed facts;
+the deadline is strictly before seal expiry/vector liability. The assembled
+inner must be that actor's signed protected reveal of that vector, and both
+signature layers, exact group hash and final salt/proof/context/court checks
+remain mandatory. Missing or borrowed actors cannot open a group.
+
+The route's existing two groups per signing bond, original per-part deposit and
+64-DAA clipped TTL provide the actor's room independently of the generic shared
+eight-slot table. Accumulated assembly is bounded before variable decode to
+one-MiB proof plus 16-KiB signed envelope. Shared metadata processing reserves a
+conservative part + three assembly-byte allowances before variable group decode;
+a live mature target uses the proof reserve. Invalid fixed targets use admission
+capacity and pay the authenticated actor's tariff. Existing malformed-group
+rehearsal/drop behavior remains; final court charges its own protected debit.
+Opening/continuing separately checks that the completing part plus maximum
+native reveal debit fit together within guaranteed work and two runs. It refuses
+insufficient/overflowing envelopes before opening a group; candidate admission
+alone does not grant this transport capability.
+
+Common per-bond slot/deposit queries now walk only the exact bond-key prefix and
+fixed headers. The closing step reads fixed expiry/deposit headers and preserves
+strict `now > expires` forfeiture without copying all pending proof bodies every
+block. The global fixed-row scan remains a separate aggregate resource concern.
+
+The SDK verifies the assembled network/key signature and supplied own mature seal,
+then signs the existing kernel parts. CLI large reveals use this path and retain
+the whole object and listed parts for review. The generic SDK splitter explicitly
+refuses large protected reveals; posts continue using generic transport. Offline
+row/height trust remains `UNVERIFIED_REMOTE_STATE` until locally authenticated.
+
+**29 distinct selected tests pass:** 18 native model-conformance tests, seven
+SDK/CLI tests, two core codec tests and two legacy chunk regressions. Production
+core/SDK/CLI checking, seven-file targeted formatting and diff whitespace checks
+pass. The unchanged kernel evidence contributes 153 passes and one ignored
+hardware benchmark; the combined recorded component total is 182 distinct
+passes, not full RFC02 acceptance. Final validation is recorded in
+[the verdict](evidence/rfc02-flat-chunk-v6-verdict.json). The native synthetic
+trial forces a valid bounded court into multiple 1-KiB parts, holds all eight
+generic groups open, refuses missing/borrowed actors, holds/releases original
+chunk deposits, convicts and pays once, and agrees on independent replay. The
+SDK test verifies maturity/actor/network refusal, both signatures and byte-exact
+assembly; core tests check target codec/truncations, inner actor/vector binding,
+bond-prefix capital and strict fixed-header expiry.
+
+This is protected transport component evidence, not a real checkpoint larger
+than a carrier or whole-network inclusion/retention acceptance. Honest inclusion
+under aggregate mature-invalid-proof/seal load, all-target fixed metadata/state
+and expiry-sweep bounds, complete shared resources/economics, whole-job public
+acquisition/retention, actual checkpoint/task/fidelity/performance, versioned
+long/sparse/state dimensions, execution Final and A6/A8 remain open. Shipping
+fences stay dormant; full RFC02 remains active.

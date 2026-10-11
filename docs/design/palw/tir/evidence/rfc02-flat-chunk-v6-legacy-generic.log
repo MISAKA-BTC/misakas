@@ -1,0 +1,5 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_control_a_chunked_proof_convicts_when_the_chunk_lane_is_free ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 824 filtered out; finished in 1.29s

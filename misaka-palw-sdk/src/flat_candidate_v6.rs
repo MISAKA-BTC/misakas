@@ -1,8 +1,8 @@
 //! Offline preparation of protected native flat candidates and private seal/reveal material.
 //! The network authenticates the signing bond, persisted seal and court at acceptance. These
 //! helpers grant no admission, fidelity, availability, reward eligibility or execution Final.
-//! Large objects use the existing bounded generic carriage; its aggregate inclusion/retention
-//! guarantees remain open. No shipping fence is selected or activated here.
+//! Large posts use generic carriage; protected reveals use the sealing bond's kernel chunk
+//! slots. Aggregate inclusion/retention guarantees remain open. No shipping fence is activated.
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_consensus_core::{
     Hash64,
@@ -182,6 +182,12 @@ pub fn flat_object_carriers_v6(object: PalwConsensusObjectV2) -> Result<Vec<Palw
     match &object {
         PalwConsensusObjectV2::KernelRouteV1 { bytes, .. } => {
             let inner = K::decode(bytes).map_err(|e| e.to_string())?;
+            if matches!(inner, K::RevealFlatModelProofV6 { .. })
+                && borsh::to_vec(&object).map_err(|e| e.to_string())?.len()
+                    > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES
+            {
+                return Err("large protected reveals require flat_reveal_carriers_v6 and a mature own seal".into());
+            }
             if !matches!(
                 inner,
                 K::PostFlatModelVectorV6 { .. }
@@ -196,4 +202,58 @@ pub fn flat_object_carriers_v6(object: PalwConsensusObjectV2) -> Result<Vec<Palw
     }
     kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(str::to_string)?;
     Ok(palw_object_chunks_v1(&object).map_err(|e| e.to_string())?.unwrap_or_else(|| vec![object]))
+}
+
+/// Protected reveal carriage in the bond's own existing kernel chunk slots, gated
+/// by its mature seal. No generic shared-table fallback. Supplied rows stay unverified
+/// until authenticated locally; consensus checks the opener and inner signer itself.
+pub fn flat_reveal_carriers_v6(
+    key: &dyn MessageSigner,
+    domain: Hash64,
+    bond: PalwBondKeyV2,
+    object: PalwConsensusObjectV2,
+    row: &FlatNativeSealRowV6,
+    daa: u64,
+    cap: usize,
+) -> Result<Vec<PalwConsensusObjectV2>, String> {
+    use kaspa_consensus_core::palw_kernel_route_v1::*;
+    let PalwConsensusObjectV2::KernelRouteV1 { bytes, signer, signature } = &object else {
+        return Err("protected carriage requires a signed reveal".into());
+    };
+    let K::RevealFlatModelProofV6 { vector, salt, proof } = K::decode(bytes).map_err(|e| e.to_string())? else {
+        return Err("protected carriage requires a reveal".into());
+    };
+    if *signer != bond || row.bond != bond {
+        return Err("protected carriage differs from the signing/sealing bond".into());
+    }
+    check_flat_seal_v6(&row.seal, &vector, &palw_kernel_bond_id_v1(&bond), &salt, &proof, daa).map_err(|e| format!("seal: {e:?}"))?;
+    if !kaspa_txscript::verify_mldsa87_with_context(
+        key.public_key(),
+        palw_kernel_route_message_v1(domain, &bond, bytes).as_byte_slice(),
+        signature,
+        PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
+    )
+    .unwrap_or(false)
+    {
+        return Err("assembled reveal signature differs from the selected network/key".into());
+    }
+    if cap == 0 || cap > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES {
+        return Err("protected chunk cap is outside the carrier bound".into());
+    }
+    let len = borsh::to_vec(&object).map_err(|e| e.to_string())?.len();
+    if len > PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6 {
+        return Err("protected assembled reveal exceeds its byte bound".into());
+    }
+    if len <= cap {
+        return Ok(vec![object]);
+    }
+    let target = PalwKernelChunkTargetV1::FlatProofV6 { vector: Hash64::from_bytes(vector), actor: palw_kernel_bond_id_v1(&bond) };
+    palw_kernel_chunks_v1(&object, bond, target, cap)?
+        .into_iter()
+        .map(|chunk| {
+            let signature =
+                key.sign_message(palw_kernel_chunk_message_v1(domain, &chunk).as_byte_slice(), PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1)?;
+            Ok(PalwConsensusObjectV2::KernelRouteChunkV1 { chunk: Box::new(chunk), signature })
+        })
+        .collect()
 }

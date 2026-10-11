@@ -980,6 +980,36 @@ pub(super) fn apply_kernel_route_chunk_v1(
     if !builder.state.bonds.get(&chunk.opener).is_some_and(|b| matches!(b.status, PalwBondStatusV2::Active)) {
         return Err(refused("a kernel chunk's opener is not an Active bond"));
     }
+    if let PalwKernelChunkTargetV1::FlatProofV6 { actor, vector } = chunk.target {
+        super::palw_flat_model_vector_fold_v3::enabled(builder, ctx)?;
+        let policy = route_ledger_policy_v1(builder)?;
+        let runs = if policy.prosecution_reserved_runs() == 0 {
+            policy.max_adjudications_per_block
+        } else {
+            policy.prosecution_reserved_runs()
+        };
+        let valid = runs >= 2
+            && actor == palw_kernel_bond_id_v1(&chunk.opener)
+            && builder.state.kernel_route.as_ref().is_some_and(|r| {
+                r.chunk_target_deadline_v1(&chunk.target, ctx.daa_score).is_some()
+                    && r.flat_model_vector_header_v3(&vector)
+                        .and_then(|h| protected_flat_chunk_finish_work_v6(&h))
+                        .is_some_and(|w| w <= policy.guaranteed_proof_work_v1())
+            });
+        // Fixed seal authentication precedes assembly. Unsealed spam consumes only
+        // admission capacity; a mature authenticated filer uses the proof reserve.
+        // Read/clone/serialize the bounded own group and assemble/hash the final
+        // carrier. Price that worst envelope before variable stored-group decode.
+        let work = super::palw_flat_model_seal_fold_v6::metadata_work(chunk.bytes.len() + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6)
+            .ok_or_else(|| refused("protected chunk metadata work overflows"))?;
+        let Some(fee) = super::palw_flat_model_vector_fold_v3::charge(builder, ctx, &chunk.opener, work, valid)? else {
+            return Ok(());
+        };
+        builder.slash_bond(chunk.opener, fee)?;
+        if !valid {
+            return Ok(());
+        }
+    }
     // A target lives in the route's state (a claim's rows, a binding's aux row): no route, nothing to prosecute.
     let Some(route) = builder.state.kernel_route.as_ref() else {
         return Err(refused("no kernel route state: a kernel chunk has no target"));
@@ -1024,6 +1054,17 @@ pub(super) fn apply_kernel_route_chunk_v1(
             }
         }
     };
+    if matches!(chunk.target, PalwKernelChunkTargetV1::FlatProofV6 { .. })
+        && group
+            .parts
+            .values()
+            .map(Vec::len)
+            .sum::<usize>()
+            .checked_add(chunk.bytes.len())
+            .is_none_or(|n| n > PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6)
+    {
+        return Err(refused("protected chunk assembly exceeds its reveal byte bound"));
+    }
     group.parts.insert(chunk.index, chunk.bytes.clone());
     if group.parts.len() < group.count as usize {
         builder.write_kernel_row(
@@ -1047,6 +1088,11 @@ pub(super) fn apply_kernel_route_chunk_v1(
     if !palw_kernel_chunk_inner_matches_target_v1(&inner, &chunk.target) {
         return Err(refused("the assembled object is not a prosecution of its group's target"));
     }
+    if matches!(chunk.target, PalwKernelChunkTargetV1::FlatProofV6 { .. })
+        && !matches!(&inner, PalwConsensusObjectV2::KernelRouteV1 { signer, .. } if *signer == chunk.opener)
+    {
+        return Err(refused("a protected reveal must be signed by its chunk opener"));
+    }
     // OPV-BOOT #1: conformance evidence rides only a group its class's registrant opened — every action but a Refute (anyone's), so
     // a registrant's action added later (OPV-BOOT's PostComplete) is the registrant's here too, never anyone's by default.
     if let PalwConsensusObjectV2::ConformanceEvidenceV1 { v2_class, action, .. } = &inner
@@ -1064,12 +1110,7 @@ pub(super) fn apply_kernel_route_chunk_v1(
 /// at release). Lenient (it runs after the rehearsal): a deposit the bond can no longer pay is taken as far as it goes.
 fn forfeit_expired_chunk_groups_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
     let Some(route) = builder.state.kernel_route.as_ref() else { return };
-    let expired: Vec<(PalwBondKeyV2, Hash64, u64)> = route
-        .chunk_groups_v1()
-        .into_iter()
-        .filter(|(_, _, g)| ctx.daa_score > g.expires_daa)
-        .map(|(opener, group, g)| (opener, group, g.deposit))
-        .collect();
+    let expired = route.expired_chunk_headers_v1(ctx.daa_score);
     for (opener, group, deposit) in expired {
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&opener, &group), None);
         let _ = builder.slash_bond(opener, deposit as u128);

@@ -3365,3 +3365,39 @@ using these helpers belong in the implementation ledger. These convenience APIs
 grant no conformance, checkpoint fidelity, model/task coverage, reward eligibility
 or execution Final, and activate no shipping fence. Full RFC02 acceptance stays
 open until all independent requirements have evidence.
+
+### §14.32 — Mature actor-owned protected proof chunks (2026-10-11)
+
+Append `FlatProofV6 { vector, actor } = 3` to the existing kernel chunk target
+grammar. It carries only the protected reveal of that vector signed by the
+sealing actor, and each part is signed by that same bond. Opening/continuing
+requires an open protected vector and that actor's mature unspent seal; the
+target deadline is strictly before seal expiry and vector liability. Completion
+still requires the exact salt/proof seal and independently bound native court.
+
+The existing two kernel chunk slots per bond, per-part original collateral,
+64-DAA clipped TTL and completion/refund/expiry-forfeiture apply. These are the
+bond's own slots, separate from the generic shared eight-group table. Bound
+protected assembly to one MiB plus 16 KiB of signed envelope before variable
+decode. Charge the part and a conservative three-assembly-byte allowance for
+own stored-group handling before decoding that group. Opening/continuing also
+needs capacity for the completing part and terminal court together, including
+two runs. Candidate admission alone does not grant that transport capability.
+An authenticated mature
+target uses the proof reserve; missing/borrowed/expired targets use admission
+capacity and do not open a group. Completion also pays the native reveal debit.
+
+Common chunk-count/deposit queries now read only the bond-key prefix and fixed
+headers; they do not decode all actors' variable payloads while calculating free
+capital. Stored parts and signatures retain their existing serialization. The
+SDK/CLI directs large protected reveals through signed kernel parts and refuses
+a silent generic split; large posts retain generic carriage. Supplied offline
+seal rows remain unverified until authenticated locally.
+
+The actual-node saturation trial forces a synthetic valid court into multiple
+parts and holds all generic slots open. It checks absent/borrowed seals, owned
+deposits, one conviction/payment, cleanup and independent replay. This tests
+the route, not a real large checkpoint or whole-network saturation bound. Shared
+invalid-proof load, all-target aggregate metadata/state and expiry-sweep costs,
+worst-job deadlines, transport/acquisition/retention and complete resources still
+need evidence. No shipping fence or full RFC02 acceptance is granted.

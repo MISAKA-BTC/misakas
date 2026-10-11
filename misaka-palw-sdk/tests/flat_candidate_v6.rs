@@ -190,6 +190,42 @@ fn sdk_reveal_requires_the_same_network_actor_exact_proof_and_mature_unspent_row
     altered.proof = alternate.to_bytes().unwrap();
     assert!(altered.reveal_object(s.network_domain, &s.bond, &r, 13).is_err());
 }
+
+#[test]
+fn protected_sdk_chunks_bind_own_mature_seal_and_both_signature_layers() {
+    let s = secret();
+    let key = ValidatorKey::from_seed([7; 32]);
+    let r = row(&s);
+    let signed =
+        sign_flat_object_v6(&key, s.network_domain, s.bond, &s.reveal_object(s.network_domain, &s.bond, &r, 13).unwrap()).unwrap();
+    assert!(flat_reveal_carriers_v6(&key, s.network_domain, s.bond, signed.clone(), &r, 12, 1024).is_err());
+    assert!(flat_reveal_carriers_v6(&key, h(2), s.bond, signed.clone(), &r, 13, 1024).is_err());
+    assert!(flat_reveal_carriers_v6(&key, s.network_domain, bond(4), signed.clone(), &r, 13, 1024).is_err());
+    assert!(flat_reveal_carriers_v6(&key, s.network_domain, s.bond, signed.clone(), &r, 13, 0).is_err());
+    let parts = flat_reveal_carriers_v6(&key, s.network_domain, s.bond, signed.clone(), &r, 13, 1024).unwrap();
+    assert!(parts.len() > 1);
+    let mut bytes = Vec::new();
+    for part in parts {
+        let O::KernelRouteChunkV1 { chunk, signature } = part else { panic!() };
+        assert_eq!(chunk.opener, s.bond);
+        assert_eq!(chunk.target, PalwKernelChunkTargetV1::FlatProofV6 { vector: s.vector, actor: palw_kernel_bond_id_v1(&s.bond) });
+        assert!(key.verify_with_context(
+            palw_kernel_chunk_message_v1(s.network_domain, &chunk).as_byte_slice(),
+            &signature,
+            PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1
+        ));
+        let mut altered = (*chunk).clone();
+        altered.bytes[0] ^= 1;
+        assert!(!key.verify_with_context(
+            palw_kernel_chunk_message_v1(s.network_domain, &altered).as_byte_slice(),
+            &signature,
+            PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1
+        ));
+        bytes.extend_from_slice(&chunk.bytes);
+    }
+    assert_eq!(borsh::from_slice::<O>(&bytes).unwrap(), signed);
+    assert!(verify(&key, s.network_domain, &signed));
+}
 #[test]
 fn signatures_and_generic_carriage_preserve_network_bond_and_exact_protected_bytes() {
     let s = secret();
@@ -243,7 +279,8 @@ fn signatures_and_generic_carriage_preserve_network_bond_and_exact_protected_byt
     )
     .unwrap();
     let raw = borsh::to_vec(&large).unwrap();
-    let parts = flat_object_carriers_v6(large.clone()).unwrap();
+    assert!(flat_object_carriers_v6(large.clone()).is_err());
+    let parts = kaspa_consensus_core::palw_state_v2::palw_object_chunks_v1(&large).unwrap().unwrap();
     assert_eq!(parts.len(), 2);
     let mut assembled = Vec::new();
     for (i, p) in parts.iter().enumerate() {
