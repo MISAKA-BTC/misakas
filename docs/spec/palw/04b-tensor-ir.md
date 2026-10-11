@@ -3317,3 +3317,51 @@ large protected reveals rather than allocating generic shared-group parts.
 Offline row/height trust, worst-job inclusion, real-size resource accounting,
 public acquisition/retention, fidelity/tasks, execution Final and A6/A8 remain
 RFC02 completion gates. Deployment fences remain dormant.
+
+### 18.3 Anchored protected candidate and seal reads (non-consensus tooling)
+
+The public protected reader MUST use the unchanged op-211 row-response grammar.
+`KernelRowsSnapshotV1::into_route_v1` exposes the common complete-snapshot rebuild:
+identical tip/roots/header/count across pages, exact ordered row coverage, both
+reconstructed roots, and a header clock no later than the served tip. Existing
+onboarding reads use this same rebuild and retain their policy/program checks.
+
+`FlatPublicSnapshotV6::from_snapshot` additionally requires a separately supplied
+`FlatSnapshotAnchorV6` with exact `tipDaa`, `networkDomain`, `rulesetDigest`,
+`ledgerRoot` and `auxRoot`. The anchor MUST be authenticated to the caller's local
+chain or state proof outside this reader. Matching remote pages to their own
+reported roots is not evidence of chain membership. The checked reader retains
+an immutable anchor; callers cannot change the clock or domains after validation.
+
+`candidate(vector,class,binding)` MUST bind those requested identities to a
+protected v6 marker and independently rebuild the native typed context and
+resource scope. `reveal_row` MUST additionally refuse a refuted/unavailable/expired
+candidate and require that bond's exact persisted unspent seal with
+`mature_daa <= anchor.tip_daa < expires_daa`. Exported bytes are the existing
+`FlatNativeSealRowV6`, without a new row or wire version. Native acceptance still
+checks the current authenticated signer/bond, state/clock, exact proof/salt and
+terminal court; snapshot reads do not grant admission, availability or Final.
+
+The SDK `flat_rpc_page_v6` bounds one JSON response to
+`2 * MAX_SNAPSHOT_BYTES_V1 + 1 MiB`; its header remains at most 64 KiB decoded.
+Before hex-to-binary copies, it checks declared/actual row counts and aggregate
+hex bytes against the unchanged 128-MiB local snapshot ceiling. Malformed hex,
+u8 table overflow, unknown fields, unavailable routes and stray terminal cursors
+MUST be refused. The common snapshot applies aggregate binary-key/row/metadata
+accounting across pages. These limits are local reader ceilings, not peak RAM,
+producer constraints or aggregate network/consensus budgets.
+
+Offline `palw-class flat-v6 snapshot --network ID --bond TXID:INDEX --out ROW
+--pages NDJSON --anchor JSON --vector HEX --class HEX --binding HEX` uses no signing
+seed. NDJSON contains one complete JSON response per line. All pages are validated
+before an output is created exclusively, with Unix mode 0600; outputs are never
+overwritten. Its report MUST retain
+`MATCHED_SUPPLIED_ANCHOR_CHAIN_TRUST_REQUIRED`, identify the anchored height, and
+explain that the caller authenticates the anchor. Existing `flat-v6 reveal` uses
+the exported row and reported height but independently checks its private material.
+No carrier is submitted by either preparation command.
+
+Actual op-211 builder/JSON component evidence and synthetic SDK fixtures remain
+separate. Automatic local chain/state-proof anchor acquisition, live public
+transport, retention/pruning and whole-job honest inclusion/deadline guarantees
+remain required by RFC02; no dormant activation fence is armed by this reader.

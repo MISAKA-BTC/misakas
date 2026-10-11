@@ -20,6 +20,7 @@ use misaka_palw_kernel::{
 };
 use std::io::{Cursor, Error, ErrorKind, Write};
 pub mod cli;
+pub mod snapshot;
 
 fn bounded_bytes<T: BorshSerialize>(value: &T, max: usize) -> Result<Vec<u8>, String> {
     struct Limited {

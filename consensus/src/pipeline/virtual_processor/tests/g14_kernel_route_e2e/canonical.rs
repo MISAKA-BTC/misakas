@@ -336,6 +336,31 @@ impl Rpc {
     }
 
     /// The SDK/CLI's common verifier input, derived solely from paged op-211 wire responses.
+    pub(super) fn flat_snapshot(
+        &self,
+        anchor: misaka_palw_sdk::flat_candidate_v6::snapshot::FlatSnapshotAnchorV6,
+    ) -> misaka_palw_sdk::flat_candidate_v6::snapshot::FlatPublicSnapshotV6 {
+        use misaka_palw_sdk::flat_candidate_v6::snapshot::*;
+        let mut snapshot = misaka_palw_sdk::onboarding_snapshot::KernelRowsSnapshotV1::default();
+        let mut request = GetPalwKernelRowsRequest { max_bytes: ROWS_PAGE_BYTES, ..Default::default() };
+        loop {
+            let (after, max_bytes) = palw_kernel_rows_request_v1(&Self::wire(request)).unwrap();
+            let wire = serde_json::to_vec(&palw_kernel_rows_response_v1(self.api(), after, max_bytes).unwrap()).unwrap();
+            match snapshot.push(flat_rpc_page_v6(&wire).unwrap()).unwrap() {
+                None => return FlatPublicSnapshotV6::from_snapshot(snapshot, anchor).unwrap(),
+                Some((table, key)) => {
+                    request = GetPalwKernelRowsRequest {
+                        has_cursor: true,
+                        after_table: table as u32,
+                        after_key: faster_hex::hex_string(&key),
+                        max_bytes: ROWS_PAGE_BYTES,
+                    }
+                }
+            }
+        }
+    }
+
+    /// The SDK/CLI's common onboarding input from paged op-211 responses.
     pub(super) fn onboarding(&self, class: Hash64) -> misaka_palw_sdk::onboarding_chain::PublicOnboardingReadsV1 {
         use misaka_palw_sdk::onboarding_snapshot::{KernelRowsPageV1, KernelRowsSnapshotV1};
         let mut snapshot = KernelRowsSnapshotV1::default();
@@ -1093,8 +1118,14 @@ async fn lie_convicted_using(mode: Mode, start: Start, lie: Lie, commitments_onl
     let finding = if commitments_only {
         assert!(fresh.ledger.demands.is_empty() && fresh.ledger.served.is_empty());
         misaka_palw_kernel::ledger::OutsiderV1 {
-            ledger: &fresh.ledger, claim: claim.id, material: &NoProducerValues, artifact: &model, salt: fresh.salt,
-        }.check_computation().expect("exact replay from authenticated public commitments and the registered artifact")
+            ledger: &fresh.ledger,
+            claim: claim.id,
+            material: &NoProducerValues,
+            artifact: &model,
+            salt: fresh.salt,
+        }
+        .check_computation()
+        .expect("exact replay from authenticated public commitments and the registered artifact")
     } else {
         fresh.check(claim.id, &claim.published(&w.fx, &[]), &model)
     };

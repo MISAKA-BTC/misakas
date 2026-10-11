@@ -22,6 +22,7 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | Flat-v5 typed node component | Explicit dormant inner 31/32 candidate statements bind the independently derived terminal scope; court folds recheck it, use shared block budgets and share original collateral/eight-statement catalogs with v2 | General public acquisition/localization, proof pre-emption seals, complete execution/checker/DA/network resource vector and execution Final; component tests are not full checkpoint/G14 acceptance |
 | Flat-v5 native public acquisition | Dormant inner 33/34/35 fetch authenticated node/hash units into public read-API state; bounded service/default, original collateral and four requester slots shared with v2 | Deployed RPC/transport, retention/pruning, whole-job acquisition/deadline guarantees, proof pre-emption seals, complete shared resources/DA/network load and execution Final; no full real-checkpoint/privacy/liveness acceptance |
 | Protected flat evidence seals v6 | Explicit versioned statement and appended route kinds; persisted signature-derived actor seals, deposit/retirement accounting, fixed actor/global quotas, proof-reserve work, explicit expiry and atomic conviction/payout; native validation is recorded below | Complete transport/deadline and adversarial aggregate honest-liveness evidence; production activation; frozen v3 remains historically unsealed |
+| Protected public snapshot and seal export | Common op-211 JSON reader, coherent complete rows checked against a separate immutable network/ruleset/tip/root anchor, native context/scope rebuild and exact mature own-seal export; actual node JSON component evidence below | Automatic locally authenticated anchor/state-proof acquisition, live public transport, whole-job retention/deadlines and full aggregate resources remain open; remote self-consistency is not chain membership |
 | Flat-v5 streamed detector | Generic exact replay consumes public node/hash paths and acquired registered weights; all 25 primitive, state/history, encoder and decode synthetic trials; the native late-leaf case now uses the generic detector | Shared complete verifier/retry/hash/delivery accounting, optimized acquisition/localization, deadlines/honest liveness, all-feature real-node cases and real-checkpoint/full-task execution Final |
 | Flat replay v6 local session budget | New projection binds unchanged v5 scope; native read API and verifier independently derive i128 tensor payload, parameter/trace hash and response bounds; one session charges retries and cached reads | Full peak memory/CPU/metadata/transport/retention accounting, shared consensus admission and per-block/per-bond/network aggregate enforcement, real-size deadline/liveness evidence |
 | Real models and coverage | Dated census reports exist; fixture/structural passes are not full-task passes | Revision/task/context/storage/arithmetic/plan records, real sizes, complete modalities via RFC03, independent Final references, A6 and A8 denominators/confidence/residuals |
@@ -2088,3 +2089,46 @@ and expiry-sweep bounds, complete shared resources/economics, whole-job public
 acquisition/retention, actual checkpoint/task/fidelity/performance, versioned
 long/sparse/state dimensions, execution Final and A6/A8 remain open. Shipping
 fences stay dormant; full RFC02 remains active.
+
+## Verified increment — protected public snapshot and exact seal export, 2026-10-11
+
+Reuse the common op-211 snapshot collector for protected reads. The exposed
+`into_route_v1` preserves its complete/coherent page, ordered row/cursor,
+served-root and header-clock checks; onboarding retains all downstream policy
+and program binding checks. The protected reader additionally compares tip,
+network/ruleset and both roots to a separate caller-authenticated anchor and
+keeps that anchor immutable after construction.
+
+Candidate reads require the requested protected vector/class/model statement and
+independently reconstruct the native typed context, resource scope and parameter/
+input bindings. Seal export requires the exact bond's mature unspent row and an
+open candidate at the anchored tip. Reveal preparation/native acceptance still
+check private exact bytes, current state/clock/bond status and the terminal fault.
+Matching an anchor copied from remote pages cannot authenticate chain membership.
+
+The common SDK parser consumes the actual op-211 JSON response grammar, bounds
+JSON/hex/counts before additional binary copies, and rejects malformed/unknown
+fields, tables and terminal cursors. Offline `palw-class flat-v6 snapshot` accepts
+one response per NDJSON line plus a separate anchor file. It writes only the exact
+checked seal row, using exclusive mode-0600 creation, and reports the anchored
+height with `MATCHED_SUPPLIED_ANCHOR_CHAIN_TRUST_REQUIRED`; it sends no carrier.
+The existing 128-MiB decoded collector ceiling is a local reader limit, not peak
+RAM, whole-job consensus capacity or a producer constraint.
+
+**36 distinct selected tests pass:** all 18 native model-conformance tests, four
+new snapshot/CLI tests, seven protected SDK/CLI tests and seven existing
+onboarding-snapshot regressions. Production SDK/CLI checking, seven-file targeted
+formatting, CLI help and whitespace checks pass. Final validation is recorded in
+[the verdict](evidence/rfc02-flat-snapshot-v6-verdict.json). The protected native
+chunk trial now reconstructs its candidate and mature seal from the actual op-211
+response builder and JSON wire grammar, with its separately authenticated local
+consensus anchor, before conviction, capital settlement and independent replay.
+SDK fixture trials cover anchor/root/scope/identity/clock/row substitutions,
+bounded malformed RPC material, exact offline export/no-overwrite and incomplete
+snapshots; their local roots are not node admission or real-checkpoint evidence.
+
+Automatic local anchor/state-proof acquisition and public network transport,
+retention/pruning, whole-job honest inclusion/deadlines, all shared aggregate
+resources/economics, versioned long/sparse/state semantics, actual checkpoint/
+task/context/fidelity/performance, execution Final and A6/A8 remain open.
+Shipping fences stay dormant; full RFC02 remains active.

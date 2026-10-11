@@ -4,17 +4,20 @@ use rand::{RngCore, rngs::OsRng};
 use std::{
     collections::BTreeMap,
     fs::OpenOptions,
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
 };
 
 const USAGE: &str = "palw-class flat-v6 — prepare protected native candidates offline
 
-All commands: --network ID [--drill-salt HEX] --key-file SEED --bond TXID:INDEX --out PATH
+All commands: --network ID [--drill-salt HEX] --bond TXID:INDEX --out PATH
+Signing commands also require --key-file SEED
     post   --class HEX --binding HEX --post FLAT_V3_BODY
     seal   --vector HEX --proof FLAT_V5_FAULT --secret-out PRIVATE_PATH
     reveal --secret PRIVATE_PATH --row NATIVE_SEAL_ROW --height DAA
     expire --vector HEX --actor HEX
+    snapshot --pages NDJSON --anchor JSON --vector HEX --class HEX --binding HEX
+             (no --key-file; --out receives the checked native seal row)
 
 seal writes only the public seal to --out. It creates --secret-out with a fresh OS-random
 salt and the exact proof, network and signing bond, with mode 0600 on Unix. Keep it private.
@@ -24,6 +27,9 @@ Outputs are never overwritten. Large objects have .chunkN parts beside --out. La
 use generic carriage; large reveals use the sealing bond's kernel slots. Timely inclusion
 and retention are not established by this tool.
 Submit the listed carriers with `misaka palw submit-object --object PATH`. Review them first.
+snapshot reads one op-211 JSON response per line, checks one complete coherent snapshot and
+compares its roots, network, ruleset and tip to the separately supplied anchor. Authenticate
+that anchor to your local chain or a state proof; the CLI does not establish chain membership.
 Preparation grants no activation, admission, fidelity, reward eligibility or execution Final.";
 
 fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>, String> {
@@ -64,13 +70,55 @@ fn write_new_files(files: &[(PathBuf, Vec<u8>)]) -> Result<(), String> {
     result
 }
 
+fn snapshot_row(flags: &mut BTreeMap<String, String>, domain: Hash64, bond: PalwBondKeyV2, out: PathBuf) -> Result<(), String> {
+    use super::snapshot::*;
+    let mut take = |name: &str| flags.remove(name).ok_or_else(|| format!("{name} is required"));
+    let pages = PathBuf::from(take("--pages")?);
+    let anchor_path = PathBuf::from(take("--anchor")?);
+    let vector = crate::improve_objects::spec::hash(&take("--vector")?)?;
+    let class = crate::improve_objects::spec::hash(&take("--class")?)?;
+    let binding = crate::improve_objects::spec::hash(&take("--binding")?)?;
+    if !flags.is_empty() {
+        return Err(format!("unknown snapshot options: {}", flags.keys().cloned().collect::<Vec<_>>().join(", ")));
+    }
+    let anchor: FlatSnapshotAnchorV6 = serde_json::from_slice(&read_bounded(&anchor_path, 64 << 10)?).map_err(|e| e.to_string())?;
+    if anchor.network_domain != domain {
+        return Err("snapshot anchor differs from the selected network".into());
+    }
+    let mut reader = BufReader::new(std::fs::File::open(&pages).map_err(|e| format!("{}: {e}", pages.display()))?);
+    let mut snapshot = crate::onboarding_snapshot::KernelRowsSnapshotV1::default();
+    loop {
+        let mut line = Vec::new();
+        let n =
+            reader.by_ref().take((MAX_FLAT_RPC_PAGE_JSON_V6 + 1) as u64).read_until(b'\n', &mut line).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        let page = flat_rpc_page_v6(&line).map_err(|e| format!("{}: {}", e.code, e.detail))?;
+        snapshot.push(page).map_err(|e| format!("{}: {}", e.code, e.detail))?;
+    }
+    let checked = FlatPublicSnapshotV6::from_snapshot(snapshot, anchor).map_err(|e| format!("{}: {}", e.code, e.detail))?;
+    let row = checked.reveal_row(vector, class, binding, &bond).map_err(|e| format!("{}: {}", e.code, e.detail))?;
+    write_new_files(&[(out.clone(), borsh::to_vec(&row).map_err(|e| e.to_string())?)])?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema": "misaka.palw.flat-native-snapshot.v6", "vector": vector.to_string(),
+            "seal_row": out, "height": checked.anchor().tip_daa, "anchor": checked.anchor(),
+            "trust": "MATCHED_SUPPLIED_ANCHOR_CHAIN_TRUST_REQUIRED",
+            "note": "Authenticate the separately supplied anchor to your local chain or a state proof. Copying it from these remote pages establishes only consistency. Native acceptance rechecks current state.",
+        })
+    );
+    Ok(())
+}
+
 pub fn run(args: &[String]) -> Result<(), String> {
     if args == ["--help"] {
         println!("{USAGE}");
         return Ok(());
     }
     let kind = args.first().ok_or(USAGE)?;
-    if !matches!(kind.as_str(), "post" | "seal" | "reveal" | "expire") {
+    if !matches!(kind.as_str(), "post" | "seal" | "reveal" | "expire" | "snapshot") {
         return Err(USAGE.into());
     }
     let mut flags = BTreeMap::new();
@@ -94,9 +142,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
         params.net.to_string().as_bytes(),
         Some(params.genesis.hash),
     );
-    let key_file = take(&mut flags, "--key-file")?;
     let bond = crate::improve_objects::spec::bond(&take(&mut flags, "--bond")?)?;
     let out = PathBuf::from(take(&mut flags, "--out")?);
+    if kind == "snapshot" {
+        return snapshot_row(&mut flags, domain, bond, out);
+    }
+    let key_file = take(&mut flags, "--key-file")?;
     let hash = |value: String| crate::improve_objects::spec::hash(&value);
     let mut private = None;
     let mut reveal_row = None;

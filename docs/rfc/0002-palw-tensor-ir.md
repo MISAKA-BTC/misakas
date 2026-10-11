@@ -3401,3 +3401,45 @@ the route, not a real large checkpoint or whole-network saturation bound. Shared
 invalid-proof load, all-target aggregate metadata/state and expiry-sweep costs,
 worst-job deadlines, transport/acquisition/retention and complete resources still
 need evidence. No shipping fence or full RFC02 acceptance is granted.
+
+### §14.33 — Protected candidate reads from one anchored public snapshot (2026-10-11)
+
+The protected SDK reader consumes the existing `getPalwKernelRows` (op 211)
+response grammar; no new RPC allocation or consensus object is introduced. One
+complete snapshot must preserve the tip, both roots, header and declared row
+count across all pages, with strictly advancing rows/cursors. The common snapshot
+rebuild checks both served roots and refuses a header newer than the tip.
+
+`FlatSnapshotAnchorV6` separately supplies the locally authenticated tip,
+network/ruleset domains and ledger/aux roots. All five must match before protected
+reads become available. A caller must authenticate that anchor to its own chain
+or a state proof. Copying the anchor from the same remote pages proves only
+consistency; the SDK/CLI must not report independent chain membership in that
+case. An offline file cannot attest its own chain trust.
+
+Candidate reads bind the requested vector/class/model statement to the explicit
+protected profile and independently rebuild the same program, parameter/input
+bindings and immutable resource scope used by the native court. Seal export
+requires the authenticated signing bond's row, an open candidate, and an unspent
+mature seal before its expiry at the anchored tip. Private salt/exact-proof guards,
+current bond status, clocks and terminal fault validity remain rechecked by reveal
+preparation and native acceptance. Snapshot membership grants no fidelity,
+execution rights, reward eligibility or Final.
+
+`palw-class flat-v6 snapshot` accepts one op-211 JSON response per NDJSON line and
+a separate anchor JSON file, then exclusively writes the checked native seal row
+and reports its anchored height for `flat-v6 reveal`. It uses the existing local
+128-MiB decoded snapshot ceiling plus a bounded JSON page envelope. JSON byte,
+row-count and hex bounds precede allocation of additional binary copies; this
+is not a peak-memory, consensus capacity or network-wide load guarantee. Unknown
+fields, malformed hex/tables, stray terminal cursors, incomplete/moved snapshots,
+root/anchor/context substitutions, unavailable routes and closed/immature/spent
+seals fail without publishing an output. Files are never overwritten.
+
+The node component trial uses the actual op-211 response builder and JSON grammar,
+a separately authenticated local consensus anchor, a reconstructed protected
+candidate/seal, and the existing own-chunk terminal court/settlement/replay.
+Synthetic/offline fixture roots establish reader behavior, not chain admission or
+actual-checkpoint/full-task acceptance. Public network transport, automatic local
+anchor/state-proof acquisition, retention/pruning, whole-job deadline/liveness,
+shared aggregate resources and the rest of §II.14 remain completion requirements.

@@ -1806,12 +1806,26 @@ async fn flat_v6_native_own_sealed_chunks_survive_generic_saturation_and_refuse_
     use kaspa_consensus_core::palw_kernel_route_v1::*;
     use kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_GROUPS;
     use misaka_palw_kernel::flat_seal6::*;
+    use misaka_palw_sdk::flat_candidate_v6::snapshot::FlatSnapshotAnchorV6;
     let f = vector_fixture(true);
     let mut net = Net::over_cfg(config(), TestConsensus::new);
     let binding = prepare(&mut net, &f).await;
     let (post, public) = flat_vector_post(&net, &f, binding, vec![0, 1], true);
     let id = send_protected_flat_vector(&mut net, &f, binding, 4, &post).await;
-    let proof = flat_first_relation_fault(&net.api().unwrap().flat_model_vector_view_v3(&id).unwrap(), &public, &f.params);
+    // Anchor comes from authenticated local consensus, separately from remote op-211 JSON.
+    let public_snapshot = |net: &Net| {
+        let local = net.api().unwrap();
+        canonical::Rpc::of(&net.chain).flat_snapshot(FlatSnapshotAnchorV6 {
+            tip_daa: net.daa(),
+            network_domain: Hash64::from_bytes(local.header.policy.network_domain),
+            ruleset_digest: Hash64::from_bytes(local.header.policy.ruleset_digest),
+            ledger_root: local.ledger_root(),
+            aux_root: local.aux_root(),
+        })
+    };
+    let snapshot = public_snapshot(&net);
+    let (_, view) = snapshot.candidate(id, Hash64::from_bytes(f.class), binding).unwrap();
+    let proof = flat_first_relation_fault(&view, &public, &f.params);
     let (actor, salt) = (net.kid(7), [71; 64]);
     let reveal = net.route(7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: proof.clone() });
     let target = PalwKernelChunkTargetV1::FlatProofV6 { vector: id, actor };
@@ -1823,6 +1837,10 @@ async fn flat_v6_native_own_sealed_chunks_survive_generic_saturation_and_refuse_
     let seal = flat_proof_seal_v6(&id.as_bytes(), &actor, &salt, &proof).unwrap();
     send(&mut net, 7, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal }).await;
     net.beat_to(net.api().unwrap().flat_model_seal_v6(&id, &actor).unwrap().seal.mature_daa).await;
+    let snapshot = public_snapshot(&net);
+    let checked_row = snapshot.reveal_row(id, Hash64::from_bytes(f.class), binding, &net.bond(7)).unwrap();
+    assert_eq!(checked_row, net.api().unwrap().flat_model_seal_v6(&id, &actor).unwrap());
+    assert!(snapshot.reveal_row(id, Hash64::from_bytes(f.class), binding, &net.bond(6)).is_err());
     let mut borrowed = parts[0].clone();
     borrowed.opener = net.bond(6);
     let borrowed = signed_flat_chunk(&mut net, 6, borrowed);

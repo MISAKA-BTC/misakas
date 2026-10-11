@@ -1,0 +1,150 @@
+{
+  "schema": "misaka.palw.rfc02-flat-public-snapshot-evidence.v6",
+  "date": "2026-10-11",
+  "verdict": "PROTECTED_PUBLIC_SNAPSHOT_COMPONENT_PASS_FULL_RFC02_INCOMPLETE",
+  "goal_status": "active",
+  "base_commit": "68f5686b56e0a9bfd7defb488db55c395ad8ddeb",
+  "branch": "codex/rfc02-review-completion",
+  "scope": "Existing op-211 response grammar, coherent complete served-root reconstruction, separate immutable network/ruleset/tip/root anchor comparison, native typed scope/candidate/own-seal reads, offline exact row export and synthetic native own-chunk court/settlement/replay.",
+  "test_groups": [
+    {
+      "group": "sdk",
+      "passed": 18,
+      "failed": 0,
+      "exit_code": 0,
+      "test_names": [
+        "cli_post_expiry_and_invalid_inputs_write_only_reviewable_carriers",
+        "cli_secret_permissions_no_overwrite_and_checked_reveal_roundtrip",
+        "private_sdk_codec_bounds_counts_and_preserves_exact_carrier",
+        "protected_sdk_chunks_bind_own_mature_seal_and_both_signature_layers",
+        "protected_sdk_post_binds_distinct_identity_and_all_implementation_records",
+        "sdk_reveal_requires_the_same_network_actor_exact_proof_and_mature_unspent_row",
+        "signatures_and_generic_carriage_preserve_network_bond_and_exact_protected_bytes",
+        "coherent_anchor_does_not_hide_candidate_scope_seal_or_clock_failures",
+        "offline_snapshot_cli_writes_only_exact_row_and_refuses_overwrite_or_wrong_anchor",
+        "public_pages_anchor_exact_candidate_and_own_mature_seal_without_execution_rights",
+        "rpc_json_rejects_counts_hex_tables_cursors_unknown_fields_and_unavailable_routes",
+        "a_history_program_cannot_disguise_itself_as_a_complete_bootstrap_check",
+        "an_authenticated_snapshot_cannot_substitute_the_candidate_program_plan_or_kernel_link",
+        "complete_check_file_replay_matches_the_committed_policy_and_refuses_other_models",
+        "incomplete_or_mutated_material_never_authenticates_to_the_served_roots",
+        "one_snapshot_rebuilds_the_registered_program_and_attempt_without_models_or_separate_final_reads",
+        "repeated_cursors_duplicates_omitted_rows_and_unbounded_snapshots_are_refused",
+        "tip_header_roots_and_count_cannot_change_between_pages_even_when_rows_are_unchanged"
+      ],
+      "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-sdk --test flat_snapshot_v6 --test onboarding_snapshot --test flat_candidate_v6 -- --nocapture --test-threads=1",
+      "binaries": {
+        "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_snapshot_v6-87ab5baee7c99b85": "c69bce17f07e4b12a55cf2e669f92f5944a77e98cc17202a99457453c6a70e32",
+        "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/onboarding_snapshot-bf2e0f60dddd9cd9": "f8058d53a7e902daabbd25ec9b43086bacd9b6b4eab40a1c2f0b5d2c6fa5f05c",
+        "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate_v6-e0a451f829e555db": "a136b7e2e183a00e1234fed2a6194f8a63581acaf585ebaf4812de6bc4e1752a"
+      },
+      "log": "rfc02-flat-snapshot-v6-sdk.log",
+      "log_sha256": "f8174a36af1e44971b93cc11cdf36802f37f87bf34eb82c0e2dc0e0957311b0d",
+      "raw_log_sha256": "49fa99bbcc14ac79ba630856eda7e247a744007c0ab941c9d3d49878a61aef70"
+    },
+    {
+      "group": "native",
+      "passed": 18,
+      "failed": 0,
+      "exit_code": 0,
+      "test_names": [
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_hash_da_node_fresh_public_reads_localize_late_leaf_and_convict_without_output_values",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_hash_da_node_shared_slots_response_priority_withholding_and_horizon_hold",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_admits_typed_scope_convicts_leaf_and_whole_once_and_replays_redemption",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_and_v2_catalogs_share_the_same_capital_and_eight_statement_limit",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_scope_identity_and_hostile_filings_pay_shared_budgets_without_poisoning",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v3_node_preemption_counterexample_and_staged_v6_seal_rejects_equivalent_carrier",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_mature_proof_uses_reserved_budget_after_admission_flood",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_own_sealed_chunks_survive_generic_saturation_and_refuse_borrowed_actors",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_seal_blocks_equivalent_preemption_legacy_bypass_and_pays_finder_once",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_seals_bound_actor_slots_hold_capital_and_forfeit_expired_false_seals",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_catalog_shares_capital_and_keeps_its_bound_after_clocked_release",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_deadlines_hold_capital_and_responses_survive_a_full_court_budget",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_public_replies_enable_a_fresh_whole_value_conviction_without_model_disclosure",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_new_large_vocab_candidates_have_public_courts_without_a_final_or_execution_rights",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_wrong_roots_scope_and_invalid_refutations_cost_only_the_actor",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_cannot_be_poisoned_by_an_earlier_false_source_root",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_registers_encoder_and_stateful_decoder_without_identity_hooks",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_wrong_roles_and_floods_spend_only_attackers_budget"
+      ],
+      "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p kaspa-consensus --lib g14_kernel_route_e2e::model_conformance -- --nocapture --test-threads=1",
+      "binaries": {
+        "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-c0e7e4ea3dbd2fe9": "b99efd44ea2936f8128cb22026ed9672b5a2908fcb9adc017aaf0c54c07126e5"
+      },
+      "log": "rfc02-flat-snapshot-v6-native.log",
+      "log_sha256": "4faf9c8fec3cd62cff45782792d616b4d3c834979629462d6fc088554419a91a",
+      "raw_log_sha256": "5da669f6048bac00ada83f6d0f89e182b08ba0a5520fba268dbf48bc15c11eb2"
+    }
+  ],
+  "distinct_selected_passing_tests": 36,
+  "new_tests": 4,
+  "checks": {
+    "check": {
+      "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo check --locked -p misaka-palw-sdk --lib --bin palw-class",
+      "exit_code": 0,
+      "log": "rfc02-flat-snapshot-v6-check.log",
+      "log_sha256": "f92e4d43b9187ac921961f60b57f5e970c0e81729d72869ec0e10318fa79dcd9",
+      "raw_log_sha256": "f92e4d43b9187ac921961f60b57f5e970c0e81729d72869ec0e10318fa79dcd9"
+    },
+    "formatting": {
+      "command": "rustfmt --edition 2024 --check --config skip_children=true,reorder_modules=false misaka-palw-sdk/src/onboarding_snapshot.rs misaka-palw-sdk/src/flat_candidate_v6.rs misaka-palw-sdk/src/flat_candidate_v6/cli.rs misaka-palw-sdk/src/flat_candidate_v6/snapshot.rs misaka-palw-sdk/tests/flat_snapshot_v6.rs consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/canonical.rs consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance.rs",
+      "exit_code": 0,
+      "log": "rfc02-flat-snapshot-v6-fmt.log",
+      "log_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "help": {
+      "command": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/palw-class flat-v6 --help",
+      "binary_sha256": "b76367aa2520da9312649026dbea15ba44d86fc97e903b0159cf89b96e995f85",
+      "exit_code": 0,
+      "log": "rfc02-flat-snapshot-v6-help.log",
+      "log_sha256": "7977a68f738e49d56635b12bc2a1a2968ac1853fa5e3f8daf699a6362b7e5574",
+      "raw_log_sha256": "7977a68f738e49d56635b12bc2a1a2968ac1853fa5e3f8daf699a6362b7e5574"
+    },
+    "diff_check_exit_code": 0
+  },
+  "prior_unchanged_evidence": {
+    "kernel": "rfc02-protected-native-v6-verdict.json",
+    "kernel_passed": 153,
+    "kernel_ignored_hardware_benchmark": 1,
+    "core_and_legacy": "rfc02-flat-chunk-v6-verdict.json",
+    "core_codec_passed": 2,
+    "legacy_chunks_passed": 2,
+    "rerun": false,
+    "cumulative_distinct_passes_in_recorded_protected_component_pool": 193
+  },
+  "source_sha256": {
+    "misaka-palw-sdk/src/onboarding_snapshot.rs": "2a9473faa9178c695d3f571f65dfb3bf77315397d10825974a971bbbbea7d2e3",
+    "misaka-palw-sdk/src/flat_candidate_v6.rs": "641437e55575e1c9eb56a0662c3eb64c4c9a588fa795f5e01cb9c37d23d70a25",
+    "misaka-palw-sdk/src/flat_candidate_v6/cli.rs": "2da506e9f8daea87149d11f5e4badcbdced0c1613067530b9460e3b06da3a55b",
+    "misaka-palw-sdk/src/flat_candidate_v6/snapshot.rs": "f4066236f72462044ebb3c1c0809b186ca4a99708f628c45152d1dd37a7834bf",
+    "misaka-palw-sdk/tests/flat_snapshot_v6.rs": "8d82b676952a16ceefc7722bb6d4ce4218bf11dd0d6210a6d2ccad2827315eb2",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/canonical.rs": "21bfb652d09ff66edabce0ff4d0fa55d85750edfc41cc689ab4b6d3f213df515",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance.rs": "90ad2d453fb5a7b93b6da885d4c44e69e46b4ce7fceabadad60f55b00f7f8a10"
+  },
+  "build_provenance": {
+    "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+    "cargo_locked": true,
+    "profile": "Ordinary unoptimized dev/test + debuginfo",
+    "CARGO_INCREMENTAL": "0: compiler caching only",
+    "target_dir": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target",
+    "other_worktree_source_modified": false,
+    "cache_cleanup": "Only generated rcgu.o intermediates whose linked rlib/test binary existed; sources, evidence and linked binaries retained.",
+    "runtime_stack_arithmetic_network_overrides": false,
+    "warnings": "Existing consensus/TIR/lowerer/SDK warnings."
+  },
+  "development_failures_excluded": [
+    "Initial CLI referred to Refusal.why rather than the existing detail field; fixed before final tests.",
+    "Initial SDK fixture confused the core page type with the SDK served-page type; qualified the core type before final tests."
+  ],
+  "limitations": [
+    "The anchor is caller supplied. Matching an anchor copied from remote pages provides consistency only; local consensus or a separate chain/state proof must establish membership.",
+    "Native trial uses actual op-211 response builders and JSON grammar against a locally authenticated node anchor, not a deployed public transport socket or remote state proof.",
+    "SDK fixtures directly construct local root-consistent rows; they do not establish candidate chain admission or model truth.",
+    "The decoded 128-MiB snapshot and bounded JSON envelope are local reader limits, not peak-memory or whole-job network/consensus budgets.",
+    "Native terminal proof is synthetic and split into forced 1-KiB parts; actual-checkpoint carrier-sized performance and full task are not established.",
+    "Current bond status, exact private proof/salt, current clocks and terminal court are checked independently at native acceptance.",
+    "Automatic local anchor/state-proof acquisition, public transport, retention/pruning, whole-job honest inclusion/deadline, shared aggregate resources/economics, versioned long/sparse/state semantics, actual checkpoint/task/context/fidelity/performance, execution Final and A6/A8 remain required.",
+    "Historical v3 stays unsealed; no shipping fence is armed."
+  ]
+}

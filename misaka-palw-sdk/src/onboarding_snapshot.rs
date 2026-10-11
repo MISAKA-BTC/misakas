@@ -99,8 +99,9 @@ impl KernelRowsSnapshotV1 {
         }
     }
 
-    /// Dispatch by the committed policy after checking the same program/attempt bindings.
-    pub fn into_onboarding_reads_v1(self, class: Hash64) -> Result<PublicOnboardingReadsV1, Refusal> {
+    /// Rebuild one complete coherent snapshot against its served roots. The caller
+    /// must separately authenticate those roots and the tip to its local chain.
+    pub fn into_route_v1(self) -> Result<(u64, PalwKernelRouteStateV1), Refusal> {
         if !self.complete {
             return Err(Refusal::new("SNAPSHOT_INCOMPLETE", "no complete snapshot was received"));
         }
@@ -110,6 +111,12 @@ impl KernelRowsSnapshotV1 {
         if route.header.scalars.daa > tip_daa {
             return Err(Refusal::new("SNAPSHOT_CLOCK", "the rows are newer than the served tip"));
         }
+        Ok((tip_daa, route))
+    }
+
+    /// Dispatch by the committed policy after checking the same program/attempt bindings.
+    pub fn into_onboarding_reads_v1(self, class: Hash64) -> Result<PublicOnboardingReadsV1, Refusal> {
+        let (tip_daa, route) = self.into_route_v1()?;
         let key = borsh::to_vec(&class).expect("digest serializes");
         let attempt_row = route
             .aux
