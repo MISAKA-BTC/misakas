@@ -35472,6 +35472,7 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::ModelBondAllocationV1) => builder.params.bond_budget().is_some_and(|mirror| mirror.allocation_at(ctx.daa_score).is_some()),
         // RFC-0008 v2: the mirror of `palw_exec_payload_v2` (written only on a `ConsensusV2` network).
         K::Fence(F::ExecPayloadV2) => builder.params.exec_v2_active_at(ctx.daa_score),
+        K::Fence(F::ClassSemanticsV1) => builder.extras.class_semantics_active,
     }
 }
 

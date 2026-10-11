@@ -122,6 +122,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }
         | O::ClassRegistered { .. }
+        | O::ClassSemanticsDeclaredV1 { .. }
         // RFC-0002 Phase F (tag 61): an IR registration is a registration, like the one above.
         | O::ClassRegisteredTirV1 { .. }
         // RFC-0003 (tag 68): a generative registration, likewise.
