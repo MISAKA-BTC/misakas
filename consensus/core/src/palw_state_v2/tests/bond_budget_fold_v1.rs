@@ -1038,7 +1038,7 @@ fn material_v3_preserves_abandonment_and_obligation_release_before_retirement() 
             .with_fp_quanta(8, 64).unwrap().with_claim_retirement_daa(200).unwrap()
             .with_capacity_escrow_from_daa((!free_prompt).then_some(100))
             .with_bond_budget(Some(PalwBondBudgetMirrorV1 {
-                from_daa: 100, policy: PalwBondBudgetPolicyV1 { window_daa: 280, ..test_policy(1) }, allocation: None,
+                from_daa: 100, policy: PalwBondBudgetPolicyV1 { window_daa: 280, block_units_per_unit: 8 * PALW_BUDGET_BLOCK_UNIT_V1, ..test_policy(1) }, allocation: None,
             }))
             .with_reporter_income_from(Some(100)).with_material_income_from(Some(150));
         let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
