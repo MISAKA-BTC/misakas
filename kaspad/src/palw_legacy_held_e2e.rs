@@ -745,6 +745,7 @@ fn service_filer_case(
         output_root: o.roots.output_root.unwrap_or_default(),
         legacy: Some(replica),
         fp_job: None,
+        own_output_ids: Vec::new(),
         _job_reservation: None,
         own_range: Box::new(|_, _| panic!("the LG14-B controller does not use the linear range fallback")),
         _reservation: None,

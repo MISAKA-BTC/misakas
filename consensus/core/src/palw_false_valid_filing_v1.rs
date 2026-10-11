@@ -34,8 +34,7 @@
 //! offence key, the evidence id and the accused.
 
 use crate::palw_offence_attribution_v1::{
-    PalwFalseValidReceiptV1, PalwFaultSiteV1, PalwIdentityRulesV1, PalwPanelFalseValidEvidenceV2, palw_check_panel_false_valid_v2,
-    palw_false_valid_offence_id_v2,
+    PalwFalseValidReceiptV1, PalwFaultSiteV1, PalwIdentityRulesV1, PalwPanelFalseValidEvidenceV2, palw_false_valid_offence_id_v2,
 };
 use crate::palw_offence_v1::{PalwOffenceVerifyError, PalwPanelContradictionV1};
 use crate::palw_panel_v2::PalwReceiptVerdictV2;
@@ -252,6 +251,31 @@ pub fn palw_false_valid_filing_check_v1(
     chain_domain: Hash64,
     verify: &dyn Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 ) -> PalwFalseValidFilingCheckV1 {
+    palw_false_valid_filing_check_at_v2(
+        state,
+        accused,
+        evidence,
+        fp_decode_rules_active,
+        rules,
+        chain_domain,
+        verify,
+        crate::palw_offence_attribution_v1::PalwSessionRuleV1::RefusedUnderSession,
+    )
+}
+
+/// The automatic filer must use the same block-context session rule as the gate and fold.
+/// Otherwise new direct proof kinds are refused before the gate can examine them.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_false_valid_filing_check_at_v2(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    fp_decode_rules_active: bool,
+    rules: PalwIdentityRulesV1,
+    chain_domain: Hash64,
+    verify: &dyn Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    sessions: crate::palw_offence_attribution_v1::PalwSessionRuleV1,
+) -> PalwFalseValidFilingCheckV1 {
     use PalwFalseValidFilingCheckV1 as Check;
     use PalwOffenceVerifyError as E;
     let Ok(payload) = borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence) else {
@@ -265,7 +289,16 @@ pub fn palw_false_valid_filing_check_v1(
         return Check::Unrelied(why.to_string());
     }
     // F7's slot stays empty on testnet-12, as the gate and the fold both pass it.
-    match palw_check_panel_false_valid_v2(state, accused, evidence, fp_decode_rules_active, false, rules, None) {
+    match crate::palw_offence_attribution_v1::palw_check_panel_false_valid_at_v2(
+        state,
+        accused,
+        evidence,
+        fp_decode_rules_active,
+        false,
+        rules,
+        None,
+        sessions,
+    ) {
         Ok(finding) => {
             let full_attestation = match payload.receipt.attested_mask() {
                 None => true,

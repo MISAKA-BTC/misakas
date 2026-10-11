@@ -5,6 +5,8 @@
 
 ## 現在の判定（Codex修正後）
 
+**constraint service / tiled filer follow-up（2026-10-11）:** False-Valid 事前判定を実 gate の session rule と揃え、禁止 token・premature stop・beaten token の actual fresh service 3件で producer と全5 Valid signers の conviction・徴収・reporter reveal を確認した。tiled は位置別の公開 tile 取得・認証済み proof 生成・限定 cache・算術局所化への fallback を node に追加し、builder / book / engine の回帰を確認した。tiled の登録 class での actual service、最大 proof の分割終局搬送と全 active family の保証は未達。[最新の検証範囲と残り](tiled-constraint-public-status.md)を参照。
+
 **G14全域はまだ未達。修正済みの小型・segmented court経路と、未完成の本番到達性を分けて評価する。** ユーザー確認により、正しい登録モデルを保有するverifierを前提とし、ADR-0177を維持する。
 
 `codex/g14-prosecution-bounds`では、公開materialから独立に再実行するcourt、canonical tensor検査、RAM/state/filing上限、small-value commitment court、固定報酬jobの生成長束縛を修正した。さらに`g14/legacy-filer`を統合し、単独の不正leafを見逃すmidpoint探索と、未認証carrierによる公開応答cache汚染を修正した。core・実node試験の件数、再試験、未実行の範囲は[実装修正記録](implementation.md)にまとめている。

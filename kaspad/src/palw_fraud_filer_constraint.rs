@@ -98,6 +98,185 @@ pub(super) fn flat_contradiction_v1(
     Ok(None)
 }
 
+/// At most two public tiles of one challenged position. Own replay IDs only nominate a
+/// candidate; public authentication and the court rule independently decide conviction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TiledPlanV1 {
+    pub position: u32,
+    pub committed: u32,
+    pub witness: Option<u32>,
+    pub beat_lane: Option<u32>,
+}
+
+impl TiledPlanV1 {
+    pub fn units(self) -> Vec<kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1> {
+        use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+        use kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES;
+        let tile = self.beat_lane.map_or(0, |_| self.committed as usize / PALW_LOGITS_TILE_LANES) as u8;
+        let mut units = vec![PalwDaUnitV1::Event { row: self.position, tile }];
+        if let Some(beat) = self.beat_lane {
+            let other = PalwDaUnitV1::Event { row: self.position, tile: (beat as usize / PALW_LOGITS_TILE_LANES) as u8 };
+            if !units.contains(&other) {
+                units.push(other);
+            }
+        }
+        units
+    }
+}
+
+pub(super) fn tiled_plan_v1(
+    target: &PalwOffenceTargetV1,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    initial: &kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
+    own_ids: &[u32],
+    table: Arc<PalwTokenTableV1>,
+) -> Result<Option<TiledPlanV1>, String> {
+    use kaspa_consensus_core::palw_step_refute::*;
+    let PalwTraceEventDisclosureV1::Tiled { binding, generated_token_ids, .. } = initial else { return Ok(None) };
+    kaspa_consensus_core::palw_offence_attribution_v1::palw_constrained_job_target_v1(target, binding, job)
+        .map_err(|e| e.to_string())?;
+    check_trace_event_disclosure_v1(target.trace_root, target.execution_root, 0, 0, initial, binding.step_leaf_count)
+        .map_err(|e| e.to_string())?;
+    if table.vocab() != binding.shape_profile.vocab_size {
+        return Err("the held token table has another vocabulary width".into());
+    }
+    if table.vocab() as usize > 256 * PALW_LOGITS_TILE_LANES {
+        return Err("the vocabulary exceeds the public event tile index space".into());
+    }
+    let mask = PalwConstraintMaskV1::for_job(job, table)?;
+    let mut state = mask.state_after(&[]).ok_or("the constraint has no initial state")?;
+    let mut same_prefix = true;
+    for (position, &committed) in generated_token_ids.iter().enumerate() {
+        if committed >= binding.shape_profile.vocab_size {
+            return Err("the committed token is past the vocabulary".into());
+        }
+        if let Some(next) = mask.admit(&state, committed) {
+            if same_prefix
+                && let Some(&own) = own_ids.get(position)
+                && own != committed
+                && mask.admit(&state, own).is_some()
+            {
+                return Ok(Some(TiledPlanV1 { position: position as u32, committed, witness: None, beat_lane: Some(own) }));
+            }
+            same_prefix &= own_ids.get(position) == Some(&committed);
+            state = next;
+        } else {
+            let witness = (0..mask.table.vocab()).find(|&id| mask.admit(&state, id).is_some());
+            if Some(committed) == mask.table.lowest_eog_id() && witness.is_none() {
+                return Ok(None);
+            }
+            return Ok(Some(TiledPlanV1 { position: position as u32, committed, witness, beat_lane: None }));
+        }
+    }
+    Ok(None)
+}
+
+pub(super) fn tiled_contradiction_v1(
+    target: &PalwOffenceTargetV1,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    plan: TiledPlanV1,
+    events: &[kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1],
+    table: Arc<PalwTokenTableV1>,
+) -> Result<Option<PalwPanelContradictionV1>, String> {
+    use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+    use kaspa_consensus_core::palw_step_refute::*;
+    let units = plan.units();
+    if events.len() != units.len() {
+        return Err("the selected public tiles are incomplete".into());
+    }
+    let first = events.first().ok_or("no selected public row")?;
+    let binding = first.binding();
+    kaspa_consensus_core::palw_offence_attribution_v1::palw_constrained_job_target_v1(target, binding, job)
+        .map_err(|e| e.to_string())?;
+    if table.vocab() != binding.shape_profile.vocab_size {
+        return Err("the held token table has another vocabulary width".into());
+    }
+    // Also check the host table's tokenizer/root before generating openings.
+    let _mask = PalwConstraintMaskV1::for_job(job, table.clone())?;
+    for (unit, event) in units.iter().zip(events) {
+        let PalwDaUnitV1::Event { row, tile } = *unit else { unreachable!() };
+        if event.binding() != binding {
+            return Err("the selected tiles carry different bindings".into());
+        }
+        check_trace_event_disclosure_v1(target.trace_root, target.execution_root, row, tile, event, binding.step_leaf_count)
+            .map_err(|e| e.to_string())?;
+    }
+    let PalwTraceEventDisclosureV1::Tiled { generated_token_ids, row_root, row_opening, tile_lanes, tile_opening, .. } = first else {
+        return Err("the selected event is not tiled".into());
+    };
+    if generated_token_ids.get(plan.position as usize) != Some(&plan.committed) {
+        return Err("the selected token changed".into());
+    }
+    let base = borsh::object_length(job)
+        .map_err(|e| e.to_string())?
+        .saturating_add(borsh::object_length(binding).map_err(|e| e.to_string())?)
+        .saturating_add(events.iter().map(|e| borsh::object_length(e).unwrap_or(usize::MAX)).fold(0usize, usize::saturating_add));
+    let ceiling = PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES as usize;
+    if base > ceiling {
+        return Err("the constrained proof requires multipart terminal carriage".into());
+    }
+    let (beat_lanes, beat_opening) = if plan.beat_lane.is_some() {
+        let PalwTraceEventDisclosureV1::Tiled {
+            generated_token_ids: other_ids, row_root: other_root, tile_lanes, tile_opening, ..
+        } = events.last().unwrap()
+        else {
+            return Err("the beating event is not tiled".into());
+        };
+        if other_ids != generated_token_ids || other_root != row_root {
+            return Err("the selected public tiles disagree on their row".into());
+        }
+        (tile_lanes.clone(), tile_opening.clone())
+    } else {
+        (Vec::new(), row_opening.clone())
+    };
+    let pin = PalwTiledDecodePinV1 {
+        position: plan.position,
+        generated_token_ids: generated_token_ids.clone(),
+        row_root: *row_root,
+        row_opening: row_opening.clone(),
+        committed_tile_lanes: if plan.beat_lane.is_some() { tile_lanes.clone() } else { Vec::new() },
+        committed_opening: if plan.beat_lane.is_some() { tile_opening.clone() } else { row_opening.clone() },
+        beat_tile_lanes: beat_lanes,
+        beat_opening,
+        beat_lane: plan.beat_lane.unwrap_or(0),
+    };
+    let leaves = table.leaf_hashes();
+    let tree = PalwStepMerkleTreeV1::build_capped_v1(&leaves, PALW_TOKEN_TABLE_MAX_LEAVES_V1).map_err(|e| e.to_string())?;
+    let opening = |id: u32| -> Result<PalwStepOpeningV1, String> {
+        Ok(PalwStepOpeningV1 {
+            leaf_index: u64::from(id),
+            leaf_hash: *leaves.get(id as usize).ok_or("a lane is outside the table")?,
+            siblings: tree.path_v1(id as usize).map_err(|e| e.to_string())?,
+        })
+    };
+    let mut eog_ids = table.eog_token_ids.clone();
+    eog_ids.sort_unstable();
+    let eog = PalwTokenTableEogOpeningV1 { ids: eog_ids, opening: opening(table.vocab())? };
+    let mut ids: BTreeSet<u32> = generated_token_ids[..=plan.position as usize].iter().copied().collect();
+    ids.extend(plan.witness);
+    ids.extend(plan.beat_lane);
+    let mut bytes = base.saturating_add(borsh::object_length(&eog).map_err(|e| e.to_string())?);
+    let mut renderings = Vec::new();
+    for id in ids {
+        let entry = table.entries.get(id as usize).ok_or("the token is past the vocabulary")?;
+        let path = opening(id)?;
+        bytes = bytes
+            .saturating_add(entry.as_ref().map_or(0, Vec::len))
+            .saturating_add(borsh::object_length(&path).map_err(|e| e.to_string())?)
+            .saturating_add(16);
+        if bytes > ceiling {
+            return Err("the constrained proof requires multipart terminal carriage".into());
+        }
+        renderings.push(PalwTokenTableOpeningV1 { id, rendering: entry.clone(), opening: path });
+    }
+    let accusation = PalwConstrainedDecodeAccusationV1 { pin, job: job.clone(), renderings, eog, witness: plan.witness };
+    match check_constrained_decode_token_v1(binding, &accusation, binding.step_leaf_count) {
+        Ok(_) => Ok(Some(PalwPanelContradictionV1::ConstrainedDecode { binding: binding.clone(), accusation: Box::new(accusation) })),
+        Err(PalwStepRefuteError::NoFaultFound) => Ok(None),
+        Err(why) => Err(why.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +421,208 @@ mod tests {
                 )
                 .is_err()
             );
+        }
+    }
+    #[test]
+    fn tiled_public_builder_finds_later_faults_across_tiles_and_authenticates_every_input() {
+        use kaspa_consensus_core::palw_decode_constraint_v1::*;
+        use kaspa_consensus_core::palw_step_refute::*;
+        let backend = crate::palw_panel::seat_s_tests::floor_backend();
+        let (mut job, prompt) = crate::palw_panel::seat_s_tests::floor_fp_job(&backend);
+        let run = backend.execute_free_prompt(&job, &prompt.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();
+        let mut template = backend.disclose_trace_event(&run.outcome.material, 0, 0).unwrap().binding().clone();
+        let vocab = 2 * PALW_LOGITS_TILE_LANES + 3;
+        let mut table = PalwTokenTableV1 {
+            entries: vec![Some(b"b".to_vec()); vocab],
+            eog_token_ids: vec![(vocab - 1) as u32],
+            tokenizer_id: job.tokenizer_id,
+        };
+        for id in [0, 1, PALW_LOGITS_TILE_LANES] {
+            table.entries[id] = Some(b"a".to_vec());
+        }
+        let table = Arc::new(table);
+        let constraint = PalwDecodeConstraintV1 {
+            version: 1,
+            compiler_id: Hash64::from_u64_word(0xC014),
+            start_frame: 0,
+            frames: vec![PalwConstraintFrameV1 {
+                start: 0,
+                nodes: vec![PalwConstraintNodeV1 {
+                    accepting: true,
+                    edges: vec![PalwConstraintEdgeV1 { lo: b'a', hi: b'a', action: PalwConstraintActionV1::Goto(0) }],
+                }],
+            }],
+        };
+        template.shape_profile.logits_scheme_id = tiled_logits_scheme_id_v1();
+        template.shape_profile.vocab_size = vocab as u32;
+        job.version = PALW_FP_CONSTRAINT_VERSION;
+        job.class_id = template.shape_profile.shape_profile_id();
+        job.decode = None;
+        job.tail = Some(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 {
+            constraint: constraint.to_bytes(),
+            table_root: table.root(),
+        }));
+        let class = kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3 {
+            model_profile_id: template.job_context.model_profile_id,
+            runtime_manifest_hash: template.job_context.runtime_manifest_hash,
+            runtime_class_id: template.job_context.runtime_class_id,
+            shape_profile_id: job.class_id,
+            cu_ruleset_id: template.job_context.cu_ruleset_id,
+        };
+        template.job_context = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_context_v3(
+            &job,
+            &class,
+            &kaspa_consensus_core::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, job.decode_token_limit),
+            &template.job_context.network_id,
+        )
+        .unwrap();
+        let own = vec![0; job.decode_token_limit as usize];
+        for fault in 0..5 {
+            let mut ids = own.clone();
+            let mut rows = vec![vec![0; vocab]; ids.len()];
+            for row in &mut rows {
+                row[0] = 10;
+            }
+            if fault == 1 {
+                ids[2] = 2;
+            }
+            if fault == 2 {
+                ids[2] = (vocab - 1) as u32;
+            }
+            let mut nominee = own.clone();
+            if fault == 3 {
+                rows[2][PALW_LOGITS_TILE_LANES] = 20;
+                nominee[2] = PALW_LOGITS_TILE_LANES as u32;
+            }
+            if fault == 4 {
+                nominee[2] = PALW_LOGITS_TILE_LANES as u32;
+            }
+            let mut binding = template.clone();
+            binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &rows, &ids).unwrap();
+            binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&binding);
+            kaspa_consensus_core::palw_step_leg::verify_binding_v1(&binding).unwrap();
+            let target = PalwOffenceTargetV1 {
+                claim_id: Hash64::from_u64_word(0xC014),
+                class_id: job.class_id,
+                artifact_root: Hash64::default(),
+                executor_bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond),
+                execution_root: binding.committed_execution_root,
+                lane: Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt),
+                segment_count: Some(4),
+                phase: None,
+                job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
+                trace_root: binding.full_logits_trace_root,
+                output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, &ids),
+            };
+            let initial = logits_event_disclosure_v1(&binding, &rows, &ids, 0, 0).unwrap();
+            let plan = tiled_plan_v1(&target, &job, &initial, &nominee, table.clone()).unwrap();
+            if fault == 0 {
+                assert!(plan.is_none());
+                continue;
+            }
+            let plan = plan.unwrap();
+            assert_eq!(plan.position, 2);
+            let events: Vec<_> = plan
+                .units()
+                .iter()
+                .map(|unit| {
+                    let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row, tile } = *unit else { unreachable!() };
+                    logits_event_disclosure_v1(&binding, &rows, &ids, row, tile).unwrap()
+                })
+                .collect();
+            assert_eq!(events.len(), if fault >= 3 { 2 } else { 1 });
+            // The real case book accepts only these selected authenticated tiles, and
+            // retains the original binding/localizer while learning a later row.
+            use super::super::{PalwFraudFilerBookV1, PalwFraudFilerCaseV1, PalwFraudFilerWalkV1};
+            use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+            let mut candidate = super::super::tests::candidate_for_input_test();
+            candidate.claim_id = target.claim_id;
+            candidate.job.execution_root = target.execution_root;
+            candidate.job.trace_root = target.trace_root;
+            let mut case = PalwFraudFilerCaseV1::new(candidate);
+            case.verdict = super::super::PalwFraudFilerVerdictV1::Mismatch(Arc::new(super::super::PalwFraudFilerRunV1 {
+                execution_root: Hash64::default(),
+                trace_root: Hash64::default(),
+                output_root: Hash64::default(),
+                own_range: Box::new(|_, _| Err("this proof does not use own ranges".into())),
+                legacy: None,
+                fp_job: Some(Box::new(job.clone())),
+                own_output_ids: nominee.clone(),
+                _job_reservation: None,
+                _reservation: None,
+            }));
+            case.binding = Some(binding.clone());
+            case.constraint_plan = Some(plan);
+            let mut book = PalwFraudFilerBookV1::default();
+            book.cases.insert(target.claim_id, case);
+            let answer = |event| crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event));
+            let mut offered: Vec<_> = plan
+                .units()
+                .into_iter()
+                .zip(events.iter().cloned())
+                .map(|(unit, event)| ((target.claim_id, unit), answer(event)))
+                .collect();
+            let unsolicited = PalwDaUnitV1::Event { row: 1, tile: 1 };
+            offered.push(((target.claim_id, unsolicited), answer(logits_event_disclosure_v1(&binding, &rows, &ids, 1, 1).unwrap())));
+            book.walked(
+                PalwFraudFilerWalkV1 { floor: 0, anchor: Hash64::from_u64_word(1), anchor_daa: 1, next: None },
+                false,
+                offered,
+            );
+            assert_eq!(book.answers.len(), plan.units().len());
+            assert!(!book.answers.contains_key(&(target.claim_id, unsolicited)), "unselected public material cannot grow the cache");
+            for (unit, event) in plan.units().iter().zip(&events) {
+                let PalwDaUnitV1::Event { row, tile } = *unit else { unreachable!() };
+                let case = book.cases.get_mut(&target.claim_id).unwrap();
+                let prior_bisect = case.bisect.clone();
+                case.learn(
+                    kaspa_consensus_core::palw_legacy_public_filer_v1::PalwLegacyProbeV1::Binding { row, tile },
+                    &answer(event.clone()),
+                )
+                .unwrap();
+                assert_eq!(case.binding.as_ref(), Some(&binding));
+                assert_eq!(case.bisect, prior_bisect);
+            }
+            let proof = tiled_contradiction_v1(&target, &job, plan, &events, table.clone()).unwrap();
+            if fault == 4 {
+                assert!(proof.is_none(), "an own-replay nomination is not a public conviction");
+                continue;
+            }
+            let proof = proof.unwrap();
+            assert_eq!(borsh::to_vec(&proof).unwrap()[0], 14);
+            let PalwPanelContradictionV1::ConstrainedDecode { accusation, .. } = &proof else { panic!("tiled proof") };
+            assert_eq!(accusation.pin.position, 2);
+            assert!(
+                kaspa_consensus_core::palw_offence_attribution_v1::palw_constrained_decode_fault_v1(
+                    &target,
+                    &binding,
+                    accusation,
+                    binding.step_leaf_count
+                )
+                .is_ok()
+            );
+            let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_v1(
+                target.claim_id,
+                target.executor_bond,
+                proof,
+                None,
+            )
+            .unwrap();
+            let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = built.object else {
+                panic!("offence")
+            };
+            assert!(evidence.len() as u64 <= PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
+            let mut bad = events.clone();
+            let PalwTraceEventDisclosureV1::Tiled { tile_lanes, .. } = bad.last_mut().unwrap() else { unreachable!() };
+            tile_lanes[0] ^= 1;
+            assert!(tiled_contradiction_v1(&target, &job, plan, &bad, table.clone()).is_err());
+            let mut foreign = job.clone();
+            foreign.job_nonce[0] ^= 1;
+            assert!(tiled_contradiction_v1(&target, &foreign, plan, &events, table.clone()).is_err());
+            assert!(tiled_contradiction_v1(&target, &job, plan, &events[..0], table.clone()).is_err());
+            let mut other = table.as_ref().clone();
+            other.entries[0] = Some(b"x".to_vec());
+            assert!(tiled_contradiction_v1(&target, &job, plan, &events, Arc::new(other)).is_err());
         }
     }
 }

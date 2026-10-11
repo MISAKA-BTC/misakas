@@ -5480,7 +5480,7 @@ impl VirtualStateProcessor {
         else {
             return Check::Refused("not a PanelFalseValidV2 filing".into());
         };
-        let check = kaspa_consensus_core::palw_false_valid_filing_v1::palw_false_valid_filing_check_v1(
+        let check = kaspa_consensus_core::palw_false_valid_filing_v1::palw_false_valid_filing_check_at_v2(
             state,
             accused,
             evidence,
@@ -5488,6 +5488,7 @@ impl VirtualStateProcessor {
             self.palw_identity_rules_v1(point.daa_score),
             self.palw_false_valid_chain_domain_v1(),
             &Self::verify_mldsa87_with_context_bool,
+            self.palw_session_rule_at(point.daa_score),
         );
         if !matches!(check, Check::File { .. }) {
             return check;
