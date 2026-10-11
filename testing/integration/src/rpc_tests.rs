@@ -1309,6 +1309,24 @@ async fn sanity_test() {
                     assert!(!read.available && read.rows.is_empty() && !read.more);
                 })
             }
+            KaspadPayloadOps::GetPalwModelRefutationSeals => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0002 P0 (op 213): a malformed bond is an error; simnet has no PALW V2 bundle, so a well-formed one is unavailable.
+                    assert!(
+                        rpc_client
+                            .get_palw_model_refutation_seals_call(None, GetPalwModelRefutationSealsRequest { bond: "zz".to_string() })
+                            .await
+                            .is_err()
+                    );
+                    let bond = format!("{}:0", "00".repeat(64));
+                    let read = rpc_client
+                        .get_palw_model_refutation_seals_call(None, GetPalwModelRefutationSealsRequest { bond })
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.seals.is_empty());
+                })
+            }
             KaspadPayloadOps::GetPalwKernelFinals => {
                 let rpc_client = client.clone();
                 tst!(op, {

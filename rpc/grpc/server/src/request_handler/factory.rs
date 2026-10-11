@@ -137,6 +137,7 @@ impl Factory {
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
                 GetPalwKernelFinals,
+                GetPalwModelRefutationSeals,
                 GetPalwOnboarding,
                 GetPalwConformanceEvidence,
                 GetTokenSupply,

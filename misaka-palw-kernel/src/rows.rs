@@ -59,8 +59,8 @@ pub const TABLE_PROOF_SEALS_V1: u8 = 15;
 pub const TABLE_JOB_ESCROWS_V1: u8 = 16;
 /// `(claim, stage, position) → the demand bonds of a served position awaiting their fate` (in the state root since G14-R4).
 pub const TABLE_SERVED_DEMAND_BONDS_V1: u8 = 17;
-/// C4R4 F-C4R4-08: `job → the bond that posted it`, written past `palw_panel_free_v1` and kept (in the beacon-seal extension). 19 is
-/// G14-R4's (unused), 20–21 K2S's.
+/// C4R4 F-C4R4-08: `job → the bond that posted it`, written past `palw_panel_free_v1` and kept (in the beacon-seal extension). 19 was
+/// G14-R4's (never used; RFC02-T's held bounties since the `rfc02/merge-final` merge), 20–21 K2S's.
 pub const TABLE_JOB_POSTERS_V1: u8 = 18;
 // 20–21: K2-TIR-v4 (lane K2S, allocated 2026-10-08), in the root only when non-empty.
 // 22–24: RFC-0004 Part II's typed tables.
@@ -106,6 +106,14 @@ pub const COURT_SCOPE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/led
 pub const TABLE_CONFORMANCE_CLASSES_V1: u8 = 29;
 /// The root extension table 29 adds once it holds a row (every older root unchanged), applied after table 28's.
 pub const CONFORMANCE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-conformance-extension/v1";
+/// **Table 19** (RFC-0002 P0 residual, `crate::sealed_bounty`, lane RFC02-T 2026-10-11): convicted claim → its held bounty, written
+/// only past `palw_model_refutation_seal_v1`. Allocated 31 on `rfc02/takeover`; 30 and 31 are R6781's beacon sources and EXEC reward
+/// holds, and 32 is the FIRST CONSENSUS (aux) table (`PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1`: the route's writer, op 211 and a fresh
+/// reader split ledger rows from aux rows at 32 — a ledger table 32 is written as an aux row and the cached ledger goes stale), so at
+/// the `rfc02/merge-final` merge it took the only free ledger number, G14-R4's never-used 19.
+pub const TABLE_HELD_BOUNTIES_V1: u8 = 19;
+/// The root extension table 19 adds once it holds a row (every older root unchanged), applied LAST — after table 31's.
+pub const HELD_BOUNTY_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-held-bounty-extension/v1";
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -148,6 +156,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_FORFEITED_CLAIM_SEALS_V1 => "forfeited-claim-seals",
         TABLE_VERIFIER_PAY_V1 => "verifier-pay",
         TABLE_COURT_SCOPE_V1 => "court-scope",
+        TABLE_HELD_BOUNTIES_V1 => "held-bounties",
         TABLE_SPEC_CLASSES_V1 => "spec-classes",
         TABLE_SPEC_JOBS_V1 => "spec-jobs",
         TABLE_MEMORY_LINES_V1 => "memory-lines",
@@ -229,6 +238,9 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.verifier_pay {
             rows.insert((TABLE_VERIFIER_PAY_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.held_bounties {
+            rows.insert((TABLE_HELD_BOUNTIES_V1, bytes_of(k)), bytes_of(v));
         }
         for (k, v) in &self.court_scope {
             rows.insert((TABLE_COURT_SCOPE_V1, bytes_of(k)), bytes_of(v));
@@ -362,6 +374,10 @@ impl KernelLedgerV1 {
                         dec::<(u8, Digest)>(key, "verifier pay key")?,
                         dec::<crate::verifier_pay::VerifierPayRowV1>(row, "verifier pay row")?,
                     );
+                }
+                TABLE_HELD_BOUNTIES_V1 => {
+                    l.held_bounties
+                        .insert(dec(key, "held bounty key")?, dec::<crate::sealed_bounty::HeldBountyRowV1>(row, "held bounty row")?);
                 }
                 TABLE_COURT_SCOPE_V1 => {
                     l.court_scope
@@ -643,7 +659,7 @@ pub fn root_of_rows(
     let base =
         if by_table.contains_key(&TABLE_COURT_SCOPE_V1) { court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1)) } else { base };
     // Fixed order by table number, each only once its table holds a row (an unarmed network roots as before): 27, 28, 29 (RFC-02's
-    // conformance classes), 30 beacon sources, 31 EXEC reward holds.
+    // conformance classes), 30 beacon sources, 31 EXEC reward holds, 19 (RFC-02's held bounties, applied last).
     let base = if by_table.contains_key(&TABLE_CONFORMANCE_CLASSES_V1) {
         conformance_root_extension_v1(&base, &coll(TABLE_CONFORMANCE_CLASSES_V1))
     } else {
@@ -654,11 +670,24 @@ pub fn root_of_rows(
     } else {
         base
     };
-    if by_table.contains_key(&TABLE_EXEC_REWARD_HOLDS_V1) {
+    let base = if by_table.contains_key(&TABLE_EXEC_REWARD_HOLDS_V1) {
         exec_reward_root_extension_v1(&base, &coll(TABLE_EXEC_REWARD_HOLDS_V1))
     } else {
         base
+    };
+    // RFC-0002 P0 residual (`crate::sealed_bounty`): table 19 extends the root only once it holds a row, applied last (after table 31's).
+    if by_table.contains_key(&TABLE_HELD_BOUNTIES_V1) {
+        held_bounty_root_extension_v1(&base, &coll(TABLE_HELD_BOUNTIES_V1))
+    } else {
+        base
     }
+}
+
+/// `H(extension; root ‖ table 19)` (held bounties, RFC-0002 P0 residual).
+pub fn held_bounty_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
+    let mut s = keyed(HELD_BOUNTY_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(table);
+    finish(s)
 }
 
 /// `H(extension; root ‖ table 28)` (the court scope, G14-S).

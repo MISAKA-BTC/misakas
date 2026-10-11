@@ -3218,6 +3218,32 @@ message GetPalwKernelFinalsResponseMessage {
   RPCError error = 1000;
 }
 
+// RFC-0002 P0 (lane RFC02-T): one bond's candidate-refutation seal rows (op 213).
+message GetPalwModelRefutationSealsRequestMessage {
+  string bond = 1;
+}
+
+message RpcPalwModelRefutationSeal {
+  uint32 slot = 1;
+  string seal = 2;
+  uint64 postedDaa = 3;
+  uint64 matureDaa = 4;
+  uint64 expiresDaa = 5;
+  uint64 depositSompi = 6;
+  bool live = 7;
+  bool revealable = 8;
+}
+
+message GetPalwModelRefutationSealsResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  string bond = 3;
+  repeated RpcPalwModelRefutationSeal seals = 4;
+  uint64 reservedSompi = 5;
+  string auxRoot = 6;
+  RPCError error = 1000;
+}
+
 // G14 lane D phase 3: where a V2 class stands on the onboarding path (op 230).
 message GetPalwOnboardingRequestMessage {
   string classId = 1;

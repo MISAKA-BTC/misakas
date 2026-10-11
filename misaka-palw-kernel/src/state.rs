@@ -238,7 +238,7 @@ impl KernelLedgerV1 {
             )
         };
         // The same fixed order as `rows::root_of_rows`: table 29 (RFC-02 conformance candidates), 30 (beacon sources), 31 (EXEC reward
-        // holds), each only once it holds a row.
+        // holds), then 19 (RFC-02 held bounties), each only once it holds a row.
         let base = if self.conformance_classes.is_empty() {
             base
         } else {
@@ -257,12 +257,20 @@ impl KernelLedgerV1 {
                 &collection_root(&d("beacon-sources"), self.beacon_sources.len(), self.beacon_sources.iter()),
             )
         };
-        if self.exec_reward_holds.is_empty() {
+        let base = if self.exec_reward_holds.is_empty() {
             base
         } else {
             crate::rows::exec_reward_root_extension_v1(
                 &base,
                 &collection_root(&d("exec-reward-holds"), self.exec_reward_holds.len(), self.exec_reward_holds.iter()),
+            )
+        };
+        if self.held_bounties.is_empty() {
+            base
+        } else {
+            crate::rows::held_bounty_root_extension_v1(
+                &base,
+                &collection_root(&d("held-bounties"), self.held_bounties.len(), self.held_bounties.iter()),
             )
         }
     }

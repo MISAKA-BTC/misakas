@@ -1600,6 +1600,32 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwKernelFinalsResponse>, protowire::
         error: None,
     }
 });
+from!(item: &kaspa_rpc_core::RpcPalwModelRefutationSeal, protowire::RpcPalwModelRefutationSeal, {
+    Self {
+        slot: item.slot,
+        seal: item.seal.clone(),
+        posted_daa: item.posted_daa,
+        mature_daa: item.mature_daa,
+        expires_daa: item.expires_daa,
+        deposit_sompi: item.deposit_sompi,
+        live: item.live,
+        revealable: item.revealable,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelRefutationSealsRequest, protowire::GetPalwModelRefutationSealsRequestMessage, {
+    Self { bond: item.bond.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRefutationSealsResponse>, protowire::GetPalwModelRefutationSealsResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        bond: item.bond.clone(),
+        seals: item.seals.iter().map(protowire::RpcPalwModelRefutationSeal::from).collect(),
+        reserved_sompi: item.reserved_sompi,
+        aux_root: item.aux_root.clone(),
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::RpcPalwOnboardingBinding, protowire::RpcPalwOnboardingBinding, {
     Self {
         kernel_param_root: item.kernel_param_root.clone(),
@@ -4008,6 +4034,31 @@ try_from!(item: &protowire::GetPalwKernelRowsResponseMessage, RpcResult<kaspa_rp
         next_table: item.next_table,
         next_key: item.next_key.clone(),
         total_rows: item.total_rows,
+    }
+});
+try_from!(item: &protowire::RpcPalwModelRefutationSeal, kaspa_rpc_core::RpcPalwModelRefutationSeal, {
+    Self {
+        slot: item.slot,
+        seal: item.seal.clone(),
+        posted_daa: item.posted_daa,
+        mature_daa: item.mature_daa,
+        expires_daa: item.expires_daa,
+        deposit_sompi: item.deposit_sompi,
+        live: item.live,
+        revealable: item.revealable,
+    }
+});
+try_from!(item: &protowire::GetPalwModelRefutationSealsRequestMessage, kaspa_rpc_core::GetPalwModelRefutationSealsRequest, {
+    Self { bond: item.bond.clone() }
+});
+try_from!(item: &protowire::GetPalwModelRefutationSealsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelRefutationSealsResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        bond: item.bond.clone(),
+        seals: item.seals.iter().map(kaspa_rpc_core::RpcPalwModelRefutationSeal::try_from).collect::<RpcResult<Vec<_>>>()?,
+        reserved_sompi: item.reserved_sompi,
+        aux_root: item.aux_root.clone(),
     }
 });
 try_from!(item: &protowire::RpcPalwKernelFinal, kaspa_rpc_core::RpcPalwKernelFinal, {

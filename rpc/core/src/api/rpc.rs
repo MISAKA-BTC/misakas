@@ -1161,6 +1161,22 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwKernelRowsResponse::default())
     }
 
+    /// RFC-0002 P0 (op 213, RFC02-T): one bond's candidate-refutation seal rows.
+    async fn get_palw_model_refutation_seals(
+        &self,
+        request: GetPalwModelRefutationSealsRequest,
+    ) -> RpcResult<GetPalwModelRefutationSealsResponse> {
+        self.get_palw_model_refutation_seals_call(None, request).await
+    }
+    async fn get_palw_model_refutation_seals_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelRefutationSealsRequest,
+    ) -> RpcResult<GetPalwModelRefutationSealsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelRefutationSealsResponse::default())
+    }
+
     /// G14 lane D / RFC-0015 (op 212): the kernel route's Finals and the beacon's fact for each.
     async fn get_palw_kernel_finals(&self, request: GetPalwKernelFinalsRequest) -> RpcResult<GetPalwKernelFinalsResponse> {
         self.get_palw_kernel_finals_call(None, request).await

@@ -2174,6 +2174,14 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-0002 P0 protected candidate refutation (RFC02-T)",
         true,
     ),
+    // RFC02-T (2026-10-11): the P0 residual on the kernel route's own FileProof — the sealed-bounty rule: kernel ledger table 19 (held
+    // bounties, root extension only once non-empty) and `LedgerEventV1` 40–41. No new object kind; below the fence no row is written.
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel ledger table 19 held bounties (sealed-bounty rule); LedgerEventV1 40–41" },
+        "palw_model_refutation_seal_v1",
+        "RFC-0002 P0 residual: kernel FileProof re-encoding (RFC02-T)",
+        true,
+    ),
     a2_row(
         PalwA2SlotV1::StateEncoding { what: "bond budget engine Q/B/R/F (deltas 190–199, tail 0xEF, root block bond_budget/v1)" },
         "palw_bond_budget_v1",

@@ -2047,3 +2047,75 @@ refused when armed, like every RFC fence until the single activation release).
 * Re-record the actual-weight delivery bundle under the merged frozen profile (needs the weights).
 * Left with codex: all-family canonical registration/eligibility without test exceptions; public bootstrap of FP job/input/initial
   state and re-acquisition after permanent pruning.
+
+
+## RFC02-T second round — kernel FileProof re-encoding (P0 residual), flat-v5 pursuit gate, seal RPC, 2026-10-11
+
+Branch `rfc02/takeover`, fast-forwarded to the integration line `5cb381187` (which already contained the first round, codex G14
+`4f1120d9e`, G14-K and G14-L), then the items below. Nothing is armed; no testnet-12 id moves.
+
+### P0 residual: the kernel route's own FileProof — YES, the copy theft applies there too (now closed past the fence)
+
+**Finding.** A `ProsecutionV1` is not a canonical encoding of its conviction. Two concrete re-encodings of one authentic
+`ProsecutionV1::Kernel` proof convict identically: (a) every non-MatMul fault kind ignores `FaultProofWireV1::scalar`; (b) a MatMul
+scalar court reads only the three openings, so an extra (unread) `prior_rows` entry changes the bytes. GAP-R7 pays the earliest mature
+sealer of the EXACT bytes, else the filer, and G14-R's identical re-seal no-op does not help (the copy has other bytes). So a copyist
+that reads a sealed finder's filing and is included first is paid as the filer and the finder's filing is a `Duplicate`.
+Segmented filings very likely admit the same (a redundant prompt tile, as codex showed for flat filings); not separately tested.
+
+**Counterexamples (before):** kernel `sealed_bounty::rfc02t_frozen_gap_r7_a_reencoded_copy_filed_first_takes_the_sealed_finders_bounty`
+and the real-node test `g14_kernel_route_e2e::rfc02t_sealed_bounty::…` (first half, MatMul scalar proof with an extra prior row):
+the copyist is paid the 49 %, the sealed finder 0, and the replaying node agrees.
+
+**Rule (after; `misaka_palw_kernel::sealed_bounty`, consumer-injected past the existing fence `palw_model_refutation_seal_v1`):**
+any authentic filing still convicts (court liveness unchanged — unsealed and direct filings keep working). The bounty is paid at once
+only if some bond holds a mature seal of the convicting bytes (GAP-R7 unchanged). Otherwise the filer's share is HELD in kernel ledger
+table 31 for the route's `seal_ttl_daa`; a bond whose own seal on the claim predates the conviction, is mature and opens to the proof it
+now files may contest it with that proof against the convicted claim (court budget and scaled dismissal fee as any filing) and takes
+the held share once; with no contest by the window's end the original filer is paid. A copyist cannot hold such a seal: it learns the
+bytes only from the finder's filing. `LedgerEventV1` 40 `BountyHeld` / 41 `HeldBountyPaid`; the tick expires windows; table 31 is in
+the route's rows and root extension only once non-empty (A2U row).
+
+**Tests (after):** kernel `sealed_bounty` — held then paid to the earlier sealer in the same block; a seal posted after the conviction
+and a proof that does not open the seal are refused free; with no contest the filer is paid at the window's end, once; exact sealed
+bytes still pay GAP-R7's sealer immediately. Real node: the second half of the node test — the copy's conviction stands (producer
+slashed once), its share is held, the finder's own sealed proof filed in the next block takes it, the copyist's retry pays nothing,
+replay identical. Residuals: a finder censored for the whole window loses the share to the filer; its seal must still be live.
+
+### Item 3 (part): a flat-v5 candidate's pursuit on G14-B's clock
+
+`misaka_palw_kernel::flat_pursuit5::flat_pursuit_v5` derives the worst-case public pursuit of a flat-v5 candidate statement from
+`crate::budget` (`PursuitClockV1::of_opv`, `response_window_daa_v1`, `route_object_chunks_v1`): ⌈log2 min(P,1024)⌉ position halvings
++ ⌈log2 N⌉ node halvings + ⌈log2 L⌉ leaf halvings + one operand round, each a one-chunk (10 KiB) reply at its base deadline, then the
+protected filing (seal maturity, prove, chunks). Past the fence the flat post fold admits a statement only if that lands inside its
+200-DAA horizon (`FLAT_PURSUIT`). Binary rounds over four slots is an upper bound; verifier compute enters only through the OPV
+policy's declared budgets. Derived numbers (kernel test `flat_pursuit`, kernel test policy + `opv_example`, not measured): the
+toy dense-MoE at 5 positions needs 15 rounds (3 position + 9 node + 2 leaf + 1) of a 20-DAA window and lands at DAA 394 — it would
+NOT fit a 200-DAA horizon under those terms; at the actual 32-position Qwen2.5 pilot shapes the flat-v5 scope itself refuses
+("flat relation exceeds court resource caps"), so no real-size candidate is admissible yet. Under the node's interim route/OPV terms
+codex's small flat fixtures are admitted (the node tests pass with the gate active). The 200-DAA statement horizon vs these
+pursuits is an open sizing decision (horizon, per-round deadline, k-ary rounds over the four slots).
+
+### Item 2 (part): RPC op 213 `getPalwModelRefutationSeals`
+
+One bond's seal rows (slot, seal, posted/mature/expires, deposit, live, revealable), its reserved deposit and the aux root; wRPC +
+gRPC 1300/1301, service handler, builder and parser in `kaspa_rpc_core::convert::palw_kernel` (the node test carries the builder's
+answer through JSON), integration test arm. Registry rows appended.
+
+### Not done (honest)
+
+* Item 2 proper: flat-v5 courts are still candidate statements — no execution registration, DA-to-Final connection, retention/pruning
+  rules or execution Final/redemption for flat-v5. Not started.
+* Item 3 proper: all-relation verification at real sizes and the complete resource vector (CPU, metadata hashing, transport,
+  retention, aggregate load) — only the pursuit deadline is derived here.
+* Segmented-filing re-encoding not separately demonstrated (the held-bounty rule is mechanism-level and covers every `ProsecutionV1`).
+
+### Wrap-up (2026-10-11): lane RFC02-T stops; codex continues RFC-0002
+
+The user decided codex keeps implementing RFC-0002 (`codex/rfc02-review-completion`); this lane stops here and did NOT merge that
+branch. Status of this second round: the kernel FileProof re-encoding check is **PASS as a finding and as a fix on the synthetic
+harness** (kernel `sealed_bounty` 4 tests, real-node `g14_kernel_route_e2e::rfc02t_sealed_bounty` before/after). Implemented and tested
+but **WIP / not reviewed**: the flat-v5 pursuit gate (sizing open, real-size scope refuses) and RPC op 213 (wRPC/gRPC wiring compiled and
+round-tripped through JSON in the node test; the integration-test arm and the gRPC conversion are compiled, not run against a node).
+Pre-existing on the integration line and not touched here: consensus-core `class_verify_deadline::td0_the_final_floor_has_one_producer`
+fails on `5cb381187` (G14-L's line 31592).

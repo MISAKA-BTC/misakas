@@ -209,6 +209,55 @@ pub fn palw_kernel_finals_response_v1(c: &dyn ConsensusApi, limit: usize) -> Rpc
     Ok(GetPalwKernelFinalsResponse { available: true, tip_daa, finals: rows, total, ledger_root: ledger_root.to_string() })
 }
 
+// ---- op 213 `getPalwModelRefutationSeals` (RFC02-T) -----------------------------------------------------------------------------
+
+/// The bond op 213 asks about (`txid_hex:index`), parsed before any state is read.
+pub fn palw_model_refutation_seals_request_v1(
+    request: &crate::GetPalwModelRefutationSealsRequest,
+) -> RpcResult<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
+    let text = request.bond.trim();
+    let (txid, index) = text.split_once(':').ok_or_else(|| RpcError::General(format!("bond '{text}' must be 'txid_hex:index'")))?;
+    let index: u32 = index.parse().map_err(|_| RpcError::General(format!("bond '{text}' has a non-numeric index")))?;
+    Ok(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+        parse_hash64(txid, "bond txid")?,
+        index,
+    )))
+}
+
+/// Op 213's answer on a ConsensusV2 network: every slot of the bond that holds a row (live or expired), from the route's aux table 64.
+pub fn palw_model_refutation_seals_response_v1(
+    c: &dyn ConsensusApi,
+    bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+) -> crate::GetPalwModelRefutationSealsResponse {
+    use kaspa_consensus_core::palw_model_refutation_seal_v4::MODEL_REFUTATION_SEAL_SLOTS_V4;
+    let tip_daa = c.get_virtual_daa_score();
+    let name = format!("{}:{}", bond.0.transaction_id, bond.0.index);
+    let Some(route) = c.palw_kernel_route_v1() else {
+        return crate::GetPalwModelRefutationSealsResponse { tip_daa, bond: name, ..Default::default() };
+    };
+    let seals = (0..MODEL_REFUTATION_SEAL_SLOTS_V4)
+        .filter_map(|slot| route.model_refutation_seal_v4(&bond, slot).map(|row| (slot, row)))
+        .map(|(slot, row)| crate::RpcPalwModelRefutationSeal {
+            slot: u32::from(slot),
+            seal: hex(&row.seal),
+            posted_daa: row.posted_daa,
+            mature_daa: row.mature_daa,
+            expires_daa: row.expires_daa,
+            deposit_sompi: row.deposit,
+            live: row.live_at(tip_daa),
+            revealable: row.live_at(tip_daa) && tip_daa >= row.mature_daa,
+        })
+        .collect();
+    crate::GetPalwModelRefutationSealsResponse {
+        available: true,
+        tip_daa,
+        bond: name,
+        seals,
+        reserved_sompi: u64::try_from(route.model_refutation_seal_reserved_v4(&bond, tip_daa)).unwrap_or(u64::MAX),
+        aux_root: route.aux_root().to_string(),
+    }
+}
+
 // ---- op 231 `getPalwConformanceEvidence` -----------------------------------------------------------------------------------------
 
 /// The V2 class op 231 asks about.

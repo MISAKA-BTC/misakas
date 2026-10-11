@@ -1639,6 +1639,28 @@ async fn flat_v4_sealed_refutation_pays_the_original_finder_and_refuses_the_copy
     let row = net.api().unwrap().model_refutation_seal_v4(&finder, 0).expect("the finder's seal row");
     assert_eq!((row.version, row.seal, row.deposit), (4, seal, mega(1)));
     assert_eq!(net.chain.tip_state().1.model_refutation_seal_reserved_v4(&finder, net.daa()), row.deposit as u128);
+    // RPC op 213 (`getPalwModelRefutationSeals`): the request parser and the node's own builder, carried through the JSON wire form.
+    {
+        use kaspa_rpc_core::convert::palw_kernel::{palw_model_refutation_seals_request_v1, palw_model_refutation_seals_response_v1};
+        let request = kaspa_rpc_core::GetPalwModelRefutationSealsRequest {
+            bond: format!("{}:{}", finder.0.transaction_id, finder.0.index),
+        };
+        assert_eq!(palw_model_refutation_seals_request_v1(&request).unwrap(), finder);
+        assert!(
+            palw_model_refutation_seals_request_v1(&kaspa_rpc_core::GetPalwModelRefutationSealsRequest { bond: "nope".into() })
+                .is_err()
+        );
+        let read = palw_model_refutation_seals_response_v1(net.chain.ctx.consensus.consensus_clone().as_ref(), finder);
+        let read: kaspa_rpc_core::GetPalwModelRefutationSealsResponse =
+            serde_json::from_slice(&serde_json::to_vec(&read).unwrap()).unwrap();
+        assert!(read.available);
+        assert_eq!(read.seals.len(), 1);
+        let s = &read.seals[0];
+        let mut wire = [0u8; 64];
+        faster_hex::hex_decode(s.seal.as_bytes(), &mut wire).unwrap();
+        assert_eq!((s.slot, wire, s.posted_daa, s.expires_daa, s.deposit_sompi, s.live), (0, seal, row.posted_daa, row.expires_daa, row.deposit, true));
+        assert_eq!(read.reserved_sompi, row.deposit);
+    }
     // An identical re-seal (a restarted finder) is a no-op: the clock stands. Another seal cannot take a live slot.
     send(&mut net, 7, &K::SealModelRefutationV4 { slot: 0, seal }).await;
     send(&mut net, 7, &K::SealModelRefutationV4 { slot: 0, seal: [9; 64] }).await;
