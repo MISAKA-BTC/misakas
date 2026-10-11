@@ -1,0 +1,75 @@
+{
+  "schema": "misaka.rfc02.real-node-execution-verdict.v1",
+  "base_commit": "a29ff0e0521fcf79aaacda8efff1fca962979dbb",
+  "observed_at_utc": "2026-10-10T13:46:18.840721+00:00",
+  "checkpoint": "Qwen/Qwen2.5-1.5B-Instruct",
+  "source_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+  "source_before_and_after_match": true,
+  "protocol_sha256": "7611c2f95d7ac5efe5a4fc6d102dd6b86c4e40dffcddefab139bbdb332b3ddc4",
+  "acceptance_fixed_before_run": true,
+  "acceptance_passed": true,
+  "positions": 2,
+  "tokens": [
+    13,
+    7932
+  ],
+  "instances_authenticated": 1636,
+  "commits_compared": 790,
+  "comparison_elapsed_ms": 381881,
+  "process_wall_seconds_including_preparation": 440.0,
+  "max_process_rss_bytes": 6442958848,
+  "peak_decoded_reference_tensor_bytes": 3733979136,
+  "reference_tensor_bound_bytes": 4201775104,
+  "reference_tensor_limit_bytes": 8589934592,
+  "rss_scope": "Whole process includes root preparation, reference interpreter, native executor and mapping; not isolated producer or verifier RSS.",
+  "tensor_cap_scope": "Largest raw tensor and i128 decoding plus allocation allowance, not total process/verifier RAM.",
+  "profile": "debug; workspace default package optimizations, no new overrides",
+  "execution": "Node CPU typed executor; fused off; no Metal feature. Compared against integer interpreter, not source floating model.",
+  "cache_condition": "Artifact read for SHA-256 and commitment preparation before comparison; no cold-cache claim.",
+  "descriptor_digest": "4fa5621e07f75fe493421315de0373eac6982fdd40e33a9481b93c420cb9bd6f027baa3e56b04a88ccb431698d2d67462d751c60c85bee9aef51c08de4a9ae6b",
+  "program_root": "a1360976cdff92e473dff36769bf468140e4fb5a03150ed3be67d7af3ca72d0a5e21f4d1bf70aa4e39678aa5d6d82bdb499556f3b01999be362adb9e7a560f3d",
+  "param_root": "1c07cbbadb1ec7166361a6ffdda43c7c5740183dbb8ecd9659e7c4c5c906cf5495ac5df4fd25617829628b3cec7969e43eeee06bed08c0beeaa51d76b023f729",
+  "validation": {
+    "node_conformance_tests_passed": 4,
+    "node_conformance_tests_failed": 0,
+    "ignored": 0
+  },
+  "code_sha256": {
+    "misaka-palw-tir-exec/src/node/conformance.rs": "ca51f82e02e429322a3e79f159379464cc5ac77a9738551dba2f1b0ab6971ff2",
+    "misaka-palw-tir-exec/tests/node_conformance.rs": "e3aaa1416661061242c7cb128aa871be57d2d39b86d23a56f11540dd97f7c41d",
+    "misaka-palw-sdk/examples/check-kernel-node-execution.rs": "dff85a4c55d60503e00b323cfc324fc6a29a6be654721fed2ade4012573a5145"
+  },
+  "diagnostic_binary_sha256": "e869da8de0aeff5de015d5511621019105342f310a4afdd66cb85cdedba3fd3d",
+  "evidence_sha256": {
+    "qwen25-real-node-execution-result.json": "f35e0116efe467354991944601996f251bf80d6cb28724bd3d74ee85bf29d470",
+    "qwen25-real-node-execution-run.log": "b84694350ed3fa1fb054539ae7511c88e14d998bfb42525ad9184b5bac12db34",
+    "qwen25-real-node-execution-source-before.json": "dad0e21aba4ca8288a1e22de046c7430f3e6ae16752834175ed49101c8cbf417",
+    "qwen25-real-node-execution-source-after.json": "a92e190799afecc7038486b761658cc081cf166225dc6f1fc0a2f41459a92898",
+    "qwen25-real-node-execution-tests.log": "458915881e6568f6e38c4bc0dfd43fb58abd5b4677cf90b3155e3ff6306a6ea0",
+    "qwen25-real-node-execution-build.log": "65d71ff96cb9b8799874b9f18f7d2b32755fa9ed6a59696bad1174ec0bda47da",
+    "qwen25-real-node-execution-protocol.json": "7611c2f95d7ac5efe5a4fc6d102dd6b86c4e40dffcddefab139bbdb332b3ddc4"
+  },
+  "raw_evidence_sha256": {
+    "qwen25-real-node-execution-result.json": "f35e0116efe467354991944601996f251bf80d6cb28724bd3d74ee85bf29d470",
+    "qwen25-real-node-execution-run.log": "b84694350ed3fa1fb054539ae7511c88e14d998bfb42525ad9184b5bac12db34",
+    "qwen25-real-node-execution-source-before.json": "dad0e21aba4ca8288a1e22de046c7430f3e6ae16752834175ed49101c8cbf417",
+    "qwen25-real-node-execution-source-after.json": "a92e190799afecc7038486b761658cc081cf166225dc6f1fc0a2f41459a92898",
+    "qwen25-real-node-execution-tests.log": "deb004a4664aa220f95ad7a139098a042e6e53a735669032e7db5c35535a4371",
+    "qwen25-real-node-execution-build.log": "65d71ff96cb9b8799874b9f18f7d2b32755fa9ed6a59696bad1174ec0bda47da"
+  },
+  "log_normalization": "Trailing blank lines only.",
+  "kernel_semantics_or_identity_changed": false,
+  "network_fences_activated": false,
+  "full_context_or_task_covered": false,
+  "source_model_fidelity_proven": false,
+  "same_node_binary_registration_public_conviction_final_proven": false,
+  "full_rfc02_complete": false,
+  "remaining": [
+    "Bind actual program/parameter/inventory roots in real node registration and public material",
+    "Construct actual-weight segmented claim trace, fresh public checking and terminal conviction",
+    "Independent Final/redemption",
+    "Full 32-position pilot context and complete task plus independent source-model fidelity",
+    "Remaining shared features, resource aggregates, A6/A8 coverage and economics"
+  ]
+}

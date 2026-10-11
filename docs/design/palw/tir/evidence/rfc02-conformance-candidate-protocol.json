@@ -1,0 +1,59 @@
+{
+  "schema": "misaka.rfc02.conformance-candidate.protocol.v1",
+  "base_commit": "679101735b8b8da9a2b34b6033cb845084560bb6",
+  "inner_route_tag": 21,
+  "outer_route_tag": 110,
+  "ledger_table": 28,
+  "route_version": 1,
+  "per_bond_candidate_cap": 8,
+  "candidate_permissions": [],
+  "preparation_validates": [
+    "known and active descriptor",
+    "canonical TIR",
+    "exact plan",
+    "parameter instances and independent root attestation",
+    "public prosecution bounds",
+    "court cap",
+    "OPV resource/economic terms",
+    "carrier envelopes",
+    "shared admission work and run budget"
+  ],
+  "promotion_requires": [
+    "same OPV class identity",
+    "V2 program and bound parameter root",
+    "complete conformance for the eligible small stateless domain or independently approved future conformance gate",
+    "existing derived eligibility"
+  ],
+  "shipping_activation_changed": false,
+  "sampled_release_reward_gate_changed": false,
+  "node_eligibility_hook_used": false,
+  "node_parameter_attestation_hook_used": false,
+  "test_armed_dormant_fences": true,
+  "scope": {
+    "node": "synthetic small stateless v2 complete-check fixture through signed real carriers",
+    "kernel": "synthetic segmented v4 metadata, codec, no job rights, shared work cap, per-bond cap, promotion and rooted replay"
+  },
+  "not_established": [
+    "shipping activation",
+    "real-weight onboarding",
+    "large/stateful release conformance",
+    "original-model fidelity or full task/context",
+    "full RFC02 completion",
+    "all system-wide resource and honest-liveness bounds"
+  ],
+  "source_sha256": {
+    "consensus/core/src/palw_kernel_route_fold_v1.rs": "ac28d9e763379cbeb35559eb8a6427bdc58df28e854ec6ee92b813ae5be2adf5",
+    "consensus/core/src/palw_lifecycle_objects_v2.rs": "af7455e28a7237856f8be0414efb77edf4a3e69c5ad5a44ccf4c4b6ea7652441",
+    "consensus/core/src/palw_onboarding_v1.rs": "626f7a6867b7d5cd59d815ef63b0c23e81cef5b69fd7974013faa9151a0438f8",
+    "consensus/core/src/palw_opv_bootstrap_v1.rs": "5fba2fd2d69982207c8f2c05950ad43c278ec9a47defa6268a84c0e2a76c71b1",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/opv_bootstrap.rs": "020e02cd932cac4ad8b34bfd5c17ae95c2feea3658718e5da76a28ee792d00eb",
+    "misaka-palw-kernel/src/ledger.rs": "2325079944791b0867062b5c73da40d8e9e5efda5a24729607bf94c23217a0dd",
+    "misaka-palw-kernel/src/route.rs": "e516955b7d9428ef06bf939cea4b0baeb47559c70fa702f50f01aeb159f6cf58",
+    "misaka-palw-kernel/src/rows.rs": "d36a73ecdd7759a704f955c44ee4e0f04a0c19de16a29237dee473701eda77b2",
+    "misaka-palw-kernel/src/state.rs": "19513913681a983152388b62cecb5c356153625428ef60f441c5be747969f3b3",
+    "misaka-palw-kernel/tests/k2_real_scale.rs": "622fce445294e6826cd539396ceb4c9e2242560981f42201b144d140c49742f7",
+    "misaka-palw-sdk/src/onboarding_snapshot.rs": "c70c699ee9a7f054356d3de0331e9721194e3f08076f9461dd59abb580c220db"
+  },
+  "fresh_candidate_snapshot_reverification_before_promotion": true,
+  "cross_actor_promotion": true
+}

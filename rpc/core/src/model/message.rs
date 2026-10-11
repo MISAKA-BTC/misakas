@@ -12682,6 +12682,135 @@ impl Deserializer for GetPalwStateProofResponse {
     }
 }
 
+/// **RFC-0009 L2: `getPalwForkChoiceOpening` (op 203)** — the fork-choice openings of blocks' post-states, and the node's sink and tips.
+///
+/// For each block the node returns its header, the 292-byte fork-choice leaf of its post-state (`PalwForkChoiceLeafV1`, borsh, the
+/// ADR-0176 D3 weight-allocation slot included — every reader reads that one versioned allocation), the ADR-0043 root the leaf is
+/// enveloped with, and the root the post-state is committed as. A client believes none of it until
+/// `PalwForkChoiceOpeningV1::verify` holds against a root it trusts (an attestation, a chain child's header); `sink` and `tips` are what
+/// this node shows — a peer hiding a tip is caught by another peer. **Op 203 is new: a node built before it drops the WebSocket on it.**
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwForkChoiceOpeningRequest {
+    /// 128 hex each, at most 16. Empty: the sink and every tip.
+    pub block_hashes: Vec<String>,
+}
+
+impl Serializer for GetPalwForkChoiceOpeningRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(Vec<String>, &self.block_hashes, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwForkChoiceOpeningRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { block_hashes: load!(Vec<String>, reader)? })
+    }
+}
+
+/// One block's opening, or why the node cannot weigh it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwForkChoiceEntry {
+    pub block_hash: String,
+    pub available: bool,
+    pub reason: String,
+    pub header: Option<RpcHeader>,
+    /// The borsh fork-choice leaf (292 bytes, the weight-allocation slot included).
+    pub leaf: Vec<u8>,
+    /// The ADR-0043 root the leaf is enveloped with (128 hex).
+    pub inner_root: String,
+    /// The root the post-state is committed as (128 hex) — the envelope past the fence, the ADR-0043 root below it.
+    pub committed_root: String,
+    /// True past the fence (the committed root is the envelope).
+    pub committed_form: bool,
+}
+
+impl Serializer for RpcPalwForkChoiceEntry {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.block_hash, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(String, &self.reason, writer)?;
+        serialize!(Option<RpcHeader>, &self.header, writer)?;
+        store!(Vec<u8>, &self.leaf, writer)?;
+        store!(String, &self.inner_root, writer)?;
+        store!(String, &self.committed_root, writer)?;
+        store!(bool, &self.committed_form, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwForkChoiceEntry {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            block_hash: load!(String, reader)?,
+            available: load!(bool, reader)?,
+            reason: load!(String, reader)?,
+            header: deserialize!(Option<RpcHeader>, reader)?,
+            leaf: load!(Vec<u8>, reader)?,
+            inner_root: load!(String, reader)?,
+            committed_root: load!(String, reader)?,
+            committed_form: load!(bool, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwForkChoiceOpeningResponse {
+    /// False with `reason` when the node serves no opening at all (no V2 ruleset, too many blocks named).
+    pub available: bool,
+    pub reason: String,
+    /// The node's sink and DAG tips (128 hex each).
+    pub sink: String,
+    pub tips: Vec<String>,
+    pub entries: Vec<RpcPalwForkChoiceEntry>,
+    /// The node's DNS BFT gate facts (an issuer copies them into its attestation): whether the overlay is in its `Active` stage, and the
+    /// confirmed DNS-final anchor (128 hex, empty with none) and its DAA. `dnsOverlay` false: the network runs no overlay.
+    pub dns_overlay: bool,
+    pub dns_stage_active: bool,
+    pub dns_confirmed_anchor: String,
+    pub dns_confirmed_anchor_daa: u64,
+}
+
+impl Serializer for GetPalwForkChoiceOpeningResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(String, &self.reason, writer)?;
+        store!(String, &self.sink, writer)?;
+        store!(Vec<String>, &self.tips, writer)?;
+        serialize!(Vec<RpcPalwForkChoiceEntry>, &self.entries, writer)?;
+        store!(bool, &self.dns_overlay, writer)?;
+        store!(bool, &self.dns_stage_active, writer)?;
+        store!(String, &self.dns_confirmed_anchor, writer)?;
+        store!(u64, &self.dns_confirmed_anchor_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwForkChoiceOpeningResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            reason: load!(String, reader)?,
+            sink: load!(String, reader)?,
+            tips: load!(Vec<String>, reader)?,
+            entries: deserialize!(Vec<RpcPalwForkChoiceEntry>, reader)?,
+            dns_overlay: load!(bool, reader)?,
+            dns_stage_active: load!(bool, reader)?,
+            dns_confirmed_anchor: load!(String, reader)?,
+            dns_confirmed_anchor_daa: load!(u64, reader)?,
+        })
+    }
+}
+
 /// **RFC-0008 v2: `getPalwExecV2Status` (op 240)** — the EXEC v2 lane's observation of the tip: counts, the named work roots (or, when
 /// none is named, the first ones in id order) with every slice and the state of its kernel-route verification claim, the refusal record
 /// of `block_hash` when one is named, and the lane's health. Read-only: no rule reads it. **Op 240 is new: a node built before it drops
@@ -14007,5 +14136,185 @@ mod palw_vesting_wire_tests {
         let old = <GetPalwClaimsResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
         assert_eq!(old.vesting_only_rows, response.vesting_only_rows, "version 2's tail is intact");
         assert!(old.bond_locks.is_empty() && old.bond_live_lock_count == 0 && !old.bond_retire_refused_while_locked);
+    }
+}
+
+// RFC6/8/12: one snapshot of all reward funds; independent paging of native rows and EXEC legs.
+// New op 241 preserves op 199's fixed binary layout. Global counters conserve outstandingSompi.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwRewardVestingRequest {
+    pub bond: String,
+    pub payout_address: String,
+    pub claim_id: String,
+    pub limit: u32,
+    pub after: String,
+    pub exec_after: String,
+}
+impl Serializer for GetPalwRewardVestingRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.payout_address, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(u32, &self.limit, writer)?;
+        store!(String, &self.after, writer)?;
+        store!(String, &self.exec_after, writer)?;
+        Ok(())
+    }
+}
+impl Deserializer for GetPalwRewardVestingRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        if load!(u16, reader)? != 1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported reward vesting version"));
+        }
+        Ok(Self {
+            bond: load!(String, reader)?,
+            payout_address: load!(String, reader)?,
+            claim_id: load!(String, reader)?,
+            limit: load!(u32, reader)?,
+            after: load!(String, reader)?,
+            exec_after: load!(String, reader)?,
+        })
+    }
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwExecRewardLeg {
+    pub claim_id: String,
+    pub bond: String,
+    pub fund: String,
+    pub payload: String,
+    pub sompi: String,
+    pub final_daa: u64,
+    pub earliest_daa: u64,
+    pub native_pending: bool,
+    pub native_clock_live: bool,
+    pub native_expiry_daa: Option<u64>,
+    pub native_second_clock_bound_daa: Option<u64>,
+    pub lock_live: bool,
+    pub ready: bool,
+    pub in_next_block: bool,
+}
+impl Serializer for RpcPalwExecRewardLeg {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.fund, writer)?;
+        store!(String, &self.payload, writer)?;
+        store!(String, &self.sompi, writer)?;
+        store!(u64, &self.final_daa, writer)?;
+        store!(u64, &self.earliest_daa, writer)?;
+        store!(bool, &self.native_pending, writer)?;
+        store!(bool, &self.native_clock_live, writer)?;
+        store!(Option<u64>, &self.native_expiry_daa, writer)?;
+        store!(Option<u64>, &self.native_second_clock_bound_daa, writer)?;
+        store!(bool, &self.lock_live, writer)?;
+        store!(bool, &self.ready, writer)?;
+        store!(bool, &self.in_next_block, writer)?;
+        Ok(())
+    }
+}
+impl Deserializer for RpcPalwExecRewardLeg {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        if load!(u16, reader)? != 1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported reward vesting version"));
+        }
+        Ok(Self {
+            claim_id: load!(String, reader)?,
+            bond: load!(String, reader)?,
+            fund: load!(String, reader)?,
+            payload: load!(String, reader)?,
+            sompi: load!(String, reader)?,
+            final_daa: load!(u64, reader)?,
+            earliest_daa: load!(u64, reader)?,
+            native_pending: load!(bool, reader)?,
+            native_clock_live: load!(bool, reader)?,
+            native_expiry_daa: load!(Option<u64>, reader)?,
+            native_second_clock_bound_daa: load!(Option<u64>, reader)?,
+            lock_live: load!(bool, reader)?,
+            ready: load!(bool, reader)?,
+            in_next_block: load!(bool, reader)?,
+        })
+    }
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwRewardVestingResponse {
+    pub available: bool,
+    pub native: GetPalwVestingResponse,
+    pub state_root: String,
+    pub outstanding_sompi: String,
+    pub exec_slice_sompi: String,
+    pub exec_kernel_fee_sompi: String,
+    pub query_outstanding_sompi: String,
+    pub query_exec_pending_sompi: String,
+    pub query_exec_ready_sompi: String,
+    pub reporter_pending_sompi_of_query: String,
+    pub reporter_awarded_sompi_of_query: String,
+    pub locked_sources: u64,
+    pub last_lock_daa: Option<u64>,
+    pub exec_rows: Vec<RpcPalwExecRewardLeg>,
+    pub exec_rows_total: u64,
+    pub exec_next_after: String,
+}
+impl Serializer for GetPalwRewardVestingResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        serialize!(GetPalwVestingResponse, &self.native, writer)?;
+        store!(String, &self.state_root, writer)?;
+        store!(String, &self.outstanding_sompi, writer)?;
+        store!(String, &self.exec_slice_sompi, writer)?;
+        store!(String, &self.exec_kernel_fee_sompi, writer)?;
+        store!(String, &self.query_outstanding_sompi, writer)?;
+        store!(String, &self.query_exec_pending_sompi, writer)?;
+        store!(String, &self.query_exec_ready_sompi, writer)?;
+        store!(String, &self.reporter_pending_sompi_of_query, writer)?;
+        store!(String, &self.reporter_awarded_sompi_of_query, writer)?;
+        store!(u64, &self.locked_sources, writer)?;
+        store!(Option<u64>, &self.last_lock_daa, writer)?;
+        serialize!(Vec<RpcPalwExecRewardLeg>, &self.exec_rows, writer)?;
+        store!(u64, &self.exec_rows_total, writer)?;
+        store!(String, &self.exec_next_after, writer)?;
+        Ok(())
+    }
+}
+impl Deserializer for GetPalwRewardVestingResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        if load!(u16, reader)? != 1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported reward vesting version"));
+        }
+        Ok(Self {
+            available: load!(bool, reader)?,
+            native: deserialize!(GetPalwVestingResponse, reader)?,
+            state_root: load!(String, reader)?,
+            outstanding_sompi: load!(String, reader)?,
+            exec_slice_sompi: load!(String, reader)?,
+            exec_kernel_fee_sompi: load!(String, reader)?,
+            query_outstanding_sompi: load!(String, reader)?,
+            query_exec_pending_sompi: load!(String, reader)?,
+            query_exec_ready_sompi: load!(String, reader)?,
+            reporter_pending_sompi_of_query: load!(String, reader)?,
+            reporter_awarded_sompi_of_query: load!(String, reader)?,
+            locked_sources: load!(u64, reader)?,
+            last_lock_daa: load!(Option<u64>, reader)?,
+            exec_rows: deserialize!(Vec<RpcPalwExecRewardLeg>, reader)?,
+            exec_rows_total: load!(u64, reader)?,
+            exec_next_after: load!(String, reader)?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod reward_vesting_codec_version_tests {
+    use super::*;
+    #[test]
+    fn reward_vesting_rejects_unknown_versions_before_reading_fields() {
+        let bytes = 2u16.to_le_bytes();
+        assert!(<GetPalwRewardVestingRequest as Deserializer>::deserialize(&mut bytes.as_slice()).is_err());
+        assert!(<RpcPalwExecRewardLeg as Deserializer>::deserialize(&mut bytes.as_slice()).is_err());
+        assert!(<GetPalwRewardVestingResponse as Deserializer>::deserialize(&mut bytes.as_slice()).is_err());
     }
 }

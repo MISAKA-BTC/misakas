@@ -125,6 +125,66 @@ impl SegmentedClaimRecordV1 {
         borsh::from_slice(bytes).map_err(|e| format!("not a segmented claim record: {e}"))
     }
 
+    /// Rebuild a public view for the exact claim an outsider requested. `header` must come
+    /// from the verifier's authenticated class/chain state; `claim_id` is the requested id,
+    /// not an id copied from this untrusted record. This verifies identity, not chain inclusion.
+    /// The last delivered id is not fed into the trace, so evidence/header checks alone do
+    /// not bind it. Recompute the claim id with the served producer before opening its logits.
+    pub fn view_for_claim(
+        &self,
+        header: &crate::evidence::EvidenceHeaderV1,
+        claim_id: &Digest,
+        producer_bond: &Digest,
+    ) -> Result<SegClaimViewV1, String> {
+        let claim = KernelClaimV1 {
+            job_id: self.job_id,
+            producer_bond: *producer_bond,
+            generated: self.generated.clone(),
+            evidence_root: self.evidence.root(),
+        };
+        if self.claim_id != *claim_id || claim.id() != *claim_id {
+            return Err("the public record is not the requested claim's body".into());
+        }
+        if self.param_commitments.windows(2).any(|w| (w[0].0, w[0].1) >= (w[1].0, w[1].1)) {
+            return Err("the public parameter map is not in unique canonical order".into());
+        }
+        let view = self.view(header)?;
+        if self.prompt_len == 0
+            || self.plan.max_positions > view.program.history_bound
+            || self.evidence.positions > self.plan.max_positions
+        {
+            return Err("the public context exceeds the class's bound".into());
+        }
+        if let Some(prompt) = &self.inline_prompt
+            && (prompt.len() as u64 != self.prompt_len as u64
+                || prompt.iter().any(|t| *t >= view.program.token_bound)
+                || prompt_root_of_ids_v1(prompt) != self.prompt_root)
+        {
+            return Err("the inline prompt is not the committed job input".into());
+        }
+        let fed = if let Some(encoder) = view.encoder {
+            if self.max_new_tokens != 0 || !self.generated.is_empty() || self.evidence.positions != 1 || self.prompt_len > encoder.l {
+                return Err("the public encoder job or output is malformed".into());
+            }
+            &[][..]
+        } else {
+            if !crate::job::generation_length_matches_v1(self.max_new_tokens, self.generated.len())
+                || self.generated.iter().any(|t| *t >= view.program.token_bound)
+            {
+                return Err("the public delivery does not match the job's exact generation length or vocabulary".into());
+            }
+            let fed = &self.generated[..self.generated.len() - 1];
+            if self.prompt_len as u64 + fed.len() as u64 != self.evidence.positions as u64 {
+                return Err("the public position count does not match the job and fed output".into());
+            }
+            fed
+        };
+        if job_input_root_v2(self.prompt_len, &self.prompt_root, fed) != self.evidence.job_input_root {
+            return Err("the public prompt or fed output is not the evidence's input".into());
+        }
+        Ok(view)
+    }
+
     /// The verifier's view, checked against the header the chain states (program root, artifact root, plan root, evidence).
     pub fn view(&self, header: &crate::evidence::EvidenceHeaderV1) -> Result<SegClaimViewV1, String> {
         let program = misaka_palw_tir::program::TirProgramV1::decode_canonical(&self.program_bytes).map_err(|e| e.to_string())?;
@@ -275,6 +335,20 @@ impl KernelLedgerV1 {
             return Err(rule("a segmented claim of a class that is not K2-TIR-v4".into()));
         }
         self.opv_claim_gate(&job.class_binding_id).map_err(rule)?;
+        // **The per-claim reward gate's court-scope condition** (DA16b, `crate::seg_scope`, lane G14-S): every model-dependent value of
+        // the class is withheld or hiding with a bounded court at the class's context, or the class takes no claim — it is never
+        // reward-bearing (`COURT_SCOPE_INCOMPLETE`).
+        self.class_court_scope_v1(&job.class_binding_id).map_err(rule)?;
+        Self::check_claim_carrier_v1(NAME, &class.bounds, &(claim, evidence, segment_roots))?;
+        let id = claim.id();
+        if self.claims.contains_key(&id) {
+            return Err(rule("an exact duplicate claim".into()));
+        }
+        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id, salt).map_err(rule)?;
+        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
+        let work = class.admission_work_v1().map_err(rule)?;
+        self.charge(NAME, work)?;
+        let class = self.classes.get(&job.class_binding_id).expect("checked");
         if claim.evidence_root != evidence.root() {
             return Err(rule("binding fault WrongEvidence".into()));
         }
@@ -311,13 +385,6 @@ impl KernelLedgerV1 {
             return Err(rule("binding fault WrongInput".into()));
         }
         evidence.check_structure(segment_roots).map_err(rule)?;
-        let id = claim.id();
-        if self.claims.contains_key(&id) {
-            return Err(rule("an exact duplicate claim".into()));
-        }
-        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id, salt).map_err(rule)?;
-        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
-        self.charge(NAME, 0)?;
         let body = ClaimBodyV1::Segmented { claim: claim.clone(), evidence: evidence.clone(), segment_roots: segment_roots.to_vec() };
         self.admit(id, claim.producer_bond, job.class_binding_id, claim.job_id, body, out).map_err(rule)?;
         self.seals.remove(&(claim.job_id, claim.producer_bond));
@@ -353,7 +420,10 @@ impl KernelLedgerV1 {
             return Err(rule("the claim is already decided"));
         }
         let is_final = matches!(row.life.state, ClaimStateV1::Final { .. });
-        let path = self.policy.court_deadline_daa.saturating_add(self.policy.proof_grace_daa);
+        // G14-B: the response window counts the route chunks of the position's parts (its declared layout); a post-Final demand opens
+        // only if that whole window and the grace after it fit the liability horizon.
+        let window = self.demand_window_daa_v1(claim, position);
+        let path = window.saturating_add(self.policy.proof_grace_daa);
         let window_open = match &row.life.state {
             ClaimStateV1::Final { .. } => row.liability_until.is_some_and(|u| daa.saturating_add(path) <= u),
             s => demand_window_open(s, daa),
@@ -369,6 +439,9 @@ impl KernelLedgerV1 {
         if self.seg_progress.get(&k).is_some_and(|p| p.complete_daa.is_some()) {
             return Err(rule("already served: it is public"));
         }
+        // ADR-0177 D2 (`crate::court_scope`): within the requester's units of the claim. A segmented position owes no model-dependent
+        // value in the clear (withheld or hiding, `crate::seg_da`), so no clear budget is drawn.
+        self.cumulative_scope_allows_v1(demander, claim, stage, position).map_err(|why| rule(&why))?;
         let need = self.policy.demand_bond;
         let Some(b) = self.bonds.get(demander) else { return Err(rule("the demander is not a registered bond")) };
         if b.exit_requested.is_some() || b.free() < need {
@@ -387,15 +460,17 @@ impl KernelLedgerV1 {
                 self.bonds.get_mut(demander).expect("checked").reserved += need;
                 settle(out, *demander, need, SettlementKindV1::ReserveDemand, Some(*claim));
             }
+            self.court_scope_record_unit_v1(demander, claim, (stage, position));
             out.push(LedgerEventV1::DemandJoined { claim: *claim, stage, position });
             return Ok(());
         }
         let program = self.classes.get(&class_id).map(|c| c.program.clone()).ok_or_else(|| rule("no such class"))?;
         let parts = position_parts_v1(&program, position).map_err(|_| rule("the position does not lay out"))?.len() as u32;
         self.bonds.get_mut(demander).expect("checked").reserved += need;
-        let deadline = daa + self.policy.court_deadline_daa;
+        let deadline = daa + window;
         self.demands.insert(k, DemandRowV1 { demanders: vec![(*demander, need)], filed_daa: daa, deadline_daa: deadline, last: None });
         self.seg_progress.insert(k, SegProgressV1::new(parts));
+        self.court_scope_record_unit_v1(demander, claim, (stage, position));
         if !is_final {
             let row = self.claims.get_mut(claim).expect("checked");
             let _ = row.life.apply(ClaimEventV1::DisputeFiled { daa });

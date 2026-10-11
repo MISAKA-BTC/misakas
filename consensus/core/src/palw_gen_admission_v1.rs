@@ -53,7 +53,7 @@ use std::collections::BTreeSet;
 use crate::Hash64;
 use crate::palw_class_admission_v2::{PalwClassAdmissionError, PalwCourtCostV1};
 use crate::palw_gen_class_v1::{
-    PalwGenAdmissionCarriageV1, PalwGenClassRecordV1, PalwGenClassReportV1, PalwGenClassV1, palw_gen_class_preflight_v1,
+    PalwGenAdmissionCarriageV1, PalwGenClassRecordV1, PalwGenClassReportV1, PalwGenClassV1, palw_gen_class_preflight_with_heads_v1,
     palw_gen_class_record_v1,
 };
 use crate::palw_gen_step_v1::PalwGenStepSpaceV1;
@@ -91,6 +91,10 @@ pub struct PalwGenAdmissionRulesV1 {
     /// **The close-sizing twin at the block**: the element twin, or the range twin past `Params::palw_gen_range_twin_v1` (the same
     /// bounds, fewer steps of the same work cap).
     pub twin: crate::palw_tir_close_range_v1::PalwTirCloseTwinV1,
+    /// **`Params::palw_task_heads_v1` at the block** (`crate::palw_task_heads_v1`): `Some` where the `Head` profile is in force — a
+    /// class of profile tag 6 is then judged as a task head under the fence's ceilings; `None` elsewhere, where tag 6 is an unknown
+    /// profile exactly as the int-12 build reads it.
+    pub heads: Option<crate::palw_task_heads_v1::PalwTaskHeadsFenceV1>,
 }
 
 impl PalwGenAdmissionRulesV1 {
@@ -106,6 +110,7 @@ impl PalwGenAdmissionRulesV1 {
             held_close_chunks: params.palw_held_close_chunks_active_at(daa_score),
             demand: params.palw_tir_demand_rules_at(daa_score),
             twin: params.palw_gen_close_twin_at(daa_score),
+            heads: params.palw_task_heads_v1_fence().filter(|f| f.activation.is_active(daa_score)),
         })
     }
 }
@@ -223,8 +228,11 @@ pub fn verify_gen_class_admission_v1(
     let class = &admission.class;
 
     // 1. The structure, under the fence's ceilings for the class's profile.
-    let report = palw_gen_class_preflight_v1(class, &rules.fence).map_err(preflight_error)?;
-    let ceilings = rules.fence.ceilings.of(report.profile);
+    let report = palw_gen_class_preflight_with_heads_v1(class, &rules.fence, rules.heads.as_ref()).map_err(preflight_error)?;
+    let ceilings = match (report.profile, rules.heads.as_ref()) {
+        (crate::palw_gen_v1::PalwGenProfileV1::Head, Some(h)) => &h.ceilings,
+        _ => rules.fence.ceilings.of(report.profile),
+    };
     let (programs, pipeline) = (&report.admission.programs, &report.admission.pipeline);
     // The weights have an inventory (a closed form of the declarations): every param byte a court
     // reads has a leaf of the class's `artifact_root` to be proven under.

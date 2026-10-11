@@ -206,6 +206,9 @@ pub enum PalwGenProfileOffersV1 {
     None,
     Image(PalwGenImageOffersV1),
     Embedding(PalwGenEmbeddingOffersV1),
+    /// **A task head's offers** (`crate::palw_task_heads_v1`, Borsh variant 3, appended): bytes the int-12 build cannot decode, read
+    /// as undecodable below `palw_task_heads_v1` (`crate::palw_task_heads_v1::palw_object_needs_task_heads_v1`).
+    Head(crate::palw_task_heads_v1::PalwGenHeadOffersV1),
 }
 
 /// **What a job of the class may ask** (RFC-0003 §I.2.3 `offers`): the job-parameter domains, each a
@@ -724,12 +727,14 @@ fn check_profile_offers(class: &PalwGenClassV1, profile: PalwGenProfileV1) -> Re
             }
             Ok(())
         }
-        (PalwGenProfileV1::Image | PalwGenProfileV1::Embedding, other) => bad(format!(
+        (PalwGenProfileV1::Head, PalwGenProfileOffersV1::Head(h)) => check_head_offers(class, h),
+        (PalwGenProfileV1::Image | PalwGenProfileV1::Embedding | PalwGenProfileV1::Head, other) => bad(format!(
             "a {profile:?} class carries {} profile offers",
             match other {
                 PalwGenProfileOffersV1::None => "no",
                 PalwGenProfileOffersV1::Image(_) => "image",
                 PalwGenProfileOffersV1::Embedding(_) => "embedding",
+                PalwGenProfileOffersV1::Head(_) => "head",
             }
         )),
         (_, PalwGenProfileOffersV1::None) => Ok(()),
@@ -740,9 +745,91 @@ fn check_profile_offers(class: &PalwGenClassV1, profile: PalwGenProfileV1) -> Re
 /// **The preflight of a generative class** under an armed fence's ceilings for its profile: the
 /// structure, the offers, the output header, and the IR's admission of the pipeline (see the module
 /// doc for what is exact and what is a necessary condition).
+/// **A task head's own offers** (`crate::palw_task_heads_v1`): the task and decision rule this build implements; the output
+/// `[rows, labels]` with `labels` the offers'; one image slot exactly for a vision head and none otherwise; a pair's separator exactly
+/// for a pair or span task; the entailment label only for a pair task, inside the labels; a masked-LM class's position as its one
+/// job scalar; no steps, negative prompt or source.
+fn check_head_offers(class: &PalwGenClassV1, h: &crate::palw_task_heads_v1::PalwGenHeadOffersV1) -> Result<(), PalwGenClassErrorV1> {
+    use crate::palw_task_heads_v1::*;
+    let bad = |m: String| Err(PalwGenClassErrorV1::Offers(m));
+    let offers = &class.offers;
+    if !PALW_HEAD_TASKS_V1.contains(&h.task) {
+        return bad(format!("head task {} is not one this build implements", h.task));
+    }
+    if !matches!(h.problem, PALW_HEAD_PROBLEM_SINGLE_LABEL_V1 | PALW_HEAD_PROBLEM_MULTI_LABEL_V1 | PALW_HEAD_PROBLEM_REGRESSION_V1) {
+        return bad(format!("head problem {} is not single-label, multi-label or regression", h.problem));
+    }
+    let (rows, width) = match class.output.shape[..] {
+        [r, w] => (r, w),
+        _ => return bad(format!("a head's output is [rows, labels], not {:?}", class.output.shape)),
+    };
+    if h.labels == 0 || width != h.labels {
+        return bad(format!("the offers name {} labels and the output's last extent is {width}", h.labels));
+    }
+    if h.problem == PALW_HEAD_PROBLEM_REGRESSION_V1 && h.labels != 1 {
+        return bad("a regression head has one output".into());
+    }
+    let pooled =
+        matches!(h.task, PALW_HEAD_TASK_SEQUENCE_V1 | PALW_HEAD_TASK_PAIR_V1 | PALW_HEAD_TASK_MASKED_LM_V1 | PALW_HEAD_TASK_IMAGE_V1);
+    if pooled && rows != 1 {
+        return bad(format!("a pooled head's output is one row, not {rows}"));
+    }
+    let vision = matches!(h.task, PALW_HEAD_TASK_IMAGE_V1 | PALW_HEAD_TASK_DETECTION_V1 | PALW_HEAD_TASK_SEGMENTATION_V1);
+    if vision != (offers.images.len() == 1) || (!vision && !offers.images.is_empty()) {
+        return bad("a vision head reads exactly one image slot, and a text head none".into());
+    }
+    if vision == (offers.max_prompt_tokens > 0) {
+        return bad("a text head offers a prompt of at least one id, and a vision head none".into());
+    }
+    let pair = matches!(h.task, PALW_HEAD_TASK_PAIR_V1 | PALW_HEAD_TASK_SPAN_QA_V1);
+    if pair == h.pair_separator.is_empty() {
+        return bad("a pair or span task names the separator between its two texts, and no other task does".into());
+    }
+    match h.entailment_label {
+        Some(e) if h.task != PALW_HEAD_TASK_PAIR_V1 || e >= h.labels => {
+            return bad(format!("the entailment label {e} is a pair task's, inside its {} labels", h.labels));
+        }
+        _ => {}
+    }
+    let no_map = matches!(h.task, PALW_HEAD_TASK_SPAN_QA_V1 | PALW_HEAD_TASK_MASKED_LM_V1);
+    if no_map != (h.label_map_root == Hash64::default()) && h.problem != PALW_HEAD_PROBLEM_REGRESSION_V1 {
+        return bad("a labelled head commits to its label map's root, and a span or masked-LM head to none".into());
+    }
+    if h.task == PALW_HEAD_TASK_SPAN_QA_V1 && h.labels != 2 {
+        return bad("a span QA head's output is a start and an end logit per token".into());
+    }
+    match (h.task == PALW_HEAD_TASK_MASKED_LM_V1, h.position_scalar) {
+        (true, Some(0)) if offers.scalars.len() == 1 && offers.scalars[0].lo >= 0 => {}
+        (true, _) => {
+            return bad("a masked-LM head carries the masked row's index as its one job scalar (index 0, non-negative)".into());
+        }
+        (false, None) if offers.scalars.is_empty() => {}
+        (false, _) => return bad("only a masked-LM head reads a job scalar".into()),
+    }
+    if !offers.steps.is_empty()
+        || offers.max_negative_tokens != 0
+        || offers.max_source_tokens != 0
+        || !offers.forced_prompt_prefix.is_empty()
+    {
+        return bad("a head offers no steps, no negative prompt, no source and no forced prefix".into());
+    }
+    Ok(())
+}
+
 pub fn palw_gen_class_preflight_v1(
     class: &PalwGenClassV1,
     fence: &PalwGenFenceV1,
+) -> Result<PalwGenClassReportV1, PalwGenClassErrorV1> {
+    palw_gen_class_preflight_with_heads_v1(class, fence, None)
+}
+
+/// **[`palw_gen_class_preflight_v1`] with the task-head fence** (`crate::palw_task_heads_v1`): where `heads` is `Some` (the fence in force
+/// at the registration's block) profile tag 6 is the `Head` profile, judged under the head fence's own ceilings; where it is `None`, tag 6
+/// is an unknown profile (`PalwGenClassErrorV1::Profile(6)`), exactly as the int-12 build resolves it.
+pub fn palw_gen_class_preflight_with_heads_v1(
+    class: &PalwGenClassV1,
+    fence: &PalwGenFenceV1,
+    heads: Option<&crate::palw_task_heads_v1::PalwTaskHeadsFenceV1>,
 ) -> Result<PalwGenClassReportV1, PalwGenClassErrorV1> {
     // 1. Versions, the profile, the carried bytes.
     if class.version != PALW_GEN_CLASS_VERSION_V1 {
@@ -751,8 +838,15 @@ pub fn palw_gen_class_preflight_v1(
     if let Some(l) = class.layouts.iter().find(|l| l.version != PALW_TIR_LAYOUT_VERSION_V1) {
         return Err(PalwGenClassErrorV1::Version(format!("layout version {}", l.version)));
     }
-    let profile = PalwGenProfileV1::from_tag(class.profile).ok_or(PalwGenClassErrorV1::Profile(class.profile))?;
-    let ceilings = fence.ceilings.of(profile);
+    let profile = match heads {
+        Some(_) => PalwGenProfileV1::from_tag_with_heads(class.profile),
+        None => PalwGenProfileV1::from_tag(class.profile),
+    }
+    .ok_or(PalwGenClassErrorV1::Profile(class.profile))?;
+    let ceilings = match (profile, heads) {
+        (PalwGenProfileV1::Head, Some(h)) => &h.ceilings,
+        _ => fence.ceilings.of(profile),
+    };
     let exceeds =
         |what, value: u64, cap: u64| if value > cap { Err(PalwGenClassErrorV1::Exceeds { what, value, cap }) } else { Ok(()) };
     exceeds("class bytes", class.carried_bytes(), ceilings.max_class_bytes as u64)?;

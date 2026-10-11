@@ -238,7 +238,7 @@ fn rc_licensed_job(
             pwu: 40,
             trace_manifest_root: h64(33),
             trace_chunk_count: 4,
-            trace_retention_daa: 999_999,
+            trace_retention_daa: CLAIM_RETENTION.with(|r| r.get()),
             execution_root: d.execution_root,
         },
         signature: vec![0; 8],
@@ -748,6 +748,11 @@ fn service_filer_case(
         own_output_ids: Vec::new(),
         _job_reservation: None,
         own_range: Box::new(|_, _| panic!("the LG14-B controller does not use the linear range fallback")),
+        own: Some(Arc::new(crate::palw_panel::palw_fraud_filer::PalwFraudFilerOwnRunV1::new(
+            Arc::new(f.seat()),
+            Arc::new(o.capture.clone()),
+            Arc::new(o.ids.clone()),
+        ))),
         _reservation: None,
     }));
     case
@@ -2425,7 +2430,32 @@ async fn lg14b_an_honest_claim_survives_a_malicious_outsider() {
             |_| SIG.to_vec(),
         )])
         .unwrap();
-    assert!(service_filer_step(&guard_world, &unresolved).unwrap_err().contains("checkpoint/trace/job localization"));
+    // G14-V: an agreeing step tree under a mismatched verdict goes PAST the step tree (never to Honest) — and there, against an
+    // honest claim whose every committed field is the verifier's own, nothing is provable and nothing is filed.
+    assert_eq!(
+        service_filer_step(&guard_world, &unresolved).unwrap(),
+        crate::palw_panel::palw_fraud_filer::PalwFraudFilerStepV1::PastStepTree
+    );
+    let event0 = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(
+        honest.backend.disclose_trace_event(&honest.material, 0, 0).expect("the honest binding read"),
+    ));
+    let target = kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1 {
+        claim_id: claim,
+        class_id: f.profile.shape_profile_id(),
+        artifact_root: f.root,
+        executor_bond: bond_key(PRODUCER),
+        execution_root: honest.execution_root,
+        lane: None,
+        segment_count: None,
+        phase: None,
+        job_identity: h64(0),
+        trace_root: honest.trace_root,
+        output_root: h64(32),
+    };
+    match crate::palw_panel::palw_fraud_filer::palw_fraud_filer_past_step_v1(&unresolved, &target, Some(&event0), None, LADDER) {
+        Err(why) => assert!(why.contains("nothing guessed"), "{why}"),
+        Ok(_) => panic!("an honest claim yields no public proof past its step tree"),
+    }
     let own = o.tree();
     assert_eq!(
         palw_legacy_descent_next_v2(Tree::Step, binding.step_leaf_count, &binding.step_merkle_root, &own, &[]),
@@ -2557,4 +2587,487 @@ async fn lg14b_below_the_fence_every_legacy_object_is_refused_and_the_state_is_u
     // And the resource bound the design states for the canonical 8k row (≈105.5M leaves, the verifier's retained level 12).
     assert!(palw_legacy_verifier_resident_bytes_v2(105_500_000, 12) < 2_100_000);
     assert_eq!(palw_legacy_descent_rounds_v2(105_500_000), 3);
+}
+
+// ---- lane G14-L: parallel reserved sessions and the k-ary descent (user decision 2026-10-11, option (a)) -----------------------
+
+thread_local! {
+    /// The claim's `trace_retention_daa` the harness's attempt carries (999,999 by default: no retention bound; the G14-L cases set
+    /// the testnet-12 lattice's 5,400 after acceptance, so the claim's hard deadline is acceptance + 4,200).
+    static CLAIM_RETENTION: std::cell::Cell<u64> = const { std::cell::Cell::new(999_999) };
+}
+
+impl World {
+    /// An empty block at `daa` (at least the next DAA): the fold sweeps every deadline below it.
+    fn jump_to(&mut self, daa: u64) {
+        let daa = daa.max(self.daa);
+        self.s = rc_step(&self.s, daa, &[]).expect("an empty block folds");
+        self.daa = daa + 1;
+    }
+}
+
+/// The producer's committed trees, built once (the answers of a round read them many times).
+struct ProducerTrees {
+    step: PalwLegacyTreeV2<'static>,
+    checkpoint: PalwLegacyTreeV2<'static>,
+}
+
+impl ProducerTrees {
+    fn of(d: &Produced) -> Self {
+        Self {
+            step: PalwLegacyTreeV2::leaves_v1(d.committed_leaves.clone()),
+            checkpoint: PalwLegacyTreeV2::leaves_v1(checkpoint_leaf_hashes(&d.material)),
+        }
+    }
+
+    /// The producer's obligation for `unit` ([`producer_answers`] over the cached trees).
+    fn answer(&self, d: &Produced, binding: &PalwStepBindingV2, claim: Hash64, unit: PalwLegacyHeldUnitV2) -> PalwConsensusObjectV2 {
+        let answer = palw_legacy_held_answer_v2(
+            &unit,
+            &self.step,
+            &self.checkpoint,
+            &d.backend,
+            &d.material,
+            &d.ids,
+            d.roots(),
+            d.backend.prompt_ids_form(),
+        )
+        .expect("the producer answers from its retention");
+        palw_legacy_held_answer_object_v2(&h64(999), claim, unit, binding.clone(), answer, bond_key(PRODUCER), |_, _| Some(SIG.to_vec()))
+            .expect("built")
+    }
+}
+
+/// The actual node filer's step with the lanes rule in force (`palw_fraud_filer_legacy_step_v3` / `_bootstrap_step_v2`).
+fn lanes_filer_step(
+    w: &World,
+    case: &crate::palw_panel::palw_fraud_filer::PalwFraudFilerCaseV1,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> crate::palw_panel::palw_fraud_filer::PalwFraudFilerStepV1 {
+    use crate::palw_panel::palw_fraud_filer::{
+        PalwFraudFilerLanesV1, palw_fraud_filer_bootstrap_step_v2, palw_fraud_filer_legacy_step_v3,
+    };
+    use kaspa_consensus_core::palw_legacy_public_filer_v1::{PalwFilerRoleV1, palw_fraud_filer_reservation_v1};
+    let claim = case.candidate.claim_id;
+    let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).expect("public claim view");
+    let reservable = kaspa_consensus_core::palw_state_v2::palw_legacy_dispute_reservation_check_v1(
+        &w.s,
+        &rc_params(),
+        &rc_extras(true),
+        &palw_fraud_filer_reservation_v1(&view, bond_key(OUTSIDER)),
+        w.daa,
+    )
+    .is_ok();
+    let court = palw_court_duties_v2(&w.s, &[bond_key(OUTSIDER)]).iter().any(|d| d.claim_id == claim && !d.i_am_responder);
+    let lanes = Some(PalwFraudFilerLanesV1 { now_daa: w.daa, form });
+    let read = |unit: &PalwDaUnitV1| service_public_answer(&w.chain, claim, *unit, view.execution_root).is_some();
+    if case.fp_bootstrap.is_some() {
+        return palw_fraud_filer_bootstrap_step_v2(
+            PalwFilerRoleV1::PublicBond,
+            Some(&view),
+            &bond_key(OUTSIDER),
+            reservable,
+            case,
+            lanes,
+            read,
+        );
+    }
+    palw_fraud_filer_legacy_step_v3(PalwFilerRoleV1::PublicBond, Some(&view), &bond_key(OUTSIDER), reservable, court, case, lanes, read)
+        .expect("the production controller can judge its own replica")
+}
+
+/// What one parallel pursuit did, session by session (absolute DAA).
+#[derive(Debug, Default)]
+struct LanesRun {
+    opens: Vec<u64>,
+    deadlines: Vec<u64>,
+    lanes: Vec<u32>,
+    demanded: Vec<PalwDaUnitV1>,
+}
+
+/// **The stalling producer**: every lane of the outsider's open session is answered on the session's LAST DAAs, one a block, the
+/// last on the deadline itself — or, `withhold`, a lane is never answered and the session defaults at its deadline (`Err(unit)`).
+fn stall_and_answer(
+    w: &mut World,
+    d: &Produced,
+    trees: &ProducerTrees,
+    binding: Option<&PalwStepBindingV2>,
+    claim: Hash64,
+    run: &mut LanesRun,
+    withhold: &dyn Fn(&PalwDaUnitV1) -> bool,
+) -> Result<(), PalwDaUnitV1> {
+    let session = w.s.da_session(&claim, &bond_key(OUTSIDER)).expect("the outsider's session is open").clone();
+    run.opens.push(session.opened_daa);
+    run.deadlines.push(session.deadline_daa);
+    run.lanes.push(session.units.len() as u32);
+    let k = session.units.len() as u64;
+    // The first answer lands at `deadline − (k − 1)`, the last on the deadline.
+    w.jump_to(session.deadline_daa - k);
+    let mut withheld = None;
+    for unit in &session.units {
+        if withhold(unit) {
+            withheld = Some(*unit);
+            w.quiet();
+            continue;
+        }
+        let answer = match unit {
+            PalwDaUnitV1::Event { row, tile } => PalwConsensusObjectV2::MaterialDisclosedV2 {
+                claim,
+                unit: *unit,
+                answer: PalwDaAnswerV1::Event(d.backend.disclose_trace_event(&d.material, *row, *tile).expect("producer's obligation")),
+                discloser: bond_key(PRODUCER),
+                signature: SIG.to_vec(),
+            },
+            PalwDaUnitV1::LegacyHeldV2(held) => trees.answer(d, binding.expect("a held lane follows the binding"), claim, *held),
+            other => panic!("the lanes path demands no {other:?}"),
+        };
+        w.block(vec![answer]).expect("the producer's answer authenticates");
+    }
+    assert_eq!(w.daa - 1, session.deadline_daa, "the stalling producer's last answer lands on the deadline");
+    if let Some(unit) = withheld {
+        w.jump_to(session.deadline_daa + 1);
+        return Err(unit);
+    }
+    assert!(w.s.da_session(&claim, &bond_key(OUTSIDER)).is_none(), "every lane answered: the session is refuted and closed");
+    Ok(())
+}
+
+/// **Drive the actual node filer's parallel steps** to the located leaf: the reservation, each demand or lane a block of its own (the
+/// node funds one carrier a DAA), the stalling producer, the node learning only authenticated public answers. After `restart_after`
+/// demands landed, the case is rebuilt from scratch (a restarted node: nothing carried but the chain).
+#[allow(clippy::too_many_arguments)]
+fn lanes_filer_drive(
+    w: &mut World,
+    f: &Fixture,
+    d: &Produced,
+    o: &Outsider,
+    case: &mut crate::palw_panel::palw_fraud_filer::PalwFraudFilerCaseV1,
+    run: &mut LanesRun,
+    withhold: &dyn Fn(&PalwDaUnitV1) -> bool,
+    restart_after: Option<usize>,
+) -> Result<u64, PalwDaUnitV1> {
+    use crate::palw_panel::palw_fraud_filer::PalwFraudFilerStepV1;
+    use kaspa_consensus_core::palw_legacy_public_filer_v1::{
+        PalwFilerActionV1, palw_dispute_reserved_object_v1, palw_fraud_filer_demand_object_v1, palw_fraud_filer_reservation_v1,
+    };
+    let form = d.backend.prompt_ids_form();
+    let trees = ProducerTrees::of(d);
+    let claim = case.candidate.claim_id;
+    let mut restarted = false;
+    let mut idle = 0u32;
+    for _ in 0..4_096 {
+        match lanes_filer_step(w, case, form) {
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve) => {
+                let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap();
+                w.block(vec![palw_dispute_reserved_object_v1(
+                    h64(999),
+                    palw_fraud_filer_reservation_v1(&view, bond_key(OUTSIDER)),
+                    |_| SIG.to_vec(),
+                )])
+                .expect("the reservation lands");
+            }
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(probe)) => {
+                assert!(!run.demanded.contains(&probe.unit()), "no unit is demanded twice: {probe:?}");
+                run.demanded.push(probe.unit());
+                let demand = palw_fraud_filer_demand_object_v1(
+                    &h64(999),
+                    claim,
+                    &d.execution_root,
+                    probe,
+                    case.binding.as_ref(),
+                    bond_key(OUTSIDER),
+                    form,
+                    |_, _| Some(SIG.to_vec()),
+                )
+                .expect("the node's builder");
+                w.block(vec![demand]).expect("the demand opens a reserved session");
+            }
+            PalwFraudFilerStepV1::DemandLanes { demand, .. } => {
+                for probe in demand {
+                    assert!(!run.demanded.contains(&probe.unit()), "no lane is demanded twice: {probe:?}");
+                    run.demanded.push(probe.unit());
+                    let object = palw_fraud_filer_demand_object_v1(
+                        &h64(999),
+                        claim,
+                        &d.execution_root,
+                        probe,
+                        case.binding.as_ref(),
+                        bond_key(OUTSIDER),
+                        form,
+                        |_, _| Some(SIG.to_vec()),
+                    )
+                    .expect("the node's builder");
+                    w.block(vec![object]).expect("the lane opens or joins the outsider's reserved session");
+                    if restart_after == Some(run.demanded.len()) && !restarted {
+                        // A restart mid-round: the case is rebuilt with nothing but the chain; the round re-derives.
+                        restarted = true;
+                        *case = service_filer_case(f, d, o, claim);
+                        break;
+                    }
+                }
+            }
+            PalwFraudFilerStepV1::Learn(probe) => {
+                let answer = service_public_answer(&w.chain, claim, probe.unit(), d.execution_root).expect("public bytes");
+                let mut learned = case.clone();
+                learned.learn(probe, &answer).expect("the actual node learns only authenticated material");
+                case.accept_learned_v1(learned);
+            }
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait) => {
+                if w.s.da_session(&claim, &bond_key(OUTSIDER)).is_some() {
+                    let binding = public_binding(&w.chain, &claim);
+                    stall_and_answer(w, d, &trees, binding.as_ref(), claim, run, withhold)?;
+                    idle = 0;
+                } else {
+                    idle += 1;
+                    if idle > 8 {
+                        let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim);
+                        let kary = match (&case.verdict, case.binding.as_ref()) {
+                            (crate::palw_panel::palw_fraud_filer::PalwFraudFilerVerdictV1::Mismatch(r), Some(b)) => {
+                                format!("{:?}", r.legacy.as_ref().map(|l| l.kary(b, &case.frontiers, 1)))
+                            }
+                            _ => "no binding/run".into(),
+                        };
+                        panic!(
+                            "the parallel controller idles at DAA {} with no session: binding {}, frontiers {}, kary {kary}, phase {:?}, \
+                             record {:?}, run {run:?}",
+                            w.daa,
+                            case.binding.is_some(),
+                            case.frontiers.len(),
+                            phase_of(&w.s, &claim),
+                            view.and_then(|v| v.record)
+                        );
+                    }
+                    w.quiet();
+                }
+            }
+            PalwFraudFilerStepV1::LegacyTerminal { leaf } => {
+                assert!(restart_after.is_none() || restarted, "the restart happened mid-round");
+                return Ok(leaf);
+            }
+            other => panic!("the parallel production controller stopped at {other:?}"),
+        }
+    }
+    panic!("the parallel controller did not reach its terminal");
+}
+
+/// The fixture's licensed claim on the testnet-12 lattice (`W_disclose` 1,200, retention 5,400 after acceptance at 101): the claim's
+/// hard deadline is 4,301.
+fn t12_lattice_claim(f: &Fixture, liar: &Produced) -> (World, Hash64) {
+    T12_WINDOWS.with(|on| on.set(true));
+    CLAIM_RETENTION.with(|r| r.set(101 + 5_400));
+    let (s, claim) = rc_licensed(liar, &f.canonical, &f.profile, f.root);
+    assert_eq!(s.claim(&claim).unwrap().trace_retention_daa, 5_501);
+    assert_eq!(kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&rc_params()), 1_200, "SA-3's window, unshortened");
+    (World { s, daa: 104, chain: Vec::new() }, claim)
+}
+
+fn t12_lattice_off() {
+    T12_WINDOWS.with(|on| on.set(false));
+    CLAIM_RETENTION.with(|r| r.set(999_999));
+}
+
+/// **G14-L: an 8k-shaped legacy pursuit — the binding read, then k-ary rounds of parallel lanes — convicts inside the testnet-12
+/// window, and a withheld lane defaults inside it.** The held 8k fixture on the lattice's `W_disclose` of 1,200 (SA-3 kept) and its
+/// hard deadline (acceptance + 4,200), a producer stalling EVERY session to its last DAA. The one-unit descent cannot finish there
+/// (G14-B: four sessions fit); the parallel one runs exactly the derived schedule (`parallel_session_schedule_v1` over the lanes the
+/// rounds held), every session opened before the hard deadline, the recompute filed before retention ends. On a second claim a lane
+/// of the deepest round is withheld: `ProducerWithholding` at that session's deadline, the producer sanctioned, the outsider whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn g14l_an_8k_shaped_pursuit_convicts_and_defaults_through_parallel_lanes_inside_the_t12_window() {
+    use kaspa_consensus_core::palw_legacy_parallel_v1::{
+        PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1, PALW_LEGACY_LANES_PER_SESSION_V1, palw_legacy_input_lanes_v1,
+        palw_legacy_parallel_clock_v1, palw_legacy_parallel_feasible_v1,
+    };
+    let f = Fixture::new(false);
+    let layer = 1.min(f.profile.layer_count - 1);
+    let pick = |ctx: &PalwJobContextV2| matmul_leaf_at(&f.profile, ctx, layer, LIE_POSITION);
+    let liar = produce_at(&f.artifact, &f.profile, Some(&pick));
+    for withhold_deep in [false, true] {
+        let (mut w, claim) = t12_lattice_claim(&f, &liar);
+        let before = bonds_collateral(&w.s);
+        let o = Outsider::start(&f, &liar);
+        let mut case = service_filer_case(&f, &liar, &o, claim);
+        let mut run = LanesRun::default();
+        let n = liar.committed_leaves.len() as u64;
+        let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(n);
+        // Withhold a lane whose frontier is the leaves (the deepest round's).
+        let deep = |unit: &PalwDaUnitV1| {
+            withhold_deep
+                && matches!(unit, PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::StepNode { level, .. }) if *level <= 9 && *level < height)
+        };
+        let outcome = lanes_filer_drive(&mut w, &f, &liar, &o, &mut case, &mut run, &deep, None);
+        let binding = case.binding.clone().expect("the binding was read");
+        let input = palw_legacy_input_lanes_v1(&binding, liar.backend.prompt_ids_form());
+        eprintln!(
+            "G14L 8k-shaped (withhold {withhold_deep}): n {n} leaves, height {height}, input lanes {input}, lanes {:?}, opens {:?}, \
+             deadlines {:?}",
+            run.lanes, run.opens, run.deadlines
+        );
+        // The derived schedule over the lanes these rounds held (acceptance at 101; the binding read opens at 105: first step 4).
+        let lattice = kaspa_consensus_core::palw_legacy_public_filer_v1::palw_legacy_pursuit_clock_v1(600, 600, 1_200, 3_000, 4, 1, 1);
+        assert_eq!((lattice.open_span_daa, lattice.close_span_daa), (4_200, 5_400));
+        let clock = palw_legacy_parallel_clock_v1(lattice, 0);
+        let derived = kaspa_consensus_core::palw_legacy_parallel_v1::parallel_session_schedule_v1(&clock, &run.lanes, None);
+        let rel = |v: &[u64]| v.iter().map(|x| x - 101).collect::<Vec<_>>();
+        assert_eq!(rel(&run.opens), derived.opens, "the node ran the derived schedule exactly");
+        assert_eq!(rel(&run.deadlines), derived.deadlines);
+        if withhold_deep {
+            let unit = outcome.expect_err("one lane withheld");
+            assert!(deep(&unit));
+            let PalwClaimPhaseV2::Voided { reason, .. } = phase_of(&w.s, &claim) else { panic!("{:?}", phase_of(&w.s, &claim)) };
+            assert_eq!(reason, PalwVoidReasonV2::ProducerWithholding, "withholding defaults, never convicts");
+            assert!(*run.deadlines.last().unwrap() < 5_501, "the default lands inside retention");
+            assert!(bonds_collateral(&w.s).0 < before.0, "the producer is sanctioned");
+            assert_eq!(bonds_collateral(&w.s).1, before.1, "the outsider's lanes cost it nothing on a default");
+        } else {
+            let leaf = outcome.expect("all answered");
+            assert_eq!(leaf, liar.leaf, "the k-ary descent lands on the lie");
+            let object = service_filer_terminal(&f, &liar, &case, leaf);
+            assert!(matches!(&object, PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. }));
+            w.block(vec![object]).expect("the recompute convicts");
+            let filed = w.daa - 1;
+            assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+            assert!(bonds_collateral(&w.s).0 < before.0);
+            assert_eq!(bonds_collateral(&w.s).1, before.1, "every deposit refunded by the conviction");
+            assert!(derived.fits, "{derived:?}");
+            assert_eq!(filed - 101, derived.filed_daa, "filed the DAA after the last answer");
+            assert!(filed <= 5_501);
+        }
+        // Every session opened before the hard deadline (acceptance + 4,200); at most four; lanes within the budgets.
+        assert!(run.opens.iter().all(|o| *o <= 101 + 4_200), "{:?}", run.opens);
+        assert!(run.lanes.len() <= 4, "the 8k shape: binding + the k-ary rounds (+ the fused terminal)");
+        assert!(run.lanes.iter().all(|l| *l <= PALW_LEGACY_LANES_PER_SESSION_V1));
+        let extra: u32 = run.lanes.iter().map(|l| l - 1).sum();
+        assert!(extra <= u32::from(PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1));
+        assert!(run.lanes.iter().skip(1).any(|l| *l > 1), "a round ran parallel lanes");
+        // The fixture's worst case at the consensus terms fits the lattice.
+        let (plan, schedule) = palw_legacy_parallel_feasible_v1(n, input, &clock).expect("the fixture's legacy profile is feasible");
+        assert!(schedule.fits && plan.sessions.len() <= 4, "{plan:?}");
+        t12_lattice_off();
+    }
+}
+
+/// **G14-L: a coalition cannot exhaust parallel sessions** (C6/C8). Twelve funded coalition bonds each reserve and fill a session to
+/// its 64 lanes; a 65th lane is refused; one bond answering its way through sessions reaches its own 128 extra lanes and the next lane
+/// is refused — while a FRESH outsider still opens a full session of its own, on its own budget (no claim-wide or global lane cap
+/// exists to fill). Each lane carries its own price on its bond's free half. A lane past the join window is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn g14l_a_coalition_cannot_exhaust_parallel_sessions() {
+    use kaspa_consensus_core::palw_legacy_parallel_v1::{PALW_LEGACY_LANE_JOIN_WINDOW_DAA_V1, PALW_LEGACY_LANES_PER_SESSION_V1};
+    let f = Fixture::new(false);
+    let liar = produce_at(&f.artifact, &f.profile, Some(&|ctx: &PalwJobContextV2| matmul_leaf_at(&f.profile, ctx, 0, 3)));
+    // testnet-12's W_disclose (1,200): no session defaults while the coalition fills its lanes.
+    T12_WINDOWS.with(|on| on.set(true));
+    let (s, claim) = rc_licensed(&liar, &f.canonical, &f.profile, f.root);
+    let mut w = World { s, daa: 104, chain: Vec::new() };
+    let trees = ProducerTrees::of(&liar);
+    coalition_reservations(&mut w, claim, 12, false);
+    // The binding becomes public through the first coalition bond's reserved row-0 read.
+    let first = bond_key(10_000);
+    w.block(vec![PalwConsensusObjectV2::DefaultAccused { claim, missing_event_index: 0, accuser: first, signature: SIG.to_vec() }])
+        .expect("a reserved row-0 read");
+    w.block(vec![PalwConsensusObjectV2::MaterialDisclosedV2 {
+        claim,
+        unit: PalwDaUnitV1::Event { row: 0, tile: 0 },
+        answer: PalwDaAnswerV1::Event(liar.backend.disclose_trace_event(&liar.material, 0, 0).unwrap()),
+        discloser: bond_key(PRODUCER),
+        signature: SIG.to_vec(),
+    }])
+    .expect("row 0 answers");
+    let binding = public_binding(&w.chain, &claim).expect("public binding");
+    let demand = |bond: PalwBondKeyV2, unit: PalwLegacyHeldUnitV2| {
+        palw_legacy_held_demand_object_v2(&h64(999), claim, unit, bond, binding.clone(), |_, _| Some(SIG.to_vec())).expect("built")
+    };
+    let node = |j: u64| PalwLegacyHeldUnitV2::StepNode { level: 1, index: j };
+    let k = PALW_LEGACY_LANES_PER_SESSION_V1 as u64;
+    // Every coalition bond fills one session to 64 lanes (16 lanes a block).
+    for b in 0..12u64 {
+        let bond = bond_key(10_000 + b);
+        let units: Vec<_> = (0..k).map(node).collect();
+        for group in units.chunks(16) {
+            w.block(group.iter().map(|u| demand(bond, *u)).collect()).expect("lanes join the bond's reserved session");
+        }
+        let session = w.s.da_session(&claim, &bond).unwrap();
+        assert_eq!(session.units.len() as u64, k);
+        assert!(session.exposure > 0);
+        let refused = rc_step(&w.s, w.daa, &[demand(bond, node(k))]);
+        assert!(format!("{refused:?}").contains("64 lanes"), "a 65th lane: {refused:?}");
+        assert_eq!(w.s.legacy_dispute_reservation_v1(&claim, &bond).unwrap().lanes_joined as u64, k - 1);
+    }
+    // A fresh outsider (reserving after the coalition) opens its own full session.
+    let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap();
+    w.block(vec![kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_reserved_object_v1(
+        h64(999),
+        kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_reservation_v1(&view, bond_key(OUTSIDER)),
+        |_| SIG.to_vec(),
+    )])
+    .expect("the outsider reserves on its own budget");
+    let mine: Vec<_> = (k..2 * k).map(node).collect();
+    for group in mine.chunks(16) {
+        w.block(group.iter().map(|u| demand(bond_key(OUTSIDER), *u)).collect()).expect("the outsider's lanes are its own");
+    }
+    let session = w.s.da_session(&claim, &bond_key(OUTSIDER)).unwrap().clone();
+    assert_eq!(session.units.len() as u64, k, "the coalition's full sessions took nothing from the outsider");
+    // Lane exposure: one DA-6 price a lane, on the outsider's free half.
+    let one = w.s.da_session(&claim, &bond_key(10_001)).unwrap().exposure / k as u128;
+    assert_eq!(session.exposure, one * k as u128, "each lane carries its own deposit");
+    // The join window: a lane past it is refused.
+    let late =
+        rc_step(&w.s, session.opened_daa + PALW_LEGACY_LANE_JOIN_WINDOW_DAA_V1 + 1, &[demand(bond_key(10_002), node(2 * k))]);
+    assert!(format!("{late:?}").contains("join window"), "{late:?}");
+    // One coalition bond answers its way through sessions until its own lane budget ends: 63 + 63 + 2 = 128 extra lanes.
+    let bond = bond_key(10_001);
+    let mut next = 2 * k;
+    for round in 0..2 {
+        let open: Vec<_> = w.s.da_session(&claim, &bond).map(|s| s.units.clone()).unwrap_or_default();
+        let answers: Vec<_> = open
+            .iter()
+            .filter_map(|u| match u {
+                PalwDaUnitV1::LegacyHeldV2(held) if !w.s.da_claim(&claim).is_some_and(|r| r.answered.contains(u)) => {
+                    Some(trees.answer(&liar, &binding, claim, *held))
+                }
+                _ => None,
+            })
+            .collect();
+        for group in answers.chunks(16) {
+            w.block(group.to_vec()).expect("the producer answers");
+        }
+        assert!(w.s.da_session(&claim, &bond).is_none(), "round {round}: answered, refuted, closed");
+        let take = if round == 0 { k } else { 3 };
+        let units: Vec<_> = (0..take).map(|j| node(next + j)).collect();
+        next += take;
+        for group in units.chunks(16) {
+            w.block(group.iter().map(|u| demand(bond, *u)).collect()).expect("within the bond's own budget");
+        }
+    }
+    let row = *w.s.legacy_dispute_reservation_v1(&claim, &bond).unwrap();
+    assert_eq!((row.lanes_joined, row.sessions_opened), (128, 3), "three lanes sessions: 63 + 63 + 2 extra lanes");
+    let exhausted = rc_step(&w.s, w.daa, &[demand(bond, node(next))]);
+    assert!(format!("{exhausted:?}").contains("128 extra lanes"), "{exhausted:?}");
+    T12_WINDOWS.with(|on| on.set(false));
+}
+
+/// **G14-L: a verifier restarted MID-ROUND resumes from the chain alone** — after part of a round's lanes landed, the case is
+/// rebuilt from scratch (G14-R's rebuild-from-chain property: nothing carried across the restart); the round re-derives at the same
+/// focus with the same width, only the lanes not yet in its session are demanded, no unit is demanded twice, the reservation opens no
+/// extra session, and the pursuit convicts.
+#[tokio::test(flavor = "multi_thread")]
+async fn g14l_a_restart_mid_round_resumes_without_duplicate_lanes() {
+    let f = Fixture::new(false);
+    let pick = |ctx: &PalwJobContextV2| matmul_leaf_at(&f.profile, ctx, 0, LIE_POSITION);
+    let liar = produce_at(&f.artifact, &f.profile, Some(&pick));
+    let (s, claim) = rc_licensed(&liar, &f.canonical, &f.profile, f.root);
+    let mut w = World { s, daa: 104, chain: Vec::new() };
+    let o = Outsider::start(&f, &liar);
+    let mut case = service_filer_case(&f, &liar, &o, claim);
+    let mut run = LanesRun::default();
+    // Restart after the binding read and three lanes of the first k-ary round.
+    let leaf = lanes_filer_drive(&mut w, &f, &liar, &o, &mut case, &mut run, &|_| false, Some(4)).expect("all answered");
+    assert_eq!(leaf, liar.leaf);
+    let unique: std::collections::BTreeSet<_> = run.demanded.iter().collect();
+    assert_eq!(unique.len(), run.demanded.len(), "no unit demanded twice across the restart");
+    let sessions = w.s.legacy_dispute_reservation_v1(&claim, &bond_key(OUTSIDER)).unwrap().sessions_opened;
+    assert_eq!(sessions as usize, run.lanes.len(), "one session a round, none extra for the restart");
+    w.block(vec![service_filer_terminal(&f, &liar, &case, leaf)]).expect("the recompute convicts after the restart");
+    assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
 }

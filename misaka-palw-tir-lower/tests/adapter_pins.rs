@@ -46,6 +46,14 @@ const INTENDED: &[(&str, &str)] = &[
     ("vlm-qwen2-vl", "42faa5b55: flat Qwen2/2.5-VL configurations dispatch to their decoder (`decoder_optional`)"),
     ("vlm-qwen3-5", "42faa5b55 / cc72d2424: as mixin-vlm; the Qwen3.5 vision tower"),
     ("vlm-qwen3-5-moe", "42faa5b55 / cc72d2424: as mixin-vlm; the Qwen3.5 vision tower"),
+    ("roberta-seqcls", "HFX 2026-10-10: CamembertForSequenceClassification joins the match list (CamemBERT is RoBERTa's classification head under the `roberta.` prefix)"),
+    ("roberta-tokcls", "HFX 2026-10-10: CamembertForTokenClassification joins the match list"),
+    ("roberta-qa", "HFX 2026-10-10: CamembertForQuestionAnswering joins the match list"),
+    // HFX 2026-10-10: `…ForImageClassification` reads its classifier as a `CnnHead` (it was ignored as `classifier.`); `…Model` is unchanged.
+    ("resnet", "HFX 2026-10-10: ResNetForImageClassification reads `classifier.1` as the class's head (CnnHead), no longer ignored"),
+    ("convnext", "HFX 2026-10-10: ConvNextForImageClassification reads `classifier` as the class's head (CnnHead), no longer ignored"),
+    ("mobilenet-v1", "HFX 2026-10-10: MobileNetV1ForImageClassification reads `classifier` as the class's head (CnnHead), no longer ignored"),
+    ("mobilenet-v2", "HFX 2026-10-10: MobileNetV2ForImageClassification reads `classifier` as the class's head (CnnHead), no longer ignored"),
 ];
 
 fn golden_path() -> PathBuf {

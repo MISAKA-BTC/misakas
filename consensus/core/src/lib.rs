@@ -277,6 +277,8 @@ pub mod palw_exec_v2;
 pub mod palw_exec_v2_anchor;
 /// RFC-0008 v2 amendment 1: the slice verification route — a slice is verified, convicted or defaulted through the G14 kernel route.
 pub mod palw_exec_v2_verify;
+/// RFC-0008 WORK: IR-derived continuation costs, bound by dormant EXEC root and slice admission.
+pub mod palw_exec_work_plan_v1;
 /// RFC-0008 v2: the work-slice ledgers (`WorkSliceUse`, `RootWorkBudget`, `JobWorkUse`), the canonical plan, the admission refusals and the root's one settlement; dormant behind `palw_exec_payload_v2`.
 pub mod palw_work_slice_v2;
 /// Spend-once execution-round quanta: 1 verified CanonicalWork → N unique permit tickets.
@@ -287,6 +289,9 @@ pub mod palw_facts;
 pub mod palw_false_valid_filing_v1;
 pub mod palw_fork_authority_v2;
 pub mod palw_fork_choice;
+/// RFC-0009 L2: the fork-choice leaf a header commits past `palw_fork_choice_commitment_v1` (dormant, refused when armed) — the
+/// comparator's inputs as an O(1) opening of the committed root.
+pub mod palw_fork_choice_commitment_v1;
 pub mod palw_fp_admission_v3;
 pub mod palw_fp_beacon_v3;
 pub mod palw_fp_devnet_v3;
@@ -494,17 +499,24 @@ pub mod palw_gen_worker_v1;
 /// RFC-0003 §II.2.1 (RFC-0001's lane): FP Job V5 — a V4 job with image inputs, for a vision-language class; dormant behind `palw_fp_job_v5`.
 pub mod palw_fp_job_v5;
 pub mod palw_gen_range_twin_v1;
+pub mod palw_task_heads_v1;
 /// RFC-0011 §15.7: the kernel route's fence `palw_probabilistic_constraints_v1` — dormant, no height, refused when armed.
 pub mod palw_probabilistic_constraints_v1;
+/// ADR-0178: rule E — the fork choice weighs exclusive pasts, bonded participation first (`palw_fork_choice_rule_e_v1`, dormant).
+pub mod palw_fork_choice_rule_e_v1;
+/// ADR-0178 × RFC-0009 L2: the rule-E fields of the fork-choice leaf v2 — the window and registry trees, openings, the client's pair.
+pub mod palw_fork_choice_rule_e_leaf_v2;
 /// RFC-0004 Part II: the typed-roots fence `palw_typed_roots_v1` — dormant, no height, refused when armed.
 pub mod palw_typed_roots_v1;
 /// ECON's M*-49 verifier pay and the held default share: the fence `palw_verifier_pay_v1` — dormant, no height, refused when armed.
 pub mod palw_verifier_pay_v1;
+pub mod palw_beacon_source_opt_in_v1;
 /// G14 lane D: the kernel route's consensus state, messages and interim policy (fence `palw_probabilistic_constraints_v1`).
 pub mod palw_kernel_route_v1;
 /// G14 lane D phase 3: the onboarding objects (artifact binding and its refutation, the kernel binding, the conformance commitment,
 /// the signed registration envelope) and the activation gate they feed — rows in the kernel route's aux tables.
 pub mod palw_onboarding_v1;
+mod palw_onboarding_tile_v3;
 /// G14 onboarding P0: conformance evidence on chain (tag 109) — the evidence core shared with the runtime pack, the network's
 /// interim challenge policy, the fold's judgement of posted evidence and of a refutation, and the fresh verifier.
 pub mod palw_conformance_evidence_v1;
@@ -568,6 +580,12 @@ pub mod palw_reporter_share_v2;
 /// to the claim's own hard deadline, the reserved DA budget, direct proofs over open sessions, and the common filer's pure half — fence
 /// `palw_legacy_public_filer_v1` (dormant, refused when armed).
 pub mod palw_legacy_public_filer_v1;
+/// Lane G14-V: authenticated subtree descent over committed step-discipline trees (step, tiled logits rows and tiles, checkpoint
+/// leg) — node policy, consensus-inert; replaces the linear legacy scan and walks past an agreeing step tree.
+pub mod palw_auth_descent_v1;
+/// Lane G14-L (user decision 2026-10-11): parallel reserved sessions (lanes) and the k-ary authenticated descent on the legacy held
+/// route — behind both dormant legacy fences (`palw_legacy_public_filer_v1` × `palw_legacy_held_da_v2`); no new wire type.
+pub mod palw_legacy_parallel_v1;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
 /// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).
@@ -613,6 +631,14 @@ pub mod palw_class_seating_fence_v1;
 pub mod palw_tir_only_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
+pub mod palw_model_artifact_v2;
+pub mod palw_model_conformance_v2;
+pub mod palw_model_vector_v2;
+pub mod palw_flat_model_vector_v3;
+pub mod palw_flat_model_vector_da_v3;
+/// RFC-0002 P0 (RFC02-T): the protected candidate refutation — fence `palw_model_refutation_seal_v1`, dormant, refused when armed.
+pub mod palw_model_refutation_seal_v4;
+pub mod palw_model_vector_da_v2;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.
 pub mod palw_tir_admission_v1;
 /// RFC-0002 Phase F step F6: an IR class's attempt job — the canonical job, the yardstick context and the job an anchor names (J5).
@@ -829,6 +855,7 @@ pub mod palw_json_key_set_v1;
 pub mod palw_prefix_state_stream_v1;
 
 pub mod palw_staged_court_state_v1;
+pub mod palw_reward_vesting_read_v2;
 
 pub mod palw_tokenizer_table_stream_v1;
 

@@ -1,0 +1,11 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 4 tests
+test route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling ... ok
+test route::tests::malformed_and_oversized_encodings_are_refused_with_their_kind ... ok
+test route::tests::the_salted_reveal_is_kind_20_carries_its_commits_own_tag_and_opens_only_its_v2_seal ... ok
+test route::tests::the_wire_form_is_version_discriminant_then_the_fields ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 94 filtered out; finished in 0.00s

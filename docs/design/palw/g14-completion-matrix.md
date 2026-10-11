@@ -153,7 +153,7 @@ The **overall G14 result remains FAIL / incomplete**; no activation or new famil
 | Scope | New evidence / correction | Still open |
 | --- | --- | --- |
 | F1–F4 generation binding | `74d59907f`: generative jobs require the exact positive `max_new_tokens` count. Short correct execution is rejected by the real block fold; the complete execution reaches Final. Kernel regression covers single, pipeline and segmented routes. | A future EOS/stop rule needs its own committed semantics; this is a dormant consensus meaning change. |
-| F3–F4 public replay and resources | `f89431d82`: authenticated public positions, independent registered-model replay, canonical tensor bytes, simultaneous RAM/state accounting, bounded whole-value courts for withheld small values. Kernel and real-node regressions pass. | 64-element hiding tiles, cumulative scope, large-profile admission, measured peak/time and maximum-response deadlines. The scope report is not a reward gate. |
+| F3–F4 public replay and resources | `f89431d82`: authenticated public positions, independent registered-model replay, canonical tensor bytes, simultaneous RAM/state accounting, bounded whole-value courts for withheld small values. Kernel and real-node regressions pass. | 64-element hiding tiles, cumulative scope, large-profile admission, measured peak/time and maximum-response deadlines. The scope report is not a reward gate. RFC02 §14.21 stages flat-v4 material/root descent; §14.22 adds a separate kernel dependency-leaf relation court. §14.23 stages a separate all-dtype flat-v5 profile with leaf/whole/malformed/decode kernel courts. §14.24 adds canonical all-position terminal-court resource preflight, checked against individual prices. Typed node admission, complete execution/checker/DA budgets, hash-unit DA, aggregate resources and actual node/Final integration are not selected or complete. |
 | F9–F16 common legacy machinery, tested on small fixtures | `a4a62ec21`: isolated faults cannot be skipped by a matching midpoint; public answers authenticate before caching/learning. The earlier real-node final batch has 7 PASS and a corrected reorg rerun has 1 PASS; core 10, fold 7, filer 5, A2U 3 PASS. The DA worker builds signed tag-158 step/checkpoint/CKW from verified base0-codec material. The outsider common filer now uses independent base0-codec replay, authenticated public tag-158 history, subtree step descent, tag-159 model-copy/matmul recomputes and CKW fused opening. Actual controller tests: LG14-B 7 V-fold PASS (pre/post-Final recompute, fused conviction, withheld frontier/CKW default); filer 8 and reader API adapter 5 V-unit PASS. | This is not a per-family F9–F16 result. Public binding job/count/output proofs and large canonical attempt-input proofs are wired. Authenticated PublicDA/canonical FP input now starts independent replay; a real FP fold reaches a gather conviction before/after Final and a post-Final DA default (V-fold, test admission/signature callback). Checkpoint/trace localization, maximum-context PanelDA input budgeting, extended FP job/state semantics and prefix-state bootstrap, fresh-node full-service reads and inclusion, permanently pruned answers remain. Held-court history pagination and selected authenticated chunk caching are wired and fixture-tested; full-service restart/reorg/inclusion is still required. Step agreement never clears an execution mismatch. The unsupported-codec linear fallback refuses more than 34 sessions. No maximum-profile RAM/time or deadline completion is established. |
 | C2 / C7 for legacy | A node started after the claim replays the chain and serves matching op-204/206 documents via the RPC builders and JSON roundtrip after conviction. The paginated history reader is fixture-tested. The fresh public service DA case above adds actual service reads, ordinary mature outsider registration, PQ mempool/template/block inclusion, objective default and normal exit for one floor canonical binding-withholding claim. The public identity service case adds actual producer debit, all five Valid signer convictions and own commit/reveals from an authenticated foreign-job Event. | Full-family disclosed-fault prosecution, a socket RPC drill, network IBD/pruned import and full-service restart/reorg. Numbered reacquisition covers supported Event/Held/LG14-B units, but permanently pruned FP job commitments and TIR/pipeline bootstrap still need retrieval; reader retries alone are not retrieval. |
 | C6 / C8 under a coalition | Reserved sessions and direct-proof priority exist. Shared 64-live / 256-lifetime reservation caps were removed; a new bond uses its own retained-record budget and collateral. V-fold crosses both old thresholds and pursues public PanelDA input to conviction/default. | This is not full-family admission or a global throughput result. State/response load scales with owners; all-response/chunk inclusion, largest-population CPU/RAM and adaptive deadline bounds remain. |
@@ -165,6 +165,595 @@ The **overall G14 result remains FAIL / incomplete**; no activation or new famil
 
 ADR-0177 D7's registered-model possession premise is confirmed by the user. GAP-80 has also been decided: legacy is in scope;
 the old "awaiting user decision" descriptions below are historical. Required family coverage is not waived.
+
+## 2c. G14-B: maximum-profile budgets and deadlines (2026-10-11, lane G14-B, branch `g14/b-budgets-deadlines`)
+
+The gate (`gate.rs`) bounds what one prosecution reads, opens and holds. G14-B asks the other half of the bar: **can the pursuit
+FINISH** — every search round, every chunk of every demanded response, the filing — before the claim's liability horizon, against a
+producer that answers every demand on the last DAA it may? The derivations are code (`misaka-palw-kernel/src/budget.rs`); nothing
+below is measured. Verifier compute enters only through the OPV policy's declared budgets (cold 10, check 10, localize 2, court 3,
+carrier 2, reorg 2 DAA — claims an external gate must measure).
+
+**Carriage (derived, pinned against consensus).** A route chunk is ≤ 100,000 B, ≤ 16 an object, around a 16 KiB wrapper. The tag-113
+lane (`KernelRouteChunkV1`) was already end-to-end on the integration line (carrier, per-bond groups with deposits, TTL ≤ 64 DAA,
+reassembly and application in the fold). A testnet-12 block carries `max_block_mass / TRANSIENT_BYTE_TO_MASS_FACTOR` = 125,000
+transaction bytes: **one full chunk a DAA, network-wide**. A maximal `Respond` (one 1 MiB part) is **11 chunks**; the consensus
+chunker's real count equals the kernel's count.
+
+**What changed** (implemented, verified by the tests below; dormant — the whole kernel route sits behind the never-armed
+`palw_probabilistic_constraints_v1`; nothing is armable):
+
+| Rule | Before | Now |
+|---|---|---|
+| Segmented position demand deadline | `filed + court_deadline` (20) for any position size | `filed + court_deadline + (chunks − 1)`. `chunks` = Σ over the position's parts of the route chunks of each part's `Respond`, from the class's deterministic layout (`seg_da::position_part_bytes_v1`), never from what the producer sends: a maximal answer buys no time |
+| Post-Final demand admission | `daa + court + grace ≤ liability_until` | `daa + window + grace ≤ liability_until` (the counted window) |
+| A class's liability horizon | `policy.liability_daa` (200) for every claim | segmented (v4/v5) classes: `max(200, the worst-case pursuit's need)` (`ClassRowV1::liability_daa`, derived at registration and at every row rebuild, never stored); every other class unchanged |
+| Registration of a segmented class | gate bounds + carrier fit | also `budget::class_pursuit_v1`: refused **by name** (`PURSUIT_SCHEDULE: …`) when the claim's worst-case lifetime (commitment → end of liability) exceeds 436 = `PALW_BOND_BUDGET_W_MAX_DAA_V1`. ECON derives `W ≥ L` (L the longest claim lifetime), so no admissible `W` can carry more. An admitted class needs the chosen `W` ≥ its lifetime. `W` is not decided here: `class_pursuit_with_ceiling_v1` takes any ceiling, and the tests sweep 280/300/358/400/436 |
+| Inline (v1–v3, typed) demand deadline | 20 | **unchanged** (open item 3) |
+
+No wire type, tag, table, RPC or registry number is added. No int-12 object changes (A-2: nothing to classify; the A2U suites
+stay green). Ledger values change only on the dormant route: `deadline_daa` of chunked segmented demands and `liability_until` of
+deep segmented classes.
+
+**The worst-case schedule** (`budget::seg_pursuit_schedule_v1`):
+- **Rounds.** G14-V's search, consumed as a parameter: `⌈log2 min(P, 1024)⌉` probes (each a full position demand) plus the
+  court's round (q − 1 and q together). That is **11** at P ≥ 1,024.
+- **Producer.** It stalls every answer to the deadline.
+- **Lifecycle.** The claim reaches Final as early as the lifecycle allows:
+  - pre-Final demands hold Final until served + grace;
+  - between a served demand and Final no demand opens (the dead zone);
+  - Final happens in its block's tick, so the first post-Final demand is in the next block.
+- **Result** (interim clock, one-chunk positions): Final +78, last demand +271, filing +300. The need is **223 DAA of liability**,
+  for a lifetime of 301. The policy's own 200 cannot carry the implemented search (10 rounds would fit 200). ECON's `L = 280` (the
+  interim kernel lifetime, 50 + 20 + 10 + 200) cannot either.
+
+**Per-profile table.** Each route at the largest context it admits. Source: `g14b_every_shipped_profile_…`, which asserts the
+gate's verdict equals the schedule's at every ceiling.
+
+| Profile | Position material (last position) | Response window | Liability need / lifetime (DAA) | Verdict (registration ceiling 436; needs `W ≥` lifetime) |
+|---|---|---|---|---|
+| wide128 sketch @8,192 (v4; the node fixture) | 1 part, 1 chunk | 20 | 223 / 301 | **fits**; needs W ≥ 301 |
+| dense-MoE windowed (window 16…1,024) @8,192 (v4; K2S GAP-31's node fixture at 1,024) | 1 part, 5 chunks; filing 4 chunks (9 at window 512) | 24 | 289 / 347 (294 / 352) | **fits**; needs W ≥ 347 (352) |
+| fat fixture @64 (v4, 1.28 MB position) | 2 parts, 11 + 3 chunks (position 1) | 33 | 229 / 296 (simulated, 7 rounds) | fits |
+| Largest position that fits, 11 rounds, lifetime ceiling 358 / 400 / 436 | ≤ 6 / 10 / 13 chunks | 25 / 29 / 32 | — | boundary (one more chunk refuses); at 280 / 300 nothing with 11 rounds fits |
+| mamba-370m @32,783 (v4) | 386 parts / 3,379 chunks | 3,398 | 34,034 | **refused by name** |
+| qwen3.5-0.8b @32,783 (v4) | 1,768 parts / 19,441 chunks | 19,460 | 194,656 | **refused by name** |
+| Huihui-Qwen3.5-9B @8,192 (v4) | 2,029 parts / 22,244 chunks; filing 1,030,590 B = 11 chunks | 22,263 | 222,686 | **refused by name**: its own window outlasts every value in the range |
+| granite-3.1-1b, smollm2-1.7b @32,783 | — | — | — | refused by the v4 gate (verifier RAM) |
+| 9B @262,144 / @2,097,152 | — | — | — | refused (retained state / `check_plan` positions) |
+| v5 encoder (1 position) | any | any | 0: the one demand is pre-Final and holds Final | fits; Final can be held for a whole window (open item 4) |
+| Legacy held 8k (LG14-A/B) | 4 input units + 5 descent rounds (2^40 leaves) + 2 = 11 sessions | 1,200 a session (`W_disclose = window_challenge()`) | sessions open until 4,200 after acceptance | **FAIL: at most 4 sessions fit** (sequential, one unit a session) — superseded 2026-10-11 by §2h: **fits** with parallel lanes, 4 sessions `[1, 36, 16, 1]` at the canonical 2^27-leaf row |
+| Legacy held 2M | 1,024 input units + 7 = 1,031 sessions | — | — | **FAIL: past the 34-session budget itself** — §2h: still **refused by name** (`PARALLEL_SESSIONS`: 1,024 input chunks exceed one session's 64 lanes) |
+| Legacy at the applied short window (120) | — | 120 | — | 35 sessions would fit (the 34 budget and the 8k profile) |
+
+**Tests and results** (run on this branch):
+
+- **Kernel crate, every test:** **PASS — 285 passed, 0 failed** (7 ignored, pre-existing). It includes:
+  - `budget::tests` (9): chunk and carrier boundaries exactly at 16 chunks and one byte over; round counts; the 223-DAA boundary
+    (`fits(223)` holds, `fits(222)` does not); the ceiling sweep, where at each of 280/300/358/400/436 the largest chunk count
+    fits and one more is refused; filing chunks; one-round fit and the inline squeeze; the legacy session boundary; population.
+  - `k2_real_scale::g14b_*` (3, V-ref):
+    - the profile table;
+    - the worst-case pursuit driven through `apply_block`: 11 demands, each answered on its last DAA; Final +78; the last demand at
+      +271, on the boundary of the class horizon; conviction at +300 ≤ +301 — exactly the derived times;
+    - the maximal response (11 + 3 chunks) lands on its counted deadline and is served, and the same position withheld defaults at
+      the counted deadline, not later.
+- **consensus-core:** **PASS — 51 passed, 0 failed** (filters `g14b_`, `palw_kernel_route_v1`, `palw_legacy_public_filer_v1`, `palw_lifecycle_objects_v2`: the A2U pins and `every_int12_wire_type_is_unchanged_or_classified` included). It includes `g14b_a_maximal_respond_rides_the_chunk_lane_in_the_chunks_the_kernel_counts`: the mirrors are pinned; testnet-12 carries one full chunk a block; a 1 MiB-part `Respond` is cut into 11 tag-113 chunks, reassembled by `chunk_completion_v1` one chunk a block inside the TTL, and lands on its counted deadline's last DAA, which the old fixed window would have missed. It also includes the legacy FAIL derivation `g14b_a_stalling_producer_…`.
+- **Node (V-node):** **PASS — 19 passed, 0 failed** (filters `g14_k2s`, `g14b_`, `t12_a2u`; 904 s). It includes `real_scale::g14b_the_worst_case_pursuit_completes_on_the_node_inside_the_class_horizon`: two outside bonds run 11 demand rounds through mempool → template → fold while the colluding producer answers on each deadline's last DAA. Final +78, last demand +271, filing +300, horizon +301, class liability 223 — the derived DAAs exactly. All 17 existing `g14_k2s_*` node tests still pass under the new rules, including K2S GAP-31's dense-MoE class held at 8,192 (lifetime 347 ≤ 436), and so do the three `t12_a2u_*` suites.
+
+**Largest population (what is provable).** The chain carries one chunk a DAA, whoever's (`concurrent_pursuits_bound_v1`). The
+counted windows assume the demanded material gets that capacity. N simultaneous demands of `c`-chunk positions need `N·c` DAA of
+carriage.
+- **Provable:** a pursuit of `k` chunks in total fits `⌊H / k⌋` concurrent copies in a span `H`. At the 436 lifetime ceiling a maximal
+  pursuit is 12 × 13 + 1 = 157 chunks, so 2 copies fit. One-carrier pursuits (wide128: about 24 small objects) are bounded by block
+  bytes, not chunks.
+- **Not provable here (UNKNOWN):** inclusion order under a coalition that fills blocks with paid traffic. There is no reserved byte
+  lane for prosecution objects; the prosecution reserve counts court runs, not bytes. Closing this needs a reserved route byte share
+  or a fee-priority argument.
+
+**Open items:**
+1. **Every real-shape v4 profile is refused.** At one chunk a DAA, no `W` in the range carries a position of more than 13 chunks
+   (about 1.3 MB) through 11 rounds. Real-scale v4 needs a different carriage. Candidates:
+   - off-chain DA with a provider court (DA16);
+   - probe demands that serve only part 0;
+   - the four open sessions used as a 5-ary search: 5 rounds instead of 11 (G14-V's call).
+2. **Legacy: FAIL, not wired.** Reserved DA sessions each last `W_disclose` = 1,200 DAA (the unshortened `window_challenge()`), one at
+   a time, until the hard deadline at 4,200. A stalling producer therefore caps a reserved pursuit at 4 sessions, below the 8k
+   profile's 11 and the 34-session budget.
+   - Options:
+     - reserved sessions on the applied window (120 DAA: 35 sessions fit; but SA-3 asks `W_disclose ≥ 2 ×` finality);
+     - concurrent reserved sessions;
+     - retention extended for an open pursuit.
+   - This is a consensus decision on a dormant fence of the live route; it is not taken here.
+   - Derivation and test: `palw_legacy_public_filer_v1::g14b_a_stalling_producer_holds_the_reserved_pursuit_to_four_sessions_on_the_t12_lattice`.
+3. **Inline deadlines are not chunk-counted.** Under the 20-DAA base deadline, a maximal one-object inline response (16 chunks) leaves
+   the producer 5 DAA to react, less than the interim disclose budget (8). Counting the gate's worst-case response bound would move
+   about 20 existing kernel tests' deadlines by 1–2 DAA, because that bound is far above the fixtures' real responses. Left for a lane
+   that owns those tests.
+4. **Pre-Final holds.** A pre-Final demand holds Final until its counted window ends. Two upper-bound reads do not count the window
+   extension or the class liability:
+   - the OPV row's reported `hard_deadline_daa` (window + court + grace);
+   - the consensus `palw_kernel_claim_horizon_bound_v1` (chunk TTL, provider lease).
+
+   Final claims use the exact `liability_until`.
+5. **Verifier times are declared, not measured** (the OPV budgets). A slower real verifier shrinks every boundary above. For legacy,
+   the 34-session count is the cap, not a measured descent. Sessions to acquire the FP job or the prefix state are not counted.
+6. **Not changed here:**
+   - v4 `max_retained_state` / `max_verifier_ram` (left open by codex);
+   - the BUDGET engine's liability hold `H_L` (280). A class liable past it is held by the kernel ledger's own reservation, but
+     ECON's L/W relation must be revisited when `W` is chosen.
+
+   G14-S's hiding tiles will change position material. `position_part_bytes_v1` follows the layout, so the windows and needs follow
+   automatically.
+## 2d. G14-S — the court scope as a gate, and DA16b option (a) (2026-10-11)
+
+Branch `g14/s-scope-gates` (from `8173dae20`). **Overall G14 result unchanged: FAIL / incomplete.** Nothing is armed: every rule is
+inside dormant K2-TIR-v4/v5 bytes or behind `palw_provider_court_v1` (consumer-injected, not in any root below it); no live id moves.
+Status words: *implemented* / *verified* (a recorded run of this code) / *armable* (nothing).
+
+**What is enforced, and where.**
+
+| Gate | Rule | Code |
+| --- | --- | --- |
+| Reward (per claim), K2-TIR-v4/v5 | a class whose `seg_scope_report_v2(program, plan.max_positions).court_scope_complete()` is false takes no claim: `COURT_SCOPE_INCOMPLETE …` (registers, never reward-bearing); the report is cached in `ClassRowV1::court_scope` | `court_scope.rs:91` `class_court_scope_v1`, called `seg_ledger.rs:281` (`commit_segmented_claim`); report `seg_scope.rs:276`, gate `seg_scope.rs:248` |
+| Reward (per claim), K2-TIR-v1/v2 on the OPV route | past `palw_provider_court_v1` + `palw_panel_free_v1`: a class with any model relation (clear budget < ∞) takes no claim — its responses serve activations in the clear and the route has no commitment-only form | `court_scope.rs:91`, called `ledger.rs:1882` (`commit_claim`) |
+| DA (what may be demanded) | ≤ 16 distinct units per (claim, requester bond) — demands, joins and segmented filings (`COURT_SCOPE_UNITS`); OPV v1/v2: a new position past the model's clear budget (`court_position_disclosure_v1`, 0 with an elementwise relation) is refused (`COURT_SCOPE_CLEAR_BUDGET`) | `court_scope.rs:131`, called `ledger.rs:2449` (v1/v2) and `seg_ledger.rs:378` (v4/v5); table 28 |
+| DA (what may be served) | K2-TIR-v4/v5: no model-dependent value in the clear — withheld = node opening only, hiding = leaf hashes only (`ChunkBodyV1::Hidden = 3`); classify refuses any other form | `seg_da.rs:143` (layout), `seg_da.rs:361` (classify) |
+| Court (what may be opened / recomputed) | a whole-value court only for a withheld node, a hiding-leaf court only for a hiding node, a hiding decode only for hiding logits; each operand in its source's form (a hiding value never by v3 leaves) | `element.rs:807`, `:829`, `:857`, operands `element.rs:644` |
+| Filings and court runs | ≤ 4 dismissed filings per (claim, accuser): the 5th is refused free, before the court runs (`COURT_SCOPE_FILINGS`); a segmented filing's position counts in its filer's 16 units | `court_scope.rs:170`, called `ledger.rs:2166`; dismissal counted `ledger.rs:2190` |
+| Consumer | `CourtScopePolicyV1 { activation_daa }` injected at every load past `palw_provider_court_v1` | `consensus/core/src/palw_kernel_route_fold_v1.rs:229`; A2U `StateEncoding` row (table 28) |
+
+All bounds are per requester or per class, so no producer, seat or front-runner can spend an honest prosecutor's allowance (one
+prosecution needs ≤ 12 units and one convicting filing).
+
+**Option (a), implemented + verified at the ledger level (V-ref).** `hide.rs`: flat 64-element tiles of the row-major order, ragged
+tail merged (64–127 elements a tile; a value < 64 elements is one leaf), `C_hide` over its own domains. A model-dependent value is
+withheld (option (c)) or hiding — never clear (`clear_masked = 0` for every program). Hiding-leaf court recomputes ONE tile from
+operands the filer supplies from its own re-execution (they authenticate only if equal to the producer's) and the filer's copy of the
+params; price `element.rs:1899` (first/last tile, ≤ 127 `MatMul` columns: the ≈ 64× column cost), modes-aware plan price
+`element.rs:1807`. Option (c) finished: whole-value courts accept hiding operands by their tiles; withheld/hiding values are empty
+placeholders in assembled positions.
+
+**New bounds (G14-B owns the derivation):**
+- `SEG_HIDING_COURT_MAX_BYTES_V1 = 1,572,864 B` (one carrier less the 4,096-B segmented header and the envelope), work 2^36; a hiding
+  court above it is *unbounded* (not in the plan's worst court; the class is incomplete).
+- Leaf-hash DA: 64 B a hiding tile (`position_material_v1`).
+- `verifier_ram_bound_v4` (`gate.rs:507`): hiding values are kept with the withheld ones; public positions no longer hold kept values,
+  so the separate `withheld × local` term is dropped. 9B-8k: **59,958,548,592 B** (was 67,191,831,824 B).
+- 9B-8k worst court **1,008,494 B** (a hiding FFN-down `MatMul` tile); position material **551,788,288 B in 548 parts**.
+- Court scope: 16 units / 4 dismissals per requester per claim (INTERIM).
+
+**9B-8k scope (derivation over the shipped program, no 9B run):** 176 clear, 11,150 withheld, 1,997 hiding occurrences; **48
+unbounded** in four relations — linear-attention state `Mul [32,128,128]` 2.10 MB; softmax `ReduceMax` / `ReduceSum` over 8,192
+scores 2.52 MB each; attention `P·V` `MatMul [4,4,256]` 11.29 MB. **The 9B-8k class is `COURT_SCOPE_INCOMPLETE`: not reward-bearing**
+until those courts are filed in chunks (tag 113, G14-B) or lowered history-chunked.
+
+**Tests (run `g14s-r1`/`r2`, this code):**
+- kernel crate, all targets: **283 PASS, 0 FAIL, 7 ignored** (the 7 are pre-existing: F-C4R4-17 on the Panel-licensed world — reason
+  updated — and the six exhaustive PESG-B runs, not run: `pesg_b_v4_route_a_samples_and_route_b_reexecution` uses the mode-aware commitments and is UNKNOWN). New: `k2_real_scale::g14s_a_hiding_tile_lie_is_convicted_pre_and_post_final_and_no_honest_tile_is`,
+  `g14s_a_decode_lie_on_hiding_logits_is_convicted_from_two_tiles`, `g14s_wide128_d16_owes_no_short_leaf_and_a_lie_is_convicted_whole`,
+  `g14s_dense_moe_rows_of_4_windows_hide_flat_and_an_unbounded_scope_takes_no_claim` (window 4: all withheld; 2^18 @16: 26 hiding,
+  complete, a hiding-window lie convicted; @16,384: incomplete → claim refused `COURT_SCOPE_INCOMPLETE`),
+  `g14s_9b_8k_hiding_sizing_is_derived_from_the_shapes`; `g14s_court_scope::g14s_f_c4r4_17_on_the_opv_route_the_clear_budget_refuses_and_the_class_takes_no_new_claim`,
+  `g14s_a_filer_past_its_cumulative_scope_is_refused_and_an_honest_prosecutor_still_convicts`; `hide::tests` (2), `element::tests`
+  (every hiding value's tiles dismissed honest, a lie in every value convicted by its mode's court).
+- consensus-core (`palw_lifecycle_objects_v2`, `palw_court_scope`, `palw_kernel_route`, A2U table): **44 PASS**.
+- node (`g14_kernel_route_e2e::real_scale`, `::da16`, `t12_a2u`): **27 PASS** after one fix (run `g14s-r1`: 26 PASS, 1 FAIL — the GAP-31 held test's streaming producer committed every value v3; with mode-aware commitments it PASSES in `g14s-r2`: the continuity lie in the 1,024-row k window at position 4,096 is localized and convicted on the real node, the verifier reading 48 B of clear values back from the blocks). The window at 1,024 rows is a hiding value by the scope derivation (its whole-value court exceeds 1 MiB); the test asserts the localization, not the court kind.
+- SDK `k2s_encoder_court::k2s_v5_encoders_and_heads…` (hiding values judged by tiles): **1 PASS**.
+
+**Open (honest):**
+1. **Panel-licensed K2-TIR-v1/v2 classes** still serve model-dependent values in the clear; F-C4R4-17 stays an ignored FAIL on that
+   world. Enforcing the clear budget at `palw_provider_court_v1` alone would refuse every DA16 Panel-licensed claim — **a Lead/user
+   decision** (Level 2 for v1/v2 needs a commitment-only response form and courts on that route).
+2. **9B-8k is incomplete** (four relation types above one carrier) — chunked filing or history-chunked lowering.
+3. Hiding at node level: one V-node case (the GAP-31 held class above: a hiding k window convicted through the real chain path); every other hiding case is V-ref. Fresh-node / pruned-import / reorg runs with hiding values beyond that are not separately run.
+4. The consensus reward gate (`palw_reward_gate_v1`, OPV eligibility — codex's) does not read the scope; the kernel's per-claim
+   refusal drops such a claim at the fold, so no reward is reachable, but eligibility still reports the class.
+5. Pipelines (K2-TIR-v3) and typed roots are not judged by `class_court_scope_v1` (consensus classifies their units, DA16b §7.3).
+6. Values under 64 elements (5,744 occurrences in 9B, 378 in dense-MoE): their commitment is one leaf — a residual brute-force
+   exposure of tiny low-entropy values, as before.
+7. Hiding pricing runs at registration and class-row rebuild (the 9B gate + report ≈ tens of seconds in debug); not measured in release.
+8. A refused filing is dropped by the fold, but its carrier bytes may still be mined; a filer only ever discloses its own copy.
+## 2e. Lane G14-V — every covered violation through the real service (2026-10-11, branch `g14/v-all-violations`)
+
+Base: integration `8173dae20` (codex LG14-A public filer merged). Overall G14 verdict stays **FAIL / incomplete**; nothing is
+armed (every fence used below is test-armed in the harness with its shipping validation still refusing it, asserted in-test).
+Levels: **V-node(svc)** = kaspad's actual `PalwPanelService` (the public verifier/filer service) on a node whose database was
+created AFTER the claim and validated every public block; its own replay of the registered floor model; its own reservation,
+demands and reporter filings through the actual PQ mempool, the production template and the real block fold; outcome read back
+from consensus. **V-node(harness)** = the G14C canonical harness: a post-genesis bond on an IBD / pruned-import node, verifier built
+from the RPC op builders — there is **no kaspad kernel-route verifier service**, so no kernel family reaches V-node(svc).
+
+### 2e.1 What changed (implemented)
+
+* **Authenticated subtree descent** (`kaspa_consensus_core::palw_auth_descent_v1`, node policy, consensus-inert, no wire type).
+  Every authenticated opening (a `StepRange` answer, a single-leaf opening) determines its path and every sibling it carries at a
+  known `(level, index)`; the descent compares only such authenticated SUBTREE ROOTS with the verifier's own nodes from the root
+  down, always into the leftmost differing child, and reads the next range at the focus subtree's left edge. A matching subtree root
+  covers its whole prefix (collision resistance) — a lone matching midpoint leaf is never trusted (codex's `a4a62ec21` rule kept:
+  the old `PalwLegacyBisectV1` is untouched). **Bound:** reads of ≤ `2^r` leaves on a tree of height `h` take at most `h − r + 1`
+  reads (`r = 10` for `StepRange`): binding read + reads + `StepLeaf` terminal ≤ `h − 7` sessions — **33 of the 34-session
+  reservation at the 2^40 ladder top; fits up to 2^41 leaves**; past that `Unjudged`, never a guess.
+* **The production filer uses it** (`kaspad/src/palw_fraud_filer.rs`): the codec-independent fallback (every case below
+  `palw_legacy_held_da_v2`, or a non-base0 replay) is now `palw_fraud_filer_subtree_step_v1` instead of the linear scan that
+  refused every claim past 32,768 leaves. The own tree is built once per replay (retained at `max(10, h − 20)`, folded below on
+  demand from the verifier's own `held_step_range_answer_v1`). The history reader caches only the binding read and the ONE unit the
+  case's descent reads now (`rcore_wanted`, backfilled like a selected LG14-B unit), learned into the case's authenticated tree and
+  dropped — a stranger's other range demands never enter the cache.
+* **Past an agreeing step tree** (both the LG14-B path and the fallback): the old `Err("checkpoint/trace/job localization is
+  required")` is replaced by `PastStepTree` → `palw_fraud_filer_past_step_v1`. From the binding read's event and the own run: a
+  committed logits lane the (agreeing) head did not output → `LogitsNotStepOutput` (12); rows all agreeing with a token that is not
+  the row's selection → `ForgedOutput` (8); each held to the fold's own predicate, filed through the reporter door (R-3
+  commit/reveal). Flat classes need no further session; tiled classes run an authenticated rows-tree then tile-tree descent of
+  `Event` reads (≤ `log2(rows) + log2(tiles) + 2` reads). An honest claim yields nothing (V-fold below). A difference only in the
+  checkpoint leg / activation leg / job with step and trace agreeing is **reported, not guessed** (job/legs/prompt faults are the
+  direct door's, which runs first from the same binding).
+
+### 2e.2 Per family × violation (verdicts at this head)
+
+| Family / route | Violation (injected through the producer's own commit path) | Level | Outcome on chain | Evidence |
+|---|---|---|---|---|
+| F9–F16 legacy floor (BASE-0 attempt, 5,560 leaves, flat logits), common filer, fallback descent | MatMul element, isolated, honest values after (leaf 1853) | **V-node(svc)** pre-Final | CourtFraud, 4 demands (binding, 2 ranges, `StepLeaf`) | `g14v_step_lies_of_every_floor_op_kind_…` |
+| 〃 | MatMul element at the op's first leaf (12) | **V-node(svc)** | CourtFraud, 3 demands | 〃 |
+| 〃 | Embedding gather (leaf 0) | **V-node(svc)** | CourtFraud | 〃 |
+| 〃 | Normalization / rounding (RmsNorm, leaf 1904) | **V-node(svc)** | CourtFraud | 〃 |
+| 〃 | Nonlinearity (SiLU, leaf 2008) | **V-node(svc)** | CourtFraud | 〃 |
+| 〃 | Honest twin | **V-node(svc)** | nothing filed, `Final` | 〃 |
+| 〃 | Logits lane bent over an honest step tree (R1 residual) | **V-node(svc)** pre-Final | kind 4 `LogitsNotStepOutput` (past-step) | `g14v_trace_token_output_input_and_state_binding_lies_…` |
+| 〃 | Forged decode token (re-committed, `NotSelected`) | **V-node(svc)** | kind 4 `ForgedOutput` (past-step) | 〃 |
+| 〃 | Output root replaced | **V-node(svc)** | kind 4 `OutputMismatch` (direct door) | 〃 |
+| 〃 | Input / prompt: relabelled prompt (another anchor's ids) | **V-node(svc)** | kind 4 via the direct door | 〃 |
+| 〃 | Input / prompt: garbage prompt root | **V-node(svc)** | kind 4 via the direct door | 〃 |
+| 〃 | State-leg identity: activation leg replaced (J6), checkpoint interval replaced (J7) | **V-node(svc)** | **DA default** (`ProducerWithholding`, producer sanctioned): the H-1 gate refuses the producer's own binding disclosure (it answers another job), so no conviction is reachable — the default is the objective outcome | 〃 |
+| 〃 | MatMul element and logits lane **after Final** (node + service started after Final) | **V-node(svc)** | CourtFraud / kind 4 | `g14v_a_step_lie_and_a_logits_lie_are_convicted_after_final` |
+| 〃 LG14-B armed (tag 157/158 frontier descent, tag 159 recompute) | MatMul element, embedding gather | **V-node(svc)** pre-Final | CourtFraud via `LegacyLeafRecomputedV2` | `g14v_lg14b_frontier_descent_convicts_step_lies_through_the_service` |
+| 〃 | Honest claim forced into a mismatch verdict: step tree agrees → past-step → nothing provable, nothing filed | V-fold | — | `lg14b_an_honest_claim_survives_a_malicious_outsider` (updated) |
+| 〃 | A lie anywhere in a claim past 32,768 leaves (the old Unjudged region) | **V-unit only** | located within ≤ 33 sessions | core `palw_auth_descent_v1::tests::*` (exhaustive n ≤ 70 × every position × r ∈ {1, 4, 1024}; disjoint multi-lies; 2^20 + 3 leaves with retained own tree), `the_subtree_engine_localizes_a_lie_anywhere_within_the_reservation` (70,001 leaves) |
+| 〃 | Tiled logits (rows/tile descent glue) | implemented; **not verified** | — | the generic single-leaf descent is V-unit; no tiled legacy claim was run |
+| 〃 | Routing (MoE) | **open** — the floor has no router; no legacy MoE class was run | | |
+| 〃 | Checkpoint **state values** (KV chunk ≠ cache-write rows) with step and trace agreeing | **open** — not wired in the public filer (the floor commits 0 checkpoints); the checkpoint court and `StateChunk` units exist; the descent module applies to the checkpoint tree but the node terminal is not connected | | |
+| F1 K2-TIR v1/v2 canonical class (`wide128`), Panel (every seat covering) and OPV | Embedding gather element, wide I128 MatMul accumulator element, clamp (range / saturating nonlinearity) — each pre- and post-Final, pruned-import node, commitments only | **V-node(harness)** | convicted, bounty to the participant, seats not charged | `canonical::g14_canonical_g14v_gather_matmul_and_clamp_lies_pre_and_post_final` (12 cases) |
+| 〃 | quantization, decode, garbage; boundary / copy / borrowed refused at inclusion | V-node(harness) (G14C, not re-run here) | | §2a |
+| 〃 | routing / history | refused by carrier fit (§2a) — **open** for conviction | | |
+| F3 K2-TIR-v4 / F4 v5 (KS, merged) | element lie, withheld, input / borrowed / garbage, after Final, continuity across segments (8,192 held), v5 encoder lies | V-node(harness), re-run at this head: `g14_k2s_` **15 PASS** | | |
+| F6 typed roots | memory / retrieval / composite (T02–T05) | V-node(harness), re-run: `r4x_` **11 PASS, 1 FAIL** — `r4x_weights_only_spec_is_byte_for_byte_the_legacy_registration_and_the_unarmed_route_is_unchanged` (the kernel-route mempool gate refuses a typed-root carrier below `palw_typed_roots_v1`; this branch does not touch that gate — integration-owned, likely the A-2 gate change `824e6da15`; UNKNOWN whether it fails on the base, not re-run there) | | |
+| F2 pipelines, F5 fused/private | unchanged (§2a): F2 has no node claim; F5 never registers | open / by construction | | |
+
+### 2e.3 Open, stated (requirements for other owners in brackets)
+
+* No kaspad **kernel-route verifier service** exists: every kernel family (F1, F3, F4, F6) stops at V-node(harness). Building it
+  (RPC-read verifier loop + filing through the service's mempool) is the next G14-V item.
+* Large-claim localization is V-unit only; the floor's 5,560 leaves sit inside the old scan's reach. A V-node(svc) run needs a
+  registered legacy class with > 32,768 leaves on the harness.
+* Checkpoint-state localization (checkpoint tree → `StateChunk` → checkpoint court) and the tiled `ForgedOutputTiled` proof are
+  not wired; tiled trace glue unverified.
+* Activation-leg / checkpoint-interval lies end in the DA default after ~1,200 DAA (the disclose window), not a conviction — a
+  public-binding-free conviction route for J6/J7 would need the binding to be publishable under the H-1 gate (consensus review).
+* Session budgets: this lane did not change `gate.rs` or the 34-session constant. The subtree descent's bound (`h − 7`) fits it to
+  2^41 leaves; [G14-B: confirm the maximum legacy step ladder ≤ 2^41 when deriving the budget].
+* Restart / reorg / IBD resume of a mid-descent case: the descent state is a cache rebuilt from chain answers (reset on a branch
+  change like LG14-B's); not exercised [G14-R].
+
+## 2f. G14-R: recovery and the external path (2026-10-11, lane G14-R, branch `g14/r-recovery-resume`)
+
+The bar's operational half: a public prosecution must **resume** and reach the same objective outcome when its verifier restarts,
+its node reorgs / IBDs / imports a pruning snapshot, or its RPC connection drops. Base: integration `1ad909f76` (contains the
+virtual-stall fix `9fbdb3f83` and G14-B). Overall G14 stays **FAIL / incomplete**; nothing is armed or armable by this lane.
+
+**Design: rebuild, never persist.** Neither route keeps pursuit state a restart can lose or double:
+- **Kernel route** — new `misaka-palw-remote::pursuit` (node policy, consensus-inert): `plan_kernel_pursuit_v1(route rows, pursuit,
+  signed filing)` returns the step the chain still needs (`Seal`, `AwaitSeal`, `FileWhole`, `FileChunks{missing}`, `Demand`,
+  `AwaitAnswer`, `Recheck`, `Done(Convicted|Defaulted)`, `TooLate`, `WouldBeDismissed`, `Refused`, `Stranded`, `NoClaim`) from op 211's
+  rows alone (the ledger, the proof seals, the demand rows, the tag-113 chunk groups of aux table 41). Before it returns `File` or
+  `Demand` it applies the object to a clone of the rebuilt ledger at the next DAA (after the signer's collateral sync the fold
+  performs), so a filing the court would dismiss or refuse is reported, never sent. Nothing is cached across tips, so a reorg has
+  nothing to invalidate. `kernel_pursuit_resume_bound_v1` is G14-B's tolerated downtime: the claim's horizon (pre-Final: window end;
+  else `liability_until`; live claims count the policy liability, a class extension only lengthens it) less the remaining carriage
+  (one chunk a DAA) and one fold.
+- **Carriers must be deterministic.** A chunked filing's group id hashes the SIGNED object: a verifier that re-signs with fresh
+  randomness after a restart strands its half-built group (deposit forfeited at TTL) and opens a second (a second deposit, one of two
+  per-bond slots). Pursuit carriers are signed with FIPS 204 deterministic ML-DSA (`PURSUIT_DETERMINISTIC_RND_V1 = 0^32`); a foreign
+  group of the opener's is reported `Stranded`, never duplicated.
+- **Kernel ledger fix (dormant route, `misaka-palw-kernel::ledger`):** an IDENTICAL proof re-seal is now a no-op. Before, the second
+  copy of the same `SealProof` (a restart with the seal in flight, or the losing branch's carrier merged back after a reorg) replaced
+  the row and restarted its clock — delaying the verifier's own filing and handing bounty precedence to a copyist who sealed the same
+  bytes in between. A re-seal of OTHER bytes still replaces and restarts (unchanged). No wire, tag, table or registry change; root
+  changes only on the dormant kernel route in that case.
+- **Legacy V2 route** — the common filer's book (`kaspad::palw_fraud_filer`) is already a cache rebuilt from the tip and the accepted
+  blocks, with codex's branch invalidation (walk reset clears answers, frontiers, CKW, binding, localizer, `sent`, input bootstrap,
+  and the filer's court-queue items; job/acceptance changes restart the case; stale blocking replays are drained, never applied). The
+  reporter door is persisted and replans from rows on reorg. G14-R found no cache in the pursuit path left without invalidation and
+  changed none of that logic; it adds the service-level and node-level evidence below.
+
+**DAG reorg semantics (observed, recorded).** Under the shipped `palw_reorg_strict_economic_win` an all-economic tie reorgs only when
+the incumbent side spans ≤ 2 DAA, so the reorgable step is the last carrier (carrying + folding block). And in a DAG the losing
+branch is not discarded: the next block merges it, so its non-conflicting pursuit carrier is re-accepted. Measured on the kernel route:
+right after the reorg the tip lacks chunk 0 and the plan re-derives `[0, 1, 2]`; one block later the merge has re-added it and the
+plan re-derives `[1, 2]`. Funding must come from the virtual UTXO set (the losing branch's carrier sits in the virtual's merge set),
+and a re-sent duplicate (identical seal: no-op; demand: free join; reservation: one per reserver; chunk part: dropped) costs no
+deposit.
+
+**Recovery point × route** (V-node = canonical real-node harness: mempool → template → block fold → persisted tip → read ops; V-svc =
+the actual `PalwPanelService`; socket = real gRPC server + wRPC proxy on 127.0.0.1 driven by `KaspaRpcClient` / `GrpcClient`):
+
+| Recovery point | K2-TIR v1/v2 (Panel / OPV) | K2-TIR-v4 segmented (OPV) | Legacy V2 public filer |
+|---|---|---|---|
+| Verifier restart | **V-node PASS** — restarted after the seal and after each chunk of a 3-chunk filing: no re-seal (an in-flight duplicate seal keeps its DAA), each chunk once, one group, conviction before Final, inside the resume bound | (covered by the node restart, below: a new process recomputes its own replay) | **V-svc PASS** — the actual service stopped after its reservation and restarted (same state dir): no second reservation, demand once |
+| Node restart (same DB) | **V-node PASS** — between chunk 0 and 1; the half-built group off disk | **V-node PASS** — between the producer's `Respond` parts (partial answer set): open demands off disk, none re-filed | V-node (existing `lg14a_the_pursuit_survives_a_node_restart`) |
+| Reorg | **V-node PASS** — last chunk reorged out → plan `[0,1,2]`; merge re-adds → `[1,2]`; one conviction, no deposit held; a DAG-IBD node agrees | **V-node PASS** — the first demand reorged out → re-derived (same position); the search continues | **V-node PASS** — post-Final reservation reorged out; a NEW verifier re-derives from the tip and convicts; ≤ 1 reservation of ours in Z's chain blocks; deposit refunded, collateral net zero; no unit demanded twice |
+| Full IBD | **V-node PASS** — node started after the seal and a partial filing finishes the same group; also after a SERVED demand (re-check reads the served position off the rows, convicts; one demand) | **V-node PASS** — a DAG-IBD node (merged blocks included) started mid-search finishes it | **V-node PASS** — node started mid-descent (reservation, binding, ranges): new verifier re-learns binding/localizer from authenticated answers, convicts; one reservation, no unit twice. **V-svc PASS** — after the demand the node is replaced by an empty DB that re-validates every block; a third service reaches the DA default |
+| Pruned import | **V-node PASS** (OPV) — after the demand: `AwaitAnswer` with the demand's own deadline, demanded once, the chain defaults it | **V-node PASS** — after a partial answer set: the search resumes on the importer and convicts | **V-node PASS** — after reservation + binding: the dispute record rides the carriage, conviction on the importer (harness keeps bodies ≤ P; answers needed are > P; bodies lost to real pruning = codex's reacquisition) |
+| Real socket RPC, disconnect/reconnect | **socket PASS** — every read (op 211 paged, 210, 212, 231, 202) and every carrier (`submitTransaction` → the node's mempool check → template) over borsh wRPC; the proxy restarted twice (connection dropped) and the node behind it swapped for an IBD node mid-filing; JSON wRPC and gRPC serve the same op 210 document | (same transport; not separately driven) | **socket PASS** — ops 204/205/206 and 202 over borsh wRPC follow the pursuit across a proxy restart and a node swap (IBD node; a new verifier convicts); JSON frames the same op 204 document |
+| Deadline (G14-B) | **V-node PASS** — down until the pre-Final resume bound: convicts before Final; down past Final: convicts in liability; down past liability: `TooLate`, nothing sent, nothing charged | bound function shared; not separately driven | legacy: the producer's session deadline is the chain's (a default needs no verifier action); the 34-session / hard-deadline limits are G14-B's FAIL rows, unchanged |
+
+**What "socket" is and is not.** `consensus/src/pipeline/virtual_processor/tests/g14r_socket_rpc.rs` fronts a test node with an
+`RpcApi` whose PALW ops run exactly the handlers' builders (`kaspa_rpc_core::convert::{palw_kernel, palw_legacy}`,
+`palw_state_proof_v1`); the shipping `kaspa_grpc_server::Adaptor`, the `kaspa_wrpc_server` proxy (`grpc_proxy_address` mode, borsh /
+JSON) and the real clients carry them. It is not `RpcCoreService` (that needs a p2p flow context, mining manager and index processor,
+and a network passing `validate_palw_v2`, which refuses these fences), and it is not a separate process.
+
+**Tests and results (2026-10-11, this branch; `buildslot.sh … --offline`, line-tables profile):**
+- `misaka-palw-kernel --test g14r_reseal`: 1 PASS (identical re-seal keeps the first DAA; other bytes replace; files and convicts).
+- `misaka-palw-remote --lib pursuit`: 2 PASS (V-unit).
+- `kaspa-consensus --lib g14r_` (skip socket): **12 PASS** — `g14_kernel_route_e2e::recovery` 7, `real_scale::g14r_seg` 2,
+  `lg14a_legacy_filer_e2e::g14r_resume` 3. Socket: **2 PASS** (`socket_rpc::g14r_kernel_v2_…`, `g14r_resume::g14r_lg14a_the_dispute_reads_…`).
+- Regression `kaspa-consensus --lib -- g14_canonical lg14a_ g14_k2s_ t12_a2u g14_kernel_route_replay g14_kernel_route_survives g14b_`:
+  **60 PASS**, 0 FAIL (A2U green).
+- `kaspad --lib` (actual service): **`resume::g14r_the_actual_public_filer_service_resumes_after_a_restart_and_on_a_fresh_database_without_duplicates`
+  PASS** (single-threaded run; service 1 reserved and stopped at DAA 1037; ten blocks with no service; service 2 rebuilt its case and
+  demanded with no second reservation; the node was replaced at DAA 1054 by an empty database that re-validated every block; service 3
+  reached the objective DA default — one reservation, no unit demanded twice, the default collected, the reservation released).
+  `palw_fraud_filer::tests` 16 PASS. The pre-existing `fresh_public_bond_service_carries_reserved_da_to_objective_default` (codex) **FAILED
+  on this host twice** (with 4 test threads and alone) at its own 360-second wall-clock limit, the reservation and demand on chain and the
+  session deadline (≈1,200 DAA away) not yet reached: a host-speed limit of that test's loop (20 heartbeats an iteration), not a logic
+  failure seen here — UNKNOWN until re-run on a quieter host; this lane did not change it.
+- `misaka-palw-kernel` (all targets): **286 PASS**, 0 FAIL after the re-seal change.
+
+**Live drill: not run — infeasible as specified, for these exact reasons.** (1) No drill flag arms `palw_legacy_public_filer_v1`
+(nor `palw_legacy_held_da_v2`), and the kernel route's `palw_probabilistic_constraints_v1` is refused by every drill flag by design
+(canonical harness doc) — a drill-only arming flag would be new arming code; (2) a pursuit needs a false claim that every seat signs
+`Valid`: the drill has producer tamper flags but no seat-collusion knob, so honest drill seats refute the lie through their own duty
+and the public filer has nothing left to carry (or races the seat court); (3) a non-genesis public bond needs the preset 1,000-DAA
+maturity on the live cadence (genesis cards are exempt, but then every outsider is a drill card); (4) the kernel route
+needs a registered K2 class on the drill, which is codex's onboarding path. The socket test above is this lane's external-path
+evidence; a drill pursuit needs (1)+(2) decided first.
+
+**Open (G14-R).** Kernel route has no node service yet — the planner is the library a remote/in-node verifier runs; wiring it into
+`PalwPanelService` (tick, funding from the virtual UTXO set, deterministic signer) is not done. Legacy service-level reorg is V-unit
+(codex) + V-node (engine), not V-svc. v4 deadline resume and v4 over the socket are not separately driven. Permanently pruned bodies
+(reacquisition) remain codex's. The verifier's synced collateral is read from its own bond (the tests read the node's tip; a remote
+verifier reads op 202's bond row).
+
+## 2g. G14-K: the kernel route's public verifier inside kaspad's service (2026-10-11, lane G14-K, branch `g14/k-kernel-service`)
+
+Base: integration `3076077f9` (G14-R merged). Overall G14 stays **FAIL / incomplete**. Nothing is armed or armable: the kernel route
+sits behind `palw_probabilistic_constraints_v1` (refused by validation at every height, asserted in the tests); no consensus code
+(only two new test modules under `consensus/src/pipeline/virtual_processor/tests/`), wire type, tag, table, RPC op or registry
+number changed; no testnet-12 id moves. The court-lane round `u32::MAX − 13` is node-local bookkeeping, not a registry number. Levels as in §2e: **V-node(svc)** = kaspad's
+actual `PalwPanelService` on a node whose database was created after the claims and validated every public block, its own replay of
+the registered model, its carriers through the PQ mempool, the production template and the real block fold, outcomes read back from
+consensus; **V-node(harness)** = the canonical consensus harness (mempool → template → fold), driven here through EXACTLY the
+library functions the service calls.
+
+**What was built (implemented).**
+- `kaspad/src/palw_kernel_verifier.rs` (new, a `PalwPanelService` lane after the LG14-A filer): once a DAA it reads the route through
+  the node's read API (`ConsensusApi::palw_kernel_route_v1`, op 211's source), rebuilds the ledger as the fold will see it
+  (`pursuit::kernel_consumer_ledger_v1`: G14-S's court scope past `palw_provider_court_v1` and the verifier-pay terms injected, so the
+  16-unit / clear-budget / 4-dismissal limits are in every dry run), selects every open claim (live, or Final inside liability) not
+  produced by its own bond whose class's REGISTERED commitments one of its models opens to, re-executes, and drives
+  `misaka_palw_remote::pursuit` (plan → sends). Carriers are signed deterministically (the service's signer is FIPS 204 `rnd = 0^32`
+  = `PURSUIT_DETERMINISTIC_RND_V1`) and queued on the court lane, which funds each from the virtual UTXO set at the object's own
+  minimum (`ensure_carrier_funding_v2`: mature, unlocked, free, chained through its change) and submits it to the mempool. Items are
+  dated by the planner's `by_daa` (pre-Final deadline, else the liability horizon), so the lane's EDF carries the pursuit nearest its
+  horizon first. Nothing persists: an object on chain is never re-planned, one in this node's mempool (a restart) is never queued twice,
+  one queued is re-offered only after 6 DAA.
+- The model: `--palw-kernel-model=<file>` (repeatable; `PalwPanelConfig::kernel_models`), a `PALWKM01` file (Borsh tensors). ADR-0177
+  D7: the verifier holds the registered model; it is used for a class only when it opens to the class's registered
+  `ParamCommitmentsV1` root (v1/v2 `of`, v4/v5 `of_v3`; a memory class's rule program). A model that does not, or a class it cannot
+  check, is logged once and never filed against.
+- `misaka-palw-remote::pursuit` (extended, nothing rewritten): `plan_kernel_pursuit_on_v1` (the planner over a caller-rebuilt ledger;
+  `plan_kernel_pursuit_v1` now delegates), `kernel_consumer_ledger_v1`, `kernel_check_program_v1` (v1/v2 and pipelines:
+  `OutsiderV1::check_computation`, no producer value read, nothing demanded of an honest producer), `kernel_check_segmented_v1` (own
+  replay + adaptive search against block-served positions), `kernel_check_typed_v1` (typed memory, `SpecOutsiderV1::check_computation`),
+  `kernel_class_model_root_v1`, `kernel_reassemble_objects_v1` (generic `ObjectChunk` and tag-113 lanes, any order, once),
+  `kernel_tiled_prompt_v1` (prompt tiles authenticated against the job's root), `kernel_segmented_tokens_v1`, `KernelBlockMaterialV1`
+  (`Respond` parts → assembled, authenticated positions + hiding leaves), `kernel_step_sends_v1`, `KERNEL_SERVICE_CHUNK_CAP_V1`.
+
+**How the kaspad test registers a kernel class without a test hook.** kaspad's tests cannot reach consensus's `cfg(test)` seams
+(attestation, OPV eligibility), and none was added. The F1 class goes through the PRODUCTION onboarding path: the V2 IR class
+(`ClassRegisteredTirV1`, the SDK builder over `palw_v2_registration_terms`), `ArtifactBoundV1` (bonded), maturity (40 DAA), then
+`RegisterClass` on the kernel route over the root the matured binding attests (`onboarding_attested_roots_v1`). That works for a
+Panel-licensed K2-TIR v1/v2 class. A v4/v5 or typed class needs OPV, whose eligibility is DERIVED (conformance passed under a
+Panel-independent beacon — codex's lane); that is why those families are V-node(harness) below.
+
+**Per family × case (this branch).**
+
+| Family | Case | Level | Outcome | Test |
+|---|---|---|---|---|
+| F1 K2-TIR-v2 (`wide128`, Panel-licensed, every interim seat signing a passing receipt) | embedding gather element, wide I128 MatMul accumulator element, clamp result — **pre-Final** | **V-node(svc)** | convicted before Final by the service (one seal, one whole filing each); producer's real bond slashed `claim_collateral`; no seat charged | `kernel::g14k_the_kernel_service_convicts_covered_lies_pre_and_post_final_and_the_honest_twin_finalizes` |
+| 〃 | the same three lies **post-Final** (node and service started after Final) | **V-node(svc)** | convicted inside the liability horizon | 〃 |
+| 〃 | honest twin (same class, same Panel collusion) | **V-node(svc)** | nothing filed against it; reaches Final (its reward paid from the poster's escrow) | 〃 |
+| 〃 | service restarted mid-pursuit (after its seal is on chain; ten blocks with no service; same state dir) | **V-node(svc)** | the new process re-derives: no second seal (the seal kept its DAA), one filing, conviction before Final | `kernel::g14k_the_kernel_service_resumes_after_a_restart_without_a_second_seal` |
+| 〃 | quantization, decode, garbage | V-node(harness) (G14C/G14-V; the service runs the same `check_computation`) | — | §2a, §2e |
+| 〃 OPV mode | gather / MatMul / clamp | V-node(harness) only (§2e) | — | an OPV class cannot be registered on kaspad's test network without the derived eligibility |
+| F1 K2-TIR-v1 descriptor | — | **open**: no v1-descriptor class was run (the canonical class is v2) | | |
+| F3 K2-TIR-v4 segmented (`wide128` @8,192, OPV) | lie at position 1,200: the service core rebuilds the prompt from the chain's tiles, demands (adaptive search), reads the producer's `Respond` parts back from the blocks, localizes, seals, files | **V-node(harness)** | convicted; an honest twin of the same shape: nothing sent | `real_scale::g14k_service_core::g14k_the_service_core_convicts_a_segmented_lie_via_demands_and_respond_chunks_and_ignores_the_honest_twin` |
+| 〃 | withheld `Respond` (producer silent) | **V-node(harness)** | `Done(Defaulted)` at the counted deadline: `Unavailable { producer_defaulted }`, producer charged, demand bonds returned, never a conviction | `real_scale::g14k_service_core::g14k_the_service_core_takes_a_withheld_segmented_answer_to_the_da_default` |
+| 〃 | the service's own block walk (`walk_accepted_lifecycle_objects_v1` → reassembly) | implemented; **not executed** at V-node(svc) (no v4 class on kaspad's network) | | |
+| F4 v5 encoders / heads | — | same code path as F3 (`kernel_check_segmented_v1`); **not run** here | | |
+| F6 typed roots — memory | step lie pre-Final (pre-state from the chain's carried post-state) and post-Final (line rolls back); honest claim left alone | **V-node(harness)** | both lies convicted (the post-Final one rolls the line back to its head); the honest claim: nothing sent | `r4x_typed_roots_e2e::g14k::g14k_the_service_core_convicts_memory_step_lies_pre_and_post_final_and_leaves_an_honest_claim_alone` |
+| F6 retrieval / composite, F2 pipelines | — | **not checked by the service** (more than one model, or a snapshot copy); reported once per claim, never filed | | |
+
+**Tests and results (2026-10-11; `buildslot.sh cargo … --offline`, line-tables profile; test binaries run directly).**
+- `misaka-palw-remote --lib pursuit`: **4 PASS** (2 G14-R + 2 new: both chunk lanes reassemble in any order once; each step sends
+  exactly its objects).
+- `kaspad --lib g14k_` (the actual service): **2 PASS** (283 s single-threaded; the main test: class through onboarding at DAA 44,
+  six convictions between DAA 122 and 134 — the three pre-Final ones first, by EDF — honest twin Final at DAA 170; the restart test:
+  seal at DAA 50, conviction at 56 after the restart). An earlier run of the same code FAILED one assertion of the test itself (it
+  counted the poster's escrow payment of the honest twin's Final reward as a seat charge); the assertion was corrected, not the service.
+- `kaspa-consensus --lib g14k_ g14r_ t12_a2u --skip socket`: **17 PASS** (g14k service core 2, G14-R 12 — the planner now delegates —,
+  A2U 3).
+- `kaspa-consensus --lib r4x_ g14k` (after the typed-root addition): **14 PASS, 1 FAIL** — the new typed test and the two segmented
+  ones PASS, R4X/G14C 11 PASS; the FAIL is the known `r4x_weights_only_spec_is_byte_for_byte_the_legacy_registration_and_the_unarmed_route_is_unchanged`
+  (recorded failing by G14-V in §2e.2; this lane does not touch the gate it trips on).
+- `kaspad --lib` without the two service-e2e modules (`palw_service_public_e2e`, `palw_service_violations_e2e`, slow and untouched): **601 PASS, 3 FAIL**, the three in files this lane did not touch (pre-existing at the base, not re-run there): `palw_backends::…class_resolution_is_not_reachable_from_the_block_processing_path` (consensus/Cargo.toml already names `misaka-palw-sdk`), `palw_operator_da::…the_tick_wires_the_lane_before_the_carriers_and_behind_no_flag` (its source-text needle no longer matches the formatted line), `workspace_default_members::…` (`misaka-palw-panel` not in the default members).
+
+**Open (honest).**
+1. **V-node(svc) only for F1 Panel-licensed v2.** v4/v5, OPV-mode v1/v2 and typed classes cannot be registered on kaspad's test
+   network until a class can be made OPV-eligible there through the derived rule (codex's registration/eligibility lane). Their
+   service path is the same library code, verified at V-node(harness); the service's own accepted-block walk is not executed.
+2. **Not wired:** pipelines (F2), composites and retrieval snapshots (more than one model / a snapshot copy), a filing that needs the
+   tag-113 chunk lane at V-node(svc) (the canonical filing fits one carrier; chunking is V-unit + G14-R's V-node harness).
+3. **The synced collateral is approximate**: the service reads its bond's collateral (op 202's row) less its route chunk deposits,
+   not every non-kernel reservation the fold nets out; a bond also holding legacy reservations can see a dry run pass that the fold
+   refuses (the carrier fee is lost, nothing else).
+4. **Throughput:** the court lane carries one carrier in flight per bond (`MAX_INFLIGHT_CARRIERS = 1`); six pursuits took 12 DAA here.
+   Under a coalition that fills blocks there is still no reserved byte lane (G14-B's UNKNOWN stands).
+5. **Socket RPC**: the service reads through the in-process API (op 211's source), not a socket; G14-R's socket evidence is for the
+   harness verifier.
+6. **Live drill**: not run, for G14-R's reasons (no drill arming for the kernel route; no seat-collusion knob).
+
+## 2h. G14-L: parallel reserved sessions and the k-ary descent on the legacy held route (2026-10-11, lane G14-L, branch `g14/l-parallel-sessions`)
+
+**The decision.** G14-B (§2c, open item 2) derived that the legacy V2 held route cannot finish a public pursuit: a stalling producer
+answers each reserved session on the last DAA of `W_disclose` (1,200 on testnet-12), sessions open one at a time until the claim's hard
+deadline (acceptance + 4,200), so **four** fit. The one-unit descent needs 9 sessions at the canonical 8k row (11 at G14-B's 2^40
+stand-in), and 2M needs 1,031. Of (a) parallel sessions, (b) retention extended during a pursuit, (c) a 120-DAA session window (breaks
+SA-3) and (d) refusing large legacy, **the user chose (a)**: several reserved sessions at once and several positions per search round,
+SA-3 and the liability / lifetime ceilings unchanged; 8k must fit; 2M is refused by name if no `k` fits. Overall G14 stays
+**FAIL / incomplete**; nothing is armed or armable by this lane.
+
+**Merged with the integration head `947edefca` (codex `g14/prosecution-bounds`, G14-K).** The fold keeps codex's input transport check
+(`palw_legacy_input_answer_transport_check_v2`, PromptIds / FpJob) FIRST, then a G14-L lane join or a new session. The filer's
+history reader keeps codex's block-aware walk, multipart `LegacyHeldAnswerChunkV2` reconstruction and memory-ledger scratch budget,
+and caches a G14-L round's units in both the whole-answer and the multipart arm (`legacy_rounds` threaded through
+`palw_fraud_filer_read_page_with_budget_v2`). The bootstrap step runs for `fp_bootstrap.is_some() || fp_job_pending`; the lanes form
+applies only once the job is held (`fp_bootstrap`), the FP-job reacquisition stays on codex's one-unit path. Open: an input lane whose
+answer rides several multipart chunks is longer than the one-carriage-DAA-a-lane term of the lane deadline; codex's transport check
+bounds it inside `W_disclose`, but the parallel schedule does not count its extra chunks (the canonical 8k rows' input lanes are
+2,048-id chunks).
+
+### 2h.1 What changed (implemented)
+
+**Consensus (dormant).** No new wire type, object tag, table, RPC or registry number; no int-12 wire type changes (A-2: nothing to
+classify — `PalwDisputeReservationRowV1` is an LG14-A type, not in the frozen int-12 manifest, and its table is written only past the
+dormant fence). The rule applies only where **both** dormant, never-armed legacy fences are in force (`palw_legacy_public_filer_v1`:
+reserved sessions exist only there; `palw_legacy_held_da_v2`: tag 157 exists only there; each is refused when armed by its own
+validator). No chain has history under either fence, so no new fence was needed for the changed session rule. Module:
+`consensus/core/src/palw_legacy_parallel_v1.rs`; fold: `join_da_session_lane_legacy_held_v1` in `palw_state_v2.rs`.
+
+| Rule | Before | Now (past both legacy fences) |
+|---|---|---|
+| A reserver's second tag-157 demand while its reserved session is open | refused (`DaSessionAlreadyOpen`, DA-1: one session per accuser per claim) | **joins** the session as one more **lane** (one more unit the producer must answer), when: every unit of the session and the new one is a legacy held unit (never an event or a reacquisition session); within 128 DAA of the session's opening (the join window: a node funds one carrier a DAA, twice `K`); at most `K` = **64 lanes** a session; at most **128 extra lanes** a reservation over its life (`PalwDisputeReservationRowV1::lanes_joined`, the bond's own budget); the reservation predates the session; the unit not already answered; the gates of an ordinary session (stage, retention, standing) |
+| Session count | each demand one of the reservation's 34 sessions | a lanes session still counts **one** of the 34; its extra lanes count on `lanes_joined` |
+| Deposit | one DA-6 price a session (A-6, free half) | **one DA-6 price per lane**, added to the session's exposure on the joiner's free half: refunded by a conviction or a default, held (and burned at retirement) when every lane was answered and nothing proved |
+| Deadline | `opened + W_disclose` | `max(deadline, now + W_disclose + (lanes − 1) × c)` at every join, `c` = 1 DAA (G14-B's chunk rule: a held answer is at most the court's close ceiling, under one block's 125,000 transaction bytes — one answer a block), never past the claim's retention |
+| Answer / default | the session is refuted when its units are answered, defaults at its deadline otherwise | unchanged, per session: every lane answered → refuted; any lane unanswered at the deadline → **DA default** (`ProducerWithholding`, DA-7) |
+| Consistency | 1–4 units, due at `opened + W_disclose` | a legacy held session of more than one unit (a lanes session: legacy held units are never drawn) — only with the public-filer fence set, ≤ 64 distinct units, seat-like (reserved), due within `[opened + W_disclose, opened + 128 + W_disclose + 63]`; reservation rows `lanes_joined ≤ 128`, zero below the fence |
+
+`da_admission_v1` is split into `da_admission_mode_v1(lane)`: a lane skips exactly the two gates it replaces (the open session is the
+one it joins; the session count) and keeps every other gate and the price; a seat's session takes no lanes.
+
+**The k-ary authenticated descent (node policy, `palw_legacy_kary_next_v1`).** A round at a focus node `(L, i)` known to differ
+demands the `2^s` nodes under it at level `L − s`; each answer authenticates its node to the claim's root and carries its frontier nine
+levels lower, so one round descends `s + 9` levels. The verifier folds a **known tree** from authenticated frontiers only (each lane's
+subtree, then every parent of two known children — across lanes) and walks from the binding's root into the **leftmost** child whose
+authenticated node differs from its own; a matching node covers its whole subtree (collision resistance), a lone matching midpoint is
+never trusted, a lie followed by correct values is found, two authenticated values for one node are a `Conflict` (never a descent),
+children that agree under a differing node are `OwnTreeInconsistent` (never a guess). The width `s` is a pure function of the focus level,
+the root round's input lanes (derived from the binding: `⌈prefill / 2,048⌉`, or 1 for a flat input) and `K`: the fewest rounds, the extra
+levels spread evenly (`palw_legacy_kary_width_bits_v1`). A restarted verifier re-derives the same round from chain answers alone.
+`PalwLegacyNodeViewV2::node` (the verifier's own opening builder) now folds a node between a focus and its lanes from its children.
+
+**rounds(k, leaves).** At `K = 2^b` lanes and no input: `⌈h / (9 + b)⌉` rounds (`h` the tree height), asserted for every `h ≤ 40` and
+`k ∈ {1, …, 64}`. With the binding read before and the fused leaf's witness after: `rounds + 2` sessions.
+
+**budget.rs.** `parallel_session_schedule_v1` (+ `ParallelSessionClockV1`, `parallel_session_max_replay_v1`): a session of `k` lanes
+opens at `t`, its lanes join one a DAA, the stalling producer answers at `t + (k − 1)(join + c) + W_disclose`; opens `≤ open span`,
+deadlines `≤ close span`, joins inside the window, the verifier's replay after the input round (declared, unmeasured), the filing by the
+close span. One lane a session is G14-B's sequential schedule exactly (asserted for 1–6 sessions).
+`palw_legacy_parallel_plan_v1` / `palw_legacy_parallel_feasible_v1` derive the worst-case plan and refuse by name (`PARALLEL_SESSIONS: …`).
+
+**The production filer (kaspad `palw_fraud_filer.rs`).** Past both fences a reserving public bond with a mismatched base0 replica runs
+`palw_fraud_filer_legacy_step_v3`: one round's lanes are demanded together (`DemandLanes`: the first to land opens the reserved session,
+the others join; a lane already in the session or answered is never re-sent; per-lane resend after 30 DAA, at most twice), answered lanes
+are read and learned one a step (`AwaitRound`/`Learn`; the history walk caches the whole round, `legacy_round`), the fused leaf's witness
+and the terminal as before. The PanelDA input bootstrap (`palw_fraud_filer_bootstrap_step_v2`) demands every input chunk **and** the root
+round's node lanes in the session after the binding (the plan's input round: the verifier replays, and the root frontiers are already
+on chain). Nothing is carried across tips: the case is rebuilt from chain answers (G14-R's property); a reset clears the round and the
+lane send-book. Seats, watchdogs, sessions below the fences and non-base0 replays keep the one-unit paths unchanged.
+
+### 2h.2 The profile table (re-derived for parallel sessions; testnet-12 lattice: bind 600, receipt 600, `W_disclose` = challenge 1,200 — unshortened, SA-3 — court 3,000; G14-B's verifier terms: first step 2, turnaround 1, filing 1, replay 0)
+
+| Profile | Plan (lanes a session) | Timeline (DAA after acceptance) | Verdict |
+|---|---|---|---|
+| **Legacy held 8k** — the canonical row (≈105.5M leaves, height 27), 4 input chunks | `[1, 36, 16, 1]`: binding; **k = 32** node lanes (s = 5) + 4 input; **k = 16** (s = 4); the fused witness | opens 2 / 1,203 / 2,474 / 3,705; deadlines 1,202 / 2,473 / 3,704 / 4,905; filed 4,906 (open span 4,200, close span 5,400) | **FITS** — 4 sessions of 34, 50 extra lanes of 128; slack 495 DAA to open, 494 to file; the verifier's own replay after the input round may take **≤ 494 DAA** |
+| Same, a verifier that holds the input (attempt claims) | `[1, 32, 16, 1]` | filed 4,898 | fits |
+| Boundary: height 29 (2^29 leaves), 4 input chunks | `[1, 36, 64, 1]` | filed 5,002 | fits (98 extra lanes) |
+| Height 30 (2^29 + 1 leaves) | 3 descent rounds → 5 sessions | the fifth would open past 4,200 | **refused by name** (`PARALLEL_SESSIONS: the worst-case rounds …`) |
+| G14-B's 2^40 ladder top (its stand-in for "8k") | 3 descent rounds → 5 sessions | — | **refused by name**; two rounds would need 2^11 lanes a round |
+| **Legacy held 2M** | 1,024 input chunks | — | **refused by name**: `PARALLEL_SESSIONS: the input's 1024 chunks exceed one session's 64 lanes` (the input must be acquired before the replay, in the root round) |
+| The one-unit descent of the 8k row (for comparison) | 4 + 3 + 2 = 9 sequential sessions | — | does not fit (G14-B: 4 fit) |
+
+Tests: `palw_legacy_parallel_v1::tests::the_legacy_profile_table_on_the_t12_lattice`, `rounds_of_k_and_the_8k_plan`,
+`budget::tests::parallel_sessions_fit_the_lattice_and_one_lane_is_the_sequential_schedule`.
+
+### 2h.3 Tests and results (this branch; `buildslot.sh … --offline`)
+
+- **Kernel + consensus-core** (`--lib -- budget:: palw_legacy palw_lifecycle_objects_v2 g14b_ palw_da_rcore`): **PASS — 9 + 68**, 0 failed.
+  New: `budget::tests::parallel_sessions_fit_the_lattice_and_one_lane_is_the_sequential_schedule`; `palw_legacy_parallel_v1::tests`
+  (7, V-unit): `the_kary_descent_finds_the_first_lie_at_every_position` (every leaf count 1–70 × frontier depths 1–3 × widths 1, 2, 4,
+  8 × a lie at EVERY position, each isolated with every later leaf honest; the last leaf; two lies → the first; rounds never past the
+  plan's), `the_kary_descent_at_the_legacy_depth_and_the_last_leaf` (depth 9, 4,133 leaves, four input lanes, stride + last leaf + 1023/1024),
+  `an_isolated_lie_after_matching_values_and_an_inconsistent_own_tree` (also a forged frontier → `Conflict`), `rounds_of_k_and_the_8k_plan`
+  (`⌈h / (9 + log2 k)⌉` for every `h ≤ 40`, `k ≤ 64`), `the_legacy_profile_table_on_the_t12_lattice`,
+  `the_lane_deadline_counts_one_carriage_daa_a_lane`. The A-2 pins (`palw_lifecycle_objects_v2::…every_int12_wire_type_is_unchanged_or_classified`
+  and the kind table) stay green; G14-B's `g14b_a_stalling_producer_…` unchanged and green.
+- **consensus-core integration** (`--test lg14a_legacy_dispute_fold --test palw_tir_da_step_fold`): **PASS — 9 + 11**.
+- **kaspad** (`--lib -- g14l_ lg14b_ palw_fraud_filer`): **PASS — 39**, 0 failed (641 s), including every existing LG14-B case and the
+  filer's unit tests. New, V-fold (the real transition with every block's delta re-applied / reverted and its carriage reloaded; the actual
+  node filer's step functions; R-core+ and both legacy fences test-armed — their shipping validators still refuse arming):
+  - `g14l_an_8k_shaped_pursuit_convicts_and_defaults_through_parallel_lanes_inside_the_t12_window` — the held 8k fixture (11,612 leaves,
+    height 14, 1 input lane) on `W_disclose` 1,200 with retention = acceptance + 5,400 (hard deadline 4,301), a producer stalling every
+    session to its last DAA: sessions `[1, 23]` (the binding read; ONE round of 23 node lanes — the tree's width at level 9), opened at
+    105 / 1,306, due 1,305 / 2,550 — **exactly** `parallel_session_schedule_v1` over those lanes; the tag-159 recompute filed at 2,551
+    (CourtFraud, producer charged, outsider whole). Twin: one deep lane withheld → `ProducerWithholding` at 2,550, producer sanctioned,
+    outsider's collateral unchanged. The fixture's worst-case plan is feasible.
+  - `g14l_a_coalition_cannot_exhaust_parallel_sessions` — 12 coalition bonds each fill a session to 64 lanes; the 65th is refused; a
+    fresh outsider reserving after them still opens its own 64-lane session (lanes price one DA-6 exposure each); a lane past the 128-DAA
+    join window is refused; one bond answering its way through three sessions reaches exactly 128 extra lanes and the next is refused.
+  - `g14l_a_restart_mid_round_resumes_without_duplicate_lanes` — the case rebuilt from scratch after the binding and three lanes of the
+    round: the round re-derives, only the missing lanes are demanded, no unit twice, one session per round, conviction.
+- **kaspad panel history reader** (`the_filer_re…`, `a_missing_header_…`): **PASS — 3** (the reader's new round-set argument).
+- **kaspa-consensus** (`--lib -- t12_a2u lg14a_ t12_legacy_held_da_gate g14b_`): **PASS — 17**, 0 failed (421 s): the `t12_a2u_*` suites,
+  every `lg14a_*` real-node case and G14-R's `g14r_lg14a_*` resume cases (IBD mid-descent, pruned import, reorg, socket), the legacy
+  held gate, G14-B's node schedule.
+- Not run: the full workspace, clippy, the `PalwPanelService` tick with lanes (V-svc), the shipping-pin suite (no params, schedule,
+  preset or fence value changed; the testnet-12 ids are untouched by construction — UNKNOWN until the integration's pin run).
+
+### 2h.4 Open, stated
+
+* **The verifier's replay time is declared, not measured.** The 8k row leaves 494 DAA for the verifier's own replay after the input
+  round (and 495 to open the last session). A real 8k replay of a large registered model may take longer on a slow host; that bound is
+  for an external measurement gate. The turnaround between rounds is 1 DAA in the derivation (as G14-B's).
+* **Inclusion under a coalition that fills blocks** (G14-B's UNKNOWN) is unchanged: the schedule assumes one carrier a DAA for the
+  verifier's lanes and one answer a block for the producer; there is no reserved byte lane. A lanes session widens the producer's window by
+  one DAA a lane, not by an inclusion guarantee.
+* **Producer load scales with reservers.** Per bond: ≤ 34 sessions and ≤ 34 + 128 units over a claim's life, each lane priced on its own
+  free half (refunded only by a conviction or a default). A coalition of `B` bonds can demand `B × 162` units of an honest producer and
+  forfeit `B × 162` DA-6 prices; whether that price deters is ECON's question, as for every per-bond budget (C6/C8: no shared cap exists
+  for an attacker to fill).
+* **The fused terminal after the witness** (the held dissection's turns) is not inside the derived timeline (as in G14-B); the plan counts
+  the witness session only.
+* **The legacy held class is not refused at registration.** The refusal by name is the planner's and the filer's (`Refused` → `Unjudged`);
+  wiring `palw_legacy_parallel_feasible_v1` into a reward gate (like G14-S's `COURT_SCOPE_INCOMPLETE`) is not done here. Legacy
+  registration is the live route's; any gate is a dormant-fence decision for its owner.
+* **The 8k-shaped node runs use the held 8k fixture** (a small model at 8k context): its tree is shallower than the canonical row's, so a
+  single k-ary round reaches its leaves; the two-round shape of the canonical row is verified by the planner, the schedule and the
+  exhaustive descent tests (V-unit), not by a node run of a 105.5M-leaf claim.
+* Checkpoint-tree k-ary descent (the planner is generic over the tree; the node runs it on the step tree only), PanelDA bootstrap lanes
+  on the fixture (`palw_fraud_filer_bootstrap_step_v2` is wired; the existing bootstrap fixture was not re-run with lanes), the actual
+  `PalwPanelService` tick with lanes (V-svc), reacquisition of a pruned round's answers (codex), and a live drill: **not done**.
 
 ## 3. Family matrices (milestone baseline)
 
@@ -431,7 +1020,7 @@ milestone throughout.
 | GAP-61 | Replace `exec_v2_test_admit_class_v1` with OB's `palw_reward_gate_v1` (`Cw::active_admitting_real`). | C7 | F7 | **X8R** (after OB integrates) | S |
 | GAP-62 | DESIGN_GAP: link the initial boundary to the REAL claim's verified output (the same root cause as GAP-81). | C3, C5 | F7, F17 | **X8R** + Lead | M |
 | GAP-63 | Merge `b8ae9412b`; rebuild. | — | F7 | **X8R** | S |
-| GAP-70 | Sampled conformance: a court for vector logits / commit digests (OB-P0 GAP 2); vector refutation for a new class (GAP-B6); self-reported implementation results (GAP-B7). **Or** the Lead rules that sampled conformance never gates reward and only `PostComplete` counts, until a production policy exists. | C3–C5 | F8 | **Decided (§5a): only the complete check gates rewards; the digest court stays on the DESIGN list, nobody builds it now** | — |
+| GAP-70 | Sampled conformance: a court for vector logits / commit digests (OB-P0 GAP 2); vector refutation for a new class (GAP-B6); self-reported implementation results (GAP-B7). **Or** the Lead rules that sampled conformance never gates reward and only `PostComplete` counts, until a production policy exists. | C3–C5 | F8 | **Release decision (§5a): only the complete check gates rewards.** RFC02 §14.18–14.20 adds a separate typed candidate trace court, point-unit DA/default and bounded WholeValue, including parameter-Gather dependency courts, without a prior Final; legacy flat-digest courts, production policy and implementation independence remain open. This does not enable sampled rewards | — |
 | GAP-71 | SDK fresh verifiers: a public seal read for v3 attempts (GAP-B17, condition 9) → **OPVB** (S–M); a fresh complete-check verifier (GAP-B10) → **G14C** (S). | C2 | F8 | OPVB / G14C | S–M |
 | GAP-80 | DECISION: the legacy V2 Panel route cannot meet G14 (§3.9). Does `LEGACY_PANEL_ROUTE` keep earning after the full-activation release (ruling #5) despite PRINCIPLES §6? If G14 is required there: RFC-0014 P1–P4 on V2 (shared non-seat filer, `CommittedKernelWitness`, a Final-holding reservation for non-seat pursuits, direct-proof priority over open courts), plus a chain-path non-seat E2E for each of F9–F16. | all | F9–F16 | **With the user (§5a)**; meanwhile "not Panel=0 / not new-reward eligible"; no XL work starts | XL |
 | GAP-81 | A `Passed` class's V2 REAL work has no G14 path (§3.10). **Decided (§5a):** the reward gate is per CLAIM verification route. | all | F17 | **OPVB** implements | L |
@@ -686,6 +1275,21 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   inverse `kernel_route_test_opv_ineligible_v1`); legacy rows updated to LG14-B's V-fold; BUDGET hook coverage listed. Integration
   compile fix: `2d93ac288` did not build — the BUDGET merge dropped the `Ok(())` and closing brace of LG14-B's
   `palw_legacy_held_signature_ok` in `processor.rs`; restored.
+* 2026-10-11 — G14-B (§2c): maximum-profile budgets and deadlines. `misaka-palw-kernel::budget` (route carriage, chunk-counting windows, the worst-case pursuit schedule, legacy sessions, population). Segmented demands now count chunks. Segmented classes get a derived liability horizon and are refused by name past a 436-DAA lifetime. The legacy 4-session FAIL is derived. Kernel 285, core 51 and node 19 PASS.
+* 2026-10-11 — G14-S (§2c, branch `g14/s-scope-gates`): the cumulative court scope enforced (table 28, per-requester units and dismissals, the OPV v1/v2 clear budget), the scope report made the per-claim reward gate (`COURT_SCOPE_INCOMPLETE`), DA16b option (a) flat 64-element hiding tiles with leaf-hash DA and the hiding-leaf / hiding-decode courts, option (c) finished; 9B-8k derived incomplete (four relation types above one carrier).
+* 2026-10-11 — lane G14-V (`g14/v-all-violations` on `8173dae20`): §2c. Authenticated subtree descent replaces the linear legacy
+  scan in the production filer; localization past an agreeing step tree (logits / forged token). Real-service V-node runs on the
+  floor: 5 step-lie op kinds + honest twin, 7 trace/token/output/input/state-identity lies, 2 post-Final lies, 2 LG14-B lies — all
+  PASS; kernel canonical gather / matmul / clamp ×(Panel, OPV)×(pre, post Final) PASS; `g14_k2s_` 15 PASS; `r4x_` 11 PASS / 1 FAIL
+  (integration-owned, see §2c.2).
+  Regression on this head: kaspad `palw_fraud_filer` 20, `accepted_objects_walk_tests` 7, `reporter_filer::tests` 21,
+  `palw_filer_held::e2e` 27 (LG14-B honest-claim guard updated to the past-step semantics), core `palw_legacy` 20 +
+  `palw_auth_descent` 5, consensus `t12_a2u` 3 and `lg14a_` 8 — PASS; normal `kaspad` lib build OK. Codex's
+  `fresh_public_bond_service_carries_reserved_da_to_objective_default` FAILED twice on its 360 s wall-clock deadline under host load
+  (load average 10–15; reached DAA ~2,036 of the 2,231 default) and PASSED (objective DA default at 2,236) with the deadline raised
+  locally to 1,500 s — the raise is not committed; the test's wall-clock bound is load-sensitive.
+* 2026-10-11 — G14-R (§2d): recovery and the external path. `misaka-palw-remote::pursuit` (kernel pursuit planner rebuilt from public rows, dry-run filings, resume bound, deterministic carriers); kernel ledger: identical proof re-seal is a no-op (dormant route); V-node recovery cases for K2-TIR v2 (Panel/OPV), K2-TIR-v4 and the legacy public filer (restart, reorg + DAG merge, full IBD, pruned import, deadline); a real gRPC/wRPC socket in front of a test node (ops 202, 204–206, 210–212, 231, submitTransaction) with disconnect/reconnect and node swap; the actual service resumes after a restart and on a fresh database. Consensus 14 + 60 regression PASS, kernel 286 PASS, kaspad service 1 PASS (+16 unit); codex's fresh-service test times out at 360 s on this host (UNKNOWN). Live drill not run (infeasible: no drill arming for the public filer / kernel route, no seat-collusion knob).
+
 
 
 2026-10-11の公開identity追及／H1 carriage／DNS lock修正の最終sourceは、exact serviceとDA非応答serviceの2件を含む **77 unique PASS**、通常node binary check成功、fresh shipping harvest／再読込 **361 pin差分なし**。G14全域は未達である。残りは全familyの正規入口→公開job/input/初期state取得→各違反の局所化・終局→scope/DA gate→最大profile/期限→restart/reorg/IBD/RPC→実運用規模の測定の順で進める。詳細と失敗を含む生logは[監査記録](../../audit/g14-review-2026-10-10/implementation.md)、現在の順序は[フィードバック](../../audit/g14-review-2026-10-10/feedback.md#残りの実装順序2026-10-11)を参照。
@@ -704,3 +1308,5 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
 
 
 2026-10-11 public constrained-selection follow-up: the fresh service tests for forbidden token, premature stop and beaten admitted token all PASS (3 tests, 444.71 s), including producer and all five Valid signers' conviction, positive collection and reporter commit/offence/reveal. False-Valid preflight now reads the gate/fold's block-context session rule. The node tiled planner requests at most two selected public tiles and authenticates them through the existing court predicate; its builder/book/engine regressions PASS, while a registered tiled family's actual service remains unverified. This round's node checks total 62 unique PASS (30 filer, 16 LG14-B, 12 False-Valid, 1 history, 3 service); normal node check PASS. Fresh core filing (5), attribution (19), and decode-constraint (19) regressions add 43 unique PASS, for 105 unique PASS in this round. The initial core build failed for disk capacity; the retry reduced only core test debug symbols and passed. Shipping harvest was not rerun. Maximum terminal carriage, model/tokenizer/table association, remaining active families, initial/prefix state, network recovery and full resource/economic guarantees remain open. ADR-0177 D7 and shipping activation refusal are retained. See [evidence and remaining work](../../audit/g14-review-2026-10-10/tiled-constraint-public-status.md).
+* 2026-10-11 — G14-K (§2g): the kernel route's public verifier inside kaspad's `PalwPanelService` (`palw_kernel_verifier`, `--palw-kernel-model`), driving `misaka-palw-remote::pursuit` (extended: consumer ledger, program / segmented / typed checks, block material, step sends). V-node(svc) for K2-TIR-v2 Panel-licensed with every seat colluding: gather / MatMul / clamp convicted pre- and post-Final, honest twin Final, restart mid-pursuit without a second seal (kaspad 2 PASS); the class registered through the production onboarding path (no test hook). v4 segmented (demand + Respond → conviction; withheld → DA default) and typed memory at V-node(harness) through the same library functions. No consensus change, nothing armed.
+* 2026-10-11 — G14-L (§2h): parallel reserved sessions (lanes, ≤ 64 a session, ≤ 128 extra a reservation, a DA-6 price a lane, deadline + 1 DAA a lane) and the k-ary authenticated descent on the legacy held route, behind both dormant legacy fences (no wire change). Legacy held 8k (2^27 leaves) fits in 4 sessions `[1, 36, 16, 1]`, filed 4,906 of 5,400; height ≥ 30, 2^40 and 2M refused by name (`PARALLEL_SESSIONS`). V-fold: 8k-shaped pursuit on the t12 lattice convicts / defaults on the derived schedule; coalition bounded; restart mid-round. Nothing armed.

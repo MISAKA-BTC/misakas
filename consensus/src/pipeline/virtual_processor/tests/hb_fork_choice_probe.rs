@@ -2283,12 +2283,31 @@ fn duel_release_set(at: u64, cap: bool) -> Duel {
 /// Two nodes on testnet-12 with harness cards and whatever fences `arm` sets, both loading under the
 /// ARMED bundle, and the two payments that spend card 1's float.
 fn duel_on(arm: impl FnOnce(&mut kaspa_consensus_core::config::params::Params)) -> Duel {
+    duel_on_retired(arm, None)
+}
+
+/// [`duel_on`], then `retirement` set on the built (validated) config: the complete copy, retirement included, is validated again,
+/// tolerating only ADR-0178's ordering rule (`PALW_DNS_RETIREMENT_NEEDS_RULE_E_V1` — rule E armed at or below the retirement), a fence
+/// this binary refuses and `validate_palw_v2` checks after every other refusal. A private test policy, never a release schedule.
+fn duel_on_retired(
+    arm: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
+    retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
+) -> Duel {
     let (config, _, premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
     arm(&mut params);
     let cap = params.palw_capacity_weight_cap_fence().map(|f| f.daa_score());
-    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    let mut config = ConfigBuilder::new(params).skip_proof_of_work().build();
     config.params.validate_palw_v2().expect("a runnable testnet-12 ruleset");
+    if retirement.is_some() {
+        config.params.palw_dns_retirement = retirement;
+        match config.params.validate_palw_v2() {
+            Ok(()) => {}
+            Err(kaspa_consensus_core::palw_mode_v2::PalwModeV2Error::Invalid(why))
+                if why == kaspa_consensus_core::palw_fork_choice_rule_e_v1::PALW_DNS_RETIREMENT_NEEDS_RULE_E_V1 => {}
+            Err(other) => panic!("the complete ruleset with its retirement validates (rule E's order aside): {other:?}"),
+        }
+    }
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
         unreachable!("ConsensusV2")
     };
@@ -2845,5 +2864,8 @@ async fn capacity_probe_w_t6c_lane_a_keeps_a_non_operators_private_claims_create
     }
 }
 
+// FINX (2026-10-08): the finality guard against the PALW fork choice, multi-node (P0).
+mod finality_consistency;
 // LIVE-R1 (2026-10-08): H1's devnet partition that healed on the wire and stayed split.
 mod partition_rejoin;
+mod private_final;

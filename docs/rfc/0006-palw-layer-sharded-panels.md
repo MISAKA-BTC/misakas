@@ -3,6 +3,9 @@
 > **Status update 2026-10-08 (supersedes every "dormant" / "None on every preset" wording below that predates it):** `palw_tir_shard_v1` is **ARMED on testnet-12 at the int-11/12 flag day, DAA 5,300** (`PALW_T12_INT11_FENCES_V1`); it stays dormant on every other preset. Fold, cells, receipts by parts, the exact court (`TirShardCourtAccused`, any Active bond) and the kaspad e2e are IMPLEMENTED_AND_TESTED; per-segment resource pricing, a non-seat public cell watcher, a processor-level reorg/duplicate-receipt test, the V3 per-shard draw and the D-S1…D-S6 drill evidence are open (`docs/design/palw/remaining-rfc-integration-matrix.md`). Any change to an armed rule needs a new versioned fence.
 >
 
+> **Implementation update 2026-10-11:** The non-seat watcher, dormant segment-resident pricing and per-shard V3 engine are implemented; their implementation is not activation approval. V3 restore now derives its seal/entropy commitments and retains the verified output after shared-epoch pruning under explicit engine carriage version 2. Live shard v1 at DAA 5,300 is preserved. See [SHARD §1.4](../design/palw/shard-rfc6-10.md#14-restore-time-seal-and-entropy-provenance-2026-10-11) and the [four-RFC audit](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md). D-S drill, public source/soundness, economic and worst-resource approvals remain open.
+>
+
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -851,10 +854,13 @@ with a declared plan:
   `misaka-palw-tir-exec`; batched on a device by `misaka-palw-tir-gpu`), the readiness proof over a
   shard's rows, and the ledger's need for a shard (`PalwRoleMemoryNeedV1` over the shard's bytes).
 
-## Open questions
+## Historical open questions — initial baseline
 
-Each question carries the **recommended default** (marked so) that this text assumes until the user
-decides.
+The following list records the initial alternatives. The v1 implementation's constants record
+adoption of their recommended defaults on 2026-10-03 (`palw_tir_shard_v1.rs`), and the implemented
+baseline is described under **Decision** below. These are not unresolved choices for the live v1
+rules. New probabilistic coverage, V3 strata and segment-resident pricing have their own later
+review / activation requirements; this historical list does not authorize their activation.
 
 1. **One fence or two?** A plan-and-draw fence and a licensing fence would let a network draw stratified
    panels and attest cells before licensing by parts (shadow mode).
@@ -898,7 +904,55 @@ decides.
 
 ## Decision
 
-<Open.>
+The implemented v1 baseline adopts the nine recommended defaults above: one original shard fence;
+three class seats with two required attesters per cell and an outsider over the whole shard;
+`TirStepRun` DA; layers-only as the default with `S_P = 2` offered for the S1 plan; work-share lock / pay
+with the existing floor; the binding shard's effective readiness for class room; the network-seat-budget
+minimum shard count with at most twice the minimum; and the original measured-speed constant.
+`palw_tir_shard_plan_shape_v1` enforces the offered position counts, 2..64 shards, the layer-count bound
+and the derived under/over-sharding limits. These choices describe the existing implementation.
+
+The v1 fence is live on testnet-12 at DAA 5,300. The later [RFC6/10 implementation record](../design/palw/shard-rfc6-10.md)
+adds V3 per-shard draws and non-seat watchers behind the permissionless-panel fence, and resident-aware
+pricing behind the separate dormant `palw_tir_shard_segment_v2` fence. Live v1 work pricing is preserved.
+The [four-RFC design audit](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md) tracks the remaining
+coverage / public-court / worst-cell capacity / fee evidence. Model acquisition follows ADR-0177 and
+the later §3.1 amendment; historical readiness is not approval of a new acquisition-based earning gate.
+
+## V3 shard assignment: retained derivation and restore contract — 2026-10-11
+
+The later permissionless V3 shard draw has a pre-entropy frozen population and subject; this
+contract does not amend live lane-A assignment at DAA 5,300. V3 assignment randomness remains
+separate from RFC07 Part VI's computation challenge.
+
+- The seal id must derive from network/ruleset, accepted immutable work subject and exposure,
+  acceptance order, parent checkpoint, first future beacon epoch, frozen population root and
+  strata. Lookup claim id and signature are not entropy. A matching copied id in a binding
+  cannot substitute for this derivation.
+- At readiness the engine copies the already verified epoch output into the claim's retained
+  derivation material. Initial and retry bindings use that same output and subject. Terminal
+  release/void may prune the shared epoch row, but must preserve the claim's output and binding
+  history while that claim remains tracked. Live output must agree with the shared epoch row;
+  missing material is refused, never filled with local randomness or a guessed output.
+- Every restored `EntropyReady` and binding must rederive the seed/beacon id and exact policy
+  readiness/assignment clocks. Frozen role/membership and per-stratum operator/retry exclusions
+  remain mandatory. Whole carriage and keyed journal restoration enforce these checks. Import
+  also requires its trusted consensus root; retained output alone is not a beacon certificate or
+  authentication of an arbitrary self-consistent checkpoint. Historical collateral headroom and
+  exact ranking require the authenticated transition history, not this material alone.
+- The implementation uses explicit engine carriage/cursor version **2**, committed by the
+  Some-only permissionless fence. Obsolete version-1 experimental states are refused; their
+  reconstruction requires authoritative replay. This adds no new lifecycle object tag or delta
+  number and arms no fence. Absent/never fences preserve public identities.
+- The serialized import envelope must include population/stratum bits, every history binding and
+  used operator, the current phase's binding copy, derived reservations and retained entropy.
+  It must permit every state under the validated structural caps. The derived current bound is
+  recorded in SHARD §1.4; a legal 4,096-seat flat checkpoint previously exceeded the old envelope.
+  Serialized-size coverage is not a RAM/CPU/latency/service-rate or participation approval.
+
+These rules close restore-time derivation omissions. They do not approve source independence,
+grinding resistance, probabilistic coverage, public-court costs, fee/capital floors or network
+migration. V3 is dormant on all public presets and real activation remains refused.
 
 ## Shared verification-challenge boundary — 2026-10-08
 

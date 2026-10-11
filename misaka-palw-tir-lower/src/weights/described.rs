@@ -23,6 +23,9 @@ struct Module {
     /// The checkpoint's name of each role's tensor (`None`: an optional role the module lacks).
     role_names: Vec<Option<String>>,
     shape: Vec<usize>,
+    /// The parameters this module decodes with: the configuration's, or the module's own where the configuration gives it some
+    /// (MLX's per-module entries: a router kept at 8 bits in a 4-bit model).
+    params: BTreeMap<String, i64>,
 }
 
 type RoleCache = Mutex<Option<(String, Arc<Vec<Option<RoleTensor>>>)>>;
@@ -41,10 +44,25 @@ impl DescribedSource {
     /// Every module of the format the checkpoint holds is found and its descriptor's rules checked; a module
     /// that breaks them is an error naming it.
     pub fn new(base: Box<dyn TensorSource + Sync>, format: Arc<QuantFormat>, params: BTreeMap<String, i64>) -> Result<DescribedSource> {
+        Self::new_with(base, format, params, &BTreeMap::new())
+    }
+
+    /// [`Self::new`] with per-module entries (`crate::prequant::QuantConfig::module_params`), by module name (`<module>`
+    /// before the role suffixes): `Some(params)` — the module decodes with those instead of `params`; `None` — the
+    /// configuration keeps the module in float. Either kind of entry that the checkpoint contradicts — parameters for a module
+    /// it does not store in this format, or a module declared float that it stores packed — is an error naming it: a
+    /// configuration and a checkpoint that disagree are not read past.
+    pub fn new_with(
+        base: Box<dyn TensorSource + Sync>,
+        format: Arc<QuantFormat>,
+        params: BTreeMap<String, i64>,
+        overrides: &BTreeMap<String, Option<BTreeMap<String, i64>>>,
+    ) -> Result<DescribedSource> {
         let v = format.as_virtual().ok_or_else(|| LowerError::bad(format!("quant format `{}` is not a virtual format", format.name())))?;
         let anchor = v.anchor_suffix().to_string();
         let mut modules = BTreeMap::new();
         let mut hidden = BTreeSet::new();
+        let mut used = BTreeSet::new();
         for name in base.names() {
             let Some(module) = name.strip_suffix(anchor.as_str()) else { continue };
             let present = |suffix: &str| base.metadata(&format!("{module}{suffix}")).map(|m| (m.dtype, m.shape.len()));
@@ -57,7 +75,10 @@ impl DescribedSource {
                 let n = format!("{module}{suffix}");
                 match base.metadata(&n) {
                     Some(m) => {
-                        let data = if m.bytes <= 4096 { base.read_slice(&n, 0..m.bytes)? } else { Vec::new() };
+                        // A small role tensor's bytes, for a shape that reads them (bitsandbytes' `quant_state`). A source that holds
+                        // headers only (a census, a preflight before the download) has none: the tensor is then known by its header, and
+                        // a shape that needs its bytes is refused by the descriptor, by name.
+                        let data = if m.bytes <= 4096 { base.read_slice(&n, 0..m.bytes).unwrap_or_default() } else { Vec::new() };
                         roles.push(Some(RoleTensor { shape: m.shape, dtype: m.dtype, data }));
                         hidden.insert(n.clone());
                         role_names.push(Some(n));
@@ -68,8 +89,27 @@ impl DescribedSource {
                     }
                 }
             }
-            let shape = v.shape(&roles, &params).map_err(|e| LowerError::weights(format!("`{module}`: {e}")))?;
-            modules.insert(module.to_string(), Module { role_names, shape });
+            let module_params = match overrides.get(module) {
+                Some(Some(p)) => {
+                    used.insert(module.to_string());
+                    p.clone()
+                }
+                Some(None) => {
+                    return Err(LowerError::weights(format!(
+                        "the configuration keeps `{module}` in float, and the checkpoint stores it packed in the {} format",
+                        format.name()
+                    )));
+                }
+                None => params.clone(),
+            };
+            let shape = v.shape(&roles, &module_params).map_err(|e| LowerError::weights(format!("`{module}`: {e}")))?;
+            modules.insert(v.served_name(module), Module { role_names, shape, params: module_params });
+        }
+        if let Some(m) = overrides.iter().find(|(m, p)| p.is_some() && !used.contains(*m)).map(|(m, _)| m) {
+            return Err(LowerError::weights(format!(
+                "the configuration gives `{m}` its own {} parameters, and the checkpoint holds no such module in that format",
+                format.name()
+            )));
         }
         Ok(DescribedSource { base, format, params, modules, hidden, cache: Mutex::new(None) })
     }
@@ -106,7 +146,8 @@ impl DescribedSource {
     fn decode(&self, module: &str, range: Range<usize>) -> Result<Vec<f32>> {
         let roles = self.roles_of(module)?;
         let v = self.format.as_virtual().expect("checked at construction");
-        v.decode_range(&roles, &self.params, range).map_err(|e| LowerError::weights(format!("`{module}`: {e}")))
+        let params = self.modules.get(module).map_or(&self.params, |m| &m.params);
+        v.decode_range(&roles, params, range).map_err(|e| LowerError::weights(format!("`{module}`: {e}")))
     }
 }
 
@@ -205,7 +246,7 @@ pub fn served_names(names: &BTreeSet<String>, format: &QuantFormat) -> BTreeSet<
             for (_, suffix, _) in v.roles() {
                 out.remove(&format!("{module}{suffix}"));
             }
-            out.insert(module.to_string());
+            out.insert(v.served_name(module));
         }
     }
     out

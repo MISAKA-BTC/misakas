@@ -390,6 +390,7 @@ use misaka_palw_kernel::seg::{
 };
 use misaka_palw_kernel::seg_detect::check_claim_by_reexecution_v1;
 use misaka_palw_kernel::seg_encoder::{EncoderBindingV1, encoder_binding_v1, trace_encoder_v1};
+use misaka_palw_kernel::seg_scope::{SegValueModeV1, seg_value_modes_v1};
 use misaka_palw_kernel::trace::{ParamCommitmentsV1, TraceV1};
 use misaka_palw_tir::{MapParams, ParamSource, Tensor};
 
@@ -641,7 +642,7 @@ fn produce(w: &World, job: Digest, prompt: &[u32], lie: Option<(u16, u16)>) -> P
         let v = t.data[0];
         t.data[0] = if t.dtype.contains(v + 1) { v + 1 } else { v - 1 };
     }
-    let c = seg_commitments_of_trace_v1(&TraceV1 { values: values.clone(), inputs: Vec::new() });
+    let c = seg_commitments_of_trace_v1(&w.enc.program, &TraceV1 { values: values.clone(), inputs: Vec::new() });
     let class = &w.l.classes[&w.class];
     let evidence =
         build_segmented_evidence_v1(class.header(w.class), &w.d, prompt.len() as u32, &prompt_root_of_ids_v1(prompt), &[], &c);
@@ -740,11 +741,12 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
         let ctx = view.context();
         assert_eq!(check_positions_v1(&ctx, &honest, &art, &prompt, &[0]), SegFindingV1::Clean, "{fixture}: honest");
         let own = trace_encoder_v1(&w.enc.program, &w.enc.params, &w.enc.binding, &prompt).unwrap();
-        let roots = seg_commitments_of_trace_v1(&own).position_roots;
+        let roots = seg_commitments_of_trace_v1(&w.enc.program, &own).position_roots;
         assert_eq!(check_claim_by_reexecution_v1(&ctx, &roots, None, &honest, &art, &prompt).finding, SegFindingV1::Clean);
         // Every honest element filed (the first, a middle and the last of every value) is dismissed, and every filing is within the
         // court's priced bound for its relation: the price the gate holds against the carrier is an upper bound of what is filed.
         let occ = w.enc.program.occurrences();
+        let modes = seg_value_modes_v1(&w.enc.program);
         let node_count: u64 = occ.iter().map(|(b, _)| w.enc.program.blocks[*b as usize].nodes.len() as u64).sum();
         let (mut filed, mut worst_ratio) = (0usize, 0f64);
         for (s, (b, _)) in occ.iter().enumerate() {
@@ -760,6 +762,39 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
                 )
                 .0;
                 assert!(priced <= w.plan_worst, "{fixture}: ({s}, {n}): a relation's price is within the plan's worst court");
+                // G14-S: a hiding value (DA16b option (a)) is judged one 64-element tile at a time; a withheld one by its whole-value
+                // court (the lies below) — its element court cannot open a hiding operand.
+                match modes[s][n] {
+                    SegValueModeV1::Hiding => {
+                        let tiles = misaka_palw_kernel::hide::hide_tiles_v1(len);
+                        for tile in [0, tiles / 2, tiles.saturating_sub(1)] {
+                            let filing = misaka_palw_kernel::element::prove_hiding_leaf_v1(
+                                &ctx,
+                                &honest,
+                                &art,
+                                &prompt,
+                                (0, s as u16, n as u16),
+                                tile,
+                            )
+                            .unwrap_or_else(|why| panic!("{fixture}: ({s}, {n}) tile {tile}: {why}"));
+                            let fault = SegFaultV1::HidingLeaf(filing);
+                            let bytes = fault.to_bytes().len() as u64;
+                            assert!(bytes <= priced, "{fixture}: ({s}, {n}) tile {tile}: filed {bytes} B above its priced {priced} B");
+                            worst_ratio = worst_ratio.max(bytes as f64 / priced as f64);
+                            assert!(
+                                matches!(
+                                    misaka_palw_kernel::element::verify_seg_fault_v1(&ctx, &fault),
+                                    Err(misaka_palw_kernel::verify::DismissalV1::NoFault)
+                                ),
+                                "{fixture}: ({s}, {n}) tile {tile}: an honest tile is dismissed"
+                            );
+                            filed += 1;
+                        }
+                        continue;
+                    }
+                    SegValueModeV1::Withheld => continue,
+                    SegValueModeV1::Clear => {}
+                }
                 for e in [0, len / 2, len.saturating_sub(1)] {
                     let filing = prove_element_v1(&ctx, &honest, &art, &prompt, (0, s as u16, n as u16), e)
                         .unwrap_or_else(|why| panic!("{fixture}: ({s}, {n}) element {e}: {why}"));
@@ -782,11 +817,14 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
             "[k2s-enc] v5 {fixture}: {filed} honest element filings dismissed, each within its priced bound (largest ratio {worst_ratio:.3})"
         );
         let (_, s, n) = targets[3];
-        let filing = prove_element_v1(&ctx, &honest, &art, &prompt, (0, s, n), 0).unwrap();
-        let ev = w.block(vec![obj(
-            OUT,
-            O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(SegFaultV1::Element(filing).to_bytes()) },
-        )]);
+        let honest_fault = match modes[s as usize][n as usize] {
+            SegValueModeV1::Hiding => SegFaultV1::HidingLeaf(
+                misaka_palw_kernel::element::prove_hiding_leaf_v1(&ctx, &honest, &art, &prompt, (0, s, n), 0).unwrap(),
+            ),
+            _ => SegFaultV1::Element(prove_element_v1(&ctx, &honest, &art, &prompt, (0, s, n), 0).unwrap()),
+        };
+        let ev = w
+            .block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(honest_fault.to_bytes()) })]);
         assert!(ev.iter().any(|e| matches!(e, E::ProofDismissed { .. })), "{fixture}: an honest element is dismissed: {ev:?}");
 
         // A lie in each target value.
@@ -816,5 +854,184 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
         // The honest claim finalizes at the window's end.
         let ev = w.beat_to(w.daa + 80);
         assert!(ev.iter().any(|e| matches!(e, E::Final { claim, .. } if *claim == honest.claim.id())), "{fixture}: {ev:?}");
+    }
+}
+
+/// The new role scope is independent of the legacy V2 binding wire. Real lowered fixture
+/// weights are sufficient to compute/open the model root: no synthetic job placeholders
+/// are loaded into either the inventory or the kernel parameter map.
+#[test]
+fn descriptor_scoped_encoder_artifact_binding_uses_only_model_weights() {
+    use kaspa_consensus_core::Hash64;
+    use kaspa_consensus_core::palw_artifact::{artifact_leaf_parts_v1, artifact_root_v1};
+    use kaspa_consensus_core::palw_onboarding_v1::{
+        ArtifactMismatchProofV1, ArtifactTileOpeningV3, verify_artifact_mismatch_v1, verify_artifact_mismatch_v2,
+    };
+    use kaspa_consensus_core::palw_tir_artifact_v1::{
+        PalwTirModelInventoryV2, palw_tir_inventory_leaf_count_v1, palw_tir_visit_inventory_rows_v1,
+    };
+    use misaka_palw_kernel::merkle3::{LeafOpeningV3, tensor_commitment_v3};
+    use misaka_palw_sdk::tir_stream::{
+        PalwTirRangeSourceV1, palw_tir_model_inventory_root_streamed_v2, palw_tir_model_open_leaf_streamed_v2,
+    };
+    use std::cell::Cell;
+    struct Weights<'a> {
+        params: &'a MapParams,
+        model_count: usize,
+        reads: Cell<usize>,
+    }
+    impl PalwTirRangeSourceV1 for Weights<'_> {
+        fn read_range(&self, param: u16, layer: Option<u16>, range: std::ops::Range<u64>, out: &mut [u8]) -> Result<(), String> {
+            assert!((param as usize) < self.model_count, "job input must never be read from a model artifact");
+            self.reads.set(self.reads.get() + 1);
+            let t = self.params.param(param, layer).ok_or("missing model tensor")?;
+            let bytes: Vec<_> = t.data.iter().flat_map(|v| v.to_le_bytes()[..t.dtype.width()].to_vec()).collect();
+            out.copy_from_slice(bytes.get(range.start as usize..range.end as usize).ok_or("outside model tensor")?);
+            Ok(())
+        }
+    }
+    for fixture in ["hf-enc/bert", "hf-cls/xlmr_rerank"] {
+        let enc = tiny_encoder(fixture, 12);
+        let d5 = k2_tir_v5_descriptor();
+        let scope = PalwTirModelInventoryV2::new(&d5, &enc.program).unwrap();
+        let v4 = PalwTirModelInventoryV2::new(&k2_tir_v4_descriptor(), &enc.program).unwrap();
+        assert_eq!(scope.descriptor_digest(), d5.digest());
+        assert_eq!(scope.model_param_count(), enc.binding.first_input as usize);
+        assert_eq!(v4.model_param_count(), enc.program.params.len());
+        assert_eq!(v4.leaf_count(), palw_tir_inventory_leaf_count_v1(&enc.program).unwrap());
+        assert_eq!(v4.leaf_count(), scope.leaf_count() + 2, "ids/count are two legacy inventory leaves");
+        assert_eq!(scope.leaf_index(enc.binding.first_input, None, 0), None);
+        assert_eq!(scope.leaf_index(enc.binding.first_input + 1, None, 0), None);
+        let src = Weights { params: &enc.params, model_count: scope.model_param_count(), reads: Cell::new(0) };
+        let (root, count) = palw_tir_model_inventory_root_streamed_v2(&scope, &src).unwrap();
+        let mut expected = Vec::new();
+        palw_tir_visit_inventory_rows_v1(&enc.program, &mut |r| {
+            if (r.param as usize) < scope.model_param_count() {
+                let t = enc.params.param(r.param, r.layer).unwrap();
+                let bytes: Vec<_> = t.data.iter().flat_map(|v| v.to_le_bytes()[..t.dtype.width()].to_vec()).collect();
+                let piece = &bytes[r.row_start as usize..(r.row_start + r.len) as usize];
+                expected.push(artifact_leaf_parts_v1(&enc.program.params[r.param as usize].name, r.layer, r.row_start, piece));
+            }
+        })
+        .unwrap();
+        assert_eq!(Some(root), artifact_root_v1(&expected));
+        assert_eq!(count as usize, expected.len());
+        let pc = ParamCommitmentsV1::of_v3(&enc.params);
+        let prepared =
+            misaka_palw_sdk::kernel_params::prepare_kernel_params_v3(&d5, &enc.program, &src, 1 << 26, 1 << 28, &mut |_, _, _| {})
+                .unwrap();
+        assert_eq!(prepared.params, pc, "root preparation uses exactly the same model role set");
+        let pc_root = Hash64::from_bytes(pc.root());
+        let instances = ArtifactMismatchProofV1::Instances { commitments: pc.clone() };
+        assert!(verify_artifact_mismatch_v2(&scope, root, pc_root, &instances).is_err(), "truthful v5 root is not fraud");
+        assert!(
+            verify_artifact_mismatch_v1(&enc.program, root, pc_root, &instances).is_ok(),
+            "old wire still includes both trailing params"
+        );
+        assert!(verify_artifact_mismatch_v2(&v4, root, pc_root, &instances).is_ok(), "the same names confer no v4 input exclusion");
+        let (key, tensor) =
+            enc.params.tensors.iter().find(|((p, _), t)| (*p as usize) < scope.model_param_count() && !t.data.is_empty()).unwrap();
+        let index = scope.leaf_index(key.0, key.1, 0).unwrap();
+        let (opened_root, opening) = palw_tir_model_open_leaf_streamed_v2(&scope, &src, index).unwrap();
+        assert_eq!(opened_root, root);
+        let honest = ArtifactMismatchProofV1::TileV3 {
+            commitments: pc.clone(),
+            param: key.0,
+            layer: key.1,
+            kernel_tile: ArtifactTileOpeningV3::new(LeafOpeningV3::of(tensor, 0, 0, 0).unwrap()).unwrap(),
+            v2_opening: opening.clone(),
+        };
+        assert!(verify_artifact_mismatch_v2(&scope, root, pc_root, &honest).is_err());
+        let old_row = ArtifactMismatchProofV1::Row {
+            commitments: pc.clone(),
+            param: key.0,
+            layer: key.1,
+            kernel_row: misaka_palw_kernel::merkle::TensorOpeningV1::row(tensor, 0).unwrap(),
+            v2_opening: opening.clone(),
+        };
+        assert_eq!(
+            verify_artifact_mismatch_v2(&scope, root, pc_root, &old_row),
+            Err("a model-only v2 binding requires a bounded v3 tile, not a legacy tensor row")
+        );
+        assert!(verify_artifact_mismatch_v2(&v4, root, pc_root, &honest).is_err(), "model-only path cannot be copied into v4 scope");
+        let mut changed = tensor.clone();
+        changed.data[0] = if changed.data[0] == 0 { 1 } else { 0 };
+        let mut false_pc = pc.clone();
+        false_pc.by_instance.insert(*key, tensor_commitment_v3(&changed));
+        let false_root = Hash64::from_bytes(false_pc.root());
+        let lie = ArtifactMismatchProofV1::TileV3 {
+            commitments: false_pc,
+            param: key.0,
+            layer: key.1,
+            kernel_tile: ArtifactTileOpeningV3::new(LeafOpeningV3::of(&changed, 0, 0, 0).unwrap()).unwrap(),
+            v2_opening: opening,
+        };
+        assert!(verify_artifact_mismatch_v2(&scope, root, false_root, &lie).is_ok(), "public openings convict changed model bytes");
+        assert!(
+            verify_artifact_mismatch_v2(&scope, root, pc_root, &lie).is_err(),
+            "a proof for another bound kernel root has no force"
+        );
+        assert!(
+            verify_artifact_mismatch_v2(&scope, Hash64::from_bytes([9; 64]), false_root, &lie).is_err(),
+            "a copied inventory path has no force against another source root"
+        );
+        let mut forged_tile = lie.clone();
+        if let ArtifactMismatchProofV1::TileV3 { v2_opening, .. } = &mut forged_tile {
+            v2_opening.leaf_count += 2;
+        }
+        assert!(verify_artifact_mismatch_v2(&scope, root, false_root, &forged_tile).is_err());
+        // Optional explicit fixture export for the node test. create_new preserves an earlier
+        // capture; no source model or ordinary runtime is changed by running this test.
+        if let Ok(dir) = std::env::var("RFC02_MODEL_ARTIFACT_COURT_EXPORT_DIR") {
+            use std::io::Write;
+            let bundle = misaka_palw_sdk::tir_stream::ModelArtifactCourtBundleV2 {
+                version: 2,
+                descriptor: d5.clone(),
+                program_bytes: enc.program.encode(),
+                model_inventory_root: root,
+                params: pc.clone(),
+                honest: honest.clone(),
+                false_binding: lie.clone(),
+            };
+            let name = if fixture == "hf-enc/bert" {
+                "rfc02-bert-model-artifact-court.borsh"
+            } else {
+                "rfc02-xlmr-model-artifact-court.borsh"
+            };
+            std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(std::path::Path::new(&dir).join(name))
+                .unwrap()
+                .write_all(&borsh::to_vec(&bundle).unwrap())
+                .unwrap();
+        }
+        let mut missing = pc.clone();
+        missing.by_instance.remove(key);
+        let missing_root = Hash64::from_bytes(missing.root());
+        assert!(
+            verify_artifact_mismatch_v2(&scope, root, missing_root, &ArtifactMismatchProofV1::Instances { commitments: missing })
+                .is_ok()
+        );
+        let mut surplus = pc.clone();
+        surplus.by_instance.insert((enc.binding.first_input, None), *pc.by_instance.get(key).unwrap());
+        let surplus_root = Hash64::from_bytes(surplus.root());
+        assert!(
+            verify_artifact_mismatch_v2(&scope, root, surplus_root, &ArtifactMismatchProofV1::Instances { commitments: surplus })
+                .is_ok()
+        );
+        let before = src.reads.get();
+        assert!(palw_tir_model_open_leaf_streamed_v2(&scope, &src, count).is_err());
+        assert_eq!(src.reads.get(), before, "out-of-range opening refuses before reading bytes");
+        let mut forged = d5.clone();
+        forged.semantics_digest[0] ^= 1;
+        assert!(PalwTirModelInventoryV2::new(&forged, &enc.program).is_err());
+        let mut malformed = enc.program.clone();
+        malformed.params[0].shape = vec![u32::MAX; 4];
+        assert!(PalwTirModelInventoryV2::new(&d5, &malformed).is_err(), "invalid shape is rejected before inventory arithmetic");
+        println!(
+            "[rfc02-model-inventory] {fixture}: {} model params, {count} leaves; honest no-fault, changed/missing/surplus convicted; no job-input reads",
+            scope.model_param_count()
+        );
     }
 }

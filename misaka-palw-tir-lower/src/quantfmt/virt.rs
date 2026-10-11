@@ -17,9 +17,15 @@
 //! export reads this one unchanged. A source that serves them ([`crate::weights::described`]) lists the
 //! served names instead of the packed ones; an element range of the served tensor is evaluated without
 //! materialising the rest.
+//!
+//! A descriptor may name the served tensor `<module><serve_suffix>` instead. MLX's affine quantisation
+//! (`MLX_AFFINE`) keeps a module's packed codes under the float export's own name, `<module>.weight` (`U32`),
+//! beside `<module>.scales` and `<module>.biases`; with `serve_suffix: ".weight"` and the codes as the first
+//! (anchor) role, a `U32` `.weight` with its two companions is served as the float `<module>.weight`, and a
+//! float `.weight` (a module MLX left unquantised) is not a module of the format and passes through.
 
 use super::desc::{ConfigDesc, DecodeDesc, LayoutDesc, QuantFormatDesc};
-use super::expr::{Col, DslError, Mask, Node, R, compile, eval};
+use super::expr::{Col, DslError, Env, Mask, Node, R, Table, compile, eval};
 use super::tensors::{ConfigReader, ConfigRead, Defs, Rd, Role, RoleTensor, TEnv, TScope, check_roles, compile_roles, table};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -40,11 +46,13 @@ pub struct VirtualFormat {
     checks: Vec<(Node, String)>,
     value: Node,
     consts: Vec<String>,
+    /// The served tensor is `<module><serve_suffix>` (empty: `<module>`).
+    serve_suffix: String,
 }
 
 impl VirtualFormat {
     pub fn compile(d: &QuantFormatDesc) -> R<VirtualFormat> {
-        let LayoutDesc::Virtual { roles, axes, shape, checks } = &d.layout else {
+        let LayoutDesc::Virtual { roles, axes, shape, checks, serve_suffix } = &d.layout else {
             return Err(DslError("not a virtual layout".into()));
         };
         let DecodeDesc { target, group, q, scale, zero, min, value, code, offset_term, order } = &d.decode;
@@ -64,6 +72,18 @@ impl VirtualFormat {
         let rs = compile_roles(roles, &lane_names)?;
         if rs.is_empty() || !rs[0].required {
             return Err(DslError("a virtual layout's first role is required: it names the module".into()));
+        }
+        if serve_suffix.as_deref() == Some("") {
+            return Err(DslError("a virtual layout's serve_suffix, when declared, is not empty".into()));
+        }
+        let serve_suffix = serve_suffix.clone().unwrap_or_default();
+        // A served name may be a role's own name only when that role is the anchor (MLX: the packed codes sit under the float export's
+        // `<module>.weight`): then the anchor's dtype tells a packed module from a float one, and every other role is hidden beside it.
+        if let Some(r) = rs.iter().skip(1).find(|r| !serve_suffix.is_empty() && r.suffix == serve_suffix) {
+            return Err(DslError(format!(
+                "the served name `<module>{serve_suffix}` is the role `{}`'s, which is not the anchor",
+                r.name
+            )));
         }
         let mut tables = Vec::new();
         for (name, t) in &d.tables {
@@ -95,6 +115,7 @@ impl VirtualFormat {
             checks: chk,
             value,
             consts,
+            serve_suffix,
         })
     }
 
@@ -106,6 +127,16 @@ impl VirtualFormat {
     /// The suffix of the first role: a tensor ending with it is a module of this format.
     pub fn anchor_suffix(&self) -> &str {
         &self.roles[0].suffix
+    }
+
+    /// The suffix of the served tensor's name after the module's (`""`: the served tensor is `<module>`).
+    pub fn serve_suffix(&self) -> &str {
+        &self.serve_suffix
+    }
+
+    /// The name the module `module` is served under.
+    pub fn served_name(&self, module: &str) -> String {
+        format!("{module}{}", self.serve_suffix)
     }
 
     pub fn rank(&self) -> usize {
@@ -179,7 +210,7 @@ impl VirtualFormat {
     /// in `f32` is an error.
     pub fn decode_range(&self, roles: &[Option<RoleTensor>], params: &BTreeMap<String, i64>, range: Range<usize>) -> R<Vec<f32>> {
         let shape = self.shape(roles, params)?;
-        let total: usize = shape.iter().product();
+        let total = shape.iter().try_fold(1usize, |n, d| n.checked_mul(*d)).ok_or_else(|| DslError("virtual shape overflows".into()))?;
         if range.start > range.end || range.end > total {
             return Err(DslError(format!("{}: elements {range:?} of a tensor of {total}", self.name)));
         }
@@ -218,5 +249,67 @@ impl VirtualFormat {
 
     pub fn config(&self) -> Option<&ConfigDesc> {
         self.reader.config.as_ref()
+    }
+    /// Static bounds for the untrusted streaming route. Shape/check expressions may read headers
+    /// and parameters only, so preflight never depends on packed weight contents or lane values.
+    pub fn streaming_work(&self) -> R<usize> {
+        for n in self.shape.iter().chain(self.checks.iter().map(|(n, _)| n)) {
+            super::expr::streaming_nodes(n, Some((self.axes.len(), self.roles.len())))?;
+        }
+        super::expr::streaming_nodes(&self.value, None)
+    }
+
+    /// Evaluate at most 1024 elements through byte ranges of individual stored role tensors.
+    /// No whole-role load, float source wrapper, parallel cache or hidden model dispatch occurs.
+    /// The caller bounds and pins each provider read. At most 256 expression nodes are evaluated
+    /// per lane; the decoded buffer is <=4KiB and intermediate columns are <=2MiB in total.
+    pub fn decode_range_streamed(
+        &self,
+        roles: &[Option<RoleTensor>],
+        params: &BTreeMap<String, i64>,
+        range: Range<usize>,
+        read: &dyn Fn(usize, Range<usize>) -> R<Vec<u8>>,
+    ) -> R<Vec<f32>> {
+        self.streaming_work()?;
+        let shape = self.shape(roles, params)?;
+        let total =
+            shape.iter().try_fold(1usize, |n, d| n.checked_mul(*d)).ok_or_else(|| DslError("virtual shape overflows".into()))?;
+        if range.start > range.end || range.end > total || range.len() > 1024 {
+            return Err(DslError("FRONTEND_DESCRIPTOR_LIMIT: decode range".into()));
+        }
+        let mut base = self.const_env(roles, params)?.with_lanes(range.len());
+        let mut stride = 1usize;
+        for a in (0..shape.len()).rev() {
+            base.vars[a] = Col::I(range.clone().map(|k| ((k / stride) % shape[a]) as i64).collect());
+            stride = stride.checked_mul(shape[a]).ok_or_else(|| DslError("virtual stride overflows".into()))?;
+        }
+        let env = RangeEnv { base, read };
+        eval(&self.value, &env, Mask(None))?
+            .into_floats(range.len())
+            .into_iter()
+            .map(|v| {
+                let f = v as f32;
+                if f.is_finite() { Ok(f) } else { Err(DslError("FRONTEND_QUANT_NONFINITE: descriptor value".into())) }
+            })
+            .collect()
+    }
+}
+
+struct RangeEnv<'a> {
+    base: TEnv<'a>,
+    read: &'a dyn Fn(usize, Range<usize>) -> R<Vec<u8>>,
+}
+impl Env for RangeEnv<'_> {
+    fn lanes(&self) -> usize {
+        self.base.n
+    }
+    fn var(&self, s: usize) -> &Col {
+        self.base.var(s)
+    }
+    fn table(&self, s: usize) -> &Table {
+        self.base.table(s)
+    }
+    fn read(&self, s: usize, index: &[Col], mask: Mask<'_>) -> R<Col> {
+        self.base.read_with(s, index, mask, &|r, range| (self.read)(r, range).map(std::borrow::Cow::Owned))
     }
 }

@@ -64,7 +64,7 @@ fn resnet_spec(cfg: &Value, size: (u32, u32), ms: ([f64; 3], [f64; 3]), out: Cnn
         }
         in_ch = *out_ch;
     }
-    CnnSpec { architecture: cfg["architectures"][0].as_str().unwrap().into(), h: size.0, w: size.1, mean: ms.0, std: ms.1, ops, out, ignored: vec![], aliases: vec![] }
+    CnnSpec { architecture: cfg["architectures"][0].as_str().unwrap().into(), h: size.0, w: size.1, mean: ms.0, std: ms.1, ops, out, ignored: vec![], aliases: vec![], head: None }
 }
 
 struct Fixture {
@@ -286,7 +286,14 @@ fn the_resnet_adapter_equals_the_rust_structure() {
         let cfg: Value = serde_json::from_str(&text).unwrap();
         for (size, out) in [((32u32, 32u32), CnnOut::GlobalAvg), ((224, 224), CnnOut::GlobalAvg)] {
             let mut want = resnet_spec(&cfg, size, ms, out);
-            want.ignored = vec!["classifier.".into()];
+            // `ResNetForImageClassification` is the classifier (the head is read); `ResNetModel` ignores `classifier.`.
+            if cfg["architectures"][0] == "ResNetForImageClassification" {
+                let labels = cfg["id2label"].as_object().map_or(2, |m| m.len());
+                want.head = Some(cnn::CnnHead { name: "classifier.1".into(), labels, bias: true });
+                want.ignored = vec![];
+            } else {
+                want.ignored = vec!["classifier.".into()];
+            }
             want.aliases = vec![["".into(), "resnet.".into()]];
             let got = cnn::parse_cnn(&text, Some(size), None).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(serde_json::to_value(&got).unwrap() == serde_json::to_value(&want).unwrap(), "{name} at {size:?}: the adapter's spec differs from the Rust structure");
@@ -534,6 +541,7 @@ fn a_network_with_tf_padding_hard_activations_channel_norm_and_layer_scale_follo
         out: CnnOut::GlobalAvgNorm { name: "head.norm".into(), eps: 1e-5 },
         ignored: vec![],
         aliases: vec![],
+        head: None,
     };
     spec.validate().expect("valid");
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(23);
@@ -793,6 +801,7 @@ fn a_depthwise_separable_network_with_dilation_follows_a_naive_reference() {
         out: CnnOut::Map,
         ignored: vec![],
         aliases: vec![],
+        head: None,
     };
     spec.validate().expect("valid");
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
@@ -869,6 +878,7 @@ fn a_one_dimensional_convolution_stack_follows_a_naive_reference() {
         out: CnnOut::Map,
         ignored: vec![],
         aliases: vec![],
+        head: None,
     };
     spec.validate().expect("valid");
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(11);
@@ -942,6 +952,7 @@ fn a_grouped_convolution_that_is_not_depthwise_is_refused_by_name() {
         out: CnnOut::Map,
         ignored: vec![],
         aliases: vec![],
+        head: None,
     };
     let e = spec.validate().unwrap_err().to_string();
     assert!(e.contains("groups = 2") && e.contains("only 1 and depthwise"), "{e}");
@@ -992,7 +1003,7 @@ fn hostile_numbers_in_a_spec_are_refused_by_arithmetic_not_allocated() {
     let conv = |k: usize, stride: usize, pad: usize, dilation: usize, cin: usize, cout: usize| {
         CnnOp::Conv(ConvOp { name: "c".into(), cin, cout, k, stride, pad, dilation, groups: 1, bias: false, bn: None, act: None, ..ConvOp::default() })
     };
-    let net = |h: u32, w: u32, ops: Vec<CnnOp>| CnnSpec { architecture: "Hostile".into(), h, w, mean: [0.0; 3], std: [1.0; 3], ops, out: CnnOut::Map, ignored: vec![], aliases: vec![] };
+    let net = |h: u32, w: u32, ops: Vec<CnnOp>| CnnSpec { architecture: "Hostile".into(), h, w, mean: [0.0; 3], std: [1.0; 3], ops, out: CnnOut::Map, ignored: vec![], aliases: vec![], head: None };
     let e12 = 1_000_000_000_000usize;
     let cases: Vec<(&str, CnnSpec)> = vec![
         ("a kernel of 10^9", net(32, 32, vec![conv(1_000_000_000, 1, 0, 1, 3, 4)])),
@@ -1016,4 +1027,29 @@ fn hostile_numbers_in_a_spec_are_refused_by_arithmetic_not_allocated() {
         assert!(t0.elapsed().as_secs() < 2, "{what}: took {:?} to refuse", t0.elapsed());
         eprintln!("{what}: {}", v.unwrap_err());
     }
+}
+
+/// **Image classifiers** (`…ForImageClassification`, HFX 2026-10-10): the adapter reads the classifier as a `CnnHead` — the pooled
+/// vector (global average pooling, ConvNeXt's final LayerNorm) through the checkpoint's linear `classifier` (`classifier.1` of ResNet's
+/// `Sequential(Flatten, Linear)`) to `num_labels` logits — and every checkpoint tensor is bound. The float reference equals
+/// transformers' logits; the integer program, its pipeline, the court and the admissions are checked as for the backbones.
+#[test]
+fn image_classifiers_match_their_hf_logits_through_the_classifier_head() {
+    check_adapter("resnet_cls", false, "logits");
+    check_adapter("convnext_cls", false, "logits");
+    check_adapter_min("mobilenet_v2_cls", false, "logits", 0.97);
+}
+
+/// The backbone's reading is unchanged: the same architecture family WITHOUT the classifier head (`…Model`) still ignores
+/// `classifier.` and outputs the pooled vector.
+#[test]
+fn a_classifier_head_is_read_only_for_the_classification_architecture() {
+    let text = std::fs::read_to_string(fixture_dir("resnet_cls").join("config.json")).expect("config");
+    let with_head = cnn::parse_cnn(&text, Some((32, 32)), None).expect("ResNetForImageClassification");
+    let head = with_head.head.as_ref().expect("a classifier head");
+    assert_eq!((head.name.as_str(), head.labels, head.bias), ("classifier.1", 5, true));
+    assert!(with_head.ignored.is_empty(), "{:?}", with_head.ignored);
+    let backbone = text.replace("ResNetForImageClassification", "ResNetModel");
+    let without = cnn::parse_cnn(&backbone, Some((32, 32)), None).expect("ResNetModel");
+    assert!(without.head.is_none() && without.ignored == ["classifier."], "{:?}", without.ignored);
 }

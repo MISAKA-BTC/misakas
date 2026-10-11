@@ -1,5 +1,11 @@
 # Full-activation readiness — what stands between each fence and arming it
 
+**2026-10-10 local code audit:** see [RFC6/7/8/12 design audit](rfc-0006-0007-0008-0012-design-audit-2026-10-10.md).
+On the combined audit branch, RFC8 still has CODE_GAP for rewards before root Final, canonical suffix-work derivation and propagation
+of convictions/defaults after root settlement. RFC7 source-work uniqueness and RFC12 open computation-court filtering were corrected;
+these do not satisfy the external soundness/economics or recovery gates. Earlier “none of this lane's” code-gap statements below do not
+cover these audit findings. No activation height is assigned by the audit.
+
 Owner: Lead. Started 2026-10-08 after the user's decision: **no DAA-9,000 flag day; the next public testnet-12 release enables
 RFC-0008, RFC-0010, RFC-0011's K2 route, RFC-0012, RFC-0014 and RFC-0015 (and the former int-13 four) in one activation, and ships only
 after every RFC implementation is complete.** Until then the integration tree's shipped t12 ids stay the live int-12 release's

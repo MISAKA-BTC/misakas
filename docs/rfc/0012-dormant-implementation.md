@@ -80,6 +80,29 @@ the conflict remains sticky until a validated resync/import clears it. Incompati
 unreadable persisted evidence is preserved for recovery and makes readers fail closed,
 rather than being replaced with an empty certificate. Neither case reinstates DNS authority.
 
+Publication history is stored separately at EVM-head prefix 209 plus
+`/native/finalized-publication/v1`, as `Option<NativeSettlementSnapshotV1>`. It keeps the deepest published
+finalized head even if the current snapshot withholds that label. Ordinary rollback across the fence
+preserves both this row and the native incident snapshot, hidden by the existing reader gates, so a
+sticky alarm survives re-entry. It is an alarm anchor, never a certificate or a selection veto. A validated
+execution-state import clears it in the same batch and invalidates the same-generation readiness memo;
+rejected imports preserve it. Old positive evidence bootstraps history, while missing history beside old
+negative evidence requires recovery rather than an assumption of no past publication. The legacy
+three-hash singleton and native RPC wire types are unchanged.
+
+EVM import checks that its target is the established pruning point before root validation and pins it
+through commit after a second check. Identical existing header/snapshot/checkpoint rows are reused and
+missing rows completed; contradictory or unreadable rows refuse before flat-state writes or incident
+reset. The pruning-history context import also reuses identical samples and rejects empty/genesis/order/
+shape/sample errors before writing history. This strengthens the existing proof/catch-up caller contract;
+it supplies no new proof authority or branch-selection rule. See RFC §4.3 and the import-recovery record.
+
+Current checkpoint rows are excluded from the evidence cache and evict any prior ordinary row of the
+same block. Returning that block above a later boundary requires loading its delta. Readiness memo
+reuse also checks the pruning point carried by its evaluation. RPC attaches that advisory explanation
+only when its version, policy and shared head/stop statements agree with the returned committed snapshot;
+a context change at the same sink must not pair an old certificate with contradictory new advice.
+
 An absent ETH block tag returns `null`. State/call queries for unavailable executed
 heads return an error, rather than reading tip state or inventing an empty account.
 The evidence API also verifies endpoint roots and provenance. The legacy DAA-only

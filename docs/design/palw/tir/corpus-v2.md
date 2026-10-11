@@ -649,6 +649,7 @@ compressed-tensors, MXFP4, NVFP4) are descriptor files; this lane wrote two more
 | --- | --- | --- |
 | ggml block types (Q*, IQ*, TQ*, MXFP4, NVFP4), GPTQ, AWQ, FP8 block scales, compressed-tensors | yes (the pack) | lane F's vectors from the libraries' own dequantisers |
 | MLX affine, 2/4/8-bit | **decode: yes** (`mlx_affine.json`); **announcement: no** (FR-33a: its config has no `quant_method`) | descriptor loads and passes its three vectors (`tests/corpus_formats.rs`); the vectors are a numpy transcription of the layout (MLX is not available offline) |
+| MLX affine, 2/3/4/5/6/8-bit — **since 2026-10-10 (HFX, `MLX_QUANT_V1`)** | **yes, built in**: `quant-formats/mlx_affine.json` (a virtual format: the codes under `<module>.weight` served as the float weight; the 3 / 5 / 6-bit codes straddle the words), and the reader names MLX's block (`prequant::quant_block`: `quantization` and/or a method-less `quantization_config`; per-module entries) — FR-33a closed for MLX | vectors from MLX 0.32's own `quantize` / GPU `dequantize`; three end-to-end fixtures quantised by MLX (`tests/quantized.rs` `mlx_*`); the transcription above decodes alike through the built-in, bit for bit (`tests/corpus_formats.rs`) |
 | bitsandbytes int8 (LLM.int8) | **decode: yes** (`bnb_int8.json`, which refuses 4-bit by a config check) | loads and passes its two vectors (same caveat) |
 | bitsandbytes nf4/fp4, double quantisation | **no**: the weight is a flat `[N/2, 1]` tensor and its `[out, in]` shape is stored only in a JSON blob (FR-33b) | read from the library's serialisation |
 | HQQ, Quanto, torchao | no: metadata blobs and tensor subclasses | not attempted |
@@ -656,6 +657,8 @@ compressed-tensors, MXFP4, NVFP4) are descriptor files; this lane wrote two more
 
 Two limits are in the registry, not in any descriptor: a format can be announced only by `quantization_config.quant_method`, and a
 `tensors` descriptor can read the weight's shape only from its role tensors (FR-33). Hub usage of these formats is not measured here.
+(2026-10-10: the first limit is closed for MLX by the reader, not by the registry — `MLX_QUANT_V1` names MLX's method-less block
+`mlx`; the census measures MLX at 25,156 listed repositories, `hf-coverage-gaps-hfx-2026-10-08.md` §7.)
 
 ## 9. Open
 

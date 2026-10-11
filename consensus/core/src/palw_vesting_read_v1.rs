@@ -153,7 +153,7 @@ pub struct PalwVestingReadV1 {
     pub tip_daa: u64,
     /// The DAA the next block folds at — every clock and the plan are asked there.
     pub next_daa: u64,
-    /// `Params::palw_rcore_plus` is in force at `next_daa`. Below it no row exists and nothing vests.
+    /// `Params::palw_rcore_plus` is in force at `next_daa`. Actual EXEC can force vesting below it.
     pub rcore_plus_active: bool,
     /// V-4(b) at `next_daa` ([`palw_chain_vesting_halted_v1`]).
     pub halted: bool,
@@ -164,6 +164,8 @@ pub struct PalwVestingReadV1 {
     /// `settled_attempt_finals`: the second clock's count now.
     pub settled_now: u64,
     pub counters: PalwVestingCountersV1,
+    /// The old row schema cannot represent these live funds. RPC v1 must direct callers to the complete read.
+    pub has_exec_rewards: bool,
     pub live_rows: usize,
     pub latched_rows: usize,
     pub live_sompi: u128,
@@ -215,8 +217,10 @@ pub struct PalwVestingReadV1 {
     /// Σ of the query's legs over EVERY matched row (not just the page): unlatched, then latched.
     pub maturing_sompi: u128,
     pub latched_sompi_of_query: u128,
-    /// The payee's reporter rewards, pending then awarded, at most [`PALW_VESTING_READ_ROW_CAP_V1`]
-    /// (empty for other queries).
+    /// Whole-query reporter totals, independent of the capped detail list. Chain includes all sources; claim includes none.
+    pub reporter_pending_sompi_of_query: u128,
+    pub reporter_awarded_sompi_of_query: u128,
+    /// The payee's reporter rewards, pending then awarded, at most [`PALW_VESTING_READ_ROW_CAP_V1`] (empty for other queries).
     pub reporter_rewards: Vec<PalwReporterRewardReadV1>,
 }
 
@@ -355,9 +359,17 @@ impl<'s> PalwVestingReaderV1<'s> {
             if out.contains_key(claim_id) {
                 continue;
             }
+            if self.state.exec_v2_reward_vesting_v1(claim_id).is_some_and(|row| !row.legs.is_empty()) {
+                out.insert(*claim_id, PalwClaimVestingV1 { stage: PalwClaimVestingStageV1::ExecPending, read: None });
+                continue;
+            }
             if let Some(PalwClaimStateV2 { phase: PalwClaimPhaseV2::Final { final_daa }, escrowed_reward, .. }) = claim
                 && *escrowed_reward > 0
-                && self.params.rcore_plus_active_at(*final_daa)
+                && (self.params.rcore_plus_active_at(*final_daa)
+                    || self
+                        .state
+                        .exec_v2_root_v1(claim_id)
+                        .is_some_and(|root| matches!(root.phase, crate::palw_work_slice_v2::PalwWorkRootPhaseV2::Settled { .. })))
             {
                 out.insert(*claim_id, PalwClaimVestingV1 { stage: PalwClaimVestingStageV1::Moved, read: None });
             }
@@ -375,6 +387,8 @@ pub enum PalwClaimVestingStageV1 {
     Latched,
     /// Moved into the queue: minted by the block after the move.
     Moved,
+    /// Native has moved (or retired), but an additional EXEC fund still awaits release.
+    ExecPending,
 }
 
 impl PalwClaimVestingStageV1 {
@@ -388,6 +402,7 @@ impl PalwClaimVestingStageV1 {
             Self::Maturing => "maturing",
             Self::Latched => "latched",
             Self::Moved => "moved",
+            Self::ExecPending => "exec_pending",
         }
     }
 }
@@ -552,6 +567,17 @@ pub fn palw_vesting_read_v1(
     }
     // Bounded like the rows: R-3 caps a reporter's open commitments, but the read does not lean on
     // a cap it does not own.
+    let (reporter_pending_sompi_of_query, reporter_awarded_sompi_of_query) = if matches!(query, PalwVestingQueryV1::Chain) {
+        (
+            state.reward_pending_iter().map(|(_, r)| u128::from(r.amount)).sum(),
+            state.reporter_rewards_iter().map(|(_, r)| u128::from(r.amount)).sum(),
+        )
+    } else {
+        (
+            reporter_rewards.iter().filter(|r| r.stage == PalwReporterRewardStageV1::Pending).map(|r| u128::from(r.amount)).sum(),
+            reporter_rewards.iter().filter(|r| r.stage == PalwReporterRewardStageV1::Awarded).map(|r| u128::from(r.amount)).sum(),
+        )
+    };
     reporter_rewards.truncate(PALW_VESTING_READ_ROW_CAP_V1);
 
     let claim_stage = match query {
@@ -574,6 +600,7 @@ pub fn palw_vesting_read_v1(
         escaped_depth: reader.escaped_depth,
         settled_now: state.settled_attempt_finals(),
         counters: state.vesting_counters(),
+        has_exec_rewards: state.exec_v2_reward_vesting_iter_v1().any(|(_, row)| !row.legs.is_empty()),
         live_rows,
         latched_rows,
         live_sompi,
@@ -595,6 +622,8 @@ pub fn palw_vesting_read_v1(
         next_after,
         maturing_sompi,
         latched_sompi_of_query,
+        reporter_pending_sompi_of_query,
+        reporter_awarded_sompi_of_query,
         reporter_rewards,
     }
 }
@@ -1091,5 +1120,30 @@ mod tests {
         assert_eq!(read.rows.iter().find(|r| r.claim_id == h(0x61)).and_then(|r| r.payout_pending), Some(9));
         let chain = palw_vesting_read_v1(&state, &off, 50, None, &PalwVestingQueryV1::Claim(h(0x61)), 0, None);
         assert!(!chain.rcore_plus_active && chain.next_block.moves.is_empty() && chain.claim_stage.is_none());
+    }
+    #[test]
+    fn reporter_query_totals_include_rewards_beyond_the_detail_cap() {
+        let extra = (0..600)
+            .map(|i| PalwDeltaEntryV2::ReporterReward {
+                key: h(0x1_0000 + i),
+                old: None,
+                new: Some(PalwPayoutV2 { payload: payload(7), amount: 1_000_000 }),
+            })
+            .collect();
+        let p = params();
+        let s = seeded_with(&[], extra, &p);
+        for query in [
+            PalwVestingQueryV1::Chain,
+            PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Payload(payload(7))),
+            PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(7))),
+        ] {
+            let r = palw_vesting_read_v1(&s, &p, 10, None, &query, 1, None);
+            assert_eq!(r.reporter_pending_sompi_of_query, 44);
+            assert_eq!(r.reporter_awarded_sompi_of_query, 600_000_033);
+            assert!(r.reporter_rewards.len() <= 500);
+            assert_eq!(r.maturing_sompi + r.latched_sompi_of_query, 0, "reporter funds are separate from vesting counters");
+        }
+        let r = palw_vesting_read_v1(&s, &p, 10, None, &PalwVestingQueryV1::Claim(h(55)), 1, None);
+        assert_eq!(r.reporter_pending_sompi_of_query + r.reporter_awarded_sompi_of_query, 0);
     }
 }

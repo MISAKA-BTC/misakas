@@ -84,6 +84,9 @@ impl TensorMeta {
 /// tensor, never the whole of it. A source that cannot serve ranges keeps the defaults, which are
 /// correct and read whole tensors.
 pub trait TensorSource {
+    /// A container-backed source may revalidate its acquired header before publishing an artifact.
+    /// Raw tensor hashes are independently checked by the frontend writer.
+    fn validate_snapshot(&self) -> Result<()> { Ok(()) }
     fn shape(&self, name: &str) -> Option<Vec<usize>>;
     fn load(&self, name: &str) -> Result<Tensor>;
     fn names(&self) -> Vec<String>;
@@ -818,6 +821,12 @@ impl<'a> Resolver<'a> {
                 let n = format!("{alt}{rest}");
                 if self.names.contains(&n) {
                     return Some(n);
+                }
+                // …and the legacy spelling UNDER the alias (`bert.embeddings.LayerNorm.gamma` of a task model saved before the rename).
+                if let Some(legacy) = legacy_layer_norm_name(&n)
+                    && self.names.contains(&legacy)
+                {
+                    return Some(legacy);
                 }
             }
         }

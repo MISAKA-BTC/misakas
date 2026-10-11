@@ -154,10 +154,11 @@ pub struct LedgerPolicyV1 {
     /// The most court / classification / inclusion-check runs one block may trigger; an object past it is refused (dropped).
     pub max_adjudications_per_block: u32,
     /// **Prosecution room that is always there** (C4 F-C4R3-05, round 2): this share (permille) of every block's
-    /// `max_adjudications_per_block` only a `FileProof` may spend — admissions (claims, registrations, pipeline jobs) and responses use
+    /// `max_adjudications_per_block` and byte/court work only a `FileProof` may spend — admissions (claims, registrations, pipeline jobs) and responses use
     /// the rest — so no flood of claims can leave an outsider without a court run in the block that carries its proof. Below 1000.
     pub prosecution_reserve_permille: u16,
-    /// The most court work (the class's declared worst court work, summed over the block's filed proofs) one block may trigger.
+    /// The most shared structural admission and court work one block may trigger. The stored field
+    /// name remains `court_work`; claim byte tariffs and worst-case public courts spend this same budget.
     pub max_court_work_per_block: u64,
     /// A claim commits only over its producer's seal at least this old (≥ 1: a seal in the same block as the reveal proves nothing).
     pub claim_seal_delay_daa: u64,
@@ -173,6 +174,23 @@ impl LedgerPolicyV1 {
     /// The court runs of every block only a `FileProof` may spend (C4 F-C4R3-05, round 2).
     pub const fn prosecution_reserved_runs(&self) -> u32 {
         (self.max_adjudications_per_block as u64 * self.prosecution_reserve_permille as u64 / 1000) as u32
+    }
+
+    /// Ordinary admission cannot spend the work reserved for public proofs. Use u128 before
+    /// scaling: policies near u64::MAX must not overflow or silently eliminate the reserve.
+    pub fn admission_work_limit_v1(&self) -> u64 {
+        let reserved = self.max_court_work_per_block as u128 * self.prosecution_reserve_permille as u128 / 1000;
+        self.max_court_work_per_block.saturating_sub(reserved.min(u64::MAX as u128) as u64)
+    }
+
+    /// A registered court must fit the room left after admissions fill their share. With no
+    /// configured reserve the policy explicitly supplies only the full-block ceiling.
+    pub fn guaranteed_proof_work_v1(&self) -> u64 {
+        if self.prosecution_reserve_permille == 0 {
+            self.max_court_work_per_block
+        } else {
+            self.max_court_work_per_block - self.admission_work_limit_v1()
+        }
     }
 
     /// **What a dismissed filing that ran a court forfeits** (C4 F-C4R4-05): `dismissed_proof_fee` for each
@@ -258,9 +276,19 @@ pub struct ClassRowV1 {
     pub ruleset_digest: Digest,
     /// The code-derived gate's bounds (registration refuses a class without them).
     pub bounds: ProsecutionBoundsV1,
+    /// **G14-B: this class's claims' liability horizon** — `max(policy liability_daa, what its worst-case public pursuit needs)`
+    /// ([`crate::budget::class_pursuit_v1`]; segmented classes; the policy's for the others). Derived, never stored.
+    pub liability_daa: u64,
+    /// **K2-TIR-v4/v5: the court-scope gate** (`crate::seg_scope::seg_scope_report_v2` at the plan's context; derived, never stored):
+    /// a class whose report is incomplete takes no claim (`COURT_SCOPE_INCOMPLETE`). `None` for every other descriptor.
+    pub court_scope: Option<crate::seg_scope::SegScopeReportV1>,
 }
 
 impl ClassRowV1 {
+    pub fn admission_work_v1(&self) -> Result<u64, String> {
+        crate::gate::program_claim_admission_work_v1(&self.bounds, self.program_bytes.len(), &self.program, &self.plan)
+    }
+
     pub fn header(&self, class_binding_id: Digest) -> EvidenceHeaderV1 {
         EvidenceHeaderV1 {
             network_domain: self.network_domain,
@@ -296,6 +324,12 @@ pub struct PipelineClassRowV1 {
 }
 
 impl PipelineClassRowV1 {
+    pub fn admission_work_v1(&self) -> Result<u64, String> {
+        let bytes = borsh::object_length(&(&self.pipeline_bytes, &self.program_bytes, &self.plan, &self.param_commitments))
+            .map_err(|e| format!("pipeline schema: {e}"))?;
+        crate::gate::claim_admission_work_v1(&self.bounds, bytes as u128)
+    }
+
     pub fn header(&self, class_binding_id: Digest) -> PipelineHeaderV1 {
         PipelineHeaderV1 { network_domain: self.network_domain, ruleset_digest: self.ruleset_digest, class_binding_id }
     }
@@ -401,7 +435,7 @@ pub struct ClaimBeaconSealV1 {
 /// the start of a seal window `[S, S + W)` must still be revealable at the end of its reveal window `[S + W, S + 2W)`). OPV-BOOT's
 /// policy validation asks this with its `beacon_window_slots`.
 pub fn seal_ttl_admits_beacon_window_v1(policy: &LedgerPolicyV1, beacon_window_daa: u64) -> bool {
-    beacon_window_daa.saturating_mul(2) <= policy.seal_ttl_daa
+    beacon_window_daa.checked_mul(2).is_some_and(|span| span <= policy.seal_ttl_daa)
 }
 
 /// An unrevealed seal: the claim seal and the DAA it was carried at.
@@ -479,6 +513,10 @@ pub enum LedgerEventV1 {
         tx: &'static str,
         why: String,
     } = 0,
+    /// A conformance candidate, with no execution or economic rights.
+    ConformanceClassRegistered {
+        class: Digest,
+    } = 32,
     ClassRegistered {
         class: Digest,
     } = 1,
@@ -638,7 +676,26 @@ pub struct LedgerBlockV1 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BlockBudgetV1 {
     pub adjudications: u32,
+    /// Shared admission byte work plus public court work (the persisted wire field keeps its name).
     pub court_work: u64,
+}
+
+impl BlockBudgetV1 {
+    /// Shared by the kernel ledger and the node's onboarding fold. Refusals consume neither a
+    /// run nor work; only public proof/refutation paths may use the reserved share.
+    pub fn charged_v1(self, policy: &LedgerPolicyV1, work: u64, may_spend_reserve: bool) -> Option<Self> {
+        let runs = if may_spend_reserve {
+            policy.max_adjudications_per_block
+        } else {
+            policy.max_adjudications_per_block.saturating_sub(policy.prosecution_reserved_runs())
+        };
+        let work_limit = if may_spend_reserve { policy.max_court_work_per_block } else { policy.admission_work_limit_v1() };
+        let court_work = self.court_work.checked_add(work)?;
+        if self.adjudications >= runs || court_work > work_limit {
+            return None;
+        }
+        Some(Self { adjudications: self.adjudications.checked_add(1)?, court_work })
+    }
 }
 
 /// **Any public source of the artifact's tensors** — a registry mirror, a DA provider, the model's host. Whatever it returns is
@@ -720,6 +777,9 @@ fn check_commitment_set(
     Ok(())
 }
 
+/// Maximum live preparation records per bonded actor; promotion releases a slot.
+pub const MAX_CONFORMANCE_CLASSES_PER_BOND_V1: usize = 8;
+
 #[derive(Clone, Debug)]
 pub struct KernelLedgerV1 {
     pub policy: LedgerPolicyV1,
@@ -729,6 +789,11 @@ pub struct KernelLedgerV1 {
     pub daa: u64,
     pub bonds: BTreeMap<Digest, BondRowV1>,
     pub classes: BTreeMap<Digest, ClassRowV1>,
+    /// Conformance-only OPV identities, keyed class id: (preparing bond, checked metadata).
+    /// No execution or payment path reads this table. Promotion removes the candidate.
+    pub conformance_classes: BTreeMap<Digest, (Digest, ClassRowV1)>,
+    /// Derived index, never committed: candidate admission reads only this bond's bounded set.
+    pub(crate) conformance_class_owners: BTreeMap<Digest, BTreeSet<Digest>>,
     pub pipeline_classes: BTreeMap<Digest, PipelineClassRowV1>,
     pub jobs: BTreeMap<Digest, KernelJobV1>,
     pub pipeline_jobs: BTreeMap<Digest, PipelineJobPostV1>,
@@ -748,6 +813,12 @@ pub struct KernelLedgerV1 {
     pub proof_seals: BTreeMap<(Digest, Digest), SealRowV1>,
     /// GAP-5: `job → its poster's escrow` — reserved at posting, paid out (once) as the job's Final reward, or returned.
     pub job_escrows: BTreeMap<Digest, JobEscrowRowV1>,
+    /// Consumer-bound EXEC rewards: escrow stays reserved until the owning root settles or cancels.
+    pub exec_reward_holds: BTreeMap<Digest, crate::exec_reward::ExecRewardHoldV1>,
+    /// Per-target source deposits (table 28). Failure rows survive as veto evidence and cannot re-opt in.
+    pub beacon_sources: BTreeMap<(Digest, Digest), crate::beacon_source::BeaconSourceRowV1>,
+    /// Trusted consumer inputs, never rows/rooted state. Empty on restore; the new feature is refused by default.
+    pub beacon_source_inputs: crate::beacon_source::BeaconSourceInputsV1,
     /// **The demand bonds of SERVED positions, awaiting their fate** (K2S's producer-side DA griefing, G14-R4): a position served on
     /// chain keeps its demanders' bonds reserved; they are refunded the moment the claim is convicted, defaults or times out, and
     /// burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction is never penalised.
@@ -788,6 +859,12 @@ pub struct KernelLedgerV1 {
     pub verifier_pay_policy: Option<crate::verifier_pay::VerifierPayPolicyV1>,
     /// **Table 27**: check-fee escrows, claim draws and held default shares (empty below the fence; in the root only once non-empty).
     pub verifier_pay: crate::verifier_pay::VerifierPayTableV1,
+    /// **The court scope's terms** (`palw_provider_court_v1`, G14-S), consumer-injected before every object and tick like the verifier
+    /// pay terms; NOT part of this state or its root. `None`: every rule of `crate::court_scope` is the historical one.
+    pub court_scope_policy: Option<crate::court_scope::CourtScopePolicyV1>,
+    /// **Table 28** (`crate::court_scope`): per claim, the units each requester named and each accuser's dismissed filings (written
+    /// only past the court scope; in the root only once non-empty).
+    pub court_scope: BTreeMap<Digest, crate::court_scope::CourtScopeRowV1>,
     budget: BlockBudgetV1,
 }
 
@@ -839,6 +916,8 @@ impl KernelLedgerV1 {
             daa: 0,
             bonds: BTreeMap::new(),
             classes: BTreeMap::new(),
+            conformance_classes: BTreeMap::new(),
+            conformance_class_owners: BTreeMap::new(),
             pipeline_classes: BTreeMap::new(),
             jobs: BTreeMap::new(),
             pipeline_jobs: BTreeMap::new(),
@@ -850,6 +929,9 @@ impl KernelLedgerV1 {
             seals: BTreeMap::new(),
             proof_seals: BTreeMap::new(),
             job_escrows: BTreeMap::new(),
+            exec_reward_holds: BTreeMap::new(),
+            beacon_sources: BTreeMap::new(),
+            beacon_source_inputs: Default::default(),
             served_demands: BTreeMap::new(),
             claim_beacon_salts: BTreeMap::new(),
             forfeited_claim_seals: BTreeMap::new(),
@@ -863,6 +945,8 @@ impl KernelLedgerV1 {
             commitment_scope_from_daa: None,
             verifier_pay_policy: None,
             verifier_pay: BTreeMap::new(),
+            court_scope_policy: None,
+            court_scope: BTreeMap::new(),
             budget: BlockBudgetV1::default(),
         })
     }
@@ -964,6 +1048,35 @@ impl KernelLedgerV1 {
         self.authorize(obj, auth)?;
         let mut out = Vec::new();
         match obj {
+            KernelRouteObjectV1::DemandFlatModelVectorV3 { .. }
+            | KernelRouteObjectV1::AnswerFlatModelVectorV3 { .. }
+            | KernelRouteObjectV1::SettleFlatModelVectorDemandV3 { .. }
+            | KernelRouteObjectV1::PostFlatModelVectorV3 { .. }
+            | KernelRouteObjectV1::RefuteFlatModelVectorV3 { .. }
+            | KernelRouteObjectV1::DemandModelVectorV2 { .. }
+            | KernelRouteObjectV1::AnswerModelVectorV2 { .. }
+            | KernelRouteObjectV1::SettleModelVectorDemandV2 { .. }
+            | KernelRouteObjectV1::PostModelVectorV2 { .. }
+            | KernelRouteObjectV1::RefuteModelVectorV2 { .. }
+            | KernelRouteObjectV1::CompleteModelConformanceV2 { .. }
+            | KernelRouteObjectV1::BindModelArtifactV2 { .. }
+            | KernelRouteObjectV1::RefuteModelArtifactV2 { .. }
+            | KernelRouteObjectV1::SealModelRefutationV4 { .. }
+            | KernelRouteObjectV1::RevealModelRefutationV4 { .. }
+            | KernelRouteObjectV1::RegisterModelConformanceClassV2 { .. } => {
+                return Err(KernelRefusalV1::rule(name, "model artifact statements require the authenticated consensus consumer"));
+            }
+            KernelRouteObjectV1::RegisterConformanceClass { descriptor, program_bytes, plan, param_commitments } => {
+                let class = self.register_class_impl(
+                    VerificationModeV1::OptimisticPublicVerification,
+                    descriptor,
+                    program_bytes,
+                    plan,
+                    param_commitments,
+                    Some(auth.signer_bond),
+                )?;
+                out.push(LedgerEventV1::ConformanceClassRegistered { class });
+            }
             KernelRouteObjectV1::RegisterClass { descriptor, program_bytes, plan, param_commitments } => {
                 let class =
                     self.register_class(VerificationModeV1::PanelLicensed, descriptor, program_bytes, plan, param_commitments)?;
@@ -1145,6 +1258,10 @@ impl KernelLedgerV1 {
                 self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa, deposit });
                 out.push(LedgerEventV1::ClaimSealed { job: *job, producer: *producer });
             }
+            KernelRouteObjectV1::OptInBeaconSource { producer, job, seal, context, terms } => {
+                self.opt_in_beacon_source(*producer, *job, *seal, *context, *terms, &mut out)
+                    .map_err(|why| KernelRefusalV1::rule(name, why))?;
+            }
             KernelRouteObjectV1::SealProof { accuser, claim, seal } => {
                 const NAME: &str = "SealProof";
                 let fee = self.policy.dismissed_proof_fee;
@@ -1162,6 +1279,13 @@ impl KernelLedgerV1 {
                     return Err(KernelRefusalV1::rule(NAME, "the claim is already convicted"));
                 }
                 self.proof_open(row).map_err(|why| KernelRefusalV1::rule(NAME, why))?;
+                // **G14-R: an IDENTICAL re-seal is a no-op** — the earlier row, its DAA and its bounty precedence stand. A pursuit that
+                // restarted while its seal was in flight cannot know whether the seal landed, and re-sends the same bytes; without
+                // this, the second copy restarted the seal's clock (delaying its own filing past what the restart cost) and gave a
+                // copyist who sealed the same bytes in between the earlier seal.
+                if self.proof_seals.get(&(*claim, *accuser)).is_some_and(|row| row.seal == *seal) {
+                    return Ok(out);
+                }
                 // One seal per (claim, accuser): a re-seal (another proof) replaces the earlier one and its clock restarts.
                 if !self.proof_seals.contains_key(&(*claim, *accuser))
                     && self.proof_seals.range((*claim, [0; 64])..=(*claim, [u8::MAX; 64])).count()
@@ -1182,6 +1306,11 @@ impl KernelLedgerV1 {
                     Some(b) if b.exit_requested.is_some_and(|at| daa >= at + delay) && b.reserved == 0 => {
                         let amount = b.collateral;
                         self.bonds.remove(bond);
+                        if let Some(classes) = self.conformance_class_owners.remove(bond) {
+                            for class in classes {
+                                self.conformance_classes.remove(&class);
+                            }
+                        }
                         out.push(LedgerEventV1::Withdrawn { bond: *bond, amount });
                         settle(&mut out, *bond, amount, SettlementKindV1::Withdraw, None);
                     }
@@ -1249,7 +1378,7 @@ impl KernelLedgerV1 {
             O::FileProof { accuser, .. } => Some((*accuser, "accuser")),
             O::FileDemand { demander, .. } => Some((*demander, "demander")),
             O::RequestExit { bond } | O::Withdraw { bond } => Some((*bond, "bond")),
-            O::SealClaim { producer, .. } => Some((*producer, "producer")),
+            O::SealClaim { producer, .. } | O::OptInBeaconSource { producer, .. } => Some((*producer, "producer")),
             O::SealProof { accuser, .. } => Some((*accuser, "accuser")),
             O::Spec { object } => object.named_actor(),
             _ => None,
@@ -1315,10 +1444,21 @@ impl KernelLedgerV1 {
     /// **ADR-0176 HOOK `budget-final` (lane BUDGET; not built here):** the reward is paid only within the R / F reservation the claim
     /// made at acceptance (`budget-accept`), re-checked here; the budget is not recovered before `d + W`, whatever the claim's fate.
     fn pay_from_job_escrow(&mut self, job: &Digest, claim: &Digest, producer: Digest, out: &mut Vec<LedgerEventV1>) -> u64 {
+        self.pay_from_job_escrow_capped(job, claim, producer, u64::MAX, out)
+    }
+
+    pub(crate) fn pay_from_job_escrow_capped(
+        &mut self,
+        job: &Digest,
+        claim: &Digest,
+        producer: Digest,
+        cap: u64,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> u64 {
         let Some(row) = self.job_escrows.remove(job) else { return 0 };
         let collateral = self.bonds.get(&row.poster).map_or(0, |b| b.collateral);
         // Never instruct more than the poster's bond still holds (another subsystem may have slashed it since).
-        let paid = row.amount.min(collateral);
+        let paid = row.amount.min(collateral).min(cap);
         if let Some(b) = self.bonds.get_mut(&row.poster) {
             b.reserved = b.reserved.saturating_sub(row.amount);
             b.collateral -= paid;
@@ -1336,7 +1476,7 @@ impl KernelLedgerV1 {
     /// make on an unclaimed job, and a re-seal restarts its clock on the same deposit, so "no live seal" let a squatter keep the
     /// escrow — and, through `reserved`, the poster's whole bond exit — for as long as it re-sealed. A producer that sealed by the
     /// escrow's TTL has `seal_ttl_daa` to reveal (its seal expires then anyway).
-    fn release_idle_job_escrows(&mut self, out: &mut Vec<LedgerEventV1>) {
+    fn release_idle_job_escrows(&mut self, held_jobs: &BTreeSet<Digest>, out: &mut Vec<LedgerEventV1>) {
         let ttl = self.policy.job_escrow_ttl_daa;
         let seal_ttl = self.policy.seal_ttl_daa;
         let idle: Vec<Digest> = self
@@ -1345,6 +1485,7 @@ impl KernelLedgerV1 {
             .filter(|(job, row)| {
                 let expired = row.posted_daa.saturating_add(ttl);
                 self.daa > expired
+                    && !held_jobs.contains(*job)
                     && !self.job_claims.get(*job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job)
                     && (self.daa > expired.saturating_add(seal_ttl)
                         || self.seals.range((**job, [0u8; 64])..=(**job, [0xFFu8; 64])).next().is_none())
@@ -1364,13 +1505,8 @@ impl KernelLedgerV1 {
     /// Charge one adjudication (and `court_work`) to the block, or refuse the object as over budget. Nothing is charged on a refusal.
     pub(crate) fn charge(&mut self, name: &'static str, court_work: u64) -> Result<(), KernelRefusalV1> {
         let b = self.budget;
-        // C4 F-C4R3-05 (round 2): a share of the block is reserved for proofs; everything else stops short of it.
-        let runs = if name == "FileProof" {
-            self.policy.max_adjudications_per_block
-        } else {
-            self.policy.max_adjudications_per_block - self.policy.prosecution_reserved_runs()
-        };
-        if b.adjudications >= runs || b.court_work.saturating_add(court_work) > self.policy.max_court_work_per_block {
+        let next = b.charged_v1(&self.policy, court_work, name == "FileProof");
+        if next.is_none() {
             return Err(KernelRefusalV1::new(
                 name,
                 RefusalKindV1::OverBudget,
@@ -1382,7 +1518,7 @@ impl KernelLedgerV1 {
                 ),
             ));
         }
-        self.budget = BlockBudgetV1 { adjudications: b.adjudications + 1, court_work: b.court_work.saturating_add(court_work) };
+        self.budget = next.expect("checked");
         Ok(())
     }
 
@@ -1439,7 +1575,25 @@ impl KernelLedgerV1 {
         plan: &VerificationPlanV1,
         pc: &ParamCommitmentsV1,
     ) -> Result<Digest, KernelRefusalV1> {
-        let name: &'static str = if mode.is_optimistic() { "RegisterClassV2" } else { "RegisterClass" };
+        self.register_class_impl(mode, descriptor, program_bytes, plan, pc, None)
+    }
+
+    fn register_class_impl(
+        &mut self,
+        mode: VerificationModeV1,
+        descriptor: &Digest,
+        program_bytes: &[u8],
+        plan: &VerificationPlanV1,
+        pc: &ParamCommitmentsV1,
+        candidate_owner: Option<Digest>,
+    ) -> Result<Digest, KernelRefusalV1> {
+        let name: &'static str = if candidate_owner.is_some() {
+            "RegisterConformanceClass"
+        } else if mode.is_optimistic() {
+            "RegisterClassV2"
+        } else {
+            "RegisterClass"
+        };
         let rule = |why: String| KernelRefusalV1::rule(name, why);
         let d = self.known_descriptor(descriptor).map_err(rule)?;
         if crate::descriptor::is_segmented_v1(&d) && !mode.is_optimistic() {
@@ -1458,7 +1612,14 @@ impl KernelLedgerV1 {
             return Err(rule("the class is already registered".into()));
         }
         let opv = if mode.is_optimistic() { Some(self.opv_register_gate(name)?) } else { None };
-        if mode.is_optimistic() {
+        if let Some(owner) = candidate_owner {
+            if self.conformance_classes.contains_key(&class) {
+                return Err(rule("the conformance class is already prepared".into()));
+            }
+            if self.conformance_class_owners.get(&owner).is_some_and(|classes| classes.len() >= MAX_CONFORMANCE_CLASSES_PER_BOND_V1) {
+                return Err(rule("the bond's conformance candidate limit is full".into()));
+            }
+        } else if mode.is_optimistic() {
             self.opv_class_admitted(name, &class)?;
         }
         if !self.attested_artifacts.contains(&binding.artifact_root) {
@@ -1506,27 +1667,59 @@ impl KernelLedgerV1 {
             &self.policy.prosecution,
         )
         .map_err(|g| rule(format!("not publicly prosecutable: {g:?}")))?;
-        if bounds.max_court_work > self.policy.max_court_work_per_block {
-            return Err(rule("the class's worst court does not fit one block's court budget: nobody could prosecute it".into()));
-        }
+        self.check_court_work_v1(bounds.max_court_work).map_err(rule)?;
         if let Some(p) = opv {
             self.opv_class_economics(&p, &bounds).map_err(rule)?;
         }
-        self.classes.insert(
-            class,
-            ClassRowV1 {
-                descriptor: d,
-                program_bytes: program_bytes.to_vec(),
-                program,
-                plan: plan.clone(),
-                param_commitments: pc.clone(),
-                network_domain: self.policy.network_domain,
-                ruleset_digest: self.policy.ruleset_digest,
-                bounds,
-            },
-        );
-        if mode.is_optimistic() {
-            self.opv.classes.insert(class);
+        // G14-B: the class's worst-case public pursuit ends inside its liability horizon, or the class is refused by name. A
+        // conformance-only candidate derives it too (`candidate_liability_daa_v1`): it takes no claim, so an unbounded pursuit is
+        // carried as 0 instead of refused, and promotion (an ordinary registration of the same class id) re-derives and refuses.
+        let derived = class_liability_daa_v1(&self.policy, opv.as_ref(), &d, &program, plan, &bounds);
+        let liability_daa = if candidate_owner.is_some() {
+            candidate_liability_daa_v1(derived)
+        } else {
+            derived.map_err(|g| rule(format!("not publicly prosecutable: {g:?}")))?
+        };
+        // The court-scope gate is derived now (a class that fails it registers, and takes no claim: never reward-bearing). A
+        // candidate row carries it too: it is a pure function of the program and plan.
+        let court_scope =
+            crate::descriptor::is_segmented_v1(&d).then(|| crate::seg_scope::seg_scope_report_v2(&program, plan.max_positions));
+        let row = ClassRowV1 {
+            descriptor: d,
+            program_bytes: program_bytes.to_vec(),
+            program,
+            plan: plan.clone(),
+            param_commitments: pc.clone(),
+            network_domain: self.policy.network_domain,
+            ruleset_digest: self.policy.ruleset_digest,
+            bounds,
+            liability_daa,
+            court_scope,
+        };
+        self.check_admission_work_v1(row.admission_work_v1().map_err(rule)?).map_err(rule)?;
+        if let Some(owner) = candidate_owner {
+            // The run was charged before decoding. Candidates additionally consume the same
+            // admission byte-work budget as claims, without spending a second run or the proof reserve.
+            let work = row.admission_work_v1().map_err(rule)?;
+            let total =
+                self.budget.court_work.checked_add(work).filter(|w| *w <= self.policy.admission_work_limit_v1()).ok_or_else(|| {
+                    KernelRefusalV1::new(name, RefusalKindV1::OverBudget, "the shared admission work budget is spent")
+                })?;
+            self.budget.court_work = total;
+            self.conformance_classes.insert(class, (owner, row));
+            self.conformance_class_owners.entry(owner).or_default().insert(class);
+        } else {
+            self.classes.insert(class, row);
+            if let Some((owner, _)) = self.conformance_classes.remove(&class) {
+                let classes = self.conformance_class_owners.get_mut(&owner).expect("candidate owner index");
+                classes.remove(&class);
+                if classes.is_empty() {
+                    self.conformance_class_owners.remove(&owner);
+                }
+            }
+            if mode.is_optimistic() {
+                self.opv.classes.insert(class);
+            }
         }
         Ok(class)
     }
@@ -1579,9 +1772,7 @@ impl KernelLedgerV1 {
         if stream_stage(&pipeline).is_some() != decode.is_some() {
             return Err(rule("a stream stage's output needs a decode rule; a pipeline without one has none".into()));
         }
-        if bounds.max_court_work > self.policy.max_court_work_per_block {
-            return Err(rule("the class's worst court does not fit one block's court budget: nobody could prosecute it".into()));
-        }
+        self.check_court_work_v1(bounds.max_court_work).map_err(rule)?;
         let binding = PipelineClassV1 {
             descriptor_digest: d.digest(),
             pipeline_root: pipeline_root_v1(&pipeline, &programs),
@@ -1599,22 +1790,21 @@ impl KernelLedgerV1 {
         if let Some(p) = opv {
             self.opv_class_economics(&p, &bounds).map_err(rule)?;
         }
-        self.pipeline_classes.insert(
-            class,
-            PipelineClassRowV1 {
-                descriptor: d,
-                pipeline_bytes: pipeline_bytes.to_vec(),
-                pipeline,
-                program_bytes: program_bytes.to_vec(),
-                programs,
-                plan: plan.clone(),
-                param_commitments: pcs.to_vec(),
-                binding,
-                network_domain: self.policy.network_domain,
-                ruleset_digest: self.policy.ruleset_digest,
-                bounds,
-            },
-        );
+        let row = PipelineClassRowV1 {
+            descriptor: d,
+            pipeline_bytes: pipeline_bytes.to_vec(),
+            pipeline,
+            program_bytes: program_bytes.to_vec(),
+            programs,
+            plan: plan.clone(),
+            param_commitments: pcs.to_vec(),
+            binding,
+            network_domain: self.policy.network_domain,
+            ruleset_digest: self.policy.ruleset_digest,
+            bounds,
+        };
+        self.check_admission_work_v1(row.admission_work_v1().map_err(rule)?).map_err(rule)?;
+        self.pipeline_classes.insert(class, row);
         if mode.is_optimistic() {
             self.opv.classes.insert(class);
         }
@@ -1678,6 +1868,7 @@ impl KernelLedgerV1 {
         bond.collateral -= fee;
         self.burned += fee;
         let daa = self.daa;
+        let source_floor = self.beacon_source_liability_floor(job, producer);
         let mut life = ClaimLifecycleV1::new(LifecyclePolicyV1 {
             check_window_daa: self.policy.check_window_daa,
             challenge_window_daa: match &opv_row {
@@ -1704,12 +1895,13 @@ impl KernelLedgerV1 {
                 committed_daa: daa,
                 life,
                 reserved: need,
-                liability_until: None,
+                liability_until: source_floor,
                 convicted: false,
                 rewarded: false,
                 sealed_daa,
             },
         );
+        self.beacon_source_revealed(job, producer, id);
         if let Some((_, row)) = opv_row {
             // An OPV claim holds its job from its first reveal: it is prosecutable by any bond from this block, so a junk claim
             // squatting the job is slashed (or defaults) at the squatter's cost, and a well-formed one is the job's answer.
@@ -1838,6 +2030,7 @@ impl KernelLedgerV1 {
             Some(b) if b.exit_requested.is_some() => return Err("the producer bond is exiting".into()),
             Some(_) => {}
         }
+        self.beacon_source_reveal_ready(*job, *producer, salt.is_some())?;
         let expected = match salt {
             None => claim_seal_v1(id),
             Some(s) => claim_seal_v2(id, s),
@@ -1868,15 +2061,15 @@ impl KernelLedgerV1 {
         let job = self.jobs.get(&claim.job_id).ok_or_else(|| rule("no such job".into()))?;
         let class = self.classes.get(&job.class_binding_id).ok_or_else(|| rule("no such class".into()))?;
         self.opv_claim_gate(&job.class_binding_id).map_err(rule)?;
+        // The per-claim reward gate's court-scope condition (`crate::court_scope`; v1/v2: past the court scope and the OPV fence).
+        self.class_court_scope_v1(&job.class_binding_id).map_err(rule)?;
+        // The carried claim fits the class's registered commit carrier before anything is cloned or authenticated.
+        Self::check_claim_carrier_v1(NAME, &class.bounds, &(claim, evidence, commitments))?;
         if let Some(f) = binding_fault_v1(job, claim, evidence, class.program.token_bound) {
             return Err(rule(format!("binding fault {f:?}")));
         }
         if evidence.header != class.header(job.class_binding_id) {
             return Err(rule(format!("binding fault {:?}", BindingFaultV1::WrongClass)));
-        }
-        // The trace commitments are carried with the claim (they bound every later opening): they must be the evidence's.
-        if EvidenceV1::new(commitments.to_vec()).root() != evidence.trace_root {
-            return Err(rule("the carried trace commitments are not the evidence's trace root".into()));
         }
         let id = claim.id();
         if self.claims.contains_key(&id) {
@@ -1885,7 +2078,12 @@ impl KernelLedgerV1 {
         // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
         self.reveal_ready(&claim.job_id, &claim.producer_bond, &id, salt).map_err(rule)?;
         self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
-        self.charge(NAME, 0)?;
+        let work = class.admission_work_v1().map_err(rule)?;
+        self.charge(NAME, work)?;
+        // The trace commitments are carried with the claim (they bound every later opening): they must be the evidence's.
+        if EvidenceV1::new(commitments.to_vec()).root() != evidence.trace_root {
+            return Err(rule("the carried trace commitments are not the evidence's trace root".into()));
+        }
         let job = self.jobs.get(&claim.job_id).expect("checked");
         let class = self.classes.get(&job.class_binding_id).expect("checked");
         // Everything a court checks before any relation, checked now: a claim is never committed in a shape a court could only
@@ -1928,6 +2126,7 @@ impl KernelLedgerV1 {
         let job = self.pipeline_jobs.get(&claim.job_id).ok_or_else(|| rule("no such job".into()))?;
         let class = self.pipeline_classes.get(&job.class_binding_id).ok_or_else(|| rule("no such class".into()))?;
         self.opv_claim_gate(&job.class_binding_id).map_err(rule)?;
+        Self::check_claim_carrier_v1(NAME, &class.bounds, &(claim, evidence, stages))?;
         use BindingFaultV1 as F;
         let fault = |f: F| Err(rule(format!("binding fault {f:?}")));
         if claim.evidence_root != evidence.root() {
@@ -1963,11 +2162,6 @@ impl KernelLedgerV1 {
         if claim.output_root != evidence.output_root {
             return Err(rule("binding fault WrongOutput".into()));
         }
-        if stages.len() != evidence.stages.len()
-            || stages.iter().zip(&evidence.stages).any(|(s, e)| s.evidence().root() != e.trace_root)
-        {
-            return Err(rule("the carried trace commitments are not the evidence's trace roots".into()));
-        }
         let id = claim.id();
         if self.claims.contains_key(&id) {
             return Err(rule("an exact duplicate claim".into()));
@@ -1975,7 +2169,13 @@ impl KernelLedgerV1 {
         // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
         self.reveal_ready(&claim.job_id, &claim.producer_bond, &id, salt).map_err(rule)?;
         self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
-        self.charge(NAME, 0)?;
+        let work = class.admission_work_v1().map_err(rule)?;
+        self.charge(NAME, work)?;
+        if stages.len() != evidence.stages.len()
+            || stages.iter().zip(&evidence.stages).any(|(s, e)| s.evidence().root() != e.trace_root)
+        {
+            return Err(rule("the carried trace commitments are not the evidence's trace roots".into()));
+        }
         let job = self.pipeline_jobs.get(&claim.job_id).expect("checked");
         let class = self.pipeline_classes.get(&job.class_binding_id).expect("checked");
         let h = class.header(job.class_binding_id);
@@ -2101,7 +2301,72 @@ impl KernelLedgerV1 {
             && matches!(row.body, ClaimBodyV1::Program { .. } | ClaimBodyV1::Pipeline { .. } | ClaimBodyV1::Spec(_))
     }
 
+    pub(crate) fn check_court_work_v1(&self, work: u64) -> Result<(), String> {
+        if work > self.policy.max_court_work_per_block {
+            return Err("the class's worst court does not fit one block's court budget: nobody could prosecute it".into());
+        }
+        if work > self.policy.guaranteed_proof_work_v1() {
+            return Err("the class's worst court does not fit guaranteed proof work: admissions could starve prosecution".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_admission_work_v1(&self, work: u64) -> Result<(), String> {
+        if work > self.policy.admission_work_limit_v1() {
+            return Err("the class's structural claim admission cannot fit the block's non-proof work budget".into());
+        }
+        Ok(())
+    }
+
+    /// Count the borrowed carrier before allocating/copying a trace or hashing evidence. A global
+    /// route envelope alone would let a small class carry arbitrarily larger malformed traces.
+    pub(crate) fn check_claim_carrier_v1<T: BorshSerialize>(
+        name: &'static str,
+        bounds: &ProsecutionBoundsV1,
+        value: &T,
+    ) -> Result<(), KernelRefusalV1> {
+        let len = borsh::object_length(value).map_err(|e| KernelRefusalV1::rule(name, e.to_string()))? as u128;
+        let cap = bounds.max_commit_bytes.saturating_add(crate::gate::CLAIM_CARRIER_OVERHEAD_BYTES_V1);
+        if len > cap {
+            return Err(KernelRefusalV1::new(
+                name,
+                RefusalKindV1::Oversized,
+                format!("claim carrier {len} bytes exceeds class bound {cap}"),
+            ));
+        }
+        Ok(())
+    }
+
     /// The prosecution bounds of a registered class of any kind (single program, pipeline, typed).
+    /// **G14-B: a claim's liability horizon** (DAA after its Final or pre-Final default): its class's derived horizon
+    /// ([`ClassRowV1::liability_daa`]), the policy's for every other kind of claim.
+    pub fn claim_liability_daa_v1(&self, claim: &Digest) -> u64 {
+        self.claims
+            .get(claim)
+            .and_then(|r| self.classes.get(&r.class_binding_id))
+            .map_or(self.policy.liability_daa, |c| c.liability_daa)
+    }
+
+    /// **G14-B: the response window of a demand on `(claim, stage, position)`** — the base court deadline plus one DAA for every chunk
+    /// past the first the demanded material takes on the route (`crate::budget::response_window_daa_v1`): a segmented position's
+    /// parts from the class layout (an inline response keeps the base deadline). Never what the producer sends.
+    pub fn demand_window_daa_v1(&self, claim: &Digest, position: u32) -> u64 {
+        let base = self.policy.court_deadline_daa;
+        let Some(row) = self.claims.get(claim) else { return base };
+        let chunks = match &row.body {
+            ClaimBodyV1::Segmented { .. } => self
+                .classes
+                .get(&row.class_binding_id)
+                .and_then(|c| crate::budget::seg_position_chunks_v1(&c.program, position).ok())
+                .map_or(1, |(chunks, _)| chunks),
+            // An inline (K2-TIR v1–v3, typed) response is ONE object, at most `ROUTE_CHUNKS_PER_OBJECT_V1` chunks by the consumer's
+            // carrier fit; it keeps the base deadline (G14-B open item: the gate's response bound is a worst case far above the real
+            // responses, and counting it would move every inline deadline — see `budget::inline_response_chunks_v1`).
+            _ => 1,
+        };
+        crate::budget::response_window_daa_v1(base, chunks)
+    }
+
     pub fn bounds_of(&self, class: &Digest) -> Option<ProsecutionBoundsV1> {
         self.classes
             .get(class)
@@ -2165,6 +2430,17 @@ impl KernelLedgerV1 {
         // out), no proof can change anything: the filing is REFUSED before any court runs, and no fee is charged — a TRUE proof never
         // costs its filer the dismissal fee, and a refusal is free for everyone (it is dropped, as an unknown claim is).
         self.proof_open(row).map_err(rule)?;
+        // ADR-0177 D2 (`crate::court_scope`): within the accuser's dismissed filings and units of this claim — refused free, before any
+        // court runs (per accuser: no other bond can spend an honest prosecutor's allowance).
+        let unit = match (&row.body, proof) {
+            (ClaimBodyV1::Segmented { .. }, ProsecutionV1::Segmented(bytes)) if self.court_scope_in_force() => {
+                let prompt_len = self.job_view_v1(&row.job_id).map_or(0, |j| j.prompt_len);
+                crate::element::SegFaultV1::from_bytes(bytes).ok().and_then(|f| f.position_v1(prompt_len)).map(|p| (0u8, p))
+            }
+            _ => None,
+        };
+        self.court_scope_filing_allows_v1(accuser, claim, unit).map_err(|why| rule(&why))?;
+        let row = self.claims.get(claim).expect("checked");
         let bounds = self.bounds_of(&row.class_binding_id);
         let cheap = bounds.and_then(|b| oversized(proof, &b));
         let verdict = match cheap {
@@ -2182,8 +2458,12 @@ impl KernelLedgerV1 {
                 self.adjudicate(claim, proof)
             }
         };
+        if let Some(unit) = unit {
+            self.court_scope_record_unit_v1(accuser, claim, unit);
+        }
         match verdict {
             Err(why) => {
+                self.court_scope_record_dismissal_v1(accuser, claim);
                 let b = self.bonds.get_mut(accuser).expect("checked");
                 b.collateral -= fee;
                 self.burned += fee;
@@ -2423,8 +2703,10 @@ impl KernelLedgerV1 {
         }
         let is_final = matches!(row.life.state, ClaimStateV1::Final { .. });
         // Before Final, only while the challenge window is open (so no demand extends Final past window + deadline + grace); after
-        // Final, within the liability horizon (material for a post-Final proof), without touching the lifecycle.
-        let path = self.policy.court_deadline_daa.saturating_add(self.policy.proof_grace_daa);
+        // Final, within the liability horizon (material for a post-Final proof), without touching the lifecycle. G14-B: the deadline
+        // counts the chunks of the class's worst response.
+        let window = self.demand_window_daa_v1(claim, position);
+        let path = window.saturating_add(self.policy.proof_grace_daa);
         let window_open = match &row.life.state {
             // The demand's whole path (its deadline, then the grace after a service) must fit in the horizon, or a late demand
             // would serve material nobody could still prosecute with.
@@ -2443,6 +2725,8 @@ impl KernelLedgerV1 {
         }
         // The explicit commitment-only scope restricts what a response owes, not the
         // demand's position. No global clear-disclosure allowance can be exhausted here.
+        // ADR-0177 D2 (`crate::court_scope`): the requester's units of the claim, and a v1/v2 position's model clear budget.
+        self.cumulative_scope_allows_v1(demander, claim, stage, position).map_err(|why| rule(&why))?;
         let need = self.policy.demand_bond;
         let Some(b) = self.bonds.get(demander) else { return Err(rule("the demander is not a registered bond")) };
         if b.exit_requested.is_some() || b.free() < need {
@@ -2461,12 +2745,14 @@ impl KernelLedgerV1 {
                 self.bonds.get_mut(demander).expect("checked").reserved += need;
                 settle(out, *demander, need, SettlementKindV1::ReserveDemand, Some(*claim));
             }
+            self.court_scope_record_unit_v1(demander, claim, (stage, position));
             out.push(LedgerEventV1::DemandJoined { claim: *claim, stage, position });
             return Ok(());
         }
+        self.court_scope_record_unit_v1(demander, claim, (stage, position));
         // One session per stage position: the count is bounded by the claim's positions, and no demand can crowd out another.
         self.bonds.get_mut(demander).expect("checked").reserved += need;
-        let deadline = daa + self.policy.court_deadline_daa;
+        let deadline = daa + window;
         self.demands.insert(k, DemandRowV1 { demanders: vec![(*demander, need)], filed_daa: daa, deadline_daa: deadline, last: None });
         if !is_final {
             let row = self.claims.get_mut(claim).expect("checked");
@@ -2570,6 +2856,8 @@ impl KernelLedgerV1 {
         let daa = self.daa;
         // S3 (`palw_verifier_pay_v1`): a forfeited beacon-source seal forfeits its extra deposit too (`d_src` in all).
         self.close_beacon_source_v1(&job, &producer, row.daa, true, out);
+        // Codex RFC-7 (table 30): every per-target source reservation attached to this seal burns too, independently.
+        self.beacon_source_seal_forfeited(job, producer, row.seal, row.daa, out);
         if self.salted_seals_from().is_some_and(|at| row.daa >= at) {
             self.forfeited_claim_seals.insert((job, producer, row.daa), ForfeitedSealRowV1 { seal: row.seal, forfeited_daa: daa });
         }
@@ -2605,8 +2893,13 @@ impl KernelLedgerV1 {
             self.forfeit_claim_seal(job, producer, row, out);
         }
         self.proof_seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
+        // EXEC holds are keyed by claim, but the poster's escrow is keyed by job. A pending Panel claim may be bound before
+        // another producer wins coverage of that same job. Neither its sibling's Final nor idle expiry may spend the held escrow.
+        // Derive this bounded set once per tick; lifecycle updates below do not change hold ownership or claim job bindings.
+        let held_jobs: BTreeSet<_> =
+            self.exec_reward_holds.keys().filter_map(|id| self.claims.get(id).map(|row| row.job_id)).collect();
         // GAP-5: escrows no claim can still use go back to their posters.
-        self.release_idle_job_escrows(out);
+        self.release_idle_job_escrows(&held_jobs, out);
         self.spec_prune_lines(daa);
         // Demands past their deadline: the producer's availability default.
         let due: Vec<_> = self.demands.iter().filter(|(_, d)| daa >= d.deadline_daa).map(|(k, _)| *k).collect();
@@ -2652,6 +2945,7 @@ impl KernelLedgerV1 {
             let burn = penalty - held - share * d.demanders.len() as u64;
             self.burned += burn;
             let producer = self.claims.get(&claim).map(|r| r.producer);
+            let liability_daa = self.claim_liability_daa_v1(&claim);
             if let Some(row) = self.claims.get_mut(&claim) {
                 let was_final = matches!(row.life.state, ClaimStateV1::Final { .. });
                 row.reserved -= taken - held;
@@ -2661,7 +2955,8 @@ impl KernelLedgerV1 {
                     // stays held, and a valid proof filed by `daa + liability_daa` still convicts it — keeping one proof out of the
                     // chain for a demand's deadline must not turn a provable fraud into a cheap default. If no valid proof arrives
                     // the outcome stays the default (availability, never fraud) and the reservation is released at the horizon.
-                    row.liability_until = Some(daa.saturating_add(self.policy.liability_daa));
+                    // The per-class horizon (G14-B), never shortening one an EXEC hold or a source opt-in already extended.
+                    row.liability_until = Some(row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)));
                 }
                 if let Some(b) = self.bonds.get_mut(&row.producer) {
                     b.reserved = b.reserved.saturating_sub(taken - held);
@@ -2704,13 +2999,18 @@ impl KernelLedgerV1 {
             };
             match (&before, &after) {
                 (b, ClaimStateV1::Final { .. }) if !matches!(b, ClaimStateV1::Final { .. }) => {
+                    let liability_daa = self.claim_liability_daa_v1(&id);
                     let row = self.claims.get_mut(&id).expect("listed");
-                    row.liability_until = Some(daa + self.policy.liability_daa);
+                    row.liability_until = Some(row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)));
                     // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. ADR-0176 hook
                     // (`palw_bond_budget_v1`, not built): this payout also re-checks and consumes the producer bond's reservation.
                     let (job, convicted) = (row.job_id, row.convicted);
                     let mut paid = Vec::new();
-                    let reward = if convicted { 0 } else { self.pay_from_job_escrow(&job, &id, producer, &mut paid) };
+                    let reward = if convicted || held_jobs.contains(&job) {
+                        0
+                    } else {
+                        self.pay_from_job_escrow(&job, &id, producer, &mut paid)
+                    };
                     self.claims.get_mut(&id).expect("listed").rewarded = reward > 0;
                     out.push(LedgerEventV1::Final { claim: id, reward });
                     out.extend(paid);
@@ -2742,6 +3042,7 @@ impl KernelLedgerV1 {
         self.tick_verifier_pay_v1(out);
         // The served positions' demand bonds whose claim is now decided (after this block's defaults, Finals and releases).
         self.settle_due_served_demand_bonds(out);
+        self.tick_beacon_sources(out);
     }
 
     /// **DA16: would `bytes` serve this committed position?** — exactly the classification a `Respond` gets (the class's response
@@ -2831,11 +3132,47 @@ impl KernelLedgerV1 {
     }
 }
 
+/// **G14-B: a single-program class's liability horizon** — a segmented (K2-TIR-v4/v5) class's worst-case public pursuit
+/// ([`crate::budget::class_pursuit_v1`]: its search rounds, the chunk-counted windows of its largest position, its filing) under the
+/// OPV clock, refused by name past the ceiling; every other class rides one demand round and keeps the policy's horizon.
+pub(crate) fn class_liability_daa_v1(
+    policy: &LedgerPolicyV1,
+    opv: Option<&crate::opv::OpvPolicyV1>,
+    d: &KernelDescriptorV1,
+    program: &TirProgramV1,
+    plan: &VerificationPlanV1,
+    bounds: &ProsecutionBoundsV1,
+) -> Result<u64, crate::gate::ProsecutionGapV1> {
+    if !crate::descriptor::is_segmented_v1(d) {
+        return Ok(policy.liability_daa);
+    }
+    let Some(opv) = opv else {
+        return Err(crate::gate::ProsecutionGapV1::Unbounded {
+            what: "PURSUIT_SCHEDULE: a segmented class has no OPV clock to finish a pursuit on",
+            required: 1,
+            limit: 0,
+        });
+    };
+    crate::budget::class_pursuit_v1(d, program, plan, bounds.max_filing_bytes, bounds.max_response_bytes, policy, opv)
+        .map(|p| p.liability_daa)
+}
+
+/// **A conformance-only candidate's liability horizon** (RFC02-T merge, 2026-10-11): G14-B's derivation where the pursuit fits, else 0
+/// — "no pursuit horizon": a candidate holds no claim, job or reservation (RFC-0002 preparation only), and every real-shape v4 profile
+/// is refused at one route chunk a DAA, so refusing here would make actual-weight candidates impossible to prepare. Promotion to an
+/// execution class re-derives with [`class_liability_daa_v1`] and is refused by name.
+pub(crate) fn candidate_liability_daa_v1(derived: Result<u64, crate::gate::ProsecutionGapV1>) -> u64 {
+    derived.unwrap_or(0)
+}
+
 /// The wire overhead around the payload of a `FileProof` (version, tag, accuser, claim, proof variant, length), of a `Respond`
 /// (version, tag, claim, stage, position, length) and of the evidence object a `CommitClaim` carries beside the commitments.
-const FILE_PROOF_OVERHEAD_V1: u128 = 1 + 1 + 64 + 64 + 1 + 4;
-const RESPOND_OVERHEAD_V1: u128 = 1 + 1 + 64 + 1 + 4 + 4;
-const COMMIT_OVERHEAD_V1: u128 = 1 << 16;
+// One derivation each: the FileProof / Respond envelopes are G14-B's (`crate::budget`, the same bytes the pursuit schedule chunks), the
+// CommitClaim evidence envelope is the claim-carrier overhead the admission work prices (`crate::gate`, 2^16 — the value this
+// constant had before either lane).
+const FILE_PROOF_OVERHEAD_V1: u128 = crate::budget::FILE_PROOF_ENVELOPE_BYTES_V1 as u128;
+const RESPOND_OVERHEAD_V1: u128 = crate::budget::RESPOND_ENVELOPE_BYTES_V1 as u128;
+const COMMIT_OVERHEAD_V1: u128 = crate::gate::CLAIM_CARRIER_OVERHEAD_BYTES_V1;
 
 /// **A class is prosecutable only if its worst filing, its largest response and its commitments fit the carriers** — the encoded-size
 /// ceilings of the objects that carry them. A court that cannot be carried by a `FileProof`, a response that cannot be carried by a

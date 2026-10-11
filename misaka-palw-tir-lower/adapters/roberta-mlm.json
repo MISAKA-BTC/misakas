@@ -1,0 +1,57 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "roberta-mlm",
+  "doc": "RobertaForMaskedLM, XLMRobertaForMaskedLM and CamembertForMaskedLM (fill-mask): the RoBERTa encoder, then every row through `lm_head` (dense, gelu, layer_norm) and the vocabulary projection tied to the word embeddings, plus `lm_head.bias` (OutputSpec::MaskedLm). Reached by the task, never by architecture alone. HFX 2026-10-10.",
+  "extends": [
+    "roberta",
+    "mixin-mlm-encoder"
+  ],
+  "match": {
+    "architectures": [],
+    "model_types": [],
+    "masked_lm_of": [
+      "RobertaForMaskedLM",
+      "XLMRobertaForMaskedLM",
+      "CamembertForMaskedLM"
+    ]
+  },
+  "vars": [
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.word_embeddings",
+        "pos_embed": "embeddings.position_embeddings",
+        "type_embed": "embeddings.token_type_embeddings",
+        "embed_norm": "embeddings.LayerNorm",
+        "attn.q": "encoder.layer.{L}.attention.self.query",
+        "attn.k": "encoder.layer.{L}.attention.self.key",
+        "attn.v": "encoder.layer.{L}.attention.self.value",
+        "attn.o": "encoder.layer.{L}.attention.output.dense",
+        "norm.mix": "encoder.layer.{L}.attention.output.LayerNorm",
+        "mlp.up": "encoder.layer.{L}.intermediate.dense",
+        "mlp.down": "encoder.layer.{L}.output.dense",
+        "norm.ffn": "encoder.layer.{L}.output.LayerNorm",
+        "head.transform.dense": "lm_head.dense",
+        "head.transform.norm": "lm_head.layer_norm",
+        "lm_head": "embeddings.word_embeddings",
+        "lm_head_bias": "lm_head.bias"
+      }
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "pooler.",
+        "lm_head.decoder."
+      ]
+    },
+    {
+      "name": "prefix_aliases",
+      "value": [
+        [
+          "",
+          "roberta."
+        ]
+      ]
+    }
+  ]
+}

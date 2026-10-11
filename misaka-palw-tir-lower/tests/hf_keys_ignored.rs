@@ -62,8 +62,11 @@ fn a_key_the_class_reads_a_storage_marker_or_an_adapter_rule_is_still_refused() 
     refused(with(base.clone(), &[("sliding_window", json!(4096))]), "sliding_window");
     // `rope_interleaved` is the Llama adapter's explicit refusal (transformers' Llama rotates halves).
     refused(with(base.clone(), &[("rope_interleaved", json!(true))]), "rope_interleaved");
-    // A storage marker is the storage check's question, whatever the scan says.
-    refused(with(base.clone(), &[("quantization", json!({"group_size": 64, "bits": 4}))]), "quantization");
+    // A storage marker is the storage check's question, whatever the scan says. MLX's `quantization` block is the reader's own
+    // (MLX_QUANT_V1: read as the MLX_AFFINE format, `tests/mlx_quant.rs`); a `quantization` that is not MLX's is refused by name.
+    let mlx = read(&with(base.clone(), &[("quantization", json!({"group_size": 64, "bits": 4}))])).expect("MLX's block is read");
+    assert!(mlx.spec.hf.quant.as_ref().is_some_and(|q| q.fmt.label().starts_with("MLX_AFFINE")));
+    refused(with(base.clone(), &[("quantization", json!({"bits": 4, "scheme": "int4"}))]), "quantization");
     refused(with(base.clone(), &[("load_in_4bit", json!(true))]), "load_in_4bit");
 }
 

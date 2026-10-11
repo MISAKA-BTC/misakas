@@ -2953,6 +2953,17 @@ pub struct Params {
     /// collapsed from `Some(never())`. Requires `palw_gen_v1` in force at or below it ([`Self::validate_palw_gen_range_twin_v1`]).
     pub palw_gen_range_twin_v1: Option<ForkActivation>,
 
+    /// **The task-head profile** ([`crate::palw_task_heads_v1`], HFX 2026-10-08): past this height a generative class may be a task
+    /// head (profile tag 6, `PalwGenProfileOffersV1::Head`, `PalwGenBodyV1::Head`) — a classifier, a token or span head, a masked-LM head
+    /// or a vision head as a complete task. Below it, and on every network that leaves it `None`, an object carrying a `Head` variant is
+    /// read exactly as the int-12 build reads its bytes: not decodable (the module doc's A-2 table).
+    ///
+    /// Dormant: `None` on every preset and in no flag-day list; hashed Some-only in both fingerprints with its value, the activation
+    /// alone visited by `for_each_fence`, the whole option collapsed from `Some(never())`. **This build refuses arming it**
+    /// ([`Self::validate_palw_task_heads_v1`]); the full-activation release will require `palw_gen_v1` in force at or below it
+    /// ([`Self::palw_task_heads_v1_arming_preconditions`]).
+    pub palw_task_heads_v1: Option<crate::palw_task_heads_v1::PalwTaskHeadsFenceV1>,
+
     /// **RFC-0011 §15.7: the probabilistic-constraint route's fence** ([`crate::palw_probabilistic_constraints_v1`]): the separately
     /// named fence under which kernel-bound classes (ADR-0172; `misaka-palw-kernel`'s versioned descriptors, `VerificationPlanV1`,
     /// constraint receipts) would be registered and their claims finalized. **Dormant with no activation height**: `None` on every
@@ -2960,17 +2971,38 @@ pub struct Params {
     /// ([`Self::validate_palw_probabilistic_constraints_v1`]) — the RFC assigns none, and shadow comparison precedes any proposal.
     pub palw_probabilistic_constraints_v1: Option<ForkActivation>,
 
+    /// **ADR-0178: rule E, the fork choice that heals a partition on bonded participation** ([`crate::palw_fork_choice_rule_e_v1`]):
+    /// past it the sink search weighs every valid tip, the deep-reorg gate and the IBD commit compare the two tips' EXCLUSIVE pasts
+    /// (participation of bonds registered in both first, once the fork is `PALW_RULE_E_PARTICIPATION_DEPTH_DAA_V1` deep; then the
+    /// economic keys over those pasts), and the relay fetches below the merge-depth root. **Dormant**: `None` on every preset and in no
+    /// flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed by
+    /// [`Self::validate_palw_fork_choice_rule_e_v1`] — which also refuses `palw_dns_retirement_v1` unless rule E is armed at or below it.
+    pub palw_fork_choice_rule_e_v1: Option<ForkActivation>,
     /// **RFC-0004 Part II: typed-root computation specifications on the kernel route** ([`crate::palw_typed_roots_v1`]): the separately
     /// named fence under which the route's ledger schedules the typed-roots extension `K2-TR-v1` (Memory, Retrieval, Composite classes;
     /// `misaka-palw-kernel::spec`). **Dormant with no activation height**: `None` on every preset and in no flag-day list, hashed
     /// Some-only in both fingerprints, collapsed from `Some(never())`, and refused when armed ([`Self::validate_palw_typed_roots_v1`])
     /// until the single full-activation release names a height for it with the others.
     pub palw_typed_roots_v1: Option<ForkActivation>,
+    /// **RFC-0009 L2: the fork-choice commitment's fence** ([`crate::palw_fork_choice_commitment_v1`]): a post-state whose point stands
+    /// at or past it is committed in headers as `BLAKE2b(fork-choice leaf ‖ ADR-0043 root)`, so a light client opens the comparator's
+    /// inputs in 258 bytes. **Dormant with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only in
+    /// both fingerprints, collapsed from `Some(never())`, and refused when armed ([`Self::validate_palw_fork_choice_commitment_v1`]).
+    pub palw_fork_choice_commitment_v1: Option<ForkActivation>,
     /// **ECON's M\*-49 verifier pay and the held default share** ([`crate::palw_verifier_pay_v1`], G14R, readiness §3f): past this
     /// height the kernel route's jobs escrow a per-check fee paid to drawn verifiers first out of the unchanged 49 %, and a pre-Final
     /// default's demander share is held to the liability horizon. **Dormant**: `None` on every preset, Some-only hashed, collapsed from
     /// `Some(never())`, refused when armed ([`Self::validate_palw_verifier_pay_v1`]).
     pub palw_verifier_pay_v1: Option<ForkActivation>,
+    /// **RFC-0002 P0: protected candidate refutations** ([`crate::palw_model_refutation_seal_v4`], lane RFC02-T): past this height
+    /// a refutation of a candidate statement (model artifact binding v2, model vector v2, flat model vector v3) is admitted only as
+    /// the reveal of the signer's own mature seal (kernel inner 36 / 37), and the frozen unsealed refutations (inner 23 / 27 / 32)
+    /// are refused by name. **Dormant**: `None` on every preset, Some-only hashed, collapsed from `Some(never())`, refused when armed
+    /// ([`Self::validate_palw_model_refutation_seal_v1`]).
+    pub palw_model_refutation_seal_v1: Option<ForkActivation>,
+    /// Per-attempt source reservation, inner 40 (codex RFC-7; renumbered from 21 at the merge). Independent, None on every preset, Some-only fingerprints.
+    /// Every real activation is refused until the target, source-only beacon and funded fee consumers are complete.
+    pub palw_beacon_source_opt_in_v1: Option<ForkActivation>,
 
     /// **RFC-0015: Panel=0 (`OptimisticPublicVerification`) on the kernel route** ([`crate::palw_panel_free_v1`]): the separately named
     /// fence under which a network admits classes registered under the Panel-free verification mode (a fixed public challenge window,
@@ -4228,12 +4260,19 @@ impl Params {
         self.validate_palw_fp_job_v5_v1()?;
         // **The generative range twin** (`crate::palw_gen_range_twin_v1`): over the generative fence.
         self.validate_palw_gen_range_twin_v1()?;
+        // **The task-head profile** (`crate::palw_task_heads_v1`): dormant, refused when armed.
+        self.validate_palw_task_heads_v1()?;
         // **RFC-0011 §15.7's dormant fence** (`crate::palw_probabilistic_constraints_v1`): refused when armed.
         self.validate_palw_probabilistic_constraints_v1()?;
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
         self.validate_palw_typed_roots_v1()?;
+        // **RFC-0009 L2's dormant fence** (`crate::palw_fork_choice_commitment_v1`): refused when armed.
+        self.validate_palw_fork_choice_commitment_v1()?;
         // **M*-49's dormant fence** (`crate::palw_verifier_pay_v1`): refused when armed.
         self.validate_palw_verifier_pay_v1()?;
+        // **RFC-0002 P0's dormant fence** (`crate::palw_model_refutation_seal_v4`): refused when armed.
+        self.validate_palw_model_refutation_seal_v1()?;
+        self.validate_palw_beacon_source_opt_in_v1()?;
         // **RFC-0015's dormant fence** (`crate::palw_panel_free_v1`): refused when armed.
         self.validate_palw_panel_free_v1()?;
         self.validate_palw_signed_registration_v1()?;
@@ -5168,7 +5207,9 @@ impl Params {
             self.validate_palw_anchor_window_v1()?;
             self.validate_palw_receipt_spend_v4()?;
             self.validate_palw_evidence_court_v1()?;
-            return self.validate_palw_audit_1004_v1();
+            self.validate_palw_audit_1004_v1()?;
+            // ADR-0178 on this path too: rule E's fence and the DNS retirement's order.
+            return self.validate_palw_fork_choice_rule_e_v1();
         };
         bundle.validate()?;
         // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
@@ -6047,7 +6088,10 @@ impl Params {
         // **RFC-0009 stage B: the provider court's refusals** — after the fences it names.
         self.validate_palw_evidence_court_v1()?;
         // Lane PA's audit-1004 fence: last, likewise.
-        self.validate_palw_audit_1004_v1()
+        self.validate_palw_audit_1004_v1()?;
+        // **ADR-0178: rule E's fence and the DNS retirement's order** — last, after every other refusal, so a rule-E refusal
+        // is reached only by a ruleset that passes everything else (`rfc12_zero_dns_matrix` relies on that).
+        self.validate_palw_fork_choice_rule_e_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -6613,17 +6657,35 @@ impl Params {
         if self.palw_gen_range_twin_v1 == Some(ForkActivation::never()) {
             self.palw_gen_range_twin_v1 = None;
         }
+        // The task-head profile, likewise: the WHOLE option collapses from `Some(never())`.
+        if self.palw_task_heads_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_task_heads_v1 = None;
+        }
         // The probabilistic-constraint fence, likewise.
         if self.palw_probabilistic_constraints_v1 == Some(ForkActivation::never()) {
             self.palw_probabilistic_constraints_v1 = None;
+        }
+        // Rule E's fence (ADR-0178), likewise.
+        if self.palw_fork_choice_rule_e_v1 == Some(ForkActivation::never()) {
+            self.palw_fork_choice_rule_e_v1 = None;
         }
         // The typed-roots fence, likewise.
         if self.palw_typed_roots_v1 == Some(ForkActivation::never()) {
             self.palw_typed_roots_v1 = None;
         }
+        // The fork-choice commitment fence, likewise.
+        if self.palw_fork_choice_commitment_v1 == Some(ForkActivation::never()) {
+            self.palw_fork_choice_commitment_v1 = None;
+        }
         // The verifier-pay fence, likewise.
         if self.palw_verifier_pay_v1 == Some(ForkActivation::never()) {
             self.palw_verifier_pay_v1 = None;
+        }
+        if self.palw_model_refutation_seal_v1 == Some(ForkActivation::never()) {
+            self.palw_model_refutation_seal_v1 = None;
+        }
+        if self.palw_beacon_source_opt_in_v1 == Some(ForkActivation::never()) {
+            self.palw_beacon_source_opt_in_v1 = None;
         }
         // The Panel-free fence, likewise.
         if self.palw_panel_free_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
@@ -10434,9 +10496,14 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
+            palw_task_heads_v1,
             palw_probabilistic_constraints_v1,
+            palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
+            palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
+            palw_model_refutation_seal_v1,
+            palw_beacon_source_opt_in_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
@@ -10718,9 +10785,14 @@ impl Params {
             ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
             ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
+            ("palw_task_heads_v1", palw_task_heads_v1.map(|fence| fence.activation)),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
+            ("palw_fork_choice_rule_e_v1", *palw_fork_choice_rule_e_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
+            ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
             ("palw_verifier_pay_v1", *palw_verifier_pay_v1),
+            ("palw_model_refutation_seal_v1", *palw_model_refutation_seal_v1),
+            ("palw_beacon_source_opt_in_v1", *palw_beacon_source_opt_in_v1),
             ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_tir_shard_segment_v2", *palw_tir_shard_segment_v2),
@@ -11009,9 +11081,20 @@ impl Params {
             h.write(b"palw_gen_range_twin_v1");
             h.write(at.daa_score().to_le_bytes());
         }
+        // The task-head profile, NAMED likewise, with its value.
+        if let Some(fence) = self.palw_task_heads_v1 {
+            h.write(b"palw_task_heads_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
         // The probabilistic-constraint fence, NAMED likewise.
         if let Some(at) = self.palw_probabilistic_constraints_v1 {
             h.write(b"palw_probabilistic_constraints_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // Rule E's fence (ADR-0178), NAMED likewise.
+        if let Some(at) = self.palw_fork_choice_rule_e_v1 {
+            h.write(b"palw_fork_choice_rule_e_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // The typed-roots fence, NAMED likewise.
@@ -11019,9 +11102,22 @@ impl Params {
             h.write(b"palw_typed_roots_v1");
             h.write(at.daa_score().to_le_bytes());
         }
+        // The fork-choice commitment fence, NAMED likewise.
+        if let Some(at) = self.palw_fork_choice_commitment_v1 {
+            h.write(b"palw_fork_choice_commitment_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
         // The verifier-pay fence, NAMED likewise.
         if let Some(at) = self.palw_verifier_pay_v1 {
             h.write(b"palw_verifier_pay_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_model_refutation_seal_v1 {
+            h.write(b"palw_model_refutation_seal_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_beacon_source_opt_in_v1 {
+            h.write(b"palw_beacon_source_opt_in_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // The Panel-free fence, NAMED likewise.
@@ -11773,9 +11869,14 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
+            palw_task_heads_v1,
             palw_probabilistic_constraints_v1,
+            palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
+            palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
+            palw_model_refutation_seal_v1,
+            palw_beacon_source_opt_in_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
@@ -12544,16 +12645,34 @@ impl Params {
         if let Some(activation) = palw_gen_range_twin_v1.as_mut() {
             fork(activation, visit);
         }
+        // The task-head profile. Some-only.
+        if let Some(fence) = palw_task_heads_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // The probabilistic-constraint fence. Some-only.
         if let Some(activation) = palw_probabilistic_constraints_v1.as_mut() {
+            fork(activation, visit);
+        }
+        // Rule E's fence. Some-only.
+        if let Some(activation) = palw_fork_choice_rule_e_v1.as_mut() {
             fork(activation, visit);
         }
         // The typed-roots fence. Some-only.
         if let Some(activation) = palw_typed_roots_v1.as_mut() {
             fork(activation, visit);
         }
+        // The fork-choice commitment fence. Some-only.
+        if let Some(activation) = palw_fork_choice_commitment_v1.as_mut() {
+            fork(activation, visit);
+        }
         // The verifier-pay fence. Some-only.
         if let Some(activation) = palw_verifier_pay_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_model_refutation_seal_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_beacon_source_opt_in_v1.as_mut() {
             fork(activation, visit);
         }
         // The Panel-free fence. Some-only.
@@ -13129,9 +13248,14 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
+            palw_task_heads_v1,
             palw_probabilistic_constraints_v1,
+            palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
+            palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
+            palw_model_refutation_seal_v1,
+            palw_beacon_source_opt_in_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
@@ -13952,9 +14076,20 @@ impl Params {
             h.write(b"palw_gen_range_twin_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The task-head profile, Some-only for the same reason.
+        if let Some(fence) = palw_task_heads_v1 {
+            h.write(b"palw_task_heads_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
         // The probabilistic-constraint fence, Some-only for the same reason.
         if let Some(activation) = palw_probabilistic_constraints_v1 {
             h.write(b"palw_probabilistic_constraints_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Rule E's fence, Some-only for the same reason.
+        if let Some(activation) = palw_fork_choice_rule_e_v1 {
+            h.write(b"palw_fork_choice_rule_e_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // The typed-roots fence, Some-only for the same reason.
@@ -13962,9 +14097,22 @@ impl Params {
             h.write(b"palw_typed_roots_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The fork-choice commitment fence, Some-only for the same reason.
+        if let Some(activation) = palw_fork_choice_commitment_v1 {
+            h.write(b"palw_fork_choice_commitment_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // The verifier-pay fence, Some-only for the same reason.
         if let Some(activation) = palw_verifier_pay_v1 {
             h.write(b"palw_verifier_pay_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_model_refutation_seal_v1 {
+            h.write(b"palw_model_refutation_seal_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_beacon_source_opt_in_v1 {
+            h.write(b"palw_beacon_source_opt_in_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // The Panel-free fence, Some-only for the same reason.
@@ -14813,9 +14961,14 @@ impl Params {
             palw_gen_v1: self.palw_gen_v1,
             palw_fp_job_v5: self.palw_fp_job_v5,
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
+            palw_task_heads_v1: self.palw_task_heads_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
+            palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
+            palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1: self.palw_verifier_pay_v1,
+            palw_model_refutation_seal_v1: self.palw_model_refutation_seal_v1,
+            palw_beacon_source_opt_in_v1: self.palw_beacon_source_opt_in_v1,
             palw_panel_free_v1: self.palw_panel_free_v1.clone(),
             palw_signed_registration_v1: self.palw_signed_registration_v1,
             palw_tir_shard_segment_v2: self.palw_tir_shard_segment_v2,
@@ -15921,9 +16074,14 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
+    palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_model_refutation_seal_v1: None,
+    palw_beacon_source_opt_in_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
@@ -16225,9 +16383,14 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
+    palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_model_refutation_seal_v1: None,
+    palw_beacon_source_opt_in_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
@@ -16511,9 +16674,14 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
+    palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_model_refutation_seal_v1: None,
+    palw_beacon_source_opt_in_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
@@ -23851,6 +24019,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_held_close_chunks_v1();
     // RFC-0003's generative range twin, likewise.
     params.sync_palw_gen_range_twin_v1();
+    // The task-head profile, likewise.
+    params.sync_palw_task_heads_v1();
     // RFC-0007's verification vertex, likewise.
     params.sync_palw_verification_vertex_v1();
     // RFC-0008 v2's EXEC payload, likewise.
@@ -24141,9 +24311,14 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
+    palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_model_refutation_seal_v1: None,
+    palw_beacon_source_opt_in_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,

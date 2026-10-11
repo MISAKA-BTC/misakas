@@ -1,5 +1,5 @@
 //! **RFC-0012 D1 — why `safe` stands where it does.** A pure explanation of the native-settlement certificate, built from the
-//! SAME inputs the snapshot is: the executed chain's effects, the facts, the sink's open claims and data-availability sessions.
+//! SAME inputs the snapshot is: the executed chain's effects, the facts, the sink's open claims and dispute sessions.
 //!
 //! The snapshot says *what* is safe and gives one stop reason. A reader waiting on a transaction needs more: *which* effect holds
 //! `safe` back, *every* condition it still lacks (not only the first), how long each time-driven one has to run, which claim or
@@ -11,14 +11,14 @@
 //! * The first wait that maps to a stop reason is, for the blocking effect, exactly the snapshot's `stop`
 //!   ([`SafeWaitV1::stop`]); a test holds it against [`certify_native_prefix_v1`].
 //! * `earliest_ready_in_daa` is an estimate *from the facts already on the chain* and is `None` the moment any unmet condition
-//!   needs something that has not happened yet (a claim still working through its panel/receipt/court clocks, an open DA session,
+//!   needs something that has not happened yet (a claim still working through its panel/receipt/court clocks, an open dispute session,
 //!   a frontier that has not advanced, work that is not there). It never promises that `safe` WILL advance.
 //! * Evidence the node saw and did not count is reported as [`SkippedEvidenceV1`], not hidden.
 
 use crate::Hash64;
 use crate::palw_native_settlement_v1::{
-    EvidenceAccumulatorV1, MatureUsefulWorkV1, NativeEffectV1, NativePrefixV1, PalwSettlementPolicyV1, SettlementStopV1,
-    SkippedEvidenceV1,
+    EvidenceAccumulatorV1, MatureUsefulWorkV1, NATIVE_SETTLEMENT_SNAPSHOT_VERSION_V1, NativeEffectV1, NativePrefixV1,
+    NativeSettlementSnapshotV1, PalwSettlementPolicyV1, SettlementStopV1, SkippedEvidenceV1,
 };
 use crate::palw_state_v2::PalwClaimPhaseV2;
 use serde::{Deserialize, Serialize};
@@ -127,8 +127,8 @@ pub enum SafeWaitV1 {
         next_deadline_daa: Option<u64>,
         wait_daa: Option<u64>,
     },
-    /// A data-availability court session names a claim at or before the effect (`claim_known` false: the claim is not in the
-    /// state, so the dispute cannot be located and counts against every effect).
+    /// A DA or computation-court session names a claim at or before the effect (`claim_known` false: the claim is not in the
+    /// state, so the dispute cannot be located and counts against every effect). The existing `openDaSession` JSON tag is retained.
     #[serde(rename_all = "camelCase")]
     OpenDaSession {
         claim: Hash64,
@@ -260,7 +260,9 @@ pub enum FinalizedWaitV1 {
 /// recomputed from the evidence at every virtual change, so when the certified prefix retreats below the pruning point the label goes
 /// to `null` — fail-closed, never to a different block — while the block itself stays canonical (a reorg that abandons it is the
 /// separate, sticky `finalizedConflict`). `withdrawn_from` names the head this node published and withdrew, from the withdrawing virtual
-/// change until a `finalized` is published again. In memory: a restart forgets it (the log line does not).
+/// change until a `finalized` is published again. Derived from the committed withdrawal and durable local
+/// publication history, so a processor restart preserves it. The readiness explanation itself is advisory.
+/// A validated pruning-state import explicitly resets that history; ordinary rollback does not.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FinalizedReadinessV1 {
@@ -299,6 +301,30 @@ pub struct NativeSafeReadinessV1 {
     pub skipped: SkippedEvidenceV1,
 }
 
+impl NativeSafeReadinessV1 {
+    /// Whether this advisory reading agrees with the shared statements of a validated local snapshot.
+    /// A sink-only check is insufficient when pruning context changes before the next publication.
+    /// This RPC pairing filter does not verify roots, work soundness or the certificate itself.
+    pub fn agrees_with_snapshot(&self, snapshot: &NativeSettlementSnapshotV1) -> bool {
+        let Ok(unique_mature_work) = self.policy.unique_mature_work.parse::<u128>() else {
+            return false;
+        };
+        let policy = PalwSettlementPolicyV1 {
+            settled_anchor_depth: self.policy.settled_anchor_depth,
+            unique_mature_work,
+            max_operator_permille: self.policy.max_operator_permille,
+            max_class_permille: self.policy.max_class_permille,
+        };
+        self.version == NATIVE_READINESS_VERSION_V1
+            && snapshot.version == NATIVE_SETTLEMENT_SNAPSHOT_VERSION_V1
+            && policy.id() == snapshot.policy_id
+            && self.generation == snapshot.generation
+            && self.safe == snapshot.safe
+            && self.finalized.finalized == snapshot.finalized
+            && self.stop == snapshot.stop
+    }
+}
+
 /// An unresolved claim at the sink, as the lifecycle rule sees it. Every claim the rule counts as open, nothing else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenClaimV1 {
@@ -309,7 +335,7 @@ pub struct OpenClaimV1 {
     pub next_deadline_daa: Option<u64>,
 }
 
-/// An open data-availability session at the sink.
+/// An open DA or computation-court session at the sink.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenSessionV1 {
     pub claim: Hash64,
@@ -779,17 +805,10 @@ mod tests {
         let b = r.blocking.expect("a blocker");
         assert_eq!(prefix.stop, Some(SettlementStopV1::InsufficientDepth));
         assert_eq!(b.evidence.pending_facts, 2);
-        let wait =
-            b.waits.iter().find_map(|w| if let SafeWaitV1::WaitingMaturity { .. } = w { Some(w.clone()) } else { None }).unwrap();
+        let wait = b.waits.iter().find_map(|w| if let SafeWaitV1::WaitingMaturity { .. } = w { Some(w.clone()) } else { None }).unwrap();
         assert_eq!(
             wait,
-            SafeWaitV1::WaitingMaturity {
-                facts: 2,
-                work: "20".into(),
-                earliest_matured_daa: 500,
-                wait_daa: 100,
-                ready_daa: Some(800)
-            }
+            SafeWaitV1::WaitingMaturity { facts: 2, work: "20".into(), earliest_matured_daa: 500, wait_daa: 100, ready_daa: Some(800) }
         );
         assert_eq!(b.earliest_ready_in_daa, Some(400), "800 - 400: both facts must mature");
         // Tight: the certificate flips exactly there.
@@ -801,13 +820,8 @@ mod tests {
     fn rfc0012_readiness_a_final_claims_retention_lapse_is_a_clock_and_sets_the_estimate() {
         // One Final claim at blue 10 holds the lifecycle until DAA 600; facts are mature already.
         let facts = [fact(1, 30, 0, 10), fact(2, 40, 0, 10)];
-        let claims = [OpenClaimV1 {
-            claim: h(0xC2),
-            stage: ClaimStageV1::Final,
-            accepted_blue: 10,
-            retention_daa: 600,
-            next_deadline_daa: None,
-        }];
+        let claims =
+            [OpenClaimV1 { claim: h(0xC2), stage: ClaimStageV1::Final, accepted_blue: 10, retention_daa: 600, next_deadline_daa: None }];
         let (r, prefix) = explain(3, 3, &facts, &claims, &[], 100, policy());
         let b = r.blocking.expect("a blocker");
         assert_eq!(prefix.stop, Some(SettlementStopV1::OpenLifecycle));
@@ -968,13 +982,8 @@ mod tests {
         let (mut a, mut c, mut b) = (fact(1, 30, 0, 12), fact(2, 40, 0, 8), fact(3, 40, 300, 20));
         (a.operator, c.operator, b.operator) = (h(0x71), h(0x72), h(0x71));
         let facts = [a, c, b];
-        let claims = [OpenClaimV1 {
-            claim: h(0xC3),
-            stage: ClaimStageV1::Final,
-            accepted_blue: 10,
-            retention_daa: 600,
-            next_deadline_daa: None,
-        }];
+        let claims =
+            [OpenClaimV1 { claim: h(0xC3), stage: ClaimStageV1::Final, accepted_blue: 10, retention_daa: 600, next_deadline_daa: None }];
         let (r, prefix) = explain(1, 1, &facts, &claims, &[], 100, policy());
         let blk = r.blocking.expect("held by the lifecycle");
         assert_eq!(prefix.stop, Some(SettlementStopV1::OpenLifecycle));

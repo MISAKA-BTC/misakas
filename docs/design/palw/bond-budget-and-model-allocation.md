@@ -504,6 +504,15 @@ Still missing on integration: EXEC (X8R `consume_block_for_bond`) and the rule-E
 | H-6 | A2U | tag 140 → `palw_model_bond_allocation_v1` in the central kind→fence table |
 | H-7 | INTF / ECON | the 49% reporter share and slash flows stay outside the budget. ECON's `L_collectible_net` uses the net loss |
 
+**EXEC binding correction (RFC6/7/8/12 audit).** Bound prefix/slice kernel claims now keep their job escrows in rooted kernel
+table 27 until the root REAL Final. `bind_exec_reward_v1` is called by declaration/admission; computation Final pays 0.
+`settle_at_final_v2` consumes the root's already-clipped gross allocation and substitutes actual escrow-funded fees for native
+issuance within each executor share. Void/expiry refunds all bound escrows without a producer payout; a previously paid
+standalone claim cannot attach. No fresh reward reservation is created for these vehicles. See RFC8 implementation spec §13
+for source conservation, delta/revert and the finite ready-root expiry. This connects the bound-fee portion of H-3, while H-1's
+standalone Q/R/F consumer and the shared pre-draw/fee policies remain open. The liability/vesting composition is the separate
+WINDOW blocker; do not label the entire budget gate PASS from this correction.
+
 ## 8. Readers
 
 ### 8.1 Pure readers (M2)

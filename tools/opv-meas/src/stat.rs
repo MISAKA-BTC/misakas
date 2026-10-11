@@ -54,7 +54,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                 Err(o) => json!({"ok": false, "why": format!("{o:?}")}),
             };
             let gate =
-                public_prosecution_complete_v1(&d, &plan, nodes, &ProfileMaterialV1::kernel_route(true), &ledger_policy.prosecution);
+                public_prosecution_complete_v1(&d, program, &plan, &ProfileMaterialV1::kernel_route(true), &ledger_policy.prosecution);
             let (gate_json, bounds) = match &gate {
                 Ok(bd) => (
                     json!({"ok": true, "max_public_bytes": bd.max_public_bytes.to_string(), "max_opening_bytes": bd.max_opening_bytes,

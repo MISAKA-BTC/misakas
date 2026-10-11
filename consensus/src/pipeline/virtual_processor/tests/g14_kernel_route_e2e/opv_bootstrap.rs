@@ -155,6 +155,11 @@ impl Net {
 /// (104), the binding windows, legacy kernel classes over the bound roots, and 106 under each spec's policy (the complete check, or
 /// the sampled policy).
 async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
+    onboard_all_under(net, specs, false).await
+}
+
+/// Prepare OPV identities directly when `candidate` is true; the legacy path remains covered separately.
+async fn onboard_all_under(net: &mut Net, specs: Vec<Spec>, candidate: bool) -> Vec<Onb> {
     let mut v2s = Vec::new();
     for s in &specs {
         let o = net.v2_registration(&s.v2, s.card, net.daa() + 30);
@@ -179,11 +184,20 @@ async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
     let d = k2_tir_v2_descriptor();
     let mut items = Vec::new();
     for s in &specs {
-        let register = K::RegisterClass {
-            descriptor: d.digest(),
-            program_bytes: s.kernel.program.encode(),
-            plan: s.kernel.plan.clone(),
-            param_commitments: s.kernel.pc.clone(),
+        let register = if candidate {
+            K::RegisterConformanceClass {
+                descriptor: d.digest(),
+                program_bytes: s.kernel.program.encode(),
+                plan: s.kernel.plan.clone(),
+                param_commitments: s.kernel.pc.clone(),
+            }
+        } else {
+            K::RegisterClass {
+                descriptor: d.digest(),
+                program_bytes: s.kernel.program.encode(),
+                plan: s.kernel.plan.clone(),
+                param_commitments: s.kernel.pc.clone(),
+            }
         };
         items.push((s.card, net.route(s.card, &register)));
     }
@@ -200,9 +214,14 @@ async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
     let mut items = Vec::new();
     let mut out = Vec::new();
     for (s, v2) in specs.into_iter().zip(v2s) {
-        let legacy = class_id(&s.kernel, VerificationModeV1::PanelLicensed);
         let opv = class_id(&s.kernel, VerificationModeV1::OptimisticPublicVerification);
-        assert!(net.ledger().classes.contains_key(&legacy), "the legacy kernel class registered over the matured binding");
+        let legacy = if candidate { opv } else { class_id(&s.kernel, VerificationModeV1::PanelLicensed) };
+        if candidate {
+            assert!(net.ledger().conformance_classes.contains_key(&opv), "conformance metadata prepared over the matured binding");
+            assert!(!net.ledger().classes.contains_key(&opv), "no execution registration yet");
+        } else {
+            assert!(net.ledger().classes.contains_key(&legacy), "the legacy kernel class registered over the matured binding");
+        }
         let policy = Hash64::from_bytes(if s.complete {
             complete
         } else if s.sealed {
@@ -358,19 +377,27 @@ async fn register_opv(net: &mut Net, card: usize, o: &Onb) -> bool {
 
 /// `n` jobs on `class`, posted by card `card`.
 async fn post_jobs(net: &mut Net, card: usize, class: Digest, n: u8, nonce: u8) -> Vec<KernelJobV1> {
-    let jobs: Vec<KernelJobV1> = (0..n)
+    post_jobs_from_payers(net, &vec![card; n as usize], class, nonce).await
+}
+
+/// Beacon quorum controls require distinct authenticated payers as well as
+/// producers. This helper actually signs/funds each job under its payer's bond.
+async fn post_jobs_from_payers(net: &mut Net, payers: &[usize], class: Digest, nonce: u8) -> Vec<KernelJobV1> {
+    let jobs: Vec<KernelJobV1> = (0..payers.len())
         .map(|i| KernelJobV1 {
             class_binding_id: class,
             prompt: vec![3, 17, 9],
             max_new_tokens: 3,
             decode: DecodeRuleV1::Greedy,
-            nonce: [nonce.wrapping_add(i); 64],
+            nonce: [nonce.checked_add(u8::try_from(i).expect("bounded test job count")).expect("bounded test nonce"); 64],
         })
         .collect();
-    let posts: Vec<(usize, Obj)> = jobs.iter().map(|j| (card, net.route(card, &K::PostJob { job: j.clone() }))).collect();
+    let posts: Vec<(usize, Obj)> =
+        jobs.iter().zip(payers).map(|(j, &payer)| (payer, net.route(payer, &K::PostJob { job: j.clone() }))).collect();
     net.send(posts).await;
-    for j in &jobs {
+    for (j, &payer) in jobs.iter().zip(payers) {
         assert!(net.ledger().jobs.contains_key(&j.id()), "the job posted");
+        assert_eq!(net.ledger().job_poster(&j.id()), Some(net.kid(payer)), "the actual signed/funded job payer");
     }
     jobs
 }
@@ -487,7 +514,7 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
     );
 
     // ---- B's OPV claims reach Final with no Panel and lock C's beacon ----
-    let jobs = post_jobs(&mut net, BOOT, b.opv, 2, 0x10).await;
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0x10).await;
     let ids = claims(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
     for id in &ids {
         assert!(net.ledger().claims.contains_key(id), "an eligible OPV class's claim commits");
@@ -497,6 +524,7 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
     assert_eq!(sources.len(), 2, "the beacon's two sources: the bootstrap's Finals");
     assert!(sources.iter().all(|w| w.event.source_profile_id == b.opv && w.event.final_path == FinalPathV1::PanelIndependent));
     assert_ne!(sources[0].attribution.producer_id, sources[1].attribution.producer_id, "distinct producers (the distinct rule)");
+    assert_ne!(sources[0].attribution.consumer_id, sources[1].attribution.consumer_id, "distinct authenticated payers");
     assert!(lock > attempt.committed_daa);
     assert_eq!(chunk_target(&net, c.v2), Some(lock + PALW_CONFORMANCE_EVIDENCE_DEADLINE_DAA_V1), "a Post: lock + deadline");
 
@@ -841,7 +869,7 @@ async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refu
     net.send(vec![(BOOT, o)]).await;
     assert!(register_opv(&mut net, BOOT, &b).await);
     // The bootstrap's jobs wait posted (a job is no source; its claim, after C's start, is).
-    let jobs = post_jobs(&mut net, BOOT, b.opv, 2, 0x50).await;
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0x50).await;
     // A false binding: the V2 artifact is seed 37's weights, the kernel class runs seed 38's (the same program).
     let c =
         onboard_all(&mut net, vec![Spec { v2: onb_fixture(37), kernel: onb_fixture(38), card: CAND, complete: false, sealed: false }])
@@ -1108,7 +1136,7 @@ async fn g14_opv_bootstrap_a_sealed_source_v3_beacon_locks_on_salted_seals_and_t
     let policy = palw_onboarding_sealed_policy_v1();
     let start = net.attempt(c.v2).committed_daa + policy.anchor_delay_slots;
     let w = policy.beacon_window_slots;
-    let jobs = post_jobs(&mut net, BOOT, b.opv, 2, 0x70).await;
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0x70).await;
     net.beat_to(start).await;
     let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
     assert!(net.daa() < start + w, "both seals inside the seal window");
@@ -1188,7 +1216,7 @@ async fn g14_opv_bootstrap_a_withheld_v3_seal_vetoes_the_attempt_and_is_counted(
     let policy = palw_onboarding_sealed_policy_v1();
     let start = net.attempt(c.v2).committed_daa + policy.anchor_delay_slots;
     let w = policy.beacon_window_slots;
-    let jobs = post_jobs(&mut net, BOOT, b.opv, 3, 0x78).await;
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..3], b.opv, 0x78).await;
     net.beat_to(start).await;
     let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..3]).await;
     net.beat_to(start + w).await;
@@ -1211,13 +1239,8 @@ async fn g14_opv_bootstrap_a_withheld_v3_seal_vetoes_the_attempt_and_is_counted(
 #[tokio::test]
 async fn g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_and_its_own_artifact() {
     use super::canonical::{Rpc, ibd_node};
-    use misaka_palw_sdk::onboarding_chain::{PublicCompleteCheckReadsV1, fresh_verify_complete_check_v1};
+    use misaka_palw_sdk::onboarding_chain::{PublicOnboardingReadsV1, fresh_verify_complete_check_v1};
     kaspa_core::log::try_init_logger("warn");
-    let unhex = |text: &str| {
-        let mut out = vec![0u8; text.len() / 2];
-        faster_hex::hex_decode(text.as_bytes(), &mut out).expect("the RPC serves hex");
-        out
-    };
     let mut net = Net::over_cfg(boot_config(0, Vec::new()), TestConsensus::new);
     net.beat_to(1).await;
     let onbs = onboard_all(&mut net, vec![Spec::honest(61, 1, true), Spec::honest(62, 3, true)]).await;
@@ -1239,17 +1262,9 @@ async fn g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_an
 
     let node = ibd_node(&net).await;
     let rpc = Rpc::of(&node.chain);
-    let (route, _) = rpc.route();
     for (i, o) in onbs.iter().enumerate() {
-        let read = rpc.conformance(o.v2);
-        assert!(read.available && read.found, "op 231 serves the attempt");
-        let binding = route.kernel_binding_v1(&o.v2).expect("op 211's rows hold the kernel binding");
-        let record = route.kernel_class_record_v1(&binding.kernel_class).expect("and the bound kernel class");
-        let reads = PublicCompleteCheckReadsV1 {
-            attempt_row: unhex(&read.attempt_row),
-            program: unhex(&read.program),
-            max_positions: record.plan.max_positions,
-            kernel_param_root: binding.kernel_param_root,
+        let PublicOnboardingReadsV1::CompleteCheck(reads) = rpc.onboarding(o.v2) else {
+            panic!("the committed policy chooses the complete-check verifier");
         };
         let report = fresh_verify_complete_check_v1(&reads, &ops_of(&o.f)).expect("the fresh verifier runs");
         assert!(report.agrees, "class {i}: {}", report.why);
@@ -1265,14 +1280,81 @@ async fn g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_an
         }
     }
     // A verifier holding another model cannot verify (and the chain asks it for nothing).
-    let read = rpc.conformance(onbs[0].v2);
-    let binding = route.kernel_binding_v1(&onbs[0].v2).unwrap();
-    let reads = PublicCompleteCheckReadsV1 {
-        attempt_row: unhex(&read.attempt_row),
-        program: unhex(&read.program),
-        max_positions: route.kernel_class_record_v1(&binding.kernel_class).unwrap().plan.max_positions,
-        kernel_param_root: binding.kernel_param_root,
+    let PublicOnboardingReadsV1::CompleteCheck(reads) = rpc.onboarding(onbs[0].v2) else {
+        panic!("a complete-check attempt");
     };
     let refusal = fresh_verify_complete_check_v1(&reads, &ops_of(&onbs[1].f)).expect_err("another model's artifact");
     assert_eq!(refusal.code, "ARTIFACT_NOT_REGISTERED");
+}
+
+/// A direct OPV candidate breaks the registration/conformance dependency without a legacy
+/// Panel class or eligibility hook. Test-armed dormant fences; no shipping activation claim.
+#[tokio::test]
+async fn g14_conformance_candidate_grants_no_rights_then_promotes_only_after_a_real_complete_check() {
+    kaspa_core::log::try_init_logger("warn");
+    let (cfg, bundle, premine, floats) = boot_config(128, Vec::new());
+    let mut params = cfg.params.clone();
+    params.palw_panel_free_v1.as_mut().unwrap().sampled_conformance_gates_reward = false;
+    assert!(params.validate_palw_v2().is_err(), "shipping activation remains refused");
+    let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new);
+    net.beat_to(1).await;
+    let o = onboard_all_under(&mut net, vec![Spec::honest(67, BOOT, true)], true).await.pop().unwrap();
+    assert_eq!(o.legacy, o.opv, "binding names the candidate's eventual OPV identity");
+    let old_panel = class_id(&o.kernel, VerificationModeV1::PanelLicensed);
+    assert!(!net.ledger().classes.contains_key(&old_panel));
+    assert_eq!(eligibility_release(&net, &o), Err(OpvIneligibleV1::ConformanceNotPassed));
+    assert!(!register_opv(&mut net, BOOT, &o).await);
+    let job = KernelJobV1 {
+        class_binding_id: o.opv,
+        prompt: vec![3, 17, 9],
+        max_new_tokens: 3,
+        decode: DecodeRuleV1::Greedy,
+        nonce: [0xB1; 64],
+    };
+    let post = net.route(BOOT, &K::PostJob { job: job.clone() });
+    net.send(vec![(BOOT, post)]).await;
+    assert!(!net.ledger().jobs.contains_key(&job.id()), "candidate cannot open an execution job or escrow");
+    assert!(net.ledger().claims.is_empty());
+    assert!(net.ledger().job_escrows.is_empty());
+    assert!(net.ledger().opv.classes.is_empty());
+    assert!(net.api().unwrap().finals_read_v1().unwrap().is_empty());
+    assert!(net.attributed_events().is_empty(), "candidate contributes no beacon source");
+    let replay_candidate = net.replay().await;
+    net.assert_same(&replay_candidate, "candidate replay");
+
+    commit(&mut net, &o, 0xB2).await;
+    let post = complete_post(&net, &o);
+    let evidence = net.evidence(BOOT, o.v2, ConformanceEvidenceActionV1::PostComplete(Box::new(post)));
+    net.send(vec![(BOOT, evidence)]).await;
+    assert_eq!(net.attempt(o.v2).record.state, S::G14Eligible);
+    assert_eq!(eligibility_release(&net, &o), Ok(OpvEligibleV1::Derived { v2_class: o.v2 }));
+    {
+        use super::canonical::{Rpc, ibd_node};
+        use misaka_palw_sdk::onboarding_chain::{PublicOnboardingReadsV1, fresh_verify_complete_check_v1};
+        let node = ibd_node(&net).await;
+        let rpc = Rpc::of(&node.chain);
+        let PublicOnboardingReadsV1::CompleteCheck(reads) = rpc.onboarding(o.v2) else { panic!("complete-check candidate snapshot") };
+        let report = fresh_verify_complete_check_v1(&reads, &ops_of(&o.f))
+            .expect("independent model holder verifies candidate before promotion");
+        assert!(report.agrees && report.honest_passes && report.chain_says_passed);
+        assert!(fresh_verify_complete_check_v1(&reads, &ops_of(&onb_fixture(68))).is_err(), "another artifact is refused");
+    }
+    assert!(register_opv(&mut net, PRODUCERS[0], &o).await, "another bonded actor can promote the same checked identity");
+    assert!(!net.ledger().conformance_classes.contains_key(&o.opv), "promotion consumes the candidate");
+    assert!(net.ledger().classes.contains_key(&o.opv));
+    assert!(!net.ledger().classes.contains_key(&old_panel));
+    let before = minted_and_owed(&net, &net.chain, PRODUCERS[0]);
+    let reward = net.ledger().policy.claim_reward;
+    let jobs = post_jobs(&mut net, BOOT, o.opv, 1, 0xB3).await;
+    let id = claims(&mut net, &o.kfx(), o.opv, &jobs, &PRODUCERS[..1]).await[0];
+    assert!(net.ledger().claims.contains_key(&id));
+    until_final(&mut net, &id).await;
+    assert_eq!(net.attributed_events().iter().filter(|w| w.event.source_profile_id == o.opv).count(), 1);
+    let paid = minted_and_owed(&net, &net.chain, PRODUCERS[0]);
+    assert_eq!(paid.0 + paid.1 - before.0 - before.1, reward);
+    net.beat_to(net.daa() + 2).await;
+    assert_eq!(minted_and_owed(&net, &net.chain, PRODUCERS[0]), (paid.0 + paid.1, 0), "Final reward redeemed exactly once");
+    let replay = net.replay().await;
+    net.assert_same(&replay, "promoted candidate replay");
+    assert_eq!(minted_and_owed(&net, &replay, PRODUCERS[0]), (paid.0 + paid.1, 0));
 }

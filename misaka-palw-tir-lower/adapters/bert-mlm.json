@@ -1,0 +1,56 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "bert-mlm",
+  "doc": "BertForMaskedLM (fill-mask): the encoder, then every row through `cls.predictions.transform` (dense, the model's activation, LayerNorm) and the vocabulary projection tied to the word embeddings, plus `cls.predictions.bias` (OutputSpec::MaskedLm). Reached by the task (`hf_schema::masked_lm_adapter_for`), never by architecture alone: a \u2026ForMaskedLM checkpoint is also read as its encoder for sentence embedding. HFX 2026-10-10.",
+  "extends": [
+    "bert",
+    "mixin-mlm-encoder"
+  ],
+  "match": {
+    "architectures": [],
+    "model_types": [],
+    "masked_lm_of": [
+      "BertForMaskedLM"
+    ]
+  },
+  "vars": [
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.word_embeddings",
+        "pos_embed": "embeddings.position_embeddings",
+        "type_embed": "embeddings.token_type_embeddings",
+        "embed_norm": "embeddings.LayerNorm",
+        "attn.q": "encoder.layer.{L}.attention.self.query",
+        "attn.k": "encoder.layer.{L}.attention.self.key",
+        "attn.v": "encoder.layer.{L}.attention.self.value",
+        "attn.o": "encoder.layer.{L}.attention.output.dense",
+        "norm.mix": "encoder.layer.{L}.attention.output.LayerNorm",
+        "mlp.up": "encoder.layer.{L}.intermediate.dense",
+        "mlp.down": "encoder.layer.{L}.output.dense",
+        "norm.ffn": "encoder.layer.{L}.output.LayerNorm",
+        "head.transform.dense": "cls.predictions.transform.dense",
+        "head.transform.norm": "cls.predictions.transform.LayerNorm",
+        "lm_head": "embeddings.word_embeddings",
+        "lm_head_bias": "cls.predictions.bias"
+      }
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "pooler.",
+        "cls.predictions.decoder.",
+        "cls.seq_relationship."
+      ]
+    },
+    {
+      "name": "prefix_aliases",
+      "value": [
+        [
+          "",
+          "bert."
+        ]
+      ]
+    }
+  ]
+}

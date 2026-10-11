@@ -94,6 +94,59 @@ round, alternates per stratum, `used_operators` = the concatenation. A tampered 
 (`PanelV3Claim`) and tail `0xED`. The engine's encodings change (dormant: the fence is refused at every height, no network
 holds an engine). The pinned seed vector (`seed_vector.rs`) hashes the snapshot root, not the snapshot, and is unchanged.
 
+### 1.4 Restore-time seal and entropy provenance (2026-10-11)
+
+The dormant engine's **carriage version is now 2**. Its existing Rust API names remain `...V1`
+and `ClaimRecordV3`; those names do not imply carriage version 1. New engines/cursors and an
+explicit permissionless-fence commitment use version 2. All public presets still have no such
+fence, and real activation remains refused. This does not change live shard v1 at DAA 5,300,
+lane-A draws, Round tickets, or the fixed seed framing/vector. Version-1 experimental engine
+checkpoints are refused, including cursor/whole-state restore, rather than silently interpreting
+them as version 2. Reconstructing one needs authoritative replay; patching its version or
+inventing missing entropy is not a migration.
+
+Previously consistency checked matching copies of seal/snapshot identifiers and seat eligibility,
+but did not recompute the seal id, beacon id or seed. Editing a bound record's seal id and matching
+binding/history, or editing its seed/beacon id in both binding copies, passed the checker. The new
+regression reproduced all three `Ok` verdicts before the fix. Trusted-root verification already
+refused bytes that differed from the committed checkpoint; this finding is a missing structural
+invariant, not evidence that an attacker can forge that trusted root.
+
+The sealing writer and restoration now share the canonical seal derivation: network/ruleset,
+accepted immutable work subject/exposure/order, pre-entropy checkpoint, first future beacon epoch,
+frozen population root and optional strata. Lookup claim id/signature remain absent. The field order
+and domain are unchanged. `ClaimRecordV3.entropy_output` is `None` until readiness, then receives the
+already verified epoch output. It remains in that claim after release/void and pruning of the shared
+epoch row. Each initial/retry binding and `EntropyReady` record must derive the same beacon id/seed
+from this output, with the policy's ready/assignment clocks. A live entropy-bearing claim also
+requires the shared epoch row to agree. Before readiness there is no retained output or binding.
+Whole import and keyed restore consistency apply these rules to flat and stratified claims alike.
+
+The retained output is **derivation material, not a certificate or trust anchor**: the producer does
+not submit it, the existing beacon verifier writes the epoch row, and import still needs the trusted
+consensus commitment. This does not authenticate a fabricated self-consistent checkpoint, approve
+source participation/independence, replay historical collateral headroom, or certify an exact seat
+ranking without the historical host view. Seat role/membership/operator/retry checks remain in place.
+The claim row adds one Option byte and, after readiness, a 64-byte hash: at the existing 65,536-row
+ceiling at most 4,259,840 additional bytes. The import envelope now includes candidate bytes, all binding/history/operator copies and
+derived reservations; the shared beacon-row limit and cleanup remain unchanged. This is a byte bound, not a CPU/RSS/latency approval.
+No payload tag, delta number or carriage tail is allocated; the grown claim still rides delta 171
+and the existing engine tail `0xED`, under the explicit new engine version.
+
+The envelope audit also reproduced a valid **4,096-seat flat checkpoint** being rejected with
+`ResourceLimit`: the previous `100 × seats × (retries+1)` did not include all repeated seat vectors,
+used operators and reservations. For `N = max(flat seats, 256)`, `C = max_candidates`,
+`R = max_retries`, and `T = max_tracked_claims`, the new upper envelope is
+`4096 + T × [4096 + 400C + (R+1)(132N+400) + 152N]` bytes. A candidate with stratum bits is at
+most 349 bytes; each historical seat plus its operator is 68+64=132 bytes; a binding's fixed
+fields are 358 bytes. Current phase seats plus live reservation entries cost 68+84=152 bytes
+per seat. Fixed per-row allowance includes the retained output, subject/seal/snapshot, collection
+prefixes, phase metadata, claim/work keys and at most one shared epoch row per claim; the initial
+4096 covers the engine cursor/global prefixes. Derivation uses validated policy caps and fits u64.
+This is a serialized-size ceiling that permits all structurally bounded states, not an approved
+per-request RAM/CPU budget. Trusted-root checking still precedes deserialization. Reducing valid
+populations or inventing a smaller arbitrary transport cap would hide the restore failure.
+
 ## 2. RFC-0010 — the G14 pre-emption guard
 
 ### 2.1 What C2 left open
@@ -250,3 +303,38 @@ readiness class can be added under its own fence.
 | Per-segment pricing | `consensus/core/tests/palw_tir_shard_segment_v2.rs`: the fence's refusals and dormancy; resident table sums to 1,000 and grows with the segment; lock and pay by `max(work, resident)` past the fence, unchanged below it |
 | G14 guard | `consensus/core/tests/rfc0010_g14_guard.rs`: pre-bind `BeaconUnavailable` deferred under an open court and applied in the block the court is cleared; walked to the court's own end, never a neutral close (conviction, or the deferred void after the close); the V3 S2 licence: with nothing pending it expires at its gate, a pending non-seat DA session holds it past the gate and the default wins, a court cleared under a pending session re-arms no gate; the receipt-window edge (inside: held; carried by the redrawing block: late, then held) |
 | Unarmed byte identity | `consensus/core/tests/shard_unarmed_byte_identity.rs`: testnet-12's own fold (lane-A binds, a licence to `Final`, a non-seat DA accusation to its default, a court; with the permissionless Panel unconfigured and configured at an unreached height) and lane A's RFC-0006 flow, every block's root and delta and the tip carriage hashed — pinned on `b676927de` before any lane change |
+
+
+## Restore provenance validation — 2026-10-11
+
+The final `cargo test --locked -p misaka-palw-panel` passed **37 tests, zero failures/ignored**:
+unit 1, replay 20, independent seed vector 1, stages 5, strata 10 (doc tests 0). Build 1.43s;
+the longest suite ran in 0.26s. Log `/tmp/rfc6-panel-origin-panel-final.log`. Four new provenance
+regressions and one wide-import regression are included, not counted again as earlier smoke runs.
+The first post-version-change run had one stale JSON carriage-version pin expecting 1; it was
+updated to the explicit new version 2. The typed observation document remains version 1.
+
+Final EVM core library: **3,643 passed, zero failures, 13 ignored**, 69.59s runtime. The same
+command's integration suites passed **44 tests, zero failures/ignored**: beacon adapter 9,
+G14 guard 6, permissionless/fence 5, production fold 18, shard V3 4, unarmed byte identity 2.
+Build 4m44s, jobs 2, dev/test debug 0, incremental 0. Log `/tmp/rfc6-panel-origin-core-final.log`.
+The earlier 44-case integration run before envelope correction is not counted twice. Command:
+`cargo test --locked -p kaspa-consensus-core --features evm --lib --test rfc0010_shard_v3 --test rfc0010_production_fold --test rfc0010_g14_guard --test rfc0010_permissionless_panel --test rfc0010_beacon_adapter --test shard_unarmed_byte_identity -- --test-threads=2`.
+The ignored library cases are explicit existing probes/dumps/measurements, not resource approval.
+
+
+EVM node command `cargo test --locked -p kaspa-consensus --features evm --lib t12_permissionless_panel_e2e -- --test-threads=1`
+passed **4 tests, zero failures/ignored**, 2.23s runtime after an 8m35s build including lock wait.
+Log `/tmp/rfc6-panel-origin-node.log`. This covers actual-processor binding, legacy draining,
+below-fence refusal, two-node block sync and reorg within the existing same-process/reference-beacon
+harness. It is not real P2P/pruning, source soundness or public activation evidence.
+`cargo check --locked -p kaspad --features evm` succeeded in 5m44s including lock wait, existing
+warnings; log `/tmp/rfc6-panel-origin-daemon.log`. The same jobs/debug/incremental settings applied.
+
+The shared seal tuple was mechanically compared with the prior writer: the domain and field order
+are identical after replacing the original checkpoint locals with the same frozen snapshot fields.
+Scoped rustfmt checks of the helper, restore checker, new tests, import guard and shard terminal
+assertions, plus `git diff --check`, passed. After compilation only import-guard line wrapping was
+adjusted; tested logic was unchanged. There were 3,728 distinct successful tests in the final runs,
+excluding 13 ignored and all earlier repeated runs. No public activation, push or deployment was
+performed. Remaining four-RFC approval obligations remain open.

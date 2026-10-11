@@ -77,24 +77,28 @@ pub(crate) struct WalletFacts {
     pub(crate) coinbase_outputs: usize,
     /// ADR-0152 (testnet-12): the rewards still VESTING toward this address — not outputs at all,
     /// so never counted above and never selectable. `None` where nothing vests, or from a node that
-    /// predates `getPalwVesting` (op 199).
+    /// predates `getPalwRewardVesting` (op 241).
     pub(crate) vesting: Option<VestingFacts>,
 }
 
-/// **What vests toward the pay address, and what B-3 holds** (`getPalwVesting`, op 199; ADR-0152).
+/// **What vests toward the pay address, and what B-3 holds** (`getPalwRewardVesting`, op 241; ADR-0152).
 /// Rows are not UTXOs: a row's sompi reach the address only when the row matures, moves and a
 /// coinbase mints it — as a coinbase output that then matures like any other (the `maturing` line).
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct VestingFacts {
     /// Σ of the address's legs over rows not latched yet, and over latched rows waiting their turn.
-    pub(crate) vesting_sompi: u64,
-    pub(crate) latched_sompi: u64,
+    #[serde(serialize_with = "decimal_sompi")]
+    pub(crate) vesting_sompi: u128,
+    #[serde(serialize_with = "decimal_sompi")]
+    pub(crate) latched_sompi: u128,
     pub(crate) rows: u64,
     /// The earliest DAA one of them moves (the node's plan, or a lower bound).
     pub(crate) next_move_daa: Option<u64>,
     /// Reporter rewards to this address: in their reveal window, and awarded (moved first, V-7).
-    pub(crate) reporter_pending_sompi: u64,
-    pub(crate) reporter_awarded_sompi: u64,
+    #[serde(serialize_with = "decimal_sompi")]
+    pub(crate) reporter_pending_sompi: u128,
+    #[serde(serialize_with = "decimal_sompi")]
+    pub(crate) reporter_awarded_sompi: u128,
     /// B-3: the profile's bond is payee of a row still unmatured, so its collateral stays locked.
     /// `None` without a bond, or when the node could not say.
     pub(crate) bond_held: Option<bool>,
@@ -102,15 +106,38 @@ pub(crate) struct VestingFacts {
     pub(crate) halted: bool,
 }
 
+fn decimal_sompi<S: serde::Serializer>(sompi: &u128, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&sompi.to_string())
+}
+
 impl VestingFacts {
-    /// From `getPalwVesting` for the pay address (and, for B-3, the bond's answer).
+    pub(crate) fn complete(
+        by_address: &kaspa_rpc_core::GetPalwRewardVestingResponse,
+        by_bond: Option<&kaspa_rpc_core::GetPalwRewardVestingResponse>,
+    ) -> Self {
+        let mut facts = Self::of(&by_address.native, by_bond.map(|r| &r.native));
+        facts.vesting_sompi += by_address.query_exec_pending_sompi.parse::<u128>().unwrap_or(0)
+            + by_address.query_exec_ready_sompi.parse::<u128>().unwrap_or(0);
+        facts.rows += by_address.exec_rows_total;
+        facts.reporter_pending_sompi = by_address.reporter_pending_sompi_of_query.parse().unwrap_or(0);
+        facts.reporter_awarded_sompi = by_address.reporter_awarded_sompi_of_query.parse().unwrap_or(0);
+        // An EXEC lower-bound date must not override its shared native pending clock.
+        facts.next_move_daa = facts
+            .next_move_daa
+            .into_iter()
+            .chain(by_address.exec_rows.iter().filter(|r| !r.native_pending).map(|r| r.earliest_daa.max(by_address.native.next_daa)))
+            .min();
+        facts
+    }
+
+    /// From `getPalwRewardVesting` for the pay address (and, for B-3, the bond's answer).
     pub(crate) fn of(
         by_address: &kaspa_rpc_core::GetPalwVestingResponse,
         by_bond: Option<&kaspa_rpc_core::GetPalwVestingResponse>,
     ) -> Self {
-        let sompi = |text: &str| u64::try_from(text.parse::<u128>().unwrap_or(0)).unwrap_or(u64::MAX);
+        let sompi = |text: &str| text.parse::<u128>().unwrap_or(0);
         let reporter = |stage: &str| {
-            by_address.reporter_rewards.iter().filter(|r| r.stage == stage).fold(0u64, |sum, r| sum.saturating_add(r.sompi))
+            by_address.reporter_rewards.iter().filter(|r| r.stage == stage).fold(0u128, |sum, r| sum + u128::from(r.sompi))
         };
         VestingFacts {
             vesting_sompi: sompi(&by_address.maturing_sompi),
@@ -344,7 +371,7 @@ impl Snapshot {
         }
         // ADR-0152 P2-11: what vests toward the pay address, and whether B-3 holds the bond — asked
         // only where this CLI's ruleset vests, and on a connection of its own: a node built before
-        // op 199 drops the connection on it, and the screens that read on after `gather` (the
+        // op 241 drops the connection on it, and the screens that read on after `gather` (the
         // verifier's duties, the doctor's fee funding) must keep theirs.
         if params.palw_rcore_plus.is_some()
             && let Some(Ok(wallet)) = snap.wallet.as_mut()
@@ -356,23 +383,23 @@ impl Snapshot {
 }
 
 /// [`VestingFacts`] for `address` (and `bond`'s B-3 hold), read on a connection of its own to
-/// `url` and closed after: `None` when the node cannot answer op 199 — a node that predates it
+/// `url` and closed after: `None` when the node cannot answer op 241 — a node that predates it
 /// drops the connection, and then the bond is not asked either.
 async fn vesting_facts(url: &str, timeout: Duration, address: &str, bond: Option<&str>) -> Option<VestingFacts> {
-    let request = |bond: &str, address: &str| kaspa_rpc_core::GetPalwVestingRequest {
+    let request = |bond: &str, address: &str| kaspa_rpc_core::GetPalwRewardVestingRequest {
         bond: bond.to_string(),
         payout_address: address.to_string(),
         limit: 50,
         ..Default::default()
     };
     let client = open_client(url, timeout).await.ok()?;
-    let by_address = client.get_palw_vesting(request("", address)).await.ok().filter(|r| r.available && r.rcore_plus_active);
+    let by_address = client.get_palw_reward_vesting(request("", address)).await.ok().filter(|r| r.available);
     let by_bond = match (&by_address, bond) {
-        (Some(_), Some(bond)) => client.get_palw_vesting(request(bond, "")).await.ok(),
+        (Some(_), Some(bond)) => client.get_palw_reward_vesting(request(bond, "")).await.ok(),
         _ => None,
     };
     let _ = client.disconnect().await;
-    Some(VestingFacts::of(&by_address?, by_bond.as_ref()))
+    Some(VestingFacts::complete(&by_address?, by_bond.as_ref()))
 }
 
 async fn wallet_facts(node: &NodeRead, address: &str) -> Result<WalletFacts, String> {
@@ -631,5 +658,40 @@ async fn in_mempool(node: &NodeRead, txid: &str) -> bool {
     match txid.parse::<kaspa_consensus_core::tx::TransactionId>() {
         Ok(id) => node.client().get_mempool_entry(id, true, false).await.is_ok(),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod complete_reward_tests {
+    use super::*;
+    #[test]
+    fn complete_facts_use_whole_totals_and_serialize_money_as_decimal_strings() {
+        let wide = u128::from(u64::MAX) + 1;
+        let r = kaspa_rpc_core::GetPalwRewardVestingResponse {
+            available: true,
+            native: kaspa_rpc_core::GetPalwVestingResponse {
+                available: true,
+                maturing_sompi: "17".into(),
+                query_latched_sompi: "19".into(),
+                next_daa: 20,
+                payee_holds_collateral: true,
+                ..Default::default()
+            },
+            query_exec_pending_sompi: wide.to_string(),
+            query_exec_ready_sompi: "23".into(),
+            reporter_pending_sompi_of_query: wide.to_string(),
+            reporter_awarded_sompi_of_query: "31".into(),
+            exec_rows_total: 600,
+            locked_sources: 40,
+            exec_rows: vec![kaspa_rpc_core::RpcPalwExecRewardLeg { earliest_daa: 10, native_pending: false, ..Default::default() }],
+            ..Default::default()
+        };
+        let f = VestingFacts::complete(&r, Some(&r));
+        assert_eq!((f.vesting_sompi, f.latched_sompi, f.rows), (wide + 40, 19, 600));
+        assert_eq!((f.next_move_daa, f.bond_held), (Some(20), Some(true)));
+        assert_eq!((f.reporter_pending_sompi, f.reporter_awarded_sompi), (wide, 31));
+        let json = serde_json::to_value(f).unwrap();
+        assert_eq!(json["vesting_sompi"], (wide + 40).to_string());
+        assert_eq!(json["reporter_pending_sompi"], wide.to_string());
     }
 }

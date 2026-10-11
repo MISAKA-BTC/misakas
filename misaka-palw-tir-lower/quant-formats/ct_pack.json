@@ -62,6 +62,20 @@
      "channel"
     ],
     "path": "config_groups.group_0.weights.strategy"
+   },
+   {
+    "path": "config_groups.group_0.input_activations",
+    "one_of": [
+     null
+    ],
+    "message": "quantised input activations require their own arithmetic contract"
+   },
+   {
+    "path": "config_groups.group_0.output_activations",
+    "one_of": [
+     null
+    ],
+    "message": "quantised output activations require their own arithmetic contract"
    }
   ],
   "inert": [
@@ -69,7 +83,8 @@
    "global_compression_ratio",
    "compression_ratio",
    "quantization_status",
-   "version"
+   "version",
+   "config_groups.group_0.weights.observer"
   ],
   "lm_head": "unless_skipped",
   "skip": "ignore",

@@ -504,6 +504,17 @@ The 2026-10-11 fresh public service DA case closes that inclusion gap for one fl
 
 The node retains an authenticated ordinary canonical job in a Pending bootstrap case under a small input ticket, before deriving the backend ceiling context or requesting full replay memory. Full-replay memory pressure therefore does not prevent binding acquisition and an input proof. Canonical Pending cases remain eligible to retry honest replay when memory becomes available; they need no served input ids. After binding acquisition the node attempts the direct kind-4 reporter proof and waits without demanding producer prompt ids. Nonresponse uses the existing DA default, not an arithmetic conviction. A correct input twin yields no input proof. The test's synthetic step/checkpoint roots isolate this input rule; that twin does not establish honesty of the entire execution. Validation and remaining G14 conditions are recorded in the audit implementation log.
 
+## G14-V: authenticated subtree descent and localization past the step tree (2026-10-11)
+
+The node's codec-independent fallback no longer scans consecutive ranges. `kaspa_consensus_core::palw_auth_descent_v1` records every
+node an authenticated `StepRange` answer determines (its leaves, its path and every sibling it carries) and descends from the root
+into the leftmost child whose authenticated root differs from the verifier's own; the next read is the range at the focus subtree's
+left edge. A matching subtree root covers its prefix; a lone midpoint leaf is never trusted (`PalwLegacyBisectV1` and its test are
+unchanged). Bound: binding + `h − 9` reads + terminal = `h − 7` sessions (33 at 2^40 leaves, `Unjudged` past 2^41). An agreeing
+step tree under a mismatched execution now goes past the step tree (`LogitsNotStepOutput`, `ForgedOutput` from the binding read's
+event and the own run) instead of erroring. Real-service V-node results and the open items are in
+[g14-completion-matrix.md §2c](g14-completion-matrix.md).
+
 ## Public identity evidence carriage and Valid signer handoff (Codex, 2026-10-11)
 
 An authenticated public binding's direct kind-4 proof now also enters the existing False Valid filer before the public case settles. Its scanner re-admits public licence receipts and asks the existing liability/adjudication gate for every relied-on signer, then uses the ordinary reporter commit/evidence/reveal door. Previously only seat replay handed its proof to this scanner; a public direct proof could settle the producer case without starting the signer prosecutions.

@@ -117,6 +117,7 @@ fn rfc0010_policy_values_and_height_are_committed_and_future_fork_is_explicit() 
     let p = palw_t12_shipped_params();
     let mut armed = p.clone();
     armed.palw_permissionless_panel_v1 = Some(PalwPermissionlessPanelV1 { activation: ForkActivation::new(1234), policy: policy() });
+    assert_eq!(&armed.palw_permissionless_panel_v1.unwrap().commitment_bytes()[..2], &WIRE_VERSION_V2.to_le_bytes());
     assert_ne!(p.consensus_params_id(), armed.consensus_params_id());
     assert_ne!(p.consensus_schedule_id(), armed.consensus_schedule_id());
     assert_eq!(p.consensus_identity_id(), armed.consensus_identity_id());

@@ -81,12 +81,31 @@ pub const TYPED_TABLES_V1: [u8; 3] = [TABLE_SPEC_CLASSES_V1, TABLE_SPEC_JOBS_V1,
 pub const TABLE_CLAIM_BEACON_SALTS_V1: u8 = 25;
 /// OPV-BOOT GAP-B1a: `(job, producer, sealed_daa) → a claim seal that expired unrevealed past `palw_panel_free_v1``.
 pub const TABLE_FORFEITED_CLAIM_SEALS_V1: u8 = 26;
+/// **Table 31**: EXEC consumer escrow holds, keyed by kernel claim (codex RFC-8, taken over by lane R6781). Empty below the EXEC
+/// fence. codex used 27, which is G14R's verifier pay (landed first); renumbered at the merge.
+pub const TABLE_EXEC_REWARD_HOLDS_V1: u8 = 31;
+/// **Table 30**: `(context, producer) → per-attempt source opt-in, reservation and permanent outcome` (codex RFC-7, lane R6781).
+/// codex used 28, which is G14-S's court scope (landed first); 29 is RFC-02's conformance classes. Renumbered at the merge.
+pub const TABLE_BEACON_SOURCES_V1: u8 = 30;
+pub const BEACON_SOURCE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-beacon-sources-extension/v1";
+pub const EXEC_REWARD_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-exec-reward-holds-extension/v1";
 /// The domain of the root extension tables 25, 26 and 18 add (absent while all are empty: every older root is unchanged).
 pub const BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-beacon-seal-extension/v1";
 /// **Table 27** (`palw_verifier_pay_v1`, G14R round 3): check-fee escrows, claim draws and held default shares, key `(kind, digest)`.
 pub const TABLE_VERIFIER_PAY_V1: u8 = 27;
 /// The root extension table 27 adds once it holds a row (every older root unchanged).
 pub const VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-verifier-pay-extension/v1";
+/// **Table 28** (`crate::court_scope`, the court scope past `palw_provider_court_v1`, lane G14-S): claim → its requesters' units and
+/// its accusers' dismissed filings.
+pub const TABLE_COURT_SCOPE_V1: u8 = 28;
+/// The root extension table 28 adds once it holds a row (every older root unchanged).
+pub const COURT_SCOPE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-court-scope-extension/v1";
+/// **Table 29** (RFC-0002, conformance-only candidate classes): class id → (preparing bond, ClassRecordV1), separate from reward
+/// registrations. Codex allocated 28 on its branch; G14-S's court scope landed on 28 first, so the candidates moved to 29 at the
+/// RFC02-T merge (2026-10-11, `docs/design/palw/remaining-rfc-integration-matrix.md`).
+pub const TABLE_CONFORMANCE_CLASSES_V1: u8 = 29;
+/// The root extension table 29 adds once it holds a row (every older root unchanged), applied after table 28's.
+pub const CONFORMANCE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-conformance-extension/v1";
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -107,6 +126,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
     let name = match table {
         TABLE_BONDS_V1 => "bonds",
         TABLE_CLASSES_V1 => "classes",
+        TABLE_CONFORMANCE_CLASSES_V1 => "conformance-classes",
         TABLE_PIPELINE_CLASSES_V1 => "pipeline-classes",
         TABLE_JOBS_V1 => "jobs",
         TABLE_PIPELINE_JOBS_V1 => "pipeline-jobs",
@@ -127,9 +147,12 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_JOB_POSTERS_V1 => "job-posters",
         TABLE_FORFEITED_CLAIM_SEALS_V1 => "forfeited-claim-seals",
         TABLE_VERIFIER_PAY_V1 => "verifier-pay",
+        TABLE_COURT_SCOPE_V1 => "court-scope",
         TABLE_SPEC_CLASSES_V1 => "spec-classes",
         TABLE_SPEC_JOBS_V1 => "spec-jobs",
         TABLE_MEMORY_LINES_V1 => "memory-lines",
+        TABLE_EXEC_REWARD_HOLDS_V1 => "exec-reward-holds",
+        TABLE_BEACON_SOURCES_V1 => "beacon-sources",
         _ => "attested-artifacts",
     };
     format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes()
@@ -146,6 +169,9 @@ impl KernelLedgerV1 {
         let mut rows = LedgerRowsV1::new();
         for (k, v) in &self.bonds {
             rows.insert((TABLE_BONDS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, (owner, c)) in &self.conformance_classes {
+            rows.insert((TABLE_CONFORMANCE_CLASSES_V1, bytes_of(k)), bytes_of(&(*owner, c.record())));
         }
         for (k, c) in &self.classes {
             rows.insert((TABLE_CLASSES_V1, bytes_of(k)), bytes_of(&c.record()));
@@ -180,6 +206,12 @@ impl KernelLedgerV1 {
         for (k, v) in &self.proof_seals {
             rows.insert((TABLE_PROOF_SEALS_V1, bytes_of(k)), bytes_of(v));
         }
+        for (k, v) in &self.beacon_sources {
+            rows.insert((TABLE_BEACON_SOURCES_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.exec_reward_holds {
+            rows.insert((TABLE_EXEC_REWARD_HOLDS_V1, bytes_of(k)), bytes_of(v));
+        }
         for (k, v) in &self.job_escrows {
             rows.insert((TABLE_JOB_ESCROWS_V1, bytes_of(k)), bytes_of(v));
         }
@@ -197,6 +229,9 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.verifier_pay {
             rows.insert((TABLE_VERIFIER_PAY_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.court_scope {
+            rows.insert((TABLE_COURT_SCOPE_V1, bytes_of(k)), bytes_of(v));
         }
         for k in &self.opv.admitted {
             rows.insert((TABLE_OPV_ADMITTED_V1, bytes_of(k)), Vec::new());
@@ -248,6 +283,33 @@ impl KernelLedgerV1 {
                 TABLE_CLASSES_V1 => {
                     let record: ClassRecordV1 = dec(row, "class")?;
                     l.classes.insert(dec(key, "class key")?, class_row_of(&l, &record)?);
+                }
+                TABLE_CONFORMANCE_CLASSES_V1 => {
+                    let (owner, record): (Digest, ClassRecordV1) = dec(row, "conformance class")?;
+                    let class: Digest = dec(key, "conformance class key")?;
+                    let binding = crate::ledger::single_class_binding_v1(
+                        record.descriptor,
+                        &record.program_bytes,
+                        &record.plan,
+                        &record.param_commitments,
+                    );
+                    if class
+                        != crate::mode::class_id_for_mode_v1(
+                            &binding.class_binding_id(),
+                            crate::mode::VerificationModeV1::OptimisticPublicVerification,
+                        )
+                    {
+                        return Err("a conformance row is stored under another class identity".into());
+                    }
+                    if l.opv.policy.is_none() || l.classes.contains_key(&class) || !l.bonds.contains_key(&owner) {
+                        return Err("a conformance row lacks its policy/bond or duplicates an execution registration".into());
+                    }
+                    let owned = l.conformance_class_owners.entry(owner).or_default();
+                    if owned.len() >= crate::ledger::MAX_CONFORMANCE_CLASSES_PER_BOND_V1 {
+                        return Err("stored conformance rows exceed the bond's candidate limit".into());
+                    }
+                    owned.insert(class);
+                    l.conformance_classes.insert(class, (owner, candidate_class_row_of(&l, &record)?));
                 }
                 TABLE_PIPELINE_CLASSES_V1 => {
                     let record: PipelineClassRecordV1 = dec(row, "pipeline class")?;
@@ -301,6 +363,16 @@ impl KernelLedgerV1 {
                         dec::<crate::verifier_pay::VerifierPayRowV1>(row, "verifier pay row")?,
                     );
                 }
+                TABLE_COURT_SCOPE_V1 => {
+                    l.court_scope
+                        .insert(dec(key, "court scope key")?, dec::<crate::court_scope::CourtScopeRowV1>(row, "court scope row")?);
+                }
+                TABLE_BEACON_SOURCES_V1 => {
+                    l.beacon_sources.insert(dec(key, "beacon source key")?, dec(row, "beacon source")?);
+                }
+                TABLE_EXEC_REWARD_HOLDS_V1 => {
+                    l.exec_reward_holds.insert(dec(key, "EXEC reward claim")?, dec(row, "EXEC reward hold")?);
+                }
                 TABLE_JOB_ESCROWS_V1 => {
                     l.job_escrows.insert(dec(key, "job escrow key")?, dec::<crate::ledger::JobEscrowRowV1>(row, "job escrow")?);
                 }
@@ -337,6 +409,8 @@ impl KernelLedgerV1 {
         }
         // The live-claim index is derived (not committed): rebuilt from the rows, exactly as a restored ledger does.
         l.opv_rebuild_live();
+        l.validate_exec_reward_holds()?;
+        l.validate_beacon_sources()?;
         Ok(l)
     }
 }
@@ -357,6 +431,7 @@ impl KernelLedgerV1 {
         // DA16's provider-liable set is consumer-derived (re-injected before every object), never a row: the rows' ledger has none.
         self.provider_liable = Default::default();
         self.commitment_scope_from_daa = None;
+        self.beacon_source_inputs = Default::default();
         self
     }
 }
@@ -364,6 +439,16 @@ impl KernelLedgerV1 {
 /// A single-program class's derived row from its record: decode the program, resolve the descriptor and recompute the gate's bounds
 /// (all pure functions of the record and the policy — what registration computed).
 fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, String> {
+    class_row_in(l, r, false)
+}
+
+/// [`class_row_of`] for a stored conformance-only candidate (table 29): its liability horizon is
+/// [`crate::ledger::candidate_liability_daa_v1`]'s, exactly as its registration derived it.
+fn candidate_class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, String> {
+    class_row_in(l, r, true)
+}
+
+fn class_row_in(l: &KernelLedgerV1, r: &ClassRecordV1, candidate: bool) -> Result<ClassRowV1, String> {
     let d: KernelDescriptorV1 = l
         .known
         .iter()
@@ -374,6 +459,15 @@ fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, Str
     let bounds =
         crate::gate::class_prosecution_bounds_v1(&d, &r.plan, &program, &ProfileMaterialV1::kernel_route(true), &l.policy.prosecution)
             .map_err(|g| format!("a stored class is no longer publicly prosecutable: {g:?}"))?;
+    // G14-B: what registration derived (a segmented class registers only under OPV, so the network's OPV clock is its clock).
+    let derived = crate::ledger::class_liability_daa_v1(&l.policy, l.opv.policy.as_ref(), &d, &program, &r.plan, &bounds);
+    let liability_daa = if candidate {
+        crate::ledger::candidate_liability_daa_v1(derived)
+    } else {
+        derived.map_err(|g| format!("a stored class's pursuit no longer fits: {g:?}"))?
+    };
+    let court_scope =
+        crate::descriptor::is_segmented_v1(&d).then(|| crate::seg_scope::seg_scope_report_v2(&program, r.plan.max_positions));
     Ok(ClassRowV1 {
         descriptor: d,
         program_bytes: r.program_bytes.clone(),
@@ -383,6 +477,8 @@ fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, Str
         network_domain: l.policy.network_domain,
         ruleset_digest: l.policy.ruleset_digest,
         bounds,
+        liability_daa,
+        court_scope,
     })
 }
 
@@ -539,17 +635,63 @@ pub fn root_of_rows(
         base
     };
     // `palw_verifier_pay_v1`: table 27 extends the root only once it holds a row.
-    if by_table.contains_key(&TABLE_VERIFIER_PAY_V1) {
+    let base = if by_table.contains_key(&TABLE_VERIFIER_PAY_V1) {
         verifier_pay_root_extension_v1(&base, &coll(TABLE_VERIFIER_PAY_V1))
     } else {
         base
+    };
+    // The court scope (`palw_provider_court_v1`, G14-S): table 28 extends the root only once it holds a row.
+    let base =
+        if by_table.contains_key(&TABLE_COURT_SCOPE_V1) { court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1)) } else { base };
+    // Fixed order by table number, each only once its table holds a row (an unarmed network roots as before): 27, 28, 29 (RFC-02's
+    // conformance classes), 30 beacon sources, 31 EXEC reward holds.
+    let base = if by_table.contains_key(&TABLE_CONFORMANCE_CLASSES_V1) {
+        conformance_root_extension_v1(&base, &coll(TABLE_CONFORMANCE_CLASSES_V1))
+    } else {
+        base
+    };
+    let base = if by_table.contains_key(&TABLE_BEACON_SOURCES_V1) {
+        beacon_source_root_extension_v1(&base, &coll(TABLE_BEACON_SOURCES_V1))
+    } else {
+        base
+    };
+    if by_table.contains_key(&TABLE_EXEC_REWARD_HOLDS_V1) {
+        exec_reward_root_extension_v1(&base, &coll(TABLE_EXEC_REWARD_HOLDS_V1))
+    } else {
+        base
     }
+}
+
+/// `H(extension; root ‖ table 28)` (the court scope, G14-S).
+pub fn court_scope_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
+    let mut s = keyed(COURT_SCOPE_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(table);
+    finish(s)
+}
+
+/// Versioned, conditional extension: historical roots remain identical with no candidates.
+pub fn conformance_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
+    let mut s = keyed(CONFORMANCE_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(table);
+    finish(s)
 }
 
 /// `H(extension; root ‖ table 27)` (`palw_verifier_pay_v1`).
 pub fn verifier_pay_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
     let mut s = keyed(VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1);
     s.update(base).update(table);
+    finish(s)
+}
+
+pub fn beacon_source_root_extension_v1(base: &Digest, sources: &Digest) -> Digest {
+    let mut s = keyed(BEACON_SOURCE_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(sources);
+    finish(s)
+}
+
+pub fn exec_reward_root_extension_v1(base: &Digest, holds: &Digest) -> Digest {
+    let mut s = keyed(EXEC_REWARD_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(holds);
     finish(s)
 }
 

@@ -18,9 +18,26 @@
 | Author(s) | MISAKA core (drafted with Claude) |
 | Created | 2026-09-28 |
 | Affects | spec/palw 03 (registry), 04/04a (execution, arithmetic), 05 (canonical work), 08 (verification), 09 (court), 14 (node), 16 (fences) · all networks (dormant until armed) · `consensus/core` (admission, court), `misaka-palw-base0` (engines), `misaka-palw-sdk`, `misaka-palw-extension` |
-| Branch | `rfc/0002-tensor-ir` (text only; no prototype yet) |
+| Working branch | `codex/rfc02-implementation` (2026-10-10 revision); the original text-only branch was `rfc/0002-tensor-ir` |
 | Related | ADR-0135 (a model is data; Decision 7 the kernel boundary, historically called VM), ADR-0038 A4 (100 % catalog coverage), ADR-0040 (BASE-0; Decision E order-free accumulation), ADR-0047 (A16), ADR-0049 (adjudication contract), ADR-0052 (QWEN36 ops), ADR-0057 (backends below the semantic boundary), ADR-0069 (e2e adjudicability), ADR-0082/0093 (fused attention and dissection), ADR-0102 (fenced kernels), ADR-0103/0116 (held context, history bound), ADR-0145 (canonical work), ADR-0171/0172 (new verification and kernel-only extension) |
 | Part II | Model onboarding (header-only preflight, streaming loader, runtime packs, quant registry, feature scope, staged enablement) — appended 2026-10-01; §II.7.5 records decided rules, not yet built. §§II.10–II.12 add Hub evidence, future-family extension and local-LLM ≥90% coverage; revised 2026-10-06 to remove the VM residual, all open acceptance work |
+
+## Current requirements and historical records — 2026-10-10
+
+The accepted revision in [§II.14](#ii14-completion-contract--2026-10-10) applies the 2026-10-10
+design review: complete the public compiler interface, preserve efficient sparse/stateful computation,
+derive bounded resources, and bind the whole computation through public verification and terminal court.
+It keeps the deterministic tensor IR and versioned kernel boundary. It does not declare any unfinished
+implementation, model, resource envelope, coverage target or activation gate complete.
+
+| Current requirement | Authoritative sections | Historical material retained below |
+| --- | --- | --- |
+| Typed bounded tensor/state graph; **25 frozen v1 primitives**; reusable versioned extensions when necessary | spec 04b and §II.14.2 | The original 30–50 primitive estimate and Gate 1 development sequence |
+| Reference/independent/backend bit equality; separate source-checkpoint fidelity | §1.2, §II.4–II.5, §II.14.3 | Architecture fixtures and old conversion measurements prove only their recorded scope |
+| Approved probabilistic whole-claim verification, bounded dispute replay and public conviction | Current design boundary, §II.13, mission amendment, §II.14.6; RFC07/14 | Routine full replay in the original admission/verification profile |
+| Model acquisition is outside consensus; fixed model identity and claim-specific evidence remain required | ADR-0177 and §II.14.6 | Old model-availability/serving gates are not reinstated |
+| Resource ceilings, canonical work and bond-bounded economic credit are separate quantities | ADR-0176, §II.14.4–II.14.5 | Historical PWU measurements are not authorization to enlarge B/R/F rights |
+| Completion needs the public extension path and real-checkpoint staged evidence | §II.10–II.12, §II.14; [implementation ledger](../design/palw/tir/rfc0002-implementation.md) | Old “not yet built” annotations record their date, not a current code audit |
 
 ## Current design boundary — 2026-10-06
 
@@ -52,7 +69,8 @@ remains an unmeasured acceptance target.
   ような **層単位の kernel がそのまま consensus の命令** になっている。新しい種類の演算は kernel 追加 = リリース = protocol upgrade。
 - **v1 の完成条件は「モデル」でなく「アーキテクチャ群」(§1)。** Dense・GQA/MQA/sliding・MoE・線形 attention(GDN)・SSM(Mamba/Mamba2)・
   recurrent(RWKV)・hybrid・routing 変種の代表モデルを **全部いったん分解し**、モデル固有 op を 1 個も足さずに表現できる最小の
-  primitive 集合(30〜50 個)を逆算してから v1 を凍結する。Qwen3.8(K 16 / V 48)は適合テストの 1 本にすぎない。
+  primitive 集合を逆算してから v1 を凍結する。Gate 1と正式仕様04bのv1は25個で、30〜50個は当初の見積り。
+  必要な共通意味論は新versionで拡張できる。Qwen3.8(K 16 / V 48)は適合テストの1本にすぎない。
 - **なぜ MISAKA で現実的か。** 汎用 VM の最難関は数値の決定性だが、MISAKA は既に **整数のみ**(ADR-0040)。丸めは名前付きの
   lossy site だけにあり、**丸め・saturation・shift・除算を含まず、全中間値が証明済みの範囲に収まる区間**(order-free region, §3.2)では
   加算順序が結果を変えない。規則は一つ: **fused kernel は order-free region の中だけを並べ替えてよく、lossy site を跨いだ融合で
@@ -65,8 +83,9 @@ remains an unmeasured acceptance target.
 - **ビット一致の範囲。** 参照インタプリタ == 独立の第 2 実装 == 出荷する全 backend はビット一致を要求する。HF の浮動小数モデルとの
   比較は **忠実度指標**(固定評価集合での top-1 一致率・KL・perplexity 差、ファミリーごとの閾値)で、ビット一致ではない(整数量子化は
   意図的に出力を変えるため)。
-- **順序。** コーパス → 意味論 → 参照インタプリタ(遅くて明らかに正しい)→ 範囲・コスト検証器 → lowerer → court → fused kernel →
-  移行。**fused kernel は最後。** 既存 45 kernel は捨てず、IR pattern の fused 実装としてビット一致すれば残す。
+- **順序。** 意味論を固定し、参照実装・範囲／コスト検証・lowerer・checker・courtを揃える。
+  高速実装と証拠生成の性能測定は並行し、実サイズで実現不可能なloweringを後から発見しない。
+  既存kernelはIR patternのfused実装としてビット一致する範囲で利用する。
 - **工数感。** 2〜4 人で 6〜9 か月。既存の Qwen3.6-35B(16/32)も踏んでいる GDN の k≠v 不具合の修正は、本 RFC とは別の小さな
   修正として独立に進められる(§7 Phase 0)。
 - **名称と「VM ではない」こと(09-28)。** PALW-TIR は有限の静的グラフ + 静的な層スケジュール + 位置方向の scan だけで、実行中の
@@ -83,7 +102,7 @@ remains an unmeasured acceptance target.
 ## Summary
 
 Replace the consensus meaning of a PALW class — today a layer-template graph whose nodes name one of
-45 hand-written kernels — with **PALW Canonical Tensor IR v1 (PALW-TIR v1)**: a closed set of 30–50
+45 hand-written kernels — with **PALW Canonical Tensor IR v1 (PALW-TIR v1)**: the frozen set of 25
 architecture-neutral integer primitives, and a class program that is a static, bounded DAG over them,
 carried as chain data. **v1 is frozen on an architecture corpus, not on a model**: it is accepted only
 when representatives of every major decoder family lower to it without a single model-specific
@@ -1545,7 +1564,12 @@ served once the consensus read that carries the seating facts exists.
 This closes F5 and the *reporting* half of F4 (the registry names `READY_SEATS` and the preflight, §II.2.3 item 8, names the
 memory). It changes nothing the chain decides.
 
-### II.7.5 The consensus rules — decided 2026-10-01, NOT YET IMPLEMENTED
+### II.7.5 The consensus rules — historical decision and implementation status at 2026-10-01
+
+**Current reading (2026-10-10):** the seating predicate and dormant fence now exist in
+`palw_class_seating_v1.rs` and `palw_class_seating_fence_v1.rs`. The following “not built” statements
+are the original decision record. Presence of those modules does not prove activation or A7's
+independent registration-to-Final exercise; see the implementation ledger for verified evidence.
 
 The coordinator decided on 2026-10-01: **Proposal A approved** (one seating rule for every class kind, under the new dormant fence
 `palw_class_seating`; the independence floor a fence parameter, default 3; armed with the RFC-0003/0004 flag day, not with int-10);
@@ -1973,6 +1997,36 @@ class conformance rules; it never has to execute a registrant's Python, `trust_r
 decide a claim. A third-party pack's own test vectors do not grant authority: malformed output fails the common
 verifier, and a false HF-equivalence claim is distinguished from the on-chain integer-program verdict.
 
+**Implementation increment (2026-10-10):** [tir-frontend-pack.v1](../design/palw/tir/tir-frontend-pack-v1.md)
+now composes the frozen primitive/state grammar without ModelSpec dispatch, consumes config/tensor
+bindings, and streams exact integer or explicitly rounded IEEE imports into the ordinary container.
+`palw-tir-frontend` emits replayable receipts; SDK `pack build-frontend`/`verify-frontend` pins source
+SHAs/compiler/executor revisions and uses common inventory and three-way conformance. Fixtures
+include direct-byte equality and offline class admission. Bounded inline **virtual**, **tensors**
+and **blocks** quant descriptors now feed the same compiler/SDK route, with explicit raw roles,
+mandatory decode vectors, nested-config checks, bounded pages and before/after source hashes.
+Tensor shape/JSON metadata is acquired after all binding-header checks, with per-plan and aggregate
+limits, exact-number parsing and source-change pins. MXFP4 expert axes, all built-in saved layouts
+and unknown third-party formats are exercised. Storage decode is explicitly binary32 before the
+declared integer rounding. Native whole/split GGUF acquisition now exposes raw names/layouts to
+the same generic CLI/SDK, including supplied unknown GGML IDs, strict native metadata and embedded
+tokenizer identity. Standard split names and a public index allow independent part selection;
+part numbers, shared declarations, primary metadata and global tensor uniqueness are checked.
+Aggregate header/allocation/count budgets, checked extents and snapshot revalidation protect
+this producer-side reader across every part and index. SDK artifact publication follows all receipt/inventory/conformance/source
+checks. Independent companions now attach public reference logits under predeclared revision/task/
+context/units/error criteria, and verify independently repeats a portable fit. The existing exact-class
+binding and beacon commit/run/fresh-verify tools accept both formats through one artifact/layout/
+static-admission/challenge/evidence path; independent imports use typed absent calibration.
+Conformance binds the node's kernel program-root domain, separately from the container graph root,
+and derives the same plan. Single-program selection uses the node prosecution/carrier/block
+limits for v1/v2/segmented v4 without shortening requested context; v4 still requires separate
+OPV admission/economics. No tool report supplies availability, activation or approved policy.
+Reference-logit gates stay separate from source identity, routing/state fidelity and task quality.
+These synthetic fixtures do not close §II.11.4: real-checkpoint source fidelity, real-node beacon and
+independent-seat
+claim/Final/redemption evidence remain open in the [implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+
 ### II.11.3 Direct-TIR escape hatch and exact boundary of permissionlessness
 
 Any independent compiler may submit canonical `TirProgramV1` bytes (or an armed RFC-0003 pipeline), a compatible
@@ -2114,3 +2168,1124 @@ canonical TIRの実行statement、実仕事量、承認済みkernel/planは正�
 全reward profileのclaim/block/reward/Final weightは同じproducer資本・期間の予算へ束縛し、正当な計算と公開検証の条件を維持する。
 
 本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
+
+## II.14 Completion contract — 2026-10-10
+
+This revision incorporates the model-extensibility design review. All six requirements below are
+part of RFC02 completion, together with the existing A1–A8 criteria. The implementation ledger
+records evidence and unresolved work; passing a newly added unit test cannot close the whole RFC.
+
+### II.14.1 Scoped support and the public extension interface
+
+The support record key is **checkpoint revision × complete task × context range × storage format
+and arithmetic version × kernel/verification/dispute plan**. Record structure/lowering, actual
+weight import, source fidelity, real-size execution, ordinary verification, public localization/
+terminal court and independent real-node Final/redemption as distinct stages. Each has measured
+evidence, `FAIL`, or `NOT_RUN`; a downstream pass is never inferred. Record partial tasks, fixtures,
+and reduced contexts explicitly. They cannot count as real-size/full-task coverage in A6/A8.
+
+Complete both §II.11 paths through the same node binary: independent canonical TIR and a
+content-addressed declarative frontend pack. They consume all math-affecting config keys, tensors
+and components, use bounded expansion before allocation, and cannot depend on an official signer,
+model name, registry entry or compiler. Unknown semantics fail the shared admission gate. Source
+equivalence remains unverified until independently reproducible conversion and fidelity pass.
+
+### II.14.2 Bounded dimensions, sparse computation and state
+
+Preserve v1 bytes, meanings and courts. New dimension/index/state semantics require a versioned
+program/kernel contract covering the entire execution, checker and court path. Token length,
+patch count and audio-frame count have declared maxima and job-committed actual lengths. No claim
+or later slice can enlarge them. Sparse access specifies index length/range, duplicate policy,
+selection and tie rules, and the binding of selected values to the original state/weights.
+
+Long-context acceptance must derive cost and evidence bounds at the requested length; raising
+the v1 history constant alone is insufficient. MoE lowering must preserve selected-expert work;
+sparse attention must preserve sparse access; recurrent updates must preserve state reuse. For
+any unavoidable asymptotic or constant-factor expansion, report the reason, real-size ratio and
+resource failure separately from structural representability. Measure execution, proof creation,
+hashing, retention and delivery early, alongside bit-exact backend conformance.
+
+### II.14.3 Storage, arithmetic and fidelity
+
+Storage decoding (including GGUF, MXFP4 and FP8), consensus arithmetic (width, rounding, saturation,
+normalization), and backend scheduling are independent identities. Decoding a format does not
+establish fidelity; a backend changing committed results requires new semantics, not a tolerance.
+Fix the evaluation corpus, contexts, metrics and acceptance thresholds before the run. Measure
+logits and task quality, routing agreement for MoE/sparse selection, long-context degradation,
+and state saturation/continuity where applicable. Keep failed and missing dimensions visible.
+
+### II.14.4 One derived resource contract
+
+Derive from the admitted program/plan and the committed job dimensions a resource vector for:
+maximum execution operations; executor working memory; state/history bytes; evidence-generation
+work; ordinary verifier work; on-chain checker work; court bytes/operations/rounds; evidence
+retention/delivery; and aggregate concurrent claim/session load. Registration, claim admission,
+proof ingestion and court processing must read the applicable same derived contract, rather than
+trusting independently declared cheap values. Arithmetic is checked; reject overflow, false
+shapes, enormous broadcasts and compiler expansion before their large allocation/work begins.
+Per-block, per-bond and network-wide aggregate limits are required in addition to per-claim caps.
+
+An executor's chosen memory budget does not set consensus capacity. Validator/court memory bounds
+remain independently enforced even when a producer owns a large GPU. New resource-contract or
+limit semantics require an explicit version/fence; legacy admission keeps its exact meaning.
+
+The pre-activation `palw_probabilistic_constraints_v1` route now prices structural claim
+admission from the registered commitment envelope and public schema, using the same byte-work
+tariff and persisted block budget as public courts. Program, pipeline, segmented and typed
+claims check their class envelope before copying traces; registrations must fit admission's
+share and a worst court must fit the work reserved for proofs. Onboarding judgements and kernel
+objects use the same budget transition. This changes hypothetical admission behind that dormant
+fence; it does not change the live legacy route or the frozen TIR/plan grammar. SDK program
+preflight applies the same admission/proof-work limits. This is **partial resource accounting**:
+the byte tariff does not certify hardware instruction counts, and the complete executor,
+evidence-generation, aggregate state/network and semantic checker resource vector remains open.
+
+### II.14.5 Work and economic conservation
+
+Resource bounds, canonical work and economic credit are separate. Apply defined canonicalization
+to dead/duplicate/redundant expressions; do not claim to decide semantic usefulness in general.
+Preserve work identity across roots, slices, riders and model copies, and charge derived rights
+to the same principal and window. Excess PWU, redundant computation, model duplication, splitting
+and resubmission cannot enlarge B/R/F ceilings. A faster correct evaluation is valid: claims bind
+results, state and constraints, not a count of physical GPU instructions. Test role swapping and
+the complete accounting path, not only a work-count helper.
+
+### II.14.6 Whole-statement public verification and completion evidence
+
+A new reusable feature ships as **semantics + type/range rules + costs + ordinary checker +
+authenticated evidence binding + localization + terminal court**. Execution-only support cannot
+enable rewards. Bind source weights, routing, previous state, KV positions, checkpoint/slice
+continuity and outputs across the full graph. Sampling guarantees require whole-claim probability
+accounting; primitive court coverage alone does not establish detection probability.
+
+Required adversarial drills include shape/product overflow and huge broadcasts; tiny frontend
+expansion bombs; substituted/duplicate experts and weights; reset state, shifted KV and skipped
+slices; silently ignored config/tensors; wrong backends and artifact roots; floods of invalid
+proofs/courts against an honest producer; duplicate work under different labels; and aggregate
+concurrent overload. Attribute invalid requests' costs to the attacker and preserve the honest
+producer's opportunity to answer. A fresh non-seat verifier must reach objective conviction using
+public authenticated material, and an honest independent participant must reach Final/redemption.
+
+The public onboarding verifier now derives the attempt, bound kernel program, Finals and v3
+source seals from one complete op-211 row snapshot. Every page must retain the same DAA, roots,
+header and total count; ordered rows, advancing cursors, completeness and both reconstructed
+roots are checked before verification. The candidate, descriptor, program, plan and parameter
+link must agree. This checks consistency with the served roots, not their canonical-chain
+authentication: the caller still needs its node/state-proof trust. The 128 MiB retained wire-byte
+ceiling is local reader policy, not a bound on total verifier RAM or a consensus capacity.
+Complete-check attempts now dispatch from the same snapshot to exhaustive file replay, with the
+chain's domain bounds checked before tensor collection. Pinned pagination on a continuously
+advancing node, real-checkpoint public conviction and independent Final/redemption remain required
+completion evidence. `palw-class kernel-preflight` also accepts canonical TIR without a frontend
+or model configuration, reports the shipping schedule and applies the node's hypothetical bounds
+at exactly the requested positions; it grants no registration or reward eligibility.
+
+Use pinned real checkpoints for dense baselines, GDN/KDA and unequal QK/V heads, MoE/routing,
+Mamba/hybrid state, sparse/compressed attention and complete multimodal tasks. The review's model
+names are discovery candidates, not a supported list; pin revisions and verify their exact required
+features before choosing tests. RFC03 supplies encoder/image/audio stage bindings; RFC07/11/14
+supply whole-claim verification and G14. Conditional verification (A) remains: obtain the correct
+model externally; do not reintroduce model-distribution consensus. Missing source access or a
+zero detection floor remains a failed security condition, never repaired by type/cost checks.
+
+#### 14.7 Bounded flat Gather courts and a real-program static regression
+
+The dormant segmented decoder/encoder kernels identify whole-value pricing revision 2 in new
+v4/v5 descriptor digests. A rank-one axis-0, unbatched Gather with output shape equal to its index
+shape uses allocation-free direct lookup, with the same index refusal, operand reads and exact
+result as the reference. Only this evaluator's per-output price changes (32 to 16 abstract units,
+then the existing factor 64); authenticated bytes and both commitment hashes retain their prices.
+The previous conservative DA16b withholding selection remains fixed. No resource limit, primitive
+semantics, v1–v3 descriptor or activation fence changes.
+
+The exact real Qwen2.5 pilot's 32-position TIR is committed as static regression material; its
+worst court work is 473,589,248, below the unchanged guaranteed proof reservation 536,870,912.
+Its direct TIR route is hypothetically eligible and remains inactive in the shipping schedule.
+This closes the pilot's previous static court-price refusal only. A vocabulary-sized synthetic
+court and differential/reference/root tests verify the optimization; they do not prove the
+real-weight node path, source fidelity, long context, model security or Final/redemption. Evidence,
+commands and remaining full-scope gates are in the implementation ledger's
+[whole-value Gather pricing revision](../design/palw/tir/rfc0002-implementation.md).
+
+#### 14.8 Generic bounded preparation of real parameter commitments
+
+The SDK and `palw-class kernel-params` prepare the existing segmented-kernel v3 parameter map
+from canonical artifact byte ranges without model/config/frontend selection. The raw-width
+builder reads every element once and reproduces both commitment trees using checked bounded
+buffers; it allocates no complete tensor or i128 expansion. Every model-instance workspace and
+the aggregate payload cap are checked before any payload read. Decoder/encoder parameter roles
+follow the explicit descriptor memory model; unknown memory models refuse, and v5 job-input slots are
+excluded only under encoder semantics. Partial preparation publishes no map.
+
+On the full real Qwen2.5 pilot artifact, all 1,636 instance roots and the complete param map agree
+with decoded reference hashing. Streaming measured 57.985 s and 38,223,872-byte maximum process
+RSS, versus 223.809 s and 4,131,471,360 bytes for the decoded diagnostic. These local debug
+measurements concern producer/verifier **root preparation**, with explicit off-chain caps. They
+change no wire preimage, kernel identity, resource price, network activation or economic right.
+They do not prove source-model fidelity, execution, public node prosecution or Final. Commands,
+bounds, raw evidence and the remaining full-scope work are in the
+[RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+
+
+### 14.9 Exact context and actual-weight node execution evidence
+
+Local executor conformance must compare exactly the requested positive number of positions,
+within the canonical program's history bound. It must refuse zero or oversized requests before
+reference parameter acquisition, rather than silently substitute a shorter context.
+
+The generic `check-kernel-node-execution` SDK example first checks every actual decoder
+parameter instance against a supplied prepared v3 map under explicit off-chain limits, then
+compares the node's typed CPU executor with the integer reference. It requires no ModelSpec,
+model name or official compiler. This is a local diagnostic, separate from registered-model
+public verification and chain admission.
+
+On the full real Qwen2.5 pilot artifact, the predeclared two-position protocol authenticated
+all 1,636 instances and compared 790 commit points and both complete vocabulary logits;
+every comparison matched. Four node conformance tests passed. Comparison elapsed was
+381.881 s; whole-process maximum RSS was 6,442,958,848 bytes. That process includes reference
+and native execution plus preparation; it does not establish native producer speed, ordinary
+verifier memory bounds, source-model fidelity, full context/task support, public conviction or
+Final. The same-node-binary registration and actual-weight public claim/court path remain
+required. Protocol, commands, scope, raw results and hashes are in the
+[RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+
+
+### 14.10 Native segmented roots and real delivery-court evidence
+
+A canonical decoder artifact can now produce existing v3 node and segmented roots through the
+node's typed executor, without a ModelSpec or compiler registry. The local SDK path rederives
+its exact plan and reuses unchanged node static prosecution/carrier/block ceilings. It streams
+one successful complete position at a time, checks native values against declared wire types,
+and keeps only position roots unless private capture is explicitly requested. Local hash/trace
+caps exclude native buffers, mapped weights and caller retention; activation and economic
+rights remain independent chain facts.
+
+The fixed real Qwen2.5 lowered pilot completed 32 positions, committing 245,056 node values.
+Native computation plus node hashing/capture took 169.916 s; whole-process maximum RSS was
+2,143,010,816 bytes. Its public reproduction bundle is 161,675 bytes, with no private position
+values or raw weights. A 17,924-byte existing Decode court proof convicts a substituted output
+token, while honest delivery is dismissed. A separate offline test consumes only that public
+witness to reproduce the outcomes and refuse copied/tampered openings. Eight relevant tests
+and five refusal checks passed.
+
+This establishes actual-weight trace construction and offline terminal delivery-court evidence.
+It does not establish registration, public RPC acquisition, full computational integrity,
+independent source/task fidelity, original full context, outsider node G14 or Final. Same-node
+registration/public claim/prosecution/settlement and the remaining full-scope requirements are
+still required. Protocol, commands, measurements, raw evidence and hashes are in the
+[RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+
+
+### 14.11 Requested-claim identity and actual-weight node delivery path
+
+An outsider consuming a segmented public record must bind it to the **requested claim id**,
+not only the class header and trace roots. The final delivered id is not fed into the trace.
+`SegmentedClaimRecordV1::view_for_claim` recomputes the canonical claim id from its job,
+producer, all delivered ids and evidence root; it also checks canonical parameter ordering,
+prompt authentication, exact output length/vocabulary, context and evidence input binding.
+Its header must be anchored in authenticated class/chain state. This local identity check is
+not a substitute for chain inclusion or an authenticated RPC state proof.
+
+The actual-weight 32-position Qwen2.5 delivery witness now has a node integration test:
+registration data in 32,000-byte ordinary chunks, prompt tiles, salted claim carriers,
+production RPC op 210 JSON, outsider proof, block court, reservation slash, honest Final,
+coinbase redemption and a second node's replay. Activation validation, parameter attestation
+and OPV eligibility are still the parent's explicit test seams. Excluding the eligibility
+hook, the class is `NotOnboarded`; the stateful program cannot use the small-stateless complete
+check. The separate V2 inventory root is not registered or confused with the kernel root.
+These mechanics do not establish model onboarding, public DA acquisition or whole-claim G14.
+The full requirement and these gates remain in force.
+
+The segmented bootstrap had a metadata cycle: only OPV can register v4/v5, OPV eligibility
+requires kernel binding/conformance, and kernel binding required a registered class. The
+conformance-only candidate path in §14.12 breaks this dependency **without granting executable claims,
+rewards, Final weight or beacon-source rights** before the existing independent gates pass.
+The legacy Panel bootstrap is not an allowed fallback for segmented classes. Sampled
+conformance remains a non-reward signal pending its digest/refutation courts; its signal or
+a test hook cannot substitute for release eligibility.
+
+Allocation-free v3 leaf counts are now used for court byte pricing. Rows and strided columns
+retain exactly their existing leaf coverage, wire sizes and tree-choice tie rule, and the
+actual 32-position plan root is unchanged. This eliminates transient index vectors created
+merely to count elements during repeated ledger reconstruction. No descriptor, price,
+commitment preimage, resource ceiling or activation flag changes. Final test evidence and
+remaining full-scope work are recorded in the
+[RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+
+
+### 14.12 Conformance-only class preparation
+
+`RegisterConformanceClass` is route version 1, new inner tag **21** of outer tag 110.
+It requires both the existing route fence and `palw_panel_free_v1`; shipping fence validation
+is unchanged. The preparing signer must be a non-exiting bonded actor. It carries exactly a
+known descriptor, canonical program, exact verification plan and parameter commitments. No
+model name, `ModelSpec`, frontend vendor or compiler approval participates in this contract.
+
+Preparation calls the same registration validation for active kernel semantics, ranges,
+parameter instances, independently attested parameter root, prosecution bounds, court work,
+OPV economics and carrier envelopes. It omits only the eligibility prerequisite that would
+otherwise depend on the conformance it is being prepared to obtain. A successful candidate
+consumes one ordinary adjudication run and its derived admission byte work from the shared
+block budget; it cannot spend the public-proof reserve. At most **eight candidates per bond**
+can stand. The ordinary wire ceiling still applies. This per-bond catalog bound is not a
+proof of the remaining system-wide resource and honest-liveness requirements.
+
+A candidate lives in ledger **table 28**, keyed by its eventual OPV class id, with value
+`borsh(preparing bond, ClassRecordV1)`. The root is extended only when that table is nonempty:
+`H("misaka-palw/kernel/ledger-conformance-extension/v1"; previous root || collection root)`.
+The collection domain is `misaka-palw/kernel/ledger-collection/conformance-classes/v1`.
+Older object discriminants, metadata encodings and roots of ledgers with no candidates remain
+unchanged. Row reconstruction checks the candidate's key against its canonical OPV identity.
+The preparing bond receives no exclusive ownership of the computation or promotion priority.
+
+`KernelBoundV1`, conformance checking and derived eligibility can read the checked candidate
+metadata. They still require the same V2 canonical program, live binding over that exact
+parameter root, conformance statement, policy, resources and clocks. Execution paths read
+only ordinary registered classes: preparation alone opens no job/escrow/claim, pays no reward,
+creates no Final, supplies no Final weight and contributes no work-beacon source. Ordinary
+`RegisterClassV2` promotes the same identity only after its independent derived eligibility
+passes, and consumes the candidate. The candidate cannot make a stateful or large class
+eligible for the small-stateless complete check; sampled evidence still does not gate release
+rewards pending GAP-70. No production activation is implied.
+
+
+### 14.13 Bounded v3 artifact-identity refutation
+
+Tag 105 appends `ArtifactMismatchProofV1::TileV3` as proof discriminant **2**.
+The old instance-set and row variants retain discriminants 0/1, encoding, judgement and
+fold behavior. The new court binds a carried parameter map to the exact bonded kernel root,
+authenticates one v3 tile against the named instance, and authenticates the canonical V2
+inventory piece against the registered class root. Authenticated dtype/shape differences or
+different bytes at common coordinates refute the binding. Rank, dtype, instance, leaf index,
+leaf count, canonical piece length and both roots are checked. A copied or disjoint opening
+proves no fault. Both row and strided column tiles are supported: a forged column tree must
+remain refutable even when its paired row root is truthful.
+
+`ArtifactTileOpeningV3` uses the existing leaf wire bytes, with lengths checked before
+allocation: rank ≤ 4, elements ≤ 4,096, path ≤ 64. It does not change the kernel leaf codec.
+The inventory material is checked before hashing against its 32 KiB piece and 32-level path
+ceilings. This court opens neither a full model tensor nor a whole execution trace.
+
+Only this appended proof spends the shared block court/run budget, before decoding the
+stored program or judging either opening. Its work tariff is serialized proof bytes plus
+stored canonical program bytes plus 16 times opened element count. A refutation may use the
+existing proof reserve. A charged judgement that proves nothing slashes the challenger's
+free collateral by `dismissal_fee_v1(work)` and persists that fee and budget as an accepted
+dismissal. An over-budget object runs no court and pays no judgement fee. Neither outcome
+slashes/defaults the honest binder. A valid proof uses the existing one-time reservation
+slash and reporter share. The dormant route fence and shipping validation remain unchanged.
+
+The SDK can stream one V2 inventory opening with a 32 KiB piece buffer, its existing bounded
+read-ahead window and logarithmic sibling-subtree frontiers, rather than retaining all
+weights or all inventory leaf hashes. The core `tile_refutation_v3` builder checks public
+openings through the same pure court. Model acquisition remains conditional; this adds no
+consensus model-weight retention or provider obligation. Refutation here requires an authenticated
+opening of the **bound** tensor as well as the verifier's true inventory bytes. An arbitrary
+opaque false commitment with no public opening is not made refutable by this comparison
+alone; that residual binding/prosecution requirement remains open. The generic
+`prepare-artifact-tile-court` diagnostic reauthenticates all v3 instances before producing
+an honest and a one-element false-binding witness; it consults no model/compiler allowlist.
+
+The predeclared tests and full-scope exclusions are recorded in
+[`rfc02-artifact-tile-protocol.json`](../design/palw/tir/evidence/rfc02-artifact-tile-protocol.json).
+This identity court cannot substitute for stateful release conformance, full computation
+verification, source fidelity, full task/context support or shipping activation. The v5
+bridge must still explicitly distinguish artifact parameters from its two job-input roles;
+v3 root preparation alone does not resolve that inventory contract.
+
+### 14.14 Descriptor-scoped model inventory and job-input roles
+
+A model artifact binding must authenticate **descriptor identity, complete canonical program,
+model inventory root and kernel parameter root together**. The challenger cannot choose the
+role contract. K2-TIR-v4 treats all declared params as artifact bytes. K2-TIR-v5 treats its
+validated trailing `input.ids` and `input.count` as job inputs, leaving the preceding params
+as model bytes. Identical tensor names under v4 do not grant the v5 exclusion. Unknown kernel
+semantics cannot copy a memory-model number to gain it; a new implemented descriptor needs
+its own explicit contract.
+
+The role scope retains the complete validated program, including its input references. It
+must not remove the last two declarations and validate a rewritten graph, read synthetic
+job placeholders from the model source, or count job inputs as missing model tensors.
+Inventory leaves retain the existing tensor-name/layer/byte-offset hash grammar and
+32 KiB piece limit. Their count and index are derived from the descriptor's model instances.
+The entire scope belongs to the authenticated statement, even when two scopes share a root.
+
+`PalwTirModelInventoryV2`, bounded streamed model roots/openings and the pure
+`verify_artifact_mismatch_v2` judge implement this role foundation for exact current v4/v5
+identities. The new judge accepts instance-set proofs and bounded v3 tiles; legacy whole-row
+proofs remain in the old judge. The BERT and XLM-R weight-bearing fixture trial tests honest
+no-fault, changed/missing/surplus model weights, copied source/kernel roots and rejection of
+unknown semantics. It proves mechanics at the fixture's scope, not a full checkpoint task.
+
+**Foundation snapshot (`d5ed40277`): node integration was still required.** §14.15 records
+the subsequent consumer implementation. Historical `ArtifactBoundV1` (104) and its challenge
+(105) retain their all-parameter inventory and existing wire meaning. They cannot be converted
+into v5 statements using a later binding or names inferred from an untrusted proof. A new
+versioned, signed and rooted statement must persist the full scope, apply collateral and
+shared resource budgets, and expose only a matching matured attestation before a v5 candidate
+can pass through the ordinary node. The new pure APIs do not supply that statement, activate
+an encoder, establish release conformance, resolve opaque-root withholding, or prove RFC02
+completion. Large/stateful conformance, full-task public G14 and the other §II.14 requirements
+remain mandatory.
+
+### 14.15 Signed model artifact statements in the node consumer
+
+The new route inner kinds **22 `BindModelArtifactV2`, 23 `RefuteModelArtifactV2` and
+24 `RegisterModelConformanceClassV2`** ride signed outer 110 and require both its
+probabilistic-constraints fence and the dormant PanelFree fence. The central allocation
+and exhaustive inner fence table name all three. The bare kernel ledger refuses them:
+only the node consumer can authenticate chain collateral and the stored scope.
+
+A signed statement commits the exact current v4/v5 descriptor, complete canonical program,
+model inventory root and parameter map. Its content id binds descriptor, program digest
+and both roots. Aux **46** stores the immutable statement/liability record, **47** its bounded
+bond index, and **48** the admitted candidate's chosen statement. Tables 43–45 belong to
+the provider court; the earlier model allocation overlapped them and is corrected before
+shipping activation. Table 42 remains reserved
+for the existing chunk lane. Each bond can retain eight statements, including decided
+records. Identical content is reusable by any candidate registrant; the binder's identity
+owns liability and grants no execution or reward priority. The reservation is the existing
+100-BILI binding amount and uses the existing challenge/liability horizons.
+
+The fixed-size stored header suffices for reservation, deadline and work reads. Per-bond
+committed collateral and both live-duty withdrawal gates count the reservation until the
+stored liability horizon or refutation. Release is a clocked read, requiring no new global
+per-block scan of model programs. Binding and refutation spend the same blue-score block
+budget as other admissions/courts; admissions cannot spend the prosecution reserve. The
+metadata work tariff is `p² + 64p + 64b`, with `p` canonical program bytes and `b` map/filing
+bytes. It is a conservative structural envelope, not execution work or economic credit.
+A charged invalid proof pays the policy's dismissal fee; an over-budget proof is not judged.
+The public decoder checks PC cardinality, ordering, tile bounds, inventory name/piece/path
+counts and trailing bytes before any corresponding allocation. Legacy whole-row proofs
+are not admitted here. Valid fraud slashes the statement reservation once under the existing
+49% challenger share; self-operator bounty collection is refused.
+
+A matured statement attests only the exact descriptor/program/PC tuple carried by inner 24.
+The consumer delegates the ordinary conformance-only validation, including ranges, plan,
+prosecution and carrier bounds, and records its chosen statement. Its temporary PC
+attestation is restored before ledger rows are persisted: it never enters the global
+attested-root list and cannot be borrowed by an unrelated class. This creates metadata,
+not an execution registration. Historical 104/105 and their inventories are unchanged.
+
+The node mechanics trial uses a lowered weight-bearing BERT fixture and ordinary signed
+carriers, with independent replay. The companion SDK capture also covers the XLM-R fixture.
+This is not a published full-checkpoint task/context support PASS. Generic scoped release
+conformance, full computation G14, the arbitrary opaque/withheld bound-root case, the complete
+resource/economic/liveness contract and shipping activation remain open under §II.14.
+
+### 14.16 Descriptor-scoped finite-domain conformance reference
+
+`ModelConformanceDomainV2` derives a finite input domain from the complete validated
+program and verification plan, using the exact current v4/v5 descriptor. For v4 it
+includes every nonempty token word of lengths `1..=plan.max_positions`; for v5 it
+includes every word of lengths `1..=L`, with the encoder's canonical ids padding and
+count injected as job inputs. Stateful decoder cases start from the reference's initial
+state independently and replay the complete prefix. Repeating one token does not cover
+this domain. Stateless programs use the same domain without a dependency-based shortcut.
+
+Before model tensor decoding or execution, the constructor caps input cases, model leaves,
+raw model bytes, a conservative reference RAM envelope, and reference work. The envelope
+includes all retained node values at worst-case H, declared states and constants, decoded
+model parameters, job inputs, operand clones and primitive scratch. These are local
+reference limits, not a change to network admission limits or proof that the full shared
+resource vector is complete. The constructor also checks the plan's program binding and
+ranges. Callers cannot supply a smaller input count or work estimate.
+
+The reference validates every inventory coordinate, re-roots the exact source bytes,
+recomputes the v3 parameter commitments from those same bytes, and hashes every node's
+shape, dtype and integer values for every input case, including stage inputs and state
+writes. The result binds descriptor, complete program, plan, source and PC roots, case
+count and input order. Comparing claimed implementation roots proves equality with this
+reference result; it does not establish the identity or independence of the implementations
+that supplied those roots, or fidelity to a source floating-point checkpoint.
+
+At the `f7f93d0d3` reference snapshot this was a pure dependency without a node consumer.
+The authenticated consumer is specified in §14.17 below. Large
+vocabularies/context domains exceed exhaustive enumeration; they still require the scalable
+GAP-70 digest/refutation path. No input subset, sampled signal or raised limit substitutes
+for that requirement, and no shipping fence is armed here.
+
+
+### 14.17 Authenticated finite-domain conformance and direct execution registration
+
+Inner **25 `CompleteModelConformanceV2`**, carried by authenticated outer 110, requires
+both probabilistic-constraints and PanelFree fences. It names a scoped candidate and a
+matured model statement. Any active bond may submit the complete source inventory and
+three claimed implementation roots; neither the binder nor the first registrant receives
+priority. The consumer checks the exact descriptor/program/plan/source/PC relation and
+every input in §14.16's bounded domain before writing a fixed-size conformance row in aux
+**49**. Aux **50** counts judged checks per blue-score block, with a maximum of two.
+
+Before decoding the stored program or proof, a judged attempt reserves shared admission
+work equal to `p² + 64p + 64b + 2^26`, checks the actor's free collateral, and charges the
+actor's dismissal fee on success or failure. Proof bytes, operand counts, names and piece
+lengths are bounded before allocation. Invalid attempts create no conformance record and
+do not slash the model binder. An already checked class is not rerun. A successful check
+selects its proved statement in aux 48, so an earlier candidate with a false declared source
+root cannot permanently poison the class.
+
+Ordinary inner 13 `RegisterClassV2` may then derive OPV eligibility from that exact checked
+scope. Admission rechecks descriptor standing, denial, binding standing, plan prosecution
+bounds, carrier fit, court work and economics, and the complete-check policy. Temporary PC
+attestation is removed before persistence. This path introduces no model-name or compiler
+allowlist, V2 decoder identity, persistent global attestation, or new payout. A candidate
+alone is not an execution registration or beacon source.
+
+This consumer certifies the bounded integer function and the source-to-PC relation. Claimed
+role roots do not certify independent runtime implementations or source checkpoint fidelity.
+Large vocabularies/context remain outside exhaustive enumeration and need GAP-70. The full
+shared resource/liveness contract, real-checkpoint task/context coverage and the remaining
+§II.14 requirements stay open. Shipping fences remain dormant.
+
+
+### 14.18 Public trace courts for unregistered scoped candidates
+
+A new versioned, non-reward statement uses inner **26 `PostModelVectorV2`** and
+**27 `RefuteModelVectorV2`** under authenticated outer 110 and dormant PanelFree.
+An active bond may publish a vector of an admitted scoped candidate without creating
+an execution class, job or kernel claim. It need not obtain a preceding Final. The
+statement binds the exact candidate and model binding, the public prompt, exact delivery
+length and delivered ids, network/ruleset, program/plan/PC identity, segmented evidence
+and segment roots. For a decoder, the last delivered token is not fed back as input.
+
+The three claimed implementation roots must agree with this explicit typed trace grammar.
+It commits intermediate values and logits through the existing v3/segmented trees, so a
+shared wrong computation is subject to the existing bounded element/type/decode courts.
+A public verifier with the matching model reconstructs this context and supplies a fault
+against its roots. A proof cannot be borrowed by another vector, source binding, program
+or plan. This is a new statement, not a reinterpretation of legacy tag-109 `a`/`b` flat
+logit/commit digests. Equality of role roots still does not establish actual independent
+software execution or source-checkpoint fidelity.
+
+Aux **51** stores a fixed reservation/court header followed by bounded post bytes; **52**
+is the poster's lifetime catalog, capped at eight statements. A new distinct assertion
+reserves 100 BILI of the poster's own free capital for the existing 200-DAA liability
+horizon. Both withdrawal duty gates and ordinary committed/free-capital calculations read
+this reservation together with all other commitments. Expiry is a clocked read and does
+not erase the catalog or scan all vectors per block. The model binder owns no liability
+for another bond's vector. Identical content shares a statement and grants no priority.
+
+Posting and refuting reserve the existing shared block work before program/post/proof
+decoding. Every judged post, including a truthful duplicate, pays the actor's policy fee.
+An invalid judged refutation also pays the actor's scaled fee; an over-budget filing is
+not judged or charged. The fixed header prices the worst admitted court plus program/wire
+work; admission requires this whole envelope to fit the work reserved for prosecution.
+Nested counts, v3 leaf sizes and paths are bounded before allocation. §14.19 adds bounded
+WholeValue optional tensors within the candidate's already admitted filing/work envelope.
+A valid fault slashes the poster's reservation once and pays only the existing 49% share
+of the collected slash; self-operator bounties are refused.
+
+This path offers falsifiable integer trace assertions for domains too large to enumerate.
+It is **not** complete-domain conformance, an OPV eligibility source, or a sampled reward
+gate. §14.19 supplies public point-unit trace demand/default. Vector discovery/transport
+tooling, immutable policy selection and its whole-statement soundness, legacy flat-digest courts and independent
+runtime certification remain required before integrating it into reward eligibility.
+Opaque/withheld source-PC relation cases and every other §II.14 requirement remain open.
+Shipping activation is unchanged.
+
+
+### 14.19 Candidate trace unit availability and verifier-owned whole-value courts
+
+Inner **28 `DemandModelVectorV2`**, **29 `AnswerModelVectorV2`**, and **30
+`SettleModelVectorDemandV2`** use the same signed, dormant PanelFree consumer. A demand
+names the exact statement and `(position, occurrence, node, axis, line, tile)`: row/column
+tiles (axis 0/1), or node commitment and Merkle paths only (axis 2, zero line/tile). No
+parameter, model file or inventory range can be requested. The candidate commitment-only
+mask (§14.20) is authoritative for this new statement; a value marked withheld owes only its node opening. The v4/v5 claim
+disclosure mask remains unchanged.
+The Level-1 model-byte mask also forbids requesting a copied or model-only tensor even
+when its WholeValue envelope is too large for the existing disclosure mask.
+Where a bounded court exists (§14.20), its tensor is supplied by the verifier's
+own model under that candidate court.
+Conditional model acquisition remains outside consensus.
+
+A requester owns four reusable slots, backed by its free collateral together with all
+other commitments and both withdrawal duty gates. Other bonds cannot occupy its slots.
+A replaced settled slot deletes its old demand row; answers/closing calls bind the new
+request id, including vector, unit, requester, slot and filed DAA. Demands decode and
+validate the stored program/trace only after reserving shared admission work and charging
+the actor's fee. The fixed request retains its admitted node index/count, positions and
+containing segment root; response classification does not decode the program or trace.
+
+The policy's court deadline plus proof grace must fit the vector's liability horizon. An
+answer is timely through its deadline; a default is closable strictly after it. Pending
+requests keep the poster's reservation held even after that horizon, until explicitly
+closed. Aux **53** holds requests, **54** their bond/slot indices, **55** authenticated
+public-unit receipts, and **56** the outstanding count per vector. No periodic scan over
+all vectors/requests is added. Reservation reads visit at most eight vectors or four
+request slots per bond. Any active bond may close a request; a default bounty goes to the
+requester's recorded payout, not the closer. A poster's own operator cannot demand it.
+
+Answers have an 80 KiB ceiling, two bounded paths and at most one existing 4096-element
+v3 tile. Counts, type/rank and paths are checked before allocation. Like the existing
+segmented response lane, this bounded Merkle/byte classification uses no shared court
+adjudication run; exhausting proof runs cannot by itself prevent a valid answer. Invalid
+answers pay their actor's scaled fee. A timely authenticated answer is public thereafter;
+its collected requester deposit compensates the poster once per admitted request. The
+deposit is at least the policy demand bond and the fee floor of the maximum bounded
+answer. Other pending requests for that same unit close from its public receipt, subject
+to their own original deadline. No new demand is admitted for an already public unit.
+This local fee floor is not a measurement of complete network/producer economics.
+
+An unserved request's explicit close slashes the poster's remaining vector reservation
+once, sets **unavailable**, refunds pending requester reservations, and pays only the
+existing 49% collected-slash bounty. Availability failure is distinct from a proven
+integer fault (**refuted**); either outcome prevents a second slash. A timely service
+and later integer conviction remain separate operations. Closed/late requests are
+refused before classification and no mutable deadline extension is allowed.
+
+The existing WholeValue proof variant is admitted with bounded node/leaf paths, input
+counts and optional whole tensors. Rank, dtype, checked dimension product and exact byte
+length are verified before allocating tensor bytes. Both wire and stored trace bytes
+join the program/court work envelope; the candidate's derived prosecution bounds and
+reserved proof-work/carrier limits still apply. This allows a verifier to reconstruct
+a falsifiable withheld-node relation from public openings and its own model, without
+requiring that model's weights from the poster. It does not certify independent runtime
+implementations or complete-domain conformance.
+
+These routes remain non-reward conformance signals and grant no execution eligibility.
+Legacy flat-vector courts, immutable whole-statement policy/soundness, actual checkpoint
+fidelity and task/context/feature coverage, discovery/transport tooling and the complete
+network resource/liveness/economic contract remain required. Opaque source-PC fidelity
+relations and large model-only trace relations outside the bounded candidate courts
+remain open; §14.20 extends the parameter-Gather case without forced weight disclosure.
+All other §II.14 requirements remain open. Shipping fences stay dormant.
+
+
+### 14.20 Candidate Gather dependency courts without a full weight opening
+
+Candidate statements (inner 26–30) use `model_vector_withheld_mask_v2`,
+`check_model_vector_positions_v2` and `verify_model_vector_fault_v2` together.
+The existing v4/v5 program arithmetic, plan, trace commitments, claim checker/court,
+`seg_withheld_mask_v1` and reward eligibility retain their meaning. These non-reward
+statements do not change the disclosure contract of an execution claim.
+
+For `Gather(axis=0,batch_dims=0)` whose data operand is a registered model parameter,
+the candidate whole-value court price includes the row leaves covering at most the
+number of selected items. It includes each selected item's full trailing dimensions,
+all row tiles and each leaf's full Merkle depth. For rank-one data, each scattered
+index may touch a distinct 4096-element tile. Repeated indices never increase this
+worst bound beyond the parameter's complete row tree. The independent index operand,
+node paths, reference element evaluation and both output commitment hashes retain
+full prices. Other axes, batch dimensions, primitives and committed data operands
+retain the established conservative whole-value price.
+
+A model-dependent node is commitment-only for this statement when its whole-value
+opening and work fit the existing one-MiB and 2^36 ceilings, or when the frozen
+v4/v5 mask already withholds it. Admission takes the maximum of the established
+class bounds and these additional candidate court bounds before checking the shared
+reserved proof work and actual carrier. Refutation must fit the stored admission
+header and its own node's dependency opening bound. An unnecessarily large filing
+cannot borrow another node's larger byte envelope. These bounds are derived, never
+supplied by the poster.
+
+The verifier acquires the matching model outside consensus and re-executes. At the
+first divergent bounded Gather, it files only the output's public authenticated node
+opening, the authenticated selected parameter leaves from its own model, and the
+index operand. The court recomputes every output element and the v3 commitment;
+it need not receive the poster's Gather tensor or the full weight file. Bad parameter
+bytes or a borrowed commitment dismiss at the challenger's cost. The same request
+lane refuses copied-model tensor tiles and serves the node commitment only.
+
+This closes the bounded parameter-Gather dependency case, not all large model-only
+relations. A whole output beyond these limits, another axis, a large committed data source,
+opaque source-PC fidelity or a relation outside these ceilings still needs a separate
+bounded court. No sampled security/complete-domain conformance, actual checkpoint
+support, independent runtime identity or reward eligibility follows. Every remaining
+§II.14 completion requirement and the dormant shipping fences remain in force.
+
+
+### 14.21 Staged flat-v4 commitment material for large withheld values
+
+`misaka-palw-kernel::merkle4` implements the flat hiding-width layout proposed in
+`k2-real-scale.md` §4.2 as a **new hash and wire grammar**, not a v3 leaf-rule
+replacement. This stage provides commitment construction, public hash-only
+openings, filer-owned value openings, bounded root descent and material resource
+bounds. No descriptor, class, candidate statement, route object, reward source
+or shipping fence selects it. A commitment helper is not a terminal court or a
+completed large-model prosecution path.
+
+The canonical layout flattens the row-major tensor across rank/line boundaries.
+Let `N` be its checked element count. For `N >= 64`, it has `floor(N/64)` leaves:
+all but the last contain 64 elements; the last contains 64 through 127, including
+the entire ragged tail. A 65-element tensor has one 65-element leaf; a 129-element
+tensor has one 64-element leaf and one 65-element leaf. No padding, short tail
+hash or interior hash of that short tail is published. Tensors below 64 elements
+have no flat-v4 leaf contract and still need a bounded whole-value alternative.
+Rank is at most four; zero dimensions, overflow and non-committable dtypes are
+refused. The primitive arithmetic and the existing `I64`/`I128` commit prohibition
+are unchanged.
+
+The flat leaf commits its dtype, flat leaf index, exact count and raw-width
+little-endian elements under the new flat-v4 leaf domain. A binary tree carries
+an odd final node upward; separate flat-v4 node and typed-tensor domains bind
+both tree structure and dtype/rank/dimensions. A hash opening carries bounded
+metadata, one leaf digest and its exact path; it contains no elements. A value
+opening additionally carries exactly the declared span's bytes, at most 508
+bytes for the existing committable dtypes. Both codecs check rank/count/path and
+carrier limits before allocating variable fields, and refuse surplus bytes.
+
+A model holder authenticates each public reply against the committed typed
+value before comparing it with its own tree. A differing leaf is terminal
+material for a future relation court. Otherwise, the first differing bottom-up
+sibling identifies a strictly smaller divergent branch, including odd carried
+nodes. At most `ceil(log2(leaves)) + 1` replies identify a divergent leaf. A
+cached tree reads paths in logarithmic time; it does not copy/hash the whole
+tree on every probe. The root-only raw-width builder retains a fixed stack
+with a conservative 8 KiB scratch bound and does not expand bytes into an i128
+tensor. Optional retained trees expose their derived live digest/vector bounds
+and can refuse a caller's retention limit before hashing or tree allocation.
+
+The 64-element rule supplies a minimum encoded width; it does **not** prove
+entropy, cryptographic privacy of predictable values, or cumulative disclosure
+safety. No ordinary participant is required to acquire the model through
+consensus. Before selecting this format, the full profile must also bind its
+masked nodes and source commitments, implement the union of each leaf's
+primitive dependency lines and terminal court, derive court/RAM/work/retention
+and aggregate budgets, connect authenticated DA/default and verifier descent,
+and pass fresh actual-node prosecution/Final trials. It cannot inherit reward
+eligibility from the existing v4/v5 plans. Existing commitments, plans, claims,
+candidate v2 statements and every §II.14 completion requirement remain in force.
+
+### 14.22 Staged flat-profile dependency-leaf terminal court
+
+`misaka-palw-kernel::flat_court4` adds a **separate, explicit profile context**
+for a terminal relation court over the §14.21 material. Its profile ID must be
+bound by a future consumer's typed statement, alongside the program, parameter
+commitments, job input, extents and segmented evidence roots. No existing
+execution descriptor, candidate-v2 statement, route discriminant, class,
+reward or shipping fence selects this context. Passing this component's tests
+cannot establish node prosecution, Final/redemption, complete-domain security
+or real-checkpoint support.
+
+Under this staged profile, a committable node value with at least 64 elements
+uses flat-v4. Other node values retain v3, including small and wide intermediate
+values; registered parameters retain their existing v3 commitments. This is an
+explicit mixed grammar, not reinterpretation of a shape in an existing claim.
+Non-committable values are not thereby legal commit points. The existing TIR
+primitive set, integer arithmetic, program validation and state wiring are
+unchanged. The profile ID and fault version are checked independently of the
+untrusted filing.
+
+A filing contains the output's authenticated node opening and **one hash-only
+flat leaf opening**, plus a sorted, duplicate-free union of operand value
+leaves. It contains no producer output values. The court authenticates the
+output coordinate against its segment, resolves each source from validated
+program wiring, and authenticates every filed operand against that exact
+source. Carry-in names the preceding occurrence's carry-out; fixed state names
+the preceding position's writer, or zeros at initialization; history names the
+preceding position's window and the current row. Crossing a 1024-position
+segment boundary does not permit a replacement state or window. A parameter
+leaf names its declared parameter and layer instance. Public tokens, positions,
+constants and encoder job inputs come from their bound job/program context.
+Borrowed coordinates, substituted weights/routing, missing dependencies and
+malformed material dismiss rather than convict the output.
+
+The court calls the frozen `element_value_v1` for every element of the declared
+64..127-element span, hashes the resulting raw-width bytes using the flat leaf
+preimage and compares that digest. A different digest, or authenticated operands
+for which the reference semantics refuse, proves this leaf relation false. A
+matching digest is `NoFault`. The model holder's dependency recorder calls the
+same evaluator over its own operand tensors and deduplicates the actual leaf
+union. The court reads sorted proof leaves through cached layouts and binary
+search; it does not build a full tensor, a per-element map or an operand tree.
+
+The staged per-leaf admission derives maximum dependency reads, leaf counts,
+full paths, raw-width carriers, reference line/sort scratch, hash/lookup work,
+and bounded program/wiring work. Identity-coordinate relations use a contiguous
+flat-span bound. Strided/Gather/MatMul/reduction bounds conservatively cap the
+union by both dependency reads and the source's leaf count, not by opening an
+entire source unconditionally. Every ragged output tail is priced at its actual
+count, up to 127. A relation exceeding one MiB, 2^30 abstract work units, 32 MiB
+scratch or 1024 operand leaves is refused before reference evaluation. These
+are component bounds, not measured peak RSS/time or network-wide admission;
+a consumer still needs worst bounds across all positions/leaves and shared
+per-block/per-bond/network accounting before accepting this profile.
+
+The strict fault decoder caps all vector counts before allocation: rank four,
+64 node/hash siblings, ten position/prompt siblings, nine operands, 1024 total
+operand leaves, 4096 values per legacy row leaf and 4096 prompt IDs. It checks
+exact value spans, known dtype/version/option tags and end of input. The
+in-memory verifier enforces the same carrier/shape/count ceilings and each
+relation's derived opening limit. Legacy row leaves are filer-owned proof
+material; no public DA service of them is introduced. Root-only hashing of an
+already resident tensor uses fixed scratch and avoids retaining another tree.
+
+Still required: typed node admission/statement binding, public hash-unit
+DA/default/session accounting and deadlines, complete-profile malformed/decode
+and small/wide-node courts, acquisition/localization from actual chain carriers,
+fresh model-holder prosecution with independent node replay and Final/redemption,
+measured verifier resources and honest liveness under aggregate invalid filings.
+Real checkpoint/task/context/fidelity, arithmetic/backend conformance, whole
+statement security and all other §II.14 requirements also remain open. This
+stage implements the dependency-leaf relation component; it does not activate
+or declare completion of the large-model path.
+
+### 14.23 Staged all-dtype internal flat-v5 material and fault kinds
+
+`misaka-palw-kernel::merkle5` and `flat_court5` add a separate, explicitly
+selected internal evidence profile. Every node value with at least 64 elements,
+including I64/I128 intermediates, uses the new flat-v5 hash namespace with
+64..127-element leaves. Smaller node values and registered parameters retain
+v3. This closes the component gap where a first wrong wide intermediate could
+not use the flat leaf relation court. It does not make wide values legal TIR
+commit points: the existing program validation and all 25 integer primitive
+semantics remain unchanged. Flat-v4 domains, bytes and public APIs retain their
+previous meaning through version-specific aliases of shared implementation.
+
+The explicit v5 fault envelope dispatches four terminal court kinds:
+
+- **Leaf:** recompute a hash-only output leaf from authenticated operand leaves,
+  including wide internal operands, using the frozen reference evaluator.
+- **Whole:** recompute every element of a sub-64 node and compare its typed v3
+  commitment. Producer output values are not required.
+- **Malformed:** authenticate the typed header preimage and convict a mismatch
+  in dtype, shape or profile grammar. Rank/count caps apply before allocation;
+  overflow and zero-dimension metadata can be authenticated without constructing
+  the claimed tensor. Unbound headers dismiss.
+- **Decode:** authenticate logits at the position selecting the delivered token,
+  then compare a rival with at most two filer-owned leaves. Equal logits select
+  the lower index. An out-of-range delivered index is convicted from the bound
+  node coordinate and declared length, with no value leaves required.
+
+The profile identifier binds this grammar; the envelope has version 5 and a
+strict fault-kind discriminant. Unknown versions/tags, truncation, surplus
+bytes and oversized nested counts are refused. Source authentication,
+validated state/history wiring and bounded dependency recording are shared
+with §14.22. The per-filing limits remain one MiB, 2^30 abstract work units,
+32 MiB scratch and 1024 operand leaves. Derived limits are checked before
+reference evaluation. These are component bounds, not measured network or
+worst-job resource guarantees.
+
+Synthetic kernel tests cover all 25 primitive samples and merged tail leaves,
+first wrong wide intermediates, small values of all six dtypes and scalar rank,
+header type/shape/overflow/grammar mismatches, decode position and tie rules,
+and bounded codecs. Independent material oracles cover all six dtypes,
+extreme I64/I128 values, root-only hashing and logarithmic divergent-leaf
+localization. No descriptor, candidate, class or shipping node route selects
+this profile. These tests do not establish real checkpoint support, privacy
+entropy, actual-node prosecution, Final/redemption or full RFC02 completion.
+
+Still required: worst-position/leaf admission for the entire profile, typed
+node statement binding, public hash-unit DA/default/session budgets and
+deadlines, shared aggregate resource accounting, public-chain acquisition,
+fresh model-holder prosecution and independent Final/redemption. The original
+§II.14 checkpoint/task/context/fidelity, conformance, economic and honest
+liveness requirements remain open. Shipping fences stay dormant.
+
+### 14.24 Staged flat-v5 all-position terminal-court resource admission
+
+`misaka-palw-kernel::flat_scope5::flat_resource_scope_v5` derives a canonical
+resource declaration from the validated program, maximum position count and
+optional exact encoder binding. `check_flat_resource_scope_v5` independently
+re-derives it and rejects any difference, including omitted relations, smaller
+costs, altered occurrence counts, profile/program/extent substitution or a
+changed job mode. The declaration has its own v5 root domain. There is no model
+name, frontend identity or operator allowlist input.
+
+The derivation validates wiring once, prices one representative per reachable
+block node and counts every layer occurrence. The same shared price function
+prices individual §14.23 filings and the registration envelope. No position
+array, parameter tensor, output tensor or Merkle tree is constructed; program
+serialization size is measured once and reused across relations. v1 permits
+at most one H per tensor, and H is `min(position + 1, window)`. The maximum
+resolved shape bounds every contraction/reduction/sort line, tree depth and
+source size, but is **not sufficient alone** for the commitment grammar:
+
+- Every large output span is conservatively priced at 127 elements, including
+  an earlier merged tail when the final shape has only 64-element leaves.
+- A source node that can cross 64 elements is priced for both flat-v5 and its
+  largest sub-64 v3 shape. The envelope retains the larger leaf count, carrier
+  and scratch bound; flat contiguous-span optimizations cannot discard the
+  earlier v3 row openings.
+- Initialization requires fewer sources than later positions. The maximum
+  position includes the previous fixed-state writer and HistAppend window
+  whenever either can occur in the admitted extent. The same symbolic block
+  types and fixed proof depths apply to every layer instance.
+- Constants and public inputs need no Merkle leaves, but still pay reference
+  contraction/reduction/sort work and scratch. The previous staged flat price
+  omitted those costs when skipping leaf authentication; both filing and scope
+  prices now include them. This correction activates no shipping profile.
+
+Every reachable relation must fit the existing one-MiB, 2^30 abstract-work,
+32-MiB scratch and 1024-operand-leaf caps, including the v5 envelope bytes.
+Malformed-header and decode costs join the maximum court vector. Logits have
+no H under v1, so decode pricing is invariant across positions. The declaration
+also records relation instances, maximum raw trace bytes, node commitment
+bytes, flat-tree bytes per position and flat hashing input bytes per claim.
+These are conservative independent maxima. They are neither a promise to
+serve clear model values nor a requirement to retain every position's full
+tree simultaneously. They are not yet the complete execution/checker/DA/network
+resource vector.
+
+An exhaustive small-program price oracle enumerates every position and leaf
+for all 25 primitive samples and growing/sliding histories with differing row
+sizes; every individual price fits the derived scope. Tests include earlier
+63-row v3 paths and 127-element tails, wide intermediate histories, exact
+encoder binding, 1,024 per-layer state instances, changed declarations and a
+2^21-position extent with a 2^24-entry external parameter table, without passing
+parameter images or position arrays to admission. Constant TopK beyond the
+court work cap is refused by both admission and the exact filing guard before
+reference sorting. Actual synthetic courts also cross 63→64→65 elements and
+a sliding window, convict false relations and dismiss missing/borrowed sources.
+
+This closes the staged **terminal-court resource preflight component**. A
+shipping consumer still must bind and check this exact scope in typed class/job
+statements, combine it with execution/checker/DA and aggregate budgets, and
+implement bounded public material/default/session acquisition. Actual-node
+fresh prosecution and independent Final/redemption, measured costs, real
+checkpoint/task/context/fidelity, privacy, economic and liveness requirements
+remain open. No shipping descriptor/class/route or fence selects flat-v5, and
+this declaration does not confer reward eligibility or full RFC02 completion.
+
+### 14.25 Dormant actual-node flat-v5 candidate statements and courts
+
+The consumer now has explicit `PostFlatModelVectorV3` and
+`RefuteFlatModelVectorV3` route kinds, inner 31/32, owned by the existing
+`palw_panel_free_v1` fence beneath the kernel-route fence. Shipping activation
+parameters remain unchanged. These are non-reward candidate trace statements,
+not execution claims or full conformance certificates.
+
+The outer v3 statement binds the flat-v5 profile and the independently derived
+§14.24 scope root to the descriptor-scoped class, model binding, program, PC,
+job inputs, generation and segmented commitments. Its nested typed job/evidence
+carrier retains the frozen v2 grammar; the new wrapper, trace/statement domains
+and route kinds select the new interpretation explicitly. Existing v2 vector
+commitments and wire encodings keep their meaning. Aux tables 57/58 store the
+new statements and bounded bond catalog separately from v2 tables.
+
+Admission derives the scope over the candidate's full admitted maximum extent,
+not merely the shorter posted trace, and persists exact filing/work/scratch
+ceilings. Every court rebuilds the typed context and scope and requires equality
+with the stored ceilings. Cached fixed-size program/PC/body lengths price and
+reserve the shared block budget before variable stored program, PC, post or
+fault decoding. The PC-map tariff includes every admitted parameter instance.
+Worst-case court admission must fit the existing guaranteed court budget and
+one-MiB proof carrier. Invalid declarations, duplicate admissible posts and
+invalid filings pay the actor's fee; exhausted block budgets stop further work.
+
+The v2 and v3 catalogs share the same eight-statement limit per bond. Both
+reserve the same original collateral through the existing global commitment
+and exit-duty accounting. Adding a profile does not add capital or court
+capacity. A successful bounded court slashes the statement poster once and
+pays the existing challenger share through ordinary payout/redemption; the
+poster's operator cannot collect that bounty. Invalid filings cannot refute
+an honest statement or slash its model binder.
+
+Actual-node synthetic trials cover the typed decoder and encoder routes,
+large leaf and small whole relation convictions, borrowed proofs, forged
+profile/scope/program/PC/role bindings, duplicate accounting, invalid-proof
+block budgets, mixed v2/v3 catalogs and independent replay/redemption. The
+filer reconstructs operands from its own model copy and authenticated public
+job input and receives only commitment/hash openings for the producer output.
+In these trials a test helper supplies those public hash openings; it is not a
+node public-acquisition protocol. No execution Final is claimed by these tests.
+
+Public flat hash-unit acquisition, localization, retention, default/session
+rules and proof pre-emption seals remain open. Candidate admission still uses
+the existing candidate plan, so this does not admit every large shape allowed
+by the staged terminal-scope component. Full execution/checker/DA/network
+resource accounting, fresh outsider acquisition through actual node APIs,
+execution Final/redemption, real checkpoint/task/context/fidelity, privacy,
+economics and honest liveness requirements remain open. The full RFC02 goal
+remains active, and no shipping fence is armed by this increment.
+
+### 14.26 Dormant flat-v5 public hash-unit demand, service and default
+
+Inner kinds 33/34/35 add `DemandFlatModelVectorV3`,
+`AnswerFlatModelVectorV3` and `SettleFlatModelVectorDemandV3`, under the existing
+route/PanelFree fences. Aux tables 59–63 store fixed requests, requester slots,
+public responses, open-request counts and unavailability. Shipping presets and
+the existing v2/v3 statement encodings are unchanged.
+
+A request identifies a committed position/occurrence/node and optionally a
+flat leaf index. Its grammar has no model-file, parameter, row/column or clear
+value request. Admission reserves structural work before reconstructing the
+stored statement, independently checks its scope and binds the fixed request
+to the exact node index/count, segment root, extent, declared dtype and resolved
+shape. Small nodes allow only node commitments; large nodes additionally allow
+hash leaves of 64–127 elements. A response binds the two node/position paths
+and, where requested, the flat-v5 hash path. The explicit answer version and
+strict ten-KiB carrier reject old answer grammars, unbounded nested counts,
+wrong units/shapes, copied roots, surplus bytes and truncation.
+
+Each requester owns four slots **shared with v2**, and each flat vector permits
+at most 32 simultaneously open requests. Open requests reserve the requester's
+own collateral. Their service deposit covers the maximum bounded-answer fee
+floor and is paid to the statement poster on authenticated service. Published
+answer bytes and their digest can be read through the node's native route read
+API even after the requester recycles its slot; a fresh verifier independently
+authenticates them and uses its own model copy for values and operands. The
+response fold reads only fixed request metadata and bounded hash paths; it
+decodes no stored program, parameters, trace or clear values. As in v2, these
+bounded responses use payload carriage rather than public adjudication slots,
+so spending the court count does not prevent service.
+
+A request must leave the existing response deadline and proof grace inside the
+statement's liability horizon. An unresolved request keeps the poster's
+reservation committed after that horizon. An explicit bounded close accepts
+timely public service, or marks the statement **unavailable**, slashes its
+remaining reservation once and pays the authenticated requester. A copying
+closer cannot take that bounty. Later service cannot erase an earlier request's
+missed deadline. Availability default is separate from integer conviction.
+The original statement row remains immutable on default; the auxiliary status
+is authoritative for refutation, demand and reservation accounting.
+
+The actual-node synthetic trial reads hash openings from persisted public node
+state, localizes a late false leaf through bounded adaptive probes, reconstructs
+its operands from an independent model copy and files a successful court. An
+independent replay node reproduces public replies and ordinary challenger payout
+redemption. Additional trials exercise shared v2/v3 slots, invalid replies,
+responses after a full court count, slot recycling, held liability and default.
+These are native read-API trials, not a deployed RPC/transport drill or real
+checkpoint/fidelity acceptance. General first-fault verification and streamed
+localization across all relations, proof pre-emption seals, public retention/
+pruning, the complete shared resource vector and aggregate DA/network load,
+execution Final, privacy/economics and honest liveness remain open. No shipping
+fence is activated; full RFC02 completion is still unproven.
+
+
+### §14.27 — Generic streamed flat-v5 detection (dormant component, 2026-10-11)
+
+`flat_detect5::check_flat_claim_v5` consumes the authenticated public job, an
+independently acquired model checked against registered v3 parameter commitments,
+and a public provider exposing only node commitments and flat hash paths. It
+uses the frozen streaming integer evaluator, visits positions/occurrences/nodes
+in order and authenticates each node path against the statement's segment roots.
+`Clean` requires exact agreement at every node and every delivered greedy id; it
+is not a sampled security receipt or an execution Final.
+
+The first divergent large value is localized with at most the layout's derived
+`localization_replies` hash probes. A small value uses the existing sub-64 whole
+relation. The verifier records the dependency union, opens only its own values,
+authenticates earlier-node sources and registered weights, and constructs the
+existing bounded flat-v5 filing. This covers common primitive wiring, carry,
+initial zero states, previous state writes, previous history windows, constants,
+public position/token ids, and encoder job ids/padding/count. Decode uses its own
+logits and at most two value leaves, including the lowest-index tie rule and
+out-of-logits ids. Every emitted filing survives the strict wire roundtrip and
+the same terminal court the node uses. No new primitive or statement grammar is
+introduced.
+
+Missing or borrowed paths and invalid hash metadata yield an exact point DA
+request, never a clean verdict. A malformed committed tensor for which the
+producer cannot serve the expected typed hash path still needs the existing
+DA service/default process; this detector does not invent a malformed-header
+conviction. Wrong/missing acquired weights, an inconsistent job or failed
+reference evaluation are reported as inconsistent, not as producer guilt.
+
+The detector retains current/previous position values, with an extra previous
+position copy alongside the existing replay engine, and the replay engine's
+bounded history rows. It does not retain all positions. It still hashes all
+reference values, reads all node paths in a clean scan and builds full own
+Merkle trees for filing operands. A retry after a DA request replays the prefix;
+caching public responses does not remove that execution cost. Consequently this
+component does **not** prove real-size practicality, bounded whole-job delivery,
+shared verifier/resource accounting, or completion before the liability horizon.
+Those requirements remain mandatory before practical or reward acceptance.
+
+Synthetic tests cover all 25 primitives, state/history across positions and
+generated-token feedback, small and I128 intermediate values, encoder inputs,
+decode ties/out-of-logits ids, bad acquisition and public-path withholding or
+substitution. The actual-node late-leaf trial now drives this generic detector
+from persisted public answer bytes through point requests, a court, challenger
+payout redemption and independent replay. Native evidence remains a synthetic
+Gather case; it is not all-feature real-node or real-checkpoint acceptance. RPC
+transport/retention, proof pre-emption seals, aggregate load/honest liveness,
+execution Final, checkpoint fidelity/complete tasks, A6/A8 and economics remain
+open. The shipping fences stay dormant; RFC02 completion is not established.
+
+
+### §14.28 — Versioned local replay budgets over the frozen flat scope (2026-10-11)
+
+`flat_replay6::FlatReplayEnvelopeV6` is a new, read-only resource projection over
+the independently checked flat-v5 scope. Its new v6 domain binds the unchanged
+v5 scope root. No existing v3 statement, v5 resource serialization/root, court
+profile, route discriminant or shipping fence is reinterpreted. The native
+`flat_model_vector_replay_envelope_v6` read API derives it from the authenticated
+stored candidate view; the local verifier independently rederives all fields.
+
+The registered-model replay adapter checks acquired dtype, shape and element
+count against the program declaration before canonical-value scanning or full
+commitment hashing, even if a substituted tensor has the supplied parameter
+root. The acquisition provider must separately cap its own allocation/transport
+before constructing and returning a Tensor.
+
+The projection reports reference tensor **payload**, separately from artifact
+storage: every `Tensor.data` value is an i128 even for i8 storage. It derives
+maximum position payload, largest operand payload and retained history-row
+payload from bounded shapes and actual layer occurrences, without allocating
+weights, tensors, trees or position arrays. It prices full v3 acquired-parameter
+commitment hashing, both v3/flat node hashing (including earlier sub-64 H and
+filing trees), node reads and bounded hash localization replies. Each public
+provider call reserves a full ten-KiB native response allowance, including
+missing or cached responses; this is a reservation, not measured wire bytes.
+Other transports must enforce that carrier bound before parsing.
+
+`FlatReplaySessionV6` carries chosen local ceilings across DA responses. Before
+model acquisition or replay it verifies the entire derived envelope and the
+class extent, checks tensor payload ceilings and reserves one whole worst-case
+replay's parameter/trace hash allowance. A withheld or inconsistent attempt
+still spends that allowance. Provider calls spend session-wide node/hash/read
+byte quotas before delegation. Attempt/hash/read exhaustion returns an explicit
+limit result, never a clean verdict or a producer conviction. Cached reads and
+repeated requests cannot reset the same session's counters. The native late-leaf
+trial uses this path from independently derived node resources to a successful
+court and payout replay.
+
+These are **local verifier limits**, not a new source of economic rights or
+network admission. A caller starting a new local session must pay/account for
+that work separately. The existing unbounded v5 checker remains available as
+a lower-level API. The payload quantities are not peak allocator memory: model
+residency, position copies, transient evaluator/sort buffers and allocator
+capacity still require complete accounting. They also do not prove wall-clock
+or CPU maxima, metadata/prompt/path-verification hash costs, RPC/retention costs,
+whole-job deadline feasibility or aggregate per-block/per-bond/network load.
+These remaining quantities must join the shared complete resource vector and
+its consensus admission before practical or reward acceptance. Proof pre-emption
+(including equivalent proof encodings), real checkpoint/task/fidelity acceptance,
+execution Final, A6/A8 and the other full RFC02 conditions stay open.
+
+
+### §14.29 — Actor-bound sealed evidence and equivalent-carrier counterexamples (2026-10-11)
+
+A proof-byte digest and earliest matching beneficiary lookup alone do not protect
+against another valid encoding of the same fault. Two different authentic greedy
+rivals can convict the same delivered id. An out-of-range delivery ignores the
+rival. An already inline-bound prompt permits a redundant authentic prompt tile
+in a relation filing. These carriers have different exact digests while producing
+the same conviction. The unchanged flat-v3 native route remains unsealed: a
+copyist submitting the alternate carrier first receives its bounty. That is a
+security counterexample, not a protected-route acceptance result.
+
+`flat_seal6` adds a separate staged v6 contract. Its salt-bearing commitment binds
+vector, authenticated actor and exact bounded proof bytes under new domains.
+Every reveal requires the **filer's own mature seal**. It has no unsealed-filer
+fallback and does not search other actors' opaque seals for a beneficiary.
+Copying a finder's seal fails actor binding; changing its proof fails exact-byte
+binding. A new correctly rebound seal posted after observing a reveal cannot
+enter a court before its own maturity, including for an equivalent carrier.
+An independently prepared mature proof is still admissible; the contract does
+not claim protection against censorship until a later copy matures.
+
+The local book has fixed-size metadata rows keyed by `(vector, actor)`, a maximum
+of 1,024 rows with a caller-selected smaller total and per-actor bound, and no
+stored proofs or historical seal list. An occupied row cannot be overwritten.
+A successful court consumes its row once; a failed court leaves it unspent.
+Both states retain their bounded slot until explicit, constant-key expiry.
+Maturity must precede expiry, which is clipped to the vector's immutable horizon;
+all DAA additions are checked. Fixed slot/time checks and bounded raw-carrier
+hashing run before a deferred court callback, so an absent, immature, expired or
+mismatched seal cannot force a variable stored-program/court decode. Rejected
+filings still need consumer fee accounting.
+
+This is **not yet a consensus seal route or protected payout implementation**.
+The consumer must authenticate actors and vector/context identity, persist rows
+and shared quotas, reserve the same original capital, charge proof/admission work,
+and atomically apply one conviction and one payout per vector. A future explicit
+versioned protected statement must refuse the old unsealed refutation route;
+merely adding a seal object beside that bypass does not close the gap. Economic
+fees, aggregate capacity and honest inclusion/deadline feasibility must be
+verified before this path is accepted for rewards. Frozen candidate/route grammar,
+resource roots and dormant shipping fences remain unchanged. Full RFC02, real
+checkpoint/task/fidelity, execution Final and A6/A8 acceptance remain open.

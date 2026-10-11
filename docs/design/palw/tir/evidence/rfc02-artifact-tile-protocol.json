@@ -1,0 +1,80 @@
+{
+  "schema": "misaka.rfc02.artifact-tile.protocol.v1",
+  "base_commit": "b7de3aca3f5b85d435cf53cfc9c9f4d570722d91",
+  "outer_tag": 105,
+  "proof_variant": 2,
+  "legacy_variants_unchanged": [
+    0,
+    1
+  ],
+  "tile_bounds": {
+    "rank": 4,
+    "elements": 4096,
+    "siblings": 64,
+    "inventory_piece_bytes": 32768,
+    "inventory_path": 32
+  },
+  "axes": [
+    "row",
+    "column with exact strided row-major element coordinates"
+  ],
+  "tariff": "serialized proof bytes + canonical stored program bytes + 16 * opened element count",
+  "shared_block_budget": true,
+  "may_use_prosecution_reserve": true,
+  "dismissal_fee": "LedgerPolicyV1.dismissal_fee_v1(tariff), paid from challenger free collateral only after a charged no-fault judgement",
+  "over_budget": "no court or fee; no binder default",
+  "required_tests": [
+    "legacy wire and old row node regression",
+    "all six dtype widths and rank 1..4, row and strided column tiles",
+    "forged column tree with true row tree",
+    "hostile lengths refused before allocation",
+    "copied roots/coordinates and authenticated disjoint pieces",
+    "signed invalid flood: four shared runs, proportional fees, honest binder intact, fresh block and replay",
+    "signed false binding: one reservation slash and bounty, duplicate refusal, replay",
+    "actual 1636-instance V2 registration and v3 binding, bounded signed 105 court, matured true root, conformance-only candidate and KernelBound without attestation/eligibility hooks"
+  ],
+  "actual_case": {
+    "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+    "mutated_param": 3,
+    "mutated_layer": 0,
+    "mutation": "first element changed to 0 (or 1 if originally zero); all other instance commitments unchanged",
+    "lowered_artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+    "lowered_program_sha256": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1",
+    "declared_artifact_sha256": "ff19dd4e4e5a1f18199c4ee5fde8015a5d7883b46080f2530bf02d51ee6db288",
+    "declared_program_sha256": "a4de8e80ecd4c8dfcbf6ad2faac54779609c373afb40602f1372d2bd63c2d516",
+    "declared_layout": {
+      "context": 32,
+      "checkpoint_interval": 65536,
+      "h_tile": 2,
+      "commit_tile": 128,
+      "logits_tile": 128
+    }
+  },
+  "test_armed_activation": true,
+  "shipping_activation_changed": false,
+  "sampled_release_reward_gate_changed": false,
+  "not_established": [
+    "large/stateful release conformance",
+    "v5 model-weight versus job-input role binding at V2 inventory bridge",
+    "full computation G14 from actual weights",
+    "original-model full-task/context fidelity",
+    "all network-wide resource and honest-liveness guarantees",
+    "shipping activation",
+    "full RFC02 completion",
+    "refutation of an arbitrary opaque false parameter commitment when no authenticated opening of that bound tensor is public"
+  ],
+  "declaration": "Existing SDK declare-layout, explicit tiled logits scheme; no parameter declarations or weights changed",
+  "source_sha256": {
+    "consensus/core/src/lib.rs": "db151d4a7cca9d9edffcd1c1c833ab7c7499646d5e0ccf60c0f35c0348a36b0f",
+    "consensus/core/src/palw_onboarding_v1.rs": "2f57bf08db64454700bcbdec4dbb92e93d8bbb1d4390d8ff6a08c5d60ced4a38",
+    "consensus/core/src/palw_onboarding_tile_v3.rs": "cb0156675d91dd9396c86d70a506965c60e268fff78f86b450a44aada5c9af6e",
+    "consensus/core/src/palw_onboarding_fold_v1.rs": "bccf3a2c0173468577bd0841941e0feff474aff717d49d9f16fb54b7f636a544",
+    "consensus/core/src/palw_public_material_v1.rs": "e2dffb33e3db87d1d724e5f3a04743f5fecc2fc3fa7105d784d42954e98366d2",
+    "consensus/core/src/palw_court_scope_v1.rs": "998233936dc1c15d1fe47f698216a549a218ba6a5762a19d0ed7f599da4f6896",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs": "027063ab91a661033ee7bcdb96ebc19e9366bf111ca2dd76481b66521a59c7f2",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/artifact_tile.rs": "fcff8b9b6d8e1d6e590d10805a7bef857a8f19a6828757ce27b7500caad13e7e",
+    "misaka-palw-sdk/src/tir_stream.rs": "332851fabd1d44662b0f30c0301274e170e83529396c658b879ef6bef636c3ed",
+    "misaka-palw-sdk/examples/prepare-artifact-tile-court.rs": "36a35a06ec6a3530abbd6ee03775f2efe7271b51f451d47886dfd65b8fea60eb"
+  },
+  "bound_opening_assumption": "The verifier has the true model inventory and an authenticated public tile opening of the bound tensor. True model bytes alone do not reveal a false opaque root's opening; this court adds no model-weight availability default."
+}

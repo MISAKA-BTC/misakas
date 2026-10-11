@@ -142,6 +142,9 @@ pub struct PalwGenEmbeddingBodyV1 {
 pub enum PalwGenBodyV1 {
     Image(PalwGenImageBodyV1),
     Embedding(PalwGenEmbeddingBodyV1),
+    /// **A task head's job** (`crate::palw_task_heads_v1`, Borsh variant 2, appended): bytes the int-12 build cannot decode, read as
+    /// undecodable below `palw_task_heads_v1`.
+    Head(crate::palw_task_heads_v1::PalwGenHeadBodyV1),
 }
 
 impl PalwGenBodyV1 {
@@ -150,6 +153,7 @@ impl PalwGenBodyV1 {
         match self {
             Self::Image(_) => PalwGenProfileV1::Image,
             Self::Embedding(_) => PalwGenProfileV1::Embedding,
+            Self::Head(_) => PalwGenProfileV1::Head,
         }
     }
 }
@@ -192,6 +196,10 @@ impl PalwGenJobV1 {
         match &self.body {
             PalwGenBodyV1::Image(b) => (b.prompt_token_ids_hash, b.prompt_tokens, b.negative_token_ids_hash, b.negative_tokens),
             PalwGenBodyV1::Embedding(b) => match &b.input {
+                PalwGenEmbeddingInputV1::Text { token_ids_hash, tokens } => (*token_ids_hash, *tokens, Hash64::default(), 0),
+                PalwGenEmbeddingInputV1::Image(_) => (Hash64::default(), 0, Hash64::default(), 0),
+            },
+            PalwGenBodyV1::Head(b) => match &b.input {
                 PalwGenEmbeddingInputV1::Text { token_ids_hash, tokens } => (*token_ids_hash, *tokens, Hash64::default(), 0),
                 PalwGenEmbeddingInputV1::Image(_) => (Hash64::default(), 0, Hash64::default(), 0),
             },
@@ -321,8 +329,9 @@ pub fn palw_gen_job_resolve_class_v1(
     if job.envelope.class_id != row.class_id {
         return Err(E::ClassMismatch);
     }
-    let class_profile = PalwGenProfileV1::from_tag(row.profile).ok_or(E::ProfileNotAJobProfile(row.profile))?;
-    if !matches!(class_profile, PalwGenProfileV1::Image | PalwGenProfileV1::Embedding) {
+    // A registered row is a `Head` row only if its class was admitted past `palw_task_heads_v1`.
+    let class_profile = PalwGenProfileV1::from_tag_with_heads(row.profile).ok_or(E::ProfileNotAJobProfile(row.profile))?;
+    if !matches!(class_profile, PalwGenProfileV1::Image | PalwGenProfileV1::Embedding | PalwGenProfileV1::Head) {
         return Err(E::ProfileNotAJobProfile(row.profile));
     }
     let body_profile = job.body.profile();
@@ -445,10 +454,95 @@ pub fn palw_gen_job_resolve_class_v1(
                 public_da,
             })
         }
+        // **A task head's job** (`crate::palw_task_heads_v1`): the class's task, its one input (text ids or one image), a masked-LM
+        // job's position inside its ids (the masked row's index is the template's prefix plus it: the class's one job scalar).
+        (PalwGenBodyV1::Head(b), PalwGenProfileOffersV1::Head(h)) => {
+            if b.output != OutputKindV1::EmbeddingI32.tag() {
+                return Err(E::OutputSpecNotOffered { got: b.output, want: OutputKindV1::EmbeddingI32.tag() });
+            }
+            if b.task != h.task {
+                return Err(E::InputNotOffered("the job's head task is not the class's"));
+            }
+            let (prompt_tokens, prompt_hash, images) = match &b.input {
+                PalwGenEmbeddingInputV1::Text { token_ids_hash, tokens } => {
+                    if offers.max_prompt_tokens == 0 || !offers.images.is_empty() {
+                        return Err(E::InputNotOffered("the class does not read text"));
+                    }
+                    if *tokens == 0 {
+                        return Err(E::InputNotOffered("an empty text is no input"));
+                    }
+                    ids_encoding("text", *tokens, token_ids_hash)?;
+                    if *tokens > offers.max_prompt_tokens {
+                        return Err(E::PromptTooLong { what: "text", tokens: *tokens, max: offers.max_prompt_tokens });
+                    }
+                    (*tokens, *token_ids_hash, Vec::new())
+                }
+                PalwGenEmbeddingInputV1::Image(reference) => {
+                    if offers.max_prompt_tokens != 0 || offers.images.len() != 1 {
+                        return Err(E::InputNotOffered("the class does not read one image"));
+                    }
+                    palw_gen_job_images_admitted_v1(offers, std::slice::from_ref(reference)).map_err(E::Image)?;
+                    (0, Hash64::default(), vec![*reference])
+                }
+            };
+            let scalars = match h.position_scalar {
+                Some(_) => {
+                    if b.position >= prompt_tokens {
+                        return Err(E::InputNotOffered("the masked position is not inside the job's ids"));
+                    }
+                    // The row the program gathers: the template's prefix, then the user's position. The class's offered
+                    // interval bounds it (the scalar's input is proven inside it at registration).
+                    let prefix = palw_gen_head_prompt_prefix_v1(class).map_err(|e| E::ClassUndecodable(e.to_string()))?;
+                    let row_index = prefix as i64 + b.position as i64;
+                    let offer = offers.scalars[0];
+                    if row_index < offer.lo || row_index > offer.hi {
+                        return Err(E::InputNotOffered("the masked row is outside the class's offered positions"));
+                    }
+                    vec![row_index]
+                }
+                None => {
+                    if b.position != 0 {
+                        return Err(E::InputNotOffered("a position on a head that reads none"));
+                    }
+                    Vec::new()
+                }
+            };
+            Ok(PalwGenAcceptedJobV1 {
+                profile: PalwGenProfileV1::Head,
+                item_index: 0,
+                steps: 0,
+                scalars,
+                prompt_tokens,
+                prompt_hash,
+                negative_tokens: 0,
+                negative_hash: Hash64::default(),
+                images,
+                public_da,
+            })
+        }
         // A class whose profile offers do not match its profile is refused at registration; a row that
         // got here with one is not a class this job can be accepted against.
         _ => Err(E::InputNotOffered("the class's profile offers are not its profile's")),
     }
+}
+
+/// **The ids a head class's template puts before the user's** — the prefix of the first `JobTokens` rule that reads the prompt (a
+/// bidirectional encoder's `[CLS]`), 0 when no rule has one.
+pub fn palw_gen_head_prompt_prefix_v1(class: &crate::palw_gen_class_v1::PalwGenClassV1) -> misaka_palw_tir::TirResult<u32> {
+    let (_, pipeline) = class.decode()?;
+    for st in &pipeline.stages {
+        if let Some(r) = st.tokens.as_ref().filter(|r| r.source == TokenSource::Prompt) {
+            return Ok(r.prefix.len() as u32);
+        }
+        for b in &st.bind {
+            if let Binding::JobTokens { rule } = b
+                && rule.source == TokenSource::Prompt
+            {
+                return Ok(rule.prefix.len() as u32);
+            }
+        }
+    }
+    Ok(0)
 }
 
 /// **A job admitted by a network**: its domain and the privacy mode's arming, then the class's

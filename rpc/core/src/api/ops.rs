@@ -279,6 +279,9 @@ pub enum RpcApiOps {
     /// RFC-0009 stage D: one PALW state collection proven against the header that commits it (a remote miner checks it against a block it
     /// pinned). Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwStateProof = 202,
+    /// RFC-0009 L2: the fork-choice openings of blocks' post-states (the comparator's inputs as an O(1) opening of the committed root),
+    /// with the node's sink and DAG tips. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwForkChoiceOpening = 203,
     /// Lane LG14-A (RFC-0014 §6.3; ops 204-206): one legacy V2 claim's dispute view — roots, retention, deadlines, reservations, open
     /// DA sessions, answered units, open courts, recorded outcomes — as one versioned JSON document. Appended at the tail: a node built
     /// before it drops the WebSocket on it.
@@ -312,6 +315,8 @@ pub enum RpcApiOps {
     /// its kernel-route verification claim, one block's refusal record, the lane's health — as one versioned JSON document. Read-only:
     /// no rule reads it. Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwExecV2Status = 240,
+    /// Complete native / slice / kernel-fee vesting observation (RFC6/8/12).
+    GetPalwRewardVesting = 241,
 }
 
 impl RpcApiOps {

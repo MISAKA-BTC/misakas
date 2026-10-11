@@ -2529,7 +2529,7 @@ function readinessWaitText(w) {
     case "finalizedConflict": return "a finalized-head conflict is recorded";
     case "frontierBehind": return `the safe frontier (blue ${n(w.frontierBlue)}) has not reached blue ${n(w.effectBlue)}${w.frontierOnBranch ? "" : " (not on this branch)"}`;
     case "openClaim": return `claim ${claim(w.claim)} is ${n(w.stage)}${w.waitDaa != null ? `; its trace retention lapses in ${n(w.waitDaa)} DAA` : ""}`;
-    case "openDaSession": return `data-availability court open on claim ${claim(w.claim)} until DAA ${n(w.deadlineDaa)} (${n(w.waitDaa)} DAA)${w.claimKnown ? "" : " (claim not in state)"}`;
+    case "openDaSession": return `dispute court open on claim ${claim(w.claim)} until DAA ${n(w.deadlineDaa)} (${n(w.waitDaa)} DAA)${w.claimKnown ? "" : " (claim not in state)"}`;
     case "waitingMaturity": return `waiting on maturity: ${n(w.facts)} fact(s), work ${n(w.work)}; the first matures in ${n(w.waitDaa)} DAA${w.readyDaa != null ? `, enough by DAA ${n(w.readyDaa)}` : ", but they would not be enough"}`;
     case "insufficientDepth": return `${n(w.have)} of ${n(w.need)} settled anchors`;
     case "insufficientWork": return `work ${n(w.have)} of ${n(w.need)}`;
@@ -2559,7 +2559,7 @@ function nativeReadinessView(r) {
   else if (fin.wait) out.push(`<div class="note">Finalized waits on the pruning point: ${esc(String(fin.wait.kind))}${fin.wait.safeBlue != null ? ` (safe is at blue ${esc(String(fin.wait.safeBlue))})` : ""}.</div>`);
   const k = r.skipped || {};
   const total = ["voided", "baseClass", "openDa", "unpriced", "bondNotHeld"].reduce((a, key) => a + Number(k[key] || 0), 0);
-  if (total > 0) out.push(`<div class="note">Evidence seen and not counted: ${esc(String(k.voided))} voided, ${esc(String(k.baseClass))} floor, ${esc(String(k.openDa))} under a DA session, ${esc(String(k.unpriced))} unpriced, ${esc(String(k.bondNotHeld))} with no bond in state.</div>`);
+  if (total > 0) out.push(`<div class="note">Evidence seen and not counted: ${esc(String(k.voided))} voided, ${esc(String(k.baseClass))} floor, ${esc(String(k.openDa))} under a dispute session, ${esc(String(k.unpriced))} unpriced, ${esc(String(k.bondNotHeld))} with no bond in state.</div>`);
   const m = r.maturity || {};
   out.push(`<div class="note">Maturity rule ${esc(String(m.rule))}: work counts once it can no longer be reversed (claim retirement ${esc(String(m.claimRetirementDaa))} DAA).</div>`);
   return out.join("");

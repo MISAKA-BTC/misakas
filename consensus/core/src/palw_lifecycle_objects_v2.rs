@@ -443,7 +443,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // fold's past `palw_exec_payload_v2`; below it the walk drops the object by name, as the older build skips it.
         // [`validate_palw_lifecycle_tx`] holds the other half: where a ruleset does NOT tolerate undecodable payloads, tag 130 is
         // refused as undecodable, as the older build refuses it.
-        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } => Ok(()),
+        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } | PalwConsensusObjectV2::ExecOriginRecordedV1 { .. } => Ok(()),
         PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {
             crate::palw_vertex_v1::palw_vertex_shape_v1(vertex).map_err(|_| "a verification vertex is malformed (RFC-0007 Part I)")
         }
@@ -1075,6 +1075,13 @@ pub fn validate_palw_lifecycle_tx(payload: &[u8], tolerate_undecodable: bool) ->
         Err(_) if tolerate_undecodable => return Ok(()),
         Err(_) => return Err(PalwLifecycleTxError::Undecodable),
     };
+    // **A `Head` variant (`crate::palw_task_heads_v1`) is bytes the int-12 build cannot decode**: this isolation gate, which holds no
+    // height, reads it exactly as int-12 does — tolerated on an audit-armed ruleset, refused as undecodable elsewhere. (Every ruleset that
+    // will arm `palw_task_heads_v1` declares the audit: arming needs `palw_gen_v1`, which needs `palw_audit_2026_09_11`. The acceptance
+    // walk drops it below the fence's height and admits it past it.)
+    if crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(&payload.object) {
+        return if tolerate_undecodable { Ok(()) } else { Err(PalwLifecycleTxError::Undecodable) };
+    }
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
         // A wire version this build does not know: extraction skips it, so tolerate it too — on an
         // audit-armed ruleset; below that, refuse it exactly as every build in the field does.
@@ -1137,16 +1144,21 @@ pub enum PalwLifecycleKindFenceV1 {
     ModelBondAllocationV1 = 5,
     /// `Params::palw_exec_payload_v2` — RFC-0008 v2's work-root declaration (tag 130), only on a `ConsensusV2` network.
     ExecPayloadV2 = 6,
+    /// `Params::palw_task_heads_v1` — lane HFX's task-head profile: the `Head` variants appended INSIDE int-12 kinds
+    /// (`PalwGenProfileOffersV1::Head` in the class registration, tag 68; `PalwGenBodyV1::Head` in a generative job, which the
+    /// tensor commitment and the court's proofs and accusations carry). No new object tag: the guarded arm of [`palw_lifecycle_kind_owner_v1`] reads the predicate
+    /// [`crate::palw_task_heads_v1::palw_object_needs_task_heads_v1`].
+    TaskHeadsV1 = 7,
     /// `Params::palw_legacy_public_filer_v1` — lane LG14-A's dispute reservation and its release (tags 154–156).
-    LegacyPublicFilerV1 = 7,
+    LegacyPublicFilerV1 = 8,
     /// Independently versioned registered semantic metadata (tag164).
-    ClassSemanticsV1 = 8,
-    StagedPublicCourtV1 = 9,
+    ClassSemanticsV1 = 9,
+    StagedPublicCourtV1 = 10,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1154,6 +1166,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::LegacyHeldDaV2,
         Self::ModelBondAllocationV1,
         Self::ExecPayloadV2,
+        Self::TaskHeadsV1,
         Self::LegacyPublicFilerV1,
         Self::ClassSemanticsV1,
         Self::StagedPublicCourtV1,
@@ -1169,6 +1182,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::LegacyHeldDaV2 => "palw_legacy_held_da_v2",
             Self::ModelBondAllocationV1 => "palw_model_bond_allocation_v1",
             Self::ExecPayloadV2 => "palw_exec_payload_v2",
+            Self::TaskHeadsV1 => "palw_task_heads_v1",
             Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
             Self::ClassSemanticsV1 => "palw_class_semantics_v1",
             Self::StagedPublicCourtV1 => "palw_staged_public_court_v1",
@@ -1193,8 +1207,22 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
     use PalwLifecycleKindFenceV1 as F;
     match object {
         O::ObjectiveOffence { kind, evidence, .. } if crate::palw_staged_court_state_v1::palw_is_staged_evidence_v1(*kind,evidence) => PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1),
+
         // LG14-B's guarded arms: an int-12 kind carrying the appended `PalwDaUnitV1::LegacyHeldV2` (the live build cannot decode it)
         // is owned by `palw_legacy_held_da_v2` (`PALW_INT12_WIRE_CHANGES_V1`'s `CarriedAppended`).
+        // HFX: an int-12 kind carrying a `Head` variant (the live build cannot decode it) is owned by `palw_task_heads_v1`
+        // (`PALW_INT12_WIRE_CHANGES_V1`'s `CarriedAppended` rows for `PalwGenProfileOffersV1` and `PalwGenBodyV1`). The signed-expiry
+        // envelope (108) is a new kind with its own owner; the Head form it wraps is read by the fold's nested predicate.
+        O::ClassRegisteredGenV1 { .. }
+        | O::GenTensorCommitted { .. }
+        | O::CourtClosed { .. }
+        | O::CourtGenRootClaimed { .. }
+        | O::GenShardCourtAccused { .. }
+        | O::TirShardCourtAccused { .. }
+            if crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(object) =>
+        {
+            PalwLifecycleKindOwnerV1::Fence(F::TaskHeadsV1)
+        }
         O::MaterialDisclosedV2 { unit, .. } if unit.is_legacy_held_v2() => PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2),
         O::DefaultAccusedTirStep { accusation } if accusation.unit.is_legacy_held_v2() => {
             PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2)
@@ -1329,7 +1357,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
-        O::ExecWorkRootOpenedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
+        O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
         O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamLeafV1 { .. } | O::PublicCourtStreamMoveV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } | O::DisputeReacquiredV1 { .. } | O::ObjectiveEvidenceDeclaredV1 { .. } | O::ObjectiveEvidenceChunkV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
@@ -1475,6 +1503,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (165, "PublicCourtStreamOpenedV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
     (166, "PublicCourtStreamLeafV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
     (167, "PublicCourtStreamMoveV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
+    (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
 
 /// **The owning fences' activations, resolved once from `Params`** (`Params::palw_lifecycle_kind_fences_v1`) and asked by every site
@@ -1541,6 +1570,8 @@ impl crate::config::params::Params {
                         }
                     }
                     PalwLifecycleKindFenceV1::LegacyHeldDaV2 => self.palw_legacy_held_da_v2,
+                    // HFX: the task-head profile's own fence (a ConsensusV2 rule; `None` where unarmed or `never()`).
+                    PalwLifecycleKindFenceV1::TaskHeadsV1 => self.palw_task_heads_v1_fence().map(|fence| fence.activation),
                     // Lane BUDGET: in force where BOTH the allocation's and the budget's fences are (`palw_model_bond_allocation_at`).
                     PalwLifecycleKindFenceV1::ModelBondAllocationV1 => {
                         let never = crate::config::params::ForkActivation::never();
@@ -1632,17 +1663,32 @@ pub enum PalwKernelInnerFenceV1 {
     /// 19). Its row names `palw_typed_roots_v1`; in force only where `palw_panel_free_v1` is too (as `ProviderCourtV1` needs the
     /// kernel route's).
     PanelFreeAndTypedRootsV1,
+    /// BOTH `Params::palw_panel_free_v1` and `Params::palw_model_refutation_seal_v1` (RFC-0002 P0, lane RFC02-T): the protected
+    /// refutation of a candidate statement (inner 36 seal, 37 reveal). Its row names `palw_model_refutation_seal_v1`; in force only
+    /// where `palw_panel_free_v1` is too (the candidate statements it refutes exist only there).
+    ModelRefutationSealV1,
+    /// Separate source opt-in fence, inner 40 (codex used 21, RFC-02's on the integration line; renumbered at the merge); no
+    /// activated preset or approved consumer tuple.
+    BeaconSourceOptInV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 3] = [Self::PanelFreeV1, Self::TypedRootsV1, Self::PanelFreeAndTypedRootsV1];
+    pub const ALL: [Self; 5] = [
+        Self::PanelFreeV1,
+        Self::TypedRootsV1,
+        Self::PanelFreeAndTypedRootsV1,
+        Self::ModelRefutationSealV1,
+        Self::BeaconSourceOptInV1,
+    ];
 
     /// The `Params` field the fence is resolved from.
     pub const fn params_field(self) -> &'static str {
         match self {
             Self::PanelFreeV1 => "palw_panel_free_v1",
             Self::TypedRootsV1 | Self::PanelFreeAndTypedRootsV1 => "palw_typed_roots_v1",
+            Self::ModelRefutationSealV1 => "palw_model_refutation_seal_v1",
+            Self::BeaconSourceOptInV1 => "palw_beacon_source_opt_in_v1",
         }
     }
 }
@@ -1677,8 +1723,26 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         // these can act where that fence is not armed either.
         K::CommitSegmentedClaim { .. } | K::PostTiledJob { .. } | K::PostPromptTile { .. } => None,
         K::CommitClaimSalted { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
-        K::RegisterClassV2 { .. } | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
+        K::DemandFlatModelVectorV3 { .. }
+        | K::AnswerFlatModelVectorV3 { .. }
+        | K::SettleFlatModelVectorDemandV3 { .. }
+        | K::PostFlatModelVectorV3 { .. }
+        | K::RefuteFlatModelVectorV3 { .. }
+        | K::DemandModelVectorV2 { .. }
+        | K::AnswerModelVectorV2 { .. }
+        | K::SettleModelVectorDemandV2 { .. }
+        | K::PostModelVectorV2 { .. }
+        | K::RefuteModelVectorV2 { .. }
+        | K::CompleteModelConformanceV2 { .. }
+        | K::BindModelArtifactV2 { .. }
+        | K::RefuteModelArtifactV2 { .. }
+        | K::RegisterModelConformanceClassV2 { .. }
+        | K::RegisterConformanceClass { .. }
+        | K::RegisterClassV2 { .. }
+        | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
         K::Spec { .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
+        K::SealModelRefutationV4 { .. } | K::RevealModelRefutationV4 { .. } => Some(PalwKernelInnerFenceV1::ModelRefutationSealV1),
+        K::OptInBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1),
     }
 }
 
@@ -1704,6 +1768,24 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (14, "RegisterPipelineClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (19, "Spec", Some(PalwKernelInnerFenceV1::TypedRootsV1)),
     (20, "CommitClaimSalted", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (21, "RegisterConformanceClass", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (22, "BindModelArtifactV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (23, "RefuteModelArtifactV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (24, "RegisterModelConformanceClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (25, "CompleteModelConformanceV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (26, "PostModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (27, "RefuteModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (28, "DemandModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (29, "AnswerModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (30, "SettleModelVectorDemandV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (31, "PostFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (32, "RefuteFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (33, "DemandFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (34, "AnswerFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (35, "SettleFlatModelVectorDemandV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (36, "SealModelRefutationV4", Some(PalwKernelInnerFenceV1::ModelRefutationSealV1)),
+    (37, "RevealModelRefutationV4", Some(PalwKernelInnerFenceV1::ModelRefutationSealV1)),
+    (40, "OptInBeaconSource", Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -1755,6 +1837,12 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
             "the HA takeover token, removed with the retired HA-takeover path (codex/docs-retired-designs, the user, 2026-10-10); a signer message, never a lifecycle carriage",
         ),
     ),
+    (
+        "consensus/core/src/palw_vesting_v1.rs::PalwVestingNoteV1",
+        PalwInt12WireChangeV1::NotCarried(
+            "journal-only notes in stored deltas; existing tags are unchanged, appended EXEC notes require a dormant EXEC root",
+        ),
+    ),
     ("consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2", PalwInt12WireChangeV1::ObjectEnum),
     (
         "consensus/core/src/palw_state_v2.rs::PalwDeltaEntryV2",
@@ -1772,6 +1860,27 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     (
         "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
         PalwInt12WireChangeV1::CarriedAppended { fence: "palw_legacy_held_da_v2", digest: 0xcca88a4c7733b9e5 },
+    ),
+    // HFX task heads: `Head` appended to the generative class's profile offers (variant 3) and to the job body (variant 2); the profile
+    // byte `Head = 6` is a hand-read tag the live build decodes and refuses at admission (`Profile(6)`), re-read below the fence.
+    (
+        "consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1",
+        PalwInt12WireChangeV1::CarriedAppended { fence: "palw_task_heads_v1", digest: 0x234df741f2be5029 },
+    ),
+    (
+        "consensus/core/src/palw_gen_job_v1.rs::PalwGenBodyV1",
+        PalwInt12WireChangeV1::CarriedAppended { fence: "palw_task_heads_v1", digest: 0xc7a9d888da15e438 },
+    ),
+    (
+        "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1",
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_task_heads_v1", digest: 0x12222f873f5f85a5 },
+    ),
+    // codex G14 (constrained-token direct proofs, 2026-10-11): `PalwPanelContradictionV1` 14 `ConstrainedDecode` and 15
+    // `ConstrainedDecodeFlat` appended inside an ObjectiveOffence's opaque evidence bytes (tag 51), as `PalwPromptProofV1` above:
+    // isolation stays int-12; acceptance / fold refuse both below the public-filer (and constraint) fences (ContradictionNotAdmitted).
+    (
+        "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1",
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0xf6c76ea7f70d9f96 },
     ),
     (
         "consensus/core/src/palw_state_v2.rs::PalwVoidReasonV2",
@@ -1793,6 +1902,12 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         ),
     ),
     // SMALL (RFC-0009 RDA4, RFC-0001 P1): the signer protocol and the worker frame — node-local wire forms, never a block's.
+    (
+        "consensus/core/src/dns_finality.rs::TakeoverToken",
+        PalwInt12WireChangeV1::NotCarried(
+            "the removed HA takeover's node-local signer credential; no lifecycle object carries it (retired paths, 27252fa18)",
+        ),
+    ),
     (
         "consensus/core/src/dns_finality.rs::SigningPurpose",
         PalwInt12WireChangeV1::NotCarried(
@@ -1940,8 +2055,21 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     ),
     a2_row(PalwA2SlotV1::KernelInner { lo: 19, hi: 19 }, "palw_typed_roots_v1", "R4X Spec (RFC-0004 Part II)", true),
     // G14R's salted claim seal v2, beside the OPV registrations (the Lead, 2026-10-09): below `palw_panel_free_v1` the kernel refuses
-    // it and the gate drops it through this table. Inner kinds 21 and 22 are not allocated.
+    // it and the gate drops it through this table. Inner kind 21 is conformance preparation; 22–35 are descriptor-scoped model onboarding.
     a2_row(PalwA2SlotV1::KernelInner { lo: 20, hi: 20 }, "palw_panel_free_v1", "G14R CommitClaimSalted (salted claim seal v2)", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 21, hi: 21 }, "palw_panel_free_v1", "RFC-0002 conformance-only class preparation", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 22, hi: 35 }, "palw_panel_free_v1", "RFC-0002 model artifact role binding", true),
+    // RFC02-T (2026-10-11): RFC-0002 P0 — the protected candidate refutation (seal 36, reveal 37); past the same fence the frozen
+    // unsealed refutations 23 / 27 / 32 are refused by name (inner kinds of tag 110, never an int-12 kind).
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 36, hi: 37 },
+        "palw_model_refutation_seal_v1",
+        "RFC-0002 P0 protected candidate refutation (RFC02-T)",
+        true,
+    ),
+    // 38/39 are G14R's verifier pay (reserved, not yet used).
+    // codex RFC-7 (lane R6781): the per-attempt beacon source opt-in under its own dormant fence (codex used 21; renumbered).
+    a2_row(PalwA2SlotV1::KernelInner { lo: 40, hi: 40 }, "palw_beacon_source_opt_in_v1", "RFC-7 OptInBeaconSource (per-attempt source)", true),
     // K2S: a segmented fault rides a filing (inner 7) under tag 110's own fence, as the filing does, so no guarded arm is needed;
     // `ClaimBodyV1::Segmented` is the kernel ledger's state, never carried.
     a2_row(
@@ -2000,19 +2128,31 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" },
         "palw_task_heads_v1",
         "HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read)",
-        false,
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1" },
+        "palw_legacy_public_filer_v1",
+        "codex G14: PalwPanelContradictionV1 14/15 (constrained decode, flat) inside opaque tag-51 evidence; isolation remains int-12, refused below the public-filer and constraint fences at acceptance/fold (re-read)",
+        true,
     ),
     a2_row(
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1" },
         "palw_task_heads_v1",
         "HFX task heads: PalwGenProfileOffersV1::Head (3), inside tag 68 (appended)",
-        false,
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_job_v1.rs::PalwGenBodyV1" },
+        "palw_task_heads_v1",
+        "HFX task heads: PalwGenBodyV1::Head (2), inside a generative job (tag 86 and the court proofs that bind one) (appended)",
+        true,
     ),
     a2_row(
         PalwA2SlotV1::FpJobForm { what: "PalwGenBodyV1::Head (2) inside a generative job" },
         "palw_task_heads_v1",
-        "HFX task heads",
-        false,
+        "HFX task heads (the version-10 free-prompt job: `palw_fp_head_job_refusal_at_v1`, the header-context half)",
+        true,
     ),
     // ---- formulas and encodings ----
     a2_row(
@@ -2042,6 +2182,32 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         },
         "palw_verifier_pay_v1",
         "G14R M*-49 / O2 (ECON, readiness §3f)",
+        true,
+    ),
+    // G14-S (2026-10-11): ADR-0177 D2's cumulative court scope — kernel ledger table 28 (per claim: each requester's units, each
+    // accuser's dismissed filings), in the route's rows and its root extension only once non-empty. No new object kind and no wire
+    // change: below `palw_provider_court_v1` the consumer injects no scope, the ledger writes no row of it and every root is unchanged.
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel ledger table 28 court scope (per-requester units, dismissed filings)" },
+        "palw_provider_court_v1",
+        "G14-S (ADR-0177 D2, DA16b §7.3/§7.9)",
+        true,
+    ),
+    // RFC02-T (2026-10-11): RFC-0002's conformance-only candidate classes moved from codex's kernel ledger table 28 (G14-S's court
+    // scope holds it) to table 29 — in the route's rows and its root extension only once non-empty, written only by inner 21 past
+    // `palw_panel_free_v1`.
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel ledger table 29 conformance-only candidate classes (RFC-0002)" },
+        "palw_panel_free_v1",
+        "RFC-0002 conformance candidates (codex; table moved at RFC02-T)",
+        true,
+    ),
+    // RFC02-T (2026-10-11): the refutation seals — kernel route aux table 64 (`(bond, slot)` rows), and their deposits in the bond
+    // committed sum and withdrawal gate. Below the fence no row exists and every sum and root is unchanged.
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux table 64 refutation seals (and their deposits in palw_bond_committed_v1)" },
+        "palw_model_refutation_seal_v1",
+        "RFC-0002 P0 protected candidate refutation (RFC02-T)",
         true,
     ),
     a2_row(
@@ -3383,8 +3549,14 @@ pub(crate) mod tests {
                 assert_eq!(palw_lifecycle_kind_owner_v1(object), PalwLifecycleKindOwnerV1::Fence(*fence), "tag {tag}");
                 assert!(!PalwLifecycleKindFencesV1::default().kind_in_force_at(object, u64::MAX), "unarmed is never in force");
             }
+            // Every owning fence owns a kind (a new tag) or a form appended inside a live-build kind (HFX's `palw_task_heads_v1` adds no
+            // tag: its `Head` variants ride inside tags 68 and 87, classified in `PALW_INT12_WIRE_CHANGES_V1`).
             for fence in PalwLifecycleKindFenceV1::ALL {
-                assert!(PALW_LIFECYCLE_NEW_KINDS_V1.iter().any(|(_, _, f)| *f == fence), "{} owns a kind", fence.params_field());
+                let owns_a_tag = PALW_LIFECYCLE_NEW_KINDS_V1.iter().any(|(_, _, f)| *f == fence);
+                let owns_a_form = PALW_INT12_WIRE_CHANGES_V1.iter().any(|(_, c)| {
+                    matches!(c, PalwInt12WireChangeV1::CarriedAppended { fence: f, .. } if *f == fence.params_field())
+                });
+                assert!(owns_a_tag || owns_a_form, "{} owns a kind or an appended form", fence.params_field());
             }
         }
 
@@ -3582,18 +3754,44 @@ pub(crate) mod tests {
                     level: 1,
                     index: 0,
                 });
-            let samples: Vec<(&str, PalwConsensusObjectV2)> = vec![(
-                "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
-                PalwConsensusObjectV2::MaterialDisclosedV2 {
-                    claim: Hash64::from_bytes([1; 64]),
-                    unit,
-                    answer: crate::palw_da_rcore_v1::PalwDaAnswerV1::Event(
-                        crate::palw_step_refute::PalwTraceEventDisclosureV1::OutOfRange { binding: Box::new(zeros()) },
-                    ),
-                    discloser: bond(),
-                    signature: vec![1],
-                },
-            )];
+            // HFX: a tag-68 class registration whose offers are `Head` (variant 3), and a tag-87 tensor commitment whose job body is
+            // `Head` (variant 2) — int-12 cannot decode either.
+            let head_offers = crate::palw_task_heads_v1::PalwGenHeadOffersV1 {
+                task: crate::palw_task_heads_v1::PALW_HEAD_TASK_SEQUENCE_V1,
+                problem: crate::palw_task_heads_v1::PALW_HEAD_PROBLEM_SINGLE_LABEL_V1,
+                labels: 2,
+                label_map_root: crate::palw_task_heads_v1::palw_head_label_map_root_v1(&["a", "b"]),
+                pair_separator: vec![],
+                entailment_label: None,
+                position_scalar: None,
+            };
+            let mut head_class = zero_filled_kind(68);
+            let PalwConsensusObjectV2::ClassRegisteredGenV1 { admission, .. } = &mut head_class else { unreachable!("tag 68") };
+            admission.class.offers.profile = crate::palw_gen_class_v1::PalwGenProfileOffersV1::Head(head_offers);
+            let mut head_job = zero_filled_kind(87);
+            let PalwConsensusObjectV2::GenTensorCommitted { job, .. } = &mut head_job else { unreachable!("tag 87") };
+            job.body = crate::palw_gen_job_v1::PalwGenBodyV1::Head(crate::palw_task_heads_v1::PalwGenHeadBodyV1 {
+                input: crate::palw_gen_job_v1::PalwGenEmbeddingInputV1::Text { token_ids_hash: Hash64::from_bytes([1; 64]), tokens: 4 },
+                task: crate::palw_task_heads_v1::PALW_HEAD_TASK_SEQUENCE_V1,
+                position: 0,
+                output: 3,
+            });
+            let samples: Vec<(&str, PalwConsensusObjectV2)> = vec![
+                (
+                    "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
+                    PalwConsensusObjectV2::MaterialDisclosedV2 {
+                        claim: Hash64::from_bytes([1; 64]),
+                        unit,
+                        answer: crate::palw_da_rcore_v1::PalwDaAnswerV1::Event(
+                            crate::palw_step_refute::PalwTraceEventDisclosureV1::OutOfRange { binding: Box::new(zeros()) },
+                        ),
+                        discloser: bond(),
+                        signature: vec![1],
+                    },
+                ),
+                ("consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1", head_class),
+                ("consensus/core/src/palw_gen_job_v1.rs::PalwGenBodyV1", head_job),
+            ];
             for (key, change) in PALW_INT12_WIRE_CHANGES_V1 {
                 let PalwInt12WireChangeV1::CarriedAppended { fence, .. } = change else { continue };
                 let carrying: Vec<_> = samples.iter().filter(|(k, _)| k == key).collect();
@@ -4233,7 +4431,7 @@ pub(crate) mod tests {
         /// `every_landed_kind_is_pinned_to_its_wire_form` fails on a missing, stale or moved pin and prints the current values.
         const PALW_A2_NEW_KIND_WIRE_V1: &[(u8, u64)] = &[
             (104, 0x98d7608e0a24ad99),
-            (105, 0xdaed6c0cfaf81e2f),
+            (105, 0xa20547aac744e0c7), // Bounded v3 tile court: refresh the stale pre-tile pin; legacy proof declarations remain unchanged.
             (106, 0x888f101d106c24bc),
             (107, 0x0081a402000ddbf4),
             (108, 0xac8ecc3ff97ec415),
@@ -4264,6 +4462,7 @@ pub(crate) mod tests {
             (165, 0xf5a36f96be897647),
             (166, 0xe436b43fd3c3e30b),
             (167, 0xd9d2c295b0c11eb7),
+            (131, 0xab59e37a222e6f74),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline

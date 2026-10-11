@@ -985,6 +985,21 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwVestingResponse::default())
     }
 
+    /// All live native, EXEC slice and kernel fee funds in one committed snapshot (op 241).
+    /// `after` pages native rows; `exec_after` independently pages additional fund legs.
+    /// Whole-query money and holding-source totals are independent of both cursors.
+    async fn get_palw_reward_vesting(&self, request: GetPalwRewardVestingRequest) -> RpcResult<GetPalwRewardVestingResponse> {
+        self.get_palw_reward_vesting_call(None, request).await
+    }
+    async fn get_palw_reward_vesting_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwRewardVestingRequest,
+    ) -> RpcResult<GetPalwRewardVestingResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwRewardVestingResponse::default())
+    }
+
     /// **ADR-0152-adjacent: one class's Activation Pool** (op 200; testnet-12) — its budgets, its
     /// payees, the terms and the sink a top-up pays into. A node built before op 200 drops the
     /// WebSocket on it: ask it last on a connection, or reconnect.
@@ -1028,6 +1043,23 @@ pub trait RpcApi: Sync + Send + AnySync {
     ) -> RpcResult<GetPalwStateProofResponse> {
         let _ = (connection, request);
         Ok(GetPalwStateProofResponse::default())
+    }
+
+    /// RFC-0009 L2: the fork-choice openings of blocks' post-states, with the node's sink and tips (op 203). A node built before op 203
+    /// drops the WebSocket on it: ask it last on a connection, or reconnect.
+    async fn get_palw_fork_choice_opening(
+        &self,
+        request: GetPalwForkChoiceOpeningRequest,
+    ) -> RpcResult<GetPalwForkChoiceOpeningResponse> {
+        self.get_palw_fork_choice_opening_call(None, request).await
+    }
+    async fn get_palw_fork_choice_opening_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwForkChoiceOpeningRequest,
+    ) -> RpcResult<GetPalwForkChoiceOpeningResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwForkChoiceOpeningResponse::default())
     }
 
     /// **RFC-0010: the permissionless Panel's observation** (op 220; read-only) — the engine's overview and the named claims'

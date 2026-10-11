@@ -195,24 +195,33 @@ pub enum PalwTirWorkError {
 
 /// A node's value is a param seen through structural primitives only: the param, or `None`.
 fn param_view(block: &Block, r: Ref) -> Option<u16> {
-    let mut r = r;
-    loop {
+    // A shared Concat/Slice DAG can encode exponentially many paths while keeping its
+    // tensors and node count small. Visit each structural node once, in operand order.
+    let mut seen = vec![false; block.nodes.len()];
+    let mut stack = vec![r];
+    let mut first = None;
+    while let Some(r) = stack.pop() {
         match r {
-            Ref::Param(j) => return Some(j),
+            Ref::Param(j) => {
+                first.get_or_insert(j);
+            }
             Ref::Node(m) => {
+                if std::mem::replace(&mut seen[m as usize], true) {
+                    continue;
+                }
                 let n = &block.nodes[m as usize];
                 match n.prim {
-                    Prim::Reshape | Prim::Transpose { .. } | Prim::Slice { .. } | Prim::Broadcast | Prim::Cast => r = n.inputs[0],
-                    Prim::Concat { .. } => {
-                        let views: Vec<Option<u16>> = n.inputs.iter().map(|i| param_view(block, *i)).collect();
-                        return views.first().copied().flatten().filter(|_| views.iter().all(Option::is_some));
+                    Prim::Reshape | Prim::Transpose { .. } | Prim::Slice { .. } | Prim::Broadcast | Prim::Cast => {
+                        stack.push(n.inputs[0]);
                     }
+                    Prim::Concat { .. } => stack.extend(n.inputs.iter().rev().copied()),
                     _ => return None,
                 }
             }
             _ => return None,
         }
     }
+    first
 }
 
 /// Whether node `m`'s backward closure within the block holds a `TopK`.

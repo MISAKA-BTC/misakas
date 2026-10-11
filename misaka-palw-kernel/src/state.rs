@@ -220,13 +220,51 @@ impl KernelLedgerV1 {
             )
         };
         // `palw_verifier_pay_v1` (table 27): an extension only once it holds a row.
-        if self.verifier_pay.is_empty() {
-            return base;
+        let base = if self.verifier_pay.is_empty() {
+            base
+        } else {
+            crate::rows::verifier_pay_root_extension_v1(
+                &base,
+                &collection_root(&d("verifier-pay"), self.verifier_pay.len(), self.verifier_pay.iter()),
+            )
+        };
+        // The court scope (table 28, `palw_provider_court_v1`, G14-S): an extension only once it holds a row.
+        let base = if self.court_scope.is_empty() {
+            base
+        } else {
+            crate::rows::court_scope_root_extension_v1(
+                &base,
+                &collection_root(&d("court-scope"), self.court_scope.len(), self.court_scope.iter()),
+            )
+        };
+        // The same fixed order as `rows::root_of_rows`: table 29 (RFC-02 conformance candidates), 30 (beacon sources), 31 (EXEC reward
+        // holds), each only once it holds a row.
+        let base = if self.conformance_classes.is_empty() {
+            base
+        } else {
+            let records: std::collections::BTreeMap<Digest, (Digest, ClassRecordV1)> =
+                self.conformance_classes.iter().map(|(k, (owner, c))| (*k, (*owner, c.record()))).collect();
+            crate::rows::conformance_root_extension_v1(
+                &base,
+                &collection_root(&d("conformance-classes"), records.len(), records.iter()),
+            )
+        };
+        let base = if self.beacon_sources.is_empty() {
+            base
+        } else {
+            crate::rows::beacon_source_root_extension_v1(
+                &base,
+                &collection_root(&d("beacon-sources"), self.beacon_sources.len(), self.beacon_sources.iter()),
+            )
+        };
+        if self.exec_reward_holds.is_empty() {
+            base
+        } else {
+            crate::rows::exec_reward_root_extension_v1(
+                &base,
+                &collection_root(&d("exec-reward-holds"), self.exec_reward_holds.len(), self.exec_reward_holds.iter()),
+            )
         }
-        crate::rows::verifier_pay_root_extension_v1(
-            &base,
-            &collection_root(&d("verifier-pay"), self.verifier_pay.len(), self.verifier_pay.iter()),
-        )
     }
 
     /// RFC-0004 Part II: `(table, collection root)` of every NON-EMPTY typed table, in root order (empty for an untyped ledger).

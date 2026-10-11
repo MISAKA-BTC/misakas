@@ -8,7 +8,11 @@
 //!    (bitsandbytes 4-bit) is refused by name;
 //! 3. the finding FR-33: MLX's own `quantization` configuration carries no `quant_method`, so the registry cannot select the
 //!    descriptor from it and the refusal ("quant_method=unknown has no descriptor ... supply one") is misleading — supplying the
-//!    descriptor does not help.
+//!    descriptor does not help. **Closed (HFX, 2026-10-10, `MLX_QUANT_V1`)**: the reader names an MLX block `mlx`
+//!    (`prequant::quant_block`), and `MLX_AFFINE` is now a BUILT-IN descriptor made from MLX's own quantiser (a virtual format:
+//!    the codes are served as the float `.weight`, 2–8 bits including the word-straddling 3 / 5 / 6). The third-party
+//!    transcription here is no longer added beside it (it has the built-in's name); its vectors are decoded by the built-in and
+//!    must agree, bit for bit — two independent readings of MLX's layout.
 //!
 //! The vectors are a numpy transcription of each library's documented layout (the libraries are not available offline): see
 //! `gen_formats.py` for what that does and does not prove.
@@ -35,7 +39,10 @@ fn third_party() -> Vec<(String, QuantFormat)> {
 }
 
 fn registry() -> QuantRegistry {
-    QuantRegistry::builtin().with(third_party().into_iter().map(|(_, f)| f).collect()).expect("no clash with the built-in pack")
+    // A third-party descriptor the built-in pack has since promoted (MLX_AFFINE) is not added a second time under its name.
+    let builtin = QuantRegistry::builtin();
+    let extra = third_party().into_iter().map(|(_, f)| f).filter(|f| builtin.named(f.name()).is_none()).collect();
+    builtin.with(extra).expect("no clash with the built-in pack")
 }
 
 #[test]
@@ -66,11 +73,46 @@ fn the_registry_with_them_reads_their_methods_and_refuses_what_they_do_not_descr
 }
 
 #[test]
-fn fr33_mlx_announces_itself_without_a_quant_method_and_the_registry_cannot_select_it() {
+fn fr33_mlx_announces_itself_without_a_quant_method_and_the_reader_names_it() {
     let reg = registry();
     // What an mlx-community config.json carries: {"quantization": {"group_size": 64, "bits": 4}} (and the same under quantization_config).
+    // The descriptor lookup alone still cannot select it — a block with no quant_method is `unknown` there …
     let e = parse_quant_config_with(&json!({"group_size": 64, "bits": 4}), "X", "llama", &reg).expect_err("no quant_method");
     let m = e.to_string();
-    eprintln!("FR-33: {m}");
     assert!(m.contains("unknown"), "the refusal names quant_method=unknown: {m}");
+    // … and the reader names it (MLX_QUANT_V1): the configuration's block, under either key, is read as MLX's.
+    let root = json!({"quantization": {"group_size": 64, "bits": 4}});
+    let q = misaka_palw_tir_lower::prequant::quant_block(root.as_object().expect("object")).expect("reads").expect("a block");
+    let c = parse_quant_config_with(&q, "X", "llama", &reg).expect("MLX's block reads");
+    assert!(c.fmt.label().starts_with("MLX_AFFINE"), "{}", c.fmt.label());
+}
+
+/// The third-party transcription of MLX's layout (`mlx_affine.json`, numpy, from MLX's documentation as recalled) and the built-in
+/// descriptor (from MLX's own quantiser) are two independent readings of the same format: every transcribed vector decodes through
+/// the built-in to the transcription's values, bit for bit.
+#[test]
+fn the_promoted_mlx_descriptor_decodes_the_transcribed_vectors_alike() {
+    use misaka_palw_tir_lower::quantfmt::tensors::RoleTensor;
+    let unhex = |h: &str| -> Result<Vec<u8>, std::num::ParseIntError> { (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16)).collect() };
+    let (_, transcribed) = third_party().into_iter().find(|(n, _)| n == "mlx_affine").expect("the transcription");
+    let builtin = QuantRegistry::builtin().named("MLX_AFFINE").expect("built-in").clone();
+    assert_ne!(builtin.digest(), transcribed.digest(), "two descriptors, one name");
+    let v = builtin.as_virtual().expect("a virtual format");
+    for (n, t) in transcribed.desc.tests.iter().enumerate() {
+        let roles: Vec<Option<RoleTensor>> = v
+            .roles()
+            .map(|(r, _, _)| {
+                let tr = t.roles.get(r).expect("every role of the vector");
+                Some(RoleTensor { shape: tr.shape.clone(), dtype: tr.dtype.clone(), data: unhex(&tr.hex).expect("hex") })
+            })
+            .collect();
+        let params = v.read_config(t.config.as_ref().expect("a config")).expect("reads").params;
+        let shape = v.shape(&roles, &params).expect("shape");
+        let got = v.decode_range(&roles, &params, 0..shape.iter().product()).expect("decodes");
+        let want: Vec<f32> = unhex(&t.values_f32_hex).expect("hex").chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+        assert_eq!(got.len(), want.len(), "vector {n}");
+        for (k, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert!(g.to_bits() == w.to_bits() || (*g == 0.0 && *w == 0.0), "vector {n} [{k}]: built-in {g}, transcription {w}");
+        }
+    }
 }

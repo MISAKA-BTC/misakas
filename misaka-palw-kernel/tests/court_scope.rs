@@ -13,6 +13,61 @@ use common::ledger_world::{Da, OUTSIDER, PRODUCER, World, convicted, position};
 use misaka_palw_kernel::ledger::{KernelLedgerV1, LedgerEventV1, OutsiderFindingV1, OutsiderV1};
 use misaka_palw_kernel::public::{MaterialResponseV1, PositionResponseV1};
 
+#[test]
+fn combined_scope_keeps_requester_quotas_and_public_conviction_without_clear_model_values() {
+    use common::ledger_world::{SPAM1, refused};
+    use misaka_palw_kernel::court_scope::CourtScopePolicyV1;
+    let mut w = World::new_opv();
+    for ledger in [&mut w.genesis, &mut w.l] {
+        ledger.commitment_scope_from_daa = Some(0);
+        ledger.court_scope_policy = Some(CourtScopePolicyV1 { activation_daa: 0 });
+    }
+    let prompt: Vec<u32> = (0..20).map(|i| (i * 7 + 3) % 32).collect();
+    let job = w.post_job(2, &prompt, 1, 17);
+    let (_, lie) = w.lying(&job, 1);
+    let id = lie.claim.id();
+    let positions = lie.trace.values.len() as u32;
+    assert!(positions > COURT_SCOPE_MAX_UNITS_PER_REQUESTER_V1 as u32);
+    let events = w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
+    assert!(events.iter().any(|e| matches!(e, LedgerEventV1::ClaimCommitted { claim } if *claim == id)), "{events:?}");
+    let events = w.block(
+        11,
+        (0..=COURT_SCOPE_MAX_UNITS_PER_REQUESTER_V1 as u32)
+            .map(|position| T::FileDemand { demander: SPAM1, claim: id, stage: 0, position })
+            .collect(),
+    );
+    assert_eq!(
+        events.iter().filter(|e| matches!(e, LedgerEventV1::DemandOpened { .. })).count(),
+        COURT_SCOPE_MAX_UNITS_PER_REQUESTER_V1
+    );
+    assert!(refused(&events).unwrap().contains("COURT_SCOPE_UNITS"), "{events:?}");
+    let events = w.block(
+        12,
+        (COURT_SCOPE_MAX_UNITS_PER_REQUESTER_V1 as u32..positions)
+            .map(|position| T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position })
+            .collect(),
+    );
+    assert!(refused(&events).is_none(), "another requester retains its independent allowance: {events:?}");
+    let mut responses = Vec::new();
+    for position in 0..positions {
+        let bytes = scoped_response(&w, &id, &lie.trace, position);
+        assert!(w.l.classify_served_position_v1(&id, 0, position, &bytes).is_ok());
+        responses.push(T::Respond { claim: id, stage: 0, position, bytes });
+    }
+    let events = w.block(13, responses);
+    assert_eq!(events.iter().filter(|e| matches!(e, LedgerEventV1::Served { .. })).count(), positions as usize);
+    drop(lie.trace);
+    let empty = Da(Default::default());
+    let OutsiderFindingV1::Prosecute(proof) =
+        (OutsiderV1 { ledger: &w.l, claim: id, material: &empty, artifact: &w.params, salt: [0x5A; 64] }).check().unwrap()
+    else {
+        panic!("the outsider must convict from authenticated public rows")
+    };
+    let events = w.block(14, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    assert!(convicted(&events).is_some(), "{events:?}");
+    assert_eq!(KernelLedgerV1::replay(&w.genesis, &w.blocks).root(), w.l.root());
+}
+
 fn scoped_response(w: &World, claim: &[u8; 64], trace: &misaka_palw_kernel::trace::TraceV1, p: u32) -> Vec<u8> {
     let mask = w.l.derived_mask(&w.l.claims[claim], 0);
     position(trace, p, |values| {

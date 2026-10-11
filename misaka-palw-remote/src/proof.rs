@@ -103,6 +103,19 @@ pub fn bond_at_pin_v1(
     bond: &PalwBondKeyV2,
 ) -> Result<Labelled<Option<PalwBondStateV2>>, PalwProofErrorV1> {
     let (root, header_daa) = pinned_root(header, pinned)?;
+    bond_under_root_v1(root, pinned, header_daa, proof, bond)
+}
+
+/// [`bond_at_pin_v1`] under an ADR-0043 root the caller already established for `pinned`'s header — past
+/// `palw_fork_choice_commitment_v1` the header commits an envelope, whose inner root an opening unwraps (`crate::l2`,
+/// `crate::verify::l3_root_at_header_v1`).
+pub fn bond_under_root_v1(
+    root: Hash64,
+    pinned: Hash64,
+    header_daa: u64,
+    proof: &PalwFactProofV1,
+    bond: &PalwBondKeyV2,
+) -> Result<Labelled<Option<PalwBondStateV2>>, PalwProofErrorV1> {
     match verify_bond_v1(proof, root, bond) {
         Ok(state) => Ok(Labelled { value: Some(state), provenance: Provenance::ProvenAtPin { pinned_block: pinned, header_daa } }),
         Err(PalwProofErrorV1::Absent) => {
@@ -119,6 +132,17 @@ pub fn class_at_pin_v1(
     class_id: &Hash64,
 ) -> Result<Labelled<Option<PalwClassStateV2>>, PalwProofErrorV1> {
     let (root, header_daa) = pinned_root(header, pinned)?;
+    class_under_root_v1(root, pinned, header_daa, proof, class_id)
+}
+
+/// [`class_at_pin_v1`] under an ADR-0043 root the caller already established for `pinned`'s header (see [`bond_under_root_v1`]).
+pub fn class_under_root_v1(
+    root: Hash64,
+    pinned: Hash64,
+    header_daa: u64,
+    proof: &PalwFactProofV1,
+    class_id: &Hash64,
+) -> Result<Labelled<Option<PalwClassStateV2>>, PalwProofErrorV1> {
     match verify_class_v1(proof, root, class_id) {
         Ok(state) => Ok(Labelled { value: Some(state), provenance: Provenance::ProvenAtPin { pinned_block: pinned, header_daa } }),
         Err(PalwProofErrorV1::Absent) => {

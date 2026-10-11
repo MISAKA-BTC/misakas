@@ -170,6 +170,24 @@ geometry の大きさで方法を分ける。
 
 **正直な検証者の収支:** 不正がゼロの期間も含めて計算する(M\*-49 はユーザーが採用済み)。監視費用を賄う検査料は、計算量・公開証拠・検査完了条件に対して Sybil farming に耐えること。
 
+収支の判定範囲は試験前に固定する。期待収支と各 epoch の実収支を分け、class／watcher ごとに
+`徴収可能な最低固定収入 + 実際に支払われる slot 数の下限 × 最低検査料 − 総費用の上限 ≥ 0` を評価する。
+slot 数の下限が期待値なら、各 epoch の保証には使わない。資本費用を料率に加えても、抽選されない watcher や
+需要ゼロの epoch は収入ゼロになり得る。取得費用を将来の期待検査数で割った額は、初回取得後に需要が消える
+場合の回収保証ではない。実際の取得・準備・検査・告発・未払／中断・退出までの重複しない資本時間を含める。
+
+広告された `B_cap`／escrow／担保は徴収額の上限であり、最低受取額ではない。告発費用に充てる賞金は、先行する
+split 後の徴収可能な pool と整数丸めから下限を立証し、立証できなければゼロとして不足分を検査料に入れる。
+買収への耐性も、追加告発費用を差し引いた最低受取額と買収可能な総利益の上限で比較する。同額なら無差別であり、
+正直な行動を強制したとはしない。draw／取得／inclusion／支払の marginal probability を根拠なく掛けない。
+
+固定収入が必要な条件では、実際の資金源・署名済み minimum・予約・Final／vesting・一回の精算／返金／reorg を
+立証する。時計の経過や自己資金の返還を収入に読み替えず、新しい発行や Final 前の支払を暗黙に認めない。
+資金源・費用・joint payment floor が欠けた項目は UNKNOWN。slot 下限ゼロで正の費用に対する固定収入もなければ、
+有限の検査料による各 epoch の保証は FAIL。数学モデルの conditional PASS を資金実装／class security PASS にしない。
+詳細と実行可能な反例は [ECON §5f](econ-verifier-incentive-and-allocation.md#5f-watcher-funding-expected-recovery-and-actual-epoch-recovery-2026-10-11-correction)
+および `scripts/misaka-palw-econ-verifier-model.py --section 15` を参照する。
+
 経済モデルで成立しない阻止策を、コードが動くという理由で PASS にしない。
 
 ### F. 有効化判定(Lead が profile ごとに集約)

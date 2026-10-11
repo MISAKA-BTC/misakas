@@ -122,6 +122,8 @@ pub struct MatureUsefulWorkV1 {
 /// deltas are kept for the whole selected chain above the pruning point.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NativeDeltaEvidenceV1 {
+    /// Consumer liability frozen in the Final block's journal, retained even after root retirement.
+    pub exec_liability_until: std::collections::BTreeMap<Hash64, u64>,
     /// REAL (attempt) claims that entered `Final` in this block, with their record at `Final`.
     pub finalized_attempts: Vec<(Hash64, PalwClaimStateV2)>,
     /// Free-prompt claims whose spent set grew in this block: the record after the spend and the newly spent quanta.
@@ -142,6 +144,14 @@ impl NativeDeltaEvidenceV1 {
 pub fn native_delta_evidence_v1(delta: &PalwStateDeltaV2) -> NativeDeltaEvidenceV1 {
     let mut out = NativeDeltaEvidenceV1::default();
     for entry in &delta.entries {
+        if let PalwDeltaEntryV2::ExecV2Row { table, key, new: Some(bytes), .. } = entry
+            && *table == crate::palw_state_v2::PALW_EXEC_V2_TABLE_REWARDS_V1
+            && let (Ok(id), Ok(row)) =
+                (borsh::from_slice::<Hash64>(key), borsh::from_slice::<crate::palw_work_slice_v2::PalwExecV2RewardRowV1>(bytes))
+        {
+            let until = out.exec_liability_until.entry(id).or_default();
+            *until = (*until).max(row.liability_until);
+        }
         let PalwDeltaEntryV2::Claim { key, old, new: Some(new) } = entry else {
             continue;
         };
@@ -176,8 +186,34 @@ pub struct NativeFactRulesV1<'a> {
     pub canonical_work_daa: Option<u64>,
     /// The committed execution-quantum maturity window (DAA).
     pub quantum_maturity_daa: u64,
-    /// Claims with a DA session open at the sink are not mature.
-    pub claims_with_open_da: &'a BTreeSet<Hash64>,
+    /// Claims with a DA or computation-court session open at the sink supply no evidence.
+    pub claims_with_open_disputes: &'a BTreeSet<Hash64>,
+}
+
+/// The same open-dispute inventory feeds evidence filtering, lifecycle closure and
+/// the readiness explanation. A court remains open even after the recorded trace
+/// retention lapses; its absence must never be inferred from that clock.
+pub fn native_open_sessions_v1(state: &PalwChainStateV2) -> Vec<(Hash64, u64)> {
+    state
+        .da_sessions_iter()
+        .map(|((claim, _), session)| (*claim, session.deadline_daa))
+        .chain(state.court_sessions_iter().map(|(_, session)| (session.claim, session.deadline_daa)))
+        .collect()
+}
+
+/// A composite root remains retractable through its dependency window. This changes eligibility, never the signed trace lease.
+pub fn native_effective_retention_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> Option<u64> {
+    let until = state.exec_v2_liability_until_v1(params, id).ok()?;
+    let after = match until {
+        Some(until) => until.checked_add(1)?,
+        None => 0,
+    };
+    Some(claim.trace_retention_daa.max(after))
 }
 
 fn fp_slice_identity(work_id: &Hash64, index: u32) -> Hash64 {
@@ -190,7 +226,7 @@ fn fp_slice_identity(work_id: &Hash64, index: u32) -> Hash64 {
 
 /// Turn one block's extracted evidence into facts. `accepting` is that block's `(daa, blue)`. Missing information
 /// is never guessed: a bond the sink no longer holds, a claim without a canonical work id or weight, a floor
-/// claim, a claim in `voided` and a claim with an open DA session contribute nothing.
+/// claim, a claim in `voided` and a claim with an open DA or computation-court session contribute nothing.
 ///
 /// **Maturity** is the latest of the claim's trace retention (the producer's own obligation to keep the trace
 /// available), `final + claim_retirement` (after which no conviction can reverse the `Final`), and for a
@@ -217,7 +253,7 @@ pub struct SkippedEvidenceV1 {
     pub voided: u64,
     /// The floor (BASE-0) class: never evidence.
     pub base_class: u64,
-    /// A data-availability session is open on the claim.
+    /// A DA or computation-court session is open. The existing `openDa` JSON name is retained.
     pub open_da: u64,
     /// No canonical work identity / weight (or a free-prompt claim not priced in compute).
     pub unpriced: u64,
@@ -252,14 +288,18 @@ pub fn native_facts_and_skips_v1(
 ) -> (Vec<MatureUsefulWorkV1>, SkippedEvidenceV1) {
     let (accepting_daa, accepting_blue) = accepting;
     let mut skipped = SkippedEvidenceV1::default();
-    // **The trace retention a claim holds NOW.** The record in the block's delta is the claim as it stood in that block, and a class
-    // that committed its own court window (`palw_model_court_window`) extends a claim's retention to a court's deadline when a court
-    // opens on it - possibly after `Final` (palw_state_v2.rs, `CourtOpened`). A fact matured on the frozen value would count work whose
-    // producer still owes the trace to a running court and whose claim can still be convicted. So where the sink still holds the claim,
-    // its live retention counts too; where it does not (retired), the recorded value stands. Without a class window the two are equal,
-    // so this changes nothing on any network that does not arm that fence.
-    let live_retention = |id: &Hash64, recorded: &PalwClaimStateV2| -> u64 {
-        rules.state.claim(id).map_or(recorded.trace_retention_daa, |live| live.trace_retention_daa.max(recorded.trace_retention_daa))
+    // **The trace retention a claim holds NOW.** Read the later of the live and recorded obligation. Current legacy `CourtOpened`
+    // and named-leaf accusations refuse terminal claims: a class-window extension is admitted before Final, holds that Final and
+    // is captured in its eventual delta. The recorded extension then survives retirement. The live maximum is defensive reader
+    // behavior, not proof that a court can open after Final. Open DA / computation sessions are independently excluded below.
+    let live_retention = |id: &Hash64, recorded: &PalwClaimStateV2| -> Option<u64> {
+        let current = rules.state.claim(id).unwrap_or(recorded);
+        let retained = native_effective_retention_v1(rules.state, rules.params, id, current)?.max(recorded.trace_retention_daa);
+        let after = match evidence.exec_liability_until.get(id) {
+            Some(until) => until.checked_add(1)?,
+            None => 0,
+        };
+        Some(retained.max(after))
     };
     let base = rules.params.base_class_id();
     let retirement = rules.params.claim_retirement_daa();
@@ -276,7 +316,7 @@ pub fn native_facts_and_skips_v1(
             skipped.base_class += 1;
             continue;
         }
-        if rules.claims_with_open_da.contains(id) {
+        if rules.claims_with_open_disputes.contains(id) {
             skipped.open_da += 1;
             continue;
         }
@@ -293,6 +333,10 @@ pub fn native_facts_and_skips_v1(
             }
             continue;
         };
+        let Some(retention) = live_retention(id, claim) else {
+            skipped.unpriced += 1;
+            continue;
+        };
         facts.push(MatureUsefulWorkV1 {
             identity,
             anchor: claim.accepted_block,
@@ -302,7 +346,7 @@ pub fn native_facts_and_skips_v1(
             accepted_blue: claim.accepted_blue_score,
             anchor_daa: claim.accepted_daa,
             accepted_daa: claim.accepted_daa,
-            matured_daa: live_retention(id, claim).max(final_daa.saturating_add(retirement)),
+            matured_daa: retention.max(final_daa.saturating_add(retirement)),
             work,
         });
     }
@@ -326,7 +370,7 @@ pub fn native_facts_and_skips_v1(
             skipped.unpriced += 1;
             continue;
         }
-        if rules.claims_with_open_da.contains(id) {
+        if rules.claims_with_open_disputes.contains(id) {
             skipped.open_da += 1;
             continue;
         }
@@ -339,9 +383,13 @@ pub fn native_facts_and_skips_v1(
             }
             continue;
         };
+        let Some(retention) = live_retention(id, claim) else {
+            skipped.unpriced += 1;
+            continue;
+        };
         let matured_daa = final_daa
             .max(accepting_daa.saturating_add(rules.quantum_maturity_daa))
-            .max(live_retention(id, claim))
+            .max(retention)
             .max(final_daa.saturating_add(retirement));
         let work = palw_fp_spend_weight_v1(rules.state, claim, *quanta, &pricing);
         for index in fresh {
@@ -538,7 +586,7 @@ pub fn certify_native_effect_v1(
 }
 
 /// **The lifecycle question, answered once for the whole chain.** An effect at blue score `b` is *closed* iff every claim
-/// accepted at or before `b` is resolved — `Voided`, or `Final` with its trace retention lapsed — and no data-availability session
+/// accepted at or before `b` is resolved — `Voided`, or `Final` with its trace retention lapsed — and no DA or computation-court session
 /// names a claim accepted at or before `b` (a session whose claim the state no longer holds is open for every effect: the dispute it
 /// records cannot be located, and an unlocatable dispute is not a closed one). A claim already retired is absent from the state and
 /// therefore closed.
@@ -547,7 +595,7 @@ pub fn certify_native_effect_v1(
 /// The O(chain x claims) form this replaces asked the question once per effect; this is one pass over the claims.
 ///
 /// `claims` is `(accepted_blue_score, phase, trace_retention_daa)` for every claim the sink's state holds; `sessions` is, for every
-/// open DA session, the `accepted_blue_score` of its claim (`None` when the claim is not in the state).
+/// open dispute session, the `accepted_blue_score` of its claim (`None` when the claim is not in the state).
 pub fn native_open_from_v1(
     claims: impl IntoIterator<Item = (u64, PalwClaimPhaseV2, u64)>,
     sessions: impl IntoIterator<Item = Option<u64>>,
