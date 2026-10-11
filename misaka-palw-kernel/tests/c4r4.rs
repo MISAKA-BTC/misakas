@@ -224,6 +224,7 @@ fn f_c4r4_05_one_junk_filing_must_not_buy_a_whole_blocks_court() {
     };
     let mut pol = policy();
     pol.max_court_work_per_block = worst; // the heaviest class the block admits (registration allows worst == the block's budget)
+    pol.prosecution_reserve_permille = 0; // Isolate dismissed-proof pricing at the full-block ceiling.
     let mut w = World::with(pol.clone());
     assert_ne!(w.class, [0; 64], "the class registers with a worst court equal to the block's court budget");
 

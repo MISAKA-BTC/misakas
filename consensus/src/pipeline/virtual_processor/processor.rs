@@ -716,6 +716,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_typed_roots_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_verifier_pay_v1` (G14R round 3): M*-49 verifier pay and the held default share on the kernel route.
     pub(super) palw_verifier_pay_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_model_refutation_seal_v1` (RFC-0002 P0, RFC02-T): candidate refutations only as sealed reveals (inner 36 / 37).
+    pub(super) palw_model_refutation_seal_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
     pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1383,6 +1385,7 @@ impl VirtualStateProcessor {
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_typed_roots_v1: params.palw_typed_roots_v1,
             palw_verifier_pay_v1: params.palw_verifier_pay_v1,
+            palw_model_refutation_seal_v1: params.palw_model_refutation_seal_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_provider_court_v1: params.palw_provider_court_v1,
             palw_legacy_held_da_v2: params.palw_legacy_held_da_v2,
@@ -14475,6 +14478,11 @@ impl VirtualStateProcessor {
                     "a salted typed-root claim is refused: palw_panel_free_v1 and palw_typed_roots_v1 are not both in force at this block"
                         .to_string()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelRefutationSealV1 => {
+                    "a sealed candidate refutation is refused: palw_panel_free_v1 and palw_model_refutation_seal_v1 are not both in force \
+                     at this block (RFC-0002 P0)"
+                        .to_string()
+                }
             });
         }
         Ok(())
@@ -14493,6 +14501,13 @@ impl VirtualStateProcessor {
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
                 self.palw_kernel_opv_at(daa_score) && self.palw_kernel_typed_roots_at(daa_score)
+            }
+            // RFC-0002 P0 (RFC02-T): the sealed candidate refutation needs the OPV fence and its own (never armable) fence.
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelRefutationSealV1 => {
+                self.palw_kernel_opv_at(daa_score)
+                    && self
+                        .palw_model_refutation_seal_v1
+                        .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score))
             }
         }
     }
@@ -16142,6 +16157,11 @@ impl VirtualStateProcessor {
                 verifier_pay: self
                     .palw_verifier_pay_v1
                     .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never())
+                    .map(|f| f.daa_score()),
+                // RFC-0002 P0 (RFC02-T): the protected candidate refutation's dormant fence, where it is in force at this block.
+                model_refutation_seal: self
+                    .palw_model_refutation_seal_v1
+                    .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score))
                     .map(|f| f.daa_score()),
             }
         })

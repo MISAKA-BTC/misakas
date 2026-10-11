@@ -325,6 +325,13 @@ pub fn element_value_v1(
     e: u64,
     ops: &dyn OperandsV1,
 ) -> Result<Option<i128>, MissingV1> {
+    // A rank-one lookup table gathered by an arbitrary-shaped index tensor has no
+    // coordinate transform: its output's flat position IS the index tensor's position.
+    // Check the index before touching the table, exactly as the generic branch does.
+    if flat_gather_v1(node, &sh.inputs, &sh.out) {
+        let index = ops.get(1, e)?;
+        return Ok(if index < 0 || index >= sh.inputs[0][0] as i128 { None } else { Some(ops.get(0, index as u64)?) });
+    }
     let out_dtype = node.out.dtype;
     let ost = strides(&sh.out);
     let o = unravel(e, &ost);
@@ -450,11 +457,17 @@ pub fn element_value_v1(
     })
 }
 
+/// The shared structural predicate for the allocation-free element lookup and its price.
+/// Other Gather axes/batch dimensions retain the general coordinate evaluator.
+pub(crate) fn flat_gather_v1(node: &Node, inputs: &[Vec<usize>], out: &[usize]) -> bool {
+    matches!(node.prim, Prim::Gather { axis: 0, batch_dims: 0 }) && inputs.len() == 2 && inputs[0].len() == 1 && inputs[1] == out
+}
+
 /// The program's per-position structure the courts read: the wiring and the flat index of each occurrence's first node.
-struct PreparedV1<'a> {
-    w: WiringV1<'a>,
+pub(crate) struct PreparedV1<'a> {
+    pub(crate) w: WiringV1<'a>,
     offsets: Vec<u64>,
-    node_count: u64,
+    pub(crate) node_count: u64,
     /// `[occurrence][node]`: how each value is owed (`crate::seg_scope`).
     modes: Vec<Vec<SegValueModeV1>>,
     /// `[occurrence][node]`: the values a verifier keeps from its own replay (withheld or hiding: never served in the clear).
@@ -463,6 +476,16 @@ struct PreparedV1<'a> {
 
 impl<'a> PreparedV1<'a> {
     fn new(program: &'a TirProgramV1, encoder: Option<&crate::seg_encoder::EncoderBindingV1>) -> Result<Self, String> {
+        let mut prepared = Self::without_scope(program, encoder)?;
+        prepared.set_modes(seg_value_modes_v1(program));
+        Ok(prepared)
+    }
+
+    /// Shared validated wiring without choosing the frozen disclosure/court profile.
+    pub(crate) fn without_scope(
+        program: &'a TirProgramV1,
+        encoder: Option<&crate::seg_encoder::EncoderBindingV1>,
+    ) -> Result<Self, String> {
         let w = match encoder {
             Some(e) => WiringV1::for_stage(program, Some(&e.stage())),
             None => WiringV1::new(program),
@@ -474,9 +497,27 @@ impl<'a> PreparedV1<'a> {
             offsets.push(at);
             at += program.blocks[*b as usize].nodes.len() as u64;
         }
-        let modes = seg_value_modes_v1(program);
-        let kept = modes.iter().map(|o| o.iter().map(|m| *m != SegValueModeV1::Clear).collect()).collect();
-        Ok(Self { w, offsets, node_count: at, modes, kept })
+        // No scope chosen: every value is served in the clear until a profile sets its modes.
+        Ok(Self { w, offsets, node_count: at, modes: Vec::new(), kept: Vec::new() })
+    }
+
+    /// Choose the disclosure/court profile: the frozen v4/v5 one ([`seg_value_modes_v1`], with G14-S hiding tiles) or a
+    /// candidate trace profile.
+    fn set_modes(&mut self, modes: Vec<Vec<SegValueModeV1>>) {
+        self.kept = modes.iter().map(|o| o.iter().map(|m| *m != SegValueModeV1::Clear).collect()).collect();
+        self.modes = modes;
+    }
+
+    /// The non-reward candidate trace v2 profile (`crate::seg_scope::model_vector_withheld_mask_v2`): commitment-only values are
+    /// withheld (v3 commitment), every other value is served in the clear. It has no hiding tiles: candidate traces are not the
+    /// frozen v4/v5 claim court contract.
+    fn set_candidate_v2_scope(&mut self, program: &TirProgramV1) {
+        let mask = crate::seg_scope::model_vector_withheld_mask_v2(program);
+        self.set_modes(
+            mask.iter()
+                .map(|o| o.iter().map(|w| if *w { SegValueModeV1::Withheld } else { SegValueModeV1::Clear }).collect())
+                .collect(),
+        );
     }
 
     fn mode(&self, s: u16, n: u16) -> SegValueModeV1 {
@@ -497,22 +538,22 @@ impl<'a> PreparedV1<'a> {
         Some(self.w.program.blocks[*b as usize].nodes.len() as u16)
     }
 
-    fn valid(&self, s: u16, n: u16) -> bool {
+    pub(crate) fn valid(&self, s: u16, n: u16) -> bool {
         self.nodes_in(s).is_some_and(|c| n < c)
     }
 
-    fn index(&self, s: u16, n: u16) -> u64 {
+    pub(crate) fn index(&self, s: u16, n: u16) -> u64 {
         self.offsets[s as usize] + n as u64
     }
 
     /// The declared type of `(s, n)`'s value at `p`.
-    fn declared(&self, s: u16, n: u16, p: u32) -> (DType, Vec<usize>) {
+    pub(crate) fn declared(&self, s: u16, n: u16, p: u32) -> (DType, Vec<usize>) {
         let node = self.w.node(s, n);
         (node.out.dtype, node.out.resolve(self.w.h(s, p)))
     }
 
     /// The shapes `(p, s, n)`'s element is evaluated at.
-    fn shapes(&self, p: u32, s: u16, n: u16) -> ElementShapesV1 {
+    pub(crate) fn shapes(&self, p: u32, s: u16, n: u16) -> ElementShapesV1 {
         let block = self.w.occurrences[s as usize].0 as usize;
         let node = self.w.node(s, n);
         let h = self.w.h(s, p);
@@ -541,13 +582,13 @@ impl<'a> PreparedV1<'a> {
 
 /// Where an operand of `(p, s, n)` comes from, `i` counting a `HistAppend`'s previous window as operand 1.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum OperandSourceV1 {
+pub(crate) enum OperandSourceV1 {
     Source(SourceV1),
     Token,
     Position,
 }
 
-fn operand_sources(pr: &PreparedV1<'_>, p: u32, s: u16, n: u16) -> Result<Vec<OperandSourceV1>, String> {
+pub(crate) fn operand_sources(pr: &PreparedV1<'_>, p: u32, s: u16, n: u16) -> Result<Vec<OperandSourceV1>, String> {
     let node = pr.w.node(s, n);
     let mut out = Vec::new();
     for (i, r) in node.inputs.iter().enumerate() {
@@ -605,7 +646,7 @@ fn header_of(l: &LeafOpeningV3) -> Option<(DType, Vec<usize>)> {
 }
 
 /// The token a node reads at `p` (the job's prompt, a tile, or a delivered id).
-fn token_at(c: &SegClaimContextV1<'_>, p: u32, tile: Option<&PromptTileOpeningV1>) -> Option<u32> {
+pub(crate) fn token_at(c: &SegClaimContextV1<'_>, p: u32, tile: Option<&PromptTileOpeningV1>) -> Option<u32> {
     if p < c.prompt_len {
         match c.inline_prompt {
             Some(ids) => ids.get(p as usize).copied(),
@@ -733,8 +774,34 @@ fn court_whole_operands(
 /// **The segmented court.** Every opening authenticated against the claim's segment roots or the class's param commitments; nothing
 /// read from the producer.
 pub fn verify_seg_fault_v1(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Result<SegConvictionV1, DismissalV1> {
+    let pr = PreparedV1::new(c.program, c.encoder.as_ref()).map_err(DismissalV1::NotAuthentic)?;
+    verify_prepared_fault(c, fault, &pr)
+}
+
+/// Non-reward candidate trace v2 court. Its commitment-only scope and Gather
+/// dependency price are distinct from the frozen v4/v5 claim court contract.
+pub fn verify_model_vector_fault_v2(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Result<SegConvictionV1, DismissalV1> {
+    let mut pr = PreparedV1::new(c.program, c.encoder.as_ref()).map_err(DismissalV1::NotAuthentic)?;
+    pr.set_candidate_v2_scope(c.program);
+    if let SegFaultV1::WholeValue(f) = fault {
+        if !pr.valid(f.occurrence, f.node) || !pr.is_withheld(f.occurrence, f.node) {
+            return Err(DismissalV1::NotAuthentic("candidate whole court is not bounded for this node".into()));
+        }
+        let (bytes, _) =
+            crate::seg_scope::model_vector_whole_court_cost_v2(c.program, f.occurrence as usize, f.node as usize, pr.node_count);
+        // Redundant, duplicate and unrelated openings cannot spend another
+        // relation's larger envelope on this dependency-priced court.
+        let wire =
+            borsh::to_vec(fault).map_err(|e| DismissalV1::NotAuthentic(format!("candidate whole filing has no wire form: {e}")))?;
+        if wire.len() as u64 > bytes {
+            return Err(DismissalV1::NotAuthentic("candidate whole filing exceeds its dependency bound".into()));
+        }
+    }
+    verify_prepared_fault(c, fault, &pr)
+}
+
+fn verify_prepared_fault(c: &SegClaimContextV1<'_>, fault: &SegFaultV1, pr: &PreparedV1<'_>) -> Result<SegConvictionV1, DismissalV1> {
     let na = DismissalV1::NotAuthentic;
-    let pr = PreparedV1::new(c.program, c.encoder.as_ref()).map_err(na)?;
     let node_ok = |o: &NodeOpeningV1, p: u32, s: u16, n: u16| -> Result<(), DismissalV1> {
         if (o.position, o.occurrence, o.node) != (p, s, n) || p >= c.positions || !pr.valid(s, n) {
             return Err(DismissalV1::NotAuthentic(format!(
@@ -1115,6 +1182,34 @@ pub fn check_positions_v1(
         Ok(pr) => pr,
         Err(why) => return SegFindingV1::Inconsistent(why),
     };
+    check_prepared_positions(c, material, artifact, tokens, positions, &pr)
+}
+
+/// A model holder checks candidate traces using exactly their commitment-only
+/// court scope. No producer value is needed for a bounded Gather's output.
+pub fn check_model_vector_positions_v2(
+    c: &SegClaimContextV1<'_>,
+    material: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    positions: &[u32],
+) -> SegFindingV1 {
+    let mut pr = match PreparedV1::new(c.program, c.encoder.as_ref()) {
+        Ok(pr) => pr,
+        Err(why) => return SegFindingV1::Inconsistent(why),
+    };
+    pr.set_candidate_v2_scope(c.program);
+    check_prepared_positions(c, material, artifact, tokens, positions, &pr)
+}
+
+fn check_prepared_positions(
+    c: &SegClaimContextV1<'_>,
+    material: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    positions: &[u32],
+    pr: &PreparedV1<'_>,
+) -> SegFindingV1 {
     let mut ps: Vec<u32> = positions.to_vec();
     ps.sort_unstable();
     ps.dedup();
@@ -1127,7 +1222,7 @@ pub fn check_positions_v1(
         Ok(l) => l,
         Err(missing) => return SegFindingV1::Demand(missing),
     };
-    let own = match crate::seg_detect::replay_positions_v1(c, artifact, tokens, &needed_positions(&ps), &pr.kept) {
+    let own = match crate::seg_detect::replay_positions_v1(c, artifact, tokens, &needed_positions(&ps), &pr.modes, &pr.kept) {
         Ok(own) => own,
         Err(why) => return SegFindingV1::Inconsistent(why),
     };
@@ -1416,6 +1511,26 @@ pub fn prove_element_v1(
     e: u64,
 ) -> Result<ElementFaultV1, String> {
     let pr = PreparedV1::new(c.program, c.encoder.as_ref())?;
+    if !pr.valid(s, n) || p >= c.positions {
+        return Err("no such value".into());
+    }
+    let loaded = load_opened_positions_for_element(c, &pr, material, &[p])?;
+    let resolved = resolve_operands(c, &pr, &loaded, artifact, tokens, (p, s, n))?;
+    build_element_fault(c, &pr, &loaded, &resolved, tokens, (p, s, n), e)
+}
+
+/// [`prove_element_v1`] for an RFC-0002 candidate trace v2 statement (the candidate court scope: every value committed v3, no hiding
+/// values) — RFC02-T merge, 2026-10-11.
+pub fn prove_model_vector_element_v2(
+    c: &SegClaimContextV1<'_>,
+    material: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    (p, s, n): (u32, u16, u16),
+    e: u64,
+) -> Result<ElementFaultV1, String> {
+    let mut pr = PreparedV1::new(c.program, c.encoder.as_ref())?;
+    pr.set_candidate_v2_scope(c.program);
     if !pr.valid(s, n) || p >= c.positions {
         return Err("no such value".into());
     }
@@ -1729,7 +1844,7 @@ fn axis_cover(l: &LayoutV3, rank: usize, width: u64, axis: u8, reads: &BTreeSet<
         .map(|(a, b, _)| (a, b))
         .collect();
     let path = (crate::merkle::depth(l.leaves(axis)) + 1) * 64 + 8 * rank as u64 + 32;
-    let bytes = set.iter().map(|(line, tile)| l.leaf_elements(axis, *line, *tile).map_or(0, |v| v.len() as u64) * width + path).sum();
+    let bytes = set.iter().map(|(line, tile)| l.leaf_element_count(axis, *line, *tile).unwrap_or(0) * width + path).sum();
     (set, bytes)
 }
 
@@ -2125,10 +2240,200 @@ pub fn decode_court_cost_v1(program: &TirProgramV1, node_count: u64, max_positio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allocation_free_leaf_pricing_matches_index_vector_oracle_on_real_weight_shapes() {
+        let cases = [
+            (vec![], BTreeSet::from([0])),
+            (vec![0], BTreeSet::from([0])),
+            (vec![4097], BTreeSet::from([0, 4095, 4096, 4097])),
+            (vec![3, 8193], (0..8193).step_by(997).collect()),
+            (vec![2, 4097, 3], (0..24_582).step_by(997).collect()),
+            // The actual pilot's vocabulary projection: a full strided MatMul column.
+            (vec![1536, 151_936], (0..1536).map(|k| k * 151_936).collect()),
+            // The actual embedding shape: a Gather reads one complete 1,536-value row.
+            (vec![151_936, 1536], (0..1536).collect()),
+        ];
+        for (shape, reads) in cases {
+            let l = LayoutV3::of(&shape);
+            for dtype in DType::ALL {
+                for axis in [AXIS_ROW, AXIS_COL] {
+                    let leaves: BTreeSet<(u64, u64)> = reads
+                        .iter()
+                        .filter_map(|e| if axis == AXIS_ROW { l.row_leaf_of(*e) } else { l.col_leaf_of(*e) })
+                        .map(|(a, b, _)| (a, b))
+                        .collect();
+                    let path = (crate::merkle::depth(l.leaves(axis)) + 1) * 64 + 8 * shape.len() as u64 + 32;
+                    let original: u64 = leaves
+                        .iter()
+                        .map(|(line, tile)| l.leaf_elements(axis, *line, *tile).unwrap().len() as u64 * dtype.width() as u64 + path)
+                        .sum();
+                    assert_eq!(axis_cover(&l, shape.len(), dtype.width() as u64, axis, &reads), (leaves, original));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn allocation_free_pricing_preserves_the_exact_actual_32_position_plan_root() {
+        let bytes =
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"));
+        let program = TirProgramV1::decode_canonical(bytes).unwrap();
+        let descriptor = crate::descriptor::k2_tir_v4_descriptor();
+        let plan = crate::plan::plan_for_tir_program_v1(&descriptor, &program, crate::public::program_root_v1(bytes), 32).unwrap();
+        let hex: String = plan.root().iter().map(|b| format!("{b:02x}")).collect();
+        // Re-pinned at the RFC02-T merge (2026-10-11): codex pinned `0e31e5b9…` on its older base; G14-S's court prices (hiding-tile
+        // operands, whole-operand shells) are part of the plan, so the merged root differs. That the allocation-free leaf count
+        // equals the index-vector oracle is checked separately on the real shapes (the test above), not by this pin.
+        assert_eq!(
+            hex,
+            "00df9d85b7b28dfc9fc3bea5da1749e102d1446d969b5fd2bd1363669a0e69beab114230fa5aa170d6444599bf541cb227832c6e87785d2d59def8684de2a793"
+        );
+    }
     use crate::seg::{SegmentedCommitmentsV1, prompt_root_of_ids_v1};
     use crate::trace::trace_v1;
     use misaka_palw_tir::MapParams;
     use misaka_palw_tir_sketch::fixture::dense_moe_v1;
+
+    /// Deliberately retains the old coordinate algorithm as a differential oracle. The
+    /// independently implemented whole-tensor TIR evaluator is checked as well.
+    fn coordinate_gather(node: &Node, sh: &ElementShapesV1, e: u64, ops: &dyn OperandsV1) -> Result<Option<i128>, MissingV1> {
+        let Prim::Gather { axis, batch_dims } = node.prim else { panic!("not Gather") };
+        let (a, b) = (axis as usize, batch_dims as usize);
+        let o = unravel(e, &strides(&sh.out));
+        let m = sh.inputs[1].len() - b;
+        let mut xi = o[..b].to_vec();
+        xi.extend_from_slice(&o[a..a + m]);
+        let v = ops.get(1, ravel(&xi, &strides(&sh.inputs[1])))?;
+        if v < 0 || v >= sh.inputs[0][a] as i128 {
+            return Ok(None);
+        }
+        let mut di = o[..a].to_vec();
+        di.push(v as usize);
+        di.extend_from_slice(&o[a + m..]);
+        Ok(Some(ops.get(0, ravel(&di, &strides(&sh.inputs[0])))?))
+    }
+
+    struct LookupOperands {
+        tensors: Vec<Tensor>,
+        missing: Option<MissingV1>,
+        reads: RefCell<Vec<(usize, u64)>>,
+    }
+    impl OperandsV1 for LookupOperands {
+        fn get(&self, i: usize, e: u64) -> Result<i128, MissingV1> {
+            self.reads.borrow_mut().push((i, e));
+            if self.missing == Some(MissingV1(i, e)) {
+                return Err(MissingV1(i, e));
+            }
+            self.tensors.get(i).and_then(|t| t.data.get(e as usize)).copied().ok_or(MissingV1(i, e))
+        }
+    }
+
+    #[test]
+    fn flat_gather_preserves_results_and_dependency_reads_for_all_dtypes_and_ranks() {
+        let program = dense_moe_v1(7).program;
+        for dtype in DType::ALL {
+            let data = Tensor::new(dtype, vec![7], vec![dtype.min_value(), dtype.max_value(), 0, 1, 2, 3, 4]).unwrap();
+            for shape in [vec![], vec![19], vec![3, 5], vec![2, 3, 4], vec![2, 2, 3, 4]] {
+                let len = shape.iter().product::<usize>();
+                let indices = Tensor::new(DType::Idx, shape.clone(), (0..len).map(|e| ((e * 11 + 3) % 7) as i128).collect()).unwrap();
+                let node = Node {
+                    prim: Prim::Gather { axis: 0, batch_dims: 0 },
+                    inputs: vec![Ref::Param(0), Ref::Param(1)],
+                    out: misaka_palw_tir::TensorType::fixed(dtype, &shape.iter().map(|n| *n as u32).collect::<Vec<_>>()),
+                    commit: true,
+                };
+                let sh = ElementShapesV1 {
+                    out: shape.clone(),
+                    inputs: vec![data.shape.clone(), shape.clone()],
+                    in_dtypes: vec![dtype, DType::Idx],
+                    hist: None,
+                };
+                let expected = eval_primitive(&node.prim, &[data.clone(), indices.clone()], dtype, &shape).unwrap();
+                let ops = LookupOperands { tensors: vec![data.clone(), indices], missing: None, reads: RefCell::new(vec![]) };
+                assert!(flat_gather_v1(&node, &sh.inputs, &sh.out));
+                for e in 0..len as u64 {
+                    ops.reads.borrow_mut().clear();
+                    let fast = element_value_v1(&program, &node, &sh, e, &ops);
+                    let reads = ops.reads.take();
+                    let old = coordinate_gather(&node, &sh, e, &ops);
+                    assert_eq!(fast, old, "{dtype:?} {shape:?} {e}");
+                    assert_eq!(fast, Ok(Some(expected.data[e as usize])));
+                    assert_eq!(reads, ops.reads.take(), "proof dependencies changed");
+                    assert_eq!(reads.len(), 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn flat_gather_refuses_invalid_indices_before_table_reads_and_preserves_missing_operands() {
+        let program = dense_moe_v1(7).program;
+        let node = Node {
+            prim: Prim::Gather { axis: 0, batch_dims: 0 },
+            inputs: vec![Ref::Param(0), Ref::Param(1)],
+            out: misaka_palw_tir::TensorType::fixed(DType::I16, &[6]),
+            commit: true,
+        };
+        let sh =
+            ElementShapesV1 { out: vec![6], inputs: vec![vec![3], vec![6]], in_dtypes: vec![DType::I16, DType::I128], hist: None };
+        let tensors = vec![
+            Tensor::new(DType::I16, vec![3], vec![-7, 0, 32767]).unwrap(),
+            Tensor::new(DType::I128, vec![6], vec![-1, 3, i128::MIN, i128::MAX, 0, 2]).unwrap(),
+        ];
+        for missing in [None, Some(MissingV1(1, 0)), Some(MissingV1(1, 5)), Some(MissingV1(0, 2))] {
+            let ops = LookupOperands { tensors: tensors.clone(), missing, reads: RefCell::new(vec![]) };
+            for e in 0..6 {
+                ops.reads.borrow_mut().clear();
+                let fast = element_value_v1(&program, &node, &sh, e, &ops);
+                let reads = ops.reads.take();
+                assert_eq!(fast, coordinate_gather(&node, &sh, e, &ops));
+                assert_eq!(reads, ops.reads.take());
+                if e < 4 {
+                    assert!(reads.iter().all(|(operand, _)| *operand == 1));
+                }
+            }
+        }
+        // Neither an axis/batch variant nor a mismatched output shape enters the specialization.
+        for prim in [Prim::Gather { axis: 1, batch_dims: 0 }, Prim::Gather { axis: 0, batch_dims: 1 }, Prim::Reshape] {
+            let mut other = node.clone();
+            other.prim = prim;
+            assert!(!flat_gather_v1(&other, &sh.inputs, &sh.out));
+        }
+        assert!(!flat_gather_v1(&node, &[vec![3, 1], vec![6]], &[6]));
+        assert!(!flat_gather_v1(&node, &sh.inputs, &[2, 3]));
+    }
+
+    #[test]
+    fn nonflat_gather_axes_and_batches_still_match_the_independent_reference() {
+        let program = dense_moe_v1(7).program;
+        for (axis, batch, data_shape, index_shape, out_shape, indices) in [
+            (0, 0, vec![3, 2], vec![2], vec![2, 2], vec![2, 0]),
+            (1, 0, vec![2, 3], vec![2], vec![2, 2], vec![2, 0]),
+            (1, 1, vec![2, 3], vec![2, 2], vec![2, 2], vec![2, 0, 1, 2]),
+        ] {
+            let data = Tensor::new(DType::I32, data_shape.clone(), (0..6).map(|i| i * 71 - 120).collect()).unwrap();
+            let ix = Tensor::new(DType::Idx, index_shape.clone(), indices).unwrap();
+            let node = Node {
+                prim: Prim::Gather { axis, batch_dims: batch },
+                inputs: vec![Ref::Param(0), Ref::Param(1)],
+                out: misaka_palw_tir::TensorType::fixed(DType::I32, &out_shape.iter().map(|n| *n as u32).collect::<Vec<_>>()),
+                commit: true,
+            };
+            let sh = ElementShapesV1 {
+                out: out_shape.clone(),
+                inputs: vec![data_shape, index_shape],
+                in_dtypes: vec![DType::I32, DType::Idx],
+                hist: None,
+            };
+            assert!(!flat_gather_v1(&node, &sh.inputs, &sh.out));
+            let expected = eval_primitive(&node.prim, &[data.clone(), ix.clone()], DType::I32, &out_shape).unwrap();
+            let ops = LookupOperands { tensors: vec![data, ix], missing: None, reads: RefCell::new(vec![]) };
+            for e in 0..expected.len() as u64 {
+                assert_eq!(element_value_v1(&program, &node, &sh, e, &ops), Ok(Some(expected.data[e as usize])));
+            }
+        }
+    }
 
     /// The claim a producer committed, as values (honest or not), with its segment roots.
     struct Committed {
@@ -2142,6 +2447,12 @@ mod tests {
             let c = SegmentedCommitmentsV1::new(values.iter().map(|p| seg_position_commitments_v1(&modes, p)).collect());
             Self { values, c }
         }
+
+        /// Every value committed v3 (the candidate trace v2 profile: no hiding values).
+        fn v3(values: Vec<Vec<Vec<Tensor>>>) -> Self {
+            let c = SegmentedCommitmentsV1::new(values.iter().map(|p| seg_position_commitments_v1(&[], p)).collect());
+            Self { values, c }
+        }
     }
 
     impl SegMaterialV1 for Committed {
@@ -2150,6 +2461,11 @@ mod tests {
         }
         fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
             (p < self.c.positions()).then(|| self.c.position_path(p).1)
+        }
+        /// The commitments the claim was built with (frozen modes, or every value v3 for the candidate profile) — never re-derived
+        /// under the frozen modes from the values.
+        fn commitments(&self, _: &TirProgramV1, p: u32) -> Option<Vec<Vec<Digest>>> {
+            self.c.commitments.get(p as usize).cloned()
         }
     }
 
@@ -2190,6 +2506,173 @@ mod tests {
             decode: DecodeRuleV1::Greedy,
             encoder: None,
         }
+    }
+
+    #[test]
+    fn vocabulary_sized_flat_lookup_roots_match_the_frozen_coordinate_evaluator() {
+        const N: usize = 151_936;
+        struct Direct(Vec<Tensor>);
+        impl OperandsV1 for Direct {
+            fn get(&self, i: usize, e: u64) -> Result<i128, MissingV1> {
+                self.0.get(i).and_then(|t| t.data.get(e as usize)).copied().ok_or(MissingV1(i, e))
+            }
+        }
+        let p = dense_moe_v1(7).program;
+        let node = Node {
+            prim: Prim::Gather { axis: 0, batch_dims: 0 },
+            inputs: vec![Ref::Param(0), Ref::Param(1)],
+            out: misaka_palw_tir::TensorType::fixed(DType::I64, &[N as u32]),
+            commit: true,
+        };
+        let sh =
+            ElementShapesV1 { out: vec![N], inputs: vec![vec![63], vec![N]], in_dtypes: vec![DType::I64, DType::I32], hist: None };
+        let ops = Direct(vec![
+            Tensor::new(DType::I64, vec![63], (0..63).map(|i| i * 1051 - 1798).collect()).unwrap(),
+            Tensor::new(DType::I32, vec![N], (0..N).map(|i| ((i * 37 + 19) % 63) as i128).collect()).unwrap(),
+        ]);
+        let evaluate = |fast: bool| {
+            (0..N as u64)
+                .map(|e| {
+                    let e = std::hint::black_box(e);
+                    if fast { element_value_v1(&p, &node, &sh, e, &ops) } else { coordinate_gather(&node, &sh, e, &ops) }
+                        .unwrap()
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        let old = evaluate(false);
+        let new = evaluate(true);
+        let reference = eval_primitive(&node.prim, &ops.0, DType::I64, &[N]).unwrap();
+        assert_eq!(old, reference.data);
+        assert_eq!(new, old);
+        let root = tensor_commitment_v3(&reference);
+        // Alternating warmed trials include both output commitment trees. Timings are a
+        // local diagnostic, never a hardware-dependent consensus or test threshold.
+        let mut times = [Vec::new(), Vec::new()];
+        for trial in 0..6 {
+            for fast in if trial % 2 == 0 { [false, true] } else { [true, false] } {
+                let start = std::time::Instant::now();
+                let data = evaluate(fast);
+                let t = Tensor::new(DType::I64, vec![N], data).unwrap();
+                assert_eq!(tensor_commitment_v3(&t), root);
+                times[fast as usize].push(start.elapsed().as_nanos());
+            }
+        }
+        for values in &mut times {
+            values.sort_unstable()
+        }
+        eprintln!(
+            "151936-output lookup + both commitment trees: frozen median {} ns, flat median {} ns; six alternating trials, all roots equal",
+            times[0][3], times[1][3]
+        );
+    }
+
+    /// Actual vocabulary-sized court, deliberately synthetic weights. This exercises the
+    /// proof format/authentication at 151,936 outputs; it is not checkpoint fidelity evidence.
+    #[test]
+    fn vocabulary_sized_lookup_whole_court_dismisses_honest_convicts_lie_and_refuses_missing_or_substituted_inputs() {
+        use misaka_palw_tir::builder::ProgramBuilder;
+        use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
+        use misaka_palw_tir::{Dim, TensorType};
+        const VOCAB: u32 = 151_936;
+        let mut pb = ProgramBuilder::new(VOCAB, HISTORY_BOUND_V1_SMALL);
+        let embeddings = pb.param("embedding", DType::I16, &[VOCAB, 1], false);
+        let table = pb.param("lookup", DType::I16, &[63], false);
+        let indices = pb.param("indices", DType::I32, &[VOCAB], false);
+        let carry = vec![TensorType::fixed(DType::I32, &[1])];
+        let pre = {
+            let mut b = pb.block("pre", vec![]);
+            let x = b.gather(embeddings, Ref::Input(INPUT_TOKEN), 0, 0);
+            let x = b.cast(x, DType::I32);
+            b.finish(&[x])
+        };
+        let post = {
+            let mut b = pb.block("post", carry);
+            let x = b.broadcast(Ref::CarryIn(0), &[Dim::Fixed(VOCAB)]);
+            let x = b.add(x, indices, DType::I32);
+            let x = b.clamp(x, 0, 62, DType::I32);
+            let y = b.gather(table, x, 0, 0);
+            b.commit(y);
+            let logits = b.cast(y, DType::I32);
+            b.commit(logits);
+            b.finish(&[])
+        };
+        let node = pb.blocks[post as usize]
+            .nodes
+            .iter()
+            .position(|n| flat_gather_v1(n, &[vec![63], vec![VOCAB as usize]], &[VOCAB as usize]))
+            .unwrap() as u16;
+        let logits = (pb.blocks[post as usize].nodes.len() - 1) as u16;
+        let program = pb.finish(pre, vec![], post, logits);
+        misaka_palw_tir::validate::validate(&program).unwrap();
+        let params = MapParams {
+            tensors: BTreeMap::from([
+                ((0, None), Tensor::new(DType::I16, vec![VOCAB as usize, 1], vec![0; VOCAB as usize]).unwrap()),
+                ((1, None), Tensor::new(DType::I16, vec![63], (0..63).map(|i| i * 31 - 900).collect()).unwrap()),
+                ((2, None), Tensor::new(DType::I32, vec![VOCAB as usize], (0..VOCAB).map(|i| (i % 63) as i128).collect()).unwrap()),
+            ]),
+        };
+        let tokens = vec![3, 62];
+        let f = Fx { pc: ParamCommitmentsV1::of_v3(&params), program, params, tokens, prompt: vec![3], generated: vec![62, 62] };
+        let values = trace_v1(&f.program, &f.params, &f.tokens).unwrap().values;
+        // RFC02-T merge (2026-10-11): G14-S prices a committed operand at the largest of its whole, v3-leaf and hiding-tile forms, so
+        // under the FROZEN v4/v5 profile this vocabulary-sized value is no longer withheld but hiding (its court is the hiding-leaf
+        // court). The flat-gather whole court is exercised under the candidate trace v2 profile, which has no hiding values.
+        let frozen = PreparedV1::new(&f.program, None).unwrap();
+        assert_eq!(frozen.mode(1, node), SegValueModeV1::Hiding);
+        let honest = Committed::v3(values.clone());
+        let roots = honest.c.segment_roots();
+        let hc = ctx(&f, &roots);
+        let mut pr = PreparedV1::new(&f.program, None).unwrap();
+        pr.set_candidate_v2_scope(&f.program);
+        assert!(pr.is_withheld(1, node));
+        let art = |j: u16, l: Option<u16>| f.params.tensors.get(&(j, l)).cloned();
+        let loaded = load_opened_positions_for_element(&hc, &pr, &honest, &[0]).unwrap();
+        let resolved = resolve_operands(&hc, &pr, &loaded, &art, &f.tokens, (0, 1, node)).unwrap();
+        let whole = build_whole_value_fault(&hc, &pr, &loaded, &resolved, &f.tokens, (0, 1, node)).unwrap();
+        let proof = SegFaultV1::WholeValue(whole.clone());
+        let count = f.program.occurrences().iter().map(|(b, _)| f.program.blocks[*b as usize].nodes.len() as u64).sum();
+        let (bytes, work) = crate::seg_scope::model_vector_whole_court_cost_v2(&f.program, 1, node as usize, count);
+        assert!(proof.to_bytes().len() as u64 <= bytes);
+        assert!(work <= 536_870_912, "whole court exceeds default proof reservation: {work}");
+        let started = std::time::Instant::now();
+        assert_eq!(verify_model_vector_fault_v2(&hc, &proof), Err(DismissalV1::NoFault));
+        eprintln!(
+            "151936-output whole court: {} proof bytes, {} abstract work, {:?} honest verification",
+            proof.to_bytes().len(),
+            work,
+            started.elapsed()
+        );
+        // Bounds are compared to the pre-specialization price, without changing disclosure.
+        let conservative_work = work + VOCAB as u64 * 16 * 64;
+        let model_mask = crate::scope::court_model_dependent_mask_v1(&f.program, crate::seg_scope::seg_model_params_v1(&f.program));
+        assert!(model_mask[1][node as usize]);
+        assert!(
+            bytes <= crate::seg_scope::SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1
+                && conservative_work <= crate::seg_scope::SEG_WHOLE_VALUE_COURT_MAX_WORK_V1
+        );
+        for missing in [false, true] {
+            let mut tampered = whole.clone();
+            if missing {
+                tampered.inputs[0].leaves.clear()
+            } else {
+                tampered.inputs[0].leaves[0].values[0] ^= 1;
+            }
+            assert!(matches!(verify_model_vector_fault_v2(&hc, &SegFaultV1::WholeValue(tampered)), Err(DismissalV1::NotAuthentic(_))));
+        }
+        let mut lying_values = values;
+        lying_values[0][1][node as usize].data[VOCAB as usize - 1] += 1;
+        let lying = Committed::v3(lying_values);
+        let lr = lying.c.segment_roots();
+        let lc = ctx(&f, &lr);
+        let SegFindingV1::Fault(fault) = check_model_vector_positions_v2(&lc, &lying, &art, &f.tokens, &[0]) else {
+            panic!("fresh verifier missed lookup lie")
+        };
+        assert!(matches!(fault.as_ref(), SegFaultV1::WholeValue(_)));
+        assert_eq!(fault.at(), Some((0, 1, node)));
+        assert!(fault.to_bytes().len() as u64 <= bytes);
+        assert_eq!(verify_model_vector_fault_v2(&lc, &fault).unwrap().kind, SegConvictionKindV1::WholeValue);
+        assert!(matches!(verify_model_vector_fault_v2(&hc, &fault), Err(DismissalV1::NotAuthentic(_))));
     }
 
     #[test]

@@ -92,6 +92,12 @@ pub const VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/le
 pub const TABLE_COURT_SCOPE_V1: u8 = 28;
 /// The root extension table 28 adds once it holds a row (every older root unchanged).
 pub const COURT_SCOPE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-court-scope-extension/v1";
+/// **Table 29** (RFC-0002, conformance-only candidate classes): class id → (preparing bond, ClassRecordV1), separate from reward
+/// registrations. Codex allocated 28 on its branch; G14-S's court scope landed on 28 first, so the candidates moved to 29 at the
+/// RFC02-T merge (2026-10-11, `docs/design/palw/remaining-rfc-integration-matrix.md`).
+pub const TABLE_CONFORMANCE_CLASSES_V1: u8 = 29;
+/// The root extension table 29 adds once it holds a row (every older root unchanged), applied after table 28's.
+pub const CONFORMANCE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-conformance-extension/v1";
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -112,6 +118,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
     let name = match table {
         TABLE_BONDS_V1 => "bonds",
         TABLE_CLASSES_V1 => "classes",
+        TABLE_CONFORMANCE_CLASSES_V1 => "conformance-classes",
         TABLE_PIPELINE_CLASSES_V1 => "pipeline-classes",
         TABLE_JOBS_V1 => "jobs",
         TABLE_PIPELINE_JOBS_V1 => "pipeline-jobs",
@@ -152,6 +159,9 @@ impl KernelLedgerV1 {
         let mut rows = LedgerRowsV1::new();
         for (k, v) in &self.bonds {
             rows.insert((TABLE_BONDS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, (owner, c)) in &self.conformance_classes {
+            rows.insert((TABLE_CONFORMANCE_CLASSES_V1, bytes_of(k)), bytes_of(&(*owner, c.record())));
         }
         for (k, c) in &self.classes {
             rows.insert((TABLE_CLASSES_V1, bytes_of(k)), bytes_of(&c.record()));
@@ -257,6 +267,33 @@ impl KernelLedgerV1 {
                 TABLE_CLASSES_V1 => {
                     let record: ClassRecordV1 = dec(row, "class")?;
                     l.classes.insert(dec(key, "class key")?, class_row_of(&l, &record)?);
+                }
+                TABLE_CONFORMANCE_CLASSES_V1 => {
+                    let (owner, record): (Digest, ClassRecordV1) = dec(row, "conformance class")?;
+                    let class: Digest = dec(key, "conformance class key")?;
+                    let binding = crate::ledger::single_class_binding_v1(
+                        record.descriptor,
+                        &record.program_bytes,
+                        &record.plan,
+                        &record.param_commitments,
+                    );
+                    if class
+                        != crate::mode::class_id_for_mode_v1(
+                            &binding.class_binding_id(),
+                            crate::mode::VerificationModeV1::OptimisticPublicVerification,
+                        )
+                    {
+                        return Err("a conformance row is stored under another class identity".into());
+                    }
+                    if l.opv.policy.is_none() || l.classes.contains_key(&class) || !l.bonds.contains_key(&owner) {
+                        return Err("a conformance row lacks its policy/bond or duplicates an execution registration".into());
+                    }
+                    let owned = l.conformance_class_owners.entry(owner).or_default();
+                    if owned.len() >= crate::ledger::MAX_CONFORMANCE_CLASSES_PER_BOND_V1 {
+                        return Err("stored conformance rows exceed the bond's candidate limit".into());
+                    }
+                    owned.insert(class);
+                    l.conformance_classes.insert(class, (owner, candidate_class_row_of(&l, &record)?));
                 }
                 TABLE_PIPELINE_CLASSES_V1 => {
                     let record: PipelineClassRecordV1 = dec(row, "pipeline class")?;
@@ -376,6 +413,16 @@ impl KernelLedgerV1 {
 /// A single-program class's derived row from its record: decode the program, resolve the descriptor and recompute the gate's bounds
 /// (all pure functions of the record and the policy — what registration computed).
 fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, String> {
+    class_row_in(l, r, false)
+}
+
+/// [`class_row_of`] for a stored conformance-only candidate (table 29): its liability horizon is
+/// [`crate::ledger::candidate_liability_daa_v1`]'s, exactly as its registration derived it.
+fn candidate_class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, String> {
+    class_row_in(l, r, true)
+}
+
+fn class_row_in(l: &KernelLedgerV1, r: &ClassRecordV1, candidate: bool) -> Result<ClassRowV1, String> {
     let d: KernelDescriptorV1 = l
         .known
         .iter()
@@ -387,8 +434,12 @@ fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, Str
         crate::gate::class_prosecution_bounds_v1(&d, &r.plan, &program, &ProfileMaterialV1::kernel_route(true), &l.policy.prosecution)
             .map_err(|g| format!("a stored class is no longer publicly prosecutable: {g:?}"))?;
     // G14-B: what registration derived (a segmented class registers only under OPV, so the network's OPV clock is its clock).
-    let liability_daa = crate::ledger::class_liability_daa_v1(&l.policy, l.opv.policy.as_ref(), &d, &program, &r.plan, &bounds)
-        .map_err(|g| format!("a stored class's pursuit no longer fits: {g:?}"))?;
+    let derived = crate::ledger::class_liability_daa_v1(&l.policy, l.opv.policy.as_ref(), &d, &program, &r.plan, &bounds);
+    let liability_daa = if candidate {
+        crate::ledger::candidate_liability_daa_v1(derived)
+    } else {
+        derived.map_err(|g| format!("a stored class's pursuit no longer fits: {g:?}"))?
+    };
     let court_scope =
         crate::descriptor::is_segmented_v1(&d).then(|| crate::seg_scope::seg_scope_report_v2(&program, r.plan.max_positions));
     Ok(ClassRowV1 {
@@ -564,12 +615,26 @@ pub fn root_of_rows(
         base
     };
     // The court scope (`palw_provider_court_v1`, G14-S): table 28 extends the root only once it holds a row.
-    if by_table.contains_key(&TABLE_COURT_SCOPE_V1) { court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1)) } else { base }
+    let base =
+        if by_table.contains_key(&TABLE_COURT_SCOPE_V1) { court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1)) } else { base };
+    // RFC-0002 conformance candidates: table 29 extends the root only once it holds a row, always after table 28's extension.
+    if by_table.contains_key(&TABLE_CONFORMANCE_CLASSES_V1) {
+        conformance_root_extension_v1(&base, &coll(TABLE_CONFORMANCE_CLASSES_V1))
+    } else {
+        base
+    }
 }
 
 /// `H(extension; root ‖ table 28)` (the court scope, G14-S).
 pub fn court_scope_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
     let mut s = keyed(COURT_SCOPE_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(table);
+    finish(s)
+}
+
+/// Versioned, conditional extension: historical roots remain identical with no candidates.
+pub fn conformance_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
+    let mut s = keyed(CONFORMANCE_ROOT_EXTENSION_DOMAIN_V1);
     s.update(base).update(table);
     finish(s)
 }

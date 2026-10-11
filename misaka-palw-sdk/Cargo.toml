@@ -52,6 +52,8 @@ misaka-palw-tir-ref2 = { path = "../misaka-palw-tir-ref2" }
 misaka-palw-challenge.workspace = true
 # Peak RSS of a conformance run (getrusage), reported in the run record, never in the evidence.
 libc.workspace = true
+# Portable HF-fit arithmetic, outside consensus; policies pin libm-v1.
+libm = "0.2.8"
 serde = { workspace = true }
 # The Hugging Face census (`census`) reads its header store gzip-compressed.
 flate2.workspace = true

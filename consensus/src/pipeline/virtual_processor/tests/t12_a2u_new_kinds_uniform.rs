@@ -176,6 +176,7 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             PalwKernelInnerFenceV1::TypedRootsV1 | PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
                 params.palw_typed_roots_v1 = Some(at)
             }
+            PalwKernelInnerFenceV1::ModelRefutationSealV1 => params.palw_model_refutation_seal_v1 = Some(at),
         }
     }
     // Every other fence a LANDED row of the central table names (formulas, state encodings, the live build's kinds judged anew):
@@ -193,7 +194,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_legacy_held_da_v2"
             | "palw_task_heads_v1"
             | "palw_legacy_public_filer_v1"
-            | "palw_exec_payload_v2" => {} // armed above, through their enums
+            | "palw_exec_payload_v2"
+            | "palw_model_refutation_seal_v1" => {} // armed above, through their enums
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
             // ADR-0175 needs model lines at or below it (`validate_palw_model_immutable_v1`); artifact root ownership is t12's.

@@ -1,0 +1,73 @@
+
+Command: ['cargo', 'test', '--locked', '-p', 'misaka-palw-kernel', '--lib', 'merkle3', '--', '--nocapture', '--test-threads=1']
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 10 tests
+test merkle3::tests::a_wire_shape_that_overflows_is_malformed_never_a_panic ... ok
+test merkle3::tests::buffered_leaf_hashes_preserve_every_dtype_and_update_boundary ... ok
+test merkle3::tests::direct_row_and_column_hashing_preserves_original_roots_and_openings ... ok
+test merkle3::tests::every_leaf_of_both_trees_opens_and_holds_its_elements ... ok
+test merkle3::tests::every_row_range_proves_against_the_commitment ... ok
+test merkle3::tests::leaf_element_counts_match_enumeration_at_both_axis_boundaries_without_allocation ... ok
+test merkle3::tests::producer_hash_cost_against_original_scalar_updates ... ignored, manual producer hash benchmark; hardware timing, not a consensus gate
+test merkle3_stream::tests::bounds_overflow_and_reader_failure_are_refusals_before_large_allocation_or_partial_success ... ok
+test merkle3_stream::tests::simultaneous_row_and_column_tile_boundaries_keep_the_canonical_leaf_order ... ok
+test merkle3_stream::tests::streamed_raw_commitments_match_decoded_roots_and_authenticate_existing_openings ... ok
+
+test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 96 filtered out; finished in 135.68s
+
+
+Command: ['cargo', 'test', '--locked', '-p', 'misaka-palw-kernel', '--lib', 'element::tests', '--', '--nocapture', '--test-threads=1']
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 14 tests
+test element::tests::a_lie_in_any_value_is_found_and_convicted_and_no_honest_element_is ... ok
+test element::tests::a_malformed_value_a_forged_decode_and_tampered_openings_are_judged_objectively ... ok
+test element::tests::allocation_free_leaf_pricing_matches_index_vector_oracle_on_real_weight_shapes ... ok
+test element::tests::allocation_free_pricing_preserves_the_exact_actual_32_position_plan_root ... ok
+test element::tests::element_courts_are_priced_by_the_tile_not_the_tensor ... ok
+test element::tests::every_filing_is_within_its_priced_bound ... 2310 filings within their prices, the largest at 0.770 of its price
+ok
+test element::tests::flat_gather_preserves_results_and_dependency_reads_for_all_dtypes_and_ranks ... ok
+test element::tests::flat_gather_refuses_invalid_indices_before_table_reads_and_preserves_missing_operands ... ok
+test element::tests::leaf_openings_file_their_values_at_the_dtype_width ... ok
+test element::tests::nonflat_gather_axes_and_batches_still_match_the_independent_reference ... ok
+test element::tests::the_element_evaluator_agrees_with_the_reference_on_every_element_of_every_value ... ok
+test element::tests::the_streamed_trace_is_the_trace ... ok
+test element::tests::vocabulary_sized_flat_lookup_roots_match_the_frozen_coordinate_evaluator ... 151936-output lookup + both commitment trees: frozen median 107239208 ns, flat median 26342750 ns; six alternating trials, all roots equal
+ok
+test element::tests::vocabulary_sized_lookup_whole_court_dismisses_honest_convicts_lie_and_refuses_missing_or_substituted_inputs ... 151936-output whole court: 608815 proof bytes, 356634368 abstract work, 62.678417ms honest verification
+ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 92 filtered out; finished in 50.87s
+
+
+Command: ['cargo', 'test', '--locked', '-p', 'misaka-palw-kernel', '--lib', 'scope::tests', '--', '--nocapture', '--test-threads=1']
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 7 tests
+test scope::tests::a_state_written_from_model_bytes_is_model_bytes_at_the_next_position ... ok
+test scope::tests::the_budget_stays_below_every_relation_and_never_refuses ... ok
+test scope::tests::the_exposure_names_the_one_position_and_the_k_position_relations ... ok
+test scope::tests::the_node_materials_separate_weights_copies_and_activations ... ok
+test scope::tests::the_per_requester_tally_bounds_each_requester_and_never_another ... ok
+test seg_scope::tests::candidate_gather_price_bounds_actual_dependency_leaves_at_all_ranks ... ok
+test seg_scope::tests::flat_lookup_price_changes_only_element_work_and_keeps_conservative_disclosure ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 99 filtered out; finished in 0.11s
+
+
+Command: ['cargo', 'test', '--locked', '-p', 'misaka-palw-kernel', '--lib', 'route::tests', '--', '--nocapture', '--test-threads=1']
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 4 tests
+test route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling ... ok
+test route::tests::malformed_and_oversized_encodings_are_refused_with_their_kind ... ok
+test route::tests::the_salted_reveal_is_kind_20_carries_its_commits_own_tag_and_opens_only_its_v2_seal ... ok
+test route::tests::the_wire_form_is_version_discriminant_then_the_fields ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 102 filtered out; finished in 0.00s

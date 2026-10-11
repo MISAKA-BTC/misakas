@@ -513,6 +513,7 @@ pub mod palw_kernel_route_v1;
 /// G14 lane D phase 3: the onboarding objects (artifact binding and its refutation, the kernel binding, the conformance commitment,
 /// the signed registration envelope) and the activation gate they feed — rows in the kernel route's aux tables.
 pub mod palw_onboarding_v1;
+mod palw_onboarding_tile_v3;
 /// G14 onboarding P0: conformance evidence on chain (tag 109) — the evidence core shared with the runtime pack, the network's
 /// interim challenge policy, the fold's judgement of posted evidence and of a refutation, and the fresh verifier.
 pub mod palw_conformance_evidence_v1;
@@ -615,6 +616,14 @@ pub mod palw_class_seating_fence_v1;
 pub mod palw_tir_only_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
+pub mod palw_model_artifact_v2;
+pub mod palw_model_conformance_v2;
+pub mod palw_model_vector_v2;
+pub mod palw_flat_model_vector_v3;
+pub mod palw_flat_model_vector_da_v3;
+/// RFC-0002 P0 (RFC02-T): the protected candidate refutation — fence `palw_model_refutation_seal_v1`, dormant, refused when armed.
+pub mod palw_model_refutation_seal_v4;
+pub mod palw_model_vector_da_v2;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.
 pub mod palw_tir_admission_v1;
 /// RFC-0002 Phase F step F6: an IR class's attempt job — the canonical job, the yardstick context and the job an anchor names (J5).

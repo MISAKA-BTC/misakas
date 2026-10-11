@@ -157,7 +157,8 @@ pub enum CourtUnitKindV1 {
     // -- onboarding (dormant) --
     /// Tag 105 `ArtifactMismatchProofV1::Instances`: the bound commitments map (digests).
     BindingCommitments,
-    /// Tag 105 `ArtifactMismatchProofV1::Row`: a V2 leaf of the true bytes (the refuter's copy) and a row of the BOUND tensor.
+    /// Tag 105 `ArtifactMismatchProofV1::Row` or `TileV3`: a V2 leaf of the true bytes
+    /// (the refuter's copy) and a row or bounded tile of the BOUND tensor.
     BindingMismatchRow,
     /// Tag 109 `Post`: the registrant's conformance evidence — digests of outcomes, never the leaves (the chain carries no multiproof).
     ConformancePost,

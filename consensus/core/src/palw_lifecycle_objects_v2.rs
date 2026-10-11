@@ -1639,17 +1639,22 @@ pub enum PalwKernelInnerFenceV1 {
     /// 19). Its row names `palw_typed_roots_v1`; in force only where `palw_panel_free_v1` is too (as `ProviderCourtV1` needs the
     /// kernel route's).
     PanelFreeAndTypedRootsV1,
+    /// BOTH `Params::palw_panel_free_v1` and `Params::palw_model_refutation_seal_v1` (RFC-0002 P0, lane RFC02-T): the protected
+    /// refutation of a candidate statement (inner 36 seal, 37 reveal). Its row names `palw_model_refutation_seal_v1`; in force only
+    /// where `palw_panel_free_v1` is too (the candidate statements it refutes exist only there).
+    ModelRefutationSealV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 3] = [Self::PanelFreeV1, Self::TypedRootsV1, Self::PanelFreeAndTypedRootsV1];
+    pub const ALL: [Self; 4] = [Self::PanelFreeV1, Self::TypedRootsV1, Self::PanelFreeAndTypedRootsV1, Self::ModelRefutationSealV1];
 
     /// The `Params` field the fence is resolved from.
     pub const fn params_field(self) -> &'static str {
         match self {
             Self::PanelFreeV1 => "palw_panel_free_v1",
             Self::TypedRootsV1 | Self::PanelFreeAndTypedRootsV1 => "palw_typed_roots_v1",
+            Self::ModelRefutationSealV1 => "palw_model_refutation_seal_v1",
         }
     }
 }
@@ -1684,8 +1689,25 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         // these can act where that fence is not armed either.
         K::CommitSegmentedClaim { .. } | K::PostTiledJob { .. } | K::PostPromptTile { .. } => None,
         K::CommitClaimSalted { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
-        K::RegisterClassV2 { .. } | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
+        K::DemandFlatModelVectorV3 { .. }
+        | K::AnswerFlatModelVectorV3 { .. }
+        | K::SettleFlatModelVectorDemandV3 { .. }
+        | K::PostFlatModelVectorV3 { .. }
+        | K::RefuteFlatModelVectorV3 { .. }
+        | K::DemandModelVectorV2 { .. }
+        | K::AnswerModelVectorV2 { .. }
+        | K::SettleModelVectorDemandV2 { .. }
+        | K::PostModelVectorV2 { .. }
+        | K::RefuteModelVectorV2 { .. }
+        | K::CompleteModelConformanceV2 { .. }
+        | K::BindModelArtifactV2 { .. }
+        | K::RefuteModelArtifactV2 { .. }
+        | K::RegisterModelConformanceClassV2 { .. }
+        | K::RegisterConformanceClass { .. }
+        | K::RegisterClassV2 { .. }
+        | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
         K::Spec { .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
+        K::SealModelRefutationV4 { .. } | K::RevealModelRefutationV4 { .. } => Some(PalwKernelInnerFenceV1::ModelRefutationSealV1),
     }
 }
 
@@ -1711,6 +1733,23 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (14, "RegisterPipelineClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (19, "Spec", Some(PalwKernelInnerFenceV1::TypedRootsV1)),
     (20, "CommitClaimSalted", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (21, "RegisterConformanceClass", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (22, "BindModelArtifactV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (23, "RefuteModelArtifactV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (24, "RegisterModelConformanceClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (25, "CompleteModelConformanceV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (26, "PostModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (27, "RefuteModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (28, "DemandModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (29, "AnswerModelVectorV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (30, "SettleModelVectorDemandV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (31, "PostFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (32, "RefuteFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (33, "DemandFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (34, "AnswerFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (35, "SettleFlatModelVectorDemandV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (36, "SealModelRefutationV4", Some(PalwKernelInnerFenceV1::ModelRefutationSealV1)),
+    (37, "RevealModelRefutationV4", Some(PalwKernelInnerFenceV1::ModelRefutationSealV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -1961,8 +2000,18 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     ),
     a2_row(PalwA2SlotV1::KernelInner { lo: 19, hi: 19 }, "palw_typed_roots_v1", "R4X Spec (RFC-0004 Part II)", true),
     // G14R's salted claim seal v2, beside the OPV registrations (the Lead, 2026-10-09): below `palw_panel_free_v1` the kernel refuses
-    // it and the gate drops it through this table. Inner kinds 21 and 22 are not allocated.
+    // it and the gate drops it through this table. Inner kind 21 is conformance preparation; 22–35 are descriptor-scoped model onboarding.
     a2_row(PalwA2SlotV1::KernelInner { lo: 20, hi: 20 }, "palw_panel_free_v1", "G14R CommitClaimSalted (salted claim seal v2)", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 21, hi: 21 }, "palw_panel_free_v1", "RFC-0002 conformance-only class preparation", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 22, hi: 35 }, "palw_panel_free_v1", "RFC-0002 model artifact role binding", true),
+    // RFC02-T (2026-10-11): RFC-0002 P0 — the protected candidate refutation (seal 36, reveal 37); past the same fence the frozen
+    // unsealed refutations 23 / 27 / 32 are refused by name (inner kinds of tag 110, never an int-12 kind).
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 36, hi: 37 },
+        "palw_model_refutation_seal_v1",
+        "RFC-0002 P0 protected candidate refutation (RFC02-T)",
+        true,
+    ),
     // K2S: a segmented fault rides a filing (inner 7) under tag 110's own fence, as the filing does, so no guarded arm is needed;
     // `ClaimBodyV1::Segmented` is the kernel ledger's state, never carried.
     a2_row(
@@ -2078,6 +2127,23 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::StateEncoding { what: "kernel ledger table 28 court scope (per-requester units, dismissed filings)" },
         "palw_provider_court_v1",
         "G14-S (ADR-0177 D2, DA16b §7.3/§7.9)",
+        true,
+    ),
+    // RFC02-T (2026-10-11): RFC-0002's conformance-only candidate classes moved from codex's kernel ledger table 28 (G14-S's court
+    // scope holds it) to table 29 — in the route's rows and its root extension only once non-empty, written only by inner 21 past
+    // `palw_panel_free_v1`.
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel ledger table 29 conformance-only candidate classes (RFC-0002)" },
+        "palw_panel_free_v1",
+        "RFC-0002 conformance candidates (codex; table moved at RFC02-T)",
+        true,
+    ),
+    // RFC02-T (2026-10-11): the refutation seals — kernel route aux table 64 (`(bond, slot)` rows), and their deposits in the bond
+    // committed sum and withdrawal gate. Below the fence no row exists and every sum and root is unchanged.
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux table 64 refutation seals (and their deposits in palw_bond_committed_v1)" },
+        "palw_model_refutation_seal_v1",
+        "RFC-0002 P0 protected candidate refutation (RFC02-T)",
         true,
     ),
     a2_row(
@@ -4297,7 +4363,7 @@ pub(crate) mod tests {
         /// `every_landed_kind_is_pinned_to_its_wire_form` fails on a missing, stale or moved pin and prints the current values.
         const PALW_A2_NEW_KIND_WIRE_V1: &[(u8, u64)] = &[
             (104, 0x98d7608e0a24ad99),
-            (105, 0xdaed6c0cfaf81e2f),
+            (105, 0xa20547aac744e0c7), // Bounded v3 tile court: refresh the stale pre-tile pin; legacy proof declarations remain unchanged.
             (106, 0x888f101d106c24bc),
             (107, 0x0081a402000ddbf4),
             (108, 0xac8ecc3ff97ec415),

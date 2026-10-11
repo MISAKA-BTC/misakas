@@ -210,7 +210,9 @@ tiled dual-root tensor commitments (v3: leaves of at most 4096 elements of one r
 (derived windows included) under a position root, position roots under segment roots of 1024 positions, segment roots under a claim \
 root carried on chain; element courts (one output element, one leaf per input dependency line; a window judged against the previous \
 position's window and the new row; greedy decode by a rival element); per-position demands served in parts; prompts posted in \
-tiles of 4096 ids under a prompt root; OptimisticPublicVerification only";
+tiles of 4096 ids under a prompt root; OptimisticPublicVerification only; \
+whole-value pricing revision 2: rank-one axis-0 unbatched Gather uses 16 work units per output before factor 64, \
+with unchanged operand authentication and output hash prices; DA16b disclosure retains revision-1 conservative prices";
 
 /// **K2-TIR-v4** (`docs/design/palw/k2-real-scale.md`): K2-TIR-v2's families and checkers under the real-scale commitment and court
 /// suites — segmented claims ([`crate::seg`]), element courts ([`crate::element`]), per-position DA ([`crate::seg_da`]). A new descriptor:
@@ -238,7 +240,8 @@ pub fn is_segmented_v1(d: &KernelDescriptorV1) -> bool {
 pub const K2_TIR_V5_SEMANTICS: &[u8] = b"misaka-palw-kernel K2-TIR-v5 (encoders and heads): K2-TIR-v4 for a program of ONE position whose \
 last two params, input.ids (idx [L], L <= 4096) and input.count (idx []), are the job's input and not the artifact: the job's prompt ids \
 padded to L with id 0, and the prompt's length; no node reads the per-position token; a tiled job of no generated id and a claim of no \
-delivered id; the result is the program's output node at position 0; OptimisticPublicVerification only";
+delivered id; the result is the program's output node at position 0; OptimisticPublicVerification only; \
+whole-value pricing revision 2 and conservative revision-1 DA16b disclosure as in K2-TIR-v4";
 
 /// The memory model of K2-TIR-v5: params past `first_input` are the job's input (`crate::seg_encoder`).
 pub const MEMORY_MODEL_JOB_INPUTS_V1: u32 = 2;
@@ -352,6 +355,25 @@ impl ModelKernelBindingV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn segmented_pricing_revision_has_new_descriptor_identities_and_arms_no_schedule() {
+        let schedule = builtin_schedule_v1();
+        for (current, text) in [(k2_tir_v4_descriptor(), K2_TIR_V4_SEMANTICS), (k2_tir_v5_descriptor(), K2_TIR_V5_SEMANTICS)] {
+            let text = std::str::from_utf8(text).unwrap();
+            let previous_text = text.split("; whole-value pricing revision 2").next().unwrap();
+            assert_ne!(previous_text, text);
+            let mut previous = current.clone();
+            previous.semantics_digest = crate::hash::id(KERNEL_DESCRIPTOR_DOMAIN_V1, previous_text.as_bytes());
+            assert_ne!(previous.digest(), current.digest(), "a revised admission price cannot silently keep its kernel identity");
+            assert_ne!(schedule.standing_at(&current.digest(), u64::MAX), KernelStandingV1::Active);
+            assert_eq!(schedule.standing_at(&previous.digest(), u64::MAX), KernelStandingV1::Unknown);
+            assert_eq!(previous.limits, current.limits, "the price revision raises no resource limit");
+        }
+        for descriptor in [k2_tir_v1_descriptor(), k2_tir_v2_descriptor(), k2_tir_v3_descriptor()] {
+            assert_eq!(schedule.standing_at(&descriptor.digest(), u64::MAX), KernelStandingV1::NotActive(KernelStatusV1::Implemented));
+        }
+    }
 
     #[test]
     fn the_builtin_kernel_is_implemented_not_active() {

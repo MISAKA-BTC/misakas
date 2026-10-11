@@ -165,6 +165,10 @@ pub struct PalwKernelRouteExtrasV1 {
     /// **G14R round 3: `Params::palw_verifier_pay_v1`'s activation DAA** (`None` on every network): the kernel ledger's M\*-49 and O2
     /// terms (`crate::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1`), injected at every load — not in the header or root.
     pub verifier_pay: Option<u64>,
+    /// **RFC-0002 P0 (RFC02-T): `Params::palw_model_refutation_seal_v1`'s activation DAA, where that fence is in force at the block**
+    /// (`None` below it and on every network): candidate refutations only as sealed reveals (inner 36 / 37), the unsealed 23 / 27 / 32
+    /// refused by name.
+    pub model_refutation_seal: Option<u64>,
 }
 
 /// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and the two restrictions of the DERIVED

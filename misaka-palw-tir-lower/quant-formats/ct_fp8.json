@@ -68,6 +68,44 @@
      "channel"
     ],
     "path": "config_groups.group_0.weights.strategy"
+   },
+   {
+    "path": "config_groups.group_0.input_activations",
+    "one_of": [
+     null
+    ],
+    "message": "quantised input activations require their own arithmetic contract"
+   },
+   {
+    "path": "config_groups.group_0.output_activations",
+    "one_of": [
+     null
+    ],
+    "message": "quantised output activations require their own arithmetic contract"
+   },
+   {
+    "path": "config_groups.group_0.weights.group_size",
+    "one_of": [
+     null,
+     -1
+    ],
+    "message": "per-channel weights have no grouped scale layout"
+   },
+   {
+    "path": "config_groups.group_0.weights.actorder",
+    "one_of": [
+     null,
+     false
+    ],
+    "message": "act-order requires a stored column-order contract"
+   },
+   {
+    "path": "config_groups.group_0.weights.symmetric",
+    "one_of": [
+     null,
+     true
+    ],
+    "message": "asymmetric FP8 needs a zero-point contract"
    }
   ],
   "inert": [
@@ -75,7 +113,8 @@
    "global_compression_ratio",
    "compression_ratio",
    "quantization_status",
-   "version"
+   "version",
+   "config_groups.group_0.weights.observer"
   ],
   "lm_head": "unless_skipped",
   "skip": "ignore",

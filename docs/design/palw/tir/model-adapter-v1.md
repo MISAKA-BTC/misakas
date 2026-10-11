@@ -73,8 +73,13 @@ a q/k norm?) is read from the tensor names when they are given and otherwise ass
   *effective* adapter (after `extends`): keys sorted, no whitespace, integral floats written as
   integers. The hash pins behaviour, including every built-in the file extends. The built-in pack's
   hash (`adapter::builtin::pack_hash`, over the sorted `(id, hash)` pairs) is what the runtime pack pins.
-* **Safety**: an adapter is untrusted data. Evaluation is pure and bounded (4 M nodes, depth 96, lists
-  of 2²⁰, 4096 layers); a key no rule reads is refused (`NOT_LOWERABLE`), never ignored; a file over
+* **Safety**: an adapter is untrusted data. Evaluation is pure and bounded (4 M work units,
+  96 JSON levels, 32 active evaluator calls including lazy-variable dependencies, lists of 2²⁰,
+  4096 layers, 64 MiB cumulative logical allocation). Copying a value counts its entire subtree,
+  object keys and UTF-8 strings before allocation; list construction and pairwise searches also
+  consume the budget. Refusal is `FRONTEND_EXPANSION_LIMIT`. The allocation meter bounds compiler
+  expansion, not process RSS or consensus resource costs. A key no rule reads is refused
+  (`NOT_LOWERABLE`), never ignored; a file over
   1 MiB is refused.
 
 ## 4. The expression language

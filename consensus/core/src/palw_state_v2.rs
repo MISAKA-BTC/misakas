@@ -139,6 +139,17 @@ mod palw_kernel_route_fold_v1;
 // G14 lane D phase 3: the onboarding objects' fold arms (artifact binding and refutation, kernel binding, conformance commitment).
 #[path = "palw_onboarding_fold_v1.rs"]
 mod palw_onboarding_fold_v1;
+#[path = "palw_model_artifact_fold_v2.rs"]
+mod palw_model_artifact_fold_v2;
+#[path = "palw_model_conformance_fold_v2.rs"]
+mod palw_model_conformance_fold_v2;
+#[path = "palw_model_vector_fold_v2.rs"]
+mod palw_model_vector_fold_v2;
+#[path = "palw_flat_model_vector_fold_v3.rs"]
+mod palw_flat_model_vector_fold_v3;
+// RFC-0002 P0 (RFC02-T): the protected candidate refutation's fold arms (seal, reveal).
+#[path = "palw_model_refutation_seal_fold_v4.rs"]
+mod palw_model_refutation_seal_fold_v4;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_provider_court_fold_v1.rs"]
 mod palw_provider_court_fold_v1;
@@ -4003,6 +4014,13 @@ pub fn palw_bond_backs_live_duty_v1(state: &PalwChainStateV2, key: &PalwBondKeyV
     if state.reserved_exposure(key) > 0
         || state.kernel_reserved(key) > 0
         || state.onboarding_reserved(key) > 0
+        || state.model_artifact_reserved_at_v2(key, now_daa) > 0
+        || state.model_vector_reserved_at_v2(key, now_daa) > 0
+        || state.flat_model_vector_reserved_at_v3(key, now_daa) > 0
+        || state.model_vector_demand_reserved_v2(key) > 0
+        || state.flat_vector_demand_reserved_v3(key) > 0
+        // RFC-0002 P0 (RFC02-T): a live refutation seal holds its deposit (0 with no seal row).
+        || state.model_refutation_seal_reserved_v4(key, now_daa) > 0
         || state.provider_court_reserved(key) > 0
         // Lane BUDGET (ADR-0176 D4): the capital that earned a budget window stays until the window has passed (design §2.4).
         || state.bond_budget_window_holds(key, now_daa)
@@ -4046,6 +4064,13 @@ pub fn palw_bond_backs_live_duty_v2(
     if state.reserved_exposure(key) > 0
         || state.kernel_reserved(key) > 0
         || state.onboarding_reserved(key) > 0
+        || state.model_artifact_reserved_at_v2(key, now_daa) > 0
+        || state.model_vector_reserved_at_v2(key, now_daa) > 0
+        || state.flat_model_vector_reserved_at_v3(key, now_daa) > 0
+        || state.model_vector_demand_reserved_v2(key) > 0
+        || state.flat_vector_demand_reserved_v3(key) > 0
+        // RFC-0002 P0 (RFC02-T): a live refutation seal holds its deposit (0 with no seal row).
+        || state.model_refutation_seal_reserved_v4(key, now_daa) > 0
         || state.provider_court_reserved(key) > 0
         // Lane BUDGET (ADR-0176 D4): the capital that earned a budget window stays until the window has passed (design §2.4).
         || state.bond_budget_window_holds(key, now_daa)
@@ -4314,6 +4339,13 @@ pub fn palw_bond_committed_v1(
         // G14 lane D: what the kernel route has reserved against the bond (a claim's collateral, a demand bond); 0 with no route.
         .saturating_add(state.kernel_reserved(bond))
         .saturating_add(state.onboarding_reserved(bond))
+        .saturating_add(state.model_artifact_reserved_at_v2(bond, now_daa))
+        .saturating_add(state.model_vector_reserved_at_v2(bond, now_daa))
+        .saturating_add(state.flat_model_vector_reserved_at_v3(bond, now_daa))
+        .saturating_add(state.model_vector_demand_reserved_v2(bond))
+        .saturating_add(state.flat_vector_demand_reserved_v3(bond))
+        // RFC-0002 P0 (RFC02-T): live refutation seals reserve their deposits (0 with no seal row).
+        .saturating_add(state.model_refutation_seal_reserved_v4(bond, now_daa))
         // DA16: the provider court's leases and challenge bonds.
         .saturating_add(state.provider_court_reserved(bond))
 }

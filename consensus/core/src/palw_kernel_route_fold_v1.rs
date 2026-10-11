@@ -536,7 +536,117 @@ pub(super) fn apply_kernel_route_object_v1(
     if !builder.state.bonds.get(signer).is_some_and(|b| matches!(b.status, PalwBondStatusV2::Active)) {
         return Ok(());
     }
+    // RFC-0002 P0 (RFC02-T): past `palw_model_refutation_seal_v1` a candidate refutation is only a sealed reveal (inner 37); the frozen
+    // unsealed refutations pay whoever is included first — an equivalent re-encoding of an honest finder's proof — so they are refused
+    // by name before any court, fee or row.
+    if super::palw_model_refutation_seal_fold_v4::sealed_refutations_in_force_v4(builder)
+        && matches!(
+            object,
+            KernelRouteObjectV1::RefuteFlatModelVectorV3 { .. }
+                | KernelRouteObjectV1::RefuteModelVectorV2 { .. }
+                | KernelRouteObjectV1::RefuteModelArtifactV2 { .. }
+        )
+    {
+        return Err(refused(
+            "an unsealed candidate refutation is refused past palw_model_refutation_seal_v1: seal (inner 36), then reveal (inner 37)",
+        ));
+    }
+    // Inner 22/23 are consensus-owned state/collateral courts, never bare-ledger moves.
+    match &object {
+        KernelRouteObjectV1::SealModelRefutationV4 { slot, seal } => {
+            return super::palw_model_refutation_seal_fold_v4::seal(builder, ctx, signer, *slot, seal);
+        }
+        KernelRouteObjectV1::RevealModelRefutationV4 { slot, kind, target, salt, proof } => {
+            return super::palw_model_refutation_seal_fold_v4::reveal(builder, ctx, signer, *slot, *kind, target, salt, proof);
+        }
+        KernelRouteObjectV1::DemandFlatModelVectorV3 { vector, slot, position, occurrence, node, leaf } => {
+            let unit = crate::palw_flat_model_vector_da_v3::FlatVectorUnitV3 {
+                position: *position, occurrence: *occurrence, node: *node, leaf: *leaf,
+            };
+            return super::palw_flat_model_vector_fold_v3::demand(builder, ctx, signer, vector, *slot, unit);
+        }
+        KernelRouteObjectV1::AnswerFlatModelVectorV3 { demand, answer } => {
+            return super::palw_flat_model_vector_fold_v3::answer(builder, ctx, signer, demand, answer);
+        }
+        KernelRouteObjectV1::SettleFlatModelVectorDemandV3 { demand } => {
+            return super::palw_flat_model_vector_fold_v3::settle_demand(builder, ctx, signer, demand);
+        }
+        KernelRouteObjectV1::PostFlatModelVectorV3 { class, binding, post } => {
+            return super::palw_flat_model_vector_fold_v3::post(builder, ctx, signer, class, binding, post);
+        }
+        KernelRouteObjectV1::RefuteFlatModelVectorV3 { vector, proof } => {
+            return super::palw_flat_model_vector_fold_v3::refute(builder, ctx, signer, vector, proof);
+        }
+        KernelRouteObjectV1::DemandModelVectorV2 { vector, slot, position, occurrence, node, axis, line, tile } => {
+            let unit = crate::palw_model_vector_da_v2::ModelVectorUnitV2 {
+                position: *position, occurrence: *occurrence, node: *node, axis: *axis, line: *line, tile: *tile,
+            };
+            return super::palw_model_vector_fold_v2::demand(builder, ctx, signer, vector, *slot, unit);
+        }
+        KernelRouteObjectV1::AnswerModelVectorV2 { demand, answer } => {
+            return super::palw_model_vector_fold_v2::answer(builder, ctx, signer, demand, answer);
+        }
+        KernelRouteObjectV1::SettleModelVectorDemandV2 { demand } => {
+            return super::palw_model_vector_fold_v2::settle_demand(builder, ctx, signer, demand);
+        }
+        KernelRouteObjectV1::PostModelVectorV2 { class, binding, post } => {
+            return super::palw_model_vector_fold_v2::post(builder, ctx, signer, class, binding, post);
+        }
+        KernelRouteObjectV1::RefuteModelVectorV2 { vector, proof } => {
+            return super::palw_model_vector_fold_v2::refute(builder, ctx, signer, vector, proof);
+        }
+        KernelRouteObjectV1::CompleteModelConformanceV2 { class, binding, proof } => {
+            return super::palw_model_conformance_fold_v2::complete(builder, ctx, signer, class, binding, proof);
+        }
+        KernelRouteObjectV1::BindModelArtifactV2 { descriptor, program_bytes, model_inventory_root, param_commitments } => {
+            return super::palw_model_artifact_fold_v2::bind(
+                builder,
+                ctx,
+                signer,
+                descriptor,
+                program_bytes,
+                model_inventory_root,
+                param_commitments,
+            );
+        }
+        KernelRouteObjectV1::RefuteModelArtifactV2 { binding, proof } => {
+            return super::palw_model_artifact_fold_v2::refute(builder, ctx, signer, binding, proof);
+        }
+        _ => {}
+    }
+    let scoped = super::palw_model_artifact_fold_v2::candidate(builder, ctx, &object)?;
     let mut ledger = load_ledger(builder, ctx)?;
+    let original_attested = ledger.attested_artifacts.clone();
+    if let Some((_, id)) = &scoped {
+        let row = builder.state.kernel_route.as_ref().unwrap().model_artifact_binding_header_v2(id).unwrap();
+        ledger.attest_artifact(row.kernel_param_root.as_bytes());
+    }
+    let object = scoped.as_ref().map(|(o, _)| o).unwrap_or(&object);
+    if let KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } = &object {
+        if mode.is_optimistic() {
+            if let (Some(route), Some(opv)) =
+                (builder.state.kernel_route.as_ref(), builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()))
+            {
+                let facts = crate::palw_opv_bootstrap_v1::OpvClassFactsV1::of_registration(
+                    *descriptor,
+                    program_bytes,
+                    plan,
+                    param_commitments,
+                );
+                if route
+                    .model_conformance_eligibility_v2(
+                        &ledger,
+                        &facts,
+                        ctx.daa_score,
+                        &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv),
+                    )
+                    .is_ok()
+                {
+                    ledger.attest_artifact(facts.param_root);
+                }
+            }
+        }
+    }
     let before = loaded_rows(builder, &ledger);
     match opv_gate_v1(builder, ctx, &ledger, &object) {
         OpvGateV1::Drop => return Ok(()),
@@ -581,9 +691,9 @@ pub(super) fn apply_kernel_route_object_v1(
     };
     // A class registers only if its worst filing, response and commitments can actually be carried (chunking counted).
     for event in &events {
-        if let LedgerEventV1::ClassRegistered { class } = event {
+        if let LedgerEventV1::ClassRegistered { class } | LedgerEventV1::ConformanceClassRegistered { class } = event {
             // Every kind's bounds: single program, pipeline, typed (RFC-0004 Part II).
-            let bounds = ledger.bounds_of(class);
+            let bounds = ledger.bounds_of(class).or_else(|| ledger.conformance_classes.get(class).map(|(_, row)| row.bounds));
             let fits = bounds.is_some_and(|b| {
                 misaka_palw_kernel::ledger::carrier_fit_v1(
                     &b,
@@ -596,6 +706,17 @@ pub(super) fn apply_kernel_route_object_v1(
             if !fits {
                 persist_budget(builder, ctx, &ledger);
                 return Ok(());
+            }
+        }
+    }
+    if let Some((_, binding)) = &scoped {
+        for event in &events {
+            if let LedgerEventV1::ConformanceClassRegistered { class } = event {
+                builder.write_kernel_row(
+                    crate::palw_model_artifact_v2::PALW_MODEL_ARTIFACT_CANDIDATE_TABLE_V2,
+                    borsh::to_vec(&Hash64::from_bytes(*class)).unwrap(),
+                    Some(borsh::to_vec(binding).unwrap()),
+                );
             }
         }
     }
@@ -623,6 +744,9 @@ pub(super) fn apply_kernel_route_object_v1(
     // slash survives; the sync above makes this unreachable.)
     apply_settlements(builder, &events, true)?;
     persist_budget(builder, ctx, &ledger);
+    // Only the exact signed candidate used the temporary scope. Persisting this root in
+    // TABLE_ATTESTED would let an unrelated program borrow it in the next object.
+    ledger.attested_artifacts = original_attested;
     flush(builder, &ledger, &before);
     if let Some((subject, row)) = scope {
         super::palw_provider_court_fold_v1::write_court_scope_row_v1(builder, &subject, &row);
@@ -665,18 +789,14 @@ pub(super) fn charge_route_budget_v1(
         Some((blue_score, a, w)) if blue_score == ctx.blue_score => (a, w),
         _ => (0, 0),
     };
-    let runs = if may_spend_reserve {
-        policy.max_adjudications_per_block
-    } else {
-        policy.max_adjudications_per_block.saturating_sub(policy.prosecution_reserved_runs())
-    };
-    if adjudications >= runs || work.saturating_add(court_work) > policy.max_court_work_per_block {
+    let spent = misaka_palw_kernel::ledger::BlockBudgetV1 { adjudications, court_work: work };
+    let Some(next) = spent.charged_v1(&policy, court_work, may_spend_reserve) else {
         return Ok(false);
-    }
+    };
     builder.write_kernel_row(
         PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,
         Vec::new(),
-        Some(borsh::to_vec(&(ctx.blue_score, adjudications + 1, work.saturating_add(court_work))).expect("a budget serializes")),
+        Some(borsh::to_vec(&(ctx.blue_score, next.adjudications, next.court_work)).expect("a budget serializes")),
     );
     Ok(true)
 }

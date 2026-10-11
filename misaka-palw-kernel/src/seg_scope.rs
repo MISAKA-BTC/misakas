@@ -69,6 +69,45 @@ pub fn all_hiding_tiles_bytes_v1(shape: &[usize], dtype: DType) -> u64 {
 /// by every leaf (whichever is larger), a param by every leaf, a token or job ids by their tile. A filer opens only what the elements
 /// read, so every filing is within it.
 pub fn whole_value_court_cost_v1(program: &TirProgramV1, s: usize, n: usize, node_count: u64) -> (u64, u64) {
+    whole_value_court_cost_in_v1(program, s, n, node_count, true)
+}
+
+fn whole_value_court_cost_in_v1(program: &TirProgramV1, s: usize, n: usize, node_count: u64, flat_gather: bool) -> (u64, u64) {
+    whole_value_court_cost_in(program, s, n, node_count, flat_gather, false)
+}
+
+/// Candidate trace v2 only: a Gather of a registered param opens at most the
+/// selected items' row leaves, rather than every item in that param. The other
+/// operand, output hashes and general element evaluator keep their full price.
+/// This does not change the v4/v5 disclosure mask, plan or reward contract.
+pub fn model_vector_whole_court_cost_v2(program: &TirProgramV1, s: usize, n: usize, node_count: u64) -> (u64, u64) {
+    whole_value_court_cost_in(program, s, n, node_count, true, true)
+}
+
+fn gather_param_leaves_bytes(shape: &[usize], dtype: DType, indices: u64) -> u64 {
+    let l = LayoutV3::of(shape);
+    let all = l.leaves(AXIS_ROW);
+    let (leaves, elements) = if shape.len() == 1 {
+        let leaves = all.min(indices);
+        (leaves, l.len.min(leaves.saturating_mul(crate::merkle3::TILE_V3)))
+    } else {
+        let items = (shape[0] as u64).min(indices);
+        let rows = l.rows / shape[0] as u64;
+        (items.saturating_mul(rows).saturating_mul(l.row_tiles), items.saturating_mul(rows).saturating_mul(l.row_len))
+    };
+    elements
+        .saturating_mul(dtype.width() as u64)
+        .saturating_add(leaves.saturating_mul((crate::merkle::depth(all) + 1) * 64 + 8 * shape.len() as u64 + 32))
+}
+
+fn whole_value_court_cost_in(
+    program: &TirProgramV1,
+    s: usize,
+    n: usize,
+    node_count: u64,
+    flat_gather: bool,
+    partial_gather: bool,
+) -> (u64, u64) {
     let occurrences = program.occurrences();
     let block = occurrences[s].0 as usize;
     let node = &program.blocks[block].nodes[n];
@@ -80,24 +119,32 @@ pub fn whole_value_court_cost_v1(program: &TirProgramV1, s: usize, n: usize, nod
     let mut bytes = 64 + node_bytes;
     // A committed operand's source may be clear (v3 leaves), withheld (whole) or hiding (hiding tiles): the largest of the three, so
     // the price never depends on which occurrence feeds the operand (and the modes are never priced in a circle). Plus the operand's shell.
+    // The candidate trace v2 profile (`partial_gather`, RFC-0002) has no hiding values (`crate::element`'s candidate scope: withheld
+    // or clear, every commitment v3), so a committed operand there is opened whole or by v3 leaves only; the hiding-tile term is the
+    // frozen v4/v5 profile's (G14-S), where any operand may be hiding.
+    let hiding_operands = !partial_gather;
     let operand = |shape: Vec<usize>, dtype: DType, committed: bool| {
         if committed {
             node_bytes
                 + whole_tensor_bytes_v1(&shape, dtype)
                     .max(all_leaves_bytes(&shape, dtype))
-                    .max(all_hiding_tiles_bytes_v1(&shape, dtype))
+                    .max(if hiding_operands { all_hiding_tiles_bytes_v1(&shape, dtype) } else { 0 })
                 + shell
         } else {
             shell + 2 + all_leaves_bytes(&shape, dtype)
         }
     };
-    for r in &node.inputs {
+    for (i, r) in node.inputs.iter().enumerate() {
         let t = crate::plan::ref_type(program, block, r);
         bytes += match r {
             Ref::Node(_) | Ref::CarryIn(_) | Ref::State(_) => operand(t.resolve(h), t.dtype, true),
             Ref::Param(j) => match encoder {
                 Some(b) if *j == b.first_input => shell + crate::element::prompt_tile_bytes_v1(b.l as u64, 0),
                 Some(b) if *j == b.first_input + 1 => shell,
+                _ if partial_gather && i == 0 && matches!(node.prim, Prim::Gather { axis: 0, batch_dims: 0 }) => {
+                    let indices = crate::plan::ref_type(program, block, &node.inputs[1]).resolve(h);
+                    8 + gather_param_leaves_bytes(&t.resolve(h), t.dtype, LayoutV3::of(&indices).len)
+                }
                 _ => operand(t.resolve(h), t.dtype, false),
             },
             Ref::Input(j) if *j == INPUT_TOKEN => shell + crate::element::prompt_tile_bytes_v1(PROMPT_TILE_IDS_V1 as u64, 0) + 64 * 20,
@@ -109,9 +156,20 @@ pub fn whole_value_court_cost_v1(program: &TirProgramV1, s: usize, n: usize, nod
     }
     let layout = LayoutV3::of(&node.out.resolve(h));
     let first_shape = || crate::plan::ref_type(program, block, &node.inputs[0]).resolve(h);
+    let flat = flat_gather
+        && matches!(node.prim, Prim::Gather { axis: 0, batch_dims: 0 })
+        && crate::element::flat_gather_v1(
+            node,
+            &node.inputs.iter().map(|r| crate::plan::ref_type(program, block, r).resolve(h)).collect::<Vec<_>>(),
+            &node.out.resolve(h),
+        );
     // Whole-value verification invokes the element evaluator once per output. A matrix product reads its full contraction
     // for EACH output; TopK sorts its reduction line for each selected index. Counting the input tensors once underprices both.
     let element_work = match node.prim {
+        // Two direct authenticated reads and an index bounds check, without per-element
+        // stride/coordinate construction. Wire authentication and both output hashes retain
+        // their separate byte prices below. The unit is abstract bounded work, not CPU time.
+        Prim::Gather { .. } if flat => 16,
         Prim::MatMul => first_shape().last().copied().unwrap_or(1) as u64 * 4,
         Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => first_shape()[axis as usize] as u64 * 2,
         Prim::TopK { axis, .. } => {
@@ -133,6 +191,44 @@ pub fn whole_value_court_cost_v1(program: &TirProgramV1, s: usize, n: usize, nod
     (bytes, work)
 }
 
+/// Commitment-only values for non-reward candidate traces. In addition to the
+/// frozen mask, this admits the bounded Gather dependency court above. Values
+/// outside these bounds are still a scope gap, never an eligibility certificate.
+pub fn model_vector_withheld_mask_v2(program: &TirProgramV1) -> Vec<Vec<bool>> {
+    let masked = crate::scope::court_model_dependent_mask_v1(program, seg_model_params_v1(program));
+    let node_count = masked.iter().map(|o| o.len() as u64).sum();
+    let old = seg_withheld_mask_v1(program);
+    masked
+        .iter()
+        .enumerate()
+        .map(|(s, occ)| {
+            occ.iter()
+                .enumerate()
+                .map(|(n, m)| {
+                    let (bytes, work) = model_vector_whole_court_cost_v2(program, s, n, node_count);
+                    old[s][n] || (*m && bytes <= SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1 && work <= SEG_WHOLE_VALUE_COURT_MAX_WORK_V1)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Additional opening/work envelope which the candidate admission must reserve.
+pub fn model_vector_whole_court_bounds_v2(program: &TirProgramV1) -> (u64, u64) {
+    let mask = model_vector_withheld_mask_v2(program);
+    let count = mask.iter().map(|o| o.len() as u64).sum();
+    let mut bounds = (0u64, 0u64);
+    for (s, occ) in mask.iter().enumerate() {
+        for (n, withheld) in occ.iter().enumerate() {
+            if *withheld {
+                let (bytes, work) = model_vector_whole_court_cost_v2(program, s, n, count);
+                bounds = (bounds.0.max(bytes), bounds.1.max(work));
+            }
+        }
+    }
+    bounds
+}
+
 /// **`[occurrence][node]`: the withheld values** — model-dependent (DA16b Level 2) and of a whole-value court that fits
 /// [`SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1`].
 pub fn seg_withheld_mask_v1(program: &TirProgramV1) -> Vec<Vec<bool>> {
@@ -148,7 +244,9 @@ pub fn seg_withheld_mask_v1(program: &TirProgramV1) -> Vec<Vec<bool>> {
                     if !m {
                         return false;
                     }
-                    let (bytes, work) = whole_value_court_cost_v1(program, s, n, node_count);
+                    // Keep the established DA selection conservative and unchanged: lowering a
+                    // court's execution price must not silently withhold additional values.
+                    let (bytes, work) = whole_value_court_cost_in_v1(program, s, n, node_count, false);
                     bytes <= SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1 && work <= SEG_WHOLE_VALUE_COURT_MAX_WORK_V1
                 })
                 .collect()
@@ -310,4 +408,107 @@ pub fn seg_scope_report_v2(program: &TirProgramV1, max_positions: u32) -> SegSco
         }
     }
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use misaka_palw_tir::builder::ProgramBuilder;
+    use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, INPUT_TOKEN};
+    use misaka_palw_tir::{Dim, TensorType};
+
+    #[test]
+    fn candidate_gather_price_bounds_actual_dependency_leaves_at_all_ranks() {
+        use crate::element::leaves_covering_v1;
+        use crate::merkle3::TreesV3;
+        use misaka_palw_tir::Tensor;
+        use std::collections::BTreeSet;
+        // Scattered scalar lookups, duplicate indices, full coverage, several
+        // rows per selected rank-3/4 item and a partial final tile.
+        for shape in [vec![9001], vec![7, 5001], vec![7, 2, 19], vec![7, 2, 3, 19]] {
+            let t = Tensor::zeros(DType::I8, &shape);
+            let trees = TreesV3::of(&t);
+            let stride = t.data.len() / shape[0];
+            for ids in [vec![0], vec![0, 0, 0], vec![0, shape[0] - 1], (0..shape[0]).collect()] {
+                let reads: BTreeSet<_> = ids.iter().flat_map(|j| (*j * stride..(*j + 1) * stride).map(|e| e as u64)).collect();
+                let leaves = leaves_covering_v1(&t, &trees, &reads);
+                let wire = leaves.iter().map(|l| borsh::to_vec(l).unwrap().len() as u64).sum::<u64>();
+                let bound = gather_param_leaves_bytes(&shape, DType::I8, ids.len() as u64);
+                assert!(wire <= bound, "{shape:?} {ids:?}: {wire} > {bound}");
+            }
+        }
+        // A large declaration changes path depth, not a full weight allocation
+        // or a linear-size court. The one selected row remains bounded.
+        let shape = [1usize << 28, 2048];
+        let sparse = gather_param_leaves_bytes(&shape, DType::I8, 1);
+        assert!(sparse < 8192);
+        assert!(all_leaves_bytes(&shape, DType::I8) > 1 << 38);
+    }
+
+    fn lookup_program(len: u32) -> TirProgramV1 {
+        let mut pb = ProgramBuilder::new(len, HISTORY_BOUND_V1_SMALL);
+        let embedding = pb.param("embedding", DType::I16, &[len, 1], false);
+        let table = pb.param("lookup", DType::I16, &[63], false);
+        let indices = pb.param("indices", DType::I32, &[len], false);
+        let pre = {
+            let mut b = pb.block("pre", vec![]);
+            let x = b.gather(embedding, Ref::Input(INPUT_TOKEN), 0, 0);
+            let x = b.cast(x, DType::I32);
+            b.finish(&[x])
+        };
+        let post = {
+            let mut b = pb.block("post", vec![TensorType::fixed(DType::I32, &[1])]);
+            let x = b.broadcast(Ref::CarryIn(0), &[Dim::Fixed(len)]);
+            let x = b.add(x, indices, DType::I32);
+            let x = b.clamp(x, 0, 62, DType::I32);
+            let x = b.gather(table, x, 0, 0);
+            let x = b.cast(x, DType::I32);
+            b.commit(x);
+            b.finish(&[])
+        };
+        let logits = (pb.blocks[post as usize].nodes.len() - 1) as u16;
+        pb.finish(pre, vec![], post, logits)
+    }
+
+    #[test]
+    fn flat_lookup_price_changes_only_element_work_and_keeps_conservative_disclosure() {
+        let mut programs = vec![
+            misaka_palw_tir_sketch::fixture::dense_moe_v1(7).program,
+            misaka_palw_tir_sketch::fixture::wide128_v1(7).program,
+            misaka_palw_tir_sketch::fixture::dense_moe_windowed_v1(7, 4).program,
+        ];
+        // Both sides of the one-MiB disclosure bound; large declarations require no tensor allocation.
+        programs.extend([64, 151_936, 190_000, 300_000, 20_000_000].map(lookup_program));
+        let mut specialized = 0;
+        for p in programs {
+            let model = crate::scope::court_model_dependent_mask_v1(&p, seg_model_params_v1(&p));
+            let mask = seg_withheld_mask_v1(&p);
+            let count = model.iter().map(|o| o.len() as u64).sum();
+            for (s, (b, _)) in p.occurrences().iter().enumerate() {
+                for (n, node) in p.blocks[*b as usize].nodes.iter().enumerate() {
+                    let old = whole_value_court_cost_in_v1(&p, s, n, count, false);
+                    let new = whole_value_court_cost_v1(&p, s, n, count);
+                    assert_eq!(old.0, new.0, "authenticated byte bound changed");
+                    assert_eq!(
+                        mask[s][n],
+                        model[s][n] && old.0 <= SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1 && old.1 <= SEG_WHOLE_VALUE_COURT_MAX_WORK_V1
+                    );
+                    let h = crate::plan::worst_h(&p, *b as usize);
+                    let inputs = node.inputs.iter().map(|r| crate::plan::ref_type(&p, *b as usize, r).resolve(h)).collect::<Vec<_>>();
+                    let out = node.out.resolve(h);
+                    if crate::element::flat_gather_v1(node, &inputs, &out) {
+                        specialized += 1;
+                        assert_eq!(
+                            old.1 - new.1,
+                            LayoutV3::of(&out).len * 16 * 64,
+                            "wire authentication and hashes retain their entire price"
+                        );
+                    } else {
+                        assert_eq!(old, new, "unrelated primitive price changed");
+                    }
+                }
+            }
+        }
+        assert!(specialized >= 5);
+    }
 }

@@ -335,6 +335,40 @@ impl Rpc {
         Self::wire(palw_conformance_evidence_response_v1(self.api(), class).expect("op 231 answers"))
     }
 
+    /// The SDK/CLI's common verifier input, derived solely from paged op-211 wire responses.
+    pub(super) fn onboarding(&self, class: Hash64) -> misaka_palw_sdk::onboarding_chain::PublicOnboardingReadsV1 {
+        use misaka_palw_sdk::onboarding_snapshot::{KernelRowsPageV1, KernelRowsSnapshotV1};
+        let mut snapshot = KernelRowsSnapshotV1::default();
+        let mut request = GetPalwKernelRowsRequest { max_bytes: ROWS_PAGE_BYTES, ..Default::default() };
+        loop {
+            let (after, max_bytes) = palw_kernel_rows_request_v1(&Self::wire(request)).unwrap();
+            let page = Self::wire(palw_kernel_rows_response_v1(self.api(), after, max_bytes).unwrap());
+            assert!(page.available);
+            let next = snapshot
+                .push(KernelRowsPageV1 {
+                    tip_daa: page.tip_daa,
+                    ledger_root: page.ledger_root.parse().unwrap(),
+                    aux_root: page.aux_root.parse().unwrap(),
+                    header: unhex(&page.header),
+                    total_rows: page.total_rows,
+                    rows: page.rows.into_iter().map(|r| (u8::try_from(r.table).unwrap(), unhex(&r.key), unhex(&r.row))).collect(),
+                    next: page.more.then(|| (u8::try_from(page.next_table).unwrap(), unhex(&page.next_key))),
+                })
+                .unwrap();
+            match next {
+                None => return snapshot.into_onboarding_reads_v1(class).unwrap(),
+                Some((table, key)) => {
+                    request = GetPalwKernelRowsRequest {
+                        has_cursor: true,
+                        after_table: table as u32,
+                        after_key: faster_hex::hex_string(&key),
+                        max_bytes: ROWS_PAGE_BYTES,
+                    }
+                }
+            }
+        }
+    }
+
     /// **Op 211 `getPalwKernelRows`, paged to the end**: the route's header and every row, reassembled into the route state and checked
     /// against the ledger and aux roots the op serves (every page must report one snapshot). Returns the state and the served ledger
     /// root.

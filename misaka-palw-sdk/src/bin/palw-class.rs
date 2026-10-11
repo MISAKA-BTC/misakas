@@ -32,6 +32,8 @@ USAGE:
     palw-class inspect   --network <id> <artifact-path>
     palw-class preflight [--network <id>] <model>  [--depth headers|shape] [--height <DAA>] [--json] [more: see below]
     palw-class preflight --network <id> <artifact-path> [--model-id <model-id>]
+    palw-class kernel-preflight <program.tir> --positions N [--height DAA] [--json]
+    palw-class kernel-params <artifact.palwtir> --tensor-workspace-mib N --payload-limit-mib N --out <params.borsh> [--encoder] [--json]
     palw-class bind-tokenizer --network <id> --tokenizer <tokenizer.json> --out <path> [--model-id <model-id>] <artifact-path>
     palw-class measure   --network <id> [--name <model name>] [--replay-ms <ms> --measured-on <host>]
                          [--key-file <ml-dsa-87 seed>] [--out <measured.json>] <artifact-path>
@@ -202,6 +204,11 @@ Exits 1 on a refusal.
 
 NETWORKS: a network id with a PALW V2 bundle, e.g. testnet-11 or devnet.
 
+`kernel-preflight` reads bounded canonical TIR directly, without config, model name or frontend.
+It reports the shipping kernel schedule and the node's hypothetical public-prosecution/carrier/block
+bounds at exactly N positions. It does not register a class or check weights, source fidelity or
+economic eligibility. Exit 0 means hypothetical bounds fit; 2 means they do not fit.
+
 `preflight` exits 0 only if every requested pairing passes the admission gate.";
 
 fn main() {
@@ -270,6 +277,106 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     let network = take_flag(&mut args, "--network");
     match command.as_str() {
+        "kernel-params" => {
+            let limit = |value: Option<String>, name: &str| -> Result<u64, String> {
+                value
+                    .ok_or_else(|| format!("{name} is required"))?
+                    .parse::<u64>()
+                    .ok()
+                    .and_then(|n| n.checked_mul(1 << 20))
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| format!("{name} must be a positive MiB count fitting u64 bytes"))
+            };
+            let workspace = limit(take_flag(&mut args, "--tensor-workspace-mib"), "--tensor-workspace-mib")?;
+            let payload = limit(take_flag(&mut args, "--payload-limit-mib"), "--payload-limit-mib")?;
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out is required")?);
+            let encoder = args.iter().any(|a| a == "--encoder");
+            let json = args.iter().any(|a| a == "--json");
+            args.retain(|a| a != "--encoder" && a != "--json");
+            if args.len() != 1 || network.is_some() {
+                return Err("kernel-params takes one artifact path and preparation limits; it grants no network admission".into());
+            }
+            let input = std::path::Path::new(&args[0]);
+            if input == out || input.canonicalize().ok().is_some_and(|p| out.canonicalize().ok() == Some(p)) {
+                return Err("--out must not replace the source artifact".into());
+            }
+            let d = if encoder {
+                misaka_palw_kernel::descriptor::k2_tir_v5_descriptor()
+            } else {
+                misaka_palw_kernel::descriptor::k2_tir_v4_descriptor()
+            };
+            let started = std::time::Instant::now();
+            let prepared = misaka_palw_sdk::kernel_params::prepare_kernel_params_file_v3(
+                &d,
+                std::path::Path::new(&args[0]),
+                workspace,
+                payload,
+                &mut |j, l, bytes| {
+                    eprintln!("hashing param {j} layer {l:?}: {bytes} bytes");
+                },
+            )?;
+            let bytes = borsh::to_vec(&prepared.params).map_err(|e| e.to_string())?;
+            misaka_palw_sdk::runtime_pack::beacon_run::write_atomic(&out, &bytes)?;
+            let hex = misaka_palw_sdk::runtime_pack::commit::hex;
+            let report = serde_json::json!({
+                "schema": "misaka.palw.kernel-params.v3", "descriptor_digest": hex(&prepared.descriptor_digest),
+                "program_root": hex(&prepared.program_root), "param_root": hex(&prepared.params.root()),
+                "model_param_declarations": prepared.model_param_declarations, "instances": prepared.params.by_instance.len(),
+                "payload_bytes": prepared.payload_bytes, "max_tensor_workspace_bytes": prepared.max_tensor_workspace_bytes,
+                "tensor_workspace_limit": workspace, "payload_limit": payload, "output": out,
+                "elapsed_ms": started.elapsed().as_millis(), "registration_or_activation_granted": false,
+            });
+            if json {
+                println!("{report}")
+            } else {
+                println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?)
+            }
+            Ok(())
+        }
+        "kernel-preflight" => {
+            use std::io::Read;
+            let positions: u32 = take_flag(&mut args, "--positions")
+                .ok_or("--positions is required")?
+                .parse()
+                .map_err(|_| "--positions must be a positive u32")?;
+            if positions == 0 {
+                return Err("--positions must be positive; no context is silently substituted".into());
+            }
+            let daa: u64 =
+                take_flag(&mut args, "--height").unwrap_or_else(|| "0".into()).parse().map_err(|_| "--height must be a u64")?;
+            let json = args.iter().any(|a| a == "--json");
+            args.retain(|a| a != "--json");
+            if args.len() != 1 || network.is_some() {
+                return Err("kernel-preflight takes one canonical TIR file; its reference schedule is not a network activation".into());
+            }
+            let mut bytes = Vec::new();
+            std::fs::File::open(&args[0])
+                .map_err(|e| e.to_string())?
+                .take((misaka_palw_tir::program::MAX_PROGRAM_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            let program = misaka_palw_tir::TirProgramV1::decode_canonical(&bytes).map_err(|e| e.to_string())?;
+            let route = misaka_palw_sdk::preflight::kernel::kernel_route_of(&program, positions, daa);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema": "misaka.palw.kernel-preflight.v1",
+                        "program_root": misaka_palw_sdk::runtime_pack::commit::hex(&misaka_palw_kernel::public::program_root_v1(&bytes)),
+                        "route": route,
+                    })
+                );
+            } else {
+                println!("kernel           {}", route.kernel);
+                println!("shipping         {}", route.shipped);
+                println!("hypothetical     {} at {} positions: {}", route.hypothetical, route.max_positions, route.detail);
+                println!("coverage         {}", route.bucket);
+                if !route.verification_mode_requirement.is_empty() {
+                    println!("requires         {}", route.verification_mode_requirement);
+                }
+            }
+            if route.hypothetical == "ELIGIBLE_AT" { Ok(()) } else { std::process::exit(2) }
+        }
         "census" => misaka_palw_sdk::census::cli::run(&args, network),
         "ledger" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;

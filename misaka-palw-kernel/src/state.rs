@@ -229,13 +229,25 @@ impl KernelLedgerV1 {
             )
         };
         // The court scope (table 28, `palw_provider_court_v1`, G14-S): an extension only once it holds a row.
-        if self.court_scope.is_empty() {
-            return base;
+        let base = if self.court_scope.is_empty() {
+            base
+        } else {
+            crate::rows::court_scope_root_extension_v1(
+                &base,
+                &collection_root(&d("court-scope"), self.court_scope.len(), self.court_scope.iter()),
+            )
+        };
+        // RFC-0002 conformance candidates (table 29): an extension only once it holds a row, after table 28's.
+        if self.conformance_classes.is_empty() {
+            base
+        } else {
+            let records: std::collections::BTreeMap<Digest, (Digest, ClassRecordV1)> =
+                self.conformance_classes.iter().map(|(k, (owner, c))| (*k, (*owner, c.record()))).collect();
+            crate::rows::conformance_root_extension_v1(
+                &base,
+                &collection_root(&d("conformance-classes"), records.len(), records.iter()),
+            )
         }
-        crate::rows::court_scope_root_extension_v1(
-            &base,
-            &collection_root(&d("court-scope"), self.court_scope.len(), self.court_scope.iter()),
-        )
     }
 
     /// RFC-0004 Part II: `(table, collection root)` of every NON-EMPTY typed table, in root order (empty for an untyped ledger).
