@@ -789,6 +789,24 @@ enum ModelCmd {
     /// conformance record (op 231), re-verified from public material.
     #[command(subcommand)]
     Onboard(OnboardCmd),
+    /// Inspect an immutable paid-source contract against caller-pinned route roots.
+    #[command(subcommand)]
+    Source(SourceCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum SourceCmd {
+    /// Read the complete authenticated source and fee inventory, including old attempts.
+    Inspect {
+        #[arg(long, value_name = "CONTEXT_ID")]
+        context: String,
+        /// Ledger root from the caller's authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        ledger_root: String,
+        /// Auxiliary root from the same authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        aux_root: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -3182,6 +3200,9 @@ async fn run_cli() -> std::process::ExitCode {
                 }
                 OnboardCmd::Verify { class, artifact } => operator::model_onboard::verify(&ctx, &class, artifact.as_deref()).await,
             }
+        }),
+        Command::Model(ModelCmd::Source(SourceCmd::Inspect { context, ledger_root, aux_root })) => Box::pin(async move {
+            operator::model_source::inspect(&ctx, &context, &ledger_root, &aux_root).await
         }),
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => Box::pin(async move {
             match profile(&args) {

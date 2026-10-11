@@ -33,6 +33,7 @@ pub(crate) mod model_add;
 pub(crate) mod model_bundle;
 pub(crate) mod model_onboard;
 pub(crate) mod model_complete;
+pub(crate) mod model_source;
 pub(crate) mod model_remote;
 pub(crate) mod nodelog;
 pub(crate) mod procs;
