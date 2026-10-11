@@ -5,7 +5,9 @@ use crate::Hash64;
 use crate::palw_constraint_stream_carriage_v1::{
     PalwConstraintStreamActionV1, PalwConstraintStreamLeafV1, PalwConstraintStreamMoveV1, PalwConstraintStreamSeedV1,
 };
-use crate::palw_constraint_stream_court_v1::{PalwConstraintStreamCourtV1, PalwConstraintStreamFaultV1};
+use crate::palw_constraint_stream_court_v1::{
+    PalwConstraintStreamCheckpointV1, PalwConstraintStreamCourtV1, PalwConstraintStreamFaultV1,
+};
 use crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1;
 use crate::palw_state_v2::PalwBondKeyV2;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -23,7 +25,38 @@ pub struct PalwOwnedConstraintStreamV1 {
     pub eog_bytes_used: u64,
     court: PalwConstraintStreamCourtV1,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwOwnedConstraintCheckpointV1 {
+    court: PalwConstraintStreamCheckpointV1,
+    moves_used: u64,
+    rendering_bytes_used: u64,
+    eog_bytes_used: u64,
+}
+
 impl PalwOwnedConstraintStreamV1 {
+    pub(crate) fn checkpoint_v1(&self) -> PalwOwnedConstraintCheckpointV1 {
+        PalwOwnedConstraintCheckpointV1 {
+            court: self.court.checkpoint_v1(),
+            moves_used: self.moves_used,
+            rendering_bytes_used: self.rendering_bytes_used,
+            eog_bytes_used: self.eog_bytes_used,
+        }
+    }
+    pub(crate) fn restore_checkpoint_v1(&mut self, cp: &PalwOwnedConstraintCheckpointV1) -> Result<(), String> {
+        if cp.moves_used == 0
+            || cp.moves_used > self.terms.plan.maximum_moves
+            || cp.rendering_bytes_used > self.terms.plan.maximum_stream_bytes
+            || cp.eog_bytes_used > self.terms.plan.maximum_eog_bytes
+        {
+            return Err("owned journal checkpoint exceeds admitted immutable resource plan".into());
+        }
+        self.court.restore_checkpoint_v1(&cp.court)?;
+        self.moves_used = cp.moves_used;
+        self.rendering_bytes_used = cp.rendering_bytes_used;
+        self.eog_bytes_used = cp.eog_bytes_used;
+        Ok(())
+    }
     #[allow(clippy::too_many_arguments)]
     pub fn admit(
         seed: &PalwConstraintStreamSeedV1,
@@ -212,6 +245,65 @@ mod tests {
         assert_eq!(borsh::from_slice::<PalwOwnedConstraintStreamV1>(&borsh::to_vec(&row).unwrap()).unwrap(), row);
         assert!(row.next_move(terms.stream_until_daa).is_err());
     }
+    #[test]
+    fn small_mutable_checkpoint_reverts_and_restores_without_grammar_or_prior_bytes() {
+        let seed = seed();
+        let terms = terms(&seed);
+        let root = seed.binding.committed_execution_root;
+        let mut row = PalwOwnedConstraintStreamV1::admit(
+            &seed,
+            root,
+            terms,
+            100,
+            u64::MAX,
+            2_880_000,
+            1 << 25,
+            terms.material_until_daa,
+            terms.bond_exit_after_daa,
+            &[terms.bond_exit_after_daa; 5],
+        )
+        .unwrap();
+        let before = row.clone();
+        let old = row.checkpoint_v1();
+        let m = PalwConstraintStreamMoveV1 {
+            version: 1,
+            claim: row.claim,
+            reserver: row.reserver,
+            reserved_daa: row.reserved_daa,
+            seed_id: row.seed_id(),
+            phase: row.court.phase(),
+            action: PalwConstraintStreamActionV1::EogPart { offset: 0, ids: vec![0] },
+            signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        row.movement(101, &m).unwrap();
+        let after = row.clone();
+        let bytes = borsh::to_vec(&row.checkpoint_v1()).unwrap();
+        assert!(bytes.len() < 40_000);
+        let checkpoint: PalwOwnedConstraintCheckpointV1 = borsh::from_slice(&bytes).unwrap();
+        row.restore_checkpoint_v1(&old).unwrap();
+        assert_eq!(row, before);
+        row.restore_checkpoint_v1(&checkpoint).unwrap();
+        assert_eq!(row, after);
+        let mut foreign_seed = seed.clone();
+        foreign_seed.reserver.0.index += 1;
+        let mut foreign = PalwOwnedConstraintStreamV1::admit(
+            &foreign_seed,
+            root,
+            terms,
+            100,
+            u64::MAX,
+            2_880_000,
+            1 << 25,
+            terms.material_until_daa,
+            terms.bond_exit_after_daa,
+            &[terms.bond_exit_after_daa; 5],
+        )
+        .unwrap();
+        let foreign_before = foreign.clone();
+        assert!(foreign.restore_checkpoint_v1(&checkpoint).is_err());
+        assert_eq!(foreign, foreign_before);
+    }
+
     #[test]
     fn foreign_owner_and_over_budget_moves_cannot_mutate_or_poison_continuation() {
         let seed = seed();

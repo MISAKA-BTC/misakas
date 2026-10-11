@@ -57,7 +57,59 @@ pub struct PalwConstraintStreamCourtV1 {
     rendering: Option<PalwRenderingStreamV1>,
     convicted: bool,
 }
+
+/// Journal checkpoint excludes immutable grammar/binding/generated IDs. These bytes may be
+/// restored only by the rooted delta engine, never accepted as a challenger credential.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwConstraintStreamCheckpointV1 {
+    seed_id: Hash64,
+    witness: Option<u32>,
+    phase: PalwConstraintStreamPhaseV1,
+    eog: Option<PalwEogStreamV1>,
+    lowest_eog: Option<u32>,
+    eog_members: Vec<u32>,
+    prefix_state: PalwConstraintStateV1,
+    rendering: Option<PalwRenderingStreamV1>,
+    convicted: bool,
+}
+
 impl PalwConstraintStreamCourtV1 {
+    pub(crate) fn checkpoint_v1(&self) -> PalwConstraintStreamCheckpointV1 {
+        PalwConstraintStreamCheckpointV1 {
+            seed_id: self.context,
+            witness: self.witness,
+            phase: self.phase,
+            eog: self.eog.clone(),
+            lowest_eog: self.lowest_eog,
+            eog_members: self.eog_members.clone(),
+            prefix_state: self.prefix_state.clone(),
+            rendering: self.rendering.clone(),
+            convicted: self.convicted,
+        }
+    }
+    pub(crate) fn restore_checkpoint_v1(&mut self, cp: &PalwConstraintStreamCheckpointV1) -> Result<(), String> {
+        if cp.seed_id != self.context {
+            return Err("journal checkpoint belongs to another immutable court seed".into());
+        }
+        if let Some(eog) = &cp.eog {
+            eog.check()?;
+        }
+        if let Some(rendering) = &cp.rendering {
+            rendering.check()?;
+        }
+        if cp.eog_members.len() > crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS + 2 || cp.eog_members.windows(2).any(|w| w[0] >= w[1]) {
+            return Err("journal checkpoint exceeds bounded EOG membership".into());
+        }
+        self.witness = cp.witness;
+        self.phase = cp.phase;
+        self.eog = cp.eog.clone();
+        self.lowest_eog = cp.lowest_eog;
+        self.eog_members = cp.eog_members.clone();
+        self.prefix_state = cp.prefix_state.clone();
+        self.rendering = cp.rendering.clone();
+        self.convicted = cp.convicted;
+        Ok(())
+    }
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         claim_id: Hash64,
