@@ -105,7 +105,49 @@
       "source": "501a6a2cb89da4e1fe0ba5e397a3458b796adfeb",
       "result": "ABORT exit134: ENOSPC in first of 4 service cases, no completion results",
       "sha256": "557e7401f34b15096257738fdb489b4668396f49a9ec57673978c6fc795c2a22"
+    },
+    {
+      "name": "core-build-qualified-work",
+      "source": "226a8ddbe",
+      "result": "build FAIL: private tokenizer test method",
+      "sha256": "a91ffa40c5f10203efe566643e79bf0a69d03ce82484fa7e3960d2522a03f387"
+    },
+    {
+      "name": "core-build-qualified-work-repair",
+      "source": "0bbbfbee3",
+      "result": "build PASS",
+      "sha256": "a6b9a13e7a5216f38c2bd406b3ec396a8c6337ff6287bf570a32a018ad0a8f1e"
+    },
+    {
+      "name": "core-qualified-work-tests",
+      "source": "0bbbfbee3",
+      "result": "22 PASS / 3 FAIL: two panel funding fixtures and one old delta expectation",
+      "sha256": "816ccca14c44db37c0f7441f8cbf5f834faa61d6dc39cf7c3617778377658ec8"
+    },
+    {
+      "name": "core-build-fixture-floor",
+      "source": "32829dfa4",
+      "result": "build FAIL: ENOSPC",
+      "sha256": "2788bb7c4313ad74b1c0feb4511265fdbd779ed691fcd1ff3bdff7ed5adf929c"
+    },
+    {
+      "name": "core-build-fixture-floor-retry",
+      "source": "47008ccfde89c66af8aaf4a63fec03680baba941",
+      "result": "build PASS",
+      "sha256": "1f966b95bab904d5708cef9c7a6872f7f4977e83813283ebad2324854d51fc02"
+    },
+    {
+      "name": "core-fixture-floor-tests",
+      "source": "47008ccfde89c66af8aaf4a63fec03680baba941",
+      "result": "13 PASS / 0 FAIL: terminal2, staged3, pins2, tokenizer5, immutable semantics1",
+      "sha256": "eb0706682d293474cb31d18ce28a85b98970b2ac03c658373bf0ecf5cd3910f3"
+    },
+    {
+      "name": "recovery-501a-automatic-restart",
+      "source": "501a6a2cb89da4e1fe0ba5e397a3458b796adfeb",
+      "result": "0 PASS / 1 FAIL: two services competed for one gossip inbox; repair47008ccfd awaits node rerun",
+      "sha256": "407239f4946951740dda0508ab37710a2e53f7b544b262c143b4c20eafecea55"
     }
   ],
-  "qualification": "Node on501a builds and 41 focused tests pass; core onae7 builds and 26 focused tests pass with4 recorded failures. Subsequent fixture/pin/source repairs require rerun. Actual registered tiled services on501a aborted on ENOSPC in the first case, so previous0PASS/4FAIL logic round is still not superseded. New prefix service, sole-receiver P2P, staged central/certificate and registry reallocation remain unexecuted. Integration105e was fetched and is being reconciled in an isolated checkout. Full G14 guarantee and activation remain pending/refused."
+  "qualification": "Node source501a builds and41 focused tests pass; tiled services abort ENOSPC and automatic restart fails shared inbox. Core source47008ccfd builds and13 focused tests pass, including the previously failing fixtures. These results do not qualify the latest whole source, the isolated integration merge, new native prefix/sole-receiver P2P paths, or full G14. New node runtime reruns remain required. Activation remains refused."
 }

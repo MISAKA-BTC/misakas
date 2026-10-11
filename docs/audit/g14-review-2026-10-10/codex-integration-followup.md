@@ -25,7 +25,7 @@ Keep activation refused. A local finite planner or source merge does not close t
 
 Source501a: node build PASS; filer/tokenizer38, CLI1, normal registration/jury2 PASS. Registered tiled services aborted in the first case on ENOSPC, so no endpoint completion was obtained. Original automatic restart failed0/1 in408.14s because two services took one FlowContext gossip inbox; repair47008ccfd gives independent inboxes and awaits compilation/runtime.
 
-Source0bb: core build PASS; focused run22 PASS /3 FAIL. Registered semantics, tokenizer parser, sparse proof identity, new wire pins and rooted certificate tests passed. Two terminal fixtures lacked actual panel funding; one staged fixture still expected the old delta number. Repairs033a1a614/32829dfa4 require rerun. The subsequent build exhausted disk; only this chat's finalized objects/obsolete binaries were reclaimed before retry. Exact source-qualified logs are retained; results are not combined into a latest-HEAD or full-G14 PASS.
+Source0bb: core build PASS; focused run22 PASS /3 FAIL. Registered semantics, tokenizer parser, sparse proof identity, new wire pins and rooted certificate tests passed. Two terminal fixtures lacked actual panel funding; one staged fixture still expected the old delta number. Repairs033a1a614/32829dfa4 were rerun on source47008ccfd: build PASS and13 focused tests PASS (terminal2, staged3, pins2, tokenizer5, immutable semantics1). The initial build exhausted disk; only this chat's finalized objects/obsolete binaries were reclaimed before the successful retry. Exact source-qualified logs are retained; results are not combined into a latest-HEAD or full-G14 PASS.
 
 ## Numbering
 
