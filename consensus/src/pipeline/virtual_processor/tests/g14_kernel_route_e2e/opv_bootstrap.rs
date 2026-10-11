@@ -1640,7 +1640,7 @@ async fn g14_opv_bootstrap_source_fee_prepaid_final_horizon_db_replay_and_two_re
     assert_eq!(net.ledger().beacon_source_fees[&context].paid, 0);
     let fork = net.chain.sink();
     let fork_daa = net.daa();
-    net.chain.heartbeat(net.ttpb(), Vec::new()).await;
+    net.beat_to(fork_daa + 1).await;
     assert_eq!(net.daa(), fork_daa + 1, "fee fork A stays within the shallow reorg window");
     assert_eq!(net.ledger().beacon_source_fees[&context].paid, 100);
     assert_eq!(net.ledger().source_fee_escrow_total().unwrap(), 0);
@@ -1659,9 +1659,9 @@ async fn g14_opv_bootstrap_source_fee_prepaid_final_horizon_db_replay_and_two_re
     branch.ctx.simulated_time = fork_time;
     branch.set_nonce_for_fork(1_000_000);
     let ttpb = net.ttpb();
-    // A has one block and B has two. Both switches stay inside the node's two-DAA
-    // shallow window; extending B farther would correctly prevent the second switch.
-    for _ in 0..2 {
+    // A advances one DAA and B two. Heartbeats need not each advance DAA, so
+    // use the actual header score rather than assuming one tick per block.
+    while branch.daa_of(branch.sink()) < fork_daa + 2 {
         let blk = branch.heartbeat(ttpb, Vec::new()).await;
         arrive(&zn.chain, blk, "source fee branch B").await;
     }
@@ -1670,9 +1670,7 @@ async fn g14_opv_bootstrap_source_fee_prepaid_final_horizon_db_replay_and_two_re
     assert_eq!(zn.ledger().beacon_source_fees[&context].paid, 100, "reorg reapplies payout once");
     assert_eq!(kernel_money_v1(&zn.chain).paid, kernel_money_v1(&branch).paid);
     let old_len = chain_blocks(&net.chain, net.chain.sink()).len();
-    for _ in 0..2 {
-        net.chain.heartbeat(ttpb, Vec::new()).await;
-    }
+    net.beat_to(fork_daa + 3).await;
     for blk in chain_blocks(&net.chain, net.chain.sink()).into_iter().skip(old_len) {
         arrive(&zn.chain, blk, "source fee branch A again").await;
     }
