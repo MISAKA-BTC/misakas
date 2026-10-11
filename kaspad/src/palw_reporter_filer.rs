@@ -1947,6 +1947,42 @@ mod tests {
         PalwRewardWinnerV1 { committed_daa, commitment: entry.commitment, reporter: entry.reporter, payload: h(0xFA) }
     }
 
+    #[test]
+    fn rooted_court_void_continuation_keeps_collection_without_buying_a_second_reward() {
+        let original = filing(80, None);
+        let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &original.object else { panic!("offence") };
+        let mut p: kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1 =
+            borsh::from_slice(evidence).unwrap();
+        p.contradiction = kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::CourtFraud { voided_daa: 99 };
+        let payload = kaspa_consensus_core::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2::filed_v2(
+            original.claim_id,
+            kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidReceiptV1::Full(
+                kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2 {
+                    claim: original.claim_id,
+                    seat_bond: original.accused,
+                    verdict: kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+                    signed_daa: 98,
+                    signature: Vec::new(),
+                },
+            ),
+            p.contradiction,
+            None,
+        );
+        let object = payload.object_v2();
+        assert!(PalwConvictionFilingV1::of_offence(object.clone(), original.claim_id, None, PalwFilingOriginV1::FalseValid).is_none());
+        let filing =
+            PalwConvictionFilingV1::of_rooted_court_void_v2(object, original.claim_id, PalwFilingOriginV1::FalseValid).unwrap();
+        let key = filing.offence_key;
+        let mut book = PalwReporterFilerV1::default();
+        assert_eq!(
+            book.file(filing, bond(ME), &chain(100), &h(DOMAIN), [0; 32], |_, _| panic!("named void buys no commit")),
+            PalwFileOutcomeV1::Queued { committed: false }
+        );
+        let entry = book.entry(&key).unwrap();
+        assert!(entry.commit_object.is_none());
+        assert_eq!(palw_filer_step_v1(entry, &chain(100)), PalwFilerStepV1::File);
+    }
+
     // These fixtures test transport scheduling over opaque bytes. They do not assert the
     // bytes are an admissible court proof; actual preflight/fold tests exercise that separately.
     fn terminal_entry() -> (PalwFilerEntryV1, kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalProgressV1) {
