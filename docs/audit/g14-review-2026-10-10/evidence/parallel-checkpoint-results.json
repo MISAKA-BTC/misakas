@@ -21,7 +21,25 @@
       "name": "core-terminal-d886",
       "result": "19 PASS / 2 FAIL",
       "sha256": "475bd4cb159d2f1c2e00c95fb405b1d2d0c51daad40986f15acfe278f3e416de"
+    },
+    {
+      "name": "core-focused-ed4",
+      "source": "1d32cfa5b",
+      "result": "89 PASS / 4 FAIL",
+      "sha256": "230d767dcdd7c58f0d05dd902823c26b6bd5f6aba85a9f9eecdb34c5d3e4d0fd"
+    },
+    {
+      "name": "core-build-prefix-ed4",
+      "source": "1d32cfa5b",
+      "result": "build PASS",
+      "sha256": "8042c7464da9c86355f371869ad6cfea0bf30af3784059cc56b97642b0508126"
+    },
+    {
+      "name": "node-build-9036",
+      "source": "9036fd6c3",
+      "result": "build FAIL: one staged shape error conversion",
+      "sha256": "c29da66a14070960d9eef1ab9031f6995e7663744bdf47df32e25c1ff17e1a9e"
     }
   ],
-  "qualification": "Core pin and ordinary reservation fixture repairs ed4d402ce are not rerun yet. Native service on latest source not yet executed. Prefix/resource new source not yet compiled. Full G14 activation refused."
+  "qualification": "Core prefix synthetic courts and exact162/163 pins passed on 1d32cfa5b; four core failures remain rerun-pending after source repairs. New staged court build failed on9036fd6c3; conversion repair74463ac32 is not compiled yet. Actual registered tiled service round2 has0PASS/4FAIL; fairness repairs are not runtime verified. Latest native prefix/resource/tokenizer integration and full G14 activation remain pending/refused."
 }
