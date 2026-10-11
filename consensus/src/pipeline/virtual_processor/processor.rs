@@ -13815,6 +13815,36 @@ impl VirtualStateProcessor {
                         bytes,
                     )?;
                 }
+                Obj::LegacyHeldAnswerDeclaredV2 { declaration } => {
+                    use kaspa_consensus_core::palw_legacy_answer_chunks_v2 as chunks;
+                    let court = self.palw_court_params_v2.as_ref().ok_or("multipart DA answer needs V2 court parameters")?;
+                    declaration.check(court.max_close_bytes())?;
+                    let domain = self.palw_network_domain_v2();
+                    let message = chunks::palw_legacy_answer_declaration_message_v2(domain.as_byte_slice(), declaration);
+                    self.palw_legacy_held_signature_ok(
+                        state, point.daa_score, &declaration.claim, &declaration.discloser,
+                        &message, &declaration.signature, chunks::PALW_LEGACY_ANSWER_DECLARE_CONTEXT_V2,
+                        borsh::to_vec(declaration).map_err(|e| e.to_string())?.len() as u64,
+                    )?;
+                }
+                Obj::LegacyHeldAnswerChunkV2 { chunk } => {
+                    use kaspa_consensus_core::palw_legacy_held_da_v2 as l;
+                    if !self.palw_legacy_held_da_v2_at(point.daa_score) {
+                        return Err("multipart DA answer is below palw_legacy_held_da_v2".into());
+                    }
+                    let row = state.legacy_answer_pending_v2(&chunk.key()).ok_or("no signed multipart DA declaration")?;
+                    let court = self.palw_court_params_v2.as_ref().ok_or("multipart DA answer needs V2 court parameters")?;
+                    row.declaration.check(court.max_close_bytes())?;
+                    if let Some(answer) = row.preview(chunk)? {
+                        let domain = self.palw_network_domain_v2();
+                        let message = l::palw_legacy_held_answer_message_v2(domain.as_byte_slice(), &answer);
+                        self.palw_legacy_held_signature_ok(
+                            state, point.daa_score, &answer.claim, &answer.discloser,
+                            &message, &answer.signature, l::PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2,
+                            row.declaration.total_bytes,
+                        )?;
+                    }
+                }
                 Obj::LegacyLeafRecomputedV2 { accusation } => {
                     use kaspa_consensus_core::palw_legacy_held_da_v2 as l;
                     let domain = self.palw_network_domain_v2();
@@ -22891,6 +22921,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::DisputeReacquiredV1 { .. } => "DisputeReacquiredV1",
         O::LegacyHeldDemandedV2 { .. } => "LegacyHeldDemandedV2",
         O::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
+        O::LegacyHeldAnswerDeclaredV2 { .. } => "LegacyHeldAnswerDeclaredV2",
+        O::LegacyHeldAnswerChunkV2 { .. } => "LegacyHeldAnswerChunkV2",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",

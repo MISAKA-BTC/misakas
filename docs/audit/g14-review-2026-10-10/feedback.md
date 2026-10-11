@@ -136,6 +136,20 @@ reference ledgerで、prompt 63 tokens・max new 1の正当なclaimに対し、�
 2. served responses、open/served demander metadata、proof seals、scope tallies等の全claim状態を含める。参加者・累積joinと各blockのworkにも明示的上限を置く。先着joinでhonest verifierが閉め出されない公開response・shared progressの性質を保つ。
 3. 責任期間内のfresh verifierが利用できる保持規則と、終了後のbounded cleanupを定義し、reorg/restart/IBD/pruningで同じrowsになることを検証する。
 
+## sessionに属する分割DA回答（2026-10-11、基盤の検証済み）
+
+最大job/inputの取得を単一carrierの100,000 bytesに閉じ込めないため、LG14-Bにtag 160（署名manifest）と161（chunk）を追加した。certificationのObjectChunkは8個の保存枠を共有するため、そのまま転用すると共謀側が枠を占有してDA回答を塞げる。新しい途中保存rowは、既存のDA義務のclaim/unitと責任を持つdiscloserに属し、certificationの枠を使わない。
+
+manifestはnetwork、claim、unit、discloser、全体bytes、partサイズ、各chunkのhash、元の署名付き回答全体のhashを署名する。最大32 parts、各90,000 bytes。全partが揃った時だけ元の回答を復元し、processorが元の回答署名を検査し、foldが従来のroot・job identity検査とDA-4を適用する。途中の回答は回答済みと数えず、元のDA期限を延長しない。回答完了、別の回答での解決、期限切れには途中保存rowを削除する。
+
+途中保存はdelta 202と非empty時だけのsnapshot tail 0xF1、state-root block `legacy_answers/v2`に含める。snapshot復元時はpartのhash・サイズ、未完了であること、生きた未回答のDA義務、義務の期限を超えていないことを検査する。live int-12の100 variantsの宣言pinは維持し、新tagsと既存のFP job追加により変わったdormant LG14 kindsのwire pinだけ更新する。
+
+**この段階は分割transportのconsensus側であり、最大jobの公開取得完了ではない。** producer workerの自動分割・確認済みpartからの再開、fresh verifierの複数history pageからのbounded再組立て、そのRAM予約、job/inputの全体byte admissionへの接続、最大profileでの実サービス試験が残る。64 KiBのFP job上限もまだ変更していない。armingは引き続き拒否する。ADR-0177 D7の登録モデル保有前提は維持する。
+
+このcheckpointは59 uniqueのcore/nodeテストがPASSし、最大32分割の境界、8 certification枠占有時の分割回答・partial restart・非応答defaultも確認した。shipping harvestと361 pinの機械照合もPASS／差分なし。fixtureの限界、修正前の失敗log、残る実装を[検証記録](owned-answer-status.md)に保存した。
+
+履歴readerの接続には追加の条件がある。`walk_accepted_lifecycle_page_v1`はtransaction acceptanceを走査し、PALW foldが拒否したobjectも返し得る。従って「historyにあるmanifest/chunk」をそのまま認証済み回答として扱わず、元の回答の署名・claim/unit・root/job pinを確認する必要がある。逆向きpageではchunkがmanifestより先に現れるため、任意のdigest groupを無制限に保持したり、共有先着cacheを埋められて必要な回答を捨てたりしない取得方式とRAM予約を実装する。producerの`sign`はML-DSA-87のdeterministic signingなので、同じmaterial/key/domainからの回答再構築は同じdigestとなるが、再起動時はchain側manifestと受理済みpartを照合して再開する。
+
 ## G14完成のために残る設計・受入条件
 
 ### 許可scopeからterminalへ到達する証明

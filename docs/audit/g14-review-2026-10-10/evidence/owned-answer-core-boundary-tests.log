@@ -1,0 +1,8 @@
+
+running 3 tests
+test palw_legacy_answer_chunks_v2::tests::a_large_answer_is_exposed_only_after_all_authenticated_parts_arrive ... ok
+test palw_legacy_answer_chunks_v2::tests::foreign_truncated_tampered_and_unbounded_parts_cannot_complete_an_answer ... ok
+test palw_legacy_answer_chunks_v2::tests::the_full_32_part_transport_fits_each_carrier_and_refuses_one_byte_less_before_signing ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3623 filtered out; finished in 0.02s
+

@@ -3096,6 +3096,9 @@ pub(crate) fn palw_carrier_keeps_its_turn_v1(tx: &Transaction, unconfirmed_daa: 
                 | PalwConsensusObjectV2::MaterialDisclosed { .. }
                 | PalwConsensusObjectV2::MaterialDisclosedHeld { .. }
                 | PalwConsensusObjectV2::MaterialDisclosedV2 { .. }
+                | PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }
+                | PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { .. }
+                | PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. }
         )
     })
 }
@@ -14545,6 +14548,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         // LG14-B (tags 157–159): the legacy route's public descent and held DA units, dormant.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. } => "LegacyHeldDemandedV2",
         PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
+        PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { .. } => "LegacyHeldAnswerDeclaredV2",
+        PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. } => "LegacyHeldAnswerChunkV2",
         PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         // Lane BUDGET (tag 140): a bond's capital assignment.
         PalwConsensusObjectV2::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",

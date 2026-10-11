@@ -82,6 +82,10 @@ pub const PALW_LEGACY_HELD_ALL_DOMAINS_V2: &[&[u8]] = &[
     PALW_LEGACY_HELD_DEMAND_DOMAIN_V2,
     PALW_LEGACY_HELD_ANSWER_DOMAIN_V2,
     PALW_LEGACY_LEAF_RECOMPUTE_DOMAIN_V2,
+    crate::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_DECLARE_CONTEXT_V2,
+    crate::palw_legacy_answer_chunks_v2::DECLARE_DOMAIN,
+    crate::palw_legacy_answer_chunks_v2::CHUNK_DOMAIN,
+    crate::palw_legacy_answer_chunks_v2::ANSWER_DOMAIN,
 ];
 
 // ---- the fence ------------------------------------------------------------------------------------------------------------------

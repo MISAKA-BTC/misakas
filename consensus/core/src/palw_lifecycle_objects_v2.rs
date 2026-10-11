@@ -396,6 +396,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
         | PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }
+        | PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { .. }
+        | PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. }
         | PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => Ok(()),
         // Lane BUDGET (tag 140): a capital assignment rides at every height with NO shape check here — not even its signature's presence
         // (A2U finding #1: an isolation-time refusal of bytes an older build tolerates is a split). The fence, the signature and ADR-0177
@@ -1307,7 +1309,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
             PalwLifecycleKindOwnerV1::Fence(F::ProviderCourtV1)
         }
         // Lane LG14-B: the legacy held DA — demand, answer, leaf recompute (157–159).
-        O::LegacyHeldDemandedV2 { .. } | O::LegacyHeldAnsweredV2 { .. } | O::LegacyLeafRecomputedV2 { .. } => {
+        O::LegacyHeldDemandedV2 { .. } | O::LegacyHeldAnsweredV2 { .. } | O::LegacyLeafRecomputedV2 { .. }
+            | O::LegacyHeldAnswerDeclaredV2 { .. } | O::LegacyHeldAnswerChunkV2 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2)
         }
         // Lane BUDGET: a bond's capital assignment (140).
@@ -1450,6 +1453,8 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (157, "LegacyHeldDemandedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (158, "LegacyHeldAnsweredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (159, "LegacyLeafRecomputedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
+    (160, "LegacyHeldAnswerDeclaredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
+    (161, "LegacyHeldAnswerChunkV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
 ];
 
 /// **The owning fences' activations, resolved once from `Params`** (`Params::palw_lifecycle_kind_fences_v1`) and asked by every site
@@ -1893,7 +1898,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // LG14-B: the legacy V2 route's descent demand, its answer and the leaf recompute (RFC-0014 §4–§5).
     // LG14-A: reservation, release and nonce-bound public DA reacquisition (RFC-0014 §6–§7).
     a2_row(PalwA2SlotV1::ObjectTags { lo: 154, hi: 156 }, "palw_legacy_public_filer_v1", "LG14-A dispute reservation", true),
-    a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 159 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 161 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
@@ -2036,6 +2041,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "LG14-A (Codex public bootstrap)",
         true,
     ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "session-owned legacy answer assembly (delta 202, tail 0xF1, root block legacy_answers/v2)" },
+        "palw_legacy_held_da_v2",
+        "LG14-B multipart answers",
+        true,
+    ),
     // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
     a2_row(
         PalwA2SlotV1::Int12RefusedByName {
@@ -2072,7 +2083,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (140, 149, "BUDGET (ADR-0176/0177)", &["palw_bond_budget_v1", "palw_model_bond_allocation_v1"]),
     (150, 153, "DA16 provider court", &["palw_provider_court_v1"]),
     (154, 156, "LG14-A dispute reservation", &["palw_legacy_public_filer_v1"]),
-    (157, 159, "LG14-B legacy held DA", &["palw_legacy_held_da_v2"]),
+    (157, 161, "LG14-B legacy held DA", &["palw_legacy_held_da_v2"]),
 ];
 
 #[cfg(test)]
@@ -4202,10 +4213,12 @@ pub(crate) mod tests {
             (153, 0x74bac59d2cf50cd4),
             (154, 0x047359d4d8ba0a7b),
             (155, 0x6d9c4e7671a9cac7),
-            (156, 0x7e5d332147511ca1),
-            (157, 0xc7acaf87a3fefb35),
-            (158, 0x380636cbf4ee26ab),
+            (156, 0xfd9ad539eab02a3c),
+            (157, 0xa5ca85bb4a3be200),
+            (158, 0x1bbcf34fe919b8c4),
             (159, 0x0395636b651f74fa),
+            (160, 0x730c4ce9aa0ff75e),
+            (161, 0xec0447b18452362b),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline

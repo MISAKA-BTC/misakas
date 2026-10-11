@@ -145,6 +145,8 @@ mod palw_provider_court_fold_v1;
 // Lane LG14-A: the legacy route's dispute reservations (tags 154–155), their lapse, release and burn, and the reserved DA budget.
 #[path = "palw_legacy_public_filer_fold_v1.rs"]
 mod palw_legacy_public_filer_fold_v1;
+#[path = "palw_legacy_answer_chunks_fold_v2.rs"]
+mod palw_legacy_answer_chunks_fold_v2;
 pub use palw_legacy_public_filer_fold_v1::{
     PalwFraudFilerCandidateV1, PalwFraudFilerReservationStatusV1, PalwFraudFilerStatusV1, PalwLegacyDisputeObservationV1,
     PalwLegacyDisputeViewV1, palw_bond_text_v1, palw_legacy_dispute_reservation_check_v1,
@@ -8767,6 +8769,8 @@ pub enum PalwConsensusObjectV2 {
     /// claim's roots (membership alone for a CKW, never an execution) and the identity rule; the producer or a bond liable on the
     /// claim (X7) discloses and signs it. **Tag 158.**
     LegacyHeldAnsweredV2 { answer: Box<crate::palw_legacy_held_da_v2::PalwLegacyHeldAnswerCarriageV2> } = 158,
+    LegacyHeldAnswerDeclaredV2 { declaration: Box<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerDeclarationV2> } = 160,
+    LegacyHeldAnswerChunkV2 { chunk: Box<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkV2> } = 161,
     /// **(tag 159): a non-fused step convicted by its committed leaf hash** — the one-move court's kernel over the committed inputs
     /// and the accuser's own model rows, without the output preimage. A direct objective proof: it lands whatever session or court
     /// is open on the claim. Signed by the accuser's bond. **Tag 159.**
@@ -8814,6 +8818,8 @@ pub fn palw_object_is_legacy_held_da_v2(object: &PalwConsensusObjectV2) -> bool 
     match object {
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
         | PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }
+        | PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { .. }
+        | PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. }
         | PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => true,
         PalwConsensusObjectV2::MaterialDisclosedV2 { unit, .. } => unit.is_legacy_held_v2(),
         PalwConsensusObjectV2::DefaultAccusedTirStep { accusation } => accusation.unit.is_legacy_held_v2(),
@@ -12018,6 +12024,7 @@ pub struct PalwChainStateV2 {
     /// Accepted public FP commitment metadata, without prompt IDs or capture. Kept with the claim
     /// past the never-armed public-filer fence, rooted and carried through pruning snapshots.
     fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
+    legacy_answers: BTreeMap<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
@@ -12250,6 +12257,7 @@ impl PalwChainStateV2 {
             panel_v3: None,
             legacy_disputes: BTreeMap::new(),
             fp_public_jobs: BTreeMap::new(),
+            legacy_answers: BTreeMap::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -14701,6 +14709,10 @@ impl PalwChainStateV2 {
         }
         // **Lane LG14-A.** Its own block, Some-only: empty until the first reservation past `palw_legacy_public_filer_v1`, which no
         // network can arm, so a dormant network roots exactly as before.
+        if !self.legacy_answers.is_empty() {
+            state.update(b"legacy_answers/v2");
+            state.update(collection_root(b"legacy_answers", &self.legacy_answers).as_byte_slice());
+        }
         if !self.fp_public_jobs.is_empty() {
             state.update(b"public_fp_jobs/v1");
             state.update(collection_root(b"public_fp_jobs", &self.fp_public_jobs).as_byte_slice());
@@ -15557,6 +15569,7 @@ impl PalwChainStateV2 {
         // Lane LG14-A: the dispute records, their indexes and their caps.
         self.assert_legacy_disputes_consistency_v1(params)?;
         self.assert_public_fp_jobs_consistency_v1(params)?;
+        self.assert_legacy_answers_v2()?;
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;
@@ -16975,6 +16988,7 @@ pub enum PalwDeltaEntryV2 {
     } = 161,
     /// Lane LG14-A (delta 201): original accepted public FP commitment, retained until claim retirement.
     PublicFpJob { key: Hash64, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 201,
+    LegacyAnswer { key: crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, old: Option<crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>, new: Option<crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2> } = 202,
     /// **Lane LG14-A (delta number 200, declared explicitly; 200–204 are the lane's): a claim's dispute record**
     /// was written, rewritten or dropped. Dormant: `palw_legacy_public_filer_v1` is armed on no network, so no stored delta carries it.
     LegacyDispute {
@@ -29652,6 +29666,7 @@ pub fn palw_v2_pre_object_base_v1(
     sweep_reward_reveals(&mut builder, ctx)?;
     // ADR-0152 DA-7 (M3): the pre-object base mirrors step 2 exactly (V-4's fold order).
     sweep_da_sessions(&mut builder, ctx)?;
+    palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
     // Lane LG14-A: the dispute reservations' lapse, as the fold's step 2 runs it.
     palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(&mut builder, ctx)?;
     sweep_court_close_deadlines(&mut builder, ctx)?;
@@ -30077,6 +30092,7 @@ fn apply_palw_transition_v7_inner(
     // unanswered default, in `(deadline, claim, accuser)` order — after the claim sweep (V-4's step 2),
     // before the courts.
     sweep_da_sessions(&mut builder, ctx)?;
+    palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
     // Lane LG14-A: every dispute reservation whose claim's hard deadline is behind this block lapses, right after the DA sweep.
     palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(&mut builder, ctx)?;
     // A declared close is swept at ITS OWN window before the session's backstop is read (audit
@@ -30610,6 +30626,7 @@ fn apply_palw_transition_v7_inner(
     //    after this block's own work was admitted at the parent's tier (admission reads the parent state), so the new level holds from
     //    the next block. A no-op below the fence and while the breaker holds no row.
     apply_rho_breaker_epoch_v1(&mut builder, ctx);
+    palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
 
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
@@ -35861,6 +35878,13 @@ fn apply_object(
         }
         PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } => {
             apply_legacy_held_answer_v2(builder, ctx, answer)?;
+            palw_legacy_answer_chunks_fold_v2::sweep(builder, ctx);
+        }
+        PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration } => {
+            palw_legacy_answer_chunks_fold_v2::declare(builder, ctx, declaration)?;
+        }
+        PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk } => {
+            palw_legacy_answer_chunks_fold_v2::chunk(builder, ctx, chunk)?;
         }
         PalwConsensusObjectV2::LegacyLeafRecomputedV2 { accusation } => {
             apply_legacy_leaf_recompute_v2(builder, ctx, accusation)?;
@@ -41905,6 +41929,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::SeatAvailability { key, old, new } => swap_write!(state.seat_availability, key, old, new),
         PalwDeltaEntryV2::SeatRootReadiness { key, old, new } => swap_write!(state.seat_root_readiness, key, old, new),
         PalwDeltaEntryV2::PublicFpJob { key, old, new } => swap_write!(state.fp_public_jobs, key, old, new),
+        PalwDeltaEntryV2::LegacyAnswer { key, old, new } => swap_write!(state.legacy_answers, key, old, new),
         PalwDeltaEntryV2::LegacyDispute { key, old, new } => swap_write!(state.legacy_disputes, key, old, new),
         // RFC-0010: the permissionless Panel engine's keyed decomposition (see `palw_panel_v3_fold_v1`).
         PalwDeltaEntryV2::PanelV3Cursor { old, new } => palw_panel_v3_fold_v1::apply_cursor_entry_v1(state, old, new, revert)?,
@@ -42345,6 +42370,7 @@ pub struct PalwStateCarriageV2 {
     pub legacy_disputes: BTreeMap<Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
     /// Original accepted FP metadata, appended tail 0xF0; omitted when empty below the public-filer fence.
     pub fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
+    pub legacy_answers: BTreeMap<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
     /// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's engine, in appended tail `0xEF`, present only when `Some`.
     pub bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
@@ -43048,6 +43074,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             crate::palw_kernel_route_v1::PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1.serialize(writer)?;
             kernel.serialize(writer)?;
         }
+        if !self.legacy_answers.is_empty() {
+            crate::palw_legacy_answer_chunks_v2::PALW_CARRIAGE_LEGACY_ANSWERS_TAIL_V2.serialize(writer)?;
+            self.legacy_answers.serialize(writer)?;
+        }
         if !self.fp_public_jobs.is_empty() {
             PALW_CARRIAGE_PUBLIC_FP_JOBS_TAIL_V1.serialize(writer)?;
             self.fp_public_jobs.serialize(writer)?;
@@ -43255,6 +43285,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1> = None;
         let mut seen_kernel_route = false;
         let mut legacy_disputes = BTreeMap::new();
+        let mut legacy_answers = BTreeMap::new();
+        let mut seen_legacy_answers = false;
         let mut fp_public_jobs = BTreeMap::new();
         let mut seen_fp_public_jobs = false;
         let mut seen_legacy_disputes = false;
@@ -43533,6 +43565,13 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_kernel_route = true;
                     kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::deserialize_reader(reader)?);
                 }
+                crate::palw_legacy_answer_chunks_v2::PALW_CARRIAGE_LEGACY_ANSWERS_TAIL_V2 if !seen_legacy_answers => {
+                    seen_legacy_answers = true;
+                    legacy_answers = BTreeMap::deserialize_reader(reader)?;
+                    if legacy_answers.is_empty() {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an empty legacy answer assembly tail"));
+                    }
+                }
                 PALW_CARRIAGE_PUBLIC_FP_JOBS_TAIL_V1 if !seen_fp_public_jobs => {
                     seen_fp_public_jobs = true;
                     fp_public_jobs = BTreeMap::deserialize_reader(reader)?;
@@ -43696,6 +43735,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             kernel_route,
             legacy_disputes,
             fp_public_jobs,
+            legacy_answers,
             bond_budget,
             exec_v2,
         })
@@ -43817,6 +43857,7 @@ impl PalwStateCarriageV2 {
             kernel_route: state.kernel_route.clone(),
             legacy_disputes: state.legacy_disputes.clone(),
             fp_public_jobs: state.fp_public_jobs.clone(),
+            legacy_answers: state.legacy_answers.clone(),
             bond_budget: state.bond_budget.clone(),
             exec_v2: state.exec_v2.clone(),
             model_versions: state.model_versions.clone(),
@@ -44040,6 +44081,7 @@ impl PalwStateCarriageV2 {
             panel_v3: self.panel_v3,
             legacy_disputes: self.legacy_disputes,
             fp_public_jobs: self.fp_public_jobs,
+            legacy_answers: self.legacy_answers,
             kernel_route: self.kernel_route,
             bond_budget: self.bond_budget,
             exec_v2: self.exec_v2,
@@ -61316,6 +61358,7 @@ pub(crate) mod tests {
                     // Lane LG14-A: its round trip is the dispute suite's.
                     PalwDeltaEntryV2::LegacyDispute { .. } => "legacy_dispute",
                     PalwDeltaEntryV2::PublicFpJob { .. } => "public_fp_job",
+                    PalwDeltaEntryV2::LegacyAnswer { .. } => "legacy_answer",
                     // Lane BUDGET: their round trip is the bond budget's suite (`palw_bond_budget_fold_v1`).
                     PalwDeltaEntryV2::BondBudgetRow { .. } => "bond_budget_row",
                     PalwDeltaEntryV2::BondBudgetHeader { .. } => "bond_budget_header",
@@ -61741,6 +61784,7 @@ pub(crate) mod tests {
             // Lane LG14-A (200–204), declared explicitly.
             (200, PalwDeltaEntryV2::LegacyDispute { key, old: None, new: None }),
             (201, PalwDeltaEntryV2::PublicFpJob { key, old: None, new: None }),
+            (202, PalwDeltaEntryV2::LegacyAnswer { key: (key, crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob, bond_key(1)), old: None, new: None }),
             // Lane BUDGET (the bond budget, 190–199), declared explicitly.
             (190, PalwDeltaEntryV2::BondBudgetRow { table: 1, key: Vec::new(), old: None, new: None }),
             (191, PalwDeltaEntryV2::BondBudgetHeader { old: None, new: None }),
@@ -62407,6 +62451,7 @@ pub(crate) mod tests {
             // Lane LG14-A: one Some-only block, empty here.
             legacy_disputes: _,
             fp_public_jobs: _,
+            legacy_answers: _,
             // Lane BUDGET: one Some-only block (`bond_budget/v1`), as the kernel route's; absent here.
             bond_budget: _,
             // RFC-0008 v2: one Some-only block of three, empty here.

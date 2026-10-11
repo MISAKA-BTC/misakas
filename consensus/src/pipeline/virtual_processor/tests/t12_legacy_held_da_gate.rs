@@ -12,6 +12,9 @@ use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+use kaspa_consensus_core::palw_legacy_answer_chunks_v2::{
+    PALW_LEGACY_ANSWER_DECLARE_CONTEXT_V2, palw_legacy_answer_declaration_message_v2, palw_legacy_answer_split_v2,
+};
 use kaspa_consensus_core::palw_legacy_held_da_v2::{
     PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2, PALW_LEGACY_HELD_DEMAND_MLDSA87_CONTEXT_V2, PALW_LEGACY_HELD_VERSION_V2,
     PALW_LEGACY_LEAF_RECOMPUTE_MLDSA87_CONTEXT_V2, PalwLegacyHeldAnswerCarriageV2, PalwLegacyHeldAnswerV2, PalwLegacyHeldDemandV2,
@@ -172,12 +175,20 @@ async fn t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their
         input_answer.answer = PalwLegacyHeldAnswerV2::PromptIds { ids: vec![0; 4], tree_root: None, siblings: vec![] };
         let message = palw_legacy_held_answer_message_v2(domain.as_byte_slice(), &input_answer);
         input_answer.signature = signer(3)(message.as_byte_slice(), PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
+        let Obj::LegacyHeldAnsweredV2 { answer: inner } = answer(claim, 3, 3) else { unreachable!() };
+        let (declaration, parts) = palw_legacy_answer_split_v2(&inner, 1_024, 200_000, |d| {
+            let m = palw_legacy_answer_declaration_message_v2(domain.as_byte_slice(), d);
+            Ok(signer(3)(m.as_byte_slice(), PALW_LEGACY_ANSWER_DECLARE_CONTEXT_V2))
+        })
+        .unwrap();
+        let chunk = Obj::LegacyHeldAnswerChunkV2 { chunk: Box::new(parts[0].clone()) };
         let signed = [
             demand(claim, 2, 2),
             answer(claim, 3, 3),
             recompute(claim, 2, 2),
             input_demand(4),
             Obj::LegacyHeldAnsweredV2 { answer: input_answer },
+            Obj::LegacyHeldAnswerDeclaredV2 { declaration: Box::new(declaration) },
         ];
         // An int-12 answer (tag 55) that names the appended unit rides the same rule.
         let carrying = Obj::MaterialDisclosedV2 {
@@ -190,7 +201,7 @@ async fn t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their
             signature: vec![1; 8],
         };
         if !armed {
-            for object in signed.iter().chain(std::iter::once(&carrying)) {
+            for object in signed.iter().chain([&carrying, &chunk]) {
                 assert!(walk(vec![object.clone()]).is_empty(), "dropped by name below the fence: {object:?}");
             }
             for object in &signed {
@@ -203,6 +214,67 @@ async fn t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their
         }
         for object in &signed {
             gate(object).unwrap_or_else(|e| panic!("signed by the bond it names, past the fence: {e}"));
+        }
+        assert!(gate(&chunk).unwrap_err().contains("no signed multipart DA declaration"));
+        // Stage only the assembly journal for this H1 signature fixture. There is deliberately
+        // no claim/DA session: the normal fold's admission and cleanup are tested separately.
+        for valid_inner in [true, false] {
+            let mut inner = (*inner).clone();
+            if !valid_inner {
+                inner.signature[0] ^= 1;
+            }
+            let (d, pieces) = palw_legacy_answer_split_v2(&inner, 1_024, 200_000, |d| {
+                let m = palw_legacy_answer_declaration_message_v2(domain.as_byte_slice(), d);
+                Ok(signer(3)(m.as_byte_slice(), PALW_LEGACY_ANSWER_DECLARE_CONTEXT_V2))
+            })
+            .unwrap();
+            assert!(pieces.len() > 1);
+            let row = kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2 {
+                declaration: d.clone(),
+                deadline_daa: point.daa_score + 500,
+                parts: pieces.iter().take(pieces.len() - 1).map(|c| (c.index, c.bytes.clone())).collect(),
+            };
+            let staged = kaspa_consensus_core::palw_state_v2::apply_delta_v2(
+                &state,
+                &kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2 {
+                    point: point.clone(),
+                    entries: vec![kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::LegacyAnswer {
+                        key: d.key(),
+                        old: None,
+                        new: Some(row),
+                    }],
+                },
+                &bundle.state,
+            )
+            .unwrap();
+            let last = Obj::LegacyHeldAnswerChunkV2 { chunk: Box::new(pieces.last().unwrap().clone()) };
+            let completion = vp.palw_v2_validate_objects(&staged, &bundle.state, &point, &[last]);
+            assert_eq!(
+                completion.is_ok(),
+                valid_inner,
+                "a signed declaration never substitutes for the original answer signature: {completion:?}"
+            );
+        }
+        for field in 0..8 {
+            let mut invalid = signed[5].clone();
+            let Obj::LegacyHeldAnswerDeclaredV2 { declaration: d } = &mut invalid else { unreachable!() };
+            match field {
+                0 => d.claim = Hash64::from_u64_word(9_999),
+                1 => d.unit = PalwLegacyHeldUnitV2::StepNode { level: 2, index: 0 },
+                2 => d.discloser = chain.bonds[4],
+                3 => d.answer_digest = Hash64::default(),
+                4 => d.chunk_digests[0] = Hash64::default(),
+                5 => d.signature.clear(),
+                6 => {
+                    let m = palw_legacy_answer_declaration_message_v2(domain.as_byte_slice(), d);
+                    d.signature = signer(4)(m.as_byte_slice(), PALW_LEGACY_ANSWER_DECLARE_CONTEXT_V2);
+                }
+                _ => {
+                    let m = palw_legacy_answer_declaration_message_v2(b"another-network", d);
+                    d.signature = signer(3)(m.as_byte_slice(), PALW_LEGACY_ANSWER_DECLARE_CONTEXT_V2);
+                }
+            }
+            assert!(gate(&invalid).is_err(), "multipart declaration field/signature {field} is authenticated");
         }
         if !merkle {
             for tokens in [100_000, u32::MAX] {

@@ -245,6 +245,8 @@ row, so a kind landing there fails the table test until the Lead allocates it. T
 | object tags 130–139 | 130 `ExecWorkRootOpenedV2` | `palw_exec_payload_v2` | X8R | no |
 | object tags 140–149 | none yet — BUDGET adds one row per kind range, naming `palw_bond_budget_v1` or `palw_model_bond_allocation_v1`, in the commit that creates the kinds | (allocation) | BUDGET | no row |
 | object tags 150–153 | `ProviderLeaseV1`, `ProviderChallengeV1`, `ProviderAnswerV1`, `DaTransferV1` | `palw_provider_court_v1` (in force only where the kernel route's fence is too) | DA16 | yes (merged with integration `648a9f481`); wire pinned |
+| object tags 154–156 | dispute reservation, release and public DA reacquisition | `palw_legacy_public_filer_v1` | LG14-A | yes; wire pinned |
+| object tags 157–161 | demand, answer, leaf recompute, signed answer manifest and chunk | `palw_legacy_held_da_v2` | LG14-B | yes; dormant, wire pinned |
 | inner kinds 1–12 | the kernel route | `palw_probabilistic_constraints_v1` (tag 110's own) | G14 lane D | yes |
 | inner kinds 13–14 | OPV registrations | `palw_panel_free_v1` | RFC-0015 | yes |
 | inner kind 15 | `SealProof` | tag 110's own | G14-R4 | no |
@@ -521,3 +523,16 @@ inner proof later. Isolation stays int-12-owned for all three evidence envelopes
 `palw_prompt_proof_fence_v1` retains the old verdict at acceptance/fold below the public-filer fence. The explicit
 opaque-carrier parity test and the canonical prompt count/root/fence test cover both stages. A guarded top-level
 owner arm would incorrectly change isolation on non-audit rulesets and was removed before release.
+
+## Session-owned multipart answer follow-up (Codex, 2026-10-11)
+
+LG14-B adds tags 160/161 under its existing dormant fence. Both kinds ride unchecked at isolation and are dropped by name
+below that fence in the acceptance walk. The core fold retains the second lock. A signed manifest belongs to a live
+unanswered DA obligation's claim/unit/discloser; it is not an entry in the eight-slot certification chunk table. The completing chunk
+restores the original signed tag-158 answer, whose signature, roots and recorded job identity remain mandatory.
+
+The assembly is a `NotCarried` state/delta change, explicitly classified as `StateEncoding` under `palw_legacy_held_da_v2`:
+delta 202, non-empty-only carriage tail 0xF1 and non-empty-only root block `legacy_answers/v2`. No live int-12 variant or empty
+state encoding is re-pinned. The post-int-12 pins for 156/157/158 also reflect the already-added FP job unit/answer forms on
+this branch; their original owning fences remain unchanged. Producer automation and public history reconstruction remain
+required before this transport can justify arming or a maximum-job availability claim.

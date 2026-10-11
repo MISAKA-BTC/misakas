@@ -221,6 +221,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         // an H-1 carrier is asked of the gate at the template.
         | O::LegacyHeldDemandedV2 { .. }
         | O::LegacyHeldAnsweredV2 { .. }
+        | O::LegacyHeldAnswerDeclaredV2 { .. }
+        | O::LegacyHeldAnswerChunkV2 { .. }
         | O::LegacyLeafRecomputedV2 { .. }
         // Lane BUDGET (tag 140): a capital assignment is registry traffic in the fee market; no halt waits on it.
         | O::BondCapitalAssignedV1 { .. }
