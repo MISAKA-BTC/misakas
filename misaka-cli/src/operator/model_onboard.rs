@@ -205,9 +205,14 @@ async fn kernel_beacon_sources(
     opt_in_context: Option<([u8; 64], bool)>,
 ) -> Result<(Vec<misaka_palw_sdk::onboarding_chain::SealedSourceV3>, Option<VerifiedBeaconSources>), CliError> {
     use kaspa_rpc_core::GetPalwKernelRowsRequest;
-    let mut rows = Vec::new();
+    use misaka_palw_sdk::kernel_rows::{KernelRowsCollectorV1, KernelRowsLimitsV1, KernelRowsSnapshotV1};
+    let limits = KernelRowsLimitsV1::default();
+    let mut read = KernelRowsCollectorV1::new(limits);
     let mut request = GetPalwKernelRowsRequest::default();
-    let mut first: Option<(String, String, String)> = None;
+    let invalid = |message| CliError::new(exit::GENERIC, message);
+    let root = |s: &str| {
+        kaspa_consensus_core::Hash64::from_str(s).map_err(|_| invalid("the node served a malformed kernel root"))
+    };
     loop {
         let page = nv
             .client
@@ -217,30 +222,41 @@ async fn kernel_beacon_sources(
         if !page.available {
             return Err(CliError::new(exit::NOT_READY, "this node serves no kernel route rows (op 211)"));
         }
-        let roots = (page.ledger_root.clone(), page.aux_root.clone(), page.header.clone());
-        match &first {
-            None => first = Some(roots),
-            Some(f) if *f != roots => {
-                return Err(CliError::new(exit::GENERIC, "the route moved while its pages were read: run verify again"));
-            }
-            Some(_) => {}
+        // Refuse oversized encoded material before allocating its decoded copy.
+        // Transport deserialization has its own limits; this bounds retained tooling state.
+        let encoded_limit = limits.maximum_bytes.saturating_mul(2);
+        let encoded_bytes = page.rows.iter().try_fold(page.header.len(), |n, row| {
+            n.checked_add(row.key.len()).and_then(|n| n.checked_add(row.row.len()))
+        }).ok_or_else(|| invalid("kernel page size overflow"))?;
+        if encoded_bytes > encoded_limit || page.total_rows > limits.maximum_rows
+            || page.rows.len() as u64 > page.total_rows || page.next_key.len() > encoded_limit {
+            return Err(invalid("kernel page exceeds the tooling read limits"));
         }
+        let snapshot = KernelRowsSnapshotV1 {
+            tip_daa: page.tip_daa,
+            ledger_root: root(&page.ledger_root)?,
+            aux_root: root(&page.aux_root)?,
+            header: unhex(&page.header)?,
+            total_rows: page.total_rows,
+        };
+        let mut rows = Vec::with_capacity(page.rows.len());
         for r in &page.rows {
-            let table = u8::try_from(r.table).map_err(|_| CliError::new(exit::GENERIC, "the node served a table number past u8"))?;
+            let table = u8::try_from(r.table).map_err(|_| invalid("the node served a table number past u8"))?;
             rows.push((table, unhex(&r.key)?, unhex(&r.row)?));
         }
-        if !page.more {
-            break;
-        }
-        request = GetPalwKernelRowsRequest { has_cursor: true, after_table: page.next_table, after_key: page.next_key, max_bytes: 0 };
+        let next = if page.more {
+            Some((u8::try_from(page.next_table).map_err(|_| invalid("kernel continuation table exceeds u8"))?,
+                unhex(&page.next_key)?))
+        } else { None };
+        read.append(snapshot, rows, next).map_err(|e| CliError::new(exit::GENERIC, e))?;
+        let Some((table, key)) = read.cursor() else { break };
+        request = GetPalwKernelRowsRequest {
+            has_cursor: true, after_table: *table as u32,
+            after_key: misaka_palw_sdk::runtime_pack::commit::hex(key), max_bytes: 0,
+        };
     }
-    let (ledger_root, aux_root, header) = first.expect("at least one page was read");
-    let root = |s: &str| {
-        kaspa_consensus_core::Hash64::from_str(s).map_err(|_| CliError::new(exit::GENERIC, "the node served a malformed root"))
-    };
-    let header = unhex(&header)?;
-    let ledger_root = root(&ledger_root)?;
-    let aux_root = root(&aux_root)?;
+    let (snapshot, rows) = read.finish().map_err(|e| CliError::new(exit::GENERIC, e))?;
+    let KernelRowsSnapshotV1 { ledger_root, aux_root, header, .. } = snapshot;
     if let Some((context, true)) = opt_in_context {
         let sources = misaka_palw_sdk::onboarding_chain::paid_opt_in_sources_from_kernel_rows_v5(
             &header,
