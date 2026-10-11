@@ -598,8 +598,9 @@ impl PalwTokenizerJsonStreamV1 {
         self.check()?;
         Ok(consumed)
     }
-    /// EOF may finish an integer id and require its uniqueness proof. Call again after that
-    /// proof; no semantic verdict is available while an id or key remains unauthenticated.
+    /// The qualified document is a root object. Any live lexeme/container at exact EOF
+    /// is invalid JSON, so sealing must not demand a new irrelevant uniqueness proof.
+    /// The original exact-length flat hash still authenticates before Invalid is usable.
     pub fn seal(&mut self) -> Result<(), String> {
         self.check()?;
         if self.offset != self.length || self.pending.is_some() {
@@ -608,23 +609,8 @@ impl PalwTokenizerJsonStreamV1 {
         if self.sealed {
             return Ok(());
         }
-        if !self.invalid {
-            let lex = std::mem::replace(&mut self.lex, Lex::Idle);
-            match lex {
-                Lex::Idle => {}
-                Lex::Number(n) => {
-                    if self.number_end(n, &mut |_| {}).is_err() {
-                        self.invalid = true;
-                    }
-                }
-                _ => self.invalid = true,
-            }
-            if self.pending.is_some() {
-                return Err("tokenizer EOF awaits the completed integer id proof".into());
-            }
-            if !self.root_done || !self.stack.is_empty() {
-                self.invalid = true;
-            }
+        if !self.invalid && (!matches!(self.lex, Lex::Idle) || !self.root_done || !self.stack.is_empty()) {
+            self.invalid = true;
         }
         self.sealed = true;
         Ok(())
@@ -1073,6 +1059,66 @@ pub(crate) mod tests {
                 h.update(&bytes);
                 PalwTokenizerRenderingDigestV1 { length: bytes.len() as u64, digest: h.finish() }
             })),
+        }
+    }
+    #[test]
+    fn observer_digest_events_are_tentative_and_do_not_change_serialized_parser_state() {
+        let raw = br#"{"added_tokens":[{"id":0,"content":"override"}],"model":{"vocab":{"a":0,"\u6f22":2},"merges":[]}}"#;
+        let context = Hash64::from_u64_word(18);
+        let mut plain = PalwTokenizerJsonStreamV1::new(context, palw_tokenizer_raw_commitment_v1(raw), raw.len() as u64, 0);
+        let mut observed = plain.clone();
+        let mut book = Book::new();
+        let mut events = vec![];
+        while plain.offset() < raw.len() as u64 {
+            if let Some((namespace, key)) = plain.pending_key() {
+                let proof = book.proof(namespace, key);
+                plain.prove_key(context, &proof).unwrap();
+                observed.prove_key(context, &proof).unwrap();
+                book.insert(namespace, key);
+            } else {
+                let offset = plain.offset();
+                let end = (offset as usize + 7).min(raw.len());
+                let n = plain.push(context, offset, &raw[offset as usize..end]).unwrap();
+                let observed_n =
+                    observed.push_with_observer_v1(context, offset, &raw[offset as usize..end], |e| events.push(e)).unwrap();
+                assert_eq!(n, observed_n);
+            }
+            assert_eq!(borsh::to_vec(&plain).unwrap(), borsh::to_vec(&observed).unwrap());
+        }
+        plain.seal().unwrap();
+        observed.seal().unwrap();
+        assert_eq!(plain.finish(), observed.finish());
+        assert_eq!(observed.finish().unwrap(), expected(raw, 0));
+        assert_eq!(events.len(), 3);
+        assert!(matches!(&events[0],PalwTokenizerRenderingEventV1::Added {id:0,rendering} if rendering.length==8));
+        assert!(matches!(&events[1],PalwTokenizerRenderingEventV1::Ordinary {id:0,rendering:Some(r)} if r.length==1));
+        assert!(matches!(&events[2], PalwTokenizerRenderingEventV1::Ordinary { id: 2, rendering: None }));
+    }
+    #[test]
+    fn exact_eof_inside_vocab_number_seals_invalid_without_an_unreachable_new_proof() {
+        let raw = br#"{"model":{"vocab":{"a":0"#;
+        let context = Hash64::from_u64_word(18);
+        for hash in [palw_tokenizer_raw_commitment_v1(raw), Hash64::from_u64_word(0xbad18)] {
+            let mut s = PalwTokenizerJsonStreamV1::new(context, hash, raw.len() as u64, 0);
+            let mut book = Book::new();
+            while s.offset() < raw.len() as u64 {
+                if s.pending_key().is_some() {
+                    book.satisfy(&mut s);
+                } else {
+                    let offset = s.offset();
+                    s.push(context, offset, &raw[offset as usize..(offset as usize + 1)]).unwrap();
+                }
+            }
+            assert!(s.pending_key().is_none());
+            assert!(!s.is_sealed_v1());
+            s.seal().unwrap();
+            assert!(s.is_sealed_v1());
+            assert!(s.pending_key().is_none());
+            if hash == palw_tokenizer_raw_commitment_v1(raw) {
+                assert_eq!(s.finish(), Ok(PalwTokenizerJsonVerdictV1::Invalid));
+            } else {
+                assert!(s.finish().is_err());
+            }
         }
     }
     #[test]
