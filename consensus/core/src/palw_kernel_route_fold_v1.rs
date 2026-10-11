@@ -224,6 +224,10 @@ pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
     ledger.attested_artifacts = attested.iter().map(|root| root.as_bytes()).collect();
     // G14R round 3: `palw_verifier_pay_v1`'s terms (M*-49, O2), injected at every load like the attested set (not in the root).
     ledger.verifier_pay_policy = extras.verifier_pay.map(crate::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1);
+    // G14-S: the court scope (ADR-0177 D2's cumulative bound, `misaka_palw_kernel::court_scope`) is `palw_provider_court_v1`'s — injected
+    // at every load like the verifier pay terms (not in the root; its table 28 is written only past it).
+    ledger.court_scope_policy =
+        extras.provider_court.map(|activation_daa| misaka_palw_kernel::court_scope::CourtScopePolicyV1 { activation_daa });
     // DA16: the claims whose material obligation moved to bonded providers — derived from the court's rooted rows, never a ledger table
     // (and nothing at all below `palw_provider_court_v1`, where no such row can exist).
     if extras.provider_court.is_some() {

@@ -391,6 +391,11 @@ and block an honest prosecutor. So the bound limits what is **disclosed**, never
   - an honest claim is dismissed.
 - Model-independent values stay clear (`misaka-palw-kernel/tests/court_scope.rs` pins this on F-C4R4-17's own class).
 - **G14R** wires the ledger hook: a per-model `served_clear` counter, the mask in classify / layout, and the 64-element leaf court.
+  **Wired by G14-S (2026-10-11, `misaka_palw_kernel::court_scope`, `hide`, `seg_scope`):** past `palw_provider_court_v1` the ledger
+  bounds each requester to 16 units and 4 dismissed filings per claim (table 28); on the OPV route a K2-TIR-v1/v2 demand past the
+  model's clear budget is refused by name (that route has no commitment-only form) and such a class takes no new claim; K2-TIR-v4/v5
+  owes every model-dependent value as withheld or flat-64-tiled hiding commitments with a hiding-leaf court. Panel-licensed v1/v2
+  classes are not covered (a Lead decision; see `k2-real-scale.md` §15 and the G14 matrix §2c).
 - **K2S** must make its v3 row leaves ≤ 64 elements for model-dependent values (v3 is not armed).
 - Mid-claim spot checks under withholding (K2S Route A) are traded for this. Re-execution (Route B) remains.
 

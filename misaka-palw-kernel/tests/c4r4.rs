@@ -188,7 +188,11 @@ fn f_c4r4_04_the_pre_final_default_liability_horizon_convicts_on_its_last_day_an
     let (_, _, until) = edge(31);
     assert_eq!(until, 231);
     let (conv_on, refused_on, _) = edge(until);
-    assert_eq!(conv_on, Some((900, 450, false)), "a proof on the horizon's last DAA convicts (the default kept 900 reserved; F-C4R4-15: the bounty is the share of the 900)");
+    assert_eq!(
+        conv_on,
+        Some((900, 450, false)),
+        "a proof on the horizon's last DAA convicts (the default kept 900 reserved; F-C4R4-15: the bounty is the share of the 900)"
+    );
     assert!(refused_on.is_none());
     let (conv_after, refused_after, _) = edge(until + 1);
     assert_eq!(conv_after, None, "one DAA past the horizon: no conviction");
@@ -863,7 +867,7 @@ fn rebuild_linear_map(rows: &[(Vec<i128>, Vec<i128>)], inp: usize, out: usize) -
 /// This is the G14 / ADR-0177 tension in one test: G14 needs the faulty position demandable (the outsider cannot know which), and
 /// ADR-0177 forbids the union of demands from rebuilding the model. SAFE: the served values rebuild no registered weight tensor.
 #[test]
-#[ignore = "FAIL F-C4R4-17: demanding every position of one claim rebuilds the class's projection weights exactly (the kernel's hook `cumulative_scope_allows_v1` waits for DA16b's predicate)"]
+#[ignore = "FAIL F-C4R4-17 on a Panel-licensed K2-TIR-v1 class (this world): demanding every position rebuilds the projection weights. G14-S enforces DA16b's clear budget on the OPV route past palw_provider_court_v1 (g14s_court_scope.rs: PASS there); Panel-licensed v1/v2 classes are open — the Lead's decision (applying it at palw_provider_court_v1 refuses every DA16 Panel-licensed claim)"]
 fn f_c4r4_17_claim_specific_demands_must_not_rebuild_the_registered_weights() {
     use misaka_palw_kernel::trace::tensor_commitment;
     use misaka_palw_tir::Tensor;

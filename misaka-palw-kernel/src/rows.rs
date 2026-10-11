@@ -87,6 +87,11 @@ pub const BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/led
 pub const TABLE_VERIFIER_PAY_V1: u8 = 27;
 /// The root extension table 27 adds once it holds a row (every older root unchanged).
 pub const VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-verifier-pay-extension/v1";
+/// **Table 28** (`crate::court_scope`, the court scope past `palw_provider_court_v1`, lane G14-S): claim → its requesters' units and
+/// its accusers' dismissed filings.
+pub const TABLE_COURT_SCOPE_V1: u8 = 28;
+/// The root extension table 28 adds once it holds a row (every older root unchanged).
+pub const COURT_SCOPE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-court-scope-extension/v1";
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -127,6 +132,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_JOB_POSTERS_V1 => "job-posters",
         TABLE_FORFEITED_CLAIM_SEALS_V1 => "forfeited-claim-seals",
         TABLE_VERIFIER_PAY_V1 => "verifier-pay",
+        TABLE_COURT_SCOPE_V1 => "court-scope",
         TABLE_SPEC_CLASSES_V1 => "spec-classes",
         TABLE_SPEC_JOBS_V1 => "spec-jobs",
         TABLE_MEMORY_LINES_V1 => "memory-lines",
@@ -197,6 +203,9 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.verifier_pay {
             rows.insert((TABLE_VERIFIER_PAY_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.court_scope {
+            rows.insert((TABLE_COURT_SCOPE_V1, bytes_of(k)), bytes_of(v));
         }
         for k in &self.opv.admitted {
             rows.insert((TABLE_OPV_ADMITTED_V1, bytes_of(k)), Vec::new());
@@ -301,6 +310,10 @@ impl KernelLedgerV1 {
                         dec::<crate::verifier_pay::VerifierPayRowV1>(row, "verifier pay row")?,
                     );
                 }
+                TABLE_COURT_SCOPE_V1 => {
+                    l.court_scope
+                        .insert(dec(key, "court scope key")?, dec::<crate::court_scope::CourtScopeRowV1>(row, "court scope row")?);
+                }
                 TABLE_JOB_ESCROWS_V1 => {
                     l.job_escrows.insert(dec(key, "job escrow key")?, dec::<crate::ledger::JobEscrowRowV1>(row, "job escrow")?);
                 }
@@ -376,6 +389,8 @@ fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, Str
     // G14-B: what registration derived (a segmented class registers only under OPV, so the network's OPV clock is its clock).
     let liability_daa = crate::ledger::class_liability_daa_v1(&l.policy, l.opv.policy.as_ref(), &d, &program, &r.plan, &bounds)
         .map_err(|g| format!("a stored class's pursuit no longer fits: {g:?}"))?;
+    let court_scope =
+        crate::descriptor::is_segmented_v1(&d).then(|| crate::seg_scope::seg_scope_report_v2(&program, r.plan.max_positions));
     Ok(ClassRowV1 {
         descriptor: d,
         program_bytes: r.program_bytes.clone(),
@@ -386,6 +401,7 @@ fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, Str
         ruleset_digest: l.policy.ruleset_digest,
         bounds,
         liability_daa,
+        court_scope,
     })
 }
 
@@ -542,11 +558,20 @@ pub fn root_of_rows(
         base
     };
     // `palw_verifier_pay_v1`: table 27 extends the root only once it holds a row.
-    if by_table.contains_key(&TABLE_VERIFIER_PAY_V1) {
+    let base = if by_table.contains_key(&TABLE_VERIFIER_PAY_V1) {
         verifier_pay_root_extension_v1(&base, &coll(TABLE_VERIFIER_PAY_V1))
     } else {
         base
-    }
+    };
+    // The court scope (`palw_provider_court_v1`, G14-S): table 28 extends the root only once it holds a row.
+    if by_table.contains_key(&TABLE_COURT_SCOPE_V1) { court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1)) } else { base }
+}
+
+/// `H(extension; root ‖ table 28)` (the court scope, G14-S).
+pub fn court_scope_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
+    let mut s = keyed(COURT_SCOPE_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(table);
+    finish(s)
 }
 
 /// `H(extension; root ‖ table 27)` (`palw_verifier_pay_v1`).

@@ -106,6 +106,8 @@ impl KernelLedgerV1 {
                     bounds: base,
                     // A typed root's rule program is a single-program (v1) class: one demand round, the policy's horizon (G14-B).
                     liability_daa: self.policy.liability_daa,
+                    // A memory rule is a K2-TIR-v1/v2 program (`public_prosecution_complete_v1` above): no segmented report.
+                    court_scope: None,
                 };
                 (SpecClassKindV1::Memory { rule: Box::new(rule), root: m.clone(), writers }, bounds)
             }

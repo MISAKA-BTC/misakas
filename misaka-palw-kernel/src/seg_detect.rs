@@ -115,8 +115,10 @@ pub fn prepare_reexecution_v1(
 ) -> Result<OwnReplayV1, String> {
     let mut roots = Vec::with_capacity(c.positions as usize);
     let mut decode_mismatch = None;
+    // A hiding value (DA16b option (a)) is committed under its flat hiding tiles, every other one v3 (`crate::seg_scope`).
+    let modes = crate::seg_scope::seg_value_modes_v1(c.program);
     replay_values_v1(c, artifact, tokens, None, &mut |p, values| {
-        let commitments = values.iter().map(|o| o.iter().map(crate::merkle3::tensor_commitment_v3).collect()).collect::<Vec<_>>();
+        let commitments = crate::seg_scope::seg_position_commitments_v1(&modes, values);
         roots.push(crate::seg::position_root_of_v1(p, &commitments));
         if c.encoder.is_none() && decode_mismatch.is_none() && p + 1 >= c.prompt_len {
             let index = (p + 1 - c.prompt_len) as usize;
@@ -148,9 +150,10 @@ pub(crate) fn replay_positions_v1(
     if last >= c.positions {
         return Err("a replay position outside the claim".into());
     }
+    let modes = crate::seg_scope::seg_value_modes_v1(c.program);
     replay_values_v1(c, artifact, tokens, Some(last), &mut |p, values| {
         if positions.contains(&p) {
-            let commitments = values.iter().map(|o| o.iter().map(crate::merkle3::tensor_commitment_v3).collect()).collect();
+            let commitments = crate::seg_scope::seg_position_commitments_v1(&modes, values);
             let withheld =
                 values.iter().zip(mask).map(|(o, m)| o.iter().zip(m).map(|(t, masked)| masked.then(|| t.clone())).collect()).collect();
             selected.insert(p, OwnPositionV1 { commitments, withheld });
@@ -264,7 +267,7 @@ fn first_divergent_in_segment(
         if !known.contains_key(&(lvl - 1, l)) {
             // Probe the subtree's leftmost position: its path shows both children of every node on the way down to it.
             let p = first + (idx << lvl) as u32;
-            let Some((root, siblings)) = producer.position_path(p) else { return Err((vec![p], probes)) };
+            let Some((root, siblings)) = producer.position_path(c.program, p) else { return Err((vec![p], probes)) };
             probes += 1;
             if !position_in_segment(p, &root, &siblings, c.segment_roots, c.positions) {
                 return Err((vec![p], probes));
@@ -346,7 +349,7 @@ mod tests {
         fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
             (p < self.c.positions()).then(|| self.c.position_path(p).1)
         }
-        fn position_path(&self, p: u32) -> Option<(Digest, Vec<Digest>)> {
+        fn position_path(&self, _: &misaka_palw_tir::program::TirProgramV1, p: u32) -> Option<(Digest, Vec<Digest>)> {
             self.probes.set(self.probes.get() + 1);
             (p < self.c.positions()).then(|| self.c.position_path(p))
         }

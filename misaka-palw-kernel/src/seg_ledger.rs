@@ -275,6 +275,10 @@ impl KernelLedgerV1 {
             return Err(rule("a segmented claim of a class that is not K2-TIR-v4".into()));
         }
         self.opv_claim_gate(&job.class_binding_id).map_err(rule)?;
+        // **The per-claim reward gate's court-scope condition** (DA16b, `crate::seg_scope`, lane G14-S): every model-dependent value of
+        // the class is withheld or hiding with a bounded court at the class's context, or the class takes no claim — it is never
+        // reward-bearing (`COURT_SCOPE_INCOMPLETE`).
+        self.class_court_scope_v1(&job.class_binding_id).map_err(rule)?;
         if claim.evidence_root != evidence.root() {
             return Err(rule("binding fault WrongEvidence".into()));
         }
@@ -372,6 +376,9 @@ impl KernelLedgerV1 {
         if self.seg_progress.get(&k).is_some_and(|p| p.complete_daa.is_some()) {
             return Err(rule("already served: it is public"));
         }
+        // ADR-0177 D2 (`crate::court_scope`): within the requester's units of the claim. A segmented position owes no model-dependent
+        // value in the clear (withheld or hiding, `crate::seg_da`), so no clear budget is drawn.
+        self.cumulative_scope_allows_v1(demander, claim, stage, position).map_err(|why| rule(&why))?;
         let need = self.policy.demand_bond;
         let Some(b) = self.bonds.get(demander) else { return Err(rule("the demander is not a registered bond")) };
         if b.exit_requested.is_some() || b.free() < need {
@@ -390,6 +397,7 @@ impl KernelLedgerV1 {
                 self.bonds.get_mut(demander).expect("checked").reserved += need;
                 settle(out, *demander, need, SettlementKindV1::ReserveDemand, Some(*claim));
             }
+            self.court_scope_record_unit_v1(demander, claim, (stage, position));
             out.push(LedgerEventV1::DemandJoined { claim: *claim, stage, position });
             return Ok(());
         }
@@ -399,6 +407,7 @@ impl KernelLedgerV1 {
         let deadline = daa + window;
         self.demands.insert(k, DemandRowV1 { demanders: vec![(*demander, need)], filed_daa: daa, deadline_daa: deadline, last: None });
         self.seg_progress.insert(k, SegProgressV1::new(parts));
+        self.court_scope_record_unit_v1(demander, claim, (stage, position));
         if !is_final {
             let row = self.claims.get_mut(claim).expect("checked");
             let _ = row.life.apply(ClaimEventV1::DisputeFiled { daa });

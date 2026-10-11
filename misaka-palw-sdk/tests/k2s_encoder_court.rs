@@ -390,6 +390,7 @@ use misaka_palw_kernel::seg::{
 };
 use misaka_palw_kernel::seg_detect::check_claim_by_reexecution_v1;
 use misaka_palw_kernel::seg_encoder::{EncoderBindingV1, encoder_binding_v1, trace_encoder_v1};
+use misaka_palw_kernel::seg_scope::{SegValueModeV1, seg_value_modes_v1};
 use misaka_palw_kernel::trace::{ParamCommitmentsV1, TraceV1};
 use misaka_palw_tir::{MapParams, ParamSource, Tensor};
 
@@ -641,7 +642,7 @@ fn produce(w: &World, job: Digest, prompt: &[u32], lie: Option<(u16, u16)>) -> P
         let v = t.data[0];
         t.data[0] = if t.dtype.contains(v + 1) { v + 1 } else { v - 1 };
     }
-    let c = seg_commitments_of_trace_v1(&TraceV1 { values: values.clone(), inputs: Vec::new() });
+    let c = seg_commitments_of_trace_v1(&w.enc.program, &TraceV1 { values: values.clone(), inputs: Vec::new() });
     let class = &w.l.classes[&w.class];
     let evidence =
         build_segmented_evidence_v1(class.header(w.class), &w.d, prompt.len() as u32, &prompt_root_of_ids_v1(prompt), &[], &c);
@@ -740,11 +741,12 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
         let ctx = view.context();
         assert_eq!(check_positions_v1(&ctx, &honest, &art, &prompt, &[0]), SegFindingV1::Clean, "{fixture}: honest");
         let own = trace_encoder_v1(&w.enc.program, &w.enc.params, &w.enc.binding, &prompt).unwrap();
-        let roots = seg_commitments_of_trace_v1(&own).position_roots;
+        let roots = seg_commitments_of_trace_v1(&w.enc.program, &own).position_roots;
         assert_eq!(check_claim_by_reexecution_v1(&ctx, &roots, None, &honest, &art, &prompt).finding, SegFindingV1::Clean);
         // Every honest element filed (the first, a middle and the last of every value) is dismissed, and every filing is within the
         // court's priced bound for its relation: the price the gate holds against the carrier is an upper bound of what is filed.
         let occ = w.enc.program.occurrences();
+        let modes = seg_value_modes_v1(&w.enc.program);
         let node_count: u64 = occ.iter().map(|(b, _)| w.enc.program.blocks[*b as usize].nodes.len() as u64).sum();
         let (mut filed, mut worst_ratio) = (0usize, 0f64);
         for (s, (b, _)) in occ.iter().enumerate() {
@@ -760,6 +762,39 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
                 )
                 .0;
                 assert!(priced <= w.plan_worst, "{fixture}: ({s}, {n}): a relation's price is within the plan's worst court");
+                // G14-S: a hiding value (DA16b option (a)) is judged one 64-element tile at a time; a withheld one by its whole-value
+                // court (the lies below) — its element court cannot open a hiding operand.
+                match modes[s][n] {
+                    SegValueModeV1::Hiding => {
+                        let tiles = misaka_palw_kernel::hide::hide_tiles_v1(len);
+                        for tile in [0, tiles / 2, tiles.saturating_sub(1)] {
+                            let filing = misaka_palw_kernel::element::prove_hiding_leaf_v1(
+                                &ctx,
+                                &honest,
+                                &art,
+                                &prompt,
+                                (0, s as u16, n as u16),
+                                tile,
+                            )
+                            .unwrap_or_else(|why| panic!("{fixture}: ({s}, {n}) tile {tile}: {why}"));
+                            let fault = SegFaultV1::HidingLeaf(filing);
+                            let bytes = fault.to_bytes().len() as u64;
+                            assert!(bytes <= priced, "{fixture}: ({s}, {n}) tile {tile}: filed {bytes} B above its priced {priced} B");
+                            worst_ratio = worst_ratio.max(bytes as f64 / priced as f64);
+                            assert!(
+                                matches!(
+                                    misaka_palw_kernel::element::verify_seg_fault_v1(&ctx, &fault),
+                                    Err(misaka_palw_kernel::verify::DismissalV1::NoFault)
+                                ),
+                                "{fixture}: ({s}, {n}) tile {tile}: an honest tile is dismissed"
+                            );
+                            filed += 1;
+                        }
+                        continue;
+                    }
+                    SegValueModeV1::Withheld => continue,
+                    SegValueModeV1::Clear => {}
+                }
                 for e in [0, len / 2, len.saturating_sub(1)] {
                     let filing = prove_element_v1(&ctx, &honest, &art, &prompt, (0, s as u16, n as u16), e)
                         .unwrap_or_else(|why| panic!("{fixture}: ({s}, {n}) element {e}: {why}"));
@@ -782,11 +817,14 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
             "[k2s-enc] v5 {fixture}: {filed} honest element filings dismissed, each within its priced bound (largest ratio {worst_ratio:.3})"
         );
         let (_, s, n) = targets[3];
-        let filing = prove_element_v1(&ctx, &honest, &art, &prompt, (0, s, n), 0).unwrap();
-        let ev = w.block(vec![obj(
-            OUT,
-            O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(SegFaultV1::Element(filing).to_bytes()) },
-        )]);
+        let honest_fault = match modes[s as usize][n as usize] {
+            SegValueModeV1::Hiding => SegFaultV1::HidingLeaf(
+                misaka_palw_kernel::element::prove_hiding_leaf_v1(&ctx, &honest, &art, &prompt, (0, s, n), 0).unwrap(),
+            ),
+            _ => SegFaultV1::Element(prove_element_v1(&ctx, &honest, &art, &prompt, (0, s, n), 0).unwrap()),
+        };
+        let ev = w
+            .block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(honest_fault.to_bytes()) })]);
         assert!(ev.iter().any(|e| matches!(e, E::ProofDismissed { .. })), "{fixture}: an honest element is dismissed: {ev:?}");
 
         // A lie in each target value.

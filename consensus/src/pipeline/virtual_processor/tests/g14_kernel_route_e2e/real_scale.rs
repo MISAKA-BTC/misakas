@@ -85,7 +85,7 @@ impl SegMaterialV1 for SegDa<'_> {
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
         (!self.withhold.contains(&p) && p < self.claim.c.positions()).then(|| self.claim.c.position_path(p).1)
     }
-    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+    fn commitments(&self, _: &misaka_palw_tir::program::TirProgramV1, p: u32) -> Option<Vec<Vec<Digest>>> {
         if self.withhold.contains(&p) {
             return None;
         }
@@ -93,9 +93,11 @@ impl SegMaterialV1 for SegDa<'_> {
     }
 }
 
-/// Positions assembled from the parts the chain's blocks carry, with the bytes a verifier reads counted.
+/// Positions assembled from the parts the chain's blocks carry, with the bytes a verifier reads counted (and, G14-S, the served leaf
+/// hashes of every hiding value, when the reader kept them).
 struct FromBlocks {
     positions: BTreeMap<u32, misaka_palw_kernel::seg_da::AssembledPositionV1>,
+    hidden: BTreeMap<u32, misaka_palw_kernel::seg_da::HiddenLeavesV1>,
     read: Cell<u128>,
 }
 
@@ -109,8 +111,11 @@ impl SegMaterialV1 for FromBlocks {
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
         self.positions.get(&p).map(|(_, siblings, _)| siblings.clone())
     }
-    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+    fn commitments(&self, _: &misaka_palw_tir::program::TirProgramV1, p: u32) -> Option<Vec<Vec<Digest>>> {
         self.positions.get(&p).map(|(_, _, commitments)| commitments.clone())
+    }
+    fn hidden_leaves(&self, _: &misaka_palw_tir::program::TirProgramV1, p: u32) -> Option<misaka_palw_kernel::seg_da::HiddenLeavesV1> {
+        self.hidden.get(&p).cloned()
     }
 }
 
@@ -341,7 +346,7 @@ impl SegWorld {
         tokens.push(g0);
         let mut values = trace.values;
         edit(&mut values);
-        let c = seg_commitments_of_trace_v1(&TraceV1 { values: values.clone(), inputs: Vec::new() });
+        let c = seg_commitments_of_trace_v1(&self.f.program, &TraceV1 { values: values.clone(), inputs: Vec::new() });
         let ledger = self.net.ledger();
         let class = &ledger.classes[&self.class];
         let evidence = build_segmented_evidence_v1(
@@ -537,7 +542,7 @@ async fn g14_k2s_a_short_correct_claim_is_refused_before_it_can_earn_the_fixed_r
     let trace = trace_v1(&w.f.program, &w.f.params, &prompt).unwrap();
     let last = trace.values.last().unwrap().last().unwrap();
     let generated = vec![DecodeRuleV1::Greedy.select(&last[w.f.program.logits as usize]).unwrap()];
-    let c = seg_commitments_of_trace_v1(&trace);
+    let c = seg_commitments_of_trace_v1(&w.f.program, &trace);
     let ledger = w.net.ledger();
     let class = &ledger.classes[&w.class];
     let evidence = build_segmented_evidence_v1(
@@ -670,7 +675,7 @@ async fn g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_
             .expect("every part of the position is in the blocks and authentic");
         positions.insert(p, assembled);
     }
-    let chain = FromBlocks { positions, read: Cell::new(0) };
+    let chain = FromBlocks { positions, hidden: BTreeMap::new(), read: Cell::new(0) };
     let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &lie.tokens, &[1200]) else {
         panic!("the served lie is found")
     };
@@ -791,14 +796,16 @@ impl SegWorld {
             }
         }
         self.net.send_all(answers).await;
-        let mut positions = BTreeMap::new();
+        let (mut positions, mut hidden) = (BTreeMap::new(), BTreeMap::new());
         for &p in missing {
             let parts = served_parts_from_blocks(&self.net, &claim.id, p);
-            let assembled =
-                assemble_position_v1(&self.f.program, &view.segment_roots, view.positions, p, &parts).expect("authentic parts");
+            let (assembled, leaves) =
+                misaka_palw_kernel::seg_da::assemble_position_full_v1(&self.f.program, &view.segment_roots, view.positions, p, &parts)
+                    .expect("authentic parts");
             positions.insert(p, assembled);
+            hidden.insert(p, leaves);
         }
-        FromBlocks { positions, read: Cell::new(0) }
+        FromBlocks { positions, hidden, read: Cell::new(0) }
     }
 }
 
@@ -846,7 +853,7 @@ async fn g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_
     let params = w.f.params.clone();
     let art = move |j: u16, l: Option<u16>| params.tensors.get(&(j, l)).cloned();
     let own = misaka_palw_kernel::seg_detect::prepare_reexecution_v1(&view.context(), &art, &lie.tokens).unwrap();
-    let mut chain = FromBlocks { positions: BTreeMap::new(), read: Cell::new(0) };
+    let mut chain = FromBlocks { positions: BTreeMap::new(), hidden: BTreeMap::new(), read: Cell::new(0) };
     let mut demanded = std::collections::BTreeSet::new();
     let fault = loop {
         let r = misaka_palw_kernel::seg_detect::check_claim_by_reexecution_v1(
@@ -868,6 +875,7 @@ async fn g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_
                 assert!(demanded.len() <= 12 && demanded.len() <= 16, "the single bond's distinct DA units are bounded");
                 let served = w.demand_served_and_read(outsider, &lie, &missing).await;
                 chain.positions.extend(served.positions);
+                chain.hidden.extend(served.hidden);
             }
             other => panic!("the public prosecution stopped: {other:?}"),
         }
@@ -1265,7 +1273,7 @@ async fn g14_k2s_survives_a_node_restart_with_live_tiled_job_and_progress_rows()
         let parts = served_parts_from_blocks(&w.net, &lie.id, p);
         served.insert(p, assemble_position_v1(&w.f.program, &view.segment_roots, view.positions, p, &parts).expect("authentic"));
     }
-    let chain = FromBlocks { positions: served, read: Cell::new(0) };
+    let chain = FromBlocks { positions: served, hidden: BTreeMap::new(), read: Cell::new(0) };
     let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &lie.tokens, &[1200]) else { panic!("found") };
     w.file(outsider, &lie.id, &fault).await;
     assert!(w.net.ledger().claims[&lie.id].convicted, "convicted by the restarted node");
@@ -1377,13 +1385,14 @@ impl SegWorld {
         let mut values: Vec<Vec<Vec<Tensor>>> = vec![Vec::new(); prompt.len()];
         let mut g0 = 0u32;
         let started = std::time::Instant::now();
+        // G14-S: each value under its mode (a hiding value's flat hiding commitment, every other one's v3).
+        let modes = misaka_palw_kernel::seg_scope::seg_value_modes_v1(&self.f.program);
         misaka_palw_kernel::trace::trace_streaming_v1(&self.f.program, &self.f.params, prompt, &mut |p, honest| {
             let mut committed = honest.to_vec();
             if p == lie.0 {
                 bump(&mut committed[lie.1 as usize][lie.2 as usize], 0);
             }
-            commitments
-                .push(committed.iter().map(|o| o.iter().map(misaka_palw_kernel::merkle3::tensor_commitment_v3).collect()).collect());
+            commitments.push(misaka_palw_kernel::seg_scope::seg_position_commitments_v1(&modes, &committed));
             if p == last {
                 g0 = DecodeRuleV1::Greedy.select(&committed[post][logits]).expect("logits");
             }
@@ -1542,7 +1551,7 @@ impl SegWorld {
         if let Some((s, n)) = lie {
             bump(&mut values[0][s as usize][n as usize], 0);
         }
-        let c = seg_commitments_of_trace_v1(&TraceV1 { values: values.clone(), inputs: Vec::new() });
+        let c = seg_commitments_of_trace_v1(&self.f.program, &TraceV1 { values: values.clone(), inputs: Vec::new() });
         let ledger = self.net.ledger();
         let class = &ledger.classes[&self.class];
         let evidence = build_segmented_evidence_v1(

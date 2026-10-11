@@ -277,6 +277,75 @@ carriage.
 
    G14-S's hiding tiles will change position material. `position_part_bytes_v1` follows the layout, so the windows and needs follow
    automatically.
+## 2d. G14-S — the court scope as a gate, and DA16b option (a) (2026-10-11)
+
+Branch `g14/s-scope-gates` (from `8173dae20`). **Overall G14 result unchanged: FAIL / incomplete.** Nothing is armed: every rule is
+inside dormant K2-TIR-v4/v5 bytes or behind `palw_provider_court_v1` (consumer-injected, not in any root below it); no live id moves.
+Status words: *implemented* / *verified* (a recorded run of this code) / *armable* (nothing).
+
+**What is enforced, and where.**
+
+| Gate | Rule | Code |
+| --- | --- | --- |
+| Reward (per claim), K2-TIR-v4/v5 | a class whose `seg_scope_report_v2(program, plan.max_positions).court_scope_complete()` is false takes no claim: `COURT_SCOPE_INCOMPLETE …` (registers, never reward-bearing); the report is cached in `ClassRowV1::court_scope` | `court_scope.rs:91` `class_court_scope_v1`, called `seg_ledger.rs:281` (`commit_segmented_claim`); report `seg_scope.rs:276`, gate `seg_scope.rs:248` |
+| Reward (per claim), K2-TIR-v1/v2 on the OPV route | past `palw_provider_court_v1` + `palw_panel_free_v1`: a class with any model relation (clear budget < ∞) takes no claim — its responses serve activations in the clear and the route has no commitment-only form | `court_scope.rs:91`, called `ledger.rs:1882` (`commit_claim`) |
+| DA (what may be demanded) | ≤ 16 distinct units per (claim, requester bond) — demands, joins and segmented filings (`COURT_SCOPE_UNITS`); OPV v1/v2: a new position past the model's clear budget (`court_position_disclosure_v1`, 0 with an elementwise relation) is refused (`COURT_SCOPE_CLEAR_BUDGET`) | `court_scope.rs:131`, called `ledger.rs:2449` (v1/v2) and `seg_ledger.rs:378` (v4/v5); table 28 |
+| DA (what may be served) | K2-TIR-v4/v5: no model-dependent value in the clear — withheld = node opening only, hiding = leaf hashes only (`ChunkBodyV1::Hidden = 3`); classify refuses any other form | `seg_da.rs:143` (layout), `seg_da.rs:361` (classify) |
+| Court (what may be opened / recomputed) | a whole-value court only for a withheld node, a hiding-leaf court only for a hiding node, a hiding decode only for hiding logits; each operand in its source's form (a hiding value never by v3 leaves) | `element.rs:807`, `:829`, `:857`, operands `element.rs:644` |
+| Filings and court runs | ≤ 4 dismissed filings per (claim, accuser): the 5th is refused free, before the court runs (`COURT_SCOPE_FILINGS`); a segmented filing's position counts in its filer's 16 units | `court_scope.rs:170`, called `ledger.rs:2166`; dismissal counted `ledger.rs:2190` |
+| Consumer | `CourtScopePolicyV1 { activation_daa }` injected at every load past `palw_provider_court_v1` | `consensus/core/src/palw_kernel_route_fold_v1.rs:229`; A2U `StateEncoding` row (table 28) |
+
+All bounds are per requester or per class, so no producer, seat or front-runner can spend an honest prosecutor's allowance (one
+prosecution needs ≤ 12 units and one convicting filing).
+
+**Option (a), implemented + verified at the ledger level (V-ref).** `hide.rs`: flat 64-element tiles of the row-major order, ragged
+tail merged (64–127 elements a tile; a value < 64 elements is one leaf), `C_hide` over its own domains. A model-dependent value is
+withheld (option (c)) or hiding — never clear (`clear_masked = 0` for every program). Hiding-leaf court recomputes ONE tile from
+operands the filer supplies from its own re-execution (they authenticate only if equal to the producer's) and the filer's copy of the
+params; price `element.rs:1899` (first/last tile, ≤ 127 `MatMul` columns: the ≈ 64× column cost), modes-aware plan price
+`element.rs:1807`. Option (c) finished: whole-value courts accept hiding operands by their tiles; withheld/hiding values are empty
+placeholders in assembled positions.
+
+**New bounds (G14-B owns the derivation):**
+- `SEG_HIDING_COURT_MAX_BYTES_V1 = 1,572,864 B` (one carrier less the 4,096-B segmented header and the envelope), work 2^36; a hiding
+  court above it is *unbounded* (not in the plan's worst court; the class is incomplete).
+- Leaf-hash DA: 64 B a hiding tile (`position_material_v1`).
+- `verifier_ram_bound_v4` (`gate.rs:507`): hiding values are kept with the withheld ones; public positions no longer hold kept values,
+  so the separate `withheld × local` term is dropped. 9B-8k: **59,958,548,592 B** (was 67,191,831,824 B).
+- 9B-8k worst court **1,008,494 B** (a hiding FFN-down `MatMul` tile); position material **551,788,288 B in 548 parts**.
+- Court scope: 16 units / 4 dismissals per requester per claim (INTERIM).
+
+**9B-8k scope (derivation over the shipped program, no 9B run):** 176 clear, 11,150 withheld, 1,997 hiding occurrences; **48
+unbounded** in four relations — linear-attention state `Mul [32,128,128]` 2.10 MB; softmax `ReduceMax` / `ReduceSum` over 8,192
+scores 2.52 MB each; attention `P·V` `MatMul [4,4,256]` 11.29 MB. **The 9B-8k class is `COURT_SCOPE_INCOMPLETE`: not reward-bearing**
+until those courts are filed in chunks (tag 113, G14-B) or lowered history-chunked.
+
+**Tests (run `g14s-r1`/`r2`, this code):**
+- kernel crate, all targets: **283 PASS, 0 FAIL, 7 ignored** (the 7 are pre-existing: F-C4R4-17 on the Panel-licensed world — reason
+  updated — and the six exhaustive PESG-B runs, not run: `pesg_b_v4_route_a_samples_and_route_b_reexecution` uses the mode-aware commitments and is UNKNOWN). New: `k2_real_scale::g14s_a_hiding_tile_lie_is_convicted_pre_and_post_final_and_no_honest_tile_is`,
+  `g14s_a_decode_lie_on_hiding_logits_is_convicted_from_two_tiles`, `g14s_wide128_d16_owes_no_short_leaf_and_a_lie_is_convicted_whole`,
+  `g14s_dense_moe_rows_of_4_windows_hide_flat_and_an_unbounded_scope_takes_no_claim` (window 4: all withheld; 2^18 @16: 26 hiding,
+  complete, a hiding-window lie convicted; @16,384: incomplete → claim refused `COURT_SCOPE_INCOMPLETE`),
+  `g14s_9b_8k_hiding_sizing_is_derived_from_the_shapes`; `g14s_court_scope::g14s_f_c4r4_17_on_the_opv_route_the_clear_budget_refuses_and_the_class_takes_no_new_claim`,
+  `g14s_a_filer_past_its_cumulative_scope_is_refused_and_an_honest_prosecutor_still_convicts`; `hide::tests` (2), `element::tests`
+  (every hiding value's tiles dismissed honest, a lie in every value convicted by its mode's court).
+- consensus-core (`palw_lifecycle_objects_v2`, `palw_court_scope`, `palw_kernel_route`, A2U table): **44 PASS**.
+- node (`g14_kernel_route_e2e::real_scale`, `::da16`, `t12_a2u`): **27 PASS** after one fix (run `g14s-r1`: 26 PASS, 1 FAIL — the GAP-31 held test's streaming producer committed every value v3; with mode-aware commitments it PASSES in `g14s-r2`: the continuity lie in the 1,024-row k window at position 4,096 is localized and convicted on the real node, the verifier reading 48 B of clear values back from the blocks). The window at 1,024 rows is a hiding value by the scope derivation (its whole-value court exceeds 1 MiB); the test asserts the localization, not the court kind.
+- SDK `k2s_encoder_court::k2s_v5_encoders_and_heads…` (hiding values judged by tiles): **1 PASS**.
+
+**Open (honest):**
+1. **Panel-licensed K2-TIR-v1/v2 classes** still serve model-dependent values in the clear; F-C4R4-17 stays an ignored FAIL on that
+   world. Enforcing the clear budget at `palw_provider_court_v1` alone would refuse every DA16 Panel-licensed claim — **a Lead/user
+   decision** (Level 2 for v1/v2 needs a commitment-only response form and courts on that route).
+2. **9B-8k is incomplete** (four relation types above one carrier) — chunked filing or history-chunked lowering.
+3. Hiding at node level: one V-node case (the GAP-31 held class above: a hiding k window convicted through the real chain path); every other hiding case is V-ref. Fresh-node / pruned-import / reorg runs with hiding values beyond that are not separately run.
+4. The consensus reward gate (`palw_reward_gate_v1`, OPV eligibility — codex's) does not read the scope; the kernel's per-claim
+   refusal drops such a claim at the fold, so no reward is reachable, but eligibility still reports the class.
+5. Pipelines (K2-TIR-v3) and typed roots are not judged by `class_court_scope_v1` (consensus classifies their units, DA16b §7.3).
+6. Values under 64 elements (5,744 occurrences in 9B, 378 in dense-MoE): their commitment is one leaf — a residual brute-force
+   exposure of tiny low-entropy values, as before.
+7. Hiding pricing runs at registration and class-row rebuild (the 9B gate + report ≈ tens of seconds in debug); not measured in release.
+8. A refused filing is dropped by the fold, but its carrier bytes may still be mined; a filer only ever discloses its own copy.
 
 ## 3. Family matrices (milestone baseline)
 
@@ -799,3 +868,4 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   compile fix: `2d93ac288` did not build — the BUDGET merge dropped the `Ok(())` and closing brace of LG14-B's
   `palw_legacy_held_signature_ok` in `processor.rs`; restored.
 * 2026-10-11 — G14-B (§2c): maximum-profile budgets and deadlines. `misaka-palw-kernel::budget` (route carriage, chunk-counting windows, the worst-case pursuit schedule, legacy sessions, population). Segmented demands now count chunks. Segmented classes get a derived liability horizon and are refused by name past a 436-DAA lifetime. The legacy 4-session FAIL is derived. Kernel 285, core 51 and node 19 PASS.
+* 2026-10-11 — G14-S (§2c, branch `g14/s-scope-gates`): the cumulative court scope enforced (table 28, per-requester units and dismissals, the OPV v1/v2 clear budget), the scope report made the per-claim reward gate (`COURT_SCOPE_INCOMPLETE`), DA16b option (a) flat 64-element hiding tiles with leaf-hash DA and the hiding-leaf / hiding-decode courts, option (c) finished; 9B-8k derived incomplete (four relation types above one carrier).
