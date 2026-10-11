@@ -3123,7 +3123,8 @@ mod tests {
         cache.values[3][0][0] ^= 1;
         // Both initial and inherited receipts use this exact class-specific state relation.
         // The seat refuses a false named root; the full model replay still runs independently.
-        use kaspa_consensus_core::palw_freeprompt_v3::{DecodeConfigV4, PalwFpJobTailV1, PalwFreePromptJobV3};
+        use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFreePromptJobV3};
         let prompt = [1u32, 2, 3, 4];
         for inherited in [false, true] {
             let mut job = PalwFreePromptJobV3 {
