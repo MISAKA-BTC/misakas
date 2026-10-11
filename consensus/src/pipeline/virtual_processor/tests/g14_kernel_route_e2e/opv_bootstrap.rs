@@ -1726,6 +1726,7 @@ async fn run_paid_v5_source_budget(budget_activation: u64) {
         .collect();
     net.beat_to(terms.source.hold_until + 1).await;
     let paid_daa = net.daa();
+    let paid_block = net.chain.sink();
     let ledger_paid = net.ledger();
     assert_eq!(ledger_paid.beacon_source_fees[&context].paid, 100);
     let state = net.chain.tip_state().1;
@@ -1771,7 +1772,8 @@ async fn run_paid_v5_source_budget(budget_activation: u64) {
     let ttpb = net.ttpb();
     let payment_block = net.chain.heartbeat(ttpb, Vec::new()).await;
     let payment_daa = net.chain.daa_of(payment_block.header.hash);
-    assert!(payment_daa > paid_daa);
+    assert_ne!(payment_block.header.hash, paid_block, "physical payment uses a later real block");
+    assert!(payment_daa >= paid_daa, "heartbeat blocks may share a DAA score");
     let paid_state = net.chain.tip_state().1;
     let mut releases = Vec::new();
     for (card, bond, queue, _, held_r, before_money) in &recipients {
