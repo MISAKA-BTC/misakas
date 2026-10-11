@@ -98,6 +98,8 @@ wire/fence impact · test · real-node result · status.
 | Verifier pay (G14R, palw_verifier_pay_v1, 2026-10-10) | kernel inner kinds **21** (verifier attestation), **22** (beacon-source opt-in) | — | — | ledger table 27, `LedgerEventV1` 25–26 |
 | `PalwVoidReasonV2` | C2 120–122; X8 one variant (assign an explicit number ≥ 130 at merge) | — | — | — |
 | Court scope + hiding tiles (G14-S, ADR-0177 D2 / DA16b §7.9, 2026-10-11) | — (no object tag, no kernel inner kind; `ProsecutionV1::Segmented` gains `SegFaultV1` 4 `HidingLeaf` / 5 `HidingDecode`, `seg_da::ChunkSpecV1::Hidden` / `ChunkBodyV1` 3 `Hidden`, all inside dormant K2-TIR-v4 bytes) | — | — | **kernel ledger table 28** `court_scope` (root extension `misaka-palw/kernel/ledger-court-scope-extension/v1`, only once non-empty), written only past `palw_provider_court_v1` (consumer-injected `CourtScopePolicyV1`); A2U `StateEncoding` row landed |
+| Conformance-only candidate classes (codex RFC-02, taken over by lane RFC02-T, 2026-10-11) | — | — | — | **kernel ledger table 29** (codex used 28 on `codex/rfc02-implementation`; 28 is G14-S's court scope, landed first) |
+| Beacon-source opt-in reservations (codex RFC-7, `beacon-source-opt-in-reservation.md`, taken over by lane R6781, 2026-10-11) | — | — | — | **kernel ledger table 30** (codex used 28 on `codex/rfc-6-7-8-12-design-audit`) |
 
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the
 skeleton first; lanes build on that commit.
