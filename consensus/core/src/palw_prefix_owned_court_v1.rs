@@ -373,6 +373,14 @@ mod tests {
                 let mut candidate = row.court.clone();
                 while let Some(source) = candidate.next_public_source_v1().unwrap() {
                     let tile = tiles.iter().find(|t| t.opening.leaf_index == source.leaf_index).unwrap();
+                    let (derived, mut header) = candidate.next_public_source_hash_header_v1().unwrap().unwrap();
+                    assert_eq!(derived, source);
+                    header.update(&tile.preimage.values_le);
+                    assert_eq!(
+                        header.finish().unwrap(),
+                        tile.opening.leaf_hash,
+                        "owned header preserves the exact original wholeleaf hash"
+                    );
                     let next =
                         candidate.authenticated_public_source_actions_v1(seed, &tile.opening, &tile.preimage.values_le).unwrap();
                     for action in &next {
