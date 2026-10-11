@@ -259,16 +259,18 @@ impl Consumer {
             assert_eq!(self.book.reserved.get(bond).copied().unwrap_or(0), row.reserved, "reserved of {:02x?}", &bond[..2]);
         }
         assert_eq!(l.burned, self.book.burned, "the burn checksum is the burn instructions'");
+        assert_eq!(l.source_fee_escrow_total().unwrap(), self.book.source_fee_escrows.values().sum::<u64>());
         self.book.balanced().unwrap();
         // **Conservation** (the user's ruling, 2026-10-09): every unit the consumer declared is still a bond's collateral (reserved or
         // free), was paid out (rewards, shares, Final rewards — each out of a debit), was burned, or left by a withdrawal. Nothing is
         // minted: escrow, burn and payouts agree in every ledger test.
         let collateral: i128 = self.book.collateral.values().map(|c| i128::from(*c)).sum();
         let paid: i128 = self.book.paid.values().map(|p| i128::from(*p)).sum();
+        let held: i128 = self.book.source_fee_escrows.values().map(|a| i128::from(*a)).sum();
         assert_eq!(
-            collateral + paid + i128::from(self.book.burned) + self.withdrawn,
+            collateral + paid + held + i128::from(self.book.burned) + self.withdrawn,
             self.declared,
-            "conservation: collateral {collateral} + paid {paid} + burned {} + withdrawn {} ≠ declared {}",
+            "conservation: collateral {collateral} + paid {paid} + escrow {held} + burned {} + withdrawn {} ≠ declared {}",
             self.book.burned,
             self.withdrawn,
             self.declared

@@ -45,6 +45,9 @@ pub struct Inner {
     // ---
     current_daa_score: Arc<AtomicU64>,
     network_id: Arc<Mutex<Option<NetworkId>>>,
+    // Runtime DNS authority is per processor; remember the global policy values so
+    // SDK maturity-period updates propagate without sharing observed anchors.
+    network_runtime_params: Mutex<HashMap<NetworkId, (Arc<NetworkParams>, (u64, u64))>>,
     rpc: Mutex<Option<Rpc>>,
     is_connected: AtomicBool,
     listener_id: Mutex<Option<ListenerId>>,
@@ -66,6 +69,9 @@ pub struct Inner {
     /// only moves at attestation-epoch cadence, so polling it on every virtual DAA tick would
     /// be pure chatter; this throttles the refresh to ~once per epoch worth of DAA.
     dns_anchor_polled_at_daa: AtomicU64,
+    /// Bind an asynchronous DNS observation to the RPC/network connection that
+    /// began it; reset and publication share this mutex, never an await.
+    dns_anchor_connection_generation: Mutex<u64>,
 }
 
 impl Inner {
@@ -82,6 +88,7 @@ impl Inner {
             address_to_utxo_context_map: DashMap::new(),
             current_daa_score: Arc::new(AtomicU64::new(0)),
             network_id: Arc::new(Mutex::new(network_id)),
+            network_runtime_params: Mutex::new(HashMap::new()),
             rpc: Mutex::new(rpc.clone()),
             is_connected: AtomicBool::new(false),
             listener_id: Mutex::new(None),
@@ -99,6 +106,7 @@ impl Inner {
             fee_rate_task_ctl: DuplexChannel::oneshot(),
             fee_rate_task_is_running: AtomicBool::new(false),
             dns_anchor_polled_at_daa: AtomicU64::new(0),
+            dns_anchor_connection_generation: Mutex::new(0),
         }
     }
 }
@@ -144,7 +152,12 @@ impl UtxoProcessor {
     }
 
     pub async fn bind_rpc(&self, rpc: Option<Rpc>) -> Result<()> {
-        self.inner.rpc.lock().unwrap().clone_from(&rpc);
+        {
+            let mut generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+            self.inner.rpc.lock().unwrap().clone_from(&rpc);
+            self.inner.is_connected.store(false, Ordering::SeqCst);
+            self.invalidate_dns_anchor_connection(&mut generation);
+        }
         let rpc_api = rpc.as_ref().map(|rpc| rpc.rpc_api().clone());
         self.metrics().bind_rpc(rpc_api);
         self.sync_proc().bind_rpc(rpc).await?;
@@ -180,18 +193,63 @@ impl UtxoProcessor {
     }
 
     pub fn set_network_id(&self, network_id: &NetworkId) {
+        let mut generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+        self.invalidate_dns_anchor_connection(&mut generation);
         self.inner.network_id.lock().unwrap().replace(*network_id);
+        if let Ok(params) = self.network_params() {
+            params.set_dns_confirmed_anchor_daa(0);
+        }
+    }
+
+    fn invalidate_dns_anchor_connection(&self, generation: &mut u64) {
+        *generation = generation.wrapping_add(1);
+        self.inner.dns_anchor_polled_at_daa.store(0, Ordering::Relaxed);
+        if let Ok(params) = self.network_params() {
+            params.set_dns_confirmed_anchor_daa(0);
+        }
+    }
+
+    fn publish_dns_anchor_observation(&self, params: &NetworkParams, started: u64, observation: Option<(bool, u64)>) {
+        let generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+        if *generation == started && self.is_connected() {
+            params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(observation));
+        }
+    }
+
+    pub(crate) fn utxo_observation_generation(&self) -> u64 {
+        *self.inner.dns_anchor_connection_generation.lock().unwrap()
+    }
+
+    // Serialize the synchronous installation of an RPC response with rebind,
+    // disconnect and network changes. The guard must never span an await.
+    pub(crate) fn with_utxo_observation_generation<T>(&self, started: u64, apply: impl FnOnce() -> Result<T>) -> Result<T> {
+        let generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+        if *generation != started {
+            return Err(Error::StaleUtxoObservation);
+        }
+        apply()
+    }
+
+    pub(crate) fn with_current_utxo_generation<T>(&self, apply: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.with_utxo_observation_generation(self.utxo_observation_generation(), apply)
     }
 
     pub fn network_id(&self) -> Result<NetworkId> {
         (*self.inner.network_id.lock().unwrap()).ok_or(Error::MissingNetworkId)
     }
 
-    pub fn network_params(&self) -> Result<&'static NetworkParams> {
-        // pub fn network_params(&self) -> Result<NetworkParams> {
-        let network_id = (*self.inner.network_id.lock().unwrap()).ok_or(Error::MissingNetworkId)?;
-        Ok(NetworkParams::from(network_id))
-        // Ok(network_id.into())
+    pub fn network_params(&self) -> Result<Arc<NetworkParams>> {
+        let network_id = self.network_id()?;
+        let config = NetworkParams::from(network_id);
+        let periods = (config.coinbase_transaction_maturity_period_daa(), config.user_transaction_maturity_period_daa());
+        let mut runtime = self.inner.network_runtime_params.lock().unwrap();
+        let (params, previous) = runtime.entry(network_id).or_insert_with(|| (Arc::new(config.for_processor()), periods));
+        if periods != *previous {
+            params.set_coinbase_transaction_maturity_period_daa(periods.0);
+            params.set_user_transaction_maturity_period_daa(periods.1);
+            *previous = periods;
+        }
+        Ok(params.clone())
     }
 
     pub fn pending(&self) -> &DashMap<UtxoEntryId, PendingUtxoEntryReference> {
@@ -279,75 +337,77 @@ impl UtxoProcessor {
     /// `get_dns_confirmation` — the input [`UtxoEntryReferenceExtension::dns_settled`] reads to
     /// keep a coinbase Pending until the anchor passes it. Throttled to ~once per 100 DAA (the
     /// attestation-epoch cadence the anchor itself moves at) and inert on networks whose params
-    /// carry no settlement. A poll failure keeps the last value: settlement then errs toward
-    /// Pending, which is the conservative direction for a display of spendability.
+    /// carry no settlement. A failed or disconnected poll clears the DNS shortcut:
+    /// only the long DAA maturity remains when the node no longer vouches for an anchor.
     async fn refresh_dns_anchor(&self, current_daa_score: u64) {
-        let Ok(params) = self.network_params() else { return };
-        if params.coinbase_settlement_long_maturity_daa() == 0 {
-            return;
-        }
-        let last = self.inner.dns_anchor_polled_at_daa.load(Ordering::Relaxed);
-        if current_daa_score < last.saturating_add(100) && last != 0 {
-            return;
-        }
-        let Some(rpc) = self.try_rpc_api() else { return };
-        self.inner.dns_anchor_polled_at_daa.store(current_daa_score, Ordering::Relaxed);
-        if let Ok(confirmation) = rpc.get_dns_confirmation().await {
-            // Retirement/unavailability must clear a cached DNS shortcut. The long maturity
-            // fallback remains available without a validator observation.
-            params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(
-                confirmation.available,
-                confirmation.last_dns_confirmed_anchor_daa_score,
-            ));
-        }
+        let (params, started, rpc) = {
+            let generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+            let Ok(params) = self.network_params() else { return };
+            if params.coinbase_settlement_long_maturity_daa() == 0 {
+                return;
+            }
+            if !self.is_connected() {
+                params.set_dns_confirmed_anchor_daa(0);
+                return;
+            }
+            let Some(rpc) = self.try_rpc_api() else {
+                params.set_dns_confirmed_anchor_daa(0);
+                return;
+            };
+            let last = self.inner.dns_anchor_polled_at_daa.load(Ordering::Relaxed);
+            if current_daa_score < last.saturating_add(100) && last != 0 {
+                return;
+            }
+            self.inner.dns_anchor_polled_at_daa.store(current_daa_score, Ordering::Relaxed);
+            (params, *generation, rpc)
+        };
+        let observation = rpc
+            .get_dns_confirmation()
+            .await
+            .ok()
+            .map(|confirmation| (confirmation.available, confirmation.last_dns_confirmed_anchor_daa_score));
+        // A delayed success from the previous connection cannot restore an anchor
+        // that disconnect/rebind/retirement has revoked. Never hold a mutex across RPC.
+        self.publish_dns_anchor_observation(&params, started, observation);
     }
 
     #[allow(clippy::mutable_key_type)]
     pub async fn handle_pending(&self, current_daa_score: u64) -> Result<()> {
-        let params = self.network_params()?;
-
-        let (mature_entries, revived_entries) = {
-            // scan and remove any pending entries that gained maturity
-            let mut mature_entries = vec![];
-            let pending_entries = &self.inner.pending;
-            pending_entries.retain(|_, pending_entry| match pending_entry.maturity(params, current_daa_score) {
-                Maturity::Confirmed => {
-                    mature_entries.push(pending_entry.clone());
-                    false
+        let registered: HashSet<UtxoContext> = self.inner.address_to_utxo_context_map.iter().map(|row| row.value().clone()).collect();
+        let mut updated_contexts: HashSet<UtxoContext> = registered.into_iter().filter(|context| context.refresh_mature_coinbases()).collect();
+        let generation = self.utxo_observation_generation();
+        // Selection keeps global rows until the matching context mutation commits.
+        // A switch while a notification is awaited cannot orphan the remaining rows.
+        let (mature_entries, revived_entries) = self.with_utxo_observation_generation(generation, || {
+            let params = self.network_params()?;
+            let mut mature_entries = Vec::new();
+            let mut revived_entries = Vec::new();
+            for entry in self.inner.pending.iter() {
+                if entry.utxo_context().network_matches_processor() && matches!(entry.maturity(&params, current_daa_score), Maturity::Confirmed) {
+                    mature_entries.push(entry.value().clone());
                 }
-                _ => true,
-            });
-
-            // scan and remove any stasis entries that can now become pending
-            // or gained maturity
-            let mut revived_entries = vec![];
-            let stasis_entries = &self.inner.stasis;
-            stasis_entries.retain(|_, stasis_entry| {
-                match stasis_entry.maturity(params, current_daa_score) {
-                    Maturity::Confirmed => {
-                        mature_entries.push(stasis_entry.clone());
-                        false
-                    }
-                    Maturity::Pending => {
-                        revived_entries.push(stasis_entry.clone());
-                        // relocate from stasis to pending ...
-                        pending_entries.insert(stasis_entry.id(), stasis_entry.clone());
-                        false
-                    }
-                    Maturity::Stasis => true,
+            }
+            for entry in self.inner.stasis.iter() {
+                if !entry.utxo_context().network_matches_processor() {
+                    continue;
                 }
-            });
-            (mature_entries, revived_entries)
-        };
+                match entry.maturity(&params, current_daa_score) {
+                    Maturity::Confirmed => mature_entries.push(entry.value().clone()),
+                    Maturity::Pending => revived_entries.push(entry.value().clone()),
+                    Maturity::Stasis => {},
+                }
+            }
+            Ok((mature_entries, revived_entries))
+        })?;
 
         // ------
 
         let promotions =
             HashMap::group_from(mature_entries.into_iter().map(|utxo| (utxo.inner.utxo_context.clone(), utxo.inner.entry.clone())));
-        let mut updated_contexts: HashSet<UtxoContext> = HashSet::from_iter(promotions.keys().cloned());
+        updated_contexts.extend(promotions.keys().cloned());
 
         for (context, utxos) in promotions.into_iter() {
-            context.promote(utxos).await?;
+            context.promote_for_generation(utxos, generation).await?;
         }
 
         // ------
@@ -357,7 +417,7 @@ impl UtxoProcessor {
         updated_contexts.extend(revivals.keys().cloned());
 
         for (context, utxos) in revivals.into_iter() {
-            context.revive(utxos).await?;
+            context.revive_for_generation(utxos, generation).await?;
         }
 
         for context in updated_contexts.into_iter() {
@@ -368,18 +428,21 @@ impl UtxoProcessor {
     }
 
     async fn handle_outgoing(&self, current_daa_score: u64) -> Result<()> {
-        let longevity = self.network_params()?.user_transaction_maturity_period_daa();
-
-        self.inner.outgoing.retain(|_, outgoing| {
-            if outgoing.acceptance_daa_score() != 0 && (outgoing.acceptance_daa_score() + longevity) < current_daa_score {
-                outgoing.originating_context().remove_outgoing_transaction(&outgoing.id());
-                false
-            } else {
-                true
-            }
-        });
-
-        Ok(())
+        self.with_current_utxo_generation(|| {
+            let longevity = self.network_params()?.user_transaction_maturity_period_daa();
+            self.inner.outgoing.retain(|_, outgoing| {
+                if !outgoing.originating_context().network_matches_processor() {
+                    return true;
+                }
+                if outgoing.acceptance_daa_score() != 0 && (outgoing.acceptance_daa_score() + longevity) < current_daa_score {
+                    outgoing.originating_context().remove_outgoing_transaction(&outgoing.id());
+                    false
+                } else {
+                    true
+                }
+            });
+            Ok(())
+        })
     }
 
     pub fn register_outgoing_transaction(&self, outgoing_transaction: OutgoingTransaction) {
@@ -569,6 +632,11 @@ impl UtxoProcessor {
     }
 
     pub async fn handle_connect_impl(&self) -> Result<()> {
+        {
+            let mut generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+            self.inner.is_connected.store(false, Ordering::SeqCst);
+            self.invalidate_dns_anchor_connection(&mut generation);
+        }
         let is_synced = self.init_state_from_server().await?;
         self.inner.is_connected.store(true, Ordering::SeqCst);
         self.register_notification_listener().await?;
@@ -628,7 +696,11 @@ impl UtxoProcessor {
     pub async fn handle_disconnect(&self) -> Result<()> {
         let _ = self.inner.connect_disconnect_guard.lock().await;
 
-        self.inner.is_connected.store(false, Ordering::SeqCst);
+        {
+            let mut generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+            self.inner.is_connected.store(false, Ordering::SeqCst);
+            self.invalidate_dns_anchor_connection(&mut generation);
+        }
         // self.stop_metrics();
 
         self.inner.metrics.unregister_sink();
@@ -882,9 +954,319 @@ pub(crate) mod mock {
 }
 
 /// **RFC-0012: what the wallet keeps of the DNS coinbase shortcut after polling `get_dns_confirmation`.** The anchor the node
-/// reports while its DNS overlay is live; `0` — no shortcut — when the node reports none (the overlay is retired, or has no state),
+/// reports while its DNS overlay is live; `0` — no shortcut — when the node reports none or cannot be reached,
 /// so a previously cached anchor can never keep accelerating coinbases after the node stopped vouching for it. The long maturity
 /// fallback (`coinbase_settlement_long_maturity_daa`) needs no observation and still applies.
-pub(crate) fn dns_shortcut_after_poll(available: bool, last_confirmed_anchor_daa: u64) -> u64 {
-    if available { last_confirmed_anchor_daa } else { 0 }
+pub(crate) fn dns_shortcut_after_poll(observation: Option<(bool, u64)>) -> u64 {
+    match observation {
+        Some((true, last_confirmed_anchor_daa)) => last_confirmed_anchor_daa,
+        Some((false, _)) | None => 0,
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod dns_observation_generation_tests {
+    use super::*;
+    use kaspa_consensus_core::dns_finality::{DnsCoinbaseSettlement, coinbase_spend_settled};
+
+    #[tokio::test]
+    async fn rfc0012_actual_money_mutation_serializes_with_network_switch_and_stale_promotion_keeps_rows() {
+        use crate::utxo::{UtxoContextBinding, UtxoIterator};
+        use kaspa_consensus_client::UtxoEntry;
+        use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionOutpoint};
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let network = NetworkId::with_suffix(NetworkType::Testnet, 12);
+        let processor = UtxoProcessor::new(None, Some(network), None, Some(Channel::unbounded()));
+        processor.mock_set_connected(true);
+        processor.inner.current_daa_score.store(1_550, Ordering::SeqCst);
+        processor.network_params().unwrap().set_coinbase_transaction_maturity_period_daa(550);
+        let context = UtxoContext::new(&processor, UtxoContextBinding::default());
+        let make_entry = |seed, coinbase, daa| -> crate::utxo::UtxoEntryReference {
+            UtxoEntry {
+                address: None,
+                outpoint: TransactionOutpoint::new(TransactionId::from_bytes([seed; 64]), 0).into(),
+                amount: 2_000_000,
+                script_public_key: ScriptPublicKey::new(0, Default::default()),
+                block_daa_score: daa,
+                is_coinbase: coinbase,
+            }.into()
+        };
+        let entry = make_entry(27, false, 1_000);
+        // Stall the actual insert on the context lock after it takes the authority
+        // gate. A simultaneous public network switch must wait for the monetary
+        // map/classification commit, rather than replace its params mid-operation.
+        let context_guard = context.context();
+        let writer_context = context.clone();
+        let writer_entry = entry.clone();
+        let writer = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread().build().unwrap()
+                .block_on(writer_context.insert(writer_entry, 1_550, false)).unwrap();
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match processor.inner.dns_anchor_connection_generation.try_lock() {
+                Err(std::sync::TryLockError::WouldBlock) => break,
+                Err(error) => panic!("generation mutex: {error}"),
+                Ok(guard) => drop(guard),
+            }
+            assert!(Instant::now() < deadline, "actual insert did not reach its authority gate");
+            std::thread::yield_now();
+        }
+        let switching = processor.clone();
+        let (started_send, started_recv) = mpsc::channel();
+        let (done_send, done_recv) = mpsc::channel();
+        let switcher = std::thread::spawn(move || {
+            started_send.send(()).unwrap();
+            switching.set_network_id(&NetworkId::new(NetworkType::Devnet));
+            done_send.send(()).unwrap();
+        });
+        started_recv.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(done_recv.recv_timeout(Duration::from_millis(30)), Err(mpsc::RecvTimeoutError::Timeout)));
+        drop(context_guard);
+        writer.join().unwrap();
+        done_recv.recv_timeout(Duration::from_secs(2)).unwrap();
+        switcher.join().unwrap();
+        assert_eq!(context.context().map.len(), 1);
+        assert!(UtxoIterator::new(&context).next().is_none());
+        assert!(matches!(context.remove(vec![entry.clone()]).await, Err(Error::UtxoContextNetworkMismatch)));
+        processor.set_network_id(&network);
+        assert!(UtxoIterator::new(&context).next().is_some());
+
+        let pending = make_entry(28, false, 1_500);
+        let stasis = make_entry(29, true, 1_000);
+        context.insert(pending.clone(), 1_550, false).await.unwrap();
+        context.insert(stasis.clone(), 1_010, false).await.unwrap();
+        let old_generation = processor.utxo_observation_generation();
+        processor.set_network_id(&network);
+        assert!(matches!(context.promote_for_generation(vec![pending.clone()], old_generation).await, Err(Error::StaleUtxoObservation)));
+        assert!(matches!(context.revive_for_generation(vec![stasis.clone()], old_generation).await, Err(Error::StaleUtxoObservation)));
+        assert!(processor.pending().contains_key(&pending.id()));
+        assert!(processor.stasis().contains_key(&stasis.id()));
+        assert!(context.context().pending.contains_key(&pending.id()));
+        assert!(context.context().stasis.contains_key(&stasis.id()));
+        processor.inner.current_daa_score.store(1_600, Ordering::SeqCst);
+        processor.handle_pending(1_600).await.unwrap();
+        assert!(!processor.pending().contains_key(&pending.id()));
+        assert!(!processor.stasis().contains_key(&stasis.id()));
+        assert_eq!(context.context().mature.len(), 3, "long-DAA jump may promote directly from stasis");
+        assert!(context.context().pending.is_empty() && context.context().stasis.is_empty());
+        assert_eq!(context.balance().unwrap().mature, 6_000_000);
+        let clearing = make_entry(30, true, 1_600);
+        context.insert(clearing.clone(), 1_610, false).await.unwrap();
+        assert!(processor.stasis().contains_key(&clearing.id()));
+        context.clear().await.unwrap();
+        assert!(processor.pending().is_empty() && processor.stasis().is_empty());
+        assert!(context.context().map.is_empty());
+        processor.set_network_id(&NetworkId::new(NetworkType::Devnet));
+        context.insert(make_entry(31, false, 1_000), 1_550, false).await.unwrap();
+        assert_eq!(context.context().map.len(), 1, "explicit cleared context may bind its new ledger without old global rows");
+
+    }
+
+    #[tokio::test]
+    async fn rfc0012_scan_reply_and_saved_selection_cannot_cross_rpc_or_network_generation() {
+        use crate::utxo::{UtxoContextBinding, UtxoIterator};
+        use kaspa_consensus_client::UtxoEntry;
+        use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionOutpoint};
+
+        let network = NetworkId::with_suffix(NetworkType::Testnet, 12);
+        // Discovery uses the actual wallet bus, so the successful import below
+        // does not require an invented RPC timestamp response.
+        let bus = Channel::unbounded();
+        let processor = UtxoProcessor::new(None, Some(network), None, Some(bus));
+        processor.mock_set_connected(true);
+        processor.inner.current_daa_score.store(1_550, Ordering::SeqCst);
+        let context = UtxoContext::new(&processor, UtxoContextBinding::default());
+        let entry: crate::utxo::UtxoEntryReference = UtxoEntry {
+            address: None,
+            outpoint: TransactionOutpoint::new(TransactionId::from_bytes([23; 64]), 0).into(),
+            amount: 2_000_000,
+            script_public_key: ScriptPublicKey::new(0, Default::default()),
+            block_daa_score: 1_000,
+            is_coinbase: false,
+        }.into();
+        let old_rpc = processor.utxo_observation_generation();
+        processor.bind_rpc(None).await.unwrap();
+        assert!(matches!(
+            context.extend_from_scan_for_generation(vec![entry.clone()], 1_550, old_rpc).await,
+            Err(Error::StaleUtxoObservation),
+        ));
+        assert!(context.context().map.is_empty());
+        assert_eq!((context.mature_utxo_size(), context.pending_utxo_size()), (0, 0));
+        assert!(processor.pending().is_empty() && processor.stasis().is_empty());
+
+        processor.mock_set_connected(true);
+        let current = processor.utxo_observation_generation();
+        context.extend_from_scan_for_generation(vec![entry.clone()], 1_550, current).await.unwrap();
+        context.update_balance().await.unwrap();
+        assert_eq!(context.balance().unwrap().mature, 2_000_000);
+        let mut saved_iterator = UtxoIterator::new(&context);
+        let change = kaspa_wallet_keys::kaspa_pq::derive_keypair("testnet-12", 0, 0, 0, &[21; 64])
+            .address(kaspa_addresses::Prefix::Testnet);
+        let settings = crate::tx::GeneratorSettings::try_new_with_context(
+            context.clone(), Some(vec![entry.clone()]), change, 1, 1,
+            crate::tx::PaymentDestination::Change, None, crate::tx::Fees::None, None, None,
+        ).unwrap();
+        let generator = crate::tx::Generator::try_new(settings, None, None).unwrap();
+        generator.stash([entry.clone()]);
+
+        let pending: crate::utxo::UtxoEntryReference = UtxoEntry {
+            address: None,
+            outpoint: TransactionOutpoint::new(TransactionId::from_bytes([24; 64]), 0).into(),
+            amount: 3_000_000,
+            script_public_key: ScriptPublicKey::new(0, Default::default()),
+            block_daa_score: 1_500,
+            is_coinbase: false,
+        }.into();
+        context.insert(pending.clone(), 1_550, false).await.unwrap();
+
+        processor.set_network_id(&NetworkId::new(NetworkType::Devnet));
+        assert!(matches!(
+            context.extend_from_scan_for_generation(vec![], 1_550, current).await,
+            Err(Error::StaleUtxoObservation),
+        ), "an empty old response must also refuse");
+        assert!(saved_iterator.next().is_none(), "non-coinbase saved selection also pins its network");
+        assert!(generator.generate_transaction().unwrap().is_none(), "saved priority and stash cannot fund another network");
+        assert!(UtxoIterator::new(&context).next().is_none(), "a newly constructed iterator also checks context provenance");
+        let change = kaspa_wallet_keys::kaspa_pq::derive_keypair("testnet-12", 0, 0, 0, &[21; 64])
+            .address(kaspa_addresses::Prefix::Testnet);
+        assert!(matches!(crate::tx::GeneratorSettings::try_new_with_context(
+            context.clone(), Some(vec![entry.clone()]), change, 1, 1,
+            crate::tx::PaymentDestination::Change, None, crate::tx::Fees::None, None, None,
+        ), Err(Error::UtxoContextNetworkMismatch)), "fresh generation cannot reinterpret the old ledger");
+        assert_eq!(context.context().map.len(), 2, "refusal preserves existing lawful entries");
+        assert!(context.balance().is_none(), "another network cannot publish this ledger's balance");
+        assert!(matches!(context.extend_from_scan_for_generation(
+            vec![], 1_550, processor.utxo_observation_generation(),
+        ).await, Err(Error::UtxoContextNetworkMismatch)));
+        assert!(matches!(context.remove(vec![entry.clone()]).await, Err(Error::UtxoContextNetworkMismatch)));
+        processor.handle_pending(1_000_000).await.unwrap();
+        assert!(processor.pending().contains_key(&pending.id()), "other-network time cannot consume the original pending right");
+        assert_eq!(context.context().pending.len(), 1);
+        processor.set_network_id(&network);
+        assert!(saved_iterator.next().is_none(), "returning to the same network does not revive an earlier generation");
+        context.extend_from_scan_for_generation(vec![], 1_550, processor.utxo_observation_generation()).await.unwrap();
+        assert!(UtxoIterator::new(&context).next().is_some(), "original-network fresh selection preserves lawful money");
+        assert_eq!(context.balance().unwrap().mature, 2_000_000);
+        processor.bind_rpc(None).await.unwrap();
+        processor.mock_set_connected(true);
+        context.extend_from_scan_for_generation(vec![], 1_550, processor.utxo_observation_generation()).await.unwrap();
+        assert!(UtxoIterator::new(&context).next().is_some(), "same-network RPC rebind has a lawful fresh path");
+    }
+
+    #[tokio::test]
+    async fn rfc0012_a_delayed_success_from_a_previous_rpc_cannot_restore_dns_spendability() {
+        // Local settings keep this ordered interleaving independent of global
+        // wallet network settings. These are connection mechanics, not real wRPC.
+        let params = NetworkParams {
+            coinbase_transaction_maturity_period_daa: AtomicU64::new(1_000),
+            coinbase_transaction_stasis_period_daa: 500,
+            user_transaction_maturity_period_daa: AtomicU64::new(100),
+            additional_compound_transaction_mass: 100,
+            coinbase_settlement_long_maturity_daa: 600,
+            dns_confirmed_anchor_daa: AtomicU64::new(0),
+        };
+        let processor = UtxoProcessor::new(None, None, None, None);
+        processor.mock_set_connected(true);
+        let old = *processor.inner.dns_anchor_connection_generation.lock().unwrap();
+        processor.publish_dns_anchor_observation(&params, old, Some((true, 1_050)));
+        assert_eq!(params.dns_confirmed_anchor_daa(), 1_050);
+        // The old poll was started above, but its reply arrives after a rebind
+        // and the new connection's unavailable/retired observation.
+        processor.bind_rpc(None).await.unwrap();
+        assert!(!processor.is_connected());
+        processor.mock_set_connected(true);
+        let current = *processor.inner.dns_anchor_connection_generation.lock().unwrap();
+        processor.publish_dns_anchor_observation(&params, current, Some((false, 1_050)));
+        processor.publish_dns_anchor_observation(&params, old, Some((true, 2_000)));
+        assert_eq!(params.dns_confirmed_anchor_daa(), 0, "the old successful reply cannot revive its shortcut");
+        let settled = |pov| coinbase_spend_settled(1_000, pov, 0, Some(&DnsCoinbaseSettlement {
+            long_maturity_daa: 600,
+            confirmed_anchor_daa: (params.dns_confirmed_anchor_daa() > 0).then_some(params.dns_confirmed_anchor_daa()),
+        }));
+        assert!(!settled(1_100), "the young coinbase remains held");
+        assert!(settled(1_600), "ordinary long maturity remains lawful");
+        processor.publish_dns_anchor_observation(&params, current, Some((true, 1_060)));
+        assert_eq!(params.dns_confirmed_anchor_daa(), 1_060, "a current fresh observation still works");
+        processor.set_network_id(&NetworkId::new(NetworkType::Devnet));
+        processor.publish_dns_anchor_observation(&params, current, Some((true, 3_000)));
+        assert_eq!(params.dns_confirmed_anchor_daa(), 1_060, "a previous network cannot overwrite the current observation");
+    }
+
+    #[tokio::test]
+    async fn rfc0012_wallet_dns_authority_is_processor_owned_and_rechecks_already_mature_coinbases() {
+        use crate::utxo::{UtxoContextBinding, UtxoIterator};
+        use kaspa_consensus_client::UtxoEntry;
+        use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionOutpoint};
+
+        let network = NetworkId::with_suffix(NetworkType::Testnet, 12);
+        let processor = UtxoProcessor::new(None, Some(network), None, None);
+        let other = UtxoProcessor::new(None, Some(network), None, None);
+        processor.mock_set_connected(true);
+        other.mock_set_connected(true);
+        processor.inner.current_daa_score.store(1_550, Ordering::SeqCst);
+        other.inner.current_daa_score.store(1_550, Ordering::SeqCst);
+        let params = processor.network_params().unwrap();
+        let other_params = other.network_params().unwrap();
+        assert!(!Arc::ptr_eq(&params, &other_params));
+        // Exercise the supported runtime wallet display policy without changing
+        // shared static settings or the consensus 600-DAA fallback. The ordinary
+        // 500-DAA stasis has elapsed, but this output is younger than 600 DAA.
+        params.set_coinbase_transaction_maturity_period_daa(550);
+        other_params.set_coinbase_transaction_maturity_period_daa(550);
+        let generation = *processor.inner.dns_anchor_connection_generation.lock().unwrap();
+        processor.publish_dns_anchor_observation(&params, generation, Some((true, 1_050)));
+        assert_eq!(NetworkParams::from(network).dns_confirmed_anchor_daa(), 0, "node observations never enter shared configuration");
+        assert_eq!(other_params.dns_confirmed_anchor_daa(), 0);
+
+        let entry = UtxoEntry {
+            address: None,
+            outpoint: TransactionOutpoint::new(TransactionId::from_bytes([19; 64]), 0).into(),
+            amount: 2_000_000,
+            script_public_key: ScriptPublicKey::new(0, Default::default()),
+            block_daa_score: 1_000,
+            is_coinbase: true,
+        };
+        let entry: crate::utxo::UtxoEntryReference = entry.into();
+        let context = UtxoContext::new(&processor, UtxoContextBinding::default());
+        context.insert(entry.clone(), 1_550, false).await.unwrap();
+        assert_eq!(context.mature_utxo_size(), 1);
+        assert_eq!(context.get_utxos(None, None).await.unwrap().len(), 1);
+        context.update_balance().await.unwrap();
+        assert_eq!(context.balance().unwrap().mature, 2_000_000);
+        let mut old_iterator = UtxoIterator::new(&context);
+        let change = kaspa_wallet_keys::kaspa_pq::derive_keypair("testnet-12", 0, 0, 0, &[17; 64])
+            .address(kaspa_addresses::Prefix::Testnet);
+        let settings = crate::tx::GeneratorSettings::try_new_with_context(
+            context.clone(), Some(vec![entry.clone()]), change, 1, 1,
+            crate::tx::PaymentDestination::Change, None, crate::tx::Fees::None, None, None,
+        ).unwrap();
+        let generator = crate::tx::Generator::try_new(settings, None, None).unwrap();
+        generator.stash([entry.clone()]);
+        // One processor's fresh confirmation cannot undo another's revocation.
+        processor.publish_dns_anchor_observation(&params, generation, Some((false, 1_050)));
+        let other_generation = *other.inner.dns_anchor_connection_generation.lock().unwrap();
+        other.publish_dns_anchor_observation(&other_params, other_generation, Some((true, 1_550)));
+        assert_eq!(processor.network_params().unwrap().dns_confirmed_anchor_daa(), 0);
+        assert!(old_iterator.next().is_none(), "a previously constructed iterator must not reuse the old shortcut");
+        assert!(generator.generate_transaction().unwrap().is_none(), "priority, stash and saved source inputs all recheck authority");
+        assert!(context.get_utxos(None, None).await.unwrap().is_empty());
+        assert_eq!(context.mature_utxo_size(), 0);
+        assert_eq!(context.pending_utxo_size(), 1, "the output is retained for lawful later maturity");
+        assert!(processor.pending().contains_key(&entry.id()));
+        let balance = context.balance().unwrap();
+        assert_eq!((balance.mature, balance.pending), (0, 2_000_000));
+
+        processor.inner.current_daa_score.store(1_600, Ordering::SeqCst);
+        processor.handle_pending(1_600).await.unwrap();
+        assert_eq!(context.get_utxos(None, None).await.unwrap().len(), 1, "ordinary long maturity restores lawful selection without DNS");
+        assert_eq!(context.balance().unwrap().mature, 2_000_000);
+        assert_eq!(context.pending_utxo_size(), 0);
+        assert_eq!(other_params.dns_confirmed_anchor_daa(), 1_550);
+        processor.bind_rpc(None).await.unwrap();
+        assert_eq!(other_params.dns_confirmed_anchor_daa(), 1_550, "disconnect revokes only its own processor");
+    }
+
 }

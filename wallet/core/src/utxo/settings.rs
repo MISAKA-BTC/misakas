@@ -20,13 +20,24 @@ pub struct NetworkParams {
     pub coinbase_settlement_long_maturity_daa: u64,
     /// The DNS confirmed anchor's DAA score as last observed from the node
     /// (`get_dns_confirmation`), `0` = none observed. RUNTIME state, not a constant: the
-    /// UtxoProcessor refreshes it at epoch cadence. Kept here because every maturity call site
-    /// already receives `&NetworkParams`, so the anchor rides along without changing six call
-    /// signatures — the same pattern as the runtime-settable maturity periods above.
+    /// UtxoProcessor refreshes its own runtime copy at epoch cadence. Static network
+    /// configuration never carries a node observation: another wallet or RPC connection
+    /// must not confer early spend authority on this processor.
     pub dns_confirmed_anchor_daa: AtomicU64,
 }
 
 impl NetworkParams {
+    pub(crate) fn for_processor(&self) -> Self {
+        Self {
+            coinbase_transaction_maturity_period_daa: AtomicU64::new(self.coinbase_transaction_maturity_period_daa()),
+            coinbase_transaction_stasis_period_daa: self.coinbase_transaction_stasis_period_daa,
+            user_transaction_maturity_period_daa: AtomicU64::new(self.user_transaction_maturity_period_daa()),
+            additional_compound_transaction_mass: self.additional_compound_transaction_mass,
+            coinbase_settlement_long_maturity_daa: self.coinbase_settlement_long_maturity_daa,
+            dns_confirmed_anchor_daa: AtomicU64::new(0),
+        }
+    }
+
     #[inline]
     pub fn coinbase_transaction_maturity_period_daa(&self) -> u64 {
         self.coinbase_transaction_maturity_period_daa.load(Ordering::Relaxed)
@@ -262,11 +273,16 @@ mod tests {
             coinbase_spend_settled(coinbase_daa, pov, 0, Some(&s))
         };
         assert!(!settled(&params), "no anchor and 100 DAA old: held");
-        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(true, 1_050));
+        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(Some((true, 1_050))));
         assert!(settled(&params), "a live anchor past the coinbase accelerates it");
-        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(false, 1_050));
+        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(Some((false, 1_050))));
         assert_eq!(params.dns_confirmed_anchor_daa(), 0, "a retired/unavailable confirmation clears the shortcut, whatever the stale value");
         assert!(!settled(&params), "and the coinbase is held again");
+        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(Some((true, 1_050))));
+        assert!(settled(&params), "a fresh authoritative observation can restore the shortcut");
+        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(None));
+        assert_eq!(params.dns_confirmed_anchor_daa(), 0, "failed RPC or disconnected node revokes a stale anchor too");
+        assert!(!settled(&params), "transport failure cannot retain early spendability across retirement or reorg");
         // The long fallback still frees it by the DAA clock alone.
         let s = DnsCoinbaseSettlement { long_maturity_daa: 600, confirmed_anchor_daa: None };
         assert!(coinbase_spend_settled(coinbase_daa, coinbase_daa + 600, 0, Some(&s)));

@@ -66,6 +66,9 @@ impl GeneratorSettings {
         final_priority_fee: Fees,
         final_transaction_payload: Option<Vec<u8>>,
     ) -> Result<Self> {
+        if !account.utxo_context().network_matches_processor() {
+            return Err(Error::UtxoContextNetworkMismatch);
+        }
         let network_id = account.utxo_context().processor().network_id()?;
         let change_address = account.change_address()?;
         let multiplexer = account.wallet().multiplexer().clone();
@@ -106,6 +109,9 @@ impl GeneratorSettings {
         final_transaction_payload: Option<Vec<u8>>,
         multiplexer: Option<Multiplexer<Box<Events>>>,
     ) -> Result<Self> {
+        if !utxo_context.network_matches_processor() {
+            return Err(Error::UtxoContextNetworkMismatch);
+        }
         let network_id = utxo_context.processor().network_id()?;
         let utxo_iterator = UtxoIterator::new(&utxo_context);
 

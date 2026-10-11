@@ -38,6 +38,21 @@ pub const VERIFIER_PAY_HELD_SHARE_V1: u8 = 2;
 pub const VERIFIER_PAY_BEACON_SOURCE_V1: u8 = 3;
 /// RFC-0002 P0 residual (`crate::sealed_bounty`, RFC02-T): a convicted claim's held bounty, key `(4, claim)`.
 pub const VERIFIER_PAY_HELD_BOUNTY_V1: u8 = 4;
+/// codex RFC-7 final (`crate::beacon_source_fee`, R6781-F merge): a context's prepaid source-fee escrow, key `(5, context)`. Its
+/// book is [`KernelLedgerV1::beacon_source_fees`]; only the row encoding lives in table 27 (codex used its own table 29).
+pub const VERIFIER_PAY_SOURCE_FEE_FUNDING_V1: u8 = 5;
+/// codex RFC-7 final: one paid source's fee promise, key `(6, source_fee_promise_key_v1(context, producer))`. Its book is
+/// [`KernelLedgerV1::beacon_source_fee_promises`] (codex used its own table 30).
+pub const VERIFIER_PAY_SOURCE_FEE_PROMISE_V1: u8 = 6;
+
+/// The table-27 key digest of a source-fee promise: `H("misaka-palw/kernel/source-fee-promise-key/v1"; context ‖ producer)`. The row
+/// keeps both, so a decode rebuilds the promise book's `(context, producer)` key and checks this digest against it.
+pub fn source_fee_promise_key_v1(context: &Digest, producer: &Digest) -> Digest {
+    let mut bytes = Vec::with_capacity(128);
+    bytes.extend_from_slice(context);
+    bytes.extend_from_slice(producer);
+    crate::hash::id(b"misaka-palw/kernel/source-fee-promise-key/v1", &bytes)
+}
 
 /// **The verifier-pay terms** (POLICY, interim and unapproved). Consumer-injected, not part of the state or its root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -89,6 +104,60 @@ pub enum VerifierPayRowV1 {
     /// earlier sealer's contest. (A table-27 kind, not a table of its own: the kernel ledger's numbers below the aux boundary 32 are
     /// spent; `rfc02/merge-final`.)
     HeldBounty { filer: Digest, producer: Digest, amount: u64, convicted_daa: u64, until_daa: u64 } = 4,
+    /// Key `(5, context)` (codex RFC-7 final, `palw_beacon_source_fee_v1`): the row form of one
+    /// [`KernelLedgerV1::beacon_source_fees`] entry. Never held in [`KernelLedgerV1::verifier_pay`].
+    SourceFeeFunding { funding: crate::beacon_source_fee::BeaconSourceFeeFundingV1 } = 5,
+    /// Key `(6, source_fee_promise_key_v1(context, producer))`: the row form of one [`KernelLedgerV1::beacon_source_fee_promises`]
+    /// entry, its book key kept in the row. Never held in [`KernelLedgerV1::verifier_pay`].
+    SourceFeePromise { context: Digest, producer: Digest, promise: crate::beacon_source_fee::BeaconSourceFeePromiseV1 } = 6,
+}
+
+impl KernelLedgerV1 {
+    /// **Table 27's source-fee rows** (kinds 5 / 6): codex RFC-7's prepaid fee books in their row form, keyed as table 27 keys them.
+    /// `rows::to_rows` writes them and `state_root` hashes them after [`Self::verifier_pay`]'s own rows (kinds 0–4 sort first), so
+    /// both roots of table 27 cover one set in one order.
+    pub fn source_fee_verifier_pay_rows_v1(&self) -> BTreeMap<(u8, Digest), VerifierPayRowV1> {
+        let mut rows = BTreeMap::new();
+        for (context, funding) in &self.beacon_source_fees {
+            rows.insert((VERIFIER_PAY_SOURCE_FEE_FUNDING_V1, *context), VerifierPayRowV1::SourceFeeFunding { funding: funding.clone() });
+        }
+        for ((context, producer), promise) in &self.beacon_source_fee_promises {
+            rows.insert(
+                (VERIFIER_PAY_SOURCE_FEE_PROMISE_V1, source_fee_promise_key_v1(context, producer)),
+                VerifierPayRowV1::SourceFeePromise { context: *context, producer: *producer, promise: promise.clone() },
+            );
+        }
+        rows
+    }
+
+    /// **One decoded table-27 row into its book** (`rows::from_rows`): kinds 5 / 6 back into the source-fee books, every other kind
+    /// into [`Self::verifier_pay`]. A kind and a variant that disagree, a promise whose key is not its `(context, producer)`, or a
+    /// duplicate, refuse the rows.
+    pub(crate) fn insert_verifier_pay_row_v1(&mut self, key: (u8, Digest), row: VerifierPayRowV1) -> Result<(), String> {
+        match (key.0, row) {
+            (VERIFIER_PAY_SOURCE_FEE_FUNDING_V1, VerifierPayRowV1::SourceFeeFunding { funding }) => {
+                if self.beacon_source_fees.insert(key.1, funding).is_some() {
+                    return Err("duplicate source fee funding row".into());
+                }
+            }
+            (VERIFIER_PAY_SOURCE_FEE_PROMISE_V1, VerifierPayRowV1::SourceFeePromise { context, producer, promise }) => {
+                if key.1 != source_fee_promise_key_v1(&context, &producer) {
+                    return Err("source fee promise row key is not its (context, producer)".into());
+                }
+                if self.beacon_source_fee_promises.insert((context, producer), promise).is_some() {
+                    return Err("duplicate source fee promise row".into());
+                }
+            }
+            (VERIFIER_PAY_SOURCE_FEE_FUNDING_V1 | VERIFIER_PAY_SOURCE_FEE_PROMISE_V1, _)
+            | (_, VerifierPayRowV1::SourceFeeFunding { .. } | VerifierPayRowV1::SourceFeePromise { .. }) => {
+                return Err("table 27 source-fee kind and row disagree".into());
+            }
+            (_, row) => {
+                self.verifier_pay.insert(key, row);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The table-27 key of a beacon-source seal.

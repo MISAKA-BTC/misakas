@@ -76,7 +76,7 @@ use std::time::{Duration, Instant};
 use std::{
     collections::HashMap,
     iter::once,
-    sync::{Arc, atomic::Ordering},
+    sync::{Arc, OnceLock, atomic::Ordering},
     vec,
 };
 use tokio::join;
@@ -528,6 +528,9 @@ pub struct RpcCoreService {
     flow_context: Arc<FlowContext>,
     utxoindex: Option<UtxoIndexProxy>,
     config: Arc<Config>,
+    // Config/Params have no interior mutation after this service is constructed. Hashing the
+    // boot bundle serializes every genesis registration, so status reads must not repeat it.
+    boot_consensus_params_id: OnceLock<String>,
     consensus_converter: Arc<ConsensusConverter>,
     index_converter: Arc<IndexConverter>,
     protocol_converter: Arc<ProtocolConverter>,
@@ -858,6 +861,7 @@ impl RpcCoreService {
             flow_context,
             utxoindex,
             config,
+            boot_consensus_params_id: OnceLock::new(),
             consensus_converter,
             index_converter,
             protocol_converter,
@@ -1849,8 +1853,18 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // node the release?" is a read, not a grep of a log that may have rolled (ADR-0122 §6.1).
         let params = &self.config.params;
         let rt = self.flow_context.palw_runtime();
+        let session = self.consensus_manager.consensus().session().await;
+        let (import, import_stable) = session.async_pruning_import_status().await.map_err(|e| RpcError::General(e.to_string()))?;
+        let import_phase = match import.active {
+            Some(_) if import.utxos_imported => "awaiting-completion",
+            Some(_) if import.utxos_started => "utxo-stream",
+            Some(_) => "sidecars",
+            None if !import_stable => "incomplete",
+            None if import.epoch == 0 => "legacy-stable",
+            None => "idle",
+        };
         Ok(GetPalwNodeStatusResponse {
-            consensus_params_id: params.consensus_params_id().to_string(),
+            consensus_params_id: self.boot_consensus_params_id.get_or_init(|| params.consensus_params_id().to_string()).clone(),
             fence_schedule: params.fence_schedule_v1(),
             consensus_schedule_id: params.consensus_schedule_id().to_string(),
             producer_state: if rt.producer_state.is_empty() { "off".to_string() } else { rt.producer_state.to_string() },
@@ -1898,6 +1912,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 .copied()
                 .collect::<Vec<_>>()
                 .join(" "),
+            import_session_available: true,
+            import_session_epoch: import.epoch,
+            import_session_point: import.active.map(|token| token.point.to_string()).unwrap_or_default(),
+            import_session_phase: import_phase.into(),
+            pruning_import_stable: import_stable,
         })
     }
 

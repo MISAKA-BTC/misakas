@@ -7,6 +7,8 @@ pub mod ibd_checkpoint;
 pub mod params;
 pub mod premine;
 pub mod trusted_checkpoint;
+#[cfg(feature = "private-integration-config")]
+pub mod private_population;
 
 use kaspa_utils::networking::{ContextualNetAddress, NetAddress};
 
@@ -82,6 +84,11 @@ pub struct Config {
 
     #[cfg(feature = "devnet-prealloc")]
     pub initial_utxo_set: Arc<UtxoCollection>,
+
+    /// Explicit factory-derived private population. Never populated by Args or
+    /// a public preset; the feature is for the unpublished process helper only.
+    #[cfg(feature = "private-integration-config")]
+    pub private_population: Option<private_population::PrivatePopulationV1>,
 
     pub disable_upnp: bool,
 
@@ -209,6 +216,8 @@ impl Config {
 
             #[cfg(feature = "devnet-prealloc")]
             initial_utxo_set: Default::default(),
+            #[cfg(feature = "private-integration-config")]
+            private_population: None,
             disable_upnp: false,
             ram_scale: 1.0,
             retention_period_days: None,

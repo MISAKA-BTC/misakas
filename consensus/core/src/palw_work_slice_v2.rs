@@ -762,6 +762,8 @@ pub enum PalwSliceRefusalV2 {
     VerificationProviderHorizon,
     #[error("6: the first signed slice's executor lacks Work room for its root reservation")]
     ExecutorUnfunded,
+    #[error("6: the actual executor lacks R room for its collectible income maximum")]
+    RecipientRewardBudget,
 }
 
 impl PalwSliceRefusalV2 {
@@ -802,6 +804,7 @@ impl PalwSliceRefusalV2 {
             R::VerificationRewardBound => 30,
             R::VerificationProviderHorizon => 31,
             R::ExecutorUnfunded => 32,
+            R::RecipientRewardBudget => 33,
         }
     }
 
@@ -841,6 +844,7 @@ impl PalwSliceRefusalV2 {
             30 => "verification_reward_bound",
             31 => "verification_provider_horizon",
             32 => "executor_unfunded",
+            33 => "recipient_reward_budget",
             _ => "unknown",
         }
     }

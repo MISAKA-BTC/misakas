@@ -5,6 +5,7 @@ pub mod flowcontext;
 pub mod ibd;
 pub mod palw_exec_v2_relay;
 pub mod palw_gossip;
+mod palw_snapshot_chunks;
 pub mod palw_heartbeat_relay;
 pub mod palw_round_relay;
 pub mod service;

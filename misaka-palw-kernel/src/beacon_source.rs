@@ -53,7 +53,7 @@ impl BeaconSourceTermsV1 {
 }
 
 /// A target is trusted input, like Panel coverage: no transaction can create one.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BeaconSourceTargetV1 {
     pub context: BeaconContextV1,
     pub terms: BeaconSourceTermsV1,
@@ -68,7 +68,7 @@ impl BeaconSourceTargetV1 {
         {
             return Err("a source conformance context must bind its candidate".into());
         }
-        if !self.context.policy.is_sealed_source() {
+        if !self.context.policy.is_sealed_source() && !self.context.policy.is_opt_in_source() {
             return Err("source target needs a sealed-source context".into());
         }
         let start =
@@ -130,6 +130,22 @@ impl KernelLedgerV1 {
     }
 
     pub(crate) fn opt_in_beacon_source(
+        &mut self,
+        producer: Digest,
+        job: Digest,
+        seal: Digest,
+        context: Digest,
+        terms_id: Digest,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), String> {
+        if self.beacon_source_inputs.targets.get(&context).is_some_and(|t| t.context.policy.is_paid_opt_in_source()) {
+            return Err("this source policy requires a signed prepaid fee promise".into());
+        }
+        self.admit_beacon_source(producer, job, seal, context, terms_id, out)
+    }
+
+    /// Internal shared admission; only the prepaid route may call this for v5.
+    pub(crate) fn admit_beacon_source(
         &mut self,
         producer: Digest,
         job: Digest,

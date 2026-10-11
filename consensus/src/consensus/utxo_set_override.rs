@@ -26,6 +26,15 @@ use crate::consensus::Consensus;
 /// wallet is the operator custody address on mainnet, the operator's public PALW address on
 /// testnet-11, and the Claude-managed test key elsewhere.
 fn genesis_initial_utxo_set(config: &Config) -> Vec<(TransactionOutpoint, UtxoEntry)> {
+    #[cfg(feature = "private-integration-config")]
+    if let Some(profile) = config.private_population {
+        let salt = config.palw_drill_genesis_salt.as_ref().expect("private population requires its explicit drill salt");
+        // Re-derive the complete set; no caller-supplied monetary row is trusted.
+        // The unchanged M-07 comparison below checks these against Params.
+        return kaspa_consensus_core::config::private_population::derive_private_population_v1(salt, profile)
+            .expect("validated private population factory").utxos.into_iter().collect();
+    }
+
     // `mut` is only exercised under `devnet-prealloc` (the extend below).
     #[cfg_attr(not(feature = "devnet-prealloc"), allow(unused_mut))]
     // Keyed by the full NetworkId: testnet-11 carries the carved-out extras; every other
@@ -106,6 +115,14 @@ pub fn set_genesis_utxo_commitment_from_config(config: &mut Config) {
     }
     #[cfg(feature = "devnet-prealloc")]
     {
+        // Cargo may unify both test features. The population remains a strict
+        // factory even in that binary; devnet's arbitrary preallocation exception
+        // is not its construction contract.
+        #[cfg(feature = "private-integration-config")]
+        if config.private_population.is_some() {
+            assert_eq!(config.params.genesis.utxo_commitment, hardcoded_commitment, "private population must preserve M-07 commitment pinning");
+            assert_eq!(config.params.genesis.hash, hardcoded_hash, "private population must preserve M-07 genesis pinning");
+        }
         let _ = (hardcoded_commitment, hardcoded_hash);
     }
 }
@@ -115,7 +132,7 @@ pub fn set_genesis_utxo_commitment_from_config(config: &mut Config) {
 pub fn set_initial_utxo_set(config: &Config, consensus: Arc<Consensus>, genesis_hash: BlockHash) {
     let utxo_set = genesis_initial_utxo_set(config);
     let mut genesis_multiset = MuHash::new();
-    consensus.append_imported_pruning_point_utxos(&utxo_set, &mut genesis_multiset);
+    consensus.append_imported_pruning_point_utxos(&utxo_set, &mut genesis_multiset).unwrap();
     consensus.import_pruning_point_utxo_set(genesis_hash, genesis_multiset).unwrap();
 }
 
@@ -375,5 +392,29 @@ mod tests {
             // ones — for testnet-11 that set includes the 347M community allocation.
             set_genesis_utxo_commitment_from_config(&mut config);
         }
+    }
+}
+
+#[cfg(all(test, feature = "private-integration-config"))]
+mod private_population_tests {
+    use super::*;
+    use kaspa_consensus_core::config::{drill::PalwDrillSaltV1, private_population::{PrivatePopulationV1, derive_private_population_v1}};
+
+    #[test]
+    fn private_factory_initial_loader_preserves_m07_and_supply() {
+        let salt = PalwDrillSaltV1::from_bytes([0x91; 32]).unwrap();
+        let profile = PrivatePopulationV1::new(17).unwrap();
+        let derived = derive_private_population_v1(&salt, profile).unwrap();
+        let mut config = Config::new(derived.params);
+        config.private_population = Some(profile);
+        config.palw_drill_genesis_salt = Some(salt);
+        let rows = genesis_initial_utxo_set(&config);
+        assert_eq!(rows.into_iter().collect::<kaspa_consensus_core::utxo::utxo_collection::UtxoCollection>(), derived.utxos);
+        let pinned = config.params.genesis.hash;
+        set_genesis_utxo_commitment_from_config(&mut config);
+        assert_eq!(config.params.genesis.hash, pinned);
+        config.params.genesis.utxo_commitment = kaspa_hashes::Hash64::from_bytes([9; 64]);
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| set_genesis_utxo_commitment_from_config(&mut config))).is_err(),
+            "private feature must not bypass the actual genesis commitment guard");
     }
 }

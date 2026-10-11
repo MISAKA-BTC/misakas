@@ -1558,7 +1558,7 @@ impl crate::config::params::Params {
                 match fence {
                     PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1 => self.palw_probabilistic_constraints_v1,
                     PalwLifecycleKindFenceV1::SignedRegistrationV1 => self.palw_signed_registration_v1,
-                    PalwLifecycleKindFenceV1::PermissionlessPanelV1 => self.palw_permissionless_panel_v1.map(|rule| rule.activation),
+                    PalwLifecycleKindFenceV1::PermissionlessPanelV1 => self.palw_permissionless_panel_activation_v1(),
                     // In force where BOTH the court's and the kernel route's fences are (the processor's `palw_provider_court_at`).
                     PalwLifecycleKindFenceV1::ProviderCourtV1 => {
                         let never = crate::config::params::ForkActivation::never();
@@ -1670,16 +1670,19 @@ pub enum PalwKernelInnerFenceV1 {
     /// Separate source opt-in fence, inner 40 (codex used 21, RFC-02's on the integration line; renumbered at the merge); no
     /// activated preset or approved consumer tuple.
     BeaconSourceOptInV1,
+    /// Signed prepaid source escrow; needs this monetary fence plus source opt-in and OPV.
+    BeaconSourceFeeV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
         Self::ModelRefutationSealV1,
         Self::BeaconSourceOptInV1,
+        Self::BeaconSourceFeeV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1689,6 +1692,7 @@ impl PalwKernelInnerFenceV1 {
             Self::TypedRootsV1 | Self::PanelFreeAndTypedRootsV1 => "palw_typed_roots_v1",
             Self::ModelRefutationSealV1 => "palw_model_refutation_seal_v1",
             Self::BeaconSourceOptInV1 => "palw_beacon_source_opt_in_v1",
+            Self::BeaconSourceFeeV1 => "palw_beacon_source_fee_v1",
         }
     }
 }
@@ -1763,6 +1767,7 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::Spec { .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
         K::SealModelRefutationV4 { .. } | K::RevealModelRefutationV4 { .. } => Some(PalwKernelInnerFenceV1::ModelRefutationSealV1),
         K::OptInBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1),
+        K::FundBeaconSourceFee { .. } | K::OptInPaidBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1),
     }
 }
 
@@ -1826,6 +1831,9 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (58, "DemandFlatModelUnitV9", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (59, "AnswerFlatModelUnitV9", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (60, "SettleFlatModelDemandV9", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    // codex RFC-7 final (R6781-F merge): codex numbered these 22 / 23 — RFC-02's on the integration line — so they follow 41–60.
+    (61, "FundBeaconSourceFee", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
+    (62, "OptInPaidBeaconSource", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2102,6 +2110,48 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::KernelInner { lo: 41, hi: 44 }, "palw_panel_free_v1", "RFC-0002 protected flat candidate v6", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 45, hi: 52 }, "palw_panel_free_v1", "RFC-0002 complete-scope mixed candidate v7", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 53, hi: 60 }, "palw_panel_free_v1", "RFC-0002 ordinary-point mixed candidate v9", true),
+    // codex RFC-7 final (lane R6781-F): prepaid source fees under their own dormant monetary fence (codex used 22 / 23; renumbered).
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 61, hi: 62 },
+        "palw_beacon_source_fee_v1",
+        "RFC-7 FundBeaconSourceFee / OptInPaidBeaconSource (prepaid source fees)",
+        true,
+    ),
+    // codex RFC-6/7/8/12 final (lane R6781-F): the state its kinds write, each only past its own dormant fence (below it no row
+    // exists and every root is unchanged). codex's own numbers are spent on the integration line: kernel ledger tables 29 / 30 →
+    // table 27 kinds 5 / 6; kernel route aux 46 / 47 / 48 / 49 → 108 / 109 / 110 / 111; bond budget table 6 → 9.
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel ledger table 30 beacon-source reservations and kernel route aux table 108 frozen v4 source targets",
+        },
+        "palw_beacon_source_opt_in_v1",
+        "RFC-7 per-attempt source opt-in (codex; R6781 / R6781-F)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel ledger table 27 kinds 5 / 6 prepaid source fees and promises; kernel route aux tables 109 / 110 v5 fee targets \
+                   and cost bounds; SettlementKindV1 22–24",
+        },
+        "palw_beacon_source_fee_v1",
+        "RFC-7 prepaid source fees (codex final; R6781-F)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux table 111 frozen Panel epoch source subjects (paid opt-in v5)" },
+        "palw_permissionless_panel_v1",
+        "RFC-10 × RFC-7 Panel source snapshot (codex final; R6781-F)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "bond budget monetary state v2–v4: reporter income (budget table 9), material income (7), paid consumer contracts \
+                   (8), in the bond_budget/v1 root block",
+        },
+        "palw_bond_budget_v1",
+        "BUDGET × RFC-8 / RFC-12 monetary lifecycle (codex final; R6781-F)",
+        false,
+    ),
     a2_row(
         PalwA2SlotV1::StateEncoding {
             what: "kernel ledger tables 0 / 19 flat-v7 / flat-v9 candidate registries (root extensions after 31's), LedgerEventV1 33–34, \

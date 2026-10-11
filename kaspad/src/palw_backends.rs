@@ -142,6 +142,7 @@ impl PalwBackendRegistry {
     /// A node that cannot serve that class says so — it does not fall back to one it can, because
     /// producing or judging under a class the chain did not name is worse than not participating.
     pub fn resolve(&self, class_id: Hash64, artifact_root: Hash64) -> Result<Box<dyn PalwExecutionBackendV1>, String> {
+        arm_tir_memory_reserver_v1();
         self.sdk.resolve(class_id, artifact_root, &self.holdings)
     }
 
@@ -157,6 +158,7 @@ impl PalwBackendRegistry {
         let entry = misaka_palw_sdk::tir_registration::tir_entries_of_v1(&self.holdings)
             .into_iter()
             .find(|e| e.class_id() == class_id && e.artifact_root == artifact_root)?;
+        arm_tir_memory_reserver_v1();
         Some(misaka_palw_sdk::lineages::tir::TirLineageV1::backend(&entry, self.sdk.court(), self.sdk.prompt_ids_form()))
     }
 
@@ -3695,4 +3697,19 @@ mod token_table_tests {
         assert_eq!(loaded[0].1, table.root());
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// Attach every IR retained-job/executor/full-tree reservation to the existing shared
+/// host ledger, before a concrete or generic backend can execute. The callback reads
+/// the final current pool at reservation time, never a stale boot-time pool snapshot.
+fn arm_tir_memory_reserver_v1() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        misaka_palw_sdk::lineages::tir::set_tir_memory_reserver_v1(std::sync::Arc::new(|role, class_id, job, bytes| {
+            crate::palw_memory_ledger::host_ledger_v1().reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role, class_id, job }, bytes)
+                .map(|guard| Box::new(guard) as Box<dyn Send + Sync>)
+                .map_err(|refusal| format!("the {role} requested storage is not free ({refusal})"))
+        }));
+    });
 }

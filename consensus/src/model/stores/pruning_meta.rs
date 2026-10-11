@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::pruning::PruningImportSessionStateV1;
 use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreResult;
@@ -16,6 +17,7 @@ pub struct PruningMetaStores {
     pub utxo_set: DbUtxoSetStore,
     utxoset_position_access: CachedDbItem<BlockHash>,
     utxoset_stable_flag_access: CachedDbItem<bool>,
+    import_session_access: CachedDbItem<PruningImportSessionStateV1>,
     body_missing_anticone_blocks: CachedDbItem<Vec<BlockHash>>,
 }
 
@@ -25,6 +27,9 @@ impl PruningMetaStores {
             utxo_set: DbUtxoSetStore::new(db.clone(), utxoset_cache_policy, DatabaseStorePrefixes::PruningUtxoset.into()),
             utxoset_position_access: CachedDbItem::new(db.clone(), DatabaseStorePrefixes::PruningUtxosetPosition.into()),
             utxoset_stable_flag_access: CachedDbItem::new(db.clone(), DatabaseStorePrefixes::PruningUtxosetSyncFlag.into()),
+            // The existing sync flag is a singleton at [60]. Its session sibling
+            // uses [60, 1], preserving old DBs and scarce top-level prefixes.
+            import_session_access: CachedDbItem::new(db.clone(), vec![DatabaseStorePrefixes::PruningUtxosetSyncFlag as u8, 1]),
             body_missing_anticone_blocks: CachedDbItem::new(db.clone(), DatabaseStorePrefixes::BodyMissingAnticone.into()),
         }
     }
@@ -45,10 +50,22 @@ impl PruningMetaStores {
         self.utxoset_stable_flag_access.write(BatchDbWriter::new(batch), &stable)
     }
 
+    pub fn import_session(&self) -> StoreResult<PruningImportSessionStateV1> {
+        Ok(self.import_session_access.read().optional()?.unwrap_or_default())
+    }
+
+    pub fn set_import_session(&mut self, batch: &mut WriteBatch, state: &PruningImportSessionStateV1) -> StoreResult<()> {
+        self.import_session_access.write(BatchDbWriter::new(batch), state)
+    }
+
     /// Read the flag; default to true if missing - this is important because a node upgrading should have this value true
     /// as all non staging consensuses had a stable utxoset previously
     pub fn pruning_utxoset_stable_flag(&self) -> bool {
-        self.utxoset_stable_flag_access.read().optional().unwrap().unwrap_or(true)
+        self.try_pruning_utxoset_stable_flag().unwrap()
+    }
+
+    pub fn try_pruning_utxoset_stable_flag(&self) -> StoreResult<bool> {
+        Ok(self.utxoset_stable_flag_access.read().optional()?.unwrap_or(true))
     }
 
     /// Represents blocks in the anticone of the current pruning point which may lack a block body

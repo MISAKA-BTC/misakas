@@ -164,6 +164,7 @@ pub(super) async fn pruned_import_node(main: &mut Net) -> Net {
             store.delete_delta_for_tests(blk).expect("no delta row at or below the pruning point");
         }
     }
+    importer.establish_pruning_import_target(p);
     importer.vp().import_pruning_point_palw_state(p, carriage).expect("the served carriage installs against T's committed root");
     assert_eq!(importer.tip_state().1.state_root(), root_at(&main.chain, p), "the imported state is P's, root for root");
     for blk in &all[k + 1..] {

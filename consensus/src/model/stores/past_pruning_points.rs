@@ -35,6 +35,10 @@ impl DbPastPruningPointsStore {
         Self::new(Arc::clone(&self.db), cache_policy)
     }
 
+    pub fn set_batch(&self, batch: &mut WriteBatch, index: u64, pruning_point: BlockHash) -> StoreResult<()> {
+        self.access.write(BatchDbWriter::new(batch), index.into(), pruning_point)
+    }
+
     pub fn insert_batch(&self, batch: &mut WriteBatch, index: u64, pruning_point: BlockHash) -> Result<(), StoreError> {
         if self.access.has(index.into())? {
             return Err(StoreError::KeyAlreadyExists(index.to_string()));

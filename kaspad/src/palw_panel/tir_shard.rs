@@ -126,6 +126,19 @@ pub(crate) fn palw_tir_shard_outcome_over_v1(
     Ok(outcome_of_verdict(ctx.declared_prefill_tokens, verdict))
 }
 
+pub(crate) fn palw_tir_shard_outcome_runs_over_v1(
+    holding: &TirShardHoldingV1, capture: &TirCaptureV1,
+    inputs: &misaka_palw_tir_exec::node::TirRunInputsV1, duty: &PalwSeatDutyV2,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1, ladder: u64,
+    device: &mut dyn KernelBackendV1,
+) -> Result<PalwTirShardOutcomeV1, String> {
+    let place = duty.tir_shard.ok_or("the duty has no shard")?;
+    let positions = holding.space.job_shape(&capture.binding.job_context).map_err(|e| e.to_string())?.positions;
+    let cells = tir_shard_cells_over_v1(&holding.space, positions, place.shard, place.s_l, place.s_p, place.segments)?;
+    let verdict = holding.verify_cells_from_runs(capture, inputs, &cells, form, ladder, device)?;
+    Ok(outcome_of_verdict(capture.binding.job_context.declared_prefill_tokens, verdict))
+}
+
 fn outcome_of_verdict(prefill: u32, verdict: TirCellVerdictV1) -> PalwTirShardOutcomeV1 {
     match verdict {
         TirCellVerdictV1::Verified { leaves, positions } => PalwTirShardOutcomeV1::Valid { leaves, positions },
@@ -182,8 +195,8 @@ pub(crate) fn palw_tir_shard_accusation_v1(
 
 /// **The same accusation for a seat that holds only its shard's rows** (RFC-0006 §4.2, D-S6 gap 2): the cone is built from the
 /// capture and the held openings (`TirShardHoldingV1::cone_close`), the decode-token door from the capture alone. A finding at a
-/// DISSECTED leaf is not adjudicated in one move — the chain opens a dissection there and the accuser must play it from its own
-/// execution, which a shard-only seat cannot — so it files nothing and says so; a full holder files that one.
+/// DISSECTED leaf opens the existing interactive court. Its challenger uses these same authenticated
+/// committed inputs and proven rows to choose each child and build the bottom.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn palw_tir_shard_accusation_over_v1(
     holding: &TirShardHoldingV1,
@@ -197,15 +210,25 @@ pub(crate) fn palw_tir_shard_accusation_over_v1(
     ladder: u64,
     form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Option<(&'static str, PalwTirOneMoveAccusationV1)>, String> {
-    let ctx = &capture.binding.job_context;
-    if let Some(l) = leaf
-        && super::tir_court::palw_tir_space_leaf_is_dissected_v1(&holding.space, ctx, l)
-    {
-        return Err(format!("leaf {l} is a dissected leaf: its accusation opens a dissection a shard-only seat cannot play"));
-    }
+    palw_tir_shard_accusation_inputs_over_v1(holding, capture, None, leaf, row, target, accuser, court, rules, ladder, form)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn palw_tir_shard_accusation_inputs_over_v1(
+    holding: &TirShardHoldingV1, capture: &TirCaptureV1,
+    inputs: Option<&misaka_palw_tir_exec::node::TirRunInputsV1>, leaf: Option<u64>, row: Option<u32>,
+    target: &PalwDisputableClaimV2, accuser: PalwBondKeyV2,
+    court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2,
+    rules: &PalwTirCourtRulesV1, ladder: u64,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<Option<(&'static str, PalwTirOneMoveAccusationV1)>, String> {
     let mut candidates: Vec<PalwTirCloseCandidateV1> = Vec::new();
     if let Some(l) = leaf {
-        candidates.push(("cone", holding.cone_close(capture, l, rules)));
+        if super::tir_court::palw_tir_space_leaf_is_dissected_v1(&holding.space, &capture.binding.job_context, l) {
+            candidates.push((super::tir_court::PALW_TIR_NAMED_LEAF_LABEL_V1, match inputs { Some(inputs) => holding.named_leaf_close_from_runs(capture, inputs, l, rules), None => holding.named_leaf_close(capture, l, rules) }));
+        } else {
+            candidates.push(("cone", match inputs { Some(inputs) => holding.cone_close_from_runs(capture, inputs, l, rules), None => holding.cone_close(capture, l, rules) }));
+        }
     }
     if let Some(row) = row
         && let Some(lanes) = capture.logits_rows.get(row as usize)
@@ -468,11 +491,15 @@ pub(crate) struct PalwTirRowFetchV1 {
     pub pursuit: misaka_palw_sdk::lineages::tir::TirRowPursuitV1,
     asked: Option<((u32, u32), std::time::Instant)>,
     pub asks: u32,
+    memory: crate::palw_memory_ledger::PalwMemoryReservationV1,
 }
 
 impl PalwTirRowFetchV1 {
-    pub(crate) fn new(pursuit: misaka_palw_sdk::lineages::tir::TirRowPursuitV1) -> Self {
-        Self { pursuit, asked: None, asks: 0 }
+    pub(crate) fn new(
+        pursuit: misaka_palw_sdk::lineages::tir::TirRowPursuitV1,
+        memory: crate::palw_memory_ledger::PalwMemoryReservationV1,
+    ) -> Self {
+        Self { pursuit, asked: None, asks: 0, memory }
     }
 
     /// **Take the replies the lane pooled for the outstanding ask** (and clear the slot, so the pool does not carry them again):
@@ -675,6 +702,18 @@ pub(crate) struct PalwTirShardFindingV1 {
     pub accusation: PalwTirOneMoveAccusationV1,
 }
 
+/// A row acquisition request is node policy, independent of receipt eligibility.
+/// A public court can reconstruct this after restart from the narrowed occurrence and
+/// any valid registered class partition. It never invents a consensus seat duty.
+#[derive(Clone, Copy)]
+struct PalwTirRowRequestV1 {
+    class_id: Hash64,
+    claim_id: Hash64,
+    artifact_root: Hash64,
+    s_l: u16,
+    shard: u16,
+}
+
 /// **The panel loop's bookkeeping for layer-sharded claims.**
 #[derive(Default)]
 pub(crate) struct PalwTirShardBooksV1 {
@@ -698,16 +737,23 @@ pub(crate) struct PalwTirShardBooksV1 {
     demanded: HashSet<Hash64>,
     /// The pursuit of each claim's leaves through `TirStepRun` demands (RFC-0006 §3, D-S4).
     run_pursuits: HashMap<Hash64, PalwTirRunPursuitV1>,
+    pub(super) cell_run_pursuits: HashMap<cell_runs::CellRunKeyV1, cell_runs::CellRunPursuitV1>,
+    pub(super) cell_run_inputs: HashMap<cell_runs::CellRunKeyV1, (std::sync::Arc<resource::ReservedRowsV1<misaka_palw_tir_exec::node::TirRunInputsV1>>, Hash64, u64)>,
     /// Captures reassembled from answered runs: this seat's material for a claim whose executor served none.
     synthesised: HashMap<Hash64, Vec<u8>>,
     /// The shards this node holds the rows of without holding the class: fetched once, proven, kept.
-    holdings: HashMap<(Hash64, u16), std::sync::Arc<TirShardHoldingV1>>,
+    pub(super) holdings: HashMap<(Hash64, u16, u16), std::sync::Arc<resource::ReservedRowsV1<TirShardHoldingV1>>>,
+    /// Partial public prosecutions keep the same row reservation through filing and the
+    /// actual court deadline, including time after the receipt window has ended.
+    court_row_interests: HashMap<(Hash64, u64), ((Hash64, u16, u16), u64)>,
     /// The fetches of shard rows from peers in flight (`--palw-tir-shard-fetch`), by `(class, shard)`.
-    row_fetches: HashMap<(Hash64, u16), PalwTirRowFetchV1>,
+    pub(super) row_fetches: HashMap<(Hash64, u16, u16), PalwTirRowFetchV1>,
     /// Claims whose cells this seat refuted (or could not accuse): never answered `Valid`.
     pub refuted: HashSet<Hash64>,
     /// The `(claim, shard)`s the non-seat watcher has verified (`--palw-tir-shard-watch`): each once.
     pub watched: HashSet<(Hash64, u16)>,
+    /// Next public-watch duty to try: unavailable early duties must not starve later shards.
+    watch_cursor: usize,
     /// `(claim)` → the DAA a part was last carried.
     submitted: HashMap<Hash64, u64>,
     /// `(class, shard)` → the span a possession proof was last carried; the plan declaration's DAA by class.
@@ -723,6 +769,57 @@ pub(crate) struct PalwTirShardBooksV1 {
 }
 
 impl PalwTirShardBooksV1 {
+    /// Keep rows only for this tip's actual seat and public watcher interests. Geometry is
+    /// part of the cache key: replanning a class must not reuse another partition's params.
+    /// Arc owners running a proof/verifier retain their own row reservation after eviction.
+    pub(crate) fn retain_row_interests_v1(&mut self, seats: &[PalwSeatDutyV2], watch: &[PalwSeatDutyV2], daa: u64) {
+        self.court_row_interests.retain(|_, (_, until)| daa <= *until);
+        let mut keep: HashSet<_> = seats
+            .iter()
+            .chain(watch)
+            .filter(|d| daa <= d.receipt_deadline)
+            .filter_map(|d| d.tir_shard.map(|p| (d.class_id, p.s_l, p.shard)))
+            .collect();
+        keep.extend(self.court_row_interests.values().map(|(key, _)| *key));
+        let live: HashSet<_> = seats.iter().chain(watch).filter(|d| daa <= d.receipt_deadline)
+            .filter_map(|d| d.tir_shard.map(|p| (d.claim_id, p.s_l, p.shard, p.s_p, p.segments.0, None))).collect();
+        let court_keeps = |key: &cell_runs::CellRunKeyV1| self.court_row_interests.iter()
+            .any(|((claim, leaf), ((_, s_l, shard), _))| *claim == key.0 && *s_l == key.1 && *shard == key.2
+                && key.5.is_none_or(|named| named == *leaf));
+        self.cell_run_pursuits.retain(|key, p| daa <= p.until && (live.contains(key) || court_keeps(key)));
+        self.cell_run_inputs.retain(|key, (_, _, until)| daa <= *until && (live.contains(key) || court_keeps(key)));
+        self.holdings.retain(|k, _| keep.contains(k));
+        self.row_fetches.retain(|k, _| keep.contains(k));
+    }
+
+    pub(crate) fn retain_public_court_rows_v1(&mut self, duties: &[kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2], daa: u64) {
+        for duty in duties.iter().filter(|d| !d.i_am_responder && d.tir_dissection.is_some()) {
+            let leaf = duty.tir_dissection.as_ref().expect("filtered phase").leaf_index();
+            if let Some((key, until)) = self.court_row_interests.get_mut(&(duty.claim_id, leaf)) {
+                if key.0 == duty.class_id {
+                    *until = (*until).max(duty.session_deadline_daa);
+                }
+            }
+        }
+        self.court_row_interests.retain(|_, (_, until)| daa <= *until);
+    }
+
+    pub(super) fn keep_public_court_rows_v1(&mut self, claim: Hash64, leaf: u64, key: (Hash64, u16, u16), until: u64) -> Result<(), String> {
+        if self.court_row_interests.len() >= PALW_TIR_SHARD_POOL_CLAIMS_V1 && !self.court_row_interests.contains_key(&(claim, leaf)) {
+            return Err("the node's partial public court retention budget is full".into());
+        }
+        for (cell, (_, _, expiry)) in &mut self.cell_run_inputs {
+            if cell.0 == claim && cell.1 == key.1 && cell.2 == key.2 && cell.5.is_none_or(|named| named == leaf) { *expiry = (*expiry).max(until); }
+        }
+        for (cell, pursuit) in &mut self.cell_run_pursuits {
+            if cell.0 == claim && cell.1 == key.1 && cell.2 == key.2 && cell.5.is_none_or(|named| named == leaf) { pursuit.until = pursuit.until.max(until); }
+        }
+        self.court_row_interests.entry((claim, leaf)).and_modify(|old| {
+            if old.0 == key { old.1 = old.1.max(until); } else { *old = (key, until); }
+        }).or_insert((key, until));
+        Ok(())
+    }
+
     /// This seat's own receipt, kept apart from what can be evicted by an arrival: put straight in the pool and the re-send table.
     pub(crate) fn insert_own(&mut self, receipt: PalwSeatReceiptV4, seat_index: u8, now: std::time::Instant) {
         self.filed.insert(
@@ -983,6 +1080,14 @@ impl super::PalwPanelService {
                 }
                 continue;
             };
+            if TirCaptureV1::decode(&material).is_ok_and(|capture| !capture.is_dense())
+                && (self.config.tir_shard_mirror.is_some() || self.config.tir_shard_fetch)
+            {
+                let mirror = self.config.tir_shard_mirror.clone();
+                self.tir_shard_holder_duty_v1(bond_key, network_domain, current_daa, duty, mirror.as_deref(), materials,
+                    interval_openings, books).await;
+                continue;
+            }
             let (want_device, shadow) = (self.config.tir_shard_gpu, self.config.tir_shard_shadow);
             if want_device && !books.said_no_device && !tir_kernel_backend_registered_v1() {
                 books.said_no_device = true;
@@ -993,43 +1098,21 @@ impl super::PalwPanelService {
             }
             let (task_tir, task_duty, task_material) = (tir.clone(), duty.clone(), material.clone());
             let outcome = tokio::task::spawn_blocking(move || {
-                // **The ledger's slots.** The cells' scratch is the host's (the capture's rows and their hashes); a device
-                // backend's shard bytes are reserved on its own pool, and a device that cannot take them is not used: the
-                // CPU runs the cells (the verdict is the same).
-                let key = crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
-                    role: PALW_TIR_SHARD_CELL_ROLE_V1,
-                    class_id: task_duty.class_id,
-                    job: task_duty.claim_id,
-                };
-                let _host = crate::palw_memory_ledger::host_ledger_v1()
-                    .reserve(
-                        key.clone(),
-                        (task_material.len() as u64).saturating_mul(3).saturating_add(PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1),
-                    )
-                    .map_err(|refusal| format!("the cells' scratch is not free ({refusal})"))?;
-                let (mut device, mut on_device) = tir_kernel_backend_v1(want_device);
-                let mut _device_hold = None;
-                if on_device {
-                    if let Some(capacity) = device.device_capacity_bytes() {
-                        crate::palw_memory_ledger::arm_device_share_v1(0, capacity);
-                    }
-                    let place = task_duty.tir_shard.ok_or("the duty is a flat panel's")?;
-                    let shard_bytes = tir_shard_weight_bytes_v1(&task_tir, place.shard, place.s_l)?;
-                    match crate::palw_memory_ledger::device_ledger_v1(0)
-                        .map(|l| l.reserve(key, u64::try_from(shard_bytes).unwrap_or(u64::MAX)))
-                    {
-                        Some(Ok(held)) => _device_hold = Some(held),
-                        _ => {
-                            on_device = false;
-                            device = Box::new(misaka_palw_sdk::lineages::tir::CpuKernelBackendV1);
-                        }
-                    }
-                }
-                let _ = on_device;
-                palw_tir_shard_outcome_v1(&task_tir, &task_material, &task_duty, device.as_mut())
+                let place = task_duty.tir_shard.ok_or("the duty is a flat panel's")?;
+                let shard_bytes = tir_shard_weight_bytes_v1(&task_tir, place.shard, place.s_l)?;
+                let mut admitted = resource::reserve_v1(
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                    resource::key_v1(PALW_TIR_SHARD_CELL_ROLE_V1, &task_duty),
+                    u64::try_from(task_material.len()).map_err(|_| "the capture exceeds u64")?,
+                    u64::try_from(shard_bytes).unwrap_or(u64::MAX),
+                    want_device,
+                )?;
+                let outcome = palw_tir_shard_outcome_v1(&task_tir, &task_material, &task_duty, admitted.backend.as_mut())?;
+                Ok::<_, String>((outcome, admitted))
             })
             .await;
-            let outcome = match outcome {
+            // Keep the admission through exact accusation construction, not only replay.
+            let (outcome, _admission) = match outcome {
                 Ok(Ok(outcome)) => outcome,
                 Ok(Err(why)) => {
                     crate::palw_backends::note_throttled_v1(&format!("tir-shard-cells-{}", duty.claim_id), || {
@@ -1156,48 +1239,235 @@ impl super::PalwPanelService {
             self.request_material_signed(network_domain, duty.claim_id, current_daa).await;
             return;
         };
-        let hold_key = (duty.class_id, place.shard);
+        let hold_key = (duty.class_id, place.s_l, place.shard);
+        if self.tir_shard_ensure_rows_v1(network_domain, current_daa, duty, &capture, mirror, interval_openings, books).await.is_none()
+        {
+            return;
+        }
+        let inputs = if capture.is_dense() { None } else {
+            let Ok(space) = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(&capture.binding.class) else { return };
+            let Ok(shape) = space.job_shape(&capture.binding.job_context) else { return };
+            let Ok(cells) = tir_shard_cells_over_v1(&space, shape.positions, place.shard, place.s_l, place.s_p, place.segments) else { return };
+            let ladder = crate::palw_producer::palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, current_daa);
+            if misaka_palw_sdk::lineages::tir::tir_authenticate_capture_metadata_v1(&capture, duty.class_id, self.class_prompt_ids_form(duty.class_id), ladder).is_err() { return; }
+            let key = (duty.claim_id, place.s_l, place.shard, place.s_p, place.segments.0, None);
+            let Ok(Some(inputs)) = self.tir_shard_ensure_cell_runs_v1(network_domain, current_daa, key, &capture, &cells,
+                duty.receipt_deadline, interval_openings, books, ladder).await else { return };
+            Some(inputs)
+        };
+        self.tir_shard_holder_judge_v1(bond_key, network_domain, current_daa, duty, capture, inputs, hold_key, books).await;
+    }
+
+    /// Obtain this duty's proven shard rows for either a seat or a public watcher. This
+    /// acquisition path asks row holders; it never requests producer material or files a receipt.
+    #[allow(clippy::too_many_arguments)]
+    async fn tir_shard_ensure_rows_v1(
+        &self,
+        network_domain: Hash64,
+        current_daa: u64,
+        duty: &PalwSeatDutyV2,
+        capture: &TirCaptureV1,
+        mirror: Option<&std::path::Path>,
+        interval_openings: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        books: &mut PalwTirShardBooksV1,
+    ) -> Option<std::sync::Arc<resource::ReservedRowsV1<TirShardHoldingV1>>> {
+        let place = duty.tir_shard?;
+        let request = PalwTirRowRequestV1 { class_id: duty.class_id, claim_id: duty.claim_id, artifact_root: duty.artifact_root, s_l: place.s_l, shard: place.shard };
+        self.tir_shard_ensure_row_request_v1(network_domain, current_daa, request, capture, mirror, interval_openings, books).await
+    }
+
+    fn tir_shard_reserve_row_request_v1(
+        &self,
+        request: PalwTirRowRequestV1,
+        class: &kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1,
+    ) -> Result<crate::palw_memory_ledger::PalwMemoryReservationV1, String> {
+        let need = resource::row_cache_need_v1(class, request.s_l, request.shard)?;
+        let key = crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+            role: resource::PALW_TIR_SHARD_ROWS_ROLE_V1, class_id: request.class_id, job: request.claim_id,
+        };
+        crate::palw_memory_ledger::host_ledger_v1().reserve(key, need).map_err(|r| format!("the row cache is not free ({r})"))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn tir_shard_ensure_row_request_v1(
+        &self,
+        network_domain: Hash64,
+        current_daa: u64,
+        request: PalwTirRowRequestV1,
+        capture: &TirCaptureV1,
+        mirror: Option<&std::path::Path>,
+        interval_openings: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        books: &mut PalwTirShardBooksV1,
+    ) -> Option<std::sync::Arc<resource::ReservedRowsV1<TirShardHoldingV1>>> {
+        let hold_key = (request.class_id, request.s_l, request.shard);
         if !books.holdings.contains_key(&hold_key) {
             let Some(mirror) = mirror else {
                 // No mirror on this host: the rows come from peers, a reply at a time (D-S6 over the network). The tick that
                 // completes the fetch inserts the holding and goes on to judge; every other tick is one more ask or a wait.
-                self.tir_shard_fetch_rows_v1(network_domain, current_daa, duty, &capture, interval_openings, books).await;
-                if !books.holdings.contains_key(&hold_key) {
-                    return;
+                self.tir_shard_fetch_rows_v1(network_domain, current_daa, request, capture, interval_openings, books).await;
+                return books.holdings.get(&hold_key).cloned();
+            };
+            let memory = match self.tir_shard_reserve_row_request_v1(request, &capture.binding.class) {
+                Ok(held) => held,
+                Err(why) => {
+                    crate::palw_backends::note_throttled_v1(&format!("tir-shard-row-memory-{}", request.class_id), || {
+                        format!("[{PALW_PANEL}] class {} shard {}: the row fetch waits ({why})", request.class_id, request.shard)
+                    });
+                    return None;
                 }
-                return self.tir_shard_holder_judge_v1(bond_key, network_domain, current_daa, duty, capture, hold_key, books).await;
             };
             let (class, class_id, root, path) =
-                (capture.binding.class.clone(), duty.class_id, duty.artifact_root, mirror.to_path_buf());
-            let (s_l, shard) = (place.s_l, place.shard);
-            let fetched =
-                tokio::task::spawn_blocking(move || fetch_shard_params_v1(&class, class_id, root, s_l, shard, &TirFileMirrorV1(path)))
-                    .await;
+                (capture.binding.class.clone(), request.class_id, request.artifact_root, mirror.to_path_buf());
+            let (s_l, shard) = (request.s_l, request.shard);
+            let fetched = tokio::task::spawn_blocking(move || {
+                fetch_shard_params_v1(&class, class_id, root, s_l, shard, &TirFileMirrorV1(path))
+                    .map(|h| resource::ReservedRowsV1::new(h, memory))
+            })
+            .await;
             match fetched {
                 Ok(Ok(h)) => {
                     info!(
                         "[{PALW_PANEL}] class {}: fetched shard {}/{} from the mirror {} — {} inventory rows, {} bytes, each proven against the registered \
                          root {}; this seat judges its cells without holding the class (RFC-0006 §4.2)",
-                        duty.class_id,
-                        place.shard,
-                        place.s_l,
+                        request.class_id,
+                        request.shard,
+                        request.s_l,
                         mirror.display(),
                         h.leaves,
                         h.bytes,
-                        duty.artifact_root
+                        request.artifact_root
                     );
                     books.holdings.insert(hold_key, std::sync::Arc::new(h));
                 }
                 Ok(Err(why)) => {
-                    crate::palw_backends::note_throttled_v1(&format!("tir-shard-fetch-{}", duty.class_id), || {
-                        format!("[{PALW_PANEL}] class {} shard {}: the mirror's rows are refused: {why}", duty.class_id, place.shard)
+                    crate::palw_backends::note_throttled_v1(&format!("tir-shard-fetch-{}", request.class_id), || {
+                        format!("[{PALW_PANEL}] class {} shard {}: the mirror's rows are refused: {why}", request.class_id, request.shard)
                     });
-                    return;
+                    return None;
                 }
-                Err(_) => return,
+                Err(_) => return None,
             }
         }
-        self.tir_shard_holder_judge_v1(bond_key, network_domain, current_daa, duty, capture, hold_key, books).await;
+        books.holdings.get(&hold_key).cloned()
+    }
+
+    fn tir_shard_public_court_until_v1(&self, due: u64) -> Option<u64> {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.consensus_config.params.palw_consensus_mode else {
+            return None;
+        };
+        due.checked_add(bundle.state.window_court())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn tir_shard_ensure_cell_runs_v1(
+        &self, network_domain: Hash64, current_daa: u64, key: cell_runs::CellRunKeyV1,
+        capture: &TirCaptureV1, cells: &[misaka_palw_tir_exec::node::TirCellV1], until: u64,
+        interval_openings: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>, books: &mut PalwTirShardBooksV1, ladder: u64,
+    ) -> Result<Option<std::sync::Arc<resource::ReservedRowsV1<misaka_palw_tir_exec::node::TirRunInputsV1>>>, String> {
+        if let Some((inputs, root, expiry)) = books.cell_run_inputs.get_mut(&key) {
+            if *root == capture.binding.committed_execution_root { *expiry = (*expiry).max(until); return Ok(Some(inputs.clone())); }
+        }
+        books.cell_run_inputs.remove(&key);
+        if books.cell_run_pursuits.get(&key).is_some_and(|p| !p.matches(capture)) { books.cell_run_pursuits.remove(&key); }
+        if !books.cell_run_pursuits.contains_key(&key) {
+            if books.cell_run_pursuits.len() + books.cell_run_inputs.len() >= PALW_TIR_SHARD_POOL_CLAIMS_V1 {
+                return Err("the node's public cell run pursuit/cache budget is full".into());
+            }
+            books.cell_run_pursuits.insert(key, cell_runs::CellRunPursuitV1::new(key.0, capture, cells, until)?);
+        }
+        let p = books.cell_run_pursuits.get_mut(&key).expect("admitted pursuit"); p.until = p.until.max(until);
+        let (_, refused) = p.drain(key.0, interval_openings, ladder);
+        if refused > 0 { warn!("[{PALW_PANEL}] claim {}: {refused} public cell run replies refused whole", key.0); }
+        if p.complete() {
+            let inputs = books.cell_run_pursuits.remove(&key).expect("completed pursuit").finish();
+            books.cell_run_inputs.insert(key, (inputs.clone(), capture.binding.committed_execution_root, until));
+            return Ok(Some(inputs));
+        }
+        let asks = p.asks_due(std::time::Instant::now());
+        for (first, count) in asks {
+            let first = u32::try_from(first).map_err(|_| "a requested cell run exceeds the signed address space")?;
+            self.request_tir_run_v1(network_domain, key.0, first, count, current_daa).await;
+        }
+        Ok(None)
+    }
+
+    /// Actual challenger consumer before full-model backend resolution. Row acquisition
+    /// uses a node partition of the immutable registered class, so a restart/replan needs
+    /// no expired receipt duty. Every fetched parameter still opens the registered root.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn tir_shard_public_court_move_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        current_daa: u64,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2,
+        mv: super::tir_dissect::PalwTirDissectMoveV1,
+        materials: &HashMap<Hash64, Vec<Vec<u8>>>,
+        interval_openings: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        books: &mut PalwTirShardBooksV1,
+    ) -> Result<Option<PalwConsensusObjectV2>, String> {
+        // Reserve before decoding each candidate. A bad candidate drops its guard before
+        // another is tried; the selected guard survives decoding, fetching and proving.
+        let decode = |bytes: &[u8]| -> Result<_, String> {
+            let key = crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                role: resource::PALW_TIR_SHARD_CLOSE_ROLE_V1, class_id: duty.class_id, job: duty.claim_id,
+            };
+            let admitted = resource::reserve_v1(&crate::palw_memory_ledger::host_ledger_v1(), key, bytes.len() as u64, 0, false)?;
+            let capture = TirCaptureV1::decode(bytes)?;
+            let (rules, _) = self.tir_dissection_rules_for_class_v1(duty.class_id, current_daa).ok_or("no V2 public court rules")?;
+            misaka_palw_sdk::lineages::tir::tir_authenticate_capture_metadata_v1(&capture, duty.class_id, rules.prompt_form, rules.max_step_leaf_count)?;
+            if capture.binding.committed_execution_root != duty.execution_root
+                || capture.binding.full_logits_trace_root != duty.trace_root
+                || capture.binding.artifact_root != duty.artifact_root
+                || capture.binding.class.class_id(&capture.binding.artifact_root) != duty.class_id
+            {
+                return Err("the public capture is not this court's class and roots".into());
+            }
+            Ok((capture, admitted))
+        };
+        let (capture, admitted) = materials.get(&duty.claim_id).and_then(|pool| pool.iter().find_map(|bytes| decode(bytes).ok()))
+            .or_else(|| books.synthesised.get(&duty.claim_id).and_then(|bytes| decode(bytes).ok()))
+            .or_else(|| self.retained_capture(&duty.claim_id).and_then(|bytes| decode(&bytes).ok()))
+            .ok_or("the partial public court has no admitted authenticated capture")?;
+        let phase = duty.tir_dissection.as_deref().ok_or("the public court has no phase")?;
+        let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(&capture.binding.class).map_err(|e| e.to_string())?;
+        let leaf = space.leaf_at(&capture.binding.job_context, phase.leaf_index()).ok_or("the court leaf is outside this capture")?;
+        let kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::Commit { occurrence, .. } = leaf.kind else {
+            return Err("a public history court must narrow a committed node".into());
+        };
+        let cached = books.court_row_interests.get(&(duty.claim_id, phase.leaf_index())).map(|(key, _)| *key);
+        let (s_l, shard) = if let Some((class, s_l, shard)) = cached.filter(|key| key.0 == duty.class_id) {
+            let _ = class;
+            (s_l, shard)
+        } else {
+            let s_l = session.palw_tir_shard_plans_v1().into_iter().find(|(class, _)| *class == duty.class_id)
+                .map(|(_, plan)| plan.s_l).ok_or("the public court has no registered shard partition")?;
+            let (parts, _) = misaka_palw_sdk::lineages::tir::tir_shard_geometry_over_v1(&space, s_l)?;
+            let shard = parts.iter().position(|p| kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_occurrences_v1(p, space.program.schedule.layers.len()).contains(&(occurrence as usize))).ok_or("no shard contains the narrowed occurrence")? as u16;
+            (s_l, shard)
+        };
+        let hold_key = (duty.class_id, s_l, shard);
+        books.keep_public_court_rows_v1(duty.claim_id, phase.leaf_index(), hold_key, duty.session_deadline_daa)?;
+        let request = PalwTirRowRequestV1 { class_id: duty.class_id, claim_id: duty.claim_id, artifact_root: duty.artifact_root, s_l, shard };
+        let holding = self.tir_shard_ensure_row_request_v1(network_domain, current_daa, request, &capture, self.config.tir_shard_mirror.as_deref(), interval_openings, books)
+            .await.ok_or("the public court's proven rows are not held yet")?;
+        let (rules, arity) = self.tir_dissection_rules_for_class_v1(duty.class_id, current_daa).ok_or("the public court has no V2 rules")?;
+        let inputs = if capture.is_dense() { None } else {
+            let cells = misaka_palw_sdk::lineages::tir::tir_public_court_cells_v1(
+                &holding.space, &capture.binding.job_context, phase.leaf_index(), shard)?;
+            let key = (duty.claim_id, s_l, shard, 1, 1, Some(phase.leaf_index()));
+            Some(self.tir_shard_ensure_cell_runs_v1(network_domain, current_daa, key, &capture, &cells,
+                duty.session_deadline_daa, interval_openings, books, rules.max_step_leaf_count).await?
+                .ok_or("the public court's bounded committed runs are not held yet")?)
+        };
+        let task_duty = duty.clone();
+        let built = tokio::task::spawn_blocking(move || {
+            let _admission = admitted;
+            super::tir_dissect::palw_tir_partial_dissect_inputs_build_v1(&holding, &capture, inputs.as_deref().map(|reserved| &**reserved), &task_duty, mv, &rules)
+        }).await.map_err(|e| format!("the public court builder did not finish: {e}"))??;
+        super::tir_dissect::palw_tir_dissect_object_v1(built, duty, arity,
+            &|message, context| self.sign(message, context),
+            &|sid, proof| session.palw_court_close_verdict_v2(sid, proof))
     }
 
     /// **Judge the claim's cells over the held shard rows** (however they came: the mirror or peers): the cells run off the tick, `Valid`
@@ -1210,22 +1480,54 @@ impl super::PalwPanelService {
         current_daa: u64,
         duty: &PalwSeatDutyV2,
         capture: TirCaptureV1,
-        hold_key: (Hash64, u16),
+        inputs: Option<std::sync::Arc<resource::ReservedRowsV1<misaka_palw_tir_exec::node::TirRunInputsV1>>>,
+        hold_key: (Hash64, u16, u16),
         books: &mut PalwTirShardBooksV1,
     ) {
         let Some(place) = duty.tir_shard else { return };
+        let ladder = self.seat_refutation_ladder_v1(duty.class_id, crate::palw_producer::palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, current_daa), current_daa);
+        if misaka_palw_sdk::lineages::tir::tir_authenticate_capture_metadata_v1(&capture, duty.class_id, self.class_prompt_ids_form(duty.class_id), ladder).is_err() {
+            return;
+        }
         let key = seat_duty_panel_key_v1(duty);
         let holding = books.holdings.get(&hold_key).cloned().expect("just inserted");
         let (want_device, shadow) = (self.config.tir_shard_gpu, self.config.tir_shard_shadow);
         let task_duty = duty.clone();
-        let (accuse_holding, accuse_capture) = (holding.clone(), capture.clone());
+        let (accuse_holding, accuse_capture, accuse_inputs) = (holding.clone(), capture.clone(), inputs.clone());
+        let form = self.class_prompt_ids_form(duty.class_id);
         let outcome = tokio::task::spawn_blocking(move || {
-            let (mut device, _) = tir_kernel_backend_v1(want_device);
-            palw_tir_shard_outcome_over_v1(&holding, &capture, &task_duty, device.as_mut())
+            let (parts, _) = misaka_palw_tir_exec::node::tir_shard_geometry_over_v1(&holding.space, place.s_l)?;
+            let part = parts.get(usize::from(place.shard)).ok_or("the holder's shard is out of range")?;
+            let weights = kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_weights_v1(
+                &holding.space.program,
+                holding.space.layout.max_context,
+            );
+            let mut admitted = resource::reserve_v1(
+                &crate::palw_memory_ledger::host_ledger_v1(),
+                resource::key_v1(PALW_TIR_SHARD_CELL_ROLE_V1, &task_duty),
+                resource::capture_bytes_v1(&capture)?,
+                u64::try_from(weights.of_range(part.start, part.end)).unwrap_or(u64::MAX),
+                want_device,
+            )?;
+            let outcome = match inputs.as_deref() {
+                Some(inputs) => palw_tir_shard_outcome_runs_over_v1(&holding, &capture, inputs, &task_duty, form, ladder, admitted.backend.as_mut())?,
+                None => palw_tir_shard_outcome_over_v1(&holding, &capture, &task_duty, admitted.backend.as_mut())?,
+            };
+            Ok::<_, String>((outcome, admitted))
         })
         .await;
+        let (outcome, _admission) = match outcome {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(why)) => {
+                crate::palw_backends::note_throttled_v1(&format!("tir-shard-holder-{}", duty.claim_id), || {
+                    format!("[{PALW_PANEL}] claim {} shard {}: the cells are not run ({why})", duty.claim_id, place.shard)
+                });
+                return;
+            }
+            Err(_) => return,
+        };
         match outcome {
-            Ok(Ok(PalwTirShardOutcomeV1::Valid { leaves, positions })) => {
+            PalwTirShardOutcomeV1::Valid { leaves, positions } => {
                 books.cells_verified += 1;
                 books.leaves_recomputed += leaves;
                 info!(
@@ -1243,7 +1545,7 @@ impl super::PalwPanelService {
                 }
                 books.answered.insert(key);
             }
-            Ok(Ok(PalwTirShardOutcomeV1::Fault { leaf, row, position })) => {
+            PalwTirShardOutcomeV1::Fault { leaf, row, position } => {
                 warn!(
                     "[{PALW_PANEL}] claim {} shard {}/{}: a cell finds the executor's commitment false (leaf {leaf:?}, token row {row:?}, \
                      position {position}) — no receipt{}",
@@ -1272,9 +1574,10 @@ impl super::PalwPanelService {
                     let built = {
                         let target = target.clone();
                         tokio::task::spawn_blocking(move || {
-                            palw_tir_shard_accusation_over_v1(
+                            palw_tir_shard_accusation_inputs_over_v1(
                                 &accuse_holding,
                                 &accuse_capture,
+                                accuse_inputs.as_deref().map(|reserved| &**reserved),
                                 leaf,
                                 row,
                                 &target,
@@ -1289,6 +1592,11 @@ impl super::PalwPanelService {
                     };
                     match built {
                         Ok(Ok(Some((label, accusation)))) => {
+                            if label == super::tir_court::PALW_TIR_NAMED_LEAF_LABEL_V1 {
+                                let Some(until) = self.tir_shard_public_court_until_v1(due) else { return };
+                                let Some(index) = leaf else { return };
+                                if books.keep_public_court_rows_v1(duty.claim_id, index, hold_key, until).is_err() { return; }
+                            }
                             books.findings.push(PalwTirShardFindingV1 { target, due, label, leaf, row, accusation });
                         }
                         Ok(Ok(None)) => warn!(
@@ -1304,12 +1612,11 @@ impl super::PalwPanelService {
                 }
                 books.answered.insert(key);
             }
-            Ok(Ok(PalwTirShardOutcomeV1::Abstain(why))) | Ok(Err(why)) => {
+            PalwTirShardOutcomeV1::Abstain(why) => {
                 crate::palw_backends::note_throttled_v1(&format!("tir-shard-holder-{}", duty.claim_id), || {
                     format!("[{PALW_PANEL}] claim {} shard {}: the cells are not run ({why})", duty.claim_id, place.shard)
                 });
             }
-            Err(_) => {}
         }
     }
 
@@ -1356,7 +1663,18 @@ impl super::PalwPanelService {
                 .unwrap_or(PALW_TIR_SHADOW_DEFAULT_PLAN_V1);
             let tir = std::sync::Arc::new(tir);
             let claim = duty.claim_id;
-            let ran = tokio::task::spawn_blocking(move || palw_tir_shard_shadow_run_v1(&tir, &capture, whole_valid, s_l, s_p)).await;
+            let task_duty = duty.clone();
+            let ran = tokio::task::spawn_blocking(move || {
+                let _admitted = resource::reserve_v1(
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                    resource::key_v1(PALW_TIR_SHARD_CELL_ROLE_V1, &task_duty),
+                    u64::try_from(capture.len()).map_err(|_| "the capture exceeds u64")?,
+                    0,
+                    false,
+                )?;
+                palw_tir_shard_shadow_run_v1(&tir, &capture, whole_valid, s_l, s_p)
+            })
+            .await;
             match ran {
                 Ok(Ok(run)) => {
                     shadow.record(claim, &run);
@@ -1395,79 +1713,88 @@ impl super::PalwPanelService {
         &self,
         network_domain: Hash64,
         current_daa: u64,
-        duty: &PalwSeatDutyV2,
+        request: PalwTirRowRequestV1,
         capture: &TirCaptureV1,
         interval_openings: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>,
         books: &mut PalwTirShardBooksV1,
     ) -> bool {
-        let Some(place) = duty.tir_shard else { return false };
-        let hold_key = (duty.class_id, place.shard);
+        let hold_key = (request.class_id, request.s_l, request.shard);
         if !books.row_fetches.contains_key(&hold_key) {
+            let memory = match self.tir_shard_reserve_row_request_v1(request, &capture.binding.class) {
+                Ok(held) => held,
+                Err(why) => {
+                    crate::palw_backends::note_throttled_v1(&format!("tir-shard-row-memory-{}", request.class_id), || {
+                        format!("[{PALW_PANEL}] class {} shard {}: the row fetch waits ({why})", request.class_id, request.shard)
+                    });
+                    return false;
+                }
+            };
             match misaka_palw_sdk::lineages::tir::TirRowPursuitV1::new(
                 &capture.binding.class,
-                duty.class_id,
-                duty.artifact_root,
-                place.s_l,
-                place.shard,
+                request.class_id,
+                request.artifact_root,
+                request.s_l,
+                request.shard,
             ) {
                 Ok(pursuit) => {
                     info!(
                         "[{PALW_PANEL}] class {}: no copy and no mirror — asking peers for shard {}/{}'s {} inventory rows (each proven against the registered root {})",
-                        duty.class_id,
-                        place.shard,
-                        place.s_l,
+                        request.class_id,
+                        request.shard,
+                        request.s_l,
                         pursuit.progress().1,
-                        duty.artifact_root
+                        request.artifact_root
                     );
-                    books.row_fetches.insert(hold_key, PalwTirRowFetchV1::new(pursuit));
+                    books.row_fetches.insert(hold_key, PalwTirRowFetchV1::new(pursuit, memory));
                 }
                 Err(why) => {
-                    crate::palw_backends::note_throttled_v1(&format!("tir-shard-fetch-{}", duty.class_id), || {
-                        format!("[{PALW_PANEL}] class {} shard {}: the row fetch cannot start: {why}", duty.class_id, place.shard)
+                    crate::palw_backends::note_throttled_v1(&format!("tir-shard-fetch-{}", request.class_id), || {
+                        format!("[{PALW_PANEL}] class {} shard {}: the row fetch cannot start: {why}", request.class_id, request.shard)
                     });
                     return false;
                 }
             }
         }
         let fetch = books.row_fetches.get_mut(&hold_key).expect("just inserted");
-        let (kept, refused) = fetch.drain(duty.claim_id, interval_openings);
+        let (kept, refused) = fetch.drain(request.claim_id, interval_openings);
         if refused > 0 {
             warn!(
                 "[{PALW_PANEL}] class {} shard {}: {refused} reply(ies) to a row request refused whole (a row that is not the leaf asked or does not open the registered root)",
-                duty.class_id, place.shard
+                request.class_id, request.shard
             );
         }
         if kept > 0 {
             let (have, of) = fetch.pursuit.progress();
             info!(
                 "[{PALW_PANEL}] class {} shard {}: {have}/{of} rows held after {} request(s)",
-                duty.class_id, place.shard, fetch.asks
+                request.class_id, request.shard, fetch.asks
             );
         }
         if fetch.pursuit.complete() {
+            // Move the existing guard with the rows; never release/re-reserve between pursuit,
+            // construction and cache. A failure drops both the pursued rows and their guard.
+            let fetch = books.row_fetches.remove(&hold_key).expect("the completed fetch is present");
             let built = fetch.pursuit.holding();
             match built {
                 Ok(h) => {
                     info!(
                         "[{PALW_PANEL}] class {}: fetched shard {}/{} from peers in {} request(s) — {} inventory rows, {} bytes, each proven against the registered root {}",
-                        duty.class_id, place.shard, place.s_l, fetch.asks, h.leaves, h.bytes, duty.artifact_root
+                        request.class_id, request.shard, request.s_l, fetch.asks, h.leaves, h.bytes, request.artifact_root
                     );
-                    books.holdings.insert(hold_key, std::sync::Arc::new(h));
-                    books.row_fetches.remove(&hold_key);
+                    books.holdings.insert(hold_key, std::sync::Arc::new(resource::ReservedRowsV1::new(h, fetch.memory)));
                     return true;
                 }
                 Err(why) => {
                     warn!(
                         "[{PALW_PANEL}] class {} shard {}: the fetched rows do not assemble ({why}); starting over",
-                        duty.class_id, place.shard
+                        request.class_id, request.shard
                     );
-                    books.row_fetches.remove(&hold_key);
                     return false;
                 }
             }
         }
         if let Some((index, count)) = fetch.due_ask(std::time::Instant::now()) {
-            self.request_tir_rows_v1(network_domain, duty.claim_id, index, count, current_daa).await;
+            self.request_tir_rows_v1(network_domain, request.claim_id, index, count, current_daa).await;
         }
         false
     }
@@ -1880,3 +2207,10 @@ pub(crate) fn tir_shard_readiness_object_v1(
 /// **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`, agent SHARD).
 #[path = "tir_shard_watch.rs"]
 pub(super) mod watch;
+
+// One admission policy for seats, shard-only holders, public watchers and shadow runs.
+#[path = "tir_shard_resource.rs"]
+pub(super) mod resource;
+
+#[path = "tir_cell_runs.rs"]
+pub(super) mod cell_runs;

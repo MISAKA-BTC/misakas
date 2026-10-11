@@ -74,7 +74,14 @@ rand = { workspace = true, features = ["small_rng"] }
 tokio = { workspace = true, features = ["rt", "macros", "process"] }
 kaspa-txscript-errors.workspace = true
 
+[[bin]]
+name = "misaka-rfc12-private-node"
+path = "src/bin/rfc12_private_node.rs"
+required-features = ["private-probe"]
+
 [features]
+# Explicit opt-in; the unpublished helper cannot appear in a normal node build.
+private-probe = ["kaspad/private-integration-config", "evm"]
 default = ["evm"]
 heap = ["dhat"]
 html_reports = []

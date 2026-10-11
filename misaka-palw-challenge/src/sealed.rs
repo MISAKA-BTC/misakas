@@ -177,9 +177,9 @@ fn final_qualifies_v3(ctx: &BeaconContextV1, seal: &SealedSourceV3, reveal: &Sea
         && (ctx.subject_kind != SubjectKindV1::PanelAssignment || ev.final_path == FinalPathV1::PanelIndependent)
 }
 
-fn item_v3(seal: &SealedSourceV3, salt: &Digest, ev: &WorkFinalEventV1) -> Digest {
+fn item_with_domain(domain: &[u8], seal: &SealedSourceV3, salt: &Digest, ev: &WorkFinalEventV1) -> Digest {
     object_id(
-        DOMAIN_SEALED_BEACON_ITEM_V3,
+        domain,
         &(
             seal.seal_position,
             seal.seal,
@@ -209,6 +209,25 @@ pub fn collect_sealed_work_beacon_v3(
     if !ctx.policy.is_sealed_source() {
         return Err(PolicyRefusalV1::WrongCollector("a v2 (accumulator) policy is collected by collect_attributed_work_beacon_v1"));
     }
+    collect_sealed_inner(
+        ctx,
+        seals,
+        tip_position,
+        DOMAIN_SEALED_BEACON_ITEM_V3,
+        DOMAIN_SEALED_BEACON_MIX_V3,
+        initial_accumulator_v3(ctx),
+    )
+}
+
+/// Both contracts use the same eligibility/Final/window rules; their public wrappers pin different policies and input contracts.
+pub(crate) fn collect_sealed_inner(
+    ctx: &BeaconContextV1,
+    seals: &[SealedSourceV3],
+    tip_position: u64,
+    item_domain: &[u8],
+    mix_domain: &[u8],
+    initial: Digest,
+) -> Result<SealedBeaconStateV3, PolicyRefusalV1> {
     debug_assert_eq!(ctx.policy.source_rule(), Some(SourceRuleV1::Distinct), "validate() pins the v3 source rule");
     if matches!(ctx.subject_kind, SubjectKindV1::ModelConformance | SubjectKindV1::KernelConformance)
         && ctx.candidate_profile_id == RootV1::Absent
@@ -266,11 +285,11 @@ pub fn collect_sealed_work_beacon_v3(
     if tip_position < lock_position {
         return Ok(SealedBeaconStateV3::Candidate { mixed: n, lock_position });
     }
-    let mut accumulators = vec![initial_accumulator_v3(ctx)];
+    let mut accumulators = vec![initial];
     let mut sources = Vec::with_capacity(finals.len());
     for (i, (s, r, ev)) in finals.iter().enumerate() {
-        let item = item_v3(s, &r.salt, ev);
-        let next = object_id(DOMAIN_SEALED_BEACON_MIX_V3, &(*accumulators.last().expect("acc_0"), (i + 1) as u32, item));
+        let item = item_with_domain(item_domain, s, &r.salt, ev);
+        let next = object_id(mix_domain, &(*accumulators.last().expect("acc_0"), (i + 1) as u32, item));
         accumulators.push(next);
         sources.push(BeaconSourceV1 {
             source_profile_id: s.source_profile_id,

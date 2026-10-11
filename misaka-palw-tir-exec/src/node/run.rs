@@ -274,27 +274,45 @@ impl<'a> TirClassRunnerV1<'a> {
             return Err("the program names no logits scheme this build commits under".into());
         };
         let h_tile = space.layout.h_tile as usize;
+        let memory_need = super::memory::tir_executor_storage_need_v1(space, self.plan, ctx)?;
+        let memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(),
+            "tir-executor", self.class_id, ctx, memory_need)?;
         let mut exec = TirExecutor::new(self.plan, self.params).map_err(|e| e.to_string())?;
         exec.set_hist_tail(h_tile);
         if self.fused {
             exec.set_fused(true);
         }
-        let (first_position, mut generated) = match start {
-            None => (0u32, Vec::with_capacity(ctx.exact_decode_tokens as usize)),
-            Some(point) => {
-                self.restore(&mut exec, point, &job)?;
-                let selected = (0..=point.position).filter(|a| job.runs_post(*a)).count();
-                if point.generated.len() != selected {
-                    return Err(format!("a resume point with {} tokens after {selected} selections", point.generated.len()));
-                }
-                (point.position + 1, point.generated.clone())
-            }
+        let first_position = match start {
+            None => 0,
+            Some(point) => point.position.checked_add(1).filter(|p| *p <= job.positions)
+                .ok_or("a resume point past the job's end")?,
         };
+        let end = match until {
+            None => job.positions,
+            Some(u) if u >= first_position && u <= job.positions => u,
+            Some(u) => return Err(format!("a replay to position {u} from {first_position} of a job of {}", job.positions)),
+        };
+        let selections_before = first_position.saturating_sub(job.prefill - 1) as usize;
+        let selections_through = end.saturating_sub(job.prefill - 1) as usize;
+        let mut generated = Vec::new();
+        generated.try_reserve_exact(selections_through).map_err(|_| "cannot reserve replay token storage")?;
+        if let Some(point) = start {
+            self.restore(&mut exec, point, &job)?;
+            if point.generated.len() != selections_before {
+                return Err(format!("a resume point with {} tokens after {selections_before} selections", point.generated.len()));
+            }
+            generated.extend_from_slice(&point.generated);
+        }
         let first_index = space.running_total(&job, first_position) as u64;
+        // A one-position replay must not reserve hashes for the rest of the whole job.
+        let range_leaves = (space.running_total(&job, end) as u64).checked_sub(first_index)
+            .ok_or("a replay leaf range runs backwards")?;
+        let mut hashes = Vec::new();
+        hashes.try_reserve_exact(range_leaves.min(1 << 24) as usize).map_err(|_| "cannot reserve replay hash storage")?;
         let mut emit = Emitter {
             ctx_hash: ctx.context_hash(),
             class_id: self.class_id,
-            hashes: Vec::with_capacity((total - first_index).min(1 << 24) as usize),
+            hashes,
             first_index,
             leaf: PalwStepTileLeafV1 {
                 version: PALW_TIR_STEP_LEAF_VERSION_V1,
@@ -308,12 +326,8 @@ impl<'a> TirClassRunnerV1<'a> {
             error: None,
             meta: verify.then(Vec::new),
         };
-        let mut rows: Vec<Vec<i32>> = Vec::with_capacity(ctx.exact_decode_tokens as usize);
-        let end = match until {
-            None => job.positions,
-            Some(u) if u >= first_position && u <= job.positions => u,
-            Some(u) => return Err(format!("a replay to position {u} from {first_position} of a job of {}", job.positions)),
-        };
+        let mut rows: Vec<Vec<i32>> = Vec::new();
+        rows.try_reserve_exact(selections_through - selections_before).map_err(|_| "cannot reserve replay trace headers")?;
         for a in first_position..end {
             let first = emit.first_index + emit.hashes.len() as u64;
             let token = if a < job.prefill {
@@ -406,7 +420,7 @@ impl<'a> TirClassRunnerV1<'a> {
         if end == job.positions && emit.first_index + emit.hashes.len() as u64 != total {
             return Err(format!("{} leaves produced, the step space counts {total}", emit.first_index + emit.hashes.len() as u64));
         }
-        Ok(Driven { first_index, hashes: emit.hashes, rows, generated, tiled })
+        Ok(Driven { first_index, hashes: emit.hashes, rows, generated, tiled, _memory: memory })
     }
 
     /// The resume point after position `a` of a running executor.
@@ -484,6 +498,8 @@ struct Driven {
     rows: Vec<Vec<i32>>,
     generated: Vec<u32>,
     tiled: bool,
+    // Keep executor/working reservation through whole-job root/trace construction.
+    _memory: Option<super::memory::TirMemoryLeaseV1>,
 }
 
 /// A resumed run's part of the job: the leaves from `first_index` on, the logits rows it produced,

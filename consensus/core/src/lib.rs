@@ -12,6 +12,7 @@ pub mod palw_mergeset_v1;
 pub mod palw_native_readiness_v1;
 pub mod palw_native_settlement_v1;
 pub mod palw_panel_beacon_v1;
+pub mod palw_panel_source_snapshot_v1;
 pub mod palw_permissionless_panel_v1;
 
 use std::collections::{HashMap, HashSet};
@@ -511,6 +512,7 @@ pub mod palw_typed_roots_v1;
 /// ECON's M*-49 verifier pay and the held default share: the fence `palw_verifier_pay_v1` — dormant, no height, refused when armed.
 pub mod palw_verifier_pay_v1;
 pub mod palw_beacon_source_opt_in_v1;
+pub mod palw_beacon_source_fee_v1;
 /// G14 lane D: the kernel route's consensus state, messages and interim policy (fence `palw_probabilistic_constraints_v1`).
 pub mod palw_kernel_route_v1;
 /// G14 lane D phase 3: the onboarding objects (artifact binding and its refutation, the kernel binding, the conformance commitment,

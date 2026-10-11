@@ -20,11 +20,42 @@ pub struct PalwPermissionlessPanelV1 {
     pub policy: PanelPolicyV1,
 }
 
+/// A separate dormant profile: complete authenticated populations, version-3 carriage,
+/// streaming operator draw and explicit whole-state resource limits. These limits are
+/// experimental refusal bounds, not economic/latency approval; activation always fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPermissionlessPanelCompleteV1 {
+    pub activation: ForkActivation,
+    pub policy: PanelPolicyV1,
+}
+
+impl PalwPermissionlessPanelCompleteV1 {
+    pub fn commitment_bytes(self) -> Vec<u8> {
+        let mut bytes = WIRE_VERSION_COMPLETE_V1.to_le_bytes().to_vec();
+        bytes.extend(self.activation.daa_score().to_le_bytes());
+        bytes.extend(borsh::to_vec(&self.policy).expect("canonical complete Panel policy"));
+        bytes
+    }
+}
+
+/// Population compaction only after the native retirement funnel. Separate experimental
+/// version-4 profile, None on every preset; historical version 2/3 never migrates silently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPermissionlessPanelRetiredV1 { pub activation: ForkActivation, pub policy: PanelPolicyV1 }
+impl PalwPermissionlessPanelRetiredV1 {
+    pub fn commitment_bytes(self) -> Vec<u8> {
+        let mut bytes = WIRE_VERSION_RETIRED_V1.to_le_bytes().to_vec();
+        bytes.extend(self.activation.daa_score().to_le_bytes());
+        bytes.extend(borsh::to_vec(&self.policy).expect("canonical retired Panel policy")); bytes
+    }
+}
+
 /// **The fence, mirrored on the V2 bundle's state params** (`PalwStateParamsV2::panel_v3`), which the fold reads: its height, its
 /// complete policy, and the engine's chain and ruleset identities. Not Borsh and not hashed — the fence itself is what the params
 /// and schedule ids name (Some-only), and `validate_palw_permissionless_panel_v1` refuses an armed one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwPanelV3ParamsV1 {
+    pub wire_version: u16,
     pub from_daa: u64,
     pub policy: PanelPolicyV1,
     /// `palw_network_domain_v2_for(network, genesis)`: a chain, not a name.
@@ -70,39 +101,81 @@ impl Params {
     /// **The fence's mirror** on the V2 bundle's state params. Dormant: `None` on every shipped preset; a fixture that bypasses
     /// `validate_palw_permissionless_panel_v1` (as `consensus/core/tests/rfc0010_permissionless_panel.rs` does) calls this.
     pub fn sync_palw_permissionless_panel_v1(&mut self) {
-        let fence = self.palw_permissionless_panel_v1.filter(|fence| fence.activation != ForkActivation::never());
         let network = crate::palw_attempt_v2::palw_network_domain_v2_for(self.net.to_string().as_bytes(), Some(self.genesis.hash));
+        let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else { return };
+        let mirror = self.palw_panel_v3_mirror_v1(network, palw_ruleset_id_v2(bundle));
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            let ruleset = palw_ruleset_id_v2(bundle);
-            let mirror = fence.map(|fence| PalwPanelV3ParamsV1 {
-                from_daa: fence.activation.daa_score(),
-                policy: fence.policy,
-                network,
-                ruleset,
-            });
             bundle.state = bundle.state.clone().with_panel_v3(mirror);
         }
     }
 
+    /// **The mirror the fences commit** (codex's selection by wire version, R6781-F merge): the retired-archive profile, else the
+    /// complete-population profile, else the original V2 fence — each only when armed (`never()` is absent). One function feeds the
+    /// sync above and the mirror check in [`Self::validate_palw_permissionless_panel_v1`], so they cannot disagree.
+    fn palw_panel_v3_mirror_v1(&self, network: Hash64, ruleset: Hash64) -> Option<PalwPanelV3ParamsV1> {
+        let armed = |a: ForkActivation| a != ForkActivation::never();
+        self.palw_permissionless_panel_retired_v1
+            .filter(|f| armed(f.activation))
+            .map(|f| PalwPanelV3ParamsV1 {
+                wire_version: WIRE_VERSION_RETIRED_V1,
+                from_daa: f.activation.daa_score(),
+                policy: f.policy,
+                network,
+                ruleset,
+            })
+            .or_else(|| {
+                self.palw_permissionless_panel_complete_v1.filter(|f| armed(f.activation)).map(|f| PalwPanelV3ParamsV1 {
+                    wire_version: WIRE_VERSION_COMPLETE_V1,
+                    from_daa: f.activation.daa_score(),
+                    policy: f.policy,
+                    network,
+                    ruleset,
+                })
+            })
+            .or_else(|| {
+                self.palw_permissionless_panel_v1.filter(|f| armed(f.activation)).map(|f| PalwPanelV3ParamsV1 {
+                    wire_version: WIRE_VERSION_V2,
+                    from_daa: f.activation.daa_score(),
+                    policy: f.policy,
+                    network,
+                    ruleset,
+                })
+            })
+    }
+
+    pub fn palw_permissionless_panel_activation_v1(&self) -> Option<ForkActivation> {
+        self.palw_permissionless_panel_v1
+            .map(|r| r.activation)
+            .into_iter()
+            .chain(self.palw_permissionless_panel_complete_v1.map(|r| r.activation))
+            .chain(self.palw_permissionless_panel_retired_v1.map(|r| r.activation))
+            .filter(|a| *a != ForkActivation::never())
+            .min_by_key(|a| a.daa_score())
+    }
+
     pub fn validate_palw_permissionless_panel_v1(&self) -> Result<(), PalwModeV2Error> {
         // The processor reads the bundle's mirror, while fingerprints and the fork schedule read
-        // the top-level fence. A mirror without that fence would silently run an uncommitted rule.
+        // the top-level fences. A mirror without its fence would silently run an uncommitted rule.
         if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-            let expected =
-                self.palw_permissionless_panel_v1.filter(|fence| fence.activation != ForkActivation::never()).map(|fence| {
-                    PalwPanelV3ParamsV1 {
-                        from_daa: fence.activation.daa_score(),
-                        policy: fence.policy,
-                        network: crate::palw_attempt_v2::palw_network_domain_v2_for(
-                            self.net.to_string().as_bytes(),
-                            Some(self.genesis.hash),
-                        ),
-                        ruleset: palw_ruleset_id_v2(bundle),
-                    }
-                });
+            let expected = self.palw_panel_v3_mirror_v1(
+                crate::palw_attempt_v2::palw_network_domain_v2_for(self.net.to_string().as_bytes(), Some(self.genesis.hash)),
+                palw_ruleset_id_v2(bundle),
+            );
             if bundle.state.panel_v3().copied() != expected {
                 return Err(PalwModeV2Error::Invalid("palw_permissionless_panel_v1 state mirror differs from its committed fence"));
             }
+        }
+        if let Some(rule) = self.palw_permissionless_panel_retired_v1.filter(|r| r.activation != ForkActivation::never()) {
+            rule.policy.validate_for_version(WIRE_VERSION_RETIRED_V1).map_err(|_| PalwModeV2Error::Invalid("retired Panel resource policy is invalid"))?;
+            return Err(PalwModeV2Error::Invalid("palw_permissionless_panel_retired_v1 cannot be armed: archive capacity/liveness, native 100k RSS/latency, public courts/DA, beacon/soundness and economics are unapproved"));
+        }
+        if let Some(rule) = self.palw_permissionless_panel_complete_v1.filter(|r| r.activation != ForkActivation::never()) {
+            rule.policy
+                .validate_for_version(WIRE_VERSION_COMPLETE_V1)
+                .map_err(|_| PalwModeV2Error::Invalid("complete Panel resource/timing policy is invalid"))?;
+            return Err(PalwModeV2Error::Invalid(
+                "palw_permissionless_panel_complete_v1 cannot be armed: 100k population/RSS/latency and retained-population liveness, complete-candidate pruned transport, all-model court/DA cost and beacon/soundness/economics reviews are unapproved",
+            ));
         }
         if let Some(rule) = self.palw_permissionless_panel_v1.filter(|r| r.activation != ForkActivation::never()) {
             rule.policy.validate().map_err(|_| {
@@ -202,12 +275,36 @@ pub fn panel_snapshot_candidates_v1(
     draw: PalwPanelDrawPolicyV1,
     capability_proof: bool,
 ) -> Result<Vec<SeatCandidateV1>, PanelErrorV1> {
-    policy.validate()?;
+    panel_snapshot_candidates_for_version_v1(
+        state,
+        claim_id,
+        floor_class,
+        checkpoint_daa,
+        policy,
+        draw,
+        capability_proof,
+        WIRE_VERSION_V2,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn panel_snapshot_candidates_for_version_v1(
+    state: &PalwChainStateV2,
+    claim_id: Hash64,
+    floor_class: Hash64,
+    checkpoint_daa: u64,
+    policy: PanelPolicyV1,
+    draw: PalwPanelDrawPolicyV1,
+    capability_proof: bool,
+    version: u16,
+) -> Result<Vec<SeatCandidateV1>, PanelErrorV1> {
+    policy.validate_for_version(version)?;
     let claim = state.claim(&claim_id).ok_or(PanelErrorV1::InvalidSnapshot)?;
     let registered_by = checkpoint_daa.checked_sub(policy.bond_maturity_daa);
     if registered_by.is_none() {
         return Ok(Vec::new());
     }
+    let checkpoint_root = state.state_root();
     let mut seats = std::collections::BTreeMap::<BondIdV1, SeatCandidateV1>::new();
     for (class, role) in [(claim.class_id, CLASS_ROLE_V1), (floor_class, OUTSIDER_ROLE_V1)] {
         if role == OUTSIDER_ROLE_V1 && policy.outsider_seats == 0 {
@@ -235,10 +332,13 @@ pub fn panel_snapshot_candidates_v1(
                 collateral: row.collateral,
                 registered_daa: row.registered_daa,
                 capability_root: commitment(b"misaka-palw/panel-v3/capability", &row.capable_classes),
-                readiness_root: commitment(b"misaka-palw/panel-v3/readiness", &(state.state_root(), class)),
+                readiness_root: commitment(b"misaka-palw/panel-v3/readiness", &(checkpoint_root, class)),
                 roles: 0,
             });
             entry.roles |= role;
+            if complete_population_version_v1(version) && seats.len() > policy.max_candidates as usize {
+                return Err(PanelErrorV1::ResourceLimit);
+            }
         }
     }
     if seats.len() > policy.max_candidates as usize {
@@ -264,7 +364,32 @@ pub fn panel_stratified_candidates_v1(
     capability_proof: bool,
     strata: &PanelStrataV1,
 ) -> Result<Vec<(SeatCandidateV1, u64)>, PanelErrorV1> {
-    policy.validate()?;
+    panel_stratified_candidates_for_version_v1(
+        state,
+        claim_id,
+        floor_class,
+        checkpoint_daa,
+        policy,
+        draw,
+        capability_proof,
+        strata,
+        WIRE_VERSION_V2,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn panel_stratified_candidates_for_version_v1(
+    state: &PalwChainStateV2,
+    claim_id: Hash64,
+    floor_class: Hash64,
+    checkpoint_daa: u64,
+    policy: PanelPolicyV1,
+    draw: PalwPanelDrawPolicyV1,
+    capability_proof: bool,
+    strata: &PanelStrataV1,
+    version: u16,
+) -> Result<Vec<(SeatCandidateV1, u64)>, PanelErrorV1> {
+    policy.validate_for_version(version)?;
     strata.validate()?;
     let claim = state.claim(&claim_id).ok_or(PanelErrorV1::InvalidSnapshot)?;
     let Some(registered_by) = checkpoint_daa.checked_sub(policy.bond_maturity_daa) else { return Ok(Vec::new()) };
@@ -313,6 +438,9 @@ pub fn panel_stratified_candidates_v1(
             });
             entry.0.roles |= role;
             entry.1 |= bit;
+            if complete_population_version_v1(version) && seats.len() > policy.max_candidates as usize {
+                return Err(PanelErrorV1::ResourceLimit);
+            }
         }
     }
     if seats.len() > policy.max_candidates as usize {
@@ -378,7 +506,15 @@ impl ConsensusViewV1 for PalwPanelChainViewV1<'_> {
     }
 
     fn terminal_claim(&self, claim: &Hash64) -> bool {
-        self.state.claim(claim).is_some_and(|r| r.phase.is_terminal())
+        self.state.claim(claim).map(|r| r.phase.is_terminal()).unwrap_or_else(|| {
+            self.state.panel_v3().is_some_and(|engine| engine.cursor().version == WIRE_VERSION_RETIRED_V1 && engine.claim(claim).is_some())
+        })
+    }
+    fn retired_claim(&self, claim: &Hash64) -> Option<PanelRetirementAuthorityV1> {
+        if self.state.claim(claim).is_some() || self.state.palw_accusation_pending_v1(claim)
+            || self.state.panel_v3().and_then(|engine| engine.claim(claim)).is_none() { return None; }
+        Some(PanelRetirementAuthorityV1 { native_parent_root: self.state.state_root(),
+            native_parent_checkpoint: self.state.last_point()?.block })
     }
 }
 
@@ -420,6 +556,9 @@ pub struct PanelV3ClaimStatusV1 {
     /// Redraws made so far (`bindings − 1`).
     pub retries: u16,
     pub terminal: Option<PanelV3TerminalV1>,
+    /// Version-4 native-root authenticated tombstone. Seats are not reconstructed from digests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retirement: Option<PanelRetiredClaimV1>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -429,6 +568,8 @@ pub struct PanelV3SnapshotSummaryV1 {
     pub checkpoint: Hash64,
     pub checkpoint_daa: u64,
     pub candidates: u32,
+    pub population_complete: bool,
+    pub carriage_version: u16,
     pub policy_id: Hash64,
 }
 
@@ -479,6 +620,7 @@ pub fn panel_v3_phase_name_v1(phase: &ClaimPhaseV3) -> &'static str {
         ClaimPhaseV3::Bound(_) => "bound",
         ClaimPhaseV3::Released { .. } => "released",
         ClaimPhaseV3::Voided { .. } => "voided",
+        ClaimPhaseV3::Retired(_) => "retired",
     }
 }
 
@@ -489,6 +631,7 @@ pub fn panel_v3_reason_code_v1(reason: NonFraudReasonV1) -> &'static str {
         NonFraudReasonV1::BeaconUnavailable => "BEACON_UNAVAILABLE",
         NonFraudReasonV1::NoCapablePanel => "NO_CAPABLE_PANEL",
         NonFraudReasonV1::PanelUnavailable => "PANEL_UNAVAILABLE",
+        NonFraudReasonV1::PopulationResourceLimit => "POPULATION_RESOURCE_LIMIT",
     }
 }
 
@@ -510,8 +653,11 @@ pub fn panel_v3_claim_status_v1(
     params: &crate::palw_state_v2::PalwStateParamsV2,
     claim_id: &Hash64,
 ) -> Option<PanelV3ClaimStatusV1> {
-    let claim = state.claim(claim_id)?;
-    let rule = match params.panel_claim_rule_v1(claim.accepted_daa) {
+    let claim = state.claim(claim_id);
+    let archived = state.panel_v3().and_then(|engine| engine.claim(claim_id));
+    if claim.is_none() && !archived.is_some_and(|r| matches!(r.phase, ClaimPhaseV3::Retired(_))) { return None; }
+    let accepted_daa = claim.map(|c| c.accepted_daa).or_else(|| archived.map(|r| r.accepted_daa))?;
+    let rule = match params.panel_claim_rule_v1(accepted_daa) {
         PanelClaimRuleV1::PermissionlessV3 => "permissionlessV3",
         PanelClaimRuleV1::HistoricalLaneA => "historicalLaneA",
     };
@@ -519,8 +665,8 @@ pub fn panel_v3_claim_status_v1(
         version: PANEL_V3_OBSERVATION_VERSION_V1,
         claim_id: *claim_id,
         rule,
-        accepted_daa: claim.accepted_daa,
-        v2_phase: v2_phase_name(&claim.phase),
+        accepted_daa,
+        v2_phase: claim.map(|c| v2_phase_name(&c.phase)).unwrap_or_else(|| "retired".into()),
         engine_phase: None,
         acceptance_order: None,
         seal: None,
@@ -529,6 +675,7 @@ pub fn panel_v3_claim_status_v1(
         assignment: None,
         retries: 0,
         terminal: None,
+        retirement: None,
     };
     let Some(engine) = state.panel_v3() else { return Some(status) };
     let Some(record) = engine.claim_rows().get(claim_id) else { return Some(status) };
@@ -540,11 +687,14 @@ pub fn panel_v3_claim_status_v1(
         checkpoint: snapshot.checkpoint,
         checkpoint_daa: snapshot.checkpoint_daa,
         candidates: snapshot.candidates.len() as u32,
+        population_complete: complete_population_version_v1(engine.cursor().version),
+        carriage_version: engine.cursor().version,
         policy_id: snapshot.policy_id,
     });
     let policy = engine.policy();
     if let Some(seal) = &record.seal {
-        let retained = engine.beacon_rows().get(&seal.beacon_epoch).copied();
+        let retained = if matches!(record.phase, ClaimPhaseV3::Retired(_)) { record.entropy_output }
+            else { engine.beacon_rows().get(&seal.beacon_epoch).copied() };
         let deadline = seal.anchor_slot.saturating_add(policy.beacon_wait_daa);
         status.beacon = Some(PanelV3BeaconStatusV1 {
             epoch: seal.beacon_epoch,
@@ -580,6 +730,16 @@ pub fn panel_v3_claim_status_v1(
             Some(PanelV3TerminalV1 { reason: panel_v3_reason_code_v1(*reason), daa: *daa, fraud: false })
         }
         ClaimPhaseV3::Released { daa } => Some(PanelV3TerminalV1 { reason: "RELEASED", daa: *daa, fraud: false }),
+        ClaimPhaseV3::Retired(archive) => {
+            status.retirement = Some(archive.clone());
+            status.retries = archive.binding_count.saturating_sub(1) as u16;
+            status.snapshot = archive.population.as_ref().map(|s| PanelV3SnapshotSummaryV1 {
+                root: s.root, checkpoint: s.checkpoint, checkpoint_daa: s.checkpoint_daa,
+                candidates: s.candidate_count, population_complete: true,
+                carriage_version: engine.cursor().version, policy_id: engine.policy().id(),
+            });
+            Some(PanelV3TerminalV1 { reason: "RETIREMENT_COMPACTED", daa: archive.daa, fraud: false })
+        }
         _ => None,
     };
     Some(status)
@@ -592,6 +752,10 @@ pub struct PanelV3OverviewV1 {
     pub version: u16,
     /// Whether the fence's engine exists on this chain.
     pub active: bool,
+    pub carriage_version: Option<u16>,
+    pub retained_candidates: u64,
+    pub candidate_limit: Option<u32>,
+    pub retained_candidate_limit: Option<u64>,
     pub tip: Option<Hash64>,
     pub height: Option<u64>,
     pub daa: Option<u64>,
@@ -605,12 +769,22 @@ pub struct PanelV3OverviewV1 {
     pub released: u32,
     pub voided: u32,
     pub certified_epochs: Vec<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retired_tombstones: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_population_claims: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permanent_claim_limit: Option<u32>,
 }
 
 pub fn panel_v3_overview_v1(state: &PalwChainStateV2) -> PanelV3OverviewV1 {
     let mut overview = PanelV3OverviewV1 {
         version: PANEL_V3_OBSERVATION_VERSION_V1,
         active: false,
+        carriage_version: None,
+        retained_candidates: 0,
+        candidate_limit: None,
+        retained_candidate_limit: None,
         tip: None,
         height: None,
         daa: None,
@@ -624,14 +798,29 @@ pub fn panel_v3_overview_v1(state: &PalwChainStateV2) -> PanelV3OverviewV1 {
         released: 0,
         voided: 0,
         certified_epochs: Vec::new(),
+        retired_tombstones: None,
+        active_population_claims: None,
+        permanent_claim_limit: None,
     };
     let Some(engine) = state.panel_v3() else { return overview };
     overview.active = true;
+    overview.carriage_version = Some(engine.cursor().version);
+    overview.retained_candidates =
+        engine.claim_rows().values().filter_map(|r| r.snapshot.as_ref()).map(|s| s.candidates.len() as u64).sum();
+    overview.candidate_limit = Some(engine.policy().max_candidates);
+    overview.retained_candidate_limit =
+        (complete_population_version_v1(engine.cursor().version)).then_some(MAX_COMPLETE_RETAINED_CANDIDATES_V1);
     overview.tip = Some(engine.tip());
     overview.height = Some(engine.height());
     overview.daa = Some(engine.daa());
     overview.policy_id = Some(engine.policy().id());
     overview.tracked_claims = engine.claim_rows().len() as u32;
+    if engine.cursor().version == WIRE_VERSION_RETIRED_V1 {
+        let retired = engine.claim_rows().values().filter(|r| matches!(r.phase, ClaimPhaseV3::Retired(_))).count() as u32;
+        overview.retired_tombstones = Some(retired);
+        overview.active_population_claims = Some(overview.tracked_claims - retired);
+        overview.permanent_claim_limit = Some(MAX_RETIRED_ARCHIVE_CLAIMS_V1 as u32);
+    }
     overview.retained_work_ids = engine.work_id_rows().len() as u32;
     overview.certified_epochs = engine.beacon_rows().keys().copied().collect();
     for record in engine.claim_rows().values() {
@@ -642,6 +831,7 @@ pub fn panel_v3_overview_v1(state: &PalwChainStateV2) -> PanelV3OverviewV1 {
             ClaimPhaseV3::Bound(_) => overview.bound += 1,
             ClaimPhaseV3::Released { .. } => overview.released += 1,
             ClaimPhaseV3::Voided { .. } => overview.voided += 1,
+            ClaimPhaseV3::Retired(_) => overview.released += 1,
         }
     }
     overview

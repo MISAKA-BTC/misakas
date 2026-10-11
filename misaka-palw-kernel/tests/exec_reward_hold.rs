@@ -183,3 +183,39 @@ fn a_sibling_final_cannot_spend_pending_exec_job_escrow_and_cancellation_refunds
         }
     }
 }
+
+#[test]
+fn standalone_final_uses_trusted_reward_grant_and_exec_substitution_uses_only_its_root_cap() {
+    for cap in [0, 3, 7, 100] {
+        let mut w = World::new();
+        let job = w.post_job(2, &[3, 17, 9], 3, 1);
+        let honest = w.honest(&job, 3);
+        let claim = honest.claim.id();
+        w.block(10, vec![honest.tx, T::PanelCovered { claim }]);
+        let rows = w.l.to_rows();
+        let root = w.l.root();
+        w.l.consumer_final_reward_caps.insert(claim, cap);
+        assert_eq!(w.l.root(), root, "trusted allowance is not transaction-owned state");
+        assert_eq!(w.l.to_rows(), rows);
+        let before = w.l.bonds[&POSTER].clone();
+        w.block(60, vec![]);
+        assert_eq!(w.consumer.paid(&PRODUCER), cap.min(7));
+        assert_eq!(w.l.bonds[&POSTER].collateral, before.collateral - cap.min(7));
+        assert_eq!(w.l.bonds[&POSTER].reserved, before.reserved - 7);
+        assert!(!w.l.job_escrows.contains_key(&job.id()));
+        w.block(61, vec![]);
+        assert_eq!(w.consumer.paid(&PRODUCER), cap.min(7), "no second Final fee");
+        assert!(restored(&w).consumer_final_reward_caps.is_empty(), "restore must re-inject current native budget");
+        let cached = w.l.clone().as_rebuilt_from_v1(&w.l.to_rows());
+        assert!(cached.consumer_final_reward_caps.is_empty());
+    }
+    let (mut w, _, claim) = held();
+    // Computation Final closes standalone admission. Its unused R remains in
+    // the shared window; actual bound funding draws only the native root cap.
+    w.l.consumer_final_reward_caps.insert(claim, 0);
+    let mut events = Vec::new();
+    assert_eq!(w.l.finish_exec_reward([0xE1; 64], claim, 3, &mut events).unwrap(), 3);
+    w.consumer.book.apply_events(&events).unwrap();
+    w.consumer.check_view(&w.l);
+    assert_eq!(w.consumer.paid(&PRODUCER), 3);
+}

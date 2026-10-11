@@ -2355,6 +2355,12 @@ mod amendment_1 {
             let mut stream = prompt;
             stream.extend_from_slice(&PREFIX_RUN);
             let prefix = Prefix { claim_id: Hash64::from_bytes(kclaim.id()), job, row, stream, boundaries: d.boundaries, input_root };
+            // codex `4262ecbeb` (R6781-F merge): an EXEC binding transfers the prefix claim's kernel income to its producer's NATIVE
+            // bond, so the route maps the producer's kernel id to it (as the route's writer does for every signer it has seen).
+            s.kernel_route.as_mut().unwrap().aux.insert(
+                (crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, borsh::to_vec(&kernel_bond).unwrap()),
+                borsh::to_vec(&root_claim.bond).unwrap(),
+            );
             prefix.install(s);
             prefix
         }
@@ -2469,6 +2475,12 @@ mod amendment_1 {
             route.ledger_cache.clear();
             route.rows.insert((TABLE_JOBS_V1, borsh::to_vec(&self.job.id()).unwrap()), borsh::to_vec(&self.job).unwrap());
             route.rows.insert((TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&self.claim_id)), borsh::to_vec(&self.row).unwrap());
+            // codex `4262ecbeb` (R6781-F merge): a slice claim's kernel income moves to its executor's NATIVE bond at the binding.
+            let executor = self.covered.slice.executor_bond;
+            route.aux.insert(
+                (crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, borsh::to_vec(&self.row.producer).unwrap()),
+                borsh::to_vec(&executor).unwrap(),
+            );
         }
 
         /// The claim row with `state` (and `convicted`), as a kernel row write of a block.

@@ -47,6 +47,8 @@ pub const PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1: u16 = 510;
 pub const PALW_MODEL_ALLOCATION_POLICY_VERSION_V2: u16 = 2;
 /// The engine state's own version (its header).
 pub const PALW_BOND_BUDGET_STATE_VERSION_V1: u16 = 1;
+/// Dormant monetary extension: authenticated reporter binding / legacy quarantine.
+pub const PALW_BOND_BUDGET_STATE_VERSION_V2: u16 = 2;
 /// The V2 carriage tail of the engine (the Lead's allocation; present only when the engine exists).
 pub const PALW_CARRIAGE_BOND_BUDGET_TAIL_V1: u8 = 0xEF;
 /// The object tag of a bond's signed capital assignment (the Lead's allocation 140–149).
@@ -77,6 +79,15 @@ pub const PALW_BUDGET_TABLE_ASSIGNMENTS_V1: u8 = 4;
 pub const PALW_BUDGET_TABLE_MODELS_V1: u8 = 5;
 /// PESG §6: the liability holds' expiries, `(hold_until, bond)`.
 pub const PALW_BUDGET_TABLE_LIABILITY_RELEASES_V1: u8 = 6;
+/// codex RFC-8 reporter income (monetary state v2). codex numbered it 6 — PESG §6's liability releases on the integration line —
+/// so it moved to 9 at the R6781-F merge (7 / 8 stay codex's material income and consumer contracts).
+pub const PALW_BUDGET_TABLE_REPORTER_INCOME_V1: u8 = 9;
+
+mod consumer;
+pub use consumer::*;
+
+mod material;
+pub use material::{PalwMaterialIncomeV1, PalwMaterialPaymentV1, PALW_BOND_BUDGET_STATE_VERSION_V3, PALW_BUDGET_TABLE_MATERIAL_INCOME_V1, material_pending_id_v1};
 
 // ---- the four dimensions ------------------------------------------------------------------------------------------------------
 
@@ -203,6 +214,21 @@ pub enum PalwBudgetOriginV1 {
     KernelRoute = 4,
     /// A bond's Round rights drawn in one span (readiness §3e): reserved and used at the draw, released at `draw + W`.
     RoundRights = 5,
+    /// Actual registrant/contributor market fee income; no claim/block/weight credit.
+    MarketFee = 6,
+    /// Fee-only execution Round income; no reward-bearing block credit.
+    RoundFee = 7,
+    /// Paid beacon-source fee promised before work, held through its signed liability and payment window.
+    SourceFee = 8,
+    /// Actual native Panel/EXEC income, held before work and through payment.
+    NativeIncome = 9,
+    /// Irrevocable native queue credit awaiting its actual coinbase payment.
+    NativeIncomeQueued = 10,
+    /// Unpaid remainder after one or more exact native queue credits; never transferable.
+    NativeIncomePartial = 11,
+    /// Immutable funded reporter entitlement, redeemed in exact recipient-R tranches.
+    /// Outside the window until a tranche enters its own physical native queue.
+    DeferredReporterIncome = 12,
 }
 
 /// Why the engine refused.
@@ -327,7 +353,9 @@ impl PalwBondBudgetPolicyV1 {
             final_weight_per_unit: 1,
             max_open_claims_per_bond: 1,
             slice_rights_by_rho: false,
-            round_rights: PalwRoundRightsPolicyV1::CountAgainstBlocks,
+            // Mode is the user's decision; this unapproved numeric probe still
+            // cannot activate any network.
+            round_rights: PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1 },
             liability_hold_daa: PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1,
             export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
             weight_value: PalwWeightValuePolicyV1::Unknown,
@@ -562,6 +590,31 @@ impl Params {
         self.palw_bond_budget_v1.as_ref().is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa_score))
     }
 
+    pub fn palw_reporter_income_active_at(&self, daa: u64) -> bool {
+        self.palw_bond_budget_active_at(daa) && self.palw_reporter_income_v2.is_some_and(|at| at != ForkActivation::never() && at.is_active(daa))
+    }
+
+    pub fn validate_palw_reporter_income_v2(&self) -> Result<(), PalwModeV2Error> {
+        let Some(at) = self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
+        if !self.palw_bond_budget_v1.as_ref().is_some_and(|f| f.activation != ForkActivation::never() && f.activation.daa_score() <= at.daa_score()) {
+            return Err(PalwModeV2Error::Invalid("palw_reporter_income_v2 requires palw_bond_budget_v1 at or below it"));
+        }
+        Err(PalwModeV2Error::Invalid("palw_reporter_income_v2 cannot be armed: monetary schema v2 and legacy cash migration are dormant pending complete activation validation"))
+    }
+
+    pub fn palw_material_income_active_at(&self, daa: u64) -> bool {
+        self.palw_reporter_income_active_at(daa) && self.palw_material_income_v3.is_some_and(|at| at != ForkActivation::never() && at.is_active(daa))
+    }
+
+    pub fn validate_palw_material_income_v3(&self) -> Result<(), PalwModeV2Error> {
+        let Some(at) = self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
+        if !self.palw_bond_budget_v1.as_ref().is_some_and(|f| f.activation != ForkActivation::never() && f.activation.daa_score() <= at.daa_score())
+            || !self.palw_reporter_income_v2.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at.daa_score()) {
+            return Err(PalwModeV2Error::Invalid("palw_material_income_v3 requires budget and reporter schema at or below it"));
+        }
+        Err(PalwModeV2Error::Invalid("palw_material_income_v3 cannot be armed: complete signed material/TTL and all consumer lifecycle validation remain pending"))
+    }
+
     /// Whether the model-bond allocation is in force at `daa_score` — never, in this binary (it needs the budget too).
     pub fn palw_model_bond_allocation_active_at(&self, daa_score: u64) -> bool {
         self.palw_bond_budget_active_at(daa_score)
@@ -579,6 +632,11 @@ impl Params {
         if fence.policy.validate().is_err() {
             return Err(PalwModeV2Error::Invalid(
                 "palw_bond_budget_v1's policy is invalid (PalwBondBudgetPolicyV1::validate names the rule that fails)",
+            ));
+        }
+        if !matches!(fence.policy.round_rights, PalwRoundRightsPolicyV1::ExecutionCap { .. }) {
+            return Err(PalwModeV2Error::Invalid(
+                "fee-only Rounds require a dedicated execution cap; B_max is for reward-bearing blocks",
             ));
         }
         // A budget-refused own attempt is SKIPPED, and only past the 2026-09-23 audit fence is a skipped attempt's carve withheld
@@ -643,7 +701,10 @@ impl Params {
                     .map(|a| (a.activation.daa_score().max(f.activation.daa_score()), a.policy.clone())),
             });
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            bundle.state = bundle.state.clone().with_bond_budget(mirror);
+            bundle.state = bundle.state.clone().with_bond_budget(mirror).with_reporter_income_from(
+                self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()))
+                .with_material_income_from(self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()))
+                .with_paid_consumer_lifecycle(self.palw_paid_consumer_lifecycle_v1.as_ref().filter(|f| f.activation != ForkActivation::never()).map(|f| PalwPaidConsumerLifecycleMirrorV1 { from_daa: f.activation.daa_score(), policy: f.policy }));
         }
     }
 }
@@ -691,6 +752,11 @@ pub fn palw_round_rights_vector_v1(policy: &PalwBondBudgetPolicyV1, n: u64) -> P
 pub fn palw_round_rights_remaining_v1(policy: &PalwBondBudgetPolicyV1, capital: u64, row: Option<&PalwBudgetBondRowV1>) -> u64 {
     let caps = palw_bond_budget_caps_v1(policy, capital);
     let window = row.map(|r| r.window).unwrap_or_default();
+    // Boundary migration can preserve accepted rights above a new cap. The
+    // reservation checks the full vector, so its candidate set must do so too.
+    if window.first_excess(&caps).is_some() {
+        return 0;
+    }
     match policy.round_rights {
         PalwRoundRightsPolicyV1::CountAgainstBlocks => (caps.block_units.saturating_sub(window.block_units)
             / PALW_BUDGET_BLOCK_UNIT_V1)
@@ -856,6 +922,52 @@ fn keyed64(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
+/// Trusted UTXO-derived fee income of one accepted Round's native body. Both
+/// amounts exclude mandatory burns; no future transaction fee is promised.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRoundFeeIncomeV1 {
+    pub block: Hash64,
+    pub bond: PalwBondKeyV2,
+    pub maximum_sompi: u64,
+    pub actual_sompi: u64,
+}
+
+pub fn palw_round_income_id_v1(block: Hash64, bond: &PalwBondKeyV2) -> Hash64 {
+    keyed64(b"misaka-palw/bond-budget/round-income/v1", &[block.as_byte_slice(), &borsh::to_vec(bond).expect("bond serializes")])
+}
+
+/// Disposable native acceptance preview, seeded/clocked by the same engine as
+/// the financial fold. The book is not serialized into the virtual state.
+#[derive(Clone, Debug)]
+pub struct PalwRoundFeeAdmissionV1 {
+    pub policy: PalwBondBudgetPolicyV1,
+    pub book: PalwBondBudgetStateV1,
+    pub capital: BTreeMap<PalwBondKeyV2, u64>,
+    pub daa_score: u64,
+}
+
+impl PalwRoundFeeAdmissionV1 {
+    /// All-or-nothing preview before the native body changes UTXOs/MuHash.
+    pub fn admit(&mut self, income: PalwRoundFeeIncomeV1) -> Result<(), PalwBudgetRefusalV1> {
+        let capital =
+            self.capital.get(&income.bond).copied().ok_or(PalwBudgetRefusalV1::Assignment("Round fee recipient is not bonded"))?;
+        if income.maximum_sompi == 0 && income.actual_sompi == 0 {
+            return Ok(());
+        }
+        self.book.reserve_income_v1(
+            &self.policy,
+            capital,
+            palw_round_income_id_v1(income.block, &income.bond),
+            income.bond,
+            self.daa_score,
+            income.maximum_sompi,
+            income.actual_sompi,
+            PalwBudgetOriginV1::RoundFee,
+            &mut Vec::new(),
+        )
+    }
+}
+
 // ---- the state -----------------------------------------------------------------------------------------------------------------
 
 /// The engine header (delta 191).
@@ -941,8 +1053,39 @@ pub struct PalwModelBudgetRowV1 {
     pub reserved_sompi: u64,
 }
 
+/// A frozen native reporter income binding. `None` explicitly means legacy
+/// cash whose actual recipient cannot be authenticated from the old carriage;
+/// it is quarantined globally, never assigned by matching payout payloads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwReporterIncomeBindingV1 {
+    pub recipient: Option<PalwBondKeyV2>,
+    pub payload: Hash64,
+    pub maximum: u64,
+    pub accepted_daa: u64,
+    pub awarded_daa: Option<u64>,
+    pub queue: Option<Hash64>,
+    pub paid_daa: Option<u64>,
+    /// Historical awarded income with no physical clock in the old carriage:
+    /// `(observed cumulative amount, conservative first-fence+W expiry)`.
+    /// This is an uncertainty boundary, never a fabricated payment timestamp.
+    pub historical_boundary: Option<(u128, u64)>,
+}
+
+impl PalwReporterIncomeBindingV1 {
+    fn valid(&self) -> bool {
+        if self.awarded_daa.is_some_and(|daa| daa < self.accepted_daa) || self.paid_daa.is_some_and(|daa| daa < self.accepted_daa) { return false; }
+        match (self.recipient, self.historical_boundary) {
+            (Some(_), None) => self.maximum > 0 && self.queue.is_none() && self.paid_daa.is_none(),
+            (None, None) => self.maximum > 0 && self.queue.is_some() && self.awarded_daa.is_none(),
+            (None, Some((amount, until))) => amount > 0 && until >= self.accepted_daa && self.maximum == 0
+                && self.queue.is_none() && self.paid_daa.is_none() && self.awarded_daa.is_none(),
+            _ => false,
+        }
+    }
+}
+
 /// **The engine state** (`PalwChainStateV2::bond_budget`): the header and five tables. Borsh for the carriage (tail `0xEF`).
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwBondBudgetStateV1 {
     pub header: PalwBondBudgetHeaderV1,
     pub bonds: BTreeMap<PalwBondKeyV2, PalwBudgetBondRowV1>,
@@ -952,6 +1095,84 @@ pub struct PalwBondBudgetStateV1 {
     pub models: BTreeMap<Hash64, PalwModelBudgetRowV1>,
     /// PESG §6: the liability holds' expiries.
     pub liability_releases: BTreeSet<(u64, PalwBondKeyV2)>,
+    pub reporter_income: BTreeMap<Hash64, PalwReporterIncomeBindingV1>,
+    pub material_income: BTreeMap<Hash64, PalwMaterialIncomeV1>,
+    pub consumer_contracts: BTreeMap<Hash64, PalwPaidConsumerContractV1>,
+    consumer_service_due: BTreeSet<(u64, Hash64)>,
+    consumer_exhausted: BTreeSet<Hash64>,
+    material_roots: BTreeMap<Option<Hash64>, BTreeSet<Hash64>>,
+    material_sources: BTreeMap<Hash64, BTreeSet<Hash64>>,
+    material_due: BTreeSet<(u64, Hash64)>,
+    /// Derived withdrawal hold: no extra serialized/rooted field or history scan.
+    deferred_by_bond: BTreeMap<PalwBondKeyV2, usize>,
+    deferred_awards: BTreeSet<Hash64>,
+    unattributed_income: usize,
+    pending_reporters: BTreeMap<PalwBondKeyV2, usize>,
+}
+
+impl BorshSerialize for PalwBondBudgetStateV1 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.header.serialize(writer)?;
+        self.bonds.serialize(writer)?;
+        self.claims.serialize(writer)?;
+        self.releases.serialize(writer)?;
+        self.assignments.serialize(writer)?;
+        self.models.serialize(writer)?;
+        // PESG §6 (integration): the liability holds' expiries, in every monetary version, after the five original tables.
+        self.liability_releases.serialize(writer)?;
+        match self.header.version {
+            PALW_BOND_BUDGET_STATE_VERSION_V1 if self.reporter_income.is_empty() && self.material_income.is_empty() && self.consumer_contracts.is_empty() => Ok(()),
+            PALW_BOND_BUDGET_STATE_VERSION_V2 if self.material_income.is_empty() && self.consumer_contracts.is_empty() => self.reporter_income.serialize(writer),
+            PALW_BOND_BUDGET_STATE_VERSION_V3 if self.consumer_contracts.is_empty() => { self.reporter_income.serialize(writer)?; self.material_income.serialize(writer) },
+            PALW_BOND_BUDGET_STATE_VERSION_V4 => { self.reporter_income.serialize(writer)?; self.material_income.serialize(writer)?; self.consumer_contracts.serialize(writer) },
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid budget monetary state version")),
+        }
+    }
+}
+
+impl BorshDeserialize for PalwBondBudgetStateV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let header: PalwBondBudgetHeaderV1 = BorshDeserialize::deserialize_reader(reader)?;
+        if !matches!(header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2 | PALW_BOND_BUDGET_STATE_VERSION_V3 | PALW_BOND_BUDGET_STATE_VERSION_V4) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid budget monetary state version"));
+        }
+        let version = header.version;
+        let mut state = Self {
+            header,
+            bonds: BorshDeserialize::deserialize_reader(reader)?,
+            claims: BorshDeserialize::deserialize_reader(reader)?,
+            releases: BorshDeserialize::deserialize_reader(reader)?,
+            assignments: BorshDeserialize::deserialize_reader(reader)?,
+            models: BorshDeserialize::deserialize_reader(reader)?,
+            liability_releases: BorshDeserialize::deserialize_reader(reader)?,
+            reporter_income: if version >= PALW_BOND_BUDGET_STATE_VERSION_V2 {
+                BorshDeserialize::deserialize_reader(reader)?
+            } else { BTreeMap::new() },
+            material_income: if version >= PALW_BOND_BUDGET_STATE_VERSION_V3 { BorshDeserialize::deserialize_reader(reader)? } else { BTreeMap::new() },
+            consumer_contracts: if version >= PALW_BOND_BUDGET_STATE_VERSION_V4 { BorshDeserialize::deserialize_reader(reader)? } else { BTreeMap::new() },
+            consumer_service_due: BTreeSet::new(), consumer_exhausted: BTreeSet::new(),
+            material_roots: BTreeMap::new(), material_sources: BTreeMap::new(), material_due: BTreeSet::new(),
+            deferred_by_bond: BTreeMap::new(),
+            deferred_awards: BTreeSet::new(),
+            unattributed_income: 0,
+            pending_reporters: BTreeMap::new(),
+        };
+        let consumers: Vec<_> = state.consumer_contracts.iter().map(|(id, row)| (*id, *row)).collect();
+        for (id, row) in consumers { state.consumer_index_replace_v1(id, None, Some(&row)); }
+        let materials: Vec<_> = state.material_income.iter().map(|(id, row)| (*id, *row)).collect();
+        for (id, row) in materials { state.material_index_replace_v1(id, None, Some(&row)); }
+        for (id, row) in &state.claims {
+            if Self::unpaid_reporter_debt(row) {
+                *state.deferred_by_bond.entry(row.bond).or_default() += 1;
+                state.deferred_awards.insert(*id);
+            }
+        }
+        state.unattributed_income = state.reporter_income.values().filter(|row| row.recipient.is_none()).count();
+        for row in state.reporter_income.values().filter(|row| row.awarded_daa.is_none()) {
+            if let Some(bond) = row.recipient { *state.pending_reporters.entry(bond).or_default() += 1; }
+        }
+        Ok(state)
+    }
 }
 
 /// One journaled write of the engine (the fold turns `Header` into delta 191 and `Row` into delta 190).
@@ -1018,6 +1239,13 @@ impl PalwBondBudgetStateV1 {
             assignments: BTreeMap::new(),
             models: BTreeMap::new(),
             liability_releases: BTreeSet::new(),
+            reporter_income: BTreeMap::new(),
+            consumer_contracts: BTreeMap::new(), consumer_service_due: BTreeSet::new(), consumer_exhausted: BTreeSet::new(),
+            material_income: BTreeMap::new(), material_roots: BTreeMap::new(), material_sources: BTreeMap::new(), material_due: BTreeSet::new(),
+            deferred_by_bond: BTreeMap::new(),
+            deferred_awards: BTreeSet::new(),
+            unattributed_income: 0,
+            pending_reporters: BTreeMap::new(),
         }
     }
 
@@ -1031,6 +1259,13 @@ impl PalwBondBudgetStateV1 {
             assignments: BTreeMap::new(),
             models: BTreeMap::new(),
             liability_releases: BTreeSet::new(),
+            reporter_income: BTreeMap::new(),
+            consumer_contracts: BTreeMap::new(), consumer_service_due: BTreeSet::new(), consumer_exhausted: BTreeSet::new(),
+            material_income: BTreeMap::new(), material_roots: BTreeMap::new(), material_sources: BTreeMap::new(), material_due: BTreeSet::new(),
+            deferred_by_bond: BTreeMap::new(),
+            deferred_awards: BTreeSet::new(),
+            unattributed_income: 0,
+            pending_reporters: BTreeMap::new(),
         }
     }
 
@@ -1044,6 +1279,11 @@ impl PalwBondBudgetStateV1 {
         self.claims.get(claim)
     }
 
+    /// Deterministic pending awards, without scanning completed monetary history.
+    pub fn unpaid_reporter_awards_v1(&self) -> impl Iterator<Item = &Hash64> {
+        self.deferred_awards.iter()
+    }
+
     pub fn model_row(&self, model: &Hash64) -> Option<&PalwModelBudgetRowV1> {
         self.models.get(model)
     }
@@ -1054,8 +1294,11 @@ impl PalwBondBudgetStateV1 {
 
     /// **Does the bond still hold a reservation inside its window at `now`?** (the withdrawal hold, design §2.4) — exact: the latest
     /// `reuse_not_before` among its in-window reservations is still ahead.
+    /// A pending monetary right uses `u64::MAX` until the ordinary release
+    /// clock removes its last reservation, because its payment DAA is unknown.
     pub fn window_holds(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
-        self.bonds.get(bond).is_some_and(|row| !row.window.is_zero() && row.latest_release_daa > now)
+        self.deferred_by_bond.contains_key(bond) || self.pending_reporters.contains_key(bond)
+            || self.bonds.get(bond).is_some_and(|row| !row.window.is_zero() && row.latest_release_daa > now)
     }
 
     /// **PESG §6: does the bond's liability hold its capital at `now`?** — an open claim, or a terminal one within `H_L`. A clock of its
@@ -1084,7 +1327,17 @@ impl PalwBondBudgetStateV1 {
     /// The table roots and the header digest the V2 root block writes, in table order.
     pub fn root_parts(&self) -> (Hash64, [Hash64; 6]) {
         use crate::palw_state_v2::palw_collection_root_of_entries_v1 as root;
-        let header = keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header)]);
+        let header = if self.header.version >= PALW_BOND_BUDGET_STATE_VERSION_V2 {
+            let income = root(b"bond_budget_reporter_income/v1", self.reporter_income.len(),
+                self.reporter_income.iter().map(|(k, v)| (enc(k), enc(v))));
+            if self.header.version >= PALW_BOND_BUDGET_STATE_VERSION_V3 {
+                let material = root(b"bond_budget_material_income/v1", self.material_income.len(), self.material_income.iter().map(|(k, v)| (enc(k), enc(v))));
+                if self.header.version >= PALW_BOND_BUDGET_STATE_VERSION_V4 {
+                    let consumers = root(b"bond_budget_consumer_contract/v1", self.consumer_contracts.len(), self.consumer_contracts.iter().map(|(k, v)| (enc(k), enc(v))));
+                    keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice(), b"material_income/v1", material.as_byte_slice(), b"consumer_contract/v1", consumers.as_byte_slice()])
+                } else { keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice(), b"material_income/v1", material.as_byte_slice()]) }
+            } else { keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice()]) }
+        } else { keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header)]) };
         (
             header,
             [
@@ -1115,7 +1368,14 @@ impl PalwBondBudgetStateV1 {
         let (expected, install) = if revert { (new, old) } else { (old, new) };
         match table {
             PALW_BUDGET_TABLE_BONDS_V1 => swap_row(&mut self.bonds, key, expected, install),
-            PALW_BUDGET_TABLE_CLAIMS_V1 => swap_row(&mut self.claims, key, expected, install),
+            PALW_BUDGET_TABLE_CLAIMS_V1 => {
+                let id: Hash64 = borsh::from_slice(key).map_err(|_| "a budget row's key does not decode")?;
+                let old = self.claims.get(&id).copied();
+                swap_row(&mut self.claims, key, expected, install)?;
+                let new = self.claims.get(&id).copied();
+                self.update_deferred_index(id, old.as_ref(), new.as_ref());
+                Ok(())
+            },
             PALW_BUDGET_TABLE_RELEASES_V1 => {
                 let k: (u64, Hash64) = borsh::from_slice(key).map_err(|_| "a release key does not decode")?;
                 let present = self.releases.contains(&k);
@@ -1143,6 +1403,31 @@ impl PalwBondBudgetStateV1 {
                 }
                 Ok(())
             }
+            PALW_BUDGET_TABLE_REPORTER_INCOME_V1 => {
+                if self.header.version < PALW_BOND_BUDGET_STATE_VERSION_V2 { return Err("reporter income needs monetary state v2"); }
+                let id: Hash64 = borsh::from_slice(key).map_err(|_| "reporter income key does not decode")?;
+                let old = self.reporter_income.get(&id).copied();
+                swap_row(&mut self.reporter_income, key, expected, install)?;
+                let new = self.reporter_income.get(&id).copied();
+                self.update_reporter_binding_index_v1(old.as_ref(), new.as_ref());
+                Ok(())
+            }
+            PALW_BUDGET_TABLE_MATERIAL_INCOME_V1 => {
+                if self.header.version < PALW_BOND_BUDGET_STATE_VERSION_V3 { return Err("material income needs monetary state v3"); }
+                let id: Hash64 = borsh::from_slice(key).map_err(|_| "material income key does not decode")?;
+                let old = self.material_income.get(&id).copied();
+                swap_row(&mut self.material_income, key, expected, install)?;
+                let new = self.material_income.get(&id).copied();
+                self.material_index_replace_v1(id, old.as_ref(), new.as_ref()); Ok(())
+            }
+            PALW_BUDGET_TABLE_CONSUMER_CONTRACT_V1 => {
+                if self.header.version < PALW_BOND_BUDGET_STATE_VERSION_V4 { return Err("consumer contract needs monetary state v4"); }
+                let id: Hash64 = borsh::from_slice(key).map_err(|_| "consumer contract key does not decode")?;
+                let old = self.consumer_contracts.get(&id).copied();
+                swap_row(&mut self.consumer_contracts, key, expected, install)?;
+                let new = self.consumer_contracts.get(&id).copied();
+                self.consumer_index_replace_v1(id, old.as_ref(), new.as_ref()); Ok(())
+            }
             _ => Err("a budget row names an unknown table"),
         }
     }
@@ -1155,6 +1440,7 @@ impl PalwBondBudgetStateV1 {
             && self.assignments.is_empty()
             && self.models.is_empty()
             && self.liability_releases.is_empty()
+            && self.reporter_income.is_empty() && self.material_income.is_empty() && self.consumer_contracts.is_empty()
     }
 
     // ---- journaled writers ----
@@ -1176,7 +1462,31 @@ impl PalwBondBudgetStateV1 {
         put(&mut self.bonds, PALW_BUDGET_TABLE_BONDS_V1, bond, keep.then_some(row), j);
     }
 
+    fn unpaid_reporter_debt(row: &PalwBudgetClaimRowV1) -> bool {
+        row.origin == PalwBudgetOriginV1::DeferredReporterIncome
+            && row.live
+            && row.consumed.reward_sompi < row.reserved.reward_sompi
+    }
+
+    fn update_deferred_index(&mut self, id: Hash64, old: Option<&PalwBudgetClaimRowV1>, new: Option<&PalwBudgetClaimRowV1>) {
+        if let Some(old) = old.filter(|row| Self::unpaid_reporter_debt(row)) {
+            self.deferred_awards.remove(&id);
+            if let Some(count) = self.deferred_by_bond.get_mut(&old.bond) {
+                *count -= 1;
+                if *count == 0 {
+                    self.deferred_by_bond.remove(&old.bond);
+                }
+            }
+        }
+        if let Some(new) = new.filter(|row| Self::unpaid_reporter_debt(row)) {
+            self.deferred_awards.insert(id);
+            *self.deferred_by_bond.entry(new.bond).or_default() += 1;
+        }
+    }
+
     fn put_claim(&mut self, claim: &Hash64, row: Option<PalwBudgetClaimRowV1>, j: &mut Vec<PalwBudgetWriteV1>) {
+        let old = self.claims.get(claim).copied();
+        self.update_deferred_index(*claim, old.as_ref(), row.as_ref());
         put(&mut self.claims, PALW_BUDGET_TABLE_CLAIMS_V1, claim, row, j);
     }
 
@@ -1190,6 +1500,90 @@ impl PalwBondBudgetStateV1 {
                 new: present.then(Vec::new),
             });
         }
+    }
+
+    fn update_reporter_binding_index_v1(&mut self, old: Option<&PalwReporterIncomeBindingV1>, new: Option<&PalwReporterIncomeBindingV1>) {
+        if let Some(old) = old {
+            if old.recipient.is_none() { self.unattributed_income -= 1; }
+            if old.awarded_daa.is_none() && let Some(bond) = old.recipient {
+                if let Some(count) = self.pending_reporters.get_mut(&bond) {
+                    *count -= 1;
+                    if *count == 0 { self.pending_reporters.remove(&bond); }
+                }
+            }
+        }
+        if let Some(new) = new {
+            if new.recipient.is_none() { self.unattributed_income += 1; }
+            if new.awarded_daa.is_none() && let Some(bond) = new.recipient {
+                *self.pending_reporters.entry(bond).or_default() += 1;
+            }
+        }
+    }
+
+    pub fn activate_reporter_income_v2(&mut self, j: &mut Vec<PalwBudgetWriteV1>) {
+        if self.header.version < PALW_BOND_BUDGET_STATE_VERSION_V2 {
+            let mut header = self.header.clone();
+            header.version = PALW_BOND_BUDGET_STATE_VERSION_V2;
+            self.put_header(header, j);
+        }
+    }
+
+    fn put_reporter_income_v1(&mut self, id: &Hash64, row: Option<PalwReporterIncomeBindingV1>, j: &mut Vec<PalwBudgetWriteV1>) {
+        self.activate_reporter_income_v2(j);
+        let old = self.reporter_income.get(id).copied();
+        self.update_reporter_binding_index_v1(old.as_ref(), row.as_ref());
+        put(&mut self.reporter_income, PALW_BUDGET_TABLE_REPORTER_INCOME_V1, id, row, j);
+    }
+
+    /// An exact old native liability has no authenticated recipient. Preserve
+    /// its cash and refuse only new monetary admissions until physical pay+W.
+    pub fn has_unattributed_income_v1(&self) -> bool { self.unattributed_income > 0 }
+
+    /// Freeze a valid named/revealed winner's full funded maximum before award.
+    /// Improving an unawarded commit-reveal winner updates only the binding;
+    /// after award, its actual recipient, amount and payload are immutable.
+    pub fn bind_reporter_income_v1(&mut self, id: Hash64, row: PalwReporterIncomeBindingV1, j: &mut Vec<PalwBudgetWriteV1>)
+        -> Result<(), PalwBudgetRefusalV1> {
+        if !row.valid() {
+            return Err(PalwBudgetRefusalV1::Assignment("invalid reporter monetary binding"));
+        }
+        if let Some(old) = self.reporter_income.get(&id) {
+            if *old == row { return Ok(()); }
+            if old.recipient.is_none() || old.awarded_daa.is_some() || old.queue.is_some() || old.paid_daa.is_some()
+                || old.maximum != row.maximum || old.accepted_daa != row.accepted_daa {
+                return Err(PalwBudgetRefusalV1::Duplicate);
+            }
+        }
+        self.put_reporter_income_v1(&id, Some(row), j);
+        Ok(())
+    }
+
+    pub fn mark_reporter_awarded_v1(&mut self, id: Hash64, now: u64, j: &mut Vec<PalwBudgetWriteV1>) -> Result<(), PalwBudgetRefusalV1> {
+        let mut row = self.reporter_income.get(&id).copied().ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if row.awarded_daa.is_some() { return Err(PalwBudgetRefusalV1::Duplicate); }
+        if row.recipient.is_none() || now < row.accepted_daa { return Err(PalwBudgetRefusalV1::Assignment("invalid reporter award clock")); }
+        row.awarded_daa = Some(now);
+        self.put_reporter_income_v1(&id, Some(row), j);
+        Ok(())
+    }
+
+    /// Exactly identified old queue cash has now actually drained. Never use
+    /// logical award/vesting DAA as its monetary release clock.
+    pub fn confirm_unattributed_payment_v1(&mut self, id: Hash64, now: u64, j: &mut Vec<PalwBudgetWriteV1>) -> Result<(), PalwBudgetRefusalV1> {
+        let mut row = self.reporter_income.get(&id).copied().filter(|row| row.recipient.is_none() && row.queue.is_some() && row.paid_daa.is_none())
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if now < row.accepted_daa { return Err(PalwBudgetRefusalV1::Assignment("legacy payment precedes monetary migration")); }
+        row.paid_daa = Some(now);
+        self.put_reporter_income_v1(&id, Some(row), j);
+        Ok(())
+    }
+
+    pub fn release_reporter_income_v1(&mut self, policy: &PalwBondBudgetPolicyV1, now: u64, j: &mut Vec<PalwBudgetWriteV1>) {
+        let due: Vec<_> = self.reporter_income.iter().filter(|(_, row)| row.recipient.is_none()
+            && (row.historical_boundary.is_some_and(|(_, until)| until <= now)
+                || row.paid_daa.is_some_and(|paid| paid.checked_add(policy.window_daa).is_some_and(|until| until <= now))))
+            .map(|(id, _)| *id).collect();
+        for id in due { self.put_reporter_income_v1(&id, None, j); }
     }
 
     fn put_header(&mut self, header: PalwBondBudgetHeaderV1, j: &mut Vec<PalwBudgetWriteV1>) {
@@ -1206,6 +1600,20 @@ impl PalwBondBudgetStateV1 {
         for (at, claim_id) in due {
             if at > now {
                 break;
+            }
+            // A source promise is an unpaid liability, even if a sparse chain
+            // jumps beyond H + W. Payment extends its window from the actual
+            // settlement clock; the clock must never free its R beforehand.
+            if self.claims.get(&claim_id).is_some_and(|claim| {
+                matches!(
+                    claim.origin,
+                    PalwBudgetOriginV1::SourceFee
+                        | PalwBudgetOriginV1::NativeIncome
+                        | PalwBudgetOriginV1::NativeIncomeQueued
+                        | PalwBudgetOriginV1::NativeIncomePartial
+                ) && claim.live
+            }) {
+                continue;
             }
             self.put_release((at, claim_id), false, j);
             let Some(mut claim) = self.claims.get(&claim_id).copied() else { continue };
@@ -1267,6 +1675,9 @@ impl PalwBondBudgetStateV1 {
         }
         let row = self.bonds.get(&bond).copied();
         if admit {
+            if reservation.reward_sompi > 0 && self.has_unattributed_income_v1() {
+                return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+            }
             palw_bond_budget_admit_v1(policy, capital, row.as_ref(), &reservation, liability_sompi)?;
         }
         let reuse_not_before = accepted_daa.saturating_add(policy.window_daa);
@@ -1295,6 +1706,646 @@ impl PalwBondBudgetStateV1 {
             j,
         );
         self.put_release((reuse_not_before, claim_id), true, j);
+        Ok(())
+    }
+
+    /// Reserve a collectible income maximum before its payment is committed.
+    /// Monetary income consumes R only: no Q, B, F or execution rights, and no
+    /// open-claim slot survives this atomic operation. The maximum occupies the
+    /// common window even when an actual fill collects less. No fee is clipped
+    /// after a seller has already transferred its asset.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        income_id: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+        maximum: u64,
+        actual: u64,
+        origin: PalwBudgetOriginV1,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        if maximum > 0 && self.has_unattributed_income_v1() {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
+        if !matches!(origin, PalwBudgetOriginV1::MarketFee | PalwBudgetOriginV1::RoundFee) || actual > maximum {
+            return Err(PalwBudgetRefusalV1::Assignment("invalid fee-income origin or unfunded maximum"));
+        }
+        if self.claims.contains_key(&income_id) {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        if accepted_daa.checked_add(policy.window_daa).is_none() {
+            return Err(PalwBudgetRefusalV1::Overflow);
+        }
+        let held = self.bonds.get(&bond).map_or(0, |row| row.window.reward_sompi);
+        if self.bonds.get(&bond).is_some_and(|row| row.open_claims == u32::MAX) {
+            return Err(PalwBudgetRefusalV1::Overflow);
+        }
+        let after = held.checked_add(maximum).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        if after > palw_bond_budget_caps_v1(policy, capital).reward_sompi {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
+        self.reserve(
+            policy,
+            capital,
+            income_id,
+            bond,
+            None,
+            accepted_daa,
+            PalwBudgetVectorV1 { reward_sompi: maximum, ..PalwBudgetVectorV1::ZERO },
+            origin,
+            false,
+            j,
+        )?;
+        let grant = self.consume(&income_id, PalwBudgetDimV1::Reward, u128::from(actual), true, j);
+        debug_assert!(matches!(grant, Some(Ok(amount)) if amount == u128::from(actual)));
+        self.close(&income_id, j);
+        self.forget(&income_id, j);
+        Ok(())
+    }
+
+    /// Collected market income may still wait in a low-priority native queue.
+    /// Transfer its already consumed R receipt without freeing or charging R
+    /// again; the physical queue drain, not collection, starts the paid window.
+    /// A destination collision or overflow leaves every row and journal intact.
+    pub fn queue_collected_income_v1(
+        &mut self,
+        income_id: &Hash64,
+        queue_id: Hash64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let row = self
+            .claims
+            .get(income_id)
+            .copied()
+            .filter(|row| {
+                matches!(row.origin, PalwBudgetOriginV1::MarketFee | PalwBudgetOriginV1::RoundFee)
+                    && row.in_window
+                    && !row.live
+                    && !row.open
+                    && row.consumed.reward_sompi > 0
+            })
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if queue_id == *income_id {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        let old = self.claims.get(&queue_id).copied();
+        if old.is_some_and(|old| {
+            old.origin != PalwBudgetOriginV1::NativeIncomeQueued || old.bond != row.bond || !old.in_window || old.open
+        }) {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        let mut next = row;
+        next.origin = PalwBudgetOriginV1::NativeIncomeQueued;
+        next.live = true;
+        if let Some(old) = old {
+            next.reserved = next.reserved.checked_add(old.reserved).ok_or(PalwBudgetRefusalV1::Overflow)?;
+            next.consumed = next.consumed.checked_add(old.consumed).ok_or(PalwBudgetRefusalV1::Overflow)?;
+            next.accepted_daa = next.accepted_daa.min(old.accepted_daa);
+            next.reuse_not_before = next.reuse_not_before.max(old.reuse_not_before);
+        }
+        self.put_release((row.reuse_not_before, *income_id), false, j);
+        self.put_claim(income_id, None, j);
+        if let Some(old) = old {
+            self.put_release((old.reuse_not_before, queue_id), false, j);
+        }
+        self.put_claim(&queue_id, Some(next), j);
+        self.put_release((next.reuse_not_before, queue_id), true, j);
+        let mut bond = *self.bonds.get(&row.bond).expect("collected income bond");
+        bond.latest_release_daa = u64::MAX;
+        self.put_bond(&row.bond, bond, j);
+        Ok(())
+    }
+
+    /// Hold the collectible maximum for an actual native recipient before
+    /// accepting work. Same-bond unpaid kernel fee reservations may be moved
+    /// into this hold: EXEC fees replace issuance, so reclassification must
+    /// never charge the same funded right twice. A refusal writes nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hold_native_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        income_id: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+        liability_until: u64,
+        maximum: u64,
+        kernel_credits: &[Hash64],
+        check_cap: bool,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let release = liability_until.checked_add(policy.window_daa).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        if liability_until < accepted_daa || maximum == 0 {
+            return Err(PalwBudgetRefusalV1::Assignment("native income requires a funded maximum and liability"));
+        }
+        let old = self.claims.get(&income_id).copied();
+        if old.is_some_and(|row| {
+            row.bond != bond
+                || row.origin != PalwBudgetOriginV1::NativeIncome
+                || !row.in_window
+                || row.open
+                || row.consumed.reward_sompi != 0
+        }) {
+            return Err(PalwBudgetRefusalV1::NotOpen);
+        }
+        let mut credit = 0u64;
+        let mut seen = BTreeSet::new();
+        let mut credits = Vec::new();
+        for id in kernel_credits {
+            if *id == income_id || !seen.insert(*id) {
+                return Err(PalwBudgetRefusalV1::Duplicate);
+            }
+            let row = self
+                .claims
+                .get(id)
+                .copied()
+                .filter(|row| {
+                    row.bond == bond
+                        && row.in_window
+                        && matches!(
+                            row.origin,
+                            PalwBudgetOriginV1::KernelRoute
+                                | PalwBudgetOriginV1::Legacy
+                                | PalwBudgetOriginV1::Attempt
+                                | PalwBudgetOriginV1::Rider
+                                | PalwBudgetOriginV1::NativeIncome
+                        )
+                        && row.live
+                        && row.consumed.reward_sompi == 0
+                })
+                .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+            credit = credit.checked_add(row.reserved.reward_sompi).ok_or(PalwBudgetRefusalV1::Overflow)?;
+            credits.push((*id, row));
+        }
+        let prior = old.map_or(0, |row| row.reserved.reward_sompi);
+        // A growing aggregate preserves all earlier fee maxima. The native
+        // maximum supplied by the consumer is the full current work share.
+        let held = prior.checked_add(credit).ok_or(PalwBudgetRefusalV1::Overflow)?.max(maximum);
+        let extra = held.checked_sub(prior).and_then(|v| v.checked_sub(credit)).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        let mut bond_row = self.bonds.get(&bond).copied().unwrap_or_default();
+        let total = bond_row.window.reward_sompi.checked_add(extra).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        if check_cap && ((extra > 0 && self.has_unattributed_income_v1()) || total > palw_bond_budget_caps_v1(policy, capital).reward_sompi) {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
+        // Preflight ends here. Reclassification leaves Q/B/F/T and open slots
+        // exactly as they were, and cannot release aggregate monetary quota.
+        for (id, mut row) in credits {
+            if row.origin == PalwBudgetOriginV1::NativeIncome {
+                // Transfer the monetary identity; no independent standalone
+                // payment can remain once EXEC owns this funded right.
+                self.put_release((row.reuse_not_before, id), false, j);
+                self.put_claim(&id, None, j);
+                self.cancel_material_pending_v1(id, j);
+            } else {
+                row.reserved.reward_sompi = 0;
+                self.put_claim(&id, Some(row), j);
+            }
+        }
+        bond_row.window.reward_sompi = total;
+        // Pending money has no known actual payment clock. The sentinel keeps
+        // the existing O(1) withdrawal gate closed across sparse DAA jumps.
+        // Once all due reservations release, put_bond deletes the zero row.
+        bond_row.latest_release_daa = u64::MAX;
+        self.put_bond(&bond, bond_row, j);
+        let mut row = old.unwrap_or(PalwBudgetClaimRowV1 {
+            bond,
+            model: None,
+            accepted_daa,
+            reuse_not_before: release,
+            reserved: PalwBudgetVectorV1::ZERO,
+            consumed: PalwBudgetVectorV1::ZERO,
+            open: false,
+            in_window: true,
+            live: true,
+            origin: PalwBudgetOriginV1::NativeIncome,
+            // PESG §6: income reserves no liability collateral.
+            liability_sompi: 0,
+        });
+        if let Some(old) = old {
+            self.put_release((old.reuse_not_before, income_id), false, j);
+        }
+        row.reuse_not_before = row.reuse_not_before.max(release);
+        row.live = true;
+        row.reserved.reward_sompi = held;
+        self.put_claim(&income_id, Some(row), j);
+        self.put_release((row.reuse_not_before, income_id), true, j);
+        Ok(())
+    }
+
+    /// Give every positive fund its exact queue receipt, including partial
+    /// payments. Each receipt starts its W clock only when that queue actually
+    /// drains. Splitting a hold never adds or releases aggregate R. The unpaid
+    /// remainder cannot be transferred to another work or resurrected after
+    /// cancellation; previously queued cash remains irrevocable.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pay_native_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        income_id: &Hash64,
+        now: u64,
+        amount: u64,
+        queue_id: Hash64,
+        finished: bool,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        if amount == 0 {
+            return Err(PalwBudgetRefusalV1::Assignment("native queue credit must be positive"));
+        }
+        if finished {
+            return self.pay_native_income_inner_v1(policy, income_id, now, amount, Some(queue_id), false, j);
+        }
+        let release = now.checked_add(policy.window_daa).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        let mut remaining = self.claims.get(income_id).copied().filter(|row| {
+            matches!(row.origin, PalwBudgetOriginV1::NativeIncome | PalwBudgetOriginV1::NativeIncomePartial)
+                && row.live && row.in_window && !row.open && row.consumed.reward_sompi == 0
+        }).ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if queue_id == *income_id {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        let left = remaining.reserved.reward_sompi.checked_sub(amount)
+            .ok_or(PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::Reward })?;
+        let old = self.claims.get(&queue_id).copied();
+        if old.is_some_and(|row| row.origin != PalwBudgetOriginV1::NativeIncomeQueued
+            || row.bond != remaining.bond || !row.in_window || row.open) {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        let mut queued = remaining;
+        queued.origin = PalwBudgetOriginV1::NativeIncomeQueued;
+        queued.reserved.reward_sompi = amount;
+        queued.consumed.reward_sompi = amount;
+        queued.reuse_not_before = queued.reuse_not_before.max(release);
+        if let Some(old) = old {
+            queued.reserved = queued.reserved.checked_add(old.reserved).ok_or(PalwBudgetRefusalV1::Overflow)?;
+            queued.consumed = queued.consumed.checked_add(old.consumed).ok_or(PalwBudgetRefusalV1::Overflow)?;
+            queued.accepted_daa = queued.accepted_daa.min(old.accepted_daa);
+            queued.reuse_not_before = queued.reuse_not_before.max(old.reuse_not_before);
+        }
+        let material = self.material_transfer_plan_v1(*income_id, queue_id, now, amount, false)?;
+        // Every destination and arithmetic check precedes the first journal write.
+        remaining.origin = PalwBudgetOriginV1::NativeIncomePartial;
+        remaining.reserved.reward_sompi = left;
+        self.put_claim(income_id, Some(remaining), j);
+        if let Some(old) = old {
+            self.put_release((old.reuse_not_before, queue_id), false, j);
+        }
+        self.put_claim(&queue_id, Some(queued), j);
+        self.put_release((queued.reuse_not_before, queue_id), true, j);
+        self.apply_material_plan_v1(material, j);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pay_native_income_inner_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        income_id: &Hash64,
+        now: u64,
+        amount: u64,
+        queue_id: Option<Hash64>,
+        source: bool,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let release = now.checked_add(policy.window_daa).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        let row = self
+            .claims
+            .get(income_id)
+            .copied()
+            .filter(|row| {
+                (matches!(row.origin, PalwBudgetOriginV1::NativeIncome | PalwBudgetOriginV1::NativeIncomePartial)
+                    || (source && row.origin == PalwBudgetOriginV1::SourceFee))
+                    && row.live
+                    && row.in_window
+                    && !row.open
+            })
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        let paid = row.consumed.reward_sompi.checked_add(amount).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        if paid > row.reserved.reward_sompi {
+            return Err(PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::Reward });
+        }
+        let queued = match queue_id {
+            Some(id) if id == *income_id => return Err(PalwBudgetRefusalV1::Duplicate),
+            Some(id) => {
+                let old = self.claims.get(&id).copied();
+                if old.is_some_and(|other| {
+                    other.origin != PalwBudgetOriginV1::NativeIncomeQueued || other.bond != row.bond || !other.in_window || other.open
+                }) {
+                    return Err(PalwBudgetRefusalV1::Duplicate);
+                }
+                let mut next = row;
+                next.origin = PalwBudgetOriginV1::NativeIncomeQueued;
+                next.consumed.reward_sompi = paid;
+                next.reuse_not_before = next.reuse_not_before.max(release);
+                if let Some(old) = old {
+                    next.reserved = next.reserved.checked_add(old.reserved).ok_or(PalwBudgetRefusalV1::Overflow)?;
+                    next.consumed = next.consumed.checked_add(old.consumed).ok_or(PalwBudgetRefusalV1::Overflow)?;
+                    next.reuse_not_before = next.reuse_not_before.max(old.reuse_not_before);
+                    next.accepted_daa = next.accepted_daa.min(old.accepted_daa);
+                }
+                Some((id, old, next))
+            }
+            None => None,
+        };
+        let material = match queue_id {
+            Some(id) => self.material_transfer_plan_v1(*income_id, id, now, amount, true)?,
+            None => Vec::new(),
+        };
+        if let Some((id, old, next)) = queued {
+            self.put_release((row.reuse_not_before, *income_id), false, j);
+            self.put_claim(income_id, None, j);
+            if let Some(old) = old {
+                self.put_release((old.reuse_not_before, id), false, j);
+            }
+            self.put_claim(&id, Some(next), j);
+            self.put_release((next.reuse_not_before, id), true, j);
+            let mut bond = *self.bonds.get(&row.bond).expect("native income bond");
+            bond.latest_release_daa = bond.latest_release_daa.max(next.reuse_not_before);
+            self.put_bond(&row.bond, bond, j);
+        } else {
+            self.extend_income_window_v1(income_id, release, j);
+            let mut row = *self.claims.get(income_id).expect("extended native hold");
+            row.consumed.reward_sompi = paid;
+            self.put_claim(income_id, Some(row), j);
+        }
+        self.apply_material_plan_v1(material, j);
+        Ok(())
+    }
+
+    /// Record a funded court award without making recipient capacity a
+    /// condition of conviction. The immutable total is preserved even when it
+    /// exceeds one R window; consumed is exact irrevocably queued progress.
+    /// A repeated receipt is idempotent, and cannot change its amount/payee.
+    pub fn stage_reporter_income_v1(
+        &mut self,
+        award: Hash64,
+        bond: PalwBondKeyV2,
+        now: u64,
+        amount: u64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        if amount == 0 {
+            return Ok(());
+        }
+        if let Some(old) = self.claims.get(&award) {
+            return if old.origin == PalwBudgetOriginV1::DeferredReporterIncome
+                && old.bond == bond && old.accepted_daa == now && old.reserved.reward_sompi == amount
+            { Ok(()) } else { Err(PalwBudgetRefusalV1::Duplicate) };
+        }
+        self.put_claim(&award, Some(PalwBudgetClaimRowV1 {
+            bond, model: None, accepted_daa: now, reuse_not_before: 0,
+            reserved: PalwBudgetVectorV1 { reward_sompi: amount, ..PalwBudgetVectorV1::ZERO },
+            consumed: PalwBudgetVectorV1::ZERO,
+            origin: PalwBudgetOriginV1::DeferredReporterIncome,
+            open: false, live: true, in_window: false, liability_sompi: 0,
+        }), j);
+        Ok(())
+    }
+
+    /// Redeem an exact funded tranche into a unique physical payout receipt.
+    /// No Q/B/F/T credit is created. Zero capacity is a reversible deferral,
+    /// and every positive tranche starts W only at actual coinbase payment.
+    #[allow(clippy::too_many_arguments)]
+    pub fn redeem_reporter_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        award: &Hash64,
+        now: u64,
+        queue_id: Hash64,
+        maximum_tranche: u64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<u64, PalwBudgetRefusalV1> {
+        let mut debt = self.claims.get(award).copied().filter(|row| {
+            row.origin == PalwBudgetOriginV1::DeferredReporterIncome && row.live && !row.open && !row.in_window
+        }).ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        let mut bond = self.bonds.get(&debt.bond).copied().unwrap_or_default();
+        let remaining = debt.reserved.reward_sompi.checked_sub(debt.consumed.reward_sompi)
+            .ok_or(PalwBudgetRefusalV1::Overflow)?;
+        let capacity = if self.has_unattributed_income_v1() { 0 } else {
+            palw_bond_budget_caps_v1(policy, capital).reward_sompi.saturating_sub(bond.window.reward_sompi)
+        };
+        let amount = remaining.min(capacity).min(maximum_tranche);
+        if amount == 0 { return Ok(0); }
+        if self.claims.contains_key(&queue_id) { return Err(PalwBudgetRefusalV1::Duplicate); }
+        let release = now.checked_add(policy.window_daa).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        let vector = PalwBudgetVectorV1 { reward_sompi: amount, ..PalwBudgetVectorV1::ZERO };
+        bond.window = bond.window.checked_add(vector).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        bond.latest_release_daa = u64::MAX;
+        let material = self.material_transfer_plan_v1(*award, queue_id, now, amount, amount == remaining)?;
+        debt.consumed.reward_sompi += amount; // bounded by immutable remaining above
+        self.put_claim(award, Some(debt), j);
+        self.put_claim(&queue_id, Some(PalwBudgetClaimRowV1 {
+            bond: debt.bond, model: None, accepted_daa: now, reuse_not_before: release,
+            reserved: vector, consumed: vector, origin: PalwBudgetOriginV1::NativeIncomeQueued,
+            open: false, live: true, in_window: true, liability_sompi: 0,
+        }), j);
+        self.put_release((release, queue_id), true, j);
+        self.put_bond(&debt.bond, bond, j);
+        self.apply_material_plan_v1(material, j);
+        Ok(amount)
+    }
+
+    /// The native fold drained the actual queue credit into this block's
+    /// validated coinbase. Sparse DAA jumps use this actual payment clock.
+    pub fn confirm_native_income_payment_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        income_id: &Hash64,
+        now: u64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let release = now.checked_add(policy.window_daa).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        self.claims
+            .get(income_id)
+            .filter(|row| row.origin == PalwBudgetOriginV1::NativeIncomeQueued && row.live)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        let material = self.material_payment_plan_v1(*income_id, now, policy.window_daa)?;
+        self.extend_income_window_v1(income_id, release, j);
+        self.forget(income_id, j);
+        self.apply_material_plan_v1(material, j);
+        Ok(())
+    }
+
+    /// Cancel only the unpaid remainder after void/forfeiture. Already paid
+    /// income and its window remain; cancellation never recovers quota early.
+    pub fn cancel_native_income_v1(&mut self, income_id: &Hash64, j: &mut Vec<PalwBudgetWriteV1>) -> Result<(), PalwBudgetRefusalV1> {
+        self.claims
+            .get(income_id)
+            .filter(|row| matches!(row.origin, PalwBudgetOriginV1::NativeIncome | PalwBudgetOriginV1::NativeIncomePartial) && row.live && !row.open)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        self.forget(income_id, j);
+        self.cancel_material_pending_v1(*income_id, j);
+        Ok(())
+    }
+
+    /// Reserve a fixed, authenticated source-fee promise before its opt-in.
+    /// The monetary right creates no open computation, block or weight credit.
+    /// Its R remains occupied while unpaid and at least through H + W.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_source_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        income_id: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+        liability_until: u64,
+        fee: u64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        self.hold_source_income_v1(policy, capital, income_id, bond, accepted_daa, liability_until, fee, true, j)
+    }
+
+    /// Migrate an authenticated pre-fence fee promise. Existing signed rights
+    /// are counted even when they fill or exceed the new R cap; no future
+    /// admission may use that occupied room. Pending income survives old W/H.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn seed_source_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        income_id: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+        liability_until: u64,
+        fee: u64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        self.hold_source_income_v1(policy, capital, income_id, bond, accepted_daa, liability_until, fee, false, j)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn hold_source_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        income_id: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+        liability_until: u64,
+        fee: u64,
+        check_cap: bool,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        if fee == 0 || liability_until < accepted_daa {
+            return Err(PalwBudgetRefusalV1::Assignment("source income requires a funded fee and a future liability"));
+        }
+        let release = liability_until.checked_add(policy.window_daa).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        if self.claims.contains_key(&income_id) {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        let row = self.bonds.get(&bond).copied().unwrap_or_default();
+        if row.open_claims == u32::MAX {
+            return Err(PalwBudgetRefusalV1::Overflow);
+        }
+        let held = row.window.reward_sompi.checked_add(fee).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        if check_cap && (self.has_unattributed_income_v1() || held > palw_bond_budget_caps_v1(policy, capital).reward_sompi) {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
+        self.reserve(
+            policy,
+            capital,
+            income_id,
+            bond,
+            None,
+            accepted_daa,
+            PalwBudgetVectorV1 { reward_sompi: fee, ..PalwBudgetVectorV1::ZERO },
+            PalwBudgetOriginV1::SourceFee,
+            false,
+            j,
+        )?;
+        self.close(&income_id, j);
+        self.extend_income_window_v1(&income_id, release, j);
+        let mut row = *self.bonds.get(&bond).expect("pending source income bond");
+        row.latest_release_daa = u64::MAX;
+        self.put_bond(&bond, row, j);
+        Ok(())
+    }
+
+    fn extend_income_window_v1(&mut self, income_id: &Hash64, release: u64, j: &mut Vec<PalwBudgetWriteV1>) {
+        let mut claim = *self.claims.get(income_id).expect("a checked income row");
+        if release > claim.reuse_not_before {
+            self.put_release((claim.reuse_not_before, *income_id), false, j);
+            claim.reuse_not_before = release;
+            self.put_claim(income_id, Some(claim), j);
+            self.put_release((release, *income_id), true, j);
+            let mut bond = self.bonds.get(&claim.bond).copied().expect("an in-window income bond");
+            bond.latest_release_daa = bond.latest_release_daa.max(release);
+            self.put_bond(&claim.bond, bond, j);
+        }
+    }
+
+    /// Pay exactly the promised fixed source fee, once, strictly after its
+    /// inclusive liability H. The fee stays in R for W after actual payment.
+    pub fn settle_source_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        income_id: &Hash64,
+        liability_until: u64,
+        now: u64,
+        fee: u64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let release = now.checked_add(policy.window_daa).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        let mut claim = self
+            .claims
+            .get(income_id)
+            .copied()
+            .filter(|claim| claim.origin == PalwBudgetOriginV1::SourceFee && claim.live && claim.in_window && !claim.open)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if now <= liability_until || fee == 0 || fee != claim.reserved.reward_sompi || claim.consumed.reward_sompi != 0 {
+            return Err(PalwBudgetRefusalV1::Assignment("source fee has not matured or differs from its funded promise"));
+        }
+        if self.material_income.contains_key(&material_pending_id_v1(*income_id)) {
+            return Err(PalwBudgetRefusalV1::Assignment("rooted material source income requires its actual native queue"));
+        }
+        self.extend_income_window_v1(income_id, release, j);
+        claim = *self.claims.get(income_id).expect("extended checked income");
+        claim.consumed.reward_sompi = fee;
+        self.put_claim(income_id, Some(claim), j);
+        self.forget(income_id, j);
+        Ok(())
+    }
+
+    /// A signed source promise became an irrevocable native queue credit.
+    /// Logical `Paid` is not yet a coinbase payment: retain the same maximum
+    /// until the common queue drain confirms actual payment + W. Preflight
+    /// includes the destination aggregate, so any refusal writes nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn queue_source_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        income_id: &Hash64,
+        liability_until: u64,
+        now: u64,
+        fee: u64,
+        queue_id: Hash64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let claim = self
+            .claims
+            .get(income_id)
+            .filter(|row| row.origin == PalwBudgetOriginV1::SourceFee && row.live && row.in_window && !row.open)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if now <= liability_until || fee == 0 || fee != claim.reserved.reward_sompi || claim.consumed.reward_sompi != 0 {
+            return Err(PalwBudgetRefusalV1::Assignment("source queue credit has not matured or differs from its funded promise"));
+        }
+        self.pay_native_income_inner_v1(policy, income_id, now, fee, Some(queue_id), true, j)
+    }
+
+    /// Cancel the unpaid right after its native funding is refunded. Window
+    /// occupancy is retained; a refund is not a quota recovery.
+    pub fn cancel_source_income_v1(&mut self, income_id: &Hash64, j: &mut Vec<PalwBudgetWriteV1>) -> Result<(), PalwBudgetRefusalV1> {
+        let row = self
+            .claims
+            .get(income_id)
+            .filter(|claim| claim.origin == PalwBudgetOriginV1::SourceFee && claim.live && claim.consumed.reward_sompi == 0)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        debug_assert!(!row.open && row.in_window);
+        self.forget(income_id, j);
+        self.cancel_material_pending_v1(*income_id, j);
         Ok(())
     }
 
@@ -1345,6 +2396,9 @@ impl PalwBondBudgetStateV1 {
         let mut reservation = palw_bond_budget_reservation_v1(policy, ask);
         if let (Some(m), Some(_)) = (model, self.header.allocation) {
             reservation.reward_sompi = reservation.reward_sompi.min(self.model_available(&m));
+        }
+        if reservation.reward_sompi > 0 && self.has_unattributed_income_v1() {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
         }
         palw_bond_budget_admit_v1(policy, capital, self.bonds.get(&bond), &reservation, ask.liability_sompi)?;
         Ok(reservation)
@@ -1472,6 +2526,9 @@ impl PalwBondBudgetStateV1 {
 
     /// **The V2 claim left the state** (retirement): close it if still open, and drop its row once it is out of the window too.
     pub fn forget(&mut self, claim_id: &Hash64, j: &mut Vec<PalwBudgetWriteV1>) {
+        // Ordinary claim retirement cannot erase immutable funded reporter debt
+        // or its completed receipt (which prevents award reclassification).
+        if self.claims.get(claim_id).is_some_and(|row| row.origin == PalwBudgetOriginV1::DeferredReporterIncome) { return; }
         self.close(claim_id, j);
         let Some(mut claim) = self.claims.get(claim_id).copied().filter(|c| c.live) else { return };
         claim.live = false;
@@ -1487,8 +2544,41 @@ impl PalwBondBudgetStateV1 {
     /// in-window reservations and its open count the number of its open rows; every in-window row has its release and no other release
     /// exists; consumption within reservation; a model's reservations this epoch within its availability base.
     pub fn check_consistency(&self) -> Result<(), &'static str> {
+        self.material_consistent_v1()?;
+        self.consumer_consistent_v1()?;
+        if !matches!(self.header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2 | PALW_BOND_BUDGET_STATE_VERSION_V3 | PALW_BOND_BUDGET_STATE_VERSION_V4)
+            || (self.header.version == PALW_BOND_BUDGET_STATE_VERSION_V1 && !self.reporter_income.is_empty()) {
+            return Err("invalid reporter monetary state version");
+        }
+        if self.unattributed_income != self.reporter_income.values().filter(|row| row.recipient.is_none()).count() {
+            return Err("the unattributed monetary index disagrees with rooted liabilities");
+        }
+        let mut pending_reporters = BTreeMap::new();
+        for row in self.reporter_income.values() {
+            if row.awarded_daa.is_none() && let Some(bond) = row.recipient {
+                *pending_reporters.entry(bond).or_insert(0usize) += 1;
+            }
+            if !row.valid() {
+                return Err("invalid reporter income binding or legacy physical queue liability");
+            }
+        }
+        if pending_reporters != self.pending_reporters { return Err("the pending reporter withdrawal index disagrees with rooted bindings"); }
         let mut windows: BTreeMap<PalwBondKeyV2, PalwBudgetBondRowV1> = BTreeMap::new();
+        let mut deferred = BTreeMap::new();
+        let mut awards = BTreeSet::new();
         for (id, claim) in &self.claims {
+            if claim.origin == PalwBudgetOriginV1::DeferredReporterIncome {
+                if claim.open || claim.in_window || !claim.live || claim.model.is_some()
+                    || claim.reuse_not_before != 0 || claim.reserved.reward_sompi == 0
+                    || claim.reserved != (PalwBudgetVectorV1 { reward_sompi: claim.reserved.reward_sompi, ..PalwBudgetVectorV1::ZERO })
+                    || claim.consumed != (PalwBudgetVectorV1 { reward_sompi: claim.consumed.reward_sompi, ..PalwBudgetVectorV1::ZERO }) {
+                    return Err("a deferred reporter award violates its immutable monetary schema");
+                }
+                if Self::unpaid_reporter_debt(claim) {
+                    *deferred.entry(claim.bond).or_insert(0usize) += 1;
+                    awards.insert(*id);
+                }
+            }
             if !claim.live && !claim.in_window {
                 return Err("a row that is neither live nor in the window was kept");
             }
@@ -1508,6 +2598,9 @@ impl PalwBondBudgetStateV1 {
                 row.open_liability_sompi += claim.liability_sompi;
                 row.open_final_weight += claim.reserved.final_weight;
             }
+        }
+        if deferred != self.deferred_by_bond || awards != self.deferred_awards {
+            return Err("the deferred reporter withdrawal index disagrees with its rooted debt");
         }
         if self.releases.iter().any(|(_, id)| !self.claims.contains_key(id)) {
             return Err("a release names no row");
@@ -1770,6 +2863,769 @@ mod tests {
         fn below(&mut self, n: u64) -> u64 {
             self.next() % n.max(1)
         }
+    }
+
+    #[test]
+    fn funded_reporter_award_above_one_window_pays_exact_tranches_across_restart_and_reorg() {
+        for w in [280, 436] {
+            let mut p = policy(1, false);
+            p.window_daa = w;
+            let capital = 1_000 * BILI;
+            let recipient = bond(0);
+            let total = 125 * BILI;
+            let mut s = PalwBondBudgetStateV1::new(10, &p);
+            let initial = s.clone();
+            // The derived index adds no serialized field to dormant carriage.
+            assert_eq!(enc(&s), enc(&(s.header.clone(), s.bonds.clone(), s.claims.clone(),
+                s.releases.clone(), s.assignments.clone(), s.models.clone(), s.liability_releases.clone())));
+            let mut j = Vec::new();
+            s.reserve_income_v1(&p, capital, h(100), recipient, 10, 50 * BILI, 50 * BILI,
+                PalwBudgetOriginV1::MarketFee, &mut j).unwrap();
+            s.stage_reporter_income_v1(h(101), recipient, 20, total, &mut j).unwrap();
+            let full = (s.clone(), j.len());
+            assert_eq!(s.redeem_reporter_income_v1(&p, capital, &h(101), 20, h(102), u64::MAX, &mut j).unwrap(), 0);
+            assert_eq!((s.clone(), j.len()), full, "R-full conviction retains exact debt without cash writes");
+            s.forget(&h(101), &mut j);
+            assert_eq!(s.claim_row(&h(101)).unwrap().reserved.reward_sompi, total);
+            assert!(s.window_holds(&recipient, u64::MAX), "unpaid debt keeps the authenticated payee bond");
+            s = borsh::from_slice(&enc(&s)).unwrap();
+            assert!(s.window_holds(&recipient, u64::MAX), "restart reconstructs withdrawal liability");
+            s.release_due(10 + w, &mut j);
+            let first = s.redeem_reporter_income_v1(&p, capital, &h(101), 10 + w, h(102), u64::MAX, &mut j).unwrap();
+            assert_eq!(first, 50 * BILI);
+            assert_eq!(s.bond_row(&recipient).unwrap().window, PalwBudgetVectorV1 { reward_sompi: first, ..PalwBudgetVectorV1::ZERO });
+            s.release_due(10 + 3 * w, &mut j);
+            assert!(s.claim_row(&h(102)).unwrap().live, "an unpaid native queue cannot expire on logical W");
+            let paid_first = 11 + 3 * w;
+            s.confirm_native_income_payment_v1(&p, &h(102), paid_first, &mut j).unwrap();
+            let before_second = s.clone();
+            let before_second_j = j.len();
+            s.release_due(paid_first + w, &mut j);
+            let second = s.redeem_reporter_income_v1(&p, capital, &h(101), paid_first + w, h(103), 30 * BILI, &mut j).unwrap();
+            assert_eq!(second, 30 * BILI, "the immutable award permits a native queue constrained tranche");
+            s.confirm_native_income_payment_v1(&p, &h(103), paid_first + w + 7, &mut j).unwrap();
+            let second_branch = s.clone();
+            // Reorg only the second payment, retaining the real first payment.
+            let mut reverted = second_branch.clone();
+            for entry in j[before_second_j..].iter().rev() {
+                let PalwBudgetWriteV1::Row { table, key, old, new } = entry else { panic!("only monetary rows") };
+                reverted.apply_row(*table, key, old, new, true).unwrap();
+            }
+            assert_eq!(reverted, before_second);
+            assert_eq!(reverted.claim_row(&h(101)).unwrap().consumed.reward_sompi, first);
+            for entry in &j[before_second_j..] {
+                let PalwBudgetWriteV1::Row { table, key, old, new } = entry else { panic!("only monetary rows") };
+                reverted.apply_row(*table, key, old, new, false).unwrap();
+            }
+            assert_eq!(reverted, second_branch);
+            s = borsh::from_slice(&enc(&reverted)).unwrap();
+            let room = s.redeem_reporter_income_v1(&p, capital, &h(101), paid_first + w + 8, h(104), u64::MAX, &mut j).unwrap();
+            assert_eq!(room, 20 * BILI);
+            s.confirm_native_income_payment_v1(&p, &h(104), paid_first + w + 9, &mut j).unwrap();
+            s.release_due(paid_first + 2 * w + 9, &mut j);
+            let last = s.redeem_reporter_income_v1(&p, capital, &h(101), paid_first + 2 * w + 9, h(105), u64::MAX, &mut j).unwrap();
+            assert_eq!(last, 25 * BILI);
+            assert_eq!(first + second + room + last, total);
+            assert_eq!(s.claim_row(&h(101)).unwrap().reserved.reward_sompi, total);
+            assert_eq!(s.claim_row(&h(101)).unwrap().consumed.reward_sompi, total);
+            assert!(s.window_holds(&recipient, paid_first + 4 * w), "last physical payment has not occurred");
+            s.confirm_native_income_payment_v1(&p, &h(105), paid_first + 4 * w, &mut j).unwrap();
+            s.release_due(paid_first + 5 * w, &mut j);
+            assert!(!s.window_holds(&recipient, paid_first + 5 * w));
+            let complete = (s.clone(), j.len());
+            s.stage_reporter_income_v1(h(101), recipient, 20, total, &mut j).unwrap();
+            assert_eq!(s.redeem_reporter_income_v1(&p, capital, &h(101), paid_first + 6 * w, h(106), u64::MAX, &mut j).unwrap(), 0);
+            assert!(s.stage_reporter_income_v1(h(101), recipient, 20, total + 1, &mut j).is_err());
+            assert_eq!((s.clone(), j.len()), complete, "no second classification, clipped award or excess payment");
+            s.check_consistency().unwrap();
+            let mut replay = initial;
+            for entry in &j {
+                let PalwBudgetWriteV1::Row { table, key, old, new } = entry else { panic!("only monetary rows") };
+                replay.apply_row(*table, key, old, new, false).unwrap();
+            }
+            assert_eq!(replay, s);
+            replay.check_consistency().unwrap();
+        }
+    }
+
+    #[test]
+    fn reporter_monetary_v2_freezes_payee_and_quarantines_legacy_cash_until_physical_pay_plus_w() {
+        fn replay_write(s: &mut PalwBondBudgetStateV1, write: &PalwBudgetWriteV1, revert: bool) {
+            match write {
+                PalwBudgetWriteV1::Header { old, new } => {
+                    let (expected, install) = if revert { (new, old) } else { (old, new) };
+                    assert_eq!(Some(&s.header), expected.as_ref());
+                    s.header = install.clone().unwrap();
+                }
+                PalwBudgetWriteV1::Row { table, key, old, new } => s.apply_row(*table, key, old, new, revert).unwrap(),
+            }
+        }
+        for w in [280, 436] {
+            let mut p = policy(1, false);
+            p.window_daa = w;
+            let capital = 1_000 * BILI;
+            let mut s = PalwBondBudgetStateV1::new(10, &p);
+            let initial = s.clone();
+            let mut j = Vec::new();
+            let binding = PalwReporterIncomeBindingV1 { recipient: Some(bond(1)), payload: h(91), maximum: 125 * BILI,
+                accepted_daa: 20, awarded_daa: None, queue: None, paid_daa: None, historical_boundary: None };
+            s.bind_reporter_income_v1(h(500), binding, &mut j).unwrap();
+            assert_eq!(s.header.version, PALW_BOND_BUDGET_STATE_VERSION_V2);
+            assert!(s.window_holds(&bond(1), u64::MAX), "the named full entitlement keeps its actual recipient collectible");
+            // Earlier valid reveal order is checked by the native consumer. Its
+            // still-unawarded winner may improve, but an awarded right cannot.
+            let winner = PalwReporterIncomeBindingV1 { recipient: Some(bond(2)), payload: h(92), ..binding };
+            s.bind_reporter_income_v1(h(500), winner, &mut j).unwrap();
+            assert!(!s.window_holds(&bond(1), u64::MAX));
+            assert!(s.window_holds(&bond(2), u64::MAX));
+            s.stage_reporter_income_v1(h(500), bond(2), 21, winner.maximum, &mut j).unwrap();
+            s.mark_reporter_awarded_v1(h(500), 21, &mut j).unwrap();
+            let awarded = (s.clone(), j.len());
+            assert!(s.bind_reporter_income_v1(h(500), binding, &mut j).is_err());
+            assert_eq!((s.clone(), j.len()), awarded, "awarded actual recipient, payout and total are immutable");
+            let legacy = PalwReporterIncomeBindingV1 { recipient: None, payload: h(92), maximum: 9 * BILI,
+                accepted_daa: 30, awarded_daa: None, queue: Some(h(501)), paid_daa: None, historical_boundary: None };
+            s.bind_reporter_income_v1(h(502), legacy, &mut j).unwrap();
+            let history = PalwReporterIncomeBindingV1 { recipient: None, payload: h(0), maximum: 0,
+                accepted_daa: 30, awarded_daa: None, queue: None, paid_daa: None, historical_boundary: Some((9 * u128::from(BILI), 30 + w)) };
+            s.bind_reporter_income_v1(h(503), history, &mut j).unwrap();
+            assert!(s.has_unattributed_income_v1());
+            let held = (s.clone(), j.len());
+            let refusal = PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward };
+            assert_eq!(s.reserve_income_v1(&p, capital, h(510), bond(3), 31, 1, 1, PalwBudgetOriginV1::MarketFee, &mut j), Err(refusal.clone()));
+            assert_eq!(s.reserve_source_income_v1(&p, capital, h(511), bond(3), 31, 100, 1, &mut j), Err(refusal.clone()));
+            assert_eq!(s.hold_native_income_v1(&p, capital, h(512), bond(3), 31, 100, 1, &[], true, &mut j), Err(refusal.clone()));
+            assert_eq!(s.preview_claim_v1(&p, capital, bond(3), None, PalwBudgetAskV1 { reward_sompi: 1, ..Default::default() }), Err(refusal));
+            assert_eq!(s.redeem_reporter_income_v1(&p, capital, &h(500), 31, h(513), u64::MAX, &mut j).unwrap(), 0);
+            assert_eq!((s.clone(), j.len()), held, "quarantine denies only new R, never consumes debt or any budget dimension");
+            s = borsh::from_slice(&enc(&s)).unwrap();
+            assert!(s.has_unattributed_income_v1());
+            assert!(s.window_holds(&bond(2), u64::MAX));
+            s.release_reporter_income_v1(&p, 30 + w, &mut j);
+            assert!(!s.reporter_income.contains_key(&h(503)), "the history uncertainty boundary is first fence + W");
+            assert!(s.has_unattributed_income_v1(), "a still-unpaid exact queue cannot expire with the history boundary");
+            s.release_reporter_income_v1(&p, 30 + 10 * w, &mut j);
+            assert!(s.has_unattributed_income_v1());
+            let paid = 31 + 10 * w;
+            s.confirm_unattributed_payment_v1(h(502), paid, &mut j).unwrap();
+            let paid_state = s.clone();
+            s.release_reporter_income_v1(&p, paid + w - 1, &mut j);
+            assert!(s.has_unattributed_income_v1());
+            s.release_reporter_income_v1(&p, paid + w, &mut j);
+            assert!(!s.has_unattributed_income_v1());
+            assert_eq!(s.redeem_reporter_income_v1(&p, capital, &h(500), paid + w, h(514), u64::MAX, &mut j).unwrap(), 50 * BILI);
+            assert_eq!(s.reporter_income[&h(500)].payload, h(92), "the debt redeems the frozen winner, never a matching address's owner");
+            s.check_consistency().unwrap();
+            assert_eq!(borsh::from_slice::<PalwBondBudgetStateV1>(&enc(&paid_state)).unwrap(), paid_state);
+            let mut different = s.clone();
+            different.reporter_income.get_mut(&h(500)).unwrap().payload = h(93);
+            assert_ne!(different.root_parts(), s.root_parts(), "table6 frozen payload is rooted even though v1's five-table API is unchanged");
+            let mut replay = initial.clone();
+            for write in &j { replay_write(&mut replay, write, false); }
+            assert_eq!(replay, s);
+            for write in j.iter().rev() { replay_write(&mut replay, write, true); }
+            assert_eq!(replay, initial, "reorg restores the original v1 schema and exact wire bytes");
+            replay.check_consistency().unwrap();
+        }
+    }
+
+    #[test]
+    fn source_fee_reservation_survives_h_and_sparse_ticks_then_counts_w_after_actual_payment() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let fee = 50 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let empty = s.clone();
+        let mut j = Vec::new();
+        s.reserve_source_income_v1(&p, capital, h(50), bond(0), 10, 500, fee, &mut j).unwrap();
+        let row = s.claim_row(&h(50)).unwrap();
+        assert!(!row.open && row.live && row.in_window);
+        assert_eq!(row.reuse_not_before, 600);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().open_claims, 0);
+        s.release_due(110, &mut j);
+        s.release_due(600, &mut j);
+        s.release_due(900, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window, PalwBudgetVectorV1 { reward_sompi: fee, ..PalwBudgetVectorV1::ZERO });
+        let before = (s.root_parts(), j.len());
+        assert!(s.reserve_income_v1(&p, capital, h(51), bond(0), 900, 1, 1, PalwBudgetOriginV1::MarketFee, &mut j).is_err());
+        assert!(s.settle_source_income_v1(&p, &h(50), 500, 500, fee, &mut j).is_err(), "H is inclusive");
+        assert!(s.settle_source_income_v1(&p, &h(50), 500, 900, fee - 1, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before, "every refusal precedes its journal writes");
+        s.settle_source_income_v1(&p, &h(50), 500, 900, fee, &mut j).unwrap();
+        assert_eq!(s.claim_row(&h(50)).unwrap().consumed.reward_sompi, fee);
+        assert_eq!(s.claim_row(&h(50)).unwrap().reuse_not_before, 1_000);
+        let paid = (s.root_parts(), j.len());
+        assert!(s.settle_source_income_v1(&p, &h(50), 500, 901, fee, &mut j).is_err());
+        assert!(s.cancel_source_income_v1(&h(50), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), paid, "a paid right cannot pay or refund again");
+        s.release_due(999, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, fee);
+        s.release_due(1_000, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none() && s.claim_row(&h(50)).is_none());
+        s.check_consistency().unwrap();
+        let mut replay = empty.clone();
+        for entry in &j {
+            match entry {
+                PalwBudgetWriteV1::Row { table, key, old, new } => replay.apply_row(*table, key, old, new, false).unwrap(),
+                PalwBudgetWriteV1::Header { .. } => panic!("income does not alter the policy header"),
+            }
+        }
+        assert_eq!(replay.root_parts(), s.root_parts());
+        for entry in j.iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), empty.root_parts(), "undo restores the original empty native ledger");
+    }
+
+    #[test]
+    fn native_income_reclassifies_kernel_r_without_q_b_f_t_or_double_charge_and_pays_after_sparse_jump() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let empty = s.clone();
+        let mut j = Vec::new();
+        let kernel = PalwBudgetVectorV1 { claims: 1, reward_sompi: 40 * BILI, ..PalwBudgetVectorV1::ZERO };
+        s.reserve(&p, capital, h(70), bond(0), None, 10, kernel, PalwBudgetOriginV1::KernelRoute, true, &mut j).unwrap();
+        s.hold_native_income_v1(&p, capital, h(71), bond(0), 20, 500, 45 * BILI, &[h(70)], true, &mut j).unwrap();
+        assert_eq!(s.claim_row(&h(70)).unwrap().reserved.reward_sompi, 0);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window, PalwBudgetVectorV1 { reward_sompi: 45 * BILI, ..kernel });
+        assert_eq!(s.bond_row(&bond(0)).unwrap().open_claims, 1);
+        s.close(&h(70), &mut j);
+        s.forget(&h(70), &mut j);
+        s.release_due(900, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window, PalwBudgetVectorV1 { reward_sompi: 45 * BILI, ..PalwBudgetVectorV1::ZERO });
+        assert!(s.window_holds(&bond(0), 900), "unpaid income still holds collateral past its initial H+W");
+        let before = (s.root_parts(), j.len());
+        assert!(s.hold_native_income_v1(&p, capital, h(71), bond(0), 900, 1_000, 51 * BILI, &[], true, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before, "refusal reclassifies and reserves nothing");
+        s.pay_native_income_v1(&p, &h(71), 901, 5 * BILI, h(72), false, &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(71), 902, 35 * BILI, h(72), true, &mut j).unwrap();
+        assert!(s.claim_row(&h(71)).is_none());
+        assert_eq!(s.claim_row(&h(72)).unwrap().origin, PalwBudgetOriginV1::NativeIncomeQueued);
+        s.release_due(2_000, &mut j);
+        assert!(s.window_holds(&bond(0), 2_000), "queued income also keeps the physical withdrawal gate closed");
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 45 * BILI, "queued money cannot expire before actual payment");
+        s.confirm_native_income_payment_v1(&p, &h(72), 2_000, &mut j).unwrap();
+        assert_eq!(s.claim_row(&h(72)).unwrap().reuse_not_before, 2_100);
+        assert!(s.pay_native_income_v1(&p, &h(71), 2_000, 1, h(72), false, &mut j).is_err());
+        assert!(s.confirm_native_income_payment_v1(&p, &h(72), 2_001, &mut j).is_err());
+        s.check_consistency().unwrap();
+        s.release_due(2_100, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none());
+        let mut replay = empty.clone();
+        for entry in &j {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), s.root_parts());
+        for entry in j.iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), empty.root_parts());
+    }
+
+    #[test]
+    fn round_candidates_and_reservations_agree_when_legacy_money_exceeds_the_new_cap() {
+        let mut p = policy(1, false);
+        p.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1 };
+        let capital = 1_000 * BILI;
+        let caps = palw_bond_budget_caps_v1(&p, capital);
+        for dim in [PalwBudgetDimV1::Claims, PalwBudgetDimV1::BlockUnits, PalwBudgetDimV1::Reward,
+            PalwBudgetDimV1::FinalWeight, PalwBudgetDimV1::RoundRights] {
+            let mut s = PalwBondBudgetStateV1::new(10, &p);
+            let mut j = Vec::new();
+            let mut old = PalwBudgetVectorV1::ZERO;
+            match dim {
+                PalwBudgetDimV1::Claims => old.claims = caps.claims + 1,
+                PalwBudgetDimV1::BlockUnits => old.block_units = caps.block_units + 1,
+                PalwBudgetDimV1::Reward => old.reward_sompi = caps.reward_sompi + 1,
+                PalwBudgetDimV1::FinalWeight => old.final_weight = caps.final_weight + 1,
+                PalwBudgetDimV1::RoundRights => old.round_rights = caps.round_rights + 1,
+            }
+            s.reserve(&p, capital, h(64), bond(0), None, 10, old, PalwBudgetOriginV1::Legacy, false, &mut j).unwrap();
+            assert_eq!(palw_round_rights_remaining_v1(&p, capital, s.bond_row(&bond(0))), 0, "overfull {dim:?}");
+            let before = (s.root_parts(), j.len());
+            assert!(matches!(s.reserve_round_rights_v1(&p, capital, 1, bond(0), 11, 1, &mut j),
+                Err(PalwBudgetRefusalV1::Exhausted { .. })));
+            assert_eq!((s.root_parts(), j.len()), before);
+            s.reserve_round_rights_v1(&p, capital, 1, bond(0), 11, 0, &mut j).unwrap();
+            assert_eq!((s.root_parts(), j.len()), before, "the zero candidate draw preserves accepted old rights");
+        }
+    }
+
+    #[test]
+    fn partial_native_funds_keep_each_fd_fe_queue_until_its_own_payment_clock_in_both_orders() {
+        // The core engine receives exact native queue identities. These prefix
+        // variants model FD kernel fees and FE native funds in either sort order;
+        // actual pre-object draining is covered separately by the fold fixture.
+        for (first, last) in [(h(0xfe), h(0xfd)), (h(0xfd), h(0xfe))] {
+            let p = policy(1, false);
+            let capital = 1_000 * BILI;
+            let mut s = PalwBondBudgetStateV1::new(10, &p);
+            let initial = s.clone();
+            let mut j = Vec::new();
+            s.hold_native_income_v1(&p, capital, h(68), bond(0), 10, 500, 50 * BILI, &[], true, &mut j).unwrap();
+            s.pay_native_income_v1(&p, &h(68), 501, 10 * BILI, first, false, &mut j).unwrap();
+            let remainder = s.claim_row(&h(68)).unwrap();
+            assert_eq!((remainder.origin, remainder.reserved.reward_sompi, remainder.consumed.reward_sompi),
+                (PalwBudgetOriginV1::NativeIncomePartial, 40 * BILI, 0));
+            assert_eq!(s.claim_row(&first).unwrap().reserved.reward_sompi, 10 * BILI);
+            let before = (s.root_parts(), j.len());
+            assert!(s.hold_native_income_v1(&p, capital, h(69), bond(0), 502, 600, 40 * BILI, &[h(68)], true, &mut j).is_err());
+            assert_eq!((s.root_parts(), j.len()), before, "a partly paid right cannot become another EXEC entitlement");
+            s.pay_native_income_v1(&p, &h(68), 503, 20 * BILI, last, true, &mut j).unwrap();
+            assert!(s.claim_row(&h(68)).is_none());
+            assert_eq!((s.claim_row(&last).unwrap().reserved.reward_sompi, s.claim_row(&last).unwrap().consumed.reward_sompi),
+                (40 * BILI, 20 * BILI));
+            assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
+            // The last-created queue drains first. Its W must not free the
+            // earlier queue that is still actual unpaid money.
+            s.confirm_native_income_payment_v1(&p, &last, 1_000, &mut j).unwrap();
+            s.release_due(1_100, &mut j);
+            assert!(s.claim_row(&last).is_none());
+            assert!(s.claim_row(&first).unwrap().live);
+            assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 10 * BILI);
+            s.release_due(2_000, &mut j);
+            assert!(s.window_holds(&bond(0), 2_000));
+            s.confirm_native_income_payment_v1(&p, &first, 3_000, &mut j).unwrap();
+            s.release_due(3_099, &mut j);
+            assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 10 * BILI);
+            s.release_due(3_100, &mut j);
+            assert!(s.bond_row(&bond(0)).is_none());
+            s.check_consistency().unwrap();
+            let mut replay = initial.clone();
+            for entry in &j {
+                if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                    replay.apply_row(*table, key, old, new, false).unwrap();
+                }
+            }
+            assert_eq!(replay.root_parts(), s.root_parts());
+            for entry in j.iter().rev() {
+                if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                    replay.apply_row(*table, key, old, new, true).unwrap();
+                }
+            }
+            assert_eq!(replay.root_parts(), initial.root_parts());
+        }
+    }
+
+    #[test]
+    fn partial_native_cash_survives_remainder_cancellation_and_branch_replay_without_second_payment() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        s.hold_native_income_v1(&p, capital, h(65), bond(0), 10, 500, 50 * BILI, &[], true, &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(65), 501, 10 * BILI, h(66), false, &mut j).unwrap();
+        s.confirm_native_income_payment_v1(&p, &h(66), 600, &mut j).unwrap();
+        let paid_branch = s.clone();
+        let start = j.len();
+        // This is the monetary cancellation primitive used by post-Final
+        // conviction. It may cancel only the unpaid 40, not the 10 actual cash.
+        s.cancel_native_income_v1(&h(65), &mut j).unwrap();
+        assert!(!s.claim_row(&h(65)).unwrap().live);
+        assert!(!s.claim_row(&h(66)).unwrap().live);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
+        let cancelled = s.root_parts();
+        let before = (cancelled, j.len());
+        assert!(s.pay_native_income_v1(&p, &h(65), 601, 40 * BILI, h(67), true, &mut j).is_err());
+        assert!(s.hold_native_income_v1(&p, capital, h(65), bond(0), 601, 900, 40 * BILI, &[], true, &mut j).is_err());
+        assert!(s.confirm_native_income_payment_v1(&p, &h(66), 601, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before, "neither unpaid revival nor duplicate paid cash is admitted");
+        // A reorg that keeps the actual payment but removes the later
+        // conviction restores only its legitimate remaining entitlement.
+        for entry in j[start..].iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                s.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(s.root_parts(), paid_branch.root_parts());
+        assert!(!s.claim_row(&h(66)).unwrap().live, "the retained physical payment never becomes unpaid again");
+        for entry in &j[start..] {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                s.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(s.root_parts(), cancelled);
+        s.release_due(700, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none());
+        s.check_consistency().unwrap();
+    }
+
+    #[test]
+    fn standalone_income_transfers_to_exec_once_without_a_second_payment_or_q_charge() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let empty = s.clone();
+        let mut j = Vec::new();
+        s.reserve(
+            &p,
+            capital,
+            h(78),
+            bond(0),
+            None,
+            10,
+            PalwBudgetVectorV1 { claims: 1, reward_sompi: 20 * BILI, ..PalwBudgetVectorV1::ZERO },
+            PalwBudgetOriginV1::KernelRoute,
+            true,
+            &mut j,
+        )
+        .unwrap();
+        s.hold_native_income_v1(&p, capital, h(79), bond(0), 10, 500, 20 * BILI, &[h(78)], false, &mut j).unwrap();
+        s.release_due(700, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 20 * BILI);
+        s.hold_native_income_v1(&p, capital, h(80), bond(0), 701, 1_000, 25 * BILI, &[h(79)], true, &mut j).unwrap();
+        assert!(s.claim_row(&h(79)).is_none(), "no remaining standalone payment identity");
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 25 * BILI);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().open_claims, 1, "only the actual claim owns Q");
+        assert!(s.pay_native_income_v1(&p, &h(79), 1_001, 20 * BILI, h(81), true, &mut j).is_err());
+        s.pay_native_income_v1(&p, &h(80), 1_001, 25 * BILI, h(81), true, &mut j).unwrap();
+        s.confirm_native_income_payment_v1(&p, &h(81), 1_002, &mut j).unwrap();
+        s.close(&h(78), &mut j);
+        s.forget(&h(78), &mut j);
+        s.check_consistency().unwrap();
+        let mut replay = empty.clone();
+        for entry in &j {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), s.root_parts());
+        for entry in j.iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), empty.root_parts());
+    }
+
+    #[test]
+    fn native_income_coalesces_the_same_queue_recipient_across_actual_payments_without_freeing_r() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        s.hold_native_income_v1(&p, capital, h(75), bond(0), 10, 20, 10 * BILI, &[], true, &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(75), 21, 8 * BILI, h(76), true, &mut j).unwrap();
+        s.confirm_native_income_payment_v1(&p, &h(76), 22, &mut j).unwrap();
+        s.hold_native_income_v1(&p, capital, h(77), bond(0), 23, 30, 20 * BILI, &[], true, &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(77), 31, 17 * BILI, h(76), true, &mut j).unwrap();
+        let coalesced = s.claim_row(&h(76)).unwrap();
+        assert_eq!((coalesced.reserved.reward_sompi, coalesced.consumed.reward_sompi), (30 * BILI, 25 * BILI));
+        assert!(coalesced.live);
+        s.release_due(1_000, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 30 * BILI);
+        s.confirm_native_income_payment_v1(&p, &h(76), 1_000, &mut j).unwrap();
+        s.release_due(1_099, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 30 * BILI);
+        s.release_due(1_100, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none());
+        s.check_consistency().unwrap();
+    }
+
+    #[test]
+    fn native_income_refuses_foreign_or_paid_credit_atomically_and_cancellation_does_not_free_r() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        let kernel = PalwBudgetVectorV1 { reward_sompi: 20 * BILI, ..PalwBudgetVectorV1::ZERO };
+        s.reserve(&p, capital, h(73), bond(1), None, 10, kernel, PalwBudgetOriginV1::KernelRoute, true, &mut j).unwrap();
+        let before = (s.root_parts(), j.len());
+        assert!(s.hold_native_income_v1(&p, capital, h(74), bond(0), 20, 500, 20 * BILI, &[h(73)], true, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before);
+        s.hold_native_income_v1(&p, capital, h(74), bond(0), 20, 500, 20 * BILI, &[], true, &mut j).unwrap();
+        s.cancel_native_income_v1(&h(74), &mut j).unwrap();
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 20 * BILI);
+        // A redraw for the same one-pay root may resume its unspent maximum;
+        // no additional quota or second payment entitlement is created.
+        s.hold_native_income_v1(&p, capital, h(74), bond(0), 30, 500, 20 * BILI, &[], true, &mut j).unwrap();
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 20 * BILI);
+        s.pay_native_income_v1(&p, &h(74), 501, 1, h(72), false, &mut j).unwrap();
+        let before = (s.root_parts(), j.len());
+        assert!(s.hold_native_income_v1(&p, capital, h(74), bond(0), 502, 700, 20 * BILI, &[], true, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before);
+        s.check_consistency().unwrap();
+    }
+
+    #[test]
+    fn source_queue_credit_holds_r_and_capital_until_actual_coinbase_plus_w() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let empty = s.clone();
+        let mut j = Vec::new();
+        s.reserve_source_income_v1(&p, capital, h(82), bond(0), 10, 500, 20 * BILI, &mut j).unwrap();
+        let before = (s.root_parts(), j.len());
+        assert!(s.queue_source_income_v1(&p, &h(82), 500, 500, 20 * BILI, h(83), &mut j).is_err());
+        assert!(s.queue_source_income_v1(&p, &h(82), 500, 501, 19 * BILI, h(83), &mut j).is_err());
+        assert!(s.queue_source_income_v1(&p, &h(82), 500, 501, 20 * BILI, h(82), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before, "H, fixed fee and destination identity fail atomically");
+        s.release_due(900, &mut j);
+        assert!(s.window_holds(&bond(0), 900));
+        s.queue_source_income_v1(&p, &h(82), 500, 901, 20 * BILI, h(83), &mut j).unwrap();
+        assert!(s.claim_row(&h(82)).is_none(), "the source cannot obtain a second queue credit");
+        let queued = s.claim_row(&h(83)).unwrap();
+        assert_eq!(queued.origin, PalwBudgetOriginV1::NativeIncomeQueued);
+        assert_eq!((queued.reserved.reward_sompi, queued.consumed.reward_sompi), (20 * BILI, 20 * BILI));
+        assert!(queued.live && !queued.open);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window, PalwBudgetVectorV1 { reward_sompi: 20 * BILI, ..PalwBudgetVectorV1::ZERO });
+        assert!(s.queue_source_income_v1(&p, &h(82), 500, 902, 20 * BILI, h(83), &mut j).is_err());
+        s.release_due(2_000, &mut j);
+        assert!(s.window_holds(&bond(0), 2_000), "an unspent queue credit cannot free collateral");
+        s.confirm_native_income_payment_v1(&p, &h(83), 2_000, &mut j).unwrap();
+        assert_eq!(s.claim_row(&h(83)).unwrap().reuse_not_before, 2_100);
+        s.release_due(2_099, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 20 * BILI);
+        s.release_due(2_100, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none());
+        s.check_consistency().unwrap();
+        let mut replay = empty.clone();
+        for entry in &j {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), s.root_parts());
+        for entry in j.iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), empty.root_parts());
+    }
+
+    #[test]
+    fn source_queue_destination_collision_refuses_without_consuming_the_signed_promise() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        s.reserve_source_income_v1(&p, capital, h(84), bond(0), 10, 500, 20 * BILI, &mut j).unwrap();
+        s.hold_native_income_v1(&p, capital, h(85), bond(1), 10, 500, 10 * BILI, &[], true, &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(85), 501, 10 * BILI, h(86), true, &mut j).unwrap();
+        let before = (s.root_parts(), j.len());
+        assert!(s.queue_source_income_v1(&p, &h(84), 500, 501, 20 * BILI, h(86), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before);
+        assert_eq!(s.claim_row(&h(84)).unwrap().consumed.reward_sompi, 0);
+        assert!(s.claim_row(&h(84)).unwrap().live);
+    }
+
+    #[test]
+    fn old_source_income_migrates_overfull_after_old_w_and_h_then_replays_and_pays_once() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let fee = 51 * BILI; // Today's R cap is 50; the pre-fence signed right remains collectible.
+        let mut s = PalwBondBudgetStateV1::new(900, &p);
+        let empty = s.clone();
+        let mut j = Vec::new();
+        s.seed_source_income_v1(&p, capital, h(52), bond(0), 10, 500, fee, &mut j).unwrap();
+        let row = *s.claim_row(&h(52)).unwrap();
+        assert_eq!(row.accepted_daa, 10);
+        assert_eq!(row.reuse_not_before, 600);
+        assert!(!row.open && row.live && row.in_window);
+        s.release_due(900, &mut j);
+        assert!(s.window_holds(&bond(0), 900), "old unpaid fee still holds collateral beyond signed H+W");
+        let held = *s.bond_row(&bond(0)).unwrap();
+        assert_eq!(held.window, PalwBudgetVectorV1 { reward_sompi: fee, ..PalwBudgetVectorV1::ZERO });
+        assert_eq!(held.open_claims, 0);
+        let before = (s.root_parts(), j.len());
+        assert!(s.reserve_source_income_v1(&p, capital, h(53), bond(0), 900, 1_500, 1, &mut j).is_err());
+        assert!(s.reserve_income_v1(&p, capital, h(54), bond(0), 900, 1, 1, PalwBudgetOriginV1::MarketFee, &mut j).is_err());
+        assert!(s.seed_source_income_v1(&p, capital, h(52), bond(0), 10, 500, fee, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before);
+        s.settle_source_income_v1(&p, &h(52), 500, 901, fee, &mut j).unwrap();
+        s.release_due(1_000, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, fee);
+        s.release_due(1_001, &mut j);
+        assert!(s.claim_row(&h(52)).is_none() && s.bond_row(&bond(0)).is_none());
+        s.check_consistency().unwrap();
+        let mut replay = empty.clone();
+        for entry in &j {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), s.root_parts());
+        for entry in j.iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), empty.root_parts());
+    }
+
+    #[test]
+    fn old_paid_source_income_uses_actual_payment_window_at_migration() {
+        let p = policy(1, false);
+        let fee = 51 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(950, &p);
+        let mut j = Vec::new();
+        s.seed_source_income_v1(&p, 1_000 * BILI, h(55), bond(0), 10, 500, fee, &mut j).unwrap();
+        s.settle_source_income_v1(&p, &h(55), 500, 900, fee, &mut j).unwrap();
+        let row = s.claim_row(&h(55)).unwrap();
+        assert_eq!(row.reuse_not_before, 1_000);
+        assert_eq!(row.consumed.reward_sompi, fee);
+        assert!(!row.live && !row.open && row.in_window);
+        s.release_due(999, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, fee);
+        s.release_due(1_000, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none());
+        s.check_consistency().unwrap();
+    }
+
+    #[test]
+    fn source_fee_refund_cancels_the_entitlement_without_reusing_its_reserved_window() {
+        let p = policy(1, false);
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        let empty = (s.root_parts(), j.len());
+        assert!(s.reserve_source_income_v1(&p, 1_000 * BILI, h(60), bond(0), 10, u64::MAX, 1, &mut j).is_err());
+        assert!(s.reserve_source_income_v1(&p, 1_000 * BILI, h(60), bond(0), 10, 9, 1, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), empty);
+        s.reserve_source_income_v1(&p, 1_000 * BILI, h(60), bond(0), 10, 500, 50 * BILI, &mut j).unwrap();
+        s.cancel_source_income_v1(&h(60), &mut j).unwrap();
+        let canceled = (s.root_parts(), j.len());
+        assert!(s.settle_source_income_v1(&p, &h(60), 500, 501, 50 * BILI, &mut j).is_err());
+        assert!(s.cancel_source_income_v1(&h(60), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), canceled);
+        s.release_due(599, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
+        s.release_due(600, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none() && s.claim_row(&h(60)).is_none());
+        s.check_consistency().unwrap();
+    }
+
+    #[test]
+    fn collected_market_fee_waits_for_physical_queue_payment_without_second_r_or_claims() {
+        let p = policy(1, false);
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        let empty = s.clone();
+        s.reserve_income_v1(&p, 1_000 * BILI, h(94), bond(0), 10, 50 * BILI, 45 * BILI, PalwBudgetOriginV1::MarketFee, &mut j)
+            .unwrap();
+        let before = (s.root_parts(), j.len());
+        assert!(s.queue_collected_income_v1(&h(94), h(94), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before);
+        s.queue_collected_income_v1(&h(94), h(95), &mut j).unwrap();
+        assert!(s.claim_row(&h(94)).is_none());
+        assert_eq!(s.claim_row(&h(95)).unwrap().origin, PalwBudgetOriginV1::NativeIncomeQueued);
+        s.release_due(1_000, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window, PalwBudgetVectorV1 { reward_sompi: 50 * BILI, ..PalwBudgetVectorV1::ZERO });
+        assert!(s.window_holds(&bond(0), 1_000));
+        let before = (s.root_parts(), j.len());
+        assert!(s.queue_collected_income_v1(&h(94), h(95), &mut j).is_err());
+        assert!(s.reserve_income_v1(&p, 1_000 * BILI, h(96), bond(0), 1_000, 1, 1, PalwBudgetOriginV1::MarketFee, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before, "the queued full maximum still occupies R");
+        s.confirm_native_income_payment_v1(&p, &h(95), 2_000, &mut j).unwrap();
+        assert!(!s.claim_row(&h(95)).unwrap().live);
+        s.release_due(2_099, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
+        s.release_due(2_100, &mut j);
+        assert!(s.claim_row(&h(95)).is_none() && s.bond_row(&bond(0)).is_none());
+        s.check_consistency().unwrap();
+        let mut replay = empty.clone();
+        for write in &j {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = write {
+                replay.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), s.root_parts());
+        for write in j.iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = write {
+                replay.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), empty.root_parts());
+    }
+
+    #[test]
+    fn collected_market_queue_collision_preserves_full_fee_and_journal() {
+        let p = policy(1, false);
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        s.reserve_income_v1(&p, 1_000 * BILI, h(97), bond(0), 10, 5, 5, PalwBudgetOriginV1::MarketFee, &mut j).unwrap();
+        s.reserve_income_v1(&p, 1_000 * BILI, h(98), bond(1), 10, 5, 5, PalwBudgetOriginV1::MarketFee, &mut j).unwrap();
+        s.queue_collected_income_v1(&h(98), h(99), &mut j).unwrap();
+        let before = (s.root_parts(), j.len());
+        assert!(s.queue_collected_income_v1(&h(97), h(99), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before);
+        assert_eq!(s.claim_row(&h(97)).unwrap().consumed.reward_sompi, 5);
+        s.check_consistency().unwrap();
+    }
+
+    #[test]
+    fn market_and_round_income_share_reward_room_with_issuance_without_manufacturing_claims_or_blocks() {
+        let mut p = policy(1, false);
+        p.max_open_claims_per_bond = 1;
+        p.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 7 };
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(1, &p);
+        let mut j = Vec::new();
+        s.reserve_claim_v1(
+            &p,
+            capital,
+            h(1),
+            bond(0),
+            None,
+            10,
+            PalwBudgetAskV1 { reward_sompi: 30 * BILI, ..Default::default() },
+            PalwBudgetOriginV1::Attempt,
+            &mut j,
+        )
+        .unwrap();
+        // Open Q is already full. A real fee is monetary income, not another claim.
+        s.reserve_income_v1(&p, capital, h(2), bond(0), 10, 15 * BILI, 10 * BILI, PalwBudgetOriginV1::MarketFee, &mut j).unwrap();
+        s.reserve_income_v1(&p, capital, h(3), bond(0), 10, 5 * BILI, 5 * BILI, PalwBudgetOriginV1::RoundFee, &mut j).unwrap();
+        let row = s.bond_row(&bond(0)).unwrap();
+        assert_eq!(row.open_claims, 1);
+        assert_eq!(row.window.claims, 1);
+        assert_eq!(row.window.block_units, 0);
+        assert_eq!(row.window.final_weight, 0);
+        assert_eq!(row.window.round_rights, 0);
+        assert_eq!(row.window.reward_sompi, 50 * BILI);
+        assert_eq!(s.claim_row(&h(2)).unwrap().consumed.reward_sompi, 10 * BILI);
+        assert!(!s.claim_row(&h(2)).unwrap().open && !s.claim_row(&h(2)).unwrap().live);
+        let root = s.root_parts();
+        let len = j.len();
+        assert_eq!(
+            s.reserve_income_v1(&p, capital, h(4), bond(0), 10, 1, 1, PalwBudgetOriginV1::MarketFee, &mut j),
+            Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward })
+        );
+        assert_eq!((s.root_parts(), j.len()), (root, len));
+        s.check_consistency().unwrap();
+        s.release_due(109, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
+        s.release_due(110, &mut j);
+        assert!(s.claim_row(&h(2)).is_none() && s.claim_row(&h(3)).is_none());
+        s.reserve_income_v1(&p, capital, h(4), bond(0), 110, 50 * BILI, 50 * BILI, PalwBudgetOriginV1::MarketFee, &mut j).unwrap();
+        s.check_consistency().unwrap();
+    }
+
+    #[test]
+    fn fee_income_refuses_duplicate_unfunded_and_overflowing_promises_before_journal_writes() {
+        let p = policy(1, false);
+        let mut s = PalwBondBudgetStateV1::new(1, &p);
+        let mut j = Vec::new();
+        s.reserve_income_v1(&p, 1_000 * BILI, h(1), bond(0), 10, 2, 1, PalwBudgetOriginV1::MarketFee, &mut j).unwrap();
+        for (id, daa, maximum, actual, origin) in [
+            (h(1), 10, 2, 1, PalwBudgetOriginV1::MarketFee),
+            (h(2), 10, 2, 3, PalwBudgetOriginV1::MarketFee),
+            (h(2), 10, 2, 1, PalwBudgetOriginV1::KernelRoute),
+            (h(2), u64::MAX, 2, 1, PalwBudgetOriginV1::RoundFee),
+        ] {
+            let root = s.root_parts();
+            let len = j.len();
+            assert!(s.reserve_income_v1(&p, 1_000 * BILI, id, bond(0), daa, maximum, actual, origin, &mut j).is_err());
+            assert_eq!((s.root_parts(), j.len()), (root, len));
+        }
+        s.check_consistency().unwrap();
     }
 
     #[test]
@@ -2629,6 +4485,38 @@ mod tests {
         let mut both = armed.clone();
         both.palw_model_bond_allocation_v1 = Some(PalwModelBondAllocationFenceV1::at(ForkActivation::new(9_000_000)));
         assert!(both.validate_palw_model_bond_allocation_v1().is_err(), "an armed allocation is refused even over the budget");
+    }
+
+    #[test]
+    fn reporter_monetary_fence_is_separate_dormant_hashed_and_requires_budget_before_it() {
+        use crate::config::params::{MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params, palw_t12_shipped_params};
+        for params in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params(), palw_t12_shipped_params()] {
+            assert!(params.palw_reporter_income_v2.is_none());
+            assert!(!params.palw_reporter_income_active_at(u64::MAX));
+            assert!(params.validate_palw_reporter_income_v2().is_ok());
+            assert!(params.palw_fences_v1().iter().any(|(name, at)| *name == "palw_reporter_income_v2" && at.is_none()));
+            let mut future = params.clone();
+            future.palw_reporter_income_v2 = Some(ForkActivation::new(9_000_001));
+            assert_ne!(params.consensus_params_id(), future.consensus_params_id());
+            assert_ne!(params.consensus_schedule_id(), future.consensus_schedule_id());
+            assert_eq!(params.consensus_identity_id(), future.consensus_identity_id());
+            assert!(future.validate_palw_reporter_income_v2().is_err(), "reporter fence without earlier budget refuses");
+            future.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1::at(ForkActivation::new(9_000_002)));
+            let PalwModeV2Error::Invalid(why) = future.validate_palw_reporter_income_v2().unwrap_err() else { panic!("Invalid") };
+            assert!(why.contains("at or below"));
+            future.palw_bond_budget_v1.as_mut().unwrap().activation = ForkActivation::new(9_000_000);
+            let PalwModeV2Error::Invalid(why) = future.validate_palw_reporter_income_v2().unwrap_err() else { panic!("Invalid") };
+            assert!(why.contains("cannot be armed"));
+            future.sync_palw_bond_budget_v1();
+            if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &future.palw_consensus_mode {
+                assert!(!bundle.state.reporter_income_active_at(9_000_000));
+                assert!(bundle.state.reporter_income_active_at(9_000_001));
+            }
+            let mut never = params.clone();
+            never.palw_reporter_income_v2 = Some(ForkActivation::never());
+            assert_eq!(params.consensus_identity_id(), never.consensus_identity_id());
+            assert!(never.validate_palw_reporter_income_v2().is_ok());
+        }
     }
 
     #[test]

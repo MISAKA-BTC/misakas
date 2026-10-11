@@ -2373,6 +2373,10 @@ pub struct Params {
 
     /// RFC-0010 permissionless Panel policy. Dormant; every activation is refused until its beacon and release gates pass.
     pub palw_permissionless_panel_v1: Option<crate::palw_permissionless_panel_v1::PalwPermissionlessPanelV1>,
+    /// RFC06 complete-population/100k experiment. No shipped preset assigns it; activation is refused.
+    pub palw_permissionless_panel_complete_v1: Option<crate::palw_permissionless_panel_v1::PalwPermissionlessPanelCompleteV1>,
+    /// Native retirement population compaction with permanent work tombstones; dormant and unapproved.
+    pub palw_permissionless_panel_retired_v1: Option<crate::palw_permissionless_panel_v1::PalwPermissionlessPanelRetiredV1>,
 
     /// **ADR-0130: the seat exposure floor** — see [`PalwPanelExposureFloorV1`]. Resolved at the
     /// claim's anchor for the draw and at the binding block's DAA for the reservation, which the
@@ -3001,8 +3005,10 @@ pub struct Params {
     /// ([`Self::validate_palw_model_refutation_seal_v1`]).
     pub palw_model_refutation_seal_v1: Option<ForkActivation>,
     /// Per-attempt source reservation, inner 40 (codex RFC-7; renumbered from 21 at the merge). Independent, None on every preset, Some-only fingerprints.
-    /// Every real activation is refused until the target, source-only beacon and funded fee consumers are complete.
-    pub palw_beacon_source_opt_in_v1: Option<ForkActivation>,
+    /// Every real activation is refused until funded fees, timing/resource bounds and source security approval are complete.
+    pub palw_beacon_source_opt_in_v1: Option<crate::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
+    /// Prepaid signed source fees (inner 61/62, codex used 22/23; renumbered at the merge), independent monetary fence; None on all presets and never armable.
+    pub palw_beacon_source_fee_v1: Option<crate::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1>,
 
     /// **RFC-0015: Panel=0 (`OptimisticPublicVerification`) on the kernel route** ([`crate::palw_panel_free_v1`]): the separately named
     /// fence under which a network admits classes registered under the Panel-free verification mode (a fixed public challenge window,
@@ -3041,6 +3047,14 @@ pub struct Params {
     /// activation height**: `None` on every preset and in no flag-day list, hashed Some-only (value included) in both fingerprints,
     /// collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_bond_budget_v1`]).
     pub palw_bond_budget_v1: Option<crate::palw_bond_budget_v1::PalwBondBudgetFenceV1>,
+    /// RFC08 monetary schema v2: authenticated reporter debt and legacy cash
+    /// quarantine. Separate dormant fence; requires the budget at or below it.
+    pub palw_reporter_income_v2: Option<ForkActivation>,
+    /// Root-exact physical monetary payment/material retention, schema v3.
+    /// Separate dormant fence; requires budget and reporter schemas at/below it.
+    pub palw_material_income_v3: Option<ForkActivation>,
+    /// Immutable paid native consumer service/backstop/material contract. Dormant.
+    pub palw_paid_consumer_lifecycle_v1: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1>,
     /// **ADR-0177 D3–D5: the model-bond allocation** ([`crate::palw_bond_budget_v1`]): past this height a bond's signed capital
     /// assignment (tag 140) counts toward `S_m`, and a claim's reward reservation is also bounded by its model's share
     /// `R_PALW · f(S_m) / Σ f(S_j)` of the realized PALW carve. Needs `palw_bond_budget_v1` at or below it. **Dormant**, as the budget
@@ -4273,6 +4287,7 @@ impl Params {
         // **RFC-0002 P0's dormant fence** (`crate::palw_model_refutation_seal_v4`): refused when armed.
         self.validate_palw_model_refutation_seal_v1()?;
         self.validate_palw_beacon_source_opt_in_v1()?;
+        self.validate_palw_beacon_source_fee_v1()?;
         // **RFC-0015's dormant fence** (`crate::palw_panel_free_v1`): refused when armed.
         self.validate_palw_panel_free_v1()?;
         self.validate_palw_signed_registration_v1()?;
@@ -4282,6 +4297,9 @@ impl Params {
         self.validate_palw_legacy_held_da_v2()?;
         // **ADR-0176 / ADR-0177's dormant fences** (`crate::palw_bond_budget_v1`): refused when armed.
         self.validate_palw_bond_budget_v1()?;
+        self.validate_palw_reporter_income_v2()?;
+        self.validate_palw_material_income_v3()?;
+        self.validate_palw_paid_consumer_lifecycle_v1()?;
         self.validate_palw_model_bond_allocation_v1()?;
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;
@@ -6684,8 +6702,11 @@ impl Params {
         if self.palw_model_refutation_seal_v1 == Some(ForkActivation::never()) {
             self.palw_model_refutation_seal_v1 = None;
         }
-        if self.palw_beacon_source_opt_in_v1 == Some(ForkActivation::never()) {
+        if self.palw_beacon_source_opt_in_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_beacon_source_opt_in_v1 = None;
+        }
+        if self.palw_beacon_source_fee_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_beacon_source_fee_v1 = None;
         }
         // The Panel-free fence, likewise.
         if self.palw_panel_free_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
@@ -6708,6 +6729,13 @@ impl Params {
             self.palw_legacy_held_da_v2 = None;
         }
         // ADR-0176 / ADR-0177's fences, collapsed whole (their policies are never read there).
+        if self.palw_reporter_income_v2 == Some(ForkActivation::never()) {
+            self.palw_reporter_income_v2 = None;
+        }
+        if self.palw_paid_consumer_lifecycle_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_paid_consumer_lifecycle_v1 = None; }
+        if self.palw_material_income_v3 == Some(ForkActivation::never()) {
+            self.palw_material_income_v3 = None;
+        }
         if self.palw_bond_budget_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_bond_budget_v1 = None;
         }
@@ -6903,6 +6931,12 @@ impl Params {
         // scheduled height leave the identity with it (the schedule id reports them).
         if self.palw_permissionless_panel_v1.is_some_and(|r| r.activation == ForkActivation::never()) {
             self.palw_permissionless_panel_v1 = None;
+        }
+        if self.palw_permissionless_panel_complete_v1.is_some_and(|r| r.activation == ForkActivation::never()) {
+            self.palw_permissionless_panel_complete_v1 = None;
+        }
+        if self.palw_permissionless_panel_retired_v1.is_some_and(|r| r.activation == ForkActivation::never()) {
+            self.palw_permissionless_panel_retired_v1 = None;
         }
         if self.palw_dns_retirement.is_some_and(|r| r.activation == ForkActivation::never()) {
             self.palw_dns_retirement = None;
@@ -10452,6 +10486,8 @@ impl Params {
             palw_overlay_carve,
             palw_dns_retirement,
             palw_permissionless_panel_v1,
+            palw_permissionless_panel_complete_v1,
+            palw_permissionless_panel_retired_v1,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_model_market,
@@ -10504,12 +10540,16 @@ impl Params {
             palw_verifier_pay_v1,
             palw_model_refutation_seal_v1,
             palw_beacon_source_opt_in_v1,
+            palw_beacon_source_fee_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
             palw_legacy_held_da_v2,
             palw_bond_budget_v1,
+            palw_reporter_income_v2,
+            palw_material_income_v3,
+            palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
@@ -10740,6 +10780,8 @@ impl Params {
             ("palw_overlay_carve", palw_overlay_carve.map(|carve| carve.activation)),
             ("palw_dns_retirement_v1", palw_dns_retirement.map(|r| r.activation)),
             ("palw_permissionless_panel_v1", palw_permissionless_panel_v1.map(|r| r.activation)),
+            ("palw_permissionless_panel_complete_v1", palw_permissionless_panel_complete_v1.map(|r| r.activation)),
+            ("palw_permissionless_panel_retired_v1", palw_permissionless_panel_retired_v1.map(|r| r.activation)),
             ("palw_panel_exposure_floor", palw_panel_exposure_floor.map(|floor| floor.activation)),
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
@@ -10792,13 +10834,17 @@ impl Params {
             ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
             ("palw_verifier_pay_v1", *palw_verifier_pay_v1),
             ("palw_model_refutation_seal_v1", *palw_model_refutation_seal_v1),
-            ("palw_beacon_source_opt_in_v1", *palw_beacon_source_opt_in_v1),
+            ("palw_beacon_source_opt_in_v1", palw_beacon_source_opt_in_v1.map(|f| f.activation)),
+            ("palw_beacon_source_fee_v1", palw_beacon_source_fee_v1.map(|f| f.activation)),
             ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_tir_shard_segment_v2", *palw_tir_shard_segment_v2),
             ("palw_provider_court_v1", *palw_provider_court_v1),
             ("palw_legacy_held_da_v2", *palw_legacy_held_da_v2),
             ("palw_bond_budget_v1", palw_bond_budget_v1.as_ref().map(|fence| fence.activation)),
+            ("palw_reporter_income_v2", *palw_reporter_income_v2),
+            ("palw_material_income_v3", *palw_material_income_v3),
+            ("palw_paid_consumer_lifecycle_v1", palw_paid_consumer_lifecycle_v1.as_ref().map(|f| f.activation)),
             ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
             ("palw_legacy_public_filer_v1", *palw_legacy_public_filer_v1),
@@ -11118,7 +11164,13 @@ impl Params {
         }
         if let Some(at) = self.palw_beacon_source_opt_in_v1 {
             h.write(b"palw_beacon_source_opt_in_v1");
-            h.write(at.daa_score().to_le_bytes());
+            h.write(at.activation.daa_score().to_le_bytes());
+            h.write(at.policy.id());
+        }
+        if let Some(at) = self.palw_beacon_source_fee_v1 {
+            h.write(b"palw_beacon_source_fee_v1");
+            h.write(at.activation.daa_score().to_le_bytes());
+            h.write(at.policy.id());
         }
         // The Panel-free fence, NAMED likewise.
         if let Some(fence) = &self.palw_panel_free_v1 {
@@ -11164,6 +11216,19 @@ impl Params {
             h.write(at.daa_score().to_le_bytes());
         }
         // ADR-0176 / ADR-0177's fences (lane BUDGET), NAMED likewise, with their policies (Some-only: every preset leaves them None).
+        if let Some(at) = self.palw_reporter_income_v2 {
+            h.write(b"palw_reporter_income_v2");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(f) = &self.palw_paid_consumer_lifecycle_v1 {
+            h.write(b"palw_paid_consumer_lifecycle_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.digest().as_bytes());
+        }
+        if let Some(at) = self.palw_material_income_v3 {
+            h.write(b"palw_material_income_v3");
+            h.write(at.daa_score().to_le_bytes());
+        }
         if let Some(fence) = &self.palw_bond_budget_v1 {
             h.write(b"palw_bond_budget_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
@@ -11561,6 +11626,14 @@ impl Params {
             h.write(b"palw_permissionless_panel_v1");
             h.write(r.commitment_bytes());
         }
+        if let Some(r) = self.palw_permissionless_panel_complete_v1.filter(|r| r.activation != ForkActivation::never()) {
+            h.write(b"palw_permissionless_panel_complete_v1");
+            h.write(r.commitment_bytes());
+        }
+        if let Some(r) = self.palw_permissionless_panel_retired_v1.filter(|r| r.activation != ForkActivation::never()) {
+            h.write(b"palw_permissionless_panel_retired_v1");
+            h.write(r.commitment_bytes());
+        }
         if let Some(carve) = self.palw_overlay_carve {
             h.write(b"palw_overlay_carve");
             h.write(carve.activation.daa_score().to_le_bytes());
@@ -11877,12 +11950,16 @@ impl Params {
             palw_verifier_pay_v1,
             palw_model_refutation_seal_v1,
             palw_beacon_source_opt_in_v1,
+            palw_beacon_source_fee_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
             palw_legacy_held_da_v2,
             palw_bond_budget_v1,
+            palw_reporter_income_v2,
+            palw_material_income_v3,
+            palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
@@ -11938,6 +12015,8 @@ impl Params {
             palw_overlay_carve,
             palw_dns_retirement,
             palw_permissionless_panel_v1,
+            palw_permissionless_panel_complete_v1,
+            palw_permissionless_panel_retired_v1,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
@@ -12672,8 +12751,11 @@ impl Params {
         if let Some(activation) = palw_model_refutation_seal_v1.as_mut() {
             fork(activation, visit);
         }
-        if let Some(activation) = palw_beacon_source_opt_in_v1.as_mut() {
-            fork(activation, visit);
+        if let Some(fence) = palw_beacon_source_opt_in_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
+        if let Some(fence) = palw_beacon_source_fee_v1.as_mut() {
+            fork(&mut fence.activation, visit);
         }
         // The Panel-free fence. Some-only.
         if let Some(fence) = palw_panel_free_v1.as_mut() {
@@ -12696,6 +12778,13 @@ impl Params {
             fork(activation, visit);
         }
         // ADR-0176 / ADR-0177's fences. Some-only; the activation alone.
+        if let Some(at) = palw_reporter_income_v2.as_mut() {
+            fork(at, visit);
+        }
+        if let Some(f) = palw_paid_consumer_lifecycle_v1.as_mut() { fork(&mut f.activation, visit); }
+        if let Some(at) = palw_material_income_v3.as_mut() {
+            fork(at, visit);
+        }
         if let Some(fence) = palw_bond_budget_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
@@ -12880,6 +12969,12 @@ impl Params {
         }
         // ADR-0126: the height only — the validator share and the escrow carve are values beside it.
         if let Some(r) = palw_permissionless_panel_v1.as_mut().filter(|r| r.activation != ForkActivation::never()) {
+            fork(&mut r.activation, visit);
+        }
+        if let Some(r) = palw_permissionless_panel_complete_v1.as_mut().filter(|r| r.activation != ForkActivation::never()) {
+            fork(&mut r.activation, visit);
+        }
+        if let Some(r) = palw_permissionless_panel_retired_v1.as_mut().filter(|r| r.activation != ForkActivation::never()) {
             fork(&mut r.activation, visit);
         }
         if let Some(r) = palw_dns_retirement.as_mut() {
@@ -13256,12 +13351,16 @@ impl Params {
             palw_verifier_pay_v1,
             palw_model_refutation_seal_v1,
             palw_beacon_source_opt_in_v1,
+            palw_beacon_source_fee_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
             palw_legacy_held_da_v2,
             palw_bond_budget_v1,
+            palw_reporter_income_v2,
+            palw_material_income_v3,
+            palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
@@ -13312,6 +13411,8 @@ impl Params {
             palw_overlay_carve,
             palw_dns_retirement,
             palw_permissionless_panel_v1,
+            palw_permissionless_panel_complete_v1,
+            palw_permissionless_panel_retired_v1,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
@@ -14113,7 +14214,13 @@ impl Params {
         }
         if let Some(activation) = palw_beacon_source_opt_in_v1 {
             h.write(b"palw_beacon_source_opt_in_v1");
-            h.write(activation.daa_score().to_le_bytes());
+            h.write(activation.activation.daa_score().to_le_bytes());
+            h.write(activation.policy.id());
+        }
+        if let Some(activation) = palw_beacon_source_fee_v1 {
+            h.write(b"palw_beacon_source_fee_v1");
+            h.write(activation.activation.daa_score().to_le_bytes());
+            h.write(activation.policy.id());
         }
         // The Panel-free fence, Some-only for the same reason.
         if let Some(fence) = palw_panel_free_v1 {
@@ -14132,6 +14239,19 @@ impl Params {
             h.write(activation.daa_score().to_le_bytes());
         }
         // The provider court's fence (DA16), Some-only for the same reason.
+        if let Some(at) = palw_reporter_income_v2 {
+            h.write(b"palw_reporter_income_v2");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(f) = &palw_paid_consumer_lifecycle_v1 {
+            h.write(b"palw_paid_consumer_lifecycle_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.digest().as_bytes());
+        }
+        if let Some(at) = palw_material_income_v3 {
+            h.write(b"palw_material_income_v3");
+            h.write(at.daa_score().to_le_bytes());
+        }
         if let Some(fence) = &palw_bond_budget_v1 {
             h.write(b"palw_bond_budget_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
@@ -14448,6 +14568,14 @@ impl Params {
         }
         if let Some(r) = palw_permissionless_panel_v1.filter(|r| r.activation != ForkActivation::never()) {
             h.write(b"palw_permissionless_panel_v1");
+            h.write(r.commitment_bytes());
+        }
+        if let Some(r) = palw_permissionless_panel_complete_v1.filter(|r| r.activation != ForkActivation::never()) {
+            h.write(b"palw_permissionless_panel_complete_v1");
+            h.write(r.commitment_bytes());
+        }
+        if let Some(r) = palw_permissionless_panel_retired_v1.filter(|r| r.activation != ForkActivation::never()) {
+            h.write(b"palw_permissionless_panel_retired_v1");
             h.write(r.commitment_bytes());
         }
         if let Some(carve) = palw_overlay_carve {
@@ -14969,12 +15097,16 @@ impl Params {
             palw_verifier_pay_v1: self.palw_verifier_pay_v1,
             palw_model_refutation_seal_v1: self.palw_model_refutation_seal_v1,
             palw_beacon_source_opt_in_v1: self.palw_beacon_source_opt_in_v1,
+            palw_beacon_source_fee_v1: self.palw_beacon_source_fee_v1,
             palw_panel_free_v1: self.palw_panel_free_v1.clone(),
             palw_signed_registration_v1: self.palw_signed_registration_v1,
             palw_tir_shard_segment_v2: self.palw_tir_shard_segment_v2,
             palw_provider_court_v1: self.palw_provider_court_v1,
             palw_legacy_held_da_v2: self.palw_legacy_held_da_v2,
             palw_bond_budget_v1: self.palw_bond_budget_v1.clone(),
+            palw_reporter_income_v2: self.palw_reporter_income_v2,
+            palw_material_income_v3: self.palw_material_income_v3,
+            palw_paid_consumer_lifecycle_v1: self.palw_paid_consumer_lifecycle_v1.clone(),
             palw_model_bond_allocation_v1: self.palw_model_bond_allocation_v1.clone(),
             palw_reporter_share_v2: self.palw_reporter_share_v2,
             palw_legacy_public_filer_v1: self.palw_legacy_public_filer_v1,
@@ -15027,6 +15159,8 @@ impl Params {
             palw_overlay_carve: self.palw_overlay_carve,
             palw_dns_retirement: self.palw_dns_retirement,
             palw_permissionless_panel_v1: self.palw_permissionless_panel_v1,
+            palw_permissionless_panel_complete_v1: self.palw_permissionless_panel_complete_v1,
+            palw_permissionless_panel_retired_v1: self.palw_permissionless_panel_retired_v1,
             palw_panel_exposure_floor: self.palw_panel_exposure_floor,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
@@ -16082,12 +16216,16 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_beacon_source_opt_in_v1: None,
+    palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_reporter_income_v2: None,
+    palw_material_income_v3: None,
+    palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
@@ -16139,6 +16277,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_overlay_carve: None,
     palw_dns_retirement: None,
     palw_permissionless_panel_v1: None,
+    palw_permissionless_panel_complete_v1: None,
+    palw_permissionless_panel_retired_v1: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -16391,12 +16531,16 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_beacon_source_opt_in_v1: None,
+    palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_reporter_income_v2: None,
+    palw_material_income_v3: None,
+    palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
@@ -16448,6 +16592,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_overlay_carve: None,
     palw_dns_retirement: None,
     palw_permissionless_panel_v1: None,
+    palw_permissionless_panel_complete_v1: None,
+    palw_permissionless_panel_retired_v1: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -16682,12 +16828,16 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_beacon_source_opt_in_v1: None,
+    palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_reporter_income_v2: None,
+    palw_material_income_v3: None,
+    palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
@@ -16739,6 +16889,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_overlay_carve: None,
     palw_dns_retirement: None,
     palw_permissionless_panel_v1: None,
+    palw_permissionless_panel_complete_v1: None,
+    palw_permissionless_panel_retired_v1: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -24319,12 +24471,16 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_beacon_source_opt_in_v1: None,
+    palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_reporter_income_v2: None,
+    palw_material_income_v3: None,
+    palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
@@ -24376,6 +24532,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_overlay_carve: None,
     palw_dns_retirement: None,
     palw_permissionless_panel_v1: None,
+    palw_permissionless_panel_complete_v1: None,
+    palw_permissionless_panel_retired_v1: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).

@@ -467,6 +467,10 @@ message PruningPointOverlaySnapshotMessage{
 
 message RequestPruningPointPalwStateMessage{
   Hash pruningPointHash = 1;
+  // Protocol >= 106 only. Empty root/index zero starts one bounded immutable stream.
+  bool chunked = 2;
+  bytes snapshotRoot = 3;
+  uint32 chunkIndex = 4;
 }
 
 message PruningPointPalwStateMessage{
@@ -481,6 +485,16 @@ message PruningPointPalwStateMessage{
   // bytes wastes only its own bandwidth. ADDITIVE: a peer that does not send this leaves the
   // field empty, and the client falls back to --palw-class-carriage.
   repeated PalwClassCarriageEntry classCarriages = 3;
+  // Protocol >= 106: palwState is one <=4 MiB chunk of format:u16, stateLength:u64,
+  // borsh(carriage)[stateLength], borsh(declarations). Length isolates optional EOF tails;
+  // classCarriages is empty. Native import still verifies the consensus state root.
+  bool chunked = 4;
+  Hash pruningPointHash = 5;
+  bytes snapshotRoot = 6;
+  uint32 chunkIndex = 7;
+  uint32 chunkCount = 8;
+  uint64 totalBytes = 9;
+  bytes chunkHash = 10;
 }
 
 // One class's declaration, as the accept path would have indexed it.

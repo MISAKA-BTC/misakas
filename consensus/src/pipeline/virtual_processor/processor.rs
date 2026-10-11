@@ -104,6 +104,7 @@ use kaspa_consensusmanager::SessionLock;
 use kaspa_core::{debug, error, info, time::unix_now, trace, warn};
 use kaspa_database::prelude::{StoreError, StoreResultExt, StoreResultUnitExt};
 use kaspa_hashes::ZERO_HASH64;
+use kaspa_consensus_core::muhash::MuHashExtensions;
 use kaspa_muhash::MuHash;
 use kaspa_notify::{events::EventType, notifier::Notify};
 use once_cell::unsync::Lazy;
@@ -544,6 +545,9 @@ pub struct VirtualStateProcessor {
     /// See `native_settlement::native_safe_readiness`.
     pub(super) native_readiness_memo:
         parking_lot::Mutex<Option<(BlockHash, kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1)>>,
+    /// Serializes session begin and every pruning-import mutation. No network
+    /// wait holds this lock; durable epochs reject delayed/reopened callers.
+    pub(crate) pruning_import_session_lock: parking_lot::Mutex<()>,
     /// LIVE-R1 N3: the PALW state AT the committed virtual sink, for the `palw_*` readers
     /// ([`Self::palw_v2_reader_state`]). Memory only, keyed by the sink it was derived at.
     pub(super) palw_reader_snapshot: parking_lot::Mutex<Option<(BlockHash, Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>)>>,
@@ -719,7 +723,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_verifier_pay_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_model_refutation_seal_v1` (RFC-0002 P0, RFC02-T): candidate refutations only as sealed reveals (inner 36 / 37).
     pub(super) palw_model_refutation_seal_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_beacon_source_opt_in_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_beacon_source_opt_in_v1: Option<kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
+    pub(super) palw_beacon_source_fee_v1: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1>,
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
     pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1335,6 +1340,7 @@ impl VirtualStateProcessor {
             palw_dns_retirement: params.palw_dns_retirement,
             native_rows: Default::default(),
             native_readiness_memo: Default::default(),
+            pruning_import_session_lock: Default::default(),
             palw_reader_snapshot: Default::default(),
             palw_refusal_streak: Default::default(),
             #[cfg(test)]
@@ -1393,6 +1399,7 @@ impl VirtualStateProcessor {
             palw_verifier_pay_v1: params.palw_verifier_pay_v1,
             palw_model_refutation_seal_v1: params.palw_model_refutation_seal_v1,
             palw_beacon_source_opt_in_v1: params.palw_beacon_source_opt_in_v1,
+            palw_beacon_source_fee_v1: params.palw_beacon_source_fee_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_provider_court_v1: params.palw_provider_court_v1,
             palw_legacy_held_da_v2: params.palw_legacy_held_da_v2,
@@ -2613,7 +2620,7 @@ impl VirtualStateProcessor {
                         palw_state.as_ref().map(|s| self.palw_v2_bond_burn_obligations(s, pov_daa_score)).unwrap_or_default();
                     // ADR-0125: which merged round blocks hold their permit, from the same parent state.
                     ctx.palw_round_verdicts =
-                        palw_state.as_ref().and_then(|s| self.palw_round_verdicts_v1(s, &ctx.ghostdag_data, pov_daa_score));
+                        palw_state.as_ref().and_then(|s| self.palw_round_verdicts_at_v1(s, &ctx.ghostdag_data, pov_daa_score, current));
                     // Lane SCAN: node-local telemetry of each judged round block (never read by consensus).
                     if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                         self.palw_record_round_verdicts(verdicts);
@@ -2785,6 +2792,7 @@ impl VirtualStateProcessor {
                                     objects,
                                     current,
                                     own_attempt_class,
+                                    &ctx.palw_round_fee_incomes,
                                 );
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
@@ -2966,6 +2974,7 @@ impl VirtualStateProcessor {
                                         if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                                             extras.round_permit_uses = verdicts.uses.clone();
                                         }
+                                        extras.round_fee_incomes = ctx.palw_round_fee_incomes.clone();
                                         // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
                                         // re-judged by the fold against its own running state) and the covered set itself.
                                         if let Some(resolved) = exec_resolved.as_ref() {
@@ -8143,7 +8152,7 @@ impl VirtualStateProcessor {
             .into_iter()
             .map(|(object, refund)| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, refund, unrefundable: None })
             .collect();
-        self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, None)
+        self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, None, &[])
     }
 
     /// **The REAL one-shot block fold, over the whole accepted list, using the same fences the
@@ -8271,7 +8280,7 @@ impl VirtualStateProcessor {
         own_attempt_class: Option<kaspa_hashes::Hash64>,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
         let (accepted, folded, _refunds) =
-            self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, own_attempt_class);
+            self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, own_attempt_class, &[]);
         (accepted, folded)
     }
 
@@ -8288,13 +8297,14 @@ impl VirtualStateProcessor {
         // `palw_audit_2026_09_23` the fold's step 3 holds room for it on the class gate, and the
         // rehearsal must refuse the commitments the fold will (2026-09-24 DoS audit review of #11).
         own_attempt_class: Option<kaspa_hashes::Hash64>,
+        round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
     ) -> (
         Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
     ) {
         kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
-            self.palw_v2_accepted_objects_and_refunds_inner(state, state_params, point, objects, block, own_attempt_class)
+            self.palw_v2_accepted_objects_and_refunds_inner(state, state_params, point, objects, block, own_attempt_class, round_fee_incomes)
         })
     }
 
@@ -8309,6 +8319,7 @@ impl VirtualStateProcessor {
         // `palw_audit_2026_09_23` the fold's step 3 holds room for it on the class gate, and the
         // rehearsal must refuse the commitments the fold will (2026-09-24 DoS audit review of #11).
         own_attempt_class: Option<kaspa_hashes::Hash64>,
+        round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
     ) -> (
         Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -8394,6 +8405,8 @@ impl VirtualStateProcessor {
         let audit_active = self.palw_audit_2026_09_11_at(point.daa_score);
         // The old path's synthetic chain point; unused past the fence.
         let mut rehearsal = *point;
+        let mut fee_extras = self.palw_transition_extras_for(point);
+        fee_extras.round_fee_incomes = round_fee_incomes.to_vec();
         let mut folded = if audit_active {
             match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_v1(
                 state,
@@ -8403,7 +8416,7 @@ impl VirtualStateProcessor {
                 self.palw_capability_bound_at(point.daa_score),
                 self.palw_uncertified_weightless_at(point.daa_score),
                 self.palw_da_court_at(point.daa_score),
-                &self.palw_transition_extras_for(point),
+                &fee_extras,
             ) {
                 Ok(base) => base,
                 // The pre-object steps are what the real fold runs before any object; if they error
@@ -14886,6 +14899,9 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
                     "a typed-root object is refused: palw_typed_roots_v1 is not in force at this block (RFC-0004 Part II)".to_string()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceFeeV1 => {
+                    "a funded source contract is refused: palw_beacon_source_fee_v1 is not in force at this block".to_string()
+                }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceOptInV1 => {
                     "a source opt-in is refused: palw_beacon_source_opt_in_v1 is not in force at this block".to_string()
                 }
@@ -14910,13 +14926,19 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> bool {
         match fence {
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceFeeV1 => {
+                self.palw_beacon_source_fee_v1
+                    .is_some_and(|f| f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score))
+                    && self.palw_kernel_inner_fence_at(
+                        kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceOptInV1, daa_score)
+            }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => self.palw_kernel_opv_at(daa_score),
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
                 self.palw_kernel_typed_roots_at(daa_score)
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceOptInV1 => {
                 self.palw_beacon_source_opt_in_v1
-                    .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score))
+                    .is_some_and(|f| f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score))
                     && self.palw_kernel_opv_at(daa_score)
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
@@ -15667,6 +15689,16 @@ impl VirtualStateProcessor {
         ghostdag_data: &GhostdagData,
         daa_score: u64,
     ) -> Option<super::utxo_validation::PalwRoundVerdictsV1> {
+        self.palw_round_verdicts_at_v1(state, ghostdag_data, daa_score, Default::default())
+    }
+
+    fn palw_round_verdicts_at_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        ghostdag_data: &GhostdagData,
+        daa_score: u64,
+        accepting_block: BlockHash,
+    ) -> Option<super::utxo_validation::PalwRoundVerdictsV1> {
         use kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope;
         use kaspa_consensus_core::palw_execution_lane_v1::{
             PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v2, palw_execution_span_v1,
@@ -15678,6 +15710,11 @@ impl VirtualStateProcessor {
         let span_now = palw_execution_span_v1(daa_score, span_daa);
         let mut verdicts = super::utxo_validation::PalwRoundVerdictsV1 {
             round_blocks: self.palw_round_blocks_of(ghostdag_data),
+            fee_budget: self.palw_state_params_v2.as_ref().and_then(|params| state.round_fee_admission_v1(params,
+                &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: Default::default(), daa_score, blue_score: ghostdag_data.blue_score,
+                    subsidy: self.coinbase_manager.calc_block_subsidy(daa_score),
+                }, self.palw_escrow_for_carrier_at(accepting_block, daa_score, daa_score))),
             ..Default::default()
         };
         // **RFC-0008 v2: the covered set is judged in the canonical order — `(round, permit index, hash)` — so two blocks of one permit,
@@ -15721,7 +15758,7 @@ impl VirtualStateProcessor {
             {
                 continue;
             }
-            let judged = (|| -> Result<(PalwExecPermitUseV1, PalwRoundLineageV1), Refusal> {
+            let judged = (|| -> Result<(PalwExecPermitUseV1, PalwRoundLineageV1, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2), Refusal> {
                 let header = self.headers_store.get_header(block).map_err(|_| Refusal::EnvelopeUndecodable)?;
                 // The envelope this block's height admits: v2's `EXEC_TX` permit, or the v1 round envelope (a block merged below
                 // the fence). Both name a round, a permit index, a bond and the key that signed; the checks below are one function
@@ -15793,10 +15830,11 @@ impl VirtualStateProcessor {
                     return Err(Refusal::PayeeBound);
                 }
                 let lineage = kaspa_consensus_core::palw_exec_view_v1::palw_round_lineage_v1(state, schedule, permit.quantum_id);
-                Ok((PalwExecPermitUseV1 { span, round: envelope.round, permit_index: envelope.permit_index }, lineage))
+                Ok((PalwExecPermitUseV1 { span, round: envelope.round, permit_index: envelope.permit_index }, lineage, envelope.bond))
             })();
             match judged {
-                Ok((used, lineage)) => {
+                Ok((used, lineage, bond)) => {
+                    verdicts.fee_recipients.insert(block, bond);
                     taken.insert((used.span, used.round, used.permit_index));
                     if let Some(bond) = self
                         .headers_store
@@ -16122,6 +16160,7 @@ impl VirtualStateProcessor {
                 }
             }),
             round_permit_uses: Vec::new(),
+            round_fee_incomes: Vec::new(),
             // RFC-0008 v2: the slice carriers the covered set holds (empty until the closure carriage fills it).
             exec_v2_covered: Vec::new(),
             exec_v2_origin_headers: Default::default(),
@@ -16574,6 +16613,10 @@ impl VirtualStateProcessor {
                     }),
                 }),
                 typed_roots: self.palw_kernel_typed_roots_activation(),
+                beacon_source: self.palw_beacon_source_opt_in_v1.filter(|f|
+                    f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score)),
+                beacon_source_fee: self.palw_beacon_source_fee_v1.filter(|f|
+                    f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score)),
                 // DA16: the provider court's activation, where its (never armable) fence is in force at this block.
                 provider_court: self
                     .palw_provider_court_at(daa_score)
@@ -21631,6 +21674,40 @@ impl VirtualStateProcessor {
             return Err(RuleError::UnknownPowAlgoId(POW_ALGO_ID_PALW_ROUND_V1));
         };
         let sink = virtual_state.ghostdag_data.selected_parent;
+        if let (Some(round), Some(params)) = (round, self.palw_state_params_v2.as_ref()) {
+            if params.bond_budget_active_at(virtual_state.daa_score) {
+                let (_, state) = self.palw_v2_state_at(sink)
+                    .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient state is unavailable".into()))?;
+                let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: Default::default(), daa_score: virtual_state.daa_score,
+                    blue_score: virtual_state.ghostdag_data.blue_score,
+                    subsidy: self.coinbase_manager.calc_block_subsidy(virtual_state.daa_score),
+                };
+                let mut budget = state.round_fee_admission_v1(params, &point, self.palw_escrow_carve_at(point.daa_score, point.daa_score))
+                    .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient budget is unavailable".into()))?;
+                let view = self.palw_round_view_v1(round)
+                    .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the execution schedule is unavailable".into()))?;
+                let recipients: std::collections::BTreeSet<_> = view.permits.iter()
+                    .filter(|permit| !view.used.contains(&permit.index))
+                    .filter(|permit| state.bond(&permit.bond).is_some_and(|bond|
+                        kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&bond.payout_payload.as_bytes()) == payout))
+                    .map(|permit| permit.bond).collect();
+                if recipients.len() != 1 || template.calculated_fees.len() + 1 != template.block.transactions.len() {
+                    return Err(RuleError::RoundFeeBudgetRefused("an unambiguous bonded permit and validated transaction fees are required".into()));
+                }
+                let burned = self.palw_v2_bond_burn_obligations(&state, point.daa_score);
+                let maximum_sompi = template.block.transactions.iter().skip(1).zip(&template.calculated_fees)
+                    .try_fold(0u64, |sum, (tx, fee)| {
+                        let bond_burned = tx.inputs.iter().map(|input| burned.get(&input.previous_outpoint).copied().unwrap_or(0))
+                            .fold(0u64, u64::saturating_add);
+                        sum.checked_add(self.palw_collectible_transaction_fee_v1(tx, *fee, bond_burned, point.daa_score))
+                    }).ok_or_else(|| RuleError::RoundFeeBudgetRefused("the collectible fee overflows".into()))?;
+                budget.admit(kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
+                    block: Default::default(), bond: *recipients.first().expect("one permit recipient"),
+                    maximum_sompi, actual_sompi: maximum_sompi,
+                }).map_err(|why| RuleError::RoundFeeBudgetRefused(why.to_string()))?;
+            }
+        }
         let anchor = self
             .ghostdag_store
             .get_selected_parent(sink)
@@ -22643,6 +22720,142 @@ impl VirtualStateProcessor {
         );
     }
 
+    pub fn pruning_import_session(&self) -> PruningImportResult<kaspa_consensus_core::pruning::PruningImportSessionStateV1> {
+        self.pruning_meta_stores.read().import_session().map_err(|e| {
+            PruningImportError::PruningPointImportContextUnavailable(BlockHash::default(), format!("import session: {e}"))
+        })
+    }
+
+    pub fn pruning_import_status(&self) -> PruningImportResult<(kaspa_consensus_core::pruning::PruningImportSessionStateV1, bool)> {
+        let meta = self.pruning_meta_stores.read();
+        let state = meta.import_session().map_err(|e| {
+            PruningImportError::PruningPointImportContextUnavailable(BlockHash::default(), format!("import session: {e}"))
+        })?;
+        let stable = meta.try_pruning_utxoset_stable_flag().map_err(|e| {
+            PruningImportError::PruningPointImportContextUnavailable(BlockHash::default(), format!("import stable marker: {e}"))
+        })?;
+        Ok((state, stable))
+    }
+
+    pub fn begin_pruning_point_import(
+        &self,
+        point: BlockHash,
+    ) -> PruningImportResult<kaspa_consensus_core::pruning::PruningImportSessionV1> {
+        use kaspa_consensus_core::pruning::{PruningImportSessionStateV1, PruningImportSessionV1};
+        let _mutation = self.pruning_import_session_lock.lock();
+        let unavailable = |e: StoreError| PruningImportError::PruningPointImportContextUnavailable(point, format!("begin session: {e}"));
+        let pruning = self.pruning_point_store.read();
+        if pruning.pruning_point().map_err(unavailable)? != point {
+            return Err(PruningImportError::PruningImportSessionRefused { point, epoch: 0, reason: "target is not the established pruning point".into() });
+        }
+        self.headers_store.get_header(point).map_err(unavailable)?;
+        let mut meta = self.pruning_meta_stores.write();
+        let old = meta.import_session().map_err(unavailable)?;
+        let epoch = old.epoch.checked_add(1).ok_or_else(|| PruningImportError::PruningImportSessionRefused {
+            point, epoch: old.epoch, reason: "durable import epoch exhausted".into(),
+        })?;
+        let token = PruningImportSessionV1 { point, epoch };
+        let state = PruningImportSessionStateV1 { epoch, active: Some(token), utxos_started: false, utxos_imported: false };
+        let mut batch = WriteBatch::default();
+        meta.set_import_session(&mut batch, &state).map_err(unavailable)?;
+        meta.set_pruning_utxoset_stable_flag(&mut batch, false).map_err(unavailable)?;
+        self.db.write(batch).expect("writing pruning import authority cannot fail");
+        Ok(token)
+    }
+
+    /// A legacy mutation is accepted only before this DB has issued a session.
+    /// Once session-aware IBD starts, old public callers cannot bypass its token.
+    pub(crate) fn with_pruning_import_session<T>(
+        &self,
+        token: Option<kaspa_consensus_core::pruning::PruningImportSessionV1>,
+        operation: impl FnOnce(&kaspa_consensus_core::pruning::PruningImportSessionStateV1) -> PruningImportResult<T>,
+    ) -> PruningImportResult<T> {
+        let _mutation = self.pruning_import_session_lock.lock();
+        let state = self.pruning_import_session()?;
+        let point = token.map(|t| t.point).unwrap_or_default();
+        let epoch = token.map(|t| t.epoch).unwrap_or(0);
+        let valid = match token {
+            Some(token) => state.active == Some(token) && state.epoch == token.epoch,
+            None => state.epoch == 0 && state.active.is_none(),
+        };
+        if !valid {
+            return Err(PruningImportError::PruningImportSessionRefused {
+                point, epoch, reason: "caller does not own the current durable import session".into(),
+            });
+        }
+        if let Some(token) = token {
+            let target = self.pruning_point_store.read().pruning_point().map_err(|e| {
+                PruningImportError::PruningPointImportContextUnavailable(point, format!("session pruning point: {e}"))
+            })?;
+            if target != point {
+                return Err(PruningImportError::PruningImportSessionRefused {
+                    point, epoch: token.epoch, reason: "established target changed after this session began".into(),
+                });
+            }
+        }
+        operation(&state)
+    }
+
+    pub(crate) fn set_pruning_import_phase(
+        &self,
+        state: &kaspa_consensus_core::pruning::PruningImportSessionStateV1,
+    ) -> PruningImportResult<()> {
+        let point = state.active.map(|t| t.point).unwrap_or_default();
+        let mut meta = self.pruning_meta_stores.write();
+        let mut batch = WriteBatch::default();
+        meta.set_import_session(&mut batch, state).map_err(|e| {
+            PruningImportError::PruningPointImportContextUnavailable(point, format!("import phase: {e}"))
+        })?;
+        self.db.write(batch).expect("writing pruning import phase cannot fail");
+        Ok(())
+    }
+
+    pub(crate) fn append_pruning_import_utxos(
+        &self,
+        point: Option<BlockHash>,
+        chunk: &[(TransactionOutpoint, UtxoEntry)],
+        multiset: &mut MuHash,
+    ) -> PruningImportResult<()> {
+        use crate::model::stores::utxo_set::UtxoSetStore;
+        let pruning = self.pruning_point_store.read();
+        if let Some(point) = point {
+            if pruning.pruning_point().map_err(|e| PruningImportError::PruningPointImportContextUnavailable(point, e.to_string()))? != point {
+                return Err(PruningImportError::PruningImportSessionRefused { point, epoch: 0, reason: "target changed before UTXO append".into() });
+            }
+        }
+        let mut meta = self.pruning_meta_stores.write();
+        meta.utxo_set.write_many(chunk).expect("writing an authorized UTXO import chunk cannot fail");
+        let inner = self.install(|| {
+            chunk.par_iter().map(|(outpoint, entry)| MuHash::from_utxo(outpoint, entry)).reduce(MuHash::new, |mut a, b| {
+                a.combine(&b);
+                a
+            })
+        });
+        multiset.combine(&inner);
+        Ok(())
+    }
+
+    pub(crate) fn clear_pruning_import_utxos(
+        &self,
+        state: Option<&kaspa_consensus_core::pruning::PruningImportSessionStateV1>,
+    ) -> PruningImportResult<()> {
+        let pruning = self.pruning_point_store.read();
+        if let Some(token) = state.and_then(|s| s.active) {
+            if pruning.pruning_point().map_err(|e| PruningImportError::PruningPointImportContextUnavailable(token.point, e.to_string()))? != token.point {
+                return Err(PruningImportError::PruningImportSessionRefused { point: token.point, epoch: token.epoch, reason: "target changed before UTXO clear".into() });
+            }
+        }
+        let mut meta = self.pruning_meta_stores.write();
+        let mut batch = WriteBatch::default();
+        if let Some(state) = state {
+            meta.set_import_session(&mut batch, state).expect("staging the UTXO import phase cannot fail");
+        }
+        meta.set_pruning_utxoset_stable_flag(&mut batch, false).expect("staging an incomplete UTXO import cannot fail");
+        self.db.write(batch).expect("writing an incomplete UTXO import cannot fail");
+        meta.utxo_set.clear().expect("clearing an authorized UTXO import cannot fail");
+        Ok(())
+    }
+
     /// Finalizes the pruning point utxoset state and imports the pruning point utxoset *to* virtual utxoset
     pub fn import_pruning_point_utxo_set(
         &self,
@@ -22650,7 +22863,16 @@ impl VirtualStateProcessor {
         mut imported_utxo_multiset: MuHash,
     ) -> PruningImportResult<()> {
         info!("Importing the UTXO set of the pruning point {}", new_pruning_point);
-        let new_pruning_point_header = self.headers_store.get_header(new_pruning_point).unwrap();
+        let unavailable = |where_: &str, e: StoreError| {
+            PruningImportError::PruningPointImportContextUnavailable(new_pruning_point, format!("UTXO {where_}: {e}"))
+        };
+        let require_target = |established: BlockHash| {
+            if new_pruning_point == established { Ok(()) } else {
+                Err(PruningImportError::ImportedUtxoPruningPointMismatch(new_pruning_point, established))
+            }
+        };
+        require_target(self.pruning_point_store.read().pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
+        let new_pruning_point_header = self.headers_store.get_header(new_pruning_point).map_err(|e| unavailable("L1 header", e))?;
         let imported_utxo_multiset_hash = imported_utxo_multiset.finalize();
         if imported_utxo_multiset_hash != new_pruning_point_header.utxo_commitment {
             return Err(PruningImportError::ImportedMultisetHashMismatch(
@@ -22660,19 +22882,47 @@ impl VirtualStateProcessor {
         }
 
         {
-            // Set the pruning point utxoset position to the new point we just verified
+            // Persist incomplete recovery with the position BEFORE a virtual UTXO copy.
+            let pruning_point_read = self.pruning_point_store.read();
+            require_target(pruning_point_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
             let mut batch = WriteBatch::default();
             let mut pruning_meta_write = self.pruning_meta_stores.write();
             pruning_meta_write.set_utxoset_position(&mut batch, new_pruning_point).unwrap();
+            pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
             self.db.write(batch).unwrap();
-            drop(pruning_meta_write);
         }
 
+        // Preserve the existing metadata -> virtual copy lock order. Never wait for a
+        // pruning writer while holding virtual: that writer may be waiting on virtual.
+        let pruning_meta_read = self.pruning_meta_stores.read();
+        let mut virtual_write = self.virtual_stores.write();
+        let pruning_point_read = self.pruning_point_store.try_read().ok_or_else(|| {
+            PruningImportError::PruningPointImportContextUnavailable(new_pruning_point, "UTXO pruning target is changing; retry import".into())
+        })?;
+        require_target(pruning_point_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
+        // The supplied incremental hash describes a stream, not necessarily the
+        // shared staging table after another append stream interleaved. Verify the
+        // actual locked table before clearing a single virtual UTXO. Memory stays
+        // bounded to 1,000 rows; this extra scan runs only during an import.
+        let mut staged_multiset = MuHash::new();
+        for chunk in &pruning_meta_read.utxo_set.iterator().chunks(1000) {
+            let rows: Vec<_> = chunk.map(|row| row.map_err(|e| {
+                PruningImportError::PruningPointImportContextUnavailable(new_pruning_point, format!("UTXO staged table row: {e}"))
+            })).collect::<PruningImportResult<_>>()?;
+            let chunk_multiset = self.install(|| {
+                rows.par_iter().map(|(outpoint, entry)| MuHash::from_utxo(outpoint, entry)).reduce(MuHash::new, |mut a, b| {
+                    a.combine(&b);
+                    a
+                })
+            });
+            staged_multiset.combine(&chunk_multiset);
+        }
+        let staged_hash = staged_multiset.finalize();
+        if staged_hash != new_pruning_point_header.utxo_commitment {
+            return Err(PruningImportError::ImportedMultisetHashMismatch(new_pruning_point_header.utxo_commitment, staged_hash));
+        }
         {
-            // Copy the pruning-point UTXO set into virtual's UTXO set
-            let pruning_meta_read = self.pruning_meta_stores.read();
-            let mut virtual_write = self.virtual_stores.write();
-
+            // Copy the pruning-point UTXO set into virtual's UTXO set.
             virtual_write.utxo_set.clear().unwrap();
             for chunk in &pruning_meta_read.utxo_set.iterator().map(|iter_result| iter_result.unwrap()).chunks(1000) {
                 virtual_write.utxo_set.write_from_iterator_without_cache(chunk).unwrap();
@@ -22681,13 +22931,13 @@ impl VirtualStateProcessor {
             self.rebuild_evm_deposit_lock_index(&virtual_write.utxo_set);
         }
 
-        let virtual_read = self.virtual_stores.upgradable_read();
+        drop(pruning_meta_read);
 
-        // Validate transactions of the pruning point itself
-        let new_pruning_point_transactions = self.block_transactions_store.get(new_pruning_point).unwrap();
+        // Validate transactions of the pruning point itself while its target stays pinned.
+        let new_pruning_point_transactions = self.block_transactions_store.get(new_pruning_point).map_err(|e| unavailable("block transactions", e))?;
         let validated_transactions = self.validate_transactions_in_parallel(
             &new_pruning_point_transactions,
-            &virtual_read.utxo_set,
+            &virtual_write.utxo_set,
             new_pruning_point_header.daa_score,
             TxValidationFlags::Full,
         );
@@ -22707,6 +22957,12 @@ impl VirtualStateProcessor {
             drop(statuses_write);
         }
 
+        // Head publication reads pruning again; release before that call to avoid
+        // a recursive read behind a waiting pruning writer. Completion rechecks the
+        // whole target/generation before it can expose this import as stable.
+        drop(pruning_point_read);
+        let virtual_read = parking_lot::RwLockWriteGuard::downgrade_to_upgradable(virtual_write);
+
         // Calculate the virtual state, treating the pruning point as the only virtual parent
         let virtual_parents = vec![new_pruning_point];
         let virtual_ghostdag_data = self.ghostdag_manager.ghostdag(&virtual_parents);
@@ -22724,6 +22980,73 @@ impl VirtualStateProcessor {
             &ChainPath::default(),
         )?;
 
+        // Genesis initialization imports its pinned premine directly, without a
+        // later IBD completion stage or non-genesis sidecars.
+        if new_pruning_point == self.genesis.hash && self.pruning_import_session()?.active.is_none() {
+            self.complete_pruning_point_import(new_pruning_point)?;
+        }
+        Ok(())
+    }
+
+    /// Complete IBD only when the target, executed virtual generation and every
+    /// enabled sidecar still refer to the imported point. Readers cannot observe
+    /// a true marker for a mixed generation; transient lock contention is retryable.
+    pub fn complete_pruning_point_import(&self, point: BlockHash) -> PruningImportResult<()> {
+        let unavailable = |where_: &str, e: StoreError| {
+            PruningImportError::PruningPointImportContextUnavailable(point, format!("completion {where_}: {e}"))
+        };
+        let mismatch = |what: &str| PruningImportError::PruningPointImportGenerationMismatch(point, what.into());
+        let virtual_read = self.virtual_stores.read();
+        let virtual_state = virtual_read.state.get().map_err(|e| unavailable("virtual state", e))?;
+        if virtual_state.ghostdag_data.selected_parent != point {
+            return Err(mismatch("virtual sink does not match the import target"));
+        }
+        // Use try guards below virtual: a writer may itself need virtual. A busy
+        // generation is incomplete, not permission to publish a stale import.
+        let pruning_read = self.pruning_point_store.try_read().ok_or_else(|| mismatch("pruning target is changing; retry"))?;
+        if pruning_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))? != point {
+            return Err(mismatch("established pruning target changed"));
+        }
+        let palw_read = self.palw_state_v2_store.try_read().ok_or_else(|| mismatch("PALW sidecar is changing; retry"))?;
+        if self.palw_state_params_v2.is_some()
+            && palw_read.tip_key().map_err(|e| unavailable("PALW tip", e))?.map(|(at, _)| at) != Some(point) {
+            return Err(mismatch("PALW tip does not match the import target"));
+        }
+        let overlay_read = self.pruning_overlay_snapshot_store.try_read().ok_or_else(|| mismatch("overlay sidecar is changing; retry"))?;
+        if point != self.genesis.hash && self.dns_params.is_some()
+            && overlay_read.get().optional().map_err(|e| unavailable("overlay snapshot", e))?.map(|row| row.pruning_point) != Some(point) {
+            return Err(mismatch("overlay snapshot does not match the import target"));
+        }
+        let heads_read = self.evm_heads_store.try_read().ok_or_else(|| mismatch("EVM heads are changing; retry"))?;
+        let header = self.headers_store.get_header(point).map_err(|e| unavailable("L1 header", e))?;
+        if point != self.genesis.hash && header.daa_score >= self.evm_activation_daa_score {
+            let execution = self.evm_header_store.get(point).map_err(|e| unavailable("EVM execution", e))?;
+            if execution.commitment_root() != header.evm_commitment_root
+                || heads_read.get().map_err(|e| unavailable("EVM heads", e))?.latest != point {
+                return Err(mismatch("EVM execution or latest head does not match the import target"));
+            }
+            self.evm_state_store.get(point).map_err(|e| unavailable("EVM snapshot", e))?;
+        }
+        let mut meta_write = self.pruning_meta_stores.try_write().ok_or_else(|| mismatch("UTXO import is changing; retry"))?;
+        if meta_write.utxoset_position().map_err(|e| unavailable("UTXO position", e))? != point {
+            return Err(mismatch("UTXO position does not match the import target"));
+        }
+        let mut batch = WriteBatch::default();
+        let mut session = meta_write.import_session().map_err(|e| unavailable("import session", e))?;
+        if let Some(token) = session.active {
+            if token.point != point || !session.utxos_started || !session.utxos_imported {
+                return Err(mismatch("session has not finalized this UTXO import"));
+            }
+            session.active = None;
+            session.utxos_started = false;
+            session.utxos_imported = false;
+            meta_write.set_import_session(&mut batch, &session).map_err(|e| unavailable("closing import session", e))?;
+        }
+        meta_write.set_pruning_utxoset_stable_flag(&mut batch, true).map_err(|e| unavailable("stable marker", e))?;
+        // Store writers update caches as they stage the batch. A failed durable
+        // commit is fatal, like the other consensus writes; returning would expose
+        // the cached true marker without its durable completion.
+        self.db.write(batch).expect("writing the verified import completion cannot fail");
         Ok(())
     }
 
@@ -22861,7 +23184,13 @@ impl VirtualStateProcessor {
             heads_write.set_native_batch(&mut batch, None).unwrap();
             heads_write.set_batch(&mut batch, heads).unwrap();
         }
+        // Importing a sidecar starts a cross-ledger recovery transaction. Persist the
+        // incomplete marker WITH the state, before any UTXO clear/copy can occur. A
+        // crash here must make IBD retry all sidecars, never reuse old stable UTXOs.
+        let mut pruning_meta_write = self.pruning_meta_stores.write();
+        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
         self.db.write(batch).unwrap();
+        drop(pruning_meta_write);
         *readiness_memo = None;
         drop(pruning_point_read);
         Ok(())
@@ -22981,6 +23310,19 @@ impl VirtualStateProcessor {
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return Ok(()); // not a ConsensusV2 network — nothing reads this store.
         };
+        let context_error = |e: StoreError| {
+            PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("PALW pruning-point store: {e}"))
+        };
+        let require_target = |established: BlockHash| {
+            if pruning_point == established {
+                Ok(())
+            } else {
+                Err(PruningImportError::ImportedPalwPruningPointMismatch(pruning_point, established))
+            }
+        };
+        // A valid historic root is not permission to replace the live PALW tip.
+        // Every IBD caller establishes this target through its pruning history first.
+        require_target(self.pruning_point_store.read().pruning_point().map_err(context_error)?)?;
         // **Which header commits this state.** `Header::palw_state_root` commits the root of the
         // state as-of the block's SELECTED PARENT — the chain walk compares exactly that
         // (`header.palw_state_root != parent_root` disqualifies). This carriage is the state as-of
@@ -23061,6 +23403,10 @@ impl VirtualStateProcessor {
                 ));
             }
         }
+        // Pin the established target after validation and through the durable batch.
+        // Pruning -> PALW -> metadata matches pruning advancement's lock order.
+        let pruning_point_read = self.pruning_point_store.read();
+        require_target(pruning_point_read.pruning_point().map_err(context_error)?)?;
         // Written through `set_tip_batch`, which RE-DERIVES the root from the state it is handed —
         // so what becomes durable is a function of what was verified, and a caller cannot store a
         // snapshot under a root it did not compute. The peer's bytes never reach the database.
@@ -23076,7 +23422,12 @@ impl VirtualStateProcessor {
                 .set_pruning_snapshot_batch(&mut batch, pruning_point, &state)
                 .expect("writing the verified PALW pruning snapshot cannot fail");
         }
+        // The PALW sidecar is installed before IBD replaces the UTXO set. An OS
+        // crash between those steps must leave a durable incomplete-import flag.
+        let mut pruning_meta_write = self.pruning_meta_stores.write();
+        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
         self.db.write(batch).unwrap();
+        drop(pruning_meta_write);
         Ok(())
     }
 
@@ -23326,6 +23677,17 @@ impl VirtualStateProcessor {
         if self.dns_params.is_none() {
             return Ok(()); // overlay dormant — the snapshot is empty and nothing reads it
         }
+        let unavailable = |where_: &str, e: StoreError| {
+            PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("legacy overlay {where_}: {e}"))
+        };
+        let require_target = |established: BlockHash| {
+            if pruning_point == established {
+                Ok(())
+            } else {
+                Err(PruningImportError::ImportedOverlayPruningPointMismatch(pruning_point, established))
+            }
+        };
+        require_target(self.pruning_point_store.read().pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
 
         // TRUSTLESS GATE — this runs BEFORE the write, and the write is to the LIVE consensus
         // store (all three IBD call sites hand this a live session; the headers-proof one
@@ -23375,21 +23737,70 @@ impl VirtualStateProcessor {
             snapshot.window.len(),
             snapshot.reserve_balance
         );
-        let mut batch = WriteBatch::default();
-        {
-            let mut bonds_write = self.stake_bonds_store.write();
-            for rec in &snapshot.bonds {
-                bonds_write.insert_batch(&mut batch, rec.bond_outpoint, std::sync::Arc::new(rec.clone())).unwrap();
+        // Historic monetary state is installed only for the authorized import target.
+        // Recheck and hold that target before acquiring any monetary store write lock.
+        let pruning_point_read = self.pruning_point_store.read();
+        require_target(pruning_point_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
+        let mismatch = |what: String| PruningImportError::ImportedOverlayExistingStateMismatch(pruning_point, what);
+        let anchor_daa = self.headers_store.get_daa_score(pruning_point)
+            .map_err(|e| unavailable("anchor header", e))?;
+        let mut canonical = snapshot;
+        canonical.canonicalize();
+        let mut bonds_write = self.stake_bonds_store.write();
+        let mut overlay_write = self.pruning_overlay_snapshot_store.write();
+        // Verify ALL existing monetary rows before staging any write. A retry is
+        // reusable state, not an overwrite of an owner's exit/slashing history.
+        let mut new_bonds = Vec::new();
+        let mut seen_bonds = std::collections::BTreeSet::new();
+        for rec in &canonical.bonds {
+            if !seen_bonds.insert((rec.bond_outpoint.transaction_id, rec.bond_outpoint.index)) {
+                return Err(mismatch(format!("duplicate bond {}", rec.bond_outpoint)));
+            }
+            match bonds_write.get(&rec.bond_outpoint).optional()
+                .map_err(|e| unavailable("bond row", e))? {
+                None => new_bonds.push(rec.clone()),
+                Some(existing) => {
+                    // A historic snapshot omits later canonical mutations; keep
+                    // those mutations when the as-of-anchor facts agree.
+                    let mut at_anchor = (*existing).clone();
+                    if at_anchor.slashed_at_daa_score.is_some_and(|d| d > anchor_daa) {
+                        at_anchor.slashed_at_daa_score = None;
+                    }
+                    if at_anchor.unbond_request_daa_score.is_some_and(|d| d > anchor_daa) {
+                        at_anchor.unbond_request_daa_score = None;
+                    }
+                    at_anchor.status = effective_bond_status(&at_anchor, anchor_daa);
+                    if at_anchor != *rec {
+                        return Err(mismatch(format!("bond {}", rec.bond_outpoint)));
+                    }
+                }
             }
         }
-        if snapshot.reserve_balance > 0 {
-            self.reserve_balance_store.insert_batch(&mut batch, pruning_point, snapshot.reserve_balance).unwrap();
+        let insert_reserve = match self.reserve_balance_store.get(pruning_point).optional()
+            .map_err(|e| unavailable("reserve row", e))? {
+            None => canonical.reserve_balance > 0,
+            Some(existing) if existing == canonical.reserve_balance => false,
+            Some(_) => return Err(mismatch("reserve balance".into())),
+        };
+        if let Some(existing) = overlay_write.get().optional().map_err(|e| unavailable("snapshot", e))?
+            && existing.pruning_point == pruning_point
+            && existing.snapshot.commitment_preimage() != canonical.commitment_preimage() {
+            return Err(mismatch("snapshot".into()));
         }
-        self.pruning_overlay_snapshot_store
-            .write()
-            .set_batch(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot })
-            .unwrap();
+        let mut batch = WriteBatch::default();
+        for rec in new_bonds {
+            bonds_write.insert_batch(&mut batch, rec.bond_outpoint, std::sync::Arc::new(rec)).unwrap();
+        }
+        if insert_reserve {
+            self.reserve_balance_store.insert_batch(&mut batch, pruning_point, canonical.reserve_balance).unwrap();
+        }
+        overlay_write.set_batch(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot: canonical }).unwrap();
+        // Legacy monetary/bond rights are another sidecar of the same import.
+        // Mark recovery incomplete in its batch, even if no UTXOs were cleared yet.
+        let mut pruning_meta_write = self.pruning_meta_stores.write();
+        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
         self.db.write(batch).unwrap();
+        drop(pruning_meta_write);
         Ok(())
     }
 

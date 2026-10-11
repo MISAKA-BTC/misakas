@@ -32,6 +32,8 @@ pub enum CompositionRefusalV1 {
     NoStatement,
     #[error("a sampled coverage of {checked} of {units} units")]
     Coverage { units: u128, checked: u128 },
+    #[error("the exact instance sum or signed composed bound is not representable")]
+    Unrepresentable,
 }
 
 /// One probabilistic relation family of a statement.
@@ -168,23 +170,35 @@ pub fn composed_false_accept_bits_v1(
     if adversary.adaptive_statements == 0 {
         return Err(CompositionRefusalV1::NoStatement);
     }
-    let check_bits = families.iter().map(|f| f.per_repetition_bits as i64 * f.repetitions as i64).min().map(|min_tb| {
-        let total = families.iter().fold(0u128, |acc, f| acc.saturating_add(f.instances));
-        match composition {
-            InstanceCompositionV1::UnionBound => min_tb - ceil_log2_v1(total) as i64,
-            InstanceCompositionV1::SingleFalseInstance => min_tb,
-        }
-    });
+    // Saturating an instance sum understates the union-bound loss, while an
+    // unsigned-to-signed cast can turn a huge grinding budget into a gain.
+    // Keep products/subtractions exact and refuse unrepresentable answers.
+    let check_bits_wide = families.iter().map(|f| i128::from(f.per_repetition_bits) * i128::from(f.repetitions)).min();
+    let instance_loss = if composition == InstanceCompositionV1::UnionBound {
+        let total =
+            families.iter().try_fold(0u128, |acc, f| acc.checked_add(f.instances)).ok_or(CompositionRefusalV1::Unrepresentable)?;
+        i128::from(ceil_log2_v1(total))
+    } else {
+        0
+    };
+    let check_bits_wide = check_bits_wide.map(|bits| bits - instance_loss);
+    let check_bits = check_bits_wide.map(i64::try_from).transpose().map_err(|_| CompositionRefusalV1::Unrepresentable)?;
     let selection_bits = match coverage {
         CoverageV1::Complete => None,
         CoverageV1::Sampled { units, checked } => selection_bits_v1(units, checked)?,
     };
     let loss_bits = adversary.loss_bits();
-    let terms: Vec<i64> = [check_bits.map(|c| c - loss_bits as i64), binding_bits.map(i64::from), selection_bits.map(i64::from)]
-        .into_iter()
-        .flatten()
-        .collect();
-    let effective_bits = terms.iter().min().map(|m| m - ceil_log2_v1(terms.len() as u128) as i64);
+    let terms: Vec<i128> =
+        [check_bits_wide.map(|c| c - i128::from(loss_bits)), binding_bits.map(i128::from), selection_bits.map(i128::from)]
+            .into_iter()
+            .flatten()
+            .collect();
+    let effective_bits = terms
+        .iter()
+        .min()
+        .map(|m| i64::try_from(m - i128::from(ceil_log2_v1(terms.len() as u128))))
+        .transpose()
+        .map_err(|_| CompositionRefusalV1::Unrepresentable)?;
     Ok(ComposedBoundV1 { check_bits, loss_bits, binding_bits, selection_bits, effective_bits })
 }
 

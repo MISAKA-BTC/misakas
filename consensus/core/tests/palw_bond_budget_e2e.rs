@@ -276,7 +276,14 @@ fn the_allocation_clips_reward_only_on_the_real_fold() {
         sim.block(H + 101, vec![], None);
         let ids: Vec<Hash64> = (0..3u64).filter_map(|k| sim.claim(90, 0x5_0000 + k)).collect();
         assert_eq!(ids.len(), 3, "the allocation never refuses a claim");
-        let reserved: Vec<u64> = ids.iter().map(|id| budget(&sim).claim_row(id).unwrap().reserved.reward_sompi).collect();
+        // codex RFC-8 (R6781-F merge): an attempt's reward reservation is its producer's native income hold (kind 0).
+        let reserved: Vec<u64> = ids
+            .iter()
+            .map(|id| {
+                let bond = sim.c.claim(id).bond;
+                sim.c.s.bond_budget_native_claim_income_v1(id, &bond).map_or(0, |row| row.reserved.reward_sompi)
+            })
+            .collect();
         let carve = sim.c.claim(&ids[0]).escrowed_reward;
         let weight: u128 = ids.iter().map(|id| budget(&sim).claim_row(id).unwrap().reserved.final_weight).sum();
         budget(&sim).check_consistency().expect("the engine's invariants");
@@ -439,10 +446,14 @@ fn no_payout_before_final_model_allocation_leg() {
         assert_eq!(row.consumed.reward_sompi, 0, "no model-allocation reward before Final");
     }
     let fin = &sim.tape[first].child;
-    let row = fin.bond_budget().unwrap().claim_row(&a).unwrap().clone();
     let vest = fin.vesting_row(&a).unwrap().clone();
     let named = vest.producer.amount + vest.seats.iter().map(|(_, p)| p.amount).sum::<u64>() + vest.reserve + vest.buyback_bound;
-    assert!(named <= row.consumed.reward_sompi && row.consumed.reward_sompi <= row.reserved.reward_sompi);
+    // codex RFC-8 (R6781-F merge): what Final names is within the producer's native income reservation (kind 0), the R its admission
+    // reserved out of the model's clipped budget.
+    let last = before_final(&sim, &a, first).pop().expect("a state before Final");
+    let bond = last.claim(&a).unwrap().bond;
+    let income = last.bond_budget_native_claim_income_v1(&a, &bond).expect("the claim's native income hold").clone();
+    assert!(named <= income.reserved.reward_sompi, "named {named} within the reservation {}", income.reserved.reward_sompi);
 }
 
 /// **The owner leg**: a model's market (its owner's fee legs and buyback) is not touched by a claim before Final.

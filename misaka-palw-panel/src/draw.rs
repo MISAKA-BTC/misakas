@@ -110,6 +110,99 @@ fn seat_order_over<'a>(
     Ok(entries.into_iter().flat_map(|e| e.3.into_iter().map(|s| s.bond)).collect())
 }
 
+/// The selected prefix of the complete operator race, in bounded working memory.
+/// Input must be strictly ordered by `(operator, bond)` and include the ENTIRE frozen
+/// role population. Headroom filters the selectable bond within an operator, but does
+/// not reduce that operator's frozen aggregate race weight. This exactly matches the
+/// full ranking followed by the bind-time headroom/operator filters.
+/// This helper alone does not enlarge historical population eligibility or a policy cap.
+pub fn seat_prefix_streaming_v1(
+    candidates: impl IntoIterator<Item = SeatCandidateV1>,
+    seed: Hash64,
+    retry: u16,
+    role: u8,
+    used: &[Hash64],
+    needed: usize,
+    max_candidates: u32,
+    mut has_headroom: impl FnMut(&SeatCandidateV1) -> bool,
+) -> Result<Vec<BondIdV1>, PanelErrorV1> {
+    if ![CLASS_ROLE_V1, OUTSIDER_ROLE_V1].contains(&role) || needed > MAX_STRATIFIED_SEATS_V1 as usize {
+        return Err(PanelErrorV1::InvalidSnapshot);
+    }
+    let used: BTreeSet<_> = used.iter().copied().collect();
+    // One group and at most `needed` winners are resident; neither all candidates nor
+    // all operator groups are materialised by the selector.
+    let mut winners: Vec<StreamWinnerV1> = Vec::with_capacity(needed + 1);
+    let mut group: Option<(Hash64, u64, Option<(BondIdV1, u64, u128)>)> = None;
+    let mut previous = None;
+    let mut count = 0u32;
+    for seat in candidates {
+        count = count.checked_add(1).ok_or(PanelErrorV1::ResourceLimit)?;
+        if count > max_candidates {
+            return Err(PanelErrorV1::ResourceLimit);
+        }
+        let key = (seat.operator, seat.bond);
+        if previous.is_some_and(|p| p >= key) {
+            return Err(PanelErrorV1::InvalidSnapshot);
+        }
+        previous = Some(key);
+        if group.as_ref().is_none_or(|g| g.0 != seat.operator) {
+            if let Some(g) = group.take() {
+                finish_stream_group_v1(g, &mut winners, needed, seed, retry, role);
+            }
+            group = Some((seat.operator, 0, None));
+        }
+        if seat.roles & role == 0 || used.contains(&seat.operator) {
+            continue;
+        }
+        if seat.collateral == 0 {
+            return Err(PanelErrorV1::InvalidSnapshot);
+        }
+        let g = group.as_mut().expect("a current operator group");
+        g.1 = g.1.checked_add(seat.collateral).ok_or(PanelErrorV1::InvalidSnapshot)?;
+        if has_headroom(&seat) {
+            let score = ticket(seed, retry, role, seat.operator, Some(seat.bond));
+            if g.2.is_none_or(|(bond, weight, old)| {
+                product(score, weight).cmp(&product(old, seat.collateral)).then(seat.bond.cmp(&bond)).is_lt()
+            }) {
+                g.2 = Some((seat.bond, seat.collateral, score));
+            }
+        }
+    }
+    if let Some(g) = group {
+        finish_stream_group_v1(g, &mut winners, needed, seed, retry, role);
+    }
+    Ok(winners.into_iter().map(|w| w.bond).collect())
+}
+
+struct StreamWinnerV1 {
+    operator: Hash64,
+    collateral: u64,
+    score: u128,
+    bond: BondIdV1,
+}
+
+fn finish_stream_group_v1(
+    (operator, collateral, best): (Hash64, u64, Option<(BondIdV1, u64, u128)>),
+    winners: &mut Vec<StreamWinnerV1>,
+    needed: usize,
+    seed: Hash64,
+    retry: u16,
+    role: u8,
+) {
+    let Some((bond, _, _)) = best else { return };
+    let row = StreamWinnerV1 { operator, collateral, score: ticket(seed, retry, role, operator, None), bond };
+    let at = winners
+        .binary_search_by(|old| {
+            product(old.score, row.collateral).cmp(&product(row.score, old.collateral)).then(old.operator.cmp(&row.operator))
+        })
+        .unwrap_or_else(|i| i);
+    if at < needed {
+        winners.insert(at, row);
+        winners.truncate(needed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

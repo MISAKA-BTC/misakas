@@ -8325,11 +8325,23 @@ pub struct GetPalwNodeStatusResponse {
     /// and receipts filed in the last hour, and the producer's backpressure gate. Empty from a
     /// version-4 sender.
     pub verification: String,
+    /// Version 6: durable pruning-import authority and its incomplete marker,
+    /// observed together. Older senders have `import_session_available=false`.
+    #[serde(default)]
+    pub import_session_available: bool,
+    #[serde(default)]
+    pub import_session_epoch: u64,
+    #[serde(default)]
+    pub import_session_point: String,
+    #[serde(default)]
+    pub import_session_phase: String,
+    #[serde(default)]
+    pub pruning_import_stable: bool,
 }
 
 impl Serializer for GetPalwNodeStatusResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &5, writer)?;
+        store!(u16, &6, writer)?;
         store!(String, &self.consensus_params_id, writer)?;
         store!(Vec<u64>, &self.fence_schedule, writer)?;
         store!(String, &self.consensus_schedule_id, writer)?;
@@ -8367,6 +8379,12 @@ impl Serializer for GetPalwNodeStatusResponse {
         store!(String, &self.drill_salt_id, writer)?;
         // Version 5: the verification debt.
         store!(String, &self.verification, writer)?;
+        // Version 6: session diagnostics. The version-5 prefix stays verbatim.
+        store!(bool, &self.import_session_available, writer)?;
+        store!(u64, &self.import_session_epoch, writer)?;
+        store!(String, &self.import_session_point, writer)?;
+        store!(String, &self.import_session_phase, writer)?;
+        store!(bool, &self.pruning_import_stable, writer)?;
         Ok(())
     }
 }
@@ -8422,6 +8440,13 @@ impl Deserializer for GetPalwNodeStatusResponse {
         if version >= 5 {
             out.verification = load!(String, reader)?;
         }
+        if version >= 6 {
+            out.import_session_available = load!(bool, reader)?;
+            out.import_session_epoch = load!(u64, reader)?;
+            out.import_session_point = load!(String, reader)?;
+            out.import_session_phase = load!(String, reader)?;
+            out.pruning_import_stable = load!(bool, reader)?;
+        }
         Ok(out)
     }
 }
@@ -8429,6 +8454,20 @@ impl Deserializer for GetPalwNodeStatusResponse {
 #[cfg(test)]
 mod palw_node_status_wire_tests {
     use super::*;
+
+    fn version_five_bytes(response: &GetPalwNodeStatusResponse) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        Serializer::serialize(response, &mut bytes).unwrap();
+        let mut tail = Vec::new();
+        store!(bool, &response.import_session_available, &mut tail).unwrap();
+        store!(u64, &response.import_session_epoch, &mut tail).unwrap();
+        store!(String, &response.import_session_point, &mut tail).unwrap();
+        store!(String, &response.import_session_phase, &mut tail).unwrap();
+        store!(bool, &response.pruning_import_stable, &mut tail).unwrap();
+        bytes.truncate(bytes.len() - tail.len());
+        bytes[..2].copy_from_slice(&5u16.to_le_bytes());
+        bytes
+    }
 
     /// **Version 4 carries the genesis and the drill id; a version-3 sender decodes with both
     /// empty** — which `palw_node_genesis_verdict_v1` reads as "predates the salt, so no drill".
@@ -8449,8 +8488,7 @@ mod palw_node_status_wire_tests {
 
         // A version-3 sender: the same bytes without the two version-4 strings and the version-5 one, version 3.
         let public = GetPalwNodeStatusResponse { genesis_hash: String::new(), drill_salt_id: String::new(), ..response };
-        let mut v5 = Vec::new();
-        Serializer::serialize(&public, &mut v5).unwrap();
+        let v5 = version_five_bytes(&public);
         let mut empty = Vec::new();
         store!(String, &String::new(), &mut empty).unwrap();
         let mut v3 = v5[..v5.len() - 3 * empty.len()].to_vec();
@@ -8478,12 +8516,53 @@ mod palw_node_status_wire_tests {
         let mut empty = Vec::new();
         store!(String, &String::new(), &mut empty).unwrap();
         let without = GetPalwNodeStatusResponse { verification: String::new(), ..response };
-        let mut v4 = Vec::new();
-        Serializer::serialize(&without, &mut v4).unwrap();
+        let v4 = version_five_bytes(&without);
         let mut v4 = v4[..v4.len() - empty.len()].to_vec();
         v4[..2].copy_from_slice(&4u16.to_le_bytes());
         let old = <GetPalwNodeStatusResponse as Deserializer>::deserialize(&mut v4.as_slice()).unwrap();
         assert_eq!((old.verification.as_str(), old.drill_salt_id.as_str()), ("", "0123456789abcdef"));
+    }
+
+    #[test]
+    fn rfc12_node_status_frames_session_diagnostics_and_older_senders_are_unknown() {
+        let response = GetPalwNodeStatusResponse {
+            genesis_hash: "ab".repeat(64),
+            verification: "unchanged-prefix".into(),
+            import_session_available: true,
+            import_session_epoch: 41,
+            import_session_point: "cd".repeat(64),
+            import_session_phase: "utxo-stream".into(),
+            pruning_import_stable: false,
+            ..Default::default()
+        };
+        let mut wire = Vec::new();
+        Serializer::serialize(&response, &mut wire).unwrap();
+        let mut framed = wire.as_slice();
+        let back = <GetPalwNodeStatusResponse as Deserializer>::deserialize(&mut framed).unwrap();
+        assert!(framed.is_empty(), "the v6 decoder consumes exactly its framed diagnostics");
+        assert!(back.import_session_available && !back.pruning_import_stable);
+        assert_eq!((back.import_session_epoch, back.import_session_point.as_str(), back.import_session_phase.as_str()),
+            (41, response.import_session_point.as_str(), "utxo-stream"));
+        assert_eq!(back.verification, "unchanged-prefix");
+        let v5 = version_five_bytes(&response);
+        let old = <GetPalwNodeStatusResponse as Deserializer>::deserialize(&mut v5.as_slice()).unwrap();
+        assert!(!old.import_session_available, "absent diagnostics cannot mean a verified stable import");
+        assert_eq!((old.import_session_epoch, old.import_session_point.as_str(), old.import_session_phase.as_str()), (0, "", ""));
+        assert_eq!(old.verification, response.verification);
+        // Prefix compatibility control: the pre-v6 fields consume the same
+        // bytes, leaving the appended tail. This does not execute an old client.
+        let mut old_reader_frame = wire.clone();
+        old_reader_frame[..2].copy_from_slice(&5u16.to_le_bytes());
+        let mut old_reader_frame = old_reader_frame.as_slice();
+        let prefix = <GetPalwNodeStatusResponse as Deserializer>::deserialize(&mut old_reader_frame).unwrap();
+        assert_eq!(prefix.verification, response.verification);
+        assert_eq!(old_reader_frame.len(), wire.len() - v5.len());
+        let mut json = serde_json::to_value(&response).unwrap();
+        for key in ["importSessionAvailable", "importSessionEpoch", "importSessionPoint", "importSessionPhase", "pruningImportStable"] {
+            json.as_object_mut().unwrap().remove(key);
+        }
+        let old_json: GetPalwNodeStatusResponse = serde_json::from_value(json).unwrap();
+        assert!(!old_json.import_session_available && old_json.import_session_point.is_empty());
     }
 }
 

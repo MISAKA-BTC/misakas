@@ -702,7 +702,7 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
 /// one of its EVM accounts. A key or address the keyring does not derive is refused whether or not
 /// public testnet-12 knows it: the keyring is the positive list, so no deny-list has to stay
 /// complete.
-fn palw_drill_keys_are_drill_only_v1(args: &Args, ring: &PalwDrillKeyringV1) -> ConfigResult<()> {
+pub(crate) fn palw_drill_keys_are_drill_only_v1(args: &Args, ring: &PalwDrillKeyringV1) -> ConfigResult<()> {
     let salt_id = ring.salt().id();
     if let Some(path) = args.palw_producer_key.as_deref() {
         let seed = kaspa_pq_validator_core::load_validator_seed(path).map_err(|e| refused(format!("--palw-producer-key: {e}")))?;

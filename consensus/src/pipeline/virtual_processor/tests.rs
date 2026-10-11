@@ -4292,6 +4292,22 @@ async fn palw_v2_the_pruning_point_import_verifies_the_root_before_it_writes() {
     assert_eq!(served, PalwStateCarriageV2::from_state(&vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap().1));
     assert!(vp.pruning_point_palw_state(kaspa_consensus_core::BlockHash::from_u64_word(0xBAD)).is_none(), "and nothing else");
 
+    // An authentic historical state is still not an authorized replacement of
+    // the live tip. The established import target is genesis until history is installed.
+    let before_tip = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap();
+    let before_stable = ctx.consensus.is_pruning_utxoset_stable();
+    let err = vp.import_pruning_point_palw_state(point, honest.clone()).expect_err("a different established target refuses even the real root");
+    assert!(matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedPalwPruningPointMismatch(incoming, established)
+        if incoming == point && established == config.params.genesis.hash), "the target is refused by name: {err}");
+    let after_tip = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap();
+    assert_eq!((after_tip.0, after_tip.1.state_root()), (before_tip.0, before_tip.1.state_root()), "refusal leaves the live tip intact");
+    assert_eq!(vp.pruning_point_palw_state(tip).unwrap(), served, "refusal leaves the serving snapshot intact");
+    assert_eq!(ctx.consensus.is_pruning_utxoset_stable(), before_stable, "refusal leaves completion intact");
+    ctx.consensus.import_pruning_points(vec![
+        ctx.consensus.get_header(config.params.genesis.hash).unwrap(),
+        ctx.consensus.get_header(point).unwrap(),
+    ]).expect("the history API authorizes this import target");
+
     // Empty the store the way a pruned join leaves it, then import what the peer served.
     {
         let mut store = vp.palw_state_v2_store.write();
@@ -4494,6 +4510,11 @@ async fn the_pruning_point_witness_is_the_selected_chain_child_not_a_side_block(
         st
     };
     let honest = PalwStateCarriageV2::from_state(&state);
+
+    ctx.consensus.import_pruning_points(vec![
+        ctx.consensus.get_header(config.params.genesis.hash).unwrap(),
+        ctx.consensus.get_header(point).unwrap(),
+    ]).expect("the history API authorizes this import target");
 
     // Empty the store the way a pruned join leaves it, then import.
     {
@@ -9450,7 +9471,7 @@ async fn evm_producer_deposit_claim_fills_and_filters_template_system_ops() {
     let consensus = TestConsensus::new(&config);
     let wait_handles = consensus.init();
     let mut genesis_ms = MuHash::new();
-    consensus.append_imported_pruning_point_utxos(&initial_utxos, &mut genesis_ms);
+    consensus.append_imported_pruning_point_utxos(&initial_utxos, &mut genesis_ms).expect("initial epoch-zero EVM genesis staging");
     consensus.import_pruning_point_utxo_set(config.genesis.hash, genesis_ms).unwrap();
 
     // (1) the valid claim for the real lock; (2) a claim for a non-existent
@@ -13885,7 +13906,7 @@ fn consensus_with_deposit_locks(
     let consensus = TestConsensus::new(&config);
     let wait_handles = consensus.init();
     let mut genesis_ms = MuHash::new();
-    consensus.append_imported_pruning_point_utxos(&initial_utxos, &mut genesis_ms);
+    consensus.append_imported_pruning_point_utxos(&initial_utxos, &mut genesis_ms).expect("initial epoch-zero EVM genesis staging");
     consensus.import_pruning_point_utxo_set(config.genesis.hash, genesis_ms).unwrap();
     (consensus, wait_handles, claims)
 }
@@ -17553,4 +17574,53 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     for id in [SUBNETWORK_ID_STAKE_UNBOND, SUBNETWORK_ID_PALW_COMMITMENT, SUBNETWORK_ID_PALW_RECEIPT] {
         assert!(validator.check_dns_retirement(&Transaction::new(0, vec![], vec![], 0, id.clone(), 0, vec![]), 5).is_ok());
     }
+}
+
+/// Actual public import/completion APIs refuse before replacing money or exposing
+/// a mixed generation. This small native fixture is not P2P or a pruning proof.
+#[tokio::test]
+async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
+    use crate::model::stores::pruning::PruningStore;
+    use kaspa_consensus_core::errors::pruning::PruningImportError;
+    use kaspa_muhash::MuHash;
+    let config = ConfigBuilder::new(DEVNET_PARAMS).skip_proof_of_work().build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    let genesis = config.params.genesis.hash;
+    ctx.consensus.set_pruning_utxoset_stable_flag(false);
+    ctx.consensus.complete_pruning_point_import(genesis).expect("the coherent genesis generation completes");
+    assert!(ctx.consensus.is_pruning_utxoset_stable());
+    let block = ctx.build_block_template_keeping_time(0).block.to_immutable();
+    let expected_sink = block.hash();
+    ctx.validate_and_insert_block(block).await;
+    assert_eq!(ctx.consensus.get_sink(), expected_sink, "the unmodified EVM-active template reaches the actual sink");
+    let point = ctx.consensus.get_sink();
+    let vp = ctx.consensus.virtual_processor();
+    let original_position = vp.pruning_meta_stores.read().utxoset_position().unwrap();
+    let before_utxos: Vec<_> = vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect();
+    let err = ctx.consensus.import_pruning_point_utxo_set(point, MuHash::new()).unwrap_err();
+    assert!(matches!(err, PruningImportError::ImportedUtxoPruningPointMismatch(incoming, target)
+        if incoming == point && target == genesis), "wrong target is refused before root or money writes: {err}");
+    assert_eq!(vp.pruning_meta_stores.read().utxoset_position().unwrap(), original_position);
+    assert_eq!(vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(), before_utxos);
+    assert!(ctx.consensus.is_pruning_utxoset_stable());
+
+    // Even the established target cannot complete after the virtual generation
+    // moved away. A failed completion leaves recovery visibly incomplete.
+    ctx.consensus.set_pruning_utxoset_stable_flag(false);
+    assert!(matches!(ctx.consensus.complete_pruning_point_import(genesis),
+        Err(PruningImportError::PruningPointImportGenerationMismatch(_, _))));
+    assert!(!ctx.consensus.is_pruning_utxoset_stable());
+    ctx.consensus.import_pruning_points(vec![ctx.consensus.get_header(genesis).unwrap(), ctx.consensus.get_header(point).unwrap()]).unwrap();
+    assert!(matches!(ctx.consensus.complete_pruning_point_import(point),
+        Err(PruningImportError::PruningPointImportGenerationMismatch(_, _))), "old UTXO position does not complete a new target");
+    assert!(!ctx.consensus.is_pruning_utxoset_stable());
+
+    // A corrupt/missing stored target produces a typed refusal, never a header
+    // unwrap panic. This final seam changes no UTXO or executed state.
+    let missing = BlockHash::from_u64_word(0x12_eeff_0001);
+    vp.pruning_point_store.write().set(missing, 2).unwrap();
+    assert!(matches!(ctx.consensus.import_pruning_point_utxo_set(missing, MuHash::new()),
+        Err(PruningImportError::PruningPointImportContextUnavailable(_, _))));
+    assert_eq!(vp.pruning_meta_stores.read().utxoset_position().unwrap(), original_position);
+    assert_eq!(vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(), before_utxos);
 }

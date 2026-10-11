@@ -42,7 +42,8 @@ use super::*;
 use crate::palw_panel_beacon_v1::{self as beacon, PanelBeaconHistoryV1};
 use crate::palw_panel_v2::PalwPanelDrawPolicyV1;
 use crate::palw_permissionless_panel_v1::{
-    PalwPanelV3ParamsV1, panel_admitted_claim_v1, panel_bond_key_v1, panel_snapshot_candidates_v1, panel_stratified_candidates_v1,
+    PalwPanelV3ParamsV1, panel_admitted_claim_v1, panel_bond_key_v1, panel_snapshot_candidates_for_version_v1,
+    panel_stratified_candidates_for_version_v1,
 };
 use misaka_palw_challenge::hash::Digest;
 use misaka_palw_challenge::{
@@ -163,6 +164,27 @@ fn attributed_v2(event: WorkFinalEventV1) -> AttributedWorkV1 {
 }
 
 impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
+    fn source_snapshot(&self, request: &BeaconRequestV1) -> Result<crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1, String> {
+        self.state.kernel_route.as_ref().ok_or("Panel source snapshot has no rooted kernel route")?.panel_source_snapshot_v1(request.epoch)
+    }
+
+    fn opt_in_material(&self, context: &Digest) -> Result<(misaka_palw_challenge::OptInContractV4, Vec<misaka_palw_challenge::OptInSourceV4>), String> {
+        let route = self.state.kernel_route.as_ref().ok_or("Panel sources have no rooted kernel route")?;
+        let target = route.beacon_source_target_v4(context)?;
+        if target.context.subject_kind != misaka_palw_challenge::SubjectKindV1::PanelAssignment {
+            return Err("source contract belongs to another subject".into());
+        }
+        Ok((misaka_palw_challenge::OptInContractV4 { context_id: *context, terms_id: target.terms.id(),
+            source_final_by: target.terms.final_by }, route.beacon_opt_in_sources_v4(context)?))
+    }
+
+    fn paid_material(&self, context: &Digest) -> Result<crate::palw_beacon_source_fee_v1::PaidBeaconMaterialV5, String> {
+        let route = self.state.kernel_route.as_ref().ok_or("Panel paid sources have no rooted kernel route")?;
+        if route.beacon_source_target_v4(context)?.context.subject_kind != misaka_palw_challenge::SubjectKindV1::PanelAssignment {
+            return Err("paid contract belongs to another subject".into());
+        }
+        route.paid_beacon_material_v5(context)?.ok_or_else(|| "Panel epoch has no authenticated prepaid funding".into())
+    }
     /// The V2 lattice's Finals (all `PanelLicensed`) and the kernel route's OPV Finals (`PanelIndependent`).
     fn final_events(&self) -> Vec<WorkFinalEventV1> {
         match self.source {
@@ -293,6 +315,7 @@ struct FoldView<'a, 'b> {
     /// The engine's own live duties per bond, which V2's ledger already holds (see [`Self::available_collateral`]).
     duties: BTreeMap<BondIdV1, u128>,
     tip_position: u64,
+    retirement_parent_root: std::cell::OnceCell<Hash64>,
 }
 
 impl<'a, 'b> FoldView<'a, 'b> {
@@ -329,6 +352,7 @@ impl<'a, 'b> FoldView<'a, 'b> {
             mirror,
             duties: BTreeMap::new(),
             tip_position: parent.last_point.map(|point| point.daa_score).unwrap_or(0),
+            retirement_parent_root: std::cell::OnceCell::new(),
         };
         // The duties the engine holds on claims still awaiting their Panel: the V2 ledger carries each as a duty row written at
         // the bind. A claim already licensed or ended is not the engine's to count (the engine releases it first thing), and
@@ -357,7 +381,7 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
     fn candidates(&self, claim: &AdmittedClaimV1) -> Result<Vec<SeatCandidateV1>, PanelErrorV1> {
         let policy = self.mirror.policy;
         let checkpoint_daa = self.engine.daa();
-        let mut rows = panel_snapshot_candidates_v1(
+        let mut rows = panel_snapshot_candidates_for_version_v1(
             self.parent,
             claim.claim_id,
             self.inputs.floor_class,
@@ -365,9 +389,10 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
             policy,
             self.inputs.draw,
             self.inputs.capability_proof,
+            self.mirror.wire_version,
         )
         // A claim the checkpoint does not hold seals an empty population (and ends non-fraud), never a failed block.
-        .unwrap_or_default();
+        .or_else(|e| if eng::complete_population_version_v1(self.mirror.wire_version) { Err(e) } else { Ok(Vec::new()) })?;
         rows.retain(|seat| self.admissible(seat, claim));
         Ok(rows)
     }
@@ -382,7 +407,7 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
         strata: &PanelStrataV1,
     ) -> Result<(Vec<SeatCandidateV1>, Vec<u64>), PanelErrorV1> {
         let policy = self.mirror.policy;
-        let mut rows = panel_stratified_candidates_v1(
+        let mut rows = panel_stratified_candidates_for_version_v1(
             self.parent,
             claim.claim_id,
             self.inputs.floor_class,
@@ -391,8 +416,9 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
             self.inputs.draw,
             self.inputs.capability_proof,
             strata,
+            self.mirror.wire_version,
         )
-        .unwrap_or_default();
+        .or_else(|e| if eng::complete_population_version_v1(self.mirror.wire_version) { Err(e) } else { Ok(Vec::new()) })?;
         rows.retain(|(seat, _)| self.admissible(seat, claim));
         Ok(rows.into_iter().unzip())
     }
@@ -440,6 +466,18 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
     fn terminal_claim(&self, claim: &Hash64) -> bool {
         !claim_awaits_its_panel(self.builder.state.claims.get(claim))
     }
+    fn retired_claim(&self, claim: &Hash64) -> Option<eng::PanelRetirementAuthorityV1> {
+        // ReceiptLicensed releases Panel duties but retains the population. Compaction
+        // waits for the existing retirement funnel's COMPLETE native removal, one full
+        // checkpoint later, so its authority root authenticates the prior full record.
+        if self.builder.state.claims.contains_key(claim) || self.parent.claims.contains_key(claim)
+            || self.builder.state.palw_accusation_pending_v1(claim) || self.parent.palw_accusation_pending_v1(claim)
+            || self.parent.panel_v3().and_then(|engine| engine.claim(claim)).is_none() { return None; }
+        Some(eng::PanelRetirementAuthorityV1 {
+            native_parent_root: *self.retirement_parent_root.get_or_init(|| self.parent.state_root()),
+            native_parent_checkpoint: self.parent.last_point?.block,
+        })
+    }
 
     /// **The receipt clock never runs against a pending accusation — structural, G14.** A Panel's receipt window
     /// (and the redraw and `PanelUnavailable` expiry it ends in) must not pre-empt a DA default a public bond has already
@@ -482,7 +520,7 @@ fn active_mirror(builder: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> O
 
 fn create_engine(parent: &PalwChainStateV2, mirror: &PalwPanelV3ParamsV1) -> Result<PermissionlessPanelStateV1, PalwStateV2Error> {
     PermissionlessPanelStateV1::from_cursor(PanelCursorV1 {
-        version: eng::WIRE_VERSION_V2,
+        version: mirror.wire_version,
         network: mirror.network,
         ruleset: mirror.ruleset,
         policy: mirror.policy,
@@ -500,6 +538,7 @@ fn v2_reason_of(reason: NonFraudReasonV1) -> PalwVoidReasonV2 {
         NonFraudReasonV1::BeaconUnavailable => PalwVoidReasonV2::BeaconUnavailable,
         NonFraudReasonV1::NoCapablePanel => PalwVoidReasonV2::PermissionlessNoCapablePanel,
         NonFraudReasonV1::PanelUnavailable => PalwVoidReasonV2::PanelUnavailable,
+        NonFraudReasonV1::PopulationResourceLimit => PalwVoidReasonV2::PermissionlessNoCapablePanel,
     }
 }
 
@@ -512,9 +551,16 @@ pub(super) fn advance_v1(
     let Some(mirror) = active_mirror(builder, ctx) else { return Ok(()) };
     let inputs = builder.extras.panel_v3.clone().unwrap_or_default();
     let engine = match builder.state.panel_v3.take() {
-        Some(engine) => engine,
+        Some(engine) if engine.cursor().version == mirror.wire_version => engine,
+        Some(_) => {
+            return Err(inconsistent(
+                "profile migration",
+                "an existing carriage cannot be silently reinterpreted as a complete population",
+            ));
+        }
         None => create_engine(parent, &mirror)?,
     };
+    freeze_source_epochs_v1(builder, parent, &engine, &inputs, ctx)?;
     let step = SelectedChainStepV1 {
         block: ctx.block,
         parent: engine.tip(),
@@ -532,6 +578,83 @@ pub(super) fn advance_v1(
     builder.state.panel_v3 = Some(next);
     apply_events(builder, ctx, &events)?;
     apply_deferred_ends_v1(builder, ctx)
+}
+
+/// Freeze at the first actual release step, using only parent facts and every
+/// already sealed assignment. New block objects cannot change this inventory.
+/// This is a prerequisite for paid Panel targets, whose authenticated sponsor
+/// and full consumer liability bound are still required before funding is enabled.
+fn freeze_source_epochs_v1(
+    builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, engine: &PermissionlessPanelStateV1,
+    inputs: &PalwPanelV3InputsV1, ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_panel_source_snapshot_v1::{PalwPanelSourceSnapshotV1, PALW_PANEL_SOURCE_SNAPSHOT_TABLE_V1 as TABLE,
+        MAX_PANEL_SOURCE_SNAPSHOT_ITEMS_V1 as MAX_ITEMS};
+    if !matches!(inputs.beacon_source, PalwPanelV3BeaconSourceV1::Chain)
+        || !builder.extras.kernel_route.as_ref().and_then(|e| e.beacon_source)
+            .is_some_and(|f| f.activation != crate::config::params::ForkActivation::never() && f.activation.is_active(ctx.daa_score)) {
+        return Ok(());
+    }
+    let Some(policy) = inputs.approved_beacons.iter().find(|p| p.id() == engine.policy().beacon_scheme.as_bytes() && p.is_opt_in_source()) else {
+        return Ok(());
+    };
+    let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
+    // A fixed aggregate retention ceiling. Once exhausted the epoch remains
+    // unavailable and ends on its normal non-fraud path; old facts are never erased.
+    let mut retained = 0usize;
+    for ((table, _), bytes) in &route.aux {
+        if *table == TABLE {
+            let row: PalwPanelSourceSnapshotV1 = borsh::from_slice(bytes).map_err(|e| inconsistent("source snapshot carriage", e))?;
+            retained = retained.checked_add(row.eligible_profiles.len() + row.excluded_profiles.len() + row.assigned_work_ids.len())
+                .ok_or_else(|| inconsistent("source snapshots", "retention overflow"))?;
+        }
+    }
+    // Group once, rather than scanning the full retained claim archive for each
+    // epoch. Only subjects in their actual carrying window require inventories.
+    let mut epochs: BTreeMap<u64, (BTreeSet<Digest>, BTreeSet<Digest>)> = BTreeMap::new();
+    for record in engine.claim_rows().values() {
+        let Some(seal) = &record.seal else { continue };
+        let release = seal.beacon_epoch.checked_mul(engine.policy().beacon_period_daa)
+            .ok_or_else(|| inconsistent("source epoch", "release overflow"))?;
+        let deadline = release.checked_add(engine.policy().beacon_wait_daa)
+            .ok_or_else(|| inconsistent("source epoch", "deadline overflow"))?;
+        if ctx.daa_score < release || ctx.daa_score > deadline { continue; }
+        let (excluded, assigned) = epochs.entry(seal.beacon_epoch).or_default();
+        excluded.insert(record.claim.class_id.as_bytes());
+        assigned.insert(record.claim.work_id.as_bytes());
+    }
+    let Some(parent_route) = parent.kernel_route.as_ref() else { return Ok(()) };
+    let Some(opv) = builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()) else { return Ok(()) };
+    let ledger = parent_route.ledger().map_err(|e| inconsistent("source eligibility ledger", e))?;
+    let profiles = parent_route.opv_eligible_set_v1(&ledger, ctx.daa_score, &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv));
+    for (epoch, (excluded_profiles, assigned_work_ids)) in epochs {
+        let Some(release) = epoch.checked_mul(engine.policy().beacon_period_daa) else { return Err(inconsistent("source epoch", "release overflow")) };
+        let Some(deadline) = release.checked_add(engine.policy().beacon_wait_daa) else { return Err(inconsistent("source epoch", "deadline overflow")) };
+        if ctx.daa_score < release || ctx.daa_score > deadline { continue; }
+        let key = borsh::to_vec(&epoch).expect("epoch serializes");
+        if builder.state.kernel_route.as_ref().expect("route exists").aux.contains_key(&(TABLE, key.clone())) {
+            // Existing rooted rows must decode and bind exactly; never overwrite
+            // malformed facts by reconstructing a different current population.
+            let row = builder.state.kernel_route.as_ref().unwrap().panel_source_snapshot_v1(epoch)
+                .map_err(|e| inconsistent("frozen source subject", e))?;
+            row.validate_for(&BeaconRequestV1 { network: engine.network(), ruleset: engine.ruleset(), scheme: engine.policy().beacon_scheme,
+                epoch, release_daa: release, deadline_daa: deadline }, policy).map_err(|e| inconsistent("frozen source subject", e))?;
+            continue;
+        }
+        let eligible_profiles: BTreeSet<_> = profiles.iter().map(|id| id.as_bytes()).filter(|id| !excluded_profiles.contains(id)).collect();
+        let count = eligible_profiles.len() + excluded_profiles.len() + assigned_work_ids.len();
+        if count > MAX_ITEMS || retained.checked_add(count).is_none_or(|n| n > MAX_ITEMS) { continue; }
+        let snapshot = PalwPanelSourceSnapshotV1 { version: 1, network: engine.network(), ruleset: engine.ruleset(),
+            scheme: engine.policy().beacon_scheme, epoch, release_daa: release, deadline_daa: deadline,
+            committed_daa: ctx.daa_score, committed_block: ctx.block, checkpoint: engine.tip(), checkpoint_daa: engine.daa(),
+            eligible_profiles, excluded_profiles, assigned_work_ids };
+        let request = BeaconRequestV1 { network: engine.network(), ruleset: engine.ruleset(), scheme: engine.policy().beacon_scheme,
+            epoch, release_daa: release, deadline_daa: deadline };
+        snapshot.validate_for(&request, policy).map_err(|e| inconsistent("new source subject", e))?;
+        builder.write_kernel_row(TABLE, key, Some(borsh::to_vec(&snapshot).expect("snapshot serializes")));
+        retained += count;
+    }
+    Ok(())
 }
 
 fn apply_events(
@@ -609,6 +732,14 @@ fn bind_v2(
     match (&claim.phase, retry) {
         (PalwClaimPhaseV2::Provisional, false) | (PalwClaimPhaseV2::PanelBound { .. }, true) => {}
         _ => return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "PanelBoundV3" }),
+    }
+    if builder.require_paid_consumer_bind_v1(*claim_id, &claim, ctx.daa_score).is_err() {
+        // Entropy/DA delays cannot buy a later service term. A nonfraud end
+        // returns reservations through the existing engine/native path.
+        if !builder.state.palw_accusation_pending_v1(claim_id) {
+            return end_claim(builder, ctx, claim_id, PalwVoidReasonV2::PanelUnavailable, true);
+        }
+        return Ok(());
     }
     let mut seats = Vec::with_capacity(binding.seats.len());
     for seat in &binding.seats {
@@ -953,7 +1084,11 @@ impl PalwChainStateV2 {
         engine.check_consistency().map_err(|e| bad(format!("the engine: {e}")))?;
         let mirror = params.panel_v3().ok_or_else(|| bad("an engine exists but the fence is not configured".into()))?;
         let cursor = engine.cursor();
-        if cursor.network != mirror.network || cursor.ruleset != mirror.ruleset || cursor.policy != mirror.policy {
+        if cursor.version != mirror.wire_version
+            || cursor.network != mirror.network
+            || cursor.ruleset != mirror.ruleset
+            || cursor.policy != mirror.policy
+        {
             return Err(bad("the engine's identity or policy differs from the fence's".into()));
         }
         for (id, record) in engine.claim_rows() {
@@ -995,6 +1130,11 @@ impl PalwChainStateV2 {
                             .is_some_and(|shard| shard.s_l == strata.count && shard.outsider == strata.outsider)
                     {
                         return Err(bad(format!("claim {id} was drawn per shard but holds no per-shard record of its strata")));
+                    }
+                }
+                ClaimPhaseV3::Retired(_) => {
+                    if claim.is_some() || self.palw_accusation_pending_v1(id) {
+                        return Err(bad(format!("claim {id} compacted before native retirement")));
                     }
                 }
                 ClaimPhaseV3::Released { .. } => {

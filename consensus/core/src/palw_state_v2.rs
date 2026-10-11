@@ -1830,6 +1830,13 @@ pub struct PalwStateParamsV2 {
     /// preset, and validation refuses both armed.
     #[borsh(skip)]
     bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1>,
+    /// Separate dormant monetary schema v2 fence, synchronized with Params.
+    #[borsh(skip)]
+    reporter_income_from_daa: Option<u64>,
+    #[borsh(skip)]
+    material_income_from_daa: Option<u64>,
+    #[borsh(skip)]
+    paid_consumer_lifecycle: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
     /// 2026-10-04 audit's fixes read it). `None` on every shipped preset.
     #[borsh(skip)]
@@ -2086,6 +2093,9 @@ impl PalwStateParamsV2 {
             anchor_window_from_daa: None,
             panel_v3: None,
             bond_budget: None,
+            reporter_income_from_daa: None,
+            material_income_from_daa: None,
+            paid_consumer_lifecycle: None,
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,
             legacy_public_filer_from_daa: None,
@@ -2540,6 +2550,27 @@ impl PalwStateParamsV2 {
     }
 
     /// The bond budget's mirror, if the network arms the fence.
+    pub fn with_reporter_income_from(mut self, from: Option<u64>) -> Self {
+        self.reporter_income_from_daa = from;
+        self
+    }
+
+    pub fn reporter_income_from(&self) -> Option<u64> { self.reporter_income_from_daa }
+
+    pub fn reporter_income_active_at(&self, daa: u64) -> bool {
+        self.bond_budget_active_at(daa) && self.reporter_income_from_daa.is_some_and(|from| daa >= from)
+    }
+
+    pub fn with_material_income_from(mut self, from: Option<u64>) -> Self { self.material_income_from_daa = from; self }
+    pub fn material_income_from(&self) -> Option<u64> { self.material_income_from_daa }
+    pub fn material_income_active_at(&self, daa: u64) -> bool {
+        self.reporter_income_active_at(daa) && self.material_income_from_daa.is_some_and(|from| daa >= from)
+    }
+
+    pub fn with_paid_consumer_lifecycle(mut self, mirror: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1>) -> Self { self.paid_consumer_lifecycle = mirror; self }
+    pub fn paid_consumer_lifecycle(&self) -> Option<&crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1> { self.paid_consumer_lifecycle.as_ref() }
+    pub fn paid_consumer_lifecycle_active_at(&self, daa: u64) -> bool { self.material_income_active_at(daa) && self.paid_consumer_lifecycle.as_ref().is_some_and(|f| daa >= f.from_daa) }
+
     pub fn bond_budget(&self) -> Option<&crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1> {
         self.bond_budget.as_ref()
     }
@@ -5617,8 +5648,8 @@ pub fn palw_rcore_deadline_v1(
                 .ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?,
         ),
         PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
-            let at = palw_exec_v2_rewards_v1::retirement(state, params, claim_id, terminal_deadline_at_v1(claim, params, last_daa)?, claim)?;
-            palw_da_terminal_deadline_v1(at.map(|at| state.staged_retirement_floor_v1(claim_id, at)), da)
+            let at = terminal_deadline_with_material_v1(state, claim_id, claim, params, last_daa)?;
+            palw_da_terminal_deadline_v1(at, da)
         }
     })
 }
@@ -15302,6 +15333,28 @@ impl PalwChainStateV2 {
             budget.check_consistency().map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("bond budget: {why}")))?;
             self.bond_budget_no_payout_before_final_v1()
                 .map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("bond budget: {why}")))?;
+            for (id, contract) in &budget.consumer_contracts {
+                let claim = self.claims.get(id).ok_or_else(|| PalwStateV2Error::CarriageInconsistent("paid consumer contract has no native claim".into()))?;
+                if contract.terms.accepted_daa != claim.accepted_daa || contract.terms.material_until > claim.trace_retention_daa
+                    || match contract.status {
+                        crate::palw_bond_budget_v1::PalwPaidConsumerStatusV1::Exhausted { daa } | crate::palw_bond_budget_v1::PalwPaidConsumerStatusV1::Terminal { daa } => self.last_point.as_ref().is_none_or(|point| daa > point.daa_score),
+                        _ => false,
+                    }
+                    || match contract.status {
+                        crate::palw_bond_budget_v1::PalwPaidConsumerStatusV1::Terminal { daa } => terminal_daa_of(claim).is_none_or(|at| at < daa),
+                        _ => claim.phase.is_terminal(),
+                    } {
+                    return Err(PalwStateV2Error::CarriageInconsistent("paid consumer contract differs from accepted native claim".into()));
+                }
+
+            }
+            if budget.header.version >= crate::palw_bond_budget_v1::PALW_BOND_BUDGET_STATE_VERSION_V4 {
+                for (id, claim) in &self.claims {
+                    if params.paid_consumer_lifecycle_active_at(claim.accepted_daa) && !budget.consumer_contracts.contains_key(id) {
+                        return Err(PalwStateV2Error::CarriageInconsistent("new accepted paid consumer has no immutable contract".into()));
+                    }
+                }
+            }
         }
         let mut exposure: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
         let mut safe: u128 = 0;
@@ -16420,8 +16473,37 @@ fn terminal_deadline_of(
     params: &PalwStateParamsV2,
     last_point: Option<&PalwBlockContextV2>,
 ) -> Result<Option<u64>, PalwStateV2Error> {
-    palw_exec_v2_rewards_v1::retirement(state, params, id, terminal_deadline_at_v1(claim, params, last_point.map(|point| point.daa_score))?, claim)
+    terminal_deadline_with_material_v1(state, id, claim, params, last_point.map(|point| point.daa_score))
+}
+
+/// A held commitment has an operational release clock before its material-safe
+/// retirement. Moving that release to an unpaid queue's MAX would skip the
+/// exact collateral release and corrupt the held-commitment counter.
+fn terminal_deadline_with_material_v1(
+    state: &PalwChainStateV2, id: &Hash64, claim: &PalwClaimStateV2,
+    params: &PalwStateParamsV2, last_daa: Option<u64>,
+) -> Result<Option<u64>, PalwStateV2Error> {
+    if let Some(release) = terminal_operational_release_at_v1(claim, params, last_daa)? {
+        return Ok(Some(release));
+    }
+    // The staged court's material horizon floors the retirement (integration, `25a9253d5`); the operational release above is a
+    // collateral clock, not a retirement, and is not floored (R6781-F merge).
+    palw_exec_v2_rewards_v1::retirement(state, params, id, terminal_deadline_at_v1(claim, params, last_daa)?, claim)
         .map(|at| at.map(|at| state.staged_retirement_floor_v1(id, at)))
+}
+
+/// Only the still-pending first terminal deadline; after its sweep, retirement
+/// composes every root-exact physical payment window.
+fn terminal_operational_release_at_v1(
+    claim: &PalwClaimStateV2, params: &PalwStateParamsV2, last_daa: Option<u64>,
+) -> Result<Option<u64>, PalwStateV2Error> {
+    let Some(terminal_daa) = terminal_daa_of(claim) else { return Ok(None) };
+    if params.fp_abandon_hold_daa > 0 && abandon_hold_may_hold_a_deadline(claim) {
+        let release = terminal_daa.checked_add(params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
+        if last_daa.is_none_or(|daa| daa <= release) { return Ok(Some(release)); }
+    }
+    Ok(crate::palw_escrow_funding_v2::palw_claim_obligation_release_at_v1(claim, params)
+        .filter(|release| last_daa.is_none_or(|daa| daa <= *release)))
 }
 
 /// [`terminal_deadline_of`] on the last point's DAA alone — the form DL-1
@@ -16434,18 +16516,8 @@ fn terminal_deadline_at_v1(
     let Some(terminal_daa) = terminal_daa_of(claim) else {
         return Ok(None);
     };
-    if params.fp_abandon_hold_daa > 0 && abandon_hold_may_hold_a_deadline(claim) {
-        let release_at = terminal_daa.checked_add(params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
-        if last_daa.is_none_or(|daa| daa <= release_at) {
-            return Ok(Some(release_at));
-        }
-    }
-    // ADR-0160 E-4: an attempt claim voided past `palw_capacity_escrow_at_licence` owns its obligation
-    // hold's release first, then its retirement (`validate_palw_v2` keeps the retirement past the hold).
-    if let Some(release_at) = crate::palw_escrow_funding_v2::palw_claim_obligation_release_at_v1(claim, params)
-        && last_daa.is_none_or(|daa| daa <= release_at)
-    {
-        return Ok(Some(release_at));
+    if let Some(release) = terminal_operational_release_at_v1(claim, params, last_daa)? {
+        return Ok(Some(release));
     }
     if params.claim_retirement_daa == 0 {
         return Ok(None);
@@ -18725,16 +18797,30 @@ impl PalwFoldReadV1<'_> {
                     u128::from(self.model_registry_ready_seats(&ready_class, now_daa, fold))
                 })
                 .collect();
-            let permille: Vec<u32> = (0..usize::from(plan.s_l))
-                .map(|shard| {
-                    plan.cell_permille
-                        .iter()
-                        .skip(shard * usize::from(plan.s_p))
-                        .take(usize::from(plan.s_p))
-                        .map(|p| u32::from(*p))
-                        .sum()
-                })
-                .collect();
+            let permille: Vec<u32> = if self.params.tir_shard_segment_active_at(now_daa) {
+                // Future admission room must cover the same resident-priced masks as
+                // bind/pay/locks. Existing claims retain their acceptance-time prices.
+                let Some(tir) = self.state.tir_classes.get(class_id) else { return Some(0) };
+                let Ok(program) = misaka_palw_tir::TirProgramV1::decode_canonical(&tir.program) else { return Some(0) };
+                let Ok(resident) = crate::palw_tir_shard_segment_v2::palw_tir_shard_cell_resident_permille_v2(
+                    &program, tir.facts.max_context, plan.s_l, plan.s_p,
+                ) else { return Some(0) };
+                let Ok(shares) = crate::palw_tir_shard_segment_v2::palw_tir_shard_room_permille_v2(
+                    &plan.cell_permille, &resident, plan.s_l, plan.s_p,
+                ) else { return Some(0) };
+                shares
+            } else {
+                (0..usize::from(plan.s_l))
+                    .map(|shard| {
+                        plan.cell_permille
+                            .iter()
+                            .skip(shard * usize::from(plan.s_p))
+                            .take(usize::from(plan.s_p))
+                            .map(|p| u32::from(*p))
+                            .sum()
+                    })
+                    .collect()
+            };
             let window = (row.profile.verification_window_spans as u64).max(1);
             return Some(crate::palw_tir_shard_v1::palw_tir_shard_room_v1(
                 &ready,
@@ -19874,10 +19960,43 @@ pub fn palw_da_lock_live_v1(
 // Transition internals: a builder that records every write it makes
 // ---------------------------------------------------------------------------------------------
 
+/// A transient registration lookup, never state/root/carriage/delta data. A key hash
+/// narrows an equality search; even a hash collision still compares the full public key.
+/// Operator holders retain bond order so the refusal names the same first holder as a walk.
+#[derive(Default)]
+struct PalwBondRegistrationIndexV1 {
+    keys: BTreeMap<Hash64, BTreeSet<PalwBondKeyV2>>,
+    operators: BTreeMap<Hash64, BTreeSet<PalwBondKeyV2>>,
+}
+
+fn registration_key_bucket_v1(pubkey: &[u8]) -> Hash64 {
+    let mut state = keyed(b"misaka-palw/transient-bond-key-index/v1");
+    state.update(&(pubkey.len() as u64).to_le_bytes());
+    state.update(pubkey);
+    finish(state)
+}
+
+impl PalwBondRegistrationIndexV1 {
+    fn note(&mut self, key: PalwBondKeyV2, record: &PalwBondStateV2, add: bool) {
+        for (map, bucket) in [(&mut self.keys, registration_key_bucket_v1(&record.pubkey)),
+                              (&mut self.operators, record.operator_id)] {
+            if add {
+                map.entry(bucket).or_default().insert(key);
+            } else if let std::collections::btree_map::Entry::Occupied(mut row) = map.entry(bucket) {
+                row.get_mut().remove(&key);
+                if row.get().is_empty() { row.remove(); }
+            }
+        }
+    }
+}
+
 struct TransitionBuilder<'a> {
     params: &'a PalwStateParamsV2,
     state: PalwChainStateV2,
     entries: Vec<PalwDeltaEntryV2>,
+    /// RFC06 complete-population preparation: lazily built once per fold, updated only by
+    /// `write_bond`, invalidated on restore. Same-block registration no longer scans N² keys.
+    registration_index: Option<PalwBondRegistrationIndexV1>,
     /// ADR-0065 D4, resolved by the caller from `Params::palw_unavailable_abstains` at this
     /// block's DAA. It rides the builder rather than each arm's signature because it is a fact
     /// about the BLOCK, constant for the whole fold, and threading it through every object arm
@@ -20416,6 +20535,7 @@ impl<'a> TransitionBuilder<'a> {
             params,
             state: parent.clone(),
             entries: Vec::new(),
+            registration_index: None,
             unavailable_abstains,
             model_moves: 0,
             exec_origin_budget: Default::default(),
@@ -20438,6 +20558,27 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    fn registration_index_v1(&mut self) -> &PalwBondRegistrationIndexV1 {
+        if self.registration_index.is_none() {
+            let mut index = PalwBondRegistrationIndexV1::default();
+            for (key, record) in &self.state.bonds { index.note(*key, record, true); }
+            self.registration_index = Some(index);
+        }
+        self.registration_index.as_ref().unwrap()
+    }
+
+    fn registered_pubkey_v1(&mut self, pubkey: &[u8]) -> bool {
+        let bucket = registration_key_bucket_v1(pubkey);
+        self.registration_index_v1();
+        self.registration_index.as_ref().unwrap().keys.get(&bucket).is_some_and(|keys| {
+            keys.iter().any(|key| self.state.bonds.get(key).is_some_and(|record| record.pubkey == pubkey))
+        })
+    }
+
+    fn registered_operator_v1(&mut self, operator: Hash64) -> Option<PalwBondKeyV2> {
+        self.registration_index_v1().operators.get(&operator).and_then(|holders| holders.first().copied())
+    }
+
     // Every write goes through one of these, so the delta cannot miss a change.
 
     fn write_bond(&mut self, key: PalwBondKeyV2, new: Option<PalwBondStateV2>) {
@@ -20449,6 +20590,15 @@ impl<'a> TransitionBuilder<'a> {
             Some(record) => self.state.bonds.insert(key, record.clone()),
             None => self.state.bonds.remove(&key),
         };
+        if let Some(index) = &mut self.registration_index {
+            // Collateral/status-only writes do not change either lookup.
+            let same_identity = old.as_ref().zip(new.as_ref()).is_some_and(|(old, new)|
+                old.pubkey == new.pubkey && old.operator_id == new.operator_id);
+            if !same_identity {
+                if let Some(record) = &old { index.note(key, record, false); }
+                if let Some(record) = &new { index.note(key, record, true); }
+            }
+        }
         self.weight_cap_retotal(before, self.weight_cap_term(&key));
         self.entries.push(PalwDeltaEntryV2::Bond { key, old, new });
     }
@@ -22445,6 +22595,7 @@ impl<'a> TransitionBuilder<'a> {
         for (key, _) in self.claim_locks_v1(&claim_id) {
             self.write_slashable_lock(key, None);
         }
+        self.cancel_panel_recipients_v1(claim_id);
         self.release_seat_duties(&claim_id)?;
         let mut revived = claim.clone();
         revived.phase = PalwClaimPhaseV2::Provisional;
@@ -23636,6 +23787,9 @@ impl<'a> TransitionBuilder<'a> {
                 payload: bond.payout_payload,
             })
         });
+        if let Some(winner) = best {
+            self.bind_native_reporter_v1(now_daa, offence_key, winner, amount, now_daa)?;
+        }
         self.write_reward_pending(offence_key, Some(PalwPendingRewardV1 { amount, reveal_until, evidence_id, best }));
         Ok(Some(amount))
     }
@@ -27269,6 +27423,7 @@ impl<'a> TransitionBuilder<'a> {
         seat_exposure: u128,
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
+        self.hold_panel_recipients_v1(claim_id, seats, now_daa)?;
         let on_duty: BTreeMap<PalwBondKeyV2, u64> = seats.iter().map(|seat| (seat.bond, 0)).collect();
         // Reserved in the panel's own order, each bond once — the journal order the row was always
         // reserved in.
@@ -27902,6 +28057,14 @@ impl<'a> TransitionBuilder<'a> {
             return 0;
         }
         let Some(payload) = payload else { return amount };
+        let key = self.model_fee_key_v1(ctx, class_id, holder, leg);
+        self.write_payout(key, Some(PalwPayoutV2 { payload, amount }));
+        0
+    }
+
+    /// Pure counterpart of the queue write: budget admission and payment use
+    /// exactly the same immutable move/leg key before either ledger is changed.
+    fn model_fee_key_v1(&self, ctx: &PalwBlockContextV2, class_id: &Hash64, holder: &Hash64, leg: &[u8]) -> Hash64 {
         let mut h = keyed(PALW_STATE_V2_DOMAIN_MODEL_PAYOUT);
         h.update(class_id.as_byte_slice());
         h.update(holder.as_byte_slice());
@@ -27910,9 +28073,7 @@ impl<'a> TransitionBuilder<'a> {
         h.update(leg);
         let mut key_bytes = finish(h).as_bytes();
         key_bytes[0] = PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX;
-        let key = Hash64::from_bytes(key_bytes);
-        self.write_payout(key, Some(PalwPayoutV2 { payload, amount }));
-        0
+        Hash64::from_bytes(key_bytes)
     }
 
     /// **How many payout rows a market move of this shape will write, at most** (audit M-10).
@@ -27958,6 +28119,12 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn write_court(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>) -> Result<(), PalwStateV2Error> {
+        if let Some(record) = &new {
+            self.state.require_paid_consumer_backstop_v1(&record.claim, record.deadline_daa)?;
+            if !self.state.court_sessions.contains_key(&key) {
+                self.state.require_paid_consumer_dispute_v1(&record.claim, record.opened_daa, record.deadline_daa)?;
+            }
+        }
         let old = match &new {
             Some(record) => self.state.court_sessions.insert(key, record.clone()),
             None => self.state.court_sessions.remove(&key),
@@ -28189,6 +28356,7 @@ impl<'a> TransitionBuilder<'a> {
         // The caches describe the state just replaced; the next reader rebuilds them from the
         // restored one (audit #13b).
         *self.inflight_index.get_mut() = None;
+        self.registration_index = None;
         self.panel_horizon.set(None);
     }
 
@@ -28550,6 +28718,15 @@ impl<'a> TransitionBuilder<'a> {
     /// attempt whose licence set recounted to `basis_k ≥ 2` — an S2 licence and every free-prompt
     /// licence never tick. The deadline is DL-1's ([`palw_rcore_deadline_v1`]).
     fn license_claim(&mut self, claim_id: Hash64, claim: PalwClaimStateV2, daa_score: u64) -> Result<(), PalwStateV2Error> {
+        if self.state.paid_consumer_contract_v1(&claim_id).is_some() {
+            // The licence's earliest Final is the one Final floor (`palw_claim_final_floor_v1`, the td0 rule; R6781-F merge), plus one.
+            let through = palw_claim_final_floor_v1(&self.state, self.params, &claim_id, &claim, daa_score)?
+                .checked_add(1)
+                .ok_or(PalwStateV2Error::Overflow("paid consumer licence path"))?;
+            if !self.state.paid_consumer_service_fits_v1(&claim_id, daa_score, through) {
+                return Err(PalwStateV2Error::ExecV2Refused("licence exceeds immutable paid consumer service".into()));
+            }
+        }
         let rcore = self.params.rcore_plus_active_at(daa_score);
         // **The second clock ticks HERE past `palw_audit_2026_09_23`** (2026-09-24 DoS audit,
         // §4b): a licence needs a quorum's live signatures in the very block that carries it, so
@@ -28812,6 +28989,10 @@ impl<'a> TransitionBuilder<'a> {
             if self.state.palw_accusation_pending_v1(&id) {return Ok(());}
             return self.void_claim(id,claim,final_daa,PalwVoidReasonV2::PanelUnavailable);
         }
+        if !self.state.paid_consumer_service_fits_v1(&id, final_daa, final_daa) {
+            return Err(PalwStateV2Error::ExecV2Refused("Final exceeds immutable paid consumer service".into()));
+        }
+        self.mark_paid_consumer_terminal_v1(id, final_daa)?;
         self.note_model_probe(claim, true, final_daa);
         // ADR-0152-adjacent (Activation Pool): (b)'s tracking — before the duty row leaves below.
         self.note_activation_probe_credits_v1(&id, claim);
@@ -28966,6 +29147,17 @@ impl<'a> TransitionBuilder<'a> {
                             buyback: slice,
                         });
                     } else {
+                        let finished = !self.state.exec_v2_rewards.get(&id)
+                            .is_some_and(|row| row.legs.keys().any(|(bond, _)| *bond == claim.bond));
+                        self.pay_native_recipient_v1(id, claim.bond, 0, final_daa, producer_amount, id, finished)?;
+                        let mut recipient_amounts: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+                        for (seat, amount) in &seat_legs {
+                            let total = recipient_amounts.entry(*seat).or_default();
+                            *total = total.checked_add(*amount).ok_or(PalwStateV2Error::Overflow("Panel recipient income"))?;
+                        }
+                        for (seat, amount) in recipient_amounts {
+                            self.pay_native_recipient_v1(id, seat, 1, final_daa, amount, palw_panel_payout_key_v1(&self.state.bonds[&seat].payout_payload), true)?;
+                        }
                         if producer_amount > 0 {
                             self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount: producer_amount }));
                         }
@@ -28996,6 +29188,9 @@ impl<'a> TransitionBuilder<'a> {
                     let (reward, legs) = palw_exec_v2_fold::settle_at_final_v2(self, &id, reward, final_daa)?;
                     exec_legs = legs;
                     exec_settled = true;
+                    let finished = !self.state.exec_v2_rewards.get(&id)
+                        .is_some_and(|row| row.legs.keys().any(|(bond, _)| *bond == claim.bond));
+                    self.pay_native_recipient_v1(id, claim.bond, 0, final_daa, reward, id, finished)?;
                     if reward > 0 {
                         self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount: reward }));
                     }
@@ -29014,6 +29209,13 @@ impl<'a> TransitionBuilder<'a> {
         // Lane BUDGET: an attempt's Final is terminal for its budget (a free-prompt claim's spends come after its Final).
         if matches!(claim.source, PalwClaimSourceV2::Attempt) {
             self.bond_budget_close_v1(&id, final_daa);
+        }
+        if let Some(duties) = self.state.panel_duties.get(&id).map(|row| row.seats.clone()) {
+            for (seat, _) in duties {
+                let future = vested.as_ref().is_some_and(|reward| reward.seats.iter()
+                    .any(|(payee, payout)| *payee == seat && payout.amount > 0));
+                if !future { self.cancel_native_recipient_v1(id, seat, 1); }
+            }
         }
         // ADR-0132 Upgrade C: the snapshot leaves with the claim — it was read above, once.
         self.write_claim_economics(id, None);
@@ -29060,6 +29262,7 @@ impl<'a> TransitionBuilder<'a> {
         voided_daa: u64,
         reason: PalwVoidReasonV2,
     ) -> Result<(), PalwStateV2Error> {
+        self.mark_paid_consumer_terminal_v1(id, voided_daa)?;
         // **ADR-0164 F-K (K3, K4): a void for want of a quorum receipt or of a panel is a claim reaching its deadline and failing** —
         // counted once, here, where every such void is written. The reasons that carry a conviction are the conviction funnel's (K2).
         match reason {
@@ -29130,6 +29333,8 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0124 Decision 3: every seat on duty leaves it with its exposure, whatever voided the
         // claim — before the phase write drops the row this reads. A seat's fault is the court's
         // and the quorum's business, charged where it is proven, never here.
+        self.cancel_panel_recipients_v1(id);
+        self.cancel_native_recipient_v1(id, claim.bond, 0);
         self.release_seat_duties(&id)?;
         // RFC-0008 v2: a work session on the claim goes void with it and its extra executors' exposure returns (a no-op for a claim
         // with no root, which is every claim below the fence).
@@ -29199,6 +29404,7 @@ impl<'a> TransitionBuilder<'a> {
     /// The panel goes with it: `write_panel` had no `None` caller anywhere, so a bound claim's
     /// panel outlived the claim by exactly forever and grew at the same one-per-block rate.
     fn retire_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
+        self.forget_paid_consumer_v1(id)?;
         // A `Final` attempt claim folded its `pwu` into `safe_weight` when it finalized. The
         // running total does not move here — the claim's contribution is simply carried by a
         // different name, so the consistency identity stays an equality rather than degrading to
@@ -29744,6 +29950,8 @@ impl<'a> TransitionBuilder<'a> {
             palw_exec_v2_rewards_v1::burn(self, claim_id)?;
             return Ok(None);
         };
+        for (bond, _) in &row.seats { self.cancel_native_recipient_v1(claim_id, *bond, 1); }
+        self.cancel_native_recipient_v1(claim_id, row.producer_bond, 0);
         let mut counters = self.state.vesting_counters;
         counters.burned = counters.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting burned"))?;
         self.write_vesting(claim_id, None);
@@ -29871,10 +30079,52 @@ impl<'a> TransitionBuilder<'a> {
     /// (or the reporter entry) leaves; counters `moved`; notes `Moved` and, for a positive reserve,
     /// `ReserveCredited`. Maturity inserts are exempt from `PALW_V2_MAX_PENDING_PAYOUTS` (M-10):
     /// the budget, not the cap, bounds them.
-    fn apply_vesting_move(&mut self, next: &crate::palw_vesting_v1::PalwVestingMoveV1) -> Result<(), PalwStateV2Error> {
+    fn apply_vesting_move(&mut self, next: &crate::palw_vesting_v1::PalwVestingMoveV1, now: u64) -> Result<(), PalwStateV2Error> {
         use crate::palw_vesting_v1::{
             PalwVestingLegKindV1, PalwVestingNoteV1, PalwVestingSourceV1, palw_reporter_payout_key_v1, palw_vesting_payout_key_v1,
         };
+        if let PalwVestingSourceV1::Row { claim_id } = &next.source {
+            let row = self.state.vesting.get(claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(*claim_id))?;
+            let mut recipients: BTreeMap<PalwBondKeyV2, PalwPayoutV2> = BTreeMap::new();
+            for (bond, payout) in &row.seats {
+                let total = recipients.entry(*bond).or_insert(PalwPayoutV2 { payload: payout.payload, amount: 0 });
+                if total.payload != payout.payload {
+                    return Err(PalwStateV2Error::BondBudgetRefused("one Panel recipient has inconsistent frozen payloads".into()));
+                }
+                total.amount = total.amount.checked_add(payout.amount).ok_or(PalwStateV2Error::Overflow("Panel recipient income"))?;
+            }
+            for (bond, payout) in recipients {
+                self.pay_native_recipient_v1(*claim_id, bond, 1, now, payout.amount, palw_panel_payout_key_v1(&payout.payload), true)?;
+            }
+            let finished = !self.state.exec_v2_rewards.get(claim_id)
+                .is_some_and(|receipt| receipt.legs.keys().any(|(bond, _)| *bond == row.producer_bond));
+            self.pay_native_recipient_v1(*claim_id, row.producer_bond, 0, now, row.producer.amount, palw_vesting_payout_key_v1(claim_id), finished)?;
+        }
+        if let PalwVestingSourceV1::Reporter { offence_id } = &next.source
+            && self.params.reporter_income_active_at(now)
+        {
+            let book = self.state.bond_budget.as_ref().ok_or_else(|| PalwStateV2Error::BondBudgetRefused("reporter move has no budget".into()))?;
+            let binding = book.reporter_income.get(&palw_bond_budget_fold_v1::native_reporter_binding_id_v1(*offence_id)).copied();
+            if let Some(binding) = binding.filter(|row| row.recipient.is_some()) {
+                if binding.accepted_daa >= self.params.reporter_income_from().expect("checked reporter fence") || binding.awarded_daa.is_none()
+                    || next.legs.iter().any(|leg| leg.payload != binding.payload || leg.amount != binding.maximum) {
+                    return Err(PalwStateV2Error::BondBudgetRefused("legacy reporter move differs from frozen entitlement".into()));
+                }
+                self.pay_native_recipient_v1(*offence_id, binding.recipient.expect("filtered"), 3, now,
+                    binding.maximum, palw_reporter_payout_key_v1(offence_id), true)?;
+            }
+            else {
+                let queue = palw_reporter_payout_key_v1(offence_id);
+                let legacy = book.reporter_income.get(&palw_bond_budget_fold_v1::legacy_queue_liability_id_v1(queue))
+                    .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("payload-only reporter move has no exact legacy liability".into()))?;
+                if legacy.recipient.is_some() || legacy.queue != Some(queue) || legacy.paid_daa.is_some()
+                    || next.legs.iter().any(|leg| leg.payload != legacy.payload || leg.amount != legacy.maximum) {
+                    return Err(PalwStateV2Error::BondBudgetRefused("payload-only reporter move differs from old exact cash".into()));
+                }
+            }
+            // Old payload-only awarded rows are exact migration liabilities:
+            // they retain cash; a global new-R quarantine closes their W clock.
+        }
         let own_key = match &next.source {
             PalwVestingSourceV1::Row { claim_id } => palw_vesting_payout_key_v1(claim_id),
             PalwVestingSourceV1::Reporter { offence_id } => palw_reporter_payout_key_v1(offence_id),
@@ -29957,7 +30207,7 @@ fn apply_vesting_maturity(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
     let budget_new_keys = PALW_V2_VESTING_LEGS_PER_BLOCK.saturating_sub(palw_vesting_non_market_rows_waiting_v1(&builder.state));
     let plan = palw_vesting_mint_plan_v1(&builder.state, budget_new_keys, palw_vesting_market_rows_waiting_v1(&builder.state));
     for next in &plan.moves {
-        builder.apply_vesting_move(next)?;
+        builder.apply_vesting_move(next, ctx.daa_score)?;
     }
     debug_assert!(
         crate::palw_vesting_v1::palw_vesting_counters_consistent_v1(&builder.state).is_ok(),
@@ -30070,7 +30320,10 @@ pub fn palw_v2_pre_object_base_v1(
     //      and this block's carve accrued; before the execution lane's span rotation (whose Round draw reads the bonds' remaining
     //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
     //      `palw_bond_budget_v1`, which no network can arm.
-    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
+    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx)?;
+    for income in &extras.round_fee_incomes {
+        builder.reserve_round_income_v1(ctx, *income)?;
+    }
     // ADR-0125: the span boundary runs where the fold runs it — before any claim is finalized here.
     if let Some(lane) = extras.round_lane {
         builder.rotate_round_lane(ctx, lane.schedule_span_daa);
@@ -30081,6 +30334,7 @@ pub fn palw_v2_pre_object_base_v1(
     // EXEC expiry is checked before REAL Final deadlines, including after a DAA jump.
     // Mirrored in the pre-object base: an expired ready root refunds escrow instead of settling.
     palw_exec_v2_fold::sweep_expired_roots_v2(&mut builder, ctx)?;
+    palw_bond_budget_fold_v1::sweep_paid_consumers_v1(&mut builder, ctx)?;
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the fold's step 2 closes the reveal windows here, right after the claim
     // sweep; mirrored so the acceptance rehearsal judges every object on the state step 3 sees.
@@ -30094,6 +30348,7 @@ pub fn palw_v2_pre_object_base_v1(
     palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(&mut builder, ctx)?;
     sweep_court_close_deadlines(&mut builder, ctx)?;
     sweep_court_deadlines(&mut builder, ctx)?;
+    palw_bond_budget_fold_v1::sweep_paid_consumers_v1(&mut builder, ctx)?;
     // Lane F2-lock (post-launch): the crossing block's re-date, right after the court sweeps as in the
     // fold's step 2, so the draw and the acceptance rehearsal read the locks the fold's step 3 reads.
     apply_final_lock_life_retro(&mut builder, parent, ctx);
@@ -30120,6 +30375,7 @@ pub fn palw_v2_pre_object_base_v1(
     palw_improve_material_fold_v1::settle_improvement_material_v1(&mut builder, ctx)?;
     // RFC-0010: the permissionless Panel's engine against the pre-object base, as the fold's step 2f does.
     palw_panel_v3_fold_v1::advance_v1(&mut builder, parent, ctx)?;
+    builder.rearm_material_retirements_v1(ctx.daa_score)?;
     Ok(builder.checkpoint().0)
 }
 
@@ -30143,6 +30399,7 @@ pub fn palw_v2_apply_one_object_v1(
     // `PalwTransitionExtrasV1::own_attempt_class`).
     builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
     apply_object(&mut builder, ctx, object)?;
+    builder.rearm_material_retirements_v1(ctx.daa_score)?;
     Ok(builder.checkpoint().0)
 }
 
@@ -30490,7 +30747,10 @@ fn apply_palw_transition_v7_inner(
     //      and this block's carve accrued; before the execution lane's span rotation (whose Round draw reads the bonds' remaining
     //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
     //      `palw_bond_budget_v1`, which no network can arm.
-    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
+    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx)?;
+    for income in &extras.round_fee_incomes {
+        builder.reserve_round_income_v1(ctx, *income)?;
+    }
     // 1d. ADR-0125: the execution lane's span boundary — before the sweeps, so an attempt finalized
     //     by this block is a credit in THIS block's span, never in the one its finals just closed.
     if let Some(lane) = extras.round_lane {
@@ -30506,6 +30766,7 @@ fn apply_palw_transition_v7_inner(
     // EXEC expiry is checked before REAL Final deadlines, including after a DAA jump.
     // Mirrored in the pre-object base: an expired ready root refunds escrow instead of settling.
     palw_exec_v2_fold::sweep_expired_roots_v2(&mut builder, ctx)?;
+    palw_bond_budget_fold_v1::sweep_paid_consumers_v1(&mut builder, ctx)?;
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the reveal windows this block is past close here, after the claim sweep
     // (whose convictions, if any, open windows that run from this block) and before the court
@@ -30528,6 +30789,7 @@ fn apply_palw_transition_v7_inner(
     // the whole prosecution did.
     sweep_court_close_deadlines(&mut builder, ctx)?;
     sweep_court_deadlines(&mut builder, ctx)?;
+    palw_bond_budget_fold_v1::sweep_paid_consumers_v1(&mut builder, ctx)?;
     // 2a′. Lane F2-lock (post-launch, `Params::palw_final_lock_life_retro`): the crossing block re-dates
     //      the long post-`Final` seat locks to `max(F + 1,000, H)`, once — after the sweeps (a claim this
     //      block finalizes is dated past `H` already) and before anything reads a bond's room. Mirrored in
@@ -31055,6 +31317,7 @@ fn apply_palw_transition_v7_inner(
     palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
     palw_staged_court_fold_v1::sweep(&mut builder,ctx);
 
+    builder.rearm_material_retirements_v1(ctx.daa_score)?;
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
         builder.entries.push(PalwDeltaEntryV2::Weights {
@@ -31385,6 +31648,7 @@ fn open_da_session_v2(
     // question: the producer was already allowed to delete what it is being asked to open.
     let disclose = palw_da_disclose_window_daa_v1(builder.params);
     let deadline_daa = ctx.daa_score.checked_add(disclose).ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?;
+    builder.state.require_paid_consumer_dispute_v1(&claim_id, ctx.daa_score, deadline_daa)?;
     palw_exec_v2_rewards_v1::require_native_session_window(&builder.state, builder.params, &claim_id, deadline_daa)?;
     if ctx.daa_score < claim.accepted_daa || deadline_daa > claim.trace_retention_daa {
         return Err(PalwStateV2Error::DaOutsideRetention {
@@ -34888,7 +35152,9 @@ fn apply_reporter_revealed(
     let Some(payload) = builder.state.bonds.get(&reporter).map(|bond| bond.payout_payload) else {
         return refuse("the reporter is not a bond on this chain");
     };
+    let accepted = consumed.accepted_daa;
     let best = PalwRewardWinnerV1 { committed_daa: committed.committed_daa, commitment, reporter, payload };
+    builder.bind_native_reporter_v1(ctx.daa_score, offence_key, best, pending.amount, accepted)?;
     builder.write_reward_pending(offence_key, Some(PalwPendingRewardV1 { best: Some(best), ..pending }));
     Ok(())
 }
@@ -34933,7 +35199,9 @@ fn sweep_reward_reveals(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
                         why: "an award under the key is still waiting for step 3d",
                     });
                 }
-                builder.write_reporter_reward(offence_key, Some(PalwPayoutV2 { payload: winner.payload, amount: pending.amount }));
+                if !builder.award_native_reporter_v1(ctx.daa_score, offence_key, winner, pending.amount)? {
+                    builder.write_reporter_reward(offence_key, Some(PalwPayoutV2 { payload: winner.payload, amount: pending.amount }));
+                }
                 // The award names its reporter's bond in the journal (S-7's note): the reward row
                 // and 3d's `Moved` carry only the payload, and the vesting reads, the per-payee
                 // index and the economics ledger read the bond off this note (M5, T75).
@@ -35039,6 +35307,7 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                 if claim.rebound_daa.is_none() {
                     // ADR-0124 Decision 3: the first panel's seats leave duty with their exposure
                     // — the redraw deals different seats, who go on duty when it binds.
+                    builder.cancel_panel_recipients_v1(claim_id);
                     builder.release_seat_duties(&claim_id)?;
                     let mut revived = claim.clone();
                     revived.phase = PalwClaimPhaseV2::Provisional;
@@ -35202,6 +35471,12 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
             PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } if builder.params.claim_retirement_daa > 0 => {
                 // Launch blockers §8: the retirement. Nothing reads a terminal claim, and keeping
                 // it costs a re-hash and a re-serialization of the whole registry on every block.
+                let effective = palw_exec_v2_rewards_v1::retirement(&builder.state, builder.params, &claim_id,
+                    terminal_deadline_at_v1(&claim, builder.params, Some(ctx.daa_score))?, &claim)?;
+                if let Some(at) = effective.filter(|at| *at >= ctx.daa_score) {
+                    builder.arm_deadline(at, claim_id);
+                    continue;
+                }
                 builder.retire_claim(claim_id, &claim)?;
             }
             PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
@@ -36158,7 +36433,7 @@ fn apply_object(
             // no uniqueness check, splitting collateral across N registrations of the SAME key
             // manufactured N independent seat tickets, and a 3-of-5 panel is a permanent quorum for
             // whoever holds three of them.
-            if builder.state.bonds.values().any(|existing| existing.pubkey == *pubkey) {
+            if builder.registered_pubkey_v1(pubkey) {
                 return Err(PalwStateV2Error::DuplicateBondKey(*bond));
             }
             // **One identity, one bond** (audit 2026-09-19). The line above makes a second bond
@@ -36175,8 +36450,8 @@ fn apply_object(
             // already on the chain cannot be claimed a second time.
             if builder.extras.operator_id_unique_active {
                 let operator = palw_operator_id_v2(operator_pubkey);
-                if let Some((holder, _)) = builder.state.bonds.iter().find(|(_, existing)| existing.operator_id == operator) {
-                    return Err(PalwStateV2Error::DuplicateOperator { operator, holder: *holder });
+                if let Some(holder) = builder.registered_operator_v1(operator) {
+                    return Err(PalwStateV2Error::DuplicateOperator { operator, holder });
                 }
             }
             if *payout_payload == Hash64::default() {
@@ -37648,6 +37923,7 @@ fn apply_object(
             let PalwClaimPhaseV2::Provisional = claim.phase else {
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "PanelBound" });
             };
+            builder.require_paid_consumer_bind_v1(*claim_id, &claim, ctx.daa_score)?;
             // **ADR-0147: the outsider is placed by the DRAW, and the draw is checked where it can
             // be.** A bought class's panel carries its outsider at position zero, and whether the
             // seat there is the one the anchor's lottery names over the network's base-class
@@ -39347,8 +39623,10 @@ fn apply_object(
             let staged_contract = builder.prepare_staged_claim_with_job_v1(&mut claim, public_job.as_deref())?;
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
+            let consumer_plan = builder.plan_paid_consumer_v1(*claim_id, &claim)?;
             let budget_plan = builder.plan_free_prompt_budget_v1(ctx, &claim, quanta)?;
             builder.reserve_for_claim(&claim)?;
+            if let Some(contract) = consumer_plan { builder.commit_paid_consumer_v1(*claim_id, contract)?; }
             let fp_pwu = claim.pwu;
             builder.write_claim(*claim_id, Some(claim));
             builder.stamp_staged_claim_v1(*claim_id, staged_contract);
@@ -40229,6 +40507,9 @@ pub struct PalwTransitionExtrasV1 {
     /// ADR-0125: the round permits this block accepted, as the processor decided them against the
     /// parent state. Empty unless `round_lane` is `Some`.
     pub round_permit_uses: Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>,
+    /// Actual UTXO-accepted Round fees, pre-reserved in the same native book
+    /// before objects can consume the recipient's remaining R room.
+    pub round_fee_incomes: Vec<crate::palw_bond_budget_v1::PalwRoundFeeIncomeV1>,
     /// **RFC-0008 v2: the slice carriers the accepting block's covered set holds**, in the processor's canonical order (root, then
     /// index, then carrier). Each is re-judged by the fold against its own running state; empty unless
     /// `Params::palw_exec_payload_v2` is in force at the block, and then `Default` is byte-identical to the transition before the
@@ -40457,32 +40738,60 @@ impl<'a> TransitionBuilder<'a> {
         line: &crate::palw_model_lines_v1::PalwModelLineV1,
         leg: u64,
         after: &mut crate::palw_model_market_v1::PalwModelMarketV1,
-    ) {
-        let owner = line.owner.and_then(|b| self.state.bonds.get(&b)).map(|b| b.payout_payload);
-        let contributor = self
+    ) -> Result<(), PalwStateV2Error> {
+        let owner_bond = line.owner.filter(|b| self.state.bonds.contains_key(b));
+        let owner = owner_bond.and_then(|b| self.state.bonds.get(&b)).map(|b| b.payout_payload);
+        let contributor_bond = self
             .state
             .model_version(line_id, line.current)
             .and_then(|v| v.adopted_from)
             .and_then(|p| self.state.model_proposals.get(&p).map(|p| p.by))
-            .and_then(|b| self.state.bonds.get(&b))
-            .map(|b| b.payout_payload);
+            .filter(|b| self.state.bonds.contains_key(b));
+        let contributor = contributor_bond.and_then(|b| self.state.bonds.get(&b)).map(|b| b.payout_payload);
         let (to_contributor, to_owner) =
             crate::palw_model_lines_v1::split_owner_leg_v1(leg, line.contributor_permille_of_leg, contributor.is_some());
+        let mut owner_tag = tag.to_vec();
+        owner_tag.extend_from_slice(b"-owner");
+        let mut contributor_tag = tag.to_vec();
+        contributor_tag.extend_from_slice(b"-contributor");
+        let owner_cash = self.improvement_owner_cash_v1(line_id, to_owner, ctx.daa_score);
+        let owner_queue = (owner_cash > 0).then(|| self.model_fee_key_v1(ctx, line_id, holder, &owner_tag));
+        let contributor_queue = (to_contributor > 0).then(|| self.model_fee_key_v1(ctx, line_id, holder, &contributor_tag));
+        // The accepted signed quote fixes the entire collectible fee. Reserve
+        // both actual bond recipients before any payout, position or pool write;
+        // the pool diversion remains the owner's income. Principal is separate.
+        // EVM action refusals retain the block, so the first leg must roll back
+        // if the second leg fails (including first-time budget migration).
+        if self.params.bond_budget_active_at(ctx.daa_score) {
+            let checkpoint = self.checkpoint();
+            let reserve = (|| {
+                use crate::palw_bond_budget_v1::PalwBudgetOriginV1;
+                if let Some(bond) = owner_bond {
+                    self.reserve_bond_income_for_queue_v1(ctx, bond, to_owner, to_owner, PalwBudgetOriginV1::MarketFee, owner_queue)?;
+                }
+                if let Some(bond) = contributor_bond {
+                    self.reserve_bond_income_for_queue_v1(ctx, bond, to_contributor, to_contributor, PalwBudgetOriginV1::MarketFee, contributor_queue)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = reserve {
+                self.restore(checkpoint);
+                return Err(error);
+            }
+        }
         // RFC-0004 (spec 17 §17.11.1): φ of a governed line's owner part feeds its improvement pool.
         // The market counts the pool's part as the owner's leg paid (ADR-0087 M2 keeps closing): φ is
         // the owner's money, routed.
         let owner_part = to_owner;
         let to_owner = self.take_improvement_phi_v1(line_id, to_owner, ctx.daa_score);
         let to_pool = owner_part - to_owner;
-        let mut owner_tag = tag.to_vec();
-        owner_tag.extend_from_slice(b"-owner");
+        debug_assert_eq!(to_owner, owner_cash);
         let burned_owner = self.write_model_fee(ctx, line_id, holder, &owner_tag, owner, to_owner);
-        let mut contributor_tag = tag.to_vec();
-        contributor_tag.extend_from_slice(b"-contributor");
         let burned_contributor = self.write_model_fee(ctx, line_id, holder, &contributor_tag, contributor, to_contributor);
         after.burned_sompi = after.burned_sompi.saturating_add(burned_owner).saturating_add(burned_contributor);
         after.registrant_paid_sompi = after.registrant_paid_sompi.saturating_add(to_owner - burned_owner).saturating_add(to_pool);
         after.contributor_paid_sompi = after.contributor_paid_sompi.saturating_add(to_contributor - burned_contributor);
+        Ok(())
     }
 
     /// **ADR-0091 Decision 2: the chain's own move at a claim's `Final`.** The slice of the escrow
@@ -40753,7 +41062,7 @@ fn model_buy_v1(
         return Err(PalwStateV2Error::ModelBuyBelowFloor { want: min_units_out, got: quote.units_out });
     }
     let mut after = quote.after;
-    builder.pay_model_leg(ctx, line_id, holder, b"buy", &line, quote.fees.registrant, &mut after);
+    builder.pay_model_leg(ctx, line_id, holder, b"buy", &line, quote.fees.registrant, &mut after)?;
     builder.write_model_market(*line_id, Some(after));
     let held = builder.state.model_position(line_id, holder);
     builder.write_model_position((*line_id, *holder), held.saturating_add(quote.units_out));
@@ -40837,7 +41146,7 @@ fn model_sell_v1(
         .is_some_and(|c| matches!(c.status, PalwClassStatusV2::Active));
     let mut after = quote.after;
     match &line {
-        Some(line) => builder.pay_model_leg(ctx, line_id, holder, b"sell", line, quote.fees.registrant, &mut after),
+        Some(line) => builder.pay_model_leg(ctx, line_id, holder, b"sell", line, quote.fees.registrant, &mut after)?,
         None => {
             // A line whose class is gone: the leg is burned, the net leg is still paid.
             after.burned_sompi = after.burned_sompi.saturating_add(quote.fees.registrant);
@@ -42097,6 +42406,7 @@ fn apply_attempt(
     // escrow, F its Final contribution) against the bond's window: the LAST check before any write, so step 4 skips a refused own attempt
     // (its carve withheld as a skipped attempt's, never minted) and 4b a merged one; the claim's immature weight is held within the F it
     // reserves. `None` below `palw_bond_budget_v1`: nothing read, nothing written.
+    let consumer_plan = builder.plan_paid_consumer_v1(claim_id, &claim)?;
     let budget_plan = builder.plan_attempt_budget_v1(ctx, &claim, &attempt.artifact_root, origin.rider, origin.budget_block_units)?;
     let claim = match &budget_plan {
         Some(plan) => {
@@ -42105,6 +42415,7 @@ fn apply_attempt(
         None => claim,
     };
     builder.reserve_for_claim(&claim)?;
+    if let Some(contract) = consumer_plan { builder.commit_paid_consumer_v1(claim_id, contract)?; }
     // **ADR-0165: a REAL attempt BLOCK's attempt (any class but the base) FULLY ACCEPTED is one event of the floor state
     // machine** — every check above passed and the claim is written below, inside the checkpoint a merged attempt's refusal
     // restores. Its colour: BLUE for the block's own attempt (a chain block), the mergeset's for a merged one. **A rider is no
@@ -72986,6 +73297,53 @@ pub(crate) mod tests {
         /// changes the object's bytes — but it turns a free primitive into a race against a
         /// registration that is already on the chain.
         #[test]
+        fn registration_index_matches_walk_through_writes_collision_restore_and_journal() {
+            let p = economy_params();
+            let extras = PalwTransitionExtrasV1::default();
+            let objects: Vec<_> = (1..=64).map(|i| bond_registration_with_collateral(i, i as u8, i % 3, 1_000_000)).collect();
+            let (state, delta) = apply_palw_transition_v2_with_extras(
+                &PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None,
+                false, false, false, false, &extras,
+            ).unwrap();
+            assert_eq!(apply_delta_v2(&PalwChainStateV2::genesis(), &delta, &p).unwrap(), state);
+            assert_eq!(revert_delta_v2(&state, &delta, &p).unwrap(), PalwChainStateV2::genesis());
+            let loaded = PalwStateCarriageV2::from_state(&state).into_state(&p, Some(state.state_root())).unwrap();
+            let mut builder = TransitionBuilder::new(&loaded, &p, false, false, false, false, &extras);
+            for i in 1..=65u8 {
+                let key = vec![i; 4];
+                assert_eq!(builder.registered_pubkey_v1(&key), builder.state.bonds.values().any(|record| record.pubkey == key));
+            }
+            for i in 0..3 {
+                let op = palw_operator_id_v2(&op_key(i));
+                assert_eq!(builder.registered_operator_v1(op), builder.state.bonds.iter().find(|(_, r)| r.operator_id == op).map(|(key, _)| *key));
+            }
+            // A deliberately colliding transient bucket cannot manufacture a duplicate key.
+            let absent = vec![99; 4];
+            builder.registration_index.as_mut().unwrap().keys.entry(registration_key_bucket_v1(&absent)).or_default().insert(bond_key(1));
+            assert!(!builder.registered_pubkey_v1(&absent));
+            let checkpoint = builder.checkpoint();
+            let original = builder.state.bonds[&bond_key(1)].clone();
+            builder.write_bond(bond_key(1), None);
+            assert!(!builder.registered_pubkey_v1(&original.pubkey));
+            let mut changed = original.clone();
+            changed.pubkey = absent.clone();
+            changed.operator_id = palw_operator_id_v2(&op_key(99));
+            builder.write_bond(bond_key(1), Some(changed.clone()));
+            assert!(builder.registered_pubkey_v1(&absent));
+            assert_eq!(builder.registered_operator_v1(changed.operator_id), Some(bond_key(1)));
+            builder.restore(checkpoint);
+            assert!(builder.registration_index.is_none(), "restore must invalidate both transient lookups");
+            assert_eq!(builder.state, state);
+            assert!(builder.registered_pubkey_v1(&original.pubkey));
+            assert!(!builder.registered_pubkey_v1(&absent));
+            let duplicate = bond_registration_with_collateral(65, 1, 99, 1_000_000);
+            let refusal = apply_palw_transition_v2_with_extras(
+                &state, &p, &ctx(2, 101, 2), &[duplicate], None, false, false, false, false, &extras,
+            ).expect_err("the new block advances both clocks and reaches the duplicate-key gate");
+            assert!(matches!(refusal, PalwStateV2Error::DuplicateBondKey(key) if key == bond_key(65)), "{refusal}");
+        }
+
+        #[test]
         fn an_operator_identity_already_on_the_chain_cannot_be_registered_again() {
             let p = economy_params();
             let victim = bond_registration_with_collateral(1, 7, 4242, 1_000_000);
@@ -73281,6 +73639,210 @@ pub(crate) mod tests {
         }
     }
 
+    /// Private fold mechanics with an already admitted synthetic class. These
+    /// quotes/fills exercise the shared carrier and EVM consumers; they are not
+    /// approved class economics or shipped-node/P2P bridge evidence.
+    mod rfc12_market_income {
+        use super::*;
+        use crate::palw_bond_budget_v1::*;
+        use crate::palw_model_lines_v1::PalwModelProposalV1;
+        use crate::palw_model_market_v1::{PalwModelMarketV1, PALW_MODEL_SEED_MIN_SOMPI_V1};
+        use crate::evm::model_market::*;
+
+        const GROSS: u64 = 100 * 100_000_000;
+
+        fn fixture(reward_cap: u64) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            let (p, mut state, class) = super::model_lines::owned_class_chain();
+            for key in [bond_key(1), bond_key(2)] {
+                state.bonds.get_mut(&key).unwrap().collateral = 1_000_000;
+            }
+            let mut line = state.model_line_or_founding(&class).unwrap();
+            line.contributor_permille_of_leg = 500;
+            let proposal = h64(0x12_fee);
+            let mut version = state.model_version(&class, line.current).unwrap();
+            version.adopted_from = Some(proposal);
+            state.model_proposals.insert(proposal, PalwModelProposalV1 {
+                line_id: class, root: version.root, note_hash: h64(77), by: bond_key(2), posted_daa: 250, adopted_in: Some(line.current),
+            });
+            state.model_versions.insert((class, line.current), version);
+            state.model_lines.insert(class, line);
+            state.model_markets.insert(class, PalwModelMarketV1::seed_v1(250, PALW_MODEL_SEED_MIN_SOMPI_V1, h64(99)));
+            let mut policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+            policy.window_daa = 300;
+            policy.capital_unit_sompi = 1_000_000;
+            policy.reward_per_unit_sompi = reward_cap;
+            let p = p.with_bond_budget(Some(PalwBondBudgetMirrorV1 { from_daa: 251, policy, allocation: None }));
+            (p, state, class)
+        }
+
+        fn extras() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { model_lines_active: true, evm_market_active: true, ..Default::default() }
+        }
+
+        #[test]
+        fn rfc12_carrier_buy_sell_income_uses_only_r_and_excludes_returned_principal() {
+            let (p, state, class) = fixture(GROSS);
+            let e = extras();
+            let point = ctx(3, 251, 3);
+            let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+            let holder = h64(88);
+            let buy = model_buy_v1(&mut b, &point, &class, &holder, GROSS, 0).unwrap();
+            let sell = model_sell_v1(&mut b, &point, &class, &holder, buy.units_out, 0, Some(holder), Some(buy.units_out)).unwrap();
+            assert_eq!(b.state.model_position(&class, &holder), 0);
+            let fee = buy.fees.registrant + sell.fees.registrant;
+            assert!(sell.fees.net > fee, "the principal return is economically distinct from fee income");
+            let budget = b.state.bond_budget().unwrap();
+            let contributor_fee = buy.fees.registrant / 2 + sell.fees.registrant / 2;
+            for (key, amount) in [(bond_key(1), fee - contributor_fee), (bond_key(2), contributor_fee)] {
+                let row = budget.bond_row(&key).unwrap();
+                assert_eq!(row.window, PalwBudgetVectorV1 { reward_sompi: amount, ..PalwBudgetVectorV1::ZERO });
+                assert_eq!(row.open_claims, 0, "a fee receipt creates no execution claim");
+            }
+            assert!(budget.claims.values().all(|r| r.origin == PalwBudgetOriginV1::NativeIncomeQueued && !r.open && r.live));
+            budget.check_consistency().unwrap();
+            let delta = PalwStateDeltaV2 { point, entries: b.entries.clone() };
+            assert_eq!(apply_delta_v2(&state, &delta, &p).unwrap().state_root(), b.state.state_root(), "the complete fee and market journals replay together");
+            assert_eq!(revert_delta_v2(&b.state, &delta, &p).unwrap(), state, "reorg restores both the budget and principal books");
+            let below = p.clone().with_bond_budget(None);
+            let mut legacy = TransitionBuilder::new(&state, &below, false, false, false, false, &e);
+            assert!(model_buy_v1(&mut legacy, &point, &class, &holder, GROSS, 0).is_ok());
+            assert!(legacy.state.bond_budget().is_none(), "the added consumer is dormant below its fence");
+        }
+
+        #[test]
+        fn rfc08_actual_market_queue_backlog_and_sparse_daa_retain_recipient_r_until_payment_plus_w() {
+            let fee_per_recipient = GROSS / 100 / 2;
+            let (p, state, class) = fixture(fee_per_recipient);
+            let e = extras();
+            let point = ctx(3, 251, 3);
+            let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+            model_buy_v1(&mut b, &point, &class, &h64(88), GROSS, 0).unwrap();
+            let receipts: Vec<_> = b.state.bond_budget().unwrap().claims.iter()
+                .map(|(id, row)| (*id, row.bond)).collect();
+            assert_eq!(receipts.len(), 2, "both actual fee recipients have pending cash R");
+            let cash: Vec<_> = b.state.pending_payouts_iter().map(|(key, row)| (*key, *row)).collect();
+            assert_eq!(cash.len(), 2);
+            // Explicit synthetic backlog fixture; the production pre-object
+            // consumer drains at most eight earlier queue rows and confirms
+            // only the exact monetary receipts whose cash actually left.
+            for i in 0..PALW_V2_MAX_PAYOUTS_PER_BLOCK {
+                b.state.pending_payouts.insert(h64(100 + i as u64), PalwPayoutV2 { payload: h64(0xB0), amount: 1 });
+            }
+            let delayed = palw_v2_pre_object_base_v1(&b.state, &p, &ctx(4, 1_000, 4), false, false, false, false, &e).unwrap();
+            for (id, bond) in &receipts {
+                let row = delayed.bond_budget().unwrap().claim_row(id).unwrap();
+                assert!(row.live && !row.open && row.in_window);
+                assert!(delayed.bond_budget_window_holds(bond, 1_000));
+                assert_eq!(delayed.bond_budget().unwrap().bond_row(bond).unwrap().window.reward_sompi, fee_per_recipient);
+            }
+            assert_eq!(delayed.pending_payouts_iter().map(|(key, row)| (*key, *row)).collect::<Vec<_>>(), cash);
+            let paid = palw_v2_pre_object_base_v1(&delayed, &p, &ctx(5, 2_000, 5), false, false, false, false, &e).unwrap();
+            assert_eq!(paid.pending_payouts_iter().count(), 0);
+            for (id, bond) in &receipts {
+                let row = paid.bond_budget().unwrap().claim_row(id).unwrap();
+                assert!(!row.live && !row.open && row.in_window);
+                assert_eq!(row.reuse_not_before, 2_300, "the exact native drain starts W=300");
+                assert_eq!(paid.bond_budget().unwrap().bond_row(bond).unwrap().window.reward_sompi, fee_per_recipient);
+            }
+            let mut blocked = TransitionBuilder::new(&paid, &p, false, false, false, false, &e);
+            let before = (blocked.state.clone(), blocked.entries.clone());
+            assert!(model_buy_v1(&mut blocked, &ctx(6, 2_299, 6), &class, &h64(88), GROSS, 0).is_err());
+            assert_eq!((blocked.state, blocked.entries), before, "even paid cash cannot admit new fees inside W");
+            let held = palw_v2_pre_object_base_v1(&paid, &p, &ctx(6, 2_299, 6), false, false, false, false, &e).unwrap();
+            for (id, _) in &receipts {
+                assert!(held.bond_budget().unwrap().claim_row(id).unwrap().in_window);
+            }
+            let released = palw_v2_pre_object_base_v1(&held, &p, &ctx(7, 2_300, 7), false, false, false, false, &e).unwrap();
+            for (id, bond) in &receipts {
+                assert!(released.bond_budget().unwrap().claim_row(id).is_none());
+                assert!(released.bond_budget().unwrap().bond_row(bond).is_none());
+            }
+            released.bond_budget().unwrap().check_consistency().unwrap();
+            let mut fresh = TransitionBuilder::new(&released, &p, false, false, false, false, &e);
+            assert!(model_buy_v1(&mut fresh, &ctx(8, 2_300, 8), &class, &h64(88), GROSS, 0).is_ok());
+        }
+
+        #[test]
+        fn rfc08_market_phi_is_one_owner_income_and_pool_only_fees_create_no_pending_cash_hold() {
+            use crate::palw_improve_state_v1::{PalwImprovementLineV1, PalwImprovementLineStatusV1, PalwImprovementPolicyRecordV1};
+            let fee_per_recipient = GROSS / 100 / 2;
+            for phi in [100, 1_000] {
+                let (p, mut state, class) = fixture(fee_per_recipient);
+                let p = p.with_improve_from_daa(Some(1));
+                let mut policy = crate::palw_improve_policy_v1::palw_improvement_policy_example_v1();
+                policy.phi_permille = phi;
+                state.improvement_policies.insert(class, PalwImprovementPolicyRecordV1 { policy, pending: None });
+                state.improvement_lines.insert(class, PalwImprovementLineV1 {
+                    line_id: class, class_id: class, policy_digest: h64(0xA0), policy_sequence: 1,
+                    status: PalwImprovementLineStatusV1::Governed, governed_from_daa: 250, head: class,
+                    head_seq: 1, next_epoch: 1, open_epoch: None, next_due_daa: 1_000, next_check_daa: 1_000,
+                    barred: vec![], last_promotion: None, regression_epoch: None, regression_check: None,
+                });
+                let e = extras();
+                let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+                model_buy_v1(&mut b, &ctx(3, 251, 3), &class, &h64(88), GROSS, 0).unwrap();
+                let pool = fee_per_recipient * u64::from(phi) / 1_000;
+                assert_eq!(b.state.improvement_pool(&class).unwrap().balance, pool);
+                for bond in [bond_key(1), bond_key(2)] {
+                    assert_eq!(b.state.bond_budget().unwrap().bond_row(&bond).unwrap().window.reward_sompi, fee_per_recipient);
+                }
+                let rows: Vec<_> = b.state.bond_budget().unwrap().claims.values().filter(|row| row.bond == bond_key(1)).collect();
+                assert_eq!(rows.len(), 1, "routing the owner's money charges its full fee exactly once");
+                assert_eq!(rows[0].consumed.reward_sompi, fee_per_recipient);
+                if phi == 1_000 {
+                    assert_eq!(rows[0].origin, PalwBudgetOriginV1::MarketFee);
+                    assert!(!rows[0].live && !rows[0].open);
+                    assert_eq!(rows[0].reuse_not_before, 551, "owned pool income has no later cash obligation");
+                } else {
+                    assert_eq!(rows[0].origin, PalwBudgetOriginV1::NativeIncomeQueued);
+                    assert!(rows[0].live && !rows[0].open);
+                }
+                b.state.bond_budget().unwrap().check_consistency().unwrap();
+            }
+        }
+
+        #[test]
+        fn rfc12_second_market_fee_recipient_failure_reverts_first_reservation_and_migration() {
+            let (p, mut state, class) = fixture(GROSS);
+            state.bonds.get_mut(&bond_key(2)).unwrap().collateral = 0;
+            let e = extras();
+            let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+            let before = b.state.clone();
+            let entries = b.entries.clone();
+            let err = model_buy_v1(&mut b, &ctx(3, 251, 3), &class, &h64(88), GROSS, 0).unwrap_err();
+            assert!(matches!(err, PalwStateV2Error::BondBudgetExhausted { bond, .. } if bond == bond_key(2)), "the second recipient has no R headroom: {err}");
+            assert_eq!(b.state, before, "owner reservation, first migration, payouts, pool, reserve and position all roll back");
+            assert_eq!(b.entries, entries, "a refused EVM action must leave no leaked fee journal");
+        }
+
+        #[test]
+        fn rfc12_evm_filled_buy_then_cap_refusal_preserves_quote_and_full_refund() {
+            let fee_per_recipient = GROSS / 100 / 2;
+            let (p, state, class) = fixture(fee_per_recipient);
+            let account = crate::evm::EvmAddress::from_bytes([0x42; 20]);
+            let actions = (0..2).map(|seq| PalwEvmMarketActionV1 {
+                seq, account, line_id: class, kind: PalwEvmMarketActionKindV1::Buy { min_units_out: 0 }, gross_sompi: GROSS,
+            }).collect();
+            let e = PalwTransitionExtrasV1 { evm_actions: actions, ..extras() };
+            let point = ctx(3, 251, 3);
+            let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+            apply_evm_market_actions(&mut b, &point).unwrap();
+            let rows: Vec<_> = b.state.evm_settlements.values().copied().collect();
+            assert_eq!(rows.len(), 2);
+            assert!(matches!(rows[0].outcome, PalwEvmSettlementOutcomeV1::Filled { .. }));
+            assert!(matches!(rows[1].outcome, PalwEvmSettlementOutcomeV1::Refused { .. }));
+            assert_eq!(rows[1].escrow_sompi, GROSS, "the refused order retains its whole refund entitlement");
+            let holder = evm_holder_v1(crate::evm::EVM_CHAIN_ID, &account);
+            let quote = crate::palw_model_market_v1::palw_model_buy_quote_v1(state.model_market(&class).unwrap(), GROSS).unwrap();
+            assert_eq!(b.state.model_position(&class, &holder), quote.units_out, "only the filled order moves the position");
+            assert_eq!(b.state.model_market(&class).unwrap().msk_reserve, quote.after.msk_reserve, "the refusal cannot add gross to backing");
+            for key in [bond_key(1), bond_key(2)] {
+                assert_eq!(b.state.bond_budget().unwrap().bond_row(&key).unwrap().window.reward_sompi, fee_per_recipient);
+            }
+            b.state.bond_budget().unwrap().check_consistency().unwrap();
+        }
+    }
+
     // ---- ADR-0089 — the EVM's actions at the fold ---------------------------------------------
     mod evm_market {
         use super::*;
@@ -73354,6 +73916,7 @@ pub(crate) mod tests {
                 prompt_ids_merkle: false,
                 round_lane: None,
                 round_permit_uses: Vec::new(),
+                round_fee_incomes: Vec::new(),
                 exec_v2_covered: Vec::new(),
                 exec_v2_origin_headers: BTreeMap::new(),
                 #[cfg(test)]
@@ -73626,6 +74189,7 @@ pub(crate) mod tests {
                 prompt_ids_merkle: false,
                 round_lane: None,
                 round_permit_uses: Vec::new(),
+                round_fee_incomes: Vec::new(),
                 exec_v2_covered: Vec::new(),
                 exec_v2_origin_headers: BTreeMap::new(),
                 #[cfg(test)]

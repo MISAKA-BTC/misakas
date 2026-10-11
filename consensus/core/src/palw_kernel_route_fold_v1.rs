@@ -53,6 +53,15 @@ fn key_bytes(d: &misaka_palw_kernel::hash::Digest) -> Vec<u8> {
     borsh::to_vec(d).expect("a digest serializes")
 }
 
+/// A source reserves income before its claim is revealed. The signed job and
+/// seal are its immutable subject; a later reveal cannot choose another R row.
+pub(super) fn source_income_subject_v1(job: &misaka_palw_kernel::hash::Digest, seal: &misaka_palw_kernel::hash::Digest) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/source-subject/v1");
+    hash.update(job);
+    hash.update(seal);
+    finish(hash)
+}
+
 /// The fold's signature check is the acceptance layer's (a pure transition holds no crypto): by the time a receipt reaches here its
 /// signature has verified under the seat bond's registered key, so the kernel's structural admission is asked with this.
 struct SignatureAlreadyVerified;
@@ -293,6 +302,23 @@ fn load_ledger_with_projection_v9(builder:&mut TransitionBuilder<'_>,ctx:&PalwBl
             .map(|c| c.as_bytes())
             .collect();
     }
+    // Each load reconstructs authenticated open targets. No object supplies this inventory.
+    if let Some(fence) = extras.beacon_source.filter(|f| f.activation.is_active(ctx.daa_score)) {
+        let inputs =
+            builder.state.kernel_route.as_ref().expect("created").beacon_source_inputs_v4(fence, ctx.daa_score).map_err(refused)?;
+        ledger.set_beacon_source_inputs(inputs).map_err(refused)?;
+    }
+    if let Some(fence) = extras.beacon_source_fee.filter(|f| f.activation.is_active(ctx.daa_score)) {
+        let inputs = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .expect("created")
+            .beacon_source_fee_inputs_v1(fence, &ledger.beacon_source_inputs, ctx.daa_score)
+            .map_err(refused)?;
+        ledger.set_beacon_source_fee_inputs(inputs).map_err(refused)?;
+    }
+    ledger.consumer_final_reward_caps = builder.kernel_final_reward_caps_v1(&ledger);
     // RFC-0015 admission is no longer a list read here: a class is admitted to the mode at its own registration, and only while
     // DERIVED-eligible (`opv_gate_v1`), so the ledger's admitted rows are exactly the classes that were eligible when they registered.
     Ok(ledger)
@@ -527,7 +553,9 @@ pub(super) fn bind_exec_reward_v1(
     let until = exec_liability_floor_v1(expiry, builder.params.window_court(), &ledger.policy)?;
     let row = ledger.claims.get(&claim.as_bytes()).ok_or_else(|| refused("the EXEC reward claim is missing"))?;
     require_exec_provider_horizon_v1(&builder.state, &claim, row, daa, until).map_err(refused)?;
+    let bond = route.bond_key_of(&row.producer).ok_or_else(|| refused("EXEC income recipient has no native bond"))?;
     ledger.bind_exec_reward_until(root.as_bytes(), claim.as_bytes(), expiry, until).map_err(refused)?;
+    builder.transfer_kernel_income_to_exec_v1(root, claim, bond, daa, until)?;
     flush(builder, &ledger, &before);
     Ok(())
 }
@@ -559,7 +587,7 @@ pub(super) fn finish_exec_rewards_v1(
         *cap -= fee;
         paid.push(fee);
     }
-    apply_settlements_to_exec_vesting(builder, &events, true, Some(root))?;
+    apply_settlements_to_exec_vesting(builder, &events, true, Some(root), daa)?;
     flush(builder, &ledger, &before);
     Ok(paid)
 }
@@ -575,7 +603,7 @@ pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: 
     for claim in claims {
         ledger.cancel_exec_reward(root.as_bytes(), claim, &mut events).map_err(refused)?;
     }
-    apply_settlements(builder, &events, true)?;
+    apply_settlements(builder, &events, true, daa)?;
     flush(builder, &ledger, &before);
     Ok(())
 }
@@ -589,8 +617,9 @@ pub(super) fn apply_settlements(
     builder: &mut TransitionBuilder<'_>,
     events: &[LedgerEventV1],
     strict: bool,
+    now: u64,
 ) -> Result<(), PalwStateV2Error> {
-    apply_settlements_to_exec_vesting(builder, events, strict, None)
+    apply_settlements_to_exec_vesting(builder, events, strict, None, now)
 }
 
 fn apply_settlements_to_exec_vesting(
@@ -598,14 +627,77 @@ fn apply_settlements_to_exec_vesting(
     events: &[LedgerEventV1],
     strict: bool,
     exec_root: Option<Hash64>,
+    now: u64,
 ) -> Result<(), PalwStateV2Error> {
     // GAP-5: what this batch actually debited from posters' escrows — the only source a Final reward is paid from. A `FinalReward`
     // with no spent escrow behind it is never paid (there is no unfunded reward path).
     let mut escrow_debited: std::collections::BTreeMap<Option<misaka_palw_kernel::hash::Digest>, u64> = Default::default();
-    for event in events {
+    // Persistent source escrows were debited in an earlier fold. Their backing is the rooted funding row, never a later
+    // sponsor balance or this batch's job escrow. All fee instructions are strict, including sweeps.
+    let fee_ledger = if events.iter().any(|e| {
+        matches!(e, LedgerEventV1::Settlement(s) if matches!(s.kind,
+        SettlementKindV1::FundSourceFeeEscrow | SettlementKindV1::PaySourceFeeEscrow | SettlementKindV1::RefundSourceFeeEscrow))
+    }) {
+        Some(builder.state.kernel_route.as_ref().ok_or_else(|| refused("source fee route missing"))?.ledger().map_err(refused)?)
+    } else {
+        None
+    };
+    let mut fee_held: std::collections::BTreeMap<_, _> =
+        fee_ledger.as_ref().map(|l| l.beacon_source_fees.iter().map(|(c, f)| (*c, f.held)).collect()).unwrap_or_default();
+    // The old ledger root and this exact ordered settlement batch identify
+    // objective court receipts independently of payout payloads or a retry.
+    // The event ordinal also separates several demanders/defaults in one tick.
+    let reporter_batch = if builder.params.reporter_income_active_at(now) {
+        let mut hash = keyed(b"misaka-palw/bond-budget/kernel-reporter-batch/v1");
+        let route = builder.state.kernel_route.as_ref().ok_or_else(|| refused("reporter route missing"))?;
+        hash.update(route.ledger_root().as_byte_slice());
+        hash.update(&now.to_le_bytes());
+        let settlements: Vec<_> = events.iter().filter_map(|event| {
+            if let LedgerEventV1::Settlement(s) = event { Some(*s) } else { None }
+        }).collect();
+        hash.update(&borsh::to_vec(&settlements).expect("settlements serialize"));
+        Some(finish(hash))
+    } else { None };
+    let mut reporter_funded: std::collections::BTreeMap<_, u64> = Default::default();
+    let mut fee_paid = std::collections::BTreeSet::new();
+    for (ordinal, event) in events.iter().enumerate() {
         let LedgerEventV1::Settlement(s) = event else { continue };
         let key = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&s.bond));
         match s.kind {
+            SettlementKindV1::FundSourceFeeEscrow => {
+                let context = s.claim.ok_or_else(|| refused("source fee funding context missing"))?;
+                if s.amount == 0 || fee_held.contains_key(&context) {
+                    return Err(refused("zero or duplicate source fee escrow funding"));
+                }
+                let key = key.ok_or_else(|| refused("source fee sponsor bond missing"))?;
+                let debit = builder.slash_bond(key, u128::from(s.amount))?;
+                if debit != s.amount {
+                    return Err(refused("source fee escrow not fully prepaid"));
+                }
+                fee_held.insert(context, debit);
+            }
+            SettlementKindV1::PaySourceFeeEscrow | SettlementKindV1::RefundSourceFeeEscrow => {
+                let context = s.claim.ok_or_else(|| refused("source fee payout context missing"))?;
+                let l = fee_ledger.as_ref().expect("loaded for fee settlements");
+                let funding = l.beacon_source_fees.get(&context).ok_or_else(|| refused("source fee payout not prepaid"))?;
+                if s.kind == SettlementKindV1::RefundSourceFeeEscrow {
+                    if s.bond != funding.terms.sponsor {
+                        return Err(refused("source fee refund recipient substituted"));
+                    }
+                } else {
+                    let promise =
+                        l.beacon_source_fee_promises.get(&(context, s.bond)).ok_or_else(|| refused("source fee promise missing"))?;
+                    if promise.outcome.is_some() || promise.fee != s.amount || !fee_paid.insert((context, s.bond)) {
+                        return Err(refused("source fee receipt differs from the once-only promise"));
+                    }
+                }
+                let held = fee_held.get_mut(&context).ok_or_else(|| refused("source fee escrow missing"))?;
+                *held = held.checked_sub(s.amount).ok_or_else(|| refused("source fee payout exceeds prepaid escrow"))?;
+                let payload = key
+                    .and_then(|k| builder.state.bonds.get(&k).map(|b| b.payout_payload))
+                    .ok_or_else(|| refused("source fee payee missing"))?;
+                builder.add_kernel_payout(payload, s.amount)?;
+            }
             SettlementKindV1::SlashFraud
             | SettlementKindV1::SlashDefault
             | SettlementKindV1::SlashFiling
@@ -628,6 +720,10 @@ fn apply_settlements_to_exec_vesting(
                 if debit != s.amount && strict {
                     return Err(refused(format!("a slash of {} took {debit}: the synced collateral did not cover it", s.amount)));
                 }
+                if matches!(s.kind, SettlementKindV1::SlashFraud | SettlementKindV1::SlashDefault) {
+                    let funded = reporter_funded.entry(s.claim).or_default();
+                    *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("reporter collateral debit"))?;
+                }
                 if s.kind == SettlementKindV1::PayJobEscrow {
                     let funded = escrow_debited.entry(s.claim).or_default();
                     *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("kernel escrow debit"))?;
@@ -647,6 +743,30 @@ fn apply_settlements_to_exec_vesting(
                 } else {
                     s.amount
                 };
+                if matches!(s.kind, SettlementKindV1::AccuserReward | SettlementKindV1::DemanderShare)
+                    && let Some(batch) = reporter_batch
+                {
+                    // No recipient cap refusal is allowed to erase an objective
+                    // conviction/default. Preserve the whole funded entitlement
+                    // and let pre-object ticks redeem exact R-limited tranches.
+                    let claim = s.claim.ok_or_else(|| refused("reporter award has no terminal court subject"))?;
+                    let terminal = events.iter().any(|event| match event {
+                        LedgerEventV1::Convicted { claim: proved, accuser, accuser_reward, .. }
+                            if s.kind == SettlementKindV1::AccuserReward => *proved == claim && *accuser == s.bond && *accuser_reward == amount,
+                        LedgerEventV1::ProducerDefault { claim: defaulted, .. } | LedgerEventV1::PostFinalDefault { claim: defaulted, .. }
+                            if s.kind == SettlementKindV1::DemanderShare => *defaulted == claim,
+                        _ => false,
+                    });
+                    if !terminal { return Err(refused("reporter award has no objective terminal verdict receipt")); }
+                    let funded = reporter_funded.entry(s.claim).or_default();
+                    *funded = funded.checked_sub(amount).ok_or_else(|| refused("reporter award lacks collected collateral"))?;
+                    let bond = key.ok_or_else(|| refused("reporter award recipient has no native bond"))?;
+                    let mut hash = keyed(b"misaka-palw/bond-budget/kernel-reporter-award/v1");
+                    hash.update(batch.as_byte_slice());
+                    hash.update(&(ordinal as u64).to_le_bytes());
+                    builder.stage_reporter_recipient_v1(finish(hash), bond, now, amount, Hash64::from_bytes(claim))?;
+                    continue;
+                }
                 if s.kind == SettlementKindV1::FinalReward
                     && let Some(root) = exec_root
                 {
@@ -659,6 +779,13 @@ fn apply_settlements_to_exec_vesting(
                         amount,
                     )?;
                     continue;
+                }
+                if s.kind == SettlementKindV1::FinalReward {
+                    let claim = s.claim.ok_or_else(|| refused("a Final fee has no claim"))?;
+                    let bond = key.ok_or_else(|| refused("a Final fee recipient has no native bond"))?;
+                    let payload =
+                        builder.state.bonds.get(&bond).ok_or_else(|| refused("a Final fee recipient is missing"))?.payout_payload;
+                    builder.consume_kernel_final_reward_v1(&claim, bond, payload, now, amount)?;
                 }
                 let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
                 match payee {
@@ -1059,6 +1186,52 @@ pub(super) fn apply_kernel_route_object_v1(
             }
         }
     }
+    // A paid opt-in reserves its fixed signed fee for the actual source bond
+    // before admission changes any native money or source rows. Roll back even
+    // initial budget creation if the recipient has no R room.
+    if let KernelRouteObjectV1::OptInPaidBeaconSource { context, producer, .. } = &object {
+        let promise =
+            ledger.beacon_source_fee_promises.get(&(*context, *producer)).ok_or_else(|| refused("paid source promise missing"))?;
+        let source = ledger.beacon_sources.get(&(*context, *producer)).ok_or_else(|| refused("paid source row missing"))?;
+        if *producer != kid || promise.accepted_daa != ctx.daa_score {
+            return Err(refused("paid source recipient or acceptance position differs"));
+        }
+        let checkpoint = builder.checkpoint();
+        if builder
+            .reserve_source_income_v1(
+                ctx,
+                Hash64::from_bytes(*context),
+                source_income_subject_v1(&source.job, &source.seal),
+                *signer,
+                source.terms.hold_until,
+                promise.fee,
+            )
+            .is_err()
+        {
+            builder.restore(checkpoint);
+            persist_budget(builder, ctx, &ledger);
+            return Ok(());
+        }
+    }
+    // Reserve the shared Q/R window before any accepted claim/fee/bond write.
+    // A refused plan still pays the public verification budget it already used.
+    for event in &events {
+        if let LedgerEventV1::ClaimCommitted { claim } = event {
+            let row = ledger.claims.get(claim).ok_or_else(|| refused("accepted kernel claim is missing"))?;
+            let reward = ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount);
+            match builder.plan_kernel_claim_budget_v1(ctx, *signer, Hash64::from_bytes(row.class_binding_id), reward) {
+                Ok(Some(plan)) => {
+                    builder.commit_bond_budget_v1(ctx, super::palw_bond_budget_fold_v1::kernel_budget_claim_id_v1(claim), plan)?;
+                    builder.hold_kernel_income_v1(ctx, Hash64::from_bytes(*claim), row.liability_until.unwrap_or(ctx.daa_score))?;
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    persist_budget(builder, ctx, &ledger);
+                    return Ok(());
+                }
+            }
+        }
+    }
     if let Some((_, binding)) = &scoped {
         for event in &events {
             if let LedgerEventV1::ConformanceClassRegistered { class } | LedgerEventV1::FlatConformanceClassRegisteredV7 { class }
@@ -1095,7 +1268,8 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     // (A settlement the real bonds cannot honour fails the object — the walk's rehearsal drops it with its builder, so no half-applied
     // slash survives; the sync above makes this unreachable.)
-    apply_settlements(builder, &events, true)?;
+    apply_settlements(builder, &events, true, ctx.daa_score)?;
+    builder.close_terminal_kernel_budgets_v1(&ledger);
     persist_budget(builder, ctx, &ledger);
     // Only the exact signed candidate used the temporary scope. Persisting this root in
     // TABLE_ATTESTED would let an unrelated program borrow it in the next object.
@@ -1258,6 +1432,8 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
                 | r::TABLE_SERVED_DEMAND_BONDS_V1
                 | r::TABLE_SEG_PROGRESS_V1
                 | r::TABLE_VERIFIER_PAY_V1
+                // codex RFC-7: the source rows (table 30) tick too; its prepaid fees ride table 27 (kinds 5 / 6, R6781-F merge).
+                | r::TABLE_BEACON_SOURCES_V1
         )
     });
     if !busy {
@@ -1272,8 +1448,51 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
             ledger.sync_bond(kid, builder.kernel_synced_collateral(&key, ctx.daa_score));
         }
     }
+    let pending_source_fees: Vec<_> =
+        ledger.beacon_source_fee_promises.iter().filter(|(_, promise)| promise.outcome.is_none()).map(|(key, _)| *key).collect();
     let events = ledger.tick();
-    apply_settlements(builder, &events, false)?;
+    // Consume the same deferred R reservation before paying the separately
+    // prepaid escrow. A principal refund cancels the entitlement and earns no
+    // income; unchanged pending promises retain their reservation through H.
+    for (context, producer) in pending_source_fees {
+        use misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeOutcomeV1;
+        let promise = &ledger.beacon_source_fee_promises[&(context, producer)];
+        let Some(outcome) = promise.outcome else { continue };
+        let source = ledger.beacon_sources.get(&(context, producer)).ok_or_else(|| refused("settled fee source missing"))?;
+        let bond = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .and_then(|route| route.bond_key_of(&producer))
+            .ok_or_else(|| refused("settled fee recipient bond missing"))?;
+        let subject = source_income_subject_v1(&source.job, &source.seal);
+        match outcome {
+            BeaconSourceFeeOutcomeV1::Paid { daa, claim, .. } => {
+                if daa != ctx.daa_score {
+                    return Err(refused("source income payment position differs"));
+                }
+                builder.bind_material_income_root_v1(
+                    ctx.daa_score,
+                    Hash64::from_bytes(claim),
+                    super::palw_bond_budget_fold_v1::source_income_id_v1(Hash64::from_bytes(context), subject, &bond),
+                )?;
+                builder.settle_source_income_v1(
+                    ctx,
+                    Hash64::from_bytes(context),
+                    subject,
+                    bond,
+                    promise.accepted_daa,
+                    source.terms.hold_until,
+                    promise.fee,
+                )?;
+            }
+            BeaconSourceFeeOutcomeV1::Refunded { .. } => {
+                builder.cancel_source_income_v1(ctx, Hash64::from_bytes(context), subject, bond, promise.accepted_daa)?;
+            }
+        }
+    }
+    apply_settlements(builder, &events, false, ctx.daa_score)?;
+    builder.close_terminal_kernel_budgets_v1(&ledger);
     // Assignments and counted receipts of claims that can no longer be covered are dropped.
     let stale: Vec<misaka_palw_kernel::hash::Digest> = builder
         .state

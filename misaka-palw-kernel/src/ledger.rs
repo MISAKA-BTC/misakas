@@ -810,6 +810,8 @@ pub struct KernelLedgerV1 {
     pub flat_conformance_classes_v7: BTreeMap<Digest, (Digest, flat_candidate7::FlatCandidateRecordV7)>,
     pub policy: LedgerPolicyV1,
     pub schedule: KernelScheduleV1,
+    /// Trusted native consumer caps for standalone Final fees. Not rows or transaction inputs.
+    pub consumer_final_reward_caps: BTreeMap<Digest, u64>,
     /// Descriptors this binary implements (never bytes from a transaction).
     pub known: Vec<KernelDescriptorV1>,
     pub daa: u64,
@@ -845,6 +847,9 @@ pub struct KernelLedgerV1 {
     pub beacon_sources: BTreeMap<(Digest, Digest), crate::beacon_source::BeaconSourceRowV1>,
     /// Trusted consumer inputs, never rows/rooted state. Empty on restore; the new feature is refused by default.
     pub beacon_source_inputs: crate::beacon_source::BeaconSourceInputsV1,
+    pub beacon_source_fee_inputs: crate::beacon_source_fee::BeaconSourceFeeInputsV1,
+    pub beacon_source_fees: BTreeMap<Digest, crate::beacon_source_fee::BeaconSourceFeeFundingV1>,
+    pub beacon_source_fee_promises: BTreeMap<(Digest, Digest), crate::beacon_source_fee::BeaconSourceFeePromiseV1>,
     /// **The demand bonds of SERVED positions, awaiting their fate** (K2S's producer-side DA griefing, G14-R4): a position served on
     /// chain keeps its demanders' bonds reserved; they are refunded the moment the claim is convicted, defaults or times out, and
     /// burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction is never penalised.
@@ -941,6 +946,7 @@ impl KernelLedgerV1 {
         Ok(Self {
             policy,
             schedule,
+            consumer_final_reward_caps: BTreeMap::new(),
             known,
             daa: 0,
             bonds: BTreeMap::new(),
@@ -964,6 +970,9 @@ impl KernelLedgerV1 {
             exec_reward_holds: BTreeMap::new(),
             beacon_sources: BTreeMap::new(),
             beacon_source_inputs: Default::default(),
+            beacon_source_fee_inputs: Default::default(),
+            beacon_source_fees: Default::default(),
+            beacon_source_fee_promises: Default::default(),
             served_demands: BTreeMap::new(),
             claim_beacon_salts: BTreeMap::new(),
             forfeited_claim_seals: BTreeMap::new(),
@@ -1357,6 +1366,13 @@ impl KernelLedgerV1 {
                 self.opt_in_beacon_source(*producer, *job, *seal, *context, *terms, &mut out)
                     .map_err(|why| KernelRefusalV1::rule(name, why))?;
             }
+            KernelRouteObjectV1::FundBeaconSourceFee { terms } => {
+                self.fund_beacon_source_fee(*terms, &mut out).map_err(|why| KernelRefusalV1::rule(name, why))?;
+            }
+            KernelRouteObjectV1::OptInPaidBeaconSource { producer, job, seal, context, source_terms, fee_terms } => {
+                self.opt_in_paid_beacon_source(*producer, *job, *seal, *context, *source_terms, *fee_terms, &mut out)
+                    .map_err(|why| KernelRefusalV1::rule(name, why))?;
+            }
             KernelRouteObjectV1::SealProof { accuser, claim, seal } => {
                 const NAME: &str = "SealProof";
                 let fee = self.policy.dismissed_proof_fee;
@@ -1476,7 +1492,10 @@ impl KernelLedgerV1 {
             O::FileProof { accuser, .. } => Some((*accuser, "accuser")),
             O::FileDemand { demander, .. } => Some((*demander, "demander")),
             O::RequestExit { bond } | O::Withdraw { bond } => Some((*bond, "bond")),
-            O::SealClaim { producer, .. } | O::OptInBeaconSource { producer, .. } => Some((*producer, "producer")),
+            O::SealClaim { producer, .. } | O::OptInBeaconSource { producer, .. } | O::OptInPaidBeaconSource { producer, .. } => {
+                Some((*producer, "producer"))
+            }
+            O::FundBeaconSourceFee { terms } => Some((terms.sponsor, "sponsor")),
             O::SealProof { accuser, .. } => Some((*accuser, "accuser")),
             O::Spec { object } => object.named_actor(),
             _ => None,
@@ -1542,7 +1561,8 @@ impl KernelLedgerV1 {
     /// **ADR-0176 HOOK `budget-final` (lane BUDGET; not built here):** the reward is paid only within the R / F reservation the claim
     /// made at acceptance (`budget-accept`), re-checked here; the budget is not recovered before `d + W`, whatever the claim's fate.
     fn pay_from_job_escrow(&mut self, job: &Digest, claim: &Digest, producer: Digest, out: &mut Vec<LedgerEventV1>) -> u64 {
-        self.pay_from_job_escrow_capped(job, claim, producer, u64::MAX, out)
+        let cap = self.consumer_final_reward_caps.get(claim).copied().unwrap_or(u64::MAX);
+        self.pay_from_job_escrow_capped(job, claim, producer, cap, out)
     }
 
     pub(crate) fn pay_from_job_escrow_capped(
@@ -3204,6 +3224,7 @@ impl KernelLedgerV1 {
         // The served positions' demand bonds whose claim is now decided (after this block's defaults, Finals and releases).
         self.settle_due_served_demand_bonds(out);
         self.tick_beacon_sources(out);
+        self.tick_beacon_source_fees(out);
     }
 
     /// **DA16: would `bytes` serve this committed position?** — exactly the classification a `Respond` gets (the class's response

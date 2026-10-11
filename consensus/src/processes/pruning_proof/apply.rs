@@ -31,7 +31,7 @@ use crate::{
             reachability::StagingReachabilityStore,
             relations::StagingRelationsStore,
             selected_chain::SelectedChainStore,
-            virtual_state::{VirtualState, VirtualStateStore},
+            virtual_state::VirtualState,
         },
     },
     processes::{
@@ -143,8 +143,15 @@ impl PruningProofManager {
             ancestors.insert(header.hash);
         }
 
-        // Once applied, store the descriptor
-        self.pruning_point_store.write().set_pruning_proof_descriptor(descriptor).unwrap();
+        // All fallible proof/trusted-set checks precede the authority writer.
+        // Stable=false, descriptor and virtual/chain replacement commit together.
+        let mut pruning = self.pruning_point_store.write();
+        let mut meta = self._pruning_meta_stores.write();
+        let mut batch = WriteBatch::default();
+        meta.set_pruning_utxoset_stable_flag(&mut batch, false).map_err(|e| {
+            PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("proof incomplete marker: {e}"))
+        })?;
+        pruning.set_pruning_proof_descriptor_batch(&mut batch, descriptor).unwrap();
 
         // Update virtual state based on proof derived pruning point.
         // updating of the utxoset is done separately as it requires downloading the new utxoset in its entirety.
@@ -154,9 +161,7 @@ impl PruningProofManager {
             ghostdag_data: self.ghostdag_manager.ghostdag(&virtual_parents),
             ..VirtualState::default()
         });
-        self.virtual_stores.write().state.set(virtual_state).unwrap();
-
-        let mut batch = WriteBatch::default();
+        self.virtual_stores.write().state.set_batch(&mut batch, virtual_state).unwrap();
         self.body_tips_store.write().init_batch(&mut batch, &virtual_parents).unwrap();
         self.headers_selected_tip_store
             .write()
@@ -165,6 +170,8 @@ impl PruningProofManager {
         self.selected_chain_store.write().init_with_pruning_point(&mut batch, pruning_point).unwrap();
         self.depth_store.insert_batch(&mut batch, pruning_point, ORIGIN, ORIGIN).unwrap();
         self.db.write(batch).unwrap();
+        drop(meta);
+        drop(pruning);
 
         Ok(())
     }
