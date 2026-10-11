@@ -79577,7 +79577,9 @@ mod staged_court_state_tests_v1 {
             apply_delta_entry(&mut state,&contract,false).unwrap();apply_delta_entry(&mut state,&seed,false).unwrap();
             assert_eq!(palw_accuser_exposure_v1(&state,&owner),u128::from(plan.deposit_sompi));
             for participant in panel.iter().chain(std::iter::once(&target.executor_bond)) {
-                assert!(state.staged_bond_exit_held_v1(participant,terms.material_until_daa));
+                assert!(state.staged_bond_exit_held_v1(participant,terms.collect_until_daa));
+                assert!(state.staged_bond_exit_held_v1(participant,terms.bond_exit_after_daa-1));
+                assert!(!state.staged_bond_exit_held_v1(participant,terms.bond_exit_after_daa));
             }
             let reference=PalwStagedCertificateRefV1 {claim:target.claim_id,reserver:owner,reserved_daa:now,seed_id};
             assert!(reference.resolve_fault_v1(&state,target.execution_root).is_err());
