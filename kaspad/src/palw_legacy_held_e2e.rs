@@ -2451,6 +2451,7 @@ async fn lg14b_an_honest_claim_survives_a_malicious_outsider() {
         job_identity: h64(0),
         trace_root: honest.trace_root,
         output_root: h64(32),
+        registered_semantics: None,
     };
     match crate::palw_panel::palw_fraud_filer::palw_fraud_filer_past_step_v1(&unresolved, &target, Some(&event0), None, LADDER) {
         Err(why) => assert!(why.contains("nothing guessed"), "{why}"),

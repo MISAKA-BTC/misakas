@@ -718,6 +718,7 @@ mod tests {
                 output_root: Hash64::default(),
                 own_range: Box::new(|_, _| Err("this proof does not use own ranges".into())),
                 legacy: None,
+                own: None,
                 fp_job: Some(Box::new(job.clone())),
                 own_output_ids: nominee.clone(),
                 _job_reservation: None,

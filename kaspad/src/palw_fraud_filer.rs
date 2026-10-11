@@ -4669,7 +4669,7 @@ pub(super) mod tests {
         };
         assert_eq!(step(&v, &case, &|_| false), PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve));
         let mut record = PalwDisputeClaimV1::default();
-        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 300, deposit: 1, sessions_opened: 0 });
+        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 300, deposit: 1, sessions_opened: 0, lanes_joined: 0 });
         v.record = Some(record);
         assert_eq!(
             step(&v, &case, &|_| false),

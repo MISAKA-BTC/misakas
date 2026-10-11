@@ -462,6 +462,8 @@ pub(super) fn apply_dispute_reserved_v1(
     builder.check_accuser_room(reserver, deposit, "dispute reservation", now)?;
     let held_before = record.holds();
     let hard = record.hard_deadline_daa;
+    let until = hard.saturating_add(builder.params.window_challenge_at(now));
+    super::palw_exec_v2_rewards_v1::require_native_session_window(&builder.state, builder.params, &claim_id, until)?;
     record.live.insert(reserver, PalwDisputeReservationRowV1 { reserved_daa: now, deposit, sessions_opened: 0, lanes_joined: 0 });
     builder.write_legacy_dispute(claim_id, Some(record));
     // The hold: DL-1 gives the claim no deadline while the record holds it (`palw_rcore_deadline_v1`, `arm_deadline`).
@@ -470,8 +472,7 @@ pub(super) fn apply_dispute_reserved_v1(
     }
     // The vesting row and the signers' `Valid` locks follow the hold, as they follow a DA session (DA-5 / L-3): a conviction landing
     // inside it finds them unmatured and live.
-    let until = hard.saturating_add(builder.params.window_challenge_at(now));
-    builder.da_rekey_v1(claim_id, until, now);
+    builder.da_rekey_v1(claim_id, until, now)?;
     Ok(())
 }
 

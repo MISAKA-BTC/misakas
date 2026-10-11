@@ -31826,13 +31826,14 @@ fn join_da_session_lane_legacy_held_v1(
             retention_daa: claim.trace_retention_daa,
         });
     }
+    let until = deadline.saturating_add(builder.params.window_challenge_at(now));
+    palw_exec_v2_rewards_v1::require_native_session_window(&builder.state, builder.params, &claim_id, until)?;
     session.units.push(unit);
     session.exposure = session.exposure.saturating_add(admission.exposure);
     session.deadline_daa = deadline;
     builder.write_da_session((claim_id, accuser), Some(session));
     builder.legacy_dispute_count_lane_v1(claim_id, accuser);
-    let until = deadline.saturating_add(builder.params.window_challenge_at(now));
-    builder.da_rekey_v1(claim_id, until, now);
+    builder.da_rekey_v1(claim_id, until, now)?;
     Ok(())
 }
 

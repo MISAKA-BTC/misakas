@@ -569,7 +569,7 @@ pub(super) async fn carry_public_rpc_answer(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn registered_tiled_constraint_class_passes_normal_registration_and_host_resolution() {
-    let (config, bundle, premine, mut floats) = fixture_config(false, true, true, true, true);
+    let (config, bundle, premine, mut floats) = fixture_config_with(false, true, true, true, true);
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
     let fixture = TiledFixture::new(&chain);
@@ -588,7 +588,7 @@ async fn registered_tiled_constraint_class_passes_normal_registration_and_host_r
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn registered_tiled_constraint_class_passes_normal_readiness_jury_and_fp_price() {
     kaspa_core::log::try_init_logger("warn");
-    let (config, bundle, premine, mut floats) = fixture_config(false, true, true, true, true);
+    let (config, bundle, premine, mut floats) = fixture_config_with(false, true, true, true, true);
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
     let fixture = TiledFixture::new(&chain);
