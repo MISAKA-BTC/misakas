@@ -331,14 +331,14 @@ mod tests {
     }
     #[test]
     fn raw_json_and_original_table_authenticate_before_honest_mismatch_duplicate_or_overrun() {
-        let raw = br#"{"model":{"vocab":{"A":0,"B":1}},"added_tokens":[]}"#;
+        let raw = br#"{"model":{"vocab":{"A":0,"B":1},"merges":[]},"added_tokens":[]}"#;
         assert!(!derive(raw, Some(b"A"), 512));
         assert!(derive(raw, Some(b"X"), 512));
-        assert!(derive(br#"{"model":{"vocab":{"A":0,"A":1}}}"#, Some(b"A"), 512));
+        assert!(derive(br#"{"model":{"vocab":{"A":0,"A":1},"merges":[]}}"#, Some(b"A"), 512));
         // B=0 cannot skip the file hash: this actual first key event violates the signed contract,
         // then the same full original raw hash must still complete before objective overrun.
         assert!(derive(raw, Some(b"A"), 0));
-        assert!(!derive(b"{}", Some(b""), 0));
+        assert!(!derive(br#"{"model":{"vocab":{},"merges":[]}}"#, Some(b""), 512));
     }
     #[test]
     fn original_table_leaf_and_rendering_digest_match_at_restart_boundaries() {
