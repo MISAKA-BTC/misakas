@@ -147,7 +147,19 @@
       "source": "501a6a2cb89da4e1fe0ba5e397a3458b796adfeb",
       "result": "0 PASS / 1 FAIL: two services competed for one gossip inbox; repair47008ccfd awaits node rerun",
       "sha256": "407239f4946951740dda0508ab37710a2e53f7b544b262c143b4c20eafecea55"
+    },
+    {
+      "name": "core-build-public-family-tokenizer",
+      "source": "151e6050b",
+      "result": "build PASS",
+      "sha256": "695f2844dd6d16cfc6f03bfee4c5989ff4e3b453ba650b8ac028c2c585d9afbe"
+    },
+    {
+      "name": "core-public-family-tokenizer-tests",
+      "source": "151e6050b",
+      "result": "23 PASS / 1 FAIL: planned changed typed165/167 wire pins; prefix codec module has0 direct tests",
+      "sha256": "140f07474a549d97292edec55c971e66891503d77dd4a216a371b484e7c10d6c"
     }
   ],
-  "qualification": "Node source501a builds and41 focused tests pass; tiled services abort ENOSPC and automatic restart fails shared inbox. Core source47008ccfd builds and13 focused tests pass, including the previously failing fixtures. These results do not qualify the latest whole source, the isolated integration merge, new native prefix/sole-receiver P2P paths, or full G14. New node runtime reruns remain required. Activation remains refused."
+  "qualification": "Node source501a builds and41 focused tests pass; tiled services abort ENOSPC and automatic restart fails shared inbox. Core source47008ccfd builds and13 focused tests pass, including the previously failing fixtures. These results do not qualify the latest whole source, the isolated integration merge, new native prefix/sole-receiver P2P paths, or full G14. New node runtime reruns remain required. Activation remains refused. Public-family/tokenizer core source151e6050b builds with23 focused PASS and1 wire-pin FAIL; typed165/167 pins corrected from actual output atc3982b2c5, rerun pending. Native Q36 whole-cache proof differential is not yet executed."
 }

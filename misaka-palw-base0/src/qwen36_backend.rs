@@ -3157,6 +3157,167 @@ mod tests {
             };
             backend.verify_prefix_state_v1(&job, &prompt).unwrap();
             let good = backend.execute_free_prompt(&job, &prompt.map(|id| id as usize)).unwrap();
+            use kaspa_consensus_core::palw_step::{
+                PalwStepCoordinateV1, PalwStepOutLenV1, PalwStepTableV1, canonical_step_leaf_index,
+            };
+            use kaspa_consensus_core::palw_step_leg::{PalwStepMerkleTreeV1, PalwStepOpeningV1, step_tile_leaf_hash_ctx_v1};
+            let retained = crate::produce::base0_material_decode_any_v1(&good.outcome.material).unwrap();
+            let binding = retained.binding();
+            let raw = retained.tiles().unwrap();
+            let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(i, t)| (*i, t)).collect();
+            let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
+            for (i, t) in raw {
+                hashes[*i as usize] = step_tile_leaf_hash_ctx_v1(&binding.job_context, &class, t);
+            }
+            let tree = PalwStepMerkleTreeV1::build_capped_v1(&hashes, 1 << 22).unwrap();
+            assert_eq!(tree.root(), binding.step_merkle_root);
+            let inventory = crate::inventory::qwen36_inventory_v1(&artifact, &profile).unwrap();
+            let operands: Vec<_> = (0..inventory.operands().len())
+                .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
+                .collect();
+            let mut semantic = kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
+                class,
+                inventory.root(),
+                &binding.job_context,
+                0,
+            );
+            semantic.prefix_state_relation =
+                Some(kaspa_consensus_core::palw_class_semantics_v1::PalwPrefixStateRelationV1::Qwen36HybridCacheV1);
+            let target = kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1 {
+                claim_id: Hash64::from_u64_word(0xc19),
+                class_id: class,
+                artifact_root: inventory.root(),
+                executor_bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond),
+                execution_root: binding.committed_execution_root,
+                lane: Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt),
+                segment_count: Some(4),
+                phase: None,
+                job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
+                trace_root: binding.full_logits_trace_root,
+                output_root: good.outcome.output_root,
+                registered_semantics: Some(semantic),
+            };
+            let rows_for = |slot: u32, position: u32, width: u64, tile_len: u32, start: u64, end: u64| {
+                (start / u64::from(tile_len)..=(end - 1) / u64::from(tile_len))
+                    .map(|tile| {
+                        let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position, tile_index: tile as u32 };
+                        let index = canonical_step_leaf_index(&profile, &binding.job_context, &coord).unwrap();
+                        let preimage = (**by_index.get(&index).unwrap()).clone();
+                        assert_eq!(u64::from(preimage.value_count), (width - tile * u64::from(tile_len)).min(u64::from(tile_len)));
+                        kaspa_consensus_core::palw_prefix_state_court_v1::PalwPrefixKvTileV1 {
+                            opening: PalwStepOpeningV1 {
+                                leaf_index: index,
+                                leaf_hash: hashes[index as usize],
+                                siblings: tree.path_v1(index as usize).unwrap(),
+                            },
+                            preimage,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let gdn = profile
+                .gdn_nodes
+                .iter()
+                .find(|n| {
+                    n.kernel_semantics_id
+                        == kaspa_consensus_core::palw_step::kernel_semantics_id_v1(
+                            kaspa_consensus_core::palw_step_refute::KDESC_Q36_GDN_STEP,
+                        )
+                })
+                .unwrap();
+            let widths: Vec<_> = gdn
+                .input_refs
+                .iter()
+                .map(|r| match profile.gdn_nodes[*r as usize].out_len {
+                    PalwStepOutLenV1::Fixed { elements } => u64::from(elements),
+                    _ => panic!("fixed GDN source"),
+                })
+                .collect();
+            for layer in 0..profile.layer_count {
+                if profile.layer_kind(layer) != kaspa_consensus_core::palw_step::PalwLayerKindV1::GatedDeltaNet {
+                    continue;
+                }
+                for head in 0..u32::from(profile.gdn_heads) {
+                    let mut replay = kaspa_consensus_core::palw_prefix_gdn_replay_v1::PalwPrefixGdnHeadReplayV1::new(
+                        &target,
+                        binding,
+                        &job,
+                        layer,
+                        head,
+                        &operands,
+                        1 << 20,
+                    )
+                    .unwrap();
+                    let ranges = kaspa_consensus_core::palw_step_refute::qwen36_gdn_slice_v1(&profile, gdn, &widths, head).unwrap();
+                    for position in 0..k {
+                        let inputs: Vec<_> = gdn
+                            .input_refs
+                            .iter()
+                            .enumerate()
+                            .map(|(i, r)| {
+                                let n = &profile.gdn_nodes[*r as usize];
+                                rows_for(
+                                    profile.global_node_slot(PalwStepTableV1::Gdn, layer, *r as usize).unwrap(),
+                                    position,
+                                    widths[i],
+                                    n.tile_len,
+                                    ranges[i].0,
+                                    ranges[i].1,
+                                )
+                            })
+                            .collect();
+                        let before = borsh::to_vec(&replay).unwrap();
+                        let mut forged = inputs.clone();
+                        forged[0][0].preimage.values_le[0] ^= 1;
+                        assert!(replay.advance(&target, binding, &forged, 1 << 22).is_err());
+                        assert_eq!(borsh::to_vec(&replay).unwrap(), before);
+                        replay.advance(&target, binding, &inputs, 1 << 22).unwrap();
+                        replay = borsh::from_slice(&borsh::to_vec(&replay).unwrap()).unwrap();
+                    }
+                    assert_eq!(
+                        replay.completed_matrix().unwrap(),
+                        cache.gdn[layer as usize][head as usize].s,
+                        "every public reconstructed head matches the actual registered backend cache"
+                    );
+                }
+            }
+            let mut public_digest = PalwQwen36PrefixCacheDigestV1::new(&profile, k).unwrap();
+            while let Some((unit, length, offset)) = public_digest.next_unit() {
+                match unit {
+                    PalwPrefixCacheUnitV1::GdnHead { layer, head } => {
+                        // Matrices above have independently completed authenticated genesis replay.
+                        let words = &cache.gdn[layer as usize][head as usize].s;
+                        let bytes: Vec<_> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+                        public_digest.push(unit, offset, &bytes).unwrap();
+                    }
+                    _ => {
+                        let plan = kaspa_consensus_core::palw_prefix_q36_public_rows_v1::PalwQ36PrefixPublicRowV1::new(
+                            binding, k, unit, offset, length,
+                        )
+                        .unwrap();
+                        let inputs: Vec<_> = plan
+                            .sources
+                            .iter()
+                            .map(|source| {
+                                rows_for(
+                                    source.node_slot,
+                                    source.position,
+                                    source.row_values,
+                                    source.tile_len,
+                                    source.start,
+                                    source.end,
+                                )
+                            })
+                            .collect();
+                        public_digest.push(unit, offset, &plan.authenticate(binding, k, &inputs, 1 << 22).unwrap()).unwrap();
+                    }
+                }
+            }
+            assert_eq!(
+                public_digest.finish().unwrap(),
+                named.state_root,
+                "all public component relations reproduce the native prefix root"
+            );
             job.tail = Some(PalwFpJobTailV1::Prefix(kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {
                 state_root: Hash64::from_u64_word(0xbad17),
                 ..named

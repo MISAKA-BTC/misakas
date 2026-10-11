@@ -4459,9 +4459,9 @@ pub(crate) mod tests {
             (162, 0x16fdc18dd12bd954),
             (163, 0x51ac8be8e6561cbd),
             (164, 0x1328fec2bbe52c00),
-            (165, 0x701596c369327a70),
+            (165, 0xf5a36f96be897647),
             (166, 0xe436b43fd3c3e30b),
-            (167, 0x4d8ea73690aec50b),
+            (167, 0xd9d2c295b0c11eb7),
             (131, 0xab59e37a222e6f74),
         ];
 
