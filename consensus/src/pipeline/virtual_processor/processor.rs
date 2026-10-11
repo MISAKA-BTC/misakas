@@ -1,3 +1,4 @@
+use kaspa_consensus_core::muhash::MuHashExtensions;
 use crate::{
     consensus::{
         services::{
@@ -20984,7 +20985,7 @@ impl VirtualStateProcessor {
         };
         let sink = virtual_state.ghostdag_data.selected_parent;
         if let (Some(round), Some(params)) = (round, self.palw_state_params_v2.as_ref()) {
-            if params.palw_bond_budget_active_at(virtual_state.daa_score) {
+            if params.bond_budget_active_at(virtual_state.daa_score) {
                 let (_, state) = self.palw_v2_state_at(sink)
                     .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient state is unavailable".into()))?;
                 let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {

@@ -66,8 +66,8 @@ fn complete_armed(extra_workers: u64, limit: u32) -> (Config, PalwConsensusParam
         *b = bond;
         *operator_pubkey = pubkey.clone();
         *pk = pubkey;
-        *payout_payload = Hash64::from_bytes(payout);
-        premine.push((bond.0, UtxoEntry::new(*collateral, p2pkh_mldsa87_spk(&payout), 0, false)));
+        *payout_payload = payout;
+        premine.push((bond.0, UtxoEntry::new(*collateral, p2pkh_mldsa87_spk(&payout.as_bytes()), 0, false)));
         workers.push(worker);
     }
     let PalwConsensusMode::ConsensusV2(bundle) = &mut config.params.palw_consensus_mode else { unreachable!() };

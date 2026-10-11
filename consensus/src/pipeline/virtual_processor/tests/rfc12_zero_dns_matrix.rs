@@ -42,6 +42,7 @@ use kaspa_consensus_core::evm::{
     CanonicalEvmHeads, DepositClaim, EVM_CHAIN_ID, EVM_NATIVE_SCALE, EvmAddress, EvmSystemOp, EvmTemplateData,
 };
 use kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk;
+use kaspa_consensus_core::muhash::MuHashExtensions;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2;
 use kaspa_consensus_core::palw_native_settlement_v1::{
     MatureUsefulWorkV1, NativeSettlementSnapshotV1, PalwDnsRetirementV1, PalwSettlementPolicyV1, SettlementStopV1,
