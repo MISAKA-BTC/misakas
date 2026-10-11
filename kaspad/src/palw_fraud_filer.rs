@@ -90,6 +90,8 @@ pub(super) const PALW_FRAUD_FILER_DEMAND_ROUND_V1: u32 = u32::MAX - 11;
 pub(super) const PALW_FRAUD_FILER_TERMINAL_ROUND_V2: u32 = u32::MAX - 12;
 /// An input bootstrap that finds an honest claim relinquishes its held reservation.
 pub(super) const PALW_FRAUD_FILER_RELEASE_ROUND_V1: u32 = u32::MAX - 13;
+/// One guarded typed staged move per claim; the accepted cursor, not transport, acknowledges it.
+pub(super) const PALW_FRAUD_FILER_STAGED_ROUND_V1: u32 = u32::MAX - 14;
 /// The host ledger's role for this filer's replays.
 pub(super) const PALW_FRAUD_FILER_REPLAY_ROLE_V1: &str = "fraud-filer";
 /// Mismatched runs held in memory at once (each keeps its capture for the localizer's own ranges).
@@ -117,7 +119,8 @@ pub(super) fn palw_fraud_filer_queued_v1(round: u32, responder: bool) -> bool {
         && (round == PALW_FRAUD_FILER_RESERVE_ROUND_V1
             || round == PALW_FRAUD_FILER_DEMAND_ROUND_V1
             || round == PALW_FRAUD_FILER_TERMINAL_ROUND_V2
-            || round == PALW_FRAUD_FILER_RELEASE_ROUND_V1)
+            || round == PALW_FRAUD_FILER_RELEASE_ROUND_V1
+            || round == PALW_FRAUD_FILER_STAGED_ROUND_V1)
 }
 
 /// **One honest run of a claim's job on this host** — the filer's own material, never the producer's: the roots its replay
@@ -501,6 +504,8 @@ pub(super) struct PalwFraudFilerCaseV1 {
     prefix_plan: Option<prefix::PrefixPlanV1>,
     prefix_complete: bool,
     rendering_done: bool,
+    staged_tokenizer: Option<Arc<std::sync::Mutex<Option<tokenizer_scheduler::TokenizerSchedulerV1>>>>,
+    staged_tokenizer_sent: Option<(Hash64, u64, u8)>,
     prefix_budget: u64,
     _prefix_reservation: Option<Arc<crate::palw_memory_ledger::PalwMemoryReservationV1>>,
     /// Lane G14-L: the current k-ary round's units (the lanes of one reserved session) — the history reader caches their answers.
@@ -553,6 +558,8 @@ impl PalwFraudFilerCaseV1 {
             prefix_plan: None,
             prefix_complete: false,
             rendering_done: false,
+            staged_tokenizer: None,
+            staged_tokenizer_sent: None,
             prefix_budget: 0,
             _prefix_reservation: None,
             legacy_round: Vec::new(),
@@ -1318,6 +1325,8 @@ impl PalwFraudFilerBookV1 {
                 case.legacy_round.clear();
                 case.lanes_sent.clear();
                 case.legacy_material_tickets.clear();
+                case.staged_tokenizer = None;
+                case.staged_tokenizer_sent = None;
                 case.sent = None;
                 case.awaiting_public = None;
                 if let Some(input) = case.fp_bootstrap.as_mut() {
@@ -1400,6 +1409,8 @@ impl PalwFraudFilerBookV1 {
             case.legacy_round.clear();
             case.lanes_sent.clear();
             case.legacy_material_tickets.clear();
+            case.staged_tokenizer = None;
+            case.staged_tokenizer_sent = None;
             case.rcore_wanted = None;
             case.trace = PalwTraceDescentV1::default();
         }
@@ -2594,9 +2605,13 @@ impl PalwPanelService {
             // Judge the binding against the recorded target BEFORE a mismatched count can stop subtree descent.
             // The reporter door rehearses the actual gate; an open colluder court cannot veto a valid direct proof.
             if params.palw_offence_attribution_active_at(current_daa)
-                && let (Some(target), Some(answer), kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)) =
-                    (target.as_ref(), book.answers.get(&(claim, PalwDaUnitV1::Event { row: 0, tile: 0 })), &params.palw_consensus_mode)
+                && let (Some(target), Some(answer), kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)) = (
+                    target.as_ref(),
+                    book.answers.get(&(claim, PalwDaUnitV1::Event { row: 0, tile: 0 })).cloned(),
+                    &params.palw_consensus_mode,
+                )
             {
+                let answer = &answer;
                 let rules = kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
                     prompt_ids_form: params.palw_prompt_ids_form_at(current_daa),
                     base_class_id: bundle.base_class_id,
@@ -2628,6 +2643,58 @@ impl PalwPanelService {
                     let case = book.cases.get_mut(&claim).expect("pursued case");
                     case._prefix_reservation = Some(Arc::new(ticket));
                     case.prefix_budget = maximum;
+                }
+                let mut staged_filing = None;
+                let mut staged_pending = false;
+                if params.palw_staged_public_court_v1_active_at(current_daa)
+                    && facts.reserved
+                    && !book.cases.get(&claim).is_some_and(|case| case.rendering_done)
+                    && target
+                        .registered_semantics
+                        .as_ref()
+                        .is_some_and(|r| r.rendering_rule.is_some() && r.tokenizer_key_events.is_some())
+                    && let (Some(job), PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial))) =
+                        (fp_job.as_ref().filter(|j| j.is_constraint()), answer)
+                {
+                    match session.palw_staged_owned_progress_v1((claim, bond_key)) {
+                        Ok(Some(progress)) => {
+                            // A qualified prospective contract keeps rendering pending even if
+                            // this host cannot currently fund/read its own operand. Local refusal
+                            // is neither a producer DA accusation nor a semantic pass.
+                            staged_pending = true;
+                            match self
+                                .fraud_filer_tokenizer_stage_v1(
+                                    session,
+                                    book,
+                                    claim,
+                                    target,
+                                    initial.binding(),
+                                    job,
+                                    progress,
+                                    maximum,
+                                    file_by,
+                                    current_daa,
+                                    court_pending,
+                                    court_due,
+                                )
+                                .await
+                            {
+                                Ok((filing, done)) => {
+                                    staged_filing = filing;
+                                    if done {
+                                        book.cases.get_mut(&claim).expect("pursued").rendering_done = true;
+                                        staged_pending = false;
+                                    }
+                                }
+                                Err(why) => debug!("[{PALW_PANEL}] claim {claim}: staged own-tokenizer work remains pending: {why}"),
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(why) => {
+                            staged_pending = true;
+                            debug!("[{PALW_PANEL}] claim {claim}: staged snapshot unavailable: {why}");
+                        }
+                    }
                 }
                 // The longest canonical prompt needs a whole-root recompute. Reserve its temporary ids/tree and proof buffers,
                 // then do all direct-proof hashing off the service loop. Pressure delays this pursuit rather than settling it.
@@ -2761,6 +2828,8 @@ impl PalwPanelService {
                     let mut tokenizer_check = None;
                     let mut rendering_done = previous_rendering_done;
                     if !rendering_done
+                        && !staged_pending
+                        && staged_filing.is_none()
                         && target.registered_semantics.as_ref().is_some_and(|row| row.rendering_rule.is_some())
                         && let Some(job) = fp_job.as_ref().filter(|job| job.is_constraint())
                         && let PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial)) = &answer
@@ -2807,7 +2876,8 @@ impl PalwPanelService {
                                 .filter(|filing| (filing.offence_key, filing.evidence_id) == (built.offence_id, built.evidence_id))
                                 .ok_or_else(|| "the tokenizer reporter key differs from its proof builder".to_string())
                         })
-                        .transpose()?;
+                        .transpose()?
+                        .or(staged_filing);
                     let semantic_ready = palw_fraud_filer_registered_preflight_v1(
                         &target,
                         rules,
@@ -3402,6 +3472,168 @@ impl PalwPanelService {
                         break;
                     }
                 }
+            }
+        }
+    }
+
+    /// A rooted prospective owner court is progressed using only this verifier's holding.
+    /// Its own one guarded move uses the existing signed, charged priority carrier queue.
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_tokenizer_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        binding: &PalwStepBindingV2,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        maximum: u64,
+        file_by: Option<u64>,
+        current_daa: u64,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1;
+        use tokenizer_scheduler::{TokenizerScheduleV1, TokenizerSchedulerV1};
+        if progress.claim != claim || progress.reserver == target.executor_bond {
+            return Err("snapshot is not this outside verifier's accepted claim/clock".into());
+        }
+        // Clock refusal precedes expensive file parsing/replay and is never called Honest.
+        let current_daa = progress.now_daa;
+        let deadline = if progress.cursor.is_none() { progress.terms.open_until_daa } else { progress.terms.collect_until_daa };
+        if progress.now_daa >= deadline {
+            return Err("prospective owned court clock is closed".into());
+        }
+        let worker = book
+            .cases
+            .get_mut(&claim)
+            .ok_or("pursuit disappeared")?
+            .staged_tokenizer
+            .get_or_insert_with(|| Arc::new(std::sync::Mutex::new(None)))
+            .clone();
+        let backends = self.backends();
+        let chain_classes = self.config.chain_classes;
+        let held_session = session.clone();
+        let executor_bond = target.executor_bond;
+        let target = target.clone();
+        let binding = binding.clone();
+        let job = job.clone();
+        let worker_progress = progress.clone();
+        let decision = tokio::task::spawn_blocking(move || -> Result<TokenizerScheduleV1, String> {
+            let mut worker = worker.lock().map_err(|_| "tokenizer worker lock poisoned")?;
+            let mut build = || -> Result<TokenizerSchedulerV1, String> {
+                let path = backends
+                    .held_tokenizer_path_or_chain_v1(target.class_id, target.artifact_root, |id| {
+                        if chain_classes { held_session.palw_registered_class_carriage_v1(id) } else { None }
+                    })
+                    .ok_or("outside verifier does not hold registered tokenizer")?;
+                let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(&job)
+                    .ok_or("outside verifier does not hold registered table")?;
+                TokenizerSchedulerV1::open(
+                    &path,
+                    &target,
+                    &binding,
+                    &job,
+                    table,
+                    &worker_progress,
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                )
+            };
+            if worker.is_none() {
+                *worker = Some(build()?);
+            }
+            match worker.as_mut().expect("built").poll(&worker_progress) {
+                Ok(decision) => Ok(decision),
+                Err(why) if why.contains("cursor") || why.contains("branch") => {
+                    // Discard the old speculative parser and its guarded packet BEFORE reserving
+                    // a fresh reconstruction. A deep/unfunded replay remains explicit Pending.
+                    *worker = None;
+                    *worker = Some(build()?);
+                    worker.as_mut().expect("rebuilt").poll(&worker_progress)
+                }
+                Err(why) => Err(why),
+            }
+        })
+        .await
+        .map_err(|e| format!("tokenizer blocking worker failed: {e}"))??;
+        match decision {
+            TokenizerScheduleV1::Finished(reference) => {
+                court_pending.retain(|(held, round, responder, _)| {
+                    (*held, *round, *responder) != (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)
+                });
+                book.cases.get_mut(&claim).expect("pursued").staged_tokenizer_sent = None;
+                let Some(reference) = reference else {
+                    return Ok((None, true));
+                };
+                let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                    claim,
+                    executor_bond,
+                    kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference },
+                    None,
+                    maximum,
+                )
+                .map_err(|e| e.to_string())?;
+                let filing = PalwConvictionFilingV1::of_offence(built.object, claim, file_by, PalwFilingOriginV1::Replay)
+                    .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                    .ok_or("staged reporter key mismatch")?;
+                Ok((Some(filing), false))
+            }
+            decision => {
+                let object = match decision {
+                    TokenizerScheduleV1::Seed(mut seed) => {
+                        seed.signature =
+                            self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no staged signing key")?;
+                        seed.check(100000)?;
+                        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed: Box::new(seed) }
+                    }
+                    TokenizerScheduleV1::Move(mut movement) => {
+                        movement.signature = self
+                            .sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1)
+                            .ok_or("no staged signing key")?;
+                        movement.check()?;
+                        PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }
+                    }
+                    _ => unreachable!(),
+                };
+                let encoded = borsh::to_vec(&object).map_err(|e| e.to_string())?;
+                let digest = Hash64::from_bytes(
+                    blake2b_simd::Params::new()
+                        .hash_length(64)
+                        .key(b"PALW/node/staged-queue/v1")
+                        .hash(&encoded)
+                        .as_bytes()
+                        .try_into()
+                        .expect("64"),
+                );
+                let case = book.cases.get_mut(&claim).expect("pursued");
+                // The desired cursor supersedes a stale branch's unsent carrier, never advances
+                // because transport removed the previous queue entry.
+                court_pending.retain(|(held, round, responder, o)| {
+                    (*held, *round, *responder) != (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false) || *o == object
+                });
+                if court_pending
+                    .iter()
+                    .any(|(held, round, responder, _)| (*held, *round, *responder) == (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false))
+                {
+                    return Ok((None, false));
+                }
+                let sends = match case.staged_tokenizer_sent {
+                    Some((id, at, sends)) if id == digest => {
+                        if current_daa.saturating_sub(at) < PALW_FRAUD_FILER_RESEND_DAA_V1 {
+                            return Ok((None, false));
+                        }
+                        if sends >= PALW_FRAUD_FILER_SENDS_V1 {
+                            return Err("signed staged move did not land within its bounded retry envelope".into());
+                        }
+                        sends
+                    }
+                    _ => 0,
+                };
+                court_due.insert((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false), progress.terms.stream_until_daa.saturating_sub(1));
+                court_pending.push((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false, object));
+                case.staged_tokenizer_sent = Some((digest, current_daa, sends + 1));
+                Ok((None, false))
             }
         }
     }
