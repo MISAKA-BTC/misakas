@@ -3289,3 +3289,46 @@ fees, aggregate capacity and honest inclusion/deadline feasibility must be
 verified before this path is accepted for rewards. Frozen candidate/route grammar,
 resource roots and dormant shipping fences remain unchanged. Full RFC02, real
 checkpoint/task/fidelity, execution Final and A6/A8 acceptance remain open.
+
+### §14.30 — Protected native flat candidate statements and evidence seals v6 (2026-10-11)
+
+The v6 protected statement wraps the unchanged v3 candidate body. Its separate
+trace-root domain binds the v3 root and the fixed v6 maturity, TTL and capacity
+policy. It retains the admitted flat-v5 resource scope and candidate-only status.
+Append inner kinds 36 `PostFlatModelVectorV6`, 37 `SealFlatModelProofV6`, 38
+`RevealFlatModelProofV6` and 39 `ExpireFlatModelSealV6` behind the existing dormant
+kernel-route/panel-free fences. Formal rules are in spec 04b §18. Existing v3
+bytes, root preimages, inner 31–35 semantics and resource scopes retain their
+meaning; the protected statement cannot enter inner 32's unsealed court.
+
+The consumer derives the actor from its authenticated signing bond and persists
+one immutable fixed row per `(vector, actor)`. The salt-bearing seal binds actor,
+vector and exact proof bytes. A reveal requires that actor's own mature seal;
+there is no unsealed fallback, borrowed beneficiary or earliest-byte-sealer
+search. Wrong salt, copied seal, changed equivalent carrier, immature/expired
+seal, changed context or an honest/malformed proof cannot settle the vector.
+
+Posting burns the shared admission tariff and holds the route policy's original
+seal deposit. Four rows per bond and 1,024 total rows bound simultaneous pending
+seals. Retirement/withdrawal and all common capital accounting read this same
+reservation. Expired pending deposits remain held until a bounded explicit close
+forfeits them; a decided vector releases deposits on close. Occupied slots cannot
+be replaced or extend their clocks. Maturity is three DAA; expiry is the lesser
+of posting plus 100 DAA and the immutable vector liability horizon.
+
+One proof-reserve debit covers fixed metadata, bounded raw hashing, stored
+program/PC/body work and the admitted terminal court, before variable decoding.
+Registration includes this debit in its worst-court admission. This avoids a
+normal-admission flood consuming the honest reveal's reserved capacity. Refused
+proofs charge the authenticated filer. A successful fold spends the seal,
+releases its deposit, settles the original vector collateral once and credits
+49 percent to the authenticated finder atomically. It grants no execution Final,
+conformance certificate or model/task support PASS.
+
+This is the consensus consumer implementation of the previously local §14.29
+contract. Native synthetic trials, exact commands and results belong in the
+implementation ledger. Whole-network invalid-proof/seal saturation, transport,
+retention, worst-job inclusion/deadlines and honest liveness still need evidence.
+The full resource contract, real-checkpoint fidelity/task/performance, independent
+execution Final/redemption and A6/A8 are unchanged completion requirements. No
+shipping fence is activated by this increment.

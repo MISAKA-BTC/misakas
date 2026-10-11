@@ -1580,3 +1580,202 @@ async fn flat_hash_da_node_shared_slots_response_priority_withholding_and_horizo
     let replay = net.replay().await;
     net.assert_same(&replay, "shared requester slots, held liability and objective flat DA default");
 }
+
+async fn send_protected_flat_vector(
+    net: &mut Net,
+    f: &Fixture,
+    binding: Hash64,
+    card: usize,
+    body: &kaspa_consensus_core::palw_flat_model_vector_v3::FlatModelVectorPostV3,
+) -> Hash64 {
+    use kaspa_consensus_core::palw_flat_model_seal_v6::FlatModelVectorPostV6;
+    let mut post = FlatModelVectorPostV6 { version: 6, body: body.clone() };
+    post.body.trace.implementation_roots = [post.trace_root(f.class, binding.as_bytes()); 3];
+    let id = post.id(f.class, binding.as_bytes());
+    send(net, card, &K::PostFlatModelVectorV6 { class: f.class, binding: binding.as_bytes(), post: borsh::to_vec(&post).unwrap() })
+        .await;
+    id
+}
+#[tokio::test]
+async fn flat_v6_native_seal_blocks_equivalent_preemption_legacy_bypass_and_pays_finder_once() {
+    use kaspa_consensus_core::palw_flat_model_seal_v6::*;
+    use misaka_palw_kernel::flat_court5::*;
+    use misaka_palw_kernel::flat_seal6::*;
+    for encoder in [true, false] {
+        let f = vector_fixture(encoder);
+        let mut net = Net::over_cfg(config(), TestConsensus::new);
+        let binding = prepare(&mut net, &f).await;
+        let (post, public) = flat_vector_post(&net, &f, binding, vec![0, 1], true);
+        let id = send_protected_flat_vector(&mut net, &f, binding, 4, &post).await;
+        assert!(net.api().unwrap().flat_model_vector_protected_v6(&id));
+        assert_ne!(id, post.id(f.class, binding.as_bytes()));
+        let view = net.api().unwrap().flat_model_vector_view_v3(&id).unwrap();
+        let proof = flat_first_relation_fault(&view, &public, &f.params);
+        let mut alternate = FlatFaultV5::from_bytes(&proof).unwrap();
+        if encoder {
+            match &mut alternate {
+                FlatFaultV5::Whole(f) => f.token = Some(PromptTileOpeningV1::of(&post.trace.prompt, 0).unwrap()),
+                _ => panic!(),
+            }
+            assert_eq!(
+                verify_flat_fault_v5(&view.context(), &alternate),
+                verify_flat_fault_v5(&view.context(), &FlatFaultV5::from_bytes(&proof).unwrap())
+            );
+        }
+        let alternate = alternate.to_bytes().unwrap();
+        let (finder, thief, salt) = (net.kid(7), net.kid(6), [42; 64]);
+        let seal = flat_proof_seal_v6(&id.as_bytes(), &finder, &salt, &proof).unwrap();
+        let collateral = net.collateral(4);
+        // The old unsealed consumer must refuse this new statement identity.
+        send(&mut net, 6, &K::RefuteFlatModelVectorV3 { vector: id.as_bytes(), proof: alternate.clone() }).await;
+        send(&mut net, 6, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: alternate.clone() }).await;
+        assert_eq!(net.owed(6), 0);
+        assert_eq!(net.collateral(4), collateral);
+        send(&mut net, 7, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal }).await;
+        let row = net.api().unwrap().flat_model_seal_v6(&id, &finder).unwrap();
+        assert_eq!(row.seal.mature_daa, row.seal.posted_daa + FLAT_NATIVE_SEAL_MATURITY_DAA_V6);
+        assert_eq!(net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(7)), row.reserved as u128);
+        assert!(row.reserved > 0);
+        // Copying the seal cannot bind another authenticated signer to its bytes.
+        send(&mut net, 6, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal }).await;
+        net.beat_to(row.seal.mature_daa).await;
+        send(&mut net, 6, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: alternate.clone() }).await;
+        assert!(!net.api().unwrap().flat_model_seal_v6(&id, &thief).unwrap().seal.spent);
+        // An equivalent proof learned at reveal cannot get a new mature seal first.
+        let fresh = flat_proof_seal_v6(&id.as_bytes(), &net.kid(5), &salt, &alternate).unwrap();
+        send(&mut net, 5, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal: fresh }).await;
+        send(&mut net, 5, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: alternate }).await;
+        assert_eq!(net.owed(5), 0);
+        assert_eq!(net.collateral(4), collateral);
+        if encoder {
+            let before = net.slashed(7);
+            let altered = match FlatFaultV5::from_bytes(&proof).unwrap() {
+                FlatFaultV5::Whole(mut f) => {
+                    f.token = Some(PromptTileOpeningV1::of(&post.trace.prompt, 0).unwrap());
+                    FlatFaultV5::Whole(f).to_bytes().unwrap()
+                }
+                _ => panic!(),
+            };
+            send(&mut net, 7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: altered }).await;
+            assert!(net.slashed(7) > before);
+        }
+        send(&mut net, 7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: proof.clone() }).await;
+        assert!(net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().refuted);
+        assert!(net.api().unwrap().flat_model_seal_v6(&id, &finder).unwrap().seal.spent);
+        assert_eq!(net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(7)), 0);
+        assert_eq!(collateral - net.collateral(4), mega(100));
+        let (minted, owed) = minted_and_owed(&net, &net.chain, 7);
+        assert_eq!(minted + owed, mega(49));
+        assert_eq!((net.owed(5), net.owed(6)), (0, 0));
+        send(&mut net, 7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof }).await;
+        let (minted, owed) = minted_and_owed(&net, &net.chain, 7);
+        assert_eq!(minted + owed, mega(49));
+        assert_eq!(net.collateral(4), collateral - mega(100));
+        // Closing a decided vector returns the copyist's unused deposit, once.
+        send(&mut net, 3, &K::ExpireFlatModelSealV6 { vector: id.as_bytes(), actor: thief }).await;
+        assert!(net.api().unwrap().flat_model_seal_v6(&id, &thief).is_none());
+        assert_eq!(net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(6)), 0);
+        assert_eq!(minted_and_owed(&net, &net.chain, 7), (mega(49), 0));
+        let replay = net.replay().await;
+        net.assert_same(&replay, "protected seal/reveal conviction, original capital and one finder payout");
+        assert_eq!(minted_and_owed(&net, &replay, 7), (mega(49), 0));
+    }
+}
+#[tokio::test]
+async fn flat_v6_native_seals_bound_actor_slots_hold_capital_and_forfeit_expired_false_seals() {
+    use kaspa_consensus_core::palw_flat_model_seal_v6::*;
+    use misaka_palw_kernel::flat_seal6::flat_proof_seal_v6;
+    let f = vector_fixture(false);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let mut ids = Vec::new();
+    for n in 0..5 {
+        let (body, _) = flat_vector_post(&net, &f, binding, vec![n, n + 1], false);
+        let id = send_protected_flat_vector(&mut net, &f, binding, 4, &body).await;
+        assert!(net.api().unwrap().flat_model_vector_header_v3(&id).is_some());
+        let seal = flat_proof_seal_v6(&id.as_bytes(), &net.kid(7), &[1; 64], b"bad proof").unwrap();
+        send(&mut net, 7, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal }).await;
+        ids.push(id);
+    }
+    assert_eq!(net.api().unwrap().flat_model_seals_of_v6(&net.bond(7)).len(), FLAT_NATIVE_SEALS_PER_BOND_V6);
+    assert_eq!(net.api().unwrap().flat_model_seal_count_v6(), FLAT_NATIVE_SEALS_PER_BOND_V6 as u32);
+    assert!(net.api().unwrap().flat_model_seal_v6(&ids[4], &net.kid(7)).is_none());
+    let row = net.api().unwrap().flat_model_seal_v6(&ids[0], &net.kid(7)).unwrap();
+    let held = net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(7));
+    let state = net.chain.tip_state().1;
+    assert!(kaspa_consensus_core::palw_state_v2::palw_bond_backs_live_duty_v1(&state, &net.bond(7), net.daa(), None));
+    assert!(kaspa_consensus_core::palw_state_v2::palw_bond_backs_live_duty_v2(&state, &net.bond(7), net.daa(), None, 10));
+    assert_eq!(held, row.reserved as u128 * FLAT_NATIVE_SEALS_PER_BOND_V6 as u128);
+    let before = net.slashed(7);
+    // A mature seal of malformed bytes enters a bounded court and charges its signer.
+    net.beat_to(row.seal.mature_daa).await;
+    send(&mut net, 7, &K::RevealFlatModelProofV6 { vector: ids[0].as_bytes(), salt: [1; 64], proof: b"bad proof".to_vec() }).await;
+    assert!(net.slashed(7) > before);
+    assert!(!net.api().unwrap().flat_model_seal_v6(&ids[0], &net.kid(7)).unwrap().seal.spent);
+    // Re-sealing does not replace or extend another pending immutable slot.
+    send(&mut net, 7, &K::SealFlatModelProofV6 { vector: ids[0].as_bytes(), seal: [0; 64] }).await;
+    assert_eq!(net.api().unwrap().flat_model_seal_v6(&ids[0], &net.kid(7)).unwrap(), row);
+    let actor = net.kid(7);
+    send(&mut net, 3, &K::ExpireFlatModelSealV6 { vector: ids[0].as_bytes(), actor }).await;
+    assert!(net.api().unwrap().flat_model_seal_v6(&ids[0], &actor).is_some());
+    net.beat_to(row.seal.expires_daa).await;
+    assert_eq!(
+        net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(7)),
+        held,
+        "unsettled expiry cannot free the original capital"
+    );
+    let collateral = net.collateral(7);
+    send(&mut net, 3, &K::ExpireFlatModelSealV6 { vector: ids[0].as_bytes(), actor }).await;
+    assert_eq!(collateral - net.collateral(7), row.reserved);
+    assert!(net.api().unwrap().flat_model_seal_v6(&ids[0], &actor).is_none());
+    assert_eq!(net.api().unwrap().flat_model_seal_count_v6(), 3);
+    send(&mut net, 3, &K::ExpireFlatModelSealV6 { vector: ids[0].as_bytes(), actor }).await;
+    assert_eq!(net.collateral(7), collateral - row.reserved);
+    let replay = net.replay().await;
+    net.assert_same(&replay, "protected bounded slots, invalid court fees and explicit deposit forfeiture");
+}
+
+#[tokio::test]
+async fn flat_v6_native_mature_proof_uses_reserved_budget_after_admission_flood() {
+    use kaspa_consensus_core::palw_flat_model_seal_v6::*;
+    use misaka_palw_kernel::flat_seal6::flat_proof_seal_v6;
+    let f = vector_fixture(false);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let binding = prepare(&mut net, &f).await;
+    let (body, public) = flat_vector_post(&net, &f, binding, vec![0, 1], true);
+    let mut post = FlatModelVectorPostV6 { version: 6, body: body.clone() };
+    post.body.trace.implementation_roots = [post.trace_root(f.class, binding.as_bytes()); 3];
+    let id = send_protected_flat_vector(&mut net, &f, binding, 4, &body).await;
+    let view = net.api().unwrap().flat_model_vector_view_v3(&id).unwrap();
+    let proof = flat_first_relation_fault(&view, &public, &f.params);
+    let actor = net.kid(7);
+    let salt = [11; 64];
+    let seal = flat_proof_seal_v6(&id.as_bytes(), &actor, &salt, &proof).unwrap();
+    send(&mut net, 7, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal }).await;
+    let mature = net.api().unwrap().flat_model_seal_v6(&id, &actor).unwrap().seal.mature_daa;
+    net.beat_to(mature).await;
+    let collateral = net.collateral(4);
+    let cards = [2, 3, 5, 6];
+    let before: Vec<_> = cards.iter().map(|c| net.slashed(*c)).collect();
+    let mut objects = Vec::new();
+    for card in cards {
+        objects.push((
+            card,
+            net.route(
+                card,
+                &K::PostFlatModelVectorV6 { class: f.class, binding: binding.as_bytes(), post: borsh::to_vec(&post).unwrap() },
+            ),
+        ));
+    }
+    objects.push((7, net.route(7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof })));
+    net.send(objects).await;
+    assert_eq!(
+        cards.iter().zip(before).filter(|(c, b)| net.slashed(**c) > *b).count(),
+        (net.ledger().policy.max_adjudications_per_block - net.ledger().policy.prosecution_reserved_runs()) as usize
+    );
+    assert!(net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().refuted);
+    assert_eq!(net.owed(7), mega(49));
+    assert_eq!(collateral - net.collateral(4), mega(100));
+    let replay = net.replay().await;
+    net.assert_same(&replay, "admission load cannot spend the mature proof's reserved run/work");
+}

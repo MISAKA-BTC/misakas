@@ -33,7 +33,7 @@ impl FlatModelVectorPostV3 {
         vector_id(self.trace_root(class, binding))
     }
 }
-fn vector_id(root: Digest) -> Hash64 {
+pub(crate) fn vector_id(root: Digest) -> Hash64 {
     Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"misaka-palw/flat-model-vector/statement/v3", &root))
 }
 pub fn decode_flat_model_vector_post_v3(bytes: &[u8]) -> std::io::Result<FlatModelVectorPostV3> {
@@ -93,22 +93,17 @@ impl FlatModelVectorViewV3 {
         FlatSegContextV5 { profile: self.profile, claim: self.trace.context() }
     }
 }
-pub(crate) fn checked_flat_model_vector_v3(
+pub(crate) fn checked_flat_model_vector_with_root(
     route: &PalwKernelRouteStateV1,
     class: Hash64,
     binding: Hash64,
     post: &FlatModelVectorPostV3,
+    root: Digest,
 ) -> Result<FlatModelVectorViewV3, String> {
     if post.version != 3 || post.profile != misaka_palw_kernel::flat_court5::flat_trace_profile_id_v5() {
         return Err("unknown flat vector grammar/profile".into());
     }
-    let trace = checked_vector_view_with_trace_root(
-        route,
-        class,
-        binding,
-        &post.trace,
-        post.trace_root(class.as_bytes(), binding.as_bytes()),
-    )?;
+    let trace = checked_vector_view_with_trace_root(route, class, binding, &post.trace, root)?;
     let record = route.kernel_class_record_v1(&class).ok_or("flat candidate disappeared")?;
     let scope =
         misaka_palw_kernel::flat_scope5::flat_resource_scope_v5(&trace.program, record.plan.max_positions, trace.encoder.as_ref())
@@ -173,14 +168,19 @@ impl PalwKernelRouteStateV1 {
         if row.post.len() != h.post_bytes_len as usize {
             return Err("flat stored body length changed".into());
         }
-        let post = decode_flat_model_vector_post_v3(&row.post).map_err(|e| e.to_string())?;
-        if post.trace_root(h.class.as_bytes(), h.binding.as_bytes()) != h.trace_root
-            || post.profile != h.profile
-            || post.scope_root != h.scope_root
-        {
+        let (post, root) = if self.flat_model_vector_protected_v6(id) {
+            let p = crate::palw_flat_model_seal_v6::decode_flat_model_vector_post_v6(&row.post).map_err(|e| e.to_string())?;
+            let root = p.trace_root(h.class.as_bytes(), h.binding.as_bytes());
+            (p.body, root)
+        } else {
+            let p = decode_flat_model_vector_post_v3(&row.post).map_err(|e| e.to_string())?;
+            let root = p.trace_root(h.class.as_bytes(), h.binding.as_bytes());
+            (p, root)
+        };
+        if root != h.trace_root || post.profile != h.profile || post.scope_root != h.scope_root {
             return Err("flat stored identity changed".into());
         }
-        let v = checked_flat_model_vector_v3(self, h.class, h.binding, &post)?;
+        let v = checked_flat_model_vector_with_root(self, h.class, h.binding, &post, root)?;
         if v.scope.worst_court_bytes != h.max_filing_bytes
             || v.scope.worst_court_work != h.max_court_work
             || v.scope.worst_court_scratch_bytes != h.max_court_scratch_bytes

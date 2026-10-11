@@ -534,9 +534,24 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     // Inner 22/23 are consensus-owned state/collateral courts, never bare-ledger moves.
     match &object {
+        KernelRouteObjectV1::PostFlatModelVectorV6 { class, binding, post } => {
+            return super::palw_flat_model_vector_fold_v3::post_protected(builder, ctx, signer, class, binding, post);
+        }
+        KernelRouteObjectV1::SealFlatModelProofV6 { vector, seal } => {
+            return super::palw_flat_model_seal_fold_v6::post_seal(builder, ctx, signer, vector, seal);
+        }
+        KernelRouteObjectV1::RevealFlatModelProofV6 { vector, salt, proof } => {
+            return super::palw_flat_model_seal_fold_v6::reveal(builder, ctx, signer, vector, salt, proof);
+        }
+        KernelRouteObjectV1::ExpireFlatModelSealV6 { vector, actor } => {
+            return super::palw_flat_model_seal_fold_v6::expire(builder, ctx, signer, vector, actor);
+        }
         KernelRouteObjectV1::DemandFlatModelVectorV3 { vector, slot, position, occurrence, node, leaf } => {
             let unit = crate::palw_flat_model_vector_da_v3::FlatVectorUnitV3 {
-                position: *position, occurrence: *occurrence, node: *node, leaf: *leaf,
+                position: *position,
+                occurrence: *occurrence,
+                node: *node,
+                leaf: *leaf,
             };
             return super::palw_flat_model_vector_fold_v3::demand(builder, ctx, signer, vector, *slot, unit);
         }
@@ -554,7 +569,12 @@ pub(super) fn apply_kernel_route_object_v1(
         }
         KernelRouteObjectV1::DemandModelVectorV2 { vector, slot, position, occurrence, node, axis, line, tile } => {
             let unit = crate::palw_model_vector_da_v2::ModelVectorUnitV2 {
-                position: *position, occurrence: *occurrence, node: *node, axis: *axis, line: *line, tile: *tile,
+                position: *position,
+                occurrence: *occurrence,
+                node: *node,
+                axis: *axis,
+                line: *line,
+                tile: *tile,
             };
             return super::palw_model_vector_fold_v2::demand(builder, ctx, signer, vector, *slot, unit);
         }

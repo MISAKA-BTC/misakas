@@ -3,7 +3,8 @@
 Goal: implement the full [RFC02 completion contract](../../../rfc/0002-palw-tensor-ir.md#ii14-completion-contract--2026-10-10)
 from the 2026-10-10 review, preserving A1–A8 and the versioned kernel boundary. **Not complete.**
 Baseline: integration `3730cc90f`, plus RFC10 audit `d6a0bd54d`; subsequently integrated
-G14 prosecution/bounds and X8R/BUDGET integration through `123d8254e`. Work branch: `codex/rfc02-implementation`.
+G14 prosecution/bounds and X8R/BUDGET integration through `123d8254e`. Original work branch: `codex/rfc02-implementation`; this review increment is isolated on
+`codex/rfc02-review-completion`, based on `392fe80f7`.
 
 Statuses below describe inspected code/evidence, not assumed results from earlier progress reports.
 
@@ -20,7 +21,7 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | Public dispute completeness | Kernel and TIR court modules exist; this alone proves no detection or end-to-end gate | Fresh outsider from public material through all relation classes, bounded terminal court, invalid-proof flood and honest liveness trials |
 | Flat-v5 typed node component | Explicit dormant inner 31/32 candidate statements bind the independently derived terminal scope; court folds recheck it, use shared block budgets and share original collateral/eight-statement catalogs with v2 | General public acquisition/localization, proof pre-emption seals, complete execution/checker/DA/network resource vector and execution Final; component tests are not full checkpoint/G14 acceptance |
 | Flat-v5 native public acquisition | Dormant inner 33/34/35 fetch authenticated node/hash units into public read-API state; bounded service/default, original collateral and four requester slots shared with v2 | Deployed RPC/transport, retention/pruning, whole-job acquisition/deadline guarantees, proof pre-emption seals, complete shared resources/DA/network load and execution Final; no full real-checkpoint/privacy/liveness acceptance |
-| Staged flat evidence seals v6 | Bounded actor/vector/salt/exact-carrier commitment; own mature seal gate before deferred court; finite local slots and explicit expiry; equivalent-carrier counterexamples | Consensus persistence/authentication/capital/budget/payout integration and a versioned protected statement that refuses the old unsealed refute bypass; frozen v3 remains vulnerable |
+| Protected flat evidence seals v6 | Explicit versioned statement and appended route kinds; persisted signature-derived actor seals, deposit/retirement accounting, fixed actor/global quotas, proof-reserve work, explicit expiry and atomic conviction/payout; native validation is recorded below | Complete transport/deadline and adversarial aggregate honest-liveness evidence; production activation; frozen v3 remains historically unsealed |
 | Flat-v5 streamed detector | Generic exact replay consumes public node/hash paths and acquired registered weights; all 25 primitive, state/history, encoder and decode synthetic trials; the native late-leaf case now uses the generic detector | Shared complete verifier/retry/hash/delivery accounting, optimized acquisition/localization, deadlines/honest liveness, all-feature real-node cases and real-checkpoint/full-task execution Final |
 | Flat replay v6 local session budget | New projection binds unchanged v5 scope; native read API and verifier independently derive i128 tensor payload, parameter/trace hash and response bounds; one session charges retries and cached reads | Full peak memory/CPU/metadata/transport/retention accounting, shared consensus admission and per-block/per-bond/network aggregate enforcement, real-size deadline/liveness evidence |
 | Real models and coverage | Dated census reports exist; fixture/structural passes are not full-task passes | Revision/task/context/storage/arithmetic/plan records, real sizes, complete modalities via RFC03, independent Final references, A6 and A8 denominators/confidence/residuals |
@@ -1929,3 +1930,53 @@ bypass. Merely adding optional seals beside inner 32 cannot close the gap.
 Network capacity/honest inclusion, complete shared resources, execution Final,
 real checkpoint/task/fidelity/performance, A6/A8 and all full RFC02 requirements
 remain open. No frozen route/statement grammar or dormant shipping fence changes.
+
+## Verified increment — protected native flat statements and seal/reveal v6, 2026-10-11
+
+The new explicit protected statement and inner kinds 36–39 implement the consumer
+half of the former local seal contract. The unchanged v3 body is wrapped with
+version 6; a distinct trace-root domain binds its fixed seal policy. Independent
+admission, declared implementation roots, persisted body/view reconstruction and
+terminal courts all use that protected root. Inner 32 refuses this identity,
+while historical v3 encodings and their reproduced counterexample remain intact.
+
+The signing bond determines the actor. Fixed persisted rows bind that actor,
+vector, salt-bearing exact-carrier seal and immutable clocks. Four slots per
+bond and 1,024 total slots constrain pending state. Posting charges shared work
+and reserves the original policy deposit; common committed-capital/live-duty/
+retirement/withdrawal queries include it. Explicit bounded expiry forfeits an
+unspent expired deposit or releases it after a decided vector, removes the row
+and decrements the catalogs/count. Pending expired rows cannot evade liability
+by merely advancing DAA or replacing a seal.
+
+A single proof-reserve debit covers metadata/hash and the admitted court before
+variable decoding. Registration prices that same worst debit. Invalid seals or
+courts pay the authenticated actor; false/honest proofs retain their unspent
+slot. A successful fold atomically consumes the seal, releases its deposit,
+settles the original vector collateral once and credits the revealing actor's
+490-permille share. Separate source/statement/actor/clock/profile/resource checks
+remain mandatory. No reward registration or execution Final is granted.
+
+**171 distinct tests pass:** full kernel 153, actual-node model-conformance 17,
+and one small integration codec/identity/fence test. The kernel's pre-existing
+manual hardware benchmark remains ignored. Production consensus-core checking,
+changed-file formatting and diff checks pass. Final commands, exact names,
+logs, binary/source hashes, earlier corrected test failures and build provenance
+are in the [verdict](evidence/rfc02-protected-native-v6-verdict.json).
+
+The three new native trials verify both encoder and decoder candidate courts,
+old-refute bypass refusal, copied seals, alternate equivalent carriers, late
+immature seals, failed court retention, bounded actor slots and original capital,
+explicit expiry/forfeiture, one total payment including already redeemed outputs,
+independent-node replay, and a mature reveal using the proof reserve after an
+admission flood. These are synthetic actual-node component results. The separate
+codec test checks bounded counts, truncation/trailing bytes, distinct identities,
+new route roundtrips and their dormant owning gates.
+
+The full RFC02 goal remains active. Needed next: expose the protected path through
+the public SDK/CLI/transport and whole-job acquisition; validate retention,
+worst-job deadlines and honest inclusion under aggregate invalid-proof/seal load;
+complete the shared resource/economic contract and versioned length/sparse/state
+semantics; obtain real checkpoint fidelity/task/performance and independent
+execution Final/redemption evidence; meet A6/A8. Existing v3 statements remain
+historically unsealed. No shipping fence is activated.

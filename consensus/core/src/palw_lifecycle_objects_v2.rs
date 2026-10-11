@@ -1649,7 +1649,11 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         // these can act where that fence is not armed either.
         K::CommitSegmentedClaim { .. } | K::PostTiledJob { .. } | K::PostPromptTile { .. } => None,
         K::CommitClaimSalted { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
-        K::DemandFlatModelVectorV3 { .. }
+        K::PostFlatModelVectorV6 { .. }
+        | K::SealFlatModelProofV6 { .. }
+        | K::RevealFlatModelProofV6 { .. }
+        | K::ExpireFlatModelSealV6 { .. }
+        | K::DemandFlatModelVectorV3 { .. }
         | K::AnswerFlatModelVectorV3 { .. }
         | K::SettleFlatModelVectorDemandV3 { .. }
         | K::PostFlatModelVectorV3 { .. }
@@ -1707,6 +1711,10 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (33, "DemandFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (34, "AnswerFlatModelVectorV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (35, "SettleFlatModelVectorDemandV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (36, "PostFlatModelVectorV6", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (37, "SealFlatModelProofV6", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (38, "RevealFlatModelProofV6", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (39, "ExpireFlatModelSealV6", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of

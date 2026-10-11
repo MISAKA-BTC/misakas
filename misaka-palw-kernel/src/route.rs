@@ -77,6 +77,10 @@ pub const TAG_REFUTE_FLAT_MODEL_VECTOR_V3: u8 = 32;
 pub const TAG_DEMAND_FLAT_MODEL_VECTOR_V3: u8 = 33;
 pub const TAG_ANSWER_FLAT_MODEL_VECTOR_V3: u8 = 34;
 pub const TAG_SETTLE_FLAT_MODEL_VECTOR_V3: u8 = 35;
+pub const TAG_POST_FLAT_MODEL_VECTOR_V6: u8 = 36;
+pub const TAG_SEAL_FLAT_MODEL_PROOF_V6: u8 = 37;
+pub const TAG_REVEAL_FLAT_MODEL_PROOF_V6: u8 = 38;
+pub const TAG_EXPIRE_FLAT_MODEL_SEAL_V6: u8 = 39;
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 
@@ -182,6 +186,27 @@ impl SaltedCommitV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum KernelRouteObjectV1 {
+    /// Protected statement: the unsealed v3 refutation cannot target its identity.
+    PostFlatModelVectorV6 {
+        class: Digest,
+        binding: Digest,
+        post: Vec<u8>,
+    } = 36,
+    /// The actor is the authenticated signer, never a carrier-selected beneficiary.
+    SealFlatModelProofV6 {
+        vector: Digest,
+        seal: Digest,
+    } = 37,
+    RevealFlatModelProofV6 {
+        vector: Digest,
+        salt: Digest,
+        proof: Vec<u8>,
+    } = 38,
+    /// Anyone bonded may close one expired fixed row; no global scan is needed.
+    ExpireFlatModelSealV6 {
+        vector: Digest,
+        actor: Digest,
+    } = 39,
     /// Node commitment or flat-v5 hash leaf only; four slots shared with v2.
     DemandFlatModelVectorV3 {
         vector: Digest,
@@ -500,6 +525,10 @@ impl KernelRouteObjectV1 {
     /// The variant's declared discriminant.
     pub const fn tag(&self) -> u8 {
         match self {
+            Self::PostFlatModelVectorV6 { .. } => TAG_POST_FLAT_MODEL_VECTOR_V6,
+            Self::SealFlatModelProofV6 { .. } => TAG_SEAL_FLAT_MODEL_PROOF_V6,
+            Self::RevealFlatModelProofV6 { .. } => TAG_REVEAL_FLAT_MODEL_PROOF_V6,
+            Self::ExpireFlatModelSealV6 { .. } => TAG_EXPIRE_FLAT_MODEL_SEAL_V6,
             Self::DemandFlatModelVectorV3 { .. } => TAG_DEMAND_FLAT_MODEL_VECTOR_V3,
             Self::AnswerFlatModelVectorV3 { .. } => TAG_ANSWER_FLAT_MODEL_VECTOR_V3,
             Self::SettleFlatModelVectorDemandV3 { .. } => TAG_SETTLE_FLAT_MODEL_VECTOR_V3,
@@ -607,6 +636,10 @@ impl KernelRouteObjectV1 {
 
 pub const fn name_of_tag(tag: u8) -> &'static str {
     match tag {
+        TAG_POST_FLAT_MODEL_VECTOR_V6 => "PostFlatModelVectorV6",
+        TAG_SEAL_FLAT_MODEL_PROOF_V6 => "SealFlatModelProofV6",
+        TAG_REVEAL_FLAT_MODEL_PROOF_V6 => "RevealFlatModelProofV6",
+        TAG_EXPIRE_FLAT_MODEL_SEAL_V6 => "ExpireFlatModelSealV6",
         TAG_DEMAND_FLAT_MODEL_VECTOR_V3 => "DemandFlatModelVectorV3",
         TAG_ANSWER_FLAT_MODEL_VECTOR_V3 => "AnswerFlatModelVectorV3",
         TAG_SETTLE_FLAT_MODEL_VECTOR_V3 => "SettleFlatModelVectorDemandV3",
@@ -649,6 +682,9 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
 /// The ceiling of a declared tag (`None`: not a declared tag).
 pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
     Some(match tag {
+        TAG_POST_FLAT_MODEL_VECTOR_V6 => 1_583_616,
+        TAG_SEAL_FLAT_MODEL_PROOF_V6 | TAG_EXPIRE_FLAT_MODEL_SEAL_V6 => 130,
+        TAG_REVEAL_FLAT_MODEL_PROOF_V6 => (1 << 20) + 134,
         TAG_BIND_MODEL_ARTIFACT_V2 | TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2 => MAX_REGISTER_CLASS_BYTES_V1,
         TAG_REFUTE_MODEL_ARTIFACT_V2 => 2 << 20,
         TAG_COMPLETE_MODEL_CONFORMANCE_V2 => 90_000 + 134,
@@ -726,6 +762,10 @@ mod tests {
             KernelRouteObjectV1::FileProof { accuser: [1; 64], claim: [2; 64], proof: ProsecutionV1::Kernel(vec![9]) },
             KernelRouteObjectV1::FileProof { accuser: [1; 64], claim: [2; 64], proof: ProsecutionV1::Pipeline(vec![9]) },
             KernelRouteObjectV1::SealProof { accuser: [1; 64], claim: [2; 64], seal: [3; 64] },
+            KernelRouteObjectV1::PostFlatModelVectorV6 { class: [1; 64], binding: [2; 64], post: vec![6, 0] },
+            KernelRouteObjectV1::SealFlatModelProofV6 { vector: [1; 64], seal: [2; 64] },
+            KernelRouteObjectV1::RevealFlatModelProofV6 { vector: [1; 64], salt: [2; 64], proof: vec![5, 0] },
+            KernelRouteObjectV1::ExpireFlatModelSealV6 { vector: [1; 64], actor: [2; 64] },
         ];
         for o in objects {
             let bytes = o.encode();
@@ -738,8 +778,8 @@ mod tests {
         let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_REGISTER_CONFORMANCE_CLASS_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!(max_encoded_bytes_of_tag(36).is_none(), "36 is not allocated");
-        for tag in 22..=35 {
+        assert!(max_encoded_bytes_of_tag(40).is_none(), "40 is not allocated");
+        for tag in 22..=39 {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         let complete = KernelRouteObjectV1::CompleteModelConformanceV2 { class: [1; 64], binding: [2; 64], proof: vec![0; 90_000] };

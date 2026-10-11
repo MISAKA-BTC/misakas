@@ -3147,3 +3147,70 @@ variant to be refused with the GPU path in front of it. A node whose build or ma
   program's un-fused nodes. The verdict is a statement about speed and blocks no registration.
 * `LOWERABLE_UNVERIFIED (the program's own verdict: V)`: the architecture's float reference is remote code this tool cannot run offline, so
   the fidelity column is empty; `V` is the verdict the program earned, which holds.
+
+## 18. Protected flat candidate evidence v6 (dormant versioned consumer)
+
+This explicit version is a non-reward candidate statement, under the existing
+unarmed kernel-route and panel-free gates. It does not change TIR v1 primitives,
+flat-v5 commitment/resource semantics or historical v3 candidate encodings.
+
+`FlatModelVectorPostV6 = borsh(version=6, body: FlatModelVectorPostV3)`. Decode
+requires the exact version, existing bounded v3 nested grammar, no trailing
+bytes, and a total body within the v3 post ceiling. Its trace root is
+`object_id("misaka-palw/flat-model-vector/protected-trace/v6", (version,
+body.trace_root(class,binding), 3:u64, 100:u64, 4:u32, 1024:u32))`. The existing
+statement-id domain hashes this distinct root. The three declared implementation
+roots must equal this protected trace root. Header/body/resource validation
+reconstructs this root independently. Protected and historical statements share
+the eight-entry bond catalog, the original vector collateral and public DA
+paths. A protected marker in aux table 64 selects the exact v6 body decoder.
+Inner 32 MUST refuse a protected statement before invoking its unsealed court.
+
+| Inner kind | Fields | Rule |
+| --- | --- | --- |
+| 36 `PostFlatModelVectorV6` | class, binding, bounded post bytes | Same model/candidate/admission and vector collateral rules; separate protected root |
+| 37 `SealFlatModelProofV6` | vector, seal | Signature-derived actor; immutable fixed slot and original deposit |
+| 38 `RevealFlatModelProofV6` | vector, salt, bounded proof bytes | Actor's own mature exact-carrier seal, independently bound court, atomic settlement |
+| 39 `ExpireFlatModelSealV6` | vector, actor | Any authenticated active bond closes one eligible fixed row |
+
+Persist seal rows in table 65 keyed by `(vector, actor)`, bounded four-vector
+bond catalogs in table 66 and a total row count in table 67. Each row binds
+version 6, vector, actor, seal, posting/maturity/expiry DAA, spent flag, the actual
+bond and its reserved deposit. The actor MUST equal the existing kernel bond-id
+mapping of that bond. Posting requires an open protected vector, an independent
+poster/challenger operator, a free actor slot, fewer than 1,024 total rows, enough
+original free collateral for the route policy's `seal_deposit`, and
+`mature = posted + 3 < expires = min(posted + 100, liability_until)`, with checked
+arithmetic. Existing rows cannot be replaced. Posting pays the shared admission
+dismissal tariff. Live-duty, retirement, withdrawal and committed-capital queries
+include the deposit, even after expiry until it is explicitly settled.
+
+A reveal reserves ONE run and work debit from the common proof-reserve budget
+before raw proof hashing or any stored program/PC/body/fault decode. The debit is
+the v3 structural court tariff plus the immutable terminal scope's maximum court
+work and `model_artifact_work_v2(0, proof_bytes + 1024)` for metadata/raw hashing.
+Protected registration MUST price the worst possible such debit within the same
+guaranteed proof allowance. A missing, borrowed, immature, expired or mismatched
+seal pays the same bounded dismissal tariff without entering the terminal court.
+A successful seal check is `check_flat_seal_v6`: exact version/vector/actor,
+unspent, `mature <= now < expires`, and the existing actor/vector/salt/exact-proof
+digest commitment. Context, court bytes/work/scratch and evidence authentication
+remain independently checked against the persisted admitted scope. A malformed
+or fault-free court pays the authenticated filer's fee and leaves the seal
+unspent. An over-budget filing is dropped without decoding or consuming the seal.
+
+Success atomically marks the vector refuted, zeroes its original reservation,
+slashes that original collateral once, credits the existing 490-permille
+challenger share to the authenticated revealing bond's payout, and marks its
+seal spent with zero reserved deposit. No second successful reveal or historical
+refutation may credit that vector. The statement confers no model conformance,
+execution Final or reward eligibility.
+
+Explicit expiry deletes exactly one row, updates its bounded actor catalog and
+decrements the total count. Before expiry it is allowed only when the vector is
+already refuted or unavailable; those decided cases return the pending deposit.
+Otherwise expiry forfeits an unspent deposit from its original bond. The caller
+pays the shared metadata admission tariff. No global deadline scan, alternate
+payout actor or unbounded seal history is part of this version. These rules bound
+this consumer component; deployment, aggregate transport/retention, worst-job
+inclusion and honest liveness remain independent RFC02 completion gates.
