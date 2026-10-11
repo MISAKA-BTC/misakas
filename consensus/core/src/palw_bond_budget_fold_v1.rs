@@ -345,22 +345,35 @@ impl TransitionBuilder<'_> {
             .try_fold(0u64, |sum, (_, slice)| sum.checked_add(slice.range.work()?))
             .ok_or(PalwStateV2Error::Overflow("EXEC recipient work"))?;
         let total = prior.checked_add(work).ok_or(PalwStateV2Error::Overflow("EXEC recipient work"))?;
-        let maximum = (u128::from(claim.escrowed_reward) * u128::from(total) / u128::from(root.total_work)) as u64;
+        let allocation = self
+            .state
+            .bond_budget
+            .as_ref()
+            .and_then(|b| b.claim_row(&native_income_id_v1(root_id, &root.root_bond, 0)))
+            .map_or(0, |row| row.reserved.reward_sompi.min(claim.escrowed_reward));
+        let maximum = (u128::from(allocation) * u128::from(total) / u128::from(root.total_work)) as u64;
         if maximum == 0 {
             return Ok(());
         }
         let until = super::palw_exec_v2_rewards_v1::horizon(&self.state, self.params, &root_id)?.expect("existing root");
-        let credit = kernel_budget_claim_id_v1(&evidence.as_bytes());
-        let credits = self
-            .state
-            .bond_budget
-            .as_ref()
+        let standalone = native_income_id_v1(evidence, &bond, 3);
+        let budget = self.state.bond_budget.as_ref();
+        let credit = if budget.and_then(|b| b.claim_row(&standalone)).is_some_and(|r| r.live && r.consumed.reward_sompi == 0) {
+            standalone
+        } else {
+            kernel_budget_claim_id_v1(&evidence.as_bytes())
+        };
+        let credits = budget
             .and_then(|b| b.claim_row(&credit))
             .filter(|r| {
                 r.bond == bond
                     && r.in_window
+                    && r.live
                     && r.consumed.reward_sompi == 0
-                    && matches!(r.origin, PalwBudgetOriginV1::KernelRoute | PalwBudgetOriginV1::Legacy)
+                    && matches!(
+                        r.origin,
+                        PalwBudgetOriginV1::KernelRoute | PalwBudgetOriginV1::Legacy | PalwBudgetOriginV1::NativeIncome
+                    )
             })
             .map(|_| vec![credit])
             .unwrap_or_default();
@@ -610,7 +623,7 @@ impl TransitionBuilder<'_> {
             let ledger = route.ledger().map_err(PalwStateV2Error::BondBudgetRefused)?;
             {
                 for (claim, row) in &ledger.claims {
-                    if row.convicted || row.life.state.is_terminal() || row.committed_daa.saturating_add(window) <= ctx.daa_score {
+                    if row.convicted || row.life.state.is_terminal() {
                         continue;
                     }
                     let Some(bond) = route.bond_key_of(&row.producer) else { continue };
@@ -620,7 +633,13 @@ impl TransitionBuilder<'_> {
                         row.committed_daa,
                         PalwBudgetVectorV1 {
                             claims: 1,
-                            reward_sompi: ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount),
+                            // Accepted EXEC work already owns one native allocation/share
+                            // hold seeded below. Its Q row creates no second R.
+                            reward_sompi: if self.state.exec_v2_root_of_kernel_claim_v1(&Hash64::from_bytes(*claim)).is_some() {
+                                0
+                            } else {
+                                ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount)
+                            },
                             ..PalwBudgetVectorV1::ZERO
                         },
                     ));
@@ -677,6 +696,21 @@ impl TransitionBuilder<'_> {
         })
         .expect("created above")
         .map_err(|why: PalwBudgetRefusalV1| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
+        let pending: Vec<_> = self
+            .state
+            .kernel_route
+            .as_ref()
+            .map(|route| route.ledger())
+            .transpose()
+            .map_err(PalwStateV2Error::BondBudgetRefused)?
+            .into_iter()
+            .flat_map(|ledger| ledger.claims.into_iter())
+            .filter(|(_, row)| !row.convicted && !row.life.state.is_terminal())
+            .map(|(claim, row)| (Hash64::from_bytes(claim), row.liability_until.unwrap_or(ctx.daa_score)))
+            .collect();
+        for (claim, until) in pending {
+            self.hold_kernel_income_v1(ctx, claim, until)?;
+        }
         self.seed_native_income_rights_v1(ctx, mirror)
     }
 
@@ -895,6 +929,77 @@ impl TransitionBuilder<'_> {
             .map_err(|why| budget_refused(bond, why))
     }
 
+    /// Kernel Q belongs to its claim row; its unpaid monetary maximum uses
+    /// role 3 until an authenticated EXEC binding transfers that same money.
+    pub(super) fn hold_kernel_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim: Hash64,
+        liability_until: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
+        let id = kernel_budget_claim_id_v1(&claim.as_bytes());
+        let Some(row) = self.state.bond_budget.as_ref().and_then(|b| b.claim_row(&id)).copied() else { return Ok(()) };
+        if row.reserved.reward_sompi == 0 {
+            return Ok(());
+        }
+        let capital = self.state.bonds.get(&row.bond).map_or(0, |b| b.collateral);
+        self.bond_budget_op(|budget, _, j| {
+            budget.hold_native_income_v1(
+                &mirror.policy,
+                capital,
+                native_income_id_v1(claim, &row.bond, 3),
+                row.bond,
+                row.accepted_daa,
+                liability_until.max(ctx.daa_score),
+                row.reserved.reward_sompi,
+                &[id],
+                false,
+                j,
+            )
+        })
+        .expect("kernel claim engine")
+        .map_err(|why| budget_refused(row.bond, why))
+    }
+
+    /// Called only after the kernel verified the consumer-frozen EXEC owner
+    /// binding. It cannot leave a second standalone payment entitlement.
+    pub(super) fn transfer_kernel_income_to_exec_v1(
+        &mut self,
+        root: Hash64,
+        evidence: Hash64,
+        bond: PalwBondKeyV2,
+        now: u64,
+        until: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(now) else { return Ok(()) };
+        let source = native_income_id_v1(evidence, &bond, 3);
+        let Some(held) = self.state.bond_budget.as_ref().and_then(|b| b.claim_row(&source)).copied() else { return Ok(()) };
+        let issuer = self.state.claims.get(&root).is_some_and(|claim| claim.bond == bond);
+        if issuer {
+            // Its fee replaces part of the immutable issuer allocation. The
+            // separately admitted standalone maximum stays in the window
+            // (no early quota recovery), but cannot enlarge that allocation
+            // or retain an independent future payment entitlement.
+            self.cancel_native_recipient_v1(evidence, bond, 3);
+            return Ok(());
+        }
+        let kind = 2;
+        let id = native_income_id_v1(root, &bond, kind);
+        let maximum = self
+            .state
+            .bond_budget
+            .as_ref()
+            .and_then(|b| b.claim_row(&id))
+            .map_or(held.reserved.reward_sompi, |row| row.reserved.reward_sompi.max(held.reserved.reward_sompi));
+        let capital = self.state.bonds.get(&bond).map_or(0, |row| row.collateral);
+        self.bond_budget_op(|budget, _, j| {
+            budget.hold_native_income_v1(&mirror.policy, capital, id, bond, now, until, maximum, &[source], false, j)
+        })
+        .expect("kernel transfer engine")
+        .map_err(|why| budget_refused(bond, why))
+    }
+
     /// Kernel carriers create no reward block or consensus weight. Their one
     /// standalone fee is Q/R-reserved before the trusted consumer commits it.
     pub(super) fn plan_kernel_claim_budget_v1(
@@ -950,12 +1055,23 @@ impl TransitionBuilder<'_> {
             .iter()
             .filter_map(|(claim, row)| {
                 let id = kernel_budget_claim_id_v1(claim);
+                let income = self
+                    .state
+                    .kernel_route
+                    .as_ref()
+                    .and_then(|route| route.bond_key_of(&row.producer))
+                    .and_then(|bond| budget.claim_row(&native_income_id_v1(Hash64::from_bytes(*claim), &bond, 3)));
                 match budget.claim_row(&id) {
-                    Some(reservation) if reservation.origin == PalwBudgetOriginV1::Legacy => None,
-                    Some(reservation) if reservation.origin == PalwBudgetOriginV1::KernelRoute => Some((
-                        *claim,
-                        if reservation.open { reservation.reserved.reward_sompi - reservation.consumed.reward_sompi } else { 0 },
-                    )),
+                    Some(reservation)
+                        if matches!(reservation.origin, PalwBudgetOriginV1::Legacy | PalwBudgetOriginV1::KernelRoute) =>
+                    {
+                        Some((
+                            *claim,
+                            income
+                                .filter(|held| held.live && held.in_window)
+                                .map_or(0, |held| held.reserved.reward_sompi - held.consumed.reward_sompi),
+                        ))
+                    }
                     _ if row.committed_daa >= budget.header.created_daa => Some((*claim, 0)),
                     _ => None,
                 }
@@ -968,35 +1084,23 @@ impl TransitionBuilder<'_> {
     pub(super) fn consume_kernel_final_reward_v1(
         &mut self,
         claim: &misaka_palw_kernel::hash::Digest,
+        bond: PalwBondKeyV2,
+        payload: Hash64,
+        now: u64,
         amount: u64,
     ) -> Result<(), PalwStateV2Error> {
-        let Some(budget) = self.state.bond_budget.as_ref() else { return Ok(()) };
-        let id = kernel_budget_claim_id_v1(claim);
-        let row = budget.claim_row(&id);
-        if row.is_none_or(|row| row.origin == PalwBudgetOriginV1::Legacy) {
-            let old = self
-                .state
-                .kernel_route
-                .as_ref()
-                .and_then(|route| route.ledger().ok())
-                .and_then(|ledger| ledger.claims.get(claim).map(|row| row.committed_daa < budget.header.created_daa))
-                .unwrap_or(false);
-            if old {
-                return Ok(());
-            }
-            if amount == 0 {
-                return Ok(());
-            }
-            return Err(PalwStateV2Error::BondBudgetRefused("a standalone kernel Final has no budget reservation".into()));
+        if self.bond_budget_mirror_at(now).is_none() {
+            return Ok(());
         }
-        if row.is_some_and(|row| row.origin != PalwBudgetOriginV1::KernelRoute) {
-            return Err(PalwStateV2Error::BondBudgetRefused("a kernel Final cannot consume another lane's budget".into()));
-        }
-        let granted = self.bond_budget_final_reward_v1(&id, amount);
-        if granted != amount {
-            return Err(PalwStateV2Error::BondBudgetRefused("kernel Final allowance and actual grant differ".into()));
-        }
-        Ok(())
+        self.pay_native_recipient_v1(
+            Hash64::from_bytes(*claim),
+            bond,
+            3,
+            now,
+            amount,
+            crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload),
+            true,
+        )
     }
 
     pub(super) fn close_terminal_kernel_budgets_v1(&mut self, ledger: &misaka_palw_kernel::ledger::KernelLedgerV1) {
@@ -1007,6 +1111,9 @@ impl TransitionBuilder<'_> {
             if row.convicted || row.life.state.is_terminal() {
                 let id = kernel_budget_claim_id_v1(claim);
                 self.bond_budget_close_v1(&id);
+                if let Some(bond) = self.state.kernel_route.as_ref().and_then(|route| route.bond_key_of(&row.producer)) {
+                    self.cancel_native_recipient_v1(Hash64::from_bytes(*claim), bond, 3);
+                }
                 // The claim row remains public. Financial quota is forgotten
                 // only after its window releases; EXEC uses its root allocation.
                 self.bond_budget_forget_v1(&id);

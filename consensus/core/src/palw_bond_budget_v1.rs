@@ -1303,7 +1303,9 @@ impl PalwBondBudgetStateV1 {
                                 | PalwBudgetOriginV1::Legacy
                                 | PalwBudgetOriginV1::Attempt
                                 | PalwBudgetOriginV1::Rider
+                                | PalwBudgetOriginV1::NativeIncome
                         )
+                        && row.live
                         && row.consumed.reward_sompi == 0
                 })
                 .ok_or(PalwBudgetRefusalV1::NotOpen)?;
@@ -1323,8 +1325,15 @@ impl PalwBondBudgetStateV1 {
         // Preflight ends here. Reclassification leaves Q/B/F/T and open slots
         // exactly as they were, and cannot release aggregate monetary quota.
         for (id, mut row) in credits {
-            row.reserved.reward_sompi = 0;
-            self.put_claim(&id, Some(row), j);
+            if row.origin == PalwBudgetOriginV1::NativeIncome {
+                // Transfer the monetary identity; no independent standalone
+                // payment can remain once EXEC owns this funded right.
+                self.put_release((row.reuse_not_before, id), false, j);
+                self.put_claim(&id, None, j);
+            } else {
+                row.reserved.reward_sompi = 0;
+                self.put_claim(&id, Some(row), j);
+            }
         }
         bond_row.window.reward_sompi = total;
         bond_row.latest_release_daa = bond_row.latest_release_daa.max(release);
@@ -2106,6 +2115,54 @@ mod tests {
         s.check_consistency().unwrap();
         s.release_due(2_100, &mut j);
         assert!(s.bond_row(&bond(0)).is_none());
+        let mut replay = empty.clone();
+        for entry in &j {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), s.root_parts());
+        for entry in j.iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), empty.root_parts());
+    }
+
+    #[test]
+    fn standalone_income_transfers_to_exec_once_without_a_second_payment_or_q_charge() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let empty = s.clone();
+        let mut j = Vec::new();
+        s.reserve(
+            &p,
+            capital,
+            h(78),
+            bond(0),
+            None,
+            10,
+            PalwBudgetVectorV1 { claims: 1, reward_sompi: 20 * BILI, ..PalwBudgetVectorV1::ZERO },
+            PalwBudgetOriginV1::KernelRoute,
+            true,
+            &mut j,
+        )
+        .unwrap();
+        s.hold_native_income_v1(&p, capital, h(79), bond(0), 10, 500, 20 * BILI, &[h(78)], false, &mut j).unwrap();
+        s.release_due(700, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 20 * BILI);
+        s.hold_native_income_v1(&p, capital, h(80), bond(0), 701, 1_000, 25 * BILI, &[h(79)], true, &mut j).unwrap();
+        assert!(s.claim_row(&h(79)).is_none(), "no remaining standalone payment identity");
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 25 * BILI);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().open_claims, 1, "only the actual claim owns Q");
+        assert!(s.pay_native_income_v1(&p, &h(79), 1_001, 20 * BILI, Some(h(81)), &mut j).is_err());
+        s.pay_native_income_v1(&p, &h(80), 1_001, 25 * BILI, Some(h(81)), &mut j).unwrap();
+        s.confirm_native_income_payment_v1(&p, &h(81), 1_002, &mut j).unwrap();
+        s.close(&h(78), &mut j);
+        s.forget(&h(78), &mut j);
+        s.check_consistency().unwrap();
         let mut replay = empty.clone();
         for entry in &j {
             if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {

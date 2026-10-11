@@ -379,7 +379,7 @@ fn lapse_if_uncovered(
         let before = ledger.to_rows();
         // Refused only for a claim that is not provider-liable, which a transferred one always is: nothing to do then.
         if let Ok(events) = ledger.provider_lapse(&claim.as_bytes()) {
-            apply_settlements(builder, &events, false)?;
+            apply_settlements(builder, &events, false, ctx.daa_score)?;
             flush(builder, &ledger, &before);
         }
     }

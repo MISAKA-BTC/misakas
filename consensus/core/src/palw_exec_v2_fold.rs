@@ -1209,6 +1209,20 @@ pub(super) fn settle_at_final_v2(
         }
     }
     settlement.slice_legs.retain(|(_, leg)| *leg > 0);
+    for bond in builder.state.exec_v2_participants_v1(claim_id, &root) {
+        if bond == root.root_bond {
+            continue;
+        }
+        let paid_later = settlement.slice_legs.iter().any(|(payee, _)| *payee == bond)
+            || builder
+                .state
+                .exec_v2_rewards
+                .get(claim_id)
+                .is_some_and(|receipt| receipt.legs.iter().any(|((payee, _), payout)| *payee == bond && payout.amount > 0));
+        if !paid_later {
+            builder.cancel_native_recipient_v1(*claim_id, bond, 2);
+        }
+    }
     release_executor_exposure_v2(builder, claim_id, &root)?;
     root.phase = PalwWorkRootPhaseV2::Settled { settled_daa: final_daa };
     builder.write_exec_root(*claim_id, Some(root));

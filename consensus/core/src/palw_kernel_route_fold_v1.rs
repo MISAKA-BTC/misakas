@@ -480,7 +480,9 @@ pub(super) fn bind_exec_reward_v1(
     let until = exec_liability_floor_v1(expiry, builder.params.window_court(), &ledger.policy)?;
     let row = ledger.claims.get(&claim.as_bytes()).ok_or_else(|| refused("the EXEC reward claim is missing"))?;
     require_exec_provider_horizon_v1(&builder.state, &claim, row, daa, until).map_err(refused)?;
+    let bond = route.bond_key_of(&row.producer).ok_or_else(|| refused("EXEC income recipient has no native bond"))?;
     ledger.bind_exec_reward_until(root.as_bytes(), claim.as_bytes(), expiry, until).map_err(refused)?;
+    builder.transfer_kernel_income_to_exec_v1(root, claim, bond, daa, until)?;
     flush(builder, &ledger, &before);
     Ok(())
 }
@@ -512,7 +514,7 @@ pub(super) fn finish_exec_rewards_v1(
         *cap -= fee;
         paid.push(fee);
     }
-    apply_settlements_to_exec_vesting(builder, &events, true, Some(root))?;
+    apply_settlements_to_exec_vesting(builder, &events, true, Some(root), daa)?;
     flush(builder, &ledger, &before);
     Ok(paid)
 }
@@ -528,7 +530,7 @@ pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: 
     for claim in claims {
         ledger.cancel_exec_reward(root.as_bytes(), claim, &mut events).map_err(refused)?;
     }
-    apply_settlements(builder, &events, true)?;
+    apply_settlements(builder, &events, true, daa)?;
     flush(builder, &ledger, &before);
     Ok(())
 }
@@ -542,8 +544,9 @@ pub(super) fn apply_settlements(
     builder: &mut TransitionBuilder<'_>,
     events: &[LedgerEventV1],
     strict: bool,
+    now: u64,
 ) -> Result<(), PalwStateV2Error> {
-    apply_settlements_to_exec_vesting(builder, events, strict, None)
+    apply_settlements_to_exec_vesting(builder, events, strict, None, now)
 }
 
 fn apply_settlements_to_exec_vesting(
@@ -551,6 +554,7 @@ fn apply_settlements_to_exec_vesting(
     events: &[LedgerEventV1],
     strict: bool,
     exec_root: Option<Hash64>,
+    now: u64,
 ) -> Result<(), PalwStateV2Error> {
     // GAP-5: what this batch actually debited from posters' escrows — the only source a Final reward is paid from. A `FinalReward`
     // with no spent escrow behind it is never paid (there is no unfunded reward path).
@@ -662,7 +666,10 @@ fn apply_settlements_to_exec_vesting(
                 }
                 if s.kind == SettlementKindV1::FinalReward {
                     let claim = s.claim.ok_or_else(|| refused("a Final fee has no claim"))?;
-                    builder.consume_kernel_final_reward_v1(&claim, amount)?;
+                    let bond = key.ok_or_else(|| refused("a Final fee recipient has no native bond"))?;
+                    let payload =
+                        builder.state.bonds.get(&bond).ok_or_else(|| refused("a Final fee recipient is missing"))?.payout_payload;
+                    builder.consume_kernel_final_reward_v1(&claim, bond, payload, now, amount)?;
                 }
                 let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
                 match payee {
@@ -853,7 +860,8 @@ pub(super) fn apply_kernel_route_object_v1(
             let reward = ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount);
             match builder.plan_kernel_claim_budget_v1(ctx, *signer, Hash64::from_bytes(row.class_binding_id), reward) {
                 Ok(Some(plan)) => {
-                    builder.commit_bond_budget_v1(ctx, super::palw_bond_budget_fold_v1::kernel_budget_claim_id_v1(claim), plan)?
+                    builder.commit_bond_budget_v1(ctx, super::palw_bond_budget_fold_v1::kernel_budget_claim_id_v1(claim), plan)?;
+                    builder.hold_kernel_income_v1(ctx, Hash64::from_bytes(*claim), row.liability_until.unwrap_or(ctx.daa_score))?;
                 }
                 Ok(None) => {}
                 Err(_) => {
@@ -885,7 +893,7 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     // (A settlement the real bonds cannot honour fails the object — the walk's rehearsal drops it with its builder, so no half-applied
     // slash survives; the sync above makes this unreachable.)
-    apply_settlements(builder, &events, true)?;
+    apply_settlements(builder, &events, true, ctx.daa_score)?;
     builder.close_terminal_kernel_budgets_v1(&ledger);
     persist_budget(builder, ctx, &ledger);
     flush(builder, &ledger, &before);
@@ -1104,7 +1112,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
             }
         }
     }
-    apply_settlements(builder, &events, false)?;
+    apply_settlements(builder, &events, false, ctx.daa_score)?;
     builder.close_terminal_kernel_budgets_v1(&ledger);
     // Assignments and counted receipts of claims that can no longer be covered are dropped.
     let stale: Vec<misaka_palw_kernel::hash::Digest> = builder
