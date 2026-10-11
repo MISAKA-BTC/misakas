@@ -794,7 +794,7 @@ pub fn palw_false_valid_admission_v1(
         | C::ForgedOutputTiled { .. }
         | C::LogitsNotStepOutput { .. }
         | C::ConstrainedDecode { .. }
-        | C::ConstrainedDecodeFlat { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
+        | C::ConstrainedDecodeFlat { .. } | C::StagedCourt { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
         C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } | C::RegisteredTableMismatch { .. } | C::PrefixStateMismatch { .. } | C::TokenizerTableMismatch { .. } => {
             Ok(PalwFalseValidAdmissionV1::ClaimProving)
         }
@@ -939,6 +939,7 @@ pub fn palw_false_valid_fault_site_v1(
         | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
         | PalwPanelContradictionV1::PrefixStateMismatch { .. }
         | PalwPanelContradictionV1::TokenizerTableMismatch { .. }
+        | PalwPanelContradictionV1::StagedCourt { .. }
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
         | PalwPanelContradictionV1::ProducerWithholding { .. }
         | PalwPanelContradictionV1::CourtFraud { .. }
@@ -2015,6 +2016,12 @@ fn adjudicate_against_claim_v1(
                 ));
             }
             match contradiction {
+                PalwPanelContradictionV1::StagedCourt { reference } => {
+                    if reference.claim != target.claim_id || sessions != PalwSessionRuleV1::DirectProofFirst {
+                        return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
+                    }
+                    reference.resolve(state,target.execution_root).map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+                }
                 PalwPanelContradictionV1::ConstrainedDecode { binding, accusation } => {
                     palw_constrained_job_target_v1(target, binding, &accusation.job)?;
                     match crate::palw_step_refute::check_constrained_decode_token_at_v2(
@@ -2499,7 +2506,7 @@ pub fn palw_executor_refuted_admission_v1(
         | C::ForgedOutputTiled { .. }
         | C::LogitsNotStepOutput { .. }
         | C::ConstrainedDecode { .. }
-        | C::ConstrainedDecodeFlat { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
+        | C::ConstrainedDecodeFlat { .. } | C::StagedCourt { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
         C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } | C::RegisteredTableMismatch { .. } | C::PrefixStateMismatch { .. } | C::TokenizerTableMismatch { .. } => {
             Ok(PalwFalseValidAdmissionV1::ClaimProving)
         }

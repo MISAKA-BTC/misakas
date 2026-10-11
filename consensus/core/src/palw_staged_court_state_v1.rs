@@ -38,3 +38,46 @@ impl PalwStagedCourtRowV1 {
         }
     }
 }
+
+/// A reference to a completed ROOTED court, not a challenger-supplied parser checkpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStagedCertificateRefV1 {
+    pub claim: Hash64,
+    pub reserver: PalwBondKeyV2,
+    pub reserved_daa: u64,
+    pub seed_id: Hash64,
+}
+impl PalwStagedCertificateRefV1 {
+    pub fn resolve(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        expected_root: Hash64,
+    ) -> Result<crate::palw_constraint_stream_court_v1::PalwConstraintStreamFaultV1, String> {
+        state.staged_claim_contract_v1(&self.claim).ok_or("certificate claim has no prospective contract")?;
+        let row = state.staged_owned_constraint_v1(self.claim, self.reserver).ok_or("certificate has no rooted owned court")?;
+        if row.reserved_daa != self.reserved_daa || row.seed_id() != self.seed_id {
+            return Err("certificate changes immutable owner/seed/reservation".into());
+        }
+        let fault = row.certificate()?.ok_or("rooted court completed without an objective fault")?;
+        if fault.claim_id != self.claim
+            || fault.reservation_owner != self.reserver
+            || fault.reserved_daa != self.reserved_daa
+            || fault.seed_id != self.seed_id
+            || fault.execution_root != expected_root
+        {
+            return Err("rooted certificate does not convict the target claim's execution".into());
+        }
+        Ok(fault)
+    }
+}
+pub fn palw_is_staged_evidence_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8]) -> bool {
+    use crate::palw_offence_attribution_v1::*;
+    use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPanelContradictionV1 as C};
+    match kind {
+        K::ExecutorRefuted => borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence)
+            .is_ok_and(|p| matches!(p.contradiction, C::StagedCourt { .. })),
+        K::PanelFalseValidV2 => borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence)
+            .is_ok_and(|p| matches!(p.contradiction, C::StagedCourt { .. })),
+        _ => false,
+    }
+}

@@ -274,6 +274,9 @@ pub enum PalwPanelContradictionV1 {
         table_opening: crate::palw_fp_constraint_job_v1::PalwTokenTableOpeningV1,
     } = 18,
 
+    /// Small completed prospective court reference. Only attribution against its rooted owner row
+    /// may judge it; stateless/V1 readers retain unknown-tag refusal.
+    StagedCourt { reference: crate::palw_staged_court_state_v1::PalwStagedCertificateRefV1 } = 19,
 }
 
 /// **How a `ForgedOutputTiled` (11) proves the committed token forged.**
@@ -322,6 +325,7 @@ impl PalwPanelContradictionV1 {
                 | Self::RegisteredTableMismatch { .. }
                 | Self::PrefixStateMismatch { .. }
                 | Self::TokenizerTableMismatch { .. }
+                | Self::StagedCourt { .. }
         )
     }
 }
@@ -491,7 +495,7 @@ fn palw_panel_contradiction_digest_v1(contradiction: &PalwPanelContradictionV1) 
         | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
         | PalwPanelContradictionV1::PrefixStateMismatch { .. }
         | PalwPanelContradictionV1::TokenizerTableMismatch { .. }
-        | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
+        | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } | PalwPanelContradictionV1::StagedCourt { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }
 
@@ -804,7 +808,7 @@ where
         | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
         | PalwPanelContradictionV1::PrefixStateMismatch { .. }
         | PalwPanelContradictionV1::TokenizerTableMismatch { .. }
-        | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => {
+        | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } | PalwPanelContradictionV1::StagedCourt { .. } => {
             return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
         }
     }
@@ -874,7 +878,7 @@ pub fn palw_panel_contradiction_convicts_execution_v1(
         | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
         | PalwPanelContradictionV1::PrefixStateMismatch { .. }
         | PalwPanelContradictionV1::TokenizerTableMismatch { .. }
-        | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
+        | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } | PalwPanelContradictionV1::StagedCourt { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }
 

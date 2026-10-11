@@ -24949,7 +24949,7 @@ impl<'a> TransitionBuilder<'a> {
             | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. }
             | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
             | PalwPanelContradictionV1::PrefixStateMismatch { .. }
-            | PalwPanelContradictionV1::TokenizerTableMismatch { .. } => {
+            | PalwPanelContradictionV1::TokenizerTableMismatch { .. } | PalwPanelContradictionV1::StagedCourt { .. } => {
                 return Err(refused("PanelFalseValid evidence does not decode".into()));
             }
         }
@@ -78992,6 +78992,47 @@ mod audit_1004_a1_dissolved_line_carriage {
 mod staged_court_state_tests_v1 {
     use super::*;
     use crate::palw_staged_court_state_v1::*;
+    #[test]
+    fn certificate_reference_requires_completed_rooted_court_and_exact_identity() {
+        use crate::palw_constraint_stream_owned_v1::tests::completed_row;
+        for guilty in [false, true] {
+            let (row, root) = completed_row(guilty);
+            let reference = PalwStagedCertificateRefV1 { claim: row.claim, reserver: row.reserver,
+                reserved_daa: row.reserved_daa, seed_id: row.seed_id() };
+            let mut state = PalwChainStateV2::genesis();
+            assert!(reference.resolve(&state, root).is_err());
+            let contract = PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {
+                terms: row.terms, producer: PALW_BOND_KEY_V2_MIN,
+                panel: BTreeSet::from([PALW_BOND_KEY_V2_MIN]),
+            });
+            apply_delta_entry(&mut state, &PalwDeltaEntryV2::StagedCourtSeed {
+                key: PalwStagedCourtKeyV1::Claim(row.claim), old: None, new: Some(contract) }, false).unwrap();
+            assert!(reference.resolve(&state, root).is_err());
+            let owner_entry = PalwDeltaEntryV2::StagedCourtSeed {
+                key: PalwStagedCourtKeyV1::Owner(row.claim, row.reserver), old: None,
+                new: Some(PalwStagedCourtRowV1::Constraint(Box::new(row))) };
+            apply_delta_entry(&mut state, &owner_entry, false).unwrap();
+            assert_eq!(reference.resolve(&state, root).is_ok(), guilty);
+            assert!(reference.resolve(&state, Hash64::from_u64_word(999)).is_err());
+            for foreign in [
+                PalwStagedCertificateRefV1 { claim: Hash64::from_u64_word(99), ..reference },
+                PalwStagedCertificateRefV1 { reserver: PALW_BOND_KEY_V2_MIN, ..reference },
+                PalwStagedCertificateRefV1 { reserved_daa: reference.reserved_daa + 1, ..reference },
+                PalwStagedCertificateRefV1 { seed_id: Hash64::from_u64_word(99), ..reference },
+            ] { assert!(foreign.resolve(&state, root).is_err()); }
+            let contradiction = crate::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference };
+            assert_eq!(borsh::to_vec(&contradiction).unwrap()[0], 19);
+            assert!(contradiction.is_attribution_only_v1());
+            assert_eq!(crate::palw_aggregate_liability_v1::palw_contradiction_tag_v1(&contradiction), 19);
+            let restored = borsh::from_slice::<PalwStateCarriageV2>(
+                &borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap()).unwrap().into_state(
+                    &PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap(),
+                    Some(state.state_root())).unwrap();
+            assert_eq!(reference.resolve(&restored, root).is_ok(), guilty);
+            apply_delta_entry(&mut state, &owner_entry, true).unwrap();
+            assert!(reference.resolve(&state, root).is_err());
+        }
+    }
     #[test]
     fn prospective_contract_roots_carries_and_reverts_without_historic_tail_changes() {
         let mut state = PalwChainStateV2::genesis();

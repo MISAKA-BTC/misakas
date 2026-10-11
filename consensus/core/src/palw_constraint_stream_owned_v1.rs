@@ -181,14 +181,16 @@ impl PalwOwnedConstraintStreamV1 {
     }
 }
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1;
     use crate::palw_rendering_resources_v1::{PalwRenderingResourcePlanV1, PalwRenderingResourcePricesV1};
     use crate::tx::{TransactionId, TransactionOutpoint};
-    fn seed() -> PalwConstraintStreamSeedV1 {
-        let (binding, a) = public_constrained_case_for_tests_v1(true);
-        PalwConstraintStreamSeedV1 {
+    fn seed() -> PalwConstraintStreamSeedV1 { seed_for(true).0 }
+    fn seed_for(fault: bool) -> (PalwConstraintStreamSeedV1, crate::palw_fp_constraint_job_v1::PalwConstrainedDecodeAccusationV1) {
+        let (binding, a) = public_constrained_case_for_tests_v1(fault);
+        let copy = a.clone();
+        (PalwConstraintStreamSeedV1 {
             version: 1,
             claim: Hash64::from_u64_word(1),
             reserver: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(2), index: 0 }),
@@ -200,7 +202,7 @@ mod tests {
             eog_count: a.eog.ids.len() as u32,
             eog_opening: a.eog.opening,
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
-        }
+        }, copy)
     }
     fn terms(seed: &PalwConstraintStreamSeedV1) -> PalwRenderingClaimTermsV1 {
         let p = PalwRenderingResourcePlanV1::derive(
@@ -217,6 +219,43 @@ mod tests {
         )
         .unwrap();
         PalwRenderingClaimTermsV1::derive(100, p, 100, 100, 10).unwrap()
+    }
+    /// Uses admitted, ordered public moves; no test checkpoint manufactures a certificate.
+    pub(crate) fn completed_row(fault: bool) -> (PalwOwnedConstraintStreamV1, Hash64) {
+        let (seed, a) = seed_for(fault);
+        let terms = terms(&seed);
+        let root = seed.binding.committed_execution_root;
+        let mut row = PalwOwnedConstraintStreamV1::admit(&seed, root, terms, 100, u64::MAX,
+            2_880_000, 1 << 25, terms.material_until_daa, terms.bond_exit_after_daa,
+            &[terms.bond_exit_after_daa; 5]).unwrap();
+        fn movement(row: &mut PalwOwnedConstraintStreamV1, action: PalwConstraintStreamActionV1) {
+            let m = PalwConstraintStreamMoveV1 { version: 1, claim: row.claim, reserver: row.reserver,
+                reserved_daa: row.reserved_daa, seed_id: row.seed_id(), phase: row.court.phase(), action,
+                signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] };
+            row.movement(100, &m).unwrap();
+        }
+        movement(&mut row, PalwConstraintStreamActionV1::EogPart { offset: 0, ids: a.eog.ids.clone() });
+        movement(&mut row, PalwConstraintStreamActionV1::EogFinish);
+        while row.court.phase() != crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::Complete {
+            let id = row.court.next_rendering_id().unwrap();
+            if row.court.is_eog(id) {
+                movement(&mut row, PalwConstraintStreamActionV1::EogTokenFinish);
+                continue;
+            }
+            let o = a.renderings.iter().find(|o| o.id == id).unwrap();
+            row.leaf(100, &PalwConstraintStreamLeafV1 { version: 1, claim: row.claim,
+                reserver: row.reserver, reserved_daa: row.reserved_daa, seed_id: row.seed_id(), id,
+                present: o.rendering.is_some(), length: o.rendering.as_ref().map_or(0, |b| b.len()) as u32,
+                opening: o.opening.clone(), signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] }).unwrap();
+            if let Some(bytes) = &o.rendering {
+                for (n, part) in bytes.chunks(65536).enumerate() {
+                    movement(&mut row, PalwConstraintStreamActionV1::RenderingPart {
+                        offset: (n * 65536) as u32, bytes: part.to_vec() });
+                }
+            }
+            movement(&mut row, PalwConstraintStreamActionV1::RenderingFinish);
+        }
+        (row, root)
     }
     #[test]
     fn admission_requires_entire_capital_and_retention_contract_before_owned_work() {
