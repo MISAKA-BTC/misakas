@@ -3902,6 +3902,7 @@ fn seat_conformance_on_v1() -> bool {
     SEAT_CONFORMANCE_V1.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+#[derive(Clone)]
 pub struct PalwPanelConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed of the bond that holds this node's seats.
     pub key_path: String,

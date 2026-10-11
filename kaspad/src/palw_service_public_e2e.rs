@@ -3,6 +3,8 @@
 //! Court windows, collateral and registration rules retain their preset values.
 //! The shipping activation validator still rejects the fixture fence; this is no network activation.
 use super::*;
+#[path = "palw_service_recovery_e2e.rs"]
+mod recovery;
 use kaspa_consensus::consensus::test_consensus::{TestConsensus, TestConsensusFactory};
 use kaspa_consensus_core::block::TemplateBuildMode;
 use kaspa_consensus_core::block::TemplateTransactionSelector;
@@ -1109,6 +1111,10 @@ async fn carry_fp_commitment(
 }
 
 async fn fresh_public_service(case: PublicCase) {
+    fresh_public_service_with_recovery(case, false).await;
+}
+
+async fn fresh_public_service_with_recovery(case: PublicCase, automatic_recovery: bool) {
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
     let (config, bundle, premine, mut floats) = fixture_config(
         case == PublicCase::ForeignFpJob,
@@ -1398,7 +1404,7 @@ async fn fresh_public_service(case: PublicCase) {
         verifier_config.class_artifacts.push(fixture.path.clone());
         verifier_config.chain_classes = true;
     }
-    let service = Arc::new(PalwPanelService::new(verifier_config, manager.clone(), flow, config));
+    let mut service = Arc::new(PalwPanelService::new(verifier_config.clone(), manager.clone(), flow, config));
     assert!(service.keypair.is_some());
     assert_eq!(service.bond, Some(bond.0));
     let cloned = service.clone();
@@ -1406,6 +1412,22 @@ async fn fresh_public_service(case: PublicCase) {
         cloned.start().await.unwrap();
     });
     let mut running = ServiceRun { service: service.clone(), task: Some(task) };
+    let mut recovery = if automatic_recovery {
+        Some(
+            recovery::RecoveryRun::start(
+                &chain,
+                case,
+                foreign.as_ref(),
+                &floats[0],
+                manager.clone(),
+                retained_flow.clone(),
+                verifier_config,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
     let deadline = std::time::Instant::now() + Duration::from_secs(360);
     let service_start = chain.history.len();
     let mut next_da_progress = chain.daa() + 100;
@@ -1437,6 +1459,20 @@ async fn fresh_public_service(case: PublicCase) {
                 "production template includes an actual service carrier"
             );
             pool_heartbeat(&mut chain, &manager, &pool).await;
+        }
+        if let Some(recovery) = recovery.as_mut() {
+            recovery
+                .tick(
+                    &chain,
+                    claim,
+                    service_start,
+                    &mut service,
+                    &mut running,
+                    &mut answer_submitted,
+                    &mut job_preimage_submitted,
+                    &mut input_chunks,
+                )
+                .await;
         }
         let view = chain.view(claim);
         if chain.daa() >= next_da_progress {
@@ -1471,7 +1507,8 @@ async fn fresh_public_service(case: PublicCase) {
         }
         reserved |= view.record.as_ref().is_some_and(|r| r.live.contains_key(&bond));
         demanded |= view.sessions.iter().any(|(accuser, _)| *accuser == bond);
-        if demanded
+        if !automatic_recovery
+            && demanded
             && case != PublicCase::UnretainedWithheldFpV3Binding
             && answer_submitted.is_none()
             && let Some((_, event, _)) = &foreign
@@ -1593,6 +1630,7 @@ async fn fresh_public_service(case: PublicCase) {
                 | PublicCase::UnretainedMultipartHonestFpV3Job
                 | PublicCase::UnretainedLargeConstraintJob
         ) || case.constraint_fault().is_some())
+            && !automatic_recovery
             && !job_preimage_submitted
             && chain.view(claim).sessions.iter().any(|(who, s)| {
                 *who == bond
@@ -1711,7 +1749,7 @@ async fn fresh_public_service(case: PublicCase) {
             job_preimage_submitted = true;
             eprintln!("[service-public] wrong job refused, authenticated job preimage acquired through signed public carriers");
         }
-        if case.answers_input() {
+        if case.answers_input() && !automatic_recovery {
             use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
             use kaspa_consensus_core::palw_legacy_held_da_v2::{
                 PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2, PALW_LEGACY_HELD_VERSION_V2, PalwLegacyHeldAnswerCarriageV2,
@@ -2143,6 +2181,9 @@ async fn fresh_public_service(case: PublicCase) {
             pool_heartbeat(&mut chain, &manager, &pool).await;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if let Some(recovery) = recovery.as_mut() {
+        recovery.finish(&chain, claim, service_start).await;
     }
     running.finish().await;
     let weak = Arc::downgrade(&service);
