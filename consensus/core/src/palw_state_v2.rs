@@ -8964,6 +8964,18 @@ pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
 pub fn palw_object_is_constrained_decode_v1(object: &PalwConsensusObjectV2) -> bool {
     match object {
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_constrained_decode_v1(),
+        PalwConsensusObjectV2::ObjectiveOffence { kind, evidence, .. }
+            if evidence.len() as u64 <= crate::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES =>
+        {
+            use crate::palw_offence_attribution_v1::{PalwExecutorRefutedEvidenceV1, PalwPanelFalseValidEvidenceV2};
+            use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPanelContradictionV1 as C};
+            let contradiction = match kind {
+                K::ExecutorRefuted => borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok().map(|p| p.contradiction),
+                K::PanelFalseValidV2 => borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok().map(|p| p.contradiction),
+                _ => None,
+            };
+            matches!(contradiction, Some(C::ConstrainedDecode { .. }))
+        }
         _ => false,
     }
 }
@@ -24809,7 +24821,8 @@ impl<'a> TransitionBuilder<'a> {
             | PalwPanelContradictionV1::OutputMismatch { .. }
             | PalwPanelContradictionV1::ForgedOutputTiled { .. }
             | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
-            | PalwPanelContradictionV1::PromptNotAnchored { .. } => {
+            | PalwPanelContradictionV1::PromptNotAnchored { .. }
+            | PalwPanelContradictionV1::ConstrainedDecode { .. } => {
                 return Err(refused("PanelFalseValid evidence does not decode".into()));
             }
         }

@@ -1,0 +1,12 @@
+
+running 7 tests
+test palw_aggregate_liability_v1::tests::l_t6_only_whole_bond_producer_convictions_may_be_counted_in_q ... ok
+test palw_aggregate_liability_v1::tests::the_step_in_force_is_the_last_one_at_or_below_the_daa_and_none_below_the_fence ... ok
+test palw_aggregate_liability_v1::tests::a_tier_freeze_lifts_at_since_plus_window_court_and_a_final_one_never ... ok
+test palw_aggregate_liability_v1::tests::a_i5_the_amplification_bound_holds_and_the_lock_never_reaches_zero ... ok
+test palw_aggregate_liability_v1::tests::decision_2_prices_the_credit_on_the_cheapest_route_s_actual_collection ... ok
+test palw_aggregate_liability_v1::tests::the_intent_class_is_the_court_fraud_and_contradictions_9_10_11_13_14_and_s1_is_tier ... ok
+test palw_aggregate_liability_v1::tests::l_t6_the_campaign_ev_is_never_positive_at_p_up_to_p_star ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3622 filtered out; finished in 0.00s
+

@@ -239,6 +239,13 @@ pub enum PalwPanelContradictionV1 {
     /// `FpCanonicalWhole` additionally proves a canonical FP job's count/root false from its
     /// authenticated public job and binding. Claim-proving; forfeiture by claim.
     PromptNotAnchored { binding: crate::palw_step_leg::PalwStepBindingV2, proof: PalwPromptProofV1 } = 13,
+    /// A constrained FP token violates the job's authenticated constraint/table rule. The
+    /// existing court predicate also judges this direct proof; no other bond's open court can
+    /// pre-empt it past the dormant public-filer fence. Earlier discriminants remain fixed.
+    ConstrainedDecode {
+        binding: crate::palw_step_leg::PalwStepBindingV2,
+        accusation: Box<crate::palw_fp_constraint_job_v1::PalwConstrainedDecodeAccusationV1>,
+    } = 14,
 }
 
 /// **How a `ForgedOutputTiled` (11) proves the committed token forged.**
@@ -282,6 +289,7 @@ impl PalwPanelContradictionV1 {
                 | Self::ForgedOutputTiled { .. }
                 | Self::LogitsNotStepOutput { .. }
                 | Self::PromptNotAnchored { .. }
+                | Self::ConstrainedDecode { .. }
         )
     }
 }
@@ -446,7 +454,8 @@ fn palw_panel_contradiction_digest_v1(contradiction: &PalwPanelContradictionV1) 
         | PalwPanelContradictionV1::OutputMismatch { .. }
         | PalwPanelContradictionV1::ForgedOutputTiled { .. }
         | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
-        | PalwPanelContradictionV1::PromptNotAnchored { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
+        | PalwPanelContradictionV1::PromptNotAnchored { .. }
+        | PalwPanelContradictionV1::ConstrainedDecode { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }
 
@@ -754,7 +763,8 @@ where
         | PalwPanelContradictionV1::OutputMismatch { .. }
         | PalwPanelContradictionV1::ForgedOutputTiled { .. }
         | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
-        | PalwPanelContradictionV1::PromptNotAnchored { .. } => {
+        | PalwPanelContradictionV1::PromptNotAnchored { .. }
+        | PalwPanelContradictionV1::ConstrainedDecode { .. } => {
             return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
         }
     }
@@ -819,7 +829,8 @@ pub fn palw_panel_contradiction_convicts_execution_v1(
         | PalwPanelContradictionV1::OutputMismatch { .. }
         | PalwPanelContradictionV1::ForgedOutputTiled { .. }
         | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
-        | PalwPanelContradictionV1::PromptNotAnchored { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
+        | PalwPanelContradictionV1::PromptNotAnchored { .. }
+        | PalwPanelContradictionV1::ConstrainedDecode { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }
 
