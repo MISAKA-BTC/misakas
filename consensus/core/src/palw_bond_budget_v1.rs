@@ -1379,12 +1379,31 @@ impl PalwBondBudgetStateV1 {
         queue_id: Option<Hash64>,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(), PalwBudgetRefusalV1> {
+        self.pay_native_income_inner_v1(policy, income_id, now, amount, queue_id, false, j)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pay_native_income_inner_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        income_id: &Hash64,
+        now: u64,
+        amount: u64,
+        queue_id: Option<Hash64>,
+        source: bool,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
         let release = now.checked_add(policy.window_daa).ok_or(PalwBudgetRefusalV1::Overflow)?;
         let row = self
             .claims
             .get(income_id)
             .copied()
-            .filter(|row| row.origin == PalwBudgetOriginV1::NativeIncome && row.live && row.in_window && !row.open)
+            .filter(|row| {
+                (row.origin == PalwBudgetOriginV1::NativeIncome || (source && row.origin == PalwBudgetOriginV1::SourceFee))
+                    && row.live
+                    && row.in_window
+                    && !row.open
+            })
             .ok_or(PalwBudgetRefusalV1::NotOpen)?;
         let paid = row.consumed.reward_sompi.checked_add(amount).ok_or(PalwBudgetRefusalV1::Overflow)?;
         if paid > row.reserved.reward_sompi {
@@ -1587,6 +1606,32 @@ impl PalwBondBudgetStateV1 {
         self.put_claim(income_id, Some(claim), j);
         self.forget(income_id, j);
         Ok(())
+    }
+
+    /// A signed source promise became an irrevocable native queue credit.
+    /// Logical `Paid` is not yet a coinbase payment: retain the same maximum
+    /// until the common queue drain confirms actual payment + W. Preflight
+    /// includes the destination aggregate, so any refusal writes nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn queue_source_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        income_id: &Hash64,
+        liability_until: u64,
+        now: u64,
+        fee: u64,
+        queue_id: Hash64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let claim = self
+            .claims
+            .get(income_id)
+            .filter(|row| row.origin == PalwBudgetOriginV1::SourceFee && row.live && row.in_window && !row.open)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if now <= liability_until || fee == 0 || fee != claim.reserved.reward_sompi || claim.consumed.reward_sompi != 0 {
+            return Err(PalwBudgetRefusalV1::Assignment("source queue credit has not matured or differs from its funded promise"));
+        }
+        self.pay_native_income_inner_v1(policy, income_id, now, fee, Some(queue_id), true, j)
     }
 
     /// Cancel the unpaid right after its native funding is refunded. Window
@@ -2235,6 +2280,69 @@ mod tests {
         assert!(s.hold_native_income_v1(&p, capital, h(74), bond(0), 502, 700, 20 * BILI, &[], true, &mut j).is_err());
         assert_eq!((s.root_parts(), j.len()), before);
         s.check_consistency().unwrap();
+    }
+
+    #[test]
+    fn source_queue_credit_holds_r_and_capital_until_actual_coinbase_plus_w() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let empty = s.clone();
+        let mut j = Vec::new();
+        s.reserve_source_income_v1(&p, capital, h(82), bond(0), 10, 500, 20 * BILI, &mut j).unwrap();
+        let before = (s.root_parts(), j.len());
+        assert!(s.queue_source_income_v1(&p, &h(82), 500, 500, 20 * BILI, h(83), &mut j).is_err());
+        assert!(s.queue_source_income_v1(&p, &h(82), 500, 501, 19 * BILI, h(83), &mut j).is_err());
+        assert!(s.queue_source_income_v1(&p, &h(82), 500, 501, 20 * BILI, h(82), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before, "H, fixed fee and destination identity fail atomically");
+        s.release_due(900, &mut j);
+        assert!(s.window_holds(&bond(0), 900));
+        s.queue_source_income_v1(&p, &h(82), 500, 901, 20 * BILI, h(83), &mut j).unwrap();
+        assert!(s.claim_row(&h(82)).is_none(), "the source cannot obtain a second queue credit");
+        let queued = s.claim_row(&h(83)).unwrap();
+        assert_eq!(queued.origin, PalwBudgetOriginV1::NativeIncomeQueued);
+        assert_eq!((queued.reserved.reward_sompi, queued.consumed.reward_sompi), (20 * BILI, 20 * BILI));
+        assert!(queued.live && !queued.open);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window, PalwBudgetVectorV1 { reward_sompi: 20 * BILI, ..PalwBudgetVectorV1::ZERO });
+        assert!(s.queue_source_income_v1(&p, &h(82), 500, 902, 20 * BILI, h(83), &mut j).is_err());
+        s.release_due(2_000, &mut j);
+        assert!(s.window_holds(&bond(0), 2_000), "an unspent queue credit cannot free collateral");
+        s.confirm_native_income_payment_v1(&p, &h(83), 2_000, &mut j).unwrap();
+        assert_eq!(s.claim_row(&h(83)).unwrap().reuse_not_before, 2_100);
+        s.release_due(2_099, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 20 * BILI);
+        s.release_due(2_100, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none());
+        s.check_consistency().unwrap();
+        let mut replay = empty.clone();
+        for entry in &j {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), s.root_parts());
+        for entry in j.iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), empty.root_parts());
+    }
+
+    #[test]
+    fn source_queue_destination_collision_refuses_without_consuming_the_signed_promise() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        s.reserve_source_income_v1(&p, capital, h(84), bond(0), 10, 500, 20 * BILI, &mut j).unwrap();
+        s.hold_native_income_v1(&p, capital, h(85), bond(1), 10, 500, 10 * BILI, &[], true, &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(85), 501, 10 * BILI, Some(h(86)), &mut j).unwrap();
+        let before = (s.root_parts(), j.len());
+        assert!(s.queue_source_income_v1(&p, &h(84), 500, 501, 20 * BILI, h(86), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before);
+        assert_eq!(s.claim_row(&h(84)).unwrap().consumed.reward_sompi, 0);
+        assert!(s.claim_row(&h(84)).unwrap().live);
     }
 
     #[test]

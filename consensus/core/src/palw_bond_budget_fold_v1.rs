@@ -50,6 +50,17 @@ impl PalwChainStateV2 {
         self.bond_budget.as_ref()
     }
 
+    /// The durable R receipt for one actual native queue key and recipient.
+    /// Several source/Panel/kernel grants may coalesce here without losing
+    /// their aggregate monetary cap or actual coinbase payment clock.
+    pub fn bond_budget_native_queue_income_v1(
+        &self,
+        queue: Hash64,
+        bond: &PalwBondKeyV2,
+    ) -> Option<&crate::palw_bond_budget_v1::PalwBudgetClaimRowV1> {
+        self.bond_budget.as_ref()?.claim_row(&native_queued_income_id_v1(queue, bond))
+    }
+
     /// **Does `bond` still hold a budget reservation inside its window at `now_daa`?** — the withdrawal hold (design §2.4): the capital
     /// that earned a window cannot leave, or be re-registered, before the window has passed. `false` with no engine.
     pub fn bond_budget_window_holds(&self, bond: &PalwBondKeyV2, now_daa: u64) -> bool {
@@ -574,7 +585,7 @@ impl TransitionBuilder<'_> {
         let carve = self.params.worker_carve_at(ctx.subsidy, self.extras.escrow_carve);
         let pricing = self.fp_pricing();
         let mut seeds: Vec<(Hash64, PalwBondKeyV2, u64, PalwBudgetVectorV1)> = Vec::new();
-        let mut source_seeds: Vec<(Hash64, PalwBondKeyV2, u64, u64, u64, Option<u64>)> = Vec::new();
+        let mut source_seeds: Vec<(Hash64, PalwBondKeyV2, u64, u64, u64, Option<(u64, Option<Hash64>)>)> = Vec::new();
         for (id, claim) in &self.state.claims {
             if claim.accepted_daa.saturating_add(window) <= ctx.daa_score && (claim.phase.is_terminal() || claim.escrowed_reward == 0)
             {
@@ -652,20 +663,39 @@ impl TransitionBuilder<'_> {
                     let paid = match promise.outcome {
                         None => None,
                         Some(BeaconSourceFeeOutcomeV1::Refunded { .. }) => continue,
-                        Some(BeaconSourceFeeOutcomeV1::Paid { daa, .. }) => {
-                            if daa.checked_add(window).is_some_and(|release| release <= ctx.daa_score) {
-                                continue;
-                            }
-                            Some(daa)
-                        }
+                        Some(BeaconSourceFeeOutcomeV1::Paid { daa, .. }) => Some(daa),
                     };
                     let source = ledger
                         .beacon_sources
                         .get(&(*context, *producer))
                         .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("migrating fee source is missing".into()))?;
-                    let bond = route
-                        .bond_key_of(producer)
-                        .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("migrating fee recipient bond is missing".into()))?;
+                    let bond = match route.bond_key_of(producer) {
+                        Some(bond) => bond,
+                        // A historical paid recipient whose immutable bond no
+                        // longer exists cannot accept new R under that key.
+                        None if paid.is_some() => continue,
+                        None => {
+                            return Err(PalwStateV2Error::BondBudgetRefused("migrating pending fee recipient bond is missing".into()));
+                        }
+                    };
+                    let paid = match paid {
+                        Some(daa) => {
+                            let payload = self.state.bonds.get(&bond).map(|row| row.payout_payload);
+                            let queue = payload.map(|p| crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&p));
+                            let queued = queue.filter(|key| {
+                                daa == ledger.daa
+                                    && (self.state.pending_payouts.get(key).is_some_and(|row| row.amount >= promise.fee)
+                                        || self.entries.iter().any(|entry| {
+                                            matches!(entry,
+                                                PalwDeltaEntryV2::Payout { key: drained, old: Some(row), new: None }
+                                                    if drained == key && row.amount >= promise.fee
+                                            )
+                                        }))
+                            });
+                            Some((daa, queued))
+                        }
+                        None => None,
+                    };
                     let subject = super::palw_kernel_route_fold_v1::source_income_subject_v1(&source.job, &source.seal);
                     source_seeds.push((
                         source_income_id_v1(Hash64::from_bytes(*context), subject, &bond),
@@ -688,8 +718,24 @@ impl TransitionBuilder<'_> {
             for (id, bond, accepted, hold_until, fee, paid) in source_seeds {
                 let capital = state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
                 budget.seed_source_income_v1(&policy, capital, id, bond, accepted, hold_until, fee, j)?;
-                if let Some(at) = paid {
-                    budget.settle_source_income_v1(&policy, &id, hold_until, at, fee, j)?;
+                if let Some((at, queue)) = paid {
+                    if let Some(queue) = queue {
+                        budget.queue_source_income_v1(
+                            &policy,
+                            &id,
+                            hold_until,
+                            at,
+                            fee,
+                            native_queued_income_id_v1(queue, &bond),
+                            j,
+                        )?;
+                    } else {
+                        // Old promises record logical Paid, not the physical
+                        // coinbase DAA. Count existing mapped income once until
+                        // first-fence + W as a conservative boundary hold;
+                        // this is not a claim that money was paid at the fence.
+                        budget.settle_source_income_v1(&policy, &id, hold_until, ctx.daa_score, fee, j)?;
+                    }
                 }
             }
             Ok(())
@@ -899,9 +945,13 @@ impl TransitionBuilder<'_> {
         if !budget.claim_row(&id).is_some_and(|row| row.accepted_daa == accepted_daa) {
             return Err(PalwStateV2Error::BondBudgetRefused("source income reservation is missing or has another acceptance".into()));
         }
-        self.bond_budget_op(|budget, _, j| budget.settle_source_income_v1(&mirror.policy, &id, liability_until, ctx.daa_score, fee, j))
-            .expect("checked")
-            .map_err(|why| budget_refused(bond, why))
+        let payload = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.payout_payload;
+        let queue = native_queued_income_id_v1(crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload), &bond);
+        self.bond_budget_op(|budget, _, j| {
+            budget.queue_source_income_v1(&mirror.policy, &id, liability_until, ctx.daa_score, fee, queue, j)
+        })
+        .expect("checked")
+        .map_err(|why| budget_refused(bond, why))
     }
 
     pub(super) fn cancel_source_income_v1(
