@@ -2254,6 +2254,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                         .expect("the verifier's exact proof is included in an actual block");
                     assert_eq!(evidence.claim_id, claim);
                     if let Some(monitor) = tokenizer_monitor.as_ref() {
+                        assert_eq!(all_seats.len(), 5, "the complete registered class Panel is convicted and collected");
                         assert!(consumed.amount > 0 && consumed.collected > 0, "the staged court collects the producer leg");
                         monitor.assert_conviction(&chain, claim, bond, &evidence, &carriers);
                     } else if let Some(fault) = case.prefix_fault() {
