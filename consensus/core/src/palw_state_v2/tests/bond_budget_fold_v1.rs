@@ -261,7 +261,7 @@ fn round_draw_handles_overfull_migration_and_duplicate_span_without_partial_tick
     use crate::palw_execution_lane_v1::{PalwExecFinalV1, PalwExecScheduleV1};
     let mut policy = test_policy(1);
     policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 10 };
-    let p = armed_with(policy, None);
+    let p = armed_with(policy.clone(), None);
     let (registered, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
     let capital = registered.bond(&bond_key(1)).unwrap().collateral;
     for overfull in [false, true] {
