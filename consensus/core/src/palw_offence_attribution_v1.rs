@@ -1118,11 +1118,15 @@ pub fn palw_binding_identity_fault_v1(
     if profile.shape_profile_id() != target.class_id {
         return Ok(Some(PalwIdentityFaultV1::ClassNotTheClaims));
     }
-    if target.registered_semantics.as_ref().is_some_and(|row| !row.matches_context(ctx)) {
-        return Ok(Some(PalwIdentityFaultV1::RegisteredSemanticsNotTheClaims));
-    }
     match lane {
         PalwClaimSourceKindV1::FreePrompt => {
+            // FP carries the held model's registered semantic identities. CoreV1 attempts
+            // instead derive their artifact-independent context in J5 below, including its
+            // mandated zero fields. A registered FP descriptor must not convict that honest
+            // attempt merely because the held artifact has nonzero identities.
+            if target.registered_semantics.as_ref().is_some_and(|row| !row.matches_context(ctx)) {
+                return Ok(Some(PalwIdentityFaultV1::RegisteredSemanticsNotTheClaims));
+            }
             // J1, free prompt: the commitment's pin, recomputed from the context.
             if crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(ctx) != identity {
                 return Ok(Some(PalwIdentityFaultV1::JobNotTheClaims));
@@ -4229,6 +4233,20 @@ mod tests {
         let honest = floor_binding_for_tests_v1(&h64(0xD08), Form::Flat);
         let row = crate::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
             honest.shape_profile.shape_profile_id(), h64(0xA08), &honest.job_context, 31);
+        let mut attempt = attempt_target(&honest, h64(1));
+        let mut fp_metadata = row.clone();
+        fp_metadata.model_profile_id = h64(0xA160);
+        fp_metadata.runtime_class_id = h64(0xA160);
+        fp_metadata.tokenizer_id = h64(0xA161);
+        attempt.registered_semantics = Some(fp_metadata);
+        assert_eq!(palw_binding_identity_fault_v1(&attempt, &honest, rules(), true), Ok(None),
+            "the FP descriptor never overrides an honest CoreV1 attempt's canonical context");
+        let wrong_attempt = moved(&honest, |b| b.job_context.tokenizer_id = h64(0xBAD));
+        let mut wrong_target = attempt_target(&wrong_attempt, h64(1));
+        wrong_target.registered_semantics = attempt.registered_semantics.clone();
+        assert_eq!(palw_binding_identity_fault_v1(&wrong_target, &wrong_attempt, rules(), true),
+            Ok(Some(PalwIdentityFaultV1::ContextNotCanonical)),
+            "attempt metadata violations remain judged by the whole canonical context");
         for field in 0..5 {
             let mut binding = moved(&honest, |b| {
                 match field {
