@@ -162,7 +162,7 @@ def main():
     parser.add_argument('--salt', required=True)
     parser.add_argument('--out', required=True)
     parser.add_argument('--timeout', type=int, default=120)
-    parser.add_argument('--profile', choices=('native-v1', 'population-v1'), default='native-v1')
+    parser.add_argument('--profile', choices=('native-v1', 'population-v1', 'complete-v1'), default='native-v1')
     parser.add_argument('--bonds', type=int)
     parser.add_argument('--manifest-timeout', type=int, default=30)
     parser.add_argument('--resource-limits', help='optional predeclared construction-only resource limits JSON')
@@ -170,7 +170,7 @@ def main():
     binary = Path(args.binary).resolve(strict=True)
     assert binary.is_file() and os.access(binary, os.X_OK), 'supply the compiled opt-in private helper'
     assert len(args.salt) == 64 and int(args.salt, 16) != 0, 'an explicit nonzero 32-byte private salt is required'
-    assert (args.profile == 'population-v1') == (args.bonds is not None), 'population-v1 needs an explicit size; native-v1 uses its existing genesis'
+    assert (args.profile == 'population-v1') == (args.bonds is not None), 'population-v1 needs an explicit size; native-v1/complete-v1 use their existing genesis'
     limits = read_limits(args.resource_limits)  # fixed before the first factory child starts
     manifest_argv = [str(binary), '--private-probe-profile=' + args.profile, '--private-probe-salt=' + args.salt,
                      '--testnet', '--netsuffix=12', '--print-private-probe-profile']

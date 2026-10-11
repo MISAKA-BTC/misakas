@@ -25,6 +25,20 @@ profile and actual public registration/work/Final/pruned-join run remain
 separate requirements; construction-only process logs do not satisfy them.
 This candidate has scoped parse/diff checks; its Rust execution is centralized.
 
+The unpublished helper also accepts `--private-probe-profile=complete-v1`. Its
+factory retains the salt's exact genesis, registry, supply, difficulty bits and
+canonical economic basis, moves the TIR fence with its mirror to genesis, and
+arms only the kernel route, signed registration and complete-only Panel-free
+policy in addition to the existing explicit retirement mechanics policy. This
+constructor checks the full salted factory fingerprint before opening its owned
+database. It checks every production startup/value/dependency rule, except the
+three unreleased activation refusals; normal `Params::validate_palw_v2` and
+`ConfigBuilder` still refuse the profile. Sampled rewards remain disabled, the
+effective target remains 128, and PoW/material/court horizons are retained.
+It installs no artifact, capability, class, claim, receipt or Final. A finite
+construction run under this profile remains construction evidence until actual
+public registration/execution/prosecution/Final/material and pruning are run.
+
 | Requirement | Implementation and actual consumers | Verification scope |
 | --- | --- | --- |
 | AUTHORITY / HEADS | EVM, PALW, legacy overlay and UTXO imports require the established pruning target. The sidecar imports recheck and pin it through their durable batches. A historic authentic root cannot authorize arbitrary replacement of the live tip. Existing pruned fixtures establish context through `import_pruning_points`; root-negative and selected-child-witness coverage remains. | New target controls are native consensus API tests. Rust execution for the latest guards is centralized in the integration checkout; parse checks alone are not execution evidence. |

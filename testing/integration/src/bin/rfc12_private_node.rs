@@ -12,7 +12,7 @@ use kaspa_consensus_core::{
 use kaspad_lib::{
     args::Args,
     daemon::Runtime,
-    private_integration::{create_private_integration_core_with_runtime, private_probe_manifest},
+    private_integration::{create_private_integration_core_with_runtime, private_complete_check_params_v1, private_probe_manifest},
 };
 
 fn run() -> Result<(), String> {
@@ -43,11 +43,13 @@ fn run() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let population = match (profile, population_size.as_deref()) {
         ("native-v1", None) => None,
+        ("complete-v1", None) => None,
         ("population-v1", Some(size)) => Some(PrivatePopulationV1::new(size.parse().map_err(|_| "invalid private bond count")?)?),
-        _ => return Err("use native-v1 without a size, or population-v1 with explicit --private-probe-bonds".into()),
+        _ => return Err("use native-v1/complete-v1 without a size, or population-v1 with explicit --private-probe-bonds".into()),
     };
     let mut params = match population {
         Some(population) => derive_private_population_v1(&salt, population)?.params,
+        None if profile == "complete-v1" => private_complete_check_params_v1(&salt)?,
         None => palw_chain_params_v1(palw_drill_network_v1(), Some(&salt))?,
     };
     // TEST values, predeclared and fingerprinted. These are transport/mechanics
@@ -62,7 +64,15 @@ fn run() -> Result<(), String> {
         },
         legacy_evidence_horizon_daa: 5,
     });
-    let mut config: Config = ConfigBuilder::new(params).adjust_perf_params_to_consensus_params().build();
+    let mut config: Config = if profile == "complete-v1" {
+        // The feature-gated factory checked all policy/value/dependency rules;
+        // ordinary ConfigBuilder still refuses these unreleased activations.
+        let mut config = Config::new(params);
+        config.perf.adjust_to_consensus_params(&config.params);
+        config
+    } else {
+        ConfigBuilder::new(params).adjust_perf_params_to_consensus_params().build()
+    };
     config.palw_drill_genesis_salt = Some(salt);
     config.private_population = population;
     let args = Args::parse(args).map_err(|error| error.to_string())?;

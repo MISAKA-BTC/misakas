@@ -122,6 +122,9 @@ join and release-scale acceptance remain pending until the actual logs and
 commitments exist.
 
 The construction profile preserves the shipped canonical-work schedule as well.
+The salted T12 factory currently reports `canonicalWorkDaa: 0`; the generic
+mainnet/testnet/devnet/RC dormant-fence test does not describe T12. The manifest
+now exports this actual field rather than inferring it from another preset.
 Non-floor attempt evidence requires an active canonical-work fence at the claim's
 accepted DAA; floor claims are excluded regardless of their count. Supplying an
 artifact or advancing heartbeat DAA alone therefore cannot turn this profile into

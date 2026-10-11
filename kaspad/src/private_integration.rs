@@ -29,6 +29,67 @@ use std::{
 
 pub const PRIVATE_PROBE_MARKER_V1: &str = "rfc12-private-probe-v1.json";
 
+/// Exact complete-only private policy for a public registration/bootstrap probe.
+/// The test constructor alone can run this policy; ordinary startup continues
+/// to refuse the three unreleased activation fences. No class, capability,
+/// claim, trace, receipt, Final or initial monetary row is inserted here.
+pub fn private_complete_check_params_v1(
+    salt: &kaspa_consensus_core::config::drill::PalwDrillSaltV1,
+) -> Result<kaspa_consensus_core::config::params::Params, String> {
+    use kaspa_consensus_core::{
+        config::params::ForkActivation,
+        palw_native_settlement_v1::{PalwDnsRetirementV1, PalwSettlementPolicyV1},
+        palw_panel_free_v1::PalwPanelFreeFenceV1,
+        palw_tir_v1::PalwTirFenceV1,
+    };
+    let mut params = kaspa_consensus_core::config::drill::palw_chain_params_v1(palw_drill_network_v1(), Some(salt))?;
+    // T12 already arms the canonical economic bundle from genesis. The IR's
+    // mirror and its own prerequisite validator must agree at the probe height.
+    if params.palw_canonical_work_daa() != Some(0) {
+        return Err("the complete-check private factory requires the shipped T12 canonical economic basis at genesis".into());
+    }
+    params.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(ForkActivation::new(0)));
+    params.sync_palw_tir_v1();
+    params.validate_palw_tir_v1().map_err(|e| e.to_string())?;
+    params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
+    params.palw_signed_registration_v1 = Some(ForkActivation::new(0));
+    let panel_free = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(0), Vec::new());
+    panel_free.validate_value()?;
+    if panel_free.sampled_conformance_gates_reward
+        || panel_free.min_effective_bits != kaspa_consensus_core::palw_panel_free_v1::PALW_OPV_MIN_EFFECTIVE_BITS_V1
+    {
+        return Err("the complete-only private policy must retain the complete reward gate and full effective target".into());
+    }
+    params.palw_panel_free_v1 = Some(panel_free);
+    // These are the construction profile's explicit test-policy terms, never
+    // an economic, security or D/W approval. All real material windows remain.
+    params.palw_dns_retirement = Some(PalwDnsRetirementV1 {
+        activation: ForkActivation::new(1),
+        settlement: PalwSettlementPolicyV1 {
+            settled_anchor_depth: 1,
+            unique_mature_work: 1,
+            max_operator_permille: 1000,
+            max_class_permille: 1000,
+        },
+        legacy_evidence_horizon_daa: 5,
+    });
+    validate_private_complete_relations(&params)?;
+    Ok(params)
+}
+
+fn validate_private_complete_relations(params: &kaspa_consensus_core::config::params::Params) -> Result<(), String> {
+    // Only the explicit release-arming refusal is excepted. Every other startup
+    // invariant, including the TIR mirror, economics, lifecycle fence audit and
+    // the fixed Panel-free value, is checked by its production implementation.
+    params.palw_panel_free_v1.as_ref().ok_or("missing private Panel-free policy")?.validate_value()?;
+    let mut checked = params.clone();
+    checked.palw_probabilistic_constraints_v1 = None;
+    checked.palw_signed_registration_v1 = None;
+    checked.palw_panel_free_v1 = None;
+    checked.validate_palw_v1().map_err(|e| e.to_string())?;
+    checked.validate_palw_v2().map_err(|e| e.to_string())
+}
+
 /// Test-policy identity, not a release result or economic/security approval.
 pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
     let genesis_money = config.palw_drill_genesis_salt.as_ref().map(|salt| {
@@ -78,6 +139,9 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
         })),
         "retirement": retirement,
         "skipProofOfWork": config.params.skip_proof_of_work,
+        "canonicalWorkDaa": config.params.palw_canonical_work_daa(),
+        "completeOnlyPrivatePolicy": config.params.palw_probabilistic_constraints_v1.is_some()
+            && config.params.palw_signed_registration_v1.is_some() && config.params.palw_panel_free_v1.is_some(),
         "releaseApproval": false,
         "securitySoundnessMeasured": false,
     })
@@ -129,8 +193,22 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
             return Err("a private probe must never name a public genesis monetary outpoint".into());
         }
     }
-    config.params.validate_palw_v1().map_err(|error| error.to_string())?;
-    config.params.validate_palw_v2().map_err(|error| error.to_string())?;
+    let private_complete = config.params.palw_probabilistic_constraints_v1.is_some()
+        || config.params.palw_signed_registration_v1.is_some()
+        || config.params.palw_panel_free_v1.is_some();
+    if private_complete {
+        if config.private_population.is_some() {
+            return Err("the complete-only private bootstrap profile has no population override".into());
+        }
+        let expected = private_complete_check_params_v1(salt)?;
+        if config.params.consensus_params_id() != expected.consensus_params_id() {
+            return Err("private complete-check Config differs from its exact salted factory policy".into());
+        }
+        validate_private_complete_relations(&config.params)?;
+    } else {
+        config.params.validate_palw_v1().map_err(|error| error.to_string())?;
+        config.params.validate_palw_v2().map_err(|error| error.to_string())?;
+    }
     let mut applied = config.clone();
     args.apply_to_config(&mut applied);
     if applied.params.consensus_params_id() != config.params.consensus_params_id()
@@ -210,6 +288,50 @@ pub fn create_private_integration_core_with_runtime(
 mod tests {
     use super::*;
     use kaspa_consensus_core::config::drill::{PalwDrillSaltV1, palw_chain_params_v1};
+
+    #[test]
+    fn private_complete_policy_is_exact_value_valid_and_still_publicly_refused() {
+        let salt = PalwDrillSaltV1::from_bytes([0x15; 32]).unwrap();
+        let baseline = palw_chain_params_v1(palw_drill_network_v1(), Some(&salt)).unwrap();
+        let params = private_complete_check_params_v1(&salt).unwrap();
+        assert_eq!(params.genesis.hash, baseline.genesis.hash);
+        assert_eq!(params.genesis.bits, baseline.genesis.bits);
+        assert!(!params.skip_proof_of_work);
+        assert_eq!(params.palw_canonical_work_daa(), Some(0));
+        assert!(params.validate_palw_v2().is_err(), "ordinary startup keeps its release refusal");
+        let opv = params.palw_panel_free_v1.as_ref().unwrap();
+        assert!(!opv.sampled_conformance_gates_reward);
+        assert_eq!(opv.min_effective_bits, 128);
+        opv.validate_value().unwrap();
+        validate_private_complete_relations(&params).unwrap();
+        let mut config = Config::new(params);
+        config.palw_drill_genesis_salt = Some(salt);
+        let args = Args {
+            testnet: true,
+            testnet_suffix: 12,
+            disable_dns_seeding: true,
+            outbound_target: 0,
+            disable_upnp: true,
+            listen: Some("127.0.0.1:53001".parse().unwrap()),
+            rpclisten: Some("127.0.0.1:53002".parse().unwrap()),
+            appdir: Some(std::env::temp_dir().join("unopened-rfc12-complete-probe").display().to_string()),
+            ..Args::default()
+        };
+        validate_private_probe(&args, &config).unwrap();
+        let manifest = private_probe_manifest(&config);
+        assert_eq!(manifest["canonicalWorkDaa"], 0);
+        assert_eq!(manifest["completeOnlyPrivatePolicy"], true);
+        assert_eq!(manifest["releaseApproval"], false);
+        let mut changed = config.clone();
+        changed.params.palw_panel_free_v1.as_mut().unwrap().min_effective_bits = 2;
+        assert!(validate_private_probe(&args, &changed).unwrap_err().contains("exact salted factory"));
+        let mut changed = config.clone();
+        changed.params.palw_panel_free_v1.as_mut().unwrap().sampled_conformance_gates_reward = true;
+        assert!(validate_private_probe(&args, &changed).is_err());
+        let mut changed = config.clone();
+        changed.params.palw_tir_v1.as_mut().unwrap().activation = kaspa_consensus_core::config::params::ForkActivation::new(2);
+        assert!(validate_private_probe(&args, &changed).is_err(), "stale mirror/changed schedule is not an exception");
+    }
 
     #[test]
     fn private_constructor_refuses_public_identity_skipped_work_and_uncontrolled_peers() {
