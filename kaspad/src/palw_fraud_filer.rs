@@ -46,6 +46,8 @@ mod constraint;
 pub(super) mod input;
 #[path = "palw_fraud_filer_prefix.rs"]
 mod prefix;
+#[path = "palw_filer_tokenizer.rs"]
+mod tokenizer;
 pub(super) use input::{palw_fraud_filer_fp_input_v1, palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};
 
 use super::reporter_filer::{
@@ -389,6 +391,7 @@ pub(super) struct PalwFraudFilerCaseV1 {
     constraint_done: bool,
     prefix_plan: Option<prefix::PrefixPlanV1>,
     prefix_complete: bool,
+    rendering_done: bool,
     prefix_budget: u64,
     _prefix_reservation: Option<Arc<crate::palw_memory_ledger::PalwMemoryReservationV1>>,
     pub(super) runs: u8,
@@ -429,6 +432,7 @@ impl PalwFraudFilerCaseV1 {
             constraint_done: false,
             prefix_plan: None,
             prefix_complete: false,
+            rendering_done: false,
             prefix_budget: 0,
             _prefix_reservation: None,
             runs: 0,
@@ -616,6 +620,11 @@ impl PalwFraudFilerCaseV1 {
             }
             _ => Err("the answer has another carriage than the probe".into()),
         }
+    }
+
+    /// Public semantics cannot certify an arithmetic run which the host never completed.
+    fn may_finish_semantics_v1(&self, semantic_ready: bool) -> bool {
+        semantic_ready && self.arithmetic_matched && matches!(self.verdict, PalwFraudFilerVerdictV1::SemanticPending)
     }
 
     /// Apply the authenticated worker result, including the input accumulator and its shared memory ticket.
@@ -1157,6 +1166,7 @@ fn palw_fraud_filer_registered_preflight_v1(
     answer: &PalwDaBuiltAnswerV1,
     fp_job: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
     prefix_verified: bool,
+    rendering_verified: bool,
 ) -> Result<bool, String> {
     if target.registered_semantics.is_none() {
         return Ok(true);
@@ -1189,9 +1199,9 @@ fn palw_fraud_filer_registered_preflight_v1(
         {
             return Ok(false);
         }
-        if job.is_constraint() {
-            // Root equality is only the immutable selection check. The registered tokenizer
-            // rendering court must also certify correspondence before matching arithmetic is Honest.
+        if job.is_constraint() && !rendering_verified {
+            // Root equality is only the immutable selection check. The whole authenticated
+            // tokenizer/table correspondence must also pass before matching arithmetic is Honest.
             return Ok(false);
         }
         if job.is_prefix_state() && !prefix_verified {
@@ -2029,6 +2039,10 @@ impl PalwPanelService {
                 let constraint_done = case.constraint_done;
                 let previous_prefix = case.prefix_plan.clone();
                 let prefix_complete = case.prefix_complete;
+                let previous_rendering_done = case.rendering_done;
+                let tokenizer_backends = self.backends();
+                let tokenizer_session = session.clone();
+                let tokenizer_chain_classes = self.config.chain_classes;
                 let own_ids = match &case.verdict {
                     PalwFraudFilerVerdictV1::Mismatch(run) => run.own_output_ids.clone(),
                     _ => Vec::new(),
@@ -2089,10 +2103,71 @@ impl PalwPanelService {
                     };
                     let mut evaluate_prefix = evaluate_prefix;
                     let prefix_filing = evaluate_prefix()?;
-                    let semantic_ready =
-                        palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, fp_job.as_ref(), prefix_complete)
-                            .unwrap_or(false);
+                    // The outside verifier owns this D7 model/tokenizer material. Neither the
+                    // producer nor an injected verdict supplies this path or its authenticated bytes.
+                    let mut tokenizer_check = None;
+                    let mut rendering_done = previous_rendering_done;
+                    if !rendering_done
+                        && target.registered_semantics.as_ref().is_some_and(|row| row.rendering_rule.is_some())
+                        && let Some(job) = fp_job.as_ref().filter(|job| job.is_constraint())
+                        && let PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial)) = &answer
+                    {
+                        let check = (|| {
+                            let path = tokenizer_backends
+                                .held_tokenizer_path_or_chain_v1(target.class_id, target.artifact_root, |id| {
+                                    if tokenizer_chain_classes {
+                                        tokenizer_session.palw_registered_class_carriage_v1(id)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .ok_or("the outside verifier does not hold the registered tokenizer file")?;
+                            let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(job)
+                                .ok_or("the outside verifier does not hold the registered token table")?;
+                            tokenizer::check_held_tokenizer_v1(&path, &target, initial.binding(), job, &table, maximum as usize)
+                        })();
+                        match check {
+                            Ok(check) => {
+                                rendering_done = check.fault.is_none();
+                                tokenizer_check = Some(check);
+                            }
+                            Err(why) => debug!(
+                                "[{PALW_PANEL}] claim {}: registered tokenizer verification remains pending: {why}",
+                                target.claim_id
+                            ),
+                        }
+                    }
+                    let tokenizer_filing = tokenizer_check
+                        .as_mut()
+                        .and_then(|check| check.fault.take())
+                        .map(|contradiction| {
+                            let built =
+                                kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                                    target.claim_id,
+                                    target.executor_bond,
+                                    contradiction,
+                                    None,
+                                    maximum,
+                                )
+                                .map_err(|e| e.to_string())?;
+                            PalwConvictionFilingV1::of_offence(built.object, target.claim_id, file_by, PalwFilingOriginV1::Replay)
+                                .filter(|filing| (filing.offence_key, filing.evidence_id) == (built.offence_id, built.evidence_id))
+                                .ok_or_else(|| "the tokenizer reporter key differs from its proof builder".to_string())
+                        })
+                        .transpose()?;
+                    let semantic_ready = palw_fraud_filer_registered_preflight_v1(
+                        &target,
+                        rules,
+                        &answer,
+                        fp_job.as_ref(),
+                        prefix_complete,
+                        rendering_done,
+                    )
+                    .unwrap_or(false);
                     let evaluate = || {
+                        if tokenizer_filing.is_some() {
+                            return Ok((tokenizer_filing, previous_plan, constraint_done));
+                        }
                         if prefix_filing.is_some() {
                             return Ok((prefix_filing, previous_plan, constraint_done));
                         }
@@ -2142,15 +2217,18 @@ impl PalwPanelService {
                         // yields to arithmetic localization, never to an unproved conviction.
                         Ok((filing, Some(plan), true))
                     };
-                    evaluate().map(|result| (result, semantic_ready, prefix_plan, prefix_complete))
+                    evaluate().map(|result| (result, semantic_ready, prefix_plan, prefix_complete, rendering_done, tokenizer_check))
                 })
                 .await
                 .unwrap_or_else(|e| Err(format!("the public proof worker failed: {e}")));
                 match proof {
-                    Ok(((Some(filing), _, _), _, prefix_plan, prefix_complete)) => {
+                    Ok(((Some(filing), _, _), _, prefix_plan, prefix_complete, rendering_done, _tokenizer_check)) => {
                         let case = book.cases.get_mut(&claim).expect("pursued case");
                         case.prefix_plan = prefix_plan;
                         case.prefix_complete = prefix_complete;
+                        case.rendering_done = rendering_done;
+                        // Keep the tokenizer scratch/evidence ticket alive until the reporter
+                        // has copied the normal filing into its independently budgeted queue.
                         // The public proof refutes the liable Valid signers as well as the
                         // executor. Keep it before settlement removes this case from pursuit;
                         // the existing false-Valid scanner independently checks every receipt.
@@ -2184,16 +2262,12 @@ impl PalwPanelService {
                         }
                         continue;
                     }
-                    Ok(((None, plan, complete), semantic_ready, prefix_plan, prefix_complete)) => {
+                    Ok(((None, plan, complete), semantic_ready, prefix_plan, prefix_complete, rendering_done, _tokenizer_check)) => {
                         let case = book.cases.get_mut(&claim).expect("pursued case");
                         case.prefix_plan = prefix_plan;
                         case.prefix_complete = prefix_complete;
-                        if semantic_ready
-                            && book
-                                .cases
-                                .get(&claim)
-                                .is_some_and(|case| matches!(case.verdict, PalwFraudFilerVerdictV1::SemanticPending))
-                        {
+                        case.rendering_done = rendering_done;
+                        if case.may_finish_semantics_v1(semantic_ready) {
                             let case = book.cases.get_mut(&claim).expect("pursued above");
                             case.verdict = PalwFraudFilerVerdictV1::Honest;
                             case.deferred_public = None;
@@ -3118,21 +3192,21 @@ pub(super) mod tests {
             da_signer_liability: true,
         };
         let answer = PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event.clone()));
-        assert!(palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, Some(&job), false).unwrap());
+        assert!(palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, Some(&job), false, false).unwrap());
         assert!(
-            !palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, None, false).unwrap(),
+            !palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, None, false, false).unwrap(),
             "a matching replay cannot erase its job obligation"
         );
         let mut wrong = target.clone();
         wrong.registered_semantics.as_mut().unwrap().tokenizer_id = Hash64::from_u64_word(0xBAD);
         assert!(
-            !palw_fraud_filer_registered_preflight_v1(&wrong, rules, &answer, Some(&job), false).unwrap(),
+            !palw_fraud_filer_registered_preflight_v1(&wrong, rules, &answer, Some(&job), false, false).unwrap(),
             "matching arithmetic does not clear J8"
         );
         wrong = target.clone();
         wrong.execution_root = Hash64::from_u64_word(0xBAD);
         assert!(
-            palw_fraud_filer_registered_preflight_v1(&wrong, rules, &answer, Some(&job), false).is_err(),
+            palw_fraud_filer_registered_preflight_v1(&wrong, rules, &answer, Some(&job), false, false).is_err(),
             "a foreign row cannot clear the semantic obligation"
         );
         let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(8192), || None);
@@ -3156,6 +3230,8 @@ pub(super) mod tests {
         assert_eq!(ledger.reserved_bytes(), 1024, "only the authenticated public job survives a matching replay");
         assert_eq!(book.held_runs(), 0);
         assert!(book.cases[&c.claim_id].pursued());
+        assert!(book.cases[&c.claim_id].may_finish_semantics_v1(true));
+        assert!(!book.cases[&c.claim_id].may_finish_semantics_v1(false));
         assert!(!book.cases[&c.claim_id].release_pending);
         assert_eq!(book.cases[&c.claim_id].public_fp_job_v1(), Some(&job));
         assert!(book.next_replay_at(300).is_none(), "the semantic court requires a binding, not another arithmetic run");
@@ -3196,6 +3272,7 @@ pub(super) mod tests {
         assert!(case.pursued());
         assert!(!case.release_pending);
         assert!(!case.arithmetic_matched);
+        assert!(!case.may_finish_semantics_v1(true), "even complete public semantics cannot certify a refused arithmetic run");
         assert!(case.fp_bootstrap.is_none(), "a refusal keeps only the public descriptor rather than accumulated input ids");
         assert_eq!(case.public_fp_job_v1(), Some(&job));
         assert_eq!(book.next_replay_at(300), None, "a backend refusal pursues its public court without an infinite host retry");

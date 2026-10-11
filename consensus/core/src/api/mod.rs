@@ -1144,7 +1144,7 @@ pub trait ConsensusApi: Send + Sync {
         me: crate::palw_state_v2::PalwBondKeyV2,
         claims: Vec<Hash64>,
     ) -> Vec<crate::palw_state_v2::PalwFraudFilerCandidateV1> {
-        if claims.len() > crate::palw_legacy_public_filer_fold_v1::PALW_FILER_EXPLICIT_TARGETS_V1 {
+        if claims.len() > crate::palw_state_v2::PALW_FILER_EXPLICIT_TARGETS_V1 {
             return Vec::new();
         }
         let wanted: std::collections::BTreeSet<_> = claims.into_iter().collect();

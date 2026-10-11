@@ -150,7 +150,7 @@ mod palw_legacy_answer_chunks_fold_v2;
 #[path = "palw_terminal_carriage_fold_v1.rs"]
 mod palw_terminal_carriage_fold_v1;
 pub use palw_legacy_public_filer_fold_v1::{
-    PalwFraudFilerCandidateV1, PalwFraudFilerReservationStatusV1, PalwFraudFilerStatusV1, PalwLegacyDisputeObservationV1,
+    PALW_FILER_EXPLICIT_TARGETS_V1, PalwFraudFilerCandidateV1, PalwFraudFilerReservationStatusV1, PalwFraudFilerStatusV1, PalwLegacyDisputeObservationV1,
     PalwLegacyDisputeViewV1, palw_bond_text_v1, palw_legacy_dispute_reservation_check_v1,
 };
 // Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's fold — the engine's journal as deltas 190/191, the capital assignment's arm (tag

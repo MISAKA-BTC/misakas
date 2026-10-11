@@ -67,7 +67,7 @@ pub(super) fn check_held_tokenizer_v1(
     }
     let table_opening = PalwTokenTableOpeningV1 { id, rendering: table.entries[id as usize].clone(), opening };
     let fault = if palw_tokenizer_table_fault_v1(target, binding, job, &bytes, &table_opening).map_err(|e| e.to_string())? {
-        Some(PalwPanelContradictionV1::TokenizerTableMismatch { binding: binding.clone(), job: job.clone(), tokenizer_bytes: bytes, table_opening })
+        Some(PalwPanelContradictionV1::TokenizerTableMismatch { binding: binding.clone(), job: Box::new(job.clone()), tokenizer_bytes: bytes, table_opening })
     } else { None };
     Ok(PalwTokenizerCheckV1 { fault, _reservation: reserved })
 }
