@@ -35,6 +35,9 @@ use kaspa_muhash::MuHash;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
 use std::{collections::BTreeSet, sync::Arc, thread::JoinHandle, time::Duration};
 
+#[path = "palw_service_tiled_e2e.rs"]
+mod tiled;
+
 struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,
     rejected: bool,
@@ -97,6 +100,7 @@ fn fixture_config(
     fp_input_bootstrap: bool,
     before_job_retention: bool,
     constraint_v2: bool,
+    tiled: bool,
 ) -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
     let mut params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
     let PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else { unreachable!() };
@@ -147,7 +151,8 @@ fn fixture_config(
         params.palw_fp_constraint_v2 = Some(ForkActivation::new(0));
     }
     params.validate_palw_v2().expect("fixture keys and the ordinary decode-rules fence validate");
-    params.palw_legacy_public_filer_v1 = Some(ForkActivation::new(if before_job_retention { 1060 } else { 0 }));
+    params.palw_legacy_public_filer_v1 =
+        Some(ForkActivation::new(if before_job_retention { if tiled { 1200 } else { 1060 } } else { 0 }));
     params.sync_palw_legacy_public_filer_v1();
     if fp_input_bootstrap {
         // Reacquiring omitted/pruned IDs uses LG14-B's binding/PromptIds bootstrap.
@@ -596,6 +601,26 @@ async fn fresh_public_bond_service_convicts_a_constraint_beaten_token_without_jo
     fresh_public_service(PublicCase::UnretainedConstraintBeaten).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_bond_service_registered_tiled_constraint_forbidden_token() {
+    fresh_public_service(PublicCase::TiledConstraintForbidden).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_bond_service_registered_tiled_constraint_premature_stop() {
+    fresh_public_service(PublicCase::TiledConstraintStop).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles() {
+    fresh_public_service(PublicCase::TiledConstraintBeaten).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_bond_service_registered_tiled_constraint_withheld_selected_tile_defaults() {
+    fresh_public_service(PublicCase::TiledConstraintWithheld).await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublicCase {
     Withholding,
@@ -616,6 +641,10 @@ enum PublicCase {
     UnretainedConstraintForbidden,
     UnretainedConstraintStop,
     UnretainedConstraintBeaten,
+    TiledConstraintForbidden,
+    TiledConstraintStop,
+    TiledConstraintBeaten,
+    TiledConstraintWithheld,
 }
 
 impl PublicCase {
@@ -626,6 +655,9 @@ impl PublicCase {
         matches!(self, Self::PrunedForeignFpV3Job | Self::PrunedHonestFpV3Job | Self::PrunedWithheldFpV3Input) || self.unretained_fp()
     }
     fn unretained_fp(self) -> bool {
+        if self.tiled() {
+            return true;
+        }
         matches!(
             self,
             Self::UnretainedForeignFpV3Job
@@ -654,6 +686,7 @@ impl PublicCase {
                 | Self::UnretainedWithheldFpV3Binding
                 | Self::UnretainedWithheldFpV3Job
                 | Self::UnretainedWithheldLargeConstraintJob
+                | Self::TiledConstraintWithheld
         )
     }
     fn reacquire_honest(self) -> bool {
@@ -667,9 +700,9 @@ impl PublicCase {
     }
     fn constraint_fault(self) -> Option<u8> {
         match self {
-            Self::UnretainedConstraintForbidden => Some(1),
-            Self::UnretainedConstraintStop => Some(2),
-            Self::UnretainedConstraintBeaten => Some(3),
+            Self::UnretainedConstraintForbidden | Self::TiledConstraintForbidden => Some(1),
+            Self::UnretainedConstraintStop | Self::TiledConstraintStop => Some(2),
+            Self::UnretainedConstraintBeaten | Self::TiledConstraintBeaten | Self::TiledConstraintWithheld => Some(3),
             _ => None,
         }
     }
@@ -677,13 +710,19 @@ impl PublicCase {
         self.large_constraint() || self.constraint_fault().is_some()
     }
     fn exact_fault(self) -> bool {
-        self.identity_fault() || self.constraint_fault().is_some()
+        self.identity_fault() || (self.constraint_fault().is_some() && !self.da_default())
     }
     fn answers_input(self) -> bool {
         self.reacquire_honest() || self.constraint_fault().is_some()
     }
     fn large_constraint(self) -> bool {
         matches!(self, Self::UnretainedLargeConstraintJob | Self::UnretainedWithheldLargeConstraintJob)
+    }
+    fn tiled(self) -> bool {
+        matches!(
+            self,
+            Self::TiledConstraintForbidden | Self::TiledConstraintStop | Self::TiledConstraintBeaten | Self::TiledConstraintWithheld
+        )
     }
 }
 
@@ -712,9 +751,16 @@ fn selection_constraint_table(tokenizer_id: Hash64) -> kaspa_consensus_core::pal
 fn selection_constraint_job(
     job: &mut kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
 ) -> Arc<kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1> {
+    let table = Arc::new(selection_constraint_table(job.tokenizer_id));
+    selection_constraint_job_with_table(job, table)
+}
+
+fn selection_constraint_job_with_table(
+    job: &mut kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    table: Arc<kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1>,
+) -> Arc<kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1> {
     use kaspa_consensus_core::palw_decode_constraint_v1::*;
     use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
-    let table = Arc::new(selection_constraint_table(job.tokenizer_id));
     let constraint = PalwDecodeConstraintV1 {
         version: 1,
         compiler_id: Hash64::from_u64_word(0xC015_0100),
@@ -927,6 +973,141 @@ fn public_fp_job(
     (outcome, event, Some((commitment, prompt.into_iter().map(|t| t as u32).collect())))
 }
 
+async fn certify_fp_lane(
+    chain: &mut Chain,
+    floats: &mut [Funding],
+    profile: kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    tiled: bool,
+) {
+    let class_id = profile.shape_profile_id();
+    let publish = PalwConsensusObjectV2::ClassLaneCertified {
+        class_id,
+        lane: kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt,
+        profile: Box::new(profile.clone()),
+    };
+    let reachable = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&profile);
+    let covered = chain.tc.palw_certified_families_v1().iter().any(|(lane, _, row)| {
+        *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt && reachable.is_subset(&row.family.kernel_ids)
+    });
+    if !covered {
+        // Carry the normal public drill evidence; the chain itself grades every fault.
+        // A build-local certificate or test callback does not certify the on-chain lane.
+        let evidence = misaka_palw_base0::e2e_drill::rc_free_prompt_evidence_v1(if tiled {
+            misaka_palw_base0::e2e_drill::PalwRcFamilyV1::Qwen25A16
+        } else {
+            misaka_palw_base0::e2e_drill::PalwRcFamilyV1::Base0
+        })
+        .unwrap();
+        let certificate = PalwConsensusObjectV2::FamilyCertified {
+            evidence: Box::new(kaspa_consensus_core::palw_state_v2::PalwCertificationEvidenceV1::FreePrompt(evidence)),
+        };
+        let carriers =
+            kaspa_consensus_core::palw_state_v2::palw_object_chunks_v1(&certificate).unwrap().unwrap_or_else(|| vec![certificate]);
+        let count = carriers.len();
+        for carrier in carriers {
+            chain.send(0, &carrier, &mut floats[0], &[]).await;
+        }
+        assert!(
+            chain
+                .tc
+                .palw_certified_families_v1()
+                .iter()
+                .any(|(lane, _, row)| *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt
+                    && reachable.is_subset(&row.family.kernel_ids))
+        );
+        eprintln!("[service-public] normal FP family certification accepted from {count} public drill carriers");
+    }
+    chain.send(0, &publish, &mut floats[0], &[]).await;
+    eprintln!("[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified");
+}
+
+async fn carry_fp_commitment(
+    chain: &mut Chain,
+    floats: &mut [Funding],
+    commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    prompt: &Vec<u32>,
+    large: bool,
+) -> Hash64 {
+    let carried = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&commitment.job, prompt);
+    assert_eq!(&carried, prompt, "ordinary PublicDA FP carries the hash-bound user prompt");
+    let quote = chain
+        .tc
+        .palw_fp_commitment_price_v1(
+            commitment.job.class_id,
+            carried.clone(),
+            commitment.job.prompt_tokens,
+            commitment.decode_tokens_executed,
+            commitment.work_leaves,
+            Some(chain.bonds[0].0),
+        )
+        .unwrap()
+        .price
+        .expect("the ordinary registry admits and prices this FP job");
+    let signer = kaspa_pq_validator_core::ValidatorKey::from_seed([0xB0; 32]);
+    let build = |fee| {
+        if large {
+            return large_constraint_transaction(commitment.clone(), carried.clone(), &floats[0], fee);
+        }
+        signer
+            .build_fp_commitment_tx(
+                chain.network_domain,
+                chain.config.params.palw_prompt_ids_form_v1(),
+                commitment.clone(),
+                carried.clone(),
+                kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: quote.quanta, pwu: quote.pwu },
+                floats[0].0,
+                &floats[0].1,
+                fee,
+            )
+            .unwrap()
+    };
+    let probe = build(250_000);
+    let params = &chain.config.params;
+    let mass = kaspa_consensus_core::mass::MassCalculator::new(
+        params.mass_per_tx_byte,
+        params.mass_per_script_pub_key_byte,
+        params.mass_per_sig_op,
+        params.storage_mass_parameter,
+    );
+    if large {
+        let masses = mass.calc_non_contextual_masses(&probe);
+        let job_bytes = borsh::object_length(&commitment.job).unwrap();
+        assert!(
+            job_bytes > 100_000 && job_bytes as u64 <= kaspa_consensus_core::palw_legacy_held_da_v2::PALW_LEGACY_FP_JOB_MAX_BYTES_V2
+        );
+        assert!(masses.transient_mass <= params.max_block_mass);
+        assert!(masses.transient_mass > params.max_block_mass * 99 / 100, "exercise the real ordinary transaction mass boundary");
+        eprintln!(
+            "[service-public] large constraint job bytes {job_bytes}, ordinary transaction transient mass {} / {}",
+            masses.transient_mass, params.max_block_mass
+        );
+    }
+    let fee = relay_fee_for_compute_mass(mass.calc_non_contextual_masses(&probe).compute_mass).max(250_000);
+    let mut validated = MutableTransaction::from_tx(build(fee));
+    chain.tc.validate_mempool_transaction(&mut validated, &Default::default()).unwrap();
+    let tx = validated.tx.as_ref().clone();
+    let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment);
+    let block = chain.heartbeat(vec![tx.clone()]).await;
+    assert!(block.transactions.iter().any(|t| t.id() == tx.id()));
+    chain.heartbeat(vec![]).await;
+    let output = tx.outputs.last().unwrap();
+    floats[0] = (
+        TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
+        UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false),
+    );
+    let view = chain.view(claim);
+    assert_eq!(
+        view.job_identity,
+        kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment),
+        "the normal block fold pins the accepted FP job"
+    );
+    eprintln!(
+        "[service-public] ordinary FP Job V{} admission: claim {claim}, {} quanta, {} pwu, fee {fee}",
+        commitment.job.version, quote.quanta, quote.pwu
+    );
+    claim
+}
+
 async fn fresh_public_service(case: PublicCase) {
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
     let (config, bundle, premine, mut floats) = fixture_config(
@@ -934,54 +1115,29 @@ async fn fresh_public_service(case: PublicCase) {
         case.pruned_fp() || case == PublicCase::HonestFpV3Job,
         case.unretained_fp(),
         case.constraint(),
+        case.tiled(),
     );
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
+    let tiled = case.tiled().then(|| tiled::TiledFixture::new(&chain));
+    if let Some(fixture) = &tiled {
+        fixture.register(&mut chain, &mut floats).await;
+    }
     if case.is_fp() {
         // Derived-work pricing requires the registered graph to be publicly carried. The
         // ordinary ClassLaneCertified arm authenticates it by the existing class id and
         // certified family; do not inject the profile into state or waive the price gate.
-        let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
-            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
-        )
-        .unwrap();
-        assert_eq!(profile.shape_profile_id(), chain.bundle.base_class_id);
-        let publish = PalwConsensusObjectV2::ClassLaneCertified {
-            class_id: chain.bundle.base_class_id,
-            lane: kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt,
-            profile: Box::new(profile.clone()),
-        };
-        let reachable = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&profile);
-        let covered = chain.tc.palw_certified_families_v1().iter().any(|(lane, _, row)| {
-            *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt
-                && reachable.is_subset(&row.family.kernel_ids)
+        let profile = tiled.as_ref().map(|f| f.profile.clone()).unwrap_or_else(|| {
+            kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
+                kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+            )
+            .unwrap()
         });
-        if !covered {
-            // Carry the normal public drill evidence; the chain itself grades every fault.
-            // A build-local certificate or test callback does not certify the on-chain lane.
-            let evidence =
-                misaka_palw_base0::e2e_drill::rc_free_prompt_evidence_v1(misaka_palw_base0::e2e_drill::PalwRcFamilyV1::Base0).unwrap();
-            let certificate = PalwConsensusObjectV2::FamilyCertified {
-                evidence: Box::new(kaspa_consensus_core::palw_state_v2::PalwCertificationEvidenceV1::FreePrompt(evidence)),
-            };
-            let carriers =
-                kaspa_consensus_core::palw_state_v2::palw_object_chunks_v1(&certificate).unwrap().unwrap_or_else(|| vec![certificate]);
-            let count = carriers.len();
-            for carrier in carriers {
-                chain.send(0, &carrier, &mut floats[0], &[]).await;
-            }
-            assert!(
-                chain
-                    .tc
-                    .palw_certified_families_v1()
-                    .iter()
-                    .any(|(lane, _, row)| *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt
-                        && reachable.is_subset(&row.family.kernel_ids))
-            );
-            eprintln!("[service-public] normal FP family certification accepted from {count} public drill carriers");
+        let class_id = profile.shape_profile_id();
+        if !case.tiled() {
+            assert_eq!(class_id, chain.bundle.base_class_id);
         }
-        chain.send(0, &publish, &mut floats[0], &[]).await;
-        eprintln!("[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified");
+        certify_fp_lane(&mut chain, &mut floats, profile, case.tiled()).await;
     }
     let signed_bond = PalwBondKeyV2(TransactionOutpoint::new(Default::default(), 0));
     let public_key = card_pubkey(OUTSIDER);
@@ -1020,7 +1176,16 @@ async fn fresh_public_service(case: PublicCase) {
     let maturity = chain.config.params.palw_bond_maturity.unwrap().window_daa;
     chain.advance(registered_before + maturity + 1).await;
     eprintln!("[service-public] ordinary bond registered before DAA {registered_before}, maturity {maturity}, now {}", chain.daa());
+    if let Some(fixture) = &tiled {
+        fixture.prepare_panel(&mut chain, &mut floats).await;
+    }
+    let mut tiled_events = std::collections::BTreeMap::new();
     let foreign = (case != PublicCase::Withholding).then(|| {
+        if let Some(fixture) = &tiled {
+            let (outcome, event, job, events) = fixture.produce(&chain, case.constraint_fault().unwrap());
+            tiled_events = events;
+            return (outcome, event, job);
+        }
         if case.is_fp() {
             return public_fp_job(&chain, case.identity_fault(), case.large_constraint(), case.constraint_fault());
         }
@@ -1046,85 +1211,7 @@ async fn fresh_public_service(case: PublicCase) {
         (outcome, event, None)
     });
     let claim = if let Some((_, _, Some((commitment, prompt)))) = &foreign {
-        let carried = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&commitment.job, prompt);
-        assert_eq!(&carried, prompt, "ordinary PublicDA FP carries the hash-bound user prompt");
-        let quote = chain
-            .tc
-            .palw_fp_commitment_price_v1(
-                commitment.job.class_id,
-                carried.clone(),
-                commitment.job.prompt_tokens,
-                commitment.decode_tokens_executed,
-                commitment.work_leaves,
-                Some(chain.bonds[0].0),
-            )
-            .unwrap()
-            .price
-            .expect("the ordinary registry admits and prices this FP job");
-        let signer = kaspa_pq_validator_core::ValidatorKey::from_seed([0xB0; 32]);
-        let build = |fee| {
-            if case.large_constraint() {
-                return large_constraint_transaction(commitment.clone(), carried.clone(), &floats[0], fee);
-            }
-            signer
-                .build_fp_commitment_tx(
-                    chain.network_domain,
-                    chain.config.params.palw_prompt_ids_form_v1(),
-                    commitment.clone(),
-                    carried.clone(),
-                    kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: quote.quanta, pwu: quote.pwu },
-                    floats[0].0,
-                    &floats[0].1,
-                    fee,
-                )
-                .unwrap()
-        };
-        let probe = build(250_000);
-        let params = &chain.config.params;
-        let mass = kaspa_consensus_core::mass::MassCalculator::new(
-            params.mass_per_tx_byte,
-            params.mass_per_script_pub_key_byte,
-            params.mass_per_sig_op,
-            params.storage_mass_parameter,
-        );
-        if case.large_constraint() {
-            let masses = mass.calc_non_contextual_masses(&probe);
-            let job_bytes = borsh::object_length(&commitment.job).unwrap();
-            assert!(
-                job_bytes > 100_000
-                    && job_bytes as u64 <= kaspa_consensus_core::palw_legacy_held_da_v2::PALW_LEGACY_FP_JOB_MAX_BYTES_V2
-            );
-            assert!(masses.transient_mass <= params.max_block_mass);
-            assert!(masses.transient_mass > params.max_block_mass * 99 / 100, "exercise the real ordinary transaction mass boundary");
-            eprintln!(
-                "[service-public] large constraint job bytes {job_bytes}, ordinary transaction transient mass {} / {}",
-                masses.transient_mass, params.max_block_mass
-            );
-        }
-        let fee = relay_fee_for_compute_mass(mass.calc_non_contextual_masses(&probe).compute_mass).max(250_000);
-        let mut validated = MutableTransaction::from_tx(build(fee));
-        chain.tc.validate_mempool_transaction(&mut validated, &Default::default()).unwrap();
-        let tx = validated.tx.as_ref().clone();
-        let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment);
-        let block = chain.heartbeat(vec![tx.clone()]).await;
-        assert!(block.transactions.iter().any(|t| t.id() == tx.id()));
-        chain.heartbeat(vec![]).await;
-        let output = tx.outputs.last().unwrap();
-        floats[0] = (
-            TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
-            UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false),
-        );
-        let view = chain.view(claim);
-        assert_eq!(
-            view.job_identity,
-            kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment),
-            "the normal block fold pins the accepted FP job"
-        );
-        eprintln!(
-            "[service-public] ordinary FP Job V{} admission: claim {claim}, {} quanta, {} pwu, fee {fee}",
-            commitment.job.version, quote.quanta, quote.pwu
-        );
-        claim
+        carry_fp_commitment(&mut chain, &mut floats, commitment, prompt, case.large_constraint()).await
     } else {
         let (attempt, claim) = chain.build_attempt_roots(
             0,
@@ -1137,12 +1224,25 @@ async fn fresh_public_service(case: PublicCase) {
         chain.insert(attempt).await;
         claim
     };
+    if let Some(fixture) = &tiled {
+        fixture.refresh_panel_readiness(&mut chain, &mut floats).await;
+    }
     let slot = chain.view(claim).accepted_daa + chain.bundle.panel.anchor_delay();
     chain.advance(slot).await;
     let (anchor, _) = chain.build_attempt_drawn(7, chain.config.params.target_time_per_block(), vec![], &|_| true, true);
     chain.insert(anchor).await;
     let duties = chain.tc.palw_seat_duties_v2(chain.bonds.clone()).into_iter().filter(|d| d.claim_id == claim).collect::<Vec<_>>();
-    assert!(!duties.is_empty());
+    assert!(
+        !duties.is_empty(),
+        "normal panel binding failed: {:?}; registry {:?}",
+        chain.view(claim),
+        chain.tc.palw_model_registry_v1().unwrap().classes.iter().find(|c| c.class_id
+            == foreign
+                .as_ref()
+                .and_then(|(_, _, job)| job.as_ref())
+                .map(|(c, _)| c.job.class_id)
+                .unwrap_or(chain.bundle.base_class_id))
+    );
     assert!(chain.tc.palw_seat_duties_v2(vec![bond]).is_empty());
     let all_seats = duties.iter().map(|d| d.seat_bond).collect::<BTreeSet<_>>();
     let signed_daa = chain.daa();
@@ -1167,9 +1267,10 @@ async fn fresh_public_service(case: PublicCase) {
     chain.import_fresh(&premine).await;
     assert!(matches!(chain.view(claim).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
     if case.unretained_fp() {
-        assert!(chain.daa() < 1060, "the job was admitted before retention activation");
+        let retained_from = if case.tiled() { 1200 } else { 1060 };
+        assert!(chain.daa() < retained_from, "the job was admitted before retention activation");
         assert!(chain.view(claim).public_fp_job.is_none(), "no metadata is injected or removed");
-        chain.advance(1060).await;
+        chain.advance(retained_from).await;
         assert!(chain.config.params.palw_legacy_public_filer_active_at(chain.daa()));
     }
     assert!(chain.tc.palw_fraud_filer_candidates_v1(bond).iter().any(|c| c.claim_id == claim && !c.seat));
@@ -1182,7 +1283,7 @@ async fn fresh_public_service(case: PublicCase) {
             .map(|wire| borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>(&wire).unwrap());
         if case.unretained_fp() {
             assert!(stored.is_none());
-            assert!(candidate.accepted_daa < 1060);
+            assert!(candidate.accepted_daa < if case.tiled() { 1200 } else { 1060 });
             assert_ne!(chain.view(claim).job_identity, Hash64::default());
         } else {
             assert_eq!(
@@ -1280,7 +1381,7 @@ async fn fresh_public_service(case: PublicCase) {
     ));
     let retained_flow = flow.clone();
     let dir = tempfile::tempdir().unwrap();
-    if case.constraint() {
+    if case.constraint() && !case.tiled() {
         use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
         // Independently rebuild and load the fixture's PUBLIC tokenizer file for the outside
         // verifier. The producer's table Arc, capture and pending state are never handed over.
@@ -1292,8 +1393,12 @@ async fn fresh_public_service(case: PublicCase) {
         let public_file = palw_token_table_file_encode_v1(&table);
         palw_token_tables_v1().register(palw_token_table_file_decode_v1(&public_file).unwrap());
     }
-    let service =
-        Arc::new(PalwPanelService::new(panel_config(&chain, dir.path(), bond, &floats[OUTSIDER]), manager.clone(), flow, config));
+    let mut verifier_config = panel_config(&chain, dir.path(), bond, &floats[OUTSIDER]);
+    if let Some(fixture) = &tiled {
+        verifier_config.class_artifacts.push(fixture.path.clone());
+        verifier_config.chain_classes = true;
+    }
+    let service = Arc::new(PalwPanelService::new(verifier_config, manager.clone(), flow, config));
     assert!(service.keypair.is_some());
     assert_eq!(service.bond, Some(bond.0));
     let cloned = service.clone();
@@ -1309,6 +1414,8 @@ async fn fresh_public_service(case: PublicCase) {
     let mut answer_submitted = None;
     let mut input_chunks = BTreeSet::new();
     let mut job_preimage_submitted = false;
+    let mut selected_tiles_submitted = BTreeSet::new();
+    let mut bootstrap_tiles_submitted = BTreeSet::new();
     loop {
         assert!(!running.task.as_ref().unwrap().is_finished(), "production worker unexpectedly stopped");
         assert!(std::time::Instant::now() < deadline, "service made no objective progress: {:?}", chain.view(claim));
@@ -1728,6 +1835,45 @@ async fn fresh_public_service(case: PublicCase) {
                 );
             }
         }
+        if case.tiled() {
+            use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_answer_object_v1};
+            let requested: Vec<_> = chain
+                .view(claim)
+                .sessions
+                .iter()
+                .filter(|(who, _)| *who == bond)
+                .flat_map(|(_, s)| s.units.iter())
+                .filter(|u| {
+                    matches!(u, PalwDaUnitV1::Event { row: 0, tile: 1 })
+                        || (case != PublicCase::TiledConstraintWithheld && matches!(u, PalwDaUnitV1::Event { row: 2, .. }))
+                })
+                .copied()
+                .collect();
+            for unit in requested {
+                if selected_tiles_submitted.contains(&unit) || bootstrap_tiles_submitted.contains(&unit) {
+                    continue;
+                }
+                let event = tiled_events.get(&unit).expect("only a selected token tile is answered").clone();
+                let object = palw_da_answer_object_v1(
+                    &chain.network_domain,
+                    claim,
+                    unit,
+                    PalwDaAnswerV1::Event(event),
+                    chain.bonds[0],
+                    chain.bundle.court.max_close_bytes(),
+                    |m, c| Some(signed(0, m, c)),
+                )
+                .unwrap();
+                tiled::carry_public_rpc_answer(&mut chain, &manager, &pool, &retained_flow, &object, &mut floats[0]).await;
+                assert!(chain.view(claim).unit_was_answered_v1(&unit));
+                if matches!(unit, PalwDaUnitV1::Event { row: 2, .. }) {
+                    selected_tiles_submitted.insert(unit);
+                } else {
+                    bootstrap_tiles_submitted.insert(unit);
+                }
+                eprintln!("[service-tiled] requested public disclosure {unit:?} mined through ordinary H1/PQ admission");
+            }
+        }
         if case.reacquire_honest() {
             let honest = chain.view(claim);
             assert!(!honest.executor_refuted && !honest.court_convicted && !honest.da_defaulted);
@@ -1859,7 +2005,22 @@ async fn fresh_public_service(case: PublicCase) {
                         })
                         .expect("the verifier's exact proof is included in an actual block");
                     assert_eq!(evidence.claim_id, claim);
-                    if case.constraint_fault().is_some() {
+                    if case.tiled() {
+                        let kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::ConstrainedDecode { accusation, .. } =
+                            evidence.contradiction
+                        else {
+                            panic!("the registered tiled token proof must reach court")
+                        };
+                        assert_eq!(accusation.pin.position, 2);
+                        assert!(job_preimage_submitted && !input_chunks.is_empty());
+                        assert_eq!(selected_tiles_submitted.len(), if case.constraint_fault() == Some(3) { 2 } else { 1 });
+                        match case.constraint_fault().unwrap() {
+                            1 => assert_eq!(accusation.pin.generated_token_ids[2], 2),
+                            2 => assert!(accusation.witness.is_some()),
+                            3 => assert_ne!(accusation.pin.committed_opening.leaf_index, accusation.pin.beat_opening.leaf_index),
+                            _ => unreachable!(),
+                        }
+                    } else if case.constraint_fault().is_some() {
                         let kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::ConstrainedDecodeFlat {
                             accusation, ..
                         } = evidence.contradiction
@@ -1916,6 +2077,15 @@ async fn fresh_public_service(case: PublicCase) {
                     .any(|o| matches!(o,PalwConsensusObjectV2::DefaultAccused {claim:c,accuser,..} if *c==claim && *accuser==bond)),
                 "the actual blocks include this verifier DA demand"
             );
+            if case == PublicCase::TiledConstraintWithheld {
+                use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+                assert!(answer_submitted.is_some() && job_preimage_submitted && !input_chunks.is_empty());
+                assert!(selected_tiles_submitted.is_empty());
+                assert!(carriers.iter().any(|object| matches!(object,
+                    PalwConsensusObjectV2::DefaultAccused {claim: c, missing_event_index, accuser, ..}
+                        if *c == claim && *accuser == bond && matches!(PalwDaUnitV1::event_of_index(*missing_event_index), PalwDaUnitV1::Event {row: 2, ..}))),
+                    "the withholding default follows the selected later token row, after job/input acquisition");
+            }
             if case == PublicCase::PrunedWithheldFpV3Input {
                 assert!(answer_submitted.is_some(), "the producer disclosed the correct binding first");
                 assert!(carriers.iter().any(|object| matches!(object,
