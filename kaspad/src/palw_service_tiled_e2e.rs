@@ -55,7 +55,7 @@ impl TiledFixture {
             })
             .expect("an ordinary A16 geometry reaches the native FP quantum");
         let canonical = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_canonical_v1(&profile, false).unwrap();
-        let canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, canonical.0, canonical.1);
+        let mut canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, canonical.0, canonical.1);
         let shape = Base0ShapeV1 {
             n_layers: 2,
             n_heads: 4,
@@ -90,6 +90,23 @@ impl TiledFixture {
             .unwrap()
             .with_tokenizer_commitment(tokenizer_id);
         let root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).unwrap().root();
+        // Register the same five semantic identities the actual held backend executes.
+        // The inventory root covers operands, so a zero-tokenizer canonical context cannot
+        // stand in for the artifact's independently committed tokenizer/runtime identity.
+        let native = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile_in_lane_v1(
+            Arc::new(artifact.clone()),
+            chain.config.params.net.to_string().into_bytes(),
+            profile.clone(),
+            (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
+            misaka_palw_base0::classes::ArtifactSourceV1::ConvertedA16,
+        ).unwrap();
+        let (native_context, _) = native.job_for_anchor(Hash64::default()).unwrap();
+        canonical.model_profile_id = native_context.model_profile_id;
+        canonical.runtime_manifest_hash = native_context.runtime_manifest_hash;
+        canonical.runtime_class_id = native_context.runtime_class_id;
+        canonical.tokenizer_id = native_context.tokenizer_id;
+        canonical.cu_ruleset_id = native_context.cu_ruleset_id;
+        assert_eq!(canonical.tokenizer_id, tokenizer_id);
         let table = Arc::new(kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1 {
             entries: (0..shape.vocab as u32).map(|id| tokenizer.token_bytes(id)).collect(),
             eog_token_ids: vec![shape.vocab as u32 - 1],
@@ -162,6 +179,26 @@ impl TiledFixture {
         admission.signature =
             signed(0, message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT);
         chain.send(0, &object, &mut floats[0], &[]).await;
+        if chain.config.params.palw_class_semantics_v1_active_at(chain.daa()) {
+            use kaspa_consensus_core::palw_class_semantics_v1::*;
+            let declaration = PalwClassSemanticsDeclarationV1 {
+                version: PALW_CLASS_SEMANTICS_VERSION_V1,
+                class_id: self.profile.shape_profile_id(),
+                artifact_root: self.root,
+                model_profile_id: self.canonical.model_profile_id,
+                runtime_manifest_hash: self.canonical.runtime_manifest_hash,
+                runtime_class_id: self.canonical.runtime_class_id,
+                tokenizer_id: self.canonical.tokenizer_id,
+                cu_ruleset_id: self.canonical.cu_ruleset_id,
+                token_table_root: self.table.root(),
+            };
+            let message = palw_class_semantics_message_v1(chain.network_domain, &declaration);
+            let object = PalwConsensusObjectV2::ClassSemanticsDeclaredV1 {
+                declaration: Box::new(declaration),
+                signature: signed(0, message.as_byte_slice(), PALW_CLASS_SEMANTICS_SIGNATURE_CONTEXT_V1),
+            };
+            chain.send(0, &object, &mut floats[0], &[]).await;
+        }
         assert_eq!(
             chain.tc.palw_registered_class_carriage_v1(self.profile.shape_profile_id()),
             Some((self.profile.clone(), self.canonical.clone()))
@@ -240,6 +277,7 @@ impl TiledFixture {
         };
         // Use the same DFA as the flat fixture, with the actual tokenizer-derived table.
         selection_constraint_job_with_table(&mut job, self.table.clone());
+        if fault==Some(4) {super::terminal::enlarge_selection_job_v1(&mut job);}
         let mask = palw_fp_constraint_mask_for_host_v1(&job, Some(self.table.clone())).unwrap();
         let run = palw_fp_with_constraint_scope_v1(mask, || {
             backend.execute_free_prompt(&job, &ids.iter().map(|id| *id as usize).collect::<Vec<_>>())
@@ -255,7 +293,7 @@ impl TiledFixture {
         generated[2] = match fault {
             Some(1) => 2,
             Some(2) => self.profile.vocab_size - 1,
-            Some(3) => {
+            Some(3) | Some(4) => {
                 if generated[2] == 0 {
                     PALW_LOGITS_TILE_LANES as u32
                 } else {
@@ -284,7 +322,7 @@ impl TiledFixture {
         // The native DA session also draws a unit beside the named binding. Answer this
         // authenticated initial-row tile before testing withholding at the selected row.
         events.insert(PalwDaUnitV1::Event { row: 0, tile: 1 }, logits_event_disclosure_v1(&binding, rows, &generated, 0, 1).unwrap());
-        for tile in 0..=u8::from(fault == Some(3)) {
+        for tile in 0..=u8::from(matches!(fault,Some(3)|Some(4))) {
             events.insert(
                 PalwDaUnitV1::Event { row: 2, tile },
                 logits_event_disclosure_v1(&binding, rows, &generated, 2, tile).unwrap(),

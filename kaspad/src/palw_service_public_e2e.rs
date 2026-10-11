@@ -39,6 +39,8 @@ use std::{collections::BTreeSet, sync::Arc, thread::JoinHandle, time::Duration};
 
 #[path = "palw_service_tiled_e2e.rs"]
 mod tiled;
+#[path = "palw_service_terminal_e2e.rs"]
+mod terminal;
 
 struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,
@@ -644,6 +646,7 @@ enum PublicCase {
     UnretainedConstraintForbidden,
     UnretainedConstraintStop,
     UnretainedConstraintBeaten,
+    TiledConstraintLargeJob,
     TiledConstraintForbidden,
     TiledConstraintStop,
     TiledConstraintBeaten,
@@ -706,6 +709,7 @@ impl PublicCase {
             Self::UnretainedConstraintForbidden | Self::TiledConstraintForbidden => Some(1),
             Self::UnretainedConstraintStop | Self::TiledConstraintStop => Some(2),
             Self::UnretainedConstraintBeaten | Self::TiledConstraintBeaten | Self::TiledConstraintWithheld => Some(3),
+            Self::TiledConstraintLargeJob => Some(4),
             _ => None,
         }
     }
@@ -719,12 +723,12 @@ impl PublicCase {
         self.reacquire_honest() || self.constraint_fault().is_some()
     }
     fn large_constraint(self) -> bool {
-        matches!(self, Self::UnretainedLargeConstraintJob | Self::UnretainedWithheldLargeConstraintJob)
+        matches!(self, Self::UnretainedLargeConstraintJob | Self::UnretainedWithheldLargeConstraintJob | Self::TiledConstraintLargeJob)
     }
     fn tiled(self) -> bool {
         matches!(
             self,
-            Self::TiledConstraintForbidden | Self::TiledConstraintStop | Self::TiledConstraintBeaten | Self::TiledConstraintWithheld
+            Self::TiledConstraintForbidden | Self::TiledConstraintStop | Self::TiledConstraintBeaten | Self::TiledConstraintWithheld | Self::TiledConstraintLargeJob
         )
     }
 }
@@ -1117,7 +1121,7 @@ async fn fresh_public_service(case: PublicCase) {
 
 async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Option<recovery::RecoveryMode>) {
     let automatic_recovery = recovery_mode.is_some();
-    kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
+    kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info,kaspad_lib::palw_panel::palw_fraud_filer=debug");
     let (mut config, bundle, premine, mut floats) = fixture_config(
         case == PublicCase::ForeignFpJob,
         case.pruned_fp() || case == PublicCase::HonestFpV3Job,
@@ -1125,6 +1129,11 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         case.constraint(),
         case.tiled(),
     );
+    if case.tiled() {
+        // Register new classes under the independently versioned immutable semantic
+        // descriptor contract; public-filer activation remains at its normal test DAA.
+        config.params.palw_class_semantics_v1 = Some(ForkActivation::new(0));
+    }
     if recovery_mode == Some(recovery::RecoveryMode::Reorg) {
         // Exercise the shipped shallow economic-tie rule, as the actual LG14-A reorg
         // fixture does. The dormant public-filer activation guard remains closed.
@@ -2005,14 +2014,17 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                     for seat in &all_seats {
                         let key = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim);
                         let panel = chain.tc.palw_reporter_filing_read_v1(key, Hash64::default(), bond, None).unwrap();
-                        if let (Some(consumed), Some(winner)) = (panel.consumed, panel.pending.and_then(|p| p.best)) {
+                        let winner=panel.pending.and_then(|p|p.best);
+                        if let Some(consumed)=panel.consumed {
+                            if winner.is_none() && case!=PublicCase::TiledConstraintLargeJob {continue;}
                             assert_eq!(consumed.kind, kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2);
                             assert_eq!(consumed.accused, seat.0);
                             assert!(consumed.amount > 0);
                             assert!(consumed.collected > 0, "each relied-on Valid signer actually loses collateral");
-                            assert_eq!(winner.reporter, bond);
-                            assert!(winner.committed_daa < consumed.accepted_daa);
-                            panels.push((*seat, key, winner));
+                            if let Some(winner)=winner.as_ref() {
+                                assert_eq!(winner.reporter,bond);assert!(winner.committed_daa<consumed.accepted_daa);
+                            } else {assert_eq!(case,PublicCase::TiledConstraintLargeJob,"only the existing rooted-void route forgoes a separate R reward");}
+                            panels.push((*seat,key,winner));
                         }
                     }
                     if panels.len() != all_seats.len() {
@@ -2057,6 +2069,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                             }
                             _ => None,
                         })
+                        .or_else(||terminal::included_executor_evidence_v1(&carriers,claim,view.producer))
                         .expect("the verifier's exact proof is included in an actual block");
                     assert_eq!(evidence.claim_id, claim);
                     if case.tiled() {
@@ -2067,11 +2080,11 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                         };
                         assert_eq!(accusation.pin.position, 2);
                         assert!(job_preimage_submitted && !input_chunks.is_empty());
-                        assert_eq!(selected_tiles_submitted.len(), if case.constraint_fault() == Some(3) { 2 } else { 1 });
+                        assert_eq!(selected_tiles_submitted.len(), if matches!(case.constraint_fault(),Some(3)|Some(4)) { 2 } else { 1 });
                         match case.constraint_fault().unwrap() {
                             1 => assert_eq!(accusation.pin.generated_token_ids[2], 2),
                             2 => assert!(accusation.witness.is_some()),
-                            3 => assert_ne!(accusation.pin.committed_opening.leaf_index, accusation.pin.beat_opening.leaf_index),
+                            3 | 4 => assert_ne!(accusation.pin.committed_opening.leaf_index, accusation.pin.beat_opening.leaf_index),
                             _ => unreachable!(),
                         }
                     } else if case.constraint_fault().is_some() {
@@ -2097,8 +2110,16 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                     }
                     for (seat, key, winner) in &panels {
                         assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ObjectiveOffence { kind, accused, .. } if *kind == kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 && *accused == *seat)));
-                        assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterCommitted { commitment, reporter, .. } if *commitment == winner.commitment && *reporter == bond)));
-                        assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterRevealed { offence_key, reporter, .. } if *offence_key == *key && *reporter == bond)));
+                        if let Some(winner)=winner {
+                            assert!(carriers.iter().any(|o| matches!(o,PalwConsensusObjectV2::ReporterCommitted {commitment,reporter,..} if *commitment==winner.commitment && *reporter==bond)));
+                            assert!(carriers.iter().any(|o| matches!(o,PalwConsensusObjectV2::ReporterRevealed {offence_key,reporter,..} if *offence_key==*key && *reporter==bond)));
+                        } else {
+                            assert!(carriers.iter().any(|o|match o {
+                                PalwConsensusObjectV2::ObjectiveOffence {accused,evidence,..} if *accused==*seat=>
+                                    borsh::from_slice::<kaspa_consensus_core::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2>(evidence)
+                                        .is_ok_and(|p|p.claim_id==claim && matches!(p.contradiction,kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::CourtFraud {..})),_=>false,
+                            }),"each collected fullPanel continuation names the actual rooted court outcome");
+                        }
                     }
                     assert!(reserved && demanded);
                     assert!(chain.tc.palw_fraud_filer_status_v1(bond).unwrap().live.iter().all(|r| r.claim_id != claim));
