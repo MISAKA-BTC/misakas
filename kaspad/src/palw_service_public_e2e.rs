@@ -1727,6 +1727,8 @@ async fn fresh_public_service(case: PublicCase) {
                     "[service-public] authenticated public FP input chunk {chunk} mined; the verifier receives no private capture"
                 );
             }
+        }
+        if case.reacquire_honest() {
             let honest = chain.view(claim);
             assert!(!honest.executor_refuted && !honest.court_convicted && !honest.da_defaulted);
             if honest.record.as_ref().is_some_and(|record| record.closed.contains(&bond)) {

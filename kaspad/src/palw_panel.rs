@@ -19081,6 +19081,36 @@ mod accepted_objects_walk_tests {
     }
 
     #[test]
+    fn false_valid_receipt_history_backfills_plateaus_and_retries_missing_suffixes_and_reorgs() {
+        use crate::palw_filer_false_valid::palw_false_valid_history_page_v1 as page;
+        let mut chain = repeated_daa_chain();
+        let mut seen = Vec::new();
+        let first = page(&chain, None, 100, 100, 3, &mut |o| seen.push(claim_of(&o))).unwrap();
+        assert_eq!(seen, vec![8, 7, 6]);
+        assert_eq!(first.next, Some(hash(5)));
+        let saved = chain.acceptance.remove(&hash(4)).unwrap();
+        let missing = page(&chain, Some(first), 102, 100, 3, &mut |o| seen.push(claim_of(&o))).unwrap();
+        assert_eq!(seen, vec![8, 7, 6, 5], "read findings survive an unavailable suffix");
+        assert_eq!(missing.next, Some(missing.anchor), "an unavailable page cannot declare completion");
+        assert_eq!(missing.floor, 100);
+        chain.acceptance.insert(hash(4), saved);
+        seen.clear();
+        let mut walk = Some(missing);
+        loop {
+            let found = page(&chain, walk, 102, 100, 3, &mut |o| seen.push(claim_of(&o))).unwrap();
+            if found.next.is_none() { break; }
+            walk = Some(found);
+        }
+        assert_eq!(seen, vec![8, 7, 6, 5, 4, 3, 2, 1]);
+        chain.sink = hash(5);
+        seen.clear();
+        let replaced = page(&chain, Some(first), 102, 100, 3, &mut |o| seen.push(claim_of(&o))).unwrap();
+        assert_eq!(replaced.anchor, hash(5));
+        assert_eq!(replaced.floor, 100, "a replaced anchor restarts from the claim's original floor");
+        assert_eq!(seen, vec![5, 4, 3]);
+    }
+
+    #[test]
     fn a_missing_header_acceptance_block_or_parent_never_completes_a_history_page() {
         let mut chain = repeated_daa_chain();
         let read = |chain: &Chain| walk_accepted_lifecycle_page_v1(chain, hash(8), 100, 3, &mut |_| {});

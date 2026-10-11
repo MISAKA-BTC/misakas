@@ -1,0 +1,43 @@
+{
+  "base_commit": "a044ffc65c61144212d3153f17b40aeb0345fde7",
+  "build": "CARGO_TARGET_DIR=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p kaspad -p kaspa-pq-validator-core --lib --locked --no-run; final test-only fixture repair rebuilt kaspad alone",
+  "validation": {
+    "builder_tests": 49,
+    "filer_regressions": 28,
+    "normal_node_check": "PASS 6.53 s after production pagination change, before test-only assertion repair",
+    "final_service_tests": "PENDING: pagination service run session 96498; no PASS claimed",
+    "honest_large_job": "PASS 1 test, 369.18 s before pagination change",
+    "receipt_history_tests": "PASS 1 test, 0.01 s after test-only anchor expectation repair",
+    "receipt_unit_tests": "PASS 12 tests, 0.20 s after test-only anchor expectation repair",
+    "checkpoint_test_build": "PASS 25.25 s"
+  },
+  "failures_preserved": {
+    "initial": "a044ffc65: all three cases refused by wallet builder before FP admission, exit 101, 324.78 s",
+    "intermediate": "Builder repaired; first two cases reached ObjectiveOffence inclusion but failed an incorrectly shared honest-case assertion. Explicit SIGINT after known fixture defect; third case uncompleted, exit 130. No service PASS claimed.",
+    "pre_pagination_service": "0 PASS, 3 FAIL, exit 101, 710.60 s; producer conviction/reveal reached, all-Panel pursuit timed out",
+    "receipt_unit_initial": "11 PASS, 1 FAIL: fixture expected scan time 100; completely read chain tip is 40. Expectation repaired; rerun 12 PASS."
+  },
+  "pre_pagination_source_sha256": {
+    "kaspa-pq-validator-core/src/lib.rs": "ab18ec1fc39433af4b971c2e445073d719bf1d619d3d73db97fb848f6df0f94b",
+    "kaspad/src/palw_service_public_e2e.rs": "ea0772fcdb847460ce0bb3ab9a73d296b3bc9fc34d46872d3a9d040c9b95aec8",
+    "kaspad/src/palw_fraud_filer.rs": "fbb1e47e9684c20939c581f7be9763e97f2da8c95b4e0cdc74daabb0856e139b",
+    "kaspad/src/palw_fraud_filer_constraint.rs": "fd5a37a2dde80978a971d49fe9281001f13845211ec017974fe472ef8272c936",
+    "consensus/core/src/palw_fp_constraint_job_v1.rs": "faf2e4c43b8d9a8761bd1871c3312c6c3ca7fc1de80b407b7858fb2d4e8eb2e7",
+    "consensus/core/src/palw_step_refute.rs": "70879b459f456cc64d6e9460b0018ac22cc9b704b5752b1627227d138281bf6f",
+    "consensus/core/src/palw_offence_attribution_v1.rs": "bdd314c8d087880dc94a699d7507819ca9f38583b0c8166e4e2ec0b9d55d1b2e",
+    "consensus/core/src/palw_state_v2.rs": "7736711c9df0f2b015fa116d8bd24beae61b5f7b0638956edc021255053d4e14"
+  },
+  "pre_pagination_binary_sha256": {
+    "kaspad_lib-a562e45711087c1e": "0af48e5150b089b07dc463a21bb080035fbd46573ee97ff2891674d27e98d53b",
+    "kaspa_pq_validator_core-77b2cdcea9290b13": "5935755ffc84370aeb2029dd6c374577f1ba865f0056c24990acc9ecdf8c1572"
+  },
+  "source_sha256": {
+    "kaspa-pq-validator-core/src/lib.rs": "ab18ec1fc39433af4b971c2e445073d719bf1d619d3d73db97fb848f6df0f94b",
+    "kaspad/src/palw_filer_false_valid.rs": "98f08cd29fe80336c8007ae2696cd6f5813ea83da083b93060e6c81210a640d9",
+    "kaspad/src/palw_panel.rs": "e135ee8925423ae753935c8756cc20bf0530b75acf308ecf838802bdf3daa2f1",
+    "kaspad/src/palw_service_public_e2e.rs": "ea0772fcdb847460ce0bb3ab9a73d296b3bc9fc34d46872d3a9d040c9b95aec8"
+  },
+  "pending_service_binary_sha256": "1f7b5f77415e9c7c8247e0f12e1e5e69dc764c8786d31a053fab70982534f77f",
+  "checkpoint_binary_sha256": "75d304a798f073b5635a05e32450e997cfd19add96fe2663dbeb4f1b33850a50",
+  "pending_service_source_difference": "Running service binary precedes only the unit-test expectation repair at palw_filer_false_valid.rs:1306; production source is unchanged."
+}
