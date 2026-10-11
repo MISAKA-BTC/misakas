@@ -1192,6 +1192,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
     use PalwConsensusObjectV2 as O;
     use PalwLifecycleKindFenceV1 as F;
     match object {
+        O::ObjectiveOffence { kind, evidence, .. } if crate::palw_staged_court_state_v1::palw_is_staged_evidence_v1(*kind,evidence) => PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1),
         // LG14-B's guarded arms: an int-12 kind carrying the appended `PalwDaUnitV1::LegacyHeldV2` (the live build cannot decode it)
         // is owned by `palw_legacy_held_da_v2` (`PALW_INT12_WIRE_CHANGES_V1`'s `CarriedAppended`).
         O::MaterialDisclosedV2 { unit, .. } if unit.is_legacy_held_v2() => PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2),
@@ -1329,7 +1330,6 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
-        O::ObjectiveOffence { kind, evidence, .. } if crate::palw_staged_court_state_v1::palw_is_staged_evidence_v1(*kind,evidence) => PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1),
         O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamLeafV1 { .. } | O::PublicCourtStreamMoveV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } | O::DisputeReacquiredV1 { .. } | O::ObjectiveEvidenceDeclaredV1 { .. } | O::ObjectiveEvidenceChunkV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
