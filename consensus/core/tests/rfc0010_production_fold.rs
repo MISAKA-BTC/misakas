@@ -1156,7 +1156,9 @@ fn paid_panel_source_subject_freezes_in_actual_fold_replay_and_carriage_and_surv
     let policy = misaka_palw_challenge::paid_opt_in_source_policy_v5(2, 2, 20, 2, 1);
     let mut panel = engine_policy();
     panel.beacon_scheme = panel_beacon_scheme_of_v1(&policy);
+    panel.beacon_period_daa = 300;
     panel.beacon_wait_daa = 200;
+    panel.validate().unwrap();
     let mut v = V3::with(panel, FENCE);
     v.inputs.approved_beacons = vec![policy.clone()];
     v.inputs.beacon_source = PalwPanelV3BeaconSourceV1::Chain;
