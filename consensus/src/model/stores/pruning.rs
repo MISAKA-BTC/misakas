@@ -128,6 +128,10 @@ impl DbPruningStore {
         self.retention_period_root_access.write(BatchDbWriter::new(batch), &retention_period_root)
     }
 
+    pub fn set_pruning_proof_descriptor_batch(&mut self, batch: &mut WriteBatch, descriptor: PruningProofDescriptor) -> StoreResult<()> {
+        self.pruning_proof_descriptor_access.write(BatchDbWriter::new(batch), &Arc::new(descriptor))
+    }
+
     pub fn set_pruning_proof_descriptor(&mut self, descriptor: PruningProofDescriptor) -> StoreResult<()> {
         self.pruning_proof_descriptor_access.write(DirectDbWriter::new(&self.db), &Arc::new(descriptor))
     }

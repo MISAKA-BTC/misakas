@@ -2229,11 +2229,18 @@ impl ConsensusApi for Consensus {
     }
 
     fn apply_pruning_proof(&self, proof: PruningPointProof, trusted_set: &[TrustedBlock]) -> PruningImportResult<()> {
-        self.services.pruning_proof_manager.apply_proof(proof, trusted_set)
+        // Production proof/history context is established on fresh staging before
+        // it receives an import session. Legacy context mutation cannot reset a
+        // live or completed session, including one naming the same target.
+        self.virtual_processor.with_pruning_import_session(None, |_| {
+            self.services.pruning_proof_manager.apply_proof(proof, trusted_set)
+        })
     }
 
     fn import_pruning_points(&self, pruning_points: PruningPointsList) -> PruningImportResult<()> {
-        self.services.pruning_proof_manager.import_pruning_points(&pruning_points)
+        self.virtual_processor.with_pruning_import_session(None, |_| {
+            self.services.pruning_proof_manager.import_pruning_points(&pruning_points)
+        })
     }
 
     fn begin_pruning_point_import(&self, point: BlockHash) -> PruningImportResult<PruningImportSessionV1> {

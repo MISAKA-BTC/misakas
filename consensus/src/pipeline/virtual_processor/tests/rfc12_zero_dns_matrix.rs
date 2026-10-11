@@ -1626,6 +1626,8 @@ async fn rfc12_import_context_is_repeatable_and_invalid_history_never_changes_th
     for _ in 0..2 {
         a.api().import_pruning_points(vec![genesis.clone(), pp.clone()]).unwrap();
     }
+    assert!(!a.api().is_pruning_utxoset_stable(), "valid legacy staging context replacement is incomplete");
+    a.api().set_pruning_utxoset_stable_flag(true).unwrap(); // retained verified rows: fixture seam only
     assert!(matches!(a.api().import_pruning_points(Vec::new()), Err(PruningImportError::PruningProofNotEnoughHeaders)));
     assert!(matches!(a.api().import_pruning_points(vec![pp.clone()]), Err(PruningImportError::PruningPointsWrongGenesis(_, _))));
     assert!(matches!(
@@ -1643,6 +1645,7 @@ async fn rfc12_import_context_is_repeatable_and_invalid_history_never_changes_th
         a.api().import_pruning_points(vec![genesis.clone(), std::sync::Arc::new(unknown)]),
         Err(PruningImportError::PruningProofUnknownPowAlgoId(..))
     ));
+    assert!(a.api().is_pruning_utxoset_stable(), "invalid history leaves the previous verified stable marker unchanged");
     assert_eq!(a.vp().past_pruning_points_store.get(0).unwrap(), genesis.hash);
     assert_eq!(a.vp().past_pruning_points_store.get(1).unwrap(), pp.hash);
     assert!(a.vp().past_pruning_points_store.get(2).is_err(), "refused input cannot leave a partial history row");
@@ -1658,6 +1661,7 @@ async fn rfc12_import_context_is_repeatable_and_invalid_history_never_changes_th
     ));
     assert_eq!(a.vp().pruning_samples_store.pruning_sample_from_pov(pp.hash).unwrap(), earlier.hash);
     assert_eq!(a.vp().pruning_point_store.read().pruning_point().unwrap(), pp.hash);
+    assert!(a.api().is_pruning_utxoset_stable(), "invalid history leaves the previous verified stable marker unchanged");
     assert_eq!(a.vp().past_pruning_points_store.get(0).unwrap(), genesis.hash);
     assert_eq!(a.vp().past_pruning_points_store.get(1).unwrap(), pp.hash);
 }
@@ -3195,6 +3199,11 @@ async fn rfc12_durable_import_sessions_serialize_streams_and_close_without_legac
     let original: Vec<_> = rig.vp().pruning_meta_stores.read().utxo_set.iterator()
         .map(|row| { let (outpoint, entry) = row.unwrap(); (outpoint, (*entry).clone()) }).collect();
     let before = sorted_process_utxos(rig.api());
+    let point_header = rig.api().get_header(point).unwrap();
+    assert!(rig.api().is_pruning_utxoset_stable());
+    rig.api().import_pruning_points(vec![point_header.clone()]).unwrap();
+    assert!(!rig.api().is_pruning_utxoset_stable(), "legacy staging context writes persist incomplete before UTXO/sidecar replacement");
+    assert_eq!(sorted_process_utxos(rig.api()), before);
     let stale = rig.api().begin_pruning_point_import(point).unwrap();
     let is_refused = |result: kaspa_consensus_core::errors::pruning::PruningImportResult<()>| {
         assert!(matches!(result, Err(PruningImportError::PruningImportSessionRefused { .. })), "typed session refusal: {result:?}");
@@ -3222,6 +3231,9 @@ async fn rfc12_durable_import_sessions_serialize_streams_and_close_without_legac
     is_refused(rig.api().clear_pruning_utxo_set());
     is_refused(rig.api().set_pruning_utxoset_stable_flag(true));
     is_refused(rig.api().set_pruning_utxoset_stable_flag(false));
+    is_refused(rig.api().import_pruning_points(vec![point_header.clone()]));
+    is_refused(rig.api().apply_pruning_proof(Vec::new(), &[]));
+    assert_eq!(rig.api().pruning_import_session().unwrap().active, Some(current));
     assert_eq!(sorted_process_utxos(rig.api()), before, "none of the stale public calls moved virtual money");
     assert!(!rig.api().is_pruning_utxoset_stable());
     rig.api().clear_pruning_utxo_set_for_session(current).unwrap();
@@ -3242,6 +3254,10 @@ async fn rfc12_durable_import_sessions_serialize_streams_and_close_without_legac
     is_refused(rig.api().complete_pruning_point_import_for_session(current));
     is_refused(rig.api().set_pruning_utxoset_stable_flag(true));
     is_refused(rig.api().set_pruning_utxoset_stable_flag(false));
+    is_refused(rig.api().import_pruning_points(vec![point_header]));
+    is_refused(rig.api().apply_pruning_proof(Vec::new(), &[]));
+    assert!(rig.api().is_pruning_utxoset_stable(), "refused old context APIs cannot mark a completed generation incomplete");
+    assert_eq!(rig.api().pruning_import_session().unwrap().epoch, current.epoch);
 
     // A public authorized-target reset may name the SAME point. Its virtual
     // replacement still invalidates an earlier finalized stream's authority.
