@@ -79,13 +79,13 @@ fn compress(block: &[u8; 128], words: &mut [u64; 8], count: u128, last: bool) {
 
 /// Serializes the actual compression continuation, never prior rendering bytes.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-struct LeafHashContinuationV1 {
+pub(crate) struct LeafHashContinuationV1 {
     words: [u64; 8],
     compressed: u128,
     buffer: Vec<u8>,
 }
 impl LeafHashContinuationV1 {
-    fn new(key: &[u8]) -> Self {
+    pub(crate) fn new(key: &[u8]) -> Self {
         assert!(key.len() <= 64);
         let mut words = IV;
         words[0] ^= 0x01010000 ^ ((key.len() as u64) << 8) ^ 64;
@@ -93,7 +93,7 @@ impl LeafHashContinuationV1 {
         buffer[..key.len()].copy_from_slice(key);
         Self { words, compressed: 0, buffer }
     }
-    fn update(&mut self, mut bytes: &[u8]) {
+    pub(crate) fn update(&mut self, mut bytes: &[u8]) {
         while !bytes.is_empty() {
             if self.buffer.len() == 128 {
                 compress(self.buffer.as_slice().try_into().expect("full block"), &mut self.words, self.compressed + 128, false);
@@ -105,7 +105,10 @@ impl LeafHashContinuationV1 {
             bytes = &bytes[n..];
         }
     }
-    fn finish(&self) -> Hash64 {
+    pub(crate) fn byte_count(&self) -> Option<u128> {
+        (self.buffer.len() <= 128 && self.compressed % 128 == 0).then(|| self.compressed + self.buffer.len() as u128)
+    }
+    pub(crate) fn finish(&self) -> Hash64 {
         let mut words = self.words;
         let mut block = [0u8; 128];
         block[..self.buffer.len()].copy_from_slice(&self.buffer);
@@ -194,9 +197,22 @@ impl PalwRenderingStreamV1 {
     }
     /// Exact contiguous moves only. Hostile offsets, lengths or constraints fail before mutation.
     pub fn push(&mut self, context: Hash64, constraint: &PalwDecodeConstraintV1, offset: u32, bytes: &[u8]) -> Result<(), String> {
+        if constraint_id_v1(&constraint.to_bytes()) != self.constraint_id {
+            return Err("rendering part changes the canonical constraint".into());
+        }
+        self.push_owned(context, constraint, offset, bytes)
+    }
+    /// Outer rooted court owns the immutable constraint; avoid rehashing its 256KiB bytes
+    /// on every move. This private-to-crate path is never exposed to a wire caller.
+    pub(crate) fn push_owned(
+        &mut self,
+        context: Hash64,
+        constraint: &PalwDecodeConstraintV1,
+        offset: u32,
+        bytes: &[u8],
+    ) -> Result<(), String> {
         self.check()?;
         if context != self.context
-            || constraint_id_v1(&constraint.to_bytes()) != self.constraint_id
             || offset != self.offset
             || bytes.is_empty()
             || bytes.len() > PALW_RENDERING_STREAM_PART_BYTES_V1
