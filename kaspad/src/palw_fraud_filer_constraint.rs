@@ -491,6 +491,7 @@ mod tests {
             &template.job_context.network_id,
         )
         .unwrap();
+        template.activation_leg_root = kaspa_consensus_core::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&template.job_context);
         let own = vec![0; job.decode_token_limit as usize];
         for fault in 0..7 {
             let mut ids = own.clone();
