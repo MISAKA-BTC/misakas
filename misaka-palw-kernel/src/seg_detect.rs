@@ -37,7 +37,7 @@ use crate::seg::{
 /// The caller supplies fed ids (prompt + generated ids except the last), or the complete prompt for a v5 encoder. They are
 /// checked against the public job before use. The callback chooses what survives streaming replay; this function reads no producer
 /// values. `through` bounds the prefix needed for a localized court.
-fn replay_values_v1(
+pub(crate) fn replay_values_v1(
     c: &SegClaimContextV1<'_>,
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],
@@ -72,6 +72,7 @@ fn replay_values_v1(
         None
     };
     struct RegisteredModel<'a> {
+        program: &'a misaka_palw_tir::program::TirProgramV1,
         params: &'a crate::trace::ParamCommitmentsV1,
         source: &'a dyn Fn(u16, Option<u16>) -> Option<Tensor>,
         job_inputs: Option<(u16, Tensor, Tensor)>,
@@ -88,6 +89,16 @@ fn replay_values_v1(
                 }
             }
             let t = (self.source)(index, layer)?;
+            let declared = self.program.params.get(index as usize)?;
+            // Resource envelopes price declared shapes and storage. Refuse a
+            // substituted tensor before walking its values or hashing it. The
+            // acquisition provider must separately cap allocation/transport.
+            let shape: Vec<_> = declared.shape.iter().map(|d| *d as usize).collect();
+            let len = crate::merkle3::LayoutV3::try_of(&shape).map(|l| l.len);
+            if t.dtype != declared.dtype || t.shape != shape || len != Some(t.data.len() as u64) {
+                *self.error.borrow_mut() = Some(format!("param {index}/{layer:?} metadata differs from its program declaration"));
+                return None;
+            }
             if !crate::verify::canonical_tensor_v1(&t)
                 || self.params.by_instance.get(&(index, layer)) != Some(&crate::merkle3::tensor_commitment_v3(&t))
             {
@@ -97,7 +108,7 @@ fn replay_values_v1(
             Some(t)
         }
     }
-    let registered = RegisteredModel { params: c.params, source: artifact, job_inputs, error: Default::default() };
+    let registered = RegisteredModel { program: c.program, params: c.params, source: artifact, job_inputs, error: Default::default() };
     let fed = if c.encoder.is_some() { &[0u32][..] } else { tokens };
     let end = through.map_or(fed.len(), |p| (p as usize).saturating_add(1).min(fed.len()));
     let result = crate::trace::trace_streaming_v1(c.program, &registered, &fed[..end], visit);
@@ -107,16 +118,67 @@ fn replay_values_v1(
     Ok(())
 }
 
+/// **Which disclosure profile a re-execution commits its own values under** (RFC02-T merge, 2026-10-11): the frozen K2-TIR-v4/v5
+/// claim profile (G14-S value modes: hiding values under flat hiding tiles), or RFC-0002's non-reward candidate trace v2 profile
+/// (no hiding values: every commitment v3, `crate::element::check_model_vector_positions_v2`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplayProfileV1 {
+    Frozen,
+    CandidateV2,
+}
+
+impl ReplayProfileV1 {
+    fn modes(self, c: &SegClaimContextV1<'_>) -> Vec<Vec<crate::seg_scope::SegValueModeV1>> {
+        match self {
+            // A hiding value (DA16b option (a)) is committed under its flat hiding tiles, every other one v3 (`crate::seg_scope`).
+            Self::Frozen => crate::seg_scope::seg_value_modes_v1(c.program),
+            // No modes: every value is committed v3.
+            Self::CandidateV2 => Vec::new(),
+        }
+    }
+
+    fn check(
+        self,
+        c: &SegClaimContextV1<'_>,
+        producer: &dyn SegMaterialV1,
+        artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+        tokens: &[u32],
+        positions: &[u32],
+    ) -> SegFindingV1 {
+        match self {
+            Self::Frozen => check_positions_v1(c, producer, artifact, tokens, positions),
+            Self::CandidateV2 => crate::element::check_model_vector_positions_v2(c, producer, artifact, tokens, positions),
+        }
+    }
+}
+
 /// Replay once to retain only position roots and the first decode mismatch. Reuse these between adaptive DA responses.
 pub fn prepare_reexecution_v1(
     c: &SegClaimContextV1<'_>,
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],
 ) -> Result<OwnReplayV1, String> {
+    prepare_reexecution_in(c, artifact, tokens, ReplayProfileV1::Frozen)
+}
+
+/// [`prepare_reexecution_v1`] for an RFC-0002 candidate trace v2 statement (every value committed v3).
+pub fn prepare_model_vector_reexecution_v2(
+    c: &SegClaimContextV1<'_>,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+) -> Result<OwnReplayV1, String> {
+    prepare_reexecution_in(c, artifact, tokens, ReplayProfileV1::CandidateV2)
+}
+
+fn prepare_reexecution_in(
+    c: &SegClaimContextV1<'_>,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    profile: ReplayProfileV1,
+) -> Result<OwnReplayV1, String> {
     let mut roots = Vec::with_capacity(c.positions as usize);
     let mut decode_mismatch = None;
-    // A hiding value (DA16b option (a)) is committed under its flat hiding tiles, every other one v3 (`crate::seg_scope`).
-    let modes = crate::seg_scope::seg_value_modes_v1(c.program);
+    let modes = profile.modes(c);
     replay_values_v1(c, artifact, tokens, None, &mut |p, values| {
         let commitments = crate::seg_scope::seg_position_commitments_v1(&modes, values);
         roots.push(crate::seg::position_root_of_v1(p, &commitments));
@@ -143,6 +205,7 @@ pub(crate) fn replay_positions_v1(
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],
     positions: &std::collections::BTreeSet<u32>,
+    modes: &[Vec<crate::seg_scope::SegValueModeV1>],
     mask: &[Vec<bool>],
 ) -> Result<BTreeMap<u32, OwnPositionV1>, String> {
     let mut selected = BTreeMap::new();
@@ -150,10 +213,12 @@ pub(crate) fn replay_positions_v1(
     if last >= c.positions {
         return Err("a replay position outside the claim".into());
     }
-    let modes = crate::seg_scope::seg_value_modes_v1(c.program);
+    // The verifier commits its own values under the SAME profile as the claim it checks (the frozen v4/v5 modes, or a candidate
+    // trace profile's, which has no hiding values): committing a candidate's values under the frozen modes would compare C_hide with
+    // the candidate's v3 commitments and diverge everywhere (RFC02-T merge, 2026-10-11).
     replay_values_v1(c, artifact, tokens, Some(last), &mut |p, values| {
         if positions.contains(&p) {
-            let commitments = crate::seg_scope::seg_position_commitments_v1(&modes, values);
+            let commitments = crate::seg_scope::seg_position_commitments_v1(modes, values);
             let withheld =
                 values.iter().zip(mask).map(|(o, m)| o.iter().zip(m).map(|(t, masked)| masked.then(|| t.clone())).collect()).collect();
             selected.insert(p, OwnPositionV1 { commitments, withheld });
@@ -180,6 +245,20 @@ pub fn reexecute_claim_v1(
 ) -> ReexecutionCheckV1 {
     match prepare_reexecution_v1(c, artifact, tokens) {
         Ok(own) => check_claim_by_reexecution_v1(c, &own.roots, own.decode_mismatch, producer, artifact, tokens),
+        Err(why) => ReexecutionCheckV1 { finding: SegFindingV1::Inconsistent(why), divergent: None, probes: 0 },
+    }
+}
+
+/// [`reexecute_claim_v1`] for an RFC-0002 candidate trace v2 statement: the verifier commits its own values v3 and checks a divergent
+/// position with the candidate court scope.
+pub fn reexecute_model_vector_v2(
+    c: &SegClaimContextV1<'_>,
+    producer: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+) -> ReexecutionCheckV1 {
+    match prepare_model_vector_reexecution_v2(c, artifact, tokens) {
+        Ok(own) => check_reexecution_in(c, &own.roots, own.decode_mismatch, producer, artifact, tokens, ReplayProfileV1::CandidateV2),
         Err(why) => ReexecutionCheckV1 { finding: SegFindingV1::Inconsistent(why), divergent: None, probes: 0 },
     }
 }
@@ -296,6 +375,31 @@ pub fn check_claim_by_reexecution_v1(
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],
 ) -> ReexecutionCheckV1 {
+    check_reexecution_in(c, own_position_roots, decode_mismatch, producer, artifact, tokens, ReplayProfileV1::Frozen)
+}
+
+/// [`check_claim_by_reexecution_v1`] for an RFC-0002 candidate trace v2 statement (roots from
+/// [`prepare_model_vector_reexecution_v2`]).
+pub fn check_model_vector_by_reexecution_v2(
+    c: &SegClaimContextV1<'_>,
+    own_position_roots: &[Digest],
+    decode_mismatch: Option<u32>,
+    producer: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+) -> ReexecutionCheckV1 {
+    check_reexecution_in(c, own_position_roots, decode_mismatch, producer, artifact, tokens, ReplayProfileV1::CandidateV2)
+}
+
+fn check_reexecution_in(
+    c: &SegClaimContextV1<'_>,
+    own_position_roots: &[Digest],
+    decode_mismatch: Option<u32>,
+    producer: &dyn SegMaterialV1,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    profile: ReplayProfileV1,
+) -> ReexecutionCheckV1 {
     let at = |finding, divergent, probes| ReexecutionCheckV1 { finding, divergent, probes };
     if own_position_roots.len() != c.positions as usize || segment_count_v1(c.positions) as usize != c.segment_roots.len() {
         return at(SegFindingV1::Inconsistent("the re-execution does not have the claim's positions".into()), None, 0);
@@ -305,7 +409,7 @@ pub fn check_claim_by_reexecution_v1(
         // Every committed value is the verifier's own: only the decode relation is left.
         return match decode_mismatch {
             None => at(SegFindingV1::Clean, None, 0),
-            Some(p) => match check_positions_v1(c, producer, artifact, tokens, &[p]) {
+            Some(p) => match profile.check(c, producer, artifact, tokens, &[p]) {
                 SegFindingV1::Clean => {
                     at(SegFindingV1::Inconsistent(format!("the delivered id at {p} is not the rule's yet checks clean")), None, 0)
                 }
@@ -319,7 +423,7 @@ pub fn check_claim_by_reexecution_v1(
         }
         Err((missing, probes)) => at(SegFindingV1::Demand(missing), None, probes),
         Ok((q, probes)) => {
-            let finding = match check_positions_v1(c, producer, artifact, tokens, &[q]) {
+            let finding = match profile.check(c, producer, artifact, tokens, &[q]) {
                 SegFindingV1::Clean => {
                     SegFindingV1::Inconsistent(format!("position {q} departs from the re-execution yet checks clean"))
                 }

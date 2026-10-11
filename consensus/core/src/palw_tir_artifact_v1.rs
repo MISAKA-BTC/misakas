@@ -148,9 +148,13 @@ pub fn palw_tir_instance_leaves_v1(p: &TirProgramV1, j: u16) -> u64 {
 
 /// The number of leaves, in closed form.
 pub fn palw_tir_inventory_leaf_count_v1(p: &TirProgramV1) -> Result<u32, PalwTirInventoryError> {
+    inventory_leaf_count_prefix(p, p.params.len())
+}
+
+fn inventory_leaf_count_prefix(p: &TirProgramV1, model_params: usize) -> Result<u32, PalwTirInventoryError> {
     let instances = palw_tir_param_instances_v1(p);
     let mut total: u64 = 0;
-    for (j, inst) in instances.iter().enumerate() {
+    for (j, inst) in instances.iter().take(model_params).enumerate() {
         let bytes = palw_tir_tensor_bytes_v1(p, j as u16);
         if bytes > u32::MAX as u64 {
             return Err(PalwTirInventoryError::TensorTooLarge { name: p.params[j].name.clone(), bytes });
@@ -167,6 +171,19 @@ pub fn palw_tir_inventory_leaf_count_v1(p: &TirProgramV1) -> Result<u32, PalwTir
 /// `byte_offset` of `(param, layer)`, or `None` if that instance or byte does not exist. A closed
 /// form of the declarations, so a court needs no artifact to name the leaf a cone operand lives in.
 pub fn palw_tir_leaf_index_v1(p: &TirProgramV1, param: u16, layer: Option<u16>, byte_offset: u64) -> Option<u32> {
+    inventory_leaf_index_prefix(p, p.params.len(), param, layer, byte_offset)
+}
+
+fn inventory_leaf_index_prefix(
+    p: &TirProgramV1,
+    model_params: usize,
+    param: u16,
+    layer: Option<u16>,
+    byte_offset: u64,
+) -> Option<u32> {
+    if param as usize >= model_params {
+        return None;
+    }
     let instances = palw_tir_param_instances_v1(p);
     let inst = instances.get(param as usize)?;
     let k = inst.iter().position(|l| *l == layer)? as u64;
@@ -186,8 +203,16 @@ pub fn palw_tir_visit_inventory_rows_v1(
     p: &TirProgramV1,
     visit: &mut dyn FnMut(PalwTirInventoryRowV1),
 ) -> Result<(), PalwTirInventoryError> {
-    palw_tir_inventory_leaf_count_v1(p)?;
-    for (j, inst) in palw_tir_param_instances_v1(p).into_iter().enumerate() {
+    visit_inventory_prefix(p, p.params.len(), visit)
+}
+
+fn visit_inventory_prefix(
+    p: &TirProgramV1,
+    model_params: usize,
+    visit: &mut dyn FnMut(PalwTirInventoryRowV1),
+) -> Result<(), PalwTirInventoryError> {
+    inventory_leaf_count_prefix(p, model_params)?;
+    for (j, inst) in palw_tir_param_instances_v1(p).into_iter().take(model_params).enumerate() {
         let j = j as u16;
         let (t, r) = (palw_tir_tensor_bytes_v1(p, j), row_bytes(p, j));
         for layer in inst {
@@ -204,6 +229,75 @@ pub fn palw_tir_visit_inventory_rows_v1(
         }
     }
     Ok(())
+}
+
+/// Descriptor-scoped model inventory for a new binding statement. This borrows the complete,
+/// validated program: input references are never removed or rewritten. The descriptor alone
+/// selects the implemented role contract; parameter names alone cannot exclude any bytes.
+///
+/// This is not the historical V2 class inventory. In particular, old objects 104/105 continue
+/// to use every declared parameter. A consumer must bind this descriptor and program together
+/// with both roots in a new authenticated statement before using this scope for adjudication.
+#[derive(Clone, Debug)]
+pub struct PalwTirModelInventoryV2<'p> {
+    program: &'p TirProgramV1,
+    descriptor: misaka_palw_kernel::hash::Digest,
+    model_params: usize,
+    leaves: u32,
+}
+
+impl<'p> PalwTirModelInventoryV2<'p> {
+    /// Only exact implemented v4/v5 descriptors are accepted. Unknown or modified semantics
+    /// cannot borrow v5's input exclusion merely by copying its memory-model number.
+    pub fn new(descriptor: &misaka_palw_kernel::descriptor::KernelDescriptorV1, program: &'p TirProgramV1) -> Result<Self, String> {
+        use misaka_palw_kernel::descriptor::{k2_tir_v4_descriptor, k2_tir_v5_descriptor};
+        let digest = descriptor.digest();
+        let encoder = if digest == k2_tir_v5_descriptor().digest() {
+            true
+        } else if digest == k2_tir_v4_descriptor().digest() {
+            false
+        } else {
+            return Err("model inventory requires an exact implemented v4 or v5 descriptor".into());
+        };
+        misaka_palw_tir::validate::validate(program).map_err(|e| e.to_string())?;
+        let model_params = if encoder {
+            misaka_palw_kernel::seg_encoder::encoder_binding_v1(program)?.first_input as usize
+        } else {
+            program.params.len()
+        };
+        let leaves = inventory_leaf_count_prefix(program, model_params).map_err(|e| e.to_string())?;
+        Ok(Self { program, descriptor: digest, model_params, leaves })
+    }
+
+    pub fn program(&self) -> &'p TirProgramV1 {
+        self.program
+    }
+
+    pub fn descriptor_digest(&self) -> misaka_palw_kernel::hash::Digest {
+        self.descriptor
+    }
+
+    pub fn model_param_count(&self) -> usize {
+        self.model_params
+    }
+
+    pub fn leaf_count(&self) -> u32 {
+        self.leaves
+    }
+
+    pub fn instances(&self) -> Vec<Vec<Option<u16>>> {
+        let mut instances = palw_tir_param_instances_v1(self.program);
+        instances.truncate(self.model_params);
+        instances
+    }
+
+    pub fn leaf_index(&self, param: u16, layer: Option<u16>, byte_offset: u64) -> Option<u32> {
+        inventory_leaf_index_prefix(self.program, self.model_params, param, layer, byte_offset)
+    }
+
+    pub fn visit_rows(&self, visit: &mut dyn FnMut(PalwTirInventoryRowV1)) -> Result<(), PalwTirInventoryError> {
+        visit_inventory_prefix(self.program, self.model_params, visit)
+    }
 }
 
 /// Supplies the bytes of each tensor instance (little-endian, the declared dtype's width).
@@ -437,6 +531,24 @@ mod tests {
             }
         }
         Src(out)
+    }
+
+    #[test]
+    fn model_inventory_v4_preserves_legacy_schedule_and_piece_positions() {
+        let p = program();
+        let inventory = PalwTirModelInventoryV2::new(&misaka_palw_kernel::descriptor::k2_tir_v4_descriptor(), &p).unwrap();
+        assert_eq!(inventory.instances(), palw_tir_param_instances_v1(&p));
+        assert_eq!(inventory.leaf_count(), palw_tir_inventory_leaf_count_v1(&p).unwrap());
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        palw_tir_visit_inventory_rows_v1(&p, &mut |r| old.push(r)).unwrap();
+        inventory.visit_rows(&mut |r| new.push(r)).unwrap();
+        assert_eq!(new, old);
+        for (i, r) in new.iter().enumerate() {
+            assert_eq!(inventory.leaf_index(r.param, r.layer, r.row_start as u64), Some(i as u32));
+            assert_eq!(inventory.leaf_index(r.param, r.layer, (r.row_start + r.len - 1) as u64), Some(i as u32));
+        }
+        assert!(PalwTirModelInventoryV2::new(&misaka_palw_kernel::descriptor::k2_tir_v5_descriptor(), &p).is_err());
     }
 
     #[test]

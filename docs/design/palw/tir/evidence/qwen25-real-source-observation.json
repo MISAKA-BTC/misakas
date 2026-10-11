@@ -1,0 +1,46 @@
+{
+  "schema": "misaka.rfc02.checkpoint-source-observation.v1",
+  "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+  "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "metadata_url": "https://huggingface.co/api/models/Qwen/Qwen2.5-1.5B-Instruct/revision/989aa7980e4cf806f80c7fef2b1adb7bc71aa306?blobs=true",
+  "files": [
+    {
+      "path": "config.json",
+      "bytes": 660,
+      "sha256": "98d2ff8cc47488d08a2b0b3acf4eb99ef210779b42bd48605f6b8e36acdbf670",
+      "git_blob_sha1": "f81ead14ab072d65a07817f83a3ee0e5a1890d10",
+      "expected_kind": "git-blob-sha1",
+      "expected": "f81ead14ab072d65a07817f83a3ee0e5a1890d10",
+      "matches": true
+    },
+    {
+      "path": "model.safetensors",
+      "bytes": 3087467144,
+      "sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+      "git_blob_sha1": "321d7203066aa4496686c6122bbd2101ce0e2b8c",
+      "expected_kind": "sha256",
+      "expected": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+      "matches": true
+    },
+    {
+      "path": "tokenizer.json",
+      "bytes": 7031645,
+      "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+      "git_blob_sha1": "443909a61d429dff23010e5bddd28ff530edda00",
+      "expected_kind": "git-blob-sha1",
+      "expected": "443909a61d429dff23010e5bddd28ff530edda00",
+      "matches": true
+    }
+  ],
+  "missing_files": [
+    ".gitattributes",
+    "LICENSE",
+    "README.md",
+    "generation_config.json",
+    "merges.txt",
+    "tokenizer_config.json",
+    "vocab.json"
+  ],
+  "seconds": 2.514,
+  "claim": "Only the listed bytes match this revision; absent generation/tokenizer configuration is not task-completion evidence."
+}

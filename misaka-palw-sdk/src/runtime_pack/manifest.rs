@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// `f64` as the hex of its bits (see the module docs).
-mod f64_bits {
+pub(crate) mod f64_bits {
     use serde::{Deserialize, Deserializer, Serializer};
     pub fn serialize<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&format!("{:016x}", v.to_bits()))

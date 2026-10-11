@@ -98,6 +98,21 @@ pub mod ledger;
 pub mod lifecycle;
 pub mod merkle;
 pub mod merkle3;
+pub mod merkle4;
+/// Separate flat-v5 namespace for all internal trace dtypes.
+pub mod merkle5;
+/// Staged flat-profile dependency-leaf courts; no shipping descriptor selects them.
+pub mod flat_court4;
+/// Staged flat-v5 complete court-kind set, not selected by a shipping route.
+pub mod flat_court5;
+pub mod flat_detect5;
+pub mod flat_replay6;
+/// Staged actor-bound sealed flat evidence; not a consensus route or payout.
+pub mod flat_seal6;
+/// Staged complete flat-v5 court resource admission.
+pub mod flat_scope5;
+/// Bounded raw-width producer hashing of the unchanged v3 tensor commitments.
+pub mod merkle3_stream;
 pub mod mode;
 pub mod opv;
 pub mod outcome;

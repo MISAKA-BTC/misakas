@@ -25,7 +25,7 @@
 //! float `.weight` (a module MLX left unquantised) is not a module of the format and passes through.
 
 use super::desc::{ConfigDesc, DecodeDesc, LayoutDesc, QuantFormatDesc};
-use super::expr::{Col, DslError, Mask, Node, R, compile, eval};
+use super::expr::{Col, DslError, Env, Mask, Node, R, Table, compile, eval};
 use super::tensors::{ConfigReader, ConfigRead, Defs, Rd, Role, RoleTensor, TEnv, TScope, check_roles, compile_roles, table};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -210,7 +210,7 @@ impl VirtualFormat {
     /// in `f32` is an error.
     pub fn decode_range(&self, roles: &[Option<RoleTensor>], params: &BTreeMap<String, i64>, range: Range<usize>) -> R<Vec<f32>> {
         let shape = self.shape(roles, params)?;
-        let total: usize = shape.iter().product();
+        let total = shape.iter().try_fold(1usize, |n, d| n.checked_mul(*d)).ok_or_else(|| DslError("virtual shape overflows".into()))?;
         if range.start > range.end || range.end > total {
             return Err(DslError(format!("{}: elements {range:?} of a tensor of {total}", self.name)));
         }
@@ -249,5 +249,67 @@ impl VirtualFormat {
 
     pub fn config(&self) -> Option<&ConfigDesc> {
         self.reader.config.as_ref()
+    }
+    /// Static bounds for the untrusted streaming route. Shape/check expressions may read headers
+    /// and parameters only, so preflight never depends on packed weight contents or lane values.
+    pub fn streaming_work(&self) -> R<usize> {
+        for n in self.shape.iter().chain(self.checks.iter().map(|(n, _)| n)) {
+            super::expr::streaming_nodes(n, Some((self.axes.len(), self.roles.len())))?;
+        }
+        super::expr::streaming_nodes(&self.value, None)
+    }
+
+    /// Evaluate at most 1024 elements through byte ranges of individual stored role tensors.
+    /// No whole-role load, float source wrapper, parallel cache or hidden model dispatch occurs.
+    /// The caller bounds and pins each provider read. At most 256 expression nodes are evaluated
+    /// per lane; the decoded buffer is <=4KiB and intermediate columns are <=2MiB in total.
+    pub fn decode_range_streamed(
+        &self,
+        roles: &[Option<RoleTensor>],
+        params: &BTreeMap<String, i64>,
+        range: Range<usize>,
+        read: &dyn Fn(usize, Range<usize>) -> R<Vec<u8>>,
+    ) -> R<Vec<f32>> {
+        self.streaming_work()?;
+        let shape = self.shape(roles, params)?;
+        let total =
+            shape.iter().try_fold(1usize, |n, d| n.checked_mul(*d)).ok_or_else(|| DslError("virtual shape overflows".into()))?;
+        if range.start > range.end || range.end > total || range.len() > 1024 {
+            return Err(DslError("FRONTEND_DESCRIPTOR_LIMIT: decode range".into()));
+        }
+        let mut base = self.const_env(roles, params)?.with_lanes(range.len());
+        let mut stride = 1usize;
+        for a in (0..shape.len()).rev() {
+            base.vars[a] = Col::I(range.clone().map(|k| ((k / stride) % shape[a]) as i64).collect());
+            stride = stride.checked_mul(shape[a]).ok_or_else(|| DslError("virtual stride overflows".into()))?;
+        }
+        let env = RangeEnv { base, read };
+        eval(&self.value, &env, Mask(None))?
+            .into_floats(range.len())
+            .into_iter()
+            .map(|v| {
+                let f = v as f32;
+                if f.is_finite() { Ok(f) } else { Err(DslError("FRONTEND_QUANT_NONFINITE: descriptor value".into())) }
+            })
+            .collect()
+    }
+}
+
+struct RangeEnv<'a> {
+    base: TEnv<'a>,
+    read: &'a dyn Fn(usize, Range<usize>) -> R<Vec<u8>>,
+}
+impl Env for RangeEnv<'_> {
+    fn lanes(&self) -> usize {
+        self.base.n
+    }
+    fn var(&self, s: usize) -> &Col {
+        self.base.var(s)
+    }
+    fn table(&self, s: usize) -> &Table {
+        self.base.table(s)
+    }
+    fn read(&self, s: usize, index: &[Col], mask: Mask<'_>) -> R<Col> {
+        self.base.read_with(s, index, mask, &|r, range| (self.read)(r, range).map(std::borrow::Cow::Owned))
     }
 }

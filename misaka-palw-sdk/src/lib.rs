@@ -13,7 +13,15 @@
 //! battery — [`conformance`] — enforces at `cargo test` the invariants the admission gate enforces
 //! on chain.
 //!
-//! ## Adding a new LLM
+//! ## Canonical TIR and versioned kernels
+//!
+//! The kernel route accepts canonical TIR as data, without a ModelSpec, model name or official
+//! compiler registry. Generic static admission is in [`preflight::kernel`]; bounded v3 parameter
+//! commitment preparation is in [`kernel_params`]. These do not grant activation, source fidelity,
+//! public availability or economic eligibility. Full execution/court/Final evidence remains required.
+//! The lineage agreements below describe the existing profile-based artifact routes.
+//!
+//! ## Adding a new LLM through a profile lineage
 //!
 //! **A new checkpoint of a known lineage** (the common case) is a data change and no SDK code:
 //! add the frozen geometry beside its family's profile module in `kaspa-consensus-core`, add the
@@ -67,6 +75,10 @@ pub mod tir_merkle_index;
 /// RFC-0013 §5: the container as a row source for the tiled independent evaluator, authenticated by the stored index.
 pub mod tir_rows;
 pub mod tir_stream;
+/// Generic bounded preparation of segmented-kernel parameter commitments.
+pub mod kernel_params;
+/// Stream the node's native values into the existing segmented commitment grammar.
+pub mod kernel_execution;
 /// RFC-0002 Phase F (F6, node half): registering an IR class.
 pub mod tir_certification;
 /// RFC-0004 §6.3 (PALW-MIP-15): a LoRA candidate's container as a composite of its parent's.
@@ -76,6 +88,7 @@ pub mod tir_registration;
 /// G14 onboarding P0: the signed registration envelope (tag 108), the conformance evidence object (tag 109) and the fresh verifier
 /// that rebuilds the chain's conformance verdict from public reads.
 pub mod onboarding_chain;
+pub mod onboarding_snapshot;
 
 pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};
 pub use lineage::{PalwClassEntryV1, PalwGenClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1, PalwWeightResidencyV1};
