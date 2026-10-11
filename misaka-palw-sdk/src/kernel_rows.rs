@@ -125,6 +125,43 @@ mod tests {
     }
 
     #[test]
+    fn kernel_pages_rebuild_the_real_route_across_page_boundaries() {
+        use kaspa_consensus_core::palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_route_policy_v1};
+        let policy = palw_kernel_route_policy_v1(Hash64::from_bytes([1; 64]), Hash64::from_bytes([2; 64]));
+        let mut route = PalwKernelRouteStateV1::new(policy, None, Default::default());
+        for table in [32, 33, 40] {
+            route.aux.insert((table, vec![0]), vec![table; 50]);
+        }
+        let mut read = collector();
+        loop {
+            let page = route.rows_page_v1(read.cursor().cloned(), 1);
+            let snapshot = KernelRowsSnapshotV1 {
+                tip_daa: 10,
+                ledger_root: route.ledger_root(),
+                aux_root: route.aux_root(),
+                header: borsh::to_vec(&route.header).unwrap(),
+                total_rows: page.total_rows,
+            };
+            let done = page.next.is_none();
+            read.append(snapshot, page.rows, page.next).unwrap();
+            if done {
+                break;
+            }
+        }
+        let (snapshot, rows) = read.finish().unwrap();
+        let rebuilt =
+            PalwKernelRouteStateV1::from_served_rows_v1(&snapshot.header, rows.clone(), &snapshot.ledger_root, &snapshot.aux_root)
+                .unwrap();
+        assert_eq!(rebuilt.aux, route.aux);
+        let mut altered = rows;
+        altered[0].2.push(9);
+        assert!(
+            PalwKernelRouteStateV1::from_served_rows_v1(&snapshot.header, altered, &snapshot.ledger_root, &snapshot.aux_root,)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn kernel_pages_finish_one_complete_ordered_inventory() {
         let mut read = collector();
         read.append(snapshot(2), vec![row(1)], Some((1, vec![0]))).unwrap();
