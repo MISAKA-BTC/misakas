@@ -4967,6 +4967,24 @@ impl VirtualStateProcessor {
         Ok(state.legacy_answer_pending_v2(key).map(|row| row.progress()))
     }
 
+    pub fn palw_legacy_answer_history_v2_impl(
+        &self,
+        block: kaspa_consensus_core::BlockHash,
+        chunk: &kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkV2,
+        maximum: u64,
+    ) -> Result<Option<kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerCarriageV2>, String> {
+        use kaspa_consensus_core::palw_legacy_answer_chunks_v2::*;
+        if chunk.index >= PALW_LEGACY_ANSWER_MAX_CHUNKS_V2 || chunk.bytes.len() > PALW_LEGACY_ANSWER_CHUNK_BYTES_V2 as usize {
+            return Ok(None);
+        }
+        let row = self.palw_state_v2_store.read().legacy_answer_history_row_v2(block, chunk, maximum)
+            .map_err(|e| e.to_string())?;
+        let Some(row) = row else { return Ok(None) };
+        // Bad carrier bytes are not a broken reader. Independently authenticated material may
+        // still be useful even when the court refused a carrier after its deadline.
+        Ok(row.preview(chunk).ok().flatten())
+    }
+
     /// **Lane LG14-A (RPC 205): the claims a live reservation holds at the tip.**
     pub fn palw_legacy_disputes_v1_impl(
         &self,

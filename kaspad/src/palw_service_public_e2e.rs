@@ -556,6 +556,11 @@ async fn fresh_public_bond_service_reacquires_an_unretained_job_and_input_then_r
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_reconstructs_a_multipart_unretained_job_then_replays_and_releases() {
+    fresh_public_service(PublicCase::UnretainedMultipartHonestFpV3Job).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fresh_public_bond_service_defaults_on_a_withheld_job_preimage_after_a_correct_binding() {
     fresh_public_service(PublicCase::UnretainedWithheldFpV3Job).await;
 }
@@ -573,6 +578,7 @@ enum PublicCase {
     UnretainedForeignFpV3Job,
     UnretainedWithheldFpV3Binding,
     UnretainedHonestFpV3Job,
+    UnretainedMultipartHonestFpV3Job,
     UnretainedWithheldFpV3Job,
 }
 
@@ -589,6 +595,7 @@ impl PublicCase {
             Self::UnretainedForeignFpV3Job
                 | Self::UnretainedWithheldFpV3Binding
                 | Self::UnretainedHonestFpV3Job
+                | Self::UnretainedMultipartHonestFpV3Job
                 | Self::UnretainedWithheldFpV3Job
         )
     }
@@ -605,7 +612,7 @@ impl PublicCase {
         )
     }
     fn reacquire_honest(self) -> bool {
-        matches!(self, Self::PrunedHonestFpV3Job | Self::UnretainedHonestFpV3Job)
+        matches!(self, Self::PrunedHonestFpV3Job | Self::UnretainedHonestFpV3Job | Self::UnretainedMultipartHonestFpV3Job)
     }
 }
 
@@ -1219,7 +1226,7 @@ async fn fresh_public_service(case: PublicCase) {
             );
             eprintln!("[service-public] authenticated binding carried; answered = {}", !case.identity_fault());
         }
-        if case == PublicCase::UnretainedHonestFpV3Job
+        if matches!(case, PublicCase::UnretainedHonestFpV3Job | PublicCase::UnretainedMultipartHonestFpV3Job)
             && !job_preimage_submitted
             && chain.view(claim).sessions.iter().any(|(who, s)| {
                 *who == bond
@@ -1251,41 +1258,70 @@ async fn fresh_public_service(case: PublicCase) {
                 };
                 let message = palw_legacy_held_answer_message_v2(chain.network_domain.as_byte_slice(), &answer);
                 answer.signature = signed(0, message.as_byte_slice(), PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
-                let tx = palw_carrier_fees::build_lifecycle_carrier_v2(
-                    &chain.config,
-                    key(0),
-                    &PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer: Box::new(answer) },
-                    floats[0].0,
-                    &floats[0].1,
-                    &[],
-                    None,
-                    chain.daa(),
-                )
-                .unwrap();
-                let session = manager.consensus().unguarded_session();
-                retained_flow
-                    .submit_rpc_transaction(&session, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden)
-                    .await
-                    .expect("the signed descriptor carrier passes ordinary PQ admission");
-                let mut included = false;
-                for _ in 0..8 {
-                    let block = pool_heartbeat(&mut chain, &manager, &pool).await;
-                    if block.transactions.iter().any(|t| t.id() == tx.id()) {
-                        included = true;
-                        break;
+                let objects = if !corrupt && case == PublicCase::UnretainedMultipartHonestFpV3Job {
+                    use kaspa_consensus_core::palw_legacy_answer_chunks_v2::*;
+                    // Exercise actual history reconstruction with two authenticated parts of this
+                    // ordinary small job. This is not a maximum-job/profile benchmark and does
+                    // not exercise the producer's automatic splitting worker.
+                    let part_bytes = borsh::object_length(&answer).unwrap().div_ceil(2) as u32;
+                    let (declaration, chunks) =
+                        palw_legacy_answer_split_v2(&answer, part_bytes, chain.bundle.court.max_close_bytes(), |d| {
+                            let message = palw_legacy_answer_declaration_message_v2(chain.network_domain.as_byte_slice(), d);
+                            Ok(signed(0, message.as_byte_slice(), PALW_LEGACY_ANSWER_DECLARE_CONTEXT_V2))
+                        })
+                        .unwrap();
+                    assert_eq!(chunks.len(), 2);
+                    let mut objects = vec![PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration: Box::new(declaration) }];
+                    objects.extend(
+                        chunks.into_iter().map(|chunk| PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(chunk) }),
+                    );
+                    objects
+                } else {
+                    vec![PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer: Box::new(answer) }]
+                };
+                let carriers = objects.len();
+                for (index, object) in objects.into_iter().enumerate() {
+                    let tx = palw_carrier_fees::build_lifecycle_carrier_v2(
+                        &chain.config,
+                        key(0),
+                        &object,
+                        floats[0].0,
+                        &floats[0].1,
+                        &[],
+                        None,
+                        chain.daa(),
+                    )
+                    .unwrap();
+                    let session = manager.consensus().unguarded_session();
+                    retained_flow
+                        .submit_rpc_transaction(&session, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden)
+                        .await
+                        .expect("the signed descriptor carrier passes ordinary PQ admission");
+                    let mut included = false;
+                    for _ in 0..8 {
+                        let block = pool_heartbeat(&mut chain, &manager, &pool).await;
+                        if block.transactions.iter().any(|t| t.id() == tx.id()) {
+                            included = true;
+                            break;
+                        }
                     }
+                    assert!(included, "the job descriptor was actually carried");
+                    pool_heartbeat(&mut chain, &manager, &pool).await;
+                    let output = tx.outputs.last().unwrap();
+                    floats[0] = (
+                        TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
+                        UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false),
+                    );
+                    assert_eq!(
+                        chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::FpJob)),
+                        !corrupt && index + 1 == carriers,
+                        "partial parts never answer the DA obligation"
+                    );
                 }
-                assert!(included, "the job descriptor was actually carried");
-                pool_heartbeat(&mut chain, &manager, &pool).await;
                 let view = chain.view(claim);
                 assert_eq!(view.unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::FpJob)), !corrupt);
                 assert!(view.public_fp_job.is_none(), "court reacquisition never fabricates original commitment metadata");
                 assert!(!view.executor_refuted && !view.court_convicted && !view.da_defaulted);
-                let output = tx.outputs.last().unwrap();
-                floats[0] = (
-                    TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
-                    UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false),
-                );
             }
             job_preimage_submitted = true;
             eprintln!("[service-public] wrong job refused, authenticated job preimage acquired through signed public carriers");
@@ -1431,6 +1467,28 @@ async fn fresh_public_service(case: PublicCase) {
                     .filter_map(|tx| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload).ok())
                     .map(|p| p.object)
                     .collect();
+                if case == PublicCase::UnretainedMultipartHonestFpV3Job {
+                    use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
+                    assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration }
+                        if declaration.claim == claim && declaration.unit == PalwLegacyHeldUnitV2::FpJob)));
+                    assert_eq!(
+                        carriers
+                            .iter()
+                            .filter(|o| matches!(o, PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk }
+                        if chunk.claim == claim && chunk.unit == PalwLegacyHeldUnitV2::FpJob))
+                            .count(),
+                        2
+                    );
+                    assert!(
+                        !carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
+                        if answer.claim == claim && answer.unit == PalwLegacyHeldUnitV2::FpJob
+                            && kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
+                                &honest.execution_root, &answer.unit, &answer.binding, &answer.answer,
+                                answer.binding.step_leaf_count, chain.config.params.palw_prompt_ids_form_at(chain.daa()),
+                            ).is_ok())),
+                        "the correct job was never carried as a direct answer"
+                    );
+                }
                 assert!(
                     carriers.iter().any(|object| matches!(object,
                     PalwConsensusObjectV2::DisputeReleasedV1 { claim: c, reserver, .. } if *c == claim && *reserver == bond)),

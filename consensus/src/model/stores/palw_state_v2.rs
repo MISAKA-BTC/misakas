@@ -226,6 +226,7 @@ impl DbPalwStateV2Store {
             return Ok(());
         }
         self.deltas.delete_all(DirectDbWriter::new(&self.db))?;
+        self.clear_legacy_answer_history(&mut DirectDbWriter::new(&self.db), None)?;
         match self.tip.remove(DirectDbWriter::new(&self.db)) {
             Ok(()) | Err(StoreError::KeyNotFound(_)) => {}
             Err(e) => return Err(e),
@@ -244,12 +245,14 @@ impl DbPalwStateV2Store {
         state_root: Hash64,
         delta: &PalwStateDeltaV2,
     ) -> StoreResult<()> {
+        self.index_legacy_answer_history_batch(batch, block, delta)?;
         let delta_borsh = borsh::to_vec(delta).expect("PalwStateDeltaV2 is borsh-serializable");
         self.deltas.write(BatchDbWriter::new(batch), block, Arc::new(PalwStateDeltaRecordV2 { state_root, delta_borsh }))
     }
 
     /// Stage removal of a block's row (it left the selected chain and its delta was reverted).
     pub fn delete_delta_batch(&mut self, batch: &mut WriteBatch, block: BlockHash) -> StoreResult<()> {
+        self.clear_legacy_answer_history(&mut BatchDbWriter::new(batch), Some(block))?;
         self.deltas.delete(BatchDbWriter::new(batch), block)
     }
 
@@ -562,6 +565,9 @@ impl DbPalwStateV2Store {
             .map_err(|e: PalwStateV2Error| StoreError::DataInconsistency(format!("palw v2 tip snapshot refused: {e}")))
     }
 }
+
+#[path = "palw_legacy_answer_history_v2.rs"]
+mod legacy_answer_history_v2;
 
 #[cfg(test)]
 mod tests {

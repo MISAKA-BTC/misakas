@@ -14748,6 +14748,18 @@ pub(crate) fn walk_accepted_lifecycle_page_v1(
     max_chain_blocks: usize,
     visit: &mut dyn FnMut(PalwConsensusObjectV2),
 ) -> Result<Option<Hash64>, String> {
+    walk_accepted_lifecycle_page_with_block_v2(consensus, start, not_before_daa, max_chain_blocks, &mut |_, object| visit(object))
+}
+
+/// Like the paged walker, with the selected-chain fold block. A mergeset carrier's own block
+/// is not the journal key; completion material must be read at the block accepting it.
+pub(crate) fn walk_accepted_lifecycle_page_with_block_v2(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    start: Hash64,
+    not_before_daa: u64,
+    max_chain_blocks: usize,
+    visit: &mut dyn FnMut(Hash64, PalwConsensusObjectV2),
+) -> Result<Option<Hash64>, String> {
     let mut cursor = start;
     for _ in 0..max_chain_blocks {
         let header = consensus.get_header(cursor).map_err(|e| format!("history header {cursor}: {e}"))?;
@@ -14767,7 +14779,7 @@ pub(crate) fn walk_accepted_lifecycle_page_v1(
                 if tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
                     && let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload)
                 {
-                    visit(payload.object);
+                    visit(cursor, payload.object);
                 }
             }
         }
@@ -18813,9 +18825,21 @@ mod accepted_objects_walk_tests {
         blocks: HashMap<BlockHash, Block>,
         targets: HashMap<Hash64, kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1>,
         views: HashMap<Hash64, kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1>,
+        answer_history: HashMap<(BlockHash, kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, Hash64, u8),
+            kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
+        answer_history_unavailable: bool,
     }
 
     impl kaspa_consensus_core::api::ConsensusApi for Chain {
+        fn palw_legacy_answer_history_v2(
+            &self, block: BlockHash,
+            chunk: Box<kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkV2>, maximum: u64,
+        ) -> Result<Option<kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerCarriageV2>, String> {
+            if self.answer_history_unavailable { return Err("test history reader unavailable".into()); }
+            let Some(row) = self.answer_history.get(&(block, chunk.key(), chunk.answer_digest, chunk.index)) else { return Ok(None) };
+            row.check(maximum)?;
+            Ok(row.preview(&chunk).ok().flatten())
+        }
         fn palw_legacy_dispute_v1(&self, claim: Hash64) -> Option<kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1> {
             self.views.get(&claim).cloned()
         }
@@ -19235,7 +19259,57 @@ mod accepted_objects_walk_tests {
         ).unwrap().2.is_empty(), "a carrier does not choose a Merkle ruleset on a Flat network");
         chain.blocks.insert(hash(2), saved);
         let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = good else { unreachable!() };
-        assert_eq!(found[0].1, PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
+        assert_eq!(found[0].1, PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding.clone(), answer.answer.clone()))));
+        // Adapter regression: public removal rows and a mergeset last carrier suffice across pages.
+        // Synthetic signatures here do not prove MLDSA acceptance or the producer service path.
+        let (declaration, chunks) = kaspa_consensus_core::palw_legacy_answer_chunks_v2::palw_legacy_answer_split_v2(
+            &answer, (borsh::object_length(&answer).unwrap().div_ceil(2)) as u32, u64::MAX, |_| Ok(vec![1]),
+        ).unwrap();
+        let mut row = kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2 {
+            declaration, deadline_daa: 1000, parts: BTreeMap::new(),
+        };
+        for chunk in &chunks[..chunks.len() - 1] { row.parts.insert(chunk.index, chunk.bytes.clone()); }
+        let last = chunks.last().unwrap().clone();
+        let history_key = (hash(2), last.key(), last.answer_digest, last.index);
+        chain.answer_history.insert(history_key, row.clone());
+        let mut corrupt = last.clone(); corrupt.bytes[0] ^= 1;
+        let txs: Vec<_> = [last.clone(), corrupt].into_iter().map(|chunk| Transaction::new(
+            TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2,
+                object: PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(chunk) } }).unwrap(),
+        )).collect();
+        chain.blocks.insert(hash(40), Block::new(Header::from_precomputed_hash(hash(40), vec![]), txs));
+        chain.acceptance.insert(hash(2), Arc::new(vec![MergesetBlockAcceptanceData {
+            block_hash: hash(40), accepted_transactions: (0..2).map(|i| AcceptedTxEntry {
+                transaction_id: Default::default(), index_within_block: i,
+            }).collect(),
+        }]));
+        let mut previous = None;
+        let mut recovered = Vec::new();
+        for _ in 0..9 {
+            let (walk, _, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+                &chain, 100, 100, previous, 1, &wanted, &selected_units,
+            ).unwrap();
+            recovered.extend(answers); previous = Some(walk);
+            if !recovered.is_empty() { break; }
+        }
+        assert_eq!(recovered, found, "the fold block, rather than mergeset carrier block, selects the bounded history row");
+        chain.answer_history_unavailable = true;
+        let (unavailable, _, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, None, 100, &wanted, &selected_units,
+        ).unwrap();
+        assert!(answers.is_empty()); assert_eq!(unavailable.next, Some(unavailable.anchor));
+        chain.answer_history_unavailable = false;
+        chain.answer_history.get_mut(&history_key).unwrap().parts.values_mut().next().unwrap()[0] ^= 1;
+        let (corrupt, _, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, None, 100, &wanted, &selected_units,
+        ).unwrap();
+        assert!(answers.is_empty()); assert_eq!(corrupt.next, Some(corrupt.anchor));
+        chain.answer_history.remove(&history_key);
+        assert!(super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
+            &chain, 100, 100, None, 100, &wanted, &selected_units,
+        ).unwrap().2.is_empty(), "an absent old index does not invent an answer; the case must reacquire");
+        chain.answer_history.insert(history_key, row);
         let wrong_root = BTreeMap::from([(claim, Hash64::from_u64_word(0xBAD))]);
         assert!(
             super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, None, 100, &wrong_root, &selected_units,)

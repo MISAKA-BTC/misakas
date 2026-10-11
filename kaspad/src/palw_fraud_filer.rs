@@ -205,6 +205,30 @@ pub(super) fn palw_fraud_filer_read_page_with_form_v1(
     legacy_wanted: &BTreeMap<Hash64, PalwLegacyHeldUnitV2>,
     network: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<(PalwFraudFilerWalkV1, bool, Vec<((Hash64, PalwDaUnitV1), PalwDaBuiltAnswerV1)>), String> {
+    palw_fraud_filer_read_page_with_budget_v2(
+        consensus,
+        oldest,
+        floor,
+        previous,
+        max_blocks,
+        wanted,
+        legacy_wanted,
+        network,
+        kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2,
+    )
+}
+
+fn palw_fraud_filer_read_page_with_budget_v2(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    oldest: u64,
+    floor: u64,
+    previous: Option<PalwFraudFilerWalkV1>,
+    max_blocks: usize,
+    wanted: &BTreeMap<Hash64, Hash64>,
+    legacy_wanted: &BTreeMap<Hash64, PalwLegacyHeldUnitV2>,
+    network: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    maximum: u64,
+) -> Result<(PalwFraudFilerWalkV1, bool, Vec<((Hash64, PalwDaUnitV1), PalwDaBuiltAnswerV1)>), String> {
     let tip = consensus.get_sink();
     let same_branch = previous.is_none_or(|p| p.anchor == tip || consensus.is_chain_ancestor_of(p.anchor, tip).unwrap_or(false));
     let reset = !same_branch;
@@ -217,44 +241,81 @@ pub(super) fn palw_fraud_filer_read_page_with_form_v1(
     )?;
     let start = continuing.and_then(|p| p.next).unwrap_or(tip);
     let mut answers = BTreeMap::new();
-    let next = crate::palw_panel::walk_accepted_lifecycle_page_v1(consensus, start, floor, max_blocks, &mut |object| match object {
-        PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, .. }
-            if wanted.get(&claim).is_some_and(|root| {
-                kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(&unit, &answer, root)
-            }) && palw_fraud_filer_cache_unit_v1(
-                &unit,
-                match &answer {
-                    PalwDaAnswerV1::Held(c) => Some(c.binding.step_leaf_count),
-                    _ => None,
-                },
-            ) =>
-        {
-            palw_fraud_filer_cache_answer_v1(&mut answers, (claim, unit), PalwDaBuiltAnswerV1::Rcore(answer));
-        }
-        PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
-            if legacy_wanted.get(&answer.claim) == Some(&answer.unit)
-                && wanted.get(&answer.claim).is_some_and(|root| {
-                    kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
-                        root,
-                        &answer.unit,
-                        &answer.binding,
-                        &answer.answer,
-                        answer.binding.step_leaf_count,
-                        network,
-                    )
-                    .is_ok()
-                }) =>
-        {
-            answers
-                .entry((answer.claim, PalwDaUnitV1::LegacyHeldV2(answer.unit)))
-                .or_insert(PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
-        }
-        _ => {}
-    })
-    .unwrap_or_else(|why| {
-        debug!("[{PALW_PANEL}] partial public history: {why}; completion watermark unchanged");
-        Some(anchor)
-    });
+    let mut unavailable = false;
+    let next =
+        crate::palw_panel::walk_accepted_lifecycle_page_with_block_v2(consensus, start, floor, max_blocks, &mut |block, object| {
+            match object {
+                PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, .. }
+                    if wanted.get(&claim).is_some_and(|root| {
+                        kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(
+                            &unit, &answer, root,
+                        )
+                    }) && palw_fraud_filer_cache_unit_v1(
+                        &unit,
+                        match &answer {
+                            PalwDaAnswerV1::Held(c) => Some(c.binding.step_leaf_count),
+                            _ => None,
+                        },
+                    ) =>
+                {
+                    palw_fraud_filer_cache_answer_v1(&mut answers, (claim, unit), PalwDaBuiltAnswerV1::Rcore(answer));
+                }
+                PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
+                    if legacy_wanted.get(&answer.claim) == Some(&answer.unit)
+                        && wanted.get(&answer.claim).is_some_and(|root| {
+                            kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
+                                root,
+                                &answer.unit,
+                                &answer.binding,
+                                &answer.answer,
+                                answer.binding.step_leaf_count,
+                                network,
+                            )
+                            .is_ok()
+                        }) =>
+                {
+                    answers
+                        .entry((answer.claim, PalwDaUnitV1::LegacyHeldV2(answer.unit)))
+                        .or_insert(PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
+                }
+                PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk }
+                    if legacy_wanted.get(&chunk.claim) == Some(&chunk.unit)
+                        && wanted.contains_key(&chunk.claim)
+                        && !answers.contains_key(&(chunk.claim, PalwDaUnitV1::LegacyHeldV2(chunk.unit))) =>
+                {
+                    match consensus.palw_legacy_answer_history_v2(block, chunk, maximum) {
+                        Ok(Some(answer))
+                            if wanted.get(&answer.claim).is_some_and(|root| {
+                                kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
+                                    root,
+                                    &answer.unit,
+                                    &answer.binding,
+                                    &answer.answer,
+                                    answer.binding.step_leaf_count,
+                                    network,
+                                )
+                                .is_ok()
+                            }) =>
+                        {
+                            answers
+                                .entry((answer.claim, PalwDaUnitV1::LegacyHeldV2(answer.unit)))
+                                .or_insert(PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding, answer.answer))));
+                        }
+                        Err(why) => {
+                            debug!("[{PALW_PANEL}] multipart public history at {block}: {why}; completion watermark unchanged");
+                            unavailable = true;
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        })
+        .unwrap_or_else(|why| {
+            debug!("[{PALW_PANEL}] partial public history: {why}; completion watermark unchanged");
+            Some(anchor)
+        });
+    let next = if unavailable { Some(anchor) } else { next };
     // `next == anchor` is the unavailable-history sentinel: retain independently authenticated answers from the readable
     // prefix, never mark the floor completed, and restart at the NEW tip on the next tick so a reacquired copy is reachable.
     Ok((PalwFraudFilerWalkV1 { floor, anchor, anchor_daa, next }, reset, answers.into_iter().collect()))
@@ -1235,21 +1296,41 @@ impl PalwPanelService {
                 let legacy_wanted =
                     book.cases.values().filter_map(|case| case.legacy_wanted.map(|unit| (case.candidate.claim_id, unit))).collect();
                 let history_form = params.palw_prompt_ids_form_at(current_daa);
-                let result = session
-                    .clone()
-                    .spawn_blocking(move |c| {
-                        palw_fraud_filer_read_page_with_form_v1(
-                            c,
-                            oldest,
-                            floor,
-                            previous,
-                            PALW_FRAUD_FILER_WALK_BLOCKS_V1,
-                            &wanted,
-                            &legacy_wanted,
-                            history_form,
-                        )
-                    })
-                    .await;
+                let history_maximum = self
+                    .config
+                    .court
+                    .max_close_bytes()
+                    .min(kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2);
+                let scratch = crate::palw_memory_ledger::host_ledger_v1().reserve(
+                    crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                        role: "public-answer-history",
+                        class_id: Hash64::default(),
+                        job: previous.map_or(Hash64::default(), |w| w.anchor),
+                    },
+                    8 * history_maximum.saturating_add(16_384),
+                );
+                let result = match scratch {
+                    Ok(scratch) => {
+                        session
+                            .clone()
+                            .spawn_blocking(move |c| {
+                                let _scratch = scratch;
+                                palw_fraud_filer_read_page_with_budget_v2(
+                                    c,
+                                    oldest,
+                                    floor,
+                                    previous,
+                                    PALW_FRAUD_FILER_WALK_BLOCKS_V1,
+                                    &wanted,
+                                    &legacy_wanted,
+                                    history_form,
+                                    history_maximum,
+                                )
+                            })
+                            .await
+                    }
+                    Err(why) => Err(format!("public history waits for memory: {why}")),
+                };
                 match result {
                     Ok((walk, reset, answers)) => {
                         if reset {
