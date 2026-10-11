@@ -3759,10 +3759,11 @@ pub(crate) mod tests {
                     let armed = unarmed.with(PalwLifecycleKindFenceV1::LegacyPublicFilerV1, Some(ForkActivation::new(1_000)))
                         .with(PalwLifecycleKindFenceV1::StagedPublicCourtV1, Some(ForkActivation::new(1_000)));
                     for at in [999, 1_000] {
-                        let below = if staged { validate_palw_lifecycle_tx(&undecodable, false) } else { Ok(()) };
-                        assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &unarmed, at), below);
-                        let expected = if at < 1_000 { below } else { Ok(()) };
-                        assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, at), expected);
+                        // Header context is a second-stage check: below the owner fence
+                        // it asks nothing. Isolation above supplies undecodable parity.
+                        assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &unarmed, at), Ok(()));
+                        assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, at), Ok(()));
+                        assert_eq!(armed.kind_in_force_at(&object, at), !staged || at >= 1_000);
                     }
                 }
             }
