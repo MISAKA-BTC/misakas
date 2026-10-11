@@ -920,6 +920,18 @@ release a held escrow first. The root's existing bounded expiry is the latest pe
 are verified but REAL Final is delayed by a court. The block's initial expiry sweep voids such a root and refunds its bound
 escrows. This is a financial hold deadline, not a reduction in the native finality delay or the required fraud liability window.
 
+The financial hold protects the entire **job escrow**, although table 27 names the bound claim. In PanelLicensed mode,
+several producers can commit claims before the first Panel pass assigns the job. A pending EXEC-bound claim does not
+win that assignment by binding: another producer may obtain coverage and computation Final first. That sibling Final
+must emit reward 0, leave `rewarded = false`, and retain the held job escrow. It cannot bypass the hold by naming a
+different claim digest. Derive the bounded set of held job IDs once per kernel closing tick and use it for both standalone
+Final payouts and idle-escrow expiry. Unrelated jobs retain their normal payment path. This does not relax the one-job
+Panel ownership rule; the uncovered EXEC dependency remains pending, then times out, and the root cancels/refunds
+without paying either producer. Normal eligible bound work still uses the root-Final capped settlement hook.
+
+OPV assigns job ownership earlier, at reveal. Its refusal of a competing claim proves that admission guard, not the
+Panel financial guard above. These two verification modes require separate regression evidence.
+
 ### 13.2 Source and cap accounting
 
 Let `A` be the root executor allocation after the native bond-budget clip, buyback and panel split. Aggregate each executor's

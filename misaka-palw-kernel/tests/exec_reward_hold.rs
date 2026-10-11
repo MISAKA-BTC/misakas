@@ -126,9 +126,9 @@ fn already_paid_standalone_work_cannot_attach_and_orphan_hold_cannot_restore() {
 }
 
 #[test]
-fn a_sibling_final_cannot_spend_held_job_escrow_and_root_finish_or_cancel_still_works() {
+fn a_sibling_final_cannot_spend_pending_exec_job_escrow_and_cancellation_refunds_it() {
     for own_coverage_daa in [10, 20] {
-        for cancel in [false, true] {
+        for cancel_daa in [70, 400] {
             let mut w = World::new();
             let job = w.post_job(2, &[3, 17, 9], 3, 1);
             let own = w.honest(&job, 3);
@@ -144,6 +144,8 @@ fn a_sibling_final_cannot_spend_held_job_escrow_and_root_finish_or_cancel_still_
             if own_coverage_daa == 20 {
                 w.block(20, vec![T::PanelCovered { claim: own_id }]);
             }
+            assert_eq!(w.l.job_claims[&job.id()], sibling_id, "the first Panel pass retains job ownership");
+            assert!(matches!(w.l.claims[&own_id].life.state, ClaimStateV1::Checking { .. }));
             let poster = w.l.bonds[&POSTER].clone();
             let events = w.block(60, vec![]);
             assert!(matches!(w.l.claims[&sibling_id].life.state, ClaimStateV1::Final { .. }));
@@ -154,25 +156,29 @@ fn a_sibling_final_cannot_spend_held_job_escrow_and_root_finish_or_cancel_still_
             assert!(events.iter().any(|event| matches!(event,
                 misaka_palw_kernel::ledger::LedgerEventV1::Final { claim, reward: 0 } if *claim == sibling_id)));
             w.l = restored(&w);
-            w.block(70, vec![]);
-            assert!(matches!(w.l.claims[&own_id].life.state, ClaimStateV1::Final { .. }));
+            w.block(cancel_daa, vec![]);
+            assert!(matches!(w.l.claims[&own_id].life.state, ClaimStateV1::Checking { .. } | ClaimStateV1::TimedOut { .. }));
             assert_eq!(w.l.bonds[&POSTER], poster, "repeated ticks after restore keep the job escrow held");
+            assert_eq!(w.l.job_escrows[&job.id()].amount, 7);
+            let root = w.l.root();
+            let mut refused_events = Vec::new();
+            assert!(
+                w.l.finish_exec_reward([0xE1; 64], own_id, 3, &mut refused_events).is_err(),
+                "a pending or timed-out claim cannot settle the root fee"
+            );
+            assert_eq!(w.l.root(), root);
+            assert!(refused_events.is_empty());
 
             let mut events = Vec::new();
-            let paid = if cancel {
-                w.l.cancel_exec_reward([0xE1; 64], own_id, &mut events).unwrap();
-                0
-            } else {
-                w.l.finish_exec_reward([0xE1; 64], own_id, 3, &mut events).unwrap()
-            };
-            assert_eq!(paid, if cancel { 0 } else { 3 });
+            w.l.cancel_exec_reward([0xE1; 64], own_id, &mut events).unwrap();
             w.consumer.book.apply_events(&events).unwrap();
             w.consumer.check_view(&w.l);
-            assert_eq!(w.l.bonds[&POSTER].collateral, poster.collateral - paid);
+            assert_eq!(w.l.bonds[&POSTER].collateral, poster.collateral);
             assert_eq!(w.l.bonds[&POSTER].reserved, poster.reserved - 7);
-            assert_eq!(w.consumer.paid(&PRODUCER), paid);
+            assert_eq!(w.consumer.paid(&PRODUCER), 0);
             assert_eq!(w.consumer.paid(&OUTSIDER), 0);
             assert!(!w.l.job_escrows.contains_key(&job.id()));
+            assert!(w.l.exec_reward_holds.is_empty());
             restored(&w);
         }
     }

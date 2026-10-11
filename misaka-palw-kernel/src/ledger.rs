@@ -1322,11 +1322,9 @@ impl KernelLedgerV1 {
     /// make on an unclaimed job, and a re-seal restarts its clock on the same deposit, so "no live seal" let a squatter keep the
     /// escrow — and, through `reserved`, the poster's whole bond exit — for as long as it re-sealed. A producer that sealed by the
     /// escrow's TTL has `seal_ttl_daa` to reveal (its seal expires then anyway).
-    fn release_idle_job_escrows(&mut self, out: &mut Vec<LedgerEventV1>) {
+    fn release_idle_job_escrows(&mut self, held_jobs: &BTreeSet<Digest>, out: &mut Vec<LedgerEventV1>) {
         let ttl = self.policy.job_escrow_ttl_daa;
         let seal_ttl = self.policy.seal_ttl_daa;
-        let held_jobs: BTreeSet<_> =
-            self.exec_reward_holds.keys().filter_map(|id| self.claims.get(id).map(|row| row.job_id)).collect();
         let idle: Vec<Digest> = self
             .job_escrows
             .iter()
@@ -2537,8 +2535,13 @@ impl KernelLedgerV1 {
             self.forfeit_claim_seal(job, producer, row, out);
         }
         self.proof_seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
+        // EXEC holds are keyed by claim, but the poster's escrow is keyed by job. A pending Panel claim may be bound before
+        // another producer wins coverage of that same job. Neither its sibling's Final nor idle expiry may spend the held escrow.
+        // Derive this bounded set once per tick; lifecycle updates below do not change hold ownership or claim job bindings.
+        let held_jobs: BTreeSet<_> =
+            self.exec_reward_holds.keys().filter_map(|id| self.claims.get(id).map(|row| row.job_id)).collect();
         // GAP-5: escrows no claim can still use go back to their posters.
-        self.release_idle_job_escrows(out);
+        self.release_idle_job_escrows(&held_jobs, out);
         self.spec_prune_lines(daa);
         // Demands past their deadline: the producer's availability default.
         let due: Vec<_> = self.demands.iter().filter(|(_, d)| daa >= d.deadline_daa).map(|(k, _)| *k).collect();
@@ -2634,7 +2637,7 @@ impl KernelLedgerV1 {
                     // (`palw_bond_budget_v1`, not built): this payout also re-checks and consumes the producer bond's reservation.
                     let (job, convicted) = (row.job_id, row.convicted);
                     let mut paid = Vec::new();
-                    let reward = if convicted || self.exec_reward_holds.contains_key(&id) {
+                    let reward = if convicted || held_jobs.contains(&job) {
                         0
                     } else {
                         self.pay_from_job_escrow(&job, &id, producer, &mut paid)
