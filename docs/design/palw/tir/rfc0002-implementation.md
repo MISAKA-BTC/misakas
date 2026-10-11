@@ -1980,3 +1980,55 @@ complete the shared resource/economic contract and versioned length/sparse/state
 semantics; obtain real checkpoint fidelity/task/performance and independent
 execution Final/redemption evidence; meet A6/A8. Existing v3 statements remain
 historically unsealed. No shipping fence is activated.
+
+## Verified increment — protected candidate SDK/CLI preparation, 2026-10-11
+
+`flat_candidate_v6` and `palw-class flat-v6 post|seal|reveal|expire` now prepare
+reviewable signed protected objects using the existing network/bond/bytes message
+and ML-DSA context. Post preparation bounds serialization and exact decoding,
+requires all source implementation records to agree on the original v3 root
+for the supplied class/binding, preserves job/evidence/scope, and only then binds
+those records to the new protected root. Divergence cannot be silently rewritten
+as declared agreement. This is a declaration migration, not proof that three
+implementations executed independently.
+
+Seal preparation writes its public commitment separately from a private local
+network/vector/bond/salt/exact-proof record. The CLI draws the salt from the OS
+RNG, creates files exclusively with Unix mode 0600, bounds raw and nested counts,
+redacts private proof/salt from reports and debug output, and never overwrites
+existing files. Ordinary I/O errors clean up only newly created outputs. Reveal
+preparation requires the same network/bond and passes the supplied fixed row and
+height through the common mature/unspent/exact-carrier guard. That supplied row
+is explicitly unverified until obtained from authenticated local chain state;
+native acceptance independently authenticates its own row and DAA.
+
+Large signed objects can be split with the existing bounded generic carriage,
+keeping the exact whole-object signature. The CLI writes the whole and listed
+parts for `misaka palw submit-object`; it submits nothing. The large-carrier trial
+checks only chunk reassembly/signature using a deliberately hostile proof, not
+court authenticity or timely consensus inclusion. The shared generic eight-group
+table still needs a protected proof transport and aggregate liveness evidence.
+
+**23 distinct selected tests pass:** six new SDK/CLI tests and all 17 native
+model-conformance tests. Both encoder/decoder protected node trials now use the
+SDK's post preparation and private seal/reveal helpers, then convict, settle
+original capital once, redeem and agree on independent-node replay. Other trials
+retain actor quotas/expiry and reserved proof processing after admission flood.
+Production SDK/CLI checking and four-file targeted formatting pass. The two
+pre-existing SDK entry-file formatting differences match the baseline exactly;
+diff whitespace checks pass. Final commands, exact test names, source/binary/log
+hashes and corrected development compile errors are in
+[the verdict](evidence/rfc02-flat-sdk-v6-verdict.json).
+
+The unchanged kernel's 153 passes and the core codec's one pass remain recorded
+in the preceding protected-native verdict; they were not rerun for SDK-only
+production additions. Together with the updated 17 native and six SDK tests,
+these are 177 distinct passing component tests, not full RFC02 acceptance.
+
+Full RFC02 remains active. Public RPC/acquisition and authenticated snapshot/row
+discovery, retention/pruning, protected large-proof transport, whole-network
+invalid-proof/seal saturation and worst-job inclusion/deadlines still need work.
+The complete shared resource/economic contract, versioned length/sparse/state
+semantics, actual checkpoint/task/context/fidelity/performance, independent
+execution Final/redemption and A6/A8 requirements are unchanged. No shipping
+fence is activated and historical v3 statements retain their unsealed semantics.

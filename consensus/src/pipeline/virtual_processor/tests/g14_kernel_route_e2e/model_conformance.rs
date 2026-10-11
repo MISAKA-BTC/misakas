@@ -1588,12 +1588,9 @@ async fn send_protected_flat_vector(
     card: usize,
     body: &kaspa_consensus_core::palw_flat_model_vector_v3::FlatModelVectorPostV3,
 ) -> Hash64 {
-    use kaspa_consensus_core::palw_flat_model_seal_v6::FlatModelVectorPostV6;
-    let mut post = FlatModelVectorPostV6 { version: 6, body: body.clone() };
-    post.body.trace.implementation_roots = [post.trace_root(f.class, binding.as_bytes()); 3];
-    let id = post.id(f.class, binding.as_bytes());
-    send(net, card, &K::PostFlatModelVectorV6 { class: f.class, binding: binding.as_bytes(), post: borsh::to_vec(&post).unwrap() })
-        .await;
+    let (id, object) =
+        misaka_palw_sdk::flat_candidate_v6::prepare_flat_model_post_v6(Hash64::from_bytes(f.class), binding, body.clone()).unwrap();
+    send(net, card, &object).await;
     id
 }
 #[tokio::test]
@@ -1624,6 +1621,8 @@ async fn flat_v6_native_seal_blocks_equivalent_preemption_legacy_bypass_and_pays
         }
         let alternate = alternate.to_bytes().unwrap();
         let (finder, thief, salt) = (net.kid(7), net.kid(6), [42; 64]);
+        let private =
+            misaka_palw_sdk::flat_candidate_v6::FlatProofSecretV6::new(net.domain, id, net.bond(7), salt, proof.clone()).unwrap();
         let seal = flat_proof_seal_v6(&id.as_bytes(), &finder, &salt, &proof).unwrap();
         let collateral = net.collateral(4);
         // The old unsealed consumer must refuse this new statement identity.
@@ -1631,7 +1630,9 @@ async fn flat_v6_native_seal_blocks_equivalent_preemption_legacy_bypass_and_pays
         send(&mut net, 6, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: alternate.clone() }).await;
         assert_eq!(net.owed(6), 0);
         assert_eq!(net.collateral(4), collateral);
-        send(&mut net, 7, &K::SealFlatModelProofV6 { vector: id.as_bytes(), seal }).await;
+        let seal_object = private.seal_object(net.domain, &net.bond(7)).unwrap();
+        assert_eq!(seal_object, K::SealFlatModelProofV6 { vector: id.as_bytes(), seal });
+        send(&mut net, 7, &seal_object).await;
         let row = net.api().unwrap().flat_model_seal_v6(&id, &finder).unwrap();
         assert_eq!(row.seal.mature_daa, row.seal.posted_daa + FLAT_NATIVE_SEAL_MATURITY_DAA_V6);
         assert_eq!(net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(7)), row.reserved as u128);
@@ -1659,7 +1660,10 @@ async fn flat_v6_native_seal_blocks_equivalent_preemption_legacy_bypass_and_pays
             send(&mut net, 7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: altered }).await;
             assert!(net.slashed(7) > before);
         }
-        send(&mut net, 7, &K::RevealFlatModelProofV6 { vector: id.as_bytes(), salt, proof: proof.clone() }).await;
+        let reveal_object = private
+            .reveal_object(net.domain, &net.bond(7), &net.api().unwrap().flat_model_seal_v6(&id, &finder).unwrap(), net.daa())
+            .unwrap();
+        send(&mut net, 7, &reveal_object).await;
         assert!(net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().refuted);
         assert!(net.api().unwrap().flat_model_seal_v6(&id, &finder).unwrap().seal.spent);
         assert_eq!(net.chain.tip_state().1.flat_model_seal_reserved_v6(&net.bond(7)), 0);

@@ -34,6 +34,7 @@ USAGE:
     palw-class preflight --network <id> <artifact-path> [--model-id <model-id>]
     palw-class kernel-preflight <program.tir> --positions N [--height DAA] [--json]
     palw-class kernel-params <artifact.palwtir> --tensor-workspace-mib N --payload-limit-mib N --out <params.borsh> [--encoder] [--json]
+    palw-class flat-v6 post|seal|reveal|expire ... (palw-class flat-v6 --help for offline protected candidate preparation)
     palw-class bind-tokenizer --network <id> --tokenizer <tokenizer.json> --out <path> [--model-id <model-id>] <artifact-path>
     palw-class measure   --network <id> [--name <model name>] [--replay-ms <ms> --measured-on <host>]
                          [--key-file <ml-dsa-87 seed>] [--out <measured.json>] <artifact-path>
@@ -267,6 +268,9 @@ fn take_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
 fn run(args: &[String]) -> Result<(), String> {
     let mut args = args.to_vec();
     let command = if args.is_empty() { String::new() } else { args.remove(0) };
+    if command == "flat-v6" {
+        return misaka_palw_sdk::flat_candidate_v6::cli::run(&args);
+    }
     // Pack subcommands own their arguments, including bind-class's --network.
     if command == "pack" {
         return match misaka_palw_sdk::runtime_pack::cli::run(&args)? {

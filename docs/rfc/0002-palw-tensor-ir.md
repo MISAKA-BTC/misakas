@@ -3332,3 +3332,36 @@ retention, worst-job inclusion/deadlines and honest liveness still need evidence
 The full resource contract, real-checkpoint fidelity/task/performance, independent
 execution Final/redemption and A6/A8 are unchanged completion requirements. No
 shipping fence is activated by this increment.
+
+### §14.31 — Protected candidate SDK and offline CLI (2026-10-11)
+
+`misaka-palw-sdk::flat_candidate_v6` and `palw-class flat-v6` expose the protected
+post, seal, reveal and explicit-expiry operations. Preparing a v6 post first
+requires all three source implementation records to agree on the original v3
+root for the selected class and binding. It preserves the job, trace and scope,
+then rebinds those agreed records to the protected root. It cannot convert
+divergent implementation results into declared agreement. Native admission
+still derives and checks the actual bound context and resource scope.
+
+Sealing produces a public signed commitment and separate private material that
+binds network domain, vector, signing bond, fresh OS-random salt and exact proof
+bytes. The CLI creates the private file with mode 0600 on Unix, refuses existing
+outputs, bounds input bytes and nested counts, and omits the proof/salt from its
+report. Reveal preparation refuses a different network/bond, borrowed row,
+changed proof or salt, immature/expired/spent row before writing a public proof.
+The supplied row and height are an offline precheck; the native consumer remains
+responsible for authenticated chain state and authoritative clocks.
+
+The SDK signs the existing network/bond/bytes message under the existing ML-DSA
+context. The CLI writes reviewable objects and, when needed, the existing bounded
+generic `ObjectChunk` parts for `misaka palw submit-object`; it sends no carrier.
+Generic shared-group capacity does not establish honest proof inclusion before
+the seal/vector horizon. Public RPC acquisition, authenticated snapshot/row
+discovery, whole-job retention, protected large-proof liveness and aggregate
+invalid-proof/seal saturation therefore remain completion requirements.
+
+SDK codec/signature/file trials and actual-node admission/court/payout replay
+using these helpers belong in the implementation ledger. These convenience APIs
+grant no conformance, checkpoint fidelity, model/task coverage, reward eligibility
+or execution Final, and activate no shipping fence. Full RFC02 acceptance stays
+open until all independent requirements have evidence.

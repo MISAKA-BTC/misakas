@@ -79,6 +79,8 @@ pub mod tir_stream;
 pub mod kernel_params;
 /// Stream the node's native values into the existing segmented commitment grammar.
 pub mod kernel_execution;
+/// Protected native candidate preparation and private actor-bound seal/reveal material.
+pub mod flat_candidate_v6;
 /// RFC-0002 Phase F (F6, node half): registering an IR class.
 pub mod tir_certification;
 /// RFC-0004 §6.3 (PALW-MIP-15): a LoRA candidate's container as a composite of its parent's.

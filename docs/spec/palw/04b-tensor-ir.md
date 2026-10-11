@@ -3214,3 +3214,48 @@ pays the shared metadata admission tariff. No global deadline scan, alternate
 payout actor or unbounded seal history is part of this version. These rules bound
 this consumer component; deployment, aggregate transport/retention, worst-job
 inclusion and honest liveness remain independent RFC02 completion gates.
+
+### 18.1 Protected preparation interface (non-consensus tooling)
+
+The reference SDK's `prepare_flat_model_post_v6` takes an exact bounded v3 body
+and explicit class/binding. It MUST refuse a wrong profile/version, excess bytes
+or source implementation records that do not all equal the original v3 trace
+root for those coordinates. Only after this check may the wrapper's three
+records be rebound to the v6 protected root. The job/evidence/scope fields retain
+their values; this rebinding does not prove that three programs ran independently.
+
+`FlatProofSecretV6` is a private local Borsh record, not a consensus object:
+`(6:u16, network_domain:Hash64, vector:Hash64, bond:PalwBondKeyV2, salt:Digest,
+proof:Vec<u8>)`. Its fixed header including the proof count is 266 bytes and its
+maximum total is that header plus the existing one-MiB proof ceiling. Decode
+checks raw length, exact version, fixed fields, bounded count, exact remainder
+and bounded flat-v5 proof grammar before returning it. It retains the exact
+carrier bytes. An SDK caller supplies a fresh secret salt; CLI `seal` generates
+64 bytes with the OS RNG and keeps them out of the public object/report.
+
+`seal_object` and `reveal_object` require the selected network domain and signing
+bond to match the private record. Reveal also requires the supplied native row's
+bond to match, and passes its fixed seal to the common actor/vector/exact-proof/
+clock checker. A supplied row/height is `UNVERIFIED_REMOTE_STATE` until obtained
+from authenticated local chain state; this precheck MUST NOT replace the
+consumer's own persisted-row and DAA checks. The SDK signs only inner 36–39 under
+the existing outer 110 message/context. The signing key's ownership of the bond
+is checked at native acceptance.
+
+`palw-class flat-v6 --help` describes the offline `post|seal|reveal|expire` workflow.
+It takes explicit network, signing
+key file, bond and output. `post` takes a v3 body/class/binding; `seal` takes a
+vector/proof/private output; `reveal` takes the private record/supplied row/DAA;
+`expire` takes a vector/actor. All output paths are reserved with exclusive
+creation before writing, existing files/symlinks are never replaced, and files
+are mode 0600 on Unix. Ordinary write failures remove only newly created outputs.
+The whole signed object and its listed carriers remain available for review.
+
+The reference splitter retains the exact signed assembled object in existing
+generic chunks at the unchanged byte/count caps. Reassembly and signature tests
+are transport-codec evidence, not court authenticity or timely inclusion tests.
+This interface does not implement new RPC transport, whole-job acquisition,
+retention or a capacity guarantee for the shared generic chunk table. Those and
+aggregate honest-liveness/deadline bounds remain RFC02 completion gates. No new
+consensus grammar, policy constant, resource root or shipping activation is
+introduced by the tooling interface.
