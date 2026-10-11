@@ -246,6 +246,44 @@ impl PalwOwnedPrefixCourtV1 {
         self.carrier_bytes_used = bytes;
         self.check()
     }
+    /// Only the qualified, fully funded rooted public-source acquisition wrapper may
+    /// consume this route. Its actual signed Answer carriers are debited by that wrapper's
+    /// separate acquisition plan. This row still debits every reconstructed logical action;
+    /// there is no caller-supplied action list or unauthenticated cache/state shortcut.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn consume_authenticated_public_source_v1(
+        &mut self,
+        now: u64,
+        claim: Hash64,
+        reserver: PalwBondKeyV2,
+        reserved_daa: u64,
+        seed_id: Hash64,
+        opening: &crate::palw_step_leg::PalwStepOpeningV1,
+        bytes: &[u8],
+    ) -> Result<u64, String> {
+        self.check()?;
+        if (claim, reserver, reserved_daa) != self.key()
+            || seed_id != self.seed_id
+            || now < self.terms.accepted_daa
+            || now >= self.terms.stream_until_daa
+        {
+            return Err("authenticated public source changes owner/seed or admitted clock".into());
+        }
+        let actions = self.court.authenticated_public_source_actions_v1(seed_id, opening, bytes)?;
+        let count = actions.len() as u64;
+        let moves = self.moves_used.checked_add(count).ok_or("authenticated source logical work overflows")?;
+        if moves > self.terms.plan.maximum_moves {
+            return Err("authenticated source exceeds paid logical action allowance".into());
+        }
+        let mut candidate = self.court.clone();
+        for action in &actions {
+            candidate.movement(seed_id, action)?;
+        }
+        self.court = candidate;
+        self.moves_used = moves;
+        self.check()?;
+        Ok(count)
+    }
     pub fn certificate(&self) -> Result<Option<PalwPrefixCourtFaultV1>, String> {
         self.check()?;
         Ok(self.court.finish()?.then(|| PalwPrefixCourtFaultV1 {
