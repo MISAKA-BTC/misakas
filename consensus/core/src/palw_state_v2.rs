@@ -29521,7 +29521,7 @@ pub fn palw_v2_pre_object_base_v1(
     //      and this block's carve accrued; before the execution lane's span rotation (whose Round draw reads the bonds' remaining
     //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
     //      `palw_bond_budget_v1`, which no network can arm.
-    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
+    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx)?;
     for income in &extras.round_fee_incomes {
         builder.reserve_round_income_v1(ctx, *income)?;
     }
@@ -29910,7 +29910,7 @@ pub fn apply_palw_transition_v7(
     //      and this block's carve accrued; before the execution lane's span rotation (whose Round draw reads the bonds' remaining
     //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
     //      `palw_bond_budget_v1`, which no network can arm.
-    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
+    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx)?;
     for income in &extras.round_fee_incomes {
         builder.reserve_round_income_v1(ctx, *income)?;
     }

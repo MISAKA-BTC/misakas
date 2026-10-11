@@ -1257,6 +1257,40 @@ impl PalwBondBudgetStateV1 {
         fee: u64,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(), PalwBudgetRefusalV1> {
+        self.hold_source_income_v1(policy, capital, income_id, bond, accepted_daa, liability_until, fee, true, j)
+    }
+
+    /// Migrate an authenticated pre-fence fee promise. Existing signed rights
+    /// are counted even when they fill or exceed the new R cap; no future
+    /// admission may use that occupied room. Pending income survives old W/H.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn seed_source_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        income_id: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+        liability_until: u64,
+        fee: u64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        self.hold_source_income_v1(policy, capital, income_id, bond, accepted_daa, liability_until, fee, false, j)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn hold_source_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        income_id: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+        liability_until: u64,
+        fee: u64,
+        check_cap: bool,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
         if fee == 0 || liability_until < accepted_daa {
             return Err(PalwBudgetRefusalV1::Assignment("source income requires a funded fee and a future liability"));
         }
@@ -1269,7 +1303,7 @@ impl PalwBondBudgetStateV1 {
             return Err(PalwBudgetRefusalV1::Overflow);
         }
         let held = row.window.reward_sompi.checked_add(fee).ok_or(PalwBudgetRefusalV1::Overflow)?;
-        if held > palw_bond_budget_caps_v1(policy, capital).reward_sompi {
+        if check_cap && held > palw_bond_budget_caps_v1(policy, capital).reward_sompi {
             return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
         }
         self.reserve(
@@ -1830,6 +1864,68 @@ mod tests {
             }
         }
         assert_eq!(replay.root_parts(), empty.root_parts(), "undo restores the original empty native ledger");
+    }
+
+    #[test]
+    fn old_source_income_migrates_overfull_after_old_w_and_h_then_replays_and_pays_once() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let fee = 51 * BILI; // Today's R cap is 50; the pre-fence signed right remains collectible.
+        let mut s = PalwBondBudgetStateV1::new(900, &p);
+        let empty = s.clone();
+        let mut j = Vec::new();
+        s.seed_source_income_v1(&p, capital, h(52), bond(0), 10, 500, fee, &mut j).unwrap();
+        let row = *s.claim_row(&h(52)).unwrap();
+        assert_eq!(row.accepted_daa, 10);
+        assert_eq!(row.reuse_not_before, 600);
+        assert!(!row.open && row.live && row.in_window);
+        s.release_due(900, &mut j);
+        let held = *s.bond_row(&bond(0)).unwrap();
+        assert_eq!(held.window, PalwBudgetVectorV1 { reward_sompi: fee, ..PalwBudgetVectorV1::ZERO });
+        assert_eq!(held.open_claims, 0);
+        let before = (s.root_parts(), j.len());
+        assert!(s.reserve_source_income_v1(&p, capital, h(53), bond(0), 900, 1_500, 1, &mut j).is_err());
+        assert!(s.reserve_income_v1(&p, capital, h(54), bond(0), 900, 1, 1, PalwBudgetOriginV1::MarketFee, &mut j).is_err());
+        assert!(s.seed_source_income_v1(&p, capital, h(52), bond(0), 10, 500, fee, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before);
+        s.settle_source_income_v1(&p, &h(52), 500, 901, fee, &mut j).unwrap();
+        s.release_due(1_000, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, fee);
+        s.release_due(1_001, &mut j);
+        assert!(s.claim_row(&h(52)).is_none() && s.bond_row(&bond(0)).is_none());
+        s.check_consistency().unwrap();
+        let mut replay = empty.clone();
+        for entry in &j {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), s.root_parts());
+        for entry in j.iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), empty.root_parts());
+    }
+
+    #[test]
+    fn old_paid_source_income_uses_actual_payment_window_at_migration() {
+        let p = policy(1, false);
+        let fee = 51 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(950, &p);
+        let mut j = Vec::new();
+        s.seed_source_income_v1(&p, 1_000 * BILI, h(55), bond(0), 10, 500, fee, &mut j).unwrap();
+        s.settle_source_income_v1(&p, &h(55), 500, 900, fee, &mut j).unwrap();
+        let row = s.claim_row(&h(55)).unwrap();
+        assert_eq!(row.reuse_not_before, 1_000);
+        assert_eq!(row.consumed.reward_sompi, fee);
+        assert!(!row.live && !row.open && row.in_window);
+        s.release_due(999, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, fee);
+        s.release_due(1_000, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none());
+        s.check_consistency().unwrap();
     }
 
     #[test]

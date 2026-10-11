@@ -36,7 +36,7 @@ impl PalwChainStateV2 {
         let mirror = params.bond_budget.as_ref().filter(|mirror| mirror.active_at(ctx.daa_score))?;
         let extras = PalwTransitionExtrasV1 { escrow_carve, ..PalwTransitionExtrasV1::default() };
         let mut builder = TransitionBuilder::new(self, params, false, false, false, false, &extras);
-        tick_bond_budget_v1(&mut builder, ctx);
+        tick_bond_budget_v1(&mut builder, ctx).ok()?;
         Some(PalwRoundFeeAdmissionV1 {
             policy: mirror.policy.clone(),
             book: builder.state.bond_budget.take().expect("active tick creates the budget"),
@@ -186,7 +186,7 @@ impl TransitionBuilder<'_> {
         }
         let capital = self.state.bond(&income.bond).ok_or(PalwStateV2Error::MissingBond(income.bond))?.collateral;
         if self.state.bond_budget.is_none() {
-            self.create_bond_budget_v1(ctx, &mirror);
+            self.create_bond_budget_v1(ctx, &mirror)?;
         }
         self.bond_budget_op(|budget, _, j| {
             budget.reserve_income_v1(
@@ -293,7 +293,7 @@ impl TransitionBuilder<'_> {
     ) -> Result<(), PalwStateV2Error> {
         if self.state.bond_budget.is_none() {
             let mirror = self.bond_budget_mirror_at(ctx.daa_score).expect("a plan exists only past the fence");
-            self.create_bond_budget_v1(ctx, &mirror);
+            self.create_bond_budget_v1(ctx, &mirror)?;
         }
         let bond = plan.bond;
         let out = self
@@ -326,7 +326,7 @@ impl TransitionBuilder<'_> {
     }
 
     /// Create the engine (delta 191, `None → Some`) and seed the window from every live old claim (design §2.9).
-    fn create_bond_budget_v1(&mut self, ctx: &PalwBlockContextV2, mirror: &PalwBondBudgetMirrorV1) {
+    fn create_bond_budget_v1(&mut self, ctx: &PalwBlockContextV2, mirror: &PalwBondBudgetMirrorV1) -> Result<(), PalwStateV2Error> {
         let budget = PalwBondBudgetStateV1::new(ctx.daa_score, &mirror.policy);
         self.entries.push(PalwDeltaEntryV2::BondBudgetHeader { old: None, new: Some(budget.header.clone()) });
         self.state.bond_budget = Some(budget);
@@ -335,6 +335,7 @@ impl TransitionBuilder<'_> {
         let carve = self.params.worker_carve_at(ctx.subsidy, self.extras.escrow_carve);
         let pricing = self.fp_pricing();
         let mut seeds: Vec<(Hash64, PalwBondKeyV2, u64, PalwBudgetVectorV1)> = Vec::new();
+        let mut source_seeds: Vec<(Hash64, PalwBondKeyV2, u64, u64, u64, Option<u64>)> = Vec::new();
         for (id, claim) in &self.state.claims {
             if claim.accepted_daa.saturating_add(window) <= ctx.daa_score {
                 continue;
@@ -374,7 +375,8 @@ impl TransitionBuilder<'_> {
         // Old kernel work is also counted at the boundary, without changing
         // its already signed economics. No old budget is silently minted anew.
         if let Some(route) = &self.state.kernel_route {
-            if let Ok(ledger) = route.ledger() {
+            let ledger = route.ledger().map_err(PalwStateV2Error::BondBudgetRefused)?;
+            {
                 for (claim, row) in &ledger.claims {
                     if row.convicted || row.life.state.is_terminal() || row.committed_daa.saturating_add(window) <= ctx.daa_score {
                         continue;
@@ -391,16 +393,58 @@ impl TransitionBuilder<'_> {
                         },
                     ));
                 }
+                // A fee promise is not a computation claim. Pending promises
+                // remain liabilities past accepted+W and even H+W on a sparse
+                // chain. Recent actual payment uses its payment+W clock.
+                use misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeOutcomeV1;
+                for ((context, producer), promise) in &ledger.beacon_source_fee_promises {
+                    let paid = match promise.outcome {
+                        None => None,
+                        Some(BeaconSourceFeeOutcomeV1::Refunded { .. }) => continue,
+                        Some(BeaconSourceFeeOutcomeV1::Paid { daa, .. }) => {
+                            if daa.checked_add(window).is_some_and(|release| release <= ctx.daa_score) {
+                                continue;
+                            }
+                            Some(daa)
+                        }
+                    };
+                    let source = ledger
+                        .beacon_sources
+                        .get(&(*context, *producer))
+                        .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("migrating fee source is missing".into()))?;
+                    let bond = route
+                        .bond_key_of(producer)
+                        .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("migrating fee recipient bond is missing".into()))?;
+                    let subject = super::palw_kernel_route_fold_v1::source_income_subject_v1(&source.job, &source.seal);
+                    source_seeds.push((
+                        source_income_id_v1(Hash64::from_bytes(*context), subject, &bond),
+                        bond,
+                        promise.accepted_daa,
+                        source.terms.hold_until,
+                        promise.fee,
+                        paid,
+                    ));
+                }
             }
         }
         let policy = mirror.policy.clone();
         self.bond_budget_op(|budget, state, j| {
             for (id, bond, accepted, vector) in seeds {
                 let capital = state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
-                // A seed is counted, never refused (the window may start over-full); its id is new to an empty engine.
-                let _ = budget.reserve(&policy, capital, id, bond, None, accepted, vector, PalwBudgetOriginV1::Legacy, false, j);
+                // Signed old rights are counted even if the first window is over-full.
+                budget.reserve(&policy, capital, id, bond, None, accepted, vector, PalwBudgetOriginV1::Legacy, false, j)?;
             }
-        });
+            for (id, bond, accepted, hold_until, fee, paid) in source_seeds {
+                let capital = state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
+                budget.seed_source_income_v1(&policy, capital, id, bond, accepted, hold_until, fee, j)?;
+                if let Some(at) = paid {
+                    budget.settle_source_income_v1(&policy, &id, hold_until, at, fee, j)?;
+                }
+            }
+            Ok(())
+        })
+        .expect("created above")
+        .map_err(|why: PalwBudgetRefusalV1| PalwStateV2Error::BondBudgetRefused(why.to_string()))
     }
 
     // ---- hooks ---------------------------------------------------------------------------------------------------------------
@@ -422,7 +466,7 @@ impl TransitionBuilder<'_> {
         }
         let capital = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
         if self.state.bond_budget.is_none() {
-            self.create_bond_budget_v1(ctx, &mirror);
+            self.create_bond_budget_v1(ctx, &mirror)?;
         }
         let mut hash = keyed(b"misaka-palw/bond-budget/income/v1");
         hash.update(ctx.block.as_byte_slice());
@@ -451,7 +495,7 @@ impl TransitionBuilder<'_> {
         let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
         let capital = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
         if self.state.bond_budget.is_none() {
-            self.create_bond_budget_v1(ctx, &mirror);
+            self.create_bond_budget_v1(ctx, &mirror)?;
         }
         let id = source_income_id_v1(context, source, &bond);
         self.bond_budget_op(|budget, _, j| {
@@ -462,8 +506,8 @@ impl TransitionBuilder<'_> {
     }
 
     /// Settle through the same durable R row, including a tick delayed past
-    /// H + W. The authenticated promise's original acceptance distinguishes
-    /// pre-fence monetary rights from a missing post-fence reservation.
+    /// H + W. Initial migration supplies every old pending row; a missing
+    /// reservation cannot become an unbounded grandfathered payment.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn settle_source_income_v1(
         &mut self,
@@ -482,8 +526,8 @@ impl TransitionBuilder<'_> {
             .as_ref()
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("source income engine missing".into()))?;
         let id = source_income_id_v1(context, source, &bond);
-        if budget.claim_row(&id).is_none() && accepted_daa < budget.header.created_daa {
-            return Ok(());
+        if !budget.claim_row(&id).is_some_and(|row| row.accepted_daa == accepted_daa) {
+            return Err(PalwStateV2Error::BondBudgetRefused("source income reservation is missing or has another acceptance".into()));
         }
         self.bond_budget_op(|budget, _, j| budget.settle_source_income_v1(&mirror.policy, &id, liability_until, ctx.daa_score, fee, j))
             .expect("checked")
@@ -507,8 +551,8 @@ impl TransitionBuilder<'_> {
             .as_ref()
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("source income engine missing".into()))?;
         let id = source_income_id_v1(context, source, &bond);
-        if budget.claim_row(&id).is_none() && accepted_daa < budget.header.created_daa {
-            return Ok(());
+        if !budget.claim_row(&id).is_some_and(|row| row.accepted_daa == accepted_daa) {
+            return Err(PalwStateV2Error::BondBudgetRefused("source income reservation is missing or has another acceptance".into()));
         }
         self.bond_budget_op(|budget, _, j| budget.cancel_source_income_v1(&id, j))
             .expect("checked")
@@ -757,7 +801,10 @@ impl TransitionBuilder<'_> {
     ) -> bool {
         let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return false };
         if self.state.bond_budget.is_none() {
-            self.create_bond_budget_v1(ctx, &mirror);
+            // The pre-object clock creates and validates the book. Without it
+            // no ticket may escape into the old uncapped fallback.
+            schedule.quanta.clear();
+            return true;
         }
         let policy = mirror.policy;
         {
@@ -823,10 +870,10 @@ impl TransitionBuilder<'_> {
 /// **Step 1f — the budget's clock** (design §2.4, §2.9, §3.2–3.4), before the sweeps and the objects: create the engine at the fence's
 /// first block (seeding the live old claims), release every reservation whose `reuse_not_before ≤ now`, roll the allocation epoch and
 /// accrue this block's carve. A no-op below the fence.
-pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
-    let Some(mirror) = builder.bond_budget_mirror_at(ctx.daa_score) else { return };
+pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    let Some(mirror) = builder.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
     if builder.state.bond_budget.is_none() {
-        builder.create_bond_budget_v1(ctx, &mirror);
+        builder.create_bond_budget_v1(ctx, &mirror)?;
     }
     let now = ctx.daa_score;
     builder.bond_budget_op(|budget, _, j| budget.release_due(now, j));
@@ -849,6 +896,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
         let carve = builder.params.worker_carve_at(ctx.subsidy, builder.extras.escrow_carve);
         builder.bond_budget_op(|budget, _, j| budget.accrue(carve, j));
     }
+    Ok(())
 }
 
 /// **Tag 140: a bond's capital assignment** (ADR-0177 D3; design §3.1). The signature is the acceptance layer's; here the fence, an
@@ -873,7 +921,7 @@ pub(super) fn apply_capital_assignment_v1(
     }
     let capital = record.collateral;
     if builder.state.bond_budget.is_none() {
-        builder.create_bond_budget_v1(ctx, &mirror);
+        builder.create_bond_budget_v1(ctx, &mirror)?;
     }
     let bond = *bond;
     builder
