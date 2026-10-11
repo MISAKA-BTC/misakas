@@ -87,8 +87,12 @@ fn sign(card: usize, message: &[u8], context: &[u8], rnd: u8) -> Vec<u8> {
 /// **The conformance world with the EXEC v2 payload armed, its candidate class driven to `Active` through blocks** — the pass flow of
 /// `g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_class_activates`, without its assertions.
 async fn active_world() -> Cw {
+    active_world_with_kernel_mode(VerificationModeV1::OptimisticPublicVerification).await
+}
+
+async fn active_world_with_kernel_mode(kernel_mode: VerificationModeV1) -> Cw {
     kaspa_core::log::try_init_logger("warn");
-    let mut cw = Cw::over_with(
+    let mut cw = Cw::over_with_floor_and_kernel_mode(
         SEED,
         |params| {
             params.palw_exec_payload_v2 = Some(ForkActivation::new(EXEC_FENCE));
@@ -96,6 +100,8 @@ async fn active_world() -> Cw {
             assert!(params.validate_palw_exec_payload_v2().is_err(), "validation refuses the payload fence: the harness arms past it");
         },
         TestConsensus::new,
+        0,
+        kernel_mode,
     )
     .await;
     cw.commit(0x22).await;
@@ -440,6 +446,23 @@ async fn kernel_prefix_claim(cw: &mut Cw, real: &RealRun, decl: &PalwWorkRootDec
     cw.net.send(vec![(ROOT_CARD, reveal)]).await;
     assert!(cw.net.ledger().claims.contains_key(&id), "the second root's own prefix was admitted within the live-claim caps");
     SliceClaim { job, claim: Claim { id, producer: ROOT_CARD, trace: produced.trace, at: matmul_at(&cw.cand.program, 1) } }
+}
+
+/// A distinct producer claims an existing public job, without reposting it or
+/// changing the job's escrow. All execution material is generated honestly.
+async fn claim_posted_job(cw: &mut Cw, producer: usize, job: &KernelJobV1) -> SliceClaim {
+    let ledger = cw.net.ledger();
+    assert!(ledger.jobs.contains_key(&job.id()));
+    let generated = greedy(&cw.cand, &ledger, &cw.kernel_class, &job.prompt, job.max_new_tokens as usize);
+    let produced = produce(&cw.cand, &ledger, &cw.kernel_class, job, cw.net.kid(producer), generated, |_| {});
+    let id = produced.claim.id();
+    let (seal, reveal) = seal_and_reveal(&ledger, cw.net.kid(producer), &produced.object);
+    let seal = cw.net.route(producer, &seal);
+    cw.net.send(vec![(producer, seal)]).await;
+    let reveal = cw.net.route(producer, &reveal);
+    cw.net.send(vec![(producer, reveal)]).await;
+    assert!(cw.net.ledger().claims.contains_key(&id), "the honest competing claim was included");
+    SliceClaim { job: job.clone(), claim: Claim { id, producer, trace: produced.trace, at: matmul_at(&cw.cand.program, 1) } }
 }
 
 /// Remove only the original REAL header while exercising root admission from an authenticated snapshot.
@@ -1332,6 +1355,66 @@ async fn x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready
     assert_eq!(cw.net.collateral(REGISTRANT), poster_collateral, "duplicate reveals spend no escrow");
     let z = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&z, "replay");
+}
+
+/// A job escrow held by EXEC cannot pay another producer's claim before root
+/// Final. The sibling computation still finalizes; an unrelated job still pays.
+#[tokio::test]
+async fn x8_g14_a_competing_claim_cannot_spend_a_bound_jobs_escrow_before_native_root_final() {
+    let mut cw = active_world_with_kernel_mode(VerificationModeV1::PanelLicensed).await;
+    let s = session(&mut cw, false, |_| false).await;
+    let job = &s.slices[2].job;
+    let before = cw.net.ledger();
+    let escrow = before.job_escrows[&job.id()];
+    let competitor = claim_posted_job(&mut cw, ACCUSER, job).await;
+    assert_ne!(competitor.claim.id, s.slices[2].claim.id);
+    assert!(!cw.net.ledger().exec_reward_holds.contains_key(&competitor.claim.id));
+    // Only the sibling wins this job's Panel coverage. The EXEC dependency is
+    // still pending; its lack of coverage cannot authorize an early job debit.
+    for claim in [&s.prefix.claim, &s.slices[0].claim, &s.slices[1].claim, &competitor.claim] {
+        let daa = cw.net.daa();
+        let receipts = colluding_receipts(&mut cw.net, claim.id, daa);
+        cw.net.send(receipts).await;
+        assert!(matches!(cw.net.claim_state(&claim.id), ClaimStateV1::ProbabilisticPass { .. }));
+    }
+    let ClaimStateV1::ProbabilisticPass { window_end_daa: end, .. } = cw.net.claim_state(&competitor.claim.id) else {
+        panic!("the truthful sibling has actual signed Panel coverage");
+    };
+    let poster_collateral = cw.net.collateral(REGISTRANT);
+    cw.net.beat_to(end + 1).await;
+    let ledger = cw.net.ledger();
+    assert!(matches!(ledger.claims[&competitor.claim.id].life.state, ClaimStateV1::Final { .. }));
+    assert!(!ledger.claims[&s.slices[2].claim.id].life.state.is_terminal());
+    assert!(!ledger.claims[&competitor.claim.id].rewarded, "a sibling Final cannot bypass the job's EXEC reward hold");
+    assert_eq!(ledger.job_escrows.get(&job.id()), Some(&escrow));
+    assert_eq!(cw.net.collateral(REGISTRANT), poster_collateral, "no early debit of the held job escrow");
+    let native = cw.net.chain.tip_state().1;
+    assert!(!native.exec_v2_root_v1(&s.real.claim).unwrap().ready_for_final());
+    assert!(!native.claim(&s.real.claim).unwrap().phase.is_terminal(), "kernel computations do not settle the native root");
+
+    // A normal, unbound job is still paid out of its own escrow exactly once.
+    let control_job = KernelJobV1 { nonce: [0xD1; 64], ..job.clone() };
+    assert_ne!(control_job.id(), job.id());
+    let post = cw.net.route(REGISTRANT, &K::PostJob { job: control_job.clone() });
+    cw.net.send(vec![(REGISTRANT, post)]).await;
+    let control_escrow = cw.net.ledger().job_escrows[&control_job.id()];
+    let control = claim_posted_job(&mut cw, ACCUSER, &control_job).await;
+    let daa = cw.net.daa();
+    let receipts = colluding_receipts(&mut cw.net, control.claim.id, daa);
+    cw.net.send(receipts).await;
+    let ClaimStateV1::ProbabilisticPass { window_end_daa: end, .. } = cw.net.claim_state(&control.claim.id) else { panic!() };
+    let control_poster = cw.net.collateral(REGISTRANT);
+    cw.net.beat_to(end + 1).await;
+    let ledger = cw.net.ledger();
+    assert!(matches!(ledger.claims[&control.claim.id].life.state, ClaimStateV1::Final { .. }));
+    assert!(ledger.claims[&control.claim.id].rewarded);
+    assert!(!ledger.job_escrows.contains_key(&control_job.id()));
+    assert_eq!(cw.net.collateral(REGISTRANT), control_poster - control_escrow.amount);
+    assert!(!ledger.job_escrows.contains_key(&job.id()), "the pending EXEC dependency times out and cancellation refunds its escrow");
+    assert!(matches!(cw.net.chain.tip_state().1.exec_v2_root_v1(&s.real.claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }));
+    assert!(!ledger.claims[&competitor.claim.id].rewarded);
+    let replay = replay_with_lane(&cw.net, &s.lane).await;
+    cw.net.assert_same(&replay, "competing producer Final and unrelated standalone payment");
 }
 
 /// **(c) GAP-60: the slice DA default on the real node, and rule 4 at node.**

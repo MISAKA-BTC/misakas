@@ -139,12 +139,24 @@ impl Cw {
         make: impl FnOnce(&Config) -> TestConsensus,
         floor: u16,
     ) -> Cw {
+        Cw::over_with_floor_and_kernel_mode(seed, edit, make, floor, VerificationModeV1::OptimisticPublicVerification).await
+    }
+
+    /// Keep the beacon source OPV while testing either supported candidate
+    /// kernel verification mode. Existing worlds retain their OPV mode.
+    async fn over_with_floor_and_kernel_mode(
+        seed: u64,
+        edit: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
+        make: impl FnOnce(&Config) -> TestConsensus,
+        floor: u16,
+        kernel_mode: VerificationModeV1,
+    ) -> Cw {
         use super::super::g14_registration_e2e::Tensors;
         use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_operands_v1;
         let src = fixture();
         let f = onb_fixture(seed);
         let src_class = opv_class_id(&src.program, &src.plan, &src.pc);
-        let kernel_class = opv_class_id(&f.program, &f.plan, &f.pc);
+        let kernel_class = single_class_id_v1(k2_tir_v2_descriptor().digest(), &f.program.encode(), &f.plan, &f.pc, kernel_mode);
         let (config, bundle, premine, floats) =
             conformance_config(vec![Hash64::from_bytes(src_class), Hash64::from_bytes(kernel_class)], floor);
         let mut params = config.params.clone();
@@ -187,12 +199,20 @@ impl Cw {
         net.send(vec![(REGISTRANT, o)]).await;
         let matures = net.api().unwrap().artifact_binding_v1(&v2_class, &kernel_root).unwrap().matures_daa;
         net.beat_to(matures).await;
-        let register_cand = K::RegisterClassV2 {
-            mode: VerificationModeV1::OptimisticPublicVerification,
-            descriptor: d.digest(),
-            program_bytes: f.program.encode(),
-            plan: f.plan.clone(),
-            param_commitments: f.pc.clone(),
+        let register_cand = match kernel_mode {
+            VerificationModeV1::PanelLicensed => K::RegisterClass {
+                descriptor: d.digest(),
+                program_bytes: f.program.encode(),
+                plan: f.plan.clone(),
+                param_commitments: f.pc.clone(),
+            },
+            VerificationModeV1::OptimisticPublicVerification => K::RegisterClassV2 {
+                mode: kernel_mode,
+                descriptor: d.digest(),
+                program_bytes: f.program.encode(),
+                plan: f.plan.clone(),
+                param_commitments: f.pc.clone(),
+            },
         };
         let o = net.route(REGISTRANT, &register_cand);
         net.send(vec![(REGISTRANT, o)]).await;

@@ -124,3 +124,56 @@ fn already_paid_standalone_work_cannot_attach_and_orphan_hold_cannot_restore() {
     w.l.claims.remove(&claim);
     assert!(KernelLedgerV1::from_rows(&w.genesis, w.l.scalars(), &w.l.to_rows()).is_err());
 }
+
+#[test]
+fn a_sibling_final_cannot_spend_held_job_escrow_and_root_finish_or_cancel_still_works() {
+    for own_coverage_daa in [10, 20] {
+        for cancel in [false, true] {
+            let mut w = World::new();
+            let job = w.post_job(2, &[3, 17, 9], 3, 1);
+            let own = w.honest(&job, 3);
+            let own_id = own.claim.id();
+            let sibling = w.produce(&job, OUTSIDER, own.claim.generated.clone(), &w.params, |_| {});
+            let sibling_id = sibling.claim.id();
+            let mut objects = vec![own.tx, sibling.tx, T::PanelCovered { claim: sibling_id }];
+            if own_coverage_daa == 10 {
+                objects.push(T::PanelCovered { claim: own_id });
+            }
+            w.block(10, objects);
+            w.l.bind_exec_reward([0xE1; 64], own_id, 500).unwrap();
+            if own_coverage_daa == 20 {
+                w.block(20, vec![T::PanelCovered { claim: own_id }]);
+            }
+            let poster = w.l.bonds[&POSTER].clone();
+            let events = w.block(60, vec![]);
+            assert!(matches!(w.l.claims[&sibling_id].life.state, ClaimStateV1::Final { .. }));
+            assert!(!w.l.claims[&sibling_id].rewarded, "another producer cannot consume the held job's escrow");
+            assert_eq!(w.consumer.paid(&OUTSIDER), 0);
+            assert_eq!(w.l.bonds[&POSTER], poster);
+            assert_eq!(w.l.job_escrows[&job.id()].amount, 7);
+            assert!(events.iter().any(|event| matches!(event,
+                misaka_palw_kernel::ledger::LedgerEventV1::Final { claim, reward: 0 } if *claim == sibling_id)));
+            w.l = restored(&w);
+            w.block(70, vec![]);
+            assert!(matches!(w.l.claims[&own_id].life.state, ClaimStateV1::Final { .. }));
+            assert_eq!(w.l.bonds[&POSTER], poster, "repeated ticks after restore keep the job escrow held");
+
+            let mut events = Vec::new();
+            let paid = if cancel {
+                w.l.cancel_exec_reward([0xE1; 64], own_id, &mut events).unwrap();
+                0
+            } else {
+                w.l.finish_exec_reward([0xE1; 64], own_id, 3, &mut events).unwrap()
+            };
+            assert_eq!(paid, if cancel { 0 } else { 3 });
+            w.consumer.book.apply_events(&events).unwrap();
+            w.consumer.check_view(&w.l);
+            assert_eq!(w.l.bonds[&POSTER].collateral, poster.collateral - paid);
+            assert_eq!(w.l.bonds[&POSTER].reserved, poster.reserved - 7);
+            assert_eq!(w.consumer.paid(&PRODUCER), paid);
+            assert_eq!(w.consumer.paid(&OUTSIDER), 0);
+            assert!(!w.l.job_escrows.contains_key(&job.id()));
+            restored(&w);
+        }
+    }
+}
