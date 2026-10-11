@@ -24919,7 +24919,8 @@ impl<'a> TransitionBuilder<'a> {
             | PalwPanelContradictionV1::PromptNotAnchored { .. }
             | PalwPanelContradictionV1::ConstrainedDecode { .. }
             | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. }
-            | PalwPanelContradictionV1::RegisteredTableMismatch { .. } => {
+            | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
+            | PalwPanelContradictionV1::PrefixStateMismatch { .. } => {
                 return Err(refused("PanelFalseValid evidence does not decode".into()));
             }
         }

@@ -795,7 +795,7 @@ pub fn palw_false_valid_admission_v1(
         | C::LogitsNotStepOutput { .. }
         | C::ConstrainedDecode { .. }
         | C::ConstrainedDecodeFlat { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
-        C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } | C::RegisteredTableMismatch { .. } => {
+        C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } | C::RegisteredTableMismatch { .. } | C::PrefixStateMismatch { .. } => {
             Ok(PalwFalseValidAdmissionV1::ClaimProving)
         }
         C::ProducerWithholding { .. } => Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
@@ -937,6 +937,7 @@ pub fn palw_false_valid_fault_site_v1(
         | PalwPanelContradictionV1::ConstrainedDecode { .. }
         | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. }
         | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
+        | PalwPanelContradictionV1::PrefixStateMismatch { .. }
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
         | PalwPanelContradictionV1::ProducerWithholding { .. }
         | PalwPanelContradictionV1::CourtFraud { .. }
@@ -961,7 +962,8 @@ pub fn palw_claim_proving_site_v1(
 ) -> Option<PalwFaultSiteV1> {
     use PalwIdentityFaultV1 as J;
     match contradiction {
-        PalwPanelContradictionV1::PromptNotAnchored { .. } | PalwPanelContradictionV1::RegisteredTableMismatch { .. } => Some(PalwFaultSiteV1::AnyValid),
+        PalwPanelContradictionV1::PromptNotAnchored { .. } | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
+        | PalwPanelContradictionV1::PrefixStateMismatch { .. } => Some(PalwFaultSiteV1::AnyValid),
         PalwPanelContradictionV1::IdentityMismatch { .. } => match identity_fault? {
             J::ClassNotTheClaims | J::JobNotTheClaims | J::SeedNotTheJobs | J::ContextNotCanonical | J::PromptNotTheAnchors => {
                 Some(PalwFaultSiteV1::AnyValid)
@@ -1364,6 +1366,26 @@ pub fn palw_registered_table_fault_v1(
     Ok(tail.table_root != expected)
 }
 
+/// The authenticated prefix-state receipt must agree with its execution's committed K/V
+/// writes. A computational lie in those writes is separately adjudicated by the step court.
+pub fn palw_prefix_state_fault_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    tiles: &[crate::palw_prefix_state_court_v1::PalwPrefixKvTileV1],
+) -> Result<bool, PalwOffenceVerifyError> {
+    palw_constrained_job_target_v1(target, binding, job)?;
+    let named = crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job)
+        .map_err(|_| PalwOffenceVerifyError::ContradictionNotAdmitted("the job is not a well-formed prefix-state receipt"))?;
+    if job.is_prefix_inherit()
+        && binding.job_context.inherited_prefix_v1() != Some((named.prefix_tokens, named.state_root))
+    { return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch); }
+    let committed = crate::palw_prefix_state_court_v1::palw_prefix_kv_state_root_v1(
+        binding, named.prefix_tokens, tiles, PALW_FALSE_VALID_NETWORK_LADDER_V1,
+    ).map_err(PalwOffenceVerifyError::ContradictionNotAdmitted)?;
+    Ok(committed != named.state_root)
+}
+
 /// Public constrained-token conviction uses the same authenticated predicate as court proof
 /// 17. Pin the descriptor to the RECORDED FP identity as well as the execution binding; a
 /// fabricated constraint beside another accepted job is not evidence against that claim.
@@ -1654,6 +1676,7 @@ fn palw_prompt_proof_fence_v1(
             PalwPanelContradictionV1::ConstrainedDecode { .. }
                 | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. }
                 | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
+                | PalwPanelContradictionV1::PrefixStateMismatch { .. }
         )
     {
         return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("constrained direct proof is below the public-filer fence"));
@@ -1893,6 +1916,10 @@ fn claim_proving_fault_v1(
     match contradiction {
         PalwPanelContradictionV1::IdentityMismatch { binding } => {
             palw_binding_identity_fault_v1(target, binding, rules, true)?.map(Some).ok_or(PalwOffenceVerifyError::IdentityHolds)
+        }
+        PalwPanelContradictionV1::PrefixStateMismatch { binding, job, tiles } => {
+            if palw_prefix_state_fault_v1(target, binding, job, tiles)? { Ok(None) }
+            else { Err(PalwOffenceVerifyError::IdentityHolds) }
         }
         PalwPanelContradictionV1::RegisteredTableMismatch { binding, job } => {
             if palw_registered_table_fault_v1(target, binding, job)? { Ok(None) }
@@ -2435,7 +2462,7 @@ pub fn palw_executor_refuted_admission_v1(
         | C::LogitsNotStepOutput { .. }
         | C::ConstrainedDecode { .. }
         | C::ConstrainedDecodeFlat { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
-        C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } | C::RegisteredTableMismatch { .. } => {
+        C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } | C::RegisteredTableMismatch { .. } | C::PrefixStateMismatch { .. } => {
             Ok(PalwFalseValidAdmissionV1::ClaimProving)
         }
         C::ExecutorEquivocation(_)

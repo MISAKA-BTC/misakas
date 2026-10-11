@@ -515,6 +515,7 @@ pub mod palw_panel_free_v1;
 pub mod palw_opv_bootstrap_v1;
 /// RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt; dormant behind `palw_fp_prefix_state`.
 pub mod palw_fp_prefix_v1;
+pub mod palw_prefix_state_court_v1;
 /// RFC-0001 §2.9: the job's tokenizer must be the class's listed one; dormant behind `palw_fp_tokenizer_match`.
 pub mod palw_class_semantics_v1;
 pub mod palw_fp_tokenizer_v1;

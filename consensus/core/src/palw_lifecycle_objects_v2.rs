@@ -1751,7 +1751,7 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     ),
     (
         "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1",
-        PalwInt12WireChangeV1::CarriedReread { fence: "palw_class_semantics_v1", digest: 0xfaefd33947f31aed },
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0x247d3edb52d194ab },
     ),
     (
         "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1",

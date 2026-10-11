@@ -258,6 +258,13 @@ pub enum PalwPanelContradictionV1 {
         binding: crate::palw_step_leg::PalwStepBindingV2,
         job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>,
     } = 16,
+    /// The accepted prefix-state job names a state root different from its own committed
+    /// dense integer K/V cache writes. Every tile and coordinate is authenticated.
+    PrefixStateMismatch {
+        binding: crate::palw_step_leg::PalwStepBindingV2,
+        job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>,
+        tiles: Vec<crate::palw_prefix_state_court_v1::PalwPrefixKvTileV1>,
+    } = 17,
 }
 
 /// **How a `ForgedOutputTiled` (11) proves the committed token forged.**
@@ -304,6 +311,7 @@ impl PalwPanelContradictionV1 {
                 | Self::ConstrainedDecode { .. }
                 | Self::ConstrainedDecodeFlat { .. }
                 | Self::RegisteredTableMismatch { .. }
+                | Self::PrefixStateMismatch { .. }
         )
     }
 }
@@ -471,6 +479,7 @@ fn palw_panel_contradiction_digest_v1(contradiction: &PalwPanelContradictionV1) 
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
         | PalwPanelContradictionV1::ConstrainedDecode { .. }
         | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
+        | PalwPanelContradictionV1::PrefixStateMismatch { .. }
         | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }
@@ -782,6 +791,7 @@ where
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
         | PalwPanelContradictionV1::ConstrainedDecode { .. }
         | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
+        | PalwPanelContradictionV1::PrefixStateMismatch { .. }
         | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => {
             return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
         }
@@ -850,6 +860,7 @@ pub fn palw_panel_contradiction_convicts_execution_v1(
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
         | PalwPanelContradictionV1::ConstrainedDecode { .. }
         | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
+        | PalwPanelContradictionV1::PrefixStateMismatch { .. }
         | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }
