@@ -79,6 +79,36 @@ impl PalwPrefixGdnContractV1 {
             parameters,
         })
     }
+    pub fn source_range_v1(
+        &self,
+        binding: &PalwStepBindingV2,
+        position: u32,
+        ordinal: usize,
+    ) -> Result<crate::palw_prefix_source_stream_v1::PalwPrefixSourceRangeV1, String> {
+        if position >= self.prefix_tokens
+            || ordinal >= 5
+            || binding.committed_execution_root != self.execution_root
+            || binding.job_context.job_id != self.job_id
+        {
+            return Err("head source changes owned position/context".into());
+        }
+        let (_, node, widths) = crate::palw_prefix_gdn_replay_v1::head_geometry(&binding.shape_profile, self.layer, self.head)?;
+        let ranges =
+            qwen36_gdn_slice_v1(&binding.shape_profile, node, &widths, self.head).ok_or("head source slices not canonical")?;
+        let r = usize::from(node.input_refs[ordinal]);
+        let source = &binding.shape_profile.gdn_nodes[r];
+        Ok(crate::palw_prefix_source_stream_v1::PalwPrefixSourceRangeV1 {
+            node_slot: binding
+                .shape_profile
+                .global_node_slot(PalwStepTableV1::Gdn, self.layer, r)
+                .ok_or("head source slot missing")?,
+            position,
+            tile_len: source.tile_len,
+            width: widths[ordinal],
+            start: ranges[ordinal].0,
+            end: ranges[ordinal].1,
+        })
+    }
     pub fn input_rows(
         &self,
         binding: &PalwStepBindingV2,

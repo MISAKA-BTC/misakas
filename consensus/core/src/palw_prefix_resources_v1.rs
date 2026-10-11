@@ -94,11 +94,11 @@ impl PalwPrefixResourcePlanV1 {
         };
         let moves = exact(moves + u128::from(prices.reorg_replay_moves))?;
         // Current pure calls revalidate/hash the immutable graph/context. Account every
-        // move's full hydrated profile and the existing accepted commitment-tx job bound,
+        // move's full hydrated profile and the public-filer accepted wire job bound,
         // including conservative repeated validation passes; a small stub cannot discount it.
         let repeated_validation = exact(
             u128::from(moves)
-                .checked_mul(u128::from(original_profile_bytes) + crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES as u128)
+                .checked_mul(u128::from(original_profile_bytes) + 125_000u128)
                 .and_then(|n| n.checked_mul(32))
                 .ok_or("prefix repeated validation budget overflows u128")?,
         )?;
@@ -157,6 +157,45 @@ mod tests {
             deposit_per_move: 1,
             reorg_replay_moves: 3,
         }
+    }
+    #[test]
+    fn hydrated_profile_quote_charges_original_bytes_on_every_move_and_refuses_understatement() {
+        let (binding, _, _) = crate::palw_prefix_state_court_v1::tests::fixture(false);
+        let p = &binding.shape_profile;
+        let size = borsh::to_vec(p).unwrap().len() as u64;
+        let quote = |n| {
+            PalwPrefixResourcePlanV1::derive_with_profile_bytes(
+                p,
+                PalwPrefixStateRelationV1::Base0Int8KvV1,
+                2,
+                binding.step_leaf_count,
+                90_000,
+                prices(),
+                n,
+            )
+        };
+        let ordinary = PalwPrefixResourcePlanV1::derive(
+            p,
+            PalwPrefixStateRelationV1::Base0Int8KvV1,
+            2,
+            binding.step_leaf_count,
+            90_000,
+            prices(),
+        )
+        .unwrap();
+        assert_eq!(quote(size).unwrap(), ordinary);
+        let bigger = quote(size + 1024).unwrap();
+        assert_eq!(bigger.envelope.maximum_moves, ordinary.envelope.maximum_moves);
+        assert_eq!(bigger.envelope.row_bytes, ordinary.envelope.row_bytes + 1024);
+        assert_eq!(bigger.envelope.resident_ram_bytes, ordinary.envelope.resident_ram_bytes + 4096);
+        assert_eq!(
+            bigger.envelope.maximum_parser_steps,
+            ordinary.envelope.maximum_parser_steps + ordinary.envelope.maximum_moves * 1024 * 32
+        );
+        assert!(bigger.envelope.maximum_blake_blocks > ordinary.envelope.maximum_blake_blocks);
+        assert!(bigger.envelope.rent_sompi > ordinary.envelope.rent_sompi);
+        assert!(quote(size - 1).is_err());
+        assert!(quote(u64::MAX).is_err());
     }
     #[test]
     fn authenticated_i8_geometry_prices_every_old_i32_leaf_and_refuses_price_overflow() {
