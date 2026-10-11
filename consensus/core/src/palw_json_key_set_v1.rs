@@ -73,6 +73,22 @@ impl PalwJsonKeySetV1 {
     pub fn insertions(&self) -> u64 {
         self.insertions
     }
+    /// Authenticated membership/absence verdict. A duplicate marks JSON invalid, but its
+    /// surrounding raw tokenizer bytes must still reach their legacy EOF hash before conviction.
+    pub fn contains(&self, namespace: u64, key_hash: Hash64, proof: &PalwJsonKeyInsertProofV1) -> Result<bool, String> {
+        if proof.namespace != namespace || proof.key_hash != key_hash || proof.siblings.len() != PALW_JSON_KEY_SET_DEPTH_V1 {
+            return Err("JSON key proof changes parser namespace/key or exact tree depth".into());
+        }
+        let path = palw_json_key_path_v1(namespace, key_hash);
+        if walk(path, present_leaf(path), &proof.siblings) == self.root {
+            return Ok(true);
+        }
+        if walk(path, empty_leaf(), &proof.siblings) == self.root {
+            return Ok(false);
+        }
+        Err("JSON membership/absence proof is not rooted in this owned stream".into())
+    }
+
     /// Parser supplies the namespace and decoded-key hash it actually reached. A wrong proof,
     /// replay or duplicate is rejected BEFORE mutation; hashes from another object cannot stand in.
     pub fn insert(&mut self, namespace: u64, key_hash: Hash64, proof: &PalwJsonKeyInsertProofV1) -> Result<(), String> {
@@ -113,6 +129,7 @@ mod tests {
         let p = empty_proof(1, "vocab");
         set.insert(1, p.key_hash, &p).unwrap();
         let after = set;
+        assert_eq!(set.contains(1, p.key_hash, &p), Ok(true));
         assert!(set.insert(1, p.key_hash, &p).is_err());
         assert_eq!(set, after);
         let p = after_one(2, "vocab", 1, "vocab");

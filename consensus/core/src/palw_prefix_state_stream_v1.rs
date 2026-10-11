@@ -19,14 +19,23 @@ pub struct PalwPrefixStateStreamV1 {
     value_bytes: u64,
     maximum_leaves: u64,
     digest: LeafHashContinuationV1,
+    pending: Option<PalwPrefixTileStreamV1>,
 }
 /// Small journal checkpoint; immutable authenticated binding stays in the seed row.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+struct PalwPrefixTileStreamV1 {
+    length: u32,
+    offset: u32,
+    expected: Hash64,
+    hash: LeafHashContinuationV1,
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwPrefixStreamCheckpointV1 {
     context: Hash64,
     next_tile: u64,
     value_bytes: u64,
     digest: LeafHashContinuationV1,
+    pending: Option<PalwPrefixTileStreamV1>,
 }
 impl PalwPrefixStateStreamV1 {
     pub fn new(
@@ -50,12 +59,6 @@ impl PalwPrefixStateStreamV1 {
             return Err("prefix stream has noncanonical step count".into());
         }
         let plan = PalwPrefixKvPlanV1::of_profile(&binding.shape_profile, prefix_tokens).map_err(str::to_string)?;
-        // Every move must fit without trusting an owner-stated shorter length.
-        if plan.key_tile_len as u64 * 4 > PALW_PREFIX_STREAM_TILE_BYTES_V1 as u64
-            || plan.value_tile_len as u64 * 4 > PALW_PREFIX_STREAM_TILE_BYTES_V1 as u64
-        {
-            return Err("prefix stream tile needs a separately chunked authenticated-leaf court".into());
-        }
         let mut digest = LeafHashContinuationV1::new(PALW_A16_PREFIX_KV_DIGEST_DOMAIN_V1);
         digest.update(&u64::from(plan.layer_count).to_le_bytes());
         Ok(Self {
@@ -67,7 +70,25 @@ impl PalwPrefixStateStreamV1 {
             value_bytes: 0,
             maximum_leaves,
             digest,
+            pending: None,
         })
+    }
+    pub fn check(&self) -> Result<(), String> {
+        if self.next_tile > self.total_tiles
+            || self.value_bytes as u128 > self.total_tiles as u128 * crate::palw_step_leg::PALW_STEP_LEG_MAX_TILE_BYTES as u128
+            || self.digest.byte_count() != Some(136 + u128::from(self.value_bytes))
+        {
+            return Err("prefix digest/cumulative counters inconsistent".into());
+        }
+        if let Some(p) = &self.pending {
+            if p.offset > p.length
+                || p.length as usize > crate::palw_step_leg::PALW_STEP_LEG_MAX_TILE_BYTES
+                || p.hash.byte_count() != Some(282 + u128::from(p.offset))
+            {
+                return Err("prefix pending oldleaf hash counters inconsistent".into());
+            }
+        }
+        Ok(())
     }
     pub fn next_tile(&self) -> u64 {
         self.next_tile
@@ -75,12 +96,10 @@ impl PalwPrefixStateStreamV1 {
     pub fn total_tiles(&self) -> u64 {
         self.total_tiles
     }
+    /// Convenience for one small already opened tile. Larger legal tiles use begin_tile,
+    /// bounded byte moves and finish_tile instead of enlarging a carrier.
     pub fn push(&mut self, context: Hash64, ordinal: u64, tile: &PalwPrefixKvTileV1) -> Result<(), String> {
-        if context != self.context
-            || ordinal != self.next_tile
-            || self.next_tile >= self.total_tiles
-            || tile.preimage.values_le.len() > PALW_PREFIX_STREAM_TILE_BYTES_V1
-        {
+        if context != self.context || ordinal != self.next_tile || self.next_tile >= self.total_tiles || self.pending.is_some() {
             return Err("prefix tile changes owned identity/order or bounded move".into());
         }
         let plan = PalwPrefixKvPlanV1::of_profile(&self.binding.shape_profile, self.prefix_tokens).map_err(str::to_string)?;
@@ -92,8 +111,78 @@ impl PalwPrefixStateStreamV1 {
         self.next_tile += 1;
         Ok(())
     }
+    /// Authenticate the OLD whole tile's header/opening, then consume its bytes in bounded
+    /// moves. Up to65536 values (256KiB) remains legal; no active tile profile is dropped.
+    pub fn begin_tile(
+        &mut self,
+        context: Hash64,
+        ordinal: u64,
+        opening: &crate::palw_step_leg::PalwStepOpeningV1,
+    ) -> Result<(), String> {
+        if context != self.context || ordinal != self.next_tile || ordinal >= self.total_tiles || self.pending.is_some() {
+            return Err("prefix tile opening changes ordered seed or pending tile".into());
+        }
+        let plan = PalwPrefixKvPlanV1::of_profile(&self.binding.shape_profile, self.prefix_tokens).map_err(str::to_string)?;
+        let (coord, count) = plan.coordinate(&self.binding.shape_profile, ordinal).ok_or("prefix next coordinate missing")?;
+        let index = crate::palw_step::canonical_step_leaf_index(&self.binding.shape_profile, &self.binding.job_context, &coord)
+            .ok_or("prefix coordinate noncanonical")?;
+        if opening.leaf_index != index
+            || crate::palw_step_leg::step_opening_root_capped_v1(self.binding.step_leaf_count, opening, self.maximum_leaves)
+                .map_err(|e| e.to_string())?
+                != self.binding.step_merkle_root
+        {
+            return Err("prefix next tile opening is not in original claim step tree".into());
+        }
+        let length = count.checked_mul(4).ok_or("prefix tile byte length overflow")?;
+        if length as usize > crate::palw_step_leg::PALW_STEP_LEG_MAX_TILE_BYTES {
+            return Err("prefix tile exceeds active shape format".into());
+        }
+        let mut hash = LeafHashContinuationV1::new(crate::palw_step_leg::PALW_STEP_LEG_DOMAIN_TILE_LEAF);
+        hash.update(&crate::palw_step::PALW_STEP_OBJECT_VERSION_V1.to_le_bytes());
+        hash.update(self.binding.job_context.leaf_context_hash_v1(coord.call_index, coord.position).as_byte_slice());
+        hash.update(self.binding.shape_profile.shape_profile_id().as_byte_slice());
+        for n in [coord.call_index, coord.node_slot, coord.position, coord.tile_index, count, length] {
+            hash.update(&n.to_le_bytes());
+        }
+        self.pending = Some(PalwPrefixTileStreamV1 { length, offset: 0, expected: opening.leaf_hash, hash });
+        Ok(())
+    }
+    pub fn push_tile_bytes(&mut self, context: Hash64, ordinal: u64, offset: u32, bytes: &[u8]) -> Result<(), String> {
+        self.check()?;
+        let pending = self.pending.as_ref().ok_or("prefix tile header missing")?;
+        if context != self.context
+            || ordinal != self.next_tile
+            || offset != pending.offset
+            || bytes.is_empty()
+            || bytes.len() > PALW_PREFIX_STREAM_TILE_BYTES_V1
+            || bytes.len() as u64 > u64::from(pending.length - pending.offset)
+        {
+            return Err("prefix tile byte move changes seed/order/offset or bounded remaining length".into());
+        }
+        let total = self.value_bytes.checked_add(bytes.len() as u64).ok_or("prefix cumulative bytes overflow")?;
+        let pending = self.pending.as_mut().unwrap();
+        pending.hash.update(bytes);
+        pending.offset += bytes.len() as u32;
+        self.digest.update(bytes);
+        self.value_bytes = total;
+        Ok(())
+    }
+    pub fn finish_tile(&mut self) -> Result<(), String> {
+        self.check()?;
+        let pending = self.pending.as_ref().ok_or("prefix tile header missing")?;
+        if pending.offset != pending.length || pending.hash.finish() != pending.expected {
+            return Err("prefix tile is incomplete or fails original wholeleaf hash".into());
+        }
+        self.next_tile += 1;
+        self.pending = None;
+        Ok(())
+    }
     pub fn finish(&self) -> Result<Hash64, String> {
-        if self.next_tile != self.total_tiles || self.digest.byte_count() != Some(136 + u128::from(self.value_bytes)) {
+        self.check()?;
+        if self.pending.is_some()
+            || self.next_tile != self.total_tiles
+            || self.digest.byte_count() != Some(136 + u128::from(self.value_bytes))
+        {
             return Err("prefix stream is incomplete or has inconsistent digest counters".into());
         }
         Ok(crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(
@@ -108,9 +197,17 @@ impl PalwPrefixStateStreamV1 {
             next_tile: self.next_tile,
             value_bytes: self.value_bytes,
             digest: self.digest.clone(),
+            pending: self.pending.clone(),
         }
     }
     pub(crate) fn restore_checkpoint_v1(&mut self, cp: &PalwPrefixStreamCheckpointV1) -> Result<(), String> {
+        if cp.pending.as_ref().is_some_and(|p| {
+            p.offset > p.length
+                || p.length as usize > crate::palw_step_leg::PALW_STEP_LEG_MAX_TILE_BYTES
+                || p.hash.byte_count() != Some(282 + u128::from(p.offset))
+        }) {
+            return Err("prefix checkpoint pending leaf counters invalid".into());
+        }
         if cp.context != self.context
             || cp.next_tile > self.total_tiles
             || cp.digest.byte_count() != Some(136 + u128::from(cp.value_bytes))
@@ -120,6 +217,7 @@ impl PalwPrefixStateStreamV1 {
         self.next_tile = cp.next_tile;
         self.value_bytes = cp.value_bytes;
         self.digest = cp.digest.clone();
+        self.pending = cp.pending.clone();
         Ok(())
     }
 }
