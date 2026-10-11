@@ -1044,7 +1044,7 @@ mod dns_observation_generation_tests {
             .address(kaspa_addresses::Prefix::Testnet);
         let settings = crate::tx::GeneratorSettings::try_new_with_context(
             context.clone(), Some(vec![entry.clone()]), change, 1, 1,
-            crate::tx::PaymentDestination::Change, None, crate::tx::Fees::SenderPays(0), None, None,
+            crate::tx::PaymentDestination::Change, None, crate::tx::Fees::None, None, None,
         ).unwrap();
         let generator = crate::tx::Generator::try_new(settings, None, None).unwrap();
         generator.stash([entry.clone()]);
