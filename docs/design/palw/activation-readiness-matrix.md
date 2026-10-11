@@ -305,6 +305,19 @@ tightening still requires consensus review. This closes the length-binding count
 F-B3 (grinding uses the exact escape `1−(1−ε_sel)^G`), F-B4 (interim Panel seeds can be ground from the claim id),
 F-B5 (legacy samplers are slightly biased) and F-B6 (sampled conformance has no power against sparse faults).
 
+## 3i. User policy rulings (2026-10-11) — drill-interim values, separated from full guarantees and normal-network activation
+
+Source: the user, with the reasoning in codex's `docs/audit/g14-review-2026-10-10/policy-decision-feedback.md` (`codex/g14-prosecution-bounds` @ `ada770cbb`).
+**Principle:** a value adopted for a drill is not a full-domain guarantee and not an activation decision for a normal preset.
+
+| Item | Ruling |
+|---|---|
+| RFC-12 values | D = 3; work W = 6,331,093,440 pwu (revisit with a measured census); operator concentration 400‰; class concentration 1000‰ for now, re-evaluate 600‰ once ≥ 3 REAL classes hold mature work. Maturity stays max(acceptance + 5,400 DAA, the later retirement deadline). Legacy DNS evidence horizon 10,080 DAA. If a new G14 path's deadline is longer, maturity extends with it. |
+| fee-only Round / market fee | A fee-only Round is NOT counted in B_max; it is limited at allocation by a separate, capital-proportional ExecutionCap. In v1 the market fee is NOT in R_max; expected fee income enters the economic-safety computation. |
+| Budget window W | 400 DAA as the drill-interim value, only for profiles that satisfy L ≤ W and the slot cap; NOT applied as-is to long G14 staged paths. Distinct from RFC-12's work W. |
+| G14-L (34 sessions vs parallel lanes) | Not approved as a reinterpretation. A new explicit contract: 34 lifetime sessions + 64 lanes/session + 128 extra lanes/reservation. Full guarantee withheld until: cumulative scope 16 vs a first round of 36 lanes is closed, re-acquisition after pruning, retained RAM, and the maximum profile reaching its terminal. |
+| Rule E + DNS retirement arm path | Approved for salted drills only: E armed at or before retirement; genesis, network and parameter identity separated from public testnet-12; fix the remote L2 client's fixed `rule_e: None` (R12 WIP `rfc12/r12-wip`); verify node/client agreement, partition rejoin and pruned IBD. Normal-preset activation is a separate decision. |
+
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
 Waves, because the Mac (32 GiB, ~40 GB free disk) cannot build a dozen targets at once, and builds are batched (user rule): each lane
