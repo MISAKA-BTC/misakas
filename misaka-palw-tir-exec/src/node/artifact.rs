@@ -59,7 +59,7 @@ pub struct TirArtifactV1 {
     /// The file's container — for a composite, the PARENT's, which serves params `0..p`.
     container: PalwTirContainerV1,
     /// The inventory tree, built on the first opening (a court close; never at load).
-    tree: OnceLock<Result<TirInventoryTreeV1, String>>,
+    tree: OnceLock<Result<TirHeldInventoryTreeV1, String>>,
     /// The inventory root and leaf count, derived once.
     root: OnceLock<Result<(Hash64, u32), String>>,
     /// A composite candidate's adapter section, when this is one.
@@ -70,6 +70,14 @@ pub struct TirArtifactV1 {
     /// Why a default residency budget was not taken, when it was not (ADR-0112 Decision 2).
     declined: Option<TirResidencyDeclinedV1>,
     weights: TirWeightsV1,
+}
+
+/// The lazy tree and its lasting reservation share the artifact's lifetime. Admission
+/// failure happens outside OnceLock initialization, allowing a later request to retry.
+struct TirHeldInventoryTreeV1 {
+    tree: TirInventoryTreeV1,
+    _memory: Option<super::memory::TirMemoryLeaseV1>,
+    _reserver: Option<super::memory::TirMemoryReserverV1>,
 }
 
 /// **A composite candidate's own half**: its reference (the chain's `PalwTirCompositeRefV1`), the
@@ -532,8 +540,21 @@ impl TirArtifactV1 {
     /// sections, whose own root is no commitment (the composite root is). Under a residency the
     /// leaves are streamed through the file descriptor in chunks, never through a mapping.
     pub fn inventory_tree(&self) -> Result<&TirInventoryTreeV1, String> {
+        if let Some(tree) = self.tree.get() {
+            return tree.as_ref().map(|held| &held.tree).map_err(|e| e.clone());
+        }
+        let need = super::memory::tir_inventory_tree_storage_need_v1(&self.plan.program, matches!(&self.weights, TirWeightsV1::Resident(_)))?;
+        let reserver = super::memory::memory_reserver_v1();
+        // The streamed inventory identity is separate from an N-leaf proof tree.
+        // Actual node artifact loading has already authenticated/cached this root.
+        let memory = if let Some(r) = reserver.as_ref() {
+            let (root, _) = self.inventory_root()?;
+            let class_id = self.class()?.class_id(&root);
+            Some(r("tir-inventory-tree", class_id, root, need)?)
+        } else { None };
         self.tree
-            .get_or_init(|| match &self.weights {
+            .get_or_init(|| {
+                let tree = match &self.weights {
                 TirWeightsV1::Mapped(_) => TirInventoryTreeV1::build(&self.plan.program, self),
                 TirWeightsV1::Resident(_) => {
                     let instances: Vec<(u16, Option<u16>)> = self.plan.param_instances_in_order();
@@ -547,8 +568,11 @@ impl TirArtifactV1 {
                     )?;
                     TirInventoryTreeV1::from_leaves(&self.plan.program, leaves)
                 }
+                }?;
+                Ok(TirHeldInventoryTreeV1 { tree, _memory: memory, _reserver: reserver })
             })
             .as_ref()
+            .map(|held| &held.tree)
             .map_err(|e| e.clone())
     }
 

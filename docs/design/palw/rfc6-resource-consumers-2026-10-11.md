@@ -627,3 +627,23 @@ access and unknown-source refusal, across the existing executable corpus. Syntax
 and diff checks pass; this latest carried-copy patch awaits central compilation and
 runtime. Neither these envelopes nor existing symbolic work substitute for model
 RSS, elapsed-time, DA/court market costs, 100k or genuine pruning acceptance tests.
+
+
+The separate lazy inventory-tree follow-up now holds each artifact's persistent
+hash levels and its host guard in one `OnceLock` owner. Admission occurs before
+constructing any N-leaf tree or starting its full pass. Refused admission leaves the
+initializer unset for later retry; a concurrent loser releases its extra guard.
+Cache hits retain the same guard, and the final artifact owner releases it. The
+streamed inventory identity/authentication remains the artifact-loading path and is
+separate from full-tree construction. Historical tools without the node provider
+still use the existing tree API, including containers without a class layout.
+
+The checked envelope counts persistent/growing hash vectors and program metadata.
+For resident construction it additionally counts the two 32-MiB maximum chunks and
+their coordinate/hash vectors: narrow rows can make a chunk contain many more than
+1,024 leaves, so the count is derived from actual row width and 32-KiB inventory
+pieces. Oversized/overflowing tensor declarations are refused before legacy count
+arithmetic. A new real-container control exercises mapped and resident refusal,
+retry without extra reads before admission, root/opening equivalence, cache reuse,
+last-Arc release and malformed dimension overflow. Runtime awaits central testing;
+requested storage remains an operational envelope rather than RSS/fee approval.

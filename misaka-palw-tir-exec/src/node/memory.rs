@@ -83,6 +83,40 @@ pub fn tir_fold_hash_storage_need_v1(count: u64) -> Result<u64, String> {
     bytes(add(mul(u128::from(count), 4 * std::mem::size_of::<Hash64>() as u128)?, 16 << 10)?)
 }
 
+/// Persistent inventory levels and their construction. Resident streaming keeps two
+/// <=32-MiB chunks plus leaf-coordinate/hash vectors; tiny tensor rows can have many
+/// leaves per chunk, so their closed-form count must be charged too. No weights are read.
+pub fn tir_inventory_tree_storage_need_v1(program: &misaka_palw_tir::TirProgramV1, resident: bool) -> Result<u64, String> {
+    // Guard the legacy inventory arithmetic before asking for its leaf count.
+    for d in &program.params {
+        let tensor = d.shape.iter().try_fold(d.dtype.width() as u128, |n, dim| mul(n, u128::from(*dim)))?;
+        if tensor > u128::from(u32::MAX) { return Err("an inventory tensor exceeds its u32 byte coordinates".into()); }
+    }
+    let count = kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_leaf_count_v1(program)
+        .map_err(|e| e.to_string())?;
+    if count == 0 { return Err("an empty inventory has no tree".into()); }
+    let mut need = add(mul(u128::from(count), 4 * std::mem::size_of::<Hash64>() as u128)?, 16 << 20)?;
+    need = add(need, mul(program.encode().len() as u128, 64)?)?;
+    if resident {
+        const CHUNK: u128 = 32 << 20;
+        let piece = kaspa_consensus_core::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1 as u128;
+        let (mut largest_chunk, mut most_leaves) = (0, 0);
+        for d in &program.params {
+            let tensor = d.shape.iter().try_fold(d.dtype.width() as u128, |n, dim| mul(n, u128::from(*dim)))?;
+            let row = if d.shape.len() < 2 { tensor } else {
+                d.shape[1..].iter().try_fold(d.dtype.width() as u128, |n, dim| mul(n, u128::from(*dim)))?
+            };
+            if row == 0 || tensor == 0 { continue; }
+            let chunk = if row <= CHUNK { (CHUNK / row * row).min(tensor) } else { CHUNK.min(tensor) };
+            let leaves = if row <= CHUNK { mul(chunk / row, row.div_ceil(piece))? } else { chunk.div_ceil(piece) };
+            largest_chunk = largest_chunk.max(chunk);
+            most_leaves = most_leaves.max(leaves);
+        }
+        need = add(need, add(mul(largest_chunk, 2)?, mul(most_leaves, 2 * (16 + 64))?)?)?;
+    }
+    bytes(need)
+}
+
 pub(crate) struct TirFoldHashesLeaseV1 {
     pub(crate) hashes: Vec<Hash64>,
     pub(crate) admission_id: usize,
