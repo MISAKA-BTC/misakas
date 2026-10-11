@@ -46,8 +46,13 @@ const fn inverse_byte_alphabet() -> [u16; 324] {
     let mut b = 0usize;
     let mut next = 256usize;
     while b < 256 {
-        let c = if (b >= 33 && b <= 126) || (b >= 161 && b <= 172) || b >= 174 { b }
-            else { let c = next; next += 1; c };
+        let c = if (b >= 33 && b <= 126) || (b >= 161 && b <= 172) || b >= 174 {
+            b
+        } else {
+            let c = next;
+            next += 1;
+            c
+        };
         inverse[c] = b as u16;
         b += 1;
     }
@@ -60,7 +65,9 @@ pub fn palw_qwen_char_byte_v1(c: char) -> Option<u8> {
 }
 
 pub fn palw_qwen_token_rendering_v1(token: &str, added: bool) -> Option<Vec<u8>> {
-    if added { return Some(token.as_bytes().to_vec()); }
+    if added {
+        return Some(token.as_bytes().to_vec());
+    }
     token.chars().map(palw_qwen_char_byte_v1).collect()
 }
 
@@ -123,14 +130,80 @@ impl PalwQwenRenderingMapV1 {
     }
 }
 
-/// Reject repeated object keys at any depth instead of silently accepting last-value wins.
+/// Rendering-only JSON view: reject repeated object keys and validate finite decimal grammar.
+/// Preserve nonnegative u32 integer numbers; map other finite numbers to null. The renderer
+/// accepts only u32 ids and ignores numeric metadata, so this is not a general JSON decoder.
 /// The incremental court must implement this exact rule before publishing any derived result.
 pub fn palw_unique_json_v1(bytes: &[u8]) -> Result<serde_json::Value, &'static str> {
     use serde::Deserialize;
-    let mut d = serde_json::Deserializer::from_slice(bytes);
+    let normalized = normalize_rendering_json_numbers(bytes)?;
+    let mut d = serde_json::Deserializer::from_slice(&normalized);
     let value = UniqueJson::deserialize(&mut d).map_err(|_| "malformed JSON or duplicate object key")?.0;
     d.end().map_err(|_| "trailing JSON bytes")?;
     Ok(value)
+}
+
+// Numbers affect rendering only as nonnegative u32 ids. Validate their exact finite decimal
+// grammar with the streaming rule, then replace other numeric values with null before the
+// library builds a Value. This makes rendering independent of serde_json float_roundtrip
+// feature unification. Unknown numeric metadata is not returned by this rendering-only view.
+fn normalize_rendering_json_numbers(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+    use crate::palw_tokenizer_json_stream_v1::NumberState;
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut depth = 0usize;
+    while at < bytes.len() {
+        let b = bytes[at];
+        if quoted {
+            out.push(b);
+            at += 1;
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                quoted = false;
+            }
+            continue;
+        }
+        if b == b'"' {
+            quoted = true;
+            out.push(b);
+            at += 1;
+            continue;
+        }
+        if matches!(b, b'{' | b'[') {
+            depth += 1;
+            if depth > 127 {
+                return Err("JSON container depth exceeds127");
+            }
+        }
+        if matches!(b, b'}' | b']') {
+            depth = depth.checked_sub(1).ok_or("unmatched JSON container close")?;
+        }
+        if matches!(b, b'-' | b'0'..=b'9') {
+            let start = at;
+            let mut n = NumberState::new(b);
+            at += 1;
+            while at < bytes.len() && n.byte(bytes[at]).map_err(|_| "invalid JSON number")? {
+                at += 1;
+            }
+            if !n.finite() {
+                return Err("JSON number is incomplete or outside the finite decimal domain");
+            }
+            if n.id().is_some() {
+                out.extend_from_slice(&bytes[start..at]);
+            } else {
+                out.extend_from_slice(b"null");
+            }
+        } else {
+            out.push(b);
+            at += 1;
+        }
+    }
+    Ok(out)
 }
 
 struct UniqueJson(serde_json::Value);
