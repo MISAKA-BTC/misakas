@@ -2330,7 +2330,22 @@ pub(crate) fn palw_da_material_v1(
                     continue;
                 };
                 let prompt: Vec<usize> = ids.iter().map(|id| *id as usize).collect();
-                let capture = match backend.execute_free_prompt(&material.job, &prompt) {
+                // Recovery owns the same authenticated constraint scope as initial execution.
+                // A retained descriptor is sufficient to remake a lost capture only when this
+                // host holds the descriptor's exact token table. Host refusal never supplies DA.
+                let mask = match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(
+                    &material.job,
+                    backend.token_table_for_job_v1(&material.job),
+                ) {
+                    Ok(mask) => mask,
+                    Err(e) => {
+                        refused = format!("the kept job's constraint table is unavailable: {e}");
+                        continue;
+                    }
+                };
+                let capture = match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+                    backend.execute_free_prompt(&material.job, &prompt)
+                }) {
                     Ok(run) => run.outcome.material,
                     Err(e) => {
                         refused = format!("the kept job's replay was refused: {e}");
@@ -23313,6 +23328,75 @@ mod p2_7_disclosure_policy {
             kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB1), 0);
         let (built, kept) = answer(&backend, &facts, vec![palw_fp_material_encode_v1(&other, &ids)], &event, false);
         assert!(built.is_err() && kept.is_none(), "another producer's job is not replayed");
+    }
+
+    #[test]
+    fn constraint_job_only_recovery_restores_the_mask_and_never_answers_from_missing_tables_or_wrong_roots() {
+        use kaspa_consensus_core::palw_decode_constraint_v1::*;
+        use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, palw_fp_capture_encode_v1, palw_fp_material_encode_v1};
+        let (backend, mut facts, mut job, ids, _) = fp_claim();
+        let constraint = PalwDecodeConstraintV1 {
+            version: 1,
+            compiler_id: Hash64::from_u64_word(0xDA_C014),
+            start_frame: 0,
+            frames: vec![PalwConstraintFrameV1 {
+                start: 0,
+                nodes: vec![PalwConstraintNodeV1 {
+                    accepting: true,
+                    edges: vec![PalwConstraintEdgeV1 { lo: b'a', hi: b'a', action: PalwConstraintActionV1::Goto(0) }],
+                }],
+            }],
+        };
+        let vocab = misaka_palw_base0::rc::palw_rc_base0_shape_v1().vocab;
+        let mut table = PalwTokenTableV1 {
+            entries: vec![Some(b"b".to_vec()); vocab],
+            eog_token_ids: vec![(vocab - 1) as u32],
+            tokenizer_id: job.tokenizer_id,
+        };
+        table.entries[0] = Some(b"a".to_vec());
+        let root = palw_token_tables_v1().register(table);
+        job.version = PALW_FP_CONSTRAINT_VERSION;
+        job.decode = None;
+        job.tail = Some(PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 { constraint: constraint.to_bytes(), table_root: root }));
+        let prompt: Vec<_> = ids.iter().map(|id| *id as usize).collect();
+        assert!(backend.execute_free_prompt(&job, &prompt).is_err(), "the unscoped recovery would fail");
+        let expected = palw_fp_with_constraint_scope_v1(
+            palw_fp_constraint_mask_for_host_v1(&job, backend.token_table_for_job_v1(&job)).unwrap(),
+            || backend.execute_free_prompt(&job, &prompt),
+        )
+        .unwrap();
+        assert!(expected.output_token_ids.iter().all(|id| *id == 0));
+        facts.execution_root = expected.outcome.execution_root;
+        facts.trace_root = expected.facts.full_logits_trace_root;
+        facts.work_leaves = expected.facts.step_leaf_count;
+        let binding = backend.disclose_trace_event(&expected.outcome.material, u32::MAX, 0).unwrap().binding().clone();
+        facts.job_pin = Some(kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context));
+        let honest = palw_fp_capture_encode_v1(&job, &ids, &expected.outcome.material);
+        let event = [PalwDaUnitV1::Event { row: 0, tile: 0 }];
+        let expected_answer = answer(&backend, &facts, vec![honest.clone()], &event, false).0.unwrap().answers;
+        for kept in [palw_fp_material_encode_v1(&job, &ids), palw_fp_capture_encode_v1(&job, &ids, b"corrupt capture")] {
+            let (built, retained) = answer(&backend, &facts, vec![kept], &event, false);
+            let actual = built.expect("the descriptor and owned public table recover the lost capture");
+            assert!(actual.remade);
+            assert_eq!(actual.answers, expected_answer);
+            assert_eq!(retained.as_deref(), Some(honest.as_slice()));
+            assert!(palw_fp_constraint_scope_v1().is_none(), "recovery restores the caller's thread scope");
+        }
+        let mut wrong_tokenizer = job.clone();
+        wrong_tokenizer.tokenizer_id = Hash64::from_u64_word(0xBAD_DA_C014);
+        let mut unavailable = job.clone();
+        let Some(PalwFpJobTailV1::Constraint(tail)) = unavailable.tail.as_mut() else { unreachable!() };
+        tail.table_root = Hash64::from_u64_word(0xBAD_DA_C015);
+        for refused in [wrong_tokenizer, unavailable] {
+            let (built, retained) = answer(&backend, &facts, vec![palw_fp_material_encode_v1(&refused, &ids)], &event, false);
+            assert!(built.is_err() && retained.is_none(), "another/missing table cannot become a DA answer");
+            assert!(palw_fp_constraint_scope_v1().is_none());
+        }
+        facts.execution_root = Hash64::from_u64_word(0xBAD_DA_C016);
+        let (built, retained) = answer(&backend, &facts, vec![palw_fp_material_encode_v1(&job, &ids)], &event, false);
+        assert!(built.is_err() && retained.is_none(), "correct recovery must still reproduce the recorded claim roots");
+        assert!(palw_fp_constraint_scope_v1().is_none());
     }
 
     /// **Every due unit of a claim from one load, and one `Flat` answers the claim's run** (IMPL-16): a
