@@ -310,3 +310,55 @@ reserved minimum floor with actual charged bytes; the assertion counts
 `max(total_bytes, floor)`, not `total_bytes + floor`. This result contains no real
 multiple-process P2P/pruning run, native 100k acceptance, peak decoded RSS, or
 four-seal long-running liveness. Those acceptance conditions remain open.
+
+## Version-4 native retirement and permanent work archive
+
+Version 3 can retain four 100,000-candidate populations under its 400,000-candidate
+budget. A receipt release removes its reservation but preserves the entire frozen
+population, so continued claim admission eventually reaches that budget even after
+those claims finish. Silently expiring work identity or deleting a population at
+ReceiptLicensed/Final would change historical draws, re-enable duplicate work or
+remove data while an accusation, vesting/payment recovery or material obligation lives.
+
+The separate experimental `palw_permissionless_panel_retired_v1` profile uses carriage
+version 4. Every shipped preset keeps it **None**, every real attempted activation is
+refused, and existing version-2/3 engines are never automatically migrated. Existing
+phase discriminants/bytes remain unchanged; the new Retired phase is appended.
+
+The actual fold asks the native retirement funnel for authority by requiring the native
+claim to be absent from **both the parent and current state**, with no pending accusation,
+and a prior Panel claim row present. Native removal is the existing retirement path,
+which waits on its dependency/material/liability/money/session holds. The next selected
+checkpoint authenticates the prior record and the fact of native removal. Neither a
+receipt release nor Final alone authorizes compaction. A cached native parent root and
+its checkpoint are carried in each typed tombstone. Import accepts the resulting compact
+state only under the caller's trusted native state root; the tombstone is a historical
+rooted record, not a standalone proof of the removed population or an independently
+verifiable replacement for native history.
+
+Compaction releases candidate bodies, snapshot strata membership, historical seat
+vectors and used-operator bodies. It permanently preserves the admitted canonical work
+identity, claim/class/producer/immutable-payload identity, acceptance order/point, original
+ClaimSeal, frozen population root/checkpoint/count, retained entropy, last seed/beacon,
+binding count, and digests of the removed record/history/operators. Existing keyed claim
+and cursor deltas handle replay and undo. Undo restores the original full record; pruned
+carriage need only retain the compact rooted row. No finite work-id expiry is introduced.
+RPC op 220 returns the typed retirement provenance after the native claim disappears,
+shows historical population count/root separately from current retained candidates and
+reports active population rows, permanent tombstones and the permanent claim capacity.
+
+Version 4 separately caps active population records at policy.maxTrackedClaims (at most
+1,024), and **all permanent claim/work identities at 65,536**. Every new admission checks
+both capacities and its 256 MiB serialized envelope before changing the next order or
+identity/claim maps. Archive-full admission is atomic refusal. Thus finished native claims
+can free the four-population budget without reopening any work identity. The finite
+permanent archive still eventually fills; infinite-history liveness, an approved archive
+scheme and measured throughput/RSS are unresolved and must not be labeled PASS.
+
+Tests added cover native-authority versus receipt release, unchanged version-2/3 behavior,
+root/seed/work preservation, keyed replay/undo, tampered-root import refusal, active-cap
+reuse and permanent-archive refusal before mutation. An actual native fold fixture follows
+ReceiptLicensed → Final → existing native removal → next-checkpoint compaction; every
+step uses real delta replay/undo and root-checked native carriage. Its reference beacon is
+explicit test construction, not an independent public source. These newly added tests
+are **pending centralized compilation/runtime** until a concrete result is recorded.

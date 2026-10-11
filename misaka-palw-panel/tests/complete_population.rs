@@ -218,3 +218,209 @@ fn complete_100k_seal_draw_restore_and_100001_refusal_are_explicit() {
     assert!(matches!(r.phase, ClaimPhaseV3::Voided { reason: NonFraudReasonV1::PopulationResourceLimit, .. }));
     assert_eq!(refused.reserved(&bond(1)), 0);
 }
+
+/// Host-authenticated native retirement is deliberately separate from ReceiptLicensed/Final.
+struct RetirementView {
+    base: View,
+    terminal: BTreeSet<Hash64>,
+    retired: BTreeSet<Hash64>,
+}
+impl ConsensusViewV1 for RetirementView {
+    fn candidates(&self, c: &AdmittedClaimV1) -> Result<Vec<SeatCandidateV1>, PanelErrorV1> {
+        self.base.candidates(c)
+    }
+    fn available_collateral(&self, b: &BondIdV1) -> u128 {
+        self.base.available_collateral(b)
+    }
+    fn terminal_claim(&self, id: &Hash64) -> bool {
+        self.terminal.contains(id)
+    }
+    fn retired_claim(&self, id: &Hash64) -> Option<PanelRetirementAuthorityV1> {
+        self.retired
+            .contains(id)
+            .then_some(PanelRetirementAuthorityV1 { native_parent_root: h(8800), native_parent_checkpoint: h(8801) })
+    }
+    fn verify_beacon(&self, r: &BeaconRequestV1, p: &BeaconProofV1) -> Result<(), PanelErrorV1> {
+        self.base.verify_beacon(r, p)
+    }
+}
+fn retirement_view(n: u64) -> RetirementView {
+    RetirementView { base: View { rows: (1..=n).map(seat).collect() }, terminal: BTreeSet::new(), retired: BTreeSet::new() }
+}
+fn retirement_initial(version: u16, active_cap: u32) -> PermissionlessPanelStateV1 {
+    let mut cursor = initial().cursor();
+    cursor.version = version;
+    cursor.policy.max_tracked_claims = active_cap;
+    PermissionlessPanelStateV1::from_cursor(cursor).unwrap()
+}
+fn retirement_advance(s: &PermissionlessPanelStateV1, daa: u64, v: &RetirementView) -> PermissionlessPanelStateV1 {
+    s.advance(
+        &SelectedChainStepV1 {
+            block: h(s.height() + 1),
+            parent: s.tip(),
+            height: s.height() + 1,
+            daa,
+            admissions: Vec::new(),
+            beacons: Vec::new(),
+        },
+        v,
+    )
+    .unwrap()
+    .0
+}
+fn distinct_claim(n: u64) -> AdmittedClaimV1 {
+    let mut c = claim();
+    c.claim_id = h(9_100_000 + n);
+    c.work_id = h(9_200_000 + n);
+    c.producer = bond(9_300_000 + n);
+    c
+}
+
+#[test]
+fn retired_population_waits_for_native_removal_keeps_work_and_seed_and_replays_undo_exactly() {
+    let mut v = retirement_view(96);
+    let mut s = retirement_advance(&retirement_initial(WIRE_VERSION_RETIRED_V1, 8), 1, &v);
+    s = s.admit(&[claim()]).unwrap().0;
+    s = retirement_advance(&retirement_advance(&s, 2, &v), 3, &v);
+    s = retirement_advance(&s, 10, &v)
+        .accept_beacon(&BeaconProofV1 { epoch: 1, output: h(42), proof: b"fixture only".to_vec() }, &v)
+        .unwrap();
+    s = retirement_advance(&s, 13, &v);
+    let before = s.claim(&claim().claim_id).unwrap().clone();
+    assert!(matches!(before.phase, ClaimPhaseV3::Bound(_)));
+    v.terminal.insert(claim().claim_id);
+    s = retirement_advance(&s, 14, &v);
+    assert!(matches!(s.claim(&claim().claim_id).unwrap().phase, ClaimPhaseV3::Released { .. }));
+    assert!(s.claim(&claim().claim_id).unwrap().snapshot.is_some(), "receipt release is not native retirement");
+    let full = s.clone();
+    let full_bytes = borsh::to_vec(&full).unwrap();
+    v.retired.insert(claim().claim_id);
+    let compact = retirement_advance(&s, 15, &v);
+    let r = compact.claim(&claim().claim_id).unwrap();
+    let ClaimPhaseV3::Retired(t) = &r.phase else { panic!("{:?}", r.phase) };
+    assert!(r.snapshot.is_none() && r.binding_history.is_empty() && r.used_operators.is_empty());
+    assert_eq!(t.population.as_ref().unwrap().root, before.snapshot.as_ref().unwrap().root);
+    assert_eq!(t.population.as_ref().unwrap().candidate_count, 96);
+    assert_eq!(t.last_seed, before.binding_history.last().map(|b| b.panel_seed_v3));
+    assert_eq!(t.binding_count, 1);
+    assert_eq!(r.claim, before.claim);
+    assert_eq!(r.seal, before.seal);
+    assert_eq!(r.entropy_output, before.entropy_output);
+    assert!(compact.work_id_rows().contains(&claim().work_id));
+    assert!(before.binding_history.iter().flat_map(|b| &b.seats).all(|bond| compact.reserved(bond) == 0));
+    let bytes = borsh::to_vec(&compact).unwrap();
+    assert!(bytes.len() * 4 < full_bytes.len());
+    assert_eq!(
+        PermissionlessPanelStateV1::import(&bytes, compact.root(), compact.network(), compact.ruleset(), compact.policy()).unwrap(),
+        compact
+    );
+    // Production deltas use the existing cursor/claim/beacon rows. Work rows never disappear.
+    let mut replay = full.clone();
+    replay.set_cursor(compact.cursor());
+    replay.put_claim_row(claim().claim_id, Some(r.clone()));
+    for epoch in full.beacon_rows().keys() {
+        replay.put_beacon_row(*epoch, compact.beacon_rows().get(epoch).copied());
+    }
+    replay.refresh_derived().unwrap();
+    assert_eq!(replay.root(), compact.root());
+    replay.check_consistency().unwrap();
+    replay.set_cursor(full.cursor());
+    replay.put_claim_row(claim().claim_id, full.claim(&claim().claim_id).cloned());
+    for (epoch, output) in full.beacon_rows() {
+        replay.put_beacon_row(*epoch, Some(*output));
+    }
+    replay.refresh_derived().unwrap();
+    assert_eq!(replay.root(), full.root());
+    assert_eq!(borsh::to_vec(&replay).unwrap(), full_bytes);
+    let (same, refused) = compact.admit(&[claim()]).unwrap();
+    assert_eq!(same.root(), compact.root());
+    assert_eq!(refused[0].1, PanelErrorV1::DuplicateClaim);
+    let mut reused = distinct_claim(1);
+    reused.work_id = claim().work_id;
+    let (same, refused) = compact.admit(&[reused]).unwrap();
+    assert_eq!(same.root(), compact.root());
+    assert_eq!(refused[0].1, PanelErrorV1::DuplicateClaim);
+    let mut bad = compact.clone();
+    let mut row = r.clone();
+    let ClaimPhaseV3::Retired(ref mut t) = row.phase else { unreachable!() };
+    t.population.as_mut().unwrap().root = h(111);
+    bad.put_claim_row(claim().claim_id, Some(row));
+    assert_eq!(bad.check_consistency(), Err(PanelErrorV1::InvalidCarriage));
+    let corrupt = borsh::to_vec(&bad).unwrap();
+    assert_eq!(
+        PermissionlessPanelStateV1::import(&corrupt, compact.root(), compact.network(), compact.ruleset(), compact.policy()),
+        Err(PanelErrorV1::InvalidCarriage)
+    );
+}
+
+#[test]
+fn retired_population_is_version_four_only_and_active_limit_is_atomic() {
+    for version in [WIRE_VERSION_V2, WIRE_VERSION_COMPLETE_V1, WIRE_VERSION_RETIRED_V1] {
+        let mut v = retirement_view(12);
+        let mut cursor = retirement_initial(WIRE_VERSION_RETIRED_V1, 8).cursor();
+        cursor.version = version;
+        if version == WIRE_VERSION_V2 {
+            cursor.policy.max_candidates = 16;
+        }
+        let mut s = retirement_advance(&PermissionlessPanelStateV1::from_cursor(cursor).unwrap(), 1, &v);
+        s = s.admit(&[claim()]).unwrap().0;
+        s = retirement_advance(&retirement_advance(&s, 2, &v), 3, &v);
+        v.terminal.insert(claim().claim_id);
+        v.retired.insert(claim().claim_id);
+        s = retirement_advance(&s, 4, &v);
+        assert_eq!(matches!(s.claim(&claim().claim_id).unwrap().phase, ClaimPhaseV3::Retired(_)), version == WIRE_VERSION_RETIRED_V1);
+        assert_eq!(s.claim(&claim().claim_id).unwrap().snapshot.is_none(), version == WIRE_VERSION_RETIRED_V1);
+    }
+    let mut v = retirement_view(12);
+    let mut s = retirement_initial(WIRE_VERSION_RETIRED_V1, 8);
+    for n in 0..8 {
+        let c = distinct_claim(n);
+        s = retirement_advance(&s, n + 1, &v);
+        s = s.admit(&[c.clone()]).unwrap().0;
+        v.terminal.insert(c.claim_id);
+        s = retirement_advance(&s, n + 1, &v);
+    }
+    let before = s.root();
+    let order = s.cursor().next_order;
+    let (same, refusal) = s.admit(&[distinct_claim(8)]).unwrap();
+    assert_eq!(refusal[0].1, PanelErrorV1::ResourceLimit);
+    assert_eq!(same.root(), before);
+    assert_eq!(same.cursor().next_order, order);
+    v.retired.insert(distinct_claim(0).claim_id);
+    s = retirement_advance(&s, 9, &v);
+    let (s, refusal) = s.admit(&[distinct_claim(8)]).unwrap();
+    assert!(refusal.is_empty());
+    assert_eq!(s.claim_rows().len(), 9);
+    assert_eq!(s.work_id_rows().len(), 9);
+    assert_eq!(s.claim_rows().values().filter(|r| !matches!(r.phase, ClaimPhaseV3::Retired(_))).count(), 8);
+}
+
+#[test]
+fn retired_population_permanent_archive_capacity_refuses_before_writing_identity_or_order() {
+    let mut v = retirement_view(0);
+    let mut s = retirement_initial(WIRE_VERSION_RETIRED_V1, 8);
+    s = retirement_advance(&s, 1, &v).admit(&[distinct_claim(0)]).unwrap().0;
+    v.terminal.insert(distinct_claim(0).claim_id);
+    v.retired.insert(distinct_claim(0).claim_id);
+    s = retirement_advance(&s, 2, &v);
+    let exemplar = s.claim(&distinct_claim(0).claim_id).unwrap().clone();
+    for n in 1..MAX_RETIRED_ARCHIVE_CLAIMS_V1 as u64 {
+        let mut r = exemplar.clone();
+        r.claim = distinct_claim(n);
+        r.acceptance_order = n;
+        s.put_work_id_row(r.claim.work_id, true);
+        s.put_claim_row(r.claim.claim_id, Some(r));
+    }
+    let mut cursor = s.cursor();
+    cursor.next_order = MAX_RETIRED_ARCHIVE_CLAIMS_V1 as u64;
+    s.set_cursor(cursor);
+    s.check_consistency().unwrap();
+    let before = s.root();
+    let next = distinct_claim(MAX_RETIRED_ARCHIVE_CLAIMS_V1 as u64);
+    let (same, refused) = s.admit(&[next.clone()]).unwrap();
+    assert_eq!(refused[0].1, PanelErrorV1::ResourceLimit);
+    assert_eq!(same.root(), before);
+    assert_eq!(same.cursor(), s.cursor());
+    assert!(!same.work_id_rows().contains(&next.work_id));
+    assert!(same.claim(&next.claim_id).is_none());
+}

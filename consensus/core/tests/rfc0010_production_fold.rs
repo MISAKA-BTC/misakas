@@ -1083,3 +1083,62 @@ fn a_tampered_snapshot_does_not_reload_and_the_engine_refuses_it() {
         assert!(reloaded.is_err(), "{name}: the carriage reloaded");
     }
 }
+
+/// VERSION-4 construction test, with the same explicitly injected reference beacon as this
+/// suite. No activation/security/100k approval: the complete native retirement funnel is real.
+#[test]
+fn retired_population_compacts_after_actual_native_retirement_and_op220_keeps_typed_identity() {
+    use kaspa_consensus_core::palw_permissionless_panel_v1::{
+        PalwPermissionlessPanelRetiredV1, WIRE_VERSION_RETIRED_V1, panel_v3_observation_v1,
+    };
+    let mut w = V3::new();
+    let mut p = w.c.p.clone();
+    let mut policy = engine_policy(); policy.max_assignments_per_block = 1; policy.max_admissions_per_block = 1;
+    p.palw_permissionless_panel_v1 = None;
+    p.palw_permissionless_panel_retired_v1 = Some(PalwPermissionlessPanelRetiredV1 { activation: ForkActivation::new(FENCE), policy });
+    assert!(p.validate_palw_v2().is_err(), "an actual public activation stays refused");
+    p.sync_palw_permissionless_panel_v1(); w.c = Chain::new(p);
+    assert!(w.c.sp.claim_retirement_daa() > 0);
+    let (id, bound_at) = w.run_to_bound(0xA410);
+    assert_eq!(w.engine().cursor().version, WIRE_VERSION_RETIRED_V1);
+    let frozen = w.record(&id).snapshot.unwrap();
+    let subject = w.record(&id).claim;
+    let seats = seats_of_panel(&w.c.s, &id);
+    w.step_with(&[quorum(id, &seats, bound_at + 1)]); w.step();
+    assert!(matches!(w.record(&id).phase, ClaimPhaseV3::Released { .. }));
+    assert!(w.record(&id).snapshot.is_some(), "ReceiptLicensed never compacts a population");
+    let final_at = w.c.s.deadline_of(&id).unwrap() + 1;
+    w.step_at(final_at, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(matches!(w.phase_v2(&id), PalwClaimPhaseV2::Final { .. }));
+    assert!(w.record(&id).snapshot.is_some(), "Final alone retains pending liabilities/material");
+    let retire_at = w.c.s.deadline_of(&id).expect("native retirement owns a dependency-bounded deadline") + 1;
+    w.step_at(retire_at, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(w.c.s.claim(&id).is_none(), "the original native retirement funnel removed its terminal claim");
+    assert!(w.record(&id).snapshot.is_some(), "one trusted parent checkpoint must authenticate native removal");
+    let authority_root = w.c.s.state_root(); let authority_point = w.c.s.last_point().unwrap().block;
+    let before = w.c.s.clone(); w.step();
+    let record = w.record(&id); let ClaimPhaseV3::Retired(archive) = &record.phase else { panic!("{:?}", record.phase) };
+    assert_eq!(archive.authority.native_parent_root, authority_root); assert_eq!(archive.authority.native_parent_checkpoint, authority_point);
+    assert_eq!(archive.population.as_ref().unwrap().root, frozen.root);
+    assert_eq!(archive.population.as_ref().unwrap().candidate_count as usize, frozen.candidates.len());
+    assert_eq!(record.claim, subject); assert!(record.snapshot.is_none() && record.binding_history.is_empty());
+    assert!(w.engine().work_id_rows().contains(&subject.work_id));
+    let observation = panel_v3_observation_v1(&w.c.s, &w.c.sp, &[id], 1);
+    assert!(observation.unknown.is_empty()); assert_eq!(observation.claims[0].engine_phase, Some("retired"));
+    assert_eq!(observation.claims[0].retirement.as_ref(), Some(archive));
+    assert_eq!(observation.claims[0].terminal.as_ref().unwrap().reason, "RETIREMENT_COMPACTED");
+    assert_eq!(observation.overview.retired_tombstones, Some(1)); assert_eq!(observation.overview.active_population_claims, Some(0));
+    assert!(w.c.s.state_root() != before.state_root());
+    // Every step above already checks actual native deltas replay/undo and root-verified carriage.
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&w.c.s)).unwrap();
+    let carriage: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+    let loaded = carriage.into_state(&w.c.sp, Some(w.c.s.state_root())).unwrap();
+    assert_eq!(loaded, w.c.s);
+    let mut corrupt = PalwStateCarriageV2::from_state(&w.c.s);
+    let engine = corrupt.panel_v3.as_mut().unwrap();
+    let mut row = engine.claim(&id).unwrap().clone();
+    let ClaimPhaseV3::Retired(ref mut archive) = row.phase else { unreachable!() };
+    archive.authority.native_parent_root = Hash64::from_u64_word(0xBAD);
+    engine.put_claim_row(id, Some(row));
+    assert!(corrupt.into_state(&w.c.sp, Some(w.c.s.state_root())).is_err(), "carriage cannot rewrite rooted compaction authority");
+}

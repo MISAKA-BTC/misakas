@@ -299,6 +299,7 @@ struct FoldView<'a, 'b> {
     /// The engine's own live duties per bond, which V2's ledger already holds (see [`Self::available_collateral`]).
     duties: BTreeMap<BondIdV1, u128>,
     tip_position: u64,
+    retirement_parent_root: std::cell::OnceCell<Hash64>,
 }
 
 impl<'a, 'b> FoldView<'a, 'b> {
@@ -335,6 +336,7 @@ impl<'a, 'b> FoldView<'a, 'b> {
             mirror,
             duties: BTreeMap::new(),
             tip_position: parent.last_point.map(|point| point.daa_score).unwrap_or(0),
+            retirement_parent_root: std::cell::OnceCell::new(),
         };
         // The duties the engine holds on claims still awaiting their Panel: the V2 ledger carries each as a duty row written at
         // the bind. A claim already licensed or ended is not the engine's to count (the engine releases it first thing), and
@@ -374,7 +376,7 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
             self.mirror.wire_version,
         )
         // A claim the checkpoint does not hold seals an empty population (and ends non-fraud), never a failed block.
-        .or_else(|e| if self.mirror.wire_version == eng::WIRE_VERSION_COMPLETE_V1 { Err(e) } else { Ok(Vec::new()) })?;
+        .or_else(|e| if eng::complete_population_version_v1(self.mirror.wire_version) { Err(e) } else { Ok(Vec::new()) })?;
         rows.retain(|seat| self.admissible(seat, claim));
         if self.mirror.wire_version == eng::WIRE_VERSION_V2 && rows.len() > policy.max_candidates as usize {
             rows.sort_by(|a, b| b.collateral.cmp(&a.collateral).then(a.bond.cmp(&b.bond)));
@@ -404,7 +406,7 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
             strata,
             self.mirror.wire_version,
         )
-        .or_else(|e| if self.mirror.wire_version == eng::WIRE_VERSION_COMPLETE_V1 { Err(e) } else { Ok(Vec::new()) })?;
+        .or_else(|e| if eng::complete_population_version_v1(self.mirror.wire_version) { Err(e) } else { Ok(Vec::new()) })?;
         rows.retain(|(seat, _)| self.admissible(seat, claim));
         if self.mirror.wire_version == eng::WIRE_VERSION_V2 && rows.len() > policy.max_candidates as usize {
             rows.sort_by(|(a, _), (b, _)| b.collateral.cmp(&a.collateral).then(a.bond.cmp(&b.bond)));
@@ -446,6 +448,18 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
     /// The V2 claim has left its Panel's receipts (licensed, final, voided, retired): the engine releases its reservation.
     fn terminal_claim(&self, claim: &Hash64) -> bool {
         !claim_awaits_its_panel(self.builder.state.claims.get(claim))
+    }
+    fn retired_claim(&self, claim: &Hash64) -> Option<eng::PanelRetirementAuthorityV1> {
+        // ReceiptLicensed releases Panel duties but retains the population. Compaction
+        // waits for the existing retirement funnel's COMPLETE native removal, one full
+        // checkpoint later, so its authority root authenticates the prior full record.
+        if self.builder.state.claims.contains_key(claim) || self.parent.claims.contains_key(claim)
+            || self.builder.state.palw_accusation_pending_v1(claim) || self.parent.palw_accusation_pending_v1(claim)
+            || self.parent.panel_v3().and_then(|engine| engine.claim(claim)).is_none() { return None; }
+        Some(eng::PanelRetirementAuthorityV1 {
+            native_parent_root: *self.retirement_parent_root.get_or_init(|| self.parent.state_root()),
+            native_parent_checkpoint: self.parent.last_point?.block,
+        })
     }
 
     /// **The receipt clock never runs against a pending accusation — structural, G14.** A Panel's receipt window
@@ -1063,6 +1077,11 @@ impl PalwChainStateV2 {
                             .is_some_and(|shard| shard.s_l == strata.count && shard.outsider == strata.outsider)
                     {
                         return Err(bad(format!("claim {id} was drawn per shard but holds no per-shard record of its strata")));
+                    }
+                }
+                ClaimPhaseV3::Retired(_) => {
+                    if claim.is_some() || self.palw_accusation_pending_v1(id) {
+                        return Err(bad(format!("claim {id} compacted before native retirement")));
                     }
                 }
                 ClaimPhaseV3::Released { .. } => {
