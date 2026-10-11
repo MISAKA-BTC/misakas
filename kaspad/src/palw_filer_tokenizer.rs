@@ -71,3 +71,7 @@ pub(super) fn check_held_tokenizer_v1(
     } else { None };
     Ok(PalwTokenizerCheckV1 { fault, _reservation: reserved })
 }
+
+#[cfg(test)]
+#[path = "palw_filer_tokenizer_tests.rs"]
+mod tests;
