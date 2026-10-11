@@ -22370,7 +22370,7 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V2: &[PalwPostLaunchFenceV1] = &[
 /// flag-day list, [`PALW_T12_DECODE_RULES_FENCES_V1`], whose height is `None` (RFC-0003's FP Job V5
 /// and RFC-0004's improvement fence both require it in force at or below them), so every shipped id is
 /// unchanged. Arming it is the one line [`PALW_T12_DECODE_RULES_DAA`] and a re-pin of testnet-12
-/// (`scripts/t12-repin.sh --shipping`). Its own prerequisite `palw_fp_derived_work` is armed at
+/// (`scripts/release/t12-repin.sh --shipping`). Its own prerequisite `palw_fp_derived_work` is armed at
 /// testnet-12's genesis, so `validate_palw_v2` holds at any height.
 pub const PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
     name: "palw_fp_decode_rules",

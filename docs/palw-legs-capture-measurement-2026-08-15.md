@@ -140,7 +140,7 @@ Measured, both classes (Metal and CPU, 2026-08-16):
 | selftest roots after adding retention | identical to §2/§3 — retention moved nothing |
 | per-job openability probe (first/middle/last leaf + checkpoints) in the selftest | PASS, now a permanent gate beside logits-neutrality |
 
-The E2E is `scripts/misaka-palw-v2-legs-open-e2e.sh`. One deliberate difference inside it:
+The E2E is `scripts/drills/misaka-palw-v2-legs-open-e2e.sh`. One deliberate difference inside it:
 `v2-golden-envelope` replaces the golden set's *sentinel* manifest hash with the worker's real
 one (goldens survive rebuilds; a job admission gate rightly refuses an envelope that does not
 declare the exact binary), so E2E roots differ from selftest roots — each is internally

@@ -236,7 +236,7 @@ gRPC は .113 以外 `--nogrpc`（同一 host 2 node で既定ポートが衝突
    "PALW DRILL" を名乗れば止め、起動直後の `PALW duties` の 1 行で panel と round lane が ON であることを確かめ（idle なら警告）、
    RPC で `EXPECT_GENESIS` を確かめ、違えばその node を止めて後続を起動しない。
 
-**出荷 commit（42452229 ＋ 再 pin）の値**（`scripts/t12-repin.sh` が build から計算した値。`--apply` が値とこの表示の commit を、出荷 commit での `--apply --shipping` が表示を出荷値に書き換える。経緯は checklist §3）:
+**出荷 commit（42452229 ＋ 再 pin）の値**（`scripts/release/t12-repin.sh` が build から計算した値。`--apply` が値とこの表示の commit を、出荷 commit での `--apply --shipping` が表示を出荷値に書き換える。経緯は checklist §3）:
 `EXPECT_FP=5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6`、
 `EXPECT_GENESIS=a27f8f44fe4d91a5…a8ca1f23`（全桁は checklist §3）、`PREMINE_TXID=5e0d5f1b37a71288…e55e2669`、
 schedule id `1678e073…`、rule manifest digest `9def81a1…`。
@@ -556,7 +556,7 @@ colima.yaml の `rosetta` が true になる = 設定の変更。Rosetta はこ�
   node は起動時に `PALW bond …: run it in exactly ONE process …` を出す（通常は INFO、`--palw-register-class` のときは WARN）。登録は
   `misaka model add`（稼働中の node の RPC に送るだけ）か、稼働中の node 自身に flag を足して再起動する形にする
   （`docs/palw-add-a-model-runbook.md` §5・`docs/palw-certify-a-new-model.md`・`docs/model-requests.md` を直した）。kit は 1 bond 1 node。
-- **drill**（`scripts/misaka-palw-t12-rcore-drill.sh`）: seat の起動から `--palw-panel` を外し、header に「round lane も常に動く・1 bond 1 process」、
+- **drill**（`scripts/drills/misaka-palw-t12-rcore-drill.sh`）: seat の起動から `--palw-panel` を外し、header に「round lane も常に動く・1 bond 1 process」、
   d6（heartbeat だけの区間）に「permit が切れるまで待つか bond 鍵なしで再起動」、d7 の fresh node に「bond 鍵を持たない relay で」と書いた。
 - ローカルで確認: 生成した launch script の `--check` が新 binary で OK、`ALWAYS-ON DUTY` を持たない binary（旧 binary の模擬）で
   `does not run --palw-panel as an always-on duty … refusing (exit 78)`。

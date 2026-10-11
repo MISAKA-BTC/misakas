@@ -459,7 +459,7 @@ the only edit outside the new crate and its CLI module is one summary line in `p
 * **Gates.** `cargo clippy -p misaka-palw-extension -p misaka-cli --tests --no-deps -- -D warnings`
   clean; `cargo check --workspace --exclude misaka-palw-worker` clean (1 m 13 s);
   `sh scripts/ci-gates.sh --group fast` all green; `rustfmt --edition 2024 --check` clean on all 15
-  touched `.rs` files; `python3 scripts/check-repin-enumeration.py` unchanged at `main`'s baseline of
+  touched `.rs` files; `python3 scripts/ci/check-repin-enumeration.py` unchanged at `main`'s baseline of
   7 unclassified files (79 in-scope files, 294 occurrences) — no literal in this work needs re-pinning,
   because every hex value in the tests and the examples is recomputed by the build rather than written
   down.

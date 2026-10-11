@@ -286,17 +286,17 @@ chain でも有効になる（premine の spend も、登録も、receipt も）
 * **devnet/simnet 専用だった drill 注入器**（`--palw-drill-tamper-fp-leaf`、`--palw-drill-answer-only`、
   `--palw-drill-refuse-leaf-evidence`）は salt 付き drill でも使える（公開 t12 では従来どおり拒否）。
 * **場所**: fleet ホスト。**この Mac では絶対に動かさない。公開 t12 ノードが動いているホストでも
-  動かさない**（09-23 の crash loop の教訓）。`scripts/misaka-palw-t12-rcore-drill.sh check-host` が両方を
+  動かさない**（09-23 の crash loop の教訓）。`scripts/drills/misaka-palw-t12-rcore-drill.sh check-host` が両方を
   拒否する（unit 名・unit file・`--configfile` 起動を含む kaspad process・公開 t12 の既定 port の
   listener・drill marker の無い `~/.rusty-kaspa/misaka-testnet-12`）。8k 行は異なる operator の ready seat
   が 7 つ要るので、1 ホストに複数 seat（`node <seat>` を seat ごとに。app dir と port は seat ごとに別、
   gRPC listener は無し — 既定の 127.0.0.1:26210 は 1 ホスト 1 つで、bind 失敗はノードを落とす）か、
   7 ホスト以上に 1 seat ずつ。
-* **手順と証拠**: `scripts/misaka-palw-t12-rcore-drill.sh`（D-1〜D-10、位置で番号付け。証拠は各 action の
+* **手順と証拠**: `scripts/drills/misaka-palw-t12-rcore-drill.sh`（D-1〜D-10、位置で番号付け。証拠は各 action の
   後に書かれた log と RPC だけ）。各 step の結果は exit code と `steps.status` に残る: 0 PASS／1 FAIL／
   3 INCOMPLETE（getPalwVesting が無い build など、証拠を出せない）／4 MANUAL（手作業部分は `attest` で
   証拠を記録）。`report` は全 step が PASS か ATTESTED で、analyzer も 0 のときだけ通る — 待ちの打ち切りや
-  証拠の欠落が「done」で終わることはない。`scripts/misaka-palw-t12-rcore-analyze.py`（door／withheld
+  証拠の欠落が「done」で終わることはない。`scripts/drills/misaka-palw-t12-rcore-analyze.py`（door／withheld
   histogram＝p、秒／DAA の実測、licence の cadence と O-1 判定。exit 0 PASS／3 INCOMPLETE／1 FAIL）。
   どちらも構文検査と、ノードもホストも使わない self-test（script の step 機構、analyzer の合成データ）
   のみで、どのホストにも流していない。

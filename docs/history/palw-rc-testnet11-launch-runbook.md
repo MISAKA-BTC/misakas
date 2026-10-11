@@ -413,7 +413,7 @@ is invisible to anything that greps for `.t11`. Get the list from the processes 
         printf '%s  %s\n' "${exe##*/}" "$(tr '\0' '\n' < "$d/cmdline" | grep '^--appdir=')"
     done | sort -u
 
-`scripts/relaunch-fleet-wipe.sh census` does exactly this across all three hosts.
+`scripts/ops/relaunch-fleet-wipe.sh census` does exactly this across all three hosts.
 
 **And the seeders are part of the wipe.** Two hosts run `misaka-dnsseeder` (`.113` and
 `5.104.81.23`). A seeder that survives the relaunch keeps handing out old-genesis peers to every new
@@ -455,13 +455,13 @@ has happened here.
     5. start the producer FIRST (see below)
     6. start the rest
 
-**Do not do steps 1–3 by hand.** `scripts/relaunch-fleet-wipe.sh` encodes five findings that cost a
+**Do not do steps 1–3 by hand.** `scripts/ops/relaunch-fleet-wipe.sh` encodes five findings that cost a
 night to measure, and every one of them is a way to believe a host is stopped when it is not:
 
-    scripts/relaunch-fleet-wipe.sh census        # changes nothing; read it before anything else
-    scripts/relaunch-fleet-wipe.sh stop          # dry run; add --execute
-    scripts/relaunch-fleet-wipe.sh verify        # THE GATE. Do not proceed while it refuses.
-    scripts/relaunch-fleet-wipe.sh wipe --genesis <hash>
+    scripts/ops/relaunch-fleet-wipe.sh census        # changes nothing; read it before anything else
+    scripts/ops/relaunch-fleet-wipe.sh stop          # dry run; add --execute
+    scripts/ops/relaunch-fleet-wipe.sh verify        # THE GATE. Do not proceed while it refuses.
+    scripts/ops/relaunch-fleet-wipe.sh wipe --genesis <hash>
 
 | the naive form | what it misses |
 |---|---|
@@ -608,7 +608,7 @@ So, before any build that arms a fence is rolled out:
 2. **The drill's lanes must be the target network's lanes.** The first bug above was masked once by
    a drill carrying a Layer-0 hash miner that testnet-11 does not have — a devnet with an anchor lane
    never reaches the state a PALW-only chain reaches at the same fence. Read the target's profile
-   from the chain with `scripts/misaka-t11-lane-walk.py`, which walks the selected parent back from
+   from the chain with `scripts/drills/misaka-t11-lane-walk.py`, which walks the selected parent back from
    the sink and counts `powAlgoId`, and pass it to the drill as `LANE_PROFILE`; a mismatch is a
    refusal, not a note in a log.
 3. **The clock gate must pass.** The drill's step 1b requires the DAA to advance within a bounded
@@ -626,10 +626,10 @@ So, before any build that arms a fence is rolled out:
 
 ```bash
 # the target network's lane profile, from the chain
-python3 scripts/misaka-t11-lane-walk.py 300 26314
+python3 scripts/drills/misaka-t11-lane-walk.py 300 26314
 
 # the drill, held to it
-LANE_PROFILE=palw+heartbeat ANCHOR_CLOCK_AT=20 bash scripts/misaka-palw-model-registry-devnet-drill.sh
+LANE_PROFILE=palw+heartbeat ANCHOR_CLOCK_AT=20 bash scripts/drills/misaka-palw-model-registry-devnet-drill.sh
 ```
 
 A green suite is evidence that each rule is right on its own. It is not evidence that the chain

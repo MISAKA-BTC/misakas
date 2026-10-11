@@ -75,7 +75,7 @@ Two things would make the next occurrence answerable. **Both are now in place** 
 
 1. **A stack tool on the fleet hosts.** `elfutils` 0.190 installed on all four; `eu-stack -p <pid>`
    walks a live node's 44 threads in **128 ms**.
-2. **A liveness watcher on the accept queue** — `scripts/palw-liveness-watch`, running as
+2. **A liveness watcher on the accept queue** — `scripts/ops/palw-liveness-watch`, running as
    `palw-liveness-watch.service` on all four hosts (enabled, 60 s poll). It fires on *stalled log
    for >240 s* **AND** *(≥5 CLOSE-WAIT **or** a non-empty LISTEN backlog)* on that node's P2P port,
    and captures a bundle: `eu-stack`, thread census, sockets, `/proc` status, CPU delta and log

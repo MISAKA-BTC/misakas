@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # t12-drill-kit/drill-host.sh — the fleet half of the POST-LAUNCH R-core+ drill (ADR-0152 §8.3 item 3,
 # D-1…D-10; §8.4's deferred drills). Runs on a drill host — a fleet host with NO public testnet-12
-# node — and drives scripts/misaka-palw-t12-rcore-drill.sh (P2-12) on the SHIPPING binaries.
+# node — and drives scripts/drills/misaka-palw-t12-rcore-drill.sh (P2-12) on the SHIPPING binaries.
 #
 #   drill-host.sh guard                     read-only: may this host drill? (lib.sh drill_guard)
 #   drill-host.sh stage-bins <dir>          copy <dir>/kaspad and <dir>/misaka into $DRILL_ROOT/bin, only

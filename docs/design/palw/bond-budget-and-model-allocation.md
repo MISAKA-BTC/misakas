@@ -650,5 +650,5 @@ the engine and fold filters pass, built on integration `d4e37155e`. Whether it i
 
 The verification-attestation gate is not implemented (see §3.3).
 
-`scripts/t12-repin.sh --shipping --drift-only` on this tree: no drift (361 ok, 29 history, 3 label). The testnet-12
+`scripts/release/t12-repin.sh --shipping --drift-only` on this tree: no drift (361 ok, 29 history, 3 label). The testnet-12
 params id `5ee7fd8e…` and schedule id `1678e073…` are unchanged.

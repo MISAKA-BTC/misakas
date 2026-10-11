@@ -394,7 +394,7 @@ js-sys = "=0.3.77"
 keccak = "0.1.4"
 # kaspa-pq: ML-DSA-87 (FIPS 204) post-quantum signatures via libcrux. Exact
 # version pin per docs/adr/0002-mldsa65-p2pkh.md. A KAT + backend differential run
-# as a HARD CI gate (scripts/pq-ci-guard.sh [3/3]). Bumping this pin requires
+# as a HARD CI gate (scripts/ci/pq-ci-guard.sh [3/3]). Bumping this pin requires
 # (audit H-10):
 #   - cargo audit clean for advisories against the new version,
 #   - re-pin `kat_mldsa87_deterministic_regression` (crypto/txscript) to the new

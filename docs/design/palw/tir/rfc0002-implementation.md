@@ -2033,7 +2033,7 @@ finder's seal and deposit; identical re-seal no-op; copyist without a seal refus
 copyist's later mature reveal refused before any court, no fee; self-operator reveal refused; deposits released at expiry; replay node
 identical) and `model_refutation_seal_objects_are_inert_below_their_fence` (mempool refuses 36/37 below the fence; no row) —
 `model_artifact` 4, `t12_a2u` 3, `g14r_` 14 PASS; `cargo check -p kaspa-consensus-core -p kaspa-consensus -p misaka-palw-kernel
---all-targets` PASS. The A2U int-12 replay script (`scripts/a2u-int12-replay.sh`) was not run.
+--all-targets` PASS. The A2U int-12 replay script (`scripts/verify/a2u-int12-replay.sh`) was not run.
 
 Status: the protected refutation is **implemented and verified on the synthetic actual-node harness**, NOT armable (its fence is
 refused when armed, like every RFC fence until the single activation release).

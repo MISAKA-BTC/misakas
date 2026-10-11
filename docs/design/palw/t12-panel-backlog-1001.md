@@ -267,7 +267,7 @@ Everything is read from `getPalwNodeStatus.verification`, `t12check.py`, the jou
 | slots not held hostage | `overdue`, `slots`, `running` | `overdue` 0 in steady state; `load_limited=true` only while the host is over 3.0 load/CPU |
 | backlog drains | tracker `nethealth.tsv`: `panel_bound`, median wait | `panel_bound` < 100 within 6 h of the 5.104 rebalance, < 40 within 12 h; median bind→licence ≤ 10 DAA; licensed per 50 DAA ≥ accepted per 50 DAA (≥ 265) |
 | producers behave | producer `debt_hold`, `own_panel_bound_aged` | non-operator bonds on int-10.1 hold only while `aged ≥ 8`; operators keep binding (BindTimeout voids stay at `last_void_daa=749`) |
-| nothing regressed | `scripts/t12-repin.sh --drift-only`, journal | identity unchanged; no new voids, no `PanelBound` claim past 300 DAA |
+| nothing regressed | `scripts/release/t12-repin.sh --drift-only`, journal | identity unchanged; no new voids, no `PanelBound` claim past 300 DAA |
 
 Durations: 30 min on b6 (receipts, headroom), 2 h on ibm, 6 h for the drain, 24 h for the memory soak.
 Rollback trigger: any node with `live` anon rising monotonically 6 h, `oom_kill` > 0, or receipts/h below the

@@ -220,7 +220,7 @@ Not compiled in this run: `testing/integration` (its op-240 arm mirrors op 220's
 
 Round 2 (`x8r-m5`, 2026-10-09): `cargo test -p kaspa-consensus-core --lib -- exec_v2 palw_work_slice_v2 the_v22_void_reasons_are_pinned`,
 71 passed / 0 failed (it includes the three round-2 fold tests, section 10b). In the same invocation,
-`scripts/t12-repin.sh --shipping --drift-only` reported **no drift**: 361 ok, testnet-12 params id `5ee7fd8ee019968c…`, schedule id
+`scripts/release/t12-repin.sh --shipping --drift-only` reported **no drift**: 361 ok, testnet-12 params id `5ee7fd8ee019968c…`, schedule id
 `1678e07359f6727e…` — the live int-12 ids.
 
 The composed run (`x8r-m6`, then `x8r-m7` after the lane-aware replay was added): `cargo test -p kaspa-consensus --lib -- x8_g14
@@ -324,7 +324,7 @@ every node, so no node can diverge on it.
   implicit 11 and is now the explicit 130**, 131/132 added by amendment 1, beside RFC-0010's 120–122; RPC — op 240 (gRPC 1294/1295) in
   this lane's 240–249. The registry (`remaining-rfc-integration-matrix.md` section 2) records all of it.
 * **The shipped ids.** No change of this branch moves a params, schedule or identity id (the fence is `None` on every preset, Some-only in
-  every hasher); `scripts/t12-repin.sh --shipping --drift-only` is the check (its result is in section 8).
+  every hasher); `scripts/release/t12-repin.sh --shipping --drift-only` is the check (its result is in section 8).
 
 ## 12. What remains (code), and the cross-lane finding
 
@@ -757,7 +757,7 @@ The runner checks that Cargo's JSON artifact matches the executable, opt-level 3
 overflow policy. It records the binary and build-log SHA-256; labels alone are not build evidence.
 
 Reproduce with the actual executable from the Cargo artifact:
-`python3 scripts/rfc8-origin-resource-probe.py --binary <executable> --profile canonical-release --build-log <cargo-json-log> --output-dir <new-directory>`.
+`python3 scripts/verify/rfc8-origin-resource-probe.py --binary <executable> --profile canonical-release --build-log <cargo-json-log> --output-dir <new-directory>`.
 The script invokes `/usr/bin/time -l` on macOS or `-v` on Linux, preserves each raw case log,
 and checks exactly one successful explicit test plus metrics. It never overwrites an existing
 output directory or interprets observations as an approved gate.

@@ -50,7 +50,7 @@ jobs:
       # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
       # morning, while `Lints` alone pinned 1.93.0. The version is read out of
       # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
-      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
       # doing this.
       - name: Read the pinned toolchain
         shell: bash
@@ -137,7 +137,7 @@ jobs:
         run: |
           platform=x86_64-unknown-linux-musl
           py=$(command -v python3 || command -v python)
-          "$py" scripts/misaka-components-manifest.py \
+          "$py" scripts/release/misaka-components-manifest.py \
             --release "${{ env.RELEASE_TAG }}" \
             --network "$("$py" -c 'import json, sys; sys.stdout.write(json.load(open("release.json"))["network"])')" \
             --platform "$platform" \
@@ -178,7 +178,7 @@ jobs:
         run: |
           platform=$(rustc -vV | sed -n 's/^host: //p')
           py=python3
-          "$py" scripts/misaka-components-manifest.py \
+          "$py" scripts/release/misaka-components-manifest.py \
             --release "${{ env.RELEASE_TAG }}" \
             --network "$("$py" -c 'import json, sys; sys.stdout.write(json.load(open("release.json"))["network"])')" \
             --platform "$platform" \
@@ -228,7 +228,7 @@ jobs:
         run: |
           platform=$(rustc -vV | sed -n 's/^host: //p')
           py=$(command -v python3 || command -v python)
-          "$py" scripts/misaka-components-manifest.py \
+          "$py" scripts/release/misaka-components-manifest.py \
             --release "${{ env.RELEASE_TAG }}" \
             --network "$("$py" -c 'import json, sys; sys.stdout.write(json.load(open("release.json"))["network"])')" \
             --platform "$platform" \
@@ -273,7 +273,7 @@ jobs:
         run: |
           platform=$(rustc -vV | sed -n 's/^host: //p')
           py=$(command -v python3 || command -v python)
-          "$py" scripts/misaka-components-manifest.py \
+          "$py" scripts/release/misaka-components-manifest.py \
             --release "${{ env.RELEASE_TAG }}" \
             --network "$("$py" -c 'import json, sys; sys.stdout.write(json.load(open("release.json"))["network"])')" \
             --platform "$platform" \
@@ -295,7 +295,7 @@ jobs:
           k=bin/kaspad
           [ -f bin/kaspad.exe ] && k=bin/kaspad.exe
           py=$(command -v python3 || command -v python)
-          "$py" scripts/misaka-release-smoke.py --kaspad "$k" --release-json release.json \
+          "$py" scripts/release/misaka-release-smoke.py --kaspad "$k" --release-json release.json \
             --platform "${{ env.platform }}" --out "release-identity-${{ env.platform }}.json"
 
       - name: Keep the files for the sign job
@@ -327,7 +327,7 @@ jobs:
       # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
       # morning, while `Lints` alone pinned 1.93.0. The version is read out of
       # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
-      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
       # doing this.
       - name: Read the pinned toolchain
         shell: bash
@@ -458,7 +458,7 @@ jobs:
           mkdir identities
           mv dist/release-identity-*.json identities/
           channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
-          python3 scripts/misaka-release-info.py --release-json release.json \
+          python3 scripts/release/misaka-release-info.py --release-json release.json \
             --tag "$RELEASE_TAG" --commit "$GITHUB_SHA" --rust "rustc $channel" \
             --out dist/RELEASE-INFO.json --summary "$GITHUB_STEP_SUMMARY" identities/*.json
 

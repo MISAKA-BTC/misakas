@@ -14,7 +14,7 @@ repository.workspace = true
 # `EthProvider` trait. The trait IMPLEMENTATION (consensus store reads + revm
 # read-only simulation via kaspa-evm) lives node-side, so this crate links NO
 # revm/secp — kaspad pulls it only under its `evm` feature, keeping the default
-# node's secp-free guarantee (scripts/pq-ci-guard.sh) intact.
+# node's secp-free guarantee (scripts/ci/pq-ci-guard.sh) intact.
 
 [dependencies]
 kaspa-consensus-core.workspace = true

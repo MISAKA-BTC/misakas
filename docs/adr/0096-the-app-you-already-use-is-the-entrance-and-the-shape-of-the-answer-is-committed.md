@@ -576,7 +576,7 @@ mapping is written down.
   `.github/ISSUE_TEMPLATE/model-request.yml`, `docs/model-requests.md` (the eight hands a request
   passes through, each with its ADR), `docs/components-manifest.md` (schema `misaka/components/v1`;
   a row points at the platform archive the release publishes and names the member — a loose
-  binary URL would point at nothing), `scripts/misaka-components-manifest.py` (write / `--check` /
+  binary URL would point at nothing), `scripts/release/misaka-components-manifest.py` (write / `--check` /
   `--validate` / `--self-test`, 39 checks) and one deploy step per platform writing
   `components-<platform>.json` beside the archive for the two components the job builds today
   (`kaspad`, `misaka`); the workers, gateway and rail become rows the day the job builds them,

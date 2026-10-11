@@ -6,7 +6,7 @@
 Prints `ANSWERS` when the node answers, and — if its class table lists the class — one line
 `<label> <registeredDaa> <canonicalLeaves> <artifactRoot> <status>`. Prints nothing (exit 0) when the node does not
 answer, so a stopped node is not mistaken for one that refused the class. The int-10 flag-day step script
-(scripts/misaka-palw-int10-flagday.sh, `classes`) asks every running new node and judges the rows together."""
+(scripts/drills/misaka-palw-int10-flagday.sh, `classes`) asks every running new node and judges the rows together."""
 import os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

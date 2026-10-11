@@ -35,7 +35,7 @@ it measures in blue score — is then paced by however fast producers can run fo
 > **This section replaces an earlier version that was WRONG, and the correction is the finding that
 > stopped the release.** The first pass recorded "300 / 300 are algo 3 (the hash anchor); no PALW
 > block on the chain in 44 h". The opposite is true. The numbers below were read from the chain
-> itself with `scripts/misaka-t11-lane-walk.py`, which walks the selected parent back from the sink
+> itself with `scripts/drills/misaka-t11-lane-walk.py`, which walks the selected parent back from the sink
 > over the node's JSON wRPC and counts `powAlgoId`. Run it before trusting any lane claim here.
 
 | window | algo 6 (PALW attempt) | algo 8 (heartbeat) | algo 3 (hash anchor) |

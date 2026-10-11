@@ -68,7 +68,7 @@ a node on 5.104 (the localhost peers too, i.e. the node's async runtime itself i
    walk missing a 200-row cache. A 2.6-3× slower per-thread speed (generic EPYC, 2.8 GHz, 3 nodes on 8 vCPUs) makes it worse.
 4. **(open) Which phase of the loop takes the six minutes is not yet attributed.** The throttled logs cannot say. int-10.4 adds the stopwatch (§3, F3); the first canary names the phase.
 
-## 3. What int-10.4 changes (node-only; no consensus rule, no on-disk format; `scripts/t12-repin.sh --drift-only` clean)
+## 3. What int-10.4 changes (node-only; no consensus rule, no on-disk format; `scripts/release/t12-repin.sh --drift-only` clean)
 
 * **F1 — a block cache that holds the block** (`database/src/db/rocksdb_preset.rs`, `consensus/src/consensus/factory.rs`, `kaspad/src/daemon.rs`): the default preset's consensus databases
   open with a 256 MiB LRU cache in **two shards** (`BLOCK_CACHE_SHARD_BITS = 1`, 128 MiB each); `--rocksdb-cache-size` (MB) now also applies to the default preset (it used to be HDD only).

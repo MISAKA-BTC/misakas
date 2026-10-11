@@ -122,7 +122,7 @@ required-features = ["legacy-secp256k1"]
 # without secp256k1; `legacy-secp256k1` re-enables the legacy secp256k1 test
 # fixtures and propagates to consensus-core + txscript. The release/node build is
 # secp-free — enforced by `cargo tree -p kaspa-consensus -e normal`
-# (scripts/pq-ci-guard.sh, HARD_SECP_GATE=1).
+# (scripts/ci/pq-ci-guard.sh, HARD_SECP_GATE=1).
 default = ["pq-only"]
 pq-only = []
 legacy-secp256k1 = [

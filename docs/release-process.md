@@ -57,9 +57,9 @@ with its fence height and the finding that forced it, and the soak clock restart
    | `verify` | nothing. It downloads the release from a clean runner and checks the signature, every checksum and every attestation |
 
    Every `build` leg smoke-starts its own `kaspad` on the network in `release.json`
-   (`scripts/misaka-release-smoke.py`), and fails unless the binary prints the declared
+   (`scripts/release/misaka-release-smoke.py`), and fails unless the binary prints the declared
    fingerprint and schedule id. `sign` writes `RELEASE-INFO.json` from what the binaries printed
-   (`scripts/misaka-release-info.py`), and fails if two platforms printed different identities.
+   (`scripts/release/misaka-release-info.py`), and fails if two platforms printed different identities.
    The run's summary page shows the same table.
 
    Nothing reaches the GitHub release until `sign` has passed. Then all of it is uploaded at

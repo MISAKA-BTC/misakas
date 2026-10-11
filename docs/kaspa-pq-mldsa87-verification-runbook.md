@@ -174,5 +174,5 @@ genesis が変わったため、デプロイは**全 devnet ホストのデー�
 
 ## 9. 補足（セキュリティ）
 
-- `libcrux-ml-dsa = 0.0.9` は固定。ローカル advisory-db の `RUSTSEC-2026-0076/0077` は `patched >= 0.0.8` なので **0.0.9 は対象外（clear）**。CI ゲート雛形は `scripts/pq-ci-guard.sh`（`cargo deny/audit` + consensus ツリーに secp256k1 が無いことの確認。後者は Phase 8 までソフト警告）。
+- `libcrux-ml-dsa = 0.0.9` は固定。ローカル advisory-db の `RUSTSEC-2026-0076/0077` は `patched >= 0.0.8` なので **0.0.9 は対象外（clear）**。CI ゲート雛形は `scripts/ci/pq-ci-guard.sh`（`cargo deny/audit` + consensus ツリーに secp256k1 が無いことの確認。後者は Phase 8 までソフト警告）。
 - premine 鍵は単一鍵（旧 2-of-3 multisig の冗長性は喪失）。multisig opcode（`OpCheckMultiSigMlDsa65` 0xa7）は dead-but-present で残置、再有効化は別 ADR。

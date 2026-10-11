@@ -4415,7 +4415,7 @@ mod devnet_fence_knob_tests {
     ///
     /// This repo's first working rule is that a build which arms a fence does not ship without a
     /// drill that CROSSES that fence, and every drill arms its fences with a
-    /// `--palw-<name>-devnet=<daa>` flag (`scripts/misaka-palw-model-registry-devnet-drill.sh`
+    /// `--palw-<name>-devnet=<daa>` flag (`scripts/drills/misaka-palw-model-registry-devnet-drill.sh`
     /// passes one per fence). So the knob is not a convenience: without it the rule cannot be
     /// satisfied and the fence cannot honestly be armed anywhere.
     ///

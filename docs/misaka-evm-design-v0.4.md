@@ -539,7 +539,7 @@ RPC・公式 UI・マーケティング資料はこの 3 層を区別する義�
 EVM レーンは secp256k1/ECDSA(ecrecover + 署名検証)を**独立 signature domain** として再導入する。native UTXO レーンの ML-DSA-87 PQ-only 不変条件([ADR-0019])との整合は次で担保する:
 
 - EVM の**型**(consensus-core)は常時コンパイルされ secp-free。
-- EVM の **executor**(revm/k256)は cargo `evm` feature(default OFF)の背後。既定 `kaspad` は secp-free のまま(`scripts/pq-ci-guard.sh` が 9 production binaries で強制)。
+- EVM の **executor**(revm/k256)は cargo `evm` feature(default OFF)の背後。既定 `kaspad` は secp-free のまま(`scripts/ci/pq-ci-guard.sh` が 9 production binaries で強制)。
 - `--features evm` ビルドのみ EVM レーンを実行できる。evm-active なネットに non-evm バイナリで参加した場合は silent fork ではなく明示的に停止する。
 - EVM レーンの量子リスクは Ethereum 本体と同等であることを利用者向けに開示する(PQ 保証は UTXO レーンのみ)。
 

@@ -21,7 +21,7 @@ fold under test:
 5. the chain survives a reorg across the bundle: two partitions extend their own selected chains,
    join, and every node converges on one chain with the same economic state.
 
-Scripts: `scripts/misaka-studio-economy-e2e.sh` (1–4) and `scripts/misaka-studio-economy-reorg.sh`
+Scripts: `scripts/drills/misaka-studio-economy-e2e.sh` (1–4) and `scripts/drills/misaka-studio-economy-reorg.sh`
 (5), on branch `feat/economy-closure`. MISAKA Studio from `MISAKA-Studio` branch
 `feat/gateway-commit-verdict`.
 

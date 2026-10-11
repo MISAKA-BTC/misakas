@@ -19,4 +19,4 @@
 
 ## 既存の残件
 
-`python3 scripts/check-repin-enumeration.py` は既存108ファイルの未分類 frozen literal により exit 2。全件が変更前の HEAD にも存在することを確認済み。今回削除したファイルの古い分類エントリは除去し、VANISHED は0件。分類判断が必要な別作業として残す。
+`python3 scripts/ci/check-repin-enumeration.py` は既存108ファイルの未分類 frozen literal により exit 2。全件が変更前の HEAD にも存在することを確認済み。今回削除したファイルの古い分類エントリは除去し、VANISHED は0件。分類判断が必要な別作業として残す。

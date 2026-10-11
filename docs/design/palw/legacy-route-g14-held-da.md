@@ -274,7 +274,7 @@ that carries the appended unit (`MaterialDisclosedV2 { unit: LegacyHeldV2(..) }`
 `palw_object_is_legacy_held_da_v2`. Nothing writes the new unit into state below the fence.
 
 **Byte identity.** An unarmed test folds the same objects with the fence unset and set to `never()`, and asserts identical
-roots and deltas. `scripts/t12-repin.sh --shipping --drift-only` reports no drift.
+roots and deltas. `scripts/release/t12-repin.sh --shipping --drift-only` reports no drift.
 
 ## 9. Interfaces with other lanes
 

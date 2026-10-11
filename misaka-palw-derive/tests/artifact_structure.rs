@@ -20,7 +20,7 @@
 //! bytes the spec names, the checksums, and every accessor's byte range inside its bufferView
 //! inside its buffer. That is a STRUCTURAL check. It says the bytes satisfy what readers rely on;
 //! it does not say that a particular reader accepted them, and this file does not pretend
-//! otherwise. `scripts/misaka-palw-derived-proof.sh` carries the other half of that claim by
+//! otherwise. `scripts/verify/misaka-palw-derived-proof.sh` carries the other half of that claim by
 //! handing the same artifacts to tools that are not ours — `file(1)`'s magic tables, and Apple's
 //! AudioToolbox `MusicSequenceFileLoad` — and reporting what they said.
 //!

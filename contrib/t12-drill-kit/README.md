@@ -9,8 +9,8 @@ Mac 上で `drill-host.sh self-test` と host guard の空打ち（拒否され�
   「公開後に回す drill と計測」）。この kit は `T12_LAUNCHED=yes` が無いと何も始めない。
 - 中身は ADR §8.3 item 3 の **D-1〜D-10** と、§8.4 で後回しにした drill（SEAT-0 の混在版 drill、8k の実 weight timing drill、
   deadline 設計の M5 / M5b / M9 / M12、O-13 の計数）。step の実体は P2-12 の
-  `scripts/misaka-palw-t12-rcore-drill.sh`（`steps` で一覧、番号は配列の位置）と analyzer
-  `scripts/misaka-palw-t12-rcore-analyze.py`（O-1 / O-2 の 3 つの report）。
+  `scripts/drills/misaka-palw-t12-rcore-drill.sh`（`steps` で一覧、番号は配列の位置）と analyzer
+  `scripts/drills/misaka-palw-t12-rcore-analyze.py`（O-1 / O-2 の 3 つの report）。
 - この kit が足すのは fleet 側の 3 点だけ（`lib.sh`）:
   1. **host guard**: drill script 自身の `check-host` より厳しい。deploy kit の unit（`misaka-t12-node*` / `misaka-t12-seat*` /
      `misaka-t12f-*` / `misaka-t12p-*`、active でも enabled でも）、drop-in `zz-t12-regenesis.conf`、`/root/t12-rel/*/launch/b*.sh`、

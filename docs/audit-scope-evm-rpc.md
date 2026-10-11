@@ -42,7 +42,7 @@ quantity/type encoding, and method dispatch. **Audit focus**:
 - **DoS surface**: the 4 MiB body cap, the `eth_getLogs` 10 000‑block + 10 000‑result caps, the
   per‑connection `Connection: close`, CORS `*`. Confirm there is no unbounded scan.
 - **secp‑free default**: the crate links no revm/secp; the provider is `#[cfg(feature = "evm")]`
-  only, so the default node keeps its secp‑free guarantee (`scripts/pq-ci-guard.sh`).
+  only, so the default node keeps its secp‑free guarantee (`scripts/ci/pq-ci-guard.sh`).
 
 ### Scope D — Application contracts
 Upstream OpenZeppelin/ERC standards = dependency review only. **Audit**: the custom BCG/marketplace

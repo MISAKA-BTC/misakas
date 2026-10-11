@@ -313,7 +313,7 @@ history cacheでは、bindingだけ正しくpinが壊れた新しいeventが最�
 
 検証log: [merge lifecycle](evidence/integration-x8r-lifecycle-final.log)、[merge reader](evidence/integration-x8r-public-history-final.log)、[public binding fold / builder](evidence/public-binding-legacy-final.log)、[reader回帰](evidence/public-binding-reader-final.log)、[reporter回帰](evidence/public-binding-reporter-final.log)。
 
-最終filer回帰も **10 V-unit PASS**。[filer結果](evidence/public-binding-filer-final.log)。統合と修正後の `scripts/t12-repin.sh --shipping --drift-only` は **361 ok、差分なし**。検査対象の全pin・gateを通過し、pinの書換えは行っていない。[repin結果](evidence/public-binding-repin-final.log)、[integration tests](evidence/public-binding-repin-harvest-tests.log)、[lib tests](evidence/public-binding-repin-harvest-lib.log)。
+最終filer回帰も **10 V-unit PASS**。[filer結果](evidence/public-binding-filer-final.log)。統合と修正後の `scripts/release/t12-repin.sh --shipping --drift-only` は **361 ok、差分なし**。検査対象の全pin・gateを通過し、pinの書換えは行っていない。[repin結果](evidence/public-binding-repin-final.log)、[integration tests](evidence/public-binding-repin-harvest-tests.log)、[lib tests](evidence/public-binding-repin-harvest-lib.log)。
 
 
 ## 大型promptの公開入力証明を共通filerへ接続
@@ -381,7 +381,7 @@ actual replay workerは、モデル保有前提どおりfresh backendからexecu
 
 coreのlifecycle/A2U回帰は **31 PASS**、既存legacy dispute foldは **7 PASS**。通常featureのkaspad binary checkも成功した。[lifecycle](evidence/fp-bootstrap-core-lifecycle-final.log)、[dispute fold](evidence/fp-bootstrap-core-dispute-final.log)、[binary check](evidence/fp-bootstrap-binary-final.log)。Final後のFP予約拒否の修正前の再現logは[こちら](evidence/fp-bootstrap-fold-debug.log)。警告は既存のunused/dead-code等が残る。
 
-最終sourceの `scripts/t12-repin.sh --shipping --drift-only` は **361 ok、差分なし**。fresh harvest logの再読込もexit 0。pinの書換えは行っていない。[repin](evidence/fp-bootstrap-repin-final.log)、[harvest tests](evidence/fp-bootstrap-repin-harvest-tests.log)、[harvest lib](evidence/fp-bootstrap-repin-harvest-lib.log)、[log再検証](evidence/fp-bootstrap-repin-replay-final.log)。
+最終sourceの `scripts/release/t12-repin.sh --shipping --drift-only` は **361 ok、差分なし**。fresh harvest logの再読込もexit 0。pinの書換えは行っていない。[repin](evidence/fp-bootstrap-repin-final.log)、[harvest tests](evidence/fp-bootstrap-repin-harvest-tests.log)、[harvest lib](evidence/fp-bootstrap-repin-harvest-lib.log)、[log再検証](evidence/fp-bootstrap-repin-replay-final.log)。
 
 
 ## 回答済みDA materialの番号付き再取得
@@ -408,7 +408,7 @@ node側合計 **71 PASS**。[held](evidence/reacquire-held-verified.log)、[file
 
 coreの最終source回帰はlifecycle/A2U **31 PASS**、共通filer **10 PASS**、legacy dispute fold **7 PASS**。新tag 156を含むfence-off twinは、None／never／未到達heightでrootとdeltaの互換性を確認した。[lifecycle](evidence/reacquire-core-lifecycle-final.log)、[filer](evidence/reacquire-core-filer-final.log)、[dispute fold](evidence/reacquire-core-dispute-final.log)。nodeの71件と合わせ、この範囲の回帰は **119 PASS**。全G14達成とは判定しない。
 
-最終sourceの `scripts/t12-repin.sh --shipping --drift-only` はexit 0、**361 ok・差分なし**。network／genesis／ruleset等のshipping pinを書き換えていない。[repin](evidence/reacquire-repin-final.log)、[fresh harvest tests](evidence/reacquire-repin-harvest-tests.log)、[fresh harvest lib](evidence/reacquire-repin-harvest-lib.log)。
+最終sourceの `scripts/release/t12-repin.sh --shipping --drift-only` はexit 0、**361 ok・差分なし**。network／genesis／ruleset等のshipping pinを書き換えていない。[repin](evidence/reacquire-repin-final.log)、[fresh harvest tests](evidence/reacquire-repin-harvest-tests.log)、[fresh harvest lib](evidence/reacquire-repin-harvest-lib.log)。
 
 
 ## PanelDA User入力の公開court bootstrap
@@ -439,7 +439,7 @@ core `lg14a_legacy_dispute_fold`は **7 V-fold PASS**。actual ML-DSA-87署名�
 
 [core input](evidence/fp-input-bootstrap-core-final.log)、[lifecycle](evidence/fp-input-bootstrap-lifecycle-final.log)、[core filer](evidence/fp-input-bootstrap-core-filer-final.log)、[dispute fold](evidence/fp-input-bootstrap-core-dispute-final.log)、[held](evidence/fp-input-bootstrap-held-final.log)、[node filer](evidence/fp-input-bootstrap-filer-final.log)、[reader](evidence/fp-input-bootstrap-reader-final.log)、[DA worker](evidence/fp-input-bootstrap-da-worker-final.log)、[IR](evidence/fp-input-bootstrap-ir-final.log)、[reporter](evidence/fp-input-bootstrap-reporter-final.log)、[signature gate](evidence/fp-input-bootstrap-processor-gate-final.log)、[binary check](evidence/fp-input-bootstrap-binary-final.log)。nodeはdefault feature（EVMを含む）、signature gateは `--features evm`、coreはdefault feature。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`。nodeのbinary直実行は、最終sourceのfiler 20件をcargoでbuildした同じkaspad_lib binaryを使った。既存unused／dead-code警告は残る。
 
-最終sourceの `scripts/t12-repin.sh --shipping --drift-only` はexit 0、**361 ok・差分なし**。同じfresh harvestの再読込もexit 0。shipping pinを書き換えていない。[repin](evidence/fp-input-bootstrap-repin-final.log)、[harvest tests](evidence/fp-input-bootstrap-repin-harvest-tests.log)、[harvest lib](evidence/fp-input-bootstrap-repin-harvest-lib.log)、[log再検証](evidence/fp-input-bootstrap-repin-replay-final.log)。
+最終sourceの `scripts/release/t12-repin.sh --shipping --drift-only` はexit 0、**361 ok・差分なし**。同じfresh harvestの再読込もexit 0。shipping pinを書き換えていない。[repin](evidence/fp-input-bootstrap-repin-final.log)、[harvest tests](evidence/fp-input-bootstrap-repin-harvest-tests.log)、[harvest lib](evidence/fp-input-bootstrap-repin-harvest-lib.log)、[log再検証](evidence/fp-input-bootstrap-repin-replay-final.log)。
 
 最初のPanelDA fixtureは、accepted-payload extractionのPanelDA fence引数を既存PublicDA試験同様のfalseにしており、正しくstateless拒否された。fixtureだけを明示的にtest-armし、productionのfenceを緩めていない。gate試験では、Merkle networkの大きな入力もchunkは小さいという性質をFlatのwhole-inputと取り違えた期待を訂正した。FlatとMerkleのcoherentなgenesis形式を別々に通す。初回gate buildはdisk不足で失敗し、自分の古いbuild cacheを整理して再実行した。最終PASSだけを結果へ計上する。
 
@@ -470,7 +470,7 @@ coreの新attack fixtureは、genesis後にcoalition bondと新verifier bondを�
 
 この修正範囲の回帰は **133 PASS**。coreはdefault feature、nodeはdefault feature（EVMを含む）、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`。binary直実行は最終sourceでcargoがbuildした同じcore／node lib-test binaryを使用した。既存unused/dead-code警告は残る。[core fold](evidence/reservation-isolation-core-fold-final.log)、[core unit](evidence/reservation-isolation-core-unit-final.log)、[lifecycle](evidence/reservation-isolation-core-lifecycle-final.log)、[node held](evidence/reservation-isolation-node-held-final.log)、[filer](evidence/reservation-isolation-node-filer-final.log)、[reader](evidence/reservation-isolation-node-reader-final.log)、[reporter](evidence/reservation-isolation-node-reporter-final.log)、[binary check](evidence/reservation-isolation-binary-final.log)。初回node fixtureの署名builder呼出しは署名bytesをcallback引数へ渡してcompile拒否され、既存APIどおりcallbackへ訂正した。最終PASSだけを計上した。
 
-最終sourceの `scripts/t12-repin.sh --shipping --drift-only` はexit 0、**361 ok・差分なし**。fresh harvest再読込もexit 0。pinを書き換えていない。[repin](evidence/reservation-isolation-repin-final.log)、[harvest tests](evidence/reservation-isolation-repin-harvest-tests.log)、[harvest lib](evidence/reservation-isolation-repin-harvest-lib.log)、[log再検証](evidence/reservation-isolation-repin-replay-final.log)。
+最終sourceの `scripts/release/t12-repin.sh --shipping --drift-only` はexit 0、**361 ok・差分なし**。fresh harvest再読込もexit 0。pinを書き換えていない。[repin](evidence/reservation-isolation-repin-final.log)、[harvest tests](evidence/reservation-isolation-repin-harvest-tests.log)、[harvest lib](evidence/reservation-isolation-repin-harvest-lib.log)、[log再検証](evidence/reservation-isolation-repin-replay-final.log)。
 
 G14全域は未達であり、owner数に比例する最大response負荷、fresh-node service、全family、最大contextの34-session予算、未取得FP job／canonical input／prefix-state、累積scopeと期限内包含が残る。
 

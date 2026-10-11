@@ -1,6 +1,6 @@
 //! **Every value the testnet-12 re-pin compares against, computed by this build — never typed.**
 //!
-//! `scripts/t12-repin.sh` (docs/t12-rcore-launch-checklist.md §5) reads each pinned literal out of
+//! `scripts/release/t12-repin.sh` (docs/t12-rcore-launch-checklist.md §5) reads each pinned literal out of
 //! the tree and sets it beside a value this build computes. Most of those values come from here: one
 //! `REPIN <key> <value>` line per value, from the same public constructors the pin tests use
 //! (`Params::from(NetworkId)` where a pin says "what a node announces", the `*_shipped_params` presets

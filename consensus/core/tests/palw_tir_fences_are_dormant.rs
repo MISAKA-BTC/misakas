@@ -46,7 +46,7 @@ fn drill_salt() -> PalwDrillSaltV1 {
 }
 
 /// The key `t12-repin.sh` harvests a row's id under: `tirdorm.<slug>.<id>`, the slug the row name's
-/// ASCII letters and digits, lowercased, every other run one `_` (`scripts/t12_repin.py`, `_tirdorm_slug`).
+/// ASCII letters and digits, lowercased, every other run one `_` (`scripts/release/t12_repin.py`, `_tirdorm_slug`).
 fn slug(name: &str) -> String {
     let mut out = String::new();
     for c in name.chars() {

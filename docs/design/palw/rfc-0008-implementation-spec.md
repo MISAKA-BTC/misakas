@@ -1296,7 +1296,7 @@ opening a root and attaching riders in the same block is refused in either objec
 without invalidating the block. Legitimate rider splitting before root declaration is preserved. This prevents later
 re-attribution of a root's budget; it does not turn that budget ceiling into a guaranteed minimum contract.
 
-`scripts/misaka-palw-econ-verifier-model.py` §14 checks exact-rational arithmetic, one-sompi underpricing, omitted capital
+`scripts/sim/misaka-palw-econ-verifier-model.py` §14 checks exact-rational arithmetic, one-sompi underpricing, omitted capital
 cost, zero collection, dependent outcomes and overflow using declared ASSUMED scenarios. It supplies no measured class
 cost, collection floor, funded minimum or policy approval. The node expiry regression uses actual signed kernel runs
 and Final transitions, with the native REAL admission harness's synthetic trace commitment/Panel seam; it proves the

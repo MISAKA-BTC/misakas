@@ -5,7 +5,7 @@ Agent SHARD, branch `shard/rfc6-10`, 2026-10-09. Owner: Lead (single integration
 Everything here is behind a dormant fence: `palw_permissionless_panel_v1` (refused at every real height),
 `palw_tir_shard_v1` (armed on testnet-12 at DAA 5,300; **no armed rule changes**) and one new fence proposed here,
 `palw_tir_shard_segment_v2` (None on every preset). No live testnet-12 id moves (params `5ee7fd8e…`, schedule
-`1678e073…`; checked with `scripts/t12-repin.sh --shipping --drift-only`).
+`1678e073…`; checked with `scripts/release/t12-repin.sh --shipping --drift-only`).
 
 ## 概要（日本語）
 

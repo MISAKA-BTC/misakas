@@ -81,7 +81,7 @@ with the device's readahead window raised" — 6 MB/s against 1.3 GB/s through r
 tensor. The root pass took that lesson. The forward pass did not: every weight it reads is
 `map.i8_slice`, a fault.
 
-**What the artifact is.** Read off its header by `scripts/misaka-qwen36-artifact-directory.py`
+**What the artifact is.** Read off its header by `scripts/verify/misaka-qwen36-artifact-directory.py`
 (the directory of 62,393 tensors and 52,623 parameter rows; the script prints this table and the
 budget arithmetic for any `.palwq36`, so a host can be sized before a node starts):
 

@@ -4,7 +4,7 @@
 //! [`evm_validate_and_persist`] when a block first becomes a selected-chain
 //! candidate. Everything here is gated behind the non-default `evm` cargo
 //! feature, so the default node never links revm/secp — the secp-free guarantee
-//! enforced by `scripts/pq-ci-guard.sh` is unaffected. The EVM lane is also
+//! enforced by `scripts/ci/pq-ci-guard.sh` is unaffected. The EVM lane is also
 //! `u64::MAX`-inert on every default network (`is_evm_active` is always false),
 //! so even an `--features evm` node never runs this until a net sets a finite
 //! `evm_activation_daa_score`.

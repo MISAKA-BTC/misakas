@@ -263,7 +263,7 @@ label|pause`; the claim RPC's staleness refusal now only under `Pause`.
 | `cargo clippy -p kaspa-consensus-core` | 6 errors — **the same 6 on `main` `40ac431b`** (measured side by side; none in lines this ADR touched) |
 | `rustfmt --edition 2024 --check` on every touched `.rs` | clean |
 | `bash scripts/ci-gates.sh --group fast` | 6/6 green |
-| `python3 scripts/check-repin-enumeration.py` | 7 unclassified — `main`'s baseline, unchanged |
+| `python3 scripts/ci/check-repin-enumeration.py` | 7 unclassified — `main`'s baseline, unchanged |
 
 **Mutations** (each applied alone to `processor.rs`, then restored byte for byte): no index union in the
 template → I-1 and I-3 fail; `Label` ignored (the old pause) → I-1, I-3 and the pipeline test fail; `safe`

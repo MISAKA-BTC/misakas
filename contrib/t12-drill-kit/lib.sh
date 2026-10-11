@@ -2,7 +2,7 @@
 #
 # The POST-LAUNCH R-core+ drill (ADR-0152 §8.3 item 3's D-1…D-10 and §8.4's deferred drills), run with
 # P2-12's tooling: the SHIPPING kaspad and misaka with `--palw-drill-genesis-salt`, driven by
-# scripts/misaka-palw-t12-rcore-drill.sh and its analyzer. This file adds only what the fleet needs
+# scripts/drills/misaka-palw-t12-rcore-drill.sh and its analyzer. This file adds only what the fleet needs
 # around that script:
 #   * a host guard stricter than the script's own `check-host` — it also knows the deploy kit's units,
 #     drop-ins, staged launch scripts, ports and app dirs (a public t12 host is refused however its node
@@ -22,7 +22,7 @@ BIN_DIR="$DRILL_ROOT/bin"                                   # written by `stage-
 WORK_DIR="${WORK_DIR:-$DRILL_ROOT/work}"                    # the rcore script's WORK_DIR (keyring, seat dirs, ledger)
 # The rcore drill script and its analyzer, from the same checkout as this kit (scripts/ beside contrib/),
 # or a copy of that scripts/ directory under DRILL_ROOT (the script finds its analyzer at ../scripts/).
-RCORE_SCRIPT="${RCORE_SCRIPT:-$KIT_DIR/../../scripts/misaka-palw-t12-rcore-drill.sh}"
+RCORE_SCRIPT="${RCORE_SCRIPT:-$KIT_DIR/../../scripts/drills/misaka-palw-t12-rcore-drill.sh}"
 
 say()  { printf '[t12-drill-kit %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die()  { say "REFUSED: $*"; exit 1; }

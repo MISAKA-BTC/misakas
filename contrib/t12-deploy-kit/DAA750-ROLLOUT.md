@@ -11,7 +11,7 @@
 > **FINAL（2026-09-26）**: この文書を FINAL にした commit の tree が、build・drill するリリース。13 本の fence（DAA 750）、
 > strict-win の浅い同点規則（`19e732712`、fence の追加なし）、IBD checkpoint、IBD 順序の修正、lifecycle UX（n7）、
 > verifier setup（n8）が入っている。§2 の値が最終値（strict-win の同点規則は params.rs のコメントしか変えず、再 pin の dry run は
-> drift なし・256 ok）。これより後に consensus・params を変える commit を足したら、`scripts/t12-repin.sh` をやり直すこと。
+> drift なし・256 ok）。これより後に consensus・params を変える commit を足したら、`scripts/release/t12-repin.sh` をやり直すこと。
 
 ## 1. このリリースに入っているもの
 
@@ -30,7 +30,7 @@
 
 ## 2. identity（旧 → 新）— 最終値
 
-`scripts/t12-repin.sh --apply --shipping` が build から計算した値（12 本での再 pin `a1b1c4491` の後、13 本目を入れて再 pin
+`scripts/release/t12-repin.sh --apply --shipping` が build から計算した値（12 本での再 pin `a1b1c4491` の後、13 本目を入れて再 pin
 `cbcec4cb5`）。strict-win の同点規則と n8 を merge した後の dry run も drift なし（256 ok・未登録 literal なし）。
 
 | 項目 | launch release（`0e8ec984e`、現在の fleet） | このリリース（**最終**） |
@@ -158,6 +158,6 @@ fence は 12 本の中に無く、strict-win 自身も他の fence を要求し�
 - `t12_bind_deadlock_f1_…`（processor test）: release の lane A（全 genesis card）の下では、fence 前に挿した card 7 の失格 attempt が
   fence 後の heartbeat に merge されると lane A 経由で claim を bind してしまい、binder の検査が偶然に左右された（2/3・1/4 などで
   失敗）。fence 前の検査を別の chain（同じ ruleset・同じ手順）で行うようにした（`fcdca691a`）。規則の問題ではなく test fixture の問題。
-- `scripts/t12-repin.sh --selftest` が 17/22: selftest の期待値が cap / resilience lane の pin 追加より古い（このリリースとは無関係）。
+- `scripts/release/t12-repin.sh --selftest` が 17/22: selftest の期待値が cap / resilience lane の pin 追加より古い（このリリースとは無関係）。
 - drill の ruleset もこのリリースの高さ（750）を持つ（drill は公開 ruleset と同じ組立てを通る設計）。`--palw-drill-fence-at` は
   それを低い高さへ動かす（MOVED と表示される）。

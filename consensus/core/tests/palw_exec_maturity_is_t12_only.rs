@@ -66,7 +66,7 @@ const UNMOVED: &[(&str, &str, &str, &str)] = &[
 /// tree the maturity landed on (the field is hashed Some-only, and the pinned twins of
 /// `palw_offence_attribution_is_t12_only`, `evm_bridge_ledger_is_t12_only` and
 /// `t12_mainnet_values_moved_only_these` hold unchanged with it taken away — so nothing else moved).
-/// The re-pin (`scripts/t12_repin.py`, `maturity.*`) moves it with every other twin.
+/// The re-pin (`scripts/release/t12_repin.py`, `maturity.*`) moves it with every other twin.
 // re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was edde9c06…, bb8d0d4d…)
 const T12_WITHOUT_THE_MATURITY: (&str, &str, &str) = (
     "199d11f3b8d97d5029e2a7e94b4578891fb1058a20eb9ec8a3da8de1e3593ad9",
@@ -153,7 +153,7 @@ fn the_maturity_moves_testnet12s_fingerprint_and_nothing_else_did() {
     let t12 = palw_t12_shipped_params();
     let twin = without_the_maturity(&t12);
     twin.validate_palw_v2().expect("the maturity is optional: testnet-12 without it is a legal ruleset");
-    // Printed before the asserts, for `scripts/t12_repin.py`'s harvest.
+    // Printed before the asserts, for `scripts/release/t12_repin.py`'s harvest.
     println!("testnet-12 with the maturity {:?} / without the maturity {:?}", ids(&t12), ids(&twin));
     assert_eq!(ids(&twin), pinned(T12_WITHOUT_THE_MATURITY), "taken away, testnet-12 is the ruleset before it");
     assert_eq!(ids(&t12), pinned(T12_WITH_THE_MATURITY), "testnet-12's ids with the maturity");

@@ -26,7 +26,7 @@ immediately and on `STALLED` only after two full windows, never twice within a c
 ```bash
 # the CLI on the host
 cp target/release/misaka /usr/local/bin/misaka
-cp scripts/misaka-node-liveness-probe.sh /usr/local/bin/misaka-node-liveness-probe
+cp scripts/ops/misaka-node-liveness-probe.sh /usr/local/bin/misaka-node-liveness-probe
 ```
 
 `/etc/systemd/system/misaka-liveness@.service`:

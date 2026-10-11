@@ -186,7 +186,7 @@ split 後の徴収可能な pool と整数丸めから下限を立証し、立�
 資金源・費用・joint payment floor が欠けた項目は UNKNOWN。slot 下限ゼロで正の費用に対する固定収入もなければ、
 有限の検査料による各 epoch の保証は FAIL。数学モデルの conditional PASS を資金実装／class security PASS にしない。
 詳細と実行可能な反例は [ECON §5f](econ-verifier-incentive-and-allocation.md#5f-watcher-funding-expected-recovery-and-actual-epoch-recovery-2026-10-11-correction)
-および `scripts/misaka-palw-econ-verifier-model.py --section 15` を参照する。
+および `scripts/sim/misaka-palw-econ-verifier-model.py --section 15` を参照する。
 
 経済モデルで成立しない阻止策を、コードが動くという理由で PASS にしない。
 

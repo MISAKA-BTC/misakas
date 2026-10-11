@@ -1,5 +1,5 @@
 //! **RFC-0003 §I.0: the generative job's golden vectors** (`consensus-vectors/gen-v1/job_v1.json`,
-//! written by `scripts/palw-gen-job-vectors.py`, an implementation that shares no code with this one).
+//! written by `scripts/verify/palw-gen-job-vectors.py`, an implementation that shares no code with this one).
 //!
 //! Every job decodes from its canonical bytes, re-encodes byte-identical and has the job id the vector
 //! says; every non-canonical encoding is refused by name and rewritten by nobody; the canonical seed is

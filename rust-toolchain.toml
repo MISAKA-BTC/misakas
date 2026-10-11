@@ -45,7 +45,7 @@
 # ## Rules for editing this file
 #
 # * `channel` must stay an EXACT version. "stable" here would reintroduce exactly the drift this
-#   file removes, and `scripts/ci-toolchain-pin-check.py` refuses anything that is not `X.Y[.Z]`.
+#   file removes, and `scripts/ci/ci-toolchain-pin-check.py` refuses anything that is not `X.Y[.Z]`.
 # * Every workflow job passes this value explicitly (see the `toolchain` job in ci.yaml). That is
 #   belt AND braces: rustup honours this file as a directory override for `cargo`, but the action
 #   would still spend a job's worth of network installing the wrong toolchain first.

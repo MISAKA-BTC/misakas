@@ -1,6 +1,6 @@
 # cargo-deny configuration — dependency advisory gate.
 #
-# Consumed by `cargo deny check advisories` in scripts/pq-ci-guard.sh [1/6] (run in CI via the
+# Consumed by `cargo deny check advisories` in scripts/ci/pq-ci-guard.sh [1/6] (run in CI via the
 # `Lints` job). A known RustSec vulnerability or a yanked crate FAILS CI. To accept a triaged but
 # currently-unfixable advisory, add its ID to `ignore` below WITH a comment and a tracking link —
 # never soften the gate globally.

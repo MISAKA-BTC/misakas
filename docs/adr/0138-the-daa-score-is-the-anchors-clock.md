@@ -95,7 +95,7 @@ This ADR assumes an anchor lane paces the chain and the model lanes ride alongsi
 testnet-11 there is no anchor lane at all**, and the fence would therefore leave the DAA with no
 source but the heartbeat.
 
-Measured from the chain on 2026-09-18 with `scripts/misaka-t11-lane-walk.py`: of the last 60
+Measured from the chain on 2026-09-18 with `scripts/drills/misaka-t11-lane-walk.py`: of the last 60
 selected-chain blocks, 60 are algo 6 and none is algo 3; of the last 300, 261 are algo 6, 39 are
 algo 8 and none is algo 3. There cannot be one: the template declares `bundle.algorithm_id`, which
 `PalwRulesetV2::validate` requires to be the committed attempt id on every ConsensusV2 network, so a

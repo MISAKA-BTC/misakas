@@ -1,6 +1,6 @@
 # misaka-probe 使い方メモ
 
-このドキュメントは、`scripts/misaka-probe.sh` をVPSに入れて、IPからMISAKA node / DNS seeder / validator状態を確認するための手順です。
+このドキュメントは、`scripts/ops/misaka-probe.sh` をVPSに入れて、IPからMISAKA node / DNS seeder / validator状態を確認するための手順です。
 
 ## できること
 
@@ -35,7 +35,7 @@ VPS上で、repoが `/opt/misakas` にある前提です。
 
 ```bash
 cd /opt/misakas
-install -o root -g root -m 0755 scripts/misaka-probe.sh /usr/local/bin/misaka-probe
+install -o root -g root -m 0755 scripts/ops/misaka-probe.sh /usr/local/bin/misaka-probe
 ```
 
 確認します。

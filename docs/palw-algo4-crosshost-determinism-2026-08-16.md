@@ -11,7 +11,7 @@
 
 
 公開テストネット Track A ゲート2。ゲート1の偽造耐性監査ハーネス
-(`scripts/misaka-palw-forgery-audit.py`, seed決定的導出) を **live t10 の4 host全部**で
+(`scripts/verify/misaka-palw-forgery-audit.py`, seed決定的導出) を **live t10 の4 host全部**で
 そのまま実行し、v1 PoW経路 (`--mode verify`) のタグを label 毎に突き合わせた。
 v2 trace のクラス校正 (2026-08-15, 4/4一致) は済んでいたが、**PoW経路そのものの
 4 host一致はこれが初測定**。
@@ -90,11 +90,11 @@ fleet の1ヘッダ検証コスト ≈ 6–16s。T=120s ブロックで検証負
 
 ```bash
 # 配布 (script は seed 決定的なので host 側に他の入力は不要)
-scp scripts/misaka-palw-forgery-audit.py <host>:palw-gate2/
+scp scripts/verify/misaka-palw-forgery-audit.py <host>:palw-gate2/
 ssh <host> 'cd palw-gate2 && PALW_WORKER=~/palw-class/palw-worker \
   MISAKA_PALW_GGUF=/tmp/Qwen3.5-2B-Q4_K_M.gguf python3 misaka-palw-forgery-audit.py'
 # 回収して照合
-scripts/misaka-palw-gate2-compare.py   # gate2/<label>.jsonl 群 + ローカル結果を比較
+scripts/verify/misaka-palw-gate2-compare.py   # gate2/<label>.jsonl 群 + ローカル結果を比較
 ```
 
 生データ: 各 host `~/palw-gate2/palw_audit_results.jsonl` (61行、~90KB)。

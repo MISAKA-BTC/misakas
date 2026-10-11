@@ -317,7 +317,7 @@ tags the two discriminant pins.
 1. Decisions 1, 2, 3 and 4 — **done** (§9); Decision 4's consensus half without a flag day.
 2. A devnet drill of the one-move court: a genesis stating V3, a seat that files, a fold that
    convicts — the U-04 of ADR-0099, now with an object to file. **Done 2026-09-10** (§9, "the
-   drill"): `scripts/misaka-palw-shard-court-devnet-drill.sh`, PASS on the second run.
+   drill"): `scripts/drills/misaka-palw-shard-court-devnet-drill.sh`, PASS on the second run.
 3. A devnet drill of per-shard licensing: a class registered by a bond, a plan, bonds declaring
    shards, a stratified panel, parts landing — the seats holding the whole model until a sharded
    backend exists (Decision 7 step 7).

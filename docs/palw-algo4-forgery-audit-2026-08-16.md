@@ -4,8 +4,8 @@
 (27/27 seedで同一タグ → 約31回のBLAKE2bで偽造可能) を発見したのと**同じ手法**を、
 その置き換えである algo_id=4 (`gemm_trace_root` 束縛) に規模を上げて適用した。
 
-- ハーネス: `scripts/misaka-palw-forgery-audit.py` (61推論、~1s/推論 warm、全体~2分)
-- 解析: `scripts/misaka-palw-forgery-audit-analyze.py`
+- ハーネス: `scripts/verify/misaka-palw-forgery-audit.py` (61推論、~1s/推論 warm、全体~2分)
+- 解析: `scripts/verify/misaka-palw-forgery-audit-analyze.py`
 - 経路: 実PoW経路と同一 — `palw_pow_seed_v1` (keyed-BLAKE2b をPythonで厳密再現) →
   `palw_pow_prompt_v1` → `palw-worker --mode verify --prompt-stdin --n-predict 128`
 - 環境: Metal profile, Qwen3.5-2B-Q4_K_M (palw-unified の pinned worker)
@@ -72,8 +72,8 @@ consensus-inert な v2 trace scheme のゲートであり、Track A の公開ゲ
 ```bash
 export PALW_WORKER=<worktree>/target/release/palw-worker
 export MISAKA_PALW_GGUF=~/Downloads/misaka-palw-runtime/models/Qwen3.5-2B-Q4_K_M.gguf
-python3 scripts/misaka-palw-forgery-audit.py     # 結果は palw_audit_results.jsonl (追記・再開可能)
-python3 scripts/misaka-palw-forgery-audit-analyze.py
+python3 scripts/verify/misaka-palw-forgery-audit.py     # 結果は palw_audit_results.jsonl (追記・再開可能)
+python3 scripts/verify/misaka-palw-forgery-audit-analyze.py
 ```
 
 seedは全て決定的に導出されるため、別hostで走らせて jsonl を突き合わせれば

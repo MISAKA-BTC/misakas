@@ -362,9 +362,9 @@ phase_f() {
 # One part's verdict: PASS (0), FAIL (1), INCOMPLETE (3), written beside the rest.
 verdict_of() { case $1 in 0) echo PASS ;; 3) echo INCOMPLETE ;; *) echo FAIL ;; esac; }
 
-# The int-10 flag-day step script (scripts/misaka-palw-int10-flagday.sh): old / below / cross / classes, on this layout.
+# The int-10 flag-day step script (scripts/drills/misaka-palw-int10-flagday.sh): old / below / cross / classes, on this layout.
 flagday_script() {
-    local s=$WT/scripts/misaka-palw-int10-flagday.sh
+    local s=$WT/scripts/drills/misaka-palw-int10-flagday.sh
     [ -x "$s" ] || [ -f "$s" ] || die "$s is missing (the int-10 kit's)"
     [ -n "$TIR2_AT" ] || die "the flag-day drill needs TIR2_AT (the chain's \`--palw-drill-tir2-at\`; a stored chain keeps its height)"
     export_layout

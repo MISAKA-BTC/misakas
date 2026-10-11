@@ -30,7 +30,7 @@ jobs:
 
       # **Why the foreign-parser check is a CI gate here and not a human one.**
       #
-      # `scripts/misaka-palw-artifact-thirdparty.py` opens a derived artifact with the library
+      # `scripts/verify/misaka-palw-artifact-thirdparty.py` opens a derived artifact with the library
       # that ecosystem actually uses and compares a quantity with MEANING — a solid's enclosed
       # volume, a song's playback duration — against the DSL the transformer was given. Every
       # other check on a derived artifact in this tree was written by us: the corpus goldens, the
@@ -97,7 +97,7 @@ jobs:
       # before pushing does not include it. `CI_ONLY` in the pin checker records that choice, so
       # `workflow-parity` does not report it as a gate nobody can run.
       - name: Prove the pin and parity checks can fail
-        run: bash scripts/ci-gates-selftest.sh
+        run: bash scripts/ci/ci-gates-selftest.sh
 
       # The same command a contributor runs. `--group fast` is every gate that needs no cargo
       # build; the Lints / Check / Test Suite jobs below run the rest.
@@ -123,7 +123,7 @@ jobs:
       # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
       # morning, while `Lints` alone pinned 1.93.0. The version is read out of
       # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
-      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
       # doing this.
       - name: Read the pinned toolchain
         shell: bash
@@ -188,7 +188,7 @@ jobs:
       # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
       # morning, while `Lints` alone pinned 1.93.0. The version is read out of
       # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
-      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
       # doing this.
       - name: Read the pinned toolchain
         shell: bash
@@ -318,7 +318,7 @@ jobs:
       # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
       # morning, while `Lints` alone pinned 1.93.0. The version is read out of
       # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
-      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
       # doing this.
       - name: Read the pinned toolchain
         shell: bash
@@ -373,7 +373,7 @@ jobs:
       - name: Write the CI summary
         if: always()
         run: |
-          python3 scripts/misaka-ci-summary.py --junit target/nextest/ci/junit.xml \
+          python3 scripts/ci/misaka-ci-summary.py --junit target/nextest/ci/junit.xml \
             --rust "$(rustc -V)" >> "$GITHUB_STEP_SUMMARY"
 
       # **`--lib` is absent on purpose. Do not add it.**
@@ -432,7 +432,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # **The compiler is a pin, not a rumour** — the same two steps every job here takes, for the
-      # reason the Test Suite job gives. `scripts/ci-toolchain-pin-check.py` fails the build if
+      # reason the Test Suite job gives. `scripts/ci/ci-toolchain-pin-check.py` fails the build if
       # this job stops doing it.
       - name: Read the pinned toolchain
         shell: bash
@@ -520,7 +520,7 @@ jobs:
       # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
       # morning, while `Lints` alone pinned 1.93.0. The version is read out of
       # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
-      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
       # doing this.
       - name: Read the pinned toolchain
         shell: bash
@@ -553,8 +553,8 @@ jobs:
       - name: PQ-only secp256k1 isolation + advisory gate (ADR-0019 §14)
         # Hard-fails if secp256k1 re-enters the kaspa-consensus dependency tree
         # (`cargo tree -p kaspa-consensus -e normal`) and runs the dependency advisory
-        # audit (cargo-deny, installed above). See scripts/pq-ci-guard.sh + deny.toml.
-        run: bash scripts/pq-ci-guard.sh
+        # audit (cargo-deny, installed above). See scripts/ci/pq-ci-guard.sh + deny.toml.
+        run: bash scripts/ci/pq-ci-guard.sh
 
   check-no-std:
     name: Check no_std
@@ -568,7 +568,7 @@ jobs:
       # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
       # morning, while `Lints` alone pinned 1.93.0. The version is read out of
       # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
-      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
       # doing this.
       - name: Read the pinned toolchain
         shell: bash
@@ -633,7 +633,7 @@ jobs:
       # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
       # morning, while `Lints` alone pinned 1.93.0. The version is read out of
       # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
-      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
       # doing this.
       - name: Read the pinned toolchain
         shell: bash
@@ -706,7 +706,7 @@ jobs:
       # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
       # morning, while `Lints` alone pinned 1.93.0. The version is read out of
       # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
-      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
       # doing this.
       - name: Read the pinned toolchain
         shell: bash
@@ -796,7 +796,7 @@ jobs:
       # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
       # morning, while `Lints` alone pinned 1.93.0. The version is read out of
       # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
-      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
       # doing this.
       - name: Read the pinned toolchain
         shell: bash
@@ -861,7 +861,7 @@ jobs:
       # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
       # morning, while `Lints` alone pinned 1.93.0. The version is read out of
       # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
-      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
       # doing this.
       - name: Read the pinned toolchain
         shell: bash

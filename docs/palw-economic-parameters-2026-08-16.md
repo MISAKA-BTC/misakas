@@ -10,7 +10,7 @@
 > inputs, not a new measurement or a complete economic-safety gate for 49%. The dated 10% results
 > below are preserved as history.
 
-**Date:** 2026-08-16 · **Tool:** `scripts/misaka-palw-economics-sim.py` (historical output below;
+**Date:** 2026-08-16 · **Tool:** `scripts/sim/misaka-palw-economics-sim.py` (historical output below;
 the current script includes the 2026-10-10 amendment) · **Normative:** ADR-0028 §4 (issuance split, no-show floor, admission
 caps), ADR-0032 (fee-bond escrow), ADR-0027 §4 (bounty cap) · **Gate:** B15
 

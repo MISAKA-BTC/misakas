@@ -264,7 +264,7 @@ Items 1–5 landed the same day; item 6 is the operator's release, shared with A
   page and the leaderboard (sortable), the docs page's "Mining buys the pair" section and fee-table
   row, the add-model step 3 text, nine self-test checks against these goldens, and a mock world
   whose seeded pairs have been mined on.
-* `scripts/misaka-palw-model-market-devnet-e2e.sh` — step 9b/9c: with no trade in flight the
+* `scripts/drills/misaka-palw-model-market-devnet-e2e.sh` — step 9b/9c: with no trade in flight the
   reward alone moves the pair, and the reserve carries the seed and the whole buyback (B8). The
   node-agreement row now compares `traded = reserve − buyback`, which the reward's own move leaves
   alone; the reserve, the buyback and the retired count are logged for the reader.

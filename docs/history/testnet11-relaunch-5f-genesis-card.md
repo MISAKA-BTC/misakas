@@ -14,7 +14,7 @@ someone's decision rather than an arithmetic consequence, it says so and says wh
 > not have yet — `palw_attn_court_v1.rs` does not exist here at all, and `prompt_ids_merkle` appears
 > zero times in this branch's `params.rs`. That is legitimate and it is also exactly how six wrong
 > citations got written in one sitting: read from one tree, committed to another, and wrong in a way
-> no test suite can see. **`scripts/check-doc-citations.sh <doc> <tree>` resolves every citation and
+> no test suite can see. **`scripts/ci/check-doc-citations.sh <doc> <tree>` resolves every citation and
 > prints the line it lands on**; run it against the merged tree at the freeze and read the output,
 > because a citation that resolves is not the same as a citation that is right. Caught by the
 > session verifying this card, not by the one writing it.
@@ -518,7 +518,7 @@ dependency, not a preference.**
     3  FH   the derived-artifact binding          on top of 2, because 2 already edits derive/src
     4  FG   the graph-v5 512 registration         profile/params only; merges impl at its end
     5  cargo +1.93.0 fmt --all                    ONCE, on the merged tree, LAST source change
-    6  scripts/check-derive-freeze.sh             after 2 and again after 5 — until it prints nothing
+    6  scripts/ci/check-derive-freeze.sh             after 2 and again after 5 — until it prints nothing
     7  "frozen"                                   5b says it only after 6 prints nothing
     8  the re-pins                                mine, last, and nothing touches derive/src after
 
@@ -542,7 +542,7 @@ thing done before the cut and it is done ONCE.
    inside the hashed bytes.
 2. Run `cargo +<pinned> fmt --all` LAST among source-changing steps — formatting is inside the hash.
 3. Then re-pin `transformer_id_pin` and `shipped_presets_have_pinned_fingerprints`, in one commit.
-3b. **"Frozen" is a sweep, not a recollection** — `scripts/check-derive-freeze.sh`. Re-run it after
+3b. **"Frozen" is a sweep, not a recollection** — `scripts/ci/check-derive-freeze.sh`. Re-run it after
    every merge until it prints nothing. As of this writing **four** branches still move the crate:
 
        MOVES IT   palw-artifact-names-genesis-row  -> 10b7eac25bab
@@ -1466,10 +1466,10 @@ green except the known pin" said this week was a statement about jobs that never
 | base0 | `cargo test -p misaka-palw-base0 --lib` | 264/0 |
 | derive | `cargo test -p misaka-palw-derive` | **NOT `--lib`** — `--lib` builds no binaries, `palw-evm-runner` is absent, and ADR-0079's confinement gate refuses rather than falling back in-process. Those seven reds are the gate HOLDING. |
 | cli | `cargo test -p misaka-cli` | 73/0 |
-| artifact selftest | `scripts/misaka-palw-artifact-conformance.py selftest` | five damaged artifacts, each refused BY NAME — a test on the exit code alone would call four-of-five a pass |
-| doc citations | `scripts/check-doc-citations.sh docs/…-genesis-card.md <merged-tree> palw-testnet-5f`, then the same without the second tree | **the two-tree form first**: it lists only citations that resolve differently on the two trees — the only ones a tree label can change the meaning of. Then the one-tree form against the merged tree, and READ the lines. A REPORT, not a verdict: it exits non-zero only on a missing file or line, because a citation that resolves to the WRONG line still resolves. |
-| stranger | `scripts/misaka-palw-derive-stranger.py selftest` | recomputes the bytes in Python, independently of the Rust. **RED right now, and correctly so — read its two halves separately** (below). |
-| third party | `scripts/misaka-palw-artifact-thirdparty.py --require` | mido / pygltflib / numpy-stl; compares MEANING (enclosed volume, playback duration) against the DSL |
+| artifact selftest | `scripts/verify/misaka-palw-artifact-conformance.py selftest` | five damaged artifacts, each refused BY NAME — a test on the exit code alone would call four-of-five a pass |
+| doc citations | `scripts/ci/check-doc-citations.sh docs/…-genesis-card.md <merged-tree> palw-testnet-5f`, then the same without the second tree | **the two-tree form first**: it lists only citations that resolve differently on the two trees — the only ones a tree label can change the meaning of. Then the one-tree form against the merged tree, and READ the lines. A REPORT, not a verdict: it exits non-zero only on a missing file or line, because a citation that resolves to the WRONG line still resolves. |
+| stranger | `scripts/verify/misaka-palw-derive-stranger.py selftest` | recomputes the bytes in Python, independently of the Rust. **RED right now, and correctly so — read its two halves separately** (below). |
+| third party | `scripts/verify/misaka-palw-artifact-thirdparty.py --require` | mido / pygltflib / numpy-stl; compares MEANING (enclosed volume, playback duration) against the DSL |
 | model gate, dense | `palw-model-gate` | A16 lane only — declared in advance |
 | model gate, QWEN36 | `palw-qwen36-model-gate` | needs the ChatML fix (§7) to pass through the production assembly |
 | fused-attention guard | `verify_class_admission_v5` | Refuses an `AttnFused` profile unless `palw_kary_court_active_at` — `FusedAttentionNeedsTheKaryCourt`, *"the class carries a fused attention site and this ruleset's court has no dissection to try it with"*; and `PricedForADifferentCourt { priced, court }` when the registered cost shape's arity is not the court's. **A guard on the way in, beside the drill and not instead of it.** |
@@ -1679,7 +1679,7 @@ gate above is the one that would have caught all three.
 
   **Ordering:** both files are under `misaka-palw-derive/src/`, so this moves all eight
   `transformer_id`s. It must land **before** the single `fmt --all` and before the tree is declared
-  frozen, or the re-pin is stale on arrival. `scripts/check-derive-freeze.sh` is the check.
+  frozen, or the re-pin is stale on arrival. `scripts/ci/check-derive-freeze.sh` is the check.
 
   *This is the one place the release's own promise — that a stranger can check a claim without
   trusting the claimant — is not kept, and it is the place the launch is named after.*
@@ -2366,7 +2366,7 @@ at 16; **on impl** it points at the v5 512 row; **the merge is what moves it**; 
 **1. The documented invocation cannot work as written.** `docs/palw-freeprompt-gateway.md`:
 
 ```bash
-python3 scripts/misaka-palw-fp-gateway-smoke.py ./target/release/misaka-palw-gateway \
+python3 scripts/drills/misaka-palw-fp-gateway-smoke.py ./target/release/misaka-palw-gateway \
     ./target/release/palw-a16-fp-worker "$MISAKA_PALW_GGUF"
 ```
 
@@ -2597,7 +2597,7 @@ for the third time today, and this time against a run I designed.
 
 ### The checker I wrote to catch silent absence had two silent absences
 
-`scripts/check-doc-tree-claims.sh` reports which identifiers a document mentions whose
+`scripts/ci/check-doc-tree-claims.sh` reports which identifiers a document mentions whose
 **definition differs between two trees** — the class `check-doc-citations.sh` cannot see, because
 a claim with no `file.rs:NNNN` has nothing to resolve. It took three runs to work, and every
 failure printed a clean plausible number:
@@ -2892,7 +2892,7 @@ not come back after a kill — which is convenient here and would be alarming an
 
 ### The ceremony's own guard grepped the tree for the answer
 
-`scripts/check-repin-predictions.sh`, first version, reported **all four values as DIFF** against
+`scripts/ci/check-repin-predictions.sh`, first version, reported **all four values as DIFF** against
 `3f9526d3`. It read `<empty>` for every one, because none of the five predicted values appears
 anywhere in the tree's `.rs` files — and **they should not**:
 
@@ -2910,7 +2910,7 @@ always sound and reads **OK** on `3f9526d3`), and the five values are compared a
 table it prints what it cannot answer and exits, rather than manufacturing a verdict:
 
 ```
-TABLE=/path/to/extracted-pins.txt scripts/check-repin-predictions.sh palw-adr0082-impl
+TABLE=/path/to/extracted-pins.txt scripts/ci/check-repin-predictions.sh palw-adr0082-impl
 
   source_tree_sha256  637858dba5ea5e34…
   t11_fingerprint     71efa66480211731…
@@ -3095,7 +3095,7 @@ palw-derive derive --transformer music/smf/v1 --answer corpus/music/03-overlappi
                    cad/stl/v1                 corpus/cad/01-extrude-l-bracket.json
 ```
 
-**1 — the files exist and carry content**, parsed by `scripts/verify-artifacts-independently.py`,
+**1 — the files exist and carry content**, parsed by `scripts/verify/verify-artifacts-independently.py`,
 which implements SMF, glTF-binary and binary-STL **from their published specifications** and
 imports, links and shells out to nothing in this tree:
 
@@ -3195,7 +3195,7 @@ node logs: ClassLaneCertified binding 0b8a6c35… DROPPED on all three nodes —
             class 4277d84f…"
 ```
 
-**The chain refused correctly.** Stage 3 of `scripts/misaka-palw-fp-devnet-e2e.sh` ran
+**The chain refused correctly.** Stage 3 of `scripts/drills/misaka-palw-fp-devnet-e2e.sh` ran
 `palw-certify drill --family a16` — the **graph-v2** family `PALW-QWEN25-A16` — while the row
 under test is **graph-v5@512**, whose kernels are `PALW-QWEN25-A16-V5`'s. The `bind` output says
 so in as many words: *"covered by the PALW-QWEN25-A16-V5 RC family."*
@@ -3335,13 +3335,13 @@ for `head`.
 
 ## The paste is verified by a SECOND IMPLEMENTATION, before the paste
 
-`scripts/misaka-palw-derive-stranger.py` is a Python re-implementation that reads the pins out of
+`scripts/verify/misaka-palw-derive-stranger.py` is a Python re-implementation that reads the pins out of
 `misaka-palw-derive/tests/transformer_id_pin.rs` and **recomputes them from the crate's actual
 bytes.** It takes `--crate-root`, so it can be pointed at any tree. Pointed at impl's:
 
 ```
 git archive palw-adr0082-impl misaka-palw-derive | tar -x -C <tmp>     # derive/src = 4969f8dc…
-python3 scripts/misaka-palw-derive-stranger.py --crate-root <tmp>/misaka-palw-derive selftest
+python3 scripts/verify/misaka-palw-derive-stranger.py --crate-root <tmp>/misaka-palw-derive selftest
 
   source_tree_sha256  recomputed 637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee9621d4953a988
   cad/stl/v1          recomputed 83e0f5088cd0f9b7e55e5add8fdfdf94…
@@ -3392,7 +3392,7 @@ exists to fix.**
 ### Two more announcement commands that do not run as written
 
 ```
-python3 scripts/misaka-palw-derive-stranger.py       ->  exit 2, "the following arguments are
+python3 scripts/verify/misaka-palw-derive-stranger.py       ->  exit 2, "the following arguments are
                                                           required: cmd"   (needs `selftest`)
 palw-certify drill --family a16-v5 …                 ->  exit 2, unknown family on 5f
 ```
@@ -3469,7 +3469,7 @@ draft was obtained on one that had. A reader gets `0 agreed` and concludes the c
 Fixed by naming the dependency in the command itself:
 
 ```
-pip install mido numpy-stl pygltflib && python3 scripts/misaka-palw-artifact-thirdparty.py --require …
+pip install mido numpy-stl pygltflib && python3 scripts/verify/misaka-palw-artifact-thirdparty.py --require …
 ```
 
 With them present: **`4 agreed, 0 disagreed, 0 unchecked`, exit 0.** The claim is true; the
@@ -3809,7 +3809,7 @@ hosts the unit loop is complete, and the fleet looks uniform until you ask each 
 
 ```
 == and the nodes NO UNIT OWNS —  above cannot reach these ==
-scripts/relaunch-fleet-wipe.sh: line 135: stop: command not found
+scripts/ops/relaunch-fleet-wipe.sh: line 135: stop: command not found
 ```
 
 I wrote ``say "… `stop` above cannot reach these"`` with markdown in mind. **Inside double quotes
@@ -3857,7 +3857,7 @@ what an operator      "verify is broken" -> wipe anyway -> a survivor re-feeds t
 The card and the script were fixed; **the runbook is what an operator actually follows** and it had
 never been checked against tonight's findings.
 
-**Gap 1 — it did not know the script existed.** `scripts/relaunch-fleet-wipe.sh` appeared **zero**
+**Gap 1 — it did not know the script existed.** `scripts/ops/relaunch-fleet-wipe.sh` appeared **zero**
 times in 609 lines, so an operator following the runbook did steps 1–3 by hand, without any of the
 five findings the script encodes. §4b now names it, lists the four commands, and carries the
 naive-versus-correct table.
@@ -4314,14 +4314,14 @@ is skipped and none is retried "just once more".**
 
 ```bash
 # 0. the guard — the table is the ONLY new input; derive/src is checked first and alone
-TABLE=/path/to/extracted-pins.txt scripts/check-repin-predictions.sh <frozen-sha>
+TABLE=/path/to/extracted-pins.txt scripts/ci/check-repin-predictions.sh <frozen-sha>
 #    -> "all five predictions hold, against a table computed from the frozen tree", or STOP.
 #       A DIFF is not a prompt to re-predict. Name the change that moved it, or stop.
 
 # 1. the four re-pins on 5f, one commit, values pasted FROM THE TABLE (never retyped)
 #    t11 / devnet fingerprints, fp golden, premine, source_tree_sha256 + the eight ids
-#    then: scripts/check-doc-citations.sh docs/history/testnet11-relaunch-5f-genesis-card.md <5f-tip>
-#          scripts/check-derive-freeze.sh    (derive/src must still read 4969f8dc…)
+#    then: scripts/ci/check-doc-citations.sh docs/history/testnet11-relaunch-5f-genesis-card.md <5f-tip>
+#          scripts/ci/check-derive-freeze.sh    (derive/src must still read 4969f8dc…)
 
 # 2. the merge impl -> 5f — RE-MEASURED 2026-09-04 against impl 971b2eff x 5f ee27ef4e:
 #    merge-tree exit 0, ZERO conflicts (the five once pre-ruled were resolved upstream), and the
@@ -4355,10 +4355,10 @@ ssh misaka-ibm 'cd /root/misakas-t11r && git checkout cut-<5f-tip> && nice -n 19
 #    wrong for the cut.
 
 # 5. the fleet, in this order and no other (fleet-wipe-must-stop-every-host-first):
-scripts/relaunch-fleet-wipe.sh census     # enumerate from PROCESSES and ss, not journals
-scripts/relaunch-fleet-wipe.sh stop       # every host, every unit incl. inactive-but-enabled
-scripts/relaunch-fleet-wipe.sh verify     # must be CLEAN before the next line exists
-scripts/relaunch-fleet-wipe.sh wipe       # dnsseeders are part of it; pool slot appdirs too
+scripts/ops/relaunch-fleet-wipe.sh census     # enumerate from PROCESSES and ss, not journals
+scripts/ops/relaunch-fleet-wipe.sh stop       # every host, every unit incl. inactive-but-enabled
+scripts/ops/relaunch-fleet-wipe.sh verify     # must be CLEAN before the next line exists
+scripts/ops/relaunch-fleet-wipe.sh wipe       # dnsseeders are part of it; pool slot appdirs too
 #    a missed host is not a stale peer tonight: it judges fused registrations by a different rule
 
 # 6. producer first (node0 = QWEN36 producer), then the rest; on EVERY host:
@@ -6046,7 +6046,7 @@ and `f1604dd3` (kaspad derives its pay address from the producer key) goes to ma
 |---|---|
 | height H | **1150** — chosen at DAA 894 (02:50Z) at ~93 DAA/h: ~2.7 h of lead over a 15-minute build and a six-seat restart |
 | tree | branch `palw-daa-bits-priced-rows` tip **`cef2ecdb`** (rebased on main `3c41abc2`): 1edfc956 ADR-0083 rule (dormant) · b6edd936 producer holds visible + draw counter · a8729a94 lint · 3341ccfd = f1604dd3 · c6ad999d **arming** (`palw_rc_base_params`: `palw_difficulty_priced_rows = Some(ForkActivation::new(1150))`) · cef2ecdb chunk-rent test fix |
-| t11 fingerprint | `2222e054…` → **`71b35c25…`** (`consensus_params_id`, the fence's Some-only write); re-pinned in `shipped_presets_have_pinned_fingerprints` and NAMED in `scripts/check-repin-predictions.sh` before the paste; genesis `ad30b5cb…` unchanged; fence-normalised identity unchanged → a seat on `14065c93…` peers with the new build until 1150 |
+| t11 fingerprint | `2222e054…` → **`71b35c25…`** (`consensus_params_id`, the fence's Some-only write); re-pinned in `shipped_presets_have_pinned_fingerprints` and NAMED in `scripts/ci/check-repin-predictions.sh` before the paste; genesis `ad30b5cb…` unchanged; fence-normalised identity unchanged → a seat on `14065c93…` peers with the new build until 1150 |
 | build | ibm, worktree `/root/misakas-cef2ecdb` (so no peer's checkout moves), `nice -n 19 cargo build --release -j 4 -p kaspad` — the 5f recipe — staged as `/root/t11/kaspad.cef2ecdb`, never over the live binary |
 | seats to restart before 1150 | ibm node0 + node1; .113 node + seat4 + pool slots 01/02/03 (all on `/root/t11/kaspad`); seat2. ff's Studio node rebuilds from `cef2ecdb` on its own (told the hash and H) |
 | order | node0 first — it is the `--addpeer` for the others and the empirical check that old/new peer with a warning — then node1, seat2, .113 |
@@ -6511,4 +6511,4 @@ Read on the row and both windows as `seedSompi` / `seededBy` / `seedMinSompi` (w
 `buybackSompi` / `retiredUnits` (wire 4; the AMM window's `market()` appends two words, so every
 earlier offset holds). The market's front end is <https://misakaoptions.com>. Both ADRs are drilled
 on a private devnet with the three fences armed from genesis
-(`scripts/misaka-palw-model-market-devnet-e2e.sh`, `--palw-model-devnet=0`).
+(`scripts/drills/misaka-palw-model-market-devnet-e2e.sh`, `--palw-model-devnet=0`).

@@ -3,7 +3,7 @@
 Owner: lane D. Lane A lists the flags below in `docs/design/palw/int-11-drill-flags.md`; lane C's harness (`tools/drills/tir/`,
 `dm.sh`) runs the scenarios. Nothing here is armed on any shipped ruleset: every fence is the drill's own mover
 (`config::drill::*`), dormant elsewhere. t12 identity must not move (params `3db42ea638f3c427…`, schedule `9d6b83fe744b6374…`
-— `scripts/t12-repin.sh --drift-only` reported no drift on the tip this document ships with).
+— `scripts/release/t12-repin.sh --drift-only` reported no drift on the tip this document ships with).
 
 ## 1. The classes
 
@@ -77,7 +77,7 @@ Liar bonds 10..13 and their keyring are lane C's (`$WORK_DIR/liars/`).
 * **CHECKPOINT 4** (`misaka-palw-tir-lower/tests/sd3_three_way.rs`): the SD3 pipeline composed by each of the reference evaluator, the typed
   backend and ref2 from its OWN earlier stages' outputs — 102 stage positions and 2,176 committed nodes over the four evaluation jobs,
   every output and every commit (slot, block, layer, node, values) bit-identical; the reference composition equals `run_pipeline`'s.
-* Consensus-core changes this layer carries (dormant behind `palw_gen_v1`, t12's fingerprint unmoved — `scripts/t12-repin.sh --drift-only`:
+* Consensus-core changes this layer carries (dormant behind `palw_gen_v1`, t12's fingerprint unmoved — `scripts/release/t12-repin.sh --drift-only`:
   no drift): the generative court source reads a post-written `Fixed` state as the committed write of the previous position; a worker's
   openings share one build of the artifact tree and of each stage's step tree; **the pipeline admission prices every close as the builder
   carries it** (`palw_gen_close_price_v1`: the PALW-TIR-38 twin over every stage, the generative court's reading of inputs and of

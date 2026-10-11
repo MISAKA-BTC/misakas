@@ -637,7 +637,7 @@ ADR-0103 integration tests (invariants 2, 3, 5, 8, 9 and 10 at 2M on the held mi
 as the shipped presets' limitations); invariant 4 on the producer's capture; invariant 6 at the
 seat (resume against recompute, a tampered fetched chunk refused by its slice, a shard's slices
 verified alone); invariant 7 at the carrier and the held DA court; invariant 1 in the fold and the
-acceptance arm, and on a live devnet by `HELD=1 scripts/misaka-palw-shard-court-devnet-drill.sh`:
+acceptance arm, and on a live devnet by `HELD=1 scripts/drills/misaka-palw-shard-court-devnet-drill.sh`:
 
 * **Run 1 (2026-09-11 11:58 JST) found §10.3 items 11 and 12.** Three devnet nodes, the floor class
   only, `--palw-held-context-devnet` on every node; node-0 committed canonical claim `aeff845e…`

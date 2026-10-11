@@ -314,7 +314,7 @@ descends. The operator module's producer/signer filter is a discovery preference
 - **Byte identity.** The unarmed fold of every int-12 object is unchanged: the adjudicators' old entry points, `da_admission_v1`
   and `open_da_session_rcore_v1` read an empty table, and `da_release_all_v1` / `retire_claim` / the sweep touch nothing. A test
   folds the same scripted chain with the fence unset, `Some(never())` and armed-but-unused and compares roots and deltas;
-  `scripts/t12-repin.sh --shipping --drift-only` must show no drift.
+  `scripts/release/t12-repin.sh --shipping --drift-only` must show no drift.
 
 ## 9. Tests
 
@@ -377,7 +377,7 @@ armable: `validate_palw_legacy_public_filer_v1` refuses every height.
 mapping, facts read, demand builder, fence dormant / Some-only hashing); `lg14a_legacy_dispute_fold` 7/7 (unarmed byte identity,
 hold of Final / bind / receipt, lapse + burn, reserved budget, default refunds, admission refusals, direct proof over an open court);
 `rcore_m3_da_court`, `rcore_m5_reorg` green; kaspad `palw_fraud_filer` book tests; rpc-core round trips for ops 204–206.
-Before the integration merge, `scripts/t12-repin.sh --shipping --drift-only` showed only drift identical to OPVB's log on the base
+Before the integration merge, `scripts/release/t12-repin.sh --shipping --drift-only` showed only drift identical to OPVB's log on the base
 (schedule ids of every preset; t12 params/identity unchanged) — not re-run after the merge.
 
 **Implemented, not verified**: the real-node E2E (`lg14a_legacy_filer_e2e`, 8 tests) — compiles, FAILS on this head (see next

@@ -320,23 +320,23 @@ gate_coverage() {
 # it installs whatever `stable` was that morning -- the skew that produced six consecutive CI
 # reds read as green in this repository's own record.
 gate_toolchain_pin() {
-    python3 "$REPO_ROOT/scripts/ci-toolchain-pin-check.py"
+    python3 "$REPO_ROOT/scripts/ci/ci-toolchain-pin-check.py"
 }
 
 # The gate that keeps THIS FILE honest: a command here that CI does not run is a lie, and a
 # command CI runs that is not here is a gate nobody can run before pushing. Checked by string.
 gate_workflow_parity() {
-    python3 "$REPO_ROOT/scripts/ci-toolchain-pin-check.py" --parity
+    python3 "$REPO_ROOT/scripts/ci/ci-toolchain-pin-check.py" --parity
 }
 
 ARTIFACT_DIR="$LOG_DIR/artifacts"
 
 gate_artifact_conformance() {
-    python3 "$REPO_ROOT/scripts/misaka-palw-artifact-conformance.py" selftest
+    python3 "$REPO_ROOT/scripts/verify/misaka-palw-artifact-conformance.py" selftest
 }
 
 gate_artifact_stranger() {
-    python3 "$REPO_ROOT/scripts/misaka-palw-derive-stranger.py" \
+    python3 "$REPO_ROOT/scripts/verify/misaka-palw-derive-stranger.py" \
         --crate-root "$REPO_ROOT/misaka-palw-derive" selftest
 }
 
@@ -356,12 +356,12 @@ gate_artifact_roundtrip() {
     rm -rf "$ARTIFACT_DIR"
     mkdir -p "$ARTIFACT_DIR" || return 1
     local rc=0
-    python3 "$REPO_ROOT/scripts/misaka-palw-derive-stranger.py" \
+    python3 "$REPO_ROOT/scripts/verify/misaka-palw-derive-stranger.py" \
         --crate-root "$REPO_ROOT/misaka-palw-derive" derive \
         --transformer music/smf/v1 \
         --answer "$REPO_ROOT/misaka-palw-derive/corpus/music/02-two-track-chords.json" \
         --out "$ARTIFACT_DIR" >/dev/null || rc=1
-    python3 "$REPO_ROOT/scripts/misaka-palw-derive-stranger.py" \
+    python3 "$REPO_ROOT/scripts/verify/misaka-palw-derive-stranger.py" \
         --crate-root "$REPO_ROOT/misaka-palw-derive" derive \
         --transformer cad/stl/v1 \
         --answer "$REPO_ROOT/misaka-palw-derive/corpus/cad/05-boolean-box-with-a-notch.json" \
@@ -376,7 +376,7 @@ gate_artifact_roundtrip() {
     echo "covered kinds: $mids MIDI, $stls STL, 0 GLB (the stranger does not implement scene/glb/v1)"
     [ "$mids" -ge 1 ] && [ "$stls" -ge 1 ] || { echo "expected at least one .mid and one .stl"; return 1; }
 
-    python3 "$REPO_ROOT/scripts/misaka-palw-artifact-conformance.py" check \
+    python3 "$REPO_ROOT/scripts/verify/misaka-palw-artifact-conformance.py" check \
         "$ARTIFACT_DIR"/*.mid "$ARTIFACT_DIR"/*.stl
 }
 
@@ -426,7 +426,7 @@ print("libraries: mido", md.version("mido"), "/ numpy-stl", md.version("numpy-st
         echo "SKIPPED: the foreign parsers are not importable; the check did NOT run"
         return 0
     }
-    "$py" "$REPO_ROOT/scripts/misaka-palw-artifact-thirdparty.py" --require "$ARTIFACT_DIR"
+    "$py" "$REPO_ROOT/scripts/verify/misaka-palw-artifact-thirdparty.py" --require "$ARTIFACT_DIR"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -435,7 +435,7 @@ print("libraries: mido", md.version("mido"), "/ numpy-stl", md.version("numpy-st
 # ---------------------------------------------------------------------------------------------
 gate_fmt()           { cargo fmt --all -- --check; }
 gate_clippy()        { cargo clippy --tests --benches --examples -- -D warnings; }
-gate_pq_guard()      { bash scripts/pq-ci-guard.sh; }
+gate_pq_guard()      { bash scripts/ci/pq-ci-guard.sh; }
 gate_check()         { cargo check --tests --benches; }
 gate_nextest()       { cargo nextest run; }
 # **No `--lib`, deliberately, and do not "optimise" it back in.**

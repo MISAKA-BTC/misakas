@@ -107,7 +107,7 @@ registry's lifecycle, or not seated (possession floor with no executor excluded,
 are refused until `seat_count` operators besides the executor prove it and the executor's operator never counts; R1 claims stay admissible through the
 grace and R1 leaves force when it ends; an R1-only seat is never drawn onto an R2 claim (and the unkeyed draw is what it was); a version is
 activated only once possessed; a head moves only to an Active seated class. `palw_root_activation_v1`: the attestation's counting rule and the stage
-machine. Below the fence every existing test is unchanged; `scripts/t12-repin.sh --drift-only` shows no drift (the fence stays `None`).
+machine. Below the fence every existing test is unchanged; `scripts/release/t12-repin.sh --drift-only` shows no drift (the fence stays `None`).
 
 ## 6. What this does not do
 

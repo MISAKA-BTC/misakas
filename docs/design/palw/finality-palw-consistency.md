@@ -443,7 +443,7 @@ work alone.
 
 ## 6. Real multi-node runs (for the Lead to schedule)
 
-`scripts/finx-devnet-partition.sh`, written for H1's harness (`tests/hf-onboarding` on `onboard/h1-hf-closed-loop`: its node layout,
+`scripts/drills/finx-devnet-partition.sh`, written for H1's harness (`tests/hf-onboarding` on `onboard/h1-hf-closed-loop`: its node layout,
 the `ISOLATED` mark, `start_node`/`stop_node`, `rpc`). It launches nothing on its own; run against a devnet `devnet.sh up` already
 brought up.
 

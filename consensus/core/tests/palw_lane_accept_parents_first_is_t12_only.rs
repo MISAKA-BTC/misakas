@@ -35,7 +35,7 @@ use kaspa_consensus_core::config::params::{
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 
 /// testnet-12 as THIS build ships it — the post-launch release, every fence of
-/// `PALW_T12_POST_LAUNCH_FENCES_V1` (this one among them) at DAA 750, re-pinned by `scripts/t12-repin.sh`
+/// `PALW_T12_POST_LAUNCH_FENCES_V1` (this one among them) at DAA 750, re-pinned by `scripts/release/t12-repin.sh`
 /// with it (the launch release was `b8564b88…` / `5de80e64…` / `93da24cc…`, which
 /// `palw_t12_launch_params_v1()` still hashes to): params, identity, schedule.
 // re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2e567642…, 5f5df817…)

@@ -189,7 +189,7 @@ fn the_fence_moves_testnet12s_fingerprint_and_nothing_else_did() {
     println!("testnet-12 without the fence: params {} identity {} schedule {}", before.0, before.1, before.2);
     println!("testnet-12 with the fence:    params {} identity {} schedule {}", ids(&t12).0, ids(&t12).1, ids(&t12).2);
     // Both twins are computed and printed before either pin is asserted, so one run shows both values
-    // (`scripts/t12-repin.sh` reads these two lines).
+    // (`scripts/release/t12-repin.sh` reads these two lines).
     let mut without_both = without.clone();
     without_both.palw_class_verify_deadline = None;
     without_both.sync_palw_class_verify_deadline();

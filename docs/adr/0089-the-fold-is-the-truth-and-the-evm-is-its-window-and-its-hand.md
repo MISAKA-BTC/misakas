@@ -526,7 +526,7 @@ counter is resynchronised from the scan at every tx. (4) The escrow moves inside
 so a revert after the queue (out of gas in the same frame is impossible, but the shape is kept)
 unwinds both the value and the log together.
 
-**The devnet drill (§8 item 6), run 2026-09-05.** `scripts/misaka-palw-model-market-devnet-e2e.sh`:
+**The devnet drill (§8 item 6), run 2026-09-05.** `scripts/drills/misaka-palw-model-market-devnet-e2e.sh`:
 six fixture-PoW producers under the devnet's public-seed bonds, the three fences armed from genesis
 (`--palw-model-devnet=0`), the floor-only ruleset (`--palw-devnet-floor-only`) and the bridge's
 DNS-finality gate waived (`--evm-bridge-devnet-unpaused`) — three private-devnet-only `kaspad`

@@ -127,7 +127,7 @@ network. testnet-11 is one.
 
 ## 6. The blocker: testnet-11 has no `bits`-priced producer
 
-Measured from the chain with `scripts/misaka-t11-lane-walk.py`, which walks the selected parent back
+Measured from the chain with `scripts/drills/misaka-t11-lane-walk.py`, which walks the selected parent back
 from the sink over the node's JSON wRPC and counts `powAlgoId`:
 
 | window | algo 6 (PALW attempt) | algo 8 (heartbeat) | algo 3 (hash anchor) |

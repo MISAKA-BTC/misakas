@@ -339,7 +339,7 @@ enter the root only where a move has been folded, and the carriage grows a tail 
 field. (3) "The market opens when the class is registered" became "on its first buy": the same
 observable market at a fraction of the fold, and no edge at activation for genesis classes.
 (4) The mempool's dust rule treats every unspendable output as dust; the sink needs the one
-exception, matched on its exact script. (5, learnt on 2026-09-05 when `scripts/misaka-palw-model-market-devnet-e2e.sh`
+exception, matched on its exact script. (5, learnt on 2026-09-05 when `scripts/drills/misaka-palw-model-market-devnet-e2e.sh`
 first ran a carrier buy through a live mempool) The dust exception was never reached: both the
 mempool and consensus refuse a non-PQ output *class* first, and an `OP_RETURN` sink is one. The
 carve-out now sits in both places, gated on the network declaring the market, so a dormant network

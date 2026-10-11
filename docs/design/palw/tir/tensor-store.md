@@ -2,7 +2,7 @@
 
 > **Status: DESIGN — nothing here is implemented** (lane TS, branch `tir/tensor-store-design` off `rcore/int-12` @ `4d5f97d58`,
 > 2026-10-03). The implementation is deferred until after the DAA 5,300 deployment, as int-12.x node releases. **Node software
-> only: no object, rule, fence, parameter, class id or fingerprint moves**, and `scripts/t12-repin.sh --drift-only` must print no
+> only: no object, rule, fence, parameter, class id or fingerprint moves**, and `scripts/release/t12-repin.sh --drift-only` must print no
 > row at any step. The benchmark that decides each step is fixed before any code, in [`tensor-store-bench.md`](tensor-store-bench.md).
 > Builds on ADR-0112 (a class's weights are read within a stated budget), [`runtime-residency.md`](runtime-residency.md) (the IR
 > tiers), ADR-0117 (a draw is one forward), RFC-0006 (cells, shard-only fetch), [`gpu-integer-backend.md`](gpu-integer-backend.md)

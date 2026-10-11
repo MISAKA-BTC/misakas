@@ -62,7 +62,7 @@ standing proof expires by itself (ADR-0135's readiness age) and the class counts
 the proof; the budget is the node's. Nothing about RAM enters consensus.
 
 **D5 — the node reports what it holds.** After loading its artifacts a node logs PSS split into anonymous and
-file-backed pages and what is swapped (`/proc/self/smaps_rollup`); `scripts/palw-memory-census.sh` prints the
+file-backed pages and what is swapped (`/proc/self/smaps_rollup`); `scripts/ops/palw-memory-census.sh` prints the
 same split for every kaspad on a host, with `MemAvailable`. RSS alone misleads once files are mapped: a
 mapped page appears in every sharer's RSS and in none of their anonymous memory. The reading that matters is
 `Pss_Anon` per process and `Pss_File` summed over the host.

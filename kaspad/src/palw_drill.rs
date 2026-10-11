@@ -5,7 +5,7 @@
 //! (`kaspa_consensus_core::config::drill`); this module is the node half: which flags a salted node
 //! must and must not carry, the datadir marker that keeps a drill and a public node out of each
 //! other's app directory, and the keyring export the drill script reads
-//! (`scripts/misaka-palw-t12-rcore-drill.sh`).
+//! (`scripts/drills/misaka-palw-t12-rcore-drill.sh`).
 //!
 //! **Everything here is refused at start-up, before a peer is dialed or a block is signed**, because
 //! every failure it prevents is one a running drill cannot undo:

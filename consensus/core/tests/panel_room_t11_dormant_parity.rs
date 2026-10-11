@@ -324,7 +324,7 @@ const PARENT_DUMP_LINES: usize = 1_953;
 /// its BLAKE2b-256: everything testnet-11 folds, reads and refuses here, and none of the roots. A v22
 /// layout change (every re-pin of [`PARENT_DUMP_BLAKE2B_256`] above) moves only the roots, so it leaves
 /// this digest, the length and the line count where they are; a change to what testnet-11 DOES moves
-/// this one. It is never re-pinned for a layout change — `scripts/t12-repin.sh` re-pins the raw digest
+/// this one. It is never re-pinned for a layout change — `scripts/release/t12-repin.sh` re-pins the raw digest
 /// only when this one held (and refuses otherwise). Taken at `rcore/int-3` 8270cf03, where the raw
 /// digest above is current.
 const PARENT_DUMP_ROOTS_MASKED_BLAKE2B_256: &str = "4b02852c31942b9572ec029ada54f1a86f1278382b0de4f4d9bebb35c503665d";

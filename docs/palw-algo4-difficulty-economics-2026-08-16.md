@@ -4,7 +4,7 @@
 
 公開テストネット Track A ゲート3。方法は二段構え:
 
-1. **DAAの正確なレプリカ** (`scripts/misaka-palw-daa-sim.py`) を書き、**live実測の
+1. **DAAの正確なレプリカ** (`scripts/sim/misaka-palw-daa-sim.py`) を書き、**live実測の
    (timestamp, bits) を食わせて全ブロック bit-exact 一致**することを先に証明する
    — レプリカが信頼できて初めて、長時間挙動を simulation で外挿できる。
 2. **隔離ローカルdevnet** (実推論、`--nodnsseed` + localhost bind + `--disable-upnp`、
@@ -99,7 +99,7 @@ miner 実収は launch 直後 **2756.28 MSK/block** — 検証ノード誘致の
 ## 再現
 
 ```bash
-python3 scripts/misaka-palw-daa-sim.py            # generative trajectories
-python3 scripts/misaka-palw-daa-sim.py replay <miner.log...>   # bit-exact verification
-python3 scripts/misaka-palw-gate3-analyze.py <workdir>         # live-run analysis
+python3 scripts/sim/misaka-palw-daa-sim.py            # generative trajectories
+python3 scripts/sim/misaka-palw-daa-sim.py replay <miner.log...>   # bit-exact verification
+python3 scripts/verify/misaka-palw-gate3-analyze.py <workdir>         # live-run analysis
 ```

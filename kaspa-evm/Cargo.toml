@@ -12,7 +12,7 @@ repository.workspace = true
 # NOTE: this crate pulls revm (and therefore an EVM secp256k1/k256 ecrecover
 # stack). It is an OPTIONAL dependency of `kaspa-consensus`, enabled only by the
 # non-default `evm` feature, so the default node build never links it — the
-# secp-free guarantee enforced by scripts/pq-ci-guard.sh (`cargo tree -e normal`)
+# secp-free guarantee enforced by scripts/ci/pq-ci-guard.sh (`cargo tree -e normal`)
 # is unaffected. See ADR-0020 §"PQ-only reconciliation".
 
 [dependencies]

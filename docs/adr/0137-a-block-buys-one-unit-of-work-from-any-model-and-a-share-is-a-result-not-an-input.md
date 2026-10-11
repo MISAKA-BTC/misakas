@@ -13,7 +13,7 @@
 
 
 **Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`, design with a
-reproducible simulation (`scripts/palw-share-sim.py`); **the shadow (§17 step 1) built the same
+reproducible simulation (`scripts/sim/palw-share-sim.py`); **the shadow (§17 step 1) built the same
 day** — `palw_work_target_v1.rs`, the state's `work_target_shadow` and `final_work` carried outside
 the root, op 186's work-target block and per-class `CCU / W`, ticket, room and finalized-work
 shares (§22); nothing armed, no fingerprint moves. The interim commit `804af11d` (a class the
@@ -123,7 +123,7 @@ That fix is correct *within* the share→target design; §3 is why the design is
 
 ## 3. The loops and traps in share → target
 
-Simulated in `scripts/palw-share-sim.py` (§20) with the shipped arithmetic: the profile globals,
+Simulated in `scripts/sim/palw-share-sim.py` (§20) with the shipped arithmetic: the profile globals,
 the lifecycle machine, the class DAA with integer block counts, the competing-census budgets with
 ADR-0123's release, the floor as its own class, a network-wide panel that replays every claim at
 the reference rate and voids what waits past its window. Supply is stated relative to what the
@@ -519,9 +519,9 @@ models holds a hundred rows and one `W`.
 
 ## 20. Simulation
 
-`scripts/palw-share-sim.py` — a fluid model with integer block semantics where the class DAA reads
+`scripts/sim/palw-share-sim.py` — a fluid model with integer block semantics where the class DAA reads
 counts; the shipped arithmetic for A (§1), the interim seating and Upgrade C for A′, D as §7, E and
-B as §6. `python3 scripts/palw-share-sim.py --supply-x 1` prints the table below (testnet-11's
+B as §6. `python3 scripts/sim/palw-share-sim.py --supply-x 1` prints the table below (testnet-11's
 escrow, eight ready seats, the profile globals, `rate_max = 9 MSK / G`); `--supply-x 10` the
 capacity-bound regime; `--no-hold` the waste without the producer's pre-check. Columns: MSK per
 G MAC-eq to the producer, the spread of that across models, block and Final-work shares, claims a

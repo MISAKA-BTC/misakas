@@ -21,4 +21,4 @@ listed one), `palw_fp_constraint_v2` (the second constraint form: bigger bounds,
 
 Token tables: a seat registers `<artifact>.palwtokens` beside each held class artifact at start (the file `palw-a16-fp-worker --emit-token-table` writes); `--palw-token-table` still adds or overrides. A table is selected by the root a constrained job commits, so a sidecar with another root is never used for it.
 
-Drill: `scripts/misaka-palw-rfc1-drill.sh dry|run` (never takes a held `DRILL.lock`). Claim producer: `misaka-palw-rfc1-drill-claim` + `scripts/misaka-palw-rfc1-drill-claims.sh constraint|constraint2|prefix|inherit` (floor class; the adapter listing has none).
+Drill: `scripts/drills/misaka-palw-rfc1-drill.sh dry|run` (never takes a held `DRILL.lock`). Claim producer: `misaka-palw-rfc1-drill-claim` + `scripts/drills/misaka-palw-rfc1-drill-claims.sh constraint|constraint2|prefix|inherit` (floor class; the adapter listing has none).

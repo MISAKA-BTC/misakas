@@ -505,9 +505,9 @@ a `response_format: json_object` request returned `{"capital":"Paris"}` in 7 s w
 export MISAKA_PALW_NETWORK_ID=testnet-11
 export MISAKA_PALW_TOKENIZER=/abs/path/to/qwen25-tokenizer.json
 MISAKA_ROOT=$(git rev-parse --show-toplevel)
-python3 scripts/misaka-palw-fp-v3-worker-smoke.py "$MISAKA_ROOT"/target/release/palw-a16-fp-worker "$MISAKA_PALW_GGUF"
-python3 scripts/misaka-palw-fp-gateway-smoke.py "$MISAKA_ROOT"/target/release/misaka-palw-gateway "$MISAKA_ROOT"/target/release/palw-a16-fp-worker /abs/path/to/qwen25-a16-graph-v5.palwart
-python3 scripts/misaka-palw-fp-rail-smoke.py "$MISAKA_ROOT"/target/release/misaka-palw-gateway "$MISAKA_ROOT"/target/release/misaka-palw-fp-rail "$MISAKA_ROOT"/target/release/palw-a16-fp-worker "$MISAKA_PALW_GGUF"
+python3 scripts/drills/misaka-palw-fp-v3-worker-smoke.py "$MISAKA_ROOT"/target/release/palw-a16-fp-worker "$MISAKA_PALW_GGUF"
+python3 scripts/drills/misaka-palw-fp-gateway-smoke.py "$MISAKA_ROOT"/target/release/misaka-palw-gateway "$MISAKA_ROOT"/target/release/palw-a16-fp-worker /abs/path/to/qwen25-a16-graph-v5.palwart
+python3 scripts/drills/misaka-palw-fp-rail-smoke.py "$MISAKA_ROOT"/target/release/misaka-palw-gateway "$MISAKA_ROOT"/target/release/misaka-palw-fp-rail "$MISAKA_ROOT"/target/release/palw-a16-fp-worker "$MISAKA_PALW_GGUF"
 ```
 
 The worker smoke pins the property everything else stands on: the Text arm and the TokenIds

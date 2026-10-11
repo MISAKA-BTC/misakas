@@ -37,7 +37,7 @@ PALW_T12_CAPACITY_NETWORK_ROOM_V1,               // palw_capacity_network_room  
   testnet-12 as shipped arms no capacity entry. Flip it, or delete it.
 * These `*_is_t12_only.rs` files each pin `T12_RELEASE` and assert their fence is `None` on testnet-12
   as shipped: `weight_cap`, `escrow_at_licence`, `aggregate_liability`, `batch_licence`, `verify_room`,
-  `stage2` (F-Q + F-S) and `network_room`. The triples are registered in `scripts/t12_repin.py` (CAP*),
+  `stage2` (F-Q + F-S) and `network_room`. The triples are registered in `scripts/release/t12_repin.py` (CAP*),
   so `t12-repin.sh` handles the pins. The "`None` on testnet-12" asserts have to be edited by hand.
 * **Fixtures that treat `palw_t12_shipped_params()` as the unarmed baseline.** Examples are
   `capacity_stage1_common.rs::params_for(class, false)`, the stage-1 state diff's shipped twin, and the

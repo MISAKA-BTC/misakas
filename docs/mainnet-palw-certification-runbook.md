@@ -44,7 +44,7 @@ script:
 
 ```bash
 cargo build --release -p kaspad -p misaka-cli -p misaka-palw-base0 --bins
-NODES=3 scripts/misaka-palw-certify-devnet-e2e.sh
+NODES=3 scripts/drills/misaka-palw-certify-devnet-e2e.sh
 ```
 
 It starts N validators from the one build in one window (each producing under bond n with the

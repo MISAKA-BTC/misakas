@@ -12,7 +12,7 @@ its name. The defect this closes is §1.3 of the ADR: four hand-kept tables in t
 what to install, one of them named a binary this tree deleted on 2026-09-02, and nothing in
 either repository's CI knew.
 
-Written by `scripts/misaka-components-manifest.py` (the node half), validated by the same script
+Written by `scripts/release/misaka-components-manifest.py` (the node half), validated by the same script
 in `--validate` and verified on disk by `--check`. The script is standard-library Python 3, so it
 runs unchanged on the three release runners and on an operator's machine.
 
@@ -85,7 +85,7 @@ reads.
   (offline, the pinned copy) and asserts that every `engine`, `worker`, `gateway` and `node` id
   the Studio can spawn is a row in it (ADR-0096 invariant 10). A binary this tree stops building
   fails the Studio's build, not a person's evening.
-* Anyone, by hand: `scripts/misaka-components-manifest.py --check components-<triple>.json
+* Anyone, by hand: `scripts/release/misaka-components-manifest.py --check components-<triple>.json
   <dir>` over an extracted release verifies every row's file against its digest and exits
   non-zero naming the first mismatch; rows of platform `any` whose file is not in the directory
   are listed as skipped, never counted as verified, and a run that verified nothing fails.
@@ -263,4 +263,4 @@ install.
 
 Related: [ADR-0096](adr/0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md)
 (Decision 10, invariants 10–11), [docs/model-requests.md](model-requests.md) (how a new
-artifact row comes to exist), `scripts/misaka-components-manifest.py --self-test`.
+artifact row comes to exist), `scripts/release/misaka-components-manifest.py --self-test`.

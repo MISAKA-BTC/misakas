@@ -52,7 +52,7 @@ Upstream rusty-kaspa components keep their places (`consensus/`, `crypto/`, `rpc
 | `kaspa-evm/`, `evm-indexer/`, `bridge/`, `contracts/` | EVM lane |
 | `misaka-cli/`, `misaminer/`, `misaka-dnsseeder/`, `misaka-endpoints/` | MISAKA applications |
 | `tools/drills/` | Drill harnesses (combined, gen, improve, tir, vertex) and `tools/` utilities |
-| `scripts/` | CI gates, verification, operations and release scripts |
+| [`scripts/`](scripts/README.md) | `ci-gates.sh` plus `ci/`, `release/`, `verify/`, `drills/`, `ops/`, `sim/` |
 | `docs/` | Documentation |
 
 ## Upstream and license

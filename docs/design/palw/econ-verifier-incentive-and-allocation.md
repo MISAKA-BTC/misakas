@@ -22,7 +22,7 @@ record of that milestone.
 | ASSUMED | an illustrative input with no measurement yet; MEAS or the user replaces it |
 | PROPOSED | a POLICY value ECON proposes for the user to fix |
 
-**Executable model:** `python3 -I scripts/misaka-palw-econ-verifier-model.py`. It covers §1–§8 and exits 1 if any of its checks
+**Executable model:** `python3 -I scripts/sim/misaka-palw-econ-verifier-model.py`. It covers §1–§8 and exits 1 if any of its checks
 fails.
 
 **Ledger PoCs:** `misaka-palw-kernel/tests/econ_bounty.rs` and `econ_seal_veto.rs`. These test only claims about consensus code.
@@ -1141,7 +1141,7 @@ dominate an affordable bribe of 20. `G` must include the coalition's complete af
 use net collectible receipts on every relevant path; expectation alone does not force truthful behaviour. First acquisition of
 5,000,000,000 sompi cannot be recovered by a one-slot acquisition allowance of 50,000,000 if future demand disappears.
 
-Reproduce `python3 -I scripts/misaka-palw-econ-verifier-model.py --section 15`. Exact Fraction arithmetic exhausts 48 one-claim
+Reproduce `python3 -I scripts/sim/misaka-palw-econ-verifier-model.py --section 15`. Exact Fraction arithmetic exhausts 48 one-claim
 distributions (`q` 0/0.5/1, four stake shares, `m` 1–4): 16 have zero demand; 28 of the 32 positive-volume cases allow a realised
 loss under an expected break-even fee. It checks conditional funding on every possible draw, startup abandonment, zero joint paid
 slots, collectible/rounded bounty bounds, missing inputs, one-sompi deficits and u64 overflow. These are financial model controls;
@@ -1312,6 +1312,6 @@ Every reward, consensus-weight and Panel=0 fence stays refused:
 ## 7. Reproduce
 
 ```text
-python3 -I scripts/misaka-palw-econ-verifier-model.py
+python3 -I scripts/sim/misaka-palw-econ-verifier-model.py
 CARGO_INCREMENTAL=0 ~/Downloads/MISAKA-wt-b/buildslot.sh cargo test --offline -p misaka-palw-kernel --test econ_bounty --test econ_seal_veto -- --nocapture
 ```

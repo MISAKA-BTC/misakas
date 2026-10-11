@@ -1,6 +1,6 @@
 //! **The A2U chains, replayed through the live testnet-12 build itself** (int-12, `rcore/int-12` @ `0b1c11b87`).
 //!
-//! NOT compiled in a newer tree (the `.int12` suffix keeps cargo away): `scripts/a2u-int12-replay.sh` places it in a source tree of
+//! NOT compiled in a newer tree (the `.int12` suffix keeps cargo away): `scripts/verify/a2u-int12-replay.sh` places it in a source tree of
 //! `0b1c11b87` as `consensus/src/pipeline/virtual_processor/tests/a2u_int12_replay.rs`, declares the module, and runs it there
 //! against the files the newer build's pin test wrote (`t12_a2u_new_kinds_uniform.rs`, `A2U_INT12_REPLAY_OUT=<dir>`).
 //!

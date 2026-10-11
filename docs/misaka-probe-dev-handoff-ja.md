@@ -5,7 +5,7 @@
 現時点では、mainのRust CLIへ入れる前の確認用として、Bashスクリプトを用意しています。
 
 ```text
-scripts/misaka-probe.sh
+scripts/ops/misaka-probe.sh
 ```
 
 ## 目的
@@ -37,7 +37,7 @@ VPS上の `/opt/misakas` にこのrepoがある前提です。
 
 ```bash
 cd /opt/misakas
-install -o root -g root -m 0755 scripts/misaka-probe.sh /usr/local/bin/misaka-probe
+install -o root -g root -m 0755 scripts/ops/misaka-probe.sh /usr/local/bin/misaka-probe
 ```
 
 確認します。

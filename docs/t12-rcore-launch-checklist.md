@@ -82,7 +82,7 @@ awk '/test result/ {for(i=1;i<=NF;i++){if($i=="passed;")p+=$(i-1); if($i=="faile
 ### item 3 — short drill D-1〜D-10 → **公開後に移動**（運用者決定 2026-09-24、§9.3 Q12 (b)）
 
 公開の gate ではない。公開後に `contrib/t12-drill-kit`（P2-12 の salt、出荷した binary、公開 node の無い 4 台以上のホスト）で行う。
-D-1〜D-10 の中身は `scripts/misaka-palw-t12-rcore-drill.sh steps`。drill 用ホストの用意は運用者（PLAN R4）。
+D-1〜D-10 の中身は `scripts/drills/misaka-palw-t12-rcore-drill.sh steps`。drill 用ホストの用意は運用者（PLAN R4）。
 
 ### item 4 — T41 の golden は出荷 commit のもの
 
@@ -366,7 +366,7 @@ release-prep の読みで、履歴として残す。判定は出荷 commit で�
 | 9-2 | `AnyValid` fence の H-1（S3 の layer-sample は `verify_material` の前に Valid を署名しない）と H-2（FP S1 resume は `palw_fp_job_pin_of_context_v1(&ctx) == duty.fp_job_pin_v1()`） | **満**。H-1: `1e20edd50` は祖先、test `seat_s_tests::c1_s3_never_attests_past_the_fence_without_verify_material`（:16583）。H-2: `kaspad/src/palw_panel.rs:13158` の `palw_fp_job_pin_of_context_v1(&ctx) != pin` → `None`（source test :16972）、`d675423d` は祖先。T18p-M は base0 `seat_material_duty.rs`。※ ADR §8.3 item 9 の「H-2 is pending」と IA-14 の同文は古い | あり | 両 test と T18p-M の PASS。入っていなければ identity site は `Whole` |
 | 9-3 | producer の V2 DA responder が `palw_rcore_plus` を武装する全 build にある（honest producer が告発に答え、課金されない processor e2e） | **満**。kaspad は `session.palw_disclosure_duties_v1(vec![bond_key])`（:7607）で自分の claim の session も読む（`palw_da_duties_v2` は court 用に残る）。processor e2e: `t46::p2_7_an_honest_producer_answers_two_accusers_with_the_nodes_builder_and_is_not_charged`（:4428）、`p2_7_a_held_session_on_an_attempt_claim_is_answered_from_its_capture`。※ ADR の「the responder's end-to-end test is to be written」は古い | あり | 両 test の PASS。運用上の飢え（PLAN §2.5 R-2b）は §7 |
 | 9-4 | `PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1` は seat の DA 自動応答（P2-7）と同じ commit でだけ `true` | **満**。`true`（`consensus/core/src/palw_da_rcore_v1.rs:67`）、P2-7（`b34df2ff`・`fc5e30d8`）は祖先。covering signer の答え: `t46::t32_t54b_…`、core `rcore_m3::t32_c7_…`（`landed` の両側） | あり | flag の値と上の test |
-| 9-5 | `misaka-palw-derive` と stranger script は network の attempt rule（t12 は `CoreV1`）で `output_root` を再計算。FP worker も | **満**。`a4682a8d`・`d675423d` は祖先。`misaka-palw-derive/tests/output_root_rules.rs`（4 本）、`scripts/misaka-palw-derive-stranger.py` | あり | `cargo test --locked -p misaka-palw-derive --test output_root_rules`、`python3 scripts/misaka-palw-derive-stranger.py selftest` |
+| 9-5 | `misaka-palw-derive` と stranger script は network の attempt rule（t12 は `CoreV1`）で `output_root` を再計算。FP worker も | **満**。`a4682a8d`・`d675423d` は祖先。`misaka-palw-derive/tests/output_root_rules.rs`（4 本）、`scripts/verify/misaka-palw-derive-stranger.py` | あり | `cargo test --locked -p misaka-palw-derive --test output_root_rules`、`python3 scripts/verify/misaka-palw-derive-stranger.py selftest` |
 | 9-6 | `PALW_RCORE_VESTING_ROWS_LANDED_V1 = true` と S-4 の funnel（kaspad は false なら起動しない） | **満**。`true`（`consensus/core/src/palw_state_v2.rs:2961`）、S-4 の merge `68f0d672` は祖先、kaspad `palw_rcore_build_can_run_v1`・test `n1_rcore_plus_needs_the_vesting_rows_at_startup`（`kaspad/src/daemon.rs:2216`） | あり | flag の値、`rcore_s4_conviction_funnel.rs` と n1 の PASS |
 | 9-7 | 4-quater の consensus 半分と P-1（`palw_class_verify_deadline`、pruning depth ≈ 74,920 DAA、D_cap 16,000）が genesis params にある — 2M は規則で閉じる | **満**（a0af3c92 から変わった）。merge `a66509f9`（`a4323997`）。`Params::palw_class_verify_deadline`、`params.rs` の `T12_PRUNING_DEPTH = 74_920`（T-D7 の test）、2M の拒否は `core/tests/t12_class_verify_deadline.rs::td2_the_2m_row_is_refused_at_launch_attempt_and_free_prompt`。t12 の params と fingerprint は a0af3c92 から動いている（§3 の値は古い） | 無い | 出荷 commit の t12 params、`probe-identity-local.sh` の fingerprint、T-D2 の PASS |
 | 9-8 | A-held と shard court（`feat/t12-aheld`、8be0f661 の上）が監査の review 後に merge、B の routing・object 57 の自動応答・N4 | 8270cf03 では **未**。**int-3 `f7350af91`（15:01）で merge 済み**: `2f92228f`（`1ee0e08d4` を含む）と `8be0f661` は祖先（本 lane はこれを merge した）。残りは review の結論の添付と item 7 の test の PASS | 無い | 監査 review の結論、merge commit、item 7 の test |
@@ -379,7 +379,7 @@ gate 全体は未達**: item 1（T57 の規則欠と一部の cell）、2、4、
 
 ## 3. testnet-12 の identity（§5 の tool が書く）
 
-**出荷 commit（42452229 ＋ 再 pin）の値** — `scripts/t12-repin.sh` が build から計算した値（`consensus/core/tests/t12_repin_values.rs` の
+**出荷 commit（42452229 ＋ 再 pin）の値** — `scripts/release/t12-repin.sh` が build から計算した値（`consensus/core/tests/t12_repin_values.rs` の
 `REPIN` 行。node が起動ログに出すのと同じ関数: fingerprint は `Params::from(testnet-12).consensus_params_id()`、genesis は premine から
 再計算した utxo commitment・merkle root・header hash）。下の block は §5 の `--apply` が書き換え（`# re-pin` 行が理由）、太字の表示も
 tool が書く（`--apply` は計算した commit に、出荷 commit での `--apply --shipping` は「出荷 commit（<commit> ＋ 再 pin）の値」に）。
@@ -436,7 +436,7 @@ drill salt `5353…53`（例示用。実際の drill の salt ではない）の
 ## 5. 再 pin の手順（出荷 commit で一度だけ。step 6）
 
 pin を動かす前に、何が動いたのかを 1 つずつ言えること（「両側を残す機械的 merge」や「default hash は全てと一致する」の事故則）。
-値は **計算して貼る**（手で打たない）。その作業は `scripts/t12-repin.sh`（本体と pin の registry は `scripts/t12_repin.py`）が行う。
+値は **計算して貼る**（手で打たない）。その作業は `scripts/release/t12-repin.sh`（本体と pin の registry は `scripts/release/t12_repin.py`）が行う。
 計算側はこの tree の build だけ: `consensus/core/tests/t12_repin_values.rs` の `REPIN` 行（全 preset の params / identity / schedule id、
 全 network の genesis を premine から再計算した hash・merkle root・utxo commitment、t12 の premine / community txid、class id と C7 の導出、
 kit の値、例示 drill salt の drill genesis）、pin test が assert の前に print する値（「その fence だけが t12 を動かした」twin、readiness
@@ -520,7 +520,7 @@ manifest を JSON として読んだ値（`class_manifest_const_v1` の転記 te
    の `PANEL_BOND_TX`、この文書の §3。
 11. 再 pin の commit の後に step 8 の battery を 2 回（上の 2 本の test も含まれる: `-p kaspa-consensus-core --tests` と `-p kaspad`）。
 
-1. `scripts/t12-repin.sh --shipping` — dry run。consensus-core の pin test 群を build して走らせ、全 pin を `pinned vs computed` の表にする
+1. `scripts/release/t12-repin.sh --shipping` — dry run。consensus-core の pin test 群を build して走らせ、全 pin を `pinned vs computed` の表にする
    （初回は consensus-core の test build、Mac Studio で約 12 分）。`--shipping` は「これが出荷 tree」の宣言で、merge が持ち込む pin file
    （`palw_activation_pool_is_t12_only.rs`・`palw_readiness_horizon_is_t12_only.rs`）と A-held の gate test が無ければ `NOT FOUND` / `CHECK`
    にする（`--shipping` 無しでは merge 前の `absent` として数えない。ただし HEAD の履歴に一度あった pin file が無いのは常に `NOT FOUND`）。
@@ -531,14 +531,14 @@ manifest を JSON として読んだ値（`class_manifest_const_v1` の転記 te
    - `NOT COMPUTED` は、値を出す test が print より前で落ちた（例: twin の前提 `pruning_depth == 12_002` が本番値の変更で動いた）。
      前提を直して再実行する。`NOT FOUND` は pin の書式か anchor が変わった、または pin file が消えた: registry を直す。
    - `UNREGISTERED` は consensus-core の integration test（`consensus/core/tests/*.rs` 全部を glob で読む）に registry が知らない 64/128 桁の
-     hex literal がある（merge で足された pin）。`scripts/t12_repin.py` の `registry()` に 1 行足す。値を test の中で作る pin なら、その test
+     hex literal がある（merge で足された pin）。`scripts/release/t12_repin.py` の `registry()` に 1 行足す。値を test の中で作る pin なら、その test
      に assert より前の print も足す（twin の print と同じ形）。
    - `CHECK` は書き換えでは直らないもの（explorer の `LLM_CLASSES` に genesis class の行が足りない・余る、genesis class の並びが [8k, 2M] で
      ない、C7 の導出が 1 本でない、card の premine index が 0..7 でない、T41 の record と `want` の名前・数が合わない、gate test の失敗、
      `--shipping` で表示が暫定のまま）。書き換えが直す写し（`app.js` の class id など）は、書き換えた後の姿で判定するので `CHECK` にならない。
-   - `scripts/t12-repin.sh --selftest`（build 不要、直前の harvest log を 1 値ずつ書き換えて判定規則を確かめる。まだ無い pin file と gate の
+   - `scripts/release/t12-repin.sh --selftest`（build 不要、直前の harvest log を 1 値ずつ書き換えて判定規則を確かめる。まだ無い pin file と gate の
      場合は SKIP）。
-2. `scripts/t12-repin.sh --apply --shipping --reason "<何が動かしたか、1 行>"` — `MOVE` の pin を書き換え、各書き換え（表の行・tuple const・
+2. `scripts/release/t12-repin.sh --apply --shipping --reason "<何が動かしたか、1 行>"` — `MOVE` の pin を書き換え、各書き換え（表の行・tuple const・
    genesis field・`want` 配列ごと）の上に `re-pin <日付> @<commit>: <reason> (was <旧値>…)` の 1 行 comment を残す（Markdown の表と散文には
    残さない。commit message が理由を持つ）。**round で進む**: genesis 定数と C7 の literal（`PALW_T12_2M_CLASS_ID_BYTES`）は pin であると
    同時に入力（params id がそれを hash する）なので、それが動いたら 1 round 目はそれだけを書き換えて build し直し、読み直した値で 2 round 目
@@ -551,7 +551,7 @@ manifest を JSON として読んだ値（`class_manifest_const_v1` の転記 te
    v22 golden と A-held の `held_forfeits_v1`、pin のある integration target 全部、`t12_deploy_kit_constants`・`t12_regenesis`・
    `t12_repin_values`。exit 5 = どれかが落ちた）。どの round でも `REFUSE`・`NOT COMPUTED`・`NOT FOUND`・`CHECK`・`UNREGISTERED` が
    1 つでもあればそこで止まる（exit 3。1 round 目なら何も書いていない）。
-3. `--apply` の最後の round が drift 0 でなければ exit 3/4/5 で止まる。commit の前にもう一度 `scripts/t12-repin.sh --shipping` →
+3. `--apply` の最後の round が drift 0 でなければ exit 3/4/5 で止まる。commit の前にもう一度 `scripts/release/t12-repin.sh --shipping` →
    `DRY RUN: no drift`（exit 0）。`--apply` が「Other mentions of the old values」に出した行（PLAN・misakascan DEPLOY・docs の散文、
    fleet.env.example の説明 comment など）を手で直す。`git diff` を読み、`re-pin` comment の reason を確かめ、record の encoding が動いた
    なら T41 の test の doc にどの field がなぜ動いたかを書いて commit。
@@ -631,7 +631,7 @@ registry が持つ pin の所在（表の読み方。書き換えは tool が行
 - 手で導出した数値の pin: t12 の pruning depth（`T12_PRUNING_DEPTH = 74_920`、`palw_class_verify_deadline_is_t12_only` の lattice）、
   withdrawal delay `12_900`、twin の前提 `12_002` など。本番値の変更が窓を動かせばこれらも動く（その merge が導出と一緒に直す）。twin の
   前提が落ちると tool は twin を `NOT COMPUTED` と出す。
-- `misaka-palw-derive` の transformer id と free-prompt の golden（`scripts/check-repin-enumeration.py` の MOVES）: derive の tree が
+- `misaka-palw-derive` の transformer id と free-prompt の golden（`scripts/ci/check-repin-enumeration.py` の MOVES）: derive の tree が
   動いたときだけ動く。battery（§1 item 2）が拾う。`misaka-palw-base0` の context vector が pin する devnet の params id は devnet で、動かない。
 - resource profile（§4 step 6 の `t12_role_memory_figures`）、release binary の sha256 と `fleet.env`（§4 step 10〜11）。
 
@@ -641,7 +641,7 @@ registry が持つ pin の所在（表の読み方。書き換えは tool が行
 
 | # | 観測 | 合格条件 |
 |---|---|---|
-| O-1 | licence の頻度 | 最初の Final から 3,000 DAA 以内に licence ≥ 30（`scripts/misaka-palw-t12-rcore-analyze.py` の report 3） |
+| O-1 | licence の頻度 | 最初の Final から 3,000 DAA 以内に licence ≥ 30（`scripts/drills/misaka-palw-t12-rcore-analyze.py` の report 3） |
 | O-2 | f・p・door histogram、genesis seat の coverage、8k の throughput、S2 の redraw 率、operator ごとの panel 参加 vs stake、dead seat の率、SW-A5 の閾値、`InsufficientEligibleStake` の数、`ready_eff` | 週次に報告。§3.7 のモデル行を置き換える |
 | O-3 | 敵対 producer に対する `q_f`（naive / garbage / borrowed） | 全 attempt が窓内で課金。M6 の条件は全 attempt が **帰責** される |
 | O-4 | Final 後の有罪が maturity 前に行を burn | 行が burn、最初の committer に支払い |

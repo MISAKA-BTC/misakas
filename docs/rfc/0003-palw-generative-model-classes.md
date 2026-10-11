@@ -349,8 +349,8 @@ rule's, not an input kind's (finding G6).
 
 **The Gaussian table.** `PALW_GAUSS_Q24_V1[i] = RHAZ(Φ⁻¹((i + ½) / 2^16) · 2^24)` for
 `i ∈ [0, 2^16)`, where RHAZ rounds half away from zero. It is evaluated at 60 or more significant
-digits by a pinned generator script (`scripts/palw-gauss-table.py`), in the manner of
-`scripts/palw-gumbel-table.py`, and pinned by
+digits by a pinned generator script (`scripts/verify/palw-gauss-table.py`), in the manner of
+`scripts/verify/palw-gumbel-table.py`, and pinned by
 `BLAKE2b-512(key = "misaka-palw/rand/gauss-q24/v1", the 65,536 entries as LE i32)` =
 `0b3c29bd5d81b9db…5285aa4` (in full: `consensus-vectors/rand-v1/domains.json`,
 `misaka_palw_gen::rand::GAUSS_Q24_V1_DIGEST_HEX`). Neither the digit count nor the tie rule decides

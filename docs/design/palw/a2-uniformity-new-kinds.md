@@ -369,7 +369,7 @@ The pin test writes each ruleset's chain when `A2U_INT12_REPLAY_OUT=<dir>` is se
 genesis, every block's header and transactions, every block's PALW root, the refused block with its header and pruning-proof
 refusals, and the final view). `Header` and `Transaction` are unchanged since `0b1c11b87`.
 
-`scripts/a2u-int12-replay.sh <work-dir> <dump>…` extracts the source of `0b1c11b87` (`git archive`, no worktree), adds
+`scripts/verify/a2u-int12-replay.sh <work-dir> <dump>…` extracts the source of `0b1c11b87` (`git archive`, no worktree), adds
 `a2u_int12_replay.rs.int12` as a test module, and runs it through the shared build gate. With int-12's own harness and fence lists it
 demands the same genesis, every block accepted and UTXO-valid **with the same PALW root block by block**, every refusal in the same
 words (header and pruning proof), and the same final view.

@@ -128,7 +128,7 @@ classification in `PALW_INT12_WIRE_CHANGES_V1`. **Below its owning fence a kind 
 reads its bytes — the same verdict (0x4b: tolerated and skipped; 0x4a and header forms: refused), the same skip, nothing charged,
 counted or written. Never refuse it at isolation on 0x4b. Its own rule (may-ride, shape, size) is asked only past the fence, in the
 header context, the acceptance walk and the fold. Merge gate: the A2U tests, the mixed-verdict pin test on both rulesets, and the replay
-of its chains through int-12 itself (`scripts/a2u-int12-replay.sh`). The live build's lists are frozen.
+of its chains through int-12 itself (`scripts/verify/a2u-int12-replay.sh`). The live build's lists are frozen.
 
 **A-2 additions (A2U, 2026-10-10).** (a) The object-tag column above is mirrored in `PALW_A2_TAG_ALLOCATIONS_V1` with each allocation's
 fences; a tag row outside its allocation or naming another lane's fence fails (`every_tag_row_is_inside_its_allocation`) — a new

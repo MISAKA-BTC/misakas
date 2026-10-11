@@ -35,13 +35,13 @@ anybody can recompute the file from it and get the same bytes.
 Three things, none of which require trusting this project's own code:
 
 **1. Recompute an artifact from a derivation, in a different language.**
-`scripts/misaka-palw-derive-stranger.py` re-derives the artifact bytes in Python from the
+`scripts/verify/misaka-palw-derive-stranger.py` re-derives the artifact bytes in Python from the
 specification, independently of the Rust that produced them. If it disagrees, it says so and refuses
 to be used as a verification: *a second implementation that is wrong proves nothing and accuses the
 innocent.*
 
 **2. Open the result in software nobody here wrote.**
-`scripts/misaka-palw-artifact-thirdparty.py` hands each artifact to the library that ecosystem
+`scripts/verify/misaka-palw-artifact-thirdparty.py` hands each artifact to the library that ecosystem
 actually uses — `mido` for MIDI, `pygltflib` for glTF, `numpy-stl` for STL — and compares a quantity
 with MEANING against the description: a solid's enclosed volume, a song's playback duration. On the
 demonstration corpus the STL's enclosed volume is **36.0**, and the description's sketch has
@@ -76,9 +76,9 @@ carries the model's own answer bytes and the artifacts derived from them.
 | decode budget at 512 | 503 max | `n_ctx − chat template (8) − prompt`; 503 is the ceiling, available only to a one-token prompt. The corpus needs 261 and 286, so it fits with room — but a real request costs more than one. |
 | the corpus's own cost | cad 66, music 261, scene 286 | `MISAKA_FLOOR_TOKENIZER_DENSE=<checkpoint>/tokenizer.json MISAKA_QWEN36_GGUF=<model>.gguf cargo test -p misaka-palw-derive --test corpus_width -- --nocapture` — **without both variables all three tests SKIP and still report `ok`** |
 | dense class faithfulness | **45 of 57 top-1**, 56/57 top-5, rank corr 0.893 | `qwen25-convert <checkpoint-dir> --a16`, which prints it at conversion time |
-| artifacts open in foreign software | 4 agreed, 0 disagreed | `pip install mido numpy-stl pygltflib && python3 scripts/misaka-palw-artifact-thirdparty.py --require docs/evidence-qwen36-model-gate/artifacts/` |
-| the format checker has teeth | five injuries, each refused by name | `python3 scripts/misaka-palw-artifact-conformance.py selftest` |
-| a second implementation agrees | — | `python3 scripts/misaka-palw-derive-stranger.py selftest` |
+| artifacts open in foreign software | 4 agreed, 0 disagreed | `pip install mido numpy-stl pygltflib && python3 scripts/verify/misaka-palw-artifact-thirdparty.py --require docs/evidence-qwen36-model-gate/artifacts/` |
+| the format checker has teeth | five injuries, each refused by name | `python3 scripts/verify/misaka-palw-artifact-conformance.py selftest` |
+| a second implementation agrees | — | `python3 scripts/verify/misaka-palw-derive-stranger.py selftest` |
 
 **Publication gate on that last row.** Running the five commands above found the stranger red on the
 pre-cut branch — the transformer ids moved when the source tree changed, which the single re-pin at

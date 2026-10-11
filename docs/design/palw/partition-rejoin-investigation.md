@@ -55,7 +55,7 @@ flows/p2p/mining/rpc were reviewed by hand (none re-takes its lock).
 
 **Tests** (`protocol/flows/src/flowcontext/ibd_candidates.rs`, `live_r1_reentrant_read_tests`): deterministic — the writer is queued
 (its bit observed) between the two reads; the old shape's second read cannot be granted; the accessor answers under the guard a queued
-writer waits on. Hotfix branch: the same three tests pass, `kaspad` builds, and `scripts/t12-repin.sh --drift-only` reports the ids.
+writer waits on. Hotfix branch: the same three tests pass, `kaspad` builds, and `scripts/release/t12-repin.sh --drift-only` reports the ids.
 
 ## 2. B — the wedge
 

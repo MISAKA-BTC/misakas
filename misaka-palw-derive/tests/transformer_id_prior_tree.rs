@@ -1,7 +1,7 @@
 //! **The ids the PREVIOUS published tree gave — kept resolvable, and kept out of the pin file.**
 //!
 //! `transformer_id_pin.rs` holds the CURRENT tree's pins, and it is read by more than cargo:
-//! `scripts/misaka-palw-derive-stranger.py` parses every `"name", "<128 hex>"` pair in it as the
+//! `scripts/verify/misaka-palw-derive-stranger.py` parses every `"name", "<128 hex>"` pair in it as the
 //! pin set. These rows lived there for one release and the parser took them for the current pins
 //! (the later spelling of a name wins), so the stranger gate reported the shipped tree as
 //! disagreeing with itself. They are a different fact — what a live chain's derivations name — and

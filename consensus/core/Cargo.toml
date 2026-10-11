@@ -24,7 +24,7 @@ wasm32-sdk = []
 # declares it EMPTY — the consensus *types* (header EVM roots, block evm_payload)
 # are always compiled in and are secp-free. The revm executor + its secp256k1
 # dependency are pulled in behind this feature in P2, so the default node build
-# stays secp-free (enforced by scripts/pq-ci-guard.sh).
+# stays secp-free (enforced by scripts/ci/pq-ci-guard.sh).
 evm = []
 
 [dependencies]

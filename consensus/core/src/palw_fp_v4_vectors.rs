@@ -1,7 +1,7 @@
 //! **RFC-0001 §A.5 — the consensus golden vectors, read** (`consensus-vectors/fp-v4/`).
 //!
 //! The vectors are the executable form of the frozen spec: written by
-//! `scripts/palw-fp-v4-vectors.py`, a second implementation of §A.3 that shares nothing with the
+//! `scripts/verify/palw-fp-v4-vectors.py`, a second implementation of §A.3 that shares nothing with the
 //! Rust one but the Gumbel table's generator. The sampler (this crate), the worker
 //! (`misaka-palw-base0`) and the panel (`kaspad`) each `include_str!` the SAME files and hand
 //! them to the checkers below with their OWN entry point — the function their engine or replay

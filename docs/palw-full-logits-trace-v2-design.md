@@ -407,7 +407,7 @@ manifest、経済パラメータを添付した明示的decision recordで行う
   - `RuntimeManifestV2` はbuild.rsが実測したCMakeCache SHA-256・静的library結合SHA-256・
     GGML_*フラグ（CMakeCacheの実値）と、実行時の自バイナリlive hashから構成。未検証fieldは
     literal `"unpinned"` として可視化し、class登録時の必須拒否対象とする
-- closed-replay smoke harness `scripts/misaka-palw-v2-worker-smoke.py`: 実モデルで
+- closed-replay smoke harness `scripts/drills/misaka-palw-v2-worker-smoke.py`: 実モデルで
   Execute×2+Replay×1のprojection byte一致、seed/prompt入力感応性、fail-closed 10 probe
   （改竄manifest・予算違反・不正frame・vocab範囲外token・`--n-predict`混入等）を確認した。
 - **golden vector登録とboot self-test**（`v2-golden-gen` / `v2-selftest` /
@@ -422,7 +422,7 @@ manifest、経済パラメータを添付した明示的decision recordで行う
   QUARANTINED=全job拒否で稼働継続、golden未登録は起動拒否）、model load前のadmission、
   per-job supervision（deadline/timeout kill、部分結果破棄）、応答の再束縛検証
   （request hash echo・CU再導出・job_context_hash独立再計算）。
-  smoke: `scripts/misaka-palw-v2-agent-smoke.py`。
+  smoke: `scripts/drills/misaka-palw-v2-agent-smoke.py`。
 
 これらは必要な前進だが、§12のgateを満たしたことを意味しない。特にgolden vector
 （full 64-byte）の正式登録、3 microarchitectures×1,000 prompts×5回、10,000 seedsの

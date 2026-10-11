@@ -57,7 +57,7 @@ Under one day of margin means the fleet cannot finish updating before the fence 
 ```bash
 MISAKA_PALW_CPU=1 MISAKA_LLAMA_SRC=<llama.cpp built -DGGML_METAL=OFF -DGGML_BLAS=OFF -DGGML_ACCELERATE=OFF -DGGML_NATIVE=OFF> \
   cargo build --release -p misaka-palw-worker
-MISAKA_PALW_GGUF=<Qwen3.5-2B-Q4_K_M.gguf> scripts/misaka-palw-cpu-calibrate.sh \
+MISAKA_PALW_GGUF=<Qwen3.5-2B-Q4_K_M.gguf> scripts/ops/misaka-palw-cpu-calibrate.sh \
   --worker ./target/release/palw-worker
 ```
 

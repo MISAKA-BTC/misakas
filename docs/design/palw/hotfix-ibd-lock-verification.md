@@ -49,7 +49,7 @@
 - **Source digests:** no `build.rs` or identity computation hashes `protocol/flows` sources.
 - **t12 ids:** see §1.1.
 
-### 1.1 `scripts/t12-repin.sh --drift-only` on `57235a5b3`
+### 1.1 `scripts/release/t12-repin.sh --drift-only` on `57235a5b3`
 
 **Pinned at `57235a5b3`:** byte-identical to `0b1c11b87`, because `git diff 0b1c11b87 57235a5b3 -- consensus kaspad contrib scripts rpc protocol/p2p` is empty. These are the live ids:
 
@@ -61,12 +61,12 @@
 
 Source: `T12_RELEASE` in `consensus/core/tests/palw_anchor_at_ceiling_is_t12_only.rs:41`. The same triple is in the other `*_is_t12_only` pins. The params and schedule ids match the brief's `5ee7fd8ee019968c…` and `1678e07359f6727e…`.
 
-**Computed side.** `CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 scripts/t12-repin.sh --drift-only` was started on `57235a5b3` ("t12-repin: tree 57235a5b3611"). **I stopped it during the harvest build of `kaspa-consensus-core`,** when free disk fell to 11 GiB (other lanes were writing too), under the session's stop-below-12 GB rule. It had printed no rows yet.
+**Computed side.** `CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 scripts/release/t12-repin.sh --drift-only` was started on `57235a5b3` ("t12-repin: tree 57235a5b3611"). **I stopped it during the harvest build of `kaspa-consensus-core`,** when free disk fell to 11 GiB (other lanes were writing too), under the session's stop-below-12 GB rule. It had printed no rows yet.
 
 The ids cannot differ from the pins, for a structural reason. The computed values come from `kaspa-consensus-core`'s own tests, and that crate's dependency closure does not include `kaspa-p2p-flows`, the only crate this diff touches. So the harvest build of `57235a5b3` compiles exactly the sources of `0b1c11b87`'s harvest, which produced these pins.
 
 **Status: verified by LIVE-R1, cross-checked by the dependency graph.**
-- **LIVE-R1's run:** `scripts/t12-repin.sh --drift-only` on `hotfix/int-12-ibd-candidates-lock` @`57235a5b3`. The Lead relayed the result: **no drift, 361 ok**, params `5ee7fd8ee019968c…`, schedule `1678e07359f6727e…`, manifest `9def81a1…`.
+- **LIVE-R1's run:** `scripts/release/t12-repin.sh --drift-only` on `hotfix/int-12-ibd-candidates-lock` @`57235a5b3`. The Lead relayed the result: **no drift, 361 ok**, params `5ee7fd8ee019968c…`, schedule `1678e07359f6727e…`, manifest `9def81a1…`.
 - **My cross-check:** the dependency argument above. `kaspa-consensus-core` cannot see `kaspa-p2p-flows`, and the diff outside `protocol/flows` is empty.
 - **Not done by me:** the Lead decided against resuming my interrupted harvest build.
 

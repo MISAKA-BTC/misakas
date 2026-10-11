@@ -128,7 +128,7 @@ At launch, validating/mining testnet-11 requires being in the pinned class:
   agreement). This is stated, not hidden. An arm-class port of the worker (or a
   multi-class committee design) is future work and would arrive as its own pinned
   class + ADR addendum, not as a silent widening.
-- The audit harness (`scripts/misaka-palw-forgery-audit.py`) doubles as a
+- The audit harness (`scripts/verify/misaka-palw-forgery-audit.py`) doubles as a
   self-service class check: run it, diff the jsonl against the published fleet
   values — the same methodology that produced the pin.
 

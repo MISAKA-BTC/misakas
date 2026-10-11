@@ -160,8 +160,8 @@ for byte; IR behaviour is added beside it and reachable only through the fence.
 | Where | What | Reuse |
 | --- | --- | --- |
 | `misaka-palw-base0/src/e2e_drill.rs:208, 336` | family certification drill over `PalwExecutionBackendV1` (planted faults, both directions, covering set) | TIR family certificate (D-F2) |
-| `scripts/misaka-palw-t12-rcore-drill.sh`, `consensus/core/src/config/drill.rs` | salted t12 drill chain on the shipping kaspad; `--palw-drill-fenceN-at` | fence-crossing drill (D-F4) |
-| `scripts/misaka-palw-model-registry-devnet-drill.sh` (step 1b clock gate) | registry/listing drill | IR registration → Candidate → Active walk |
+| `scripts/drills/misaka-palw-t12-rcore-drill.sh`, `consensus/core/src/config/drill.rs` | salted t12 drill chain on the shipping kaspad; `--palw-drill-fenceN-at` | fence-crossing drill (D-F4) |
+| `scripts/drills/misaka-palw-model-registry-devnet-drill.sh` (step 1b clock gate) | registry/listing drill | IR registration → Candidate → Active walk |
 | red-team harness (2026-09-07, 8 block forgeries; a `misaminer` `redteam` bin never committed) | 8/8 rejection battery | commit it as `misaminer/src/bin/redteam.rs` and rerun against the IR class (D-F3) |
 | `consensus/src/pipeline/virtual_processor/tests/t46_false_valid_real_claim.rs` | processor-level conviction test shape | IR court end-to-end in the processor |
 

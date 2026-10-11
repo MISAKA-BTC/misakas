@@ -211,7 +211,7 @@ solves, signs and submits the round block.
 * The compute credit: `palw_execution_credit_v1`, `PalwExecFinalV1::credit`, the fold's
   `work_price_unit` (shared with ADR-0124's work price).
 * §7.1: `kaspad --palw-execution-lane-devnet=activation,width,span[,daa:width…]` and
-  `scripts/misaka-palw-round-lane-devnet-drill.sh`.
+  `scripts/drills/misaka-palw-round-lane-devnet-drill.sh`.
 * Tests: the rules module (including the evidence's own proofs); the state (`adr0125_*` in
   `palw_state_v2.rs`: a finalized attempt schedules the next span, a permit is accepted once, spans
   are dropped, the delta and the carriage round-trip, nothing is written below the fence, a permit
@@ -273,7 +273,7 @@ every DAG parameter, depth and PALW window; every network until its fence is arm
 
 ## 7. What remains
 
-1. **Built** — the devnet drill (`scripts/misaka-palw-round-lane-devnet-drill.sh`, four nodes: an
+1. **Built** — the devnet drill (`scripts/drills/misaka-palw-round-lane-devnet-drill.sh`, four nodes: an
    attempt reaches `Final`, the next span is scheduled, round blocks are produced for held permits,
    chain blocks grant them, a granted round block carries fee-paying transactions). A reorg across a
    span boundary is pinned at the state layer (`adr0125_a_reorg_across_a_span_boundary_…`); the drill
@@ -350,7 +350,7 @@ devnet schedules no fence, so the move does not reach this drill). Same host, fo
 | 4 | **established** — a granted round block carried a sent payment | five payments sent (`d7b978c9…`, `e0745580…`, `eb2ee4ea…`, `31fd64aa…`, `b8cddeaf…`); 16:57:19, after the sends: chain block `570284ce…` merged 11 round blocks, 1 transaction accepted, **1 native: `d7b978c9…`**, the first sent id, named by the chain walk's lane line; recipient balance 0 → 400,000,009 sompi |
 | 5 | two nodes reported one lane | node-1 and node-3: span 12, width 2, one domain; 16 lane lines across the fleet, 127 round-block production reports |
 
-`PASS` at 07:58:37Z (`scripts/misaka-palw-round-lane-devnet-drill.sh`, exit 0). What the first run
+`PASS` at 07:58:37Z (`scripts/drills/misaka-palw-round-lane-devnet-drill.sh`, exit 0). What the first run
 could not show — that the lane carried *the* payments rather than only carriers — is now shown by the
 rule §8 added: the lane line counts native transactions apart from carriers and names them, and the
 step accepts only a line written after the sends that names a sent id. One observation, not a defect
@@ -398,7 +398,7 @@ The classifier reads the whole mergeset, preserves the relative input order of e
 
 Raw mergeset access remains valid inside GHOSTDAG/store code, reachability, pruning/IBD, merge-depth validation, and legacy RPC field conversion. PALW semantic consumers must use the common classifier or a complete, colour-independent discovery iterator. Use `member`/`header` while a member can be a round; use `red` only after genuine-red classification. Tests may inspect raw reds to pin the unchanged representation.
 
-`python3 scripts/check-palw-mergeset-access.py` audits the PALW semantic consumer files for direct raw-red access. Consensus/store and legacy RPC compatibility accesses remain outside this semantic-only check.
+`python3 scripts/ci/check-palw-mergeset-access.py` audits the PALW semantic consumer files for direct raw-red access. Consensus/store and legacy RPC compatibility accesses remain outside this semantic-only check.
 
 ### RPC and explorer
 

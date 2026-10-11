@@ -316,8 +316,8 @@ lane's adjudicability just as much as the free-prompt lane's.
 
 The drill needs Units A–D on a devnet preset carrying
 `palw_fp_devnet_bundle_v3`. Until then the honest drill is the one already run: the sidecar path
-end to end on the real model (`scripts/misaka-palw-fp-v3-worker-smoke.py`,
-`scripts/misaka-palw-fp-gateway-smoke.py`), which measures everything that does not require a
+end to end on the real model (`scripts/drills/misaka-palw-fp-v3-worker-smoke.py`,
+`scripts/drills/misaka-palw-fp-gateway-smoke.py`), which measures everything that does not require a
 chain — one inference producing answer and commitment, arm equality, retention, and the
 transaction the executor rail would submit.
 

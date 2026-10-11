@@ -62,14 +62,14 @@ python3 -m venv /tmp/artifact-venv
 CI_GATES_THIRDPARTY_PYTHON=/tmp/artifact-venv/bin/python bash scripts/ci-gates.sh --group fast
 ```
 
-The CI lints job also runs `scripts/pq-ci-guard.sh`, which hard-gates that neither `kaspa-consensus` nor `kaspad` link secp256k1.
+The CI lints job also runs `scripts/ci/pq-ci-guard.sh`, which hard-gates that neither `kaspa-consensus` nor `kaspad` link secp256k1.
 </details>
 
 <details>
 <summary>The pinned toolchain</summary>
 
 `rust-toolchain.toml` pins the compiler. Every workflow job reads that file rather than
-repeating the version, and `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+repeating the version, and `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
 doing so — before this file existed, every job installed `dtolnay/rust-toolchain@<sha>  # stable`,
 which pins the ACTION and leaves the COMPILER floating (the action's `toolchain` input defaults
 to `stable`), while the Lints job alone pinned a different version.

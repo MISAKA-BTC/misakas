@@ -11,7 +11,7 @@
 >   * F-ECON-3;
 >   * the abandonment stall `T_ab`.
 >
->   It moved every calculator to `scripts/misaka-palw-econ-verifier-model.py`.
+>   It moved every calculator to `scripts/sim/misaka-palw-econ-verifier-model.py`.
 > * F-ECON-1/2 were fixed by G14R (`9429128f8`, S1) and are tested on that branch.
 > * At 49%, the self-inflicted-default path recoups 53.9% of what was collected (a net loss of 46.1%), not at most 49%; see the successor's E1.
 

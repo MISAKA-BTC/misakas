@@ -1,7 +1,7 @@
 # testnet-12 replay memory, 2026-10-01 — what a PALW replay reserves, and int-10.2
 
 Status: node-only release `rcore/int-10-p2` (lane M1), off int-10.1 (`8712ef00d`). The t12 consensus fingerprint does not move
-(`scripts/t12-repin.sh --drift-only`). Companion to `t12-panel-backlog-1001.md` (lane P's root cause; F1–F4 are int-10.1).
+(`scripts/release/t12-repin.sh --drift-only`). Companion to `t12-panel-backlog-1001.md` (lane P's root cause; F1–F4 are int-10.1).
 
 ## 1. What was measured (5.104, 10-01 ~21:25 JST)
 

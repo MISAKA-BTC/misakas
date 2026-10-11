@@ -122,7 +122,7 @@ open time (clean resync, per [ADR-0001](0001-network-isolation.md)) rather than 
 ## PQ-only reconciliation
 
 revm pulls in secp256k1 (ecrecover + secp precompiles), which conflicts with the secp-free node
-guarantee enforced by `scripts/pq-ci-guard.sh`. Resolution: the EVM **types** are always compiled and
+guarantee enforced by `scripts/ci/pq-ci-guard.sh`. Resolution: the EVM **types** are always compiled and
 are secp-free; the **executor** (revm) lands behind the `evm` cargo feature (default OFF). The default
 `kaspad` build stays secp-free; an `--features evm` build opts into the EVM lane and secp. The EVM lane
 is a separate signature domain from native UTXO ML-DSA-87 (design §1.2/§16). A PQ-EVM (no secp) is

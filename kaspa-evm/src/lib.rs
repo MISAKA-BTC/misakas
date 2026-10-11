@@ -11,7 +11,7 @@
 //! This crate is the only place revm (and an EVM secp256k1/k256 ecrecover stack)
 //! enters the tree. It is an **optional** dependency of `kaspa-consensus`, gated
 //! behind the non-default `evm` cargo feature, so the default node stays
-//! secp-free (scripts/pq-ci-guard.sh). The consensus types it operates on
+//! secp-free (scripts/ci/pq-ci-guard.sh). The consensus types it operates on
 //! ([`kaspa_consensus_core::evm`]) are always compiled and secp-free.
 
 pub mod env;

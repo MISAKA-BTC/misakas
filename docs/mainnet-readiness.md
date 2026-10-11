@@ -21,7 +21,7 @@ marked only by what this repository can show. The mark is not a plan or an inten
 Last reviewed: **2026-09-25**, against `main` at testnet-12's release commit `0e8ec984e`. A PASS
 turns back into PARTIAL or TODO when later work removes its evidence. Anybody changing a mark
 changes it in the same commit as the evidence. Every CI run counts the marks in this file into its
-job summary (`scripts/misaka-ci-summary.py`), next to the test counts of that run.
+job summary (`scripts/ci/misaka-ci-summary.py`), next to the test counts of that run.
 
 **Summary.** The engineering base is strong: gated CI that can be reproduced locally, a pinned
 toolchain, post-quantum isolation enforced by the build, many audits published with their fixes,
@@ -54,7 +54,7 @@ add more rules.
 
 | status | item | evidence / what is missing |
 |---|---|---|
-| **PASS** | Post-quantum isolation enforced | `scripts/pq-ci-guard.sh` fails CI if `kaspa-consensus` or `kaspad` links secp256k1 |
+| **PASS** | Post-quantum isolation enforced | `scripts/ci/pq-ci-guard.sh` fails CI if `kaspa-consensus` or `kaspad` links secp256k1 |
 | **PASS** | Dependency advisories gated | `cargo-deny` runs in the `pq-guard` gate ([`deny.toml`](../deny.toml)) |
 | **PASS** | Internal audits, fixed in the open | e.g. [palw-audit-2026-09-18-6001.md](palw-audit-2026-09-18-6001.md) (2 Critical / 6 High, all fixed), [palw-daa-clock-audit-2026-09-18.md](palw-daa-clock-audit-2026-09-18.md), the mainnet audits of [08-28](palw-mainnet-audit-2026-08-28.md), [08-30](palw-mainnet-audit-2026-08-30.md), [09-05](palw-mainnet-audit-2026-09-05.md) and [09-06](palw-mainnet-audit-2026-09-06.md), and the release report [palw-release-6001-verdict-2026-09-18.md](palw-release-6001-verdict-2026-09-18.md) |
 | **PARTIAL** | External review | commissioned static reviews of code snapshots: the 2026-06-22 Kaspa-diff and EVM/NFT packages (answered in [security/MISAKA-Audit-Remediation-Response-2026-06-23.md](security/MISAKA-Audit-Remediation-Response-2026-06-23.md)) and the 2026-08-21 PALW review ([palw-external-audit-2026-08-21.md](palw-external-audit-2026-08-21.md), which could not build or run the code). None of them covers a release. The reviewers are not named in the tree |
@@ -90,7 +90,7 @@ add more rules.
 
 | status | item | evidence / what is missing |
 |---|---|---|
-| **PASS** | Pinned toolchain | [`rust-toolchain.toml`](../rust-toolchain.toml), enforced in every job by `scripts/ci-toolchain-pin-check.py` |
+| **PASS** | Pinned toolchain | [`rust-toolchain.toml`](../rust-toolchain.toml), enforced in every job by `scripts/ci/ci-toolchain-pin-check.py` |
 | **PASS** | Checksums published | per-binary sha256 in [the launch note](t12-launch-2026-09-25.md); `SHA256SUMS` on earlier GitHub releases |
 | **PASS** | Component digests | [components manifest](components-manifest.md) (`misaka/components/v1`) is written on release |
 | **PARTIAL** | Reproducible binaries | testnet-12's build matched byte-for-byte across two checkouts; nobody else has reproduced it, and CI does not check it |

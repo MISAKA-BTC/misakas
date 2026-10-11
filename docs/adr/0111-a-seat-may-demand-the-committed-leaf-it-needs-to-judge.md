@@ -223,7 +223,7 @@ shipped preset arms.
 
 ### 8.2 What the live drill found (both fixed, both pinned)
 
-`scripts/misaka-palw-shard-court-devnet-drill.sh` with `HELD=1 LEAF=fast` runs the executor with
+`scripts/drills/misaka-palw-shard-court-devnet-drill.sh` with `HELD=1 LEAF=fast` runs the executor with
 `--palw-drill-answer-only` — it serves its claims' answer envelope and never the capture — so a
 seat judges by intervals alone. Its first two runs found two defects older than this ADR, on the
 path from a sampled fault to a named leaf:
