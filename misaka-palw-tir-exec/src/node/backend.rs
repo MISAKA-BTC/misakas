@@ -39,7 +39,7 @@ use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_atte
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirLogitsConsistencyV1, PalwTirStepLeafDisclosureV1,
-    build_tir_dissect_bottom_v1, build_tir_dissect_round_v1, build_tir_named_leaf_refutation_v1, build_tir_root_claim_v1,
+    build_tir_dissect_bottom_bounded_v1, build_tir_dissect_round_bounded_v1, build_tir_named_leaf_refutation_v1, build_tir_root_claim_bounded_v1,
     build_tir_step_leaf_disclosure_v1,
 };
 use kaspa_consensus_core::palw_tir_dissect_v1::{PalwTirDissectPhaseV1, PalwTirDissectRoundV1, PalwTirRootClaimV1};
@@ -60,6 +60,14 @@ pub const TIR_CAPTURE_MAGIC_V1: [u8; 8] = *b"PALWTIRC";
 /// capture); past it, a fold. (A leaf is up to 16 KiB of lanes — a 4,096-lane logits tile — so the
 /// cap is in bytes, not leaves.)
 pub const TIR_DENSE_CAPTURE_BYTES_V1: usize = 64 << 20;
+
+/// Node policy for one proof-construction move. The rule's work limit is shared
+/// across all evaluations; 65,536 requested output entries bound result/header
+/// materialization even when the values are supplied directly by committed leaves.
+/// A refusal means no move is built and certifies no verdict, soundness or fee.
+pub fn tir_court_builder_limits_v1(rules: &PalwTirCourtRulesV1) -> kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1 {
+    kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1 { evaluation: rules.limits, max_target_requests: 65_536 }
+}
 
 /// Whether a new [`TirBackendV1`] runs the fused kernels ([`set_tir_fused_kernels_default_v1`]).
 static TIR_FUSED_KERNELS_DEFAULT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -809,7 +817,8 @@ impl TirBackendV1 {
             rules.prompt_form,
             self.ladder,
         )?;
-        build_tir_dissect_bottom_v1(root_binding, phase, &store, rules).map_err(|e| e.to_string())
+        build_tir_dissect_bottom_bounded_v1(root_binding, phase, &store, rules, tir_court_builder_limits_v1(rules))
+            .map(|(object, _)| object).map_err(|e| e.to_string())
     }
 
     /// **RFC-0002 F7: the responder's IR root claim** at the narrowed dissected leaf `narrowed` of its
@@ -818,7 +827,8 @@ impl TirBackendV1 {
     /// strips it.
     pub fn root_claim(&self, material: &[u8], narrowed: u64, rules: &PalwTirCourtRulesV1) -> Result<PalwTirRootClaimV1, String> {
         self.with_capture_store(material, rules.prompt_form, |store, binding| {
-            build_tir_root_claim_v1(binding, narrowed, store, rules).map_err(|e| e.to_string())
+            build_tir_root_claim_bounded_v1(binding, narrowed, store, rules, tir_court_builder_limits_v1(rules))
+                .map(|(object, _)| object).map_err(|e| e.to_string())
         })
     }
 
@@ -834,7 +844,8 @@ impl TirBackendV1 {
     ) -> Result<PalwTirDissectRoundV1, String> {
         let tile = self.space.layout.h_tile;
         self.with_capture_store(material, rules.prompt_form, |store, binding| {
-            build_tir_dissect_round_v1(binding, phase, tile, store, rules).map_err(|e| e.to_string())
+            build_tir_dissect_round_bounded_v1(binding, phase, tile, store, rules, tir_court_builder_limits_v1(rules))
+                .map(|(object, _)| object).map_err(|e| e.to_string())
         })
     }
 
@@ -848,7 +859,8 @@ impl TirBackendV1 {
         rules: &PalwTirCourtRulesV1,
     ) -> Result<PalwTirConeRefutationV1, String> {
         self.with_capture_store(accused, rules.prompt_form, |store, binding| {
-            build_tir_dissect_bottom_v1(binding, phase, store, rules).map_err(|e| e.to_string())
+            build_tir_dissect_bottom_bounded_v1(binding, phase, store, rules, tir_court_builder_limits_v1(rules))
+                .map(|(object, _)| object).map_err(|e| e.to_string())
         })
     }
 

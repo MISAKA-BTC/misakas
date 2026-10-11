@@ -16,7 +16,9 @@ use kaspa_consensus_core::palw_step_leg::{
 };
 use kaspa_consensus_core::palw_step_refute::PalwStepRefuteError;
 use kaspa_consensus_core::palw_tir_court_v1::{
-    PalwTirCourtRulesV1, check_tir_dissect_bottom_v1, check_tir_root_claim_v1, tir_root_claim_finalizes_to_v1,
+    PalwTirBuilderMeterV1, PalwTirBuilderWorkLimitsV1, PalwTirCourtRulesV1, build_tir_dissect_bottom_bounded_v1,
+    build_tir_dissect_bottom_v1, build_tir_dissect_round_bounded_v1, build_tir_dissect_round_v1, build_tir_root_claim_bounded_v1,
+    build_tir_root_claim_v1, check_tir_dissect_bottom_v1, check_tir_root_claim_v1, tir_root_claim_finalizes_to_v1,
 };
 use kaspa_consensus_core::palw_tir_dissect_v1::{
     PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirDissectChoiceV1, PalwTirDissectPhaseV1, PalwTirDissectSiteV1, PalwTirFoldV1,
@@ -26,7 +28,8 @@ use kaspa_consensus_core::palw_tir_step_v1::{PalwTirLeafKindV1, palw_tir_executi
 use misaka_palw_tir::interval::analyze_ranges;
 use misaka_palw_tir_exec::node::{
     TirArtifactV1, TirBackendV1, TirCaptureV1, TirClassRunnerV1, TirEvidenceV1, TirFileMirrorV1, TirRunInputsV1, TirShardHoldingV1,
-    cell_runs_capped_v1, fetch_shard_params_v1, tir_dissect_choice_v1, tir_public_court_cells_v1, tir_shard_geometry_over_v1,
+    cell_runs_capped_v1, fetch_shard_params_v1, tir_court_builder_limits_v1, tir_dissect_choice_v1, tir_public_court_cells_v1,
+    tir_shard_geometry_over_v1,
 };
 use std::sync::Arc;
 
@@ -234,6 +237,19 @@ fn global_post_history() -> (String, misaka_palw_tir::TirProgramV1, misaka_palw_
     ("global-pre-history-post-reduction".into(), program, params)
 }
 
+fn exact_builder_limit(meter: PalwTirBuilderMeterV1) -> PalwTirBuilderWorkLimitsV1 {
+    PalwTirBuilderWorkLimitsV1 {
+        evaluation: misaka_palw_tir::demand::DemandLimits { max_elements: meter.work.elements, max_terms: meter.work.terms },
+        max_target_requests: meter.target_requests,
+    }
+}
+
+fn record_builder_maximum(maximum: &mut PalwTirBuilderMeterV1, meter: PalwTirBuilderMeterV1) {
+    maximum.work.elements = maximum.work.elements.max(meter.work.elements);
+    maximum.work.terms = maximum.work.terms.max(meter.work.terms);
+    maximum.target_requests = maximum.target_requests.max(meter.target_requests);
+}
+
 #[test]
 fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_site() {
     let rules = rules();
@@ -241,6 +257,7 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
     std::fs::create_dir_all(&dir).unwrap();
     let (mut models, mut sites, mut reductions, mut maximum_close, mut maximum_root, mut maximum_round) = (0, 0, 0, 0, 0, 0);
     let (mut maximum_court_leaves, mut maximum_court_da_bytes) = (0, 0);
+    let mut maximum_builder = PalwTirBuilderMeterV1::default();
     for (k, (name, program, params)) in node_common::programs().into_iter().chain(std::iter::once(global_post_history())).enumerate() {
         let Ok(intervals) = analyze_ranges(&program) else { continue };
         if program.schedule.layers.len() < 2 {
@@ -291,6 +308,38 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
             maximum_court_leaves = maximum_court_leaves.max(inputs.leaves());
             maximum_court_da_bytes = maximum_court_da_bytes.max(da_bytes);
             let root = partial.root_claim(&capture, index, &rules).unwrap_or_else(|e| panic!("{name} leaf {index}: {e}"));
+            let runner = TirClassRunnerV1::new(&partial.space, &partial.plan, &partial.params, class_id).unwrap();
+            let store = TirEvidenceV1::dense(
+                &runner,
+                &capture.binding,
+                &capture.prompt,
+                &capture.logits_rows,
+                &capture.generated,
+                &capture.leaves,
+                &partial,
+                rules.prompt_form,
+                rules.max_step_leaf_count,
+            )
+            .unwrap();
+            assert_eq!(
+                root,
+                build_tir_root_claim_v1(&capture.binding, index, &store, &rules).unwrap(),
+                "bounded node and historical root builder produce the same object"
+            );
+            let (metered_root, meter) =
+                build_tir_root_claim_bounded_v1(&capture.binding, index, &store, &rules, tir_court_builder_limits_v1(&rules)).unwrap();
+            assert_eq!(metered_root, root);
+            record_builder_maximum(&mut maximum_builder, meter);
+            assert_eq!(
+                build_tir_root_claim_bounded_v1(&capture.binding, index, &store, &rules, exact_builder_limit(meter)).unwrap().0,
+                root
+            );
+            let mut insufficient = exact_builder_limit(meter);
+            insufficient.max_target_requests -= 1;
+            assert!(
+                build_tir_root_claim_bounded_v1(&capture.binding, index, &store, &rules, insufficient).is_err(),
+                "root target bound is shared across full reductions, finalize and closure"
+            );
             assert_eq!(root, full.root_claim(&honest.material, index, &rules).unwrap(), "{name}: partial root is canonical");
             assert_eq!(check_tir_root_claim_v1(&root, index, &rules).unwrap(), site);
             maximum_root = maximum_root.max(borsh::object_length(&root).unwrap());
@@ -298,6 +347,68 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
             let mut daa = 1;
             while phase.turn() == PalwBisectTurnV1::AwaitDisclosure {
                 let round = partial.dissect_round(&capture, &phase, &rules).unwrap();
+                let (metered, meter) = build_tir_dissect_round_bounded_v1(
+                    &capture.binding,
+                    &phase,
+                    partial.space.layout.h_tile,
+                    &store,
+                    &rules,
+                    tir_court_builder_limits_v1(&rules),
+                )
+                .unwrap();
+                assert_eq!(metered, round);
+                assert_eq!(
+                    build_tir_dissect_round_v1(&capture.binding, &phase, partial.space.layout.h_tile, &store, &rules).unwrap(),
+                    round
+                );
+                record_builder_maximum(&mut maximum_builder, meter);
+                assert_eq!(
+                    build_tir_dissect_round_bounded_v1(
+                        &capture.binding,
+                        &phase,
+                        partial.space.layout.h_tile,
+                        &store,
+                        &rules,
+                        exact_builder_limit(meter)
+                    )
+                    .unwrap()
+                    .0,
+                    round
+                );
+                let mut insufficient = exact_builder_limit(meter);
+                insufficient.max_target_requests -= 1;
+                assert!(
+                    build_tir_dissect_round_bounded_v1(
+                        &capture.binding,
+                        &phase,
+                        partial.space.layout.h_tile,
+                        &store,
+                        &rules,
+                        insufficient
+                    )
+                    .is_err(),
+                    "round target budget is not reset for every child/reduction"
+                );
+                if meter.work.terms > 0 || meter.work.elements > 0 {
+                    let mut insufficient = exact_builder_limit(meter);
+                    if meter.work.terms > 0 {
+                        insufficient.evaluation.max_terms -= 1;
+                    } else {
+                        insufficient.evaluation.max_elements -= 1;
+                    }
+                    assert!(
+                        build_tir_dissect_round_bounded_v1(
+                            &capture.binding,
+                            &phase,
+                            partial.space.layout.h_tile,
+                            &store,
+                            &rules,
+                            insufficient
+                        )
+                        .is_err(),
+                        "whole-round evaluated work cap is exact"
+                    );
+                }
                 assert_eq!(round, full.dissect_round(&honest.material, &phase, &rules).unwrap(), "{name}: same child partials");
                 assert_eq!(
                     partial.dissect_round_from_runs(&fold, &inputs, &phase, &rules).unwrap(),
@@ -317,6 +428,12 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
                 daa += 2;
             }
             let bottom = partial.dissect_bottom(&capture, &phase, &rules).unwrap();
+            let (metered, meter) =
+                build_tir_dissect_bottom_bounded_v1(&capture.binding, &phase, &store, &rules, tir_court_builder_limits_v1(&rules))
+                    .unwrap();
+            assert_eq!(metered, bottom);
+            assert_eq!(build_tir_dissect_bottom_v1(&capture.binding, &phase, &store, &rules).unwrap(), bottom);
+            record_builder_maximum(&mut maximum_builder, meter);
             assert_eq!(bottom, full.dissect_bottom(&honest.material, &phase, &rules).unwrap());
             assert_eq!(
                 partial.dissect_bottom_from_runs(&fold, &inputs, &phase, &rules).unwrap(),
@@ -404,7 +521,7 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
     }
     std::fs::remove_dir(&dir).unwrap();
     eprintln!(
-        "RFC06_PARTIAL_COURT models={models} sites={sites} forged_reductions={reductions} max_root_bytes={maximum_root} max_round_bytes={maximum_round} max_close_bytes={maximum_close} max_court_run_leaves={maximum_court_leaves} max_court_da_bytes={maximum_court_da_bytes}"
+        "RFC06_PARTIAL_COURT models={models} sites={sites} forged_reductions={reductions} max_root_bytes={maximum_root} max_round_bytes={maximum_round} max_close_bytes={maximum_close} max_court_run_leaves={maximum_court_leaves} max_court_da_bytes={maximum_court_da_bytes} max_builder={maximum_builder:?}"
     );
     assert!(models >= 3 && sites >= models && reductions >= sites, "history corpus must be exercised");
 }

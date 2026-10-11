@@ -227,7 +227,8 @@ impl TirShardHoldingV1 {
         rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectRoundV1, String> {
         self.with_runs(capture, inputs, rules, |store| {
-            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_round_v1(&capture.binding, phase, self.space.layout.h_tile, store, rules).map_err(|e| e.to_string())
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_round_bounded_v1(&capture.binding, phase, self.space.layout.h_tile, store, rules,
+                super::backend::tir_court_builder_limits_v1(rules)).map(|(object, _)| object).map_err(|e| e.to_string())
         })
     }
 
@@ -237,7 +238,8 @@ impl TirShardHoldingV1 {
         rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<kaspa_consensus_core::palw_tir_court_v1::PalwTirConeRefutationV1, String> {
         self.with_runs(capture, inputs, rules, |store| {
-            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_bottom_v1(&capture.binding, phase, store, rules).map_err(|e| e.to_string())
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_bottom_bounded_v1(&capture.binding, phase, store, rules,
+                super::backend::tir_court_builder_limits_v1(rules)).map(|(object, _)| object).map_err(|e| e.to_string())
         })
     }
 
@@ -250,8 +252,8 @@ impl TirShardHoldingV1 {
         rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirRootClaimV1, String> {
         self.with_store(capture, rules.prompt_form, rules.max_step_leaf_count, |store| {
-            kaspa_consensus_core::palw_tir_court_v1::build_tir_root_claim_v1(&capture.binding, index, store, rules)
-                .map_err(|e| e.to_string())
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_root_claim_bounded_v1(&capture.binding, index, store, rules,
+                super::backend::tir_court_builder_limits_v1(rules)).map(|(object, _)| object).map_err(|e| e.to_string())
         })
     }
 
@@ -265,9 +267,10 @@ impl TirShardHoldingV1 {
         rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectRoundV1, String> {
         self.with_store(capture, rules.prompt_form, rules.max_step_leaf_count, |store| {
-            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_round_v1(
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_round_bounded_v1(
                 &capture.binding, phase, self.space.layout.h_tile, store, rules,
-            ).map_err(|e| e.to_string())
+                super::backend::tir_court_builder_limits_v1(rules),
+            ).map(|(object, _)| object).map_err(|e| e.to_string())
         })
     }
 
@@ -280,8 +283,8 @@ impl TirShardHoldingV1 {
         rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<kaspa_consensus_core::palw_tir_court_v1::PalwTirConeRefutationV1, String> {
         self.with_store(capture, rules.prompt_form, rules.max_step_leaf_count, |store| {
-            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_bottom_v1(&capture.binding, phase, store, rules)
-                .map_err(|e| e.to_string())
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_bottom_bounded_v1(&capture.binding, phase, store, rules,
+                super::backend::tir_court_builder_limits_v1(rules)).map(|(object, _)| object).map_err(|e| e.to_string())
         })
     }
 

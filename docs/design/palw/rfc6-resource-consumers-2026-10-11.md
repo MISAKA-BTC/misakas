@@ -38,6 +38,20 @@ leaf counts. This candidate is pending central execution. The 65,536-leaf/1,024-
 and a minimal phase-dependent/dynamic-routing acquisition plan and real peak RSS/cost
 certification remain acceptance work.
 
+Node root/round/bottom constructors now use separate bounded helper entry points.
+The original core builder entry points and all historical court validator/wire rules
+are preserved. A node shares the existing rule's computed-element/reduction-term
+budget over a whole move, including all children, reductions and root-finalize closure;
+it also caps cumulative requested result entries at 65,536 before constructing each
+target vector. Root construction no longer executes every reduction with an unlimited
+node work budget. Refusal returns no object or claimed verdict. The bounded helpers
+return actual `DemandWork` and target counts so the corpus can record them and verify
+canonical equivalence and exact aggregate refusal boundaries. These counters exclude
+class decode/validation, authenticated source reads, full-backend replay, allocator
+overhead and elapsed time; they are not an approved CPU/RSS cost or fee certificate.
+Large jobs exceeding the bounded builder policy still need resource/cost acceptance
+and a supported construction plan before a public profile can be approved.
+
 A second defect defeated the intended shard memory scope. `TirExecutor::new_cell` initialized all `Fixed` state instances in the class, including every other layer. Restoring a segment repeated that full allocation. The executor now derives exactly the state instances touched by its immutable occurrence range, including read-only state. Other instances retain their indices with empty buffers. Checkpoint import/export respects that scope. An attempted wider cell, a whole-schedule step through a cell executor, or a checkpoint predicate naming another shard is refused before execution. Whole-schedule execution keeps its existing full state.
 
 These changes are node execution/resource behavior. They allocate no consensus tag, delta, rooted field or new fence, and do not change live shard v1 pricing, draws, receipt rules, or public preset parameters.
