@@ -1561,7 +1561,8 @@ async fn g14_opv_bootstrap_paid_v5_requires_prepaid_signed_fees_and_public_sdk_v
         PublicConformanceReadsV1, fresh_verify_from_reads_v1, fresh_verify_from_reads_v5, opt_in_sources_from_kernel_rows_v4,
         paid_opt_in_sources_from_kernel_rows_v5,
     };
-    let (mut net, b, c) = opt_in_world_with_policy(Net::over_cfg(source_fee_config(), TestConsensus::new), 81, false, true).await;
+    let (mut net, b, c) =
+        opt_in_world_with_policy(Net::over_cfg(source_fee_budget_config(), TestConsensus::new), 81, false, true).await;
     let a = net.attempt(c.v2);
     assert!(a.is_paid_opt_in_source());
     assert_ne!(a.policy().id(), kaspa_consensus_core::palw_conformance_evidence_v1::palw_onboarding_opt_in_policy_v4().id());
@@ -1610,6 +1611,26 @@ async fn g14_opv_bootstrap_paid_v5_requires_prepaid_signed_fees_and_public_sdk_v
     net.send(vec![(PRODUCERS[0], object)]).await;
     assert!(net.ledger().beacon_sources.is_empty(), "funding never retroactively awards an unsigned source promise");
     paid_sources(&mut net, terms, &jobs, &PRODUCERS[..2]).await;
+    let fee_rows: Vec<_> = net
+        .chain
+        .state
+        .bond_budget()
+        .unwrap()
+        .claims
+        .values()
+        .filter(|row| row.origin == kaspa_consensus_core::palw_bond_budget_v1::PalwBudgetOriginV1::SourceFee)
+        .copied()
+        .collect();
+    assert_eq!(fee_rows.len(), 2, "one durable income reservation for each actual source recipient");
+    for row in &fee_rows {
+        assert!(PRODUCERS[..2].iter().any(|card| net.bond(*card) == row.bond));
+        assert_eq!(
+            (row.reserved.claims, row.reserved.block_units, row.reserved.final_weight, row.reserved.round_rights),
+            (0, 0, 0, 0)
+        );
+        assert_eq!((row.reserved.reward_sompi, row.consumed.reward_sompi), (50, 0));
+        assert!(row.reuse_not_before >= terms.source.hold_until + 280);
+    }
     net.beat_to(terms.source.seal_end).await;
     reveal_now(&mut net, &reveals).await;
     net.beat_to(terms.source.final_by + a.policy().settlement_depth_d).await;
@@ -1649,6 +1670,15 @@ async fn g14_opv_bootstrap_paid_v5_requires_prepaid_signed_fees_and_public_sdk_v
     }
     net.beat_to(terms.source.hold_until + 1).await;
     assert_eq!(net.ledger().beacon_source_fees[&context].paid, 100);
+    let state = net.chain.tip_state().1;
+    let budget = state.bond_budget().unwrap();
+    for row in
+        budget.claims.values().filter(|row| row.origin == kaspa_consensus_core::palw_bond_budget_v1::PalwBudgetOriginV1::SourceFee)
+    {
+        assert_eq!(row.consumed.reward_sompi, 50, "source escrow payout consumes its recipient's held R once");
+        assert!(!row.open && !row.live && row.in_window);
+        assert!(row.reuse_not_before >= net.daa() + 280);
+    }
     let replay = net.replay().await;
     net.assert_same(&replay, "mandatory paid v5 full fee/beacon replay");
 }
@@ -1660,6 +1690,32 @@ fn source_fee_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
         Some(kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1::unapproved_probe_at(ForkActivation::new(1)));
     assert!(params.validate_palw_v2().is_err());
     (Config::new(params), bundle, premine, floats)
+}
+fn source_fee_budget_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    use kaspa_consensus_core::palw_bond_budget_v1::{PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1, PalwRoundRightsPolicyV1};
+    let (mut cfg, _, premine, floats) = source_fee_config();
+    // Ample mechanics-fixture rates, with the user-selected separate ticket cap.
+    // No rate here is an approved economic policy.
+    cfg.params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 {
+        activation: ForkActivation::new(1),
+        policy: PalwBondBudgetPolicyV1 {
+            window_daa: 280,
+            capital_unit_sompi: 100_000_000,
+            claims_per_unit: 100,
+            block_units_per_unit: 100_000_000,
+            reward_per_unit_sompi: 100_000_000,
+            final_weight_per_unit: 1_000_000_000,
+            max_open_claims_per_bond: 1_000,
+            round_rights: PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 },
+            ..PalwBondBudgetPolicyV1::unapproved_probe_v1()
+        },
+    });
+    cfg.params.sync_palw_bond_budget_v1();
+    assert!(cfg.params.validate_palw_v2().is_err());
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &cfg.params.palw_consensus_mode else {
+        unreachable!("V2 fixture")
+    };
+    (cfg.clone(), bundle.clone(), premine, floats)
 }
 fn fee_terms(net: &Net, c: &Onb, capacity: u32) -> misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1 {
     let a = net.attempt(c.v2);
