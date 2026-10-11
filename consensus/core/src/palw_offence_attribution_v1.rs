@@ -1859,11 +1859,20 @@ fn adjudicate_against_claim_v1(
             }
             match contradiction {
                 PalwPanelContradictionV1::ConstrainedDecode { binding, accusation } => {
-                    palw_constrained_decode_fault_v1(target, binding, accusation, ladder)?
+                    palw_constrained_job_target_v1(target, binding, &accusation.job)?;
+                    match crate::palw_step_refute::check_constrained_decode_token_at_v2(
+                        binding, accusation, ladder, sessions == PalwSessionRuleV1::DirectProofFirst,
+                    ) {
+                        Ok(_) => {},
+                        Err(crate::palw_step_refute::PalwStepRefuteError::NoFaultFound) => return Err(PalwOffenceVerifyError::TokenHolds),
+                        _ => return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
+                    }
                 }
                 PalwPanelContradictionV1::ConstrainedDecodeFlat { binding, accusation } => {
                     palw_constrained_job_target_v1(target, binding, &accusation.job)?;
-                    match crate::palw_step_refute::check_constrained_flat_decode_token_v1(binding, accusation, ladder) {
+                    match crate::palw_step_refute::check_constrained_flat_decode_token_at_v2(
+                        binding, accusation, ladder, sessions == PalwSessionRuleV1::DirectProofFirst,
+                    ) {
                         Ok(_) => {}
                         Err(crate::palw_step_refute::PalwStepRefuteError::NoFaultFound) => {
                             return Err(PalwOffenceVerifyError::TokenHolds);

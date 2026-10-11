@@ -37,7 +37,7 @@ pub(super) fn flat_contradiction_v1(
     let mut state = mask.state_after(&[]).ok_or("the constraint has no initial state")?;
     for (position, (&committed, row)) in pin.generated_token_ids.iter().zip(&pin.logits_rows).enumerate() {
         let (selected, stop) = mask.select(Some(&state), row, position as u32, &sampling);
-        if committed != selected {
+        if committed != selected || (stop && position + 1 < pin.generated_token_ids.len()) {
             let admitted = mask.admit(&state, committed).is_some();
             let witness = (!admitted && !stop).then_some(selected);
             let beat_lane = admitted.then_some(selected);
@@ -79,10 +79,11 @@ pub(super) fn flat_contradiction_v1(
                 witness,
                 beat_lane,
             };
-            kaspa_consensus_core::palw_step_refute::check_constrained_flat_decode_token_v1(
+            kaspa_consensus_core::palw_step_refute::check_constrained_flat_decode_token_at_v2(
                 binding,
                 &accusation,
                 binding.step_leaf_count,
+                true,
             )
             .map_err(|e| e.to_string())?;
             return Ok(Some(PalwPanelContradictionV1::ConstrainedDecodeFlat {
@@ -162,7 +163,7 @@ pub(super) fn tiled_plan_v1(
             state = next;
         } else {
             let witness = (0..mask.table.vocab()).find(|&id| mask.admit(&state, id).is_some());
-            if Some(committed) == mask.table.lowest_eog_id() && witness.is_none() {
+            if Some(committed) == mask.table.lowest_eog_id() && witness.is_none() && position + 1 == generated_token_ids.len() {
                 return Ok(None);
             }
             return Ok(Some(TiledPlanV1 { position: position as u32, committed, witness, beat_lane: None }));
@@ -270,7 +271,7 @@ pub(super) fn tiled_contradiction_v1(
         renderings.push(PalwTokenTableOpeningV1 { id, rendering: entry.clone(), opening: path });
     }
     let accusation = PalwConstrainedDecodeAccusationV1 { pin, job: job.clone(), renderings, eog, witness: plan.witness };
-    match check_constrained_decode_token_v1(binding, &accusation, binding.step_leaf_count) {
+    match check_constrained_decode_token_at_v2(binding, &accusation, binding.step_leaf_count, true) {
         Ok(_) => Ok(Some(PalwPanelContradictionV1::ConstrainedDecode { binding: binding.clone(), accusation: Box::new(accusation) })),
         Err(PalwStepRefuteError::NoFaultFound) => Ok(None),
         Err(why) => Err(why.to_string()),
@@ -491,7 +492,7 @@ mod tests {
         )
         .unwrap();
         let own = vec![0; job.decode_token_limit as usize];
-        for fault in 0..6 {
+        for fault in 0..7 {
             let mut ids = own.clone();
             let mut rows = vec![vec![0; vocab]; ids.len()];
             for row in &mut rows {
@@ -513,6 +514,54 @@ mod tests {
             }
             if fault == 5 {
                 ids[2] = vocab as u32;
+            }
+            if fault == 6 {
+                // An automaton accepting only the empty string has no admitted rendering.
+                // Its first EOG is a real stop; the authenticated suffix is nevertheless fraud.
+                let terminal = PalwDecodeConstraintV1 {
+                    version: 1, compiler_id: Hash64::from_u64_word(0xC016), start_frame: 0,
+                    frames: vec![PalwConstraintFrameV1 { start: 0,
+                        nodes: vec![PalwConstraintNodeV1 { accepting: true, edges: vec![] }] }],
+                };
+                let mut stopped_job = job.clone();
+                let Some(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(tail)) = &mut stopped_job.tail else {
+                    unreachable!()
+                };
+                tail.constraint = terminal.to_bytes();
+                for suffix in [false, true] {
+                    let stopped_ids = if suffix { vec![(vocab - 1) as u32, 0] } else { vec![(vocab - 1) as u32] };
+                    let stopped_rows = &rows[..stopped_ids.len()];
+                    let mut stopped_binding = template.clone();
+                    stopped_binding.job_context = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_context_v3(
+                        &stopped_job, &class,
+                        &kaspa_consensus_core::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(
+                            &stopped_job, stopped_ids.len() as u32), &template.job_context.network_id).unwrap();
+                    stopped_binding.full_logits_trace_root = tiled_logits_trace_root_v1(
+                        &stopped_binding.job_context, stopped_rows, &stopped_ids).unwrap();
+                    stopped_binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&stopped_binding);
+                    let stopped_target = PalwOffenceTargetV1 {
+                        claim_id: Hash64::from_u64_word(0xC016), class_id: job.class_id, artifact_root: Hash64::default(),
+                        executor_bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond),
+                        execution_root: stopped_binding.committed_execution_root,
+                        lane: Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt),
+                        segment_count: Some(4), phase: None,
+                        job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&stopped_binding.job_context),
+                        trace_root: stopped_binding.full_logits_trace_root,
+                        output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&stopped_binding.job_context, &stopped_ids),
+                    };
+                    let stopped_event = logits_event_disclosure_v1(&stopped_binding, stopped_rows, &stopped_ids, 0, 0).unwrap();
+                    let planned = tiled_plan_v1(&stopped_target, &stopped_job, &stopped_event, &[], table.clone()).unwrap();
+                    if suffix {
+                        let plan = planned.expect("a post-stop suffix is directly localizable");
+                        assert_eq!(plan.position, 0);
+                        assert_eq!(plan.witness, None);
+                        assert_eq!(plan.units().len(), 1);
+                        let proof = tiled_contradiction_v1(&stopped_target, &stopped_job, plan, &[stopped_event], table.clone())
+                            .unwrap().expect("public EOG and IDs suffice without a selection witness");
+                        assert!(matches!(proof, PalwPanelContradictionV1::ConstrainedDecode { .. }));
+                    } else { assert!(planned.is_none(), "an honest terminal EOG clears"); }
+                }
+                continue;
             }
             let mut binding = template.clone();
             binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &rows, &ids).unwrap();
