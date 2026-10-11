@@ -934,7 +934,7 @@ impl PalwTokenizerJsonStreamV1 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::palw_tokenizer_rendering_v1::{PalwQwenRenderingMapV1, palw_tokenizer_raw_commitment_v1};
     use std::collections::BTreeMap;
@@ -957,12 +957,12 @@ mod tests {
     }
     // Test-only proof book. Production may persist its sparse nodes to disk independently of
     // the court's constant-size set root; no challenger-supplied root enters the parser.
-    struct Book {
+    pub(crate) struct Book {
         defaults: Vec<Hash64>,
         nodes: BTreeMap<(usize, [u8; 64]), Hash64>,
     }
     impl Book {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let mut defaults = vec![hash(b"misaka-palw/json/object-key-empty/v1", &[])];
             for h in 1..=512 {
                 let last = defaults[h - 1];
@@ -970,7 +970,7 @@ mod tests {
             }
             Self { defaults, nodes: BTreeMap::new() }
         }
-        fn proof(&self, namespace: u64, key_hash: Hash64) -> PalwJsonKeyInsertProofV1 {
+        pub(crate) fn proof(&self, namespace: u64, key_hash: Hash64) -> PalwJsonKeyInsertProofV1 {
             let path = crate::palw_json_key_set_v1::palw_json_key_path_v1(namespace, key_hash);
             let mut siblings = Vec::new();
             for h in 0..512 {
@@ -981,7 +981,7 @@ mod tests {
             }
             PalwJsonKeyInsertProofV1 { namespace, key_hash, siblings }
         }
-        fn insert(&mut self, namespace: u64, key_hash: Hash64) {
+        pub(crate) fn insert(&mut self, namespace: u64, key_hash: Hash64) {
             let path = crate::palw_json_key_set_v1::palw_json_key_path_v1(namespace, key_hash);
             self.nodes.insert((0, prefix(path, 0)), hash(b"misaka-palw/json/object-key-present/v1", &[path.as_byte_slice()]));
             for h in 1..=512 {
