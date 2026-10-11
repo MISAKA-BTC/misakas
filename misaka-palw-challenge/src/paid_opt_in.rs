@@ -7,7 +7,8 @@ use crate::beacon::{VerifiedWorkBeaconV1, WorkBeaconV1};
 use crate::hash::{Digest, object_id};
 use crate::opt_in::opt_in_source_facts;
 use crate::sealed::collect_sealed_inner;
-use crate::{BeaconContextV1, OptInContractV4, OptInSourceV4, PolicyRefusalV1, SealedBeaconStateV3};
+use crate::policy::PolicyRefusalV1;
+use crate::{BeaconContextV1, OptInContractV4, OptInSourceV4, SealedBeaconStateV3};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 const INITIAL: &[u8] = b"MISAKA/PALW/WORK-BEACON/PAID-OPT-IN/V5";
