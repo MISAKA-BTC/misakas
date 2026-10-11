@@ -581,6 +581,21 @@ async fn fresh_public_bond_service_defaults_on_a_withheld_job_preimage_after_a_c
     fresh_public_service(PublicCase::UnretainedWithheldFpV3Job).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_bond_service_convicts_a_constraint_forbidden_token_without_job_metadata() {
+    fresh_public_service(PublicCase::UnretainedConstraintForbidden).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_bond_service_convicts_a_constraint_premature_stop_without_job_metadata() {
+    fresh_public_service(PublicCase::UnretainedConstraintStop).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_bond_service_convicts_a_constraint_beaten_token_without_job_metadata() {
+    fresh_public_service(PublicCase::UnretainedConstraintBeaten).await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublicCase {
     Withholding,
@@ -598,6 +613,9 @@ enum PublicCase {
     UnretainedLargeConstraintJob,
     UnretainedWithheldLargeConstraintJob,
     UnretainedWithheldFpV3Job,
+    UnretainedConstraintForbidden,
+    UnretainedConstraintStop,
+    UnretainedConstraintBeaten,
 }
 
 impl PublicCase {
@@ -617,6 +635,9 @@ impl PublicCase {
                 | Self::UnretainedLargeConstraintJob
                 | Self::UnretainedWithheldLargeConstraintJob
                 | Self::UnretainedWithheldFpV3Job
+                | Self::UnretainedConstraintForbidden
+                | Self::UnretainedConstraintStop
+                | Self::UnretainedConstraintBeaten
         )
     }
     fn identity_fault(self) -> bool {
@@ -644,6 +665,23 @@ impl PublicCase {
                 | Self::UnretainedLargeConstraintJob
         )
     }
+    fn constraint_fault(self) -> Option<u8> {
+        match self {
+            Self::UnretainedConstraintForbidden => Some(1),
+            Self::UnretainedConstraintStop => Some(2),
+            Self::UnretainedConstraintBeaten => Some(3),
+            _ => None,
+        }
+    }
+    fn constraint(self) -> bool {
+        self.large_constraint() || self.constraint_fault().is_some()
+    }
+    fn exact_fault(self) -> bool {
+        self.identity_fault() || self.constraint_fault().is_some()
+    }
+    fn answers_input(self) -> bool {
+        self.reacquire_honest() || self.constraint_fault().is_some()
+    }
     fn large_constraint(self) -> bool {
         matches!(self, Self::UnretainedLargeConstraintJob | Self::UnretainedWithheldLargeConstraintJob)
     }
@@ -659,6 +697,43 @@ fn public_constraint_table(tokenizer_id: Hash64) -> kaspa_consensus_core::palw_f
         eog_token_ids: vec![(vocab - 1) as u32],
         tokenizer_id,
     }
+}
+
+fn selection_constraint_table(tokenizer_id: Hash64) -> kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+    let mut table = public_constraint_table(tokenizer_id);
+    for entry in &mut table.entries {
+        *entry = Some(b"b".to_vec());
+    }
+    table.entries[0] = Some(b"a".to_vec());
+    table.entries[1] = Some(b"a".to_vec());
+    table
+}
+
+fn selection_constraint_job(
+    job: &mut kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+) -> Arc<kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1> {
+    use kaspa_consensus_core::palw_decode_constraint_v1::*;
+    use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
+    let table = Arc::new(selection_constraint_table(job.tokenizer_id));
+    let constraint = PalwDecodeConstraintV1 {
+        version: 1,
+        compiler_id: Hash64::from_u64_word(0xC015_0100),
+        start_frame: 0,
+        frames: vec![PalwConstraintFrameV1 {
+            start: 0,
+            nodes: vec![PalwConstraintNodeV1 {
+                accepting: true,
+                edges: vec![PalwConstraintEdgeV1 { lo: b'a', hi: b'a', action: PalwConstraintActionV1::Goto(0) }],
+            }],
+        }],
+    };
+    job.version = PALW_FP_CONSTRAINT_VERSION;
+    job.decode = None;
+    job.tail = Some(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 {
+        constraint: constraint.to_bytes(),
+        table_root: table.root(),
+    }));
+    table
 }
 
 fn large_public_constraint_job(
@@ -726,6 +801,7 @@ fn public_fp_job(
     chain: &Chain,
     identity_fault: bool,
     large_constraint: bool,
+    constraint_fault: Option<u8>,
 ) -> (
     kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1,
     kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
@@ -770,6 +846,8 @@ fn public_fp_job(
     };
     let producer_table = if large_constraint {
         Some(large_public_constraint_job(&mut job))
+    } else if constraint_fault.is_some() {
+        Some(selection_constraint_job(&mut job))
     } else if chain.config.params.palw_fp_decode_rules_active_at(chain.daa()) {
         job = job.into_v4(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
         None
@@ -806,7 +884,33 @@ fn public_fp_job(
         chain.daa() + facts.min_trace_retention_daa,
     )
     .unwrap();
-    let event = backend.disclose_trace_event(&run.outcome.material, 0, 0).unwrap();
+    let mut event = backend.disclose_trace_event(&run.outcome.material, 0, 0).unwrap();
+    let mut outcome = run.outcome;
+    if let Some(fault) = constraint_fault {
+        use kaspa_consensus_core::palw_step_refute::{PalwTraceEventDisclosureV1, base0_logits_trace_root_v1};
+        let PalwTraceEventDisclosureV1::Flat { binding, pin } = &mut event else { panic!("registered floor is flat") };
+        assert!(pin.generated_token_ids.len() > 2);
+        assert!(pin.generated_token_ids[..3].iter().all(|id| *id <= 1));
+        pin.generated_token_ids[2] = match fault {
+            1 => 2,
+            2 => binding.shape_profile.vocab_size - 1,
+            3 => 1 - pin.generated_token_ids[2],
+            _ => unreachable!(),
+        };
+        binding.full_logits_trace_root = base0_logits_trace_root_v1(&binding.job_context, &pin.logits_rows, &pin.generated_token_ids);
+        binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(binding);
+        kaspa_consensus_core::palw_step_leg::verify_binding_v1(binding).unwrap();
+        commitment.execution_root = binding.committed_execution_root;
+        commitment.trace_root = binding.full_logits_trace_root;
+        commitment.output_root =
+            kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, &pin.generated_token_ids);
+        outcome.execution_root = commitment.execution_root;
+        outcome.trace_root = commitment.trace_root;
+        outcome.output_root = commitment.output_root;
+        // Retain only the public event and input/job descriptor. No producer capture is
+        // available to the outsider or to a test-side proof builder.
+        outcome.material.clear();
+    }
     // The claimed job A has a fully valid user prompt and schedule; its authenticated
     // execution material belongs to B. Admission must not require trusting Panel replay.
     if identity_fault {
@@ -820,7 +924,7 @@ fn public_fp_job(
         commitment.decode_tokens_executed,
     )
     .0;
-    (run.outcome, event, Some((commitment, prompt.into_iter().map(|t| t as u32).collect())))
+    (outcome, event, Some((commitment, prompt.into_iter().map(|t| t as u32).collect())))
 }
 
 async fn fresh_public_service(case: PublicCase) {
@@ -829,7 +933,7 @@ async fn fresh_public_service(case: PublicCase) {
         case == PublicCase::ForeignFpJob,
         case.pruned_fp() || case == PublicCase::HonestFpV3Job,
         case.unretained_fp(),
-        case.large_constraint(),
+        case.constraint(),
     );
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
@@ -918,7 +1022,7 @@ async fn fresh_public_service(case: PublicCase) {
     eprintln!("[service-public] ordinary bond registered before DAA {registered_before}, maturity {maturity}, now {}", chain.daa());
     let foreign = (case != PublicCase::Withholding).then(|| {
         if case.is_fp() {
-            return public_fp_job(&chain, case.identity_fault(), case.large_constraint());
+            return public_fp_job(&chain, case.identity_fault(), case.large_constraint(), case.constraint_fault());
         }
         use misaka_palw_base0::classes::resolve_class_v1;
         let backend = misaka_palw_base0::backend::Base0Backend::new(
@@ -1176,11 +1280,16 @@ async fn fresh_public_service(case: PublicCase) {
     ));
     let retained_flow = flow.clone();
     let dir = tempfile::tempdir().unwrap();
-    if case.large_constraint() {
+    if case.constraint() {
         use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
         // Independently rebuild and load the fixture's PUBLIC tokenizer file for the outside
         // verifier. The producer's table Arc, capture and pending state are never handed over.
-        let public_file = palw_token_table_file_encode_v1(&public_constraint_table(Hash64::default()));
+        let table = if case.constraint_fault().is_some() {
+            selection_constraint_table(Hash64::default())
+        } else {
+            public_constraint_table(Hash64::default())
+        };
+        let public_file = palw_token_table_file_encode_v1(&table);
         palw_token_tables_v1().register(palw_token_table_file_decode_v1(&public_file).unwrap());
     }
     let service =
@@ -1371,12 +1480,13 @@ async fn fresh_public_service(case: PublicCase) {
             );
             eprintln!("[service-public] authenticated binding carried; answered = {}", !case.identity_fault());
         }
-        if matches!(
+        if (matches!(
             case,
             PublicCase::UnretainedHonestFpV3Job
                 | PublicCase::UnretainedMultipartHonestFpV3Job
                 | PublicCase::UnretainedLargeConstraintJob
-        ) && !job_preimage_submitted
+        ) || case.constraint_fault().is_some())
+            && !job_preimage_submitted
             && chain.view(claim).sessions.iter().any(|(who, s)| {
                 *who == bond
                     && s.units.contains(&kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(
@@ -1494,7 +1604,7 @@ async fn fresh_public_service(case: PublicCase) {
             job_preimage_submitted = true;
             eprintln!("[service-public] wrong job refused, authenticated job preimage acquired through signed public carriers");
         }
-        if case.reacquire_honest() {
+        if case.answers_input() {
             use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
             use kaspa_consensus_core::palw_legacy_held_da_v2::{
                 PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2, PALW_LEGACY_HELD_VERSION_V2, PalwLegacyHeldAnswerCarriageV2,
@@ -1673,7 +1783,7 @@ async fn fresh_public_service(case: PublicCase) {
                 break;
             }
         }
-        if case.identity_fault() {
+        if case.exact_fault() {
             assert!(!view.da_defaulted, "disclosed job fraud must reach exact conviction, not DA default");
             let offence =
                 kaspa_consensus_core::palw_offence_attribution_v1::palw_executor_refuted_offence_id_v1(&view.producer.0, &claim);
@@ -1747,10 +1857,27 @@ async fn fresh_public_service(case: PublicCase) {
                         })
                         .expect("the verifier's exact proof is included in an actual block");
                     assert_eq!(evidence.claim_id, claim);
-                    assert!(matches!(
-                        evidence.contradiction,
-                        kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::IdentityMismatch { .. }
-                    ));
+                    if case.constraint_fault().is_some() {
+                        let kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::ConstrainedDecodeFlat {
+                            accusation, ..
+                        } = evidence.contradiction
+                        else {
+                            panic!("exact constraint token proof, not identity/output/default")
+                        };
+                        assert_eq!(accusation.position, 2);
+                        assert!(job_preimage_submitted, "the outsider reacquired the original job before proof generation");
+                        match case.constraint_fault().unwrap() {
+                            1 => assert_eq!(accusation.pin.generated_token_ids[2], 2),
+                            2 => assert!(accusation.witness.is_some()),
+                            3 => assert!(accusation.beat_lane.is_some()),
+                            _ => unreachable!(),
+                        }
+                    } else {
+                        assert!(matches!(
+                            evidence.contradiction,
+                            kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::IdentityMismatch { .. }
+                        ));
+                    }
                     for (seat, key, winner) in &panels {
                         assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ObjectiveOffence { kind, accused, .. } if *kind == kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 && *accused == *seat)));
                         assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterCommitted { commitment, reporter, .. } if *commitment == winner.commitment && *reporter == bond)));
