@@ -15,6 +15,7 @@ pub struct PalwStagedClaimContractV1 {
     pub producer: PalwBondKeyV2,
     /// All bound seats remain held even after their panel/claim rows retire.
     pub panel: std::collections::BTreeSet<PalwBondKeyV2>,
+    pub prefix_custody: Option<crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwStagedCourtRowV1 {
@@ -57,7 +58,10 @@ impl PalwStagedCourtRowV1 {
                     && c.terms.collect_until_daa <= c.terms.material_until_daa
                     && c.terms.material_until_daa <= c.terms.bond_exit_after_daa =>
             {
-                Ok(())
+                if c.prefix_custody.as_ref().is_some_and(|p| p.accepted_daa != c.terms.accepted_daa) {
+                    return Err("prefix custody changes immutable accepting clock".into());
+                }
+                c.prefix_custody.as_ref().map(|p| p.check(&c.panel)).unwrap_or(Ok(()))
             }
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Constraint(c)) if (*claim, *bond) == c.key() => c.check(),
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Tokenizer(c)) if (*claim, *bond) == c.key() => c.check(),

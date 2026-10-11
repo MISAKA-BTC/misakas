@@ -117,7 +117,17 @@ impl TransitionBuilder<'_> {
             }
         }
         claim.trace_retention_daa = claim.trace_retention_daa.max(terms.material_until_daa);
-        Ok(Some(PalwStagedClaimContractV1 { terms, producer: claim.bond, panel: BTreeSet::new() }))
+        let prefix_custody = public_job.filter(|c| c.job.is_prefix_state()).and_then(|commit| {
+            self.state.class_semantics.get(&claim.class_id).filter(|s| s.prefix_state_relation.is_some()).map(|registered| {
+                crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1::new(
+                    claim.execution_root,
+                    crate::palw_fp_execution_v3::palw_fp_job_pin_v1(commit),
+                    registered.cu_ruleset_id,
+                    &terms,
+                )
+            })
+        });
+        Ok(Some(PalwStagedClaimContractV1 { terms, producer: claim.bond, panel: BTreeSet::new(), prefix_custody }))
     }
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) {
         let old = match &new {
@@ -137,6 +147,38 @@ impl TransitionBuilder<'_> {
     pub(super) fn record_staged_panel_v1(&mut self, claim: Hash64, panel: &PalwPanelStateV2) {
         if let Some(mut contract) = self.state.staged_claim_contract_v1(&claim).cloned() {
             contract.panel.extend(panel.seats.iter().map(|seat| seat.bond));
+            if let Some(custody) = &mut contract.prefix_custody {
+                custody.expected_panel = panel.seats.iter().map(|seat| seat.bond).collect();
+            }
+            self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(PalwStagedCourtRowV1::Claim(contract)));
+        }
+    }
+    /// Called only on actual signed Valid credit edges; ordinary membership/Sampled pay is
+    /// insufficient. Qualification remains claim-rooted after duty/receipt pruning.
+    pub(super) fn record_staged_prefix_receipts_v1(
+        &mut self,
+        claim: Hash64,
+        receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
+        credited: &[PalwBondKeyV2],
+        now: u64,
+    ) {
+        if self.extras.staged_public_court.is_none() {
+            return;
+        }
+        let Some(mut contract) = self.state.staged_claim_contract_v1(&claim).cloned() else {
+            return;
+        };
+        let Some(custody) = &mut contract.prefix_custody else {
+            return;
+        };
+        let mut changed = false;
+        for receipt in receipts.iter().filter(|r| {
+            credited.contains(&r.seat_bond)
+                || self.state.panel_duties.get(&claim).is_some_and(|duties| duties.seats.get(&r.seat_bond).is_some_and(|at| *at != 0))
+        }) {
+            changed |= custody.qualify(claim, receipt, now);
+        }
+        if changed {
             self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(PalwStagedCourtRowV1::Claim(contract)));
         }
     }

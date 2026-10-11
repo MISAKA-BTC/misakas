@@ -27315,6 +27315,7 @@ impl<'a> TransitionBuilder<'a> {
         if moved {
             self.write_panel_duties(claim_id, Some(row));
         }
+        self.record_staged_prefix_receipts_v1(claim_id,receipts,&credited,daa_score);
         // Lane PL part E (ADR-0166): a credited receipt is one success in its seat's availability window (once per seat and
         // claim: the duty row's `0 -> credited` edge is the only writer).
         if self.params.seat_availability_active_at(daa_score) {
@@ -28780,6 +28781,12 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
+        if self.state.staged_claim_contract_v1(&id).and_then(|c|c.prefix_custody.as_ref()).is_some_and(|c|!c.qualified()) {
+            // Refusal to opt into prospective custody buys no Final/activation credit and
+            // creates no retroactive DA guilt. Pending accusations keep their existing route.
+            if self.state.palw_accusation_pending_v1(&id) {return Ok(());}
+            return self.void_claim(id,claim,final_daa,PalwVoidReasonV2::PanelUnavailable);
+        }
         self.note_model_probe(claim, true, final_daa);
         // ADR-0152-adjacent (Activation Pool): (b)'s tracking — before the duty row leaves below.
         self.note_activation_probe_credits_v1(&id, claim);
@@ -79496,7 +79503,7 @@ mod staged_court_state_tests_v1 {
         state.last_point=Some(PalwBlockContextV2 {block:BlockHash::from_u64_word(821),daa_score:100,blue_score:100,subsidy:0});
         assert_eq!(palw_staged_owned_progress_v1(&state,(claim,owner)).unwrap(),None);
         let contract=PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms:row.terms,producer:PALW_BOND_KEY_V2_MIN,
-            panel:BTreeSet::from([PALW_BOND_KEY_V2_MIN])});
+            panel:BTreeSet::from([PALW_BOND_KEY_V2_MIN]), prefix_custody:None });
         apply_delta_entry(&mut state,&PalwDeltaEntryV2::StagedCourtSeed {key:PalwStagedCourtKeyV1::Claim(claim),old:None,new:Some(contract)},false).unwrap();
         let mut dispute=crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1 {opened_daa:100,hard_deadline_daa:row.terms.material_until_daa,..Default::default()};
         dispute.live.insert(owner,crate::palw_legacy_public_filer_v1::PalwDisputeReservationRowV1 {reserved_daa:100,deposit:1,sessions_opened:0,lanes_joined:0});
@@ -79528,9 +79535,9 @@ mod staged_court_state_tests_v1 {
             .court_envelope(17,config.prices).unwrap();
         let terms=crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(100,small,100,100,20).unwrap();
         let panel:BTreeSet<_>=(1..=5).map(|i|PalwBondKeyV2(TransactionOutpoint {transaction_id:crate::tx::TransactionId::from_u64_word(i),index:0})).collect();
-        let original=PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms,producer:PALW_BOND_KEY_V2_MIN,panel:panel.clone()});
+        let original=PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms,producer:PALW_BOND_KEY_V2_MIN,panel:panel.clone(), prefix_custody:None });
         let next_terms=terms.extend_paid_work_v1(terms.open_until_daa-1,large).unwrap();
-        let extended=PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms:next_terms,producer:PALW_BOND_KEY_V2_MIN,panel:panel.clone()});
+        let extended=PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms:next_terms,producer:PALW_BOND_KEY_V2_MIN,panel:panel.clone(), prefix_custody:None });
         let key=PalwStagedCourtKeyV1::Claim(Hash64::from_u64_word(819));
         let mut state=PalwChainStateV2::genesis();
         apply_delta_entry(&mut state,&PalwDeltaEntryV2::StagedCourtSeed {key,old:None,new:Some(original.clone())},false).unwrap();
@@ -79572,7 +79579,7 @@ mod staged_court_state_tests_v1 {
             let panel:BTreeSet<_>=(1..=5).map(|i|PalwBondKeyV2(TransactionOutpoint {
                 transaction_id:crate::tx::TransactionId::from_u64_word(i),index:0})).collect();
             let contract=PalwDeltaEntryV2::StagedCourtSeed {key:PalwStagedCourtKeyV1::Claim(target.claim_id),old:None,
-                new:Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms,producer:target.executor_bond,panel:panel.clone()}))};
+                new:Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms,producer:target.executor_bond,panel:panel.clone(), prefix_custody:None }))};
             let seed=PalwDeltaEntryV2::StagedCourtSeed {key:owner_key,old:None,new:Some(PalwStagedCourtRowV1::Prefix(Box::new(row)))};
             apply_delta_entry(&mut state,&contract,false).unwrap();apply_delta_entry(&mut state,&seed,false).unwrap();
             assert_eq!(palw_accuser_exposure_v1(&state,&owner),u128::from(plan.deposit_sompi));
@@ -79630,7 +79637,7 @@ mod staged_court_state_tests_v1 {
             let mut state=PalwChainStateV2::genesis();let empty_root=state.state_root();
             let contract=PalwDeltaEntryV2::StagedCourtSeed { key:PalwStagedCourtKeyV1::Claim(row.claim),old:None,
                 new:Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms:row.terms,
-                    producer:PALW_BOND_KEY_V2_MIN,panel:BTreeSet::from([PALW_BOND_KEY_V2_MIN])})) };
+                    producer:PALW_BOND_KEY_V2_MIN,panel:BTreeSet::from([PALW_BOND_KEY_V2_MIN]), prefix_custody:None })) };
             let seed=PalwDeltaEntryV2::StagedCourtSeed {key:owner_key,old:None,new:Some(PalwStagedCourtRowV1::Tokenizer(Box::new(row.clone())))};
             apply_delta_entry(&mut state,&contract,false).unwrap();apply_delta_entry(&mut state,&seed,false).unwrap();
             assert_eq!(palw_accuser_exposure_v1(&state,&row.reserver),u128::from(row.deposit_locked));
@@ -79673,7 +79680,7 @@ mod staged_court_state_tests_v1 {
         let deposit = row.deposit_locked;
         let contract = PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {
             terms: row.terms, producer: owner, panel: BTreeSet::from([PALW_BOND_KEY_V2_MIN]),
-        });
+         prefix_custody:None });
         let claim_entry = PalwDeltaEntryV2::StagedCourtSeed { key: PalwStagedCourtKeyV1::Claim(claim),
             old: None, new: Some(contract) };
         let owner_entry = PalwDeltaEntryV2::StagedCourtSeed { key: PalwStagedCourtKeyV1::Owner(claim, owner),
@@ -79710,7 +79717,7 @@ mod staged_court_state_tests_v1 {
             let contract = PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {
                 terms: row.terms, producer: PALW_BOND_KEY_V2_MIN,
                 panel: BTreeSet::from([PALW_BOND_KEY_V2_MIN]),
-            });
+             prefix_custody:None });
             apply_delta_entry(&mut state, &PalwDeltaEntryV2::StagedCourtSeed {
                 key: PalwStagedCourtKeyV1::Claim(row.claim), old: None, new: Some(contract) }, false).unwrap();
             assert!(reference.resolve(&state, root).is_err());
@@ -79751,7 +79758,7 @@ mod staged_court_state_tests_v1 {
         let terms = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()
             .claim_terms(100, 4, 4099).unwrap();
         let key = PalwStagedCourtKeyV1::Claim(Hash64::from_u64_word(107));
-        let entry = PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new: Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms, producer: PALW_BOND_KEY_V2_MIN, panel: BTreeSet::new() })) };
+        let entry = PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new: Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms, producer: PALW_BOND_KEY_V2_MIN, panel: BTreeSet::new() , prefix_custody:None })) };
         assert_eq!(borsh::to_vec(&entry).unwrap()[0], 210);
         apply_delta_entry(&mut state, &entry, false).unwrap();
         assert_ne!(state.state_root(), empty_root);
