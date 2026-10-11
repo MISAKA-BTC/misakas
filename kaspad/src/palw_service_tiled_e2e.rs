@@ -188,6 +188,19 @@ impl TiledFixture {
         admission.signature =
             signed(0, message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT);
         chain.send(0, &object, &mut floats[0], &[]).await;
+        assert_eq!(
+            chain.tc.palw_registered_class_carriage_v1(self.profile.shape_profile_id()),
+            Some((self.profile.clone(), self.canonical.clone()))
+        );
+        eprintln!(
+            "[service-tiled] ordinary signed class registration accepted; root {}, {} lanes, canonical {}/{}",
+            self.root, self.profile.vocab_size, self.canonical.declared_prefill_tokens, self.canonical.exact_decode_tokens
+        );
+    }
+
+    /// The canonical graph is first published through the ordinary certification object.
+    /// A qualified cache relation cannot be attached to an unproven profile at registration.
+    pub async fn declare_semantics(&self, chain: &mut Chain, floats: &mut [Funding]) {
         if chain.config.params.palw_class_semantics_v1_active_at(chain.daa()) {
             use kaspa_consensus_core::palw_class_semantics_v1::*;
             let declaration = PalwClassSemanticsDeclarationV1 {
@@ -212,14 +225,6 @@ impl TiledFixture {
             };
             chain.send(0, &object, &mut floats[0], &[]).await;
         }
-        assert_eq!(
-            chain.tc.palw_registered_class_carriage_v1(self.profile.shape_profile_id()),
-            Some((self.profile.clone(), self.canonical.clone()))
-        );
-        eprintln!(
-            "[service-tiled] ordinary signed class registration accepted; root {}, {} lanes, canonical {}/{}",
-            self.root, self.profile.vocab_size, self.canonical.declared_prefill_tokens, self.canonical.exact_decode_tokens
-        );
     }
 
     pub fn produce(
@@ -569,6 +574,8 @@ async fn registered_tiled_constraint_class_passes_normal_registration_and_host_r
     chain.advance(2).await;
     let fixture = TiledFixture::new(&chain);
     fixture.register(&mut chain, &mut floats).await;
+    certify_fp_lane(&mut chain, &mut floats, fixture.profile.clone(), true).await;
+    fixture.declare_semantics(&mut chain, &mut floats).await;
     let backend = fixture.backend(&chain);
     let (context, _) = backend.job_for_anchor(Hash64::from_u64_word(0xC014)).unwrap();
     assert_eq!(context.shape_profile_id, fixture.profile.shape_profile_id());
@@ -587,6 +594,7 @@ async fn registered_tiled_constraint_class_passes_normal_readiness_jury_and_fp_p
     let fixture = TiledFixture::new(&chain);
     fixture.register(&mut chain, &mut floats).await;
     certify_fp_lane(&mut chain, &mut floats, fixture.profile.clone(), true).await;
+    fixture.declare_semantics(&mut chain, &mut floats).await;
     fixture.prepare_panel(&mut chain, &mut floats).await;
     let (_, _, Some((commitment, ids)), _) = fixture.produce(&chain, 3) else { unreachable!() };
     let quote = chain
