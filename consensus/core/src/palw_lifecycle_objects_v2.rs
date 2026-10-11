@@ -1926,6 +1926,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 161 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 162, hi: 163 }, "palw_legacy_public_filer_v1", "LG14 terminal objective evidence", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 164, hi: 164 }, "palw_class_semantics_v1", "G14 prospective registered semantics", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 165, hi: 167 }, "palw_staged_public_court_v1", "G14 owned public court stream", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
@@ -2120,6 +2121,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (157, 161, "LG14-B legacy held DA", &["palw_legacy_held_da_v2"]),
     (162, 163, "LG14 terminal objective evidence", &["palw_legacy_public_filer_v1"]),
     (164, 164, "G14 prospective registered semantics", &["palw_class_semantics_v1"]),
+    (165, 167, "G14 owned public court stream", &["palw_staged_public_court_v1"]),
 ];
 
 #[cfg(test)]
