@@ -17,6 +17,7 @@ pub mod mapped;
 pub mod residency;
 pub mod run;
 pub mod tree;
+mod sparse_tree;
 
 pub use annex::{
     PALW_TIR_LEAF_ANNEX_MAGIC_V1, PALW_TIR_LEAF_ANNEX_VERSION_V1, PalwTirAnnexTraceV1, PalwTirLeafAnnexV1, TirDivergenceV1,
@@ -59,3 +60,5 @@ pub use residency::{
 };
 pub use run::{TirBoundaryLieV1, TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, TirRangeRunV1, TirResumePointV1};
 pub use tree::TirStepTreeV1;
+
+pub use sparse_tree::{TirProofTreeV1, TirSparseStepTreeV1};

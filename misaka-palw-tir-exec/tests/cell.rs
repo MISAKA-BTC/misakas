@@ -30,7 +30,7 @@ use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use misaka_palw_tir::{MapParams, Prim, TirProgramV1};
 use misaka_palw_tir_exec::node::{
     CpuKernelBackendV1, KernelBackendV1, TirCaptureInputsV1, TirCellRequestV1, TirCellV1, TirCellVerdictV1, TirClassRunnerV1,
-    TirRunInputsV1, cell_runs_v1,
+    TirRunInputsV1, TirCellInputsV1, cell_runs_v1,
 };
 use misaka_palw_tir_exec::{NoSink, StepSink, TirExecutor, TirParams, TirPlan};
 use node_common::{job, layout, programs};
@@ -493,6 +493,19 @@ fn a_wrong_generated_id_is_a_token_fault_and_a_missing_input_is_unavailable_and_
         fused: false,
     };
     assert!(matches!(CpuKernelBackendV1.verify_cell(&req).unwrap(), TirCellVerdictV1::Unavailable { .. }));
+    // A corrupt second preimage may not retain the otherwise valid first one.
+    let mut atomic = TirRunInputsV1::default();
+    let opening = PalwStepRangeOpeningV1 { first_leaf_index: 0, leaf_hashes: hashes[..2].to_vec(),
+        siblings: step_merkle_range_siblings_v1(&hashes, 0, 2).unwrap() };
+    let mut corrupt = s.leaves[..2].to_vec();
+    corrupt[1].values_le[0] ^= 1;
+    assert!(atomic.add_run(hashes.len() as u64, &s.root, &opening, &corrupt, &s.ctx, &s.class_id, u64::MAX).is_err());
+    assert_eq!(atomic.leaves(), 0);
+    assert!(atomic.leaf_preimage(0).is_none());
+    atomic.add_run(hashes.len() as u64, &s.root, &opening, &s.leaves[..2], &s.ctx, &s.class_id, u64::MAX).unwrap();
+    let before = atomic.leaves();
+    assert!(atomic.add_run(hashes.len() as u64, &s.root, &opening, &[], &s.ctx, &Hash64::from_u64_word(99), u64::MAX).is_err());
+    assert_eq!(atomic.leaves(), before);
     let _ = NoSink;
 }
 
@@ -556,6 +569,44 @@ fn a_seat_duty_verifies_its_shards_cells_over_a_backends_capture() {
                     let v = tir_verify_capture_cells_v1(&backend, &outcome.material, std::slice::from_ref(c), &mut CpuKernelBackendV1)
                         .unwrap();
                     assert!(matches!(v, TirCellVerdictV1::Verified { .. }), "{name} S_L {s_l} S_P {s_p} shard {shard}: {v:?}");
+                    // The real producer's stripped DA answers supply only this cell's runs.
+                    // The verifier and proof builder use a fold, never the whole N-leaf tree.
+                    let capture = TirCaptureV1::decode(&outcome.material).unwrap();
+                    let class = backend.class();
+                    let holding = misaka_palw_tir_exec::node::fetch_shard_params_v1(
+                        &class, class.class_id(&root), root, s_l, shard,
+                        &misaka_palw_tir_exec::node::TirFileMirrorV1(path.clone()),
+                    ).unwrap();
+                    let mut runs = TirRunInputsV1::default();
+                    for (first, count, _) in cell_runs_v1(backend.space(), &job, c).unwrap() {
+                        let mut start = first;
+                        let end = first + u64::from(count);
+                        while start < end {
+                            let take = (end - start).min(256) as u32;
+                            let kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::TirStepRun(answer) = backend.step_unit_answer(
+                                &outcome.material, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::TirStepRun { first: start, count: take }
+                            ).unwrap() else { panic!("a valid run receives its disclosure") };
+                            assert!(answer.binding.class.program.is_empty());
+                            runs.add_run(capture.binding.step_leaf_count, &capture.binding.step_merkle_root,
+                                &answer.range, &answer.preimages, &job, &holding.class_id, 1 << 26).unwrap();
+                            start += u64::from(take);
+                        }
+                    }
+                    let mut fold = capture.clone();
+                    fold.leaves.clear();
+                    assert_eq!(holding.verify_cells_from_runs(&fold, &runs, std::slice::from_ref(c), form,
+                        1 << 26, &mut CpuKernelBackendV1).unwrap(), v, "{name}: sparse DA inputs have the exact dense verdict");
+                    let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
+                        1 << 26, 10, 2, 2_250_000, 16_777_216, 8).unwrap();
+                    let rules = backend.court_rules(&court);
+                    if let Some(index) = (0..capture.binding.step_leaf_count).find(|i| {
+                        runs.leaf_preimage(*i).is_some()
+                            && backend.space().leaf_at(&job, *i).is_some_and(|l| matches!(l.kind,
+                                PalwTirLeafKindV1::Commit { occurrence, .. } if c.occ.contains(&(occurrence as usize))))
+                    }) {
+                        assert_eq!(holding.named_leaf_close_from_runs(&fold, &runs, index, &rules).unwrap(),
+                            holding.named_leaf_close(&capture, index, &rules).unwrap(), "{name}: same canonical opening");
+                    }
                     cells_run += 1;
                 }
                 if let Some(first) = full.first() {

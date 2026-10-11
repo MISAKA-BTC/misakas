@@ -559,6 +559,8 @@ impl TirCellInputsV1 for TirCaptureInputsV1<'_> {
 pub struct TirRunInputsV1 {
     hashes: BTreeMap<u64, Hash64>,
     preimages: BTreeMap<u64, PalwStepTileLeafV1>,
+    identity: Option<(u64, Hash64, Hash64, Hash64)>,
+    ranges: BTreeMap<(u64, usize), PalwStepRangeOpeningV1>,
 }
 
 impl TirRunInputsV1 {
@@ -582,16 +584,42 @@ impl TirRunInputsV1 {
             return Err("more preimages than leaves in the run".to_string());
         }
         let ctx_hash = ctx.context_hash();
+        let identity = (leaf_count, *step_root, ctx_hash, *class_id);
+        if self.identity.is_some_and(|old| old != identity) {
+            return Err("the requested runs bind different jobs, classes or roots".into());
+        }
         for (i, pre) in preimages.iter().enumerate() {
             if step_tile_leaf_hash_v1(&ctx_hash, class_id, pre) != opening.leaf_hashes[i] {
                 return Err(format!("preimage {i} of the run is not its opened leaf"));
             }
+        }
+        // Authenticate every preimage before the first mutation. A corrupt suffix may
+        // not leave the preceding leaves behind in a supposedly refused whole reply.
+        for (i, pre) in preimages.iter().enumerate() {
             self.preimages.insert(opening.first_leaf_index + i as u64, pre.clone());
         }
         for (i, h) in opening.leaf_hashes.iter().enumerate() {
             self.hashes.insert(opening.first_leaf_index + i as u64, *h);
         }
+        self.identity = Some(identity);
+        self.ranges.insert((opening.first_leaf_index, opening.leaf_hashes.len()), opening.clone());
         Ok(())
+    }
+
+    pub(crate) fn preimages_v1(&self) -> &BTreeMap<u64, PalwStepTileLeafV1> { &self.preimages }
+    pub(crate) fn validate_capture_v1(&self, capture: &super::backend::TirCaptureV1, class_id: Hash64) -> Result<(), String> {
+        let b = &capture.binding;
+        if self.identity != Some((b.step_leaf_count, b.step_merkle_root, b.job_context.context_hash(), class_id)) {
+            return Err("the sparse evidence is not this capture's binding".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn proof_tree_v1(&self, binding: &super::backend::TirCaptureV1, class_id: Hash64, cap: u64) -> Result<super::sparse_tree::TirSparseStepTreeV1, String> {
+        self.validate_capture_v1(binding, class_id)?;
+        let b = &binding.binding;
+        let mut tree = super::sparse_tree::TirSparseStepTreeV1::new(b.step_leaf_count, b.step_merkle_root)?;
+        for opening in self.ranges.values() { tree.add_range(opening, cap)?; }
+        Ok(tree)
     }
 
     pub fn leaves(&self) -> usize {

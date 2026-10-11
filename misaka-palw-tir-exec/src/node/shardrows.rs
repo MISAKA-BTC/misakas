@@ -160,6 +160,87 @@ impl TirShardHoldingV1 {
         f(&store)
     }
 
+    fn with_runs<R>(
+        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
+        rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
+        f: impl FnOnce(&super::evidence::TirEvidenceV1<'_>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let runner = super::run::TirClassRunnerV1::new(&self.space, &self.plan, &self.params, self.class_id)?;
+        let store = super::evidence::TirEvidenceV1::runs(&runner, capture, inputs, self, rules.prompt_form, rules.max_step_leaf_count)?;
+        f(&store)
+    }
+
+    /// Verify only the cells and their authenticated requested inputs. A fold is enough
+    /// for the pinned prompt/trace; missing leaf/hash inputs produce Unavailable.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_cells_from_runs(
+        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
+        cells: &[super::cell::TirCellV1],
+        prompt_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        cap: u64, backend: &mut dyn super::cell::KernelBackendV1,
+    ) -> Result<super::cell::TirCellVerdictV1, String> {
+        use super::cell::{CpuKernelBackendV1, KernelBackendV1, TirCellRequestV1, TirCellVerdictV1};
+        super::backend::tir_authenticate_capture_metadata_v1(capture, self.class_id, prompt_form, cap)?;
+        inputs.validate_capture_v1(capture, self.class_id)?;
+        let tokens = super::cell::tokens_of_capture_v1(capture);
+        let (mut leaves, mut positions) = (0u64, 0u32);
+        for cell in cells {
+            let request = TirCellRequestV1 { space: &self.space, plan: &self.plan, params: &self.params,
+                class_id: self.class_id, ctx: &capture.binding.job_context, cell, tokens: &tokens, inputs, fused: false };
+            let verdict = backend.verify_cell(&request).unwrap_or_else(|_| CpuKernelBackendV1.verify_cell(&request).expect("the CPU verifier runs every cell"));
+            match verdict {
+                TirCellVerdictV1::Verified { leaves: n, positions: p } => {
+                    leaves = leaves.checked_add(n).ok_or("the sparse cell leaf total overflows")?;
+                    positions = positions.checked_add(p).ok_or("the sparse cell position total overflows")?;
+                }
+                other => return Ok(other),
+            }
+        }
+        Ok(TirCellVerdictV1::Verified { leaves, positions })
+    }
+
+    pub fn cone_close_from_runs(
+        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
+        index: u64, rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
+    ) -> Result<kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2, String> {
+        self.with_runs(capture, inputs, rules, |store| {
+            let refutation = store.cone_refutation(index, rules).map_err(|e| e.to_string())?;
+            let mut proof = kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
+            proof.tir_strip_program_v1(); Ok(proof)
+        })
+    }
+
+    pub fn named_leaf_close_from_runs(
+        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
+        index: u64, rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
+    ) -> Result<kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2, String> {
+        self.with_runs(capture, inputs, rules, |store| {
+            let refutation = kaspa_consensus_core::palw_tir_court_v1::build_tir_named_leaf_refutation_v1(&capture.binding, index, store).map_err(|e| e.to_string())?;
+            let mut proof = kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
+            proof.tir_strip_program_v1(); Ok(proof)
+        })
+    }
+
+    pub fn dissect_round_from_runs(
+        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
+        phase: &kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
+        rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
+    ) -> Result<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectRoundV1, String> {
+        self.with_runs(capture, inputs, rules, |store| {
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_round_v1(&capture.binding, phase, self.space.layout.h_tile, store, rules).map_err(|e| e.to_string())
+        })
+    }
+
+    pub fn dissect_bottom_from_runs(
+        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
+        phase: &kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
+        rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
+    ) -> Result<kaspa_consensus_core::palw_tir_court_v1::PalwTirConeRefutationV1, String> {
+        self.with_runs(capture, inputs, rules, |store| {
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_bottom_v1(&capture.binding, phase, store, rules).map_err(|e| e.to_string())
+        })
+    }
+
     /// Reduction totals over the capture's committed inputs. Dense evidence never replays
     /// the model prefix: any required parameter outside this holding is refused by the store.
     pub fn root_claim(

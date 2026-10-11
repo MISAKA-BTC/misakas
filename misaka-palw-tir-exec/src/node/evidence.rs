@@ -139,6 +139,8 @@ pub fn tir_first_divergence_v1(ctx: &PalwJobContextV2, a: &[Hash64], b: &[Hash64
 enum Leaves<'a> {
     /// Every preimage, held (a dense capture).
     Dense(&'a [PalwStepTileLeafV1]),
+    /// Only the authenticated preimages fetched for the current cell/court.
+    Sparse(&'a BTreeMap<u64, PalwStepTileLeafV1>),
     /// Re-derived by replay from the resume points; the disputed leaf, when it is the accused's,
     /// overrides the replay's.
     Replay { points: &'a [TirResumePointV1], disputed: Option<(u64, PalwStepTileLeafV1)> },
@@ -191,7 +193,7 @@ pub struct TirEvidenceV1<'a> {
     binding: &'a PalwTirStepBindingV1,
     prompt: &'a [u32],
     trace: TirTraceV1<'a>,
-    tree: TirStepTreeV1,
+    tree: Box<dyn super::sparse_tree::TirProofTreeV1>,
     leaves: Leaves<'a>,
     params: &'a dyn TirParamOpenerV1,
     prompt_form: PalwPromptIdsFormV1,
@@ -217,7 +219,7 @@ impl<'a> TirEvidenceV1<'a> {
             binding: &job.binding,
             prompt: &job.prompt,
             trace: TirTraceV1::Rows { rows: &job.logits_rows, generated: &job.generated },
-            tree,
+            tree: Box::new(tree),
             leaves: Leaves::Replay { points: &job.points, disputed: None },
             params,
             prompt_form,
@@ -249,13 +251,34 @@ impl<'a> TirEvidenceV1<'a> {
             binding,
             prompt,
             trace: TirTraceV1::Rows { rows: logits_rows, generated },
-            tree,
+            tree: Box::new(tree),
             leaves: Leaves::Dense(preimages),
             params,
             prompt_form,
             cap,
             cache: RefCell::new(BTreeMap::new()),
             cache_budget: 0,
+        })
+    }
+
+    /// Sparse public evidence: the requested ranges and their Merkle siblings, with
+    /// no N-leaf allocation or prefix replay. Missing units remain unavailable.
+    #[allow(clippy::too_many_arguments)]
+    pub fn runs(
+        runner: &'a TirClassRunnerV1<'a>,
+        capture: &'a super::backend::TirCaptureV1,
+        inputs: &'a super::cell::TirRunInputsV1,
+        params: &'a dyn TirParamOpenerV1,
+        prompt_form: PalwPromptIdsFormV1,
+        cap: u64,
+    ) -> Result<Self, String> {
+        super::backend::tir_authenticate_capture_metadata_v1(capture, runner.class_id, prompt_form, cap)?;
+        let tree = inputs.proof_tree_v1(capture, runner.class_id, cap)?;
+        Ok(Self {
+            runner, binding: &capture.binding, prompt: &capture.prompt,
+            trace: TirTraceV1::Rows { rows: &capture.logits_rows, generated: &capture.generated },
+            tree: Box::new(tree), leaves: Leaves::Sparse(inputs.preimages_v1()), params,
+            prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_budget: 0,
         })
     }
 
@@ -313,7 +336,7 @@ impl<'a> TirEvidenceV1<'a> {
             binding: accused,
             prompt: &own.prompt,
             trace,
-            tree,
+            tree: Box::new(tree),
             leaves: Leaves::Replay { points: &own.points, disputed: Some((disputed_opening.leaf_index, disputed_preimage)) },
             params,
             prompt_form,
@@ -437,6 +460,7 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
         match &self.leaves {
             Leaves::Dense(all) => all.get(index as usize).cloned(),
+            Leaves::Sparse(all) => all.get(&index).cloned(),
             Leaves::Replay { points, disputed } => {
                 if let Some((i, accused)) = disputed {
                     if *i == index {
