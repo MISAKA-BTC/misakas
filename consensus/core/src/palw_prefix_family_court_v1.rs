@@ -557,8 +557,9 @@ impl PalwPrefixFamilyCourtV1 {
                 let FamilyV1::Q36 { head: Some(h), .. } = &self.family else {
                     return Err("head source has no owned head".into());
                 };
-                let Q36HeadV1::Whole { contract, input: None, .. } = h.as_ref() else {
-                    return Err("head source has no whole initial input phase".into());
+                let contract = match h.as_ref() {
+                    Q36HeadV1::Whole { contract, input: None, .. } | Q36HeadV1::Paged { contract, input: None, .. } => contract,
+                    _ => return Err("head source has no canonical initial input phase".into()),
                 };
                 let source = contract.source_range_v1(&self.binding, position, 0)?;
                 let tile_index =
