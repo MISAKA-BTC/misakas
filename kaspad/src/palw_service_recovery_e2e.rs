@@ -6,6 +6,8 @@ use super::*;
 mod network;
 #[path = "palw_service_pruned_e2e.rs"]
 pub(super) mod pruned;
+use kaspa_consensus::model::stores::acceptance_data::AcceptanceDataStore;
+use kaspa_consensus::model::stores::block_transactions::BlockTransactionsStore;
 use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
 use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
 
@@ -30,6 +32,11 @@ async fn automatic_multipart_recovery_and_continuous_public_verifier_survive_a_r
     fresh_public_service_with_recovery(PublicCase::UnretainedLargeConstraintJob, Some(RecoveryMode::Reorg)).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_verifier_reacquires_one_pruned_parallel_input_lane_from_the_automatic_producer() {
+    fresh_public_service_with_recovery(PublicCase::UnretainedLargeConstraintJob, Some(RecoveryMode::PrunedRound)).await;
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum RecoveryMode {
     Restart,
@@ -37,6 +44,7 @@ pub(super) enum RecoveryMode {
     Network,
     NetworkVerifier,
     Pruned,
+    PrunedRound,
 }
 
 pub(super) struct RecoveryRun {
@@ -44,12 +52,15 @@ pub(super) struct RecoveryRun {
     producer: ServiceRun,
     producer_config: PalwPanelConfig,
     verifier_config: PalwPanelConfig,
+    verifier_bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
     manager: Arc<ConsensusManager>,
     flow: Arc<FlowContext>,
     config: Arc<Config>,
     notification_root: Arc<kaspa_consensus_notify::root::ConsensusNotificationRoot>,
     producer_restarted: bool,
     verifier_restarted: bool,
+    paused_input: bool,
+    pruned_round: Option<(usize, u8)>,
     honest: bool,
     job_only_recovery: Option<(std::path::PathBuf, Vec<u8>)>,
     mode: RecoveryMode,
@@ -171,17 +182,21 @@ impl RecoveryRun {
         let notification_root = chain.tc.notification_root();
         let producer = launch(producer_config.clone(), manager.clone(), flow.clone(), config.clone(), notification_root.clone()).await;
         assert_eq!(producer.service.bond, Some(chain.bonds[0].0));
+        let verifier_bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(verifier_config.bond.parse().unwrap());
         Self {
             _directory: directory,
             producer,
             producer_config,
             verifier_config,
+            verifier_bond,
             manager,
             flow,
             config,
             notification_root,
             producer_restarted: false,
             verifier_restarted: false,
+            paused_input: false,
+            pruned_round: None,
             honest,
             job_only_recovery,
             mode,
@@ -202,6 +217,28 @@ impl RecoveryRun {
         *service = launched.service.clone();
         *verifier = launched;
         eprintln!("[service-network] sole outside verifier runs on the independently validated receiver DB");
+    }
+
+    /// Stop before inclusion so the first worker cannot learn a local copy of the answer
+    /// that this fixture will prune. The pending bytes came from the real producer worker.
+    pub(super) async fn before_carriers(
+        &mut self,
+        claim: Hash64,
+        mut pending: impl Iterator<Item = PalwConsensusObjectV2>,
+        verifier: &mut ServiceRun,
+    ) {
+        if self.mode != RecoveryMode::PrunedRound || self.paused_input || self.pruned_round.is_some() {
+            return;
+        }
+        // Merely recognize the already signed producer object; no public answer is fabricated.
+        if pending.any(|o| {
+            matches!(o, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
+            if answer.claim == claim && answer.unit == PalwLegacyHeldUnitV2::PromptIds { chunk: 0 })
+        }) {
+            verifier.finish().await;
+            // The carrier is recovered from actual accepted history in tick, after native validation.
+            self.paused_input = true;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -262,6 +299,79 @@ impl RecoveryRun {
             .await;
             self.producer_restarted = true;
             eprintln!("[service-recovery] producer restarted from accepted partial manifest at DAA {}", chain.daa());
+        }
+        if self.mode == RecoveryMode::PrunedRound && self.paused_input && self.pruned_round.is_none() {
+            let unit = PalwLegacyHeldUnitV2::PromptIds { chunk: 0 };
+            let key = PalwDaUnitV1::LegacyHeldV2(unit);
+            // Native accepted extraction, not mempool presence or the retained producer file.
+            let accepted = accepted_objects(chain, service_start);
+            assert!(
+                accepted.iter().any(|o| matches!(o, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
+                if answer.claim == claim && answer.unit == unit && answer.discloser == chain.bonds[0])),
+                "production template and selected-chain acceptance must include the paused input answer"
+            );
+            assert_multipart_transport(chain, claim, service_start);
+            let source = chain.history[service_start..]
+                .iter()
+                .find(|block| {
+                    block.transactions.iter().any(|tx| {
+                        borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload).is_ok_and(|p| {
+                            matches!(p.object, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
+                        if answer.claim == claim && answer.unit == unit)
+                        })
+                    })
+                })
+                .unwrap()
+                .hash();
+            let acceptance = chain
+                .history
+                .iter()
+                .find(|block| {
+                    chain
+                        .tc
+                        .get_block_acceptance_data(block.hash())
+                        .is_ok_and(|rows| rows.iter().any(|row| row.block_hash == source && !row.accepted_transactions.is_empty()))
+                })
+                .expect("the carrier's actual acceptance row exists")
+                .hash();
+            let me = self.verifier_bond;
+            let opened =
+                view.record.as_ref().unwrap().live.get(&me).expect("the same ordinary reservation remains live").sessions_opened;
+            assert!(view.unit_was_answered_v1(&key));
+            assert!(!view.sessions.iter().any(|(bond, _)| *bond == me), "the answered bootstrap session actually closed");
+            chain.tc.block_transactions_store.delete(source).unwrap();
+            chain.tc.acceptance_data_store.delete(acceptance).unwrap();
+            assert!(chain.tc.get_block(source).is_err());
+            assert!(chain.tc.get_block_acceptance_data(acceptance).is_err());
+            assert!(chain.view(claim).unit_was_answered_v1(&key), "rooted answer guard survives body pruning");
+            assert_eq!(chain.view(claim).record.as_ref().unwrap().live.get(&me).unwrap().sessions_opened, opened);
+            assert!(verifier.task.is_none(), "the old book was stopped before it could learn the input");
+            // Forget producer sent keys too. Its public descriptor/input is retained, not copied
+            // into the fresh verifier. A genuine numbered request must drive the second answer.
+            self.producer.finish().await;
+            self.producer = launch(
+                self.producer_config.clone(),
+                self.manager.clone(),
+                self.flow.clone(),
+                self.config.clone(),
+                self.notification_root.clone(),
+            )
+            .await;
+            let restarted = launch(
+                self.verifier_config.clone(),
+                self.manager.clone(),
+                self.flow.clone(),
+                self.config.clone(),
+                self.notification_root.clone(),
+            )
+            .await;
+            *service = restarted.service.clone();
+            *verifier = restarted;
+            self.verifier_restarted = true;
+            assert!(service.fraud_filer_honest_replays.lock().unwrap().is_empty());
+            assert!(std::fs::read_dir(&self.verifier_config.retention_dir).unwrap().next().is_none());
+            self.pruned_round = Some((chain.history.len(), opened));
+            eprintln!("[service-recovery] pruned actual input carrier and restarted empty public book at DAA {}", chain.daa());
         }
         let waiting_for_binding = view.sessions.iter().any(|(_, s)| s.units.contains(&PalwDaUnitV1::Event { row: 0, tile: 0 }));
         if self.mode == RecoveryMode::Restart && !self.verifier_restarted && (partial || (!self.honest && waiting_for_binding)) {
@@ -369,34 +479,36 @@ impl RecoveryRun {
         }
         if self.honest {
             assert!(self.producer_restarted, "the producer must restart during accepted partial multipart transport");
-            let mut declarations = 0;
-            let mut chunks = BTreeSet::new();
-            let objects = accepted_objects(chain, service_start);
-            for object in objects {
-                match object {
-                    PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration }
-                        if declaration.claim == claim && declaration.unit == PalwLegacyHeldUnitV2::FpJob =>
-                    {
-                        assert_eq!(declaration.discloser, chain.bonds[0]);
-                        declarations += 1;
-                    }
-                    PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk }
-                        if chunk.claim == claim && chunk.unit == PalwLegacyHeldUnitV2::FpJob =>
-                    {
-                        assert_eq!(chunk.discloser, chain.bonds[0]);
-                        assert!(chunks.insert(chunk.index), "automatic restart must not carry an already accepted part again");
-                    }
-                    PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
-                        if answer.claim == claim && answer.unit == PalwLegacyHeldUnitV2::FpJob =>
-                    {
-                        panic!("the large descriptor must be supplied by the actual multipart worker");
-                    }
-                    _ => {}
-                }
+            if let Some((after, opened)) = self.pruned_round {
+                assert!(self.verifier_restarted);
+                let unit = PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk: 0 });
+                let objects = accepted_objects(chain, after);
+                let me = self.verifier_bond;
+                let requests: Vec<_> = objects
+                    .iter()
+                    .filter_map(|o| match o {
+                        PalwConsensusObjectV2::DisputeReacquiredV1 { request, signature }
+                            if request.claim == claim && request.reserver == me && request.unit == unit =>
+                        {
+                            assert!(!signature.is_empty());
+                            Some(request)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(requests.len(), 1, "exactly one signed numbered reacquisition must be accepted");
+                assert_eq!(requests[0].session_number, opened + 1);
+                assert!(
+                    objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
+                    if answer.claim == claim && answer.unit == PalwLegacyHeldUnitV2::PromptIds { chunk: 0 }
+                        && answer.discloser == chain.bonds[0])),
+                    "the actual automatic producer reanswers after pruning"
+                );
+                assert!(chain.view(claim).unit_was_answered_v1(&unit));
+            } else {
+                assert!(self.mode != RecoveryMode::PrunedRound, "the pruning fixture must actually prune a carried input");
+                assert_multipart_transport(chain, claim, service_start);
             }
-            assert_eq!(declarations, 1);
-            assert_eq!(chunks.len(), 2);
-            assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::FpJob)));
         } else {
             assert!(chain.view(claim).da_defaulted);
         }
@@ -427,4 +539,35 @@ pub(super) fn accepted_objects(chain: &Chain, service_start: usize) -> Vec<PalwC
         .expect("terminal verification reads the actual selected-chain acceptance");
     }
     objects
+}
+
+fn assert_multipart_transport(chain: &Chain, claim: Hash64, service_start: usize) {
+    let mut declarations = 0;
+    let mut chunks = BTreeSet::new();
+    let objects = accepted_objects(chain, service_start);
+    for object in objects {
+        match object {
+            PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration }
+                if declaration.claim == claim && declaration.unit == PalwLegacyHeldUnitV2::FpJob =>
+            {
+                assert_eq!(declaration.discloser, chain.bonds[0]);
+                declarations += 1;
+            }
+            PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk }
+                if chunk.claim == claim && chunk.unit == PalwLegacyHeldUnitV2::FpJob =>
+            {
+                assert_eq!(chunk.discloser, chain.bonds[0]);
+                assert!(chunks.insert(chunk.index), "automatic restart must not carry an already accepted part again");
+            }
+            PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
+                if answer.claim == claim && answer.unit == PalwLegacyHeldUnitV2::FpJob =>
+            {
+                panic!("the large descriptor must be supplied by the actual multipart worker");
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(declarations, 1);
+    assert_eq!(chunks.len(), 2);
+    assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::FpJob)));
 }

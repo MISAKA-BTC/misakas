@@ -1502,6 +1502,15 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         assert!(!running.task.as_ref().unwrap().is_finished(), "production worker unexpectedly stopped");
         assert!(std::time::Instant::now() < deadline, "service made no objective progress: {:?}", chain.view(claim));
         let (pending, _) = pool.clone().get_all_transactions(TransactionQuery::TransactionsOnly).await;
+        if let Some(recovery) = recovery.as_mut() {
+            recovery
+                .before_carriers(
+                    claim,
+                    pending.iter().filter_map(|t| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&t.tx.payload).ok().map(|p| p.object)),
+                    &mut running,
+                )
+                .await;
+        }
         if !pending.is_empty() {
             let ids = pending.iter().map(|t| t.tx.id()).collect::<Vec<_>>();
             for tx in &pending {
