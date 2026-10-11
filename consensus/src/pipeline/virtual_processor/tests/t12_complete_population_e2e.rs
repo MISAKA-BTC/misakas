@@ -202,3 +202,49 @@ async fn rfc06_complete_population_native_100k_load_and_refusal_boundary() {
     complete_run(99_993, 100_000, false, false).await;
     complete_run(99_994, 100_000, true, false).await;
 }
+
+/// Real native writer's retained-population shape. Lack of a beacon is a legitimate
+/// terminal outcome, and version 3 preserves its frozen populations after that outcome.
+/// This measures carriage bytes instead of extrapolating BondRegistered object sizes.
+async fn complete_retained_populations(extra_workers: u64, expect_fifth_refusal: bool) {
+    let (config, cards, premine, floats) = complete_armed(extra_workers, 100_000);
+    let begun = Instant::now();
+    let mut a = t12_genesis_chain(&config, &cards, &premine, &floats);
+    *a.vp().panel_v3_test_beacon.lock() = Some((vec![challenge_policy()], complete_source()));
+    beat_to(&mut a, 1).await;
+    let mut ids = Vec::new();
+    for card in 0..if expect_fifth_refusal { 5 } else { 4 } {
+        let (_, id) = a.attempt(card, ttpb(&a), Vec::new(), &|_| true).await;
+        ids.push(id);
+        for _ in 0..10 {
+            let state = state_of(&a);
+            let r = state.panel_v3().unwrap().claim(&id).unwrap();
+            if r.snapshot.is_some() || r.phase.terminal() { break; }
+            drop(state); a.heartbeat(ttpb(&a), Vec::new()).await;
+        }
+        let state = state_of(&a); let r = state.panel_v3().unwrap().claim(&id).unwrap();
+        if card < 4 { assert_eq!(r.snapshot.as_ref().unwrap().candidates.len() as u64, 7 + extra_workers); }
+        else { assert!(matches!(r.phase, ClaimPhaseV3::Voided { reason: NonFraudReasonV1::PopulationResourceLimit, .. })); assert!(r.snapshot.is_none() && r.seal.is_none()); }
+    }
+    let state = state_of(&a); let engine = state.panel_v3().unwrap();
+    let retained: usize = engine.claim_rows().values().filter_map(|r| r.snapshot.as_ref()).map(|p| p.candidates.len()).sum();
+    assert_eq!(retained as u64, 4 * (7 + extra_workers));
+    let observed = a.vp().palw_panel_v3_observation_v1_impl(ids, 0).unwrap();
+    assert_eq!(observed.overview.retained_candidates, retained as u64);
+    let carriage = PalwStateCarriageV2::from_state(&state);
+    let bytes = borsh::object_length(&carriage).unwrap();
+    eprintln!("[rfc06-resource] native_bonds={} retained_populations=4 retained_candidates={retained} encoded_engine_bytes={} full_carriage_bytes={bytes} legacy_384mib_fits={} elapsed_ms={}",
+        8 + extra_workers, borsh::object_length(engine).unwrap(), bytes <= 384 << 20, begun.elapsed().as_millis());
+    assert_eq!(carriage.into_state(&cards.state, Some(state.state_root())).unwrap(), state);
+}
+
+#[tokio::test]
+async fn rfc06_complete_population_native_four_retained_seals_carriage_shape_control() {
+    complete_retained_populations(64, false).await;
+}
+
+#[tokio::test]
+#[ignore = "100k funded native four-seal carriage measurement requires a dedicated resource runner"]
+async fn rfc06_complete_population_native_100k_four_retained_seals_and_fifth_refusal() {
+    complete_retained_populations(99_993, true).await;
+}

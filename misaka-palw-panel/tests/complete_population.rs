@@ -424,3 +424,35 @@ fn retired_population_permanent_archive_capacity_refuses_before_writing_identity
     assert!(!same.work_id_rows().contains(&next.work_id));
     assert!(same.claim(&next.claim_id).is_none());
 }
+
+/// Dedicated resource drill: this is engine storage/capacity evidence, not a native node,
+/// RAM approval, real economic cost or pruned P2P result. Run under an external RSS recorder.
+#[test]
+#[ignore = "four 100k frozen populations require a dedicated measured resource runner"]
+fn retired_population_four_100k_seals_refuse_the_fifth_and_native_retirement_reuses_the_budget() {
+    let begun = std::time::Instant::now();
+    let mut v = retirement_view(100_000);
+    let mut s = retirement_initial(WIRE_VERSION_RETIRED_V1, 8);
+    for n in 0..5 {
+        let c = distinct_claim(n);
+        let daa = s.daa() + 1;
+        s = retirement_advance(&s, daa, &v).admit(&[c.clone()]).unwrap().0;
+        s = retirement_advance(&s, s.daa() + 1, &v);
+        s = retirement_advance(&s, s.daa() + 1, &v);
+        let r = s.claim(&c.claim_id).unwrap();
+        if n < 4 { assert_eq!(r.snapshot.as_ref().unwrap().candidates.len(), 100_000); }
+        else { assert!(matches!(r.phase, ClaimPhaseV3::Voided { reason: NonFraudReasonV1::PopulationResourceLimit, .. })); assert!(r.snapshot.is_none()); }
+    }
+    let count = |s: &PermissionlessPanelStateV1| s.claim_rows().values().filter_map(|r| r.snapshot.as_ref()).map(|p| p.candidates.len()).sum::<usize>();
+    assert_eq!(count(&s), 400_000);
+    eprintln!("[rfc06-retention] four_seals_candidates={} encoded_bytes={} elapsed_ms={}", count(&s), borsh::object_length(&s).unwrap(), begun.elapsed().as_millis());
+    v.terminal.insert(distinct_claim(0).claim_id); v.retired.insert(distinct_claim(0).claim_id);
+    s = retirement_advance(&s, s.daa() + 1, &v); assert_eq!(count(&s), 300_000);
+    assert!(s.work_id_rows().contains(&distinct_claim(0).work_id));
+    let c = distinct_claim(5);
+    s = retirement_advance(&s, s.daa() + 1, &v).admit(&[c.clone()]).unwrap().0;
+    s = retirement_advance(&s, s.daa() + 1, &v); s = retirement_advance(&s, s.daa() + 1, &v);
+    assert_eq!(s.claim(&c.claim_id).unwrap().snapshot.as_ref().unwrap().candidates.len(), 100_000);
+    assert_eq!(count(&s), 400_000);
+    eprintln!("[rfc06-retention] reclaimed_and_resealed_candidates={} encoded_bytes={} elapsed_ms={}", count(&s), borsh::object_length(&s).unwrap(), begun.elapsed().as_millis());
+}
