@@ -218,7 +218,7 @@ mod tests {
         for c in [1, 2, 7, 4096] {
             for count in 0..64 {
                 for limit in [0, 1, 3, 8, 1024] {
-                    assert_eq!(checkpoint_rows(count, c, limit).unwrap(), (1..=count).map(|k| (k * c).min(limit)).sum());
+                    assert_eq!(checkpoint_rows(count, c, limit).unwrap(), (1..=count).map(|k| (k * c).min(limit)).sum::<u128>());
                 }
             }
         }
