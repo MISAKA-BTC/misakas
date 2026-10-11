@@ -1406,7 +1406,7 @@ impl PalwFraudFilerBookV1 {
     /// A newer binding-only carrier can be read before an older valid token pin. Do not discard the pursuit on descent's
     /// inability to explain matching step trees until that public backfill completes.
     fn descent_failed(&mut self, claim: &Hash64, why: String) -> bool {
-        if self.walk.is_none_or(|walk| walk.next.is_some()) {
+        if self.walk.is_none_or(|walk| walk.next.is_some() || walk.incomplete) {
             return false;
         }
         self.settle(claim, PalwFraudFilerVerdictV1::Unjudged(why));
