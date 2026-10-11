@@ -265,6 +265,11 @@ impl UtxoContext {
         let previous = self.context().balance.clone()?;
         self.refresh_mature_coinbases();
         let mut current = self.calculate_balance_now();
+        if (current.mature, current.pending, current.outgoing, current.mature_utxo_count, current.pending_utxo_count, current.stasis_utxo_count)
+            == (previous.mature, previous.pending, previous.outgoing, previous.mature_utxo_count, previous.pending_utxo_count, previous.stasis_utxo_count)
+        {
+            return Some(previous);
+        }
         current.delta(&Some(previous));
         self.context().balance.replace(current.clone());
         Some(current)
