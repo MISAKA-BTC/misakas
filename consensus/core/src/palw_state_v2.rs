@@ -28819,7 +28819,10 @@ impl<'a> TransitionBuilder<'a> {
         }
         // Lane BUDGET: an attempt's Final is terminal for its budget (a free-prompt claim's spends come after its Final).
         if matches!(claim.source, PalwClaimSourceV2::Attempt) {
-            self.bond_budget_close_v1(&id, final_daa);
+            // R8-BUDGET × WINDOW: a settled EXEC root holds its bond to the frozen consumer horizon, not only to `final + H_L`.
+            // The horizon is inclusive (a proof on its last DAA still lands), so the hold runs through it: `holds(now) = until > now`.
+            let exec_horizon = self.state.exec_v2_rewards.get(&id).map(|row| row.liability_until.saturating_add(1));
+            self.bond_budget_close_holding_v1(&id, final_daa, exec_horizon);
         }
         // ADR-0132 Upgrade C: the snapshot leaves with the claim — it was read above, once.
         self.write_claim_economics(id, None);

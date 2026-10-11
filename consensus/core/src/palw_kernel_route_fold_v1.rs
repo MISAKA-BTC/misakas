@@ -391,12 +391,14 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
 
 /// Latest permitted root Final plus native evidence window and the complete kernel court path.
 /// Checked additions refuse an impossible horizon before any consensus write.
+/// R8 (2026-10-11): the kernel term is the dependency class's G14-B horizon (`class_liability_daa`, never below the policy's).
 pub(super) fn exec_liability_floor_v1(
     expiry: u64,
     native_window: u64,
     policy: &misaka_palw_kernel::ledger::LedgerPolicyV1,
+    class_liability_daa: u64,
 ) -> Result<u64, PalwStateV2Error> {
-    crate::palw_exec_v2_verify::palw_exec_v2_retention_terms_v1(expiry, 0, native_window, policy)
+    crate::palw_exec_v2_verify::palw_exec_v2_retention_terms_for_class_v1(expiry, 0, native_window, policy, class_liability_daa)
         .map(|terms| terms.liability_until)
         .map_err(refused)
 }
@@ -457,7 +459,9 @@ pub(super) fn bind_exec_reward_v1(
     let before = route.rows.clone();
     let mut ledger = route.ledger().map_err(refused)?;
     ledger.daa = daa;
-    let until = exec_liability_floor_v1(expiry, builder.params.window_court(), &ledger.policy)?;
+    // R8: the bound claim keeps its own class's G14-B horizon past the latest root Final (the consumer checked the class binding).
+    let until =
+        exec_liability_floor_v1(expiry, builder.params.window_court(), &ledger.policy, ledger.claim_liability_daa_v1(&claim.as_bytes()))?;
     let row = ledger.claims.get(&claim.as_bytes()).ok_or_else(|| refused("the EXEC reward claim is missing"))?;
     require_exec_provider_horizon_v1(&builder.state, &claim, row, daa, until).map_err(refused)?;
     ledger.bind_exec_reward_until(root.as_bytes(), claim.as_bytes(), expiry, until).map_err(refused)?;
@@ -493,6 +497,9 @@ pub(super) fn finish_exec_rewards_v1(
         paid.push(fee);
     }
     apply_settlements_to_exec_vesting(builder, &events, true, Some(root))?;
+    // H-1: each bound fee consumes its claim's own `R`; the root's settlement closes every bound claim.
+    let bound: Vec<_> = claims.iter().map(|(claim, _)| claim.as_bytes()).collect();
+    bond_budget_kernel_events_v1(builder, None, daa, &ledger, &events, false, &bound)?;
     flush(builder, &ledger, &before);
     Ok(paid)
 }
@@ -505,11 +512,93 @@ pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: 
     let claims: Vec<_> =
         ledger.exec_reward_holds.iter().filter(|(_, hold)| hold.owner_root == root.as_bytes()).map(|(id, _)| *id).collect();
     let mut events = Vec::new();
-    for claim in claims {
-        ledger.cancel_exec_reward(root.as_bytes(), claim, &mut events).map_err(refused)?;
+    for claim in &claims {
+        ledger.cancel_exec_reward(root.as_bytes(), *claim, &mut events).map_err(refused)?;
     }
     apply_settlements(builder, &events, true)?;
+    // H-1: a cancelled root no longer holds its bound claims open — those already terminal close now (no fee was paid).
+    let terminal: Vec<_> =
+        claims.iter().copied().filter(|claim| ledger.claims.get(claim).is_some_and(|row| row.life.state.is_terminal())).collect();
+    bond_budget_kernel_events_v1(builder, None, daa, &ledger, &events, true, &terminal)?;
     flush(builder, &ledger, &before);
+    Ok(())
+}
+
+/// **Hook H-1 (ADR-0176, R8-BUDGET, 2026-10-11): the bond budget of standalone kernel-route claims**, after a ledger step's settlements
+/// were applied — a no-op below `palw_bond_budget_v1` (no mirror, no engine). In event order:
+///
+/// 1. every `ClaimCommitted` reserves `Q` 1, its liability and (per the market-fee POLICY) its job escrow in `R` on the producer's
+///    V2 bond; a bond whose window or open-claim cap is full refuses the object (`strict`; the walk drops it, the block stands);
+/// 2. every market fee paid to a claim's producer (`FinalReward` naming the claim and its producer — standalone at the closing tick, or
+///    a bound fee at the EXEC root's settlement) consumes that claim's `R`, strictly;
+/// 3. a terminal claim closes (`Final` — unless an EXEC root still holds it: then the root's settlement or cancellation closes it —,
+///    `TimedOut`, a conviction, a default), its bond held to the later of `now + H_L` and the claim's inclusive liability horizon.
+///    `also_close` names claims a consumer finished without a ledger lifecycle event (the EXEC root's bound claims).
+///
+/// Nothing is ever returned to the window early (ADR-0176 D4: the reservation stays to `d + W`); a claim the engine never saw (committed
+/// below the fence) has no row and every step skips it.
+pub(super) fn bond_budget_kernel_events_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: Option<&PalwBlockContextV2>,
+    daa: u64,
+    ledger: &KernelLedgerV1,
+    events: &[LedgerEventV1],
+    strict: bool,
+    also_close: &[misaka_palw_kernel::hash::Digest],
+) -> Result<(), PalwStateV2Error> {
+    if builder.bond_budget_mirror_at(daa).is_none() && builder.state.bond_budget().is_none() {
+        return Ok(());
+    }
+    let key_of = |builder: &TransitionBuilder<'_>, kid: &misaka_palw_kernel::hash::Digest| {
+        builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(kid))
+    };
+    for event in events {
+        let LedgerEventV1::ClaimCommitted { claim } = event else { continue };
+        // Commitments are objects, which always have their block context.
+        let Some(ctx) = ctx else { continue };
+        let Some(row) = ledger.claims.get(claim) else { continue };
+        let Some(bond) = key_of(builder, &row.producer) else {
+            return Err(refused("a committed kernel claim's producer is no bond the route has seen"));
+        };
+        let escrow = ledger.job_escrows.get(&row.job_id).map_or(0, |e| e.amount);
+        match builder.plan_kernel_claim_budget_v1(ctx, bond, escrow, row.reserved) {
+            Ok(Some(plan)) => builder.commit_bond_budget_v1(ctx, Hash64::from_bytes(*claim), plan)?,
+            Ok(None) => {}
+            Err(e) if strict => return Err(e),
+            // Never on a closing tick (commitments are objects); were it to, the claim simply stays unbudgeted.
+            Err(_) => {}
+        }
+    }
+    for event in events {
+        let LedgerEventV1::Settlement(s) = event else { continue };
+        if s.kind != SettlementKindV1::FinalReward {
+            continue;
+        }
+        let Some(claim) = s.claim else { continue };
+        if ledger.claims.get(&claim).is_none_or(|row| row.producer != s.bond) {
+            continue;
+        }
+        match builder.bond_budget_kernel_fee_v1(&Hash64::from_bytes(claim), s.amount) {
+            Ok(()) => {}
+            Err(e) if strict => return Err(e),
+            Err(_) => debug_assert!(false, "a kernel fee exceeded the escrow its claim reserved"),
+        }
+    }
+    let mut closing: Vec<misaka_palw_kernel::hash::Digest> = also_close.to_vec();
+    for event in events {
+        match event {
+            LedgerEventV1::Final { claim, .. } if !ledger.exec_reward_holds.contains_key(claim) => closing.push(*claim),
+            LedgerEventV1::TimedOut { claim }
+            | LedgerEventV1::Convicted { claim, .. }
+            | LedgerEventV1::ProducerDefault { claim, .. }
+            | LedgerEventV1::PostFinalDefault { claim, .. } => closing.push(*claim),
+            _ => {}
+        }
+    }
+    for claim in closing {
+        let horizon = ledger.claims.get(&claim).and_then(|row| row.liability_until).map(|until| until.saturating_add(1));
+        builder.bond_budget_close_holding_v1(&Hash64::from_bytes(claim), daa, horizon);
+    }
     Ok(())
 }
 
@@ -891,6 +980,8 @@ pub(super) fn apply_kernel_route_object_v1(
     // (A settlement the real bonds cannot honour fails the object — the walk's rehearsal drops it with its builder, so no half-applied
     // slash survives; the sync above makes this unreachable.)
     apply_settlements(builder, &events, true)?;
+    // H-1 (ADR-0176): a commitment past the bond budget's fence reserves on its producer's bond, or the object is refused.
+    bond_budget_kernel_events_v1(builder, Some(ctx), ctx.daa_score, &ledger, &events, true, &[])?;
     persist_budget(builder, ctx, &ledger);
     // Only the exact signed candidate used the temporary scope. Persisting this root in
     // TABLE_ATTESTED would let an unrelated program borrow it in the next object.
@@ -1069,6 +1160,8 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     }
     let events = ledger.tick();
     apply_settlements(builder, &events, false)?;
+    // H-1: standalone market fees consume their claims' `R`; terminal claims close.
+    bond_budget_kernel_events_v1(builder, Some(ctx), ctx.daa_score, &ledger, &events, false, &[])?;
     // Assignments and counted receipts of claims that can no longer be covered are dropped.
     let stale: Vec<misaka_palw_kernel::hash::Digest> = builder
         .state

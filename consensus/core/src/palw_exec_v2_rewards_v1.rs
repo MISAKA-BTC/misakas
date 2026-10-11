@@ -14,9 +14,12 @@ pub(super) fn horizon(
 ) -> Result<Option<u64>, PalwStateV2Error> {
     let Some(root) = state.exec_v2.roots.get(root_id) else { return Ok(None) };
     let mut until = match &state.kernel_route {
-        Some(kernel) => {
-            super::palw_kernel_route_fold_v1::exec_liability_floor_v1(root.expiry_daa, params.window_court(), &kernel.header.policy)?
-        }
+        Some(kernel) => super::palw_kernel_route_fold_v1::exec_liability_floor_v1(
+            root.expiry_daa,
+            params.window_court(),
+            &kernel.header.policy,
+            kernel.exec_class_liability_daa_v1(&root.class_id),
+        )?,
         None => root.expiry_daa.checked_add(params.window_court()).ok_or(PalwStateV2Error::Overflow("EXEC liability horizon"))?,
     };
     if let Some(kernel) = &state.kernel_route {
@@ -54,6 +57,7 @@ pub(super) fn require_native_session_window(
                 root.expiry_daa,
                 params.window_court(),
                 &kernel.header.policy,
+                kernel.exec_class_liability_daa_v1(&root.class_id),
             )?,
             None => {
                 root.expiry_daa.checked_add(params.window_court()).ok_or(PalwStateV2Error::Overflow("EXEC native session horizon"))?

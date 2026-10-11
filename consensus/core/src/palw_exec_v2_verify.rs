@@ -85,8 +85,25 @@ pub fn palw_exec_v2_retention_terms_v1(
     native_window: u64,
     policy: &misaka_palw_kernel::ledger::LedgerPolicyV1,
 ) -> Result<PalwExecRetentionTermsV1, &'static str> {
+    palw_exec_v2_retention_terms_for_class_v1(expiry_daa, executor_exposure_sompi, native_window, policy, policy.liability_daa)
+}
+
+/// **R8 (2026-10-11): the retention terms under the bound kernel class's G14-B horizon.** The kernel term of the floor is
+/// `max(native window, policy liability_daa, class liability_daa)` — a dependency claim of a segmented class whose worst-case public
+/// pursuit needs more than the policy's horizon (`misaka_palw_kernel::budget::class_pursuit_v1`) stays liable for that whole pursuit
+/// after the latest root Final. Where the class horizon does not exceed the policy's (every non-segmented class), the terms and their
+/// policy commitment are byte-identical to [`palw_exec_v2_retention_terms_v1`]; otherwise the commitment also names the class horizon,
+/// so the worker's signed job nonce covers the longer obligation it accepts.
+pub fn palw_exec_v2_retention_terms_for_class_v1(
+    expiry_daa: u64,
+    executor_exposure_sompi: u128,
+    native_window: u64,
+    policy: &misaka_palw_kernel::ledger::LedgerPolicyV1,
+    class_liability_daa: u64,
+) -> Result<PalwExecRetentionTermsV1, &'static str> {
+    let kernel_liability = policy.liability_daa.max(class_liability_daa);
     let liability_until = expiry_daa
-        .checked_add(native_window.max(policy.liability_daa))
+        .checked_add(native_window.max(kernel_liability))
         .and_then(|until| until.checked_add(policy.court_deadline_daa))
         .and_then(|until| until.checked_add(policy.proof_grace_daa))
         .filter(|until| *until < u64::MAX)
@@ -94,7 +111,26 @@ pub fn palw_exec_v2_retention_terms_v1(
     let mut hash = keyed(b"misaka-palw/exec-v2/retention-policy/v1");
     hash.update(&native_window.to_le_bytes());
     hash.update(&borsh::to_vec(policy).expect("the fixed kernel policy serializes"));
+    if kernel_liability > policy.liability_daa {
+        hash.update(b"class-liability-daa");
+        hash.update(&kernel_liability.to_le_bytes());
+    }
     Ok(PalwExecRetentionTermsV1 { expiry_daa, liability_until, executor_exposure_sompi, policy_root: finish(hash) })
+}
+
+/// The terms of `root` under its bound kernel class's horizon ([`palw_exec_v2_retention_terms_for_class_v1`]).
+pub fn palw_exec_v2_root_retention_terms_v1(
+    root: &crate::palw_work_slice_v2::PalwWorkRootV2,
+    native_window: u64,
+    route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
+) -> Result<PalwExecRetentionTermsV1, &'static str> {
+    palw_exec_v2_retention_terms_for_class_v1(
+        root.expiry_daa,
+        root.executor_exposure,
+        native_window,
+        &route.header.policy,
+        route.exec_class_liability_daa_v1(&root.class_id),
+    )
 }
 
 fn retention_nonce_v2(base: Hash64, terms: &PalwExecRetentionTermsV1) -> Hash64 {
@@ -135,7 +171,7 @@ pub fn palw_exec_v2_slice_job_nonce_at_root_v2(
 ) -> Result<Hash64, String> {
     let root = state.exec_v2_root_v1(root_claim_id).ok_or("no such EXEC root")?;
     let route = state.kernel_route().ok_or("no kernel route")?;
-    let terms = palw_exec_v2_retention_terms_v1(root.expiry_daa, root.executor_exposure, params.window_court(), &route.header.policy)?;
+    let terms = palw_exec_v2_root_retention_terms_v1(root, params.window_court(), route)?;
     Ok(palw_exec_v2_root_slice_job_nonce_v2(root_claim_id, index, root, &terms)?)
 }
 
@@ -712,7 +748,7 @@ pub fn palw_exec_v2_observation_with_retention_v2(
             })
             .collect();
         let retention_terms = route.zip(native_window).and_then(|(route, window)| {
-            palw_exec_v2_retention_terms_v1(root.expiry_daa, root.executor_exposure, window, &route.header.policy).ok()
+            palw_exec_v2_root_retention_terms_v1(root, window, route).ok()
         });
         let next_job_nonce = if matches!(root.phase, crate::palw_work_slice_v2::PalwWorkRootPhaseV2::Open) {
             retention_terms
@@ -846,6 +882,29 @@ mod tests {
         assert_eq!(changed_price.liability_until, terms.liability_until);
         assert_ne!(nonce, palw_exec_v2_slice_job_nonce_v2(&base, &changed_price));
         assert!(palw_exec_v2_retention_terms_v1(u64::MAX - 1, 123, 0, &policy).is_err());
+    }
+
+    /// R8: a dependency class whose G14-B pursuit needs more than the policy's horizon keeps its whole pursuit after the latest root
+    /// Final, and the worker's nonce commits it; a class at or below the policy's horizon is byte-identical to the v1 terms.
+    #[test]
+    fn the_retention_terms_carry_the_bound_classs_g14b_horizon() {
+        let base = slice();
+        let policy = crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let v1 = palw_exec_v2_retention_terms_v1(1_000, 123, 0, &policy).unwrap();
+        for below in [0, policy.liability_daa / 2, policy.liability_daa] {
+            assert_eq!(palw_exec_v2_retention_terms_for_class_v1(1_000, 123, 0, &policy, below).unwrap(), v1, "class horizon {below}");
+        }
+        let longer = policy.liability_daa + 23;
+        let class = palw_exec_v2_retention_terms_for_class_v1(1_000, 123, 0, &policy, longer).unwrap();
+        assert_eq!(class.liability_until, 1_000 + longer + policy.court_deadline_daa + policy.proof_grace_daa);
+        assert_eq!(class.liability_until, v1.liability_until + 23);
+        assert_ne!(class.policy_root, v1.policy_root, "the commitment names the longer obligation");
+        assert_ne!(palw_exec_v2_slice_job_nonce_v2(&base, &class), palw_exec_v2_slice_job_nonce_v2(&base, &v1));
+        // A native window longer than both still governs; the class horizon then changes only the commitment.
+        let window = longer + 100;
+        let wide = palw_exec_v2_retention_terms_for_class_v1(1_000, 123, window, &policy, longer).unwrap();
+        assert_eq!(wide.liability_until, palw_exec_v2_retention_terms_v1(1_000, 123, window, &policy).unwrap().liability_until);
+        assert!(palw_exec_v2_retention_terms_for_class_v1(u64::MAX - longer, 123, 0, &policy, longer).is_err());
     }
 
     #[test]

@@ -960,6 +960,50 @@ fn the_root_settles_once_at_final_and_the_allocation_is_conserved_against_a_sess
     assert!(leg_a + leg_b <= twin_leg - (twin_leg as u128 * 160 / 800) as u64 + 1);
 }
 
+/// **R8-BUDGET × WINDOW (2026-10-11)**: with the bond budget in force, a settled composite root holds its producer bond's capital
+/// (the budget's withdrawal/liability hold, PESG §6) through the frozen consumer horizon — inclusive — not only to `final + H_L`; the
+/// session-free twin keeps the plain `final + H_L`. Both fold, revert and restart (the `step` harness).
+#[test]
+fn r8_a_settled_exec_root_holds_its_budgeted_bond_through_the_frozen_consumer_horizon() {
+    use crate::palw_bond_budget_v1::{PalwBondBudgetMirrorV1, PalwBondBudgetPolicyV1};
+    let policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+    let arm = |p: PalwStateParamsV2| {
+        p.with_bond_budget(Some(PalwBondBudgetMirrorV1 { from_daa: 112, policy: policy.clone(), allocation: None }))
+    };
+    let final_of = |s: &PalwChainStateV2, claim: &Hash64| match s.claim(claim).unwrap().phase {
+        PalwClaimPhaseV2::Final { final_daa } => final_daa,
+        ref other => panic!("not Final: {other:?}"),
+    };
+    // The twin: no session.
+    let (pt, st, claim_t) = world(Some(0));
+    let licensed = license(&pt, &st, claim_t, 45, 111);
+    let pt = arm(pt);
+    let twin = run_to_terminal(&pt, licensed, claim_t, 70, 112);
+    let bond_t = twin.claim(&claim_t).unwrap().bond;
+    let final_t = final_of(&twin, &claim_t);
+    let row_t = twin.bond_budget().expect("the engine booted").bond_row(&bond_t).expect("the seeded producer row").clone();
+    assert_eq!(row_t.liability_hold_until, final_t + policy.liability_hold_daa, "the twin holds to final + H_L");
+    // The composite root.
+    let (p, s, claim) = complete_and_licensed();
+    let p = arm(p);
+    let s = verify(&p, &s, 60, 130, &[(claim, 0), (claim, 1), (claim, 2)]);
+    let s = run_to_terminal(&p, s, claim, 70, 131);
+    let final_daa = final_of(&s, &claim);
+    let bond = s.claim(&claim).unwrap().bond;
+    let receipt = s.exec_v2_reward_vesting_v1(&claim).expect("the composite receipt");
+    assert!(
+        receipt.liability_until > final_daa + policy.liability_hold_daa,
+        "the fixture's consumer horizon {} outlives final + H_L {}",
+        receipt.liability_until,
+        final_daa + policy.liability_hold_daa
+    );
+    let budget = s.bond_budget().expect("the engine");
+    assert_eq!(budget.bond_row(&bond).unwrap().liability_hold_until, receipt.liability_until + 1);
+    assert!(s.bond_budget_window_holds(&bond, receipt.liability_until), "held through the inclusive last DAA");
+    assert!(budget.liability_holds(&bond, receipt.liability_until));
+    assert!(!budget.liability_holds(&bond, receipt.liability_until + 1), "and released the next DAA");
+}
+
 #[test]
 fn an_unfinished_session_voids_its_claim_uncharged_at_its_expiry() {
     let (p, s, claim) = opened();
@@ -3698,7 +3742,8 @@ mod amendment_1 {
         let d = pre.decl(native);
         let policy = &s.kernel_route.as_ref().unwrap().header.policy;
         let old = palw_kernel_claim_horizon_bound_v1(&pre.row, policy, None);
-        let until = super::palw_kernel_route_fold_v1::exec_liability_floor_v1(d.expiry_daa, p.window_court(), policy).unwrap();
+        let until = super::palw_kernel_route_fold_v1::exec_liability_floor_v1(d.expiry_daa, p.window_court(), policy, policy.liability_daa)
+            .unwrap();
         assert!(old < until);
         let short = provider_terms(&p, &s, pre.claim_id, bond_key(1), 106, old, 30, true);
         let subject = ProviderSubjectV1::KernelClaim { claim: pre.claim_id };

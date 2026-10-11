@@ -381,6 +381,21 @@ impl PalwKernelRouteStateV1 {
         self.aux_row(PALW_ONBOARDING_TABLE_KERNEL_BINDINGS_V1, &borsh::to_vec(class).expect("a digest serializes"))
     }
 
+    /// **R8 (2026-10-11): the liability horizon an EXEC root's dependency claims inherit** — G14-B's derived horizon of the kernel
+    /// class `class` (a V2 class) is kernel-bound to ([`misaka_palw_kernel::ledger::ClassRowV1::liability_daa`]: `max(policy
+    /// liability_daa, the class's worst-case public pursuit)`), never below the policy's. An unbound class or an unregistered kernel
+    /// class answers the policy's horizon (the consumer refuses those roots elsewhere). Reads the cached ledger without cloning it.
+    pub fn exec_class_liability_daa_v1(&self, class: &Hash64) -> u64 {
+        let policy = self.header.policy.liability_daa;
+        let Some(binding) = self.kernel_binding_v1(class) else { return policy };
+        let kernel_class = binding.kernel_class.as_bytes();
+        let derived = match self.ledger_cache.with(|ledger| ledger.classes.get(&kernel_class).map(|row| row.liability_daa)) {
+            Some(found) => found,
+            None => self.ledger().ok().and_then(|ledger| ledger.classes.get(&kernel_class).map(|row| row.liability_daa)),
+        };
+        derived.unwrap_or(policy).max(policy)
+    }
+
     pub fn conformance_v1(&self, class: &Hash64, artifact_root: &Hash64) -> Option<ConformanceRowV1> {
         self.aux_row(PALW_ONBOARDING_TABLE_CONFORMANCE_V1, &key2(class, artifact_root))
     }

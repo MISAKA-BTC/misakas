@@ -287,6 +287,21 @@ pub struct PalwBondBudgetPolicyV1 {
     pub export_cap_permille: u16,
     /// PESG §6: the value of Final weight — UNKNOWN today (FINX, BUDGET), so the slot is versioned and `Unknown` by default.
     pub weight_value: PalwWeightValuePolicyV1,
+    /// **R8-BUDGET (2026-10-11): whether a poster-funded market fee (a kernel-route job escrow paid to its producer, hook H-1) counts in
+    /// the producer bond's `R`** — POLICY, UNDECIDED (the audit's "market fee を `R_max` に入れるか"). Both modes reserve `Q` (one claim)
+    /// and the claim's liability for every kernel claim; neither creates block units or Final weight (a kernel claim has neither).
+    pub market_fee: PalwMarketFeePolicyV1,
+}
+
+/// **Does a market fee count in `R_max`?** (R8-BUDGET, POLICY — undecided; both are implemented and tested, neither is recommended.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwMarketFeePolicyV1 {
+    /// The fee is outside `R`: a kernel claim reserves `Q` and its liability only.
+    OutsideReward = 0,
+    /// The fee is attributed reward: a kernel claim also reserves its job's escrow in `R`, and the actual payment consumes it.
+    CountAgainstReward = 1,
 }
 
 /// **The value of a unit of Final weight** (PESG §6, ECON §5e.4: `w·v_F` belongs inside the same per-bond budget as `r`). The value is
@@ -331,6 +346,7 @@ impl PalwBondBudgetPolicyV1 {
             liability_hold_daa: PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1,
             export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
             weight_value: PalwWeightValuePolicyV1::Unknown,
+            market_fee: PalwMarketFeePolicyV1::OutsideReward,
         }
     }
 
@@ -1753,6 +1769,7 @@ mod tests {
             liability_hold_daa: 30,
             export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
             weight_value: PalwWeightValuePolicyV1::Unknown,
+            market_fee: PalwMarketFeePolicyV1::OutsideReward,
         }
     }
 

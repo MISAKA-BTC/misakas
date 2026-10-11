@@ -362,6 +362,11 @@ impl KernelLedgerCacheV1 {
         self.0.as_ref().map(|l| (**l).clone())
     }
 
+    /// Read the cached ledger in place (`None` when nothing is cached) — no clone.
+    pub fn with<R>(&self, f: impl FnOnce(&KernelLedgerV1) -> R) -> Option<R> {
+        self.0.as_deref().map(f)
+    }
+
     pub fn set(&mut self, ledger: KernelLedgerV1) {
         self.0 = Some(std::sync::Arc::new(ledger));
     }

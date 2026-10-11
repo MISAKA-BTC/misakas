@@ -3480,3 +3480,5 @@ mod opv_bootstrap;
 // `g14_kernel_route_e2e/socket_rpc.rs`.
 mod recovery;
 mod socket_rpc;
+// R8-BUDGET (2026-10-11): hook H-1, the bond budget of standalone kernel claims under both market-fee policies.
+mod r8_budget;

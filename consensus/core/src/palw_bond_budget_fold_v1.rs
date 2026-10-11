@@ -403,6 +403,43 @@ impl TransitionBuilder<'_> {
         self.plan_bond_budget_v1(ctx, claim.bond, Some(model), ask, origin, budget_block_units)
     }
 
+    /// **Hook H-1 (R8-BUDGET, 2026-10-11): a kernel-route claim's plan** — `Q` 1 and its liability (the kernel reservation) always;
+    /// `R` the job escrow it may be paid from where the market-fee policy counts it ([`PalwMarketFeePolicyV1::CountAgainstReward`]),
+    /// else 0; no block units (a kernel claim mints no block) and no Final weight (it carries none). `None` below the fence.
+    pub(super) fn plan_kernel_claim_budget_v1(
+        &self,
+        ctx: &PalwBlockContextV2,
+        bond: PalwBondKeyV2,
+        job_escrow_sompi: u64,
+        liability_sompi: u64,
+    ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
+        let reward_sompi = match mirror.policy.market_fee {
+            PalwMarketFeePolicyV1::OutsideReward => 0,
+            PalwMarketFeePolicyV1::CountAgainstReward => job_escrow_sompi,
+        };
+        let ask = PalwBudgetAskV1 { block_units: 0, reward_sompi, final_weight: 0, liability_sompi: liability_sompi as u128 };
+        self.plan_bond_budget_v1(ctx, bond, None, ask, PalwBudgetOriginV1::KernelRoute, 0)
+    }
+
+    /// **Hook H-1: a market fee actually paid to a kernel claim's producer** consumes the claim's `R` reservation, strictly (the
+    /// reservation was the whole escrow, so an honest payment always fits). `Ok` for a claim with no row (below the fence, or a fee
+    /// outside `R`: its reservation is 0 and nothing is drawn).
+    pub(super) fn bond_budget_kernel_fee_v1(&mut self, claim_id: &Hash64, amount: u64) -> Result<(), PalwStateV2Error> {
+        let Some(budget) = self.state.bond_budget.as_ref() else { return Ok(()) };
+        let Some(row) = budget.claim_row(claim_id) else { return Ok(()) };
+        // A closed row (a fee can only follow a Final or a root settlement, both of which close after paying) has nothing to draw.
+        if row.origin != PalwBudgetOriginV1::KernelRoute || row.reserved.reward_sompi == 0 || amount == 0 || !row.open {
+            return Ok(());
+        }
+        let bond = row.bond;
+        match self.bond_budget_op(|budget, _, j| budget.consume(claim_id, PalwBudgetDimV1::Reward, amount as u128, true, j)).flatten()
+        {
+            None | Some(Ok(_)) => Ok(()),
+            Some(Err(why)) => Err(budget_refused(bond, why)),
+        }
+    }
+
     /// **A free-prompt commitment's plan**: Q 1, B `quanta` blocks, R `quanta` carves of this block, F `quanta` per-quantum weights.
     pub(super) fn plan_free_prompt_budget_v1(
         &self,
@@ -564,7 +601,15 @@ impl TransitionBuilder<'_> {
     /// **A claim is terminal** (an attempt's Final, a void, a conviction) at `now`: no further consumption; nothing returns to the window;
     /// the bond's liability hold runs to `now + H_L` (PESG §6).
     pub(super) fn bond_budget_close_v1(&mut self, claim_id: &Hash64, now: u64) {
-        let hold_until = self.bond_budget_liability_hold_until_v1(now);
+        self.bond_budget_close_holding_v1(claim_id, now, None);
+    }
+
+    /// **R8-BUDGET × WINDOW (2026-10-11): a terminal claim whose liability outlives `H_L`** — the bond's hold runs to the later of
+    /// `now + H_L` and `liability_until` (an EXEC composite root's frozen consumer horizon: its dependencies stay prosecutable, and its
+    /// vested legs unpaid, until that inclusive DAA, so the capital that answers for them is not released to a withdrawal first). Below
+    /// the fence (no engine) nothing is written, as for [`Self::bond_budget_close_v1`].
+    pub(super) fn bond_budget_close_holding_v1(&mut self, claim_id: &Hash64, now: u64, liability_until: Option<u64>) {
+        let hold_until = self.bond_budget_liability_hold_until_v1(now).max(liability_until.unwrap_or(0));
         self.bond_budget_op(|budget, _, j| budget.close_at(claim_id, Some(hold_until), j));
     }
 

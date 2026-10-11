@@ -1213,4 +1213,100 @@ mod tests {
         assert_eq!(borsh::to_vec(&PalwWorkRootPhaseV2::Voided { from_index: 0, voided_daa: 0 }).unwrap()[0], 2);
         assert_eq!(borsh::to_vec(&PalwWorkRootPhaseV2::Settled { settled_daa: 0 }).unwrap()[0], 3);
     }
+
+    /// **R8-NEUTRAL (2026-10-11): the one settlement is invariant under every reordering and relabelling, and sub-additive under
+    /// splitting** — over 4,000 deterministic random plans (xorshift, fixed seed):
+    /// (a) permuting the credited slices (carrier / acceptance / registration order) changes nothing;
+    /// (b) relabelling executors by any bijection that fixes the root bond (operator ids, genesis order, the bond keys' sort order)
+    ///     maps each leg to the relabelled executor with the same amount;
+    /// (c) splitting one executor's work across fresh bonds (Sybil capital) never raises that party's total, nor lowers any other
+    ///     executor's leg; the dust goes to the root executor, and the sum stays exactly the allocation;
+    /// (d) re-cutting the same executor's work into more slices (same bond) is exact: no dust moves.
+    /// This is arithmetic neutrality of `settle_root_v2`; it is not a proof that distinct bonds are distinct economic actors.
+    #[test]
+    fn r8_neutral_settlement_is_order_and_label_invariant_and_split_subadditive() {
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let root = bond(1);
+        let total_of = |s: &PalwRootSettlementV2, b: &PalwBondKeyV2| -> u64 {
+            if *b == root { s.root_leg } else { s.slice_legs.iter().filter(|(k, _)| k == b).map(|(_, a)| *a).sum() }
+        };
+        for case in 0..4_000u64 {
+            let executors = 1 + (next() % 5) as usize;
+            let slices_n = 1 + (next() % 8) as usize;
+            let allocation = match case % 4 {
+                0 => next() % 1_000,
+                1 => next() % 1_000_000_007,
+                2 => u64::MAX - (next() % 1_000),
+                _ => next(),
+            };
+            let prefix = 1 + next() % 10_000;
+            let mut slices: Vec<(PalwBondKeyV2, u64)> = (0..slices_n)
+                .map(|_| {
+                    let e = (next() % (executors as u64 + 1)) as u64; // 0 = the root bond itself
+                    (if e == 0 { root } else { bond(100 + e) }, 1 + next() % 100_000)
+                })
+                .collect();
+            let total = prefix + slices.iter().map(|(_, w)| w).sum::<u64>();
+            let base = settle_root_v2(allocation, total, prefix, &slices, root).unwrap();
+            assert_eq!(base.total(), Some(allocation), "case {case}: conservation");
+            // (a) order
+            slices.reverse();
+            assert_eq!(settle_root_v2(allocation, total, prefix, &slices, root).unwrap(), base, "case {case}: reversed");
+            let k = (next() as usize) % slices.len();
+            slices.rotate_left(k);
+            assert_eq!(settle_root_v2(allocation, total, prefix, &slices, root).unwrap(), base, "case {case}: rotated");
+            // (b) labels: map 100+e → 1000-e (reverses their sort order), the root fixed.
+            let relabel = |b: &PalwBondKeyV2| {
+                (1..=5u64).find(|e| *b == bond(100 + e)).map(|e| bond(1_000 - e)).unwrap_or(*b)
+            };
+            let relabelled: Vec<_> = slices.iter().map(|(b, w)| (relabel(b), *w)).collect();
+            let r = settle_root_v2(allocation, total, prefix, &relabelled, root).unwrap();
+            assert_eq!(r.root_leg, base.root_leg, "case {case}: the root leg ignores labels");
+            for (b, amount) in &base.slice_legs {
+                assert_eq!(total_of(&r, &relabel(b)), *amount, "case {case}: a leg follows its executor's relabelling");
+            }
+            // (c) split one non-root executor's every slice across two fresh bonds.
+            if let Some((victim, _)) = slices.iter().find(|(b, _)| *b != root).copied() {
+                let mut toggle = false;
+                let split: Vec<_> = slices
+                    .iter()
+                    .flat_map(|(b, w)| {
+                        if *b == victim && *w >= 2 {
+                            let a = 1 + next() % (*w - 1);
+                            vec![(bond(5_000), a), (bond(5_001), *w - a)]
+                        } else if *b == victim {
+                            toggle = !toggle;
+                            vec![(if toggle { bond(5_000) } else { bond(5_001) }, *w)]
+                        } else {
+                            vec![(*b, *w)]
+                        }
+                    })
+                    .collect();
+                let s = settle_root_v2(allocation, total, prefix, &split, root).unwrap();
+                assert_eq!(s.total(), Some(allocation), "case {case}: conservation after the split");
+                let sybil = total_of(&s, &bond(5_000)) + total_of(&s, &bond(5_001));
+                assert!(sybil <= total_of(&base, &victim), "case {case}: splitting capital never raises the party's total");
+                for (b, amount) in &base.slice_legs {
+                    if *b != victim {
+                        assert_eq!(total_of(&s, b), *amount, "case {case}: another executor's leg is untouched");
+                    }
+                }
+                assert!(s.root_leg >= base.root_leg, "case {case}: the dust returns to the root executor");
+            }
+            // (d) re-cut one slice of the same bond into two.
+            let (b0, w0) = slices[0];
+            if w0 >= 2 {
+                let mut recut = slices.clone();
+                recut[0] = (b0, w0 / 2);
+                recut.push((b0, w0 - w0 / 2));
+                assert_eq!(settle_root_v2(allocation, total, prefix, &recut, root).unwrap(), base, "case {case}: re-cut is exact");
+            }
+        }
+    }
 }

@@ -69,6 +69,7 @@ fn test_policy(unit: u64, rho: u32) -> PalwBondBudgetPolicyV1 {
         liability_hold_daa: PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1,
         export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
         weight_value: PalwWeightValuePolicyV1::Unknown,
+        market_fee: kaspa_consensus_core::palw_bond_budget_v1::PalwMarketFeePolicyV1::OutsideReward,
     }
 }
 

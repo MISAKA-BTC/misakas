@@ -1816,3 +1816,5 @@ async fn x8_g14_a_lying_real_run_is_convicted_through_its_prefix_claim_and_voids
     let z = replay_with_lane(&cw.net, &lane).await;
     cw.net.assert_same(&z, "replay");
 }
+
+mod native_final;

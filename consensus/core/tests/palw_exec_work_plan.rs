@@ -249,3 +249,82 @@ fn maximum_structural_size_context_and_slice_count_have_a_bounded_cost_inverse()
         assert_eq!(plan.slices().last().unwrap().positions().end, program.history_bound);
     }
 }
+
+/// **R8-WORK release resource probe (2026-10-11, ignored; run with `--release -- --ignored --nocapture`)** — the worst registered-IR
+/// shape the structural caps admit (16 blocks × 512 nodes, 1,024 layers, `2^21` positions) under BOTH cost policies, for the whole
+/// live root population a restart re-derives (`PALW_EXEC_V2_MAX_OPEN_ROOTS` = 256 roots × the 128-suffix plan) plus one per-block
+/// admission's worst work (`PALW_EXEC_V2_MAX_SLICES_PER_BLOCK` slice scopes and one declaration). Prints wall times; asserts only
+/// correctness. The measured numbers are evidence for a release latency budget no one has approved (UNKNOWN until a budget exists).
+#[test]
+#[ignore]
+fn r8_work_release_probe_worst_graph_and_full_root_population() {
+    use misaka_palw_tir::program::{Block, MAX_BLOCKS, MAX_LAYERS, MAX_NODES_PER_BLOCK, Node, Ref, Schedule};
+    use misaka_palw_tir::{DType, Prim, TensorType};
+    let mut program = misaka_palw_tir_sketch::fixture::dense_moe_v1(1).program;
+    program.params.clear();
+    program.consts.clear();
+    program.states.clear();
+    program.history_bound = misaka_palw_tir::program::HISTORY_BOUND_V1_HELD;
+    program.blocks = (0..MAX_BLOCKS)
+        .map(|index| Block {
+            name: format!("b{index}"),
+            carry_in: vec![],
+            carry_out: vec![],
+            nodes: vec![
+                Node { prim: Prim::Cast, inputs: vec![Ref::Input(0)], out: TensorType::scalar(DType::Idx), commit: true };
+                MAX_NODES_PER_BLOCK
+            ],
+        })
+        .collect();
+    program.schedule = Schedule {
+        pre: 0,
+        post: (MAX_BLOCKS - 1) as u8,
+        layers: (0..MAX_LAYERS).map(|index| (1 + index % (MAX_BLOCKS - 2)) as u8).collect(),
+    };
+    program.logits = 0;
+    let program = TirProgramV1::decode_canonical(&program.encode()).expect("all structural caps fit the byte cap");
+    let slice_count = kaspa_consensus_core::palw_exec_v2::PALW_EXEC_V2_MAX_SLICES_PER_ROOT;
+    let roots = kaspa_consensus_core::palw_work_slice_v2::PALW_EXEC_V2_MAX_OPEN_ROOTS;
+    let per_block = kaspa_consensus_core::palw_work_slice_v2::PALW_EXEC_V2_MAX_SLICES_PER_BLOCK;
+    let ends: Vec<_> = (1..=slice_count)
+        .map(|i| 1 + i * ((program.history_bound - 1) / slice_count) + i * ((program.history_bound - 1) % slice_count) / slice_count)
+        .collect();
+    let per_position = (MAX_LAYERS as u64 + 2) * MAX_NODES_PER_BLOCK as u64;
+    let boundaries: Vec<_> = std::iter::once(per_position).chain(ends.iter().map(|g| per_position * u64::from(*g))).collect();
+    for cost in [PalwExecWorkCostV1::AllNodesV1, PalwExecWorkCostV1::MinSelectArmsV2] {
+        // One declaration (the forward planner) — what one root admission derives.
+        let started = std::time::Instant::now();
+        let plan = palw_exec_work_plan_v1(&program, cost, program.history_bound, 1, 1, &ends).unwrap();
+        let declaration = started.elapsed();
+        assert_eq!(plan.boundaries(), boundaries.as_slice());
+        // Restart: every live root re-derives its plan from the stored boundaries.
+        let started = std::time::Instant::now();
+        for _ in 0..roots {
+            let again = palw_exec_work_plan_from_boundaries_v1(&program, cost, program.history_bound, 1, 1, &boundaries).unwrap();
+            assert_eq!(again.slices().len(), slice_count as usize);
+        }
+        let restart = started.elapsed();
+        // One block's worst slice admissions: each checks its cell's scope.
+        let started = std::time::Instant::now();
+        for (index, cell) in plan.slices().iter().take(per_block).enumerate() {
+            let pair = [plan.boundaries()[index], plan.boundaries()[index + 1]];
+            palw_exec_work_slice_scope_v1(
+                &program,
+                cost,
+                program.history_bound,
+                1,
+                1,
+                pair,
+                cell.prompt_tokens() as usize,
+                (cell.positions().end - cell.positions().start) as usize,
+            )
+            .unwrap();
+        }
+        let block = started.elapsed();
+        println!(
+            "[r8-work-probe] {cost:?}: one declaration {declaration:?}; restart of {roots} roots x {slice_count} suffixes {restart:?} \
+             ({:?}/root); {per_block} slice scopes in one block {block:?}",
+            restart / roots as u32
+        );
+    }
+}

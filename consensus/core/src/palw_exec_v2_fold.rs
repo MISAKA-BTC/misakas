@@ -28,7 +28,7 @@ use super::*;
 use crate::palw_exec_v2::PalwWorkRangeV1;
 use crate::palw_exec_v2_verify::{
     PalwExecV2PrefixInputsV1, PalwSliceVerificationV1, palw_exec_v2_claim_outcome_v1, palw_exec_v2_kernel_key_v1,
-    palw_exec_v2_leg_cap_v1, palw_exec_v2_prefix_binding_v1, palw_exec_v2_real_job_v1, palw_exec_v2_retention_terms_v1,
+    palw_exec_v2_leg_cap_v1, palw_exec_v2_prefix_binding_v1, palw_exec_v2_real_job_v1,
     palw_exec_v2_root_slice_job_nonce_v2, palw_exec_v2_route_reward_v1, palw_exec_v2_verification_binding_v2,
 };
 use crate::palw_work_slice_v2::{
@@ -305,13 +305,8 @@ impl PalwChainStateV2 {
                     .rows
                     .get(&(misaka_palw_kernel::rows::TABLE_JOBS_V1, borsh::to_vec(&row.job_id).expect("a digest serializes")))
                     .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::job::KernelJobV1>(bytes).ok());
-                let terms = palw_exec_v2_retention_terms_v1(
-                    root.expiry_daa,
-                    root.executor_exposure,
-                    params.window_court(),
-                    &kernel.header.policy,
-                )
-                .map_err(|_| R::Overflow)?;
+                let terms = crate::palw_exec_v2_verify::palw_exec_v2_root_retention_terms_v1(root, params.window_court(), kernel)
+                    .map_err(|_| R::Overflow)?;
                 palw_exec_v2_verification_binding_v2(
                     slice,
                     &binding,
@@ -388,17 +383,19 @@ impl PalwChainStateV2 {
                     && root.prefix != PalwWorkPrefixStageV2::Unbound
                 {
                     let hold = ExecRewardHoldV1 { owner_root: id.as_bytes(), expires_daa: root.expiry_daa };
-                    if expected.insert(root.prefix_claim.as_bytes(), hold).is_some() {
+                    // R8: the floor is the bound kernel class's G14-B horizon, as the hook froze it.
+                    let class_liability = kernel.exec_class_liability_daa_v1(&root.class_id);
+                    if expected.insert(root.prefix_claim.as_bytes(), (hold, class_liability)).is_some() {
                         return Err(bad("a prefix reward is bound more than once".into()));
                     }
                     for (_, slice) in self.exec_v2.slices.range((*id, 0)..=(*id, u32::MAX)) {
-                        if expected.insert(slice.evidence_root.as_bytes(), hold).is_some() {
+                        if expected.insert(slice.evidence_root.as_bytes(), (hold, class_liability)).is_some() {
                             return Err(bad("a kernel reward is bound more than once".into()));
                         }
                     }
                 }
             }
-            for (claim, hold) in &expected {
+            for (claim, (hold, class_liability)) in &expected {
                 let row: misaka_palw_kernel::ledger::ClaimRowV1 = kernel
                     .rows
                     .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, borsh::to_vec(claim).expect("a digest serializes")))
@@ -408,6 +405,7 @@ impl PalwChainStateV2 {
                     hold.expires_daa,
                     params.window_court(),
                     &kernel.header.policy,
+                    *class_liability,
                 )?;
                 if row.liability_until.is_none_or(|until| until < floor) {
                     return Err(bad("a dependency's liability cannot cover its root window".into()));
@@ -422,7 +420,7 @@ impl PalwChainStateV2 {
                     actual.insert(claim, hold);
                 }
             }
-            if expected != actual {
+            if expected.iter().map(|(claim, (hold, _))| (*claim, hold.clone())).collect::<BTreeMap<_, _>>() != actual {
                 return Err(bad("EXEC roots and kernel reward holds differ".into()));
             }
         }
@@ -532,13 +530,9 @@ impl PalwChainStateV2 {
                             let misaka_palw_kernel::ledger::ClaimBodyV1::Program { claim, .. } = &kernel_claim.body else {
                                 return Err(bad(format!("root {claim_id}'s slice {index} is not a program claim")));
                             };
-                            let terms = palw_exec_v2_retention_terms_v1(
-                                root.expiry_daa,
-                                root.executor_exposure,
-                                params.window_court(),
-                                &kernel.header.policy,
-                            )
-                            .map_err(|why| bad(why.into()))?;
+                            let terms =
+                                crate::palw_exec_v2_verify::palw_exec_v2_root_retention_terms_v1(root, params.window_court(), kernel)
+                                    .map_err(|why| bad(why.into()))?;
                             let nonce =
                                 palw_exec_v2_root_slice_job_nonce_v2(claim_id, *index, root, &terms).map_err(|why| bad(why.into()))?;
                             if job.nonce != nonce.as_bytes() {
