@@ -7,7 +7,7 @@
 use crate::{Hash64, palw_v2::PalwJobContextV2};
 
 pub const PALW_CLASS_SEMANTICS_VERSION_V1: u16 = 1;
-pub const PALW_CARRIAGE_CLASS_SEMANTICS_TAIL_V1: u8 = 0xF3;
+pub const PALW_CARRIAGE_CLASS_SEMANTICS_TAIL_V1: u8 = 0xF7;
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwClassSemanticsV1 {

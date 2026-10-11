@@ -17067,14 +17067,14 @@ pub enum PalwDeltaEntryV2 {
     /// Lane LG14-A (delta 201): original accepted public FP commitment, retained until claim retirement.
     PublicFpJob { key: Hash64, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 201,
     /// Immutable canonical semantic identities, one row per registered class.
-    ClassSemantics { key: Hash64, old: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>, new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1> } = 204,
+    ClassSemantics { key: Hash64, old: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>, new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1> } = 213,
     /// Immutable registered semantics snapshotted when a new claim is accepted.
-    ClaimSemantics { key: Hash64, old: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>, new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1> } = 206,
+    ClaimSemantics { key: Hash64, old: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>, new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1> } = 214,
     LegacyAnswer { key: crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, old: Option<crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>, new: Option<crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2> } = 202,
     TerminalEvidence { key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, old: Option<crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>, new: Option<crate::palw_terminal_carriage_v1::PalwPendingTerminalV1> } = 203,
-    TerminalPart { key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, index: u8, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 205,
-    StagedCourtSeed { key: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, old: Option<crate::palw_staged_court_state_v1::PalwStagedCourtRowV1>, new: Option<crate::palw_staged_court_state_v1::PalwStagedCourtRowV1> } = 207,
-    StagedCourtMove { key: crate::palw_constraint_stream_owned_v1::PalwConstraintStreamKeyV1, old: crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1, new: crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1 } = 208,
+    TerminalPart { key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, index: u8, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 212,
+    StagedCourtSeed { key: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, old: Option<crate::palw_staged_court_state_v1::PalwStagedCourtRowV1>, new: Option<crate::palw_staged_court_state_v1::PalwStagedCourtRowV1> } = 210,
+    StagedCourtMove { key: crate::palw_constraint_stream_owned_v1::PalwConstraintStreamKeyV1, old: crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1, new: crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1 } = 211,
     /// **Lane LG14-A (delta number 200, declared explicitly; 200–204 are the lane's): a claim's dispute record**
     /// was written, rewritten or dropped. Dormant: `palw_legacy_public_filer_v1` is armed on no network, so no stored delta carries it.
     LegacyDispute {
@@ -42626,7 +42626,7 @@ pub struct PalwStateCarriageV2 {
     pub legacy_disputes: BTreeMap<Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
     /// Original accepted FP metadata, appended tail 0xF0; omitted when empty below the public-filer fence.
     pub fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
-    /// Immutable signed registration semantics, optional tail 0xF3.
+    /// Immutable signed registration semantics, optional tail 0xF7.
     pub class_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     pub claim_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     pub legacy_answers: BTreeMap<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,

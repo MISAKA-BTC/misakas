@@ -8,7 +8,7 @@ use crate::palw_step_leg::{PalwStepBindingV2, PalwStepOpeningV1};
 use crate::palw_step_refute::PalwTiledDecodePinV1;
 use borsh::{BorshDeserialize, BorshSerialize};
 pub const PALW_CONSTRAINT_STREAM_CONTEXT_V1: &[u8] = b"misaka-palw/constraint-stream/v1/mldsa87";
-pub const PALW_CONSTRAINT_STREAM_TAIL_V1: u8 = 0xF4;
+pub const PALW_CONSTRAINT_STREAM_TAIL_V1: u8 = 0xF8;
 /// Seed transport is independent of a legacy direct objective offence cap. It is still bounded
 /// by the admitted court carrier ceiling, never a limit chosen by the challenger.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
