@@ -42,6 +42,16 @@ impl PrefixPlanV1 {
             plan, tiles: Vec::new(), evidence_bytes, maximum_evidence_bytes }))
     }
 
+    /// An accepted ordinary reservation admits the larger owned-court budget before a
+    /// declaration exists. Preserve acquired authenticated tiles while growing that envelope.
+    pub(super) fn increase_budget(&mut self, maximum_evidence_bytes: u64) -> Result<(), String> {
+        if maximum_evidence_bytes < self.evidence_bytes {
+            return Err("the current owned court cannot carry the acquired prefix evidence".into());
+        }
+        self.maximum_evidence_bytes = self.maximum_evidence_bytes.max(maximum_evidence_bytes);
+        Ok(())
+    }
+
     pub(super) fn next_unit(&self, binding: &PalwStepBindingV2) -> Result<Option<PalwLegacyHeldUnitV2>, String> {
         if binding.committed_execution_root != self.execution_root || binding.job_context.job_id != self.job_id {
             return Err("the prefix plan is another claim's binding".into());

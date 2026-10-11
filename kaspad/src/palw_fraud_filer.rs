@@ -44,6 +44,8 @@ use std::collections::BTreeSet;
 mod constraint;
 #[path = "palw_fraud_filer_input.rs"]
 pub(super) mod input;
+#[path = "palw_fraud_filer_prefix.rs"]
+mod prefix;
 pub(super) use input::{palw_fraud_filer_fp_input_v1, palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};
 
 use super::reporter_filer::{
@@ -385,6 +387,10 @@ pub(super) struct PalwFraudFilerCaseV1 {
     pub(super) legacy_wanted: Option<PalwLegacyHeldUnitV2>,
     constraint_plan: Option<constraint::TiledPlanV1>,
     constraint_done: bool,
+    prefix_plan: Option<prefix::PrefixPlanV1>,
+    prefix_complete: bool,
+    prefix_budget: u64,
+    _prefix_reservation: Option<Arc<crate::palw_memory_ledger::PalwMemoryReservationV1>>,
     pub(super) runs: u8,
     registered_preflight: bool,
     arithmetic_matched: bool,
@@ -421,6 +427,10 @@ impl PalwFraudFilerCaseV1 {
             legacy_wanted: None,
             constraint_plan: None,
             constraint_done: false,
+            prefix_plan: None,
+            prefix_complete: false,
+            prefix_budget: 0,
+            _prefix_reservation: None,
             runs: 0,
             registered_preflight: false,
             arithmetic_matched: false,
@@ -478,6 +488,21 @@ impl PalwFraudFilerCaseV1 {
     }
 
     pub(super) fn learn(&mut self, probe: PalwLegacyProbeV1, answer: &PalwDaBuiltAnswerV1) -> Result<(), String> {
+        if let (Some(plan), Some(binding), PalwLegacyProbeV1::HeldNode { unit }, PalwDaBuiltAnswerV1::LegacyHeldV2(answer)) =
+            (self.prefix_plan.as_mut(), self.binding.as_ref(), probe, answer)
+        {
+            if plan.next_unit(binding)? == Some(unit) {
+                if answer.0 != *binding {
+                    return Err("the prefix witness carries another binding".into());
+                }
+                let PalwLegacyHeldAnswerV2::KernelWitness(witness) = &answer.1 else {
+                    return Err("the prefix unit is not a committed kernel witness".into());
+                };
+                plan.learn(binding, witness)?;
+                self.legacy_wanted = None;
+                return Ok(());
+            }
+        }
         if self.fp_bootstrap.is_some() || self.fp_job_pending {
             match (probe, answer) {
                 (PalwLegacyProbeV1::Binding { row: 0, tile: 0 }, PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event))) => {
@@ -601,6 +626,8 @@ impl PalwFraudFilerCaseV1 {
         self.frontiers = learned.frontiers;
         self.witness = learned.witness;
         self.legacy_wanted = learned.legacy_wanted;
+        self.prefix_plan = learned.prefix_plan;
+        self.prefix_complete = learned.prefix_complete;
         self.fp_bootstrap = learned.fp_bootstrap;
         self.fp_descriptor = learned.fp_descriptor;
         self.input_retry_at = learned.input_retry_at;
@@ -1043,6 +1070,9 @@ impl PalwFraudFilerBookV1 {
         if let Some(case) = self.cases.get_mut(claim) {
             case.verdict = verdict;
             case.deferred_public = None;
+            case.prefix_plan = None;
+            case.prefix_complete = false;
+            case._prefix_reservation = None;
             case.release_pending = false;
             case.fp_bootstrap = None;
             case.fp_descriptor = None;
@@ -1090,6 +1120,7 @@ fn palw_fraud_filer_registered_preflight_v1(
     rules: kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1,
     answer: &PalwDaBuiltAnswerV1,
     fp_job: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
+    prefix_verified: bool,
 ) -> Result<bool, String> {
     if target.registered_semantics.is_none() {
         return Ok(true);
@@ -1122,7 +1153,12 @@ fn palw_fraud_filer_registered_preflight_v1(
         {
             return Ok(false);
         }
-        if job.is_prefix_state() {
+        if job.is_constraint() {
+            // Root equality is only the immutable selection check. The registered tokenizer
+            // rendering court must also certify correspondence before matching arithmetic is Honest.
+            return Ok(false);
+        }
+        if job.is_prefix_state() && !prefix_verified {
             return Ok(false);
         }
     }
@@ -1164,8 +1200,13 @@ pub(super) fn palw_fraud_filer_bootstrap_step_v1(
     if facts.session_open || !facts.accusable {
         return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait);
     }
-    let probe = if case.binding.is_none() && (case.fp_bootstrap.is_some() || case.fp_job_pending) {
+    let probe = if case.binding.is_none() && (case.fp_bootstrap.is_some() || case.fp_job_pending || case.prefix_plan.is_some()) {
         PalwLegacyProbeV1::Binding { row: 0, tile: 0 }
+    } else if let (Some(plan), Some(binding)) = (case.prefix_plan.as_ref(), case.binding.as_ref()) {
+        match plan.next_unit(binding) {
+            Ok(Some(unit)) => PalwLegacyProbeV1::HeldNode { unit },
+            _ => return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait),
+        }
     } else if let Some(input) = case.fp_bootstrap.as_ref() {
         if input.ready() || input.payload.job().prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
         {
@@ -1852,6 +1893,24 @@ impl PalwPanelService {
                     Err(_) => continue,
                 };
                 let fp_job = book.cases.get(&claim).and_then(|c| c.public_fp_job_v1().cloned());
+                if fp_job.as_ref().is_some_and(|job| job.is_prefix_state())
+                    && book.cases.get(&claim).is_some_and(|case| case._prefix_reservation.is_none() || case.prefix_budget < maximum)
+                {
+                    // Three learning/proof copies, Vec growth and the terminal builder remain
+                    // within this conservative envelope; all bytes stay under the shared ledger.
+                    let ticket = crate::palw_memory_ledger::host_ledger_v1().reserve(
+                        crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                            role: "public-prefix-proof",
+                            class_id: target.class_id,
+                            job: claim,
+                        },
+                        maximum.saturating_mul(8),
+                    );
+                    let Ok(ticket) = ticket else { continue };
+                    let case = book.cases.get_mut(&claim).expect("pursued case");
+                    case._prefix_reservation = Some(Arc::new(ticket));
+                    case.prefix_budget = maximum;
+                }
                 // The longest canonical prompt needs a whole-root recompute. Reserve its temporary ids/tree and proof buffers,
                 // then do all direct-proof hashing off the service loop. Pressure delays this pursuit rather than settling it.
                 let prefill = match answer {
@@ -1913,6 +1972,8 @@ impl PalwPanelService {
                 let case = book.cases.get(&claim).expect("pursued above");
                 let previous_plan = case.constraint_plan;
                 let constraint_done = case.constraint_done;
+                let previous_prefix = case.prefix_plan.clone();
+                let prefix_complete = case.prefix_complete;
                 let own_ids = match &case.verdict {
                     PalwFraudFilerVerdictV1::Mismatch(run) => run.own_output_ids.clone(),
                     _ => Vec::new(),
@@ -1932,11 +1993,59 @@ impl PalwPanelService {
                 let answer = answer.clone();
                 let proof = tokio::task::spawn_blocking(move || {
                     let _reserved = reserved;
-                    let semantic_ready =
-                        palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, fp_job.as_ref()).unwrap_or(false);
-                    let evaluate = || {
+                    let mut prefix_plan = previous_prefix;
+                    let mut prefix_complete = prefix_complete;
+                    let mut prefix_direct_checked = false;
+                    let evaluate_prefix = || -> Result<_, String> {
+                        let Some(job) = fp_job.as_ref().filter(|job| job.is_prefix_state()) else { return Ok(None) };
                         let direct =
                             palw_fraud_filer_public_filing_with_budget_v3(&target, rules, &answer, file_by, fp_job.as_ref(), maximum)?;
+                        prefix_direct_checked = true;
+                        if direct.is_some() {
+                            return Ok(direct);
+                        }
+                        let PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial)) = &answer else { return Ok(None) };
+                        if prefix_plan.is_none() {
+                            prefix_plan = prefix::PrefixPlanV1::for_job(&target, initial.binding(), job, maximum)?;
+                        }
+                        let Some(plan) = prefix_plan.as_mut() else { return Ok(None) };
+                        plan.increase_budget(maximum)?;
+                        if plan.next_unit(initial.binding())?.is_some() {
+                            return Ok(None);
+                        }
+                        let contradiction = plan.contradiction(&target, initial.binding(), job)?;
+                        prefix_complete = true;
+                        contradiction
+                            .map(|contradiction| {
+                                let built =
+                                    kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                                        target.claim_id,
+                                        target.executor_bond,
+                                        contradiction,
+                                        None,
+                                        maximum,
+                                    )
+                                    .map_err(|e| e.to_string())?;
+                                PalwConvictionFilingV1::of_offence(built.object, target.claim_id, file_by, PalwFilingOriginV1::Replay)
+                                    .filter(|filing| (filing.offence_key, filing.evidence_id) == (built.offence_id, built.evidence_id))
+                                    .ok_or_else(|| "the prefix reporter key differs from its proof builder".to_string())
+                            })
+                            .transpose()
+                    };
+                    let mut evaluate_prefix = evaluate_prefix;
+                    let prefix_filing = evaluate_prefix()?;
+                    let semantic_ready =
+                        palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, fp_job.as_ref(), prefix_complete)
+                            .unwrap_or(false);
+                    let evaluate = || {
+                        if prefix_filing.is_some() {
+                            return Ok((prefix_filing, previous_plan, constraint_done));
+                        }
+                        let direct = if prefix_direct_checked {
+                            None
+                        } else {
+                            palw_fraud_filer_public_filing_with_budget_v3(&target, rules, &answer, file_by, fp_job.as_ref(), maximum)?
+                        };
                         if direct.is_some() || constraint_done {
                             return Ok((direct, previous_plan, constraint_done));
                         }
@@ -1978,12 +2087,15 @@ impl PalwPanelService {
                         // yields to arithmetic localization, never to an unproved conviction.
                         Ok((filing, Some(plan), true))
                     };
-                    evaluate().map(|result| (result, semantic_ready))
+                    evaluate().map(|result| (result, semantic_ready, prefix_plan, prefix_complete))
                 })
                 .await
                 .unwrap_or_else(|e| Err(format!("the public proof worker failed: {e}")));
                 match proof {
-                    Ok(((Some(filing), _, _), _)) => {
+                    Ok(((Some(filing), _, _), _, prefix_plan, prefix_complete)) => {
+                        let case = book.cases.get_mut(&claim).expect("pursued case");
+                        case.prefix_plan = prefix_plan;
+                        case.prefix_complete = prefix_complete;
                         // The public proof refutes the liable Valid signers as well as the
                         // executor. Keep it before settlement removes this case from pursuit;
                         // the existing false-Valid scanner independently checks every receipt.
@@ -2017,7 +2129,10 @@ impl PalwPanelService {
                         }
                         continue;
                     }
-                    Ok(((None, plan, complete), semantic_ready)) => {
+                    Ok(((None, plan, complete), semantic_ready, prefix_plan, prefix_complete)) => {
+                        let case = book.cases.get_mut(&claim).expect("pursued case");
+                        case.prefix_plan = prefix_plan;
+                        case.prefix_complete = prefix_complete;
                         if semantic_ready
                             && book
                                 .cases
@@ -2027,6 +2142,9 @@ impl PalwPanelService {
                             let case = book.cases.get_mut(&claim).expect("pursued above");
                             case.verdict = PalwFraudFilerVerdictV1::Honest;
                             case.deferred_public = None;
+                            case.prefix_plan = None;
+                            case._prefix_reservation = None;
+                            case.prefix_budget = 0;
                             case.fp_job_pending = false;
                             case.release_pending = true;
                             #[cfg(test)]
@@ -2073,6 +2191,7 @@ impl PalwPanelService {
                 let step = if case.fp_bootstrap.is_some()
                     || case.fp_job_pending
                     || matches!(case.verdict, PalwFraudFilerVerdictV1::DeferredMismatch)
+                    || (case.prefix_plan.is_some() && !case.prefix_complete)
                 {
                     palw_fraud_filer_bootstrap_step_v1(role, view.as_ref(), &bond_key, reservable, case, |unit| {
                         book.answers.contains_key(&(claim, *unit))
@@ -2126,6 +2245,11 @@ impl PalwPanelService {
                             }
                             Err(why) => {
                                 warn!("[{PALW_PANEL}] claim {claim}: the chain's answer to {probe:?} does not read: {why} (LG14-A)");
+                                if book.cases.get(&claim).is_some_and(|case| case.prefix_plan.is_some()) {
+                                    // An insufficient finite evidence budget is an explicit pending
+                                    // scope refusal, never an Honest verdict or reservation release.
+                                    break;
+                                }
                                 book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(why));
                                 break;
                             }
@@ -2892,21 +3016,21 @@ pub(super) mod tests {
             da_signer_liability: true,
         };
         let answer = PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event.clone()));
-        assert!(palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, Some(&job)).unwrap());
+        assert!(palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, Some(&job), false).unwrap());
         assert!(
-            !palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, None).unwrap(),
+            !palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, None, false).unwrap(),
             "a matching replay cannot erase its job obligation"
         );
         let mut wrong = target.clone();
         wrong.registered_semantics.as_mut().unwrap().tokenizer_id = Hash64::from_u64_word(0xBAD);
         assert!(
-            !palw_fraud_filer_registered_preflight_v1(&wrong, rules, &answer, Some(&job)).unwrap(),
+            !palw_fraud_filer_registered_preflight_v1(&wrong, rules, &answer, Some(&job), false).unwrap(),
             "matching arithmetic does not clear J8"
         );
         wrong = target.clone();
         wrong.execution_root = Hash64::from_u64_word(0xBAD);
         assert!(
-            palw_fraud_filer_registered_preflight_v1(&wrong, rules, &answer, Some(&job)).is_err(),
+            palw_fraud_filer_registered_preflight_v1(&wrong, rules, &answer, Some(&job), false).is_err(),
             "a foreign row cannot clear the semantic obligation"
         );
         let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(8192), || None);
