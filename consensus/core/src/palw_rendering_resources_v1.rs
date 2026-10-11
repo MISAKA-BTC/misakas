@@ -291,14 +291,24 @@ pub struct PalwTokenizerResourcePlanV1 {
 }
 impl PalwTokenizerResourcePlanV1 {
     pub fn derive(exact_raw_bytes: u64, p: PalwRenderingResourcePricesV1) -> Result<Self, String> {
+        Self::derive_with_key_bound(exact_raw_bytes, exact_raw_bytes, p)
+    }
+    /// The signed bound is normative, not a claim that the file is small. At the B+1
+    /// parser-derived event the court switches to raw-hash completion and only exposes
+    /// objective overrun after authenticated EOF. Thus an understated bound cannot strand
+    /// acquisition or grant semantic acceptance without doing the corresponding work.
+    pub fn derive_with_key_bound(exact_raw_bytes: u64, signed_key_bound: u64,
+        p: PalwRenderingResourcePricesV1) -> Result<Self, String> {
         if p.inclusion_margin_daa == 0 {
             return Err("tokenizer obligation requires finite positive inclusion margin".into());
         }
         let raw = u128::from(exact_raw_bytes);
-        let proofs = raw; // Every completed object key or numeric ID consumes at least one raw byte.
+        let proofs = raw.min(u128::from(signed_key_bound)); // Each proved event consumes raw bytes.
+        // One extra bounded move records the actual B+1 pending event before hash-only EOF.
+        let overrun_move = u128::from(signed_key_bound < exact_raw_bytes);
         let part = 65_536u128;
         // Every key pause can split a raw part. Include seed/seal/result and finite reorg replay.
-        let moves = raw.div_ceil(part) + 2 * proofs + 3 + u128::from(p.reorg_replay_moves);
+        let moves = raw.div_ceil(part) + 2 * proofs + 3 + overrun_move + u128::from(p.reorg_replay_moves);
         // All512 hash siblings retain full consensus collision security. Include signature/header
         // for EACH fragmented raw or key carrier rather than pricing just the raw model file.
         let carriers = raw + proofs * (512 * 64 + 512) + moves * 5_632;
@@ -327,6 +337,22 @@ impl PalwTokenizerResourcePlanV1 {
 #[cfg(test)]
 mod tokenizer_resource_tests {
     use super::*;
+    #[test]
+    fn signed_event_bound_prices_complete_honest_or_authenticated_overrun_route() {
+        let prices=PalwStagedPublicCourtConfigV1::network_v1().prices;
+        let raw=256*1024*1024;
+        let bounded=PalwTokenizerResourcePlanV1::derive_with_key_bound(raw,1024,prices).unwrap();
+        let legacy=PalwTokenizerResourcePlanV1::derive(raw,prices).unwrap();
+        assert_eq!(bounded.maximum_key_proofs,1024);
+        assert!(bounded.maximum_carrier_bytes<400_000_000);
+        assert!(bounded.inclusion_daa<30_000);
+        assert!(bounded.maximum_moves<legacy.maximum_moves);
+        let none=PalwTokenizerResourcePlanV1::derive_with_key_bound(raw,0,prices).unwrap();
+        assert_eq!(none.maximum_key_proofs,0);
+        assert!(none.maximum_carrier_bytes>=raw);
+        // Huge overstatement cannot require more key proofs than exist in the raw preimage.
+        assert_eq!(PalwTokenizerResourcePlanV1::derive_with_key_bound(1,u64::MAX,prices).unwrap().maximum_key_proofs,1);
+    }
     #[test]
     fn raw_flat_hash_is_not_assigned_an_invented_file_cap_and_all_key_carriers_are_priced() {
         let prices = PalwStagedPublicCourtConfigV1::network_v1().prices;
