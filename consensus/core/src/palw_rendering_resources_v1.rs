@@ -43,7 +43,8 @@ fn narrow(value: u128) -> Result<u64, String> {
 }
 impl PalwRenderingResourcePlanV1 {
     /// Prefix length and vocab come from the authenticated binding/profile, never a declaration.
-    /// The decision may need EVERY token-table leaf to prove a stop, not just two nominated lanes.
+    /// Conservative bound allows all-vocabulary work. The refutation court itself needs only
+    /// nominated witness/beat lanes; this helper does not implement an all-vocabulary census.
     pub fn derive(prefix_tokens: u32, vocab: u32, p: PalwRenderingResourcePricesV1) -> Result<Self, String> {
         use crate::palw_fp_constraint_job_v1::{PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1, PALW_TOKEN_TABLE_MAX_VOCAB_V1};
         if prefix_tokens as usize >= crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS
@@ -186,7 +187,8 @@ impl PalwRenderingClaimTermsV1 {
     /// Acceptance must use these prospective terms for EVERY liable producer/Panel bond and
     /// each mandatory public material row; a shorter ordinary clock cannot silently substitute.
     pub fn check_holds(&self, material_until: u64, producer_exit_after: u64, panel_exit_after: &[u64]) -> Result<(), String> {
-        if material_until < self.material_until_daa
+        if panel_exit_after.is_empty()
+            || material_until < self.material_until_daa
             || producer_exit_after < self.bond_exit_after_daa
             || panel_exit_after.iter().any(|at| *at < self.bond_exit_after_daa)
         {

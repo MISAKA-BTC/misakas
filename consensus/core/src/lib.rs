@@ -820,3 +820,5 @@ pub mod palw_constraint_stream_carriage_v1;
 pub mod palw_constraint_stream_owned_v1;
 
 pub mod palw_json_key_set_v1;
+
+pub mod palw_prefix_state_stream_v1;
