@@ -1056,3 +1056,22 @@ fn a_row_pursuit_over_peers_refuses_liars_and_ends_with_the_mirrors_holding() {
     }
     assert!(done >= 4);
 }
+
+#[test]
+fn malformed_public_cell_run_requests_refuse_before_indexing_or_demanding_unrestorable_material() {
+    let (name, program, params) = programs().into_iter().next().unwrap();
+    let s = setup(&name, &program, &params, 1, 2, 4, 4, 5);
+    let positions = s.space.job_shape(&s.ctx).unwrap().positions;
+    for occ in [0..0, 2..1, s.n_occ..s.n_occ + 1, s.n_occ + 1..s.n_occ + 2, 0..usize::MAX] {
+        let cell = TirCellV1 { shard: 0, occ, positions: 0..positions };
+        assert!(cell_runs_v1(&s.space, &s.ctx, &cell).is_err(), "{:?}", cell);
+    }
+    for range in [4..2, positions + 1..positions + 2, 1..positions] {
+        let cell = TirCellV1 { shard: 0, occ: 0..s.n_occ, positions: range };
+        assert!(cell_runs_v1(&s.space, &s.ctx, &cell).is_err(), "{:?}", cell);
+    }
+    let empty = TirCellV1 { shard: 0, occ: 0..s.n_occ, positions: positions..positions };
+    assert!(cell_runs_v1(&s.space, &s.ctx, &empty).unwrap().is_empty());
+    let full = TirCellV1 { shard: 0, occ: 0..s.n_occ, positions: 0..positions };
+    assert!(!cell_runs_v1(&s.space, &s.ctx, &full).unwrap().is_empty());
+}

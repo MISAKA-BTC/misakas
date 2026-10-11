@@ -705,3 +705,77 @@ fn fetched_rows_and_incomplete_pursuits_follow_live_duties_and_keep_their_memory
     assert_eq!(ledger.reserved_bytes(), 0);
     assert!(resource::reserve_rows_v1(&ledger, &seat, class).is_ok());
 }
+
+#[test]
+fn a_public_watcher_with_only_proven_shard_rows_convicts_and_refuses_a_borrowed_capture_or_partition() {
+    use super::tir_shard::watch::{PalwTirShardWatchFindingV1, palw_tir_shard_watch_finding_over_v1};
+    use kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2;
+    use misaka_palw_sdk::lineages::tir::{TirCaptureV1, TirFileMirrorV1, fetch_shard_params_v1};
+    let ir = shard_class("public-partial-watch");
+    let tir = ir.tir();
+    let (job, prompt) = tir.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let honest = tir.execute(&job, &prompt).unwrap();
+    let capture = TirCaptureV1::decode(&honest.material).unwrap();
+    let watcher = bond(30);
+    let court = PalwCourtParamsV2::new(LADDER, 20, 2).unwrap();
+    let rules = tir.court_rules(&court);
+    let holds: Vec<_> = (0..2)
+        .map(|shard| {
+            fetch_shard_params_v1(tir.class(), ir.class_id, ir.root, 2, shard, &TirFileMirrorV1(ir.dir.join("tiny.palwtir"))).unwrap()
+        })
+        .collect();
+    let watch = |shard, root, trace| PalwSeatDutyV2 {
+        seat_bond: watcher,
+        execution_root: root,
+        trace_root: trace,
+        seat_index: kaspa_consensus_core::palw_tir_shard_watch_v1::PALW_TIR_SHARD_WATCH_NO_SEAT_V1,
+        ..duty(&ir, shard, 2, 1, PalwSegmentMaskV2::full(1), true)
+    };
+    let find = |holding: &misaka_palw_sdk::lineages::tir::TirShardHoldingV1, capture: &TirCaptureV1, d: &PalwSeatDutyV2| {
+        palw_tir_shard_watch_finding_over_v1(
+            holding,
+            capture,
+            d,
+            watcher,
+            &court,
+            &rules,
+            LADDER,
+            PalwPromptIdsFormV1::Flat,
+            &mut kaspa_cpu(),
+        )
+    };
+    for shard in 0..2 {
+        let d = watch(shard, honest.execution_root, honest.trace_root);
+        assert_eq!(find(&holds[shard as usize], &capture, &d).unwrap(), PalwTirShardWatchFindingV1::Valid);
+        let borrowed = PalwSeatDutyV2 { execution_root: Hash64::from_u64_word(999), ..d.clone() };
+        assert!(find(&holds[shard as usize], &capture, &borrowed).unwrap_err().contains("class/roots"));
+        assert!(find(&holds[1 - shard as usize], &capture, &d).unwrap_err().contains("class/partition"));
+    }
+    let mut accused = 0;
+    for leaf in [
+        capture.binding.step_leaf_count / 5,
+        capture.binding.step_leaf_count / 3,
+        capture.binding.step_leaf_count / 2,
+        capture.binding.step_leaf_count - 3,
+    ] {
+        let forged = tir.execute_with_injected_fault(&job, &prompt, leaf).unwrap();
+        let c = TirCaptureV1::decode(&forged.material).unwrap();
+        let mut found = 0;
+        for shard in 0..2 {
+            match find(&holds[shard as usize], &c, &watch(shard, forged.execution_root, forged.trace_root)).unwrap() {
+                PalwTirShardWatchFindingV1::Accuse { accusation, .. } => {
+                    assert_eq!(accusation.accuser_bond, watcher);
+                    assert_eq!(accusation.verdict, PalwCourtVerdictV2::ExecutorGuilty);
+                    assert_eq!((accusation.execution_root, accusation.trace_root), (forged.execution_root, forged.trace_root));
+                    found += 1;
+                    accused += 1;
+                }
+                PalwTirShardWatchFindingV1::Unconvictable { .. } => found += 1,
+                PalwTirShardWatchFindingV1::Valid => {}
+                PalwTirShardWatchFindingV1::Abstain(why) => panic!("shard {shard} leaf {leaf}: {why}"),
+            }
+        }
+        assert!(found > 0, "the owning shard finds every planted lie");
+    }
+    assert!(accused > 0, "at least one planted lie must reach the public court from held rows alone");
+}

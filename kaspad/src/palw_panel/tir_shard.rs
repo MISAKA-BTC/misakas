@@ -712,6 +712,8 @@ pub(crate) struct PalwTirShardBooksV1 {
     pub refuted: HashSet<Hash64>,
     /// The `(claim, shard)`s the non-seat watcher has verified (`--palw-tir-shard-watch`): each once.
     pub watched: HashSet<(Hash64, u16)>,
+    /// Next public-watch duty to try: unavailable early duties must not starve later shards.
+    watch_cursor: usize,
     /// `(claim)` → the DAA a part was last carried.
     submitted: HashMap<Hash64, u64>,
     /// `(class, shard)` → the span a possession proof was last carried; the plan declaration's DAA by class.
@@ -1153,15 +1155,34 @@ impl super::PalwPanelService {
             return;
         };
         let hold_key = (duty.class_id, place.s_l, place.shard);
+        if self.tir_shard_ensure_rows_v1(network_domain, current_daa, duty, &capture, mirror, interval_openings, books).await.is_none()
+        {
+            return;
+        }
+        self.tir_shard_holder_judge_v1(bond_key, network_domain, current_daa, duty, capture, hold_key, books).await;
+    }
+
+    /// Obtain this duty's proven shard rows for either a seat or a public watcher. This
+    /// acquisition path asks row holders; it never requests producer material or files a receipt.
+    #[allow(clippy::too_many_arguments)]
+    async fn tir_shard_ensure_rows_v1(
+        &self,
+        network_domain: Hash64,
+        current_daa: u64,
+        duty: &PalwSeatDutyV2,
+        capture: &TirCaptureV1,
+        mirror: Option<&std::path::Path>,
+        interval_openings: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        books: &mut PalwTirShardBooksV1,
+    ) -> Option<std::sync::Arc<resource::ReservedRowsV1<TirShardHoldingV1>>> {
+        let place = duty.tir_shard?;
+        let hold_key = (duty.class_id, place.s_l, place.shard);
         if !books.holdings.contains_key(&hold_key) {
             let Some(mirror) = mirror else {
                 // No mirror on this host: the rows come from peers, a reply at a time (D-S6 over the network). The tick that
                 // completes the fetch inserts the holding and goes on to judge; every other tick is one more ask or a wait.
-                self.tir_shard_fetch_rows_v1(network_domain, current_daa, duty, &capture, interval_openings, books).await;
-                if !books.holdings.contains_key(&hold_key) {
-                    return;
-                }
-                return self.tir_shard_holder_judge_v1(bond_key, network_domain, current_daa, duty, capture, hold_key, books).await;
+                self.tir_shard_fetch_rows_v1(network_domain, current_daa, duty, capture, interval_openings, books).await;
+                return books.holdings.get(&hold_key).cloned();
             };
             let memory = match resource::reserve_rows_v1(&crate::palw_memory_ledger::host_ledger_v1(), duty, &capture.binding.class) {
                 Ok(held) => held,
@@ -1169,7 +1190,7 @@ impl super::PalwPanelService {
                     crate::palw_backends::note_throttled_v1(&format!("tir-shard-row-memory-{}", duty.class_id), || {
                         format!("[{PALW_PANEL}] class {} shard {}: the row fetch waits ({why})", duty.class_id, place.shard)
                     });
-                    return;
+                    return None;
                 }
             };
             let (class, class_id, root, path) =
@@ -1199,12 +1220,12 @@ impl super::PalwPanelService {
                     crate::palw_backends::note_throttled_v1(&format!("tir-shard-fetch-{}", duty.class_id), || {
                         format!("[{PALW_PANEL}] class {} shard {}: the mirror's rows are refused: {why}", duty.class_id, place.shard)
                     });
-                    return;
+                    return None;
                 }
-                Err(_) => return,
+                Err(_) => return None,
             }
         }
-        self.tir_shard_holder_judge_v1(bond_key, network_domain, current_daa, duty, capture, hold_key, books).await;
+        books.holdings.get(&hold_key).cloned()
     }
 
     /// **Judge the claim's cells over the held shard rows** (however they came: the mirror or peers): the cells run off the tick, `Valid`

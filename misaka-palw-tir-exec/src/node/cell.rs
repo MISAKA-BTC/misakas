@@ -614,8 +614,21 @@ impl TirCellInputsV1 for TirRunInputsV1 {
 /// `TirStepRun` demands from these; a producer builds the answers.
 pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &TirCellV1) -> Result<Vec<(u64, u32, usize)>, String> {
     let job = space.job_shape(ctx).map_err(|e| e.to_string())?;
-    let (owned_fixed, owned_hist) = written_instances(space, &cell.occ);
     let n_occ = space.occurrences().len();
+    if cell.occ.start >= cell.occ.end || cell.occ.end > n_occ {
+        return Err(format!("a cell of occurrences {:?} of {n_occ}", cell.occ));
+    }
+    if cell.positions.start > cell.positions.end || cell.positions.start > job.positions {
+        return Err(format!("a cell of positions {:?} of {}", cell.positions, job.positions));
+    }
+    if cell.positions.start == cell.positions.end.min(job.positions) {
+        return Ok(Vec::new());
+    }
+    let p = cell.positions.start;
+    if p > 0 && (!p.is_multiple_of(space.layout.checkpoint_interval) || !p.is_multiple_of(space.layout.h_tile)) {
+        return Err(format!("a cell's start {p} is not aligned to checkpoint/history tiles"));
+    }
+    let (owned_fixed, owned_hist) = written_instances(space, &cell.occ);
     let mut runs: Vec<(u64, u32, usize)> = Vec::new();
     for a in cell.positions.start..cell.positions.end.min(job.positions) {
         let listed = space.leaves_of_position(ctx, a);

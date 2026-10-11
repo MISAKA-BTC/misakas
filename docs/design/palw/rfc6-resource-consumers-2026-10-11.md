@@ -64,3 +64,27 @@ partition eviction, expired incomplete-pursuit release, and a verifier keeping i
 reservation after cache eviction. Resource unit tests cover last-Arc release and all
 three checked-overflow terms without large allocations. These daemon tests are pending
 the parent integration build, not reported as passing here.
+
+
+## Public watcher with partial rows
+
+The actual watcher service now accepts a public capture without a full-class backend.
+With `--palw-tir-shard-mirror` or `--palw-tir-shard-fetch`, it uses the same admitted row
+acquisition/cache as a shard seat and runs the same cell verifier and held-row court.
+The watch duty's class/root and shard partition must match both the public capture and
+held rows. It files no seat receipt and does not send a seat-signed producer material
+request. A rotating duty cursor prevents an unavailable early shard from monopolizing
+the two verification/fetch attempts per tick; abstention leaves the duty retryable.
+
+A planted lie with a one-move held-row close can accuse as the watcher's own bond.
+A dissected leaf stays explicitly Unconvictable for this partial holder because the
+interactive accuser playback still requires full execution. Without a public capture,
+the shard-only watcher cannot yet assemble bounded cell runs directly from the native
+service; the existing full-holder run pursuit remains available. Neither this connection
+nor the fixture establishes an unconditional acquisition/detection floor, all-model
+soundness, a worst-case court-cost certificate or real pruned P2P transport.
+
+The public `cell_runs_v1` door also refuses malformed occurrence ranges before indexing
+an upstream occurrence, reversed/outside positions and unaligned nonempty segment
+starts. Empty terminal cells keep their no-demand meaning. A regression fixture checks
+the previous out-of-bounds panic and refuses material a segment cannot restore.
