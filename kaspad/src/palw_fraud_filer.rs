@@ -122,6 +122,13 @@ pub(super) struct PalwFraudFilerRunV1 {
     pub(super) _reservation: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
 }
 
+/// Public descriptor retained while a local replica is absent. Its byte ticket follows the descriptor,
+/// while dropping the run releases the much larger capture ticket and backend closure.
+struct PalwFraudFilerDeferredPublicV1 {
+    job: Box<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
+    _reservation: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
+}
+
 /// Where this node's judgement of one claim stands.
 #[derive(Clone)]
 pub(super) enum PalwFraudFilerVerdictV1 {
@@ -129,6 +136,8 @@ pub(super) enum PalwFraudFilerVerdictV1 {
     Pending,
     /// The replay reproduced the claim's execution root: nothing to file.
     Honest,
+    /// Its replica was evicted from the bounded cache; the public pursuit remains live.
+    DeferredMismatch,
     /// The replay did not: the engine pursues it.
     Mismatch(Arc<PalwFraudFilerRunV1>),
     /// This host cannot judge it (the class does not resolve, the block is not held, the replay failed twice, a fused leaf).
@@ -375,6 +384,9 @@ pub(super) struct PalwFraudFilerCaseV1 {
     constraint_plan: Option<constraint::TiledPlanV1>,
     constraint_done: bool,
     pub(super) runs: u8,
+    replay_failures: u8,
+    replay_turn: u64,
+    deferred_public: Option<Arc<PalwFraudFilerDeferredPublicV1>>,
     input_retry_at: u64,
     pub(super) fp_bootstrap: Option<PalwFraudFilerFpBootstrapV1>,
     /// Binding-only pursuit when the original FP job is unavailable; held through a later replay.
@@ -406,6 +418,9 @@ impl PalwFraudFilerCaseV1 {
             constraint_plan: None,
             constraint_done: false,
             runs: 0,
+            replay_failures: 0,
+            replay_turn: 0,
+            deferred_public: None,
             input_retry_at: 0,
             fp_bootstrap: None,
             fp_job_pending: false,
@@ -423,7 +438,7 @@ impl PalwFraudFilerCaseV1 {
 
     pub(super) fn pursued(&self) -> bool {
         self.release_pending
-            || matches!(self.verdict, PalwFraudFilerVerdictV1::Mismatch(_))
+            || matches!(self.verdict, PalwFraudFilerVerdictV1::Mismatch(_) | PalwFraudFilerVerdictV1::DeferredMismatch)
             || (matches!(self.verdict, PalwFraudFilerVerdictV1::Pending) && (self.fp_bootstrap.is_some() || self.fp_job_pending))
     }
 
@@ -433,6 +448,7 @@ impl PalwFraudFilerCaseV1 {
             .as_ref()
             .map(|input| input.payload.job())
             .or_else(|| self.fp_descriptor.as_ref().map(|input| input.job()))
+            .or_else(|| self.deferred_public.as_ref().map(|public| public.job.as_ref()))
             .or_else(|| match &self.verdict {
                 PalwFraudFilerVerdictV1::Mismatch(run) => run.fp_job.as_deref(),
                 _ => None,
@@ -651,6 +667,7 @@ struct PalwFraudFilerReplayV1 {
 #[derive(Default)]
 pub(super) struct PalwFraudFilerBookV1 {
     pub(super) cases: BTreeMap<Hash64, PalwFraudFilerCaseV1>,
+    replay_turn: u64,
     read_at: Option<u64>,
     running: Option<PalwFraudFilerReplayV1>,
     /// `(claim, unit) → authenticated answer`, only the binding and consecutive ranges this localizer reads.
@@ -741,7 +758,7 @@ impl PalwFraudFilerBookV1 {
         self.cases
             .values()
             .filter(|case| {
-                matches!(case.verdict, PalwFraudFilerVerdictV1::Pending)
+                matches!(case.verdict, PalwFraudFilerVerdictV1::Pending | PalwFraudFilerVerdictV1::DeferredMismatch)
                     && case.fp_bootstrap.as_ref().is_none_or(|input| {
                         input.ready()
                             || input.payload.job().prompt_mode
@@ -752,8 +769,66 @@ impl PalwFraudFilerBookV1 {
                     && !case.candidate.seat
                     && current_daa >= case.input_retry_at
             })
-            .min_by_key(|case| (case.candidate.accepted_daa, case.candidate.claim_id))
+            .min_by_key(|case| (case.replay_turn, case.candidate.accepted_daa, case.candidate.claim_id))
             .map(|case| case.candidate.claim_id)
+    }
+
+    /// Rotate only when another eligible claim needs a replay. Never discard court state or
+    /// release an on-chain reservation: a missing local replica is a scheduling state, not a verdict.
+    fn make_replay_room(&mut self, current_daa: u64, replay_room: bool) {
+        if !replay_room || self.running.is_some() || self.held_runs() < PALW_FRAUD_FILER_HELD_RUNS_V1 {
+            return;
+        }
+        let waiting = self.cases.values().any(|case| {
+            matches!(case.verdict, PalwFraudFilerVerdictV1::Pending | PalwFraudFilerVerdictV1::DeferredMismatch)
+                && !case.candidate.seat
+                && current_daa >= case.input_retry_at
+                && case.fp_bootstrap.as_ref().is_none_or(|input| {
+                    input.ready()
+                        || input.payload.job().prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
+                })
+        });
+        if !waiting {
+            return;
+        }
+        let victim = self
+            .cases
+            .values()
+            .filter(|case| matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if Arc::strong_count(run) == 1))
+            .min_by_key(|case| (case.replay_turn, case.candidate.accepted_daa, case.candidate.claim_id))
+            .map(|case| case.candidate.claim_id);
+        let Some(victim) = victim else { return };
+        let case = self.cases.get_mut(&victim).expect("selected case");
+        let PalwFraudFilerVerdictV1::Mismatch(run) = std::mem::replace(&mut case.verdict, PalwFraudFilerVerdictV1::DeferredMismatch)
+        else {
+            unreachable!()
+        };
+        match Arc::try_unwrap(run) {
+            Ok(mut run) => {
+                case.deferred_public = run
+                    .fp_job
+                    .take()
+                    .map(|job| Arc::new(PalwFraudFilerDeferredPublicV1 { job, _reservation: run._job_reservation.take() }));
+                // `run` drops here: only authenticated public metadata survives its replica.
+            }
+            Err(run) => case.verdict = PalwFraudFilerVerdictV1::Mismatch(run),
+        }
+    }
+
+    fn started_replay(&mut self, claim: Hash64) {
+        if self.replay_turn == u64::MAX {
+            // Preserve fair ordering even at counter exhaustion, using the bounded case book.
+            let mut order: Vec<_> = self.cases.iter().map(|(claim, case)| (case.replay_turn, *claim)).collect();
+            order.sort();
+            for (index, (_, claim)) in order.into_iter().enumerate() {
+                self.cases.get_mut(&claim).unwrap().replay_turn = index as u64;
+            }
+            self.replay_turn = self.cases.len() as u64;
+        }
+        self.replay_turn += 1;
+        if let Some(case) = self.cases.get_mut(&claim) {
+            case.replay_turn = self.replay_turn;
+        }
     }
 
     /// The claims the engine steps this tick, oldest acceptance first.
@@ -784,8 +859,12 @@ impl PalwFraudFilerBookV1 {
     pub(super) fn judge(&mut self, claim: Hash64, result: Result<PalwFraudFilerRunV1, String>) -> Option<&PalwFraudFilerVerdictV1> {
         let case = self.cases.get_mut(&claim)?;
         case.runs = case.runs.saturating_add(1);
+        if result.is_err() {
+            case.replay_failures = case.replay_failures.saturating_add(1);
+        }
         let bootstrapped = case.fp_bootstrap.is_some() || case.fp_job_pending;
         if result.is_ok() {
+            case.deferred_public = None;
             case.fp_bootstrap = None;
             case.fp_descriptor = None;
             case.fp_job_pending = false;
@@ -800,7 +879,7 @@ impl PalwFraudFilerBookV1 {
                 PalwFraudFilerVerdictV1::Mismatch(Arc::new(run))
             }
             Ok(_) => PalwFraudFilerVerdictV1::Honest,
-            Err(_) if case.runs < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1 => PalwFraudFilerVerdictV1::Pending,
+            Err(_) if case.replay_failures < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1 => PalwFraudFilerVerdictV1::Pending,
             Err(why) => PalwFraudFilerVerdictV1::Unjudged(format!("the replay failed twice: {why}")),
         };
         case.release_pending =
@@ -916,6 +995,7 @@ impl PalwFraudFilerBookV1 {
     pub(super) fn settle(&mut self, claim: &Hash64, verdict: PalwFraudFilerVerdictV1) {
         if let Some(case) = self.cases.get_mut(claim) {
             case.verdict = verdict;
+            case.deferred_public = None;
             case.release_pending = false;
             case.fp_bootstrap = None;
             case.fp_descriptor = None;
@@ -1564,6 +1644,7 @@ impl PalwPanelService {
                 _ => {}
             }
         }
+        book.make_replay_room(current_daa, seat_replay_room);
         if let Some(claim) = book.next_probe_at(current_daa, seat_replay_room) {
             self.fraud_filer_start_replay_v1(
                 session,
@@ -1872,7 +1953,10 @@ impl PalwPanelService {
                 let Some(case) = book.cases.get(&claim) else { break };
                 let legacy = params.palw_legacy_held_da_v2_active_at(current_daa)
                     && matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.legacy.is_some());
-                let step = if case.fp_bootstrap.is_some() || case.fp_job_pending {
+                let step = if case.fp_bootstrap.is_some()
+                    || case.fp_job_pending
+                    || matches!(case.verdict, PalwFraudFilerVerdictV1::DeferredMismatch)
+                {
                     palw_fraud_filer_bootstrap_step_v1(role, view.as_ref(), &bond_key, reservable, case, |unit| {
                         book.answers.contains_key(&(claim, *unit))
                     })
@@ -2232,6 +2316,16 @@ impl PalwPanelService {
                 Ok(input.payload.as_ref().clone())
             } else if let Some(job) = book.cases.get(&claim).and_then(|c| c.fp_descriptor.as_ref()) {
                 Ok(job.as_ref().clone())
+            } else if let Some((public, pin)) = book
+                .cases
+                .get(&claim)
+                .and_then(|case| case.deferred_public.as_ref().zip(case.fp_expected_pin.filter(|pin| *pin != Hash64::default())))
+            {
+                Ok(input::PalwFraudFilerFpDescriptorV1::Disclosed {
+                    job: public.job.as_ref().clone(),
+                    execution_root: job.execution_root,
+                    job_identity: pin,
+                })
             } else {
                 session
                     .clone()
@@ -2417,6 +2511,7 @@ impl PalwPanelService {
         };
         info!("[{PALW_PANEL}] claim {claim}: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)");
         let attempt_draw = self.attempt_draw_for_claim(session, job.accepted_block);
+        book.started_replay(claim);
         let handle = tokio::task::spawn_blocking(move || {
             palw_fraud_filer_execute_v1(backend, ctx, prompt32, prompt_form, attempt_draw, fp_job, Some(reserved))
         });
@@ -2716,6 +2811,89 @@ pub(super) mod tests {
             "seat pressure cannot stop metadata probing, and the running acceptance is not probed twice"
         );
         assert!(book.running.take().unwrap().handle.await.unwrap().is_err());
+    }
+
+    #[test]
+    fn full_capture_cache_rotates_fairly_without_forgetting_a_public_pursuit() {
+        let mut book = PalwFraudFilerBookV1::default();
+        let claims: Vec<_> = (1..=3).map(|id| candidate(id, 100 + id, false)).collect();
+        book.refresh(claims.clone(), 200);
+        for claim in &claims[..2] {
+            book.started_replay(claim.claim_id);
+            book.judge(claim.claim_id, Ok(run(Hash64::default(), Hash64::default())));
+        }
+        let first = claims[0].claim_id;
+        book.cases.get_mut(&first).unwrap().sent = Some((PalwFraudFilerSentV1::Reserve, 150, 1));
+        book.cases.get_mut(&first).unwrap().bisect = PalwLegacyBisectV1::new(17);
+        let weak = match &book.cases[&first].verdict {
+            PalwFraudFilerVerdictV1::Mismatch(run) => Arc::downgrade(run),
+            _ => unreachable!(),
+        };
+        assert_eq!(book.next_probe_at(200, true), None);
+        book.make_replay_room(200, false);
+        assert_eq!(book.held_runs(), PALW_FRAUD_FILER_HELD_RUNS_V1, "seat pressure never starts another replica");
+        book.make_replay_room(200, true);
+        assert!(weak.upgrade().is_none(), "the evicted closure and capture ticket have actually dropped");
+        assert_eq!(book.held_runs(), PALW_FRAUD_FILER_HELD_RUNS_V1 - 1);
+        assert!(matches!(book.cases[&first].verdict, PalwFraudFilerVerdictV1::DeferredMismatch));
+        assert_eq!(book.cases[&first].sent, Some((PalwFraudFilerSentV1::Reserve, 150, 1)));
+        assert!(book.pursued().contains(&first), "eviction cannot relinquish the active prosecution");
+        assert_eq!(book.next_probe_at(200, true), Some(claims[2].claim_id), "a never-replayed claim precedes older replicas");
+        book.started_replay(claims[2].claim_id);
+        book.judge(claims[2].claim_id, Ok(run(Hash64::default(), Hash64::default())));
+        book.make_replay_room(200, true);
+        assert_eq!(book.next_probe_at(200, true), Some(first), "the deferred claim gets its next fair turn");
+        book.started_replay(first);
+        book.judge(first, Ok(run(Hash64::default(), Hash64::default())));
+        book.make_replay_room(200, true);
+        assert_eq!(book.next_probe_at(200, true), Some(claims[1].claim_id));
+        assert!(book.held_runs() < PALW_FRAUD_FILER_HELD_RUNS_V1);
+        // Successful cache rotations do not consume the bounded host-failure retry allowance.
+        assert!(matches!(book.judge(first, Err("transient host error".into())), Some(PalwFraudFilerVerdictV1::Pending)));
+        assert!(matches!(book.judge(first, Err("second host error".into())), Some(PalwFraudFilerVerdictV1::Unjudged(_))));
+    }
+
+    #[test]
+    fn evicted_fp_replica_keeps_authenticated_job_and_its_byte_ticket() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1, PalwMemoryReservationKeyV1};
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(16_384), || None);
+        let mut book = PalwFraudFilerBookV1::default();
+        let claims: Vec<_> = (1..=3).map(|id| candidate(id, 100 + id, false)).collect();
+        book.refresh(claims.clone(), 200);
+        let job = input::tests::payload().commitment.job;
+        for claim in &claims[..2] {
+            book.started_replay(claim.claim_id);
+            let mut replica = run(Hash64::default(), Hash64::default());
+            replica.fp_job = Some(Box::new(job.clone()));
+            replica._job_reservation = Some(
+                ledger
+                    .reserve(
+                        PalwMemoryReservationKeyV1 { role: "deferred-public-test", class_id: claim.job.class_id, job: claim.claim_id },
+                        1024,
+                    )
+                    .unwrap(),
+            );
+            replica._reservation = Some(
+                ledger
+                    .reserve(
+                        PalwMemoryReservationKeyV1 {
+                            role: "deferred-capture-test",
+                            class_id: claim.job.class_id,
+                            job: claim.claim_id,
+                        },
+                        4096,
+                    )
+                    .unwrap(),
+            );
+            book.judge(claim.claim_id, Ok(replica));
+        }
+        assert_eq!(ledger.reserved_bytes(), 10_240);
+        book.make_replay_room(200, true);
+        assert_eq!(ledger.reserved_bytes(), 6144, "eviction drops only the capture reservation");
+        assert_eq!(book.cases[&claims[0].claim_id].public_fp_job_v1(), Some(&job));
+        book.settle(&claims[0].claim_id, PalwFraudFilerVerdictV1::Settled(PalwFilerPhaseV1::Convicted));
+        assert!(book.cases[&claims[0].claim_id].deferred_public.is_none());
+        assert_eq!(ledger.reserved_bytes(), 5120, "settlement releases the retained public descriptor ticket");
     }
 
     #[test]
