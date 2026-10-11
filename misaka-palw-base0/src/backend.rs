@@ -1402,16 +1402,17 @@ mod tests {
         let digest = Hash64::from_bytes(direct.finalize().as_bytes().try_into().unwrap());
         assert_eq!(named.state_root, kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&class, k, &digest));
         for inherited in [false, true] {
+            for false_named in [false,true] {
             let mut job = free_prompt_job(&backend, ids.len() as u32, 1);
             job.version = if inherited { 12 } else { 11 };
             job.decode = Some(DecodeConfigV4::NOOP);
-            job.tail = Some(PalwFpJobTailV1::Prefix(named));
+            job.tail = Some(PalwFpJobTailV1::Prefix(if false_named { PalwFpPrefixStateV1 {state_root:Hash64::from_u64_word(0xbad19),..named} } else {named}));
             job.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
                 kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 &ids,
             )
             .unwrap();
-            backend.verify_prefix_state_v1(&job, &ids).unwrap();
+            if false_named { assert!(backend.verify_prefix_state_v1(&job, &ids).is_err()); } else { backend.verify_prefix_state_v1(&job, &ids).unwrap(); }
             let good = backend.execute_free_prompt(&job, &ids.map(|id| id as usize)).unwrap();
             let retained = crate::produce::base0_material_decode_any_v1(&good.outcome.material).unwrap();
             let binding = retained.binding();
@@ -1473,7 +1474,8 @@ mod tests {
                 named.state_root,
                 "public i32 narrowing rows reproduce the actual i8 cache, inherited={inherited}"
             );
-            assert_eq!(court.finish(), Ok(false));
+            assert_eq!(court.finish(), Ok(false_named), "actual bad-context public leaves convict; honest clears");
+            if !false_named {
             job.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xbad19), ..named }));
             assert!(backend.verify_prefix_state_v1(&job, &ids).is_err());
             let bad = backend.execute_free_prompt(&job, &ids.map(|id| id as usize)).unwrap();
@@ -1489,6 +1491,8 @@ mod tests {
             }
             assert_ne!(retained.binding().job_context.context_hash(), bad_retained.binding().job_context.context_hash());
             assert_ne!(good.outcome.output_root, bad.outcome.output_root);
+            }
+            }
         }
     }
 

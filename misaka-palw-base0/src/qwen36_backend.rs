@@ -3127,6 +3127,7 @@ mod tests {
         use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFreePromptJobV3};
         let prompt = [1u32, 2, 3, 4];
         for inherited in [false, true] {
+            for false_named in [false,true] {
             let mut job = PalwFreePromptJobV3 {
                 version: if inherited { 12 } else { 11 },
                 network_domain: Hash64::from_u64_word(0xd0),
@@ -3154,9 +3155,9 @@ mod tests {
                 sampling_seed: [0; 32],
                 temperature_q: 0,
                 decode: Some(DecodeConfigV4::NOOP),
-                tail: Some(PalwFpJobTailV1::Prefix(named)),
+                tail: Some(PalwFpJobTailV1::Prefix(if false_named { kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {state_root:Hash64::from_u64_word(0xbad17),..named} } else {named})),
             };
-            backend.verify_prefix_state_v1(&job, &prompt).unwrap();
+            if false_named { assert!(backend.verify_prefix_state_v1(&job, &prompt).is_err()); } else { backend.verify_prefix_state_v1(&job, &prompt).unwrap(); }
             let good = backend.execute_free_prompt(&job, &prompt.map(|id| id as usize)).unwrap();
             use kaspa_consensus_core::palw_step::{
                 PalwStepCoordinateV1, PalwStepOutLenV1, PalwStepTableV1, canonical_step_leaf_index,
@@ -3346,7 +3347,8 @@ mod tests {
                 named.state_root,
                 "all public component relations reproduce the native prefix root"
             );
-            assert_eq!(court.finish(), Ok(false), "the complete typed court clears the honest public prefix");
+            assert_eq!(court.finish(), Ok(false_named), "actual bad-context public leaves convict the false named prefix; honest clears");
+            if !false_named {
             job.tail = Some(PalwFpJobTailV1::Prefix(kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {
                 state_root: Hash64::from_u64_word(0xbad17),
                 ..named
@@ -3365,6 +3367,8 @@ mod tests {
             // though it does not change the independently replayed arithmetic answer.
             assert_ne!(retained.binding().job_context.context_hash(), bad_retained.binding().job_context.context_hash());
             assert_ne!(good.outcome.output_root, bad.outcome.output_root);
+            }
+            }
         }
         assert!(backend.prefix_state_v1(Hash64::from_u64_word(0xbad), Hash64::default(), &ids).is_err());
         assert!(backend.prefix_state_v1(class, Hash64::default(), &[]).is_err());
