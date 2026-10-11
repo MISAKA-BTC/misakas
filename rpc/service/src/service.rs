@@ -3376,6 +3376,20 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         session.spawn_blocking(move |c| kaspa_rpc_core::convert::palw_kernel::palw_kernel_rows_response_v1(c, after, max_bytes)).await
     }
 
+    async fn get_palw_model_refutation_seals_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelRefutationSealsRequest,
+    ) -> RpcResult<GetPalwModelRefutationSealsResponse> {
+        // A malformed bond is an error before any state is read, on every network.
+        let bond = kaspa_rpc_core::convert::palw_kernel::palw_model_refutation_seals_request_v1(&request)?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwModelRefutationSealsResponse { bond: request.bond.trim().to_string(), ..Default::default() });
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        Ok(session.spawn_blocking(move |c| kaspa_rpc_core::convert::palw_kernel::palw_model_refutation_seals_response_v1(c, bond)).await)
+    }
+
     async fn get_palw_kernel_finals_call(
         &self,
         _connection: Option<&DynRpcConnection>,

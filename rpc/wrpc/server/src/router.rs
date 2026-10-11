@@ -124,6 +124,7 @@ impl Router {
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
                 GetPalwKernelFinals,
+                GetPalwModelRefutationSeals,
                 GetPalwOnboarding,
                 GetPalwConformanceEvidence,
                 GetTokenSupply,

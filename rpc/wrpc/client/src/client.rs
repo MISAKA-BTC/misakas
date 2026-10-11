@@ -715,6 +715,7 @@ impl RpcApi for KaspaRpcClient {
             GetPalwKernelClaim,
             GetPalwKernelRows,
             GetPalwKernelFinals,
+            GetPalwModelRefutationSeals,
             GetPalwOnboarding,
             GetPalwConformanceEvidence,
             GetTokenSupply,

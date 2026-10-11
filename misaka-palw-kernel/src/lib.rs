@@ -84,6 +84,10 @@ pub mod challenge;
 pub mod check;
 pub mod claim_subject;
 pub mod court_scope;
+/// RFC-0002 P0 residual (RFC02-T): the sealed-bounty rule for kernel filings (table 31), past `palw_model_refutation_seal_v1`.
+pub mod sealed_bounty;
+/// RFC-0002 item 3 (RFC02-T): a flat-v5 candidate's worst-case public pursuit on G14-B's clock and carriage.
+pub mod flat_pursuit5;
 pub mod descriptor;
 pub mod element;
 pub mod evidence;

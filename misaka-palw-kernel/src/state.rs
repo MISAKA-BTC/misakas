@@ -238,7 +238,7 @@ impl KernelLedgerV1 {
             )
         };
         // RFC-0002 conformance candidates (table 29): an extension only once it holds a row, after table 28's.
-        if self.conformance_classes.is_empty() {
+        let base = if self.conformance_classes.is_empty() {
             base
         } else {
             let records: std::collections::BTreeMap<Digest, (Digest, ClassRecordV1)> =
@@ -246,6 +246,15 @@ impl KernelLedgerV1 {
             crate::rows::conformance_root_extension_v1(
                 &base,
                 &collection_root(&d("conformance-classes"), records.len(), records.iter()),
+            )
+        };
+        // RFC-0002 P0 residual (table 31): an extension only once it holds a row, after table 29's.
+        if self.held_bounties.is_empty() {
+            base
+        } else {
+            crate::rows::held_bounty_root_extension_v1(
+                &base,
+                &collection_root(&d("held-bounties"), self.held_bounties.len(), self.held_bounties.iter()),
             )
         }
     }

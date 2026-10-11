@@ -337,6 +337,7 @@ impl RpcApi for GrpcClient {
     route!(get_palw_kernel_claim_call, GetPalwKernelClaim);
     route!(get_palw_kernel_rows_call, GetPalwKernelRows);
     route!(get_palw_kernel_finals_call, GetPalwKernelFinals);
+    route!(get_palw_model_refutation_seals_call, GetPalwModelRefutationSeals);
     route!(get_palw_onboarding_call, GetPalwOnboarding);
     route!(get_palw_conformance_evidence_call, GetPalwConformanceEvidence);
     route!(get_token_supply_call, GetTokenSupply);

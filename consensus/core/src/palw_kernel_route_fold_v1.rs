@@ -228,6 +228,12 @@ pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
     // at every load like the verifier pay terms (not in the root; its table 28 is written only past it).
     ledger.court_scope_policy =
         extras.provider_court.map(|activation_daa| misaka_palw_kernel::court_scope::CourtScopePolicyV1 { activation_daa });
+    // RFC-0002 P0 residual (RFC02-T): the sealed-bounty rule for kernel filings is `palw_model_refutation_seal_v1`'s — injected at every
+    // load (not in the root; its table 31 is written only past it). The contest window is the route's seal TTL.
+    let seal_ttl_daa = ledger.policy.seal_ttl_daa;
+    ledger.sealed_bounty_policy = extras.model_refutation_seal.map(|activation_daa| {
+        misaka_palw_kernel::sealed_bounty::SealedBountyPolicyV1 { activation_daa, contest_daa: seal_ttl_daa }
+    });
     // DA16: the claims whose material obligation moved to bonded providers — derived from the court's rooted rows, never a ledger table
     // (and nothing at all below `palw_provider_court_v1`, where no such row can exist).
     if extras.provider_court.is_some() {
@@ -905,6 +911,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
                 | r::TABLE_SERVED_DEMAND_BONDS_V1
                 | r::TABLE_SEG_PROGRESS_V1
                 | r::TABLE_VERIFIER_PAY_V1
+                | r::TABLE_HELD_BOUNTIES_V1
         )
     });
     if !busy {

@@ -71,10 +71,35 @@ pub(super) fn post(
         .ok_or_else(|| refused("flat vector work overflow"))?;
     let Some(fee) = charge(builder, ctx, signer, work, false)? else { return Ok(()) };
     builder.slash_bond(*signer, fee)?;
+    // RFC-0002 item 3 (RFC02-T): past `palw_model_refutation_seal_v1` (the protected candidate route) a statement is admitted only if
+    // its worst-case public pursuit — G14-B's clock and carriage, the sealed filing included — lands inside its liability horizon.
+    let pursuit_gate = if super::palw_model_refutation_seal_fold_v4::sealed_refutations_in_force_v4(builder) {
+        let ledger_policy = route_ledger_policy_v1(builder)?;
+        builder.extras.kernel_route.as_ref().and_then(|r| r.opv.as_ref()).map(|o| (ledger_policy, o.policy.clone()))
+    } else {
+        None
+    };
     let checked = (|| -> Result<_, String> {
         let route = builder.state.kernel_route.as_ref().unwrap();
         let post = decode_flat_model_vector_post_v3(bytes).map_err(|e| e.to_string())?;
         let view = checked_flat_model_vector_v3(route, class, binding, &post)?;
+        if let Some((ledger_policy, opv_policy)) = &pursuit_gate {
+            let positions = route.kernel_class_record_v1(&class).ok_or("flat candidate disappeared")?.plan.max_positions;
+            let p = misaka_palw_kernel::flat_pursuit5::flat_pursuit_v5(
+                &view.trace.program,
+                positions,
+                view.scope.worst_court_bytes,
+                ledger_policy,
+                opv_policy,
+            )
+            .map_err(|g| format!("{g:?}"))?;
+            if !p.fits(PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1) {
+                return Err(format!(
+                    "FLAT_PURSUIT: the worst-case pursuit lands at DAA {} past the {}-DAA statement horizon",
+                    p.filed_daa, PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1
+                ));
+            }
+        }
         if view.trace.params.by_instance.len() != statement.pc_instances as usize {
             return Err("flat PC count changed".into());
         }
