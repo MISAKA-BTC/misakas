@@ -1171,6 +1171,21 @@ fn paid_panel_source_subject_freezes_in_actual_fold_replay_and_carriage_and_surv
         beacon_source: Some(PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(FENCE))),
         ..Default::default()
     });
+    // The route is created by its first accepted object, never by extras alone.
+    // Exercise that production writer before the epoch's parent checkpoint. As
+    // elsewhere in this pure-fold fixture, signatures are already-admitted inputs;
+    // this does not establish the native signature or paid-source admission gate.
+    let route_actor = bundle(&v.c.p).genesis_objects.iter().filter_map(|object| match object {
+        PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
+        _ => None,
+    }).nth(1).expect("a distinct existing genesis bond");
+    let init = misaka_palw_kernel::route::KernelRouteObjectV1::RequestExit {
+        bond: kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&route_actor),
+    };
+    v.step_with(&[PalwConsensusObjectV2::KernelRouteV1 {
+        bytes: init.encode(), signer: route_actor, signature: Vec::new(),
+    }]);
+    assert!(v.c.s.kernel_route().is_some(), "an accepted route object creates authenticated parent state");
     let id = v.floor_claim(0x7A);
     v.step();
     v.step();
