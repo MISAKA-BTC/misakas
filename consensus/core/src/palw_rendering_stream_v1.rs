@@ -21,8 +21,63 @@ const IV: [u64; 8] = [
     0x5BE0CD19137E2179,
 ];
 
-/// Serializes the actual compression continuation, never prior rendering bytes. The locked
-/// library's public portable compression primitive supplies all BLAKE2 rounds and flags.
+// Portable BLAKE2b compression ported from blake2b_simd1.0.2 src/portable.rs,
+// copyright Jack O'Connor, licensed MIT or Apache-2.0 (licenses in rendering-stream-upstream/).
+// Parameter initialization, counters and last-block handling are covered by the keyed V1-leaf
+// differential tests below against that same locked library's public API.
+const SIGMA: [[u8; 16]; 12] = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+    [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4],
+    [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
+    [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13],
+    [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
+    [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11],
+    [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
+    [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5],
+    [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+];
+fn mix(v: &mut [u64; 16], a: usize, b: usize, c: usize, d: usize, x: u64, y: u64) {
+    v[a] = v[a].wrapping_add(v[b]).wrapping_add(x);
+    v[d] = (v[d] ^ v[a]).rotate_right(32);
+    v[c] = v[c].wrapping_add(v[d]);
+    v[b] = (v[b] ^ v[c]).rotate_right(24);
+    v[a] = v[a].wrapping_add(v[b]).wrapping_add(y);
+    v[d] = (v[d] ^ v[a]).rotate_right(16);
+    v[c] = v[c].wrapping_add(v[d]);
+    v[b] = (v[b] ^ v[c]).rotate_right(63);
+}
+fn compress(block: &[u8; 128], words: &mut [u64; 8], count: u128, last: bool) {
+    let mut v = [0u64; 16];
+    v[..8].copy_from_slice(words);
+    v[8..].copy_from_slice(&IV);
+    v[12] ^= count as u64;
+    v[13] ^= (count >> 64) as u64;
+    if last {
+        v[14] ^= u64::MAX;
+    }
+    let mut m = [0u64; 16];
+    for (word, bytes) in m.iter_mut().zip(block.chunks_exact(8)) {
+        *word = u64::from_le_bytes(bytes.try_into().unwrap());
+    }
+    for s in SIGMA {
+        mix(&mut v, 0, 4, 8, 12, m[s[0] as usize], m[s[1] as usize]);
+        mix(&mut v, 1, 5, 9, 13, m[s[2] as usize], m[s[3] as usize]);
+        mix(&mut v, 2, 6, 10, 14, m[s[4] as usize], m[s[5] as usize]);
+        mix(&mut v, 3, 7, 11, 15, m[s[6] as usize], m[s[7] as usize]);
+        mix(&mut v, 0, 5, 10, 15, m[s[8] as usize], m[s[9] as usize]);
+        mix(&mut v, 1, 6, 11, 12, m[s[10] as usize], m[s[11] as usize]);
+        mix(&mut v, 2, 7, 8, 13, m[s[12] as usize], m[s[13] as usize]);
+        mix(&mut v, 3, 4, 9, 14, m[s[14] as usize], m[s[15] as usize]);
+    }
+    for i in 0..8 {
+        words[i] ^= v[i] ^ v[i + 8];
+    }
+}
+
+/// Serializes the actual compression continuation, never prior rendering bytes.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 struct LeafHashContinuationV1 {
     words: [u64; 8],
@@ -39,17 +94,9 @@ impl LeafHashContinuationV1 {
         Self { words, compressed: 0, buffer }
     }
     fn update(&mut self, mut bytes: &[u8]) {
-        use blake2b_simd::guts::{Finalize, Implementation, LastNode, Stride};
         while !bytes.is_empty() {
             if self.buffer.len() == 128 {
-                Implementation::portable().compress1_loop(
-                    &self.buffer,
-                    &mut self.words,
-                    self.compressed,
-                    LastNode::No,
-                    Finalize::No,
-                    Stride::Serial,
-                );
+                compress(self.buffer.as_slice().try_into().expect("full block"), &mut self.words, self.compressed + 128, false);
                 self.compressed += 128;
                 self.buffer.clear();
             }
@@ -59,16 +106,10 @@ impl LeafHashContinuationV1 {
         }
     }
     fn finish(&self) -> Hash64 {
-        use blake2b_simd::guts::{Finalize, Implementation, LastNode, Stride};
         let mut words = self.words;
-        Implementation::portable().compress1_loop(
-            &self.buffer,
-            &mut words,
-            self.compressed,
-            LastNode::No,
-            Finalize::Yes,
-            Stride::Serial,
-        );
+        let mut block = [0u8; 128];
+        block[..self.buffer.len()].copy_from_slice(&self.buffer);
+        compress(&block, &mut words, self.compressed + self.buffer.len() as u128, true);
         let mut out = [0u8; 64];
         for (part, word) in out.chunks_exact_mut(8).zip(words) {
             part.copy_from_slice(&word.to_le_bytes());
@@ -250,6 +291,25 @@ mod tests {
         }
         assert_eq!(stream(None).finish().unwrap(), None);
     }
+    #[test]
+    fn continuation_matches_upstream_keyed_hash_for_every_short_length_and_split() {
+        for n in 0..=512 {
+            let bytes: Vec<u8> = (0..n).map(|i| ((i * 131 + n * 17) % 256) as u8).collect();
+            let expected = table_leaf_hash_v1(17, Some(&bytes));
+            for cut in [0, n / 2, n] {
+                let mut hash = LeafHashContinuationV1::new(PALW_TOKEN_TABLE_DOMAIN_LEAF_V1);
+                hash.update(&17u32.to_le_bytes());
+                hash.update(&[1]);
+                hash.update(&(n as u32).to_le_bytes());
+                hash.update(&bytes[..cut]);
+                let checkpoint = borsh::to_vec(&hash).unwrap();
+                let mut hash: LeafHashContinuationV1 = borsh::from_slice(&checkpoint).unwrap();
+                hash.update(&bytes[cut..]);
+                assert_eq!(hash.finish(), expected, "length {n}, cut {cut}");
+            }
+        }
+    }
+
     #[test]
     fn incomplete_corrupted_and_foreign_chunks_never_expose_a_transition() {
         let c = grammar();
