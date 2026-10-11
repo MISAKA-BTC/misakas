@@ -12068,7 +12068,7 @@ pub struct PalwChainStateV2 {
     terminal_evidence: BTreeMap<crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
-    staged_holds: BTreeSet<(PalwBondKeyV2, u64, Hash64)>,
+    staged_holds: BTreeSet<(PalwBondKeyV2, u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>,
     staged_due: BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>,
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
     /// in (spec 17 §17.5.2).

@@ -27,7 +27,10 @@ impl PalwChainStateV2 {
     }
     pub fn staged_bond_exit_held_v1(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
         now.checked_add(1).is_some_and(|after| {
-            self.staged_holds.range((*bond, after, ZERO_HASH64)..).next().is_some_and(|(held, _, _)| held == bond)
+            self.staged_holds
+                .range((*bond, after, PalwStagedCourtKeyV1::Claim(ZERO_HASH64))..)
+                .next()
+                .is_some_and(|(held, _, _)| held == bond)
         })
     }
 }
@@ -214,19 +217,19 @@ pub(super) fn movement(
 }
 
 /// Pure derived indexes; no additional rooted copy of a signer list or clock.
-fn index_rows(key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1) -> (u64, Vec<(PalwBondKeyV2, u64, Hash64)>) {
+fn index_rows(key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1) -> (u64, Vec<(PalwBondKeyV2, u64, PalwStagedCourtKeyV1)>) {
     match row {
         PalwStagedCourtRowV1::Claim(c) => {
-            let PalwStagedCourtKeyV1::Claim(claim) = key else {
+            let PalwStagedCourtKeyV1::Claim(_) = key else {
                 return (0, Vec::new());
             };
             let rows = std::iter::once(c.producer)
                 .chain(c.panel.iter().copied())
-                .map(|bond| (bond, c.terms.bond_exit_after_daa, claim))
+                .map(|bond| (bond, c.terms.bond_exit_after_daa, key))
                 .collect();
             (c.terms.material_until_daa, rows)
         }
-        PalwStagedCourtRowV1::Constraint(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, c.claim)]),
+        PalwStagedCourtRowV1::Constraint(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
     }
 }
 pub(super) fn update_indices(
