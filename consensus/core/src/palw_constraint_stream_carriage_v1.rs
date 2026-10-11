@@ -337,4 +337,46 @@ mod tests {
         m.action = PalwConstraintStreamActionV1::Prefix(A::TilePart { offset: 0, bytes: vec![0; 90_001] });
         assert!(m.check().is_err());
     }
+    #[test]
+    fn registered_graph_variable_metadata_can_exceed_a_single_seed_carrier() {
+        let (_, mut binding, _, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
+        let base = borsh::to_vec(&binding.shape_profile).unwrap().len();
+        binding.shape_profile.transcendental_bindings = vec![
+            crate::palw_step::PalwTranscendentalBindingV1 {
+                site: crate::palw_step::PalwTranscendentalSiteV1::VectorExpPolynomial,
+                algorithm_id: Hash64::from_u64_word(31),
+            };
+            1500
+        ];
+        // Registration's shape gate has no count ceiling here; the extra bindings do not
+        // change node count/width or reachable kernels. This is a carrier regression witness,
+        // not a claim that this synthetic registration has run through an actual service.
+        binding.shape_profile.validate_shape().unwrap();
+        let profile_bytes = borsh::to_vec(&binding.shape_profile).unwrap().len();
+        assert_eq!(profile_bytes - base, 1500 * 65);
+        let (_, a) = crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1(false);
+        let seed = PalwConstraintStreamSeedV1 {
+            version: 1,
+            claim: Hash64::from_u64_word(32),
+            reserver: movement().reserver,
+            reserved_daa: 40,
+            binding,
+            job: None,
+            pin: a.pin,
+            witness: None,
+            eog_count: 0,
+            eog_opening: a.eog.opening,
+            auxiliary: Some(PalwAuxiliaryPublicCourtSeedV1::Prefix {
+                maximum_leaves: 1 << 32,
+                prefix_tokens: 2,
+                relation: crate::palw_class_semantics_v1::PalwPrefixStateRelationV1::Base0Int8KvV1,
+            }),
+            signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        let seed_bytes = borsh::to_vec(&seed).unwrap().len();
+        eprintln!("G14 full profile={profile_bytes} seed(job=None)={seed_bytes} carrier=90000");
+        assert!(profile_bytes > 90_000);
+        assert!(seed_bytes > 90_000);
+        assert!(seed.check(90_000).is_err());
+    }
 }
