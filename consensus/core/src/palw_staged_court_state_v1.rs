@@ -194,6 +194,7 @@ pub struct PalwStagedOwnedProgressV1 {
 pub enum PalwStagedOwnedCursorV1 {
     Prefix {
         moves_used: u64,
+        cursor: crate::palw_prefix_family_court_v1::PalwPrefixFamilyCursorV1,
         completed: Option<bool>,
     },
     Constraint {
@@ -201,6 +202,7 @@ pub enum PalwStagedOwnedCursorV1 {
     },
     Tokenizer {
         offset: u64,
+        tokenizer_sealed: bool,
         pending_key: Option<(u64, Hash64)>,
         key_root: Hash64,
         key_events: u64,
@@ -227,6 +229,7 @@ pub fn palw_staged_owned_progress_v1(
                 Some(row.seed_id()),
                 Some(PalwStagedOwnedCursorV1::Tokenizer {
                     offset: court.tokenizer_offset(),
+                    tokenizer_sealed: court.tokenizer_sealed_v1(),
                     pending_key: court.pending_key(),
                     key_root: court.key_set_root(),
                     key_events: court.key_events(),
@@ -251,6 +254,7 @@ pub fn palw_staged_owned_progress_v1(
                 Some(row.seed_id()),
                 Some(PalwStagedOwnedCursorV1::Prefix {
                     moves_used: row.moves_used,
+                    cursor: row.cursor_v1()?,
                     completed: row.certificate().ok().map(|r| r.is_some()),
                 }),
             )

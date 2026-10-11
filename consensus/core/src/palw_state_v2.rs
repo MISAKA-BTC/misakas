@@ -79507,7 +79507,7 @@ mod staged_court_state_tests_v1 {
             new:Some(PalwStagedCourtRowV1::Tokenizer(Box::new(row)))},false).unwrap();
         let progress=palw_staged_owned_progress_v1(&state,(claim,owner)).unwrap().unwrap();
         assert_eq!(progress.seed_id,Some(seed_id));
-        assert!(matches!(progress.cursor,Some(PalwStagedOwnedCursorV1::Tokenizer {offset,completed:Some(true),..}) if offset==raw.len() as u64));
+        assert!(matches!(progress.cursor,Some(PalwStagedOwnedCursorV1::Tokenizer {offset,tokenizer_sealed:true,completed:Some(true),..}) if offset==raw.len() as u64));
         assert_eq!(palw_staged_owned_progress_v1(&state,(claim,PALW_BOND_KEY_V2_MIN)).unwrap(),None);
         let rooted=state.state_root();let _=palw_staged_owned_progress_v1(&state,(claim,owner)).unwrap();assert_eq!(state.state_root(),rooted);
         // A rewind exposes the corresponding earlier cursor, not the newer cached completion.
@@ -79515,7 +79515,7 @@ mod staged_court_state_tests_v1 {
         apply_delta_entry(&mut state,&PalwDeltaEntryV2::StagedCourtSeed {key:PalwStagedCourtKeyV1::Owner(claim,owner),old:Some(current),
             new:Some(PalwStagedCourtRowV1::Tokenizer(Box::new(initial)))},false).unwrap();
         assert!(matches!(palw_staged_owned_progress_v1(&state,(claim,owner)).unwrap().unwrap().cursor,
-            Some(PalwStagedOwnedCursorV1::Tokenizer {offset:0,completed:None,..})));
+            Some(PalwStagedOwnedCursorV1::Tokenizer {offset:0,tokenizer_sealed:false,completed:None,..})));
     }
     #[test]
     fn paid_claim_work_extension_holds_every_bound_seat_and_restores_all_indexes() {
@@ -79544,6 +79544,74 @@ mod staged_court_state_tests_v1 {
         assert!(apply_delta_entry(&mut state,&delta,false).is_err());assert_eq!(state.state_root(),after);
         apply_delta_entry(&mut state,&delta,true).unwrap();assert_eq!(state.state_root(),before);
         assert_eq!(state.staged_holds,holds_before);assert_eq!(state.staged_due,due_before);
+    }
+    #[test]
+    fn typed_prefix_owned_journal_authenticates_eof_and_restores_all_paid_state() {
+        use crate::palw_prefix_family_court_v1::{PalwPrefixCourtActionV1 as A,tests::qualified_prefix_case_for_tests_v1};
+        use crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCourtV1;
+        use crate::palw_rendering_resources_v1::{PalwRenderingClaimTermsV1,PalwStagedPublicCourtConfigV1};
+        for inherited in [false,true] {for faulty in [false,true] {
+            let (target,binding,job,tiles)=qualified_prefix_case_for_tests_v1(faulty,inherited);
+            let owner=PalwBondKeyV2(TransactionOutpoint {transaction_id:crate::tx::TransactionId::from_u64_word(81919),index:3});
+            let seed_id=Hash64::from_u64_word(81919);let now=100;let cap=1<<32;
+            let prices=PalwStagedPublicCourtConfigV1::network_v1().prices;
+            let relation=target.registered_semantics.as_ref().unwrap().prefix_state_relation.unwrap();
+            let plan=crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive(
+                &binding.shape_profile,relation,2,binding.step_leaf_count,90_000,prices).unwrap().envelope;
+            let terms=PalwRenderingClaimTermsV1::derive(now,plan,100,100,20).unwrap();
+            let funding=plan.rent_sompi.checked_add(plan.deposit_sompi).unwrap();
+            let admit=|funding|PalwOwnedPrefixCourtV1::admit(seed_id,target.claim_id,owner,now,&binding,&job,&target,
+                terms,prices,now,funding,90_000,cap,20_000,terms.material_until_daa,terms.bond_exit_after_daa,
+                &[terms.bond_exit_after_daa;5]);
+            assert!(admit(funding-1).is_err());let row=admit(funding).unwrap();
+            assert!(row.certificate().is_err());
+            let mut state=PalwChainStateV2::genesis();let empty=state.state_root();
+            let owner_key=PalwStagedCourtKeyV1::Owner(target.claim_id,owner);
+            let panel:BTreeSet<_>=(1..=5).map(|i|PalwBondKeyV2(TransactionOutpoint {
+                transaction_id:crate::tx::TransactionId::from_u64_word(i),index:0})).collect();
+            let contract=PalwDeltaEntryV2::StagedCourtSeed {key:PalwStagedCourtKeyV1::Claim(target.claim_id),old:None,
+                new:Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms,producer:target.executor_bond,panel:panel.clone()}))};
+            let seed=PalwDeltaEntryV2::StagedCourtSeed {key:owner_key,old:None,new:Some(PalwStagedCourtRowV1::Prefix(Box::new(row)))};
+            apply_delta_entry(&mut state,&contract,false).unwrap();apply_delta_entry(&mut state,&seed,false).unwrap();
+            assert_eq!(palw_accuser_exposure_v1(&state,&owner),u128::from(plan.deposit_sompi));
+            for participant in panel.iter().chain(std::iter::once(&target.executor_bond)) {
+                assert!(state.staged_bond_exit_held_v1(participant,terms.material_until_daa));
+            }
+            let reference=PalwStagedCertificateRefV1 {claim:target.claim_id,reserver:owner,reserved_daa:now,seed_id};
+            assert!(reference.resolve_fault_v1(&state,target.execution_root).is_err());
+            let mut journal=vec![];
+            for tile in tiles {let actions=[A::BeginTile {opening:tile.opening},
+                A::TilePart {offset:0,bytes:tile.preimage.values_le},A::FinishTile];
+                for action in actions {
+                    let current=state.staged_courts[&owner_key].clone();let old=current.checkpoint_v1().unwrap();
+                    let mut next=current.clone();let PalwStagedCourtRowV1::Prefix(c)=&mut next else {unreachable!()};
+                    let before=borsh::to_vec(c).unwrap();
+                    assert!(c.movement(now,target.claim_id,owner,now,Hash64::default(),&action,20_000).is_err());
+                    assert_eq!(borsh::to_vec(c).unwrap(),before);
+                    assert!(c.movement(terms.stream_until_daa,target.claim_id,owner,now,seed_id,&action,20_000).is_err());
+                    assert_eq!(borsh::to_vec(c).unwrap(),before);
+                    c.movement(now,target.claim_id,owner,now,seed_id,&action,20_000).unwrap();
+                    let delta=PalwDeltaEntryV2::StagedCourtMove {key:(target.claim_id,owner),old,new:next.checkpoint_v1().unwrap()};
+                    assert!(borsh::to_vec(&delta).unwrap().len()<4096);
+                    apply_delta_entry(&mut state,&delta,false).unwrap();let after=state.state_root();
+                    assert!(apply_delta_entry(&mut state,&delta,false).is_err());assert_eq!(state.state_root(),after);
+                    journal.push(delta);
+                }
+            }
+            let cert=reference.resolve_fault_v1(&state,target.execution_root);
+            assert_eq!(cert.is_ok(),faulty);if faulty {assert!(matches!(cert,Ok(PalwStagedFaultV1::Prefix(_))));}
+            assert!(reference.resolve_fault_v1(&state,Hash64::default()).is_err());
+            assert!(PalwStagedCertificateRefV1 {reserver:target.executor_bond,..reference}.resolve_fault_v1(&state,target.execution_root).is_err());
+            let root=state.state_root();let carried=borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
+            let restored=borsh::from_slice::<PalwStateCarriageV2>(&carried).unwrap().into_state(
+                &PalwStateParamsV2::new(100,10,40,20,500,1000,Hash64::from_u64_word(1),4,1000,100,1000,0).unwrap(),Some(root)).unwrap();
+            assert_eq!(restored.state_root(),root);
+            assert_eq!(reference.resolve_fault_v1(&restored,target.execution_root).is_ok(),faulty);
+            for delta in journal.iter().rev() {apply_delta_entry(&mut state,delta,true).unwrap();}
+            assert!(reference.resolve_fault_v1(&state,target.execution_root).is_err());
+            apply_delta_entry(&mut state,&seed,true).unwrap();assert_eq!(palw_accuser_exposure_v1(&state,&owner),0);
+            apply_delta_entry(&mut state,&contract,true).unwrap();assert_eq!(state.state_root(),empty);
+        }}
     }
     #[test]
     fn tokenizer_owned_moves_root_reload_and_reorg_preserve_exact_certificate_and_capital() {

@@ -205,6 +205,9 @@ impl PalwTokenizerTableStreamV1 {
         self.parser.check()?;
         self.table.check()
     }
+    pub fn tokenizer_sealed_v1(&self) -> bool {
+        self.parser.is_sealed_v1()
+    }
     pub fn tokenizer_offset(&self) -> u64 {
         self.parser.offset()
     }
