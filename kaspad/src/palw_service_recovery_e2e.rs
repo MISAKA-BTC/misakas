@@ -2,6 +2,8 @@
 //! receives its real retained capture; the verifier starts and restarts with an empty retention
 //! directory and obtains signed material exclusively from accepted public carriers.
 use super::*;
+#[path = "palw_service_network_e2e.rs"]
+mod network;
 use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
 use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
 
@@ -30,6 +32,7 @@ async fn automatic_multipart_recovery_and_continuous_public_verifier_survive_a_r
 pub(super) enum RecoveryMode {
     Restart,
     Reorg,
+    Network,
 }
 
 pub(super) struct RecoveryRun {
@@ -47,6 +50,7 @@ pub(super) struct RecoveryRun {
     mode: RecoveryMode,
     premine: Vec<Funding>,
     reorged: bool,
+    network: Option<network::NetworkRun>,
 }
 
 async fn launch(
@@ -95,6 +99,19 @@ impl RecoveryRun {
                 Some((path, kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(&commitment.job, prompt)));
         }
         let config = Arc::new(chain.config.clone());
+        let network = if mode == RecoveryMode::Network {
+            Some(
+                network::NetworkRun::start(
+                    chain,
+                    premine,
+                    flow.clone(),
+                    kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&foreign.unwrap().2.as_ref().unwrap().0),
+                )
+                .await,
+            )
+        } else {
+            None
+        };
         let producer = launch(producer_config.clone(), manager.clone(), flow.clone(), config.clone()).await;
         assert_eq!(producer.service.bond, Some(chain.bonds[0].0));
         Self {
@@ -112,6 +129,7 @@ impl RecoveryRun {
             mode,
             premine: premine.to_vec(),
             reorged: false,
+            network,
         }
     }
 
@@ -128,6 +146,9 @@ impl RecoveryRun {
         input_chunks: &mut BTreeSet<u32>,
     ) {
         assert!(!self.producer.task.as_ref().unwrap().is_finished(), "automatic producer worker stopped");
+        if let Some(network) = self.network.as_mut() {
+            network.relay(chain).await;
+        }
         for tx in chain.history[service_start..].iter().flat_map(|b| b.transactions.iter()) {
             let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload) else { continue };
             match payload.object {
@@ -251,7 +272,7 @@ impl RecoveryRun {
     pub(super) async fn finish(&mut self, chain: &Chain, claim: Hash64, service_start: usize) {
         if self.mode == RecoveryMode::Restart {
             assert!(self.verifier_restarted, "the test must actually restart the public service while its case is live");
-        } else {
+        } else if self.mode == RecoveryMode::Reorg {
             assert!(self.reorged, "a real selected-chain switch must roll back the accepted partial assembly");
             assert!(!self.verifier_restarted, "the public verifier must continue across the real reorg without losing its book");
         }
@@ -287,6 +308,9 @@ impl RecoveryRun {
             assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::FpJob)));
         } else {
             assert!(chain.view(claim).da_defaulted);
+        }
+        if let Some(network) = self.network.as_mut() {
+            network.finish(chain, claim, service_start).await;
         }
         self.producer.finish().await;
     }

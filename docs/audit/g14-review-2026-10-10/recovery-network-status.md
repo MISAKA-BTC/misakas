@@ -26,3 +26,9 @@ A third opt-in test, `automatic_multipart_recovery_and_continuous_public_verifie
 This fixture explicitly test-arms the existing normal `palw_reorg_strict_economic_win` rule at zero, as the existing LG14-A and kernel-route reorg fixtures do. It does not substitute fork-choice callbacks or waive the economic/shallow-window predicate. The public-filer shipping activation remains closed. Terminal transport assertions read actual selected-chain acceptance, so orphaned carriers cannot count as accepted duplicates.
 
 The new reorg test is source-only at this checkpoint: formatting and diff checks passed; compilation/execution are pending. Socket RPC/P2P and real pruned-IBD validation are still separate requirements.
+
+## Socket P2P public multipart reader path (verification pending)
+
+The independent `palw_service_network_e2e.rs` child test starts a real loopback P2P listener/client, performs the ordinary rule/genesis handshake, and relays the automatic worker's new blocks through `InvRelayBlock` and the normal protocol flows into a separate consensus database. No test-side insertion of the new answer suffix is permitted. The receiver independently validates the common prefix, loses its original FP body/acceptance rows before transport begins, retains no public FP metadata, and must reconstruct/authenticate the signed multipart descriptor using the ordinary paged public-history reader after actual socket block validation.
+
+`automatic_public_job_multipart_is_authenticated_after_socket_p2p_block_relay` also keeps the primary ordinary outsider's real independent replay/release assertions and the producer descriptor-only partial restart. The socket receiver is a separate authenticated material reader, not a second full prosecution service. It does not claim full socket RPC coverage, fresh pruned-IBD import, every active profile or full G14 completion. Implementation/format checks are complete; build and runtime evidence are pending.
