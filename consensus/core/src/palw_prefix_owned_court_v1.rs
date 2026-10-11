@@ -383,7 +383,7 @@ mod tests {
                     assert_eq!(derived, source);
                     header.update(&tile.preimage.values_le);
                     assert_eq!(
-                        header.finish().unwrap(),
+                        header.finish(),
                         tile.opening.leaf_hash,
                         "owned header preserves the exact original wholeleaf hash"
                     );
