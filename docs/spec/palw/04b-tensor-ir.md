@@ -3441,3 +3441,80 @@ and localization, preserve actor-cost/capital/aggregate liveness rules and test
 honest execution Final independently. Synthetic fixed-axis trials do not satisfy
 checkpoint/task/context/fidelity/performance or A6/A8 requirements. All existing
 shipping fences stay dormant.
+
+### 18.5 Explicit v7 mixed-court graph and replay contract (no native route)
+
+The new `flat-court-set/v7` identity binds the flat-v5 commitment profile, the
+exact `topk-point-court/v7` identity, ordinary v5 courts, all positions/relations,
+decode and malformed-header kinds, and the outer v7 grammar. The program and
+resource scope use separate v7 domains. Neither an existing profile digest nor
+an old vector identity selects this court set.
+
+`FlatResourceScopeV7` MUST be derived from a canonical validated program, exact
+maximum positions and exact optional encoder binding. Extents remain within
+the frozen v1 history bound; an encoder has its exact derived inputs and one
+position. Include one record per reachable block node with exact occurrence
+multiplicity, selected court policy, filing/work/scratch/operand-leaf bounds,
+TopK selection work/auxiliary memory and selected-value reads. Include total
+relation instances; worst terminal bounds across ordinary, TopK, malformed and
+decode courts; storage/reference tensor payloads, node commitments, flat tree
+and hash material; and complete TopK scan/read/reply quantities. Any changed,
+omitted, underpriced, rebound or surplus declaration MUST be refused.
+
+For TopK, inspect both initial and last-position source wiring in every unrolled
+occurrence. A registered parameter or authenticated node selects point v7;
+other sources select ordinary v5. A mixed state policy MUST price both and
+dispatch from the exact relation's derived source. An ordinary relation proof
+MUST NOT substitute for a point-selected relation. A malformed-header proof
+and delivered decode proof remain v5 kinds within the v7 envelope. Account for
+all earlier sub-64 internal legacy layouts across an H threshold, not only the
+first and last flat layouts. Derivation MUST allocate neither tensor images nor
+position arrays and MUST NOT hash/serialize the program per TopK occurrence.
+
+For the v5 raw bound before its own version/discriminant, the mixed wrapper
+adds 6 filing bytes, 768 work and 96 scratch bytes. For a complete TopK-v7
+bound, it adds 3 filing bytes, 384 work and 48 scratch bytes. Apply the existing
+1-MiB/2^30/32-MiB/1,024-leaf terminal ceilings to the complete envelope. Require
+the ordinary TopK scanner's selection auxiliary bytes <= 32 MiB. All-position
+scope may reject a graph even when an isolated point filing fits.
+
+The exact mixed wire format is `u16=7`, `u8 kind`, and the complete inner bytes:
+kind 0 is bounded `FlatFaultV5` including its version, kind 1 is bounded
+`TopKFaultV7` including its version. Unknown versions/kinds, oversized input,
+truncations, surplus bytes and inner count/path/type failures MUST be refused
+before variable-size allocation. Courts MUST rederive the full graph scope,
+the exact wiring-selected kind and the filing's actual bounds before judgment.
+
+The ordinary replay acquires registered parameters independently and checks
+every node and delivered id. A differing point-selected TopK reads its selected
+ids through `FlatValueV7`: `u16=7` and a bounded `FlatOperandV5` containing its
+exact output node plus exactly one flat OR legacy output leaf. The entire reply
+MUST be <= 16 KiB. Node identity, declared IDX type/shape, leaf coordinates and
+typed root MUST authenticate before using an id. A fault obtains at most three
+selected leaves and two own score leaves, then roundtrips and independently
+verifies the terminal proof. Public selected values never replace own scores.
+Missing/bad/substituted replies MUST yield a value demand, not correctness.
+
+`FlatReplayEnvelopeV7` binds the exact v7 scope and reuses the frozen v6 reference
+cost formulas as data, not v6 admission. In addition reserve the scope's complete
+TopK scan work and auxiliary bytes. For each point relation, price
+`rows * (K+3)` selected-value reads at maximum H, times occurrence multiplicity
+and maximum positions, each at 16 KiB. Add those reply bytes to the ordinary
+reply envelope and four times those bytes to the trace-authentication hashing
+allowance. All quantities use checked bounded metadata and separate i128
+reference containers from declared storage width.
+
+The same local session MUST reserve the whole parameter/trace hash and TopK scan
+attempt before any provider callback. A failed artifact/read/demand consumes
+the attempt. Node, hash and selected-value reads MUST consume their read and
+maximum reply allowance before calling providers. Missing acquisition and
+retry MUST NOT reset counters. Underpriced declarations and shape/work/byte/
+temporary-memory limits MUST stop before dependent callbacks.
+
+These remain component tensor/hash/read/scan prices: they are not whole-process
+peak memory, complete primitive CPU, inclusion/deadline, public storage or shared
+network-resource/economic guarantees. No current node post, protected seal or
+reveal, chunk, DA, activation or Final route accepts this contract. A consumer
+must explicitly bind it and complete the remaining RFC02 acceptance requirements.
+Conditional external mode A and dormant fences remain unchanged; no consensus
+availability obligation or reward/ExecutionFinal right is introduced.

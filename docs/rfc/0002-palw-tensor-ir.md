@@ -3507,3 +3507,74 @@ proof routes still refuse v7 bytes. Bounded token/patch/audio lengths, H-axis
 selection, all-plan/shared network budgets, full model/task/fidelity/performance,
 independent execution Final/redemption and A6/A8 remain required. No shipping
 fence or full RFC02 acceptance is activated by this increment.
+
+### §14.35 — Explicit mixed-court graph scope and prepaid independent replay (2026-10-11)
+
+`flat-resource-scope/v7` now selects the point court through an independently
+derived **complete graph** contract. The commitment grammar remains flat-v5
+internal/v3 parameter; the separately domain-bound court-set id and scope root
+select the v7 terminal semantics. Every reachable block node, every unrolled
+layer occurrence, the admitted maximum positions, decode and malformed-header
+courts are included. A declaration must equal the complete derivation in every
+field. A small TopK filing cannot admit another oversized relation or replace
+the graph's exact program, mode, extent or resource ceilings.
+
+Committed TopK sources select the v7 point court. Public/constant/initial-zero
+sources retain bounded v5 courts. When initial state and a later state writer
+require different courts, the scope prices both and selects the court from the
+exact typed wiring at that position and occurrence; neither a registrant nor a
+filer chooses the cheaper kind. Frozen state roles, per-layer state namespaces,
+history windows, source coordinates and v1 type/shape rules remain unchanged.
+Admission visits metadata, not model images or position arrays. It accounts for
+earlier sub-64 legacy layouts when monotone H crosses into flat commitments,
+including the case where an earlier legacy row tree has more paths than the last
+flat tree. It serializes/hashes the program once for the unrolled TopK prices.
+
+`flat-fault/v7` wraps either the exact bounded v5 court bytes or v7 TopK point
+bytes under a new version and discriminant. The mixed court rederives complete
+scope, checks the wiring-selected kind and exact filing bounds, then dispatches
+the existing authenticating court. All historical v5/v6 decoders and routes
+retain their previous acceptance behavior; none implicitly accepts this wrapper.
+
+The ordinary v7 verifier reexecutes from independently acquired registered
+parameters and authenticated public job ids. Its shared replay engine still
+checks ordinary relations and delivered decode ids. When TopK differs, it reads
+selected ids through a new **16-KiB, single-output-leaf, bounded byte codec**,
+authenticates every reply to the same node/type/shape/root, scans its own scores
+under the derived budget and builds a bounded point counterexample. A public
+value reply is evidence for the selected member, never the reference score or
+the correctness of the computation. Missing, oversized, wrong-version or
+borrowed material yields a demand, never a Clean verdict or conviction.
+
+The versioned local replay session independently binds the complete scope and
+prices reference i128 tensor payloads, parameter/trace hashing, history rows,
+node/hash/value reads, reply bytes, TopK scan work, temporary selection memory
+and attempts. The full hashing/scan attempt is reserved before artifact or public
+callbacks; missing material or an inconsistent artifact consumes that attempt.
+Each response consumes its read and byte allowance before delegation. Retries
+share the same counters. Storage bytes, the reference i128 representation and
+temporary selection bytes are distinct quantities. These component prices do
+not yet certify total allocator/RSS, all-primitive CPU/deadlines, public storage/
+delivery, per-block/per-bond or network-wide economic and load admission.
+
+An actual synthetic N=10,485,760, K=2, **one-position graph** now passes honest
+independent replay and prosecutes a wrong selection through the mixed court.
+The mixed filing is 17,488 bytes; its reference source occupies 167,772,160 bytes,
+and its scan charge remains 251,658,288 with 128 temporary selection bytes.
+Separately, metadata-only admission covers TopK→Gather→state update with 1,024
+layers and the existing 2,097,152-position ceiling; this is a derived envelope,
+not execution or a materialized maximum-length job. Synthetic graphs exercise
+range/duplicate/dominance faults, state and history transitions, all sub-64/64/127
+thresholds, decode, encoder inputs, substitution refusal and prepaid retries.
+
+No consensus post/seal/reveal/chunk/DA or reward route selects the mixed v7
+contract yet. The protected-v6 actual-node regressions remain compatibility
+evidence, not v7 native acceptance. A subsequent consumer must bind the new
+court set and complete scope to admission, public acquisition, actor-owned
+prosecution, reserved transport, shared resources and original-capital payout.
+Versioned token/patch/audio job lengths, H-axis sparsity/state semantics, the full
+shared resource vector and economics, real checkpoint/task/context/fidelity/
+performance, fresh outsiders, independent execution Final/redemption and A6/A8
+remain required. Conditional external-verification mode A remains unchanged;
+this increment adds no consensus model-availability obligation. Full RFC02 stays
+active and shipping fences stay dormant.

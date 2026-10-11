@@ -102,12 +102,16 @@ pub mod merkle5;
 pub mod flat_court4;
 /// Staged flat-v5 complete court-kind set, not selected by a shipping route.
 pub mod flat_court5;
+pub mod flat_court7;
 pub mod flat_detect5;
+pub mod flat_detect7;
 pub mod flat_replay6;
+pub mod flat_replay7;
 /// Staged actor-bound sealed flat evidence; not a consensus route or payout.
 pub mod flat_seal6;
 /// Staged complete flat-v5 court resource admission.
 pub mod flat_scope5;
+pub mod flat_scope7;
 /// Explicit opt-in point-counterexample TopK courts over the frozen flat-v5 commitments.
 /// No consensus route implicitly accepts the new v7 proof grammar.
 pub mod flat_topk7;

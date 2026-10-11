@@ -389,6 +389,76 @@ fn actual_ten_million_axis_has_a_small_terminal_proof_and_independently_priced_s
     assert!(bytes.len() as u64 <= scope.filing_bytes);
     assert!(bytes.len() < 32 << 10);
     assert_eq!(verify_topk_fault_v7(&f.context(), &TopKFaultV7::from_bytes(&bytes).unwrap()), Ok(()));
+    use misaka_palw_kernel::{
+        flat_court7::{FlatContextV7, FlatFaultV7, verify_flat_fault_v7},
+        flat_detect5::{FlatPublicReadsV5, FlatReadV5},
+        flat_detect7::{FlatFindingV7, FlatPublicReadsV7, FlatValueReadV7, FlatValueV7},
+        flat_replay6::FlatReplayLimitsV6,
+        flat_replay7::{FlatReplayLimitsV7, FlatReplayResultV7, FlatReplaySessionV7, flat_replay_envelope_v7},
+        flat_scope7::flat_resource_scope_v7,
+    };
+    struct Server<'a>(&'a Fixture);
+    impl FlatPublicReadsV5 for Server<'_> {
+        fn node(&self, r: FlatReadV5) -> Option<misaka_palw_kernel::seg::NodeOpeningV1> {
+            self.0.commit.node_opening(r.position, r.occurrence, r.node)
+        }
+        fn hash(&self, _: FlatReadV5) -> Option<misaka_palw_kernel::merkle5::FlatLeafHashV5> {
+            panic!("a TopK point counterexample needs selected values, not whole-axis hash descent")
+        }
+    }
+    impl FlatPublicReadsV7 for Server<'_> {
+        fn value(&self, r: FlatValueReadV7) -> Option<Vec<u8>> {
+            let t = &self.0.trace.values[r.node.position as usize][r.node.occurrence as usize][r.node.node as usize];
+            FlatValueV7 { version: 7, value: self.0.opening(t, true, vec![r.element], r.node.node) }.to_bytes().ok()
+        }
+    }
+    let graph = flat_resource_scope_v7(&f.p, 1, None).unwrap();
+    let envelope = flat_replay_envelope_v7(&f.p, &graph, None).unwrap();
+    let limits = FlatReplayLimitsV7 {
+        reference: FlatReplayLimitsV6 {
+            position_tensor_bytes: envelope.reference.position_tensor_bytes,
+            operand_tensor_bytes: envelope.reference.largest_operand_tensor_bytes,
+            history_tensor_bytes: envelope.reference.history_rows_tensor_bytes,
+            parameter_hash_bytes: envelope.reference.parameter_hash_bytes_per_attempt,
+            trace_hash_bytes: envelope.reference.trace_hash_bytes_per_attempt,
+            node_reads: envelope.reference.node_reads_per_attempt,
+            hash_reads: envelope.reference.hash_reads_per_attempt,
+            reply_bytes: envelope.reference.reply_bytes_per_attempt,
+            attempts: 1,
+        },
+        topk_scan_work: envelope.topk_scan_work_per_attempt,
+        topk_auxiliary_bytes: envelope.topk_auxiliary_bytes,
+        selected_value_reads: envelope.selected_value_reads_per_attempt,
+    };
+    let mut context = FlatContextV7 { scope: &graph, base: f.context().base };
+    // The two output logits are [0, N-1]; their greedy delivered id is 1.
+    context.base.claim.generated = &[1];
+    let mut session = FlatReplaySessionV7::new(limits.clone());
+    let FlatReplayResultV7::Finding(FlatFindingV7::Fault(found)) =
+        session.check(&context, &envelope, &Server(&f), &|i, l| f.params.tensors.get(&(i, l)).cloned(), &[0])
+    else {
+        panic!("actual large graph did not prosecute its TopK")
+    };
+    let wire = found.to_bytes().unwrap();
+    assert!(matches!(found, FlatFaultV7::TopK(_)));
+    assert_eq!(wire.len(), bytes.len() + 3);
+    verify_flat_fault_v7(&context, &FlatFaultV7::from_bytes(&wire).unwrap()).unwrap();
+    assert_eq!(session.topk_scan_work, envelope.topk_scan_work_per_attempt);
+    println!(
+        "flat-v7 synthetic actual full-graph replay axis={n} K=2 mixed_filing_bytes={} reference_operand_bytes={} selected_reads={} charged_scan_work={}; one position, not a ten-million-token job, checkpoint, native or Final acceptance",
+        wire.len(),
+        envelope.reference.largest_operand_tensor_bytes,
+        session.selected_value_reads.get(),
+        session.topk_scan_work
+    );
+    f.set_row(0, &[0, n - 1]);
+    let mut context = FlatContextV7 { scope: &graph, base: f.context().base };
+    context.base.claim.generated = &[1];
+    let mut session = FlatReplaySessionV7::new(limits);
+    assert_eq!(
+        session.check(&context, &envelope, &Server(&f), &|i, l| f.params.tensors.get(&(i, l)).cloned(), &[0]),
+        FlatReplayResultV7::Finding(FlatFindingV7::Clean)
+    );
     println!(
         "TopK-v7 synthetic actual axis={n} K=2 source_bytes={} filing_bytes={} court_bound={} court_work={} scratch_bound={} scan_work={} selection_aux={}; no checkpoint, dynamic-H, native or Final acceptance",
         n as u64 * 4,

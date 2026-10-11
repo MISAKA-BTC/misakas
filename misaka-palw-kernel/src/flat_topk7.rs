@@ -65,7 +65,7 @@ fn bad(s: &str) -> DismissalV1 {
 fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "invalid bounded TopK-v7 fault")
 }
-fn operand(r: &mut Cursor<&[u8]>, max: usize) -> io::Result<FlatOperandV5> {
+pub(crate) fn operand(r: &mut Cursor<&[u8]>, max: usize) -> io::Result<FlatOperandV5> {
     let node = common::optional(r, common::read_node)?;
     let flat = common::vector(r, max, FlatLeafValueV5::deserialize_reader)?;
     let legacy = common::vector(r, max - flat.len(), common::read_legacy)?;
@@ -171,6 +171,48 @@ fn derived(
     if c.court_id != topk_court_id_v7() || p >= c.base.claim.positions || !pr.valid(s, n) {
         return Err(bad("wrong opt-in court or relation"));
     }
+    relation_scope_v7(c.base.claim.program, pr, c.base.claim.positions, p, s, n, false)
+}
+/// Metadata-only derivation for complete graph admission. No parameter image,
+/// position/root array or public callback is needed.
+pub(crate) struct TopKProgramPriceV7 {
+    pub bytes: u64,
+    pub root: Digest,
+}
+impl TopKProgramPriceV7 {
+    pub(crate) fn of(program: &misaka_palw_tir::program::TirProgramV1) -> Result<Self, DismissalV1> {
+        Ok(Self {
+            bytes: common::size_with_limit(program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
+                .map_err(|_| bad("oversized program"))?,
+            root: object_id(b"misaka-palw/kernel/topk-program/v7", program),
+        })
+    }
+}
+pub(crate) fn relation_scope_v7(
+    program: &misaka_palw_tir::program::TirProgramV1,
+    pr: &crate::element::PreparedV1<'_>,
+    max_positions: u32,
+    p: u32,
+    s: u16,
+    n: u16,
+    envelope: bool,
+) -> Result<TopKResourceScopeV7, DismissalV1> {
+    relation_scope_priced_v7(&TopKProgramPriceV7::of(program)?, pr, max_positions, p, s, n, envelope)
+}
+/// Serialize/hash the program once for whole-graph admission, rather than once
+/// per unrolled TopK relation. The public point API derives this price itself.
+pub(crate) fn relation_scope_priced_v7(
+    price: &TopKProgramPriceV7,
+    pr: &crate::element::PreparedV1<'_>,
+    max_positions: u32,
+    p: u32,
+    s: u16,
+    n: u16,
+    envelope: bool,
+) -> Result<TopKResourceScopeV7, DismissalV1> {
+    if p >= max_positions || !pr.valid(s, n) {
+        return Err(bad("wrong TopK relation extent"));
+    }
     let Prim::TopK { axis, k } = pr.w.node(s, n).prim else { return Err(bad("relation is not TopK")) };
     let sh = pr.shapes(p, s, n);
     let axis = axis as usize;
@@ -180,15 +222,28 @@ fn derived(
     }
     let source_flat =
         matches!(sources[0], OperandSourceV1::Source(SourceV1::Node { .. })) && common::uses_flat::<5>(sh.in_dtypes[0], &sh.inputs[0]);
-    let source = opening_bytes(sh.in_dtypes[0], &sh.inputs[0], source_flat)?;
-    let output = opening_bytes(DType::Idx, &sh.out, common::uses_flat::<5>(DType::Idx, &sh.out))?;
+    let mut source = opening_bytes(sh.in_dtypes[0], &sh.inputs[0], source_flat)?;
+    let mut output = opening_bytes(DType::Idx, &sh.out, common::uses_flat::<5>(DType::Idx, &sh.out))?;
+    if envelope {
+        // A monotone H may cross the internal 64-element grammar threshold.
+        // The earlier legacy tree can have MORE row paths than the final flat
+        // tree (e.g. [H, 1] at H=63 vs 64). Price every sub-64 layout, not just
+        // the first and last position, without visiting positions.
+        let first = pr.shapes(0, s, n);
+        let small = |dtype: DType, rank: usize| 128 + 8 * rank as u64 + 63 * dtype.width() as u64 + 64 * crate::merkle3::depth_v3(63);
+        if source_flat && LayoutV3::of(&first.inputs[0]).len < 64 {
+            source = source.max(small(sh.in_dtypes[0], sh.inputs[0].len()));
+        }
+        if common::uses_flat::<5>(DType::Idx, &sh.out) && LayoutV3::of(&first.out).len < 64 {
+            output = output.max(small(DType::Idx, sh.out.len()));
+        }
+    }
     let nodes = 2 * node_opening_bytes_v1(pr.node_count);
     let filing_bytes = 1024 + nodes + 2 * source + 3 * output;
     if filing_bytes > TOPK_FAULT_MAX_BYTES_V7 {
         return Err(bad("TopK point filing exceeds cap"));
     }
-    let bytes = common::size_with_limit(c.base.claim.program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
-        .map_err(|_| bad("oversized program"))?;
+    let bytes = price.bytes;
     let court_work = bytes
         .checked_mul(bytes)
         .and_then(|w| w.checked_add(bytes * 64))
@@ -208,8 +263,8 @@ fn derived(
     }
     Ok(TopKResourceScopeV7 {
         version: 7,
-        court_id: c.court_id,
-        program: object_id(b"misaka-palw/kernel/topk-program/v7", c.base.claim.program),
+        court_id: topk_court_id_v7(),
+        program: price.root,
         position: p,
         occurrence: s,
         node: n,
@@ -233,7 +288,7 @@ pub fn check_topk_resource_scope_v7(c: &TopKContextV7<'_>, scope: &TopKResourceS
     }
     Ok(())
 }
-fn at(shape: &[usize], axis: usize, row: u64, slot: u32) -> Result<u64, DismissalV1> {
+pub(crate) fn at(shape: &[usize], axis: usize, row: u64, slot: u32) -> Result<u64, DismissalV1> {
     let suffix = shape[axis + 1..].iter().product::<usize>() as u64;
     let rows = LayoutV3::of(shape).len / shape[axis] as u64;
     if row >= rows || slot as usize >= shape[axis] {
@@ -241,7 +296,7 @@ fn at(shape: &[usize], axis: usize, row: u64, slot: u32) -> Result<u64, Dismissa
     }
     Ok(((row / suffix) * shape[axis] as u64 + slot as u64) * suffix + row % suffix)
 }
-fn output_point(o: &FlatOperandV5, shape: &[usize], index: u64) -> Result<i128, DismissalV1> {
+pub(crate) fn output_point(o: &FlatOperandV5, shape: &[usize], index: u64) -> Result<i128, DismissalV1> {
     let root = o.node.as_ref().ok_or_else(|| bad("missing output node"))?.commitment;
     let dims: Vec<_> = shape.iter().map(|n| *n as u64).collect();
     if common::uses_flat::<5>(DType::Idx, shape) {

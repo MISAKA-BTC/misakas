@@ -2202,3 +2202,80 @@ retention/inclusion/deadlines, real checkpoint/task/context/fidelity/performance
 fresh outsiders, independent execution Final/redemption and A6/A8 remain required.
 Missing score material adds no availability default: conditional external mode A
 and all dormant shipping fences remain unchanged.
+
+## Verified increment — complete mixed-court graph scope and independent replay, 2026-10-11
+
+Add an explicit v7 court-set/resource identity over unchanged flat-v5 internal
+and v3 parameter commitments. Complete metadata admission derives every reachable
+block node, layer multiplicity, maximum positions, state source and history
+shape, ordinary and TopK courts, malformed headers and delivered decode. Scope
+declarations must match every independently derived field. Isolated TopK success
+cannot bypass another oversized reduction or omit a relation. Program hashing
+for TopK prices is shared across unrolled occurrences rather than repeated.
+
+Public/constant/initial-zero sources retain bounded v5 relation courts; registered
+parameters and committed node/state-writer sources use point v7. A mixed state
+policy prices both kinds and derives the selected kind from exact position and
+occurrence wiring. Frozen per-layer state roles and normal-form type rules are
+preserved. The all-position price covers earlier sub-64 legacy row paths even
+when the final internal layout is flat. A v5 ordinary proof cannot bypass a
+point-selected relation within the new mixed scope. Existing v5/v6 scope roots,
+proof decoders, node routes and envelopes retain their prior behavior.
+
+Add a separate bounded v7 mixed-fault codec/dispatcher and a complete ordinary
+replay session. The shared reference engine independently loads registered
+parameters and job ids, checks ordinary nodes and decode, and acquires selected
+ids only when TopK differs. New value replies are raw bytes bounded at 16 KiB
+before decoding, with one exact authenticated output leaf and node. Wrong-version,
+missing, oversized or borrowed replies yield demands. The verifier's own scores
+and state produce the bounded counterexample; every emitted fault roundtrips
+and passes the independently authenticating mixed court.
+
+The session binds the complete scope and reserves whole parameter/trace hashing
+and TopK scan attempts before any provider callback. Each node/hash/selected
+reply consumes its read and maximum byte allowance before delegation. Demands,
+bad artifacts and retries do not regain counters. Source storage, i128 reference
+tensor payloads, selection temporary memory, history, hash work, reply bytes and
+attempts are separate dimensions. Reused v6 reference-cost formulas are data
+inside the new v7 envelope, not a bypass of v6's frozen admission. These remain
+component prices, not complete allocator/RSS, all-primitive CPU, deadline,
+per-block/per-bond or network-wide resource/economic guarantees.
+
+**187 distinct selected tests pass:** 153 existing kernel tests, six point-court
+tests extended with actual whole-graph replay, ten new complete-graph tests and
+18 actual-node v3/v6 compatibility tests. The existing hardware benchmark remains
+ignored. Graph trials cover metadata-only 1,024-layer sparse Gather/state work,
+all declaration fields and an independently oversized reduction; honest and
+late-fault sparse/state replay; range/duplicate/dominance; source/value/codec
+substitution; precharged retries and callback refusal; H=1/63/64/127/128 history
+layouts; initial/per-layer prior-state writer court selection; decode and exact
+one-position public encoder inputs. Ten-file formatting and whitespace checks
+pass. Test names, commands, source/doc/binary/log hashes, measured material and
+development fixture corrections are in
+[the verdict](evidence/rfc02-flat-graph-v7-verdict.json).
+
+The actual synthetic N=10,485,760, K=2 **one-position graph** replays honestly and
+prosecutes a wrong committed selection. Its mixed filing is 17,488 bytes, while
+the reference source tensor is 167,772,160 bytes and its complete scan is charged
+251,658,288 with 128 temporary selection bytes. The failure reads three selected
+values. Source/hash/evidence costs remain priced independently of that small
+filing. This is an executed fixed axis, not a ten-million-token job/checkpoint.
+Separately, metadata-only TopK→Gather→reshape/reduce→state update admission at
+1,024 layers and 2,097,152 maximum positions includes 10 template relations and
+15,038,676,992 instances. Worst court ceilings are 39,283 bytes, 15,073,040 work
+and 8,438,451 scratch bytes; conservative TopK scan work is 540,432,058,363,674,624.
+No weights, tokens, trace arrays or maximum-length execution are materialized
+for that large envelope.
+
+The updated protected-component pool records 232 distinct component passes;
+this does not establish full RFC02 coverage. No native v7 post, seal/reveal,
+chunk/DA or economics/Final route is implemented by this increment. The 18 real
+node regressions validate old-route compatibility only. Next, bind the complete
+court set/scope and value acquisition to protected native candidate admission,
+actor-owned prosecution, transport reservations, shared budgets and original
+capital. Versioned token/patch/audio lengths and H-axis sparse/state semantics,
+the complete shared resource vector and economics, real checkpoint/task/context/
+fidelity/performance, fresh outsider execution, independent Final/redemption and
+A6/A8 remain open. Full RFC02 stays active. Conditional external mode A and
+dormant shipping fences remain unchanged; no model-availability consensus
+obligation is introduced.
