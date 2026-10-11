@@ -577,13 +577,25 @@ impl KernelLedgerV1 {
 
     /// `derived[occurrence][node]` of a typed claim's demand stage.
     pub(super) fn spec_derived_mask(&self, row: &ClaimRowV1, body: &SpecClaimBodyV1, stage: u8) -> Vec<Vec<bool>> {
+        let scope_mask = |program: &misaka_palw_tir::program::TirProgramV1| {
+            let mut mask = derived_mask_v1(program);
+            if self.commitment_scope_applies_v1(row) {
+                let hidden = crate::scope::court_model_dependent_mask_v1(program, program.params.len());
+                for (occ, hidden) in mask.iter_mut().zip(hidden) {
+                    for (derived, hidden) in occ.iter_mut().zip(hidden) {
+                        *derived |= hidden;
+                    }
+                }
+            }
+            mask
+        };
         match (self.typed.classes.get(&row.class_binding_id).map(|c| &c.kind), &body.claim) {
-            (Some(SpecClassKindV1::Memory { rule, .. }), _) if stage == 0 => derived_mask_v1(&rule.program),
+            (Some(SpecClassKindV1::Memory { rule, .. }), _) if stage == 0 => scope_mask(&rule.program),
             (Some(SpecClassKindV1::Memory { root, .. }), _) if stage == MEMORY_PRE_STATE_STAGE_V1 => {
                 vec![vec![false; root.slots.len()]]
             }
             (Some(SpecClassKindV1::Composite { components, .. }), _) => match components.get(stage as usize) {
-                Some(ComponentV1::Model(m)) => derived_mask_v1(&m.program),
+                Some(ComponentV1::Model(m)) => scope_mask(&m.program),
                 _ => Vec::new(),
             },
             _ => Vec::new(),

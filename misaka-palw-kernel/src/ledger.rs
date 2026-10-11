@@ -2098,7 +2098,7 @@ impl KernelLedgerV1 {
 
     pub fn commitment_scope_applies_v1(&self, row: &ClaimRowV1) -> bool {
         self.commitment_scope_from_daa.is_some_and(|at| row.committed_daa >= at)
-            && matches!(row.body, ClaimBodyV1::Program { .. } | ClaimBodyV1::Pipeline { .. })
+            && matches!(row.body, ClaimBodyV1::Program { .. } | ClaimBodyV1::Pipeline { .. } | ClaimBodyV1::Spec(_))
     }
 
     /// The prosecution bounds of a registered class of any kind (single program, pipeline, typed).

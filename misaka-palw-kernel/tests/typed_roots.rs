@@ -1195,3 +1195,62 @@ fn bounds_per_kind_fit_the_carriers_and_refuse_past_each_ceiling_by_name() {
         "a slice past the carrier is not carriable"
     );
 }
+
+#[test]
+fn commitment_scope_memory_serves_no_model_values_and_convicts_from_public_inherited_state() {
+    let mut m = Mem::new(memory_v1(3));
+    m.w.l.commitment_scope_from_daa = Some(0);
+    let (_, first_job) = m.job(vec![vec![3, 17, 9]]);
+    let first = m.produce(&first_job, P1, &m.m0(), |_, _| {});
+    let (first_id, _) = m.w.commit(SpecClaimV1::Memory(first.claim.clone()));
+    m.w.beat_to(m.w.l.opv.claims[&first_id].window_end_daa);
+    drop(first);
+    let inherited = m.chain_head();
+    let (_, job) = m.job(vec![vec![4, 4], vec![8, 1, 6]]);
+    let (s_at, n_at) = matmul_of(&m.fx.program);
+    let production = m.produce(&job, P1, &inherited, |step, trace| {
+        if step == 1 { bump(&mut trace.values[0][s_at][n_at], 1); }
+    });
+    let (claim, events) = m.w.commit(SpecClaimV1::Memory(production.claim.clone()));
+    assert!(events.contains(&E::ClaimCommitted { claim }));
+    let mask = m.w.l.derived_mask(&m.w.l.claims[&claim], 0);
+    assert!(mask[s_at][n_at]);
+    let mut position = 0;
+    for trace in &production.traces {
+        for values in &trace.values {
+            let response = PositionResponseV1 {
+                values: values.iter().zip(&mask).map(|(occ, hidden)| {
+                    occ.iter().zip(hidden).map(|(value, hidden)| {
+                        if *hidden { MaterialResponseV1::Omitted }
+                        else { MaterialResponseV1::Whole(TensorWireV1::of(value)) }
+                    }).collect()
+                }).collect(),
+                inputs: vec![],
+            };
+            let bytes = borsh::to_vec(&response).unwrap();
+            assert!(m.w.l.classify_served_position_v1(&claim, 0, position, &bytes).is_ok());
+            let mut leaked = response.clone();
+            leaked.values[s_at][n_at] = MaterialResponseV1::Whole(TensorWireV1::of(&values[s_at][n_at]));
+            assert!(m.w.l.classify_served_position_v1(&claim, 0, position, &borsh::to_vec(&leaked).unwrap()).is_err());
+            let events = m.w.block(vec![obj(OUT, O::FileDemand { demander: OUT, claim, stage: 0, position })]);
+            assert!(events.iter().any(|e| matches!(e, E::DemandOpened { .. })), "{events:?}");
+            let events = m.w.block(vec![obj(P1, O::Respond { claim, stage: 0, position, bytes })]);
+            assert!(events.iter().any(|e| matches!(e, E::Served { .. })), "{events:?}");
+            position += 1;
+        }
+    }
+    drop(production);
+    drop(inherited);
+    let mut rebuilt = m.w.rebuilt();
+    // Native route supplies the independently authenticated auxiliary policy after reconstruction.
+    rebuilt.commitment_scope_from_daa = m.w.l.commitment_scope_from_daa;
+    let finding = check(&rebuilt, claim, &Da::default(), &m.fx.params, &());
+    let OutsiderFindingV1::Prosecute(ProsecutionV1::Spec(bytes)) = finding else { panic!("{finding:?}") };
+    let fault: SpecFaultV1 = borsh::from_slice(&bytes).unwrap();
+    assert!(matches!(fault, SpecFaultV1::MemoryStep { step: 1, .. }));
+    let before = m.w.l.bonds[&P1].collateral;
+    let events = m.w.file(OUT, claim, fault);
+    assert!(events.iter().any(|e| matches!(e, E::Convicted { .. })), "{events:?}");
+    assert!(m.w.l.bonds[&P1].collateral < before);
+    assert_eq!(m.w.l.typed.lines[&m.class].head_source, Some(first_id));
+}
