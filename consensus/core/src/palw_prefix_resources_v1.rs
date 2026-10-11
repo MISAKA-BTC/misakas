@@ -57,6 +57,9 @@ fn full_cache_row_cost(width: u64, tile: u32, base: u64, total: u64) -> Result<(
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwPrefixResourcePlanV1 {
+    /// Physical signed packets, separate from envelope.maximum_moves logical work.
+    pub maximum_carriers: u64,
+    pub maximum_packet_body_bytes: u64,
     pub envelope: PalwRenderingResourcePlanV1,
     pub maximum_head_working_set_bytes: u64,
     pub maximum_carrier_bytes: u64,
@@ -102,6 +105,7 @@ impl PalwPrefixResourcePlanV1 {
         }
         let k = u128::from(prefix_tokens);
         let mut head_working = 0u128;
+        let mut parameter_heads = 0u128;
         let (bytes, leaves, moves, work) = match relation {
             PalwPrefixStateRelationV1::DenseInt32KvV1 | PalwPrefixStateRelationV1::Base0Int8KvV1 => {
                 let plan = PalwPrefixKvPlanV1::of_profile(profile, prefix_tokens)?;
@@ -116,6 +120,7 @@ impl PalwPrefixResourcePlanV1 {
                 let gdn_layers =
                     (0..profile.layer_count).filter(|l| profile.layer_kind(*l) == PalwLayerKindV1::GatedDeltaNet).count() as u128;
                 let heads = gdn_layers * u128::from(profile.gdn_heads);
+                parameter_heads = heads;
                 let dk = u128::from(profile.gdn_head_k_dim);
                 let dv = u128::from(profile.gdn_head_v_dim);
                 let (mode, working) = palw_prefix_gdn_mode_v1(profile);
@@ -197,7 +202,10 @@ impl PalwPrefixResourcePlanV1 {
                 (bytes, leaves, moves, work)
             }
         };
-        let moves = exact(moves + u128::from(prices.reorg_replay_moves))?;
+        // Reorg allowance is measured in physical signed packets, each carrying at most64
+        // independently charged logical actions. Do not reuse the old single-action quote.
+        let replay_logical = u128::from(prices.reorg_replay_moves) * 64;
+        let moves = exact(moves + replay_logical)?;
         // Current pure calls revalidate/hash the immutable graph/context. Account every
         // move's full hydrated profile and the public-filer accepted wire job bound,
         // including conservative repeated validation passes; a small stub cannot discount it.
@@ -209,10 +217,46 @@ impl PalwPrefixResourcePlanV1 {
         )?;
         // Complete signed carrier budget includes all old-tree openings, headers,
         // signatures and the seed, not just cache/raw bytes.
-        let carrier_bytes = exact(u128::from(moves) * u128::from(carrier_maximum))?;
-        let blake =
-            bytes.div_ceil(128) + leaves * (4 + 64 * 3) + (u128::from(carrier_bytes) + u128::from(repeated_validation)).div_ceil(128);
-        let work = work + leaves * 64 * 384 + u128::from(carrier_bytes) + u128::from(repeated_validation);
+        // Deterministic next-fit packing of at most64 flat actions, reserving16KiB for
+        // the complete outer signed carrier. Every logical action remains individually
+        // checked/charged. A byte-closed packet plus the next packet exceeds body_max;
+        // disjoint adjacent pairs bound those closures by ceil(2*wire_bytes/body_max).
+        // Count-closed packets independently cost at most ceil(logical_moves/64).
+        let body_max = carrier_maximum.checked_sub(16_384).ok_or("prefix packet header budget absent")?;
+        let step_depth = if step_leaves <= 1 { 0 } else { 64 - (step_leaves - 1).leading_zeros() };
+        // Original inventory has at mostu32 leaves. Names may be erased in a fee skeleton;
+        // the exact retained profile byte count safely bounds any single declared name.
+        let artifact_opening = 128u128 + u128::from(original_profile_bytes) + 32 * 64;
+        let largest_action = (65_536u128 + 128)
+            .max(128 + u128::from(step_depth) * 64)
+            .max(if parameter_heads == 0 { 0 } else { artifact_opening })
+            .max(16_384 + 22 * 64 + 128);
+        if largest_action > u128::from(body_max) {
+            return Err(
+                "original prefix action does not fit its signed bounded packet; a streamed identity contract is required".into()
+            );
+        }
+        let logical = u128::from(moves);
+        let action_wire = bytes
+            + logical * 128
+            + leaves * u128::from(step_depth) * 64
+            + parameter_heads * (u128::from(original_profile_bytes) + 32 * 64)
+            + u128::from(prices.reorg_replay_moves) * u128::from(body_max);
+        let maximum_carriers = exact((action_wire * 2).div_ceil(u128::from(body_max)) + logical.div_ceil(64) + 2)?;
+        let maximum_carriers = maximum_carriers.min(moves);
+        let carrier_bytes = exact(u128::from(maximum_carriers) * u128::from(carrier_maximum))?;
+        let replay_raw = u128::from(prices.reorg_replay_moves) * u128::from(body_max);
+        let blake = bytes.div_ceil(128)
+            + leaves * (4 + 64 * 3)
+            + replay_raw.div_ceil(128)
+            + replay_logical * (4 + 64 * 3)
+            + (u128::from(carrier_bytes) + u128::from(repeated_validation)).div_ceil(128);
+        let work = work
+            + leaves * 64 * 384
+            + replay_raw * 2
+            + replay_logical * 64 * 384
+            + u128::from(carrier_bytes)
+            + u128::from(repeated_validation);
         let profile_bytes = u128::from(original_profile_bytes);
         let row = head_working + profile_bytes + 262_144 + 65_536 + 32_768 + 16_384;
         let resident = head_working + profile_bytes * 4 + 1_048_576;
@@ -240,13 +284,19 @@ impl PalwPrefixResourcePlanV1 {
             maximum_moves: moves,
             maximum_parser_steps: work,
             maximum_blake_blocks: blake,
-            inclusion_daa: exact(u128::from(moves) * u128::from(prices.inclusion_margin_daa))?,
+            inclusion_daa: exact(u128::from(maximum_carriers) * u128::from(prices.inclusion_margin_daa))?,
             rent_sompi: exact(rent)?,
             deposit_sompi: exact(u128::from(moves) * u128::from(prices.deposit_per_move))?,
             row_bytes: row,
             resident_ram_bytes: resident,
         };
-        Ok(Self { envelope, maximum_head_working_set_bytes: exact(head_working)?, maximum_carrier_bytes: carrier_bytes })
+        Ok(Self {
+            envelope,
+            maximum_head_working_set_bytes: exact(head_working)?,
+            maximum_carrier_bytes: carrier_bytes,
+            maximum_carriers,
+            maximum_packet_body_bytes: body_max,
+        })
     }
 }
 
@@ -275,7 +325,14 @@ mod tests {
         };
         let a = quote(1);
         let b = quote(1 << 40);
-        assert_eq!(a, b, "unrelated committed decode/calculation leaves are not demanded once per head");
+        assert_eq!(a.envelope.maximum_stream_bytes, b.envelope.maximum_stream_bytes);
+        assert_eq!(a.envelope.maximum_stream_leaves, b.envelope.maximum_stream_leaves);
+        assert_eq!(
+            a.envelope.maximum_moves, b.envelope.maximum_moves,
+            "unrelated committed decode/calculation leaves are not demanded once per head"
+        );
+        assert!(a.maximum_carriers <= b.maximum_carriers, "original path depth is still authenticated/priced");
+        assert!(b.maximum_carriers < b.envelope.maximum_moves);
         assert_eq!(a.envelope.maximum_stream_bytes, 8_503_040);
         assert_eq!(a.envelope.maximum_stream_leaves, 73_300);
         assert!(a.envelope.resident_ram_bytes < 2 * 1024 * 1024);
@@ -340,7 +397,8 @@ mod tests {
         let kv = PalwPrefixKvPlanV1::of_profile(p, 2).unwrap();
         assert_eq!(plan.envelope.maximum_stream_bytes, u64::from(kv.layer_count) * 2 * 2 * u64::from(kv.width) * 4);
         assert_eq!(plan.envelope.maximum_stream_leaves, kv.tile_count);
-        assert_eq!(plan.envelope.inclusion_daa, plan.envelope.maximum_moves * 4);
+        assert_eq!(plan.envelope.inclusion_daa, plan.maximum_carriers * 4);
+        assert!(plan.maximum_carriers <= plan.envelope.maximum_moves);
         assert_eq!(plan.maximum_head_working_set_bytes, 0);
         assert!(
             PalwPrefixResourcePlanV1::derive(

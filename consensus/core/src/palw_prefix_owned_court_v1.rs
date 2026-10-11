@@ -16,11 +16,15 @@ pub struct PalwOwnedPrefixCourtV1 {
     pub terms: PalwRenderingClaimTermsV1,
     pub rent_paid: u64,
     pub deposit_locked: u64,
+    /// Individually charged logical actions, including the seed.
     pub moves_used: u64,
+    pub physical_carriers_used: u64,
     pub carrier_bytes_used: u64,
     seed_id: Hash64,
     execution_root: Hash64,
     maximum_carrier_bytes: u64,
+    maximum_carriers: u64,
+    maximum_packet_body_bytes: u64,
     carrier_maximum: u64,
     court: PalwPrefixFamilyCourtV1,
 }
@@ -36,6 +40,7 @@ pub struct PalwPrefixCourtFaultV1 {
 pub struct PalwOwnedPrefixCheckpointV1 {
     court: crate::palw_prefix_family_court_v1::PalwPrefixFamilyCheckpointV1,
     moves_used: u64,
+    physical_carriers_used: u64,
     carrier_bytes_used: u64,
 }
 impl PalwOwnedPrefixCourtV1 {
@@ -114,10 +119,13 @@ impl PalwOwnedPrefixCourtV1 {
             rent_paid: plan.rent_sompi,
             deposit_locked: plan.deposit_sompi,
             moves_used: 1,
+            physical_carriers_used: 1,
             carrier_bytes_used: seed_carrier_bytes,
             seed_id,
             execution_root: target.execution_root,
             maximum_carrier_bytes: resources.maximum_carrier_bytes,
+            maximum_carriers: resources.maximum_carriers,
+            maximum_packet_body_bytes: resources.maximum_packet_body_bytes,
             carrier_maximum,
             court,
         };
@@ -150,6 +158,8 @@ impl PalwOwnedPrefixCourtV1 {
     }
     pub fn check(&self) -> Result<(), String> {
         if self.moves_used == 0
+            || self.physical_carriers_used == 0
+            || self.physical_carriers_used > self.maximum_carriers
             || self.moves_used > self.terms.plan.maximum_moves
             || self.carrier_bytes_used > self.maximum_carrier_bytes
             || self.rent_paid != self.terms.plan.rent_sompi
@@ -177,23 +187,50 @@ impl PalwOwnedPrefixCourtV1 {
         action: &PalwPrefixCourtActionV1,
         carrier_bytes: u64,
     ) -> Result<(), String> {
+        self.movement_batch_v1(now, claim, reserver, reserved_daa, seed_id, std::slice::from_ref(action), carrier_bytes)
+    }
+    /// One flat signed packet, with per-action logical work and one physical carrier debit.
+    /// No recursive action type exists. The same original-leaf sequence runs on a copied
+    /// baseline, so a late bad hash/offset/phase cannot commit an earlier prefix of a packet.
+    #[allow(clippy::too_many_arguments)]
+    pub fn movement_batch_v1(
+        &mut self,
+        now: u64,
+        claim: Hash64,
+        reserver: PalwBondKeyV2,
+        reserved_daa: u64,
+        seed_id: Hash64,
+        actions: &[PalwPrefixCourtActionV1],
+        whole_signed_len: u64,
+    ) -> Result<(), String> {
         self.check()?;
-        if (claim, reserver, reserved_daa) != self.key()
+        if actions.is_empty()
+            || actions.len() > 64
+            || (claim, reserver, reserved_daa) != self.key()
             || seed_id != self.seed_id
             || now >= self.terms.stream_until_daa
             || now < self.terms.accepted_daa
-            || carrier_bytes > self.carrier_maximum
-            || borsh::to_vec(action).map_err(|e| e.to_string())?.len() as u64 > carrier_bytes
+            || whole_signed_len > self.carrier_maximum
         {
-            return Err("prefix move changes literal owner/seed, clock or admitted bounded carrier".into());
+            return Err("prefix packet changes literal owner/seed, clock or bounded carrier".into());
         }
-        let moves = self.moves_used.checked_add(1).ok_or("prefix move count overflow")?;
-        let bytes = self.carrier_bytes_used.checked_add(carrier_bytes).ok_or("prefix carrier count overflow")?;
-        if moves > self.terms.plan.maximum_moves || bytes > self.maximum_carrier_bytes {
-            return Err("prefix cumulative moves/carriers exceed admitted work".into());
+        let body = borsh::to_vec(&actions).map_err(|e| e.to_string())?.len() as u64;
+        if body > self.maximum_packet_body_bytes || body > whole_signed_len {
+            return Err("prefix packet exceeds its measured flat body or whole signed envelope".into());
         }
-        self.court.movement(seed_id, action)?;
+        let moves = self.moves_used.checked_add(actions.len() as u64).ok_or("prefix logical action count overflow")?;
+        let physical = self.physical_carriers_used.checked_add(1).ok_or("prefix physical carrier count overflow")?;
+        let bytes = self.carrier_bytes_used.checked_add(whole_signed_len).ok_or("prefix signed carrier byte count overflow")?;
+        if moves > self.terms.plan.maximum_moves || physical > self.maximum_carriers || bytes > self.maximum_carrier_bytes {
+            return Err("prefix cumulative logical work/physical carriers exceed admitted budget".into());
+        }
+        let mut candidate = self.court.clone();
+        for action in actions {
+            candidate.movement(seed_id, action)?;
+        }
+        self.court = candidate;
         self.moves_used = moves;
+        self.physical_carriers_used = physical;
         self.carrier_bytes_used = bytes;
         self.check()
     }
@@ -211,17 +248,112 @@ impl PalwOwnedPrefixCourtV1 {
         PalwOwnedPrefixCheckpointV1 {
             court: self.court.checkpoint_v1(),
             moves_used: self.moves_used,
+            physical_carriers_used: self.physical_carriers_used,
             carrier_bytes_used: self.carrier_bytes_used,
         }
     }
     pub(crate) fn restore_checkpoint_v1(&mut self, cp: &PalwOwnedPrefixCheckpointV1) -> Result<(), String> {
         // Checkpoints are generated and paired by the rooted journal, never accepted as wire credentials.
-        if cp.moves_used == 0 || cp.moves_used > self.terms.plan.maximum_moves || cp.carrier_bytes_used > self.maximum_carrier_bytes {
+        if cp.moves_used == 0
+            || cp.moves_used > self.terms.plan.maximum_moves
+            || cp.physical_carriers_used == 0
+            || cp.physical_carriers_used > self.maximum_carriers
+            || cp.carrier_bytes_used > self.maximum_carrier_bytes
+        {
             return Err("prefix checkpoint changes immutable seed or budget".into());
         }
         self.court.restore_checkpoint_v1(&cp.court)?;
         self.moves_used = cp.moves_used;
+        self.physical_carriers_used = cp.physical_carriers_used;
         self.carrier_bytes_used = cp.carrier_bytes_used;
         self.check()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn flat_packet_charges_each_action_once_and_late_bad_eof_rolls_back_all_actions() {
+        for inherited in [false, true] {
+            for fault in [false, true] {
+                let (target, binding, job, tiles) =
+                    crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(fault, inherited);
+                let prices = PalwRenderingResourcePricesV1 {
+                    inclusion_margin_daa: 4,
+                    rent_per_stream_byte: 1,
+                    rent_per_parser_step: 1,
+                    rent_per_row_byte: 1,
+                    deposit_per_move: 1,
+                    reorg_replay_moves: 0,
+                };
+                let resources = PalwPrefixResourcePlanV1::derive(
+                    &binding.shape_profile,
+                    target.registered_semantics.as_ref().unwrap().prefix_state_relation.unwrap(),
+                    2,
+                    binding.step_leaf_count,
+                    90_000,
+                    prices,
+                )
+                .unwrap();
+                let terms = PalwRenderingClaimTermsV1::derive(100, resources.envelope, 100, 100, 20).unwrap();
+                let owner = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(0x1917), 0));
+                let seed = Hash64::from_u64_word(0x16517);
+                let mut row = PalwOwnedPrefixCourtV1::admit(
+                    seed,
+                    target.claim_id,
+                    owner,
+                    100,
+                    &binding,
+                    &job,
+                    &target,
+                    terms,
+                    prices,
+                    100,
+                    u64::MAX,
+                    90_000,
+                    1 << 22,
+                    8000,
+                    terms.material_until_daa,
+                    terms.bond_exit_after_daa,
+                    &[terms.bond_exit_after_daa; 5],
+                )
+                .unwrap();
+                let mut actions = Vec::new();
+                let mut candidate = row.court.clone();
+                while let Some(source) = candidate.next_public_source_v1().unwrap() {
+                    let tile = tiles.iter().find(|t| t.opening.leaf_index == source.leaf_index).unwrap();
+                    let next =
+                        candidate.authenticated_public_source_actions_v1(seed, &tile.opening, &tile.preimage.values_le).unwrap();
+                    for action in &next {
+                        candidate.movement(seed, action).unwrap();
+                    }
+                    actions.extend(next);
+                }
+                assert!(actions.len() > 1 && actions.len() <= 64);
+                let signed_length = borsh::to_vec(&actions).unwrap().len() as u64 + 8000;
+                let baseline = borsh::to_vec(&row).unwrap();
+                let mut corrupt = actions.clone();
+                let bytes = corrupt
+                    .iter_mut()
+                    .rev()
+                    .find_map(|action| match action {
+                        PalwPrefixCourtActionV1::TilePart { bytes, .. } => Some(bytes),
+                        _ => None,
+                    })
+                    .unwrap();
+                bytes[0] ^= 1;
+                assert!(row.movement_batch_v1(101, target.claim_id, owner, 100, seed, &corrupt, signed_length).is_err());
+                assert_eq!(borsh::to_vec(&row).unwrap(), baseline, "a late bad original EOF commits neither state nor counters");
+                assert!(row.movement_batch_v1(101, target.claim_id, owner, 100, seed, &[], signed_length).is_err());
+                assert!(row.movement_batch_v1(101, target.claim_id, owner, 100, Hash64::default(), &actions, signed_length).is_err());
+                row.movement_batch_v1(101, target.claim_id, owner, 100, seed, &actions, signed_length).unwrap();
+                assert_eq!(row.moves_used, 1 + actions.len() as u64);
+                assert_eq!(row.physical_carriers_used, 2);
+                assert_eq!(row.carrier_bytes_used, 8000 + signed_length);
+                row = borsh::from_slice(&borsh::to_vec(&row).unwrap()).unwrap();
+                assert_eq!(row.certificate().unwrap().is_some(), fault);
+            }
+        }
     }
 }
