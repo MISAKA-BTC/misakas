@@ -196,19 +196,92 @@ test, the real worst cell workspace/public-court/DA envelope, funded collectible
 watcher capital and measured small/large/cap/window profitability. These memory admission
 patches do not supply those economics values.
 
-## Pruned P2P conflict remains concrete
+## Pruned P2P implementation and remaining resource conflict
 
-Actual server `protocol/flows/src/v8/request_pruning_point_snapshots.rs` and requester
-`protocol/flows/src/ibd/flow.rs` share `PALW_PRUNING_STATE_MAX_BYTES = 384 MiB` for the
-whole native PALW carriage plus class declarations. The server materializes the full
-single message and refuses an overfull response. A 256 MiB engine import limit alone
-cannot guarantee that a 100k native registry plus several frozen populations fits this
-transport. The resource drill records whole-carriage bytes precisely to expose this
-conflict; it must not be called a pruned join PASS.
+The actual server and IBD requester negotiate protocol 106 while protocol 105 keeps
+its original whole-message fields. Each new snapshot is immutable and names the same
+pruning point, total length, chunk count and stream root. Every ordered chunk is at
+most 4 MiB and its hash binds all those fields plus its index and length. Duplicate,
+rewound, oversized, wrong-point/root/hash/count chunks, early EOF, trailing bytes and
+unnegotiated modes are refused before native import. Native import independently
+checks the consensus state root under the pruning header; a transport digest does not
+replace that verification or approve a beacon source.
 
-[The existing chunked transport design](pruned-ibd-palw-state-chunked-transport.md)
-requires new protocol messages, fixed pruning-point/root across chunks, spill-file
-back-pressure/streaming decode, resumable authenticated chunks, class declaration
-coverage and actual multi-process reorg/drop/resume/pruned-join tests. It is still a
-release condition. The single-message cap is not raised without resource evidence,
-and no VM/Torrent/Seeder/acquisition consensus gate is restored.
+The new stream uses `format:u16 = 1`, `stateLength:u64`, exactly that many bytes of
+Borsh carriage, then Borsh declarations. The native carriage decoder reads its optional
+tagged tails to EOF, so directly serializing a tuple `(carriage, declarations)` is
+incorrect. An exact `Take` reader isolates that EOF without another whole-state Vec.
+Declaration counts must fit remaining fixed entry headers; each length must fit the
+remaining stream. Unknown and duplicate declarations are discarded directly from the
+reader before allocation. Missing declarations retain native legacy semantics: state
+acquisition succeeds, while a class without its graph remains unservable until its
+valid local declaration is supplied. No acquisition consensus gate is restored.
+
+Two shared node-wide permits cover serving, receiving, legacy materialization and any
+paused receiver. Each session has at most 384 MiB of spill bytes and a 600-second total
+lifetime. Unix spills are unlinked immediately while their private FD stays open;
+Windows uses delete-on-close. Normal errors/cancellation and process death cannot
+leave a named Unix spill behind. A sender serializes directly to a buffered spill;
+receiver hashes and appends chunks before streaming decode. The existing serving
+ledger admits the first attempt floor then charges the whole traversal once, including
+384 MiB (larger than the 48 MiB peer and 256 MiB node windows). Ordered continuation
+chunks consume that prepaid traversal. Another traversal is refused until the window
+rolls. A per-chunk reservation would strand a legal large transfer.
+
+Only one interrupted receiver may be parked on Timeout/ConnectionClosed, retaining
+its original shared permit and deadline. A different peer can reconstruct the exact
+stream, pay its full traversal and resume the next index only when the root matches.
+Changed generations or declaration sets refuse resume and require a fresh bounded
+retry. Invalid input, explicit cancellation, pruning-point change, replacement and
+expiry release only their owned spill. An older expiry timer cannot delete a newer
+receiver. No partially decoded state is installed by this helper.
+
+The nine helper and one maximal-prepay ledger regression candidates cover native
+optional tails/declaration filtering, malformed Borsh lengths and truncated maps/Vecs,
+stream completeness/identity/order, resumed independent sender reconstruction and
+session/generation cleanup. Central compilation/test execution is pending and is not
+reported as PASS. A valid nested-empty-Vec probe demonstrates decoded Borsh allocation
+amplification, so 384 MiB of encoded data and two permits are **not a proven native
+RAM bound**. Snapshot cloning, decoded registry/state and class graphs need measured
+or formally derived separate admission; the current bound is transport/spill/session
+policy only.
+
+The preserved 384 MiB total limit can still conflict with a 100k native registry plus
+several frozen populations. The actual 100k fixture must record the whole carriage,
+CPU/RSS/time, then test accepted transport rather than count a cap refusal as 100k
+completion. Four 100k seals still exhaust the 400k retained-candidate bound. The
+engine releases reservations at a validated terminal outcome that includes licensing;
+public court/liability may still remain. That event is not sufficient authority to
+drop the full population or its draw provenance. Reviewed population sharing/expiry,
+long-running liveness and historical migration remain unresolved.
+
+Actual multiple-process P2P/pruning/drop/reorg/resume/pruned-join evidence is still
+required. Leaf reassembly or block-feed replay does not provide it. The implementation
+follows [the chunked transport design](pruned-ibd-palw-state-chunked-transport.md) without
+raising the total cap or restoring VM/Torrent/Seeder/acquisition consensus gates.
+
+## Dormant room consumer uses the resident pricing envelope
+
+`PalwFoldReadV1::class_capacity_v1` previously used only each shard's summed work
+shares even after segment pricing, while bound-seat pay weights and counted-seat
+locks used `max(sum work, sum resident)` over their assigned masks. This could overstate
+pre-draw class/bond-share room on a resident-heavy shard. The dormant room branch now
+derives the same normalized resident table from the registered program. It uses
+`sum_cell max(work_cell, resident_cell)` per shard as its cost share; the legacy branch
+keeps exactly the work sum. Missing/malformed derivation yields zero future room.
+
+A whole-shard `max(sum work, sum resident)` is insufficient when neighbouring masks
+have different dominant terms. For two cells with work `(450, 50)` and resident
+`(50, 850)`, it reports 900 while their separate masks cost 1300. The cell-wise envelope
+bounds every two-attester class assignment independently of the as-yet-unknown seed:
+`sum_seat max(sum_mask work, sum_mask resident) <= 2 * sum_cell max(work, resident)`.
+It prices future room at the current DAA, while existing claim locks/pay stay pinned
+to immutable acceptance DAA across the fence. Outsider supply and collateral floors
+remain separate existing constraints; the envelope is not an approved measured fee,
+CPU/RAM certificate, profitability result or change to live t12.
+
+New regression candidates check the opposing-mask counterexample, every mask, actual
+assignments across 64 seeds, binding-room reduction, malformed/missing/unnormalized
+cells, unchanged equal tables and the existing core pipeline's actual bound-seat
+prices. The pipeline candidate also crosses the fence between acceptance and binding
+to verify old claims are never repriced. These additions await the central core build.

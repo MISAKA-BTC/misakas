@@ -120,6 +120,29 @@ pub fn palw_tir_shard_price_share_v2(work: &[u16], resident: &[u16], s_p: u16, s
     palw_tir_cells_share_permille_v1(work, s_p, shard, mask).max(palw_tir_cells_share_permille_v1(resident, s_p, shard, mask))
 }
 
+/// The pre-draw room's shard costs under segment pricing. Every cell is checked
+/// by two class seats, but a seat mask may have a different dominant work/resident
+/// term from its neighbours. Thus max(sum work, sum resident) over a whole shard
+/// can undercount sum of seat prices. Sum of cell-wise maxima is a seed-independent
+/// upper bound: sum_seats max(sum_mask work, sum_mask resident) <= 2 * this sum.
+/// This is a structural pricing envelope, not measured CPU/RAM or an approved fee.
+pub fn palw_tir_shard_room_permille_v2(work: &[u16], resident: &[u16], s_l: u16, s_p: u16) -> Result<Vec<u32>, PalwTirShardError> {
+    crate::palw_tir_shard_v1::palw_tir_shard_plan_prelim_v1(s_l, s_p, usize::from(s_l))?;
+    let cells = usize::from(s_l) * usize::from(s_p);
+    if work.len() != cells
+        || resident.len() != cells
+        || work.iter().map(|x| u32::from(*x)).sum::<u32>() != 1_000
+        || resident.iter().map(|x| u32::from(*x)).sum::<u32>() != 1_000
+    {
+        return Err(PalwTirShardError::Program("room tables do not cover the same normalized cells".into()));
+    }
+    Ok(work
+        .chunks_exact(usize::from(s_p))
+        .zip(resident.chunks_exact(usize::from(s_p)))
+        .map(|(work, resident)| work.iter().zip(resident).map(|(w, r)| u32::from((*w).max(*r))).sum())
+        .collect())
+}
+
 /// **Each stored seat's price share**, in stored panel order (`[outsider?] ++ class seats` a shard) — the pay weights a bind past the
 /// fence fixes in `PalwTirShardClaimV1::drawn_permille` (the field the armed record has; only its values change).
 pub fn palw_tir_shard_drawn_price_permille_v2(
@@ -238,5 +261,52 @@ mod tests {
         assert_eq!(palw_tir_shard_price_share_v2(&work, &resident, 2, 0, full), 500);
         assert_eq!(palw_tir_shard_price_share_v2(&work, &resident, 2, 0, PalwSegmentMaskV2::single(0)), 200);
         assert_eq!(palw_tir_shard_price_share_v2(&work, &resident, 2, 1, PalwSegmentMaskV2::single(1)), 350);
+    }
+    #[test]
+    fn room_covers_opposing_mask_prices_and_reduces_the_binding_resident_shard() {
+        let work = [450, 50, 450, 50];
+        let resident = [50, 850, 50, 50];
+        let shares = palw_tir_shard_room_permille_v2(&work, &resident, 2, 2).unwrap();
+        assert_eq!(shares, [1300, 500]);
+        // In shard 0 two masks have opposite dominant terms. Whole-shard max
+        // 900 misses their combined 1300 price, even before double verification.
+        let masks = [PalwSegmentMaskV2::single(0), PalwSegmentMaskV2::single(1)];
+        let masked: u32 = masks.iter().map(|m| palw_tir_shard_price_share_v2(&work, &resident, 2, 0, *m)).sum();
+        assert_eq!(masked, shares[0]);
+        assert!(masked > 900);
+        let old = crate::palw_tir_shard_v1::palw_tir_shard_room_v1(&[8, 8], &[500, 500], 1000, 10, 100);
+        let new = crate::palw_tir_shard_v1::palw_tir_shard_room_v1(&[8, 8], &shares, 1000, 10, 100);
+        assert!(new < old, "work-only room must not over-admit a resident-heavy shard");
+        // Exhaust every mask and actual class assignment for diverse seeds. Each
+        // assignment covers a cell twice, exactly the room's attester multiplier.
+        for n in 0..64 {
+            let seed = Hash64::from_u64_word(n);
+            for shard in 0..2 {
+                let actual: u32 = palw_tir_shard_assignment_v1(&seed, &Hash64::from_u64_word(9), shard, 2)
+                    .iter()
+                    .map(|mask| palw_tir_shard_price_share_v2(&work, &resident, 2, shard, *mask))
+                    .sum();
+                assert!(actual <= 2 * shares[usize::from(shard)]);
+            }
+        }
+        for bits in 0..4 {
+            let mask = PalwSegmentMaskV2(bits);
+            let bound = (0..2).filter(|j| bits & (1 << j) != 0).map(|j| u32::from(work[j].max(resident[j]))).sum::<u32>();
+            assert!(palw_tir_shard_price_share_v2(&work, &resident, 2, 0, mask) <= bound);
+        }
+    }
+    #[test]
+    fn room_tables_refuse_missing_cells_wrong_normalization_and_invalid_plan() {
+        let work = [200, 300, 200, 300];
+        assert!(palw_tir_shard_room_permille_v2(&work, &work[..3], 2, 2).is_err());
+        assert!(palw_tir_shard_room_permille_v2(&work, &[200, 300, 200, 299], 2, 2).is_err());
+        assert!(palw_tir_shard_room_permille_v2(&work, &work, 0, 2).is_err());
+        assert!(palw_tir_shard_room_permille_v2(&work, &work, 2, 0).is_err());
+        assert!(palw_tir_shard_room_permille_v2(&work, &work, u16::MAX, u16::MAX).is_err());
+        assert_eq!(
+            palw_tir_shard_room_permille_v2(&work, &work, 2, 2).unwrap(),
+            [500, 500],
+            "identical work/resident tables preserve the existing room"
+        );
     }
 }

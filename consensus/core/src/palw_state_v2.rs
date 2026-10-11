@@ -18314,16 +18314,30 @@ impl PalwFoldReadV1<'_> {
                     u128::from(self.model_registry_ready_seats(&ready_class, now_daa, fold))
                 })
                 .collect();
-            let permille: Vec<u32> = (0..usize::from(plan.s_l))
-                .map(|shard| {
-                    plan.cell_permille
-                        .iter()
-                        .skip(shard * usize::from(plan.s_p))
-                        .take(usize::from(plan.s_p))
-                        .map(|p| u32::from(*p))
-                        .sum()
-                })
-                .collect();
+            let permille: Vec<u32> = if self.params.tir_shard_segment_active_at(now_daa) {
+                // Future admission room must cover the same resident-priced masks as
+                // bind/pay/locks. Existing claims retain their acceptance-time prices.
+                let Some(tir) = self.state.tir_classes.get(class_id) else { return Some(0) };
+                let Ok(program) = misaka_palw_tir::TirProgramV1::decode_canonical(&tir.program) else { return Some(0) };
+                let Ok(resident) = crate::palw_tir_shard_segment_v2::palw_tir_shard_cell_resident_permille_v2(
+                    &program, tir.facts.max_context, plan.s_l, plan.s_p,
+                ) else { return Some(0) };
+                let Ok(shares) = crate::palw_tir_shard_segment_v2::palw_tir_shard_room_permille_v2(
+                    &plan.cell_permille, &resident, plan.s_l, plan.s_p,
+                ) else { return Some(0) };
+                shares
+            } else {
+                (0..usize::from(plan.s_l))
+                    .map(|shard| {
+                        plan.cell_permille
+                            .iter()
+                            .skip(shard * usize::from(plan.s_p))
+                            .take(usize::from(plan.s_p))
+                            .map(|p| u32::from(*p))
+                            .sum()
+                    })
+                    .collect()
+            };
             let window = (row.profile.verification_window_spans as u64).max(1);
             return Some(crate::palw_tir_shard_v1::palw_tir_shard_room_v1(
                 &ready,
