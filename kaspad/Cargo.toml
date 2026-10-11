@@ -50,6 +50,7 @@ misaka-palw-sdk.workspace = true
 misaka-palw-tir.workspace = true
 misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec", features = ["node"] }
 misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
+misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact", optional = true }
 kaspa-rpc-core.workspace = true
 kaspa-rpc-service.workspace = true
 kaspa-txscript.workspace = true
@@ -91,7 +92,7 @@ serde_with = "3.7.0"
 [features]
 # Library construction boundary used only by the unpublished private integration
 # helper. No public Args flag selects it; ordinary kaspad always uses its presets.
-private-integration-config = ["kaspa-consensus/private-integration-config"]
+private-integration-config = ["kaspa-consensus/private-integration-config", "dep:misaka-palw-tir-artifact"]
 # The EVM lane is part of the node, not a bolt-on (user decision 2026-08-21). testnet-11 and
 # testnet-12 activate the lane at DAA 0, so a binary built without it refuses to start there
 # (`EvmLaneRequiresEvmBuild`) — which turned "forgot the flag" into a fleet-wide operational trap.

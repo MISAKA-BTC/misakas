@@ -151,3 +151,23 @@ inclusion, mature useful work, trained-model provenance and security approval as
 unestablished. The three new SDK controls use a seeded typed code fixture for
 actual signatures and root/file/clock/cost/refutation/statement refusal. Central
 Cargo execution and actual process bootstrap remain separate acceptance evidence.
+# Private bootstrap export boundary (candidate; runtime evidence pending)
+
+The feature-only `misaka-rfc12-private-node` accepts
+`--private-probe-profile=complete-v1 --private-probe-salt=<private salt>
+--private-probe-export-bootstrap=<new owned directory>` together with its normal
+private testnet arguments. It exports an actual PALWTIR1 wide128 seed-37 code
+fixture, raw native tag 61, signed registration envelope 108, and signed artifact
+binding 104. Registration prices come from the exact factory's genesis base
+class, and native admission plus the bounded file-derived complete-check domain
+are checked before signing. The envelope binds the factory's fired fork digest
+at DAA 1 and expires at DAA 32. It is intended for the initial bootstrap, and
+does not authenticate the live registration target after retargeting.
+
+The fresh directory is mode 0700; salt-derived private funding and bond seeds
+are mode 0600, created without replacing existing files, and omitted from the
+public manifest. Ordinary startup, PoW validation, Panel quorum, material windows,
+registration inclusion, and complete-check consensus validation remain in force.
+This export inserts no state, capability, claim, conformance outcome or Final.
+The manifest's inclusion, useful-work, trained-model, 100k and security flags
+remain false until separately supported by real process evidence.

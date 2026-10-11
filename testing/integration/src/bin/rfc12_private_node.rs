@@ -12,7 +12,10 @@ use kaspa_consensus_core::{
 use kaspad_lib::{
     args::Args,
     daemon::Runtime,
-    private_integration::{create_private_integration_core_with_runtime, private_complete_check_params_v1, private_probe_manifest},
+    private_integration::{
+        create_private_integration_core_with_runtime, export_private_complete_bootstrap_v1, private_complete_check_params_v1,
+        private_probe_manifest,
+    },
 };
 
 fn run() -> Result<(), String> {
@@ -21,6 +24,7 @@ fn run() -> Result<(), String> {
     let mut profile = None;
     let mut population_size = None;
     let mut print = false;
+    let mut export_bootstrap = None;
     args.retain(|argument| {
         if let Some(value) = argument.strip_prefix("--private-probe-salt=") {
             salt = Some(value.to_string());
@@ -33,6 +37,9 @@ fn run() -> Result<(), String> {
             false
         } else if argument == "--print-private-probe-profile" {
             print = true;
+            false
+        } else if let Some(value) = argument.strip_prefix("--private-probe-export-bootstrap=") {
+            export_bootstrap = Some(value.to_string());
             false
         } else {
             true
@@ -76,6 +83,14 @@ fn run() -> Result<(), String> {
     config.palw_drill_genesis_salt = Some(salt);
     config.private_population = population;
     let args = Args::parse(args).map_err(|error| error.to_string())?;
+    if let Some(path) = export_bootstrap {
+        if profile != "complete-v1" {
+            return Err("the fixture exporter requires the exact complete-v1 construction profile".into());
+        }
+        let manifest = export_private_complete_bootstrap_v1(&config, std::path::Path::new(&path))?;
+        println!("{}", serde_json::to_string(&manifest).map_err(|error| error.to_string())?);
+        return Ok(());
+    }
     println!("{}", serde_json::to_string(&private_probe_manifest(&config)).map_err(|error| error.to_string())?);
     if print {
         return Ok(());

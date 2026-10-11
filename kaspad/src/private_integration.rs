@@ -27,6 +27,9 @@ use std::{
     sync::Arc,
 };
 
+mod bootstrap;
+pub use bootstrap::export_private_complete_bootstrap_v1;
+
 pub const PRIVATE_PROBE_MARKER_V1: &str = "rfc12-private-probe-v1.json";
 
 /// Exact complete-only private policy for a public registration/bootstrap probe.
