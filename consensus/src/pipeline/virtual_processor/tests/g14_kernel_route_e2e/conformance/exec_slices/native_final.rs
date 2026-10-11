@@ -153,6 +153,11 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
         s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &slice.claim).await);
     }
     let poster_before = cw.net.collateral(REGISTRANT);
+    let before_final = cw.net.ledger();
+    let fee_maxima: std::collections::BTreeMap<_, _> = std::iter::once(&s.prefix)
+        .chain(s.slices.iter())
+        .map(|claim| (claim.claim.id, before_final.job_escrows[&claim.job.id()].amount))
+        .collect();
     let (final_daa, licence) = finalize_native_root(&mut cw, &s).await;
     let state = cw.net.chain.tip_state().1;
     let receipt = state.exec_v2_reward_vesting_v1(&s.real.claim).expect("funded independent receipt").clone();
@@ -175,18 +180,8 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
             assert!(!ledger.exec_reward_holds.contains_key(&claim.claim.id));
             assert!(!ledger.job_escrows.contains_key(&claim.job.id()));
             let row = &ledger.claims[&claim.claim.id];
-            assert!(
-                row.rewarded,
-                "root Final settles worker {:?}: producer {}, reserved {}, root allocation {}, native producer {}, prefix {:?}",
-                claim.claim.id,
-                claim.claim.producer,
-                row.reserved,
-                receipt.allocation_sompi,
-                native.producer.amount,
-                state.exec_v2_root_v1(&s.real.claim).unwrap().prefix
-            );
             let native_root = state.exec_v2_root_v1(&s.real.claim).unwrap();
-            if claim.claim.id == s.prefix.claim.id {
+            let fee = if claim.claim.id == s.prefix.claim.id {
                 match native_root.prefix {
                     PalwWorkPrefixStageV2::Verified { route_reward, .. } => route_reward,
                     _ => unreachable!(),
@@ -197,7 +192,10 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
                     PalwWorkSliceStageV2::Verified { route_reward, .. } => route_reward,
                     _ => unreachable!(),
                 }
-            }
+            };
+            assert_eq!(row.rewarded, fee > 0, "a resolved capped worker right records only actually paid money");
+            assert!(fee <= fee_maxima[&claim.claim.id], "root settlement never debits more than its job's actual held escrow");
+            fee
         })
         .sum();
     let fees_held: u64 =

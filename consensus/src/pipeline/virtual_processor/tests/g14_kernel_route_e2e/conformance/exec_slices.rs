@@ -208,11 +208,16 @@ async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> Re
     // Under the work target a draw costs every class the same work, so a class whose one inference is cheap (this fixture) has a hard
     // ticket: about 2^128 / target ≈ 23M draws expected (two runs took 11.2M and 11.8M, ~5 µs each). The cap makes a miss
     // vanishingly rare (e^-17), not the run short.
-    let won = (0u64..400_000_000).position(|draw| {
+    let mut wins = |draw: u64| {
         attempt.trace_root = Hash64::from_u64_word((nonce << 32) ^ draw ^ 0x7B00_0000_0000_0000);
         attempt.trace_manifest_root = attempt_trace_manifest_root_v1(attempt.trace_root, attempt.trace_chunk_count);
         class_ticket_v3(&attempt, anchor) <= facts.class_target
-    });
+    };
+    // The native-Final fixture has already found this trace-seam candidate on
+    // its deterministic anchor. Re-evaluate the real ticket; changed anchors
+    // fall back to the same bounded search. No eligibility/crypto gate changes.
+    let won = [58_535_663].into_iter().find(|draw| wins(*draw))
+        .or_else(|| (0u64..400_000_000).find(|draw| wins(*draw)));
     eprintln!("[x8-g14] the class lottery: {won:?} draws (target {})", facts.class_target);
     assert!(won.is_some(), "the class lottery is winnable");
     let claim = attempt_id_v2(&attempt);
