@@ -2310,6 +2310,11 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_da_accusation_check_v1_impl(claim, accuser)
     }
 
+    fn palw_staged_owned_progress_v1(&self,key:(kaspa_consensus_core::Hash64,kaspa_consensus_core::palw_state_v2::PalwBondKeyV2))
+        ->Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>,String> {
+        self.virtual_processor.palw_staged_owned_progress_v1_impl(key)
+    }
+
     fn palw_terminal_progress_v1(
         &self,
         key: kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalKeyV1,

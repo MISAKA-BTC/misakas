@@ -1077,6 +1077,12 @@ pub trait ConsensusApi: Send + Sync {
         Default::default()
     }
 
+    /// Bounded read-only progress from one accepted staged court/reservation snapshot.
+    fn palw_staged_owned_progress_v1(&self,_key:(crate::Hash64,crate::palw_state_v2::PalwBondKeyV2))
+        ->Result<Option<crate::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>,String> {
+        Err("staged owned progress reader unavailable".into())
+    }
+
     /// Terminal evidence progress of this verifier's own live reservation at the accepted tip.
     /// Unavailable readers are errors; absent/closed reservations are distinct successful reads.
     fn palw_terminal_progress_v1(

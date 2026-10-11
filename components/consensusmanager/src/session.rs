@@ -257,6 +257,11 @@ impl ConsensusSessionOwned {
         self.consensus.palw_disclosure_duties_v1(mine)
     }
 
+    pub fn palw_staged_owned_progress_v1(&self,key:(kaspa_consensus_core::Hash64,kaspa_consensus_core::palw_state_v2::PalwBondKeyV2))
+        ->Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>,String> {
+        self.consensus.palw_staged_owned_progress_v1(key)
+    }
+
     /// Read accepted terminal progress under the same owned consensus session as filer work.
     pub fn palw_terminal_progress_v1(
         &self,

@@ -5060,6 +5060,17 @@ impl VirtualStateProcessor {
         state.palw_legacy_dispute_view_v1(state_params, &claim)
     }
 
+    pub fn palw_staged_owned_progress_v1_impl(&self,key:(kaspa_consensus_core::Hash64,kaspa_consensus_core::palw_state_v2::PalwBondKeyV2))
+        ->Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>,String> {
+        let params=self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_,state)=self.palw_v2_reader_state(params).map_err(|e|e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        // All clocks and cursors come from this SAME rooted reader snapshot. Do not reacquire
+        // a virtual/coinbase lock for a newer clock that could straddle a concurrent reorg.
+        let now=state.last_point().ok_or("staged snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_public_court_v1.is_some_and(|f|f.is_active(now)) {return Ok(None);}
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_owned_progress_v1(&state,key)
+    }
+
     pub fn palw_terminal_progress_v1_impl(
         &self,
         key: &kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalKeyV1,

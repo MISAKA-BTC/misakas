@@ -155,3 +155,79 @@ pub fn palw_staged_collection_open_v1(
         .staged_claim_contract_v1(&reference.claim)
         .is_some_and(|c| accepting_daa >= c.terms.accepted_daa && accepting_daa < c.terms.collect_until_daa)
 }
+
+/// Read-only accepted snapshot. None owner cursor means this literal live reservation has
+/// not opened its one paid court. No parser checkpoint or prior operand bytes are returned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwStagedOwnedProgressV1 {
+    pub snapshot_block: crate::BlockHash,
+    pub now_daa: u64,
+    pub claim: Hash64,
+    pub reserver: PalwBondKeyV2,
+    pub reserved_daa: u64,
+    pub terms: PalwRenderingClaimTermsV1,
+    pub seed_id: Option<Hash64>,
+    pub cursor: Option<PalwStagedOwnedCursorV1>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwStagedOwnedCursorV1 {
+    Constraint {
+        phase: crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+    },
+    Tokenizer {
+        offset: u64,
+        pending_key: Option<(u64, Hash64)>,
+        key_root: Hash64,
+        key_events: u64,
+        rendering_offset: u32,
+        /// None is incomplete or unauthenticated; Some(false) honest, Some(true) objective fault.
+        completed: Option<bool>,
+    },
+}
+pub fn palw_staged_owned_progress_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: (Hash64, PalwBondKeyV2),
+) -> Result<Option<PalwStagedOwnedProgressV1>, String> {
+    let point = state.last_point().ok_or("staged progress snapshot has no accepted clock")?;
+    let Some(contract) = state.staged_claim_contract_v1(&key.0) else { return Ok(None) };
+    let Some(reservation) = state.legacy_dispute_reservation_v1(&key.0, &key.1) else { return Ok(None) };
+    let (seed_id, cursor) = match state.staged_owned_row_v1(key.0, key.1) {
+        Some(PalwStagedCourtRowV1::Tokenizer(row)) => {
+            row.check()?;
+            if row.reserved_daa != reservation.reserved_daa {
+                return Err("staged progress reservation differs from owned seed".into());
+            }
+            let court = row.court();
+            (
+                Some(row.seed_id()),
+                Some(PalwStagedOwnedCursorV1::Tokenizer {
+                    offset: court.tokenizer_offset(),
+                    pending_key: court.pending_key(),
+                    key_root: court.key_set_root(),
+                    key_events: court.key_events(),
+                    rendering_offset: court.rendering_offset(),
+                    completed: row.certificate().ok().map(|r| r.is_some()),
+                }),
+            )
+        }
+        Some(PalwStagedCourtRowV1::Constraint(row)) => {
+            row.check()?;
+            if row.reserved_daa != reservation.reserved_daa {
+                return Err("staged progress reservation differs from owned seed".into());
+            }
+            (Some(row.seed_id()), Some(PalwStagedOwnedCursorV1::Constraint { phase: row.court().phase() }))
+        }
+        Some(_) => return Err("staged owner key contains a claim contract".into()),
+        None => (None, None),
+    };
+    Ok(Some(PalwStagedOwnedProgressV1 {
+        snapshot_block: point.block,
+        now_daa: point.daa_score,
+        claim: key.0,
+        reserver: key.1,
+        reserved_daa: reservation.reserved_daa,
+        terms: contract.terms,
+        seed_id,
+        cursor,
+    }))
+}

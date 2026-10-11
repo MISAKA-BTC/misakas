@@ -79478,6 +79478,39 @@ mod staged_court_state_tests_v1 {
     use crate::palw_staged_court_state_v1::*;
 
     #[test]
+    fn staged_progress_uses_one_accepted_snapshot_and_never_copies_parser_state() {
+        use crate::palw_tokenizer_owned_court_v1::tests::{admitted_case,complete};
+        let (mut row,raw,table)=admitted_case(true,64);
+        let claim=row.claim;let owner=row.reserver;let seed_id=row.seed_id();
+        let mut state=PalwChainStateV2::genesis();
+        assert!(palw_staged_owned_progress_v1(&state,(claim,owner)).is_err());
+        state.last_point=Some(PalwBlockContextV2 {block:BlockHash::from_u64_word(821),daa_score:100,blue_score:100,subsidy:0});
+        assert_eq!(palw_staged_owned_progress_v1(&state,(claim,owner)).unwrap(),None);
+        let contract=PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms:row.terms,producer:PALW_BOND_KEY_V2_MIN,
+            panel:BTreeSet::from([PALW_BOND_KEY_V2_MIN])});
+        apply_delta_entry(&mut state,&PalwDeltaEntryV2::StagedCourtSeed {key:PalwStagedCourtKeyV1::Claim(claim),old:None,new:Some(contract)},false).unwrap();
+        let mut dispute=crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1 {opened_daa:100,hard_deadline_daa:row.terms.material_until_daa,..Default::default()};
+        dispute.live.insert(owner,crate::palw_legacy_public_filer_v1::PalwDisputeReservationRowV1 {reserved_daa:100,deposit:1,sessions_opened:0});
+        apply_delta_entry(&mut state,&PalwDeltaEntryV2::LegacyDispute {key:claim,old:None,new:Some(dispute)},false).unwrap();
+        let progress=palw_staged_owned_progress_v1(&state,(claim,owner)).unwrap().unwrap();
+        assert_eq!((progress.now_daa,progress.snapshot_block),(100,BlockHash::from_u64_word(821)));
+        assert_eq!(progress.seed_id,None);assert_eq!(progress.cursor,None);
+        let initial=row.clone();complete(&mut row,&raw,&table);
+        apply_delta_entry(&mut state,&PalwDeltaEntryV2::StagedCourtSeed {key:PalwStagedCourtKeyV1::Owner(claim,owner),old:None,
+            new:Some(PalwStagedCourtRowV1::Tokenizer(Box::new(row)))},false).unwrap();
+        let progress=palw_staged_owned_progress_v1(&state,(claim,owner)).unwrap().unwrap();
+        assert_eq!(progress.seed_id,Some(seed_id));
+        assert!(matches!(progress.cursor,Some(PalwStagedOwnedCursorV1::Tokenizer {offset,completed:Some(true),..}) if offset==raw.len() as u64));
+        assert_eq!(palw_staged_owned_progress_v1(&state,(claim,PALW_BOND_KEY_V2_MIN)).unwrap(),None);
+        let rooted=state.state_root();let _=palw_staged_owned_progress_v1(&state,(claim,owner)).unwrap();assert_eq!(state.state_root(),rooted);
+        // A rewind exposes the corresponding earlier cursor, not the newer cached completion.
+        let current=state.staged_courts[&PalwStagedCourtKeyV1::Owner(claim,owner)].clone();
+        apply_delta_entry(&mut state,&PalwDeltaEntryV2::StagedCourtSeed {key:PalwStagedCourtKeyV1::Owner(claim,owner),old:Some(current),
+            new:Some(PalwStagedCourtRowV1::Tokenizer(Box::new(initial)))},false).unwrap();
+        assert!(matches!(palw_staged_owned_progress_v1(&state,(claim,owner)).unwrap().unwrap().cursor,
+            Some(PalwStagedOwnedCursorV1::Tokenizer {offset:0,completed:None,..})));
+    }
+    #[test]
     fn paid_claim_work_extension_holds_every_bound_seat_and_restores_all_indexes() {
         let config=crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
         let small=crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(1,0,config.prices).unwrap()
