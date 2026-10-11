@@ -241,6 +241,10 @@ impl RecoveryRun {
         }
     }
 
+    pub(super) fn verifier_paused(&self) -> bool {
+        self.mode == RecoveryMode::PrunedRound && self.paused_input && self.pruned_round.is_none()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn tick(
         &mut self,
@@ -300,7 +304,10 @@ impl RecoveryRun {
             self.producer_restarted = true;
             eprintln!("[service-recovery] producer restarted from accepted partial manifest at DAA {}", chain.daa());
         }
-        if self.mode == RecoveryMode::PrunedRound && self.paused_input && self.pruned_round.is_none() {
+        if self.verifier_paused()
+            && view.unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk: 0 }))
+            && !view.sessions.iter().any(|(bond, _)| *bond == self.verifier_bond)
+        {
             let unit = PalwLegacyHeldUnitV2::PromptIds { chunk: 0 };
             let key = PalwDaUnitV1::LegacyHeldV2(unit);
             // Native accepted extraction, not mempool presence or the retained producer file.

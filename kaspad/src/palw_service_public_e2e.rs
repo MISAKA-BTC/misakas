@@ -1499,7 +1499,11 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     let mut bootstrap_tiles_submitted = BTreeSet::new();
     let mut prefix_tiles_submitted = BTreeSet::new();
     loop {
-        assert!(!running.task.as_ref().unwrap().is_finished(), "production worker unexpectedly stopped");
+        assert!(
+            running.task.as_ref().is_some_and(|task| !task.is_finished())
+                || (running.task.is_none() && recovery.as_ref().is_some_and(|r| r.verifier_paused())),
+            "production worker unexpectedly stopped"
+        );
         assert!(std::time::Instant::now() < deadline, "service made no objective progress: {:?}", chain.view(claim));
         let (pending, _) = pool.clone().get_all_transactions(TransactionQuery::TransactionsOnly).await;
         if let Some(recovery) = recovery.as_mut() {
