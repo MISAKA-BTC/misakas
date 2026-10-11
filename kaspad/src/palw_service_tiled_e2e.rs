@@ -200,6 +200,7 @@ impl TiledFixture {
                 tokenizer_id: self.canonical.tokenizer_id,
                 cu_ruleset_id: self.canonical.cu_ruleset_id,
                 token_table_root: self.table.root(),
+                rendering_rule: Some(kaspa_consensus_core::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1),
             };
             let message = palw_class_semantics_message_v1(chain.network_domain, &declaration);
             let object = PalwConsensusObjectV2::ClassSemanticsDeclaredV1 {

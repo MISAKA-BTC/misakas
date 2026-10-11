@@ -506,6 +506,7 @@ pub struct VirtualStateProcessor {
     pub(super) palw_model_lines: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_model_immutable_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_class_semantics_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_court_commitment_scope_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0095 §4.11 as corrected: the membership's own fence.
     pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0114: `Params::palw_model_leg_v2_fence` — the five-percent owner leg's height.
@@ -1301,6 +1302,7 @@ impl VirtualStateProcessor {
             palw_model_lines: params.palw_model_lines_fence(),
             palw_model_immutable_v1: params.palw_model_immutable_v1_fence(),
             palw_class_semantics_v1: params.palw_class_semantics_v1_fence(),
+            palw_court_commitment_scope_v1: params.palw_court_commitment_scope_v1_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_leg_v2: params.palw_model_leg_v2_fence(),
             palw_model_seed_v2: params.palw_model_seed_v2_fence(),
@@ -16229,7 +16231,7 @@ impl VirtualStateProcessor {
                     .palw_provider_court_at(daa_score)
                     .then(|| self.palw_provider_court_v1.map(|f| f.daa_score()))
                     .flatten(),
-                commitment_scope: self.palw_court_commitment_scope_v1_fence()
+                commitment_scope: self.palw_court_commitment_scope_v1
                     .filter(|at| at.is_active(daa_score)).map(|at| at.daa_score()),
                 // G14R round 3: M*-49 / O2's dormant fence (refused when armed; a test arms it through the Config seam).
                 verifier_pay: self
