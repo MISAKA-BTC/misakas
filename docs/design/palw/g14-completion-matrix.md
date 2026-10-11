@@ -573,7 +573,7 @@ Panel-independent beacon — codex's lane); that is why those families are V-nod
 | 〃 | withheld `Respond` (producer silent) | **V-node(harness)** | `Done(Defaulted)` at the counted deadline: `Unavailable { producer_defaulted }`, producer charged, demand bonds returned, never a conviction | `real_scale::g14k_service_core::g14k_the_service_core_takes_a_withheld_segmented_answer_to_the_da_default` |
 | 〃 | the service's own block walk (`walk_accepted_lifecycle_objects_v1` → reassembly) | implemented; **not executed** at V-node(svc) (no v4 class on kaspad's network) | | |
 | F4 v5 encoders / heads | — | same code path as F3 (`kernel_check_segmented_v1`); **not run** here | | |
-| F6 typed roots — memory | step lie pre-Final (pre-state from the chain's carried post-state) and post-Final (line rolls back); honest claim left alone | **V-node(harness)** | see the test result below | `r4x_typed_roots_e2e::g14k::g14k_the_service_core_convicts_memory_step_lies_pre_and_post_final_and_leaves_an_honest_claim_alone` |
+| F6 typed roots — memory | step lie pre-Final (pre-state from the chain's carried post-state) and post-Final (line rolls back); honest claim left alone | **V-node(harness)** | both lies convicted (the post-Final one rolls the line back to its head); the honest claim: nothing sent | `r4x_typed_roots_e2e::g14k::g14k_the_service_core_convicts_memory_step_lies_pre_and_post_final_and_leaves_an_honest_claim_alone` |
 | F6 retrieval / composite, F2 pipelines | — | **not checked by the service** (more than one model, or a snapshot copy); reported once per claim, never filed | | |
 
 **Tests and results (2026-10-11; `buildslot.sh cargo … --offline`, line-tables profile; test binaries run directly).**
@@ -584,7 +584,10 @@ Panel-independent beacon — codex's lane); that is why those families are V-nod
   seal at DAA 50, conviction at 56 after the restart). An earlier run of the same code FAILED one assertion of the test itself (it
   counted the poster's escrow payment of the honest twin's Final reward as a seat charge); the assertion was corrected, not the service.
 - `kaspa-consensus --lib g14k_ g14r_ t12_a2u --skip socket`: **17 PASS** (g14k service core 2, G14-R 12 — the planner now delegates —,
-  A2U 3). 
+  A2U 3).
+- `kaspa-consensus --lib r4x_ g14k` (after the typed-root addition): **14 PASS, 1 FAIL** — the new typed test and the two segmented
+  ones PASS, R4X/G14C 11 PASS; the FAIL is the known `r4x_weights_only_spec_is_byte_for_byte_the_legacy_registration_and_the_unarmed_route_is_unchanged`
+  (recorded failing by G14-V in §2e.2; this lane does not touch the gate it trips on).
 - `kaspad --lib` without the two service-e2e modules (`palw_service_public_e2e`, `palw_service_violations_e2e`, slow and untouched): **601 PASS, 3 FAIL**, the three in files this lane did not touch (pre-existing at the base, not re-run there): `palw_backends::…class_resolution_is_not_reachable_from_the_block_processing_path` (consensus/Cargo.toml already names `misaka-palw-sdk`), `palw_operator_da::…the_tick_wires_the_lane_before_the_carriers_and_behind_no_flag` (its source-text needle no longer matches the formatted line), `workspace_default_members::…` (`misaka-palw-panel` not in the default members).
 
 **Open (honest).**
