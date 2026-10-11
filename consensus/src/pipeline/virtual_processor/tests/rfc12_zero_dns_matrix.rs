@@ -3221,6 +3221,7 @@ async fn rfc12_durable_import_sessions_serialize_streams_and_close_without_legac
     is_refused(rig.api().append_imported_pruning_point_utxos(&original[..1], &mut MuHash::new()));
     is_refused(rig.api().clear_pruning_utxo_set());
     is_refused(rig.api().set_pruning_utxoset_stable_flag(true));
+    is_refused(rig.api().set_pruning_utxoset_stable_flag(false));
     assert_eq!(sorted_process_utxos(rig.api()), before, "none of the stale public calls moved virtual money");
     assert!(!rig.api().is_pruning_utxoset_stable());
     rig.api().clear_pruning_utxo_set_for_session(current).unwrap();
@@ -3240,4 +3241,21 @@ async fn rfc12_durable_import_sessions_serialize_streams_and_close_without_legac
     is_refused(rig.api().clear_pruning_utxo_set_for_session(current));
     is_refused(rig.api().complete_pruning_point_import_for_session(current));
     is_refused(rig.api().set_pruning_utxoset_stable_flag(true));
+    is_refused(rig.api().set_pruning_utxoset_stable_flag(false));
+
+    // A public authorized-target reset may name the SAME point. Its virtual
+    // replacement still invalidates an earlier finalized stream's authority.
+    let interrupted = rig.api().begin_pruning_point_import(point).unwrap();
+    rig.api().clear_pruning_utxo_set_for_session(interrupted).unwrap();
+    let mut hash = MuHash::new();
+    rig.api().append_imported_pruning_point_utxos_for_session(interrupted, &original, &mut hash).unwrap();
+    rig.api().import_pruning_point_utxo_set_for_session(interrupted, hash).unwrap();
+    assert!(rig.api().pruning_import_session().unwrap().utxos_imported);
+    rig.api().consensus_clone().intrusive_pruning_point_store_writes(point, point, std::collections::VecDeque::new()).unwrap();
+    let reset = rig.api().pruning_import_session().unwrap();
+    assert!(reset.epoch > interrupted.epoch);
+    assert!(reset.active.is_none() && !reset.utxos_imported && !reset.utxos_started);
+    is_refused(rig.api().complete_pruning_point_import_for_session(interrupted));
+    assert!(!rig.api().is_pruning_utxoset_stable());
+    assert_eq!(sorted_process_utxos(rig.api()), before, "authority reset does not manufacture or erase existing money");
 }

@@ -895,6 +895,21 @@ impl Consensus {
         syncer_sink: BlockHash,
         pruning_points_to_add: VecDeque<BlockHash>,
     ) -> ConsensusResult<()> {
+        // Resetting virtual, including at the SAME point, invalidates a prior
+        // stream's completion. Serialize it with begin and every import mutation.
+        let _import_mutation = self.virtual_processor.pruning_import_session_lock.lock();
+        // All fallible traversal/session reads precede writers that stage caches.
+        let mut anticone = self.services.dag_traversal_manager.anticone(new_pruning_point, [syncer_sink].into_iter(), None)?;
+        anticone.push(new_pruning_point);
+        let mut import = self.pruning_meta_stores.read().import_session()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("reading pruning import authority: {e}")))?;
+        if import.epoch > 0 {
+            import.epoch = import.epoch.checked_add(1)
+                .ok_or_else(|| ConsensusError::General("pruning import epoch exhausted"))?;
+        }
+        import.active = None;
+        import.utxos_started = false;
+        import.utxos_imported = false;
         let mut batch = WriteBatch::default();
         let mut pruning_point_write = self.pruning_point_store.write();
         let old_pp_index = pruning_point_write.pruning_point_index().unwrap();
@@ -928,12 +943,13 @@ impl Consensus {
         // Update selected_chain
         self.selected_chain_store.write().init_with_pruning_point(&mut batch, new_pruning_point).unwrap();
         // It is important to set this flag to false together with writing the batch, in case the node crashes suddenly before syncing of new utxo starts
-        self.pruning_meta_stores.write().set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
-        // Store the currently bodyless anticone from the POV of the syncer, for trusted body validation at a later stage.
-        let mut anticone = self.services.dag_traversal_manager.anticone(new_pruning_point, [syncer_sink].into_iter(), None)?;
-        // Add the pruning point itself which is also missing a body
-        anticone.push(new_pruning_point);
-        self.pruning_meta_stores.write().set_body_missing_anticone(&mut batch, anticone).unwrap();
+        {
+            let mut meta = self.pruning_meta_stores.write();
+            meta.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
+            meta.set_import_session(&mut batch, &import).unwrap();
+            // Store the currently bodyless anticone for trusted validation.
+            meta.set_body_missing_anticone(&mut batch, anticone).unwrap();
+        }
         self.db.write(batch).unwrap();
         drop(pruning_point_write);
         Ok(())
@@ -3689,21 +3705,13 @@ impl ConsensusApi for Consensus {
     }
 
     fn set_pruning_utxoset_stable_flag(&self, val: bool) -> PruningImportResult<()> {
-        if val {
-            return self.virtual_processor.with_pruning_import_session(None, |_| {
-                let mut meta = self.pruning_meta_stores.write();
-                let mut batch = rocksdb::WriteBatch::default();
-                meta.set_pruning_utxoset_stable_flag(&mut batch, true).unwrap();
-                self.db.write(batch).unwrap();
-                Ok(())
-            });
-        }
-        let mut pruning_meta_write = self.pruning_meta_stores.write();
-        let mut batch = rocksdb::WriteBatch::default();
-
-        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
-        self.db.write(batch).unwrap();
-        Ok(())
+        self.virtual_processor.with_pruning_import_session(None, |_| {
+            let mut meta = self.pruning_meta_stores.write();
+            let mut batch = rocksdb::WriteBatch::default();
+            meta.set_pruning_utxoset_stable_flag(&mut batch, val).unwrap();
+            self.db.write(batch).unwrap();
+            Ok(())
+        })
     }
 
     fn is_pruning_utxoset_stable(&self) -> bool {
