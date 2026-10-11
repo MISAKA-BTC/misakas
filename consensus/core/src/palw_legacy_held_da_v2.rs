@@ -196,9 +196,13 @@ pub enum PalwLegacyHeldAnswerV2 {
     FpJob(Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>),
 }
 
-/// The descriptor alone must fit the existing single-carrier court, beside its binding.
-/// Larger job tails require a separate bounded multipart acquisition protocol before activation.
-pub const PALW_LEGACY_FP_JOB_MAX_BYTES_V2: u64 = 64 * 1024;
+/// Every shipped preset bounds each ordinary non-coinbase transaction's estimated bytes by
+/// block mass / TRANSIENT_BYTE_TO_MASS_FACTOR. The Borsh job is inside its payload and therefore
+/// smaller still. This conservative descriptor ceiling covers those ordinary admissions, even
+/// when a 64 KiB constraint plus the job header exceeds the former 64 KiB retrieval ceiling.
+/// The complete answer additionally carries a binding and signature and may require multipart transport.
+pub const PALW_LEGACY_FP_JOB_MAX_BYTES_V2: u64 =
+    crate::config::params::TESTNET_PARAMS.max_block_mass / crate::constants::TRANSIENT_BYTE_TO_MASS_FACTOR;
 
 /// Authenticate a job preimage against a binding already pinned to the claim. The context's
 /// executed count is authenticated by the recorded FP pin at the caller, not invented here.
@@ -209,7 +213,7 @@ pub fn palw_legacy_fp_job_check_v2(
     use crate::palw_fp_execution_v3::palw_fp_execution_seed_v3;
     use crate::palw_freeprompt_v3::fp_job_id_v3;
     let ctx = &binding.job_context;
-    if borsh::to_vec(job).map_or(true, |b| b.len() as u64 > PALW_LEGACY_FP_JOB_MAX_BYTES_V2)
+    if borsh::object_length(job).map_or(true, |b| b as u64 > PALW_LEGACY_FP_JOB_MAX_BYTES_V2)
         || fp_job_id_v3(job) != ctx.job_id
         || palw_fp_execution_seed_v3(job) != ctx.execution_seed
         || job.tokenizer_id != ctx.tokenizer_id
@@ -1120,6 +1124,55 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_valid_near_ceiling_constraint_job_is_publicly_retrievable_beyond_the_old_64k_limit() {
+        use crate::palw_decode_constraint_v1::*;
+        use crate::palw_fp_constraint_job_v1::{PALW_FP_CONSTRAINT_VERSION, PalwFpConstraintTailV1};
+        use crate::palw_freeprompt_v3::*;
+        let mut binding = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, None).binding;
+        let node = PalwConstraintNodeV1 {
+            accepting: true,
+            edges: (0u8..128).map(|lo| PalwConstraintEdgeV1 { lo, hi: lo, action: PalwConstraintActionV1::Goto(0) }).collect(),
+        };
+        let constraint = PalwDecodeConstraintV1 {
+            version: PALW_DECODE_CONSTRAINT_VERSION_V1, compiler_id: h(910), start_frame: 0,
+            frames: vec![PalwConstraintFrameV1 { start: 0, nodes: vec![node; 100] }],
+        };
+        let bytes = constraint.to_bytes();
+        assert!(bytes.len() > 63_000 && bytes.len() <= PALW_CONSTRAINT_MAX_BYTES_V1);
+        PalwDecodeConstraintV1::from_bytes(&bytes).expect("canonical, well-formed constraint inside the actual admission ceiling");
+        let ctx = &binding.job_context;
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_CONSTRAINT_VERSION, network_domain: h(900), class_id: binding.shape_profile.shape_profile_id(),
+            executor_bond: crate::tx::TransactionOutpoint::new(h(901), 0), executor_pubkey: vec![7; 2592],
+            operator_id: h(902), anchor_block: h(903), anchor_daa: 10, job_nonce: [4; 32], tokenizer_id: ctx.tokenizer_id,
+            prompt_token_ids_hash: ctx.prompt_token_ids_hash, prompt_tokens: ctx.declared_prefill_tokens,
+            decode_token_limit: ctx.exact_decode_tokens, max_context_tokens: ctx.max_context_tokens,
+            privacy_mode: PALW_FP_PRIVACY_PANEL_DA, prompt_mode: PALW_FP_PROMPT_MODE_USER, sampling_seed: [0;32],
+            temperature_q: 0, decode: None,
+            tail: Some(PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 { constraint: bytes, table_root: h(911) })),
+        };
+        let length = borsh::object_length(&job).unwrap() as u64;
+        assert!(length > 64 * 1024 && length < PALW_LEGACY_FP_JOB_MAX_BYTES_V2);
+        assert_eq!(PALW_LEGACY_FP_JOB_MAX_BYTES_V2, 125_000);
+        for params in [&crate::config::params::MAINNET_PARAMS, &crate::config::params::TESTNET_PARAMS,
+            &crate::config::params::TESTNET11_PARAMS, &crate::config::params::SIMNET_PARAMS, &crate::config::params::DEVNET_PARAMS] {
+            assert!(params.max_block_mass / crate::constants::TRANSIENT_BYTE_TO_MASS_FACTOR <= PALW_LEGACY_FP_JOB_MAX_BYTES_V2);
+        }
+        binding.job_context.job_id = fp_job_id_v3(&job);
+        binding.job_context.execution_seed = crate::palw_fp_execution_v3::palw_fp_execution_seed_v3(&job);
+        binding.committed_execution_root = crate::palw_step_leg::binding_commitment_root_v1(&binding);
+        palw_legacy_fp_job_check_v2(&binding, &job).unwrap();
+        let mut changed = job.clone();
+        let Some(PalwFpJobTailV1::Constraint(tail)) = changed.tail.as_mut() else { unreachable!() };
+        tail.table_root = h(912);
+        assert!(palw_legacy_fp_job_check_v2(&binding, &changed).is_err(), "a larger descriptor still authenticates every byte");
+        let Some(PalwFpJobTailV1::Constraint(tail)) = changed.tail.as_mut() else { unreachable!() };
+        tail.constraint.resize(PALW_LEGACY_FP_JOB_MAX_BYTES_V2 as usize, 0);
+        assert!(borsh::object_length(&changed).unwrap() as u64 > PALW_LEGACY_FP_JOB_MAX_BYTES_V2);
+        assert!(palw_legacy_fp_job_check_v2(&binding, &changed).is_err());
     }
 
     /// Input proofs use global counts/indices, including the final ragged subtree; no execution or model oracle is used.

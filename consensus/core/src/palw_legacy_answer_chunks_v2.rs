@@ -10,12 +10,59 @@ pub const PALW_LEGACY_ANSWER_CHUNK_TAG_V2: u8 = 161;
 pub const PALW_CARRIAGE_LEGACY_ANSWERS_TAIL_V2: u8 = 0xF1;
 pub const PALW_LEGACY_ANSWER_CHUNK_BYTES_V2: u32 = 90_000;
 pub const PALW_LEGACY_ANSWER_MAX_CHUNKS_V2: u8 = 32;
+pub const PALW_LEGACY_ANSWER_MAX_BYTES_V2: u64 = PALW_LEGACY_ANSWER_CHUNK_BYTES_V2 as u64 * PALW_LEGACY_ANSWER_MAX_CHUNKS_V2 as u64;
 pub const PALW_LEGACY_ANSWER_DECLARE_CONTEXT_V2: &[u8] = b"misaka-palw/legacy-held-da/v2/declare/mldsa87/v1";
 pub const DECLARE_DOMAIN: &[u8] = b"misaka-palw/legacy-held-da/v2/declare-message";
 pub const CHUNK_DOMAIN: &[u8] = b"misaka-palw/legacy-held-da/v2/answer-chunk";
 pub const ANSWER_DOMAIN: &[u8] = b"misaka-palw/legacy-held-da/v2/assembled-answer";
 
 pub type PalwLegacyAnswerKeyV2 = (Hash64, PalwLegacyHeldUnitV2, PalwBondKeyV2);
+
+/// Worst signed response to an input/job demand, including the binding, owner and original
+/// MLDSA signature. Count the header without allocating a serialized copy of the binding.
+pub fn palw_legacy_input_answer_bound_v2(
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    unit: &PalwLegacyHeldUnitV2,
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<u64, String> {
+    let body = match *unit {
+        PalwLegacyHeldUnitV2::PromptIds { chunk } => {
+            crate::palw_legacy_held_da_v2::palw_legacy_prompt_answer_bound_v2(binding, chunk, form).map_err(|e| e.to_string())?
+        }
+        PalwLegacyHeldUnitV2::FpJob => crate::palw_legacy_held_da_v2::PALW_LEGACY_FP_JOB_MAX_BYTES_V2 + 1,
+        _ => return Err("this response bound is for input/job demands".into()),
+    };
+    let owner = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::default(), 0));
+    let header =
+        borsh::object_length(&(2u16, Hash64::default(), unit, binding, owner, Vec::<u8>::new())).map_err(|e| e.to_string())? as u64;
+    Ok(header.saturating_add(body).saturating_add(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64))
+}
+
+/// Opening a session must leave room for its worst admitted response. The bound is not a
+/// per-claim promise of network inclusion; it uses the protocol's existing carrier margin.
+pub fn palw_legacy_input_answer_transport_check_v2(
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    unit: &PalwLegacyHeldUnitV2,
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    court_maximum: u64,
+    disclose_window: u64,
+) -> Result<u64, String> {
+    let bound = palw_legacy_input_answer_bound_v2(binding, unit, form)?;
+    if bound > court_maximum.min(PALW_LEGACY_ANSWER_MAX_BYTES_V2) {
+        return Err("the complete signed input/job response exceeds the court/multipart ceiling".into());
+    }
+    // The direct object has one enum tag beyond the signed answer envelope. Larger answers
+    // require one declaration carrier followed by the bounded number of 90,000-byte parts.
+    let carriers = if bound.saturating_add(1) <= crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64 {
+        1
+    } else {
+        1 + bound.div_ceil(u64::from(PALW_LEGACY_ANSWER_CHUNK_BYTES_V2))
+    };
+    if crate::palw_state_v2::PALW_COURT_CLOSE_INCLUSION_MARGIN.saturating_mul(carriers) >= disclose_window {
+        return Err("the worst signed input/job response cannot fit the existing DA window".into());
+    }
+    Ok(bound)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwLegacyAnswerDeclarationV2 {
@@ -254,6 +301,39 @@ mod tests {
             discloser: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(101), 0)),
             signature: vec![8; 4627],
         }
+    }
+
+    #[test]
+    fn input_and_job_admission_count_the_signed_envelope_and_every_carrier_in_the_existing_window() {
+        use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 as F;
+        let mut a = answer();
+        // Held v4 profiles force Merkle input even on a Flat network. Use the regular profile
+        // for this transport-only Flat size fixture; production continues to obey the class form.
+        a.binding.shape_profile =
+            crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap();
+        a.binding.state_chunk_map_id = a.binding.shape_profile.state_chunk_map_id;
+        a.binding.job_context.shape_profile_id = a.binding.shape_profile.shape_profile_id();
+        a.binding.job_context.declared_prefill_tokens = 30_000;
+        a.binding.job_context.max_context_tokens = 30_001;
+        let bound = palw_legacy_input_answer_bound_v2(&a.binding, &a.unit, F::Flat).unwrap();
+        assert!(borsh::object_length(&a).unwrap() as u64 <= bound && bound > 100_000);
+        assert_eq!(palw_legacy_input_answer_transport_check_v2(&a.binding, &a.unit, F::Flat, bound, 20).unwrap(), bound);
+        assert!(palw_legacy_input_answer_transport_check_v2(&a.binding, &a.unit, F::Flat, bound - 1, 20).is_err());
+        // Two parts plus the manifest need three inclusion margins, strictly inside the window.
+        assert!(palw_legacy_input_answer_transport_check_v2(&a.binding, &a.unit, F::Flat, bound, 12).is_err());
+        assert!(palw_legacy_input_answer_transport_check_v2(&a.binding, &a.unit, F::Flat, bound, 13).is_ok());
+        let job_bound = palw_legacy_input_answer_bound_v2(&a.binding, &PalwLegacyHeldUnitV2::FpJob, F::Flat).unwrap();
+        assert!(job_bound > crate::palw_legacy_held_da_v2::PALW_LEGACY_FP_JOB_MAX_BYTES_V2);
+        assert!(
+            palw_legacy_input_answer_transport_check_v2(&a.binding, &PalwLegacyHeldUnitV2::FpJob, F::Flat, job_bound - 1, 20).is_err()
+        );
+        assert!(palw_legacy_input_answer_transport_check_v2(&a.binding, &PalwLegacyHeldUnitV2::FpJob, F::Flat, job_bound, 20).is_ok());
+        a.binding.job_context.declared_prefill_tokens = 2_000_000;
+        a.binding.job_context.max_context_tokens = 2_000_001;
+        assert!(
+            palw_legacy_input_answer_transport_check_v2(&a.binding, &a.unit, F::Flat, u64::MAX, u64::MAX).is_err(),
+            "the existing 32-part transport does not prove full 2M Flat coverage"
+        );
     }
 
     #[test]

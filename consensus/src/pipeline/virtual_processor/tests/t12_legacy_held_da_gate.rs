@@ -85,6 +85,8 @@ async fn t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their
         }
         if armed {
             params.palw_legacy_held_da_v2 = Some(ForkActivation::new(0));
+            params.palw_legacy_public_filer_v1 = Some(ForkActivation::new(0));
+            params.sync_palw_legacy_public_filer_v1();
             assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fence; only this harness bypasses it");
         }
         params.skip_proof_of_work = true;
@@ -169,6 +171,22 @@ async fn t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their
             let message = palw_legacy_held_demand_message_v2(domain.as_byte_slice(), &demand);
             demand.signature = signer(2)(message.as_byte_slice(), PALW_LEGACY_HELD_DEMAND_MLDSA87_CONTEXT_V2);
             Obj::LegacyHeldDemandedV2 { demand }
+        };
+        let reacquire = |tokens: u32, unit: PalwLegacyHeldUnitV2| {
+            use kaspa_consensus_core::palw_legacy_public_filer_v1::*;
+            let mut binding = binding.clone();
+            binding.job_context.declared_prefill_tokens = tokens;
+            let request = PalwDisputeReacquireV1 {
+                version: PALW_DISPUTE_RESERVATION_VERSION_V1,
+                claim,
+                reserver: chain.bonds[2],
+                reserved_daa: point.daa_score,
+                session_number: 1,
+                valid_until_daa: point.daa_score + 500,
+                unit: PalwDaUnitV1::LegacyHeldV2(unit),
+                binding: Some(binding),
+            };
+            palw_dispute_reacquire_object_v1(domain, request, |m| signer(2)(m, PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1))
         };
         let Obj::LegacyHeldAnsweredV2 { answer: mut input_answer } = answer(claim, 3, 3) else { unreachable!() };
         input_answer.unit = PalwLegacyHeldUnitV2::PromptIds { chunk: 0 };
@@ -276,15 +294,24 @@ async fn t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their
             }
             assert!(gate(&invalid).is_err(), "multipart declaration field/signature {field} is authenticated");
         }
+        gate(&reacquire(4, PalwLegacyHeldUnitV2::FpJob)).expect("job reacquisition uses the complete signed multipart bound");
         if !merkle {
-            for tokens in [100_000, u32::MAX] {
+            for tokens in [30_000, 100_000] {
+                gate(&input_demand(tokens)).expect("a signed Flat response can span multiple session-owned carriers");
+                gate(&reacquire(tokens, PalwLegacyHeldUnitV2::PromptIds { chunk: 0 }))
+                    .expect("reacquisition shares the same response bound");
+            }
+            for tokens in [1_000_000, u32::MAX] {
+                assert!(gate(&input_demand(tokens)).unwrap_err().contains("court/multipart ceiling"));
                 assert!(
-                    gate(&input_demand(tokens)).unwrap_err().contains("input response and binding cannot fit"),
-                    "a Flat unit beyond the single-carrier or court ceiling is refused before opening a DA session"
+                    gate(&reacquire(tokens, PalwLegacyHeldUnitV2::PromptIds { chunk: 0 }))
+                        .unwrap_err()
+                        .contains("court/multipart ceiling")
                 );
             }
         } else {
             gate(&input_demand(100_000)).expect("Merkle answers stay bounded regardless of the total input count");
+            gate(&reacquire(100_000, PalwLegacyHeldUnitV2::PromptIds { chunk: 0 })).expect("bounded Merkle reacquisition");
         }
         let other = Hash64::from_bytes([0x5D; 64]);
         let tamper = |object: &Obj, f: &dyn Fn(&mut Obj)| {

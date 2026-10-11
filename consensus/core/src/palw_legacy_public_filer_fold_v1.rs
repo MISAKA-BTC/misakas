@@ -520,6 +520,15 @@ pub(super) fn apply_dispute_reacquired_v1(
             if let Some(why) = builder.da_binding_answers_another_job_v1(now, &claim_id, binding) {
                 return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
             }
+            if matches!(unit, crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }
+                | crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob)
+            {
+                crate::palw_legacy_answer_chunks_v2::palw_legacy_input_answer_transport_check_v2(
+                    binding, unit, builder.extras.prompt_ids_form_v1(),
+                    crate::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2,
+                    palw_da_disclose_window_daa_v1(builder.params),
+                ).map_err(refused)?;
+            }
             None
         }
         _ => return Err(refused("this unit has no reacquisition route, or its binding form is wrong")),

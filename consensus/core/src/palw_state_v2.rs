@@ -31375,6 +31375,15 @@ fn open_da_session_legacy_held_v2(
     if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &demand.binding) {
         return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
     }
+    if matches!(demand.unit, crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }
+        | crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob)
+    {
+        crate::palw_legacy_answer_chunks_v2::palw_legacy_input_answer_transport_check_v2(
+            &demand.binding, &demand.unit, builder.extras.prompt_ids_form_v1(),
+            crate::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2,
+            palw_da_disclose_window_daa_v1(builder.params),
+        ).map_err(refused)?;
+    }
     open_da_session_rcore_v1(builder, ctx, claim_id, demand.accuser, crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(demand.unit), None)
 }
 
