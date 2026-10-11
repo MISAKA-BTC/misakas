@@ -627,6 +627,15 @@ async fn fresh_public_bond_service_registered_tiled_constraint_withheld_selected
     fresh_public_service(PublicCase::TiledConstraintWithheld).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_bond_service_registered_prefix_initial_after_pruned_import() {
+    fresh_public_service(PublicCase::TiledPrefixInitial).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_bond_service_registered_prefix_inherited_after_pruned_import() {
+    fresh_public_service(PublicCase::TiledPrefixInherited).await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublicCase {
     Withholding,
@@ -652,6 +661,8 @@ enum PublicCase {
     TiledConstraintStop,
     TiledConstraintBeaten,
     TiledConstraintWithheld,
+    TiledPrefixInitial,
+    TiledPrefixInherited,
 }
 
 impl PublicCase {
@@ -714,14 +725,17 @@ impl PublicCase {
             _ => None,
         }
     }
+    fn prefix_fault(self) -> Option<u8> {
+        match self {Self::TiledPrefixInitial=>Some(5),Self::TiledPrefixInherited=>Some(6),_=>None}
+    }
     fn constraint(self) -> bool {
         self.large_constraint() || self.constraint_fault().is_some()
     }
     fn exact_fault(self) -> bool {
-        self.identity_fault() || (self.constraint_fault().is_some() && !self.da_default())
+        self.identity_fault() || self.prefix_fault().is_some() || (self.constraint_fault().is_some() && !self.da_default())
     }
     fn answers_input(self) -> bool {
-        self.reacquire_honest() || self.constraint_fault().is_some()
+        self.reacquire_honest() || self.constraint_fault().is_some() || self.prefix_fault().is_some()
     }
     fn large_constraint(self) -> bool {
         matches!(self, Self::UnretainedLargeConstraintJob | Self::UnretainedWithheldLargeConstraintJob | Self::TiledConstraintLargeJob)
@@ -729,7 +743,7 @@ impl PublicCase {
     fn tiled(self) -> bool {
         matches!(
             self,
-            Self::TiledConstraintForbidden | Self::TiledConstraintStop | Self::TiledConstraintBeaten | Self::TiledConstraintWithheld | Self::TiledConstraintLargeJob
+            Self::TiledConstraintForbidden | Self::TiledConstraintStop | Self::TiledConstraintBeaten | Self::TiledConstraintWithheld | Self::TiledConstraintLargeJob | Self::TiledPrefixInitial | Self::TiledPrefixInherited
         )
     }
 }
@@ -1124,7 +1138,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     let automatic_recovery = recovery_mode.is_some();
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info,kaspad_lib::palw_panel::palw_fraud_filer=debug");
     let (mut config, bundle, premine, mut floats) = fixture_config(
-        case == PublicCase::ForeignFpJob,
+        case == PublicCase::ForeignFpJob || case.prefix_fault().is_some(),
         case.pruned_fp() || case == PublicCase::HonestFpV3Job,
         case.unretained_fp(),
         case.constraint(),
@@ -1134,6 +1148,12 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         // Register new classes under the independently versioned immutable semantic
         // descriptor contract; public-filer activation remains at its normal test DAA.
         config.params.palw_class_semantics_v1 = Some(ForkActivation::new(0));
+    }
+    if case.prefix_fault().is_some() {
+        config.params.palw_fp_prefix_state = Some(ForkActivation::new(0));
+        config.params.palw_fp_prefix_inherit = Some(ForkActivation::new(0));
+        config.params.validate_palw_fp_prefix_state_v1().unwrap();
+        config.params.validate_palw_fp_prefix_inherit_v1().unwrap();
     }
     if recovery_mode == Some(recovery::RecoveryMode::Reorg) {
         // Exercise the shipped shallow economic-tie rule, as the actual LG14-A reorg
@@ -1203,9 +1223,14 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         fixture.prepare_panel(&mut chain, &mut floats).await;
     }
     let mut tiled_events = std::collections::BTreeMap::new();
+    let mut prefix_answers = std::collections::BTreeMap::new();
     let foreign = (case != PublicCase::Withholding).then(|| {
         if let Some(fixture) = &tiled {
-            let (outcome, event, job, events) = fixture.produce(&chain, case.constraint_fault().unwrap());
+            let (outcome, event, job, events) = fixture.produce(&chain, case.prefix_fault().or(case.constraint_fault()).unwrap());
+            if case.prefix_fault().is_some() {
+                let (commitment, ids) = job.as_ref().unwrap();
+                prefix_answers = fixture.prefix_kernel_answers(&chain, commitment, ids);
+            }
             tiled_events = events;
             return (outcome, event, job);
         }
@@ -1362,7 +1387,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
             );
         }
     }
-    if recovery_mode == Some(recovery::RecoveryMode::Pruned) {
+    if case.prefix_fault().is_some() || recovery_mode == Some(recovery::RecoveryMode::Pruned) {
         recovery::pruned::import_public_carriage(&mut chain, &premine, claim).await;
     }
     let producer_capital = chain.tc.palw_operator_da_standing_v1(chain.view(claim).producer).unwrap().collateral;
@@ -1469,6 +1494,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     let mut job_preimage_submitted = false;
     let mut selected_tiles_submitted = BTreeSet::new();
     let mut bootstrap_tiles_submitted = BTreeSet::new();
+    let mut prefix_tiles_submitted = BTreeSet::new();
     loop {
         assert!(!running.task.as_ref().unwrap().is_finished(), "production worker unexpectedly stopped");
         assert!(std::time::Instant::now() < deadline, "service made no objective progress: {:?}", chain.view(claim));
@@ -1660,7 +1686,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
             PublicCase::UnretainedHonestFpV3Job
                 | PublicCase::UnretainedMultipartHonestFpV3Job
                 | PublicCase::UnretainedLargeConstraintJob
-        ) || case.constraint_fault().is_some())
+        ) || case.constraint_fault().is_some() || case.prefix_fault().is_some())
             && !automatic_recovery
             && !job_preimage_submitted
             && chain.view(claim).sessions.iter().any(|(who, s)| {
@@ -1943,6 +1969,24 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                 eprintln!("[service-tiled] requested public disclosure {unit:?} mined through ordinary H1/PQ admission");
             }
         }
+        if case.prefix_fault().is_some() {
+            use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+            use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
+            let requested: Vec<_> = chain.view(claim).sessions.iter().filter(|(who,_)|*who==bond)
+                .flat_map(|(_,session)|session.units.iter())
+                .filter_map(|unit|match unit {PalwDaUnitV1::LegacyHeldV2(u @ PalwLegacyHeldUnitV2::KernelWitness {..})=>Some(*u),_=>None})
+                .collect();
+            for unit in requested {
+                if prefix_tiles_submitted.contains(&unit) {continue;}
+                let (binding, answer) = prefix_answers.get(&unit).expect("only canonical prefix output CKWs are answered").clone();
+                let object = crate::palw_legacy_held_v2::palw_legacy_held_answer_object_v2(
+                    &chain.network_domain,claim,unit,binding,answer,chain.bonds[0],|message,context|Some(signed(0,message,context))).unwrap();
+                tiled::carry_public_rpc_answer(&mut chain,&manager,&pool,&retained_flow,&object,&mut floats[0]).await;
+                assert!(chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit)));
+                prefix_tiles_submitted.insert(unit);
+                eprintln!("[service-prefix] canonical public CKW {unit:?} authenticated through ordinary H1/PQ");
+            }
+        }
         if case.reacquire_honest() {
             let honest = chain.view(claim);
             assert!(!honest.executor_refuted && !honest.court_convicted && !honest.da_defaulted);
@@ -2082,7 +2126,21 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                         .or_else(||terminal::included_executor_evidence_v1(&carriers,claim,view.producer))
                         .expect("the verifier's exact proof is included in an actual block");
                     assert_eq!(evidence.claim_id, claim);
-                    if case.tiled() {
+                    if let Some(fault)=case.prefix_fault() {
+                        let kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::PrefixStateMismatch {binding,job,tiles}=evidence.contradiction
+                        else {panic!("the actual registered prefix fault must reach exact court17")};
+                        assert_eq!(job.version,if fault==6 {kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_INHERIT_VERSION}
+                            else {kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION});
+                        let named=kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&job).unwrap();
+                        assert_eq!(named.prefix_tokens,2);assert_eq!(named.state_root,Hash64::from_u64_word(0xBAD17));
+                        let plan=kaspa_consensus_core::palw_prefix_state_court_v1::PalwPrefixKvPlanV1::of_profile(&binding.shape_profile,2).unwrap();
+                        assert_eq!(tiles.len() as u64,plan.tile_count);
+                        assert_eq!(prefix_tiles_submitted.len(),prefix_answers.len());
+                        assert_eq!(all_seats.len(),5,"the complete colluding Panel is charged");
+                        assert!(job_preimage_submitted&&!input_chunks.is_empty());
+                        assert_ne!(kaspa_consensus_core::palw_prefix_state_court_v1::palw_prefix_kv_state_root_v1(
+                            &binding,2,&tiles,chain.bundle.court.max_step_leaf_count()).unwrap(),named.state_root);
+                    } else if case.tiled() {
                         let kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::ConstrainedDecode { accusation, .. } =
                             evidence.contradiction
                         else {

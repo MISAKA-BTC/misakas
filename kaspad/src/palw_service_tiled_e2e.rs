@@ -286,8 +286,22 @@ impl TiledFixture {
             decode: None,
             tail: None,
         };
-        // Use the same DFA as the flat fixture, with the actual tokenizer-derived table.
-        selection_constraint_job_with_table(&mut job, self.table.clone());
+        let prefix_fault = matches!(fault, Some(5) | Some(6));
+        if prefix_fault {
+            let true_prefix = backend.prefix_state_v1(self.profile.shape_profile_id(), self.table.tokenizer_id, &ids[..2]).unwrap();
+            assert_eq!(true_prefix.prefix_tokens, 2);
+            job.version = if fault == Some(6) {
+                kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_INHERIT_VERSION
+            } else { kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION };
+            job.decode = Some(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+            job.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 {
+                state_root: Hash64::from_u64_word(0xBAD17), ..true_prefix
+            }));
+            assert!(backend.verify_prefix_state_v1(&job, &ids).is_err(), "the actual holder rejects the false named prefix");
+        } else {
+            // Use the same DFA as the flat fixture, with the actual tokenizer-derived table.
+            selection_constraint_job_with_table(&mut job, self.table.clone());
+        }
         if fault==Some(4) {super::terminal::enlarge_selection_job_v1(&mut job);}
         let mask = palw_fp_constraint_mask_for_host_v1(&job, Some(self.table.clone())).unwrap();
         let run = palw_fp_with_constraint_scope_v1(mask, || {
@@ -300,7 +314,7 @@ impl TiledFixture {
         let rows = retained.logits_rows();
         let mut generated = retained.generated_token_ids().to_vec();
         assert_eq!(generated.len(), 4);
-        assert!(generated.iter().all(|id| *id == 0 || *id == PALW_LOGITS_TILE_LANES as u32));
+        if !prefix_fault { assert!(generated.iter().all(|id| *id == 0 || *id == PALW_LOGITS_TILE_LANES as u32)); }
         generated[2] = match fault {
             Some(1) => 2,
             Some(2) => self.profile.vocab_size - 1,
@@ -311,7 +325,7 @@ impl TiledFixture {
                     0
                 }
             }
-            None => generated[2],
+            None | Some(5) | Some(6) => generated[2],
             _ => unreachable!(),
         };
         binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, rows, &generated).unwrap();
@@ -347,6 +361,51 @@ impl TiledFixture {
         // Only signed public answer candidates leave the producer side. Neither its backend
         // nor its capture/row array enters the verifier's service or proof builder.
         (outcome, initial, Some((commitment, ids)), events)
+    }
+
+    /// Build only the signed-public CKW payloads from producer retention. The caller stores
+    /// these beside its public answer candidates; no capture/backend enters the outsider service.
+    pub fn prefix_kernel_answers(
+        &self, chain: &Chain,
+        commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        ids: &[u32],
+    ) -> std::collections::BTreeMap<
+        kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2,
+        (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+         kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2),
+    > {
+        use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
+        let backend = self.backend(chain);
+        let job = &commitment.job;
+        assert!(job.is_prefix_state());
+        let run = backend.execute_free_prompt(job, &ids.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();
+        assert_eq!(run.outcome.execution_root, commitment.execution_root);
+        assert_eq!(run.outcome.trace_root, commitment.trace_root);
+        assert_eq!(run.outcome.output_root, commitment.output_root);
+        let retained = misaka_palw_base0::produce::base0_material_decode_any_v1(&run.outcome.material).unwrap();
+        let binding = retained.binding();
+        let named = kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job).unwrap();
+        let plan = kaspa_consensus_core::palw_prefix_state_court_v1::PalwPrefixKvPlanV1::of_profile(&self.profile, named.prefix_tokens).unwrap();
+        let roots = kaspa_consensus_core::palw_backend::PalwClaimRootsV1 {
+            execution_root: commitment.execution_root, trace_root: commitment.trace_root,
+            output_root: Some(commitment.output_root),
+            anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_canonical_anchor_v1(job),
+            attempt_draw: None,
+            job_pin: Some(kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment)),
+        };
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(
+            chain.config.params.palw_prompt_ids_form_v1(), &self.profile);
+        let mut answers = std::collections::BTreeMap::new();
+        for ordinal in 0..plan.tile_count {
+            let (coordinate, _) = plan.coordinate(&self.profile, ordinal).unwrap();
+            let leaf = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&self.profile, &binding.job_context, &coordinate).unwrap();
+            let unit = PalwLegacyHeldUnitV2::KernelWitness { leaf };
+            let payload = crate::palw_legacy_held_v2::palw_legacy_held_capture_answer_v2(
+                backend.as_ref(), &run.outcome.material, ids, roots, form, &unit).unwrap();
+            answers.insert(unit, payload);
+        }
+        assert_eq!(answers.len() as u64, plan.tile_count);
+        answers
     }
 
     pub fn readiness(&self, chain: &Chain, card: usize) -> PalwConsensusObjectV2 {
