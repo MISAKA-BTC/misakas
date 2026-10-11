@@ -1,0 +1,23 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+warning: function `history` is never used
+  --> misaka-palw-kernel/tests/flat_graph9.rs:59:4
+   |
+59 | fn history() -> TirProgramV1 {
+   |    ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-kernel` (test "flat_graph9") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running tests/flat_graph9.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_graph9-8edb1b8b50193d3d)
+
+running 6 tests
+test public_header_authentication_binds_all_dtypes_both_grammars_and_malformed_metadata ... ok
+test ordinary_relation_helper_descends_nonfirst_leaf_and_validates_coordinate_before_callbacks ... ok
+test mixed_decode_malformed_and_initial_public_topk_keep_distinct_legacy_courts ... ok
+test public_value9_roundtrip_all_types_and_hostile_bounds_are_strict ... ok
+test typed_reply_withholding_borrowing_codec_and_retry_limits_are_demands_not_convictions ... ok
+test independent_mixed_replay_finds_all25_first_faults_and_all_honest_nodes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.55s
+

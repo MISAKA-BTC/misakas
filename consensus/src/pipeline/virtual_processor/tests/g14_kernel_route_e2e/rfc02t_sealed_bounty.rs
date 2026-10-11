@@ -73,11 +73,11 @@ async fn rfc02t_kernel_fileproof_reencoded_copy_takes_the_bounty_below_the_fence
     // The held share is not slashed yet: it stays reserved on the producer's real bond until the contest resolves.
     assert_eq!(before - w.net.collateral(0), w.policy().claim_collateral - reward, "slashed but for the held share");
     assert_eq!(w.net.kernel_reserved(0), u128::from(reward), "the held share stays reserved (it cannot leave)");
-    let held = ledger.held_bounties[&id];
+    let held = ledger.held_bounty_v1(&id).expect("held");
     assert_eq!((held.filer, held.amount), (w.net.kid(copyist), reward), "nobody sealed the copy: its share is held");
     assert_eq!(minted_and_owed(&w.net, &w.net.chain, copyist), (0, 0), "the copyist is not paid");
     w.proof(finder, &id, proof.clone()).await;
-    assert!(w.net.ledger().held_bounties.is_empty(), "contested and paid once");
+    assert!(w.net.ledger().held_bounties_v1().is_empty(), "contested and paid once");
     assert_eq!(before - w.net.collateral(0), w.policy().claim_collateral, "the producer is slashed once, in full");
     assert_eq!(w.net.kernel_reserved(0), 0);
     let (fm, fo) = minted_and_owed(&w.net, &w.net.chain, finder);

@@ -355,19 +355,29 @@ pub static PALW_KERNEL_LEDGER_CACHE_HITS_V1: std::sync::atomic::AtomicU64 = std:
 
 /// The cached ledger of a [`PalwKernelRouteStateV1`] (see its `ledger_cache`). Clones share the immutable ledger; a load clones it.
 #[derive(Clone, Default)]
-pub struct KernelLedgerCacheV1(Option<std::sync::Arc<KernelLedgerV1>>);
+pub struct KernelLedgerCacheV1(Option<std::sync::Arc<KernelLedgerV1>>, bool);
 
 impl KernelLedgerCacheV1 {
     pub fn get(&self) -> Option<KernelLedgerV1> {
-        self.0.as_ref().map(|l| (**l).clone())
+        if self.1 { None } else { self.0.as_ref().map(|l| (**l).clone()) }
     }
 
     pub fn set(&mut self, ledger: KernelLedgerV1) {
         self.0 = Some(std::sync::Arc::new(ledger));
+        self.1 = false;
     }
 
     pub fn clear(&mut self) {
         self.0 = None;
+        self.1 = false;
+    }
+
+    pub(crate) fn native_projection(&self) -> Option<KernelLedgerV1> {
+        if self.1 {self.0.as_ref().map(|l| (**l).clone())} else {None}
+    }
+    pub(crate) fn set_native_projection(&mut self, mut ledger: KernelLedgerV1) {
+        ledger.flat_conformance_classes_v9.clear();
+        self.0 = Some(std::sync::Arc::new(ledger)); self.1 = true;
     }
 
     pub fn is_set(&self) -> bool {
@@ -651,7 +661,7 @@ impl PalwKernelRouteStateV1 {
     pub fn finals_read_v1(&self) -> Result<Vec<KernelFinalReadV1>, String> {
         use misaka_palw_kernel::mode::VerificationModeV1;
         use misaka_palw_kernel::opv::WorkFinalContextV1;
-        let ledger = self.ledger()?;
+        let ledger = self.ledger_native_projection_v9()?;
         let mut out = Vec::new();
         for receipt in ledger.final_receipts() {
             let work = ledger.claims.get(&receipt.claim).map(|r| (r.class_binding_id, r.job_id));
@@ -696,7 +706,7 @@ impl PalwKernelRouteStateV1 {
     /// **The public read of one claim** (see [`KernelClaimReadV1`]); `Ok(None)` for an unknown claim, `Err` only if the stored rows do
     /// not rebuild (corruption, not an input).
     pub fn claim_read_v1(&self, claim: &Digest) -> Result<Option<KernelClaimReadV1>, String> {
-        let ledger = self.ledger()?;
+        let ledger = self.ledger_native_projection_v9()?;
         let Some(row) = ledger.claims.get(claim) else { return Ok(None) };
         let (kind, public_record, record_header) = match &row.body {
             misaka_palw_kernel::ledger::ClaimBodyV1::Program { .. } => {
@@ -875,12 +885,76 @@ pub enum PalwKernelChunkTargetV1 {
     /// A kernel claim: the assembled object is a `FileProof` against it or a `Respond` to a demand on it (tag 110).
     Claim(Digest) = 0,
     /// An onboarding artifact binding: the assembled object is its refutation (tag 105).
-    Binding { v2_class: Hash64, kernel_param_root: Hash64 } = 1,
+    Binding {
+        v2_class: Hash64,
+        kernel_param_root: Hash64,
+    } = 1,
     /// **OPV-BOOT #1: the conformance attempt of V2 class `v2_class`** — the assembled object is that class's conformance evidence
     /// (tag 109: a Post by the class's registrant, opening the group itself, or a Refute by anyone), applied by its own arm. Its
     /// deadline is OPV-BOOT's `palw_conformance_chunk_target_v1(route, v2_class, daa)` (the agreed signature: the attempt's evidence
     /// deadline for a Post, its refutation window's end for a Refute; `None` when no attempt is open).
-    Conformance { v2_class: Hash64 } = 2,
+    Conformance {
+        v2_class: Hash64,
+    } = 2,
+    /// A protected flat reveal, opened only by its mature seal's authenticated actor.
+    FlatProofV6 {
+        vector: Hash64,
+        actor: Digest,
+    } = 3,
+    FlatProofV7 {
+        vector: Hash64,
+        actor: Digest,
+    } = 4,
+    FlatProofV9 { vector:Hash64, actor:Digest } = 5,
+}
+
+/// Raw protected reveal plus the bounded signed outer envelope; never an arbitrary
+/// sixteen-part object. This bounds assembly before its variable Borsh decode.
+pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6: usize = misaka_palw_kernel::flat_seal6::FLAT_SEAL_MAX_PROOF_BYTES_V6 + (16 << 10);
+pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V9: usize = misaka_palw_kernel::flat_seal9::FLAT_SEAL_MAX_PROOF_BYTES_V9 + (16 << 10);
+pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7: usize = misaka_palw_kernel::flat_seal7::FLAT_SEAL_MAX_PROOF_BYTES_V7 + (16 << 10);
+
+/// A completing part and terminal court must fit together. Derive this upper
+/// debit from fixed admitted metadata before opening/continuing a group.
+pub fn protected_flat_chunk_finish_work_v6(h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3) -> Option<u64> {
+    let proof = usize::try_from(h.max_filing_bytes).ok()?.min(misaka_palw_kernel::flat_seal6::FLAT_SEAL_MAX_PROOF_BYTES_V6);
+    let metadata = |bytes: usize| crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?);
+    crate::palw_flat_model_vector_v3::flat_model_vector_work_v3(
+        h.program_bytes_len,
+        h.pc_instances,
+        proof.checked_add(h.post_bytes_len as usize)?,
+    )
+    .and_then(|w| w.checked_add(h.max_court_work))
+    .and_then(|w| w.checked_add(metadata(proof)?))
+    .and_then(|w| w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6)?))
+}
+
+pub fn protected_flat_chunk_finish_work_v7(h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3) -> Option<u64> {
+    let proof = usize::try_from(h.max_filing_bytes).ok()?.min(misaka_palw_kernel::flat_seal7::FLAT_SEAL_MAX_PROOF_BYTES_V7);
+    let metadata = |bytes: usize| crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?);
+    crate::palw_flat_model_vector_v3::flat_model_vector_work_v3(
+        h.program_bytes_len,
+        h.pc_instances,
+        proof.checked_add(h.post_bytes_len as usize)?,
+    )
+    .and_then(|w| w.checked_add(h.max_court_work))
+    .and_then(|w| w.checked_add(metadata(proof)?))
+    .and_then(|w| w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7)?))
+}
+pub fn protected_flat_chunk_cap_v9(h:&crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3)->Option<usize> {
+    usize::try_from(h.max_filing_bytes).ok()?.checked_add(16<<10).filter(|x| *x<=PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V9)
+}
+pub fn protected_flat_chunk_finish_work_v9(route:&PalwKernelRouteStateV1,h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3) -> Option<u64> {
+    let proof = usize::try_from(h.max_filing_bytes).ok()?.min(misaka_palw_kernel::flat_seal9::FLAT_SEAL_MAX_PROOF_BYTES_V9);
+    let metadata = |bytes: usize| crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?);
+    crate::palw_flat_model_vector_v9::flat_model_vector_work_v9(
+        route,
+        &h.class,
+        proof.checked_add(h.post_bytes_len as usize)?,
+    )
+    .and_then(|w| w.checked_add(h.max_court_work))
+    .and_then(|w| w.checked_add(metadata(proof)?))
+    .and_then(|w| w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * protected_flat_chunk_cap_v9(h)?)?))
 }
 
 /// **One chunk of a prosecution object in the route's own lane** (the body of `KernelRouteChunkV1`, tag 113). `group` is
@@ -969,6 +1043,18 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
             PalwKernelChunkTargetV1::Binding { v2_class: class, kernel_param_root: root },
         ) => v2_class == class && kernel_param_root == root,
         (Obj::ConformanceEvidenceV1 { v2_class, .. }, PalwKernelChunkTargetV1::Conformance { v2_class: class }) => v2_class == class,
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV6 { vector, actor }) => {
+            palw_kernel_bond_id_v1(signer) == *actor
+                && matches!(K::decode(bytes), Ok(K::RevealFlatModelProofV6 { vector: id, .. }) if id == vector.as_bytes())
+        }
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV7 { vector, actor }) => {
+            palw_kernel_bond_id_v1(signer) == *actor
+                && matches!(K::decode(bytes), Ok(K::RevealFlatModelProofV7 { vector: id, .. }) if id == vector.as_bytes())
+        }
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV9 { vector, actor }) => {
+            palw_kernel_bond_id_v1(signer) == *actor
+                && matches!(K::decode(bytes), Ok(K::RevealFlatModelProofV9 { vector: id, .. }) if id == vector.as_bytes())
+        }
         _ => false,
     }
 }
@@ -1005,6 +1091,16 @@ pub fn palw_kernel_claim_horizon_bound_v1(
     }
 }
 
+fn chunk_fixed_header_v1(bytes: &[u8]) -> Option<(u64, u64)> {
+    let mut r = std::io::Cursor::new(bytes);
+    let _ = PalwKernelChunkTargetV1::deserialize_reader(&mut r).ok()?;
+    let count = u8::deserialize_reader(&mut r).ok()?;
+    let _ = u64::deserialize_reader(&mut r).ok()?;
+    let expires = u64::deserialize_reader(&mut r).ok()?;
+    let deposit = u64::deserialize_reader(&mut r).ok()?;
+    let parts = u32::deserialize_reader(&mut r).ok()?;
+    (count > 0 && count <= crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT && parts <= count as u32).then_some((expires, deposit))
+}
 impl PalwKernelRouteStateV1 {
     /// One group of the route's chunk lane.
     pub fn chunk_group_v1(&self, opener: &PalwBondKeyV2, group: &Hash64) -> Option<PalwKernelChunkGroupV1> {
@@ -1025,13 +1121,45 @@ impl PalwKernelRouteStateV1 {
 
     /// How many groups `opener` holds open.
     pub fn chunk_groups_of_v1(&self, opener: &PalwBondKeyV2) -> usize {
-        self.chunk_groups_v1().iter().filter(|(o, _, _)| o == opener).count()
+        self.chunk_deposit_headers_v1(opener).count()
+    }
+
+    /// Bond-prefix reads and fixed metadata only: committed capital must not decode
+    /// every actor's variable proof payload before a processing-budget reservation.
+    fn chunk_deposit_headers_v1(&self, opener: &PalwBondKeyV2) -> impl Iterator<Item = u64> + '_ {
+        let prefix = borsh::to_vec(opener).expect("fixed bond key");
+        let t = PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1;
+        self.aux.range((t, prefix.clone())..(t + 1, Vec::new())).take_while(move |((_, key), _)| key.starts_with(&prefix)).filter_map(
+            |((_, key), bytes)| {
+                if key.len() != 132 {
+                    return None;
+                }
+                chunk_fixed_header_v1(bytes).map(|(_, deposit)| deposit)
+            },
+        )
     }
 
     /// The deposits `bond`'s open groups hold against its collateral (part of what V2's committed-collateral ledger and both
     /// withdrawal gates read as the route's reservation).
     pub fn chunk_deposits_of_v1(&self, bond: &PalwBondKeyV2) -> u64 {
-        self.chunk_groups_v1().iter().filter(|(o, _, _)| o == bond).fold(0u64, |acc, (_, _, g)| acc.saturating_add(g.deposit))
+        self.chunk_deposit_headers_v1(bond).fold(0u64, u64::saturating_add)
+    }
+
+    /// Read expiry/deposit headers without cloning proof payloads on every block.
+    /// The aggregate fixed-row scan remains a separate resource requirement.
+    pub fn expired_chunk_headers_v1(&self, daa: u64) -> Vec<(PalwBondKeyV2, Hash64, u64)> {
+        let t = PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1;
+        self.aux
+            .range((t, Vec::new())..(t + 1, Vec::new()))
+            .filter_map(|((_, key), bytes)| {
+                let (expires, deposit) = chunk_fixed_header_v1(bytes)?;
+                if daa <= expires {
+                    return None;
+                }
+                let (opener, group) = borsh::from_slice(key).ok()?;
+                Some((opener, group, deposit))
+            })
+            .collect()
     }
 
     /// **The last DAA at which an object for `target` could still change anything** (`None`: nothing can — the claim is decided or
@@ -1053,6 +1181,42 @@ impl PalwKernelRouteStateV1 {
                 (!row.refuted).then(|| row.final_daa.saturating_sub(1))
             }
             PalwKernelChunkTargetV1::Conformance { v2_class } => palw_conformance_chunk_target_pending_v1(self, v2_class, daa),
+            PalwKernelChunkTargetV1::FlatProofV6 { vector, actor } => {
+                let header = self.flat_model_vector_header_v3(vector)?;
+                let seal = self.flat_model_seal_v6(vector, actor)?.seal;
+                (self.flat_model_vector_protected_v6(vector)
+                    && !header.refuted
+                    && !self.flat_vector_unavailable_v3(vector)
+                    && !seal.spent
+                    && daa >= seal.mature_daa
+                    && daa < seal.expires_daa
+                    && daa < header.liability_until)
+                    .then(|| seal.expires_daa.min(header.liability_until).saturating_sub(1))
+            }
+            PalwKernelChunkTargetV1::FlatProofV7 { vector, actor } => {
+                let header = self.flat_model_vector_header_v3(vector)?;
+                let seal = self.flat_model_seal_v7(vector, actor)?.seal;
+                (self.flat_model_vector_protected_v7(vector)
+                    && !header.refuted
+                    && !self.flat_vector_unavailable_v7(vector)
+                    && !seal.spent
+                    && daa >= seal.mature_daa
+                    && daa < seal.expires_daa
+                    && daa < header.liability_until)
+                    .then(|| seal.expires_daa.min(header.liability_until).saturating_sub(1))
+            }
+            PalwKernelChunkTargetV1::FlatProofV9 { vector, actor } => {
+                let header = self.flat_model_vector_header_v3(vector)?;
+                let seal = self.flat_model_seal_v9(vector, actor)?.seal;
+                (self.flat_model_vector_protected_v9(vector)
+                    && !header.refuted
+                    && !self.flat_vector_unavailable_v9(vector)
+                    && !seal.spent
+                    && daa >= seal.mature_daa
+                    && daa < seal.expires_daa
+                    && daa < header.liability_until)
+                    .then(|| seal.expires_daa.min(header.liability_until).saturating_sub(1))
+            }
         }
     }
 
@@ -1062,6 +1226,45 @@ impl PalwKernelRouteStateV1 {
     pub fn chunk_completion_v1(&self, chunk: &PalwKernelChunkV1) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
         if chunk.count == 0 || chunk.index >= chunk.count || chunk.bytes.is_empty() {
             return None;
+        }
+        if let PalwKernelChunkTargetV1::FlatProofV6 { vector, actor } = chunk.target {
+            let header = self.flat_model_vector_header_v3(&vector)?;
+            let seal = self.flat_model_seal_v6(&vector, &actor)?;
+            if actor != palw_kernel_bond_id_v1(&chunk.opener)
+                || seal.bond != chunk.opener
+                || seal.seal.spent
+                || !self.flat_model_vector_protected_v6(&vector)
+                || header.refuted
+                || self.flat_vector_unavailable_v3(&vector)
+            {
+                return None;
+            }
+        }
+        if let PalwKernelChunkTargetV1::FlatProofV7 { vector, actor } = chunk.target {
+            let header = self.flat_model_vector_header_v3(&vector)?;
+            let seal = self.flat_model_seal_v7(&vector, &actor)?;
+            if actor != palw_kernel_bond_id_v1(&chunk.opener)
+                || seal.bond != chunk.opener
+                || seal.seal.spent
+                || !self.flat_model_vector_protected_v7(&vector)
+                || header.refuted
+                || self.flat_vector_unavailable_v7(&vector)
+            {
+                return None;
+            }
+        }
+        if let PalwKernelChunkTargetV1::FlatProofV9 { vector, actor } = chunk.target {
+            let header = self.flat_model_vector_header_v3(&vector)?;
+            let seal = self.flat_model_seal_v9(&vector, &actor)?;
+            if actor != palw_kernel_bond_id_v1(&chunk.opener)
+                || seal.bond != chunk.opener
+                || seal.seal.spent
+                || !self.flat_model_vector_protected_v9(&vector)
+                || header.refuted
+                || self.flat_vector_unavailable_v9(&vector)
+            {
+                return None;
+            }
         }
         let stored = self.chunk_group_v1(&chunk.opener, &chunk.group);
         let mut parts: BTreeMap<u8, &[u8]> = BTreeMap::new();
@@ -1075,7 +1278,17 @@ impl PalwKernelRouteStateV1 {
         if parts.len() != chunk.count as usize {
             return None;
         }
-        let mut whole = Vec::with_capacity(parts.values().map(|p| p.len()).sum());
+        let size: usize = parts.values().map(|p| p.len()).sum();
+        let proof_cap = match chunk.target {
+            PalwKernelChunkTargetV1::FlatProofV6 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6),
+            PalwKernelChunkTargetV1::FlatProofV7 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7),
+            PalwKernelChunkTargetV1::FlatProofV9 { vector,.. } => Some(protected_flat_chunk_cap_v9(&self.flat_model_vector_header_v3(&vector)?)?),
+            _ => None,
+        };
+        if proof_cap.is_some_and(|cap| size > cap) {
+            return None;
+        }
+        let mut whole = Vec::with_capacity(size);
         for i in 0..chunk.count {
             whole.extend_from_slice(parts.get(&i)?);
         }
@@ -1390,5 +1603,41 @@ mod tests {
         let completed_at = completed_at.expect("the last chunk completes the group");
         assert_eq!(completed_at, t0 + window, "it lands on the chunk-counted deadline's last DAA");
         assert!(completed_at > t0 + p.court_deadline_daa, "the fixed window would have defaulted an honest producer by size alone");
+    }
+}
+
+impl PalwKernelRouteStateV1 {
+    /// Native-only projection of already admitted, journaled class9 rows. Each
+    /// historical registration was fully independently checked in its block.
+    /// Remote snapshot consumers use ledger()/full from_rows and an external
+    /// chain anchor, never this fixed-prefix operational projection.
+    pub(crate) fn ledger_native_projection_v9(&self)->Result<KernelLedgerV1,String> {
+        use misaka_palw_kernel::{ledger::flat_candidate9::*,rows::*};
+        let mut count=0usize;let mut bytes=0usize;
+        for ((_,_),row) in self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9,Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9+1,Vec::new())) {
+            count+=1;bytes=bytes.checked_add(row.len()).ok_or("native9 registry size overflow")?;
+            if count>FLAT_CANDIDATE_REGISTRY_MAX_V9 || row.len()>FLAT_CANDIDATE_RECORD_MAX_BYTES_V9 || bytes>FLAT_CANDIDATE_IMPORT_MAX_BYTES_V9 {
+                return Err("native9 admitted registry count/raw residency cap".into());
+            }
+        }
+        if count==0 {return self.ledger();}
+        if let Some(cached)=self.ledger_cache.native_projection() {
+            debug_assert!(cached.scalars()==self.header.scalars);
+            debug_assert!(cached.flat_conformance_classes_v9.is_empty());
+            debug_assert!(cached.native_candidate_count_v9()==count);
+            debug_assert!(cached.to_rows().iter().all(|(k,v)| self.rows.get(k)==Some(v)));
+            debug_assert_eq!(cached.to_rows().len(),self.rows.keys().filter(|(t,_)|*t!=TABLE_FLAT_CONFORMANCE_CLASSES_V9).count());
+            PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+            return Ok(cached);
+        }
+        let rows:LedgerRowsV1=self.rows.iter().filter(|((table,_),_)|*table!=TABLE_FLAT_CONFORMANCE_CLASSES_V9)
+            .map(|(k,v)|(k.clone(),v.clone())).collect();
+        let mut ledger=KernelLedgerV1::from_rows(&self.template(),self.header.scalars,&rows)?;
+        for ((_,key),row) in self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9,Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9+1,Vec::new())) {
+            let class:Digest=borsh::from_slice(key).map_err(|e|e.to_string())?;
+            let owner:Digest=row.get(..64).ok_or("native9 truncated admitted owner")?.try_into().map_err(|_|"native9 owner size")?;
+            ledger.note_native_candidate_projection_v9(owner,class)?;
+        }
+        Ok(ledger)
     }
 }

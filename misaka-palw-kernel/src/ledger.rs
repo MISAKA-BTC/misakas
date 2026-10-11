@@ -98,6 +98,10 @@ use crate::pipeline_public::{
     StageCommitmentsV1,
 };
 use crate::plan::VerificationPlanV1;
+#[path = "flat_candidate7.rs"]
+pub mod flat_candidate7;
+#[path = "flat_candidate9.rs"]
+pub mod flat_candidate9;
 use crate::public::{
     FreshVerifierV1, ProfileMaterialV1, PublicClaimRecordV1, ServedPositionV1, TensorWireV1, classify_position_response_v1,
     program_root_v1,
@@ -517,6 +521,10 @@ pub enum LedgerEventV1 {
     ConformanceClassRegistered {
         class: Digest,
     } = 32,
+    FlatConformanceClassRegisteredV7 {
+        class: Digest,
+    } = 33,
+    FlatConformanceClassRegisteredV9 { class: Digest } = 34,
     ClassRegistered {
         class: Digest,
     } = 1,
@@ -796,6 +804,10 @@ pub const MAX_CONFORMANCE_CLASSES_PER_BOND_V1: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct KernelLedgerV1 {
+    pub flat_conformance_classes_v9: BTreeMap<Digest, (Digest, flat_candidate9::FlatCandidateRecordV9)>,
+    /// Derived native projection index; never serialized/hashed or a checker of remote data.
+    pub(crate) native_flat_candidate_ids_v9: BTreeSet<Digest>,
+    pub flat_conformance_classes_v7: BTreeMap<Digest, (Digest, flat_candidate7::FlatCandidateRecordV7)>,
     pub policy: LedgerPolicyV1,
     pub schedule: KernelScheduleV1,
     /// Descriptors this binary implements (never bytes from a transaction).
@@ -878,9 +890,6 @@ pub struct KernelLedgerV1 {
     /// **RFC-0002 P0 residual**: the sealed-bounty terms (`crate::sealed_bounty`), consumer-injected past
     /// `palw_model_refutation_seal_v1` at every load — never part of the state or its root.
     pub sealed_bounty_policy: Option<crate::sealed_bounty::SealedBountyPolicyV1>,
-    /// **Table 31** (`crate::sealed_bounty`): convicted claim → its held bounty (written only past the fence; in the root only once
-    /// non-empty).
-    pub held_bounties: BTreeMap<Digest, crate::sealed_bounty::HeldBountyRowV1>,
     budget: BlockBudgetV1,
 }
 
@@ -933,6 +942,9 @@ impl KernelLedgerV1 {
             bonds: BTreeMap::new(),
             classes: BTreeMap::new(),
             conformance_classes: BTreeMap::new(),
+            flat_conformance_classes_v7: BTreeMap::new(),
+            flat_conformance_classes_v9: BTreeMap::new(),
+            native_flat_candidate_ids_v9: BTreeSet::new(),
             conformance_class_owners: BTreeMap::new(),
             pipeline_classes: BTreeMap::new(),
             jobs: BTreeMap::new(),
@@ -962,7 +974,6 @@ impl KernelLedgerV1 {
             verifier_pay: BTreeMap::new(),
             court_scope_policy: None,
             sealed_bounty_policy: None,
-            held_bounties: BTreeMap::new(),
             court_scope: BTreeMap::new(),
             budget: BlockBudgetV1::default(),
         })
@@ -1065,7 +1076,25 @@ impl KernelLedgerV1 {
         self.authorize(obj, auth)?;
         let mut out = Vec::new();
         match obj {
-            KernelRouteObjectV1::DemandFlatModelVectorV3 { .. }
+            KernelRouteObjectV1::PostFlatModelVectorV9 {..}
+            | KernelRouteObjectV1::SealFlatModelProofV9 {..}
+            | KernelRouteObjectV1::RevealFlatModelProofV9 {..}
+            | KernelRouteObjectV1::ExpireFlatModelSealV9 {..}
+            | KernelRouteObjectV1::DemandFlatModelUnitV9 {..}
+            | KernelRouteObjectV1::AnswerFlatModelUnitV9 {..}
+            | KernelRouteObjectV1::SettleFlatModelDemandV9 {..}
+            | KernelRouteObjectV1::PostFlatModelVectorV7 {..}
+            | KernelRouteObjectV1::SealFlatModelProofV7 {..}
+            | KernelRouteObjectV1::RevealFlatModelProofV7 {..}
+            | KernelRouteObjectV1::ExpireFlatModelSealV7 {..}
+            | KernelRouteObjectV1::DemandFlatModelUnitV7 {..}
+            | KernelRouteObjectV1::AnswerFlatModelUnitV7 {..}
+            | KernelRouteObjectV1::SettleFlatModelDemandV7 {..}
+            | KernelRouteObjectV1::PostFlatModelVectorV6 { .. }
+            | KernelRouteObjectV1::SealFlatModelProofV6 { .. }
+            | KernelRouteObjectV1::RevealFlatModelProofV6 { .. }
+            | KernelRouteObjectV1::ExpireFlatModelSealV6 { .. }
+            | KernelRouteObjectV1::DemandFlatModelVectorV3 { .. }
             | KernelRouteObjectV1::AnswerFlatModelVectorV3 { .. }
             | KernelRouteObjectV1::SettleFlatModelVectorDemandV3 { .. }
             | KernelRouteObjectV1::PostFlatModelVectorV3 { .. }
@@ -1082,6 +1111,50 @@ impl KernelLedgerV1 {
             | KernelRouteObjectV1::RevealModelRefutationV4 { .. }
             | KernelRouteObjectV1::RegisterModelConformanceClassV2 { .. } => {
                 return Err(KernelRefusalV1::rule(name, "model artifact statements require the authenticated consensus consumer"));
+            }
+            KernelRouteObjectV1::RegisterFlatModelCandidateV7 {
+                binding,
+                descriptor,
+                program_bytes,
+                param_commitments,
+                max_positions,
+                scope_root,
+                replay_root,
+            } => {
+                let class = self.register_flat_candidate_v7(
+                    *binding,
+                    *descriptor,
+                    program_bytes,
+                    param_commitments,
+                    *max_positions,
+                    *scope_root,
+                    *replay_root,
+                    auth.signer_bond,
+                )?;
+                out.push(LedgerEventV1::FlatConformanceClassRegisteredV7 { class });
+            }
+            KernelRouteObjectV1::RegisterFlatModelCandidateV9 {
+                binding,
+                descriptor,
+                program_bytes,
+                param_commitments,
+                max_positions,
+                scope_root,
+                replay_root,
+                resource_root,
+            } => {
+                let class = self.register_flat_candidate_v9(
+                    *binding,
+                    *descriptor,
+                    program_bytes,
+                    param_commitments,
+                    *max_positions,
+                    *scope_root,
+                    *replay_root,
+                    *resource_root,
+                    auth.signer_bond,
+                )?;
+                out.push(LedgerEventV1::FlatConformanceClassRegisteredV9 { class });
             }
             KernelRouteObjectV1::RegisterConformanceClass { descriptor, program_bytes, plan, param_commitments } => {
                 let class = self.register_class_impl(
@@ -1326,6 +1399,9 @@ impl KernelLedgerV1 {
                         if let Some(classes) = self.conformance_class_owners.remove(bond) {
                             for class in classes {
                                 self.conformance_classes.remove(&class);
+                                self.flat_conformance_classes_v7.remove(&class);
+                                self.flat_conformance_classes_v9.remove(&class);
+                                self.native_flat_candidate_ids_v9.remove(&class);
                             }
                         }
                         out.push(LedgerEventV1::Withdrawn { bond: *bond, amount });
@@ -2414,7 +2490,7 @@ impl KernelLedgerV1 {
         let Some(row) = self.claims.get(claim) else { return Err(rule("no such claim")) };
         if row.convicted {
             // RFC-0002 P0 residual: a conviction by unsealed bytes holds its bounty; an earlier sealer may contest it with its own proof.
-            if self.sealed_bounty_in_force().is_some() && self.held_bounties.contains_key(claim) {
+            if self.sealed_bounty_in_force().is_some() && self.held_bounty_v1(claim).is_some() {
                 return self.contest_held_bounty_v1(accuser, claim, proof, out);
             }
             // A second filing of the same fault, in this block or after a replay: one conviction, no second slash, no fee.

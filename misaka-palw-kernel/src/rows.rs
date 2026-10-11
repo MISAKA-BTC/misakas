@@ -93,6 +93,15 @@ pub const EXEC_REWARD_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/led
 pub const BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-beacon-seal-extension/v1";
 /// **Table 27** (`palw_verifier_pay_v1`, G14R round 3): check-fee escrows, claim draws and held default shares, key `(kind, digest)`.
 pub const TABLE_VERIFIER_PAY_V1: u8 = 27;
+/// **RFC-0002 codex final: the flat-v7 / flat-v9 candidate registries** (`codex/rfc02-review-completion`). Codex numbered them 29 / 30
+/// on its branch, where 29 / 30 / 31 are RFC-02's conformance candidates, R6781's beacon sources and EXEC reward holds on the
+/// integration line, and 32 is the first consensus (aux) table. At the `rfc02/merge-final` merge they took the only free ledger
+/// numbers: **0** (v7 — loaded after the loop, since its rows name a bond and must follow table 1) and **19** (v9, G14-R4's
+/// never-used number). Their root extensions keep codex's fixed order, after table 31's.
+pub const TABLE_FLAT_CONFORMANCE_CLASSES_V7: u8 = 0;
+pub const TABLE_FLAT_CONFORMANCE_CLASSES_V9: u8 = 19;
+pub const FLAT_CONFORMANCE_ROOT_EXTENSION_DOMAIN_V9: &[u8] = b"misaka-palw/kernel/ledger-flat-conformance-extension/v9";
+pub const FLAT_CONFORMANCE_ROOT_EXTENSION_DOMAIN_V7: &[u8] = b"misaka-palw/kernel/ledger-flat-conformance-extension/v7";
 /// The root extension table 27 adds once it holds a row (every older root unchanged).
 pub const VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-verifier-pay-extension/v1";
 /// **Table 28** (`crate::court_scope`, the court scope past `palw_provider_court_v1`, lane G14-S): claim → its requesters' units and
@@ -106,14 +115,6 @@ pub const COURT_SCOPE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/led
 pub const TABLE_CONFORMANCE_CLASSES_V1: u8 = 29;
 /// The root extension table 29 adds once it holds a row (every older root unchanged), applied after table 28's.
 pub const CONFORMANCE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-conformance-extension/v1";
-/// **Table 19** (RFC-0002 P0 residual, `crate::sealed_bounty`, lane RFC02-T 2026-10-11): convicted claim → its held bounty, written
-/// only past `palw_model_refutation_seal_v1`. Allocated 31 on `rfc02/takeover`; 30 and 31 are R6781's beacon sources and EXEC reward
-/// holds, and 32 is the FIRST CONSENSUS (aux) table (`PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1`: the route's writer, op 211 and a fresh
-/// reader split ledger rows from aux rows at 32 — a ledger table 32 is written as an aux row and the cached ledger goes stale), so at
-/// the `rfc02/merge-final` merge it took the only free ledger number, G14-R4's never-used 19.
-pub const TABLE_HELD_BOUNTIES_V1: u8 = 19;
-/// The root extension table 19 adds once it holds a row (every older root unchanged), applied LAST — after table 31's.
-pub const HELD_BOUNTY_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-held-bounty-extension/v1";
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -135,6 +136,8 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_BONDS_V1 => "bonds",
         TABLE_CLASSES_V1 => "classes",
         TABLE_CONFORMANCE_CLASSES_V1 => "conformance-classes",
+        TABLE_FLAT_CONFORMANCE_CLASSES_V7 => "flat-conformance-v7",
+        TABLE_FLAT_CONFORMANCE_CLASSES_V9 => "flat-conformance-v9",
         TABLE_PIPELINE_CLASSES_V1 => "pipeline-classes",
         TABLE_JOBS_V1 => "jobs",
         TABLE_PIPELINE_JOBS_V1 => "pipeline-jobs",
@@ -156,7 +159,6 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_FORFEITED_CLAIM_SEALS_V1 => "forfeited-claim-seals",
         TABLE_VERIFIER_PAY_V1 => "verifier-pay",
         TABLE_COURT_SCOPE_V1 => "court-scope",
-        TABLE_HELD_BOUNTIES_V1 => "held-bounties",
         TABLE_SPEC_CLASSES_V1 => "spec-classes",
         TABLE_SPEC_JOBS_V1 => "spec-jobs",
         TABLE_MEMORY_LINES_V1 => "memory-lines",
@@ -181,6 +183,11 @@ impl KernelLedgerV1 {
         }
         for (k, (owner, c)) in &self.conformance_classes {
             rows.insert((TABLE_CONFORMANCE_CLASSES_V1, bytes_of(k)), bytes_of(&(*owner, c.record())));
+        }
+        for (k, row) in &self.flat_conformance_classes_v7 {
+            rows.insert((TABLE_FLAT_CONFORMANCE_CLASSES_V7, bytes_of(k)), bytes_of(row));
+        }        for (k, row) in &self.flat_conformance_classes_v9 {
+            rows.insert((TABLE_FLAT_CONFORMANCE_CLASSES_V9, bytes_of(k)), bytes_of(row));
         }
         for (k, c) in &self.classes {
             rows.insert((TABLE_CLASSES_V1, bytes_of(k)), bytes_of(&c.record()));
@@ -239,9 +246,6 @@ impl KernelLedgerV1 {
         for (k, v) in &self.verifier_pay {
             rows.insert((TABLE_VERIFIER_PAY_V1, bytes_of(k)), bytes_of(v));
         }
-        for (k, v) in &self.held_bounties {
-            rows.insert((TABLE_HELD_BOUNTIES_V1, bytes_of(k)), bytes_of(v));
-        }
         for (k, v) in &self.court_scope {
             rows.insert((TABLE_COURT_SCOPE_V1, bytes_of(k)), bytes_of(v));
         }
@@ -276,6 +280,7 @@ impl KernelLedgerV1 {
     /// implemented descriptors; its own rows are ignored). A row that does not decode, or a class record that does not rebuild,
     /// is an error — a consumer's stored rows are its own consensus state, so that is corruption, not an input.
     pub fn from_rows(template: &KernelLedgerV1, scalars: LedgerScalarsV1, rows: &LedgerRowsV1) -> Result<Self, String> {
+        crate::ledger::flat_candidate9::check_candidate_registry_import_v9(rows,&template.policy)?;
         let mut l = KernelLedgerV1::genesis(template.policy, template.schedule.clone(), template.known.clone())?;
         // The OPV policy is configuration (a genesis constant): the template carries it, exactly as it carries the ledger's own.
         if let Some(p) = template.opv.policy {
@@ -287,6 +292,7 @@ impl KernelLedgerV1 {
             borsh::from_slice(b).map_err(|e| format!("a stored {what} does not decode: {e}"))
         }
         let mut specs: Vec<(Digest, crate::spec::ComputationSpecV1)> = Vec::new();
+        let mut flat_v7: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         for ((table, key), row) in rows {
             match *table {
                 TABLE_BONDS_V1 => {
@@ -295,6 +301,27 @@ impl KernelLedgerV1 {
                 TABLE_CLASSES_V1 => {
                     let record: ClassRecordV1 = dec(row, "class")?;
                     l.classes.insert(dec(key, "class key")?, class_row_of(&l, &record)?);
+                }
+                // Table 0 sorts before the bonds (table 1) its rows name: loaded after the loop (`rfc02/merge-final`).
+                TABLE_FLAT_CONFORMANCE_CLASSES_V7 => flat_v7.push((key.clone(), row.clone())),
+                TABLE_FLAT_CONFORMANCE_CLASSES_V9 => {
+                    let (owner, record) = crate::ledger::flat_candidate9::decode_candidate_row_v9(row)?;
+                    let class: Digest = dec(key, "flat-v9 class key")?;
+                    if record.id() != class
+                        || l.opv.policy.is_none()
+                        || !l.bonds.contains_key(&owner)
+                        || l.classes.contains_key(&class)
+                    {
+                        return Err("flat-v9 preparation lacks exact identity/policy/bond or duplicates execution".into());
+                    }
+                    record.checked()?.check_policy(&l)?;
+                    let owned = l.conformance_class_owners.entry(owner).or_default();
+                    if owned.len() >= crate::ledger::MAX_CONFORMANCE_CLASSES_PER_BOND_V1 {
+                        return Err("mixed preparation rows exceed the shared bond catalog".into());
+                    }
+                    owned.insert(class);
+                    l.flat_conformance_classes_v9.insert(class, (owner, record));
+                    l.native_flat_candidate_ids_v9.insert(class);
                 }
                 TABLE_CONFORMANCE_CLASSES_V1 => {
                     let (owner, record): (Digest, ClassRecordV1) = dec(row, "conformance class")?;
@@ -375,10 +402,6 @@ impl KernelLedgerV1 {
                         dec::<crate::verifier_pay::VerifierPayRowV1>(row, "verifier pay row")?,
                     );
                 }
-                TABLE_HELD_BOUNTIES_V1 => {
-                    l.held_bounties
-                        .insert(dec(key, "held bounty key")?, dec::<crate::sealed_bounty::HeldBountyRowV1>(row, "held bounty row")?);
-                }
                 TABLE_COURT_SCOPE_V1 => {
                     l.court_scope
                         .insert(dec(key, "court scope key")?, dec::<crate::court_scope::CourtScopeRowV1>(row, "court scope row")?);
@@ -416,6 +439,26 @@ impl KernelLedgerV1 {
                 }
                 other => return Err(format!("a stored row names no table ({other})")),
             }
+        }
+        // RFC-0002 codex final: the flat-v7 registry (table 0), now that every bond and class is loaded.
+        for (key, row) in flat_v7 {
+            let (owner, record): (Digest, crate::ledger::flat_candidate7::FlatCandidateRecordV7) =
+                dec(&row, "flat-v7 conformance class")?;
+            let class: Digest = dec(&key, "flat-v7 class key")?;
+            if record.id() != class
+                || l.opv.policy.is_none()
+                || !l.bonds.contains_key(&owner)
+                || l.classes.contains_key(&class)
+            {
+                return Err("flat-v7 preparation lacks exact identity/policy/bond or duplicates execution".into());
+            }
+            record.checked()?.check_policy(&l)?;
+            let owned = l.conformance_class_owners.entry(owner).or_default();
+            if owned.len() >= crate::ledger::MAX_CONFORMANCE_CLASSES_PER_BOND_V1 {
+                return Err("mixed preparation rows exceed the shared bond catalog".into());
+            }
+            owned.insert(class);
+            l.flat_conformance_classes_v7.insert(class, (owner, record));
         }
         // A composite's derived row reads its components': every other typed class first (a component never is a composite).
         specs.sort_by_key(|(_, spec)| matches!(spec.roots.first(), Some(crate::spec::TypedRootV1::CompositeV1(_))));
@@ -658,8 +701,8 @@ pub fn root_of_rows(
     // The court scope (`palw_provider_court_v1`, G14-S): table 28 extends the root only once it holds a row.
     let base =
         if by_table.contains_key(&TABLE_COURT_SCOPE_V1) { court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1)) } else { base };
-    // Fixed order by table number, each only once its table holds a row (an unarmed network roots as before): 27, 28, 29 (RFC-02's
-    // conformance classes), 30 beacon sources, 31 EXEC reward holds, 19 (RFC-02's held bounties, applied last).
+    // Fixed order, each only once its table holds a row (an unarmed network roots as before): 27, 28, 29 (RFC-02's conformance
+    // classes), 30 beacon sources, 31 EXEC reward holds, then codex's flat-v7 (table 0) and flat-v9 (table 19) registries.
     let base = if by_table.contains_key(&TABLE_CONFORMANCE_CLASSES_V1) {
         conformance_root_extension_v1(&base, &coll(TABLE_CONFORMANCE_CLASSES_V1))
     } else {
@@ -675,20 +718,26 @@ pub fn root_of_rows(
     } else {
         base
     };
-    // RFC-0002 P0 residual (`crate::sealed_bounty`): table 19 extends the root only once it holds a row, applied last (after table 31's).
-    if by_table.contains_key(&TABLE_HELD_BOUNTIES_V1) {
-        held_bounty_root_extension_v1(&base, &coll(TABLE_HELD_BOUNTIES_V1))
-    } else {
-        base
-    }
+    let base = if by_table.contains_key(&TABLE_FLAT_CONFORMANCE_CLASSES_V7) {
+        flat_conformance_root_extension_v7(&base, &coll(TABLE_FLAT_CONFORMANCE_CLASSES_V7))
+    } else { base };
+    if by_table.contains_key(&TABLE_FLAT_CONFORMANCE_CLASSES_V9) {
+        flat_conformance_root_extension_v9(&base, &coll(TABLE_FLAT_CONFORMANCE_CLASSES_V9))
+    } else { base }
 }
 
-/// `H(extension; root ‖ table 19)` (held bounties, RFC-0002 P0 residual).
-pub fn held_bounty_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
-    let mut s = keyed(HELD_BOUNTY_ROOT_EXTENSION_DOMAIN_V1);
-    s.update(base).update(table);
-    finish(s)
+pub fn flat_conformance_root_extension_v9(base: &Digest, table: &Digest) -> Digest {
+    let mut h = keyed(FLAT_CONFORMANCE_ROOT_EXTENSION_DOMAIN_V9);
+    h.update(base).update(table);
+    finish(h)
 }
+
+pub fn flat_conformance_root_extension_v7(base: &Digest, table: &Digest) -> Digest {
+    let mut h = keyed(FLAT_CONFORMANCE_ROOT_EXTENSION_DOMAIN_V7);
+    h.update(base).update(table);
+    finish(h)
+}
+
 
 /// `H(extension; root ‖ table 28)` (the court scope, G14-S).
 pub fn court_scope_root_extension_v1(base: &Digest, table: &Digest) -> Digest {

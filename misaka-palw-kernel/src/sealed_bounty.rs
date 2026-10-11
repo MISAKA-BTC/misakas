@@ -9,7 +9,7 @@
 //!
 //! **The rule past the fence.** A filing still convicts exactly as before (any authentic proof, sealed or not: the court's liveness
 //! is unchanged). Its bounty is paid at once only when some bond holds a mature seal of the convicting bytes (GAP-R7 unchanged).
-//! Otherwise the filer's share is **held** in table 19 for `contest_daa`: in that window any bond whose OWN seal on the claim was
+//! Otherwise the filer's share is **held** in table 27 (kind 4, `VerifierPayRowV1::HeldBounty`) for `contest_daa`: in that window any bond whose OWN seal on the claim was
 //! posted before the conviction, is mature and opens to the proof it now files, may file that proof against the convicted claim; the
 //! court runs (fee and budget as any filing), and an authentic one takes the held share. A copyist learns the bytes only from the
 //! finder's filing, so it cannot hold a seal of them posted before the conviction. With no such reveal by the window's end the held
@@ -25,6 +25,7 @@ use crate::hash::Digest;
 use crate::ledger::{KernelLedgerV1, LedgerEventV1, settle};
 use crate::route::{ProsecutionV1, proof_digest_v1, proof_seal_of_digest_v1};
 use crate::settle::SettlementKindV1;
+use crate::verifier_pay::{VERIFIER_PAY_HELD_BOUNTY_V1, VerifierPayRowV1};
 
 /// **The sealed-bounty terms**, consumer-injected (never part of the state or its root).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -71,15 +72,15 @@ impl KernelLedgerV1 {
     ) {
         let p = self.sealed_bounty_in_force().expect("held only past the fence");
         let until_daa = self.daa.saturating_add(p.contest_daa);
-        self.held_bounties
-            .insert(*claim, HeldBountyRowV1 { filer: *filer, producer: *producer, amount, convicted_daa: self.daa, until_daa });
+        let row = HeldBountyRowV1 { filer: *filer, producer: *producer, amount, convicted_daa: self.daa, until_daa };
+        self.put_held_bounty_v1(claim, row);
         out.push(LedgerEventV1::BountyHeld { claim: *claim, filer: *filer, amount, until_daa });
     }
 
     /// May `accuser` contest `claim`'s held bounty with `proof` now? (Its own seal, posted before the conviction, mature, opening to
     /// exactly these bytes, inside the window.) The court has not run yet.
     pub(crate) fn held_bounty_contest_allows_v1(&self, accuser: &Digest, claim: &Digest, proof: &ProsecutionV1) -> Result<(), &'static str> {
-        let held = self.held_bounties.get(claim).ok_or("the claim is convicted and holds no bounty")?;
+        let held = self.held_bounty_v1(claim).ok_or("the claim is convicted and holds no bounty")?;
         if self.daa >= held.until_daa {
             return Err("the held bounty's contest window has closed");
         }
@@ -98,7 +99,7 @@ impl KernelLedgerV1 {
 
     /// An authentic contesting proof: the held share is the contester's, once; the claim's seals are spent.
     pub(crate) fn pay_held_bounty_v1(&mut self, claim: &Digest, accuser: &Digest, out: &mut Vec<LedgerEventV1>) {
-        if let Some(held) = self.held_bounties.remove(claim) {
+        if let Some(held) = self.take_held_bounty_v1(claim) {
             // The share was kept reserved on the producer's bond: slash it now and pay it, one balanced step.
             let amount = match self.bonds.get_mut(&held.producer) {
                 Some(b) => {
@@ -119,11 +120,49 @@ impl KernelLedgerV1 {
     /// Windows that closed with no earlier sealer's reveal: the held share is the original filer's.
     pub(crate) fn expire_held_bounties_v1(&mut self, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
-        let due: Vec<Digest> = self.held_bounties.iter().filter(|(_, h)| daa >= h.until_daa).map(|(c, _)| *c).collect();
-        for claim in due {
-            let filer = self.held_bounties[&claim].filer;
+        let due: Vec<(Digest, Digest)> = self.held_bounties_v1().into_iter().filter(|(_, h)| daa >= h.until_daa).map(|(c, h)| (c, h.filer)).collect();
+        for (claim, filer) in due {
             self.pay_held_bounty_v1(&claim, &filer, out);
         }
+    }
+
+    /// The held bounty of `claim` (table 27, kind 4), if any.
+    pub fn held_bounty_v1(&self, claim: &Digest) -> Option<HeldBountyRowV1> {
+        match self.verifier_pay.get(&(VERIFIER_PAY_HELD_BOUNTY_V1, *claim)) {
+            Some(VerifierPayRowV1::HeldBounty { filer, producer, amount, convicted_daa, until_daa }) => Some(HeldBountyRowV1 {
+                filer: *filer,
+                producer: *producer,
+                amount: *amount,
+                convicted_daa: *convicted_daa,
+                until_daa: *until_daa,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Every held bounty, by claim.
+    pub fn held_bounties_v1(&self) -> Vec<(Digest, HeldBountyRowV1)> {
+        self.verifier_pay
+            .range((VERIFIER_PAY_HELD_BOUNTY_V1, [0u8; 64])..=(VERIFIER_PAY_HELD_BOUNTY_V1, [0xFFu8; 64]))
+            .filter_map(|((_, claim), _)| self.held_bounty_v1(claim).map(|h| (*claim, h)))
+            .collect()
+    }
+
+    fn put_held_bounty_v1(&mut self, claim: &Digest, h: HeldBountyRowV1) {
+        let row = VerifierPayRowV1::HeldBounty {
+            filer: h.filer,
+            producer: h.producer,
+            amount: h.amount,
+            convicted_daa: h.convicted_daa,
+            until_daa: h.until_daa,
+        };
+        self.verifier_pay.insert((VERIFIER_PAY_HELD_BOUNTY_V1, *claim), row);
+    }
+
+    fn take_held_bounty_v1(&mut self, claim: &Digest) -> Option<HeldBountyRowV1> {
+        let h = self.held_bounty_v1(claim)?;
+        self.verifier_pay.remove(&(VERIFIER_PAY_HELD_BOUNTY_V1, *claim));
+        Some(h)
     }
 
     pub(crate) fn spend_proof_seals_v1(&mut self, claim: &Digest) {

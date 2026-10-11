@@ -1,0 +1,168 @@
+{
+  "schema": "misaka.rfc02.native9-typed-da-node-verdict.v1",
+  "component_scope": "Explicit native candidate9/post9/own-seal9/mixed-court9/typed Header and Value DA9/own chunks; live candidate7 and9 withdraw retention. Conditional mode A only; no source availability obligation, no full empirical source fidelity or execution reward eligibility.",
+  "passed": {
+    "kernel_unit_after_inventory_fix": 184,
+    "kernel_candidate9": 5,
+    "sdk_library": 130,
+    "sdk_candidate9": 4,
+    "core_da_vector_route_lifecycle": 51,
+    "native_model_conformance": 35
+  },
+  "ignored": {
+    "kernel_unit": 1,
+    "reason": "manual producer hash hardware benchmark"
+  },
+  "selected_component_distinct_passed": 409,
+  "new_acceptance_pool_contribution": 20,
+  "pool_counting": "5 candidate9 +4 SDK candidate9 +3 typed DA9 +8 new native cases; broad prior regressions and repeated route5 are not added again. Pure quota20/execution12 are separate root receipts.",
+  "source_capture": {
+    "captured_files": 1071,
+    "preimages_manifest": "docs/design/palw/tir/evidence/rfc02-native9-final-source-preimages.json",
+    "preimages_manifest_sha256": "feb370054f64b84ce1bdae5b0608a3b73515cf20aa8a8de6f3945dfe354defc4",
+    "preimages_archive": "docs/design/palw/tir/evidence/rfc02-native9-final-source-preimages.tar.gz",
+    "preimages_archive_sha256": "c4521ce912c7a1c72c82bc52e721e3a86994e5f0770d52f125536318b3d46f82",
+    "after_before_inventory_fixture_fix": "docs/design/palw/tir/evidence/rfc02-native9-final-source-after.json",
+    "identical_before_inventory_fixture_fix": true,
+    "eligible_native9_files": 43,
+    "eligible_native9_staged_manifest": "docs/design/palw/tir/evidence/rfc02-native9-final-source-eligible-staged-files-after-test-fix.json",
+    "staged_after_manifest": "docs/design/palw/tir/evidence/rfc02-native9-final-source-after-route-test-fix.json",
+    "later_changed_files": [
+      "misaka-palw-kernel/src/route.rs"
+    ],
+    "later_change": "route.rs cfg(test) inventory alone adds explicit48..55 samples, moves first unallocated tag48 to56. Native/core/SDK/candidate binaries retain their exact initial source preimages; the whole route.rs file is not claimed identical afterward.",
+    "production_route_prefix_bytes": 45722,
+    "production_route_prefix_sha256": "7042b2935d1b574918f16376b9e1914a5f376d02686674040bd49d4eaea3e27e",
+    "production_route_prefix_byte_identical": true,
+    "kernel_full_after_fix_preimage": "docs/design/palw/tir/evidence/rfc02-native9-route-formatted-unit-preimage.rs",
+    "kernel_full_after_fix_source_scope": "The fixed full-unit binary compiled whitespace-only formatting in route production prefix, preserved separately. The final staged prefix was restored byte-for-byte; exact staged route5 then passed in a separate binary.",
+    "excluded_unexported_next_sources": [
+      "consensus/core/src/palw_flat_execution_v11.rs",
+      "misaka-palw-sdk/src/flat_streamed_locator_v9.rs",
+      "misaka-palw-sdk/tests/flat_streamed_locator_v9.rs",
+      "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9/actual_outsider.rs"
+    ]
+  },
+  "prior_failure_retained": {
+    "kernel_full": {
+      "passed": 183,
+      "failed": 1,
+      "ignored": 1,
+      "cause": "obsolete cfg(test) unknown-tag48 assertion; no runtime gate or cap changed"
+    },
+    "typed_da_codec_fixture": "earlier typed DA test used count offset78 instead of142, omitting scope64; field fixture corrected without relaxing production decoder",
+    "failure_logs_retained": true
+  },
+  "native_verified": [
+    "actual Qwen classmax32 registration and exactP1 post",
+    "all captured public Node/Hash/Header/Value replies authenticated against exactscope/job",
+    "actual ordinary output e1500/leaf23 proof under own matured sealed identity",
+    "original100 producer principal slashed once; finder49 payout reaches actualUTXO or backed pending queue and node IBD replay",
+    "synthetic independent public finder, sparse/tie/routing/state and ordinary faults",
+    "mature own proof after admission flood and own chunk lane after generic group saturation",
+    "fresh non-genesis IBD and pruning public snapshot acquisition/prosecution/redemption",
+    "live candidate7 and9 metadata retained through vector/seal/DA liability, expiry withdraw and sharedcatalog slotreuse",
+    "bounded128 active candidate9 projection without ordinary wholecatalog scopewalk; bounded aggregate import raw/predecode caps before mapallocation"
+  ],
+  "actual_fixture": {
+    "path": "docs/design/palw/tir/evidence/qwen25-real-generic9-fixture.borsh",
+    "sha256": "f023ac340642759675c8154c4747e316c2f9a0beda8ef5c5f5c54033a9d896bf",
+    "scope": "native consumes externally independently executed fixture; native test itself does not run a new mapped model or unknown-coordinate search",
+    "fresh_actual_outsider_proven": false
+  },
+  "remaining": [
+    "native11 persistent 21-axis quota/full class/job/input/resource consumers",
+    "native11 genuine original escrow and one credit/job atomic Final/refund/UTXO integration",
+    "protected paid challenger quota reservations and separately priced bounded fragments",
+    "actual fresh participant own mapped-model unknown-coordinate prosecution",
+    "bounded catalog retirement/archival beyond active retention",
+    "complete empirical checkpoint fidelity/task cohort and A6/A8 >=90% acceptance; performance evidence"
+  ],
+  "shipping_activation_changed": false,
+  "honest_execution_final_proven": false,
+  "full_rfc02_complete": false,
+  "binaries": [
+    {
+      "component": "node",
+      "immutable_path": "/tmp/rfc02-native9-final-node-binary",
+      "sha256": "9c964bba6dfb53078ac5bd962ebe4125b8e76ca7d8d86a6080e41fe2696594c5"
+    },
+    {
+      "component": "core",
+      "immutable_path": "/tmp/rfc02-native9-final-core-binary",
+      "sha256": "760ce2d29d5ef65c7f924f518144ae5e979eb6108297fbe0795dbf754a5ac8d7"
+    },
+    {
+      "component": "sdk",
+      "immutable_path": "/tmp/rfc02-native9-final-misaka_palw_sdk-a2a6cc1c258b5adf-binary",
+      "sha256": "21c2445ce9a0ffbe90519a07d49a56e3213e579dea6fb75927737f198998d712"
+    },
+    {
+      "component": "sdk_candidate9",
+      "immutable_path": "/tmp/rfc02-native9-final-flat_candidate_v9-669a0452c105eaaf-binary",
+      "sha256": "6b1837504b6819572dc0ee1f90516af0a9f5fb1247dea25eefceb3189aa8e927"
+    },
+    {
+      "component": "kernel_candidate9",
+      "immutable_path": "/tmp/rfc02-native9-final-flat_candidate9-25059127372bf198-binary",
+      "sha256": "3c09a3aeb6b32038a55afce3cd42d783b4ec50737f60c3869241fde8a866cc18"
+    },
+    {
+      "component": "kernel_full_before_inventory_fix",
+      "immutable_path": "/tmp/rfc02-native9-final-kernel-unit-binary",
+      "sha256": "77080ae4b76ae1b0436f47b32c530db161ce2c62f63b36ace1abc196f5ab07af"
+    },
+    {
+      "component": "kernel_full_after_inventory_fix",
+      "immutable_path": "/tmp/rfc02-native9-fixed-inventory-kernel-unit-binary",
+      "sha256": "cef9b107f58c807377a4cf7d95a7f74d43a0c96c1e8281cb8a25b1603b7cfc95"
+    },
+    {
+      "component": "kernel_exact_staged_route",
+      "immutable_path": "/tmp/rfc02-native9-exact-route-kernel-unit-binary",
+      "sha256": "207a20e909b3839c80ff456d90b06a0ff139f32a578c8065a19416006e745f83"
+    }
+  ],
+  "logs": [
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native9-final-sdk-tests.log",
+      "sha256": "8ab6941e47b4c67f2f4af076adb0d507fce9facd7bb8b1e2bd8063889077904e"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native9-final-core-build.log",
+      "sha256": "bb77df8b5d69c4c1e6b0d8f635479c14a8881e6c6d8ecf79a927e63c5b1c1e76"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native9-final-core-tests.log",
+      "sha256": "fe71e2f578521029d32e567ef55d7bf5dcf793f7e291fe624177ffb2129fb7b8"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native9-final-node-build.log",
+      "sha256": "d9084be099c61140dd99f14d1a199af86131733e29350b0cfa0137d46f039905"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native9-final-node-tests.log",
+      "sha256": "a8b2e1dea0c2bc0d3b0cd43c074292d36799f5ff937c8bf152d7c8cede1059a5"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native9-final-kernel-candidate-tests.log",
+      "sha256": "02db82c016f7316d8dabb241b32849d5ba7fa595125fb4da978c929beb70b705"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native9-final-kernel-unit-tests.log",
+      "sha256": "b8a47a8569e028ecdd22deb602b3acd98d152d2de8491f9d6f68dd07034c0ef8"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native9-final-kernel-unit-tests-fixed.log",
+      "sha256": "35bbd697445293ef74158a95e9dc96c0b952b9e11095836ba4b7430a37e012e2"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native9-exact-final-kernel-route-tests.log",
+      "sha256": "39687416b074d31e486d75c48f143602d6ddaa550053a926201094fdf4a4d812"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native9-final-route-ceiling-refusal.log",
+      "sha256": "e25de00a639d07af8aca6f6a3681dc371d8827ec4a69a42c0756d64a63cc9ebd"
+    }
+  ]
+}

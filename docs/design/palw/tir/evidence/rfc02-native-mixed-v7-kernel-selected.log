@@ -1,0 +1,15 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 30s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227)
+
+running 6 tests
+test flat_seal7::tests::mixed_seal7_binds_actor_exact_proof_and_namespace_before_court ... ok
+test route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling ... ok
+test route::tests::explicit_mixed7_outer_codec_refuses_truncation_inflated_counts_trailing_and_noncanonical_units ... ok
+test route::tests::malformed_and_oversized_encodings_are_refused_with_their_kind ... ok
+test route::tests::the_salted_reveal_is_kind_20_carries_its_commits_own_tag_and_opens_only_its_v2_seal ... ok
+test route::tests::the_wire_form_is_version_discriminant_then_the_fields ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 150 filtered out; finished in 0.00s
+

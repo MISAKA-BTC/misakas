@@ -98,7 +98,7 @@ fn rfc02t_sealed_bounty_holds_an_unsealed_conviction_and_the_earlier_sealer_take
     // The finder's filing, ordered after the conviction in the same block, contested it: its seal predates the conviction.
     assert_eq!(paid(&w, &OUTSIDER), reward, "the earlier sealer's own authentic proof takes the held share");
     assert!(ev.iter().any(|e| matches!(e, E::HeldBountyPaid { accuser, .. } if *accuser == OUTSIDER)), "{ev:?}");
-    assert!(w.l.held_bounties.is_empty() && w.l.proof_seals.is_empty(), "paid once; the claim's seals are spent");
+    assert!(w.l.held_bounties_v1().is_empty() && w.l.proof_seals.is_empty(), "paid once; the claim's seals are spent");
     // Nothing more to take: a further filing is a duplicate, no second payment.
     let ev = w.block(14, vec![T::FileProof { accuser: COPYIST, claim: id, proof: copy }]);
     assert!(ev.iter().any(|e| matches!(e, E::Duplicate { .. })), "{ev:?}");
@@ -124,7 +124,7 @@ fn rfc02t_sealed_bounty_a_late_seal_cannot_contest_and_an_unsealed_honest_filer_
         w.block(daa, vec![]);
     }
     assert_eq!(paid(&w, &COPYIST), reward);
-    assert!(w.l.held_bounties.is_empty());
+    assert!(w.l.held_bounties_v1().is_empty());
 }
 
 #[test]
@@ -134,5 +134,5 @@ fn rfc02t_sealed_bounty_leaves_gap_r7_alone_when_the_convicting_bytes_were_seale
     let ev = w.block(13, vec![T::FileProof { accuser: COPYIST, claim: id, proof }]);
     let (_, reward, _) = convicted(&ev).expect("convicted");
     assert_eq!((paid(&w, &OUTSIDER), paid(&w, &COPYIST)), (reward, 0));
-    assert!(w.l.held_bounties.is_empty());
+    assert!(w.l.held_bounties_v1().is_empty());
 }

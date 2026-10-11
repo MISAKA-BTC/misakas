@@ -116,7 +116,7 @@ async fn world(mode: Mode) -> World {
 }
 
 /// The participant's coins: the re-addressed main premine output.
-fn newcomer_funding(net: &Net) -> (TransactionOutpoint, UtxoEntry) {
+pub(super) fn newcomer_funding(net: &Net) -> (TransactionOutpoint, UtxoEntry) {
     let main = premine_outpoint_for(net.config.params.net, MAIN_PREMINE_INDEX);
     let (outpoint, entry) = net.premine.iter().find(|(o, _)| *o == main).expect("the main premine output").clone();
     assert_eq!(entry.script_public_key, card_payout_spk(NEWCOMER), "re-addressed to the participant");
@@ -221,7 +221,7 @@ pub(super) fn agree(main: &Net, node: &Net, what: &str) {
 /// bond named by index with a zero id, the bond key's signature over the registration and the operator key's over possession (one key
 /// for both), under this chain's domain; change at output 0. Taken by `node`'s mempool, carried by `node`'s template, folded by the
 /// next block. Returns the bond, which is then this network's actor [`NEWCOMER`] on `node` (its key and its change output).
-async fn register_newcomer(node: &mut Net, funding: (TransactionOutpoint, UtxoEntry)) -> PalwBondKeyV2 {
+pub(super) async fn register_newcomer(node: &mut Net, funding: (TransactionOutpoint, UtxoEntry)) -> PalwBondKeyV2 {
     use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
     let key = TestConsensus::palw_v2_registry_keypair(NEWCOMER as u64);
     let pubkey = key.verification_key.as_ref().to_vec();
@@ -278,7 +278,7 @@ async fn register_newcomer(node: &mut Net, funding: (TransactionOutpoint, UtxoEn
 }
 
 /// The participant's bond, known to `net` too (for the reads that name actors by index); its funding stays its own node's.
-fn know_newcomer(net: &mut Net, bond: PalwBondKeyV2) {
+pub(super) fn know_newcomer(net: &mut Net, bond: PalwBondKeyV2) {
     assert_eq!(net.chain.bonds.len(), NEWCOMER);
     net.chain.bonds.push(bond);
 }
@@ -336,6 +336,31 @@ impl Rpc {
     }
 
     /// The SDK/CLI's common verifier input, derived solely from paged op-211 wire responses.
+    pub(super) fn flat_snapshot(
+        &self,
+        anchor: misaka_palw_sdk::flat_candidate_v6::snapshot::FlatSnapshotAnchorV6,
+    ) -> misaka_palw_sdk::flat_candidate_v6::snapshot::FlatPublicSnapshotV6 {
+        use misaka_palw_sdk::flat_candidate_v6::snapshot::*;
+        let mut snapshot = misaka_palw_sdk::onboarding_snapshot::KernelRowsSnapshotV1::default();
+        let mut request = GetPalwKernelRowsRequest { max_bytes: ROWS_PAGE_BYTES, ..Default::default() };
+        loop {
+            let (after, max_bytes) = palw_kernel_rows_request_v1(&Self::wire(request)).unwrap();
+            let wire = serde_json::to_vec(&palw_kernel_rows_response_v1(self.api(), after, max_bytes).unwrap()).unwrap();
+            match snapshot.push(flat_rpc_page_v6(&wire).unwrap()).unwrap() {
+                None => return FlatPublicSnapshotV6::from_snapshot(snapshot, anchor).unwrap(),
+                Some((table, key)) => {
+                    request = GetPalwKernelRowsRequest {
+                        has_cursor: true,
+                        after_table: table as u32,
+                        after_key: faster_hex::hex_string(&key),
+                        max_bytes: ROWS_PAGE_BYTES,
+                    }
+                }
+            }
+        }
+    }
+
+    /// The SDK/CLI's common onboarding input from paged op-211 responses.
     pub(super) fn onboarding(&self, class: Hash64) -> misaka_palw_sdk::onboarding_chain::PublicOnboardingReadsV1 {
         use misaka_palw_sdk::onboarding_snapshot::{KernelRowsPageV1, KernelRowsSnapshotV1};
         let mut snapshot = KernelRowsSnapshotV1::default();
@@ -1102,8 +1127,14 @@ async fn lie_convicted_using(mode: Mode, start: Start, lie: Lie, commitments_onl
     let finding = if commitments_only {
         assert!(fresh.ledger.demands.is_empty() && fresh.ledger.served.is_empty());
         misaka_palw_kernel::ledger::OutsiderV1 {
-            ledger: &fresh.ledger, claim: claim.id, material: &NoProducerValues, artifact: &model, salt: fresh.salt,
-        }.check_computation().expect("exact replay from authenticated public commitments and the registered artifact")
+            ledger: &fresh.ledger,
+            claim: claim.id,
+            material: &NoProducerValues,
+            artifact: &model,
+            salt: fresh.salt,
+        }
+        .check_computation()
+        .expect("exact replay from authenticated public commitments and the registered artifact")
     } else {
         fresh.check(claim.id, &claim.published(&w.fx, &[]), &model)
     };

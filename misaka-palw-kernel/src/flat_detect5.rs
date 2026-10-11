@@ -44,7 +44,7 @@ pub enum FlatFindingV5 {
 fn error(e: impl std::fmt::Debug) -> FlatFindingV5 {
     FlatFindingV5::Inconsistent(format!("{e:?}"))
 }
-fn read_node(
+pub(crate) fn read_node(
     c: &FlatSegContextV5<'_>,
     pr: &PreparedV1<'_>,
     public: &dyn FlatPublicReadsV5,
@@ -55,7 +55,7 @@ fn read_node(
         .filter(|o| common::authenticate_node(c, pr, o, (unit.position, unit.occurrence, unit.node)))
         .ok_or(FlatFindingV5::Demand(unit))
 }
-fn value_proof(t: &Tensor, node: Option<NodeOpeningV1>, reads: &[(u64, u64)]) -> Result<FlatOperandV5, FlatFindingV5> {
+pub(crate) fn value_proof(t: &Tensor, node: Option<NodeOpeningV1>, reads: &[(u64, u64)]) -> Result<FlatOperandV5, FlatFindingV5> {
     let mut out = FlatOperandV5 { node, flat: Vec::new(), legacy: Vec::new() };
     if out.node.is_some() && t.data.len() >= 64 {
         let tree = FlatTreeV5::of(t).map_err(error)?;
@@ -79,7 +79,7 @@ fn checked_fault(c: &FlatSegContextV5<'_>, fault: FlatFaultV5) -> FlatFindingV5 
         },
     }
 }
-fn relation(
+pub(crate) fn relation(
     c: &FlatSegContextV5<'_>,
     pr: &PreparedV1<'_>,
     public: &dyn FlatPublicReadsV5,
@@ -187,15 +187,22 @@ fn relation(
 /// reads have no tensor-value API. Stop at the first fault or DA request. A
 /// retry replays the prefix; callers should cache replies, and must account for
 /// replay/hash/transport costs separately from the bounded terminal court.
-pub fn check_flat_claim_v5(
+pub(crate) fn check_flat_claim_engine<E: From<FlatFindingV5>>(
     c: &FlatSegContextV5<'_>,
     public: &dyn FlatPublicReadsV5,
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],
-) -> FlatFindingV5 {
+    mut inspect: impl FnMut(
+        &PreparedV1<'_>,
+        FlatReadV5,
+        &Tensor,
+        &dyn Fn() -> Result<Vec<Tensor>, String>,
+        &dyn Fn() -> Option<PromptTileOpeningV1>,
+    ) -> Result<(), E>,
+) -> Result<(), E> {
     let pr = match common::prepare(c) {
         Ok(p) => p,
-        Err(e) => return error(e),
+        Err(e) => return Err(error(e).into()),
     };
     let mut previous: Vec<Vec<Tensor>> = Vec::new();
     let mut stopped = None;
@@ -247,8 +254,7 @@ pub fn check_flat_claim_v5(
                         None
                     }
                 };
-                let finding = relation(c, &pr, public, FlatReadV5::node(p, s, n), expected, &own, &token);
-                if finding != FlatFindingV5::Clean {
+                if let Err(finding) = inspect(&pr, FlatReadV5::node(p, s, n), expected, &own, &token) {
                     stopped = Some(finding);
                     return Err(TirError::new(TirErrorKind::Missing, "flat verifier stopped"));
                 }
@@ -287,7 +293,7 @@ pub fn check_flat_claim_v5(
                     ))
                 })()
                 .unwrap_or_else(|f| f);
-                stopped = Some(finding);
+                stopped = Some(finding.into());
                 return Err(TirError::new(TirErrorKind::Missing, "flat decode stopped"));
             }
         }
@@ -295,14 +301,23 @@ pub fn check_flat_claim_v5(
         Ok(())
     };
     let replay = crate::seg_detect::replay_values_v1(&c.claim, artifact, tokens, None, &mut visit);
-    if let Some(f) = stopped {
-        f
-    } else {
-        match replay {
-            Ok(()) => FlatFindingV5::Clean,
-            Err(e) => error(e),
+    if let Some(f) = stopped { Err(f) } else { replay.map_err(|e| error(e).into()) }
+}
+
+pub fn check_flat_claim_v5(
+    c: &FlatSegContextV5<'_>,
+    public: &dyn FlatPublicReadsV5,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+) -> FlatFindingV5 {
+    check_flat_claim_engine(c, public, artifact, tokens, |pr, unit, expected, own, token| {
+        match relation(c, pr, public, unit, expected, own, token) {
+            FlatFindingV5::Clean => Ok(()),
+            f => Err(f),
         }
-    }
+    })
+    .err()
+    .unwrap_or(FlatFindingV5::Clean)
 }
 
 #[cfg(test)]

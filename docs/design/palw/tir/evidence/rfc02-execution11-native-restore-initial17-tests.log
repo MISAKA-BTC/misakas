@@ -1,0 +1,25 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.10s
+     Running tests/flat_execution11.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_execution11-4486c76b0fcb72ce)
+
+running 17 tests
+test native_nonce_encoding_and_operator_counter_have_no_padding_or_rotation_alias ... ok
+test one_claim_final_credit_is_original_escrow_and_cannot_repeat_after_restore ... ok
+test claim_wrong_actor_identity_clock_or_original_reserve_leaves_funding_unchanged ... ok
+test fast_native_class_restore_preserves_original_funding_after_source_revocation ... ok
+test execution_class_requires_exact_mature_source_policy_and_full_candidate ... ok
+test execution_checked_money_overflow_and_corrupt_state_cannot_spend_or_rewind ... ok
+test funded_actual_job_binds_all_text_lengths_resource_and_single_interval ... ok
+test fast_native_restore_rejects_rooted_but_wrong_resource_namespace_and_primitives ... ok
+test rooted_resource_frame_bounds_counts_before_allocation_and_rejects_foreign_roots ... ok
+test job_identity_cannot_change_with_funding_carrier_and_unclaimed_refunds_once ... ok
+test original_class_restore_rechecks_exact_source_candidate_policy_and_cannot_grant_admission ... ok
+test pending_own_proofs_da_answer_and_retention_grace_block_final_atomically ... ok
+test trusted_daa_jump_can_close_or_refund_expired_funding_without_reopening_courts ... ok
+test revoked_original_class_restores_existing_escrow_but_cannot_admit_another_job ... ok
+test native_eligibility_is_exact_ephemeral_and_cannot_be_reused_in_another_block ... ok
+test all_native_faults_refund_one_escrow_and_pay_only_collected_original_slash ... ok
+test wrong_native_source_subject_late_judgment_and_excess_slash_are_atomic_refusals ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

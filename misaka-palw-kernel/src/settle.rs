@@ -141,15 +141,23 @@ impl SettlementBookV1 {
 
     pub fn apply(&mut self, s: &SettlementInstructionV1) -> Result<(), String> {
         use SettlementKindV1 as K;
+        let sum = |a: u64, b: u64| a.checked_add(b).ok_or_else(|| "settlement total overflows u64".to_string());
         let (b, a) = (s.bond, s.amount);
         let c = self.collateral.get(&b).copied().unwrap_or(0);
         let r = self.reserved.get(&b).copied().unwrap_or(0);
         match s.kind {
             K::ReserveClaim | K::ReserveDemand | K::ReserveJobEscrow | K::ReserveSealDeposit => {
+                // Another consumer may have slashed held collateral. Its old
+                // reservation must still be releasable and its remaining
+                // collateral may fund a clamped debit; only new allocation
+                // refuses an existing reservation overhang.
+                if r > c {
+                    return Err(format!("reservation {r} exceeds collateral {c}"));
+                }
                 if a > c.saturating_sub(r) {
                     return Err(format!("reserve {a} past the free collateral {}", c.saturating_sub(r)));
                 }
-                self.reserved.insert(b, r + a);
+                self.reserved.insert(b, sum(r, a)?);
             }
             K::ReleaseClaim | K::ReleaseDemand | K::ReleaseJobEscrow | K::ReleaseSealDeposit => {
                 if a > r {
@@ -161,39 +169,56 @@ impl SettlementBookV1 {
                 if a > r || a > c {
                     return Err(format!("slash {a} of a {r} reservation / {c} collateral"));
                 }
+                let slashed = sum(self.slashed, a)?;
+                let escrow_spent = if s.kind == K::PayJobEscrow { sum(self.escrow_spent, a)? } else { self.escrow_spent };
                 self.reserved.insert(b, r - a);
                 self.collateral.insert(b, c - a);
-                self.slashed += a;
-                if s.kind == K::PayJobEscrow {
-                    self.escrow_spent += a;
-                }
+                self.slashed = slashed;
+                self.escrow_spent = escrow_spent;
             }
             K::SlashFiling | K::AdmissionFee | K::JobFee => {
                 if a > c.saturating_sub(r) {
                     return Err(format!("fee {a} past the free collateral {}", c.saturating_sub(r)));
                 }
+                let slashed = sum(self.slashed, a)?;
                 self.collateral.insert(b, c - a);
-                self.slashed += a;
+                self.slashed = slashed;
             }
             K::AccuserReward | K::DemanderShare => {
-                *self.paid.entry(b).or_default() += a;
-                self.routed += a;
+                let paid = sum(self.paid.get(&b).copied().unwrap_or(0), a)?;
+                let routed = sum(self.routed, a)?;
+                if routed > self.slashed {
+                    return Err("a payout exceeds original debited collateral".into());
+                }
+                self.paid.insert(b, paid);
+                self.routed = routed;
             }
             K::Burn => {
-                self.burned += a;
-                self.routed += a;
+                let burned = sum(self.burned, a)?;
+                let routed = sum(self.routed, a)?;
+                if routed > self.slashed {
+                    return Err("a burn exceeds original debited collateral".into());
+                }
+                self.burned = burned;
+                self.routed = routed;
             }
             K::FinalReward => {
                 // GAP-5: a Final reward is a spent escrow routed to the producer, never new money.
-                if self.final_rewards.saturating_add(a) > self.escrow_spent {
+                let final_rewards = sum(self.final_rewards, a)?;
+                if final_rewards > self.escrow_spent {
                     return Err(format!(
                         "a Final reward of {a} with only {} of spent escrow behind it",
-                        self.escrow_spent - self.final_rewards
+                        self.escrow_spent.saturating_sub(self.final_rewards)
                     ));
                 }
-                *self.paid.entry(b).or_default() += a;
-                self.final_rewards += a;
-                self.routed += a;
+                let paid = sum(self.paid.get(&b).copied().unwrap_or(0), a)?;
+                let routed = sum(self.routed, a)?;
+                if routed > self.slashed {
+                    return Err("a Final reward exceeds original debited collateral".into());
+                }
+                self.paid.insert(b, paid);
+                self.final_rewards = final_rewards;
+                self.routed = routed;
             }
             K::Withdraw => {
                 if r != 0 || a != c {
@@ -206,14 +231,18 @@ impl SettlementBookV1 {
         Ok(())
     }
 
-    /// Apply every settlement in a receipt batch, then check that everything slashed was routed.
+    /// Apply an entire receipt batch atomically and check that every debit was
+    /// routed. A rejected instruction or unbalanced batch preserves the book.
     pub fn apply_events(&mut self, events: &[LedgerEventV1]) -> Result<(), String> {
+        let mut next = self.clone();
         for e in events {
             if let LedgerEventV1::Settlement(s) = e {
-                self.apply(s).map_err(|why| format!("{s:?}: {why}"))?;
+                next.apply(s).map_err(|why| format!("{s:?}: {why}"))?;
             }
         }
-        self.balanced()
+        next.balanced()?;
+        *self = next;
+        Ok(())
     }
 
     /// `slashed == routed`: nothing a slash took is unaccounted for.

@@ -626,6 +626,9 @@ pub mod palw_model_artifact_v2;
 pub mod palw_model_conformance_v2;
 pub mod palw_model_vector_v2;
 pub mod palw_flat_model_vector_v3;
+pub mod palw_flat_model_seal_v6;
+pub mod palw_flat_model_vector_v7;
+pub mod palw_flat_model_vector_da_v7;
 pub mod palw_flat_model_vector_da_v3;
 /// RFC-0002 P0 (RFC02-T): the protected candidate refutation — fence `palw_model_refutation_seal_v1`, dormant, refused when armed.
 pub mod palw_model_refutation_seal_v4;
@@ -831,3 +834,6 @@ mod tests {
 }
 
 pub mod palw_reward_vesting_read_v2;
+pub mod palw_flat_model_vector_v9;
+pub mod palw_flat_execution_v11;
+pub mod palw_flat_model_vector_da_v9;

@@ -1,0 +1,54 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+error[E0716]: temporary value dropped while borrowed
+   --> misaka-palw-kernel/src/flat_quota11/protected_tests.rs:693:50
+    |
+690 |             CheckedQuotaShardV11::from_native_rows(
+    |             -------------------------------------- borrow later used by call
+...
+693 |                 if field == 0 { &wrong } else { &global.root() },
+    |                                                  ^^^^^^^^^^^^-
+    |                                                  |           |
+    |                                                  |           temporary value is freed at the end of this statement
+    |                                                  creates a temporary value which is freed while still in use
+    |
+    = note: consider using a `let` binding to create a longer lived value
+
+error[E0716]: temporary value dropped while borrowed
+   --> misaka-palw-kernel/src/flat_quota11/protected_tests.rs:695:64
+    |
+695 |                 Some((&actor, if field == 1 { &wrong } else { &actor.root() })),
+    |                      ------------------------------------------^^^^^^^^^^^----
+    |                      |                                         |          |
+    |                      |                                         |          temporary value is freed at the end of this statement
+    |                      |                                         creates a temporary value which is freed while still in use
+    |                      borrow later used here
+    |
+    = note: consider using a `let` binding to create a longer lived value
+
+error[E0716]: temporary value dropped while borrowed
+   --> misaka-palw-kernel/src/flat_quota11/protected_tests.rs:696:65
+    |
+696 |                 Some((subject, if field == 2 { &wrong } else { &subject.row_root() })),
+    |                      -------------------------------------------^^^^^^^^^^^^^^^^^----
+    |                      |                                          |                |
+    |                      |                                          |                temporary value is freed at the end of this statement
+    |                      |                                          creates a temporary value which is freed while still in use
+    |                      borrow later used here
+    |
+    = note: consider using a `let` binding to create a longer lived value
+
+error[E0716]: temporary value dropped while borrowed
+   --> misaka-palw-kernel/src/flat_quota11/protected_tests.rs:697:62
+    |
+697 |                 Some((seal, if field == 3 { &wrong } else { &seal.row_root() }))
+    |                      ----------------------------------------^^^^^^^^^^^^^^----
+    |                      |                                       |             |
+    |                      |                                       |             temporary value is freed at the end of this statement
+    |                      |                                       creates a temporary value which is freed while still in use
+    |                      borrow later used here
+    |
+    = note: consider using a `let` binding to create a longer lived value
+
+For more information about this error, try `rustc --explain E0716`.
+error: could not compile `misaka-palw-kernel` (lib test) due to 4 previous errors

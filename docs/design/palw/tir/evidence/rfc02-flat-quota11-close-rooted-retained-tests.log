@@ -1,0 +1,24 @@
+
+running 19 tests
+test flat_quota11::tests::actual_class_scopes_and_rooted_stored_plan_are_independently_bound ... ok
+test flat_quota11::tests::bounded_snapshot_codec_refuses_count_floods_truncation_duplicates_and_trailing_bytes ... ok
+test flat_quota11::tests::closed_expired_collection_allows_new_jobs_without_nonce_reuse_or_old_guarantee_refunds ... ok
+test flat_quota11::tests::duplicate_jobs_and_multiple_actors_share_caps_and_bounded_retained_counts ... ok
+test flat_quota11::tests::every_axis_and_all_four_cap_scopes_are_atomic_at_baseline ... ok
+test flat_quota11::tests::expired_terminal_current_debits_survive_failures_and_ordinary_floods_without_old_credit ... ok
+test flat_quota11::tests::failed_current_close_keeps_debit_open_and_only_exact_genuine_terminal_marks_closed ... ok
+test flat_quota11::tests::failed_expensive_attempts_stay_spent_and_oversized_carriers_refuse_before_debit ... ok
+test flat_quota11::tests::freshly_checked_class_factory_matches_independent_actual_and_maximum_derivation ... ok
+test flat_quota11::tests::interval_crossing_is_refused_and_rollover_never_rebinds_old_subject ... ok
+test flat_quota11::tests::late_native_terminal_mark_requires_exact_prepaid_book_and_never_refunds_old_guarantee ... ok
+test flat_quota11::tests::native_baseline_factory_rejects_every_foreign_anchor_and_public_baseline_backdoor ... ok
+test flat_quota11::tests::ordinary_admission_flood_cannot_take_mature_court_da_chunk_or_close_guarantee ... ok
+test flat_quota11::tests::overflow_fixed_policy_and_restored_guarantee_tampering_refuse_atomically ... ok
+test flat_quota11::tests::public_challenger_failures_spend_only_own_unreserved_pool_preserving_mature_owner_guarantee ... ok
+test flat_quota11::tests::rooted_native_restore_refuses_locally_conserved_counter_row_erasure_and_guarantee_increase ... ok
+test flat_quota11::tests::subject_input_class_actor_and_plan_bindings_cannot_change_or_duplicate_baseline ... ok
+test flat_quota11::tests::terminal_anchor_and_restored_class_cannot_authorize_new_baseline_or_early_collection ... ok
+test flat_quota11::tests::trusted_equal_daa_blocks_keep_interval_and_lifetime_credit_and_rollback_replays_exactly ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 165 filtered out; finished in 0.02s
+

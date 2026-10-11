@@ -1,0 +1,19 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 31s
+     Running tests/flat_graph7.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_graph7-e82208e92101cef3)
+
+running 10 tests
+test complete_scope_prices_ten_million_axis_sparse_gather_and_1024_state_layers_without_images ... flat-v7 synthetic metadata-only N=10485760 K=2 layers=1024 max_positions=2097152 relations=10 instances=15038676992 court_bytes=39283 court_work=15073040 court_scratch=8438451 scan_work=540432058363674624 aux=128; no allocated model/job, native or Final acceptance
+ok
+test delivered_decode_fault_is_included_in_the_same_scope_and_mixed_codec ... ok
+test every_history_threshold_and_tail_uses_the_admitted_point_court_and_prior_state ... ok
+test honest_sparse_graph_replays_and_late_topk_or_state_faults_reach_their_own_courts ... ok
+test independent_full_scope_refuses_every_underpriced_or_rebound_field_and_other_oversized_relations ... ok
+test initial_zero_and_per_layer_state_writers_select_courts_from_exact_wiring ... ok
+test missing_borrowed_wrong_version_and_oversized_material_never_produces_a_conviction ... ok
+test ordinary_encoder_graph_keeps_job_bound_inputs_and_exact_single_position_scope ... ok
+test range_duplicate_and_dominance_faults_use_bounded_selected_value_replies ... ok
+test session_limits_precede_callbacks_and_missing_material_spends_the_retry_budget ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s

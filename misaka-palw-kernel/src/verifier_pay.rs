@@ -36,6 +36,8 @@ pub const VERIFIER_PAY_FEE_ESCROW_V1: u8 = 0;
 pub const VERIFIER_PAY_DRAW_V1: u8 = 1;
 pub const VERIFIER_PAY_HELD_SHARE_V1: u8 = 2;
 pub const VERIFIER_PAY_BEACON_SOURCE_V1: u8 = 3;
+/// RFC-0002 P0 residual (`crate::sealed_bounty`, RFC02-T): a convicted claim's held bounty, key `(4, claim)`.
+pub const VERIFIER_PAY_HELD_BOUNTY_V1: u8 = 4;
 
 /// **The verifier-pay terms** (POLICY, interim and unapproved). Consumer-injected, not part of the state or its root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -82,6 +84,11 @@ pub enum VerifierPayRowV1 {
     /// reserved beside the seal's own deposit until the seal is revealed (returned) or forfeited (burned with it); kept afterwards
     /// as the attempt's source record. `open`: the seal is still live.
     BeaconSource { attempt: Digest, class: Digest, job: Digest, producer: Digest, sealed_daa: u64, extra: u64, open: bool } = 3,
+    /// Key `(4, claim)` (RFC-0002 P0 residual, `crate::sealed_bounty`, past `palw_model_refutation_seal_v1`): a conviction by bytes
+    /// nobody had sealed — the filer's share, still reserved on the producer's bond until `until_daa` (like `HeldShare`), for an
+    /// earlier sealer's contest. (A table-27 kind, not a table of its own: the kernel ledger's numbers below the aux boundary 32 are
+    /// spent; `rfc02/merge-final`.)
+    HeldBounty { filer: Digest, producer: Digest, amount: u64, convicted_daa: u64, until_daa: u64 } = 4,
 }
 
 /// The table-27 key of a beacon-source seal.

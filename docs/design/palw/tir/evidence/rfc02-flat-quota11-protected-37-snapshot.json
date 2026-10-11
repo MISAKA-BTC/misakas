@@ -1,0 +1,23 @@
+{
+  "tests": 37,
+  "binary": "/tmp/rfc02-flat-quota11-protected-37-snapshot-unit",
+  "binary_sha256": "8607c0cbdbfcec5d469d8f55d6a25fc17b5817cc0ca6902621334f6f061a5815",
+  "source": {
+    "misaka-palw-kernel/src/flat_quota11.rs": {
+      "sha256": "d1599429a0e692030a2c242037c8c456c08c407fd86d65137e3f74659d542c66",
+      "copy": "/tmp/rfc02-flat-quota11-protected-37-flat_quota11.rs"
+    },
+    "misaka-palw-kernel/src/flat_quota11/protected.rs": {
+      "sha256": "51d0045ccc0424050e5e2e45b3857ad981f34b9d4eb93c98dc4a77530d0ed1b6",
+      "copy": "/tmp/rfc02-flat-quota11-protected-37-protected.rs"
+    },
+    "misaka-palw-kernel/src/flat_quota11/sharded.rs": {
+      "sha256": "d1da8f81bf956e710105c2eaae86d3bb88ff14f2aa9b600eb040d69eb9441930",
+      "copy": "/tmp/rfc02-flat-quota11-protected-37-sharded.rs"
+    },
+    "misaka-palw-kernel/src/flat_quota11/protected_tests.rs": {
+      "sha256": "2542127c58f6ac45653356c61b4f93856390df3947fb104b9d4164a793d7ef36",
+      "copy": "/tmp/rfc02-flat-quota11-protected-37-protected_tests.rs"
+    }
+  }
+}

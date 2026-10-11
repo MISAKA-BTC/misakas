@@ -1,0 +1,8 @@
+{
+  "schema": "misaka.rfc02.borrowed128-task-preallocation.v1",
+  "case": "zero fidelity gate rejected before missing artifact/config/model paths",
+  "exit_code": 1,
+  "stderr": "Error: \"finite task gates\"",
+  "passed": true,
+  "binary": "/tmp/rfc02-next9-immutable-174c9b5a50c4/check-borrowed-checkpoint-generation"
+}
