@@ -188,6 +188,8 @@ pub enum PalwBudgetOriginV1 {
     MarketFee = 6,
     /// Fee-only execution Round income; no reward-bearing block credit.
     RoundFee = 7,
+    /// Paid beacon-source fee promised before work, held through its signed liability and payment window.
+    SourceFee = 8,
 }
 
 /// Why the engine refused.
@@ -1068,6 +1070,12 @@ impl PalwBondBudgetStateV1 {
             if at > now {
                 break;
             }
+            // A source promise is an unpaid liability, even if a sparse chain
+            // jumps beyond H + W. Payment extends its window from the actual
+            // settlement clock; the clock must never free its R beforehand.
+            if self.claims.get(&claim_id).is_some_and(|claim| claim.origin == PalwBudgetOriginV1::SourceFee && claim.live) {
+                continue;
+            }
             self.put_release((at, claim_id), false, j);
             let Some(mut claim) = self.claims.get(&claim_id).copied() else { continue };
             let mut bond = self.bonds.get(&claim.bond).copied().unwrap_or_default();
@@ -1178,6 +1186,108 @@ impl PalwBondBudgetStateV1 {
         debug_assert!(matches!(grant, Some(Ok(amount)) if amount == u128::from(actual)));
         self.close(&income_id, j);
         self.forget(&income_id, j);
+        Ok(())
+    }
+
+    /// Reserve a fixed, authenticated source-fee promise before its opt-in.
+    /// The monetary right creates no open computation, block or weight credit.
+    /// Its R remains occupied while unpaid and at least through H + W.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_source_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        income_id: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+        liability_until: u64,
+        fee: u64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        if fee == 0 || liability_until < accepted_daa {
+            return Err(PalwBudgetRefusalV1::Assignment("source income requires a funded fee and a future liability"));
+        }
+        let release = liability_until.checked_add(policy.window_daa).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        if self.claims.contains_key(&income_id) {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        let row = self.bonds.get(&bond).copied().unwrap_or_default();
+        if row.open_claims == u32::MAX {
+            return Err(PalwBudgetRefusalV1::Overflow);
+        }
+        let held = row.window.reward_sompi.checked_add(fee).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        if held > palw_bond_budget_caps_v1(policy, capital).reward_sompi {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
+        self.reserve(
+            policy,
+            capital,
+            income_id,
+            bond,
+            None,
+            accepted_daa,
+            PalwBudgetVectorV1 { reward_sompi: fee, ..PalwBudgetVectorV1::ZERO },
+            PalwBudgetOriginV1::SourceFee,
+            false,
+            j,
+        )?;
+        self.close(&income_id, j);
+        self.extend_income_window_v1(&income_id, release, j);
+        Ok(())
+    }
+
+    fn extend_income_window_v1(&mut self, income_id: &Hash64, release: u64, j: &mut Vec<PalwBudgetWriteV1>) {
+        let mut claim = *self.claims.get(income_id).expect("a checked income row");
+        if release > claim.reuse_not_before {
+            self.put_release((claim.reuse_not_before, *income_id), false, j);
+            claim.reuse_not_before = release;
+            self.put_claim(income_id, Some(claim), j);
+            self.put_release((release, *income_id), true, j);
+            let mut bond = self.bonds.get(&claim.bond).copied().expect("an in-window income bond");
+            bond.latest_release_daa = bond.latest_release_daa.max(release);
+            self.put_bond(&claim.bond, bond, j);
+        }
+    }
+
+    /// Pay exactly the promised fixed source fee, once, strictly after its
+    /// inclusive liability H. The fee stays in R for W after actual payment.
+    pub fn settle_source_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        income_id: &Hash64,
+        liability_until: u64,
+        now: u64,
+        fee: u64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let release = now.checked_add(policy.window_daa).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        let mut claim = self
+            .claims
+            .get(income_id)
+            .copied()
+            .filter(|claim| claim.origin == PalwBudgetOriginV1::SourceFee && claim.live && claim.in_window && !claim.open)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if now <= liability_until || fee == 0 || fee != claim.reserved.reward_sompi || claim.consumed.reward_sompi != 0 {
+            return Err(PalwBudgetRefusalV1::Assignment("source fee has not matured or differs from its funded promise"));
+        }
+        self.extend_income_window_v1(income_id, release, j);
+        claim = *self.claims.get(income_id).expect("extended checked income");
+        claim.consumed.reward_sompi = fee;
+        self.put_claim(income_id, Some(claim), j);
+        self.forget(income_id, j);
+        Ok(())
+    }
+
+    /// Cancel the unpaid right after its native funding is refunded. Window
+    /// occupancy is retained; a refund is not a quota recovery.
+    pub fn cancel_source_income_v1(&mut self, income_id: &Hash64, j: &mut Vec<PalwBudgetWriteV1>) -> Result<(), PalwBudgetRefusalV1> {
+        let row = self
+            .claims
+            .get(income_id)
+            .filter(|claim| claim.origin == PalwBudgetOriginV1::SourceFee && claim.live && claim.consumed.reward_sompi == 0)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        debug_assert!(!row.open && row.in_window);
+        self.forget(income_id, j);
         Ok(())
     }
 
@@ -1617,6 +1727,78 @@ mod tests {
         fn below(&mut self, n: u64) -> u64 {
             self.next() % n.max(1)
         }
+    }
+
+    #[test]
+    fn source_fee_reservation_survives_h_and_sparse_ticks_then_counts_w_after_actual_payment() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let fee = 50 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let empty = s.clone();
+        let mut j = Vec::new();
+        s.reserve_source_income_v1(&p, capital, h(50), bond(0), 10, 500, fee, &mut j).unwrap();
+        let row = s.claim(&h(50)).unwrap();
+        assert!(!row.open && row.live && row.in_window);
+        assert_eq!(row.reuse_not_before, 600);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().open_claims, 0);
+        s.release_due(110, &mut j);
+        s.release_due(600, &mut j);
+        s.release_due(900, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window, PalwBudgetVectorV1 { reward_sompi: fee, ..PalwBudgetVectorV1::ZERO });
+        let before = (s.root_parts(), j.len());
+        assert!(s.reserve_income_v1(&p, capital, h(51), bond(0), 900, 1, 1, PalwBudgetOriginV1::MarketFee, &mut j).is_err());
+        assert!(s.settle_source_income_v1(&p, &h(50), 500, 500, fee, &mut j).is_err(), "H is inclusive");
+        assert!(s.settle_source_income_v1(&p, &h(50), 500, 900, fee - 1, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before, "every refusal precedes its journal writes");
+        s.settle_source_income_v1(&p, &h(50), 500, 900, fee, &mut j).unwrap();
+        assert_eq!(s.claim(&h(50)).unwrap().consumed.reward_sompi, fee);
+        assert_eq!(s.claim(&h(50)).unwrap().reuse_not_before, 1_000);
+        let paid = (s.root_parts(), j.len());
+        assert!(s.settle_source_income_v1(&p, &h(50), 500, 901, fee, &mut j).is_err());
+        assert!(s.cancel_source_income_v1(&h(50), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), paid, "a paid right cannot pay or refund again");
+        s.release_due(999, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, fee);
+        s.release_due(1_000, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none() && s.claim(&h(50)).is_none());
+        s.check_consistency().unwrap();
+        let mut replay = empty.clone();
+        for entry in &j {
+            match entry {
+                PalwBudgetWriteV1::Row { table, key, old, new } => replay.apply_row(*table, key, old, new, false).unwrap(),
+                PalwBudgetWriteV1::Header { .. } => panic!("income does not alter the policy header"),
+            }
+        }
+        assert_eq!(replay.root_parts(), s.root_parts());
+        for entry in j.iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                replay.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), empty.root_parts(), "undo restores the original empty native ledger");
+    }
+
+    #[test]
+    fn source_fee_refund_cancels_the_entitlement_without_reusing_its_reserved_window() {
+        let p = policy(1, false);
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        let empty = (s.root_parts(), j.len());
+        assert!(s.reserve_source_income_v1(&p, 1_000 * BILI, h(60), bond(0), 10, u64::MAX, 1, &mut j).is_err());
+        assert!(s.reserve_source_income_v1(&p, 1_000 * BILI, h(60), bond(0), 10, 9, 1, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), empty);
+        s.reserve_source_income_v1(&p, 1_000 * BILI, h(60), bond(0), 10, 500, 50 * BILI, &mut j).unwrap();
+        s.cancel_source_income_v1(&h(60), &mut j).unwrap();
+        let canceled = (s.root_parts(), j.len());
+        assert!(s.settle_source_income_v1(&p, &h(60), 500, 501, 50 * BILI, &mut j).is_err());
+        assert!(s.cancel_source_income_v1(&h(60), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), canceled);
+        s.release_due(599, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
+        s.release_due(600, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none() && s.claim(&h(60)).is_none());
+        s.check_consistency().unwrap();
     }
 
     #[test]

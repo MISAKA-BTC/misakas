@@ -73,6 +73,16 @@ pub(super) fn kernel_budget_claim_id_v1(claim: &misaka_palw_kernel::hash::Digest
     finish(hash)
 }
 
+/// One recipient's funded source promise, independent of carrier replay or
+/// income from another market/EXEC/native claim.
+pub(super) fn source_income_id_v1(context: Hash64, source: Hash64, bond: &PalwBondKeyV2) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/source-income/v1");
+    hash.update(context.as_byte_slice());
+    hash.update(source.as_byte_slice());
+    hash.update(&borsh::to_vec(bond).expect("a bond serializes"));
+    finish(hash)
+}
+
 // ---- delta application ------------------------------------------------------------------------------------------------------
 
 /// Delta 190, verify-then-install.
@@ -374,6 +384,84 @@ impl TransitionBuilder<'_> {
         })
         .expect("created")
         .map_err(|why| budget_refused(bond, why))
+    }
+
+    /// Native paid-source admission reserves the signed fixed fee before its
+    /// opt-in becomes accepted. This row creates no computation or Round right.
+    pub(super) fn reserve_source_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        context: Hash64,
+        source: Hash64,
+        bond: PalwBondKeyV2,
+        liability_until: u64,
+        fee: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
+        let capital = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
+        if self.state.bond_budget.is_none() {
+            self.create_bond_budget_v1(ctx, &mirror);
+        }
+        let id = source_income_id_v1(context, source, &bond);
+        self.bond_budget_op(|budget, _, j| {
+            budget.reserve_source_income_v1(&mirror.policy, capital, id, bond, ctx.daa_score, liability_until, fee, j)
+        })
+        .expect("created")
+        .map_err(|why| budget_refused(bond, why))
+    }
+
+    /// Settle through the same durable R row, including a tick delayed past
+    /// H + W. The authenticated promise's original acceptance distinguishes
+    /// pre-fence monetary rights from a missing post-fence reservation.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn settle_source_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        context: Hash64,
+        source: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+        liability_until: u64,
+        fee: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
+        let budget = self
+            .state
+            .bond_budget
+            .as_ref()
+            .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("source income engine missing".into()))?;
+        let id = source_income_id_v1(context, source, &bond);
+        if budget.claim(&id).is_none() && accepted_daa < budget.header.created_daa {
+            return Ok(());
+        }
+        self.bond_budget_op(|budget, _, j| budget.settle_source_income_v1(&mirror.policy, &id, liability_until, ctx.daa_score, fee, j))
+            .expect("checked")
+            .map_err(|why| budget_refused(bond, why))
+    }
+
+    pub(super) fn cancel_source_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        context: Hash64,
+        source: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if self.bond_budget_mirror_at(ctx.daa_score).is_none() {
+            return Ok(());
+        }
+        let budget = self
+            .state
+            .bond_budget
+            .as_ref()
+            .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("source income engine missing".into()))?;
+        let id = source_income_id_v1(context, source, &bond);
+        if budget.claim(&id).is_none() && accepted_daa < budget.header.created_daa {
+            return Ok(());
+        }
+        self.bond_budget_op(|budget, _, j| budget.cancel_source_income_v1(&id, j))
+            .expect("checked")
+            .map_err(|why| budget_refused(bond, why))
     }
 
     /// Kernel carriers create no reward block or consensus weight. Their one
