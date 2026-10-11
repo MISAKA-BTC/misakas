@@ -17565,7 +17565,10 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
     ctx.consensus.set_pruning_utxoset_stable_flag(false);
     ctx.consensus.complete_pruning_point_import(genesis).expect("the coherent genesis generation completes");
     assert!(ctx.consensus.is_pruning_utxoset_stable());
-    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    let block = ctx.build_block_template_keeping_time(0).block.to_immutable();
+    let expected_sink = block.hash();
+    ctx.validate_and_insert_block(block).await;
+    assert_eq!(ctx.consensus.get_sink(), expected_sink, "the unmodified EVM-active template reaches the actual sink");
     let point = ctx.consensus.get_sink();
     let vp = ctx.consensus.virtual_processor();
     let original_position = vp.pruning_meta_stores.read().utxoset_position().unwrap();
