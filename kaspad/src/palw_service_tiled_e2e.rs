@@ -202,6 +202,8 @@ impl TiledFixture {
                 token_table_root: self.table.root(),
                 rendering_rule: kaspa_consensus_core::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1,
                 raw_tokenizer_bytes: std::fs::metadata(self.path.parent().unwrap().join("tokenizer.json")).unwrap().len(),
+                tokenizer_key_events: kaspa_consensus_core::palw_tokenizer_rendering_v1::palw_tokenizer_key_events_v1(&std::fs::read(self.path.parent().unwrap().join("tokenizer.json")).unwrap()).unwrap(),
+                prefix_state_relation: Some(PalwPrefixStateRelationV1::DenseInt32KvV1),
             };
             let message = palw_class_semantics_message_v1(chain.network_domain, &declaration);
             let object = PalwConsensusObjectV2::ClassSemanticsDeclaredV1 {
