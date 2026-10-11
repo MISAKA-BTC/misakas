@@ -21,7 +21,7 @@
 //! verdict is what tells them apart. The logits-consistency accusation and the decode-token door are
 //! built here from the same retention.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
 use kaspa_consensus_core::Hash64;
@@ -203,6 +203,7 @@ pub struct TirEvidenceV1<'a> {
     cache: RefCell<BTreeMap<u32, Vec<PalwStepTileLeafV1>>>,
     cache_budget: usize,
     max_replay_positions: u32,
+    replay_positions_used: Cell<u64>,
 }
 
 impl<'a> TirEvidenceV1<'a> {
@@ -229,6 +230,7 @@ impl<'a> TirEvidenceV1<'a> {
             cache: RefCell::new(BTreeMap::new()),
             cache_budget: 1 << 30,
             max_replay_positions: 4096,
+            replay_positions_used: Cell::new(0),
         })
     }
 
@@ -262,6 +264,7 @@ impl<'a> TirEvidenceV1<'a> {
             cache: RefCell::new(BTreeMap::new()),
             cache_budget: 0,
             max_replay_positions: 0,
+            replay_positions_used: Cell::new(0),
         })
     }
 
@@ -282,7 +285,7 @@ impl<'a> TirEvidenceV1<'a> {
             runner, binding: &capture.binding, prompt: &capture.prompt,
             trace: TirTraceV1::Rows { rows: &capture.logits_rows, generated: &capture.generated },
             tree: Box::new(tree), leaves: Leaves::Sparse(inputs.preimages_v1()), params,
-            prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_budget: 0, max_replay_positions: 0,
+            prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_budget: 0, max_replay_positions: 0, replay_positions_used: Cell::new(0),
         })
     }
 
@@ -348,6 +351,7 @@ impl<'a> TirEvidenceV1<'a> {
             cache: RefCell::new(BTreeMap::new()),
             cache_budget: 1 << 30,
             max_replay_positions: 4096,
+            replay_positions_used: Cell::new(0),
         })
     }
 
@@ -432,9 +436,12 @@ impl<'a> TirEvidenceV1<'a> {
     pub fn with_replay_limits_v1(mut self, positions: u32, requested_bytes: usize) -> Self {
         self.max_replay_positions = positions;
         self.cache_budget = requested_bytes;
+        self.replay_positions_used.set(0);
         self.cache.borrow_mut().clear();
         self
     }
+
+    pub fn replay_positions_used_v1(&self) -> u64 { self.replay_positions_used.get() }
 
     /// Requested native buffer storage for one replay: range hashes, selecting logits
     /// rows, generated ids and the target position's leaf headers/lanes. Executor
@@ -476,6 +483,13 @@ impl<'a> TirEvidenceV1<'a> {
         let requested = self.replay_requested_storage_v1(a)?;
         if requested > self.cache_budget { return None; }
         let point = points.iter().rev().find(|p| p.position < a);
+        let first = point.map_or(Some(0), |p| p.position.checked_add(1))?;
+        let span = u64::from(a.checked_add(1)?.checked_sub(first)?);
+        let total = self.replay_positions_used.get().checked_add(span)?;
+        if total > u64::from(self.max_replay_positions) { return None; }
+        // Failed work consumes the move's budget too; cache misses cannot multiply
+        // 4096 positions by an unbounded number of logical source reads.
+        self.replay_positions_used.set(total);
         let ctx = &self.binding.job_context;
         let job = self.runner.space.job_shape(ctx).ok()?;
         let count = usize::try_from(self.runner.space.leaves_at_position(&job, a)).ok()?;
@@ -506,6 +520,8 @@ impl<'a> TirEvidenceV1<'a> {
 }
 
 impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
+    fn begin_builder_move_v1(&self) { self.replay_positions_used.set(0); }
+
     fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
         match &self.leaves {
             Leaves::Dense(all) => all.get(index as usize).cloned(),

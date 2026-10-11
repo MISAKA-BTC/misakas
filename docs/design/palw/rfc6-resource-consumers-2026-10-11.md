@@ -481,3 +481,11 @@ position with bounded output-buffer capacity; this is a narrow-allocation regres
 This requested-buffer metric excludes executor tensors/working state, immutable full proof trees,
 retained checkpoint/memo lifetime and allocator/process RSS overhead. Full fold construction still
 has those separately unresolved liabilities; no whole-process memory/cost gate is promoted.
+
+Replay positions are additionally charged cumulatively across **all** cache misses within one
+bounded cone/root/round/bottom move, including carriage assembly fetches. The store's default
+4096 limit therefore caps the whole move, not 4096 multiplied by the source-read count. Every
+bounded core entry point begins that store budget once; nested child/reduction/closure evaluation
+never resets it. Failed replay consumes admitted work. A focused actual store test accepts the
+first one-position miss, refuses a second under a shared limit of one, and accepts it only after
+starting a new move. This is a replay-position limit, not a MAC/time bound on executor tensors.

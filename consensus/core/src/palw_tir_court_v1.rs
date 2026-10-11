@@ -243,6 +243,9 @@ impl PalwTirParamOpeningV1 {
 /// units, which a responder holds and a challenger obtains through the bisection's disclosures.
 /// Every method answers `None` for what the builder does not hold.
 pub trait PalwTirEvidenceStoreV1 {
+    /// Begin one bounded node construction move. Stores may reset their own hidden
+    /// replay/fetch work budget here; historical builders/validators never call it.
+    fn begin_builder_move_v1(&self) {}
     /// The preimage of step leaf `index`.
     fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1>;
     /// The single-leaf opening of step leaf `index` in the step tree.
@@ -1390,6 +1393,7 @@ pub fn build_tir_cone_refutation_bounded_v1(
     rules: &PalwTirCourtRulesV1,
     limit: PalwTirBuilderWorkLimitsV1,
 ) -> Result<(PalwTirConeRefutationV1, PalwTirBuilderMeterV1), PalwTirEvidenceErrorV1> {
+    store.begin_builder_move_v1();
     let mut budget = BuilderBudget::new(limit);
     let built = build_tir_cone_refutation_with_budget(binding, output_leaf, store, rules, Some(&mut budget))?;
     Ok((built, budget.meter()))
@@ -1841,6 +1845,7 @@ pub fn build_tir_root_claim_bounded_v1(
     rules: &PalwTirCourtRulesV1,
     limit: PalwTirBuilderWorkLimitsV1,
 ) -> Result<(PalwTirRootClaimV1, PalwTirBuilderMeterV1), PalwTirEvidenceErrorV1> {
+    store.begin_builder_move_v1();
     let mut budget = BuilderBudget::new(limit);
     let built = build_tir_root_claim_with_budget(binding, narrowed, store, rules, Some(&mut budget))?;
     Ok((built, budget.meter()))
@@ -1984,6 +1989,7 @@ pub fn build_tir_dissect_round_bounded_v1(
     rules: &PalwTirCourtRulesV1,
     limit: PalwTirBuilderWorkLimitsV1,
 ) -> Result<(PalwTirDissectRoundV1, PalwTirBuilderMeterV1), PalwTirEvidenceErrorV1> {
+    store.begin_builder_move_v1();
     let mut budget = BuilderBudget::new(limit);
     let built = build_tir_dissect_round_with_budget(binding, phase, tile_positions, store, rules, Some(&mut budget))?;
     Ok((built, budget.meter()))
@@ -2034,6 +2040,7 @@ pub fn build_tir_dissect_bottom_bounded_v1(
     rules: &PalwTirCourtRulesV1,
     limit: PalwTirBuilderWorkLimitsV1,
 ) -> Result<(PalwTirConeRefutationV1, PalwTirBuilderMeterV1), PalwTirEvidenceErrorV1> {
+    store.begin_builder_move_v1();
     let mut budget = BuilderBudget::new(limit);
     let built = build_tir_dissect_bottom_with_budget(binding, phase, store, rules, Some(&mut budget))?;
     Ok((built, budget.meter()))

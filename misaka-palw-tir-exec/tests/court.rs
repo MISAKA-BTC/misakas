@@ -515,3 +515,25 @@ fn one_position_replay_does_not_allocate_for_a_100k_position_job() {
     assert!(requested_buffers <= 64 << 10, "a one-position replay requests {requested_buffers} output-buffer bytes");
     println!("RFC06 100k-context one-position replay requested output buffers: {requested_buffers} bytes; full run unmeasured");
 }
+
+#[test]
+fn replay_work_is_shared_across_all_source_requests_until_the_next_builder_move() {
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    let case = cases().into_iter().find(|case| case.c == 1).unwrap();
+    let f = fixture(&case);
+    let params = TirParams::from_map(&f.plan, &case.params).unwrap();
+    let inventory = TirHeldInventoryV1::build(&case.program, &TirParamsSourceV1(&params)).unwrap();
+    let runner = TirClassRunnerV1::new(&f.space, &f.plan, &params, f.class.class_id(&f.artifact_root)).unwrap();
+    let job = runner.retain(&f.class, f.artifact_root, &f.ctx, &f.prompt, CAP).unwrap();
+    let store = TirEvidenceV1::own(&runner, &job, &inventory, case.form, CAP).unwrap().with_replay_limits_v1(1, 1 << 30);
+    let shape = f.space.job_shape(&f.ctx).unwrap();
+    let next = f.space.running_total(&shape, 1) as u64;
+    assert!(store.step_leaf(0).is_some());
+    assert_eq!(store.replay_positions_used_v1(), 1);
+    assert!(store.step_leaf(next).is_none(), "a second one-position cache miss must not reset the whole-move budget");
+    assert_eq!(store.replay_positions_used_v1(), 1, "refused span is never executed");
+    store.begin_builder_move_v1();
+    assert_eq!(store.replay_positions_used_v1(), 0);
+    assert!(store.step_leaf(next).is_some());
+    assert_eq!(store.replay_positions_used_v1(), 1);
+}
