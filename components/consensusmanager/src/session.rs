@@ -257,6 +257,14 @@ impl ConsensusSessionOwned {
         self.consensus.palw_disclosure_duties_v1(mine)
     }
 
+    /// Read accepted terminal progress under the same owned consensus session as filer work.
+    pub fn palw_terminal_progress_v1(
+        &self,
+        key: kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalKeyV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalProgressV1>, String> {
+        self.consensus.palw_terminal_progress_v1(key)
+    }
+
     pub fn palw_legacy_answer_progress_v2(
         &self,
         key: kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2,
@@ -357,7 +365,9 @@ impl ConsensusSessionOwned {
     }
 
     /// RFC-0006: the layer-shard plans at the tip.
-    pub fn palw_tir_shard_plans_v1(&self) -> Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPlanV1)> {
+    pub fn palw_tir_shard_plans_v1(
+        &self,
+    ) -> Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPlanV1)> {
         self.consensus.palw_tir_shard_plans_v1()
     }
 
@@ -438,7 +448,10 @@ impl ConsensusSessionOwned {
     }
 
     /// **RFC-0007 Parts II and IV: the mesh at the tip**, and `seat`'s open audits.
-    pub fn palw_v2_mesh_status_v1(&self, seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2) -> kaspa_consensus_core::palw_mesh_v1::PalwMeshStatusV1 {
+    pub fn palw_v2_mesh_status_v1(
+        &self,
+        seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> kaspa_consensus_core::palw_mesh_v1::PalwMeshStatusV1 {
         self.consensus.palw_v2_mesh_status_v1(seat)
     }
 
@@ -766,7 +779,9 @@ impl ConsensusSessionOwned {
     }
 
     /// ADR-0127 Decision 3: the settlement read at `daa_score`, off the async runtime.
-    pub async fn async_get_native_settlement_snapshot(&self) -> ConsensusResult<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
+    pub async fn async_get_native_settlement_snapshot(
+        &self,
+    ) -> ConsensusResult<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
         self.clone().spawn_blocking(|c| c.get_native_settlement_snapshot()).await
     }
 
