@@ -8974,7 +8974,7 @@ pub fn palw_object_is_constrained_decode_v1(object: &PalwConsensusObjectV2) -> b
                 K::PanelFalseValidV2 => borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok().map(|p| p.contradiction),
                 _ => None,
             };
-            matches!(contradiction, Some(C::ConstrainedDecode { .. }))
+            matches!(contradiction, Some(C::ConstrainedDecode { .. } | C::ConstrainedDecodeFlat { .. }))
         }
         _ => false,
     }
@@ -24822,7 +24822,8 @@ impl<'a> TransitionBuilder<'a> {
             | PalwPanelContradictionV1::ForgedOutputTiled { .. }
             | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
             | PalwPanelContradictionV1::PromptNotAnchored { .. }
-            | PalwPanelContradictionV1::ConstrainedDecode { .. } => {
+            | PalwPanelContradictionV1::ConstrainedDecode { .. }
+            | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => {
                 return Err(refused("PanelFalseValid evidence does not decode".into()));
             }
         }

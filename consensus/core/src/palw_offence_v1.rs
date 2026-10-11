@@ -246,6 +246,12 @@ pub enum PalwPanelContradictionV1 {
         binding: crate::palw_step_leg::PalwStepBindingV2,
         accusation: Box<crate::palw_fp_constraint_job_v1::PalwConstrainedDecodeAccusationV1>,
     } = 14,
+    /// The same constrained-token fault for a class committing whole logits rows. Appended;
+    /// guarded by both the constraint and public-filer fences, like tag 14.
+    ConstrainedDecodeFlat {
+        binding: crate::palw_step_leg::PalwStepBindingV2,
+        accusation: Box<crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1>,
+    } = 15,
 }
 
 /// **How a `ForgedOutputTiled` (11) proves the committed token forged.**
@@ -290,6 +296,7 @@ impl PalwPanelContradictionV1 {
                 | Self::LogitsNotStepOutput { .. }
                 | Self::PromptNotAnchored { .. }
                 | Self::ConstrainedDecode { .. }
+                | Self::ConstrainedDecodeFlat { .. }
         )
     }
 }
@@ -455,7 +462,8 @@ fn palw_panel_contradiction_digest_v1(contradiction: &PalwPanelContradictionV1) 
         | PalwPanelContradictionV1::ForgedOutputTiled { .. }
         | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
-        | PalwPanelContradictionV1::ConstrainedDecode { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
+        | PalwPanelContradictionV1::ConstrainedDecode { .. }
+        | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }
 
@@ -764,7 +772,8 @@ where
         | PalwPanelContradictionV1::ForgedOutputTiled { .. }
         | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
-        | PalwPanelContradictionV1::ConstrainedDecode { .. } => {
+        | PalwPanelContradictionV1::ConstrainedDecode { .. }
+        | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => {
             return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
         }
     }
@@ -830,7 +839,8 @@ pub fn palw_panel_contradiction_convicts_execution_v1(
         | PalwPanelContradictionV1::ForgedOutputTiled { .. }
         | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
-        | PalwPanelContradictionV1::ConstrainedDecode { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
+        | PalwPanelContradictionV1::ConstrainedDecode { .. }
+        | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }
 

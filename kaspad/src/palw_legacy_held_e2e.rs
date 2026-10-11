@@ -744,6 +744,8 @@ fn service_filer_case(
         trace_root: o.roots.trace_root,
         output_root: o.roots.output_root.unwrap_or_default(),
         legacy: Some(replica),
+        fp_job: None,
+        _job_reservation: None,
         own_range: Box::new(|_, _| panic!("the LG14-B controller does not use the linear range fallback")),
         _reservation: None,
     }));

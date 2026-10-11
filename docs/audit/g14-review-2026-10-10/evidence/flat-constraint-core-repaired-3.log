@@ -1,0 +1,22 @@
+
+running 17 tests
+test palw_offence_v1::tests::offence_id_is_the_evidence_not_the_submitter ... ok
+test palw_offence_v1::tests::quality_usefulness_cache_and_speedup_are_not_offence_kinds ... ok
+test palw_offence_v1::tests::a_renamed_evidence_id_does_not_pass ... ok
+test palw_offence_v1::tests::empty_evidence_is_not_a_proof ... ok
+test palw_offence_v1::tests::the_colluding_quorum_must_cover_max_fraud_gain ... ok
+test palw_offence_v1::tests::court_guilty_is_not_a_standalone_object ... ok
+test palw_offence_v1::tests::panel_false_valid_is_fail_closed_until_the_contradiction_exists ... ok
+test palw_offence_v1::tests::a_renamed_id_and_a_garbage_blob_are_zero_penalty_at_the_gate ... ok
+test palw_offence_v1::tests::court_fraud_and_independent_proofs_are_fail_closed_until_they_convict ... ok
+test palw_offence_v1::tests::honest_unavailable_and_incapable_are_zero_penalty ... ok
+test palw_offence_v1::tests::the_consumed_offence_record_appends_collected_and_claim_id ... ok
+test palw_offence_v1::tests::a_proven_equivocation_carriage_passes_the_processor_gate ... ok
+test palw_offence_v1::tests::the_proof_forms_of_11_and_13_are_pinned ... ok
+test palw_offence_v1::tests::the_v22_offence_kind_slots_are_pinned_and_the_fold_recorded_ones_are_never_filed ... ok
+test palw_offence_v1::tests::contradictions_9_to_13_are_appended_and_refused_by_every_v1_reader ... ok
+test palw_offence_v1::tests::swapping_attestation_order_is_the_same_offence ... ok
+test palw_offence_v1::tests::a_proven_panel_false_valid_is_one_offence_per_seat ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 3613 filtered out; finished in 0.03s
+

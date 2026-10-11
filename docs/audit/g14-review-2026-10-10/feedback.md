@@ -11,6 +11,8 @@
 
 次の条件が閉じるまで「producer + 全Panel共謀でも1 verifierで全対象違反を終局まで追及できる」とは判定しない。
 
+**floorのconstraint直接反証を公開filerへ接続（2026-10-11）:** 登録floorはflat logitsで既存constraint courtはtiled専用だったため、同じ認証・選択predicateを共有するappend-only contradiction tag 15を追加。公開filerが後続位置の禁止token・早すぎる停止・負ける許可tokenをproofへ変換し、既存reporter filingへ渡す。replay後もjobを専用メモリticketとともに保持する。関連 **104件 PASS**、通常node check成功。大型proofの分割終局搬送、tiledの位置別DA接続、constraint不正そのものの実service convictionは未検証／未完成。初回synthetic proofの100KB上限超過FAILも[記録](flat-constraint-public-status.md)に残し、全域達成とはしない。
+
 **constraint直接反証のcore基盤（2026-10-11）:** append-only contradiction tag 14で、認証済みFP job／binding／row／token table openingを既存constraint courtと同じpredicateで判定する経路を追加。kind-3／kind-4、job・trace・executor一致、direct-proof precedence、既存activation fenceの分類を確認し、関連core **68件 PASS**、通常node check成功。nodeのproof生成と大型proofの分割終局搬送は未接続で、G14全域完了とはしない。fixtureと検証範囲は[記録](constrained-direct-proof-status.md)を参照。
 
 **fresh serviceの追加検証（2026-10-11）:** ordinary bondを実署名・collateral付きで新規登録し、通常1,000 DAA maturityを待ったPanel外verifierが、空DBで公開block 2,051件を再検証した後、実service自身の読み取りと登録floor modelのreplayから公開reservation／binding要求を提出できた。PQ mempool→production template→実block foldを通り、DAA 2236で`ProducerWithholding`／`DaDefault`、producer制裁と予約解放、正常service終了へ到達した。実service試験1件と関連回帰69件の **70 PASS**、通常binary check成功、shipping **361 pin差分なし**。producer秘密stateは渡していない。終了時にmodel／DBを保持する3 gossip callbackの循環参照を`Weak`へ修正した。これはfloor canonical attemptのbinding非応答1 caseで、算術不正のexact conviction、全family、socket RPC、ネットワークIBD／pruned import、restart／reorg、最大profileの期限保証を満たしたという判定ではない。下記のfresh service未検証という旧記述は、この1 caseについて更新する。例外と失敗・再試験logは[実装修正記録](implementation.md#新規公開bondとfresh-dbから実serviceでda不応答を追及する2026-10-11)を参照。

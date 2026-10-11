@@ -42,6 +42,8 @@ use super::*;
 use std::collections::BTreeSet;
 #[path = "palw_fraud_filer_input.rs"]
 pub(super) mod input;
+#[path = "palw_fraud_filer_constraint.rs"]
+mod constraint;
 pub(super) use input::{palw_fraud_filer_fp_input_v1, palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};
 
 use super::reporter_filer::{
@@ -113,6 +115,9 @@ pub(super) struct PalwFraudFilerRunV1 {
     /// This node's own leaf hashes of `[first, first + count)`.
     pub(super) own_range: Box<dyn Fn(u64, u32) -> Result<Vec<Hash64>, String> + Send + Sync>,
     pub(super) legacy: Option<Arc<PalwLegacyReplicaV2>>,
+    /// Authenticated public FP descriptor retained with a mismatched replay until prosecution.
+    pub(super) fp_job: Option<Box<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>>,
+    pub(super) _job_reservation: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
     pub(super) _reservation: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
 }
 
@@ -413,6 +418,16 @@ impl PalwFraudFilerCaseV1 {
         self.release_pending
             || matches!(self.verdict, PalwFraudFilerVerdictV1::Mismatch(_))
             || (matches!(self.verdict, PalwFraudFilerVerdictV1::Pending) && (self.fp_bootstrap.is_some() || self.fp_job_pending))
+    }
+
+    /// Public metadata survives successful bootstrap cleanup through the held replay.
+    fn public_fp_job_v1(&self) -> Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3> {
+        self.fp_bootstrap.as_ref().map(|input| input.payload.job())
+            .or_else(|| self.fp_descriptor.as_ref().map(|input| input.job()))
+            .or_else(|| match &self.verdict {
+                PalwFraudFilerVerdictV1::Mismatch(run) => run.fp_job.as_deref(),
+                _ => None,
+            })
     }
 
     pub(super) fn learn(&mut self, probe: PalwLegacyProbeV1, answer: &PalwDaBuiltAnswerV1) -> Result<(), String> {
@@ -1126,10 +1141,16 @@ pub(super) fn palw_fraud_filer_public_filing_with_fp_v2(
             }
             PalwTraceEventDisclosureV1::OutOfRange { .. } => return Ok(None),
         };
-        if !palw_output_fault_v1(target, binding, &pin).map_err(|e| e.to_string())? {
+        if palw_output_fault_v1(target, binding, &pin).map_err(|e| e.to_string())? {
+            PalwPanelContradictionV1::OutputMismatch { binding: binding.clone(), pin }
+        } else if let (Some(job), PalwTraceEventDisclosureV1::Flat { pin, .. }) = (fp_job.filter(|j| j.is_constraint()), event) {
+            let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(job)
+                .ok_or("the public verifier does not hold this job's tokenizer table")?;
+            let Some(proof) = constraint::flat_contradiction_v1(target, binding, job, pin, table)? else { return Ok(None) };
+            proof
+        } else {
             return Ok(None);
         }
-        PalwPanelContradictionV1::OutputMismatch { binding: binding.clone(), pin }
     };
     let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_v1(
         target.claim_id,
@@ -1186,6 +1207,13 @@ pub(super) fn palw_fraud_filer_execute_v1(
     reserved: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
 ) -> Result<PalwFraudFilerRunV1, String> {
     let prompt: Vec<usize> = prompt32.iter().map(|id| *id as usize).collect();
+    let job_reservation = fp_job.as_ref().map(|job| {
+        let bytes = borsh::object_length(job).map_err(|e| e.to_string())? as u64;
+        crate::palw_memory_ledger::host_ledger_v1().reserve(
+            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role: "public-replay-job", class_id: job.class_id, job: ctx.job_id },
+            bytes.saturating_add(1024).saturating_mul(8),
+        ).map_err(|e| e.to_string())
+    }).transpose()?;
     let outcome = if let Some(job) = fp_job.as_ref() {
         // The public replay owns its scope just as the producer and interval verifier do.
         // A constraint's authenticated job tail and this host's matching token table determine
@@ -1234,6 +1262,8 @@ pub(super) fn palw_fraud_filer_execute_v1(
             own_backend.held_step_range_answer_v1(&own_material, &own_prompt, first, count).map(|opening| opening.leaf_hashes)
         }),
         legacy,
+        fp_job: fp_job.map(Box::new),
+        _job_reservation: job_reservation,
         _reservation: reserved,
     })
 }
@@ -1492,12 +1522,7 @@ impl PalwPanelService {
                     da_signer_liability: params.palw_rcore_plus_active_at(current_daa),
                 };
                 let file_by = view.as_ref().map(|v| v.hard_deadline_daa.saturating_sub(2));
-                let fp_job = book.cases.get(&claim).and_then(|c| {
-                    c.fp_bootstrap
-                        .as_ref()
-                        .map(|input| input.payload.job().clone())
-                        .or_else(|| c.fp_descriptor.as_ref().map(|input| input.job().clone()))
-                });
+                let fp_job = book.cases.get(&claim).and_then(|c| c.public_fp_job_v1().cloned());
                 // The longest canonical prompt needs a whole-root recompute. Reserve its temporary ids/tree and proof buffers,
                 // then do all direct-proof hashing off the service loop. Pressure delays this pursuit rather than settling it.
                 let prefill = match answer {
@@ -1531,6 +1556,14 @@ impl PalwPanelService {
                     .saturating_mul(8)
                     .saturating_add(tiles.saturating_mul(256))
                     .saturating_add(2 * kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
+                let bytes = bytes.saturating_add(if fp_job.as_ref().is_some_and(|job| job.is_constraint()) {
+                    // Leaf hashes plus cached Merkle levels, built once for all opened IDs.
+                    match answer {
+                        PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event)) =>
+                            u64::from(event.binding().shape_profile.vocab_size).saturating_add(1).saturating_mul(256),
+                        _ => 0,
+                    }
+                } else { 0 });
                 let reserved = match crate::palw_memory_ledger::host_ledger_v1().reserve(
                     crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
                         role: "public-binding-proof",
@@ -2332,6 +2365,15 @@ pub(super) mod tests {
         assert_eq!(actual.execution_root, expected.outcome.execution_root);
         assert_eq!(actual.trace_root, expected.outcome.trace_root);
         assert_eq!(actual.output_root, expected.outcome.output_root);
+        assert_eq!(actual.fp_job.as_deref(), Some(&job), "a mismatched run can later build its public job proof");
+        assert!(actual._job_reservation.is_some(), "the retained descriptor holds its memory ticket");
+        let c = candidate(0xC014, 300, false);
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![c.clone()], 300);
+        assert!(matches!(book.judge(c.claim_id, Ok(actual)), Some(PalwFraudFilerVerdictV1::Mismatch(_))));
+        assert!(book.cases[&c.claim_id].fp_bootstrap.is_none());
+        assert!(book.cases[&c.claim_id].fp_descriptor.is_none());
+        assert_eq!(book.cases[&c.claim_id].public_fp_job_v1(), Some(&job), "successful replay cleanup retains the prosecution job");
         assert!(palw_fp_constraint_scope_v1().is_none(), "the replay restores its thread scope");
         let mut wrong_tokenizer = job.clone();
         wrong_tokenizer.tokenizer_id = Hash64::from_u64_word(0xBAD_C015);
@@ -2554,6 +2596,8 @@ pub(super) mod tests {
             output_root: Hash64::default(),
             own_range: Box::new(|_, _| Err("no range".into())),
             legacy: None,
+            fp_job: None,
+            _job_reservation: None,
             _reservation: None,
         }
     }

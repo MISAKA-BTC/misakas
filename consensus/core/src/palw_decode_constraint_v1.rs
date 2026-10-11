@@ -1731,6 +1731,39 @@ pub(crate) mod tests {
         (binding, proof)
     }
 
+    pub(crate) fn public_flat_constrained_case_for_tests_v1(fault: bool) -> (
+        crate::palw_step_leg::PalwStepBindingV2,
+        crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1,
+    ) {
+        let (mut binding, proof) = public_constrained_case_for_tests_v1(fault);
+        let mut job = proof.job;
+        binding.shape_profile.logits_scheme_id = crate::palw_step_refute::flat_logits_scheme_id_v1();
+        job.class_id = binding.shape_profile.shape_profile_id();
+        let class = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
+            model_profile_id: binding.job_context.model_profile_id,
+            runtime_manifest_hash: binding.job_context.runtime_manifest_hash,
+            runtime_class_id: binding.job_context.runtime_class_id,
+            shape_profile_id: job.class_id,
+            cu_ruleset_id: binding.job_context.cu_ruleset_id,
+        };
+        // Keep this synthetic 10,000-lane flat proof within the unchanged direct evidence
+        // ceiling. A complete four-row pin is over that ceiling and needs multipart carriage.
+        let ids = proof.pin.generated_token_ids[..2].to_vec();
+        let rows = constrained_rows(6)[..ids.len()].to_vec();
+        binding.job_context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(
+            &job, &class,
+            &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, ids.len() as u32),
+            &binding.job_context.network_id,
+        ).unwrap();
+        binding.full_logits_trace_root = crate::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, &rows, &ids);
+        crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
+        crate::palw_step_leg::verify_binding_v1(&binding).unwrap();
+        (binding, crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1 {
+            pin: crate::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: rows, generated_token_ids: ids },
+            position: 1, job, renderings: proof.renderings, eog: proof.eog, witness: None, beat_lane: None,
+        })
+    }
+
     /// **The court's third arm, as an accusation**: an honest constrained run clears at every position (the stop included, with
     /// no witness); an id the constraint forbids is convicted from the ids and the opened renderings alone; the stop rule's
     /// "nothing is admitted" is convicted only when the challenger shows a lane that was; and a later position is not
