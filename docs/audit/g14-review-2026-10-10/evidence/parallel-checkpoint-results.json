@@ -1,5 +1,5 @@
 {
-  "core_source": "d886ad719",
+  "core_source": "19da752f6",
   "kernel_source": "23965f086",
   "results": [
     {
@@ -408,12 +408,200 @@
       "result": "0PASS1FAIL463.97s: actual accepted-partial producer restart, deleted input carrier, fresh public book, authenticated numbered input reacquisition, honest replay and Release reached DAA1379; final session-count assertion6!=4 remains unqualified;64MiB debug stack",
       "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-pruned-round-7819-stack64-disk-retry.log",
       "sha256": "728803632f7e464abcc58eef478a5d127ec90c68a7c116ab66bf46299b0d6010"
+    },
+    {
+      "name": "joint-packed-stream-build-25f",
+      "source": "25f6c9084",
+      "result": "partial build: core/base0 compiled; nodeFAIL E0432 tokenizer fixture imported Action from court instead of carriage;230.78s",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-joint-packed-stream-build-a2.log",
+      "sha256": "356e783c8eac610875387ad60bdd87366a78540f4ebe4ab46d80d10da83d3c81"
+    },
+    {
+      "name": "core-prefix-all-25f",
+      "source": "25f6c9084",
+      "result": "15PASS1FAIL0.68s; custody/attempt/source/resource pass; owned packet fixture incorrectly gathers >64 actions into one packet",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-prefix-all-25f.log",
+      "sha256": "27cdb5ed28045e62d202058c8db50df6cc5ee3d6a4332a3c6bf3a5698fac89e5"
+    },
+    {
+      "name": "core-a2-all-25f",
+      "source": "25f6c9084",
+      "result": "15PASS2FAIL1.54s; frozen int12 and new165/167 pins pass; duplicate retired TakeoverToken classification and new test misclassifies already F8-fenced staged19",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-a2-all-25f.log",
+      "sha256": "8bbe921a76b970ebf76e1e1cd29eacae8b971d4d309898817a5d3cbceec17b05"
+    },
+    {
+      "name": "core-staged-carriage-25f",
+      "source": "25f6c9084",
+      "result": "5PASS0FAIL0.08s; bounded64 flat logical actions, measured whole signed90k envelope",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-staged-carriage-25f.log",
+      "sha256": "4843df298204f38c37b7dc6773b1dfc1dc777e7ae47e777a766cfd02f6587653"
+    },
+    {
+      "name": "core-staged-state-25f",
+      "source": "25f6c9084",
+      "result": "7PASS0FAIL0.92s; rooted state/rollback/reference and exclusive paid participant holds",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-staged-state-25f.log",
+      "sha256": "e1a047f7ce98e01e0cb3dce7416b56ed2342a231241a647d15722b007d08083f"
+    },
+    {
+      "name": "native-q36-streamed-prefix-25f",
+      "source": "25f6c9084",
+      "result": "1PASS0FAIL3.79s; actual registered Q36 backend, initial/inherited honest/false roots;131072-byte originalKVleaf bounded streams, per-move serialized restart, bad EOF refusal",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-q36-streamed-prefix-25f.log",
+      "sha256": "a0888d90e08a5aec9d87bbf49cdb4117481bb734f8acd32f4dadb1d1b4226afd"
+    },
+    {
+      "name": "native-base0-prefix-25f",
+      "source": "25f6c9084",
+      "result": "1PASS0FAIL1.35s; actual BASE0 initial/inherited honest/false native prefix",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-base0-prefix-25f.log",
+      "sha256": "4879aad2271d6815b92b7fed95d02724c866ccf46e5dd393bf4bbd48480dcec1"
+    },
+    {
+      "name": "joint-public-attempt-build-ed4",
+      "source": "ed4084414",
+      "result": "FAIL198.18s; core test E0599 called unwrap on Hash64 header.finish(); fixed in2c7b15d8b",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-joint-public-attempt-build-ed4.log",
+      "sha256": "e3bd3dcc7f674b29c7fee689f3501509ed1f4876b4b176712d215a063ecda007"
+    },
+    {
+      "name": "joint-public-attempt-build-a9f",
+      "source": "a9fdf216b",
+      "result": "PASS224.82s; jointly built core/node/base0 with EVM and debug-disabled package overrides; source-qualified binaries recorded separately",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-joint-public-attempt-build-a9f.log",
+      "sha256": "d94123d4ebe789241df63b30a944031ba054070d5073b3161e23b138886956d5"
+    },
+    {
+      "name": "core-prefix-all-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 3832 filtered out; finished in 1.10s",
+      "exit_code": 0,
+      "wall_seconds": 2.42,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-prefix-all-a9f.log",
+      "sha256": "51ee1eda348b58c9062ce358bf917982baa9ceaf5d473ac686b7e5f7bf8acb11"
+    },
+    {
+      "name": "core-a2-all-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: FAILED. 16 passed; 1 failed; 0 ignored; 0 measured; 3835 filtered out; finished in 1.98s",
+      "exit_code": 101,
+      "wall_seconds": 1.99,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-a2-all-a9f.log",
+      "sha256": "8b0b7d40c65f334de0a3d5a1d638368b59de5fb3300e886d4ebac63528a1ed74"
+    },
+    {
+      "name": "core-staged-carriage-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3847 filtered out; finished in 0.08s",
+      "exit_code": 0,
+      "wall_seconds": 0.09,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-staged-carriage-a9f.log",
+      "sha256": "ae3bde7e30977c52aa4577f35e3f652602d95cb73672c8ba38c66aa6c657ecec"
+    },
+    {
+      "name": "core-staged-state-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3845 filtered out; finished in 0.91s",
+      "exit_code": 0,
+      "wall_seconds": 0.92,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-staged-state-a9f.log",
+      "sha256": "517b7bcadfad1d22ad4a82cb8cbcb75a203e87b35bc07be17019da3613b16aa0"
+    },
+    {
+      "name": "node-filer-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 663 filtered out; finished in 6.84s",
+      "exit_code": 0,
+      "wall_seconds": 9.4,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-node-filer-a9f.log",
+      "sha256": "1d22e1efb23b60a830232267ca8e95fd321de7b8838dbced2c8986d50c269fcf"
+    },
+    {
+      "name": "node-tokenizer-scheduler-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 693 filtered out; finished in 1.59s",
+      "exit_code": 0,
+      "wall_seconds": 1.63,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-node-tokenizer-scheduler-a9f.log",
+      "sha256": "dd093dff409208e1142c6fc92d519be0cd87c5af87f0eb24bd81b243da0421b5"
+    },
+    {
+      "name": "node-held-tokenizer-witness-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 694 filtered out; finished in 0.98s",
+      "exit_code": 0,
+      "wall_seconds": 1.01,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-node-held-tokenizer-witness-a9f.log",
+      "sha256": "4bb8c08bb5f702c7bb60b2a00cd912036e08dc52888c6ba35b1cf43f722ea8ad"
+    },
+    {
+      "name": "node-held-tokenizer-mutation-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.00s",
+      "exit_code": 0,
+      "wall_seconds": 0.04,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-node-held-tokenizer-mutation-a9f.log",
+      "sha256": "164de6f8409dc318bad59d6099d6c3130aa9d212c44477b1b3b12480a72d73d4"
+    },
+    {
+      "name": "node-accepted-history-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 685 filtered out; finished in 3.11s",
+      "exit_code": 0,
+      "wall_seconds": 3.15,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-node-accepted-history-a9f.log",
+      "sha256": "83152bfe57ac84a0a3a121bc7f72e52634546f9bbf32a8b93eb25330b6c1d485"
+    },
+    {
+      "name": "native-q36-streamed-prefix-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 501 filtered out; finished in 3.76s",
+      "exit_code": 0,
+      "wall_seconds": 4.58,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-q36-streamed-prefix-a9f.log",
+      "sha256": "61846c37082b27da2b0db3f6010aea8cc6288c45ae14185a2c5798cc463504cd"
+    },
+    {
+      "name": "native-base0-prefix-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 501 filtered out; finished in 1.35s",
+      "exit_code": 0,
+      "wall_seconds": 1.36,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-base0-prefix-a9f.log",
+      "sha256": "4879aad2271d6815b92b7fed95d02724c866ccf46e5dd393bf4bbd48480dcec1"
+    },
+    {
+      "name": "core-a2-repair-build-19d",
+      "source": "19da752f6",
+      "result": "PASS56.77s wall/56.72s Cargo; core-only --features evm --locked; node binary remains a9f",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-a2-repair-build-19d.log",
+      "sha256": "5c730760e75bad3e3782b38a3bf33be326e0d7656bba3b4a0200fa98d6fc4fb9"
+    },
+    {
+      "name": "core-a2-all-19d",
+      "source": "19da752f6",
+      "result": "17PASS0FAIL2.08s; frozen int12 and165/166/167 pins; existing F8 staged19 isolation retained; unarmed/below header context preserves its existing no-op gate",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-a2-all-19d.log",
+      "sha256": "30a374803f86683b02e2728a6c64637a521ba76f77556d0fcda6078a6fa9b59c"
     }
   ],
-  "qualification": "Per-record source qualification only. Source7819 joint core/node/base0 build PASS4m01s and104 focused PASS2FAIL:52core+50node+2actualnative; failures are stale165/167 wire pins and unclassified changed14..19 contradiction enum. Public prefix+raw tokenizer+rooted paid/hold boundary/carriage/history/refusal tests pass. Actual one-pruned automatic producer service aborted at native headerDB ENOSPC; disk retry FAIL0/1 after463.97s: recovery/replay/Release endpoint reached, but final session-count assertion6!=4 remains unresolved; not a recovery PASS. Source112417s restart timing FAIL and source7a exclusive-hold/pins FAIL are preserved; boundary assertion repaired without production weakening. New staged tokenizer service native fixture and separate own D7 file setup queued, not compiled/executed yet. Required-source Q36 quote reveals a large funding/horizon gap despite finite streaming/paging; canonicalk8192 is prospective and exceeds defaultcap. No full G14, latest-HEAD runtime or activation PASS.",
+  "qualification": "Sourcea9fdf216b jointbuild PASS and focused100PASS1FAIL (48core/50node/2actualnative); only A2 probe incorrectly expected unarmed header-context rejection. Source19da752f6 core-only EVM build and17A2 PASS repair that test expectation while preserving existing F8 isolation and frozen int12 declarations. These are separate source-qualified runs, not a latestHEAD/fullG14 PASS. Actual131072-byte native Q36 oldleaf streams pass for initial/inherited honest/false cases, per-move Borsh restore and mutated EOF refusal. The a9f ordinary registered A16 false-tokenizer-length service is currently running, with normal admission observed but no staged certificate/allPanel collection endpoint yet. Actual pruned-round single-input counter repair is compiled but has not been retried. Public Prefix wrapper/paid custody tests do not yet qualify the rooted joint DA/default collection pipeline. Maximum-profile transport, capital/residual liability, inclusion/resource guarantees, actual network/reorg and all active-family coverage remain incomplete; activation stays refused. Prior failed runs remain in evidence.",
   "executed_7819_binaries": {
     "core": "ee6767407d69a9215f590d5532f19b58575da2fc434d0e413388c842d9ea0738",
     "node": "6e0781cef8a4b4519acb8fa1588602d0f28ccef3b29f4bd896a6907203503233",
     "base0": "990cba5e2b5d93e9d41485dbf956a2e0d948a952942a035483fad3029fcc63a9"
+  },
+  "executed_25f_binaries": {
+    "core": "89bb1d0ecb8e5a2784c593a59a9701be85ff81bc01a967dd7fbb0a6787921115",
+    "base0": "c8ab961209cbc69de58c340fa2acf2e3a627a86b1d7ebc936f918983179a5a25"
+  },
+  "executed_a9f_binaries": {
+    "core": "08456e4e4103c3d396a8b93a379a00f63209b5ad8ddebc669f3124967c15e45c",
+    "node": "aa93ec4f831a227bbabcc18327b4e843e7c851746073533655055cd6d03a1349",
+    "base0": "796953534d58c941bb10a3f264d9453ab53a05028478a9830093d84dd9a8ebf4"
+  },
+  "executed_19d_binaries": {
+    "core_evm": "2d45582b32e83daf61105486e1db917b0425af79f54310030c15dc6f4bbfffed"
   }
 }
