@@ -180,6 +180,22 @@ A dedicated resource runner may select 100000 and longer explicit setup/probe de
 
 The native carriage retains one bond public key and an operator identity hash; registration objects' second public key is not a second full key in the state carriage. RFC06's central native fixture observed 72 bonds / 71 candidates at 251,751 full-carriage bytes. A 100k registry with no seals may fit the retained 384 MiB snapshot ceiling, while multiple complete populations add a separate retained-state cost. The new profile permits the registry cost to be measured; it does not raise the bound or label a refusal as successful pruned transport. Complete populations, usable native beacon input, post-Final history compaction, genuine pruned joins and the approved resource/latency criteria retain their separate acceptance requirements.
 
+The central native-v1 and population-v1/17 probes have since completed
+`CONSTRUCTION_TRANSPORT_PASS`. The [public observation excerpt](0012-owned-construction-observations-2026-10-11.json)
+preserves each source result's SHA-256 and plan digest, actual process roots,
+genesis identities, P2P peer counts, monetary totals and cold reopen reads.
+Every observation remains at DAA 0 and import epoch 0. These are actual separate
+processes and ordinary P2P connections, but no newly mined work or pruning.
+The source result does not pin an executable Git revision; this limitation is
+recorded explicitly rather than assigning a guessed binary head.
+
+For the 17-bond probe, fixed construction limits were 500000 KiB per owned
+process, 64 MiB logical DB per process, 1000 ms per probe and 30 seconds for
+factory export. Export took 0.992 seconds; the largest 250-ms sampled RSS was
+116464 KiB, largest logical DB 440516 bytes, and longest recorded probe
+20.989 ms. All selected construction limits passed. Sampled RSS is not a complete
+peak or an OS hard quota; no 100k/complete-population resource claim follows.
+
 ## Predeclared construction resource observations
 
 The private smoke also observes only its owned manifest/A/B/JOIN children at a
