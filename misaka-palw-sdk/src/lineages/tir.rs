@@ -37,6 +37,7 @@ pub use misaka_palw_tir_exec::node::{
     tir_authenticate_capture_metadata_v1, tir_shard_cells_over_v1, tir_shard_geometry_over_v1, tir_verify_capture_cells_over_v1,
     tir_public_court_cells_v1,
 };
+pub use misaka_palw_tir_exec::node::tir_full_tree_storage_need_v1;
 
 /// RFC-0006: the out-of-process device (the GPU helper's client).
 pub use misaka_palw_tir_exec::TirProcessDeviceV1;

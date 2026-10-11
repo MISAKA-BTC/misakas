@@ -398,13 +398,69 @@ pub(crate) fn palw_tir_annex_request_index_v1(leaf: u64) -> u32 {
 pub(crate) const PALW_TIR_ANNEX_REASK_DAA_V1: u64 = 3;
 pub(crate) const PALW_TIR_ANNEX_ASKS_V1: u32 = 5;
 
+/// A persistent tree and its host admission share one Arc owner, including cloned
+/// pursuits and trace descents. A tree cannot outlive its reservation.
+pub(crate) struct PalwTirHeldTreeV1 {
+    tree: misaka_palw_sdk::lineages::tir::TirStepTreeV1,
+    _memory: crate::palw_memory_ledger::PalwMemoryReservationV1,
+}
+impl std::ops::Deref for PalwTirHeldTreeV1 {
+    type Target = misaka_palw_sdk::lineages::tir::TirStepTreeV1;
+    fn deref(&self) -> &Self::Target { &self.tree }
+}
+impl PalwTirHeldTreeV1 {
+    fn reserve(own: &misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1, role: &'static str, bytes: u64)
+        -> Result<crate::palw_memory_ledger::PalwMemoryReservationV1, String> {
+        Self::reserve_on(&crate::palw_memory_ledger::host_ledger_v1(), own, role, bytes)
+    }
+    fn reserve_on(ledger: &std::sync::Arc<crate::palw_memory_ledger::PalwMemoryLedgerV1>,
+        own: &misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1, role: &'static str, bytes: u64)
+        -> Result<crate::palw_memory_ledger::PalwMemoryReservationV1, String> {
+        ledger.reserve(
+            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                role, class_id: own.binding.class.class_id(&own.binding.artifact_root), job: own.binding.job_context.context_hash(),
+            }, bytes).map_err(|e| format!("the pursuit tree cannot reserve requested storage: {e}"))
+    }
+    fn full(own: &misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1) -> Result<std::sync::Arc<Self>, String> {
+        Self::full_on(own, &crate::palw_memory_ledger::host_ledger_v1())
+    }
+    fn full_on(own: &misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1,
+        ledger: &std::sync::Arc<crate::palw_memory_ledger::PalwMemoryLedgerV1>) -> Result<std::sync::Arc<Self>, String> {
+        if own.leaf_hashes.len() as u64 != own.binding.step_leaf_count { return Err("the pursuit own-tree count is not its binding".into()); }
+        let bytes = misaka_palw_sdk::lineages::tir::tir_full_tree_storage_need_v1(own.binding.step_leaf_count)?;
+        let memory = Self::reserve_on(ledger, own, "tir-annex-step-tree", bytes)?;
+        let tree = misaka_palw_sdk::lineages::tir::TirStepTreeV1::full(&own.leaf_hashes);
+        Ok(std::sync::Arc::new(Self { tree, _memory: memory }))
+    }
+    fn rows(own: &misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1) -> Result<Option<std::sync::Arc<Self>>, String> {
+        if own.logits_rows.is_empty() { return Ok(None); }
+        let count = u64::try_from(own.logits_rows.len()).map_err(|_| "trace row count overflows")?;
+        let width = u64::try_from(own.logits_rows.iter().map(Vec::len).max().unwrap_or(0)).map_err(|_| "trace row width overflows")?;
+        // Includes the widest row's hashing/fold scratch before any row root is built.
+        // This operational envelope is not a measured RSS or approved cost certificate.
+        let bytes = misaka_palw_sdk::lineages::tir::tir_full_tree_storage_need_v1(count)?
+            .checked_add(width.checked_mul(256).ok_or("trace row scratch overflows")?)
+            .and_then(|n| n.checked_add(16 << 20)).ok_or("trace tree storage overflows")?;
+        let memory = Self::reserve(own, "tir-annex-trace-tree", bytes)?;
+        Ok(misaka_palw_sdk::lineages::tir::tir_rows_tree_v1(&own.binding.job_context, &own.logits_rows)
+            .map(|tree| std::sync::Arc::new(Self { tree, _memory: memory })))
+    }
+    #[cfg(test)]
+    fn from_tool_tree(tree: misaka_palw_sdk::lineages::tir::TirStepTreeV1,
+        own: &misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1) -> std::sync::Arc<Self> {
+        let bytes = misaka_palw_sdk::lineages::tir::tir_full_tree_storage_need_v1(tree.leaf_count()).expect("tool tree envelope");
+        let memory = Self::reserve(own, "tir-annex-trace-tree", bytes).expect("tool trace tree admission");
+        std::sync::Arc::new(Self { tree, _memory: memory })
+    }
+}
+
 /// **A seat's pursuit of one claim through served annexes.** The own execution and its tree are the
 /// seat's re-run of the claim's job (the process-wide memo keeps the run itself); the rest is where
 /// the descent stands.
 #[derive(Clone)]
 pub(crate) struct PalwTirAnnexPursuitV1 {
     pub own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1>,
-    pub own_tree: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirStepTreeV1>,
+    pub own_tree: std::sync::Arc<PalwTirHeldTreeV1>,
     /// The leaf whose annex is asked, and the level the search is bounded below — the first leaf of
     /// the subtree the descent stands at, and that subtree's level (`None`: the whole tree).
     pub leaf: u64,
@@ -454,8 +510,12 @@ pub(crate) struct PalwTirAnnexPursuitV1 {
 }
 
 impl PalwTirAnnexPursuitV1 {
-    pub fn new(own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1>, current_daa: u64) -> Self {
-        let own_tree = std::sync::Arc::new(misaka_palw_sdk::lineages::tir::TirStepTreeV1::full(&own.leaf_hashes));
+    pub fn try_new(own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1>, current_daa: u64) -> Result<Self, String> {
+        let own_tree = PalwTirHeldTreeV1::full(&own)?;
+        Ok(Self::with_tree(own, own_tree, current_daa))
+    }
+    fn with_tree(own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1>,
+        own_tree: std::sync::Arc<PalwTirHeldTreeV1>, current_daa: u64) -> Self {
         Self {
             own,
             own_tree,
@@ -481,20 +541,38 @@ impl PalwTirAnnexPursuitV1 {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn try_new_with_ledger(own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1>,
+        current_daa: u64, ledger: &std::sync::Arc<crate::palw_memory_ledger::PalwMemoryLedgerV1>) -> Result<Self, String> {
+        let own_tree = PalwTirHeldTreeV1::full_on(&own, ledger)?;
+        Ok(Self::with_tree(own, own_tree, current_daa))
+    }
+
+    #[cfg(test)]
+    pub fn new(own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1>, current_daa: u64) -> Self {
+        Self::try_new(own, current_daa).expect("test pursuit tree admission")
+    }
+
     /// **The pursuit of a claim whose steps are this seat's own** (a tiled trace): the descent is the
     /// trace's, over `own_rows` (this seat's rows tree, `tir_rows_tree_v1` of its own run), from the
     /// rows root. Served annexes cost no session, so the first one asked is decode row 0's logits leaf
     /// holding this seat's own token there (`row0_leaf`): its answer carries the claim's ids and row
     /// 0's pin, the decode-token door itself when row 0 holds the first id they part at. On chain the
     /// descent starts at the rows root instead ([`palw_tir_withheld_unit_v1`]).
-    pub fn with_trace(mut self, own_rows: misaka_palw_sdk::lineages::tir::TirStepTreeV1, row0_leaf: Option<u64>) -> Self {
+    fn with_reserved_trace(mut self, own_rows: std::sync::Arc<PalwTirHeldTreeV1>, row0_leaf: Option<u64>) -> Self {
         let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(own_rows.leaf_count());
         self.trace =
-            Some(PalwTirTraceDescentV1 { own_rows: std::sync::Arc::new(own_rows), at: (height, 0), event: None, rows_agree: false });
+            Some(PalwTirTraceDescentV1 { own_rows, at: (height, 0), event: None, rows_agree: false });
         if let (Some(leaf), Some(&token)) = (row0_leaf, self.own.generated.first()) {
             (self.leaf, self.below, self.token) = (leaf, None, Some((0, token)));
         }
         self
+    }
+
+    #[cfg(test)]
+    pub fn with_trace(self, own_rows: misaka_palw_sdk::lineages::tir::TirStepTreeV1, row0_leaf: Option<u64>) -> Self {
+        let held = PalwTirHeldTreeV1::from_tool_tree(own_rows, &self.own);
+        self.with_reserved_trace(held, row0_leaf)
     }
 }
 
@@ -509,7 +587,7 @@ impl PalwTirAnnexPursuitV1 {
 #[derive(Clone)]
 pub(crate) struct PalwTirTraceDescentV1 {
     /// This seat's own rows tree (its row roots as the leaves).
-    pub own_rows: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirStepTreeV1>,
+    pub own_rows: std::sync::Arc<PalwTirHeldTreeV1>,
     /// The rows-tree node the descent stands at, `(level, index)`; level 0 is a row, whose frontier
     /// is its tile leaves.
     pub at: (u8, u64),
@@ -1613,23 +1691,27 @@ impl super::PalwPanelService {
             let (trace_root, execution_root) = (target.trace_root, target.execution_root);
             // The run, and — for a claim whose steps are this seat's own, under the tiled scheme — its
             // rows tree and decode row 0's door leaf: the trace's descent.
-            let Ok(Ok((own, trace))) = tokio::task::spawn_blocking(move || {
+            let Ok(Ok((own, pursuit))) = tokio::task::spawn_blocking(move || {
                 let own = tir.retain_memo(&job, &prompt)?;
                 let tiled = Hash64::from_bytes(tir.space().program.logits_scheme_id)
                     == kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1();
                 let reproduces =
                     own.binding.committed_execution_root == execution_root && own.binding.full_logits_trace_root == trace_root;
-                let trace = (tiled && !reproduces && palw_tir_steps_agree_v1(&own, &trace_root, &execution_root))
-                    .then(|| {
-                        let rows = misaka_palw_sdk::lineages::tir::tir_rows_tree_v1(&own.binding.job_context, &own.logits_rows)?;
+                let pursuit = if reproduces { None } else {
+                    // Both persistent trees are admitted and constructed on the blocking
+                    // worker. Failure creates neither a pursuit nor a peer request.
+                    let mut pursuit = PalwTirAnnexPursuitV1::try_new(own.clone(), current_daa)?;
+                    if tiled && palw_tir_steps_agree_v1(&own, &trace_root, &execution_root) {
+                        let rows = PalwTirHeldTreeV1::rows(&own)?.ok_or("the trace pursuit has no rows tree")?;
                         let row0 = own
                             .generated
                             .first()
                             .and_then(|token| tir.logits_leaf_holding(&own.binding.job_context, 0, u64::from(*token)));
-                        Some((rows, row0))
-                    })
-                    .flatten();
-                Ok::<_, String>((own, trace))
+                        pursuit = pursuit.with_reserved_trace(rows, row0);
+                    }
+                    Some(pursuit)
+                };
+                Ok::<_, String>((own, pursuit))
             })
             .await
             else {
@@ -1640,10 +1722,7 @@ impl super::PalwPanelService {
                 books.challenged.insert(claim);
                 return;
             }
-            let mut pursuit = PalwTirAnnexPursuitV1::new(own, current_daa);
-            if let Some((rows, row0)) = trace {
-                pursuit = pursuit.with_trace(rows, row0);
-            }
+            let Some(pursuit) = pursuit else { return };
             warn!(
                 "[{PALW_PANEL}] IR claim {claim} committed an execution this node does not reproduce{}, and no capture of it reaches \
                  this seat — asking its executor for served annexes (RFC-0002 evidence transport B)",

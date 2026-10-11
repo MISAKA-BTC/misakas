@@ -567,3 +567,21 @@ bound or measured fee. It excludes checkpoint restore/export copies, artifact re
 class analysis and serialization, compiler/runtime primitive implementation overhead,
 and allocator/OS RSS. Those costs still require model-specific measurement and reviewed
 economics, and no soundness, fee, 100k or pruning gate is promoted.
+
+The central lease suite on parent `37c2` passed both new tests before the symbolic-cost
+follow-up: 22 executable cases, maximum requested executor 24,418,112 B, full tree
+114,896 B and retained 17,942,244 B. These are operational requested envelopes with
+native retained Vec-capacity checks, not RSS. The subsequent node check exposed an
+explicit annex-pursuit owner signature still expecting an unleased job Arc; that owner
+now retains the leased Arc directly, including pursuit clones.
+
+Actual annex pursuits also had independent unreserved full step and tiled trace trees.
+Both now use a node-owned Arc of tree plus host guard, with checked pre-allocation
+storage admission. The actual pursuit constructor is fallible, and both trees are
+constructed on its blocking worker. Admission failure publishes no pursuit or peer
+request. Its trace guard includes widest-row hashing scratch before row-root construction.
+Historical SDK tree APIs remain unchanged; test-only compatibility wrappers are explicit.
+A real node fixture checks one-less tree refusal, retained memo eviction with live
+pursuit clones, and an independent tree reader keeping the tree guard after the last
+pursuit drops. This latest actual-node follow-up has syntax/diff checks only; fresh
+central compilation/runtime (including cost controls) is still required.
