@@ -251,6 +251,30 @@ Recompute `safe` on legal reorgs and emit changed/removed logs and transaction s
 it by an RPC-local checkpoint. A conflict below `finalized`/pruned history requires the documented
 resync/safety-failure procedure and an explicit alarm, never a silent relabel or DNS veto revival.
 
+### 4.3 Pruning import authority and repeatable recovery
+
+An EVM header and account snapshot reproducing a block's commitments establish execution data for that
+block; they do not authorize resetting settlement incidents at an arbitrary block. EVM pruning import
+MUST target the node's established pruning point, installed by the existing validated headers-proof or
+catch-up path. Check that target before expensive validation, then recheck and hold it through the import
+batch. An unreadable target/header is an explicit error, not a panic or an assumed empty state. These
+checks do not replace proof validation or change branch selection.
+
+Retrying a committed import, including after restart before IBD's stable flag was set, MUST succeed for
+identical canonical execution headers, snapshots and checkpoints. Complete missing rows independently;
+do not treat an existing row as proof of success or overwrite contradictory/unreadable data. Verify all
+existing rows before staging flat-state/head changes or clearing publication history. A checkpoint's
+block, EVM number, root, payload and checksum must agree with the validated input. Current snapshot
+canonicality and code/hash checks remain required. Storage corruption requires validated recovery;
+ignoring a read error or deleting a conflicting row merely to make a retry succeed is forbidden.
+
+The pruning-history context import must also accept identical existing samples. Validate nonempty history,
+network genesis, uniqueness, monotonic blue score, immutable sample consistency and required header shapes
+before changing history. Keep its target/retention update coherent under the context lock. The durable EVM
+import batch and explicit IBD stable flag still form a recovery protocol; this subsection does not claim one
+transaction spanning all UTXO/PALW/EVM sidecars. Real transport, interrupted imports, proof adoption and
+cross-ledger recovery remain acceptance requirements under §§4.1 and 8.
+
 ## 5. Retire the overlay without erasing history or locking users' bonds
 
 Introduce a proposed `palw_dns_retirement_v1` fence, scheduled only for a compatible PALW network.

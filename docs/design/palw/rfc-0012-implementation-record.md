@@ -383,3 +383,76 @@ were corrected without weakening production validation.
 `cargo check --locked -p kaspad --features evm` succeeded in 35.20s with existing warnings; log
 `/tmp/rfc12-publication-daemon.log`. Scoped formatting and `git diff --check` pass. No source logic changed
 after this validation; only the documentation records were completed. No public activation, push or deployment.
+
+
+## Pruning-import authority and repeatable recovery (2026-10-11 design audit)
+
+The publication-history repair made a root-verified import the explicit incident-reset path. A new
+negative test showed that the import itself did not require the established pruning point: valid EVM
+data for another locally executed block could clear the incident. The first regression failed at that
+refusal assertion. Its companion retry failed earlier in setup because the pruning-history context
+import unconditionally inserted an already-present immutable sample. Log `/tmp/rfc12-import-before.log`
+records **0 passed, 2 failed**; the second failure is not evidence for an EVM-row retry yet.
+
+An isolated retry with fixture-installed context then reproduced a distinct EVM-header
+`KeyAlreadyExists` panic after reopening the processor over the same DB (**0 passed, 1 failed**,
+`/tmp/rfc12-import-retry-before.log`). Production IBD already passes the validated proof pruning point,
+the established session pruning point, or the negotiated catch-up point into `sync_new_utxo_set`.
+The core importer now enforces that caller contract itself; commitment validity alone supplies no
+import authority. It checks the actual pruning store before root validation, then rechecks and holds
+its read guard through the durable EVM batch. Missing/unreadable context is a named error.
+
+The importer serializes retries in the existing memo → pruning → heads lock order. Before flat-state
+seeding or persistent changes, it checks every existing execution header, canonical snapshot and V1
+checkpoint against the root-verified input. Identical rows are reused, missing rows are completed, and
+contradictions or read errors refuse without clearing the publication/incident, changing heads, rewinding
+the flat pointer or invalidating the readiness memo. Whole-checkpoint equality includes block, EVM number,
+state root, deterministic payload and checksum. Incoming canonicality and code/hash checks remain active.
+Successful imports retain the existing atomic EVM state/head/history reset and post-commit memo reset.
+
+The prerequisite `import_pruning_points` now validates the entire list before input-dependent writes:
+nonempty, actual network genesis, unique hashes, strictly increasing blue scores, existing sample
+consistency and required unknown-header shapes. Identical samples and known headers are reused.
+The pruning write lock keeps target consumers and another context import out through the final
+pruning-point/retention batch. The individual history/header/sample writes remain separate from that
+batch; this is not a new transaction spanning them, UTXO and PALW sidecars. Full interrupted-proof
+adoption and cross-ledger recovery remain explicit acceptance gates.
+
+Six new node tests cover another block's valid execution, identical retry after processor reopen,
+three partial-row combinations, three conflicting row kinds with the flat backend enabled, missing
+context header, and repeatable context import with empty/genesis/order/duplicate/shape/sample refusals.
+The existing x7 and legacy-negative recovery tests now establish context through the actual history
+import API before EVM import. The final fixture uses normally processed samples and that real API;
+it does not supply a fully validated long-range proof or actually prune the DB. Publication/incident
+facts remain fixture-controlled, and reopening uses the same Arc DB in one process. No OS crash,
+real transport, IBD stable-flag interruption, complete resync protocol, long-horizon work soundness,
+common-prefix proof or public activation is established by these tests. RFC §4.3 records the contract.
+
+A first post-repair compile found a nonexistent test-only latest-pointer reader trait import; removing
+it allowed use of the store's existing inherent reader. Production validation was not weakened.
+
+
+Final validation (Rust 1.93.0, macOS aarch64, jobs 2, dev/test debug 0, incremental 0):
+
+* `cargo test --locked -p kaspa-consensus --features evm --lib -- rfc12_ rfc0012_ --test-threads=1`:
+  **42 passed, 0 failed, 1 ignored**, build 2m05s, runtime 17.39s. Matrix 34, C-items 3,
+  existing private-Final probe 1, store 2, retirement unit 1, row-size unit 1. The ignored case is the
+  existing explicit 5,400-DAA long probe. Log `/tmp/rfc12-import-regression.log`.
+* `cargo test --locked -p kaspa-consensus-core --features evm --lib --test pruning_proof_strict_economic_fence --test rfc0012_evidence_window --test rfc0012_native_evidence_fold --test rfc0012_court_maturity --test rfc0012_safe_maturity_attacks -- --test-threads=2`:
+  library **3,643 passed, 0 failed, 13 ignored** (69.78s); integrations **22 passed, 0 failed,
+  0 ignored** (economic fence 5, court maturity 2, evidence window 1, native fold 6, maturity attacks 8).
+  Build 4m50s. Log `/tmp/rfc12-import-core.log`. The existing explicitly ignored probes are not successes.
+* `cargo test --locked -p kaspa-consensus --features evm --lib -- t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225 hb_regression_the_same_chain_rule_colors_the_same_through_the_pruning_proof --test-threads=1`:
+  **2 passed, 0 failed, 0 ignored**, build 0.42s, runtime 1.73s; log
+  `/tmp/rfc12-import-proof-roundtrip.log`. These existing shrunk-depth, archival-source node tests validate,
+  apply and rebuild a proof with context import; the latter checks identical fork coloring with its fence
+  dormant and armed. They establish this path's regression compatibility, not real P2P, actual GC or
+  interrupted EVM-sidecar recovery. No source changes or weakening of those tests was needed.
+* `cargo check --locked -p kaspad --features evm`: succeeded in 37.70s with existing warnings;
+  log `/tmp/rfc12-import-daemon.log`.
+
+The independent passing total in these final commands is **3,709**, excluding 14 ignored cases and
+all earlier failed/smoke runs. Scoped rustfmt and `git diff --check` pass. The new error variants are local
+import errors; no wire codecs, network parameters, fingerprints, Round tickets, selection rule or public
+activation changed. Source logic was not edited after validation; only documentation was completed.
+No push or deployment. The four-RFC goal remains active with its recorded open acceptance gates.

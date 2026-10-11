@@ -101,6 +101,21 @@ pub enum PruningImportError {
     #[error("got trusted block {0} in the future of the pruning point {1}")]
     TrustedBlockInPruningPointFuture(BlockHash, BlockHash),
 
+    #[error("pruning-point history starts at {0}, expected network genesis {1}")]
+    PruningPointsWrongGenesis(BlockHash, BlockHash),
+
+    #[error("pruning-point sample for {0} is already {1}, but imported history requires {2}")]
+    ImportedPruningPointHistoryMismatch(BlockHash, BlockHash, BlockHash),
+
+    #[error("cannot establish import context for pruning point {0}: {1}")]
+    PruningPointImportContextUnavailable(BlockHash, String),
+
+    #[error("imported EVM state targets block {0}, but the established pruning point is {1}")]
+    ImportedEvmPruningPointMismatch(BlockHash, BlockHash),
+
+    #[error("existing EVM {1} for pruning point {0} disagrees with the root-verified imported state")]
+    ImportedEvmExistingStateMismatch(BlockHash, String),
+
     // kaspa-pq ADR-0022: pruned-IBD EVM/overlay snapshot import verification.
     #[error("imported EVM execution header for pruning point {0} has commitment {1} but the L1 header commits {2}")]
     ImportedEvmCommitmentMismatch(BlockHash, Hash64, Hash64),

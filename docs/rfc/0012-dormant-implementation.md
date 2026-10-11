@@ -90,6 +90,13 @@ rejected imports preserve it. Old positive evidence bootstraps history, while mi
 negative evidence requires recovery rather than an assumption of no past publication. The legacy
 three-hash singleton and native RPC wire types are unchanged.
 
+EVM import checks that its target is the established pruning point before root validation and pins it
+through commit after a second check. Identical existing header/snapshot/checkpoint rows are reused and
+missing rows completed; contradictory or unreadable rows refuse before flat-state writes or incident
+reset. The pruning-history context import also reuses identical samples and rejects empty/genesis/order/
+shape/sample errors before writing history. This strengthens the existing proof/catch-up caller contract;
+it supplies no new proof authority or branch-selection rule. See RFC §4.3 and the import-recovery record.
+
 An absent ETH block tag returns `null`. State/call queries for unavailable executed
 heads return an error, rather than reading tip state or inventing an empty account.
 The evidence API also verifies endpoint roots and provenance. The legacy DAA-only

@@ -1100,6 +1100,10 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
     assert_eq!((still.stop, still.generation), (Some(SettlementStopV1::FinalizedConflict), z2[0].header.hash), "sticky");
     // The resync: a root-verified import of the pruning point's EVM state (a retired pruning point).
     let pp = a.chain.sink();
+    // Fixture pruning context; its headers are real, but no long-range proof/GC is claimed.
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
     let header = a.api().get_evm_header_of(pp).unwrap().expect("the EVM header");
     let snapshot = a.api().get_evm_state_snapshot_of(pp).unwrap().expect("the EVM state");
     let publication = a.vp().evm_heads_store.read().native_finalized_publication().unwrap();
@@ -1322,6 +1326,10 @@ async fn rfc12_publication_legacy_negative_snapshot_requires_recovery_not_invent
         Some(SafeWaitV1::MissingHistory { gap: HistoryGapV1::PersistedSnapshotIncompatible, block: None })
     );
     let pp = a.chain.sink();
+    // Fixture pruning context; its headers are real, but no long-range proof/GC is claimed.
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
     let header = a.api().get_evm_header_of(pp).unwrap().unwrap();
     let state = a.api().get_evm_state_snapshot_of(pp).unwrap().unwrap();
     {
@@ -1362,6 +1370,282 @@ async fn rfc12_publication_corrupt_bytes_never_fall_back_to_a_convenient_snapsho
         readiness_of(&a).stopped_early,
         Some(SafeWaitV1::MissingHistory { gap: HistoryGapV1::PersistedSnapshotIncompatible, block: None })
     );
+}
+#[tokio::test]
+async fn rfc12_import_a_valid_execution_of_another_block_cannot_clear_the_incident() {
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStore, EvmStateStore};
+    use crate::model::stores::pruning::PruningStoreReader;
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0780_0000);
+    prefix(&mut a).await;
+    extend(&mut a, &[2]).await;
+    let requested = a.chain.sink();
+    let current_pruning = a.vp().pruning_point_store.read().pruning_point().unwrap();
+    assert_ne!(requested, current_pruning);
+    let ordinary = snapshot_of(&a).unwrap();
+    let positive = NativeSettlementSnapshotV1 { safe: ordinary.latest, finalized: ordinary.latest, stop: None, ..ordinary };
+    publish_native(&a, positive.clone());
+    let incident =
+        NativeSettlementSnapshotV1 { safe: None, finalized: None, stop: Some(SettlementStopV1::FinalizedConflict), ..positive.clone() };
+    publish_native(&a, incident.clone());
+    let heads = a.vp().evm_heads_store.read().get().unwrap();
+    assert_eq!(readiness_of(&a).stop, incident.stop);
+    let header = a.api().get_evm_header_of(requested).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(requested).unwrap().unwrap();
+    // The supplied state is genuinely root-verified, but it is not the established pruning target.
+    // Removing local rows models a sidecar import and avoids an unrelated duplicate-insert panic.
+    let mut batch = rocksdb::WriteBatch::default();
+    a.vp().evm_header_store.delete_batch(&mut batch, requested).unwrap();
+    a.vp().evm_state_store.delete_batch(&mut batch, requested).unwrap();
+    a.vp().db.write(batch).unwrap();
+    assert!(
+        a.vp().import_pruning_point_evm_state(requested, header, state).is_err(),
+        "root validity alone must not authorize clearing a finalized incident at another block"
+    );
+    assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(incident.clone()));
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), Some(positive));
+    assert_eq!(a.vp().evm_heads_store.read().get().unwrap(), heads);
+    assert_eq!(readiness_of(&a).stop, incident.stop);
+    assert!(a.api().get_evm_header_of(requested).unwrap().is_none(), "refused import stages no execution row");
+    assert_eq!(a.vp().pruning_point_store.read().pruning_point().unwrap(), current_pruning);
+}
+
+#[tokio::test]
+async fn rfc12_import_retry_after_a_processor_restart_is_idempotent() {
+    use crate::model::stores::evm::{EvmHeaderStore, EvmStateCheckpointStoreReader, EvmStateStore};
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let p = parts(Some(FENCE));
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _rx) = async_channel::unbounded();
+    let first = TestConsensus::with_db(db.clone(), &p.0, sender);
+    let mut a = Rig::on(first, &p, 0x12_0790_0000);
+    prefix(&mut a).await;
+    extend(&mut a, &[2]).await;
+    let pp = a.chain.sink();
+    // Establish context through the real import entry; normal header processing already installed
+    // the same sample. This is a harness history list, not a full pruning proof or actual GC.
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
+    let header = a.api().get_evm_header_of(pp).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(pp).unwrap().unwrap();
+    let mut batch = rocksdb::WriteBatch::default();
+    a.vp().evm_header_store.delete_batch(&mut batch, pp).unwrap();
+    a.vp().evm_state_store.delete_batch(&mut batch, pp).unwrap();
+    a.vp().db.write(batch).unwrap();
+    a.vp().import_pruning_point_evm_state(pp, header.clone(), state.clone()).unwrap();
+    let checkpoint = a.vp().evm_state_checkpoint_store.get(pp).unwrap().unwrap();
+    assert_eq!(checkpoint.decode_snapshot().unwrap(), state);
+    let first_heads = heads_of(&a).unwrap();
+    let (wallets, nonce, simulated_time, reopen_nonce) =
+        (a.wallets.clone(), a.nonce, a.chain.ctx.simulated_time, a.chain.nonce_for_reopen());
+    drop(a);
+    let mut config = p.0.clone();
+    config.process_genesis = false;
+    let (sender, _rx) = async_channel::unbounded();
+    let second = TestConsensus::with_db(db, &config, sender);
+    let chain = t12_reopened_chain(second, &config, &p.1, simulated_time, reopen_nonce);
+    let resumed = (config, p.1.clone(), p.2.clone(), p.3.clone());
+    let a = Rig::resumed(chain, &resumed, wallets, nonce);
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
+    a.vp()
+        .import_pruning_point_evm_state(pp, header.clone(), state.clone())
+        .expect("retrying a committed import must not panic on existing immutable rows");
+    assert_eq!(a.api().get_evm_header_of(pp).unwrap(), Some(header));
+    assert_eq!(a.api().get_evm_state_snapshot_of(pp).unwrap(), Some(state));
+    assert_eq!(a.vp().evm_state_checkpoint_store.get(pp).unwrap(), Some(checkpoint));
+    assert_eq!(heads_of(&a), Some(first_heads));
+    assert_eq!(snapshot_of(&a), None);
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), None);
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, None);
+}
+#[tokio::test]
+async fn rfc12_import_partial_execution_rows_are_completed_without_overwriting_identical_data() {
+    use crate::model::stores::evm::{EvmHeaderStore, EvmStateCheckpointStoreReader, EvmStateStore};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_07a0_0000);
+    prefix(&mut a).await;
+    extend(&mut a, &[2]).await;
+    let pp = a.chain.sink();
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
+    let header = a.api().get_evm_header_of(pp).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(pp).unwrap().unwrap();
+    let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV1::build(pp, header.evm_number, header.state_root, &state);
+    // Retire-206/recovery may have only a header, only a snapshot, or only the checkpoint.
+    for (keep_header, keep_state, keep_checkpoint) in [(true, false, true), (false, true, false), (false, false, true)] {
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().evm_header_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().evm_state_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().evm_state_checkpoint_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().db.write(batch).unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+        if keep_header {
+            a.vp().evm_header_store.insert_batch(&mut batch, pp, header.clone()).unwrap();
+        }
+        if keep_state {
+            a.vp().evm_state_store.insert_batch(&mut batch, pp, state.clone()).unwrap();
+        }
+        if keep_checkpoint {
+            a.vp().evm_state_checkpoint_store.insert_batch(&mut batch, pp, checkpoint.clone()).unwrap();
+        }
+        a.vp().db.write(batch).unwrap();
+        a.vp().import_pruning_point_evm_state(pp, header.clone(), state.clone()).unwrap();
+        assert_eq!(a.api().get_evm_header_of(pp).unwrap(), Some(header.clone()));
+        assert_eq!(a.api().get_evm_state_snapshot_of(pp).unwrap(), Some(state.clone()));
+        assert_eq!(a.vp().evm_state_checkpoint_store.get(pp).unwrap(), Some(checkpoint.clone()));
+        assert_eq!(snapshot_of(&a), None);
+        assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), None);
+        let heads = heads_of(&a).unwrap();
+        assert_eq!((heads.latest_head(), heads.safe_head(), heads.finalized_head()), (Some(pp), None, None));
+    }
+}
+
+#[tokio::test]
+async fn rfc12_import_conflicting_existing_rows_preserve_incident_and_flat_head() {
+    use crate::model::stores::evm::{
+        EvmCanonicalHeadsStoreReader, EvmHeaderStore, EvmStateCheckpointStoreReader, EvmStateStore,
+    };
+    use kaspa_consensus_core::errors::pruning::PruningImportError;
+    let mut p = parts(Some(FENCE));
+    p.0.evm_shadow_state_backend = true;
+    let mut a = Rig::new(&p, 0x12_07b0_0000);
+    let pre = prefix(&mut a).await;
+    extend(&mut a, &[2]).await;
+    let pp = pre[0].header.hash;
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
+    let header = a.api().get_evm_header_of(pp).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(pp).unwrap().unwrap();
+    let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV1::build(pp, header.evm_number, header.state_root, &state);
+    let ordinary = snapshot_of(&a).unwrap();
+    let positive = NativeSettlementSnapshotV1 { safe: ordinary.latest, finalized: ordinary.latest, stop: None, ..ordinary };
+    publish_native(&a, positive.clone());
+    let incident =
+        NativeSettlementSnapshotV1 { safe: None, finalized: None, stop: Some(SettlementStopV1::FinalizedConflict), ..positive.clone() };
+    publish_native(&a, incident.clone());
+    assert_eq!(readiness_of(&a).stop, incident.stop);
+    let ptr = a.vp().evm_latest_state_ptr_store.read().get().unwrap().unwrap();
+    assert_ne!(ptr.canonical_head, pp, "the failed import must not rewind the flat pointer to P");
+    let heads = a.vp().evm_heads_store.read().get().unwrap();
+    for kind in 0..3 {
+        let (mut stored_header, mut stored_state, mut stored_checkpoint) = (header.clone(), state.clone(), checkpoint.clone());
+        match kind {
+            0 => stored_header.evm_number += 1,
+            1 => stored_state.accounts.push(kaspa_consensus_core::evm::EvmAccountSnapshot {
+                address: EvmAddress::from_bytes([0xee; 20]),
+                nonce: 1,
+                code_hash: kaspa_consensus_core::evm::EVM_EMPTY_CODE_HASH,
+                ..Default::default()
+            }),
+            2 => stored_checkpoint.checksum[0] ^= 1,
+            _ => unreachable!(),
+        }
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().evm_header_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().evm_state_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().evm_state_checkpoint_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().db.write(batch).unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().evm_header_store.insert_batch(&mut batch, pp, stored_header.clone()).unwrap();
+        a.vp().evm_state_store.insert_batch(&mut batch, pp, stored_state.clone()).unwrap();
+        a.vp().evm_state_checkpoint_store.insert_batch(&mut batch, pp, stored_checkpoint.clone()).unwrap();
+        a.vp().db.write(batch).unwrap();
+        assert!(matches!(a.vp().import_pruning_point_evm_state(pp, header.clone(), state.clone()),
+            Err(PruningImportError::ImportedEvmExistingStateMismatch(target, _)) if target == pp));
+        assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(incident.clone()));
+        assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), Some(positive.clone()));
+        assert_eq!(a.vp().evm_heads_store.read().get().unwrap(), heads);
+        assert_eq!(a.vp().evm_latest_state_ptr_store.read().get().unwrap(), Some(ptr));
+        assert_eq!(a.vp().evm_state_checkpoint_store.get(pp).unwrap(), Some(stored_checkpoint));
+        assert_eq!(a.api().get_evm_header_of(pp).unwrap(), Some(stored_header));
+        assert_eq!(a.api().get_evm_state_snapshot_of(pp).unwrap(), Some(stored_state));
+        assert_eq!(readiness_of(&a).stop, incident.stop, "failed validation cannot clear the memo");
+    }
+}
+
+#[tokio::test]
+async fn rfc12_import_missing_context_header_is_an_error_not_a_panic() {
+    use crate::model::stores::{evm::EvmCanonicalHeadsStoreReader, pruning::PruningStore};
+    use kaspa_consensus_core::errors::pruning::PruningImportError;
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_07c0_0000);
+    prefix(&mut a).await;
+    let tip = a.chain.sink();
+    let header = a.api().get_evm_header_of(tip).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(tip).unwrap().unwrap();
+    let native = a.vp().evm_heads_store.read().native_snapshot().unwrap();
+    let publication = a.vp().evm_heads_store.read().native_finalized_publication().unwrap();
+    let heads = a.vp().evm_heads_store.read().get().unwrap();
+    let missing = Hash64::from_u64_word(0x12_07c0_dead);
+    // Deliberately broken fixture context: a production proof must have installed this header.
+    a.vp().pruning_point_store.write().set(missing, 1).unwrap();
+    assert!(matches!(a.vp().import_pruning_point_evm_state(missing, header, state),
+        Err(PruningImportError::PruningPointImportContextUnavailable(target, _)) if target == missing));
+    assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), native);
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), publication);
+    assert_eq!(a.vp().evm_heads_store.read().get().unwrap(), heads);
+}
+
+#[tokio::test]
+async fn rfc12_import_context_is_repeatable_and_invalid_history_never_changes_the_target() {
+    use crate::model::stores::{
+        past_pruning_points::PastPruningPointsStoreReader, pruning::PruningStoreReader, pruning_samples::PruningSamplesStoreReader,
+    };
+    use kaspa_consensus_core::errors::pruning::PruningImportError;
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_07d0_0000);
+    let pre = prefix(&mut a).await;
+    extend(&mut a, &[2]).await;
+    let genesis = a.api().get_header(a.config.params.genesis.hash).unwrap();
+    let pp = a.api().get_header(a.chain.sink()).unwrap();
+    let earlier = pre[0].header.clone();
+    assert_eq!(
+        a.vp().pruning_samples_store.pruning_sample_from_pov(pp.hash).unwrap(),
+        genesis.hash,
+        "normal processing already has the identical immutable sample"
+    );
+    for _ in 0..2 {
+        a.api().import_pruning_points(vec![genesis.clone(), pp.clone()]).unwrap();
+    }
+    assert!(matches!(a.api().import_pruning_points(Vec::new()), Err(PruningImportError::PruningProofNotEnoughHeaders)));
+    assert!(matches!(a.api().import_pruning_points(vec![pp.clone()]), Err(PruningImportError::PruningPointsWrongGenesis(_, _))));
+    assert!(matches!(
+        a.api().import_pruning_points(vec![genesis.clone(), pp.clone(), earlier.clone()]),
+        Err(PruningImportError::InconsistentPastPruningPoints(..))
+    ));
+    assert!(matches!(
+        a.api().import_pruning_points(vec![genesis.clone(), pp.clone(), pp.clone()]),
+        Err(PruningImportError::DuplicatedPastPruningPoints(_))
+    ));
+    let mut unknown = pp.as_ref().clone();
+    unknown.pow_algo_id = 255;
+    unknown.finalize();
+    assert!(matches!(
+        a.api().import_pruning_points(vec![genesis.clone(), std::sync::Arc::new(unknown)]),
+        Err(PruningImportError::PruningProofUnknownPowAlgoId(..))
+    ));
+    assert_eq!(a.vp().past_pruning_points_store.get(0).unwrap(), genesis.hash);
+    assert_eq!(a.vp().past_pruning_points_store.get(1).unwrap(), pp.hash);
+    assert!(a.vp().past_pruning_points_store.get(2).is_err(), "refused input cannot leave a partial history row");
+    let mut batch = rocksdb::WriteBatch::default();
+    a.vp().pruning_samples_store.delete_batch(&mut batch, pp.hash).unwrap();
+    a.vp().db.write(batch).unwrap();
+    let mut batch = rocksdb::WriteBatch::default();
+    a.vp().pruning_samples_store.insert_batch(&mut batch, pp.hash, earlier.hash).unwrap();
+    a.vp().db.write(batch).unwrap();
+    assert!(matches!(
+        a.api().import_pruning_points(vec![genesis.clone(), pp.clone()]),
+        Err(PruningImportError::ImportedPruningPointHistoryMismatch(..))
+    ));
+    assert_eq!(a.vp().pruning_samples_store.pruning_sample_from_pov(pp.hash).unwrap(), earlier.hash);
+    assert_eq!(a.vp().pruning_point_store.read().pruning_point().unwrap(), pp.hash);
+    assert_eq!(a.vp().past_pruning_points_store.get(0).unwrap(), genesis.hash);
+    assert_eq!(a.vp().past_pruning_points_store.get(1).unwrap(), pp.hash);
 }
 // =====================================================================================================================
 // MATRIX 7 — certified work makes a prefix safe; a reorg takes it back; lost history stops certification
