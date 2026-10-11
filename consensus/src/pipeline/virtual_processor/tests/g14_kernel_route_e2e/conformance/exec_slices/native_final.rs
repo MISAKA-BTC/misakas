@@ -205,7 +205,7 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
     assert_eq!(reopened.vesting_counters(), counters);
     assert_eq!(cw.net.api(), final_route);
     assert_eq!(Net::utxos_of(&cw.net.chain), final_utxos);
-    assert_eq!(cw.net.ledger().to_rows_v1(), ledger.to_rows_v1());
+    assert_eq!(cw.net.ledger().to_rows(), ledger.to_rows());
     cw.net.send(vec![(REGISTRANT, licence)]).await;
     let repeated = cw.net.chain.tip_state().1;
     assert_eq!(repeated.exec_v2_reward_vesting_v1(&s.real.claim), Some(&receipt));
