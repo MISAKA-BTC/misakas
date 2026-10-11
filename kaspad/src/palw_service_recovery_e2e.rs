@@ -47,6 +47,7 @@ pub(super) struct RecoveryRun {
     manager: Arc<ConsensusManager>,
     flow: Arc<FlowContext>,
     config: Arc<Config>,
+    notification_root: Arc<kaspa_consensus_notify::root::ConsensusNotificationRoot>,
     producer_restarted: bool,
     verifier_restarted: bool,
     honest: bool,
@@ -58,6 +59,40 @@ pub(super) struct RecoveryRun {
 }
 
 async fn launch(
+    config: PalwPanelConfig,
+    manager: Arc<ConsensusManager>,
+    flow: Arc<FlowContext>,
+    consensus_config: Arc<Config>,
+    notification_root: Arc<kaspa_consensus_notify::root::ConsensusNotificationRoot>,
+) -> ServiceRun {
+    // A real node restart constructs a new FlowContext. Its gossip inbox is single-owner;
+    // sharing or restarting the old context disables the next panel service entirely.
+    // Keep only the public consensus, transaction pool, addresses and connected hub shared.
+    let tick = Arc::new(TickService::new());
+    let hub = flow.hub().clone();
+    let rules = Arc::new(MiningRuleEngine::new(
+        manager.clone(),
+        consensus_config.clone(),
+        Default::default(),
+        tick.clone(),
+        hub.clone(),
+        Default::default(),
+        Arc::new(kaspa_core::chain_participation::ChainParticipationGate::new(true)),
+    ));
+    let fresh = Arc::new(FlowContext::new(
+        manager.clone(),
+        flow.address_manager.clone(),
+        consensus_config.clone(),
+        flow.mining_manager().clone(),
+        tick,
+        notification_root,
+        hub,
+        rules,
+    ));
+    launch_on_flow(config, manager, fresh, consensus_config).await
+}
+
+async fn launch_on_flow(
     config: PalwPanelConfig,
     manager: Arc<ConsensusManager>,
     flow: Arc<FlowContext>,
@@ -133,7 +168,8 @@ impl RecoveryRun {
         } else {
             None
         };
-        let producer = launch(producer_config.clone(), manager.clone(), flow.clone(), config.clone()).await;
+        let notification_root = chain.tc.notification_root();
+        let producer = launch(producer_config.clone(), manager.clone(), flow.clone(), config.clone(), notification_root.clone()).await;
         assert_eq!(producer.service.bond, Some(chain.bonds[0].0));
         Self {
             _directory: directory,
@@ -143,6 +179,7 @@ impl RecoveryRun {
             manager,
             flow,
             config,
+            notification_root,
             producer_restarted: false,
             verifier_restarted: false,
             honest,
@@ -161,7 +198,7 @@ impl RecoveryRun {
         assert!(verifier.task.is_none(), "the primary node never starts a second outsider service");
         let network = self.network.as_ref().expect("independent socket receiver");
         let (manager, flow) = network.verifier_endpoint().await;
-        let launched = launch(self.verifier_config.clone(), manager, flow, self.config.clone()).await;
+        let launched = launch_on_flow(self.verifier_config.clone(), manager, flow, self.config.clone()).await;
         *service = launched.service.clone();
         *verifier = launched;
         eprintln!("[service-network] sole outside verifier runs on the independently validated receiver DB");
@@ -215,14 +252,28 @@ impl RecoveryRun {
             if self.mode == RecoveryMode::Reorg {
                 self.reorg_partial_answer(chain, claim).await;
             }
-            self.producer = launch(self.producer_config.clone(), self.manager.clone(), self.flow.clone(), self.config.clone()).await;
+            self.producer = launch(
+                self.producer_config.clone(),
+                self.manager.clone(),
+                self.flow.clone(),
+                self.config.clone(),
+                self.notification_root.clone(),
+            )
+            .await;
             self.producer_restarted = true;
             eprintln!("[service-recovery] producer restarted from accepted partial manifest at DAA {}", chain.daa());
         }
         let waiting_for_binding = view.sessions.iter().any(|(_, s)| s.units.contains(&PalwDaUnitV1::Event { row: 0, tile: 0 }));
         if self.mode == RecoveryMode::Restart && !self.verifier_restarted && (partial || (!self.honest && waiting_for_binding)) {
             verifier.finish().await;
-            let restarted = launch(self.verifier_config.clone(), self.manager.clone(), self.flow.clone(), self.config.clone()).await;
+            let restarted = launch(
+                self.verifier_config.clone(),
+                self.manager.clone(),
+                self.flow.clone(),
+                self.config.clone(),
+                self.notification_root.clone(),
+            )
+            .await;
             *service = restarted.service.clone();
             *verifier = restarted;
             self.verifier_restarted = true;
