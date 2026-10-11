@@ -2551,7 +2551,7 @@ impl VirtualStateProcessor {
                         palw_state.as_ref().map(|s| self.palw_v2_bond_burn_obligations(s, pov_daa_score)).unwrap_or_default();
                     // ADR-0125: which merged round blocks hold their permit, from the same parent state.
                     ctx.palw_round_verdicts =
-                        palw_state.as_ref().and_then(|s| self.palw_round_verdicts_v1(s, &ctx.ghostdag_data, pov_daa_score));
+                        palw_state.as_ref().and_then(|s| self.palw_round_verdicts_at_v1(s, &ctx.ghostdag_data, pov_daa_score, current));
                     // Lane SCAN: node-local telemetry of each judged round block (never read by consensus).
                     if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                         self.palw_record_round_verdicts(verdicts);
@@ -2720,6 +2720,7 @@ impl VirtualStateProcessor {
                                     objects,
                                     current,
                                     own_attempt_class,
+                                    &ctx.palw_round_fee_incomes,
                                 );
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
@@ -2901,6 +2902,7 @@ impl VirtualStateProcessor {
                                         if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                                             extras.round_permit_uses = verdicts.uses.clone();
                                         }
+                                        extras.round_fee_incomes = ctx.palw_round_fee_incomes.clone();
                                         // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
                                         // re-judged by the fold against its own running state) and the covered set itself.
                                         if let Some(resolved) = exec_resolved.as_ref() {
@@ -7887,7 +7889,7 @@ impl VirtualStateProcessor {
             .into_iter()
             .map(|(object, refund)| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, refund, unrefundable: None })
             .collect();
-        self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, None)
+        self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, None, &[])
     }
 
     /// **The REAL one-shot block fold, over the whole accepted list, using the same fences the
@@ -8015,7 +8017,7 @@ impl VirtualStateProcessor {
         own_attempt_class: Option<kaspa_hashes::Hash64>,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
         let (accepted, folded, _refunds) =
-            self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, own_attempt_class);
+            self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, own_attempt_class, &[]);
         (accepted, folded)
     }
 
@@ -8032,6 +8034,7 @@ impl VirtualStateProcessor {
         // `palw_audit_2026_09_23` the fold's step 3 holds room for it on the class gate, and the
         // rehearsal must refuse the commitments the fold will (2026-09-24 DoS audit review of #11).
         own_attempt_class: Option<kaspa_hashes::Hash64>,
+        round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
     ) -> (
         Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -8117,6 +8120,8 @@ impl VirtualStateProcessor {
         let audit_active = self.palw_audit_2026_09_11_at(point.daa_score);
         // The old path's synthetic chain point; unused past the fence.
         let mut rehearsal = *point;
+        let mut fee_extras = self.palw_transition_extras_for(point);
+        fee_extras.round_fee_incomes = round_fee_incomes.to_vec();
         let mut folded = if audit_active {
             match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_v1(
                 state,
@@ -8126,7 +8131,7 @@ impl VirtualStateProcessor {
                 self.palw_capability_bound_at(point.daa_score),
                 self.palw_uncertified_weightless_at(point.daa_score),
                 self.palw_da_court_at(point.daa_score),
-                &self.palw_transition_extras_for(point),
+                &fee_extras,
             ) {
                 Ok(base) => base,
                 // The pre-object steps are what the real fold runs before any object; if they error
@@ -15069,6 +15074,16 @@ impl VirtualStateProcessor {
         ghostdag_data: &GhostdagData,
         daa_score: u64,
     ) -> Option<super::utxo_validation::PalwRoundVerdictsV1> {
+        self.palw_round_verdicts_at_v1(state, ghostdag_data, daa_score, Default::default())
+    }
+
+    fn palw_round_verdicts_at_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        ghostdag_data: &GhostdagData,
+        daa_score: u64,
+        accepting_block: BlockHash,
+    ) -> Option<super::utxo_validation::PalwRoundVerdictsV1> {
         use kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope;
         use kaspa_consensus_core::palw_execution_lane_v1::{
             PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v2, palw_execution_span_v1,
@@ -15080,6 +15095,11 @@ impl VirtualStateProcessor {
         let span_now = palw_execution_span_v1(daa_score, span_daa);
         let mut verdicts = super::utxo_validation::PalwRoundVerdictsV1 {
             round_blocks: self.palw_round_blocks_of(ghostdag_data),
+            fee_budget: self.palw_state_params_v2.as_ref().and_then(|params| state.round_fee_admission_v1(params,
+                &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: Default::default(), daa_score, blue_score: ghostdag_data.blue_score,
+                    subsidy: self.coinbase_manager.calc_block_subsidy(daa_score),
+                }, self.palw_escrow_for_carrier_at(accepting_block, daa_score, daa_score))),
             ..Default::default()
         };
         // **RFC-0008 v2: the covered set is judged in the canonical order — `(round, permit index, hash)` — so two blocks of one permit,
@@ -15123,7 +15143,7 @@ impl VirtualStateProcessor {
             {
                 continue;
             }
-            let judged = (|| -> Result<(PalwExecPermitUseV1, PalwRoundLineageV1), Refusal> {
+            let judged = (|| -> Result<(PalwExecPermitUseV1, PalwRoundLineageV1, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2), Refusal> {
                 let header = self.headers_store.get_header(block).map_err(|_| Refusal::EnvelopeUndecodable)?;
                 // The envelope this block's height admits: v2's `EXEC_TX` permit, or the v1 round envelope (a block merged below
                 // the fence). Both name a round, a permit index, a bond and the key that signed; the checks below are one function
@@ -15195,10 +15215,11 @@ impl VirtualStateProcessor {
                     return Err(Refusal::PayeeBound);
                 }
                 let lineage = kaspa_consensus_core::palw_exec_view_v1::palw_round_lineage_v1(state, schedule, permit.quantum_id);
-                Ok((PalwExecPermitUseV1 { span, round: envelope.round, permit_index: envelope.permit_index }, lineage))
+                Ok((PalwExecPermitUseV1 { span, round: envelope.round, permit_index: envelope.permit_index }, lineage, envelope.bond))
             })();
             match judged {
-                Ok((used, lineage)) => {
+                Ok((used, lineage, bond)) => {
+                    verdicts.fee_recipients.insert(block, bond);
                     taken.insert((used.span, used.round, used.permit_index));
                     if let Some(bond) = self
                         .headers_store
@@ -15520,6 +15541,7 @@ impl VirtualStateProcessor {
                 }
             }),
             round_permit_uses: Vec::new(),
+            round_fee_incomes: Vec::new(),
             // RFC-0008 v2: the slice carriers the covered set holds (empty until the closure carriage fills it).
             exec_v2_covered: Vec::new(),
             exec_v2_origin_headers: Default::default(),
@@ -20961,6 +20983,40 @@ impl VirtualStateProcessor {
             return Err(RuleError::UnknownPowAlgoId(POW_ALGO_ID_PALW_ROUND_V1));
         };
         let sink = virtual_state.ghostdag_data.selected_parent;
+        if let (Some(round), Some(params)) = (round, self.palw_state_params_v2.as_ref()) {
+            if params.palw_bond_budget_active_at(virtual_state.daa_score) {
+                let (_, state) = self.palw_v2_state_at(sink)
+                    .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient state is unavailable".into()))?;
+                let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: Default::default(), daa_score: virtual_state.daa_score,
+                    blue_score: virtual_state.ghostdag_data.blue_score,
+                    subsidy: self.coinbase_manager.calc_block_subsidy(virtual_state.daa_score),
+                };
+                let mut budget = state.round_fee_admission_v1(params, &point, self.palw_escrow_carve_at(point.daa_score, point.daa_score))
+                    .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient budget is unavailable".into()))?;
+                let view = self.palw_round_view_v1(round)
+                    .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the execution schedule is unavailable".into()))?;
+                let recipients: std::collections::BTreeSet<_> = view.permits.iter()
+                    .filter(|permit| !view.used.contains(&permit.index))
+                    .filter(|permit| state.bond(&permit.bond).is_some_and(|bond|
+                        kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&bond.payout_payload.as_bytes()) == payout))
+                    .map(|permit| permit.bond).collect();
+                if recipients.len() != 1 || template.calculated_fees.len() + 1 != template.block.transactions.len() {
+                    return Err(RuleError::RoundFeeBudgetRefused("an unambiguous bonded permit and validated transaction fees are required".into()));
+                }
+                let burned = self.palw_v2_bond_burn_obligations(&state, point.daa_score);
+                let maximum_sompi = template.block.transactions.iter().skip(1).zip(&template.calculated_fees)
+                    .try_fold(0u64, |sum, (tx, fee)| {
+                        let bond_burned = tx.inputs.iter().map(|input| burned.get(&input.previous_outpoint).copied().unwrap_or(0))
+                            .fold(0u64, u64::saturating_add);
+                        sum.checked_add(self.palw_collectible_transaction_fee_v1(tx, *fee, bond_burned, point.daa_score))
+                    }).ok_or_else(|| RuleError::RoundFeeBudgetRefused("the collectible fee overflows".into()))?;
+                budget.admit(kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
+                    block: Default::default(), bond: *recipients.first().expect("one permit recipient"),
+                    maximum_sompi, actual_sompi: maximum_sompi,
+                }).map_err(|why| RuleError::RoundFeeBudgetRefused(why.to_string()))?;
+            }
+        }
         let anchor = self
             .ghostdag_store
             .get_selected_parent(sink)

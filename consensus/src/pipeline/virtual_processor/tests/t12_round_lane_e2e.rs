@@ -668,6 +668,14 @@ async fn a_floor_final_scheduled(draw: SeedDraw) -> AtTheTargetSpan {
 /// fence validator refuses every real height, so the harness arms what validation refuses — see `t12_exec_v2_carriage`). `None` is the
 /// chain exactly as before.
 pub(super) async fn a_floor_final_scheduled_with(draw: SeedDraw, exec_v2_fence: Option<u64>) -> AtTheTargetSpan {
+    a_floor_final_scheduled_with_edit(draw, exec_v2_fence, |_| {}).await
+}
+
+async fn a_floor_final_scheduled_with_edit(
+    draw: SeedDraw,
+    exec_v2_fence: Option<u64>,
+    edit: impl FnOnce(&mut Params),
+) -> AtTheTargetSpan {
     use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecSeedAnchorV1, palw_execution_span_seed_v1, palw_execution_span_v1};
     use kaspa_consensus_core::palw_execution_quanta_v1::{
         PALW_EXECUTION_QUANTUM_V1, palw_execution_quantum_count_v1, palw_execution_span_rounds_v1,
@@ -683,6 +691,10 @@ pub(super) async fn a_floor_final_scheduled_with(draw: SeedDraw, exec_v2_fence: 
         config.params.sync_palw_exec_payload_v2();
         let PalwConsensusMode::ConsensusV2(armed) = &config.params.palw_consensus_mode else { unreachable!("testnet-12 is V2") };
         bundle = armed.clone();
+    }
+    edit(&mut config.params);
+    if let PalwConsensusMode::ConsensusV2(edited) = &config.params.palw_consensus_mode {
+        bundle = edited.clone();
     }
     let lane = config.params.palw_execution_lane.expect("t12 opens the execution lane");
     let ttpb = config.params.target_time_per_block();
@@ -914,6 +926,19 @@ async fn a_round_block_in_the_target_span(
     permit_index: u16,
     fee: u64,
 ) -> (MutableBlock, Transaction) {
+    a_round_block_with_actual_fee(at, round, permit_index, fee, fee).await
+}
+
+/// External signed carriage may bypass the producer's preflight. When the
+/// actual fee differs, assert local production refuses it and then send the
+/// fully re-signed body through ordinary header/UTXO validation anyway.
+async fn a_round_block_with_actual_fee(
+    at: &mut AtTheTargetSpan,
+    round: u64,
+    permit_index: u16,
+    fee: u64,
+    preflight_fee: u64,
+) -> (MutableBlock, Transaction) {
     use kaspa_consensus_core::palw_execution_lane_v1::{
         PALW_EXEC_ENVELOPE_VERSION_V1, PALW_EXEC_MLDSA87_CONTEXT, PalwExecEnvelopeV1, palw_exec_signing_message_v1,
         palw_execution_span_v1,
@@ -935,17 +960,17 @@ async fn a_round_block_in_the_target_span(
             at.chain.ctx.consensus.get_virtual_utxos(None, 1_000_000, false).into_iter().collect();
         (out, utxos.get(&out).cloned().expect("the carrier's change is unspent"))
     };
-    let paying = {
+    let mut paying = {
         let mut tx = Transaction::new(
             crate::constants::TX_VERSION,
             vec![TransactionInput::new(change, vec![], 0, 1)],
-            vec![TransactionOutput::new(change_entry.amount - fee, card_payout_spk(0))],
+            vec![TransactionOutput::new(change_entry.amount - preflight_fee, card_payout_spk(0))],
             0,
             kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
             0,
             vec![],
         );
-        sign_spend(&mut tx, change_entry, 0, at.chain.config.params.storage_mass_parameter);
+        sign_spend(&mut tx, change_entry.clone(), 0, at.chain.config.params.storage_mass_parameter);
         tx
     };
     let template = at
@@ -956,6 +981,30 @@ async fn a_round_block_in_the_target_span(
         .expect("a template carrying the spend");
     let mut block =
         at.chain.vp().round_adapt_block_template(template, round, card_payout_spk(0)).expect("the lane adapts a template").block;
+    if fee != preflight_fee {
+        let old_id = paying.id();
+        paying.outputs[0].value = change_entry.amount - fee;
+        sign_spend(&mut paying, change_entry, 0, at.chain.config.params.storage_mass_parameter);
+        let excessive = at
+            .chain
+            .ctx
+            .consensus
+            .build_block_template(
+                new_miner_data(),
+                Box::new(OnetimeTxSelector::new(vec![paying.clone()])),
+                TemplateBuildMode::Standard,
+            )
+            .expect("a signed fee transaction");
+        assert!(
+            matches!(
+                at.chain.vp().round_adapt_block_template(excessive, round, card_payout_spk(0)),
+                Err(crate::errors::RuleError::RoundFeeBudgetRefused(_))
+            ),
+            "the honest producer refuses an unfunded R maximum"
+        );
+        *block.transactions.iter_mut().find(|tx| tx.id() == old_id).expect("original body") = paying.clone();
+        block.header.hash_merkle_root = kaspa_consensus_core::merkle::calc_hash_merkle_root(block.transactions.iter());
+    }
     assert_eq!(block.header.pow_algo_id, kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1);
     assert_eq!(block.header.direct_parents(), &[at.opening], "hung from the opening block, the sink's selected parent");
     assert!(block.transactions.iter().any(|tx| tx.id() == paying.id()), "the round block carries the spend");
@@ -1138,6 +1187,79 @@ async fn t12_a_floor_final_becomes_a_permitted_round_block_whose_fee_pays_its_bo
         at.chain.sink_daa(),
         started.elapsed().as_secs_f64()
     );
+}
+
+/// Dormant budget fence, actual signed Round and native UTXO/coinbase fold.
+/// Execution roots remain the named harness seam above; fee amounts and native
+/// ownership are validated by the node. B covers reward blocks; T covers the
+/// already drawn execution ticket, and only actually collected fees consume R.
+#[tokio::test]
+async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_block_b() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_bond_budget_v1::{
+        PALW_BUDGET_BLOCK_UNIT_V1, PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1, PalwBudgetOriginV1, PalwRoundRightsPolicyV1,
+    };
+    use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1;
+    const LIMIT: u64 = 500_000;
+    for actual_fee in [LIMIT, LIMIT + 1] {
+        // The real original floor Final predates the fence; its signed rights
+        // survive. Its ticket is drawn after the new dedicated T cap opens.
+        let mut at = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, |params| {
+            let mut policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+            policy.window_daa = 280;
+            policy.capital_unit_sompi = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
+            policy.claims_per_unit = 1_000_000;
+            policy.block_units_per_unit = 1_000_000 * PALW_BUDGET_BLOCK_UNIT_V1;
+            policy.reward_per_unit_sompi = LIMIT;
+            policy.final_weight_per_unit = 1_000_000;
+            policy.max_open_claims_per_bond = 1_000_000;
+            policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1 };
+            params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(200), policy });
+            params.sync_palw_bond_budget_v1();
+        })
+        .await;
+        let (_, before_state) = at.chain.tip_state();
+        let before = *before_state.bond_budget().unwrap().bond_row(&at.executor).expect("ticket recipient has a T reservation");
+        assert_eq!(before.window.reward_sompi, 0, "old settled Final is not charged a second time");
+        assert_eq!(before.window.block_units, 0, "fee-only ticket does not reserve reward blocks");
+        assert_eq!(before.window.round_rights, 1, "dedicated execution cap is occupied before the Round");
+        let ticket = at.schedule.quanta.iter().filter(|q| q.final_id == at.claim_id).min_by_key(|q| q.scheduled_round).unwrap();
+        let round = ticket.scheduled_round;
+        let width = at.lane.width_of_span_len(at.target, at.span_daa);
+        let permit = palw_execution_permits_v1(&at.schedule, round, width).into_iter().find(|p| p.bond == at.executor).unwrap();
+        let (block, paying) = a_round_block_with_actual_fee(&mut at, round, permit.index, actual_fee, LIMIT).await;
+        let input = paying.inputs[0].previous_outpoint;
+        let input_before: std::collections::HashMap<_, _> =
+            at.chain.ctx.consensus.get_virtual_utxos(None, 1_000_000, false).into_iter().collect();
+        let merged = merge_the_round_block(&mut at, &block, &paying, round, actual_fee).await;
+        assert!(merged.permitted && merged.permit_recorded, "execution permit is independent of the refused native fee body");
+        let accepted = actual_fee == LIMIT;
+        assert_eq!(merged.spend_accepted, accepted);
+        assert_eq!(merged.fee_paid_to_payout, accepted);
+        let (_, after_state) = at.chain.tip_state();
+        let book = after_state.bond_budget().unwrap();
+        let after = *book.bond_row(&at.executor).unwrap();
+        assert_eq!(after.window.block_units, before.window.block_units);
+        assert_eq!(after.window.round_rights, before.window.round_rights);
+        assert_eq!(after.open_claims, before.open_claims);
+        if accepted {
+            assert_eq!(after.window.reward_sompi, LIMIT);
+            let id = kaspa_consensus_core::palw_bond_budget_v1::palw_round_income_id_v1(block.header.hash, &at.executor);
+            let income = book.claim_row(&id).expect("actual native fee collection is journaled");
+            assert_eq!(income.origin, PalwBudgetOriginV1::RoundFee);
+            assert_eq!(income.reserved.reward_sompi, LIMIT);
+            assert_eq!(income.consumed.reward_sompi, LIMIT);
+            assert!(!income.open && !income.live && income.in_window);
+        } else {
+            assert_eq!(after, before, "refused fee body leaves every recipient budget counter unchanged");
+            let utxos: std::collections::HashMap<_, _> =
+                at.chain.ctx.consensus.get_virtual_utxos(None, 1_000_000, false).into_iter().collect();
+            assert_eq!(utxos.get(&input), input_before.get(&input), "refused native body leaves the actual input untouched");
+            assert!(!utxos.contains_key(&TransactionOutpoint::new(paying.id(), 0)), "refused native output is never created");
+            let id = kaspa_consensus_core::palw_bond_budget_v1::palw_round_income_id_v1(block.header.hash, &at.executor);
+            assert!(book.claim_row(&id).is_none(), "no hidden R charge for a refused native body");
+        }
+    }
 }
 
 /// **Route-matrix #2 — a Final that mints no ticket holds no round permit** (formerly a FINDING:

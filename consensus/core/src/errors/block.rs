@@ -210,6 +210,8 @@ pub enum RuleError {
     /// block's selected chain.
     #[error("round lane parents: {0}")]
     BadRoundLaneParents(String),
+    #[error("Round fee batch exceeds its recipient budget: {0}")]
+    RoundFeeBudgetRefused(String),
 
     /// ADR-0125: a block's mergeset breaks the round lane's header rule (count, width, a permit twice,
     /// or a round block merging a round that is not older than its own).

@@ -29522,6 +29522,9 @@ pub fn palw_v2_pre_object_base_v1(
     //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
     //      `palw_bond_budget_v1`, which no network can arm.
     palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
+    for income in &extras.round_fee_incomes {
+        builder.reserve_round_income_v1(ctx, *income)?;
+    }
     // ADR-0125: the span boundary runs where the fold runs it — before any claim is finalized here.
     if let Some(lane) = extras.round_lane {
         builder.rotate_round_lane(ctx, lane.schedule_span_daa);
@@ -29908,6 +29911,9 @@ pub fn apply_palw_transition_v7(
     //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
     //      `palw_bond_budget_v1`, which no network can arm.
     palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
+    for income in &extras.round_fee_incomes {
+        builder.reserve_round_income_v1(ctx, *income)?;
+    }
     // 1d. ADR-0125: the execution lane's span boundary — before the sweeps, so an attempt finalized
     //     by this block is a credit in THIS block's span, never in the one its finals just closed.
     if let Some(lane) = extras.round_lane {
@@ -39405,6 +39411,9 @@ pub struct PalwTransitionExtrasV1 {
     /// ADR-0125: the round permits this block accepted, as the processor decided them against the
     /// parent state. Empty unless `round_lane` is `Some`.
     pub round_permit_uses: Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>,
+    /// Actual UTXO-accepted Round fees, pre-reserved in the same native book
+    /// before objects can consume the recipient's remaining R room.
+    pub round_fee_incomes: Vec<crate::palw_bond_budget_v1::PalwRoundFeeIncomeV1>,
     /// **RFC-0008 v2: the slice carriers the accepting block's covered set holds**, in the processor's canonical order (root, then
     /// index, then carrier). Each is re-judged by the fold against its own running state; empty unless
     /// `Params::palw_exec_payload_v2` is in force at the block, and then `Default` is byte-identical to the transition before the
@@ -72207,6 +72216,7 @@ pub(crate) mod tests {
                 prompt_ids_merkle: false,
                 round_lane: None,
                 round_permit_uses: Vec::new(),
+                round_fee_incomes: Vec::new(),
                 exec_v2_covered: Vec::new(),
                 exec_v2_origin_headers: BTreeMap::new(),
                 #[cfg(test)]
@@ -72476,6 +72486,7 @@ pub(crate) mod tests {
                 prompt_ids_merkle: false,
                 round_lane: None,
                 round_permit_uses: Vec::new(),
+                round_fee_incomes: Vec::new(),
                 exec_v2_covered: Vec::new(),
                 exec_v2_origin_headers: BTreeMap::new(),
                 #[cfg(test)]

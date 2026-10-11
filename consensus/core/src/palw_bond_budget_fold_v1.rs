@@ -25,6 +25,26 @@ use super::*;
 use crate::palw_bond_budget_v1::*;
 
 impl PalwChainStateV2 {
+    /// UTXO validation and producer preflight use the same first-fence legacy
+    /// seeds and clock release as the native fold, before any fee is collected.
+    pub fn round_fee_admission_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        ctx: &PalwBlockContextV2,
+        escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
+    ) -> Option<PalwRoundFeeAdmissionV1> {
+        let mirror = params.bond_budget.as_ref().filter(|mirror| mirror.active_at(ctx.daa_score))?;
+        let extras = PalwTransitionExtrasV1 { escrow_carve, ..PalwTransitionExtrasV1::default() };
+        let mut builder = TransitionBuilder::new(self, params, false, false, false, false, &extras);
+        tick_bond_budget_v1(&mut builder, ctx);
+        Some(PalwRoundFeeAdmissionV1 {
+            policy: mirror.policy.clone(),
+            book: builder.state.bond_budget.take().expect("active tick creates the budget"),
+            capital: self.bonds.iter().map(|(bond, row)| (*bond, row.collateral)).collect(),
+            daa_score: ctx.daa_score,
+        })
+    }
+
     /// **Lane BUDGET: the bond budget's engine**, once the fence's first block has folded.
     pub fn bond_budget(&self) -> Option<&PalwBondBudgetStateV1> {
         self.bond_budget.as_ref()
@@ -74,7 +94,8 @@ pub(super) fn kernel_budget_claim_id_v1(claim: &misaka_palw_kernel::hash::Digest
 }
 
 /// One recipient's funded source promise, independent of carrier replay or
-/// income from another market/EXEC/native claim.
+/// income from another market/EXEC/native claim. `source` is the signed immutable
+/// source subject (job/seal before reveal), not an as-yet-unknown revealed claim.
 pub(super) fn source_income_id_v1(context: Hash64, source: Hash64, bond: &PalwBondKeyV2) -> Hash64 {
     let mut hash = keyed(b"misaka-palw/bond-budget/source-income/v1");
     hash.update(context.as_byte_slice());
@@ -154,6 +175,36 @@ fn budget_refused(bond: PalwBondKeyV2, why: PalwBudgetRefusalV1) -> PalwStateV2E
 }
 
 impl TransitionBuilder<'_> {
+    pub(super) fn reserve_round_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        income: PalwRoundFeeIncomeV1,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
+        if income.maximum_sompi == 0 && income.actual_sompi == 0 {
+            return Ok(());
+        }
+        let capital = self.state.bond(&income.bond).ok_or(PalwStateV2Error::MissingBond(income.bond))?.collateral;
+        if self.state.bond_budget.is_none() {
+            self.create_bond_budget_v1(ctx, &mirror);
+        }
+        self.bond_budget_op(|budget, _, j| {
+            budget.reserve_income_v1(
+                &mirror.policy,
+                capital,
+                palw_round_income_id_v1(income.block, &income.bond),
+                income.bond,
+                ctx.daa_score,
+                income.maximum_sompi,
+                income.actual_sompi,
+                PalwBudgetOriginV1::RoundFee,
+                j,
+            )
+        })
+        .expect("created")
+        .map_err(|why| budget_refused(income.bond, why))
+    }
+
     /// The engine's journal, as deltas.
     fn journal_bond_budget(&mut self, writes: Vec<PalwBudgetWriteV1>) {
         for write in writes {

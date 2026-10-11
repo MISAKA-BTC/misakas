@@ -287,7 +287,9 @@ impl PalwBondBudgetPolicyV1 {
             final_weight_per_unit: 1,
             max_open_claims_per_bond: 1,
             slice_rights_by_rho: false,
-            round_rights: PalwRoundRightsPolicyV1::CountAgainstBlocks,
+            // Mode is the user's decision; this unapproved numeric probe still
+            // cannot activate any network.
+            round_rights: PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1 },
         }
     }
 
@@ -527,6 +529,11 @@ impl Params {
         if fence.policy.validate().is_err() {
             return Err(PalwModeV2Error::Invalid(
                 "palw_bond_budget_v1's policy is invalid (PalwBondBudgetPolicyV1::validate names the rule that fails)",
+            ));
+        }
+        if !matches!(fence.policy.round_rights, PalwRoundRightsPolicyV1::ExecutionCap { .. }) {
+            return Err(PalwModeV2Error::Invalid(
+                "fee-only Rounds require a dedicated execution cap; B_max is for reward-bearing blocks",
             ));
         }
         // A budget-refused own attempt is SKIPPED, and only past the 2026-09-23 audit fence is a skipped attempt's carve withheld
@@ -775,6 +782,52 @@ fn keyed64(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
     let mut out = [0u8; 64];
     out.copy_from_slice(s.finalize().as_bytes());
     Hash64::from_bytes(out)
+}
+
+/// Trusted UTXO-derived fee income of one accepted Round's native body. Both
+/// amounts exclude mandatory burns; no future transaction fee is promised.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRoundFeeIncomeV1 {
+    pub block: Hash64,
+    pub bond: PalwBondKeyV2,
+    pub maximum_sompi: u64,
+    pub actual_sompi: u64,
+}
+
+pub fn palw_round_income_id_v1(block: Hash64, bond: &PalwBondKeyV2) -> Hash64 {
+    keyed64(b"misaka-palw/bond-budget/round-income/v1", &[block.as_byte_slice(), &borsh::to_vec(bond).expect("bond serializes")])
+}
+
+/// Disposable native acceptance preview, seeded/clocked by the same engine as
+/// the financial fold. The book is not serialized into the virtual state.
+#[derive(Clone, Debug)]
+pub struct PalwRoundFeeAdmissionV1 {
+    pub policy: PalwBondBudgetPolicyV1,
+    pub book: PalwBondBudgetStateV1,
+    pub capital: BTreeMap<PalwBondKeyV2, u64>,
+    pub daa_score: u64,
+}
+
+impl PalwRoundFeeAdmissionV1 {
+    /// All-or-nothing preview before the native body changes UTXOs/MuHash.
+    pub fn admit(&mut self, income: PalwRoundFeeIncomeV1) -> Result<(), PalwBudgetRefusalV1> {
+        let capital =
+            self.capital.get(&income.bond).copied().ok_or(PalwBudgetRefusalV1::Assignment("Round fee recipient is not bonded"))?;
+        if income.maximum_sompi == 0 && income.actual_sompi == 0 {
+            return Ok(());
+        }
+        self.book.reserve_income_v1(
+            &self.policy,
+            capital,
+            palw_round_income_id_v1(income.block, &income.bond),
+            income.bond,
+            self.daa_score,
+            income.maximum_sompi,
+            income.actual_sompi,
+            PalwBudgetOriginV1::RoundFee,
+            &mut Vec::new(),
+        )
+    }
 }
 
 // ---- the state -----------------------------------------------------------------------------------------------------------------
@@ -1738,7 +1791,7 @@ mod tests {
         let empty = s.clone();
         let mut j = Vec::new();
         s.reserve_source_income_v1(&p, capital, h(50), bond(0), 10, 500, fee, &mut j).unwrap();
-        let row = s.claim(&h(50)).unwrap();
+        let row = s.claim_row(&h(50)).unwrap();
         assert!(!row.open && row.live && row.in_window);
         assert_eq!(row.reuse_not_before, 600);
         assert_eq!(s.bond_row(&bond(0)).unwrap().open_claims, 0);
@@ -1752,8 +1805,8 @@ mod tests {
         assert!(s.settle_source_income_v1(&p, &h(50), 500, 900, fee - 1, &mut j).is_err());
         assert_eq!((s.root_parts(), j.len()), before, "every refusal precedes its journal writes");
         s.settle_source_income_v1(&p, &h(50), 500, 900, fee, &mut j).unwrap();
-        assert_eq!(s.claim(&h(50)).unwrap().consumed.reward_sompi, fee);
-        assert_eq!(s.claim(&h(50)).unwrap().reuse_not_before, 1_000);
+        assert_eq!(s.claim_row(&h(50)).unwrap().consumed.reward_sompi, fee);
+        assert_eq!(s.claim_row(&h(50)).unwrap().reuse_not_before, 1_000);
         let paid = (s.root_parts(), j.len());
         assert!(s.settle_source_income_v1(&p, &h(50), 500, 901, fee, &mut j).is_err());
         assert!(s.cancel_source_income_v1(&h(50), &mut j).is_err());
@@ -1761,7 +1814,7 @@ mod tests {
         s.release_due(999, &mut j);
         assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, fee);
         s.release_due(1_000, &mut j);
-        assert!(s.bond_row(&bond(0)).is_none() && s.claim(&h(50)).is_none());
+        assert!(s.bond_row(&bond(0)).is_none() && s.claim_row(&h(50)).is_none());
         s.check_consistency().unwrap();
         let mut replay = empty.clone();
         for entry in &j {
@@ -1797,7 +1850,7 @@ mod tests {
         s.release_due(599, &mut j);
         assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
         s.release_due(600, &mut j);
-        assert!(s.bond_row(&bond(0)).is_none() && s.claim(&h(60)).is_none());
+        assert!(s.bond_row(&bond(0)).is_none() && s.claim_row(&h(60)).is_none());
         s.check_consistency().unwrap();
     }
 
