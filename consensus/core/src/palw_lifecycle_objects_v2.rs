@@ -1592,17 +1592,20 @@ pub enum PalwKernelInnerFenceV1 {
     /// 19). Its row names `palw_typed_roots_v1`; in force only where `palw_panel_free_v1` is too (as `ProviderCourtV1` needs the
     /// kernel route's).
     PanelFreeAndTypedRootsV1,
+    /// Separate source opt-in fence, inner 21; no activated preset or approved consumer tuple.
+    BeaconSourceOptInV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 3] = [Self::PanelFreeV1, Self::TypedRootsV1, Self::PanelFreeAndTypedRootsV1];
+    pub const ALL: [Self; 4] = [Self::PanelFreeV1, Self::TypedRootsV1, Self::PanelFreeAndTypedRootsV1, Self::BeaconSourceOptInV1];
 
     /// The `Params` field the fence is resolved from.
     pub const fn params_field(self) -> &'static str {
         match self {
             Self::PanelFreeV1 => "palw_panel_free_v1",
             Self::TypedRootsV1 | Self::PanelFreeAndTypedRootsV1 => "palw_typed_roots_v1",
+            Self::BeaconSourceOptInV1 => "palw_beacon_source_opt_in_v1",
         }
     }
 }
@@ -1639,6 +1642,7 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::CommitClaimSalted { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
         K::RegisterClassV2 { .. } | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
         K::Spec { .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
+        K::OptInBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1),
     }
 }
 
@@ -1664,6 +1668,7 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (14, "RegisterPipelineClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (19, "Spec", Some(PalwKernelInnerFenceV1::TypedRootsV1)),
     (20, "CommitClaimSalted", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (21, "OptInBeaconSource", Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of

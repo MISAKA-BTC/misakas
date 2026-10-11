@@ -219,12 +219,20 @@ impl KernelLedgerV1 {
                 &collection_root(&d("job-posters"), self.job_posters.len(), self.job_posters.iter()),
             )
         };
-        if self.exec_reward_holds.is_empty() {
+        let base = if self.exec_reward_holds.is_empty() {
             base
         } else {
             crate::rows::exec_reward_root_extension_v1(
                 &base,
                 &collection_root(&d("exec-reward-holds"), self.exec_reward_holds.len(), self.exec_reward_holds.iter()),
+            )
+        };
+        if self.beacon_sources.is_empty() {
+            base
+        } else {
+            crate::rows::beacon_source_root_extension_v1(
+                &base,
+                &collection_root(&d("beacon-sources"), self.beacon_sources.len(), self.beacon_sources.iter()),
             )
         }
     }

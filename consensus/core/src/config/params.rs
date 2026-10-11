@@ -2959,6 +2959,9 @@ pub struct Params {
     /// Some-only in both fingerprints, collapsed from `Some(never())`, and refused when armed ([`Self::validate_palw_typed_roots_v1`])
     /// until the single full-activation release names a height for it with the others.
     pub palw_typed_roots_v1: Option<ForkActivation>,
+    /// Per-attempt source reservation, inner 21. Independent, None on every preset, Some-only fingerprints.
+    /// Every real activation is refused until the target, source-only beacon and funded fee consumers are complete.
+    pub palw_beacon_source_opt_in_v1: Option<ForkActivation>,
 
     /// **RFC-0015: Panel=0 (`OptimisticPublicVerification`) on the kernel route** ([`crate::palw_panel_free_v1`]): the separately named
     /// fence under which a network admits classes registered under the Panel-free verification mode (a fixed public challenge window,
@@ -4210,6 +4213,7 @@ impl Params {
         self.validate_palw_probabilistic_constraints_v1()?;
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
         self.validate_palw_typed_roots_v1()?;
+        self.validate_palw_beacon_source_opt_in_v1()?;
         // **RFC-0015's dormant fence** (`crate::palw_panel_free_v1`): refused when armed.
         self.validate_palw_panel_free_v1()?;
         self.validate_palw_signed_registration_v1()?;
@@ -6582,6 +6586,9 @@ impl Params {
         // The typed-roots fence, likewise.
         if self.palw_typed_roots_v1 == Some(ForkActivation::never()) {
             self.palw_typed_roots_v1 = None;
+        }
+        if self.palw_beacon_source_opt_in_v1 == Some(ForkActivation::never()) {
+            self.palw_beacon_source_opt_in_v1 = None;
         }
         // The Panel-free fence, likewise.
         if self.palw_panel_free_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
@@ -10333,6 +10340,7 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
             palw_typed_roots_v1,
+            palw_beacon_source_opt_in_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
@@ -10612,6 +10620,7 @@ impl Params {
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
+            ("palw_beacon_source_opt_in_v1", *palw_beacon_source_opt_in_v1),
             ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_tir_shard_segment_v2", *palw_tir_shard_segment_v2),
@@ -10907,6 +10916,10 @@ impl Params {
         // The typed-roots fence, NAMED likewise.
         if let Some(at) = self.palw_typed_roots_v1 {
             h.write(b"palw_typed_roots_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_beacon_source_opt_in_v1 {
+            h.write(b"palw_beacon_source_opt_in_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // The Panel-free fence, NAMED likewise.
@@ -11640,6 +11653,7 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
             palw_typed_roots_v1,
+            palw_beacon_source_opt_in_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
@@ -12406,6 +12420,9 @@ impl Params {
         if let Some(activation) = palw_typed_roots_v1.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_beacon_source_opt_in_v1.as_mut() {
+            fork(activation, visit);
+        }
         // The Panel-free fence. Some-only.
         if let Some(fence) = palw_panel_free_v1.as_mut() {
             fork(&mut fence.activation, visit);
@@ -12974,6 +12991,7 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
             palw_typed_roots_v1,
+            palw_beacon_source_opt_in_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
@@ -13789,6 +13807,10 @@ impl Params {
         // The typed-roots fence, Some-only for the same reason.
         if let Some(activation) = palw_typed_roots_v1 {
             h.write(b"palw_typed_roots_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_beacon_source_opt_in_v1 {
+            h.write(b"palw_beacon_source_opt_in_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // The Panel-free fence, Some-only for the same reason.
@@ -14631,6 +14653,7 @@ impl Params {
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
+            palw_beacon_source_opt_in_v1: self.palw_beacon_source_opt_in_v1,
             palw_panel_free_v1: self.palw_panel_free_v1.clone(),
             palw_signed_registration_v1: self.palw_signed_registration_v1,
             palw_tir_shard_segment_v2: self.palw_tir_shard_segment_v2,
@@ -15734,6 +15757,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_beacon_source_opt_in_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
@@ -16033,6 +16057,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_beacon_source_opt_in_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
@@ -16314,6 +16339,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_beacon_source_opt_in_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
@@ -23937,6 +23963,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_beacon_source_opt_in_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,

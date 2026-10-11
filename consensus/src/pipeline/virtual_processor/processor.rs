@@ -708,6 +708,7 @@ pub struct VirtualStateProcessor {
     /// the route's schedule holds `K2-TR-v1` Active. Resolved in ONE place ([`Self::palw_kernel_typed_roots_at`]). Never armable by a
     /// real network (its validation refuses every height); a test builds the config without that validation.
     pub(super) palw_typed_roots_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_beacon_source_opt_in_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
     pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1362,6 +1363,7 @@ impl VirtualStateProcessor {
             palw_probabilistic_constraints_v1: params.palw_probabilistic_constraints_v1,
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_typed_roots_v1: params.palw_typed_roots_v1,
+            palw_beacon_source_opt_in_v1: params.palw_beacon_source_opt_in_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_provider_court_v1: params.palw_provider_court_v1,
             palw_legacy_held_da_v2: params.palw_legacy_held_da_v2,
@@ -14287,6 +14289,9 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
                     "a typed-root object is refused: palw_typed_roots_v1 is not in force at this block (RFC-0004 Part II)".to_string()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceOptInV1 => {
+                    "a source opt-in is refused: palw_beacon_source_opt_in_v1 is not in force at this block".to_string()
+                }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
                     "a salted typed-root claim is refused: palw_panel_free_v1 and palw_typed_roots_v1 are not both in force at this block"
                         .to_string()
@@ -14306,6 +14311,11 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => self.palw_kernel_opv_at(daa_score),
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
                 self.palw_kernel_typed_roots_at(daa_score)
+            }
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceOptInV1 => {
+                self.palw_beacon_source_opt_in_v1
+                    .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score))
+                    && self.palw_kernel_opv_at(daa_score)
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
                 self.palw_kernel_opv_at(daa_score) && self.palw_kernel_typed_roots_at(daa_score)

@@ -401,7 +401,7 @@ pub struct ClaimBeaconSealV1 {
 /// the start of a seal window `[S, S + W)` must still be revealable at the end of its reveal window `[S + W, S + 2W)`). OPV-BOOT's
 /// policy validation asks this with its `beacon_window_slots`.
 pub fn seal_ttl_admits_beacon_window_v1(policy: &LedgerPolicyV1, beacon_window_daa: u64) -> bool {
-    beacon_window_daa.saturating_mul(2) <= policy.seal_ttl_daa
+    beacon_window_daa.checked_mul(2).is_some_and(|span| span <= policy.seal_ttl_daa)
 }
 
 /// An unrevealed seal: the claim seal and the DAA it was carried at.
@@ -736,6 +736,10 @@ pub struct KernelLedgerV1 {
     pub job_escrows: BTreeMap<Digest, JobEscrowRowV1>,
     /// Consumer-bound EXEC rewards: escrow stays reserved until the owning root settles or cancels.
     pub exec_reward_holds: BTreeMap<Digest, crate::exec_reward::ExecRewardHoldV1>,
+    /// Per-target source deposits (table 28). Failure rows survive as veto evidence and cannot re-opt in.
+    pub beacon_sources: BTreeMap<(Digest, Digest), crate::beacon_source::BeaconSourceRowV1>,
+    /// Trusted consumer inputs, never rows/rooted state. Empty on restore; the new feature is refused by default.
+    pub beacon_source_inputs: crate::beacon_source::BeaconSourceInputsV1,
     /// **The demand bonds of SERVED positions, awaiting their fate** (K2S's producer-side DA griefing, G14-R4): a position served on
     /// chain keeps its demanders' bonds reserved; they are refunded the moment the claim is convicted, defaults or times out, and
     /// burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction is never penalised.
@@ -830,6 +834,8 @@ impl KernelLedgerV1 {
             proof_seals: BTreeMap::new(),
             job_escrows: BTreeMap::new(),
             exec_reward_holds: BTreeMap::new(),
+            beacon_sources: BTreeMap::new(),
+            beacon_source_inputs: Default::default(),
             served_demands: BTreeMap::new(),
             claim_beacon_salts: BTreeMap::new(),
             forfeited_claim_seals: BTreeMap::new(),
@@ -1122,6 +1128,10 @@ impl KernelLedgerV1 {
                 self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa, deposit });
                 out.push(LedgerEventV1::ClaimSealed { job: *job, producer: *producer });
             }
+            KernelRouteObjectV1::OptInBeaconSource { producer, job, seal, context, terms } => {
+                self.opt_in_beacon_source(*producer, *job, *seal, *context, *terms, &mut out)
+                    .map_err(|why| KernelRefusalV1::rule(name, why))?;
+            }
             KernelRouteObjectV1::SealProof { accuser, claim, seal } => {
                 const NAME: &str = "SealProof";
                 let fee = self.policy.dismissed_proof_fee;
@@ -1226,7 +1236,7 @@ impl KernelLedgerV1 {
             O::FileProof { accuser, .. } => Some((*accuser, "accuser")),
             O::FileDemand { demander, .. } => Some((*demander, "demander")),
             O::RequestExit { bond } | O::Withdraw { bond } => Some((*bond, "bond")),
-            O::SealClaim { producer, .. } => Some((*producer, "producer")),
+            O::SealClaim { producer, .. } | O::OptInBeaconSource { producer, .. } => Some((*producer, "producer")),
             O::SealProof { accuser, .. } => Some((*accuser, "accuser")),
             O::Spec { object } => object.named_actor(),
             _ => None,
@@ -1665,6 +1675,7 @@ impl KernelLedgerV1 {
         bond.collateral -= fee;
         self.burned += fee;
         let daa = self.daa;
+        let source_floor = self.beacon_source_liability_floor(job, producer);
         let mut life = ClaimLifecycleV1::new(LifecyclePolicyV1 {
             check_window_daa: self.policy.check_window_daa,
             challenge_window_daa: match &opv_row {
@@ -1691,12 +1702,13 @@ impl KernelLedgerV1 {
                 committed_daa: daa,
                 life,
                 reserved: need,
-                liability_until: None,
+                liability_until: source_floor,
                 convicted: false,
                 rewarded: false,
                 sealed_daa,
             },
         );
+        self.beacon_source_revealed(job, producer, id);
         if let Some((_, row)) = opv_row {
             // An OPV claim holds its job from its first reveal: it is prosecutable by any bond from this block, so a junk claim
             // squatting the job is slashed (or defaults) at the squatter's cost, and a well-formed one is the job's answer.
@@ -1823,6 +1835,7 @@ impl KernelLedgerV1 {
             Some(b) if b.exit_requested.is_some() => return Err("the producer bond is exiting".into()),
             Some(_) => {}
         }
+        self.beacon_source_reveal_ready(*job, *producer, salt.is_some())?;
         let expected = match salt {
             None => claim_seal_v1(id),
             Some(s) => claim_seal_v2(id, s),
@@ -2500,6 +2513,7 @@ impl KernelLedgerV1 {
     /// exclusion. Called at expiry (the tick) and, past the fence, when a re-seal replaces it (ECON fix S1).
     fn forfeit_claim_seal(&mut self, job: Digest, producer: Digest, row: SealRowV1, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
+        self.beacon_source_seal_forfeited(job, producer, row.seal, row.daa, out);
         if self.salted_seals_from().is_some_and(|at| row.daa >= at) {
             self.forfeited_claim_seals.insert((job, producer, row.daa), ForfeitedSealRowV1 { seal: row.seal, forfeited_daa: daa });
         }
@@ -2665,6 +2679,7 @@ impl KernelLedgerV1 {
         }
         // The served positions' demand bonds whose claim is now decided (after this block's defaults, Finals and releases).
         self.settle_due_served_demand_bonds(out);
+        self.tick_beacon_sources(out);
     }
 
     /// **DA16: would `bytes` serve this committed position?** — exactly the classification a `Respond` gets (the class's response
