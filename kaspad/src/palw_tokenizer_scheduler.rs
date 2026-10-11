@@ -113,6 +113,10 @@ impl Candidate {
         let eog_opening = step_opening_from_leaf_source_capped_v1(count, count - 1, PALW_TOKEN_TABLE_MAX_LEAVES_V1, leaf)
             .map_err(|e| e.to_string())?;
         let length = table.entries[id as usize].as_ref().map_or(0, Vec::len);
+        let retained_bytes = (borsh::object_length(binding).map_err(|e| e.to_string())? as u64)
+            .checked_mul(8)
+            .and_then(|n| n.checked_add(1_048_576))
+            .ok_or("retained seed copy bound overflow")?;
         let retained = Arc::new(
             ledger
                 .reserve(
@@ -121,14 +125,14 @@ impl Candidate {
                         class_id: target.class_id,
                         job: target.claim_id,
                     },
-                    1_048_576,
+                    retained_bytes,
                 )
                 .map_err(|e| e.to_string())?,
         );
         // Selection fields are unused by typed auxiliary admission. Their canonical empty
         // representation makes the seed deterministic without inventing a public row witness.
         let empty = || PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: Vec::new() };
-        let seed = PalwConstraintStreamSeedV1 {
+        let mut seed = PalwConstraintStreamSeedV1 {
             version: 1,
             claim: target.claim_id,
             reserver: progress.reserver,
@@ -159,7 +163,15 @@ impl Candidate {
                 operand_tokenizer_bytes: actual_length,
             }),
             signature: Vec::new(),
+            retained_profile: None,
         };
+        let signed_bytes = borsh::object_length(&seed)
+            .map_err(|e| e.to_string())?
+            .checked_add(kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN)
+            .ok_or("seed carrier length overflow")?;
+        if signed_bytes > 90000 {
+            seed.use_retained_profile_v1()?;
+        }
         Ok(Self { path: path.to_owned(), table, id, actual_length, seed, _reservation: retained })
     }
 }

@@ -3490,7 +3490,7 @@ impl PalwPanelService {
         progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
         maximum: u64,
         file_by: Option<u64>,
-        current_daa: u64,
+        _current_daa: u64,
         court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
         court_due: &mut HashMap<(Hash64, u32, bool), u64>,
     ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
@@ -3512,6 +3512,20 @@ impl PalwPanelService {
             .staged_tokenizer
             .get_or_insert_with(|| Arc::new(std::sync::Mutex::new(None)))
             .clone();
+        let copy_bytes = (borsh::object_length(&(binding, job)).map_err(|e| e.to_string())? as u64)
+            .checked_mul(8)
+            .and_then(|n| n.checked_add(16_384))
+            .ok_or("staged public operand copy bound overflow")?;
+        let copies = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-tokenizer-worker-copies",
+                    class_id: target.class_id,
+                    job: claim,
+                },
+                copy_bytes,
+            )
+            .map_err(|e| e.to_string())?;
         let backends = self.backends();
         let chain_classes = self.config.chain_classes;
         let held_session = session.clone();
@@ -3521,8 +3535,9 @@ impl PalwPanelService {
         let job = job.clone();
         let worker_progress = progress.clone();
         let decision = tokio::task::spawn_blocking(move || -> Result<TokenizerScheduleV1, String> {
+            let _copies = copies;
             let mut worker = worker.lock().map_err(|_| "tokenizer worker lock poisoned")?;
-            let mut build = || -> Result<TokenizerSchedulerV1, String> {
+            let build = || -> Result<TokenizerSchedulerV1, String> {
                 let path = backends
                     .held_tokenizer_path_or_chain_v1(target.class_id, target.artifact_root, |id| {
                         if chain_classes { held_session.palw_registered_class_carriage_v1(id) } else { None }
