@@ -538,6 +538,75 @@ pub fn palw_fraud_filer_next_descent_v1(
     }
 }
 
+/// **The worst-case reserved sessions of the authenticated `StepRange` subtree descent** (lane G14-V): the binding read, the
+/// descent's reads ([`crate::palw_auth_descent_v1::palw_auth_descent_max_reads_v1`] at 1,024-leaf reads) and the terminal.
+pub fn palw_fraud_filer_subtree_sessions_v1(leaves: u64) -> u64 {
+    crate::palw_auth_descent_v1::palw_auth_descent_max_reads_v1(leaves, PALW_LEGACY_BISECT_FINAL_RANGE_V1).saturating_add(2)
+}
+
+/// **The common filer's step over the authenticated `StepRange` subtree descent** (lane G14-V) — the codec-independent localizer
+/// that replaces the linear contiguous scan: the same prelude as [`palw_fraud_filer_next_v1`], then the descent's next move over the
+/// authenticated subtree roots the chain's range answers carried (`crate::palw_auth_descent_v1::palw_auth_descent_next_v1`). A read
+/// is a reserved `StepRange` demand at the focus subtree's left edge; the first divergent leaf is the `StepLeaf` terminal (a fused
+/// leaf is the held route's); an agreeing step tree is `Honest` for the STEP tree only — the node then localizes past it (logits
+/// trace, output) and never settles a mismatched execution as honest; an own tree that cannot judge is `Unjudged`. Fits the
+/// reservation's 34 sessions up to 2^41 leaves ([`palw_fraud_filer_subtree_sessions_v1`]).
+pub fn palw_fraud_filer_next_subtree_v1(
+    role: PalwFilerRoleV1,
+    facts: &PalwFilerClaimFactsV1,
+    mismatch: bool,
+    leaves: u64,
+    descent: crate::palw_auth_descent_v1::PalwAuthDescentV1,
+    demandable: impl Fn(u64) -> bool,
+) -> PalwFilerActionV1 {
+    use crate::palw_auth_descent_v1::PalwAuthDescentV1 as D;
+    if let Some(action) = palw_fraud_filer_prelude_v1(role, facts, mismatch) {
+        return action;
+    }
+    if palw_fraud_filer_subtree_sessions_v1(leaves) > u64::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1) {
+        return PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged);
+    }
+    match descent {
+        D::Agrees => PalwFilerActionV1::Done(PalwFilerPhaseV1::Honest),
+        D::Read { first, count } => match u32::try_from(count) {
+            Ok(count) if count >= 1 && u64::from(count) <= PALW_LEGACY_BISECT_FINAL_RANGE_V1 => {
+                PalwFilerActionV1::Demand(PalwLegacyProbeV1::Range { first, count })
+            }
+            _ => PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged),
+        },
+        D::FirstDivergentLeaf(leaf) if demandable(leaf) => PalwFilerActionV1::Demand(PalwLegacyProbeV1::Terminal { leaf }),
+        D::FirstDivergentLeaf(leaf) => PalwFilerActionV1::HeldRoute { leaf },
+        D::OwnInconsistent { .. } | D::OwnUnavailable { .. } => PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged),
+    }
+}
+
+/// **Learn one authenticated `StepRange` answer into the subtree descent's tree** — the answer must authenticate against the claim
+/// (its binding reproduces the claim's execution root, the opening folds to that binding's step root) and its binding must be the
+/// one the case read; only then are its nodes recorded. Unauthenticated bytes change nothing.
+pub fn palw_fraud_filer_learn_subtree_v1(
+    probe: PalwLegacyProbeV1,
+    answer: &crate::palw_da_rcore_v1::PalwDaAnswerV1,
+    claim_execution_root: &Hash64,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    tree: &mut crate::palw_auth_descent_v1::PalwAuthTreeV1,
+) -> Result<usize, String> {
+    use crate::palw_da_rcore_v1::PalwDaAnswerV1;
+    use crate::palw_held_da_v1::PalwHeldDisclosureV1;
+    if !palw_fraud_filer_answer_authenticates_v1(&probe.unit(), answer, claim_execution_root) {
+        return Err("the answer does not authenticate the requested unit against the claim".into());
+    }
+    let (PalwLegacyProbeV1::Range { .. }, PalwDaAnswerV1::Held(carriage)) = (probe, answer) else {
+        return Err(format!("{probe:?} is not a range the subtree descent reads"));
+    };
+    if carriage.binding != *binding || tree.root != binding.step_merkle_root || tree.leaf_count != binding.step_leaf_count {
+        return Err("the range answers another binding than the case read".into());
+    }
+    let PalwHeldDisclosureV1::StepRange { opening } = &carriage.disclosure else {
+        return Err("a range is answered by a range".into());
+    };
+    tree.learn_range(opening)
+}
+
 // ---- the engine's shared reads and builders (RFC-0014 §6.1–§6.3): the node's filer and the real-node suite run THESE ------------
 
 impl PalwLegacyProbeV1 {
@@ -904,6 +973,93 @@ mod tests {
         unproven.record_range(2_048, &[true]);
         assert_eq!(unproven, PalwLegacyBisectV1::new(4_097), "a matching midpoint proves no prefix");
         assert_eq!(PalwLegacyBisectV1::max_demands(1u64 << 40), (1u64 << 40).div_ceil(PALW_LEGACY_BISECT_FINAL_RANGE_V1) + 2);
+    }
+
+    /// **G14-V: the subtree engine localizes any lone or sparse lie of a ladder the linear scan refused, within the 34 sessions**,
+    /// learning only authenticated range answers (a rejected carrier changes nothing), and never trusts a matching midpoint.
+    #[test]
+    fn the_subtree_engine_localizes_a_lie_anywhere_within_the_reservation() {
+        use crate::palw_auth_descent_v1::{PalwAuthDescentV1, PalwAuthTreeV1, palw_auth_descent_next_v1};
+        use crate::palw_step_leg::{step_merkle_leaf_v1, step_merkle_node_v1};
+        assert_eq!(palw_fraud_filer_subtree_sessions_v1(1 << 40), 33);
+        assert!(palw_fraud_filer_subtree_sessions_v1(1 << 41) <= 34);
+        assert!(palw_fraud_filer_subtree_sessions_v1(1 << 42) > 34);
+        assert!(PalwLegacyBisectV1::max_demands(1 << 20) > 34, "the linear scan refused this ladder");
+        let reserved = PalwFilerClaimFactsV1 {
+            reservable: true,
+            accusable: true,
+            binding_known: true,
+            reserved: true,
+            ..Default::default()
+        };
+        let whole = |leaves: &[Hash64]| {
+            let mut levels = vec![leaves.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(i as u64, h)).collect::<Vec<_>>()];
+            while levels.last().unwrap().len() > 1 {
+                let l = levels.last().unwrap();
+                let mut next: Vec<Hash64> = l.chunks_exact(2).map(|p| step_merkle_node_v1(&p[0], &p[1])).collect();
+                if l.len() % 2 == 1 {
+                    next.push(*l.last().unwrap());
+                }
+                levels.push(next);
+            }
+            levels
+        };
+        let n = 70_001u64; // 69 linear ranges: refused by the old scan.
+        let honest: Vec<Hash64> = (0..n).map(|i| Hash64::from_u64_word(i ^ 0x5A5A)).collect();
+        let own = whole(&honest);
+        for lies in [vec![0u64], vec![n - 1], vec![1_024 * 33 + 5, n - 2], vec![n / 2, n / 2 + 1_024 * 7]] {
+            let mut claim = honest.clone();
+            for lie in &lies {
+                claim[*lie as usize] = Hash64::from_u64_word(0xBAD ^ lie);
+            }
+            let committed = whole(&claim);
+            let mut tree = PalwAuthTreeV1::new(n, *committed.last().unwrap().first().unwrap()).unwrap();
+            let own_node = |l: u8, i: u64| own.get(usize::from(l))?.get(i as usize).copied();
+            let mut sessions = 1u64; // the binding read
+            let located = loop {
+                let descent = palw_auth_descent_next_v1(&tree, &own_node, PALW_LEGACY_BISECT_FINAL_RANGE_V1);
+                match palw_fraud_filer_next_subtree_v1(PalwFilerRoleV1::PublicBond, &reserved, true, n, descent, |_| true) {
+                    PalwFilerActionV1::Demand(PalwLegacyProbeV1::Range { first, count }) => {
+                        sessions += 1;
+                        assert_eq!(first % PALW_LEGACY_BISECT_FINAL_RANGE_V1, 0, "reads are 1,024-aligned left edges");
+                        let (a, b) = (first as usize, first as usize + count as usize);
+                        let opening = crate::palw_step_leg::PalwStepRangeOpeningV1 {
+                            first_leaf_index: first,
+                            leaf_hashes: claim[a..b].to_vec(),
+                            siblings: crate::palw_step_leg::step_merkle_range_siblings_v1(&claim, a, b - a).unwrap(),
+                        };
+                        tree.learn_range(&opening).unwrap();
+                    }
+                    PalwFilerActionV1::Demand(PalwLegacyProbeV1::Terminal { leaf }) => break leaf,
+                    other => panic!("{other:?}"),
+                }
+            };
+            sessions += 1; // the terminal
+            assert_eq!(located, *lies.iter().min().unwrap());
+            assert!(sessions <= palw_fraud_filer_subtree_sessions_v1(n) && sessions <= 34, "{sessions} sessions");
+        }
+        let agrees = palw_auth_descent_next_v1(
+            &PalwAuthTreeV1::new(n, own.last().unwrap()[0]).unwrap(),
+            &|l, i| own.get(usize::from(l))?.get(i as usize).copied(),
+            1024,
+        );
+        assert_eq!(agrees, PalwAuthDescentV1::Agrees);
+        assert_eq!(
+            palw_fraud_filer_next_subtree_v1(PalwFilerRoleV1::PublicBond, &reserved, true, 1 << 42, agrees, |_| true),
+            PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged),
+            "past 2^41 leaves the descent no longer fits the reservation: Unjudged, never a guess"
+        );
+        assert_eq!(
+            palw_fraud_filer_next_subtree_v1(
+                PalwFilerRoleV1::PublicBond,
+                &reserved,
+                true,
+                n,
+                PalwAuthDescentV1::FirstDivergentLeaf(9),
+                |_| false
+            ),
+            PalwFilerActionV1::HeldRoute { leaf: 9 }
+        );
     }
 
     /// The engine's step: every role reaches the same terminal from the same facts; only a bond reserves; the binding is read first;

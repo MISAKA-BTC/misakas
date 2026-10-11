@@ -972,6 +972,12 @@ enum Lie {
     Decode,
     /// Every weight perturbed and the whole trace and tokens recomputed consistently under them (a self-consistent garbage trace).
     Garbage,
+    /// G14-V: the embedding gather's committed row element moved (input embedding / gather).
+    Gather,
+    /// G14-V: one element of the wide I128 matmul's committed accumulator moved (MatMul element).
+    MatMul,
+    /// G14-V: a clamp's committed result moved (range / saturating nonlinearity).
+    Clamp,
 }
 
 /// **The producer's lying claim of `job`**, revealed, and (Panel) covered by every seat; returns it and its seats.
@@ -998,13 +1004,16 @@ async fn lying_claim(w: &mut World, mode: Mode, producer: usize, job: &KernelJob
     let program = w.fx.program.clone();
     let at = match lie {
         Lie::Quantize => find_node(&program, 1, |p| matches!(p, misaka_palw_tir::Prim::Div { .. })),
+        Lie::Gather => find_node(&program, 1, |p| matches!(p, misaka_palw_tir::Prim::Gather { .. })),
+        Lie::MatMul => find_node(&program, 1, |p| matches!(p, misaka_palw_tir::Prim::MatMul)),
+        Lie::Clamp => find_node(&program, 1, |p| matches!(p, misaka_palw_tir::Prim::Clamp { .. })),
         Lie::Decode | Lie::Garbage => (0, 0, 0),
     };
     let produced = produce(&fx, &ledger, &w.class, job, w.net.kid(producer), generated, |t| {
         let v = &mut t.values[at.0 as usize][at.1 as usize][at.2 as usize];
         let before = v.clone();
         match lie {
-            Lie::Quantize => bump(v, 0),
+            Lie::Quantize | Lie::Gather | Lie::MatMul | Lie::Clamp => bump(v, 0),
             Lie::Decode | Lie::Garbage => return,
         }
         assert_ne!(*v, before, "the lie changes the committed value");
@@ -1087,6 +1096,21 @@ async fn lie_convicted_using(mode: Mode, start: Start, lie: Lie, commitments_onl
     w.net.chain.heartbeat(ttpb, Vec::new()).await;
     sync(&w.net, &mut node).await;
     agree(&w.net, &node, "the participant's node");
+}
+
+/// **G14-V: the remaining element faults of the canonical class at V-node** — an embedding-gather element, a wide matmul
+/// accumulator element and a clamp (range / saturating nonlinearity) result, each an isolated lie in one committed node, convicted
+/// by the post-genesis participant on a node started after the claim (pruned import, commitments only — no producer value read),
+/// Panel-licensed (every seat covering) and OPV, before and after Final.
+#[tokio::test]
+async fn g14_canonical_g14v_gather_matmul_and_clamp_lies_pre_and_post_final() {
+    for mode in [Mode::Panel, Mode::Opv] {
+        for after_final in [false, true] {
+            for lie in [Lie::Gather, Lie::MatMul, Lie::Clamp] {
+                lie_convicted_using(mode, Start::PrunedImport, lie, true, after_final).await;
+            }
+        }
+    }
 }
 
 #[tokio::test]

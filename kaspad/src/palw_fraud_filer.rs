@@ -12,11 +12,16 @@
 //! 2. **read the binding** — a reserved `DefaultAccused` of event `(0, 0)`, whose answer carries the claim's step binding (the fold
 //!    authenticates it against the claim's `execution_root`);
 //! 3. **localize** — past LG14-B's fence a base0-codec replica compares authenticated tag-158 frontiers against its own tree,
-//!    descending to the first divergent leaf. Other captures use the bounded, contiguous `StepRange` fallback;
+//!    descending to the first divergent leaf. Every other case (below that fence, or any codec) runs lane G14-V's authenticated
+//!    `StepRange` subtree descent (`kaspa_consensus_core::palw_auth_descent_v1`): only subtree roots the range answers carried, each
+//!    authenticated to the claim's step root, are compared with the verifier's own tree — never a lone midpoint leaf — so a lie at
+//!    any position is located in at most `h − 9` reads (`h` the tree height; 33 reserved sessions at 2^40 leaves);
 //! 4. **terminal** — the LG14-B replica builds tag 159 from its own registered model and public leaf hashes, or uses a public CKW
-//!    to open a fused held court. The fallback demands `StepLeaf`. Silence on a required unit defaults (DA-7).
-//!    Public binding/job/shape/output faults go through the reporter door as kind 4 before descent. Checkpoint/trace localization
-//!    beyond these direct proofs remains incomplete; step-tree agreement never clears a mismatched execution.
+//!    to open a fused held court. The subtree descent demands `StepLeaf`. Silence on a required unit defaults (DA-7).
+//!    Public binding/job/shape/output faults go through the reporter door as kind 4 before descent. **Past an agreeing step tree**
+//!    (G14-V) the logits trace is localized from the binding read's event (flat: no further session; tiled: an authenticated
+//!    rows/tiles descent of `Event` reads) and `LogitsNotStepOutput` / `ForgedOutput` filed through the same door; step-tree
+//!    agreement never clears a mismatched execution. A checkpoint-leg-only difference is reported, not guessed (open).
 //!
 //! **Shared progress** (§7.4): a unit the chain already answered — this node's before a restart, or anybody's — is read off the
 //! accepted blocks, never demanded again; the unit must be marked answered for descent. A complete direct proof needs only
@@ -48,6 +53,9 @@ use super::reporter_filer::{
     PalwConvictionDoorV1, PalwConvictionFilingV1, PalwFileOutcomeV1, PalwFilingOriginV1, PalwReporterFilerV1,
 };
 use crate::palw_legacy_held_v2::PalwLegacyReplicaV2;
+use kaspa_consensus_core::palw_auth_descent_v1::{
+    PalwAuthDescentV1, PalwAuthTreeV1, PalwOwnLeafTreeV1, PalwTraceDescentV1, PalwTraceLocalizeV1, palw_auth_descent_next_v1,
+};
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_step_leaf_is_fused_v1};
 use kaspa_consensus_core::palw_legacy_held_da_v2::{
@@ -57,7 +65,7 @@ use kaspa_consensus_core::palw_legacy_held_da_v2::{
 use kaspa_consensus_core::palw_legacy_public_filer_v1::{
     PALW_DISPUTE_RESERVATION_VERSION_V1, PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1, PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1,
     PalwFilerActionV1, PalwFilerPhaseV1, PalwFilerRoleV1, PalwLegacyBisectV1, PalwLegacyProbeV1, palw_dispute_reserved_object_v1,
-    palw_fraud_filer_demand_object_v1, palw_fraud_filer_facts_v1, palw_fraud_filer_learn_v1, palw_fraud_filer_next_v1,
+    palw_fraud_filer_demand_object_v1, palw_fraud_filer_facts_v1, palw_fraud_filer_learn_v1,
     palw_fraud_filer_reservation_v1,
 };
 use kaspa_consensus_core::palw_state_v2::{PalwFraudFilerCandidateV1, PalwLegacyDisputeViewV1};
@@ -108,7 +116,66 @@ pub(super) struct PalwFraudFilerRunV1 {
     /// This node's own leaf hashes of `[first, first + count)`.
     pub(super) own_range: Box<dyn Fn(u64, u32) -> Result<Vec<Hash64>, String> + Send + Sync>,
     pub(super) legacy: Option<Arc<PalwLegacyReplicaV2>>,
+    /// Lane G14-V: the own run's material for the authenticated subtree descent and the localizations past the step tree.
+    pub(super) own: Option<Arc<PalwFraudFilerOwnRunV1>>,
     pub(super) _reservation: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
+}
+
+/// **Lane G14-V: the verifier's own run, as the localizers past the binding read it** — its backend, its capture and the job's
+/// prompt (its own material, never the producer's). Its own step tree is built once per run, retained at
+/// [`kaspa_consensus_core::palw_auth_descent_v1::PalwOwnLeafTreeV1::retain_level_v1`] and folded below it on demand.
+pub(super) struct PalwFraudFilerOwnRunV1 {
+    pub(super) backend: Arc<dyn PalwExecutionBackendV1>,
+    pub(super) material: Arc<Vec<u8>>,
+    pub(super) prompt: Arc<Vec<u32>>,
+    pub(super) tree: std::sync::OnceLock<Result<Arc<PalwOwnLeafTreeV1>, String>>,
+}
+
+impl PalwFraudFilerOwnRunV1 {
+    pub(super) fn new(backend: Arc<dyn PalwExecutionBackendV1>, material: Arc<Vec<u8>>, prompt: Arc<Vec<u32>>) -> Self {
+        Self { backend, material, prompt, tree: std::sync::OnceLock::new() }
+    }
+
+    /// The own run's committed event `(row, tile)` (its DA responder's disclosure of its own capture).
+    pub(super) fn event(
+        &self,
+        row: u32,
+        tile: u8,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1, String> {
+        self.backend.disclose_trace_event(&self.material, row, tile)
+    }
+
+    /// The own run's binding (an out-of-range event discloses only the binding).
+    pub(super) fn binding(&self) -> Result<PalwStepBindingV2, String> {
+        self.event(u32::MAX, u8::MAX).map(|d| d.binding().clone())
+    }
+
+    /// The own run's leaf hashes of `[first, first + count)`.
+    pub(super) fn range(&self, first: u64, count: u32) -> Result<Vec<Hash64>, String> {
+        self.backend.held_step_range_answer_v1(&self.material, &self.prompt, first, count).map(|opening| opening.leaf_hashes)
+    }
+
+    /// The own run's opening of step leaf `leaf` (authenticates against the claim's step root only where the two trees agree).
+    pub(super) fn opening(&self, leaf: u64) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1, String> {
+        let range = self.backend.held_step_range_answer_v1(&self.material, &self.prompt, leaf, 1)?;
+        let leaf_hash = *range.leaf_hashes.first().ok_or("an empty own range")?;
+        Ok(kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1 { leaf_index: leaf, leaf_hash, siblings: range.siblings })
+    }
+
+    /// The own step tree over `leaves` leaves, built once.
+    pub(super) fn tree(&self, leaves: u64) -> Result<Arc<PalwOwnLeafTreeV1>, String> {
+        let tree = self
+            .tree
+            .get_or_init(|| {
+                PalwOwnLeafTreeV1::build(leaves, PalwOwnLeafTreeV1::retain_level_v1(leaves), &|first, count| self.range(first, count))
+                    .map(Arc::new)
+            })
+            .clone()?;
+        if tree.leaf_count != leaves {
+            return Err("the claim's step count is not this public job's: the job/count terminal is required".into());
+        }
+        Ok(tree)
+    }
 }
 
 /// Where this node's judgement of one claim stands.
@@ -144,24 +211,12 @@ pub(super) struct PalwFraudFilerWalkV1 {
     pub(super) next: Option<Hash64>,
 }
 
-/// Only units the contiguous fallback reads enter its cache. Authentication and deduplication bound it to one binding plus at most
-/// 32 ranges per pursued claim. LG14-B separately holds only the currently selected authenticated node/witness answer.
-fn palw_fraud_filer_cache_unit_v1(unit: &PalwDaUnitV1, leaf_count: Option<u64>) -> bool {
-    use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
-    use kaspa_consensus_core::palw_legacy_public_filer_v1::{
-        PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1, PALW_LEGACY_BISECT_FINAL_RANGE_V1,
-    };
-    match *unit {
-        PalwDaUnitV1::Event { row: 0, tile: 0 } => true,
-        PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first, count }) => {
-            let Some(leaves) = leaf_count else { return false };
-            PalwLegacyBisectV1::max_demands(leaves) <= u64::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1)
-                && first < leaves
-                && first % PALW_LEGACY_BISECT_FINAL_RANGE_V1 == 0
-                && u64::from(count) == (leaves - first).min(PALW_LEGACY_BISECT_FINAL_RANGE_V1)
-        }
-        _ => false,
-    }
+/// Only the binding read and the ONE unit a case's localizer currently reads enter the cache (lane G14-V: the subtree descent's
+/// range or the trace descent's event — any unit the chain answered for anyone, never every range a stranger demanded). Each is
+/// learned into the case's authenticated tree and dropped, so the cache holds one binding and at most one unit per pursued claim.
+/// LG14-B separately holds only the currently selected authenticated node/witness answer.
+fn palw_fraud_filer_cache_unit_v1(unit: &PalwDaUnitV1, wanted: Option<&PalwDaUnitV1>) -> bool {
+    matches!(*unit, PalwDaUnitV1::Event { row: 0, tile: 0 }) || wanted == Some(unit)
 }
 
 /// Read/resume one page. A reorg beyond the old anchor restarts at the current tip and the oldest pursued claim, including when
@@ -185,10 +240,12 @@ pub(super) fn palw_fraud_filer_read_page_v1(
         max_blocks,
         wanted,
         legacy_wanted,
+        &BTreeMap::new(),
         kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn palw_fraud_filer_read_page_with_form_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
     oldest: u64,
@@ -197,6 +254,7 @@ pub(super) fn palw_fraud_filer_read_page_with_form_v1(
     max_blocks: usize,
     wanted: &BTreeMap<Hash64, Hash64>,
     legacy_wanted: &BTreeMap<Hash64, PalwLegacyHeldUnitV2>,
+    rcore_wanted: &BTreeMap<Hash64, PalwDaUnitV1>,
     network: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<(PalwFraudFilerWalkV1, bool, Vec<((Hash64, PalwDaUnitV1), PalwDaBuiltAnswerV1)>), String> {
     let tip = consensus.get_sink();
@@ -215,13 +273,7 @@ pub(super) fn palw_fraud_filer_read_page_with_form_v1(
         PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, .. }
             if wanted.get(&claim).is_some_and(|root| {
                 kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(&unit, &answer, root)
-            }) && palw_fraud_filer_cache_unit_v1(
-                &unit,
-                match &answer {
-                    PalwDaAnswerV1::Held(c) => Some(c.binding.step_leaf_count),
-                    _ => None,
-                },
-            ) =>
+            }) && palw_fraud_filer_cache_unit_v1(&unit, rcore_wanted.get(&claim)) =>
         {
             palw_fraud_filer_cache_answer_v1(&mut answers, (claim, unit), PalwDaBuiltAnswerV1::Rcore(answer));
         }
@@ -294,6 +346,12 @@ pub(super) struct PalwFraudFilerCaseV1 {
     pub(super) verdict: PalwFraudFilerVerdictV1,
     pub(super) binding: Option<PalwStepBindingV2>,
     pub(super) bisect: PalwLegacyBisectV1,
+    /// Lane G14-V: the claim's step tree as far as authenticated range answers reached it (the subtree descent's state).
+    pub(super) step_tree: Option<PalwAuthTreeV1>,
+    /// Lane G14-V: the authenticated tiled events a trace localization read past an agreeing step tree.
+    pub(super) trace: PalwTraceDescentV1,
+    /// Lane G14-V: the one range or event unit this case's localizer reads now (the history reader caches only it).
+    pub(super) rcore_wanted: Option<PalwDaUnitV1>,
     pub(super) frontiers: Vec<PalwLegacyFrontierV2>,
     pub(super) witness: Option<Box<PalwCommittedKernelWitnessV2>>,
     pub(super) legacy_wanted: Option<PalwLegacyHeldUnitV2>,
@@ -315,6 +373,9 @@ impl PalwFraudFilerCaseV1 {
             verdict: PalwFraudFilerVerdictV1::Pending,
             binding: None,
             bisect: PalwLegacyBisectV1::new(0),
+            step_tree: None,
+            trace: PalwTraceDescentV1::default(),
+            rcore_wanted: None,
             frontiers: Vec::new(),
             witness: None,
             legacy_wanted: None,
@@ -349,6 +410,7 @@ impl PalwFraudFilerCaseV1 {
                         return Err("bootstrap binding has another trace root".into());
                     }
                     self.bisect = PalwLegacyBisectV1::new(binding.step_leaf_count);
+                    self.step_tree = PalwAuthTreeV1::new(binding.step_leaf_count, binding.step_merkle_root);
                     self.binding = Some(binding.clone());
                     return Ok(());
                 }
@@ -405,14 +467,54 @@ impl PalwFraudFilerCaseV1 {
             }
             (_, PalwDaBuiltAnswerV1::Rcore(answer)) => {
                 let PalwFraudFilerVerdictV1::Mismatch(run) = &self.verdict else { return Err("no mismatched replay is held".into()) };
-                palw_fraud_filer_learn_v1(
-                    probe,
-                    answer,
-                    &self.candidate.job.execution_root,
-                    &mut self.binding,
-                    &mut self.bisect,
-                    |first, count| (run.own_range)(first, count),
-                )
+                match probe {
+                    // G14-V: a range is learned into the authenticated subtree descent, never into a linear scan.
+                    PalwLegacyProbeV1::Range { .. } => {
+                        let binding = self.binding.as_ref().ok_or("a range is learned after the binding")?;
+                        let tree = self.step_tree.as_mut().ok_or("no step tree is held for this binding")?;
+                        kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_learn_subtree_v1(
+                            probe,
+                            answer,
+                            &self.candidate.job.execution_root,
+                            binding,
+                            tree,
+                        )?;
+                        self.rcore_wanted = None;
+                        Ok(())
+                    }
+                    // G14-V: a tiled logits event past the binding, authenticated against the claim's own roots before it is kept.
+                    PalwLegacyProbeV1::Binding { row, tile } if (row, tile) != (0, 0) => {
+                        let binding = self.binding.as_ref().ok_or("an event is learned after the binding")?;
+                        let PalwDaAnswerV1::Event(event) = answer else { return Err("an event is answered by an event".into()) };
+                        if event.binding() != binding {
+                            return Err("the event carries another binding".into());
+                        }
+                        self.trace.learn(
+                            self.candidate.job.trace_root,
+                            self.candidate.job.execution_root,
+                            row,
+                            tile,
+                            event,
+                            binding.step_leaf_count,
+                        )?;
+                        self.rcore_wanted = None;
+                        Ok(())
+                    }
+                    _ => {
+                        palw_fraud_filer_learn_v1(
+                            probe,
+                            answer,
+                            &self.candidate.job.execution_root,
+                            &mut self.binding,
+                            &mut self.bisect,
+                            |first, count| (run.own_range)(first, count),
+                        )?;
+                        if let (PalwLegacyProbeV1::Binding { .. }, Some(binding)) = (probe, self.binding.as_ref()) {
+                            self.step_tree = PalwAuthTreeV1::new(binding.step_leaf_count, binding.step_merkle_root);
+                        }
+                        Ok(())
+                    }
+                }
             }
             _ => Err("the answer has another carriage than the probe".into()),
         }
@@ -423,6 +525,9 @@ impl PalwFraudFilerCaseV1 {
         self.awaiting_public = None;
         self.binding = learned.binding;
         self.bisect = learned.bisect;
+        self.step_tree = learned.step_tree;
+        self.trace = learned.trace;
+        self.rcore_wanted = learned.rcore_wanted;
         self.frontiers = learned.frontiers;
         self.witness = learned.witness;
         self.legacy_wanted = learned.legacy_wanted;
@@ -697,6 +802,9 @@ impl PalwFraudFilerBookV1 {
                 case.witness = None;
                 case.binding = None;
                 case.bisect = PalwLegacyBisectV1::new(0);
+                case.step_tree = None;
+                case.trace = PalwTraceDescentV1::default();
+                case.rcore_wanted = None;
                 case.legacy_wanted = None;
                 case.sent = None;
                 case.awaiting_public = None;
@@ -760,6 +868,8 @@ impl PalwFraudFilerBookV1 {
             case.frontiers.clear();
             case.witness = None;
             case.legacy_wanted = None;
+            case.rcore_wanted = None;
+            case.trace = PalwTraceDescentV1::default();
         }
     }
 
@@ -771,6 +881,23 @@ impl PalwFraudFilerBookV1 {
         }
         self.settle(claim, PalwFraudFilerVerdictV1::Unjudged(why));
         true
+    }
+
+    /// G14-V: the subtree/trace descent's next unit, read from history like a selected legacy unit (an answer that predates the
+    /// selection is backfilled; only this unit and the binding are cached for the claim).
+    pub(super) fn want_rcore(&mut self, claim: Hash64, unit: PalwDaUnitV1) {
+        let Some(case) = self.cases.get_mut(&claim) else { return };
+        if case.rcore_wanted == Some(unit) {
+            return;
+        }
+        case.rcore_wanted = Some(unit);
+        self.answers.retain(|(held, held_unit), _| {
+            *held != claim || matches!(held_unit, PalwDaUnitV1::Event { row: 0, tile: 0 } | PalwDaUnitV1::LegacyHeldV2(_))
+        });
+        self.walked_from = None;
+        self.walked_to = None;
+        self.walk = None;
+        self.read_at = None;
     }
 
     /// Reading a previously answered legacy unit needs its historical bytes, even if a prior walk predated this selection.
@@ -800,6 +927,9 @@ pub(super) enum PalwFraudFilerStepV1 {
     LegacyTerminal {
         leaf: u64,
     },
+    /// G14-V: the claim's step tree is the verifier's own and its execution is not — localize past the step tree (the logits
+    /// trace, the committed tokens) instead of settling a mismatched execution as honest.
+    PastStepTree,
 }
 
 pub(super) fn palw_fraud_filer_bootstrap_step_v1(
@@ -887,7 +1017,7 @@ pub(super) fn palw_fraud_filer_legacy_step_v2(
         action = PalwFilerActionV1::Demand(PalwLegacyProbeV1::HeldNode { unit: PalwLegacyHeldUnitV2::KernelWitness { leaf } });
     }
     if matches!(action, PalwFilerActionV1::Done(PalwFilerPhaseV1::Honest)) && case.pursued() {
-        return Err("the own step tree agrees but the execution root differs: checkpoint/trace/job localization is required".into());
+        return Ok(PalwFraudFilerStepV1::PastStepTree);
     }
     Ok(match action {
         PalwFilerActionV1::Demand(probe) => {
@@ -902,6 +1032,139 @@ pub(super) fn palw_fraud_filer_legacy_step_v2(
     })
 }
 
+/// **G14-V: the node's codec-independent step** — the common engine over the authenticated `StepRange` subtree descent
+/// (`palw_fraud_filer_next_subtree_v1`): the claim's committed subtree roots, as authenticated range answers carried them, against
+/// the verifier's own tree (built once from its own run). Replaces the linear scan, which refused every claim past 32,768 leaves; an
+/// agreeing step tree under a mismatched execution goes past the step tree, never to `Honest`. Blocking: the first call builds the
+/// own tree.
+pub(super) fn palw_fraud_filer_subtree_step_v1(
+    role: PalwFilerRoleV1,
+    view: Option<&PalwLegacyDisputeViewV1>,
+    me: &PalwBondKeyV2,
+    reservable: bool,
+    case: &PalwFraudFilerCaseV1,
+    answer_read: impl Fn(&PalwDaUnitV1) -> bool,
+) -> Result<PalwFraudFilerStepV1, String> {
+    let facts = palw_fraud_filer_facts_v1(view, me, reservable, case.binding.is_some());
+    let binding = case.binding.as_ref();
+    let descent = match (binding, &case.verdict, &case.step_tree) {
+        (Some(binding), PalwFraudFilerVerdictV1::Mismatch(run), Some(tree))
+            if !facts.session_open
+                && facts.accusable
+                && facts.outcome.is_none()
+                && (facts.reserved || matches!(role, PalwFilerRoleV1::Seat | PalwFilerRoleV1::Watchdog)) =>
+        {
+            let own = run.own.as_ref().ok_or("this replay keeps no own run")?;
+            let own_tree = own.tree(binding.step_leaf_count)?;
+            let range = |first: u64, count: u32| own.range(first, count);
+            palw_auth_descent_next_v1(
+                tree,
+                &|level, index| own_tree.node(level, index, &range),
+                kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_LEGACY_BISECT_FINAL_RANGE_V1,
+            )
+        }
+        _ => PalwAuthDescentV1::Agrees,
+    };
+    let action = kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_next_subtree_v1(
+        role,
+        &facts,
+        case.pursued(),
+        binding.map_or(0, |b| b.step_leaf_count),
+        descent,
+        |leaf| binding.is_some_and(|binding| !palw_da_step_leaf_is_fused_v1(binding, leaf)),
+    );
+    if matches!(action, PalwFilerActionV1::Done(PalwFilerPhaseV1::Honest)) && case.pursued() {
+        return Ok(PalwFraudFilerStepV1::PastStepTree);
+    }
+    Ok(match action {
+        PalwFilerActionV1::Demand(probe) if !matches!(probe, PalwLegacyProbeV1::Terminal { .. }) => {
+            let unit = probe.unit();
+            match (view.is_some_and(|view| view.unit_was_answered_v1(&unit)), answer_read(&unit)) {
+                (true, true) => PalwFraudFilerStepV1::Learn(probe),
+                (true, false) => PalwFraudFilerStepV1::AwaitAnswer(probe),
+                (false, _) => PalwFraudFilerStepV1::Engine(action),
+            }
+        }
+        action => PalwFraudFilerStepV1::Engine(action),
+    })
+}
+
+/// **G14-V: what the public localization past an agreeing step tree does next** — a proof to file, or an event to read.
+pub(super) enum PalwFraudFilerPastStepV1 {
+    File(PalwConvictionFilingV1),
+    Read(PalwLegacyProbeV1),
+}
+
+/// **G14-V: past the step tree** (blocking). The claim's step tree is the verifier's own and its execution, trace or output is not.
+/// From the binding read (authenticated against the claim's execution root), the public tiled events this case read, and its OWN
+/// run: a committed logits lane the agreeing head did not output (`LogitsNotStepOutput`), or a flat committed token that is not its
+/// agreeing row's selection (`ForgedOutput`) — each held to the fold's own predicate before it is filed. Any other differing field
+/// (job, shape, legs, prompt, output root) is a direct proof's, which the reporter door already ran from the same binding; a
+/// differing checkpoint leg with everything else agreeing is reported, not guessed.
+pub(super) fn palw_fraud_filer_past_step_v1(
+    case: &PalwFraudFilerCaseV1,
+    target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+    event0: Option<&PalwDaBuiltAnswerV1>,
+    file_by: Option<u64>,
+    ladder: u64,
+) -> Result<PalwFraudFilerPastStepV1, String> {
+    let PalwFraudFilerVerdictV1::Mismatch(run) = &case.verdict else { return Err("no mismatched replay is held".into()) };
+    let own = run.own.as_ref().ok_or("this replay keeps no own run")?;
+    let binding = case.binding.as_ref().ok_or("past the step tree needs the binding read")?;
+    let Some(PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event0))) = event0 else {
+        return Err("the binding read's event is not held".into());
+    };
+    let own_binding = own.binding()?;
+    if own_binding.step_merkle_root != binding.step_merkle_root || own_binding.step_leaf_count != binding.step_leaf_count {
+        return Err("the step trees differ: the step descent's, not this localization's".into());
+    }
+    if own_binding.full_logits_trace_root == binding.full_logits_trace_root {
+        let differs = [
+            ("checkpoint leg", own_binding.checkpoint_merkle_root != binding.checkpoint_merkle_root),
+            ("activation leg", own_binding.activation_leg_root != binding.activation_leg_root),
+            ("job context", own_binding.job_context != binding.job_context),
+            (
+                "shape / checkpoint profile",
+                own_binding.shape_profile != binding.shape_profile
+                    || own_binding.checkpoint_profile != binding.checkpoint_profile
+                    || own_binding.state_chunk_map_id != binding.state_chunk_map_id,
+            ),
+        ];
+        let named: Vec<&str> = differs.iter().filter(|(_, d)| *d).map(|(n, _)| *n).collect();
+        return Err(format!(
+            "the step tree and logits trace are the verifier's own; the execution differs in {named:?} (a direct proof's, or the \
+             checkpoint-state localization, which is not wired) — nothing guessed"
+        ));
+    }
+    let next = kaspa_consensus_core::palw_auth_descent_v1::palw_trace_localize_next_v1(
+        target,
+        binding,
+        event0,
+        &case.trace,
+        &|row, tile| own.event(row, tile),
+        &|leaf| own.opening(leaf),
+        ladder,
+    )?;
+    match next {
+        PalwTraceLocalizeV1::Read { row, tile } => Ok(PalwFraudFilerPastStepV1::Read(PalwLegacyProbeV1::Binding { row, tile })),
+        PalwTraceLocalizeV1::Proof(contradiction) => {
+            let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_v1(
+                target.claim_id,
+                target.executor_bond,
+                contradiction,
+                None,
+            )
+            .map_err(|e| e.to_string())?;
+            let filing = PalwConvictionFilingV1::of_offence(built.object, target.claim_id, file_by, PalwFilingOriginV1::Replay)
+                .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                .ok_or("the reporter's key differs from the proof builder's")?;
+            Ok(PalwFraudFilerPastStepV1::File(filing))
+        }
+    }
+}
+
+/// The retired linear-scan step (kept for the engine's unit tests).
+#[cfg(test)]
 pub(super) fn palw_fraud_filer_step_v1(
     role: PalwFilerRoleV1,
     view: Option<&PalwLegacyDisputeViewV1>,
@@ -912,7 +1175,7 @@ pub(super) fn palw_fraud_filer_step_v1(
 ) -> PalwFraudFilerStepV1 {
     let facts = palw_fraud_filer_facts_v1(view, me, reservable, case.binding.is_some());
     let binding = case.binding.as_ref();
-    let action = palw_fraud_filer_next_v1(role, &facts, case.pursued(), &case.bisect, |leaf| {
+    let action = kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_next_v1(role, &facts, case.pursued(), &case.bisect, |leaf| {
         binding.is_some_and(|binding| !palw_da_step_leaf_is_fused_v1(binding, leaf))
     });
     match action {
@@ -1079,6 +1342,7 @@ pub(super) fn palw_fraud_filer_execute_v1(
     let own_backend = backend.clone();
     let own_material = material.clone();
     let own_prompt = prompt32.clone();
+    let own = Arc::new(PalwFraudFilerOwnRunV1::new(backend.clone(), material.clone(), prompt32.clone()));
     let legacy = misaka_palw_base0::produce::base0_material_decode_any_v1(&material).is_ok().then(|| {
         Arc::new(PalwLegacyReplicaV2 {
             backend,
@@ -1103,6 +1367,7 @@ pub(super) fn palw_fraud_filer_execute_v1(
             own_backend.held_step_range_answer_v1(&own_material, &own_prompt, first, count).map(|opening| opening.leaf_hashes)
         }),
         legacy,
+        own: Some(own),
         _reservation: reserved,
     })
 }
@@ -1172,6 +1437,8 @@ impl PalwPanelService {
                 let previous = book.walk;
                 let legacy_wanted =
                     book.cases.values().filter_map(|case| case.legacy_wanted.map(|unit| (case.candidate.claim_id, unit))).collect();
+                let rcore_wanted: BTreeMap<Hash64, PalwDaUnitV1> =
+                    book.cases.values().filter_map(|case| case.rcore_wanted.map(|unit| (case.candidate.claim_id, unit))).collect();
                 let history_form = params.palw_prompt_ids_form_at(current_daa);
                 let result = session
                     .clone()
@@ -1184,6 +1451,7 @@ impl PalwPanelService {
                             PALW_FRAUD_FILER_WALK_BLOCKS_V1,
                             &wanted,
                             &legacy_wanted,
+                            &rcore_wanted,
                             history_form,
                         )
                     })
@@ -1411,9 +1679,26 @@ impl PalwPanelService {
                         }
                     }
                 } else {
-                    palw_fraud_filer_step_v1(role, view.as_ref(), &bond_key, reservable, case, |unit| {
-                        book.answers.contains_key(&(claim, *unit))
+                    // G14-V: the codec-independent authenticated subtree descent (its first call builds the own tree: blocking).
+                    let owned = case.clone();
+                    let view = view.clone();
+                    let read: BTreeSet<PalwDaUnitV1> =
+                        book.answers.keys().filter(|(held, _)| *held == claim).map(|(_, unit)| *unit).collect();
+                    match tokio::task::spawn_blocking(move || {
+                        palw_fraud_filer_subtree_step_v1(role, view.as_ref(), &bond_key, reservable, &owned, |unit| read.contains(unit))
                     })
+                    .await
+                    .unwrap_or_else(|e| Err(format!("the public subtree descent task did not finish: {e}")))
+                    {
+                        Ok(step) => step,
+                        Err(why) => {
+                            warn!("[{PALW_PANEL}] claim {claim}: the public subtree descent cannot proceed: {why}");
+                            if !book.descent_failed(&claim, why) {
+                                debug!("[{PALW_PANEL}] claim {claim}: waiting for the remaining public proof history before settling");
+                            }
+                            break;
+                        }
+                    }
                 };
                 match step {
                     PalwFraudFilerStepV1::Learn(probe) => {
@@ -1426,7 +1711,10 @@ impl PalwPanelService {
                             Ok(owned) => {
                                 let case = book.cases.get_mut(&claim).expect("held above");
                                 case.accept_learned_v1(owned);
-                                if matches!(probe, PalwLegacyProbeV1::HeldNode { .. }) {
+                                // A learned node, range or trace event lives on in the case's authenticated tree; the bytes go.
+                                if matches!(probe, PalwLegacyProbeV1::HeldNode { .. } | PalwLegacyProbeV1::Range { .. })
+                                    || matches!(probe, PalwLegacyProbeV1::Binding { row, tile } if (row, tile) != (0, 0))
+                                {
                                     book.answers.remove(&(claim, probe.unit()));
                                 }
                                 debug!("[{PALW_PANEL}] claim {claim}: read the authenticated chain answer to {probe:?}");
@@ -1439,8 +1727,11 @@ impl PalwPanelService {
                         }
                     }
                     PalwFraudFilerStepV1::AwaitAnswer(probe) => {
-                        if let PalwLegacyProbeV1::HeldNode { unit } = probe {
-                            book.want_legacy(claim, unit);
+                        match probe {
+                            PalwLegacyProbeV1::HeldNode { unit } => book.want_legacy(claim, unit),
+                            PalwLegacyProbeV1::Range { .. } => book.want_rcore(claim, probe.unit()),
+                            PalwLegacyProbeV1::Binding { row, tile } if (row, tile) != (0, 0) => book.want_rcore(claim, probe.unit()),
+                            _ => {}
                         }
                         if let Some(view) = view.as_ref()
                             && let Some(request) =
@@ -1465,6 +1756,106 @@ impl PalwPanelService {
                         break;
                     }
                     PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait) => break,
+                    PalwFraudFilerStepV1::PastStepTree => {
+                        // G14-V: the step tree is the verifier's own and the execution is not — localize the logits trace or
+                        // the committed tokens from the binding read, public events and the own run; never settle as honest.
+                        let Some(target) = target.clone() else {
+                            debug!("[{PALW_PANEL}] claim {claim}: past the step tree, the claim's offence target is not readable yet");
+                            break;
+                        };
+                        let fallback = kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(
+                            &self.config.court,
+                            params.palw_court_ladder.is_some_and(|f| f.is_active(current_daa)),
+                        );
+                        let ladder = self.seat_refutation_ladder_v1(target.class_id, fallback, current_daa);
+                        let file_by = view.as_ref().map(|v| v.hard_deadline_daa.saturating_sub(2));
+                        let owned = case.clone();
+                        let event0 = book.answers.get(&(claim, PalwDaUnitV1::Event { row: 0, tile: 0 })).cloned();
+                        let past = tokio::task::spawn_blocking(move || {
+                            palw_fraud_filer_past_step_v1(&owned, &target, event0.as_ref(), file_by, ladder)
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(format!("the past-step localization task did not finish: {e}")));
+                        match past {
+                            Ok(PalwFraudFilerPastStepV1::File(filing)) => {
+                                info!("[{PALW_PANEL}] claim {claim}: past an agreeing step tree, a public proof is filed (G14-V)");
+                                let mut door = self.conviction_door_v1(session, reporter, bond_key, network_domain);
+                                let case = book.cases.get_mut(&claim).expect("pursued above");
+                                if !door.holds(&filing.offence_key)
+                                    && case.direct_handed < super::reporter_filer::PALW_FILER_HAND_OFFS_PER_OFFENCE_V1
+                                    && case
+                                        .direct_asked_at
+                                        .is_none_or(|at| current_daa.saturating_sub(at) >= PALW_FRAUD_FILER_RESEND_DAA_V1)
+                                {
+                                    case.direct_asked_at = Some(current_daa);
+                                    match door.file(filing) {
+                                        PalwFileOutcomeV1::Queued { .. } | PalwFileOutcomeV1::AlreadyFiled => case.direct_handed += 1,
+                                        PalwFileOutcomeV1::AlreadyConvicted => {}
+                                        why => warn!(
+                                            "[{PALW_PANEL}] claim {claim}: the past-step proof waits at the reporter door: {why:?}"
+                                        ),
+                                    }
+                                }
+                                break;
+                            }
+                            Ok(PalwFraudFilerPastStepV1::Read(probe)) => {
+                                let unit = probe.unit();
+                                book.want_rcore(claim, unit);
+                                let answered = view.as_ref().is_some_and(|v| v.unit_was_answered_v1(&unit));
+                                if answered && let Some(answer) = book.answers.get(&(claim, unit)).cloned() {
+                                    let mut owned = book.cases.get(&claim).expect("pursued above").clone();
+                                    let learned = tokio::task::spawn_blocking(move || owned.learn(probe, &answer).map(|()| owned))
+                                        .await
+                                        .unwrap_or_else(|e| Err(format!("the read did not finish: {e}")));
+                                    match learned {
+                                        Ok(owned) => {
+                                            book.cases.get_mut(&claim).expect("held above").accept_learned_v1(owned);
+                                            book.answers.remove(&(claim, unit));
+                                            continue;
+                                        }
+                                        Err(why) => {
+                                            warn!("[{PALW_PANEL}] claim {claim}: the chain's event {probe:?} does not read: {why}");
+                                            book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(why));
+                                            break;
+                                        }
+                                    }
+                                }
+                                if answered {
+                                    break; // The walk reads it next.
+                                }
+                                let Some(view) = view.as_ref() else { break };
+                                let binding = book.cases.get(&claim).and_then(|c| c.binding.clone());
+                                self.fraud_filer_queue_v1(
+                                    book,
+                                    claim,
+                                    PalwFraudFilerSentV1::Demand(probe),
+                                    current_daa,
+                                    court_pending,
+                                    court_due,
+                                    || {
+                                        palw_fraud_filer_demand_object_v1(
+                                            &network_domain,
+                                            claim,
+                                            &view.execution_root,
+                                            probe,
+                                            binding.as_ref(),
+                                            bond_key,
+                                            form,
+                                            |message, context| self.sign(message, context),
+                                        )
+                                    },
+                                );
+                                break;
+                            }
+                            Err(why) => {
+                                warn!("[{PALW_PANEL}] claim {claim}: past the step tree nothing is provable yet: {why}");
+                                if !book.descent_failed(&claim, why) {
+                                    debug!("[{PALW_PANEL}] claim {claim}: waiting for the remaining public proof history before settling");
+                                }
+                                break;
+                            }
+                        }
+                    }
                     PalwFraudFilerStepV1::LegacyTerminal { leaf } => {
                         let item = PalwFraudFilerSentV1::Terminal { leaf };
                         if case.may_send(item, current_daa) != Ok(true) {
@@ -1564,8 +1955,11 @@ impl PalwPanelService {
                     PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(probe)) => {
                         let Some(view) = view.as_ref() else { break };
                         let binding = case.binding.clone();
-                        if let PalwLegacyProbeV1::HeldNode { unit } = probe {
-                            book.want_legacy(claim, unit);
+                        match probe {
+                            PalwLegacyProbeV1::HeldNode { unit } => book.want_legacy(claim, unit),
+                            PalwLegacyProbeV1::Range { .. } => book.want_rcore(claim, probe.unit()),
+                            PalwLegacyProbeV1::Binding { row, tile } if (row, tile) != (0, 0) => book.want_rcore(claim, probe.unit()),
+                            _ => {}
                         }
                         self.fraud_filer_queue_v1(
                             book,
@@ -1961,6 +2355,7 @@ pub(super) mod tests {
             output_root: Hash64::default(),
             own_range: Box::new(|_, _| Err("no range".into())),
             legacy: None,
+            own: None,
             _reservation: None,
         }
     }
@@ -2320,16 +2715,17 @@ pub(super) mod tests {
         let range = |first, count| PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first, count });
         assert!(palw_fraud_filer_cache_unit_v1(&PalwDaUnitV1::Event { row: 0, tile: 0 }, None));
         assert!(!palw_fraud_filer_cache_unit_v1(&PalwDaUnitV1::Event { row: 1, tile: 0 }, None));
-        let leaves = 2_049;
-        for first in 0..leaves {
-            for count in [0, 1, 1_024] {
-                let expected = matches!((first, count), (0 | 1_024, 1_024) | (2_048, 1));
-                assert_eq!(palw_fraud_filer_cache_unit_v1(&range(first, count), Some(leaves)), expected);
+        // G14-V: only the ONE unit the case's descent reads now is cached — any position, never a stranger's other demands.
+        let wanted = range(1 << 30, 1_024);
+        for first in [0u64, 1_024, 1 << 30, (1 << 30) + 1_024] {
+            for count in [1, 1_024] {
+                assert_eq!(palw_fraud_filer_cache_unit_v1(&range(first, count), Some(&wanted)), range(first, count) == wanted);
             }
         }
-        assert!(palw_fraud_filer_cache_unit_v1(&range(31 * 1_024, 1_024), Some(32 * 1_024)));
-        assert!(!palw_fraud_filer_cache_unit_v1(&range(0, 1_024), Some(32 * 1_024 + 1)), "an over-cap ladder is not this fallback's");
         assert!(!palw_fraud_filer_cache_unit_v1(&range(0, 1_024), None));
+        let event = PalwDaUnitV1::Event { row: 3, tile: 7 };
+        assert!(palw_fraud_filer_cache_unit_v1(&event, Some(&event)));
+        assert!(!palw_fraud_filer_cache_unit_v1(&PalwDaUnitV1::Event { row: 3, tile: 8 }, Some(&event)));
     }
 
     /// **The tick wires the filer behind no flag, after lane B, with the seat's replay room** (a source pin).

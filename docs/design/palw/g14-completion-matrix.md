@@ -346,6 +346,85 @@ until those courts are filed in chunks (tag 113, G14-B) or lowered history-chunk
    exposure of tiny low-entropy values, as before.
 7. Hiding pricing runs at registration and class-row rebuild (the 9B gate + report ≈ tens of seconds in debug); not measured in release.
 8. A refused filing is dropped by the fold, but its carrier bytes may still be mined; a filer only ever discloses its own copy.
+## 2e. Lane G14-V — every covered violation through the real service (2026-10-11, branch `g14/v-all-violations`)
+
+Base: integration `8173dae20` (codex LG14-A public filer merged). Overall G14 verdict stays **FAIL / incomplete**; nothing is
+armed (every fence used below is test-armed in the harness with its shipping validation still refusing it, asserted in-test).
+Levels: **V-node(svc)** = kaspad's actual `PalwPanelService` (the public verifier/filer service) on a node whose database was
+created AFTER the claim and validated every public block; its own replay of the registered floor model; its own reservation,
+demands and reporter filings through the actual PQ mempool, the production template and the real block fold; outcome read back
+from consensus. **V-node(harness)** = the G14C canonical harness: a post-genesis bond on an IBD / pruned-import node, verifier built
+from the RPC op builders — there is **no kaspad kernel-route verifier service**, so no kernel family reaches V-node(svc).
+
+### 2e.1 What changed (implemented)
+
+* **Authenticated subtree descent** (`kaspa_consensus_core::palw_auth_descent_v1`, node policy, consensus-inert, no wire type).
+  Every authenticated opening (a `StepRange` answer, a single-leaf opening) determines its path and every sibling it carries at a
+  known `(level, index)`; the descent compares only such authenticated SUBTREE ROOTS with the verifier's own nodes from the root
+  down, always into the leftmost differing child, and reads the next range at the focus subtree's left edge. A matching subtree root
+  covers its whole prefix (collision resistance) — a lone matching midpoint leaf is never trusted (codex's `a4a62ec21` rule kept:
+  the old `PalwLegacyBisectV1` is untouched). **Bound:** reads of ≤ `2^r` leaves on a tree of height `h` take at most `h − r + 1`
+  reads (`r = 10` for `StepRange`): binding read + reads + `StepLeaf` terminal ≤ `h − 7` sessions — **33 of the 34-session
+  reservation at the 2^40 ladder top; fits up to 2^41 leaves**; past that `Unjudged`, never a guess.
+* **The production filer uses it** (`kaspad/src/palw_fraud_filer.rs`): the codec-independent fallback (every case below
+  `palw_legacy_held_da_v2`, or a non-base0 replay) is now `palw_fraud_filer_subtree_step_v1` instead of the linear scan that
+  refused every claim past 32,768 leaves. The own tree is built once per replay (retained at `max(10, h − 20)`, folded below on
+  demand from the verifier's own `held_step_range_answer_v1`). The history reader caches only the binding read and the ONE unit the
+  case's descent reads now (`rcore_wanted`, backfilled like a selected LG14-B unit), learned into the case's authenticated tree and
+  dropped — a stranger's other range demands never enter the cache.
+* **Past an agreeing step tree** (both the LG14-B path and the fallback): the old `Err("checkpoint/trace/job localization is
+  required")` is replaced by `PastStepTree` → `palw_fraud_filer_past_step_v1`. From the binding read's event and the own run: a
+  committed logits lane the (agreeing) head did not output → `LogitsNotStepOutput` (12); rows all agreeing with a token that is not
+  the row's selection → `ForgedOutput` (8); each held to the fold's own predicate, filed through the reporter door (R-3
+  commit/reveal). Flat classes need no further session; tiled classes run an authenticated rows-tree then tile-tree descent of
+  `Event` reads (≤ `log2(rows) + log2(tiles) + 2` reads). An honest claim yields nothing (V-fold below). A difference only in the
+  checkpoint leg / activation leg / job with step and trace agreeing is **reported, not guessed** (job/legs/prompt faults are the
+  direct door's, which runs first from the same binding).
+
+### 2e.2 Per family × violation (verdicts at this head)
+
+| Family / route | Violation (injected through the producer's own commit path) | Level | Outcome on chain | Evidence |
+|---|---|---|---|---|
+| F9–F16 legacy floor (BASE-0 attempt, 5,560 leaves, flat logits), common filer, fallback descent | MatMul element, isolated, honest values after (leaf 1853) | **V-node(svc)** pre-Final | CourtFraud, 4 demands (binding, 2 ranges, `StepLeaf`) | `g14v_step_lies_of_every_floor_op_kind_…` |
+| 〃 | MatMul element at the op's first leaf (12) | **V-node(svc)** | CourtFraud, 3 demands | 〃 |
+| 〃 | Embedding gather (leaf 0) | **V-node(svc)** | CourtFraud | 〃 |
+| 〃 | Normalization / rounding (RmsNorm, leaf 1904) | **V-node(svc)** | CourtFraud | 〃 |
+| 〃 | Nonlinearity (SiLU, leaf 2008) | **V-node(svc)** | CourtFraud | 〃 |
+| 〃 | Honest twin | **V-node(svc)** | nothing filed, `Final` | 〃 |
+| 〃 | Logits lane bent over an honest step tree (R1 residual) | **V-node(svc)** pre-Final | kind 4 `LogitsNotStepOutput` (past-step) | `g14v_trace_token_output_input_and_state_binding_lies_…` |
+| 〃 | Forged decode token (re-committed, `NotSelected`) | **V-node(svc)** | kind 4 `ForgedOutput` (past-step) | 〃 |
+| 〃 | Output root replaced | **V-node(svc)** | kind 4 `OutputMismatch` (direct door) | 〃 |
+| 〃 | Input / prompt: relabelled prompt (another anchor's ids) | **V-node(svc)** | kind 4 via the direct door | 〃 |
+| 〃 | Input / prompt: garbage prompt root | **V-node(svc)** | kind 4 via the direct door | 〃 |
+| 〃 | State-leg identity: activation leg replaced (J6), checkpoint interval replaced (J7) | **V-node(svc)** | **DA default** (`ProducerWithholding`, producer sanctioned): the H-1 gate refuses the producer's own binding disclosure (it answers another job), so no conviction is reachable — the default is the objective outcome | 〃 |
+| 〃 | MatMul element and logits lane **after Final** (node + service started after Final) | **V-node(svc)** | CourtFraud / kind 4 | `g14v_a_step_lie_and_a_logits_lie_are_convicted_after_final` |
+| 〃 LG14-B armed (tag 157/158 frontier descent, tag 159 recompute) | MatMul element, embedding gather | **V-node(svc)** pre-Final | CourtFraud via `LegacyLeafRecomputedV2` | `g14v_lg14b_frontier_descent_convicts_step_lies_through_the_service` |
+| 〃 | Honest claim forced into a mismatch verdict: step tree agrees → past-step → nothing provable, nothing filed | V-fold | — | `lg14b_an_honest_claim_survives_a_malicious_outsider` (updated) |
+| 〃 | A lie anywhere in a claim past 32,768 leaves (the old Unjudged region) | **V-unit only** | located within ≤ 33 sessions | core `palw_auth_descent_v1::tests::*` (exhaustive n ≤ 70 × every position × r ∈ {1, 4, 1024}; disjoint multi-lies; 2^20 + 3 leaves with retained own tree), `the_subtree_engine_localizes_a_lie_anywhere_within_the_reservation` (70,001 leaves) |
+| 〃 | Tiled logits (rows/tile descent glue) | implemented; **not verified** | — | the generic single-leaf descent is V-unit; no tiled legacy claim was run |
+| 〃 | Routing (MoE) | **open** — the floor has no router; no legacy MoE class was run | | |
+| 〃 | Checkpoint **state values** (KV chunk ≠ cache-write rows) with step and trace agreeing | **open** — not wired in the public filer (the floor commits 0 checkpoints); the checkpoint court and `StateChunk` units exist; the descent module applies to the checkpoint tree but the node terminal is not connected | | |
+| F1 K2-TIR v1/v2 canonical class (`wide128`), Panel (every seat covering) and OPV | Embedding gather element, wide I128 MatMul accumulator element, clamp (range / saturating nonlinearity) — each pre- and post-Final, pruned-import node, commitments only | **V-node(harness)** | convicted, bounty to the participant, seats not charged | `canonical::g14_canonical_g14v_gather_matmul_and_clamp_lies_pre_and_post_final` (12 cases) |
+| 〃 | quantization, decode, garbage; boundary / copy / borrowed refused at inclusion | V-node(harness) (G14C, not re-run here) | | §2a |
+| 〃 | routing / history | refused by carrier fit (§2a) — **open** for conviction | | |
+| F3 K2-TIR-v4 / F4 v5 (KS, merged) | element lie, withheld, input / borrowed / garbage, after Final, continuity across segments (8,192 held), v5 encoder lies | V-node(harness), re-run at this head: `g14_k2s_` **15 PASS** | | |
+| F6 typed roots | memory / retrieval / composite (T02–T05) | V-node(harness), re-run: `r4x_` **11 PASS, 1 FAIL** — `r4x_weights_only_spec_is_byte_for_byte_the_legacy_registration_and_the_unarmed_route_is_unchanged` (the kernel-route mempool gate refuses a typed-root carrier below `palw_typed_roots_v1`; this branch does not touch that gate — integration-owned, likely the A-2 gate change `824e6da15`; UNKNOWN whether it fails on the base, not re-run there) | | |
+| F2 pipelines, F5 fused/private | unchanged (§2a): F2 has no node claim; F5 never registers | open / by construction | | |
+
+### 2e.3 Open, stated (requirements for other owners in brackets)
+
+* No kaspad **kernel-route verifier service** exists: every kernel family (F1, F3, F4, F6) stops at V-node(harness). Building it
+  (RPC-read verifier loop + filing through the service's mempool) is the next G14-V item.
+* Large-claim localization is V-unit only; the floor's 5,560 leaves sit inside the old scan's reach. A V-node(svc) run needs a
+  registered legacy class with > 32,768 leaves on the harness.
+* Checkpoint-state localization (checkpoint tree → `StateChunk` → checkpoint court) and the tiled `ForgedOutputTiled` proof are
+  not wired; tiled trace glue unverified.
+* Activation-leg / checkpoint-interval lies end in the DA default after ~1,200 DAA (the disclose window), not a conviction — a
+  public-binding-free conviction route for J6/J7 would need the binding to be publishable under the H-1 gate (consensus review).
+* Session budgets: this lane did not change `gate.rs` or the 34-session constant. The subtree descent's bound (`h − 7`) fits it to
+  2^41 leaves; [G14-B: confirm the maximum legacy step ladder ≤ 2^41 when deriving the budget].
+* Restart / reorg / IBD resume of a mid-descent case: the descent state is a cache rebuilt from chain answers (reset on a branch
+  change like LG14-B's); not exercised [G14-R].
 
 ## 3. Family matrices (milestone baseline)
 
@@ -869,3 +948,14 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   `palw_legacy_held_signature_ok` in `processor.rs`; restored.
 * 2026-10-11 — G14-B (§2c): maximum-profile budgets and deadlines. `misaka-palw-kernel::budget` (route carriage, chunk-counting windows, the worst-case pursuit schedule, legacy sessions, population). Segmented demands now count chunks. Segmented classes get a derived liability horizon and are refused by name past a 436-DAA lifetime. The legacy 4-session FAIL is derived. Kernel 285, core 51 and node 19 PASS.
 * 2026-10-11 — G14-S (§2c, branch `g14/s-scope-gates`): the cumulative court scope enforced (table 28, per-requester units and dismissals, the OPV v1/v2 clear budget), the scope report made the per-claim reward gate (`COURT_SCOPE_INCOMPLETE`), DA16b option (a) flat 64-element hiding tiles with leaf-hash DA and the hiding-leaf / hiding-decode courts, option (c) finished; 9B-8k derived incomplete (four relation types above one carrier).
+* 2026-10-11 — lane G14-V (`g14/v-all-violations` on `8173dae20`): §2c. Authenticated subtree descent replaces the linear legacy
+  scan in the production filer; localization past an agreeing step tree (logits / forged token). Real-service V-node runs on the
+  floor: 5 step-lie op kinds + honest twin, 7 trace/token/output/input/state-identity lies, 2 post-Final lies, 2 LG14-B lies — all
+  PASS; kernel canonical gather / matmul / clamp ×(Panel, OPV)×(pre, post Final) PASS; `g14_k2s_` 15 PASS; `r4x_` 11 PASS / 1 FAIL
+  (integration-owned, see §2c.2).
+  Regression on this head: kaspad `palw_fraud_filer` 20, `accepted_objects_walk_tests` 7, `reporter_filer::tests` 21,
+  `palw_filer_held::e2e` 27 (LG14-B honest-claim guard updated to the past-step semantics), core `palw_legacy` 20 +
+  `palw_auth_descent` 5, consensus `t12_a2u` 3 and `lg14a_` 8 — PASS; normal `kaspad` lib build OK. Codex's
+  `fresh_public_bond_service_carries_reserved_da_to_objective_default` FAILED twice on its 360 s wall-clock deadline under host load
+  (load average 10–15; reached DAA ~2,036 of the 2,231 default) and PASSED (objective DA default at 2,236) with the deadline raised
+  locally to 1,500 s — the raise is not committed; the test's wall-clock bound is load-sensitive.

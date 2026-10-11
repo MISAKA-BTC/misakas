@@ -629,6 +629,11 @@ fn service_filer_case(
         output_root: o.roots.output_root.unwrap_or_default(),
         legacy: Some(replica),
         own_range: Box::new(|_, _| panic!("the LG14-B controller does not use the linear range fallback")),
+        own: Some(Arc::new(crate::palw_panel::palw_fraud_filer::PalwFraudFilerOwnRunV1::new(
+            Arc::new(f.seat()),
+            Arc::new(o.capture.clone()),
+            Arc::new(o.ids.clone()),
+        ))),
         _reservation: None,
     }));
     case
@@ -2285,7 +2290,32 @@ async fn lg14b_an_honest_claim_survives_a_malicious_outsider() {
             |_| SIG.to_vec(),
         )])
         .unwrap();
-    assert!(service_filer_step(&guard_world, &unresolved).unwrap_err().contains("checkpoint/trace/job localization"));
+    // G14-V: an agreeing step tree under a mismatched verdict goes PAST the step tree (never to Honest) — and there, against an
+    // honest claim whose every committed field is the verifier's own, nothing is provable and nothing is filed.
+    assert_eq!(
+        service_filer_step(&guard_world, &unresolved).unwrap(),
+        crate::palw_panel::palw_fraud_filer::PalwFraudFilerStepV1::PastStepTree
+    );
+    let event0 = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(
+        honest.backend.disclose_trace_event(&honest.material, 0, 0).expect("the honest binding read"),
+    ));
+    let target = kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1 {
+        claim_id: claim,
+        class_id: f.profile.shape_profile_id(),
+        artifact_root: f.root,
+        executor_bond: bond_key(PRODUCER),
+        execution_root: honest.execution_root,
+        lane: None,
+        segment_count: None,
+        phase: None,
+        job_identity: h64(0),
+        trace_root: honest.trace_root,
+        output_root: h64(32),
+    };
+    match crate::palw_panel::palw_fraud_filer::palw_fraud_filer_past_step_v1(&unresolved, &target, Some(&event0), None, LADDER) {
+        Err(why) => assert!(why.contains("nothing guessed"), "{why}"),
+        Ok(_) => panic!("an honest claim yields no public proof past its step tree"),
+    }
     let own = o.tree();
     assert_eq!(
         palw_legacy_descent_next_v2(Tree::Step, binding.step_leaf_count, &binding.step_merkle_root, &own, &[]),
