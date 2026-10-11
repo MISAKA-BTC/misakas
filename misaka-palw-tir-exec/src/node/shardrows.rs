@@ -26,6 +26,10 @@ use crate::plan::TirPlan;
 
 /// Where a shard-only seat gets rows: a holder's answer to "open these inventory leaves". Nothing it returns is believed.
 pub trait TirRowFetcherV1 {
+    /// A fetch-local immutable source, when this provider can hold one. Repeated
+    /// chunks then share its artifact/tree rather than rebuilding the whole inventory.
+    /// Historical/custom single-call providers retain their existing behavior.
+    fn open_session_v1(&self) -> Result<Option<Box<dyn TirRowFetcherV1 + '_>>, String> { Ok(None) }
     /// An opening for each leaf of `leaves`, in order.
     fn open_rows(&self, leaves: &[u32]) -> Result<Vec<PalwArtifactOpeningV1>, String>;
 }
@@ -35,9 +39,19 @@ pub trait TirRowFetcherV1 {
 pub struct TirFileMirrorV1(pub PathBuf);
 
 impl TirRowFetcherV1 for TirFileMirrorV1 {
+    fn open_session_v1(&self) -> Result<Option<Box<dyn TirRowFetcherV1 + '_>>, String> {
+        Ok(Some(Box::new(TirMirrorSessionV1(TirArtifactV1::open(&self.0)?))))
+    }
     fn open_rows(&self, leaves: &[u32]) -> Result<Vec<PalwArtifactOpeningV1>, String> {
         let holder = TirArtifactV1::open(&self.0)?;
         leaves.iter().map(|i| holder.param_opening(*i).ok_or_else(|| format!("the mirror cannot open leaf {i}"))).collect()
+    }
+}
+
+struct TirMirrorSessionV1(TirArtifactV1);
+impl TirRowFetcherV1 for TirMirrorSessionV1 {
+    fn open_rows(&self, leaves: &[u32]) -> Result<Vec<PalwArtifactOpeningV1>, String> {
+        leaves.iter().map(|i| self.0.param_opening(*i).ok_or_else(|| format!("the mirror cannot open leaf {i}"))).collect()
     }
 }
 
@@ -77,6 +91,8 @@ pub fn fetch_shard_params_v1(
     let layers = parts.get(usize::from(shard)).cloned().ok_or_else(|| format!("shard {shard} of {s_l}"))?;
     let ranges = shard_rules::palw_tir_shard_inventory_ranges_v1(&program, layers, shard == 0, shard + 1 == s_l);
     let wanted: Vec<u32> = ranges.iter().flat_map(|r| r.clone()).collect();
+    let session = if wanted.is_empty() { None } else { fetcher.open_session_v1()? };
+    let fetcher = session.as_deref().unwrap_or(fetcher);
     let mut pieces: BTreeMap<(u16, Option<u16>), Vec<(u32, Vec<u8>)>> = BTreeMap::new();
     let (mut leaves, mut bytes) = (0u64, 0u64);
     let mut kept: BTreeMap<u32, PalwArtifactOpeningV1> = BTreeMap::new();

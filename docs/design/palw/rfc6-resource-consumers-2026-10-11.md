@@ -668,3 +668,15 @@ inventory controls. Actual returned proof objects require their longer-lived out
 consumer admission; this transient reservation is neither an economic cap nor a
 physical instruction/RSS proof. The new inventory test also covers every executable
 corpus class, each mapped and resident, rather than only one example artifact.
+
+
+The actual local mirror fetch also reopened a container and reconstructed its complete
+inventory tree on every 256-row chunk. That repeated the full hash pass O(chunks) times.
+`TirRowFetcherV1` now has a defaulted local fetch-session hook; the file mirror holds one
+immutable artifact/tree for the full `fetch_shard_params_v1` operation. Existing custom
+providers and single-call/path APIs retain their behavior, empty fetches open no source,
+and copied holdings remain under the existing actual node's row-lifetime reservation.
+The mirror session's tree guard releases on return/error; the new multi-chunk real
+64-expert parent control expects exactly one inventory admission/hash pass and unchanged
+all-row assembly. Proof bytes and off-chain acquisition/consensus eligibility are unchanged.
+This follow-up awaits central testing after the active compilation batch.

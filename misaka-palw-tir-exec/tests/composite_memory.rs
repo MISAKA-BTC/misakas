@@ -10,7 +10,10 @@ use kaspa_consensus_core::{
 };
 use misaka_palw_tir_exec::{
     TirParams, TirPlan,
-    node::{TirArtifactV1, TirParamOpenerV1, TirParamsSourceV1, TirResidencyPolicyV1, set_tir_memory_reserver_v1},
+    node::{
+        TirArtifactV1, TirFileMirrorV1, TirParamOpenerV1, TirParamsSourceV1, TirResidencyPolicyV1, fetch_shard_params_v1,
+        set_tir_memory_reserver_v1,
+    },
 };
 use std::{
     collections::BTreeMap,
@@ -138,6 +141,18 @@ fn mapped_and_resident_composite_carriage_refold_refuses_before_copy_and_preserv
         assert_eq!(held.lock().unwrap().values().sum::<u64>(), 0);
         limit.store(u64::MAX, Ordering::SeqCst);
     }
+    // More than one 256-row request reuses ONE immutable mirror/tree session.
+    // The returned rows have their caller's separate lasting admission.
+    assert!(split > 256);
+    let before = calls.lock().unwrap().len();
+    let holding =
+        fetch_shard_params_v1(&parent_file.class().unwrap(), parent_class, parent_root, 1, 0, &TirFileMirrorV1(ppath.clone()))
+            .unwrap();
+    assert_eq!(holding.leaves, u64::from(split));
+    assert_eq!(calls.lock().unwrap().len(), before + 1, "multi-chunk fetch hashes/reserves the inventory only once");
+    assert_eq!(calls.lock().unwrap()[before].0, "tir-inventory-tree");
+    assert_eq!(held.lock().unwrap().values().sum::<u64>(), 0, "fetch-local artifact/tree releases after copied holding is assembled");
+    drop(holding);
     drop(parent_file);
     std::fs::remove_file(ppath).unwrap();
     std::fs::remove_file(spath).unwrap();
