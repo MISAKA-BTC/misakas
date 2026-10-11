@@ -66,7 +66,7 @@ impl PalwRenderingResourcePlanV1 {
         let body_moves = prefix * table.div_ceil(part) + table.div_ceil(part) + vocab128;
         let eog_bytes = vocab128 * 4;
         let eog_moves = eog_bytes.div_ceil(part);
-        let moves = body_moves + leaves + eog_moves + 2 + u128::from(p.reorg_replay_moves); // opening and terminal
+        let moves = body_moves + 2 * leaves + eog_moves + 2 + u128::from(p.reorg_replay_moves); // opening and terminal
         // Also covers <=13 binary-search membership comparisons per EOG id.
         let parser_steps = (bytes + eog_bytes) * (crate::palw_decode_constraint_v1::PALW_CONSTRAINT_MAX_HOPS_V1 as u128 + 1);
         // Key block, legacy id/presence/length header and final padding per leaf.

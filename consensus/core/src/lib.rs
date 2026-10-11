@@ -815,3 +815,5 @@ pub mod palw_eog_stream_v1;
 pub mod palw_constraint_stream_court_v1;
 
 pub mod palw_constraint_stream_carriage_v1;
+
+pub mod palw_constraint_stream_owned_v1;
