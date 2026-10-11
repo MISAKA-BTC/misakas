@@ -107,9 +107,16 @@ use crate::palw_panel::reporter_filer::{
 
 const PALW_PANEL: &str = "palw-panel";
 
-/// The most proofs held at once. A proof is one contradiction (at most one carrier's bytes,
-/// `PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES`), so the book stays under ~8 MB; the oldest leaves first.
+/// The most proofs held at once, additionally bounded by aggregate serialized proof bytes.
+/// The oldest leaves first when either envelope fills.
 pub(crate) const PALW_FALSE_VALID_MAX_CASES_V1: usize = 64;
+const PALW_FALSE_VALID_PROOF_RAM_V2: u64 = 64 * 1024 * 1024;
+fn palw_false_valid_proof_bytes_v2(proof: &PalwFalseValidProofV1) -> u64 {
+    borsh::object_length(&proof.contradiction)
+        .ok()
+        .zip(borsh::object_length(&proof.prompt_ids_opening).ok())
+        .map_or(u64::MAX, |(a, b)| 64u64.saturating_add(a as u64).saturating_add(b as u64))
+}
 
 /// Claims scanned a tick: each scan is a chain walk, a signature check per receipt admitted and one
 /// adjudication per signer, on a blocking thread — one a tick keeps a burst of faults from taking
@@ -180,6 +187,9 @@ pub(crate) fn palw_false_valid_conviction_filing_v1(filing: &PalwFalseValidFilin
         return None;
     }
     PalwConvictionFilingV1::of_offence(filing.object.clone(), filing.claim_id, None, PalwFilingOriginV1::FalseValid)
+        .or_else(|| {
+            PalwConvictionFilingV1::of_rooted_court_void_v2(filing.object.clone(), filing.claim_id, PalwFilingOriginV1::FalseValid)
+        })
         .filter(|conviction| conviction.offence_key == filing.offence_id && conviction.evidence_id == filing.evidence_id)
 }
 
@@ -302,9 +312,22 @@ impl PalwFalseValidFilerV1 {
         if self.cases.contains_key(&claim_id) {
             return false;
         }
-        if self.cases.len() >= PALW_FALSE_VALID_MAX_CASES_V1
-            && let Some(oldest) = self.cases.iter().min_by_key(|(_, case)| case.expires_daa).map(|(claim, _)| *claim)
+        let bytes = palw_false_valid_proof_bytes_v2(&proof);
+        if bytes > kaspa_consensus_core::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1 {
+            return false;
+        }
+        while self.cases.len() >= PALW_FALSE_VALID_MAX_CASES_V1
+            || self
+                .cases
+                .values()
+                .map(|c| palw_false_valid_proof_bytes_v2(c.proof.as_ref()))
+                .fold(0u64, u64::saturating_add)
+                .saturating_add(bytes)
+                > PALW_FALSE_VALID_PROOF_RAM_V2
         {
+            let Some(oldest) = self.cases.iter().min_by_key(|(_, case)| case.expires_daa).map(|(claim, _)| *claim) else {
+                return false;
+            };
             warn!("[{PALW_PANEL}] false-Valid filer: {PALW_FALSE_VALID_MAX_CASES_V1} proofs held — forgetting claim {oldest}'s");
             self.forget(&oldest);
         }
@@ -391,7 +414,7 @@ impl PalwFalseValidFilerV1 {
         else {
             return false;
         };
-        if !armed {
+        if !armed || evidence.len() as u64 > kaspa_consensus_core::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1 {
             return false;
         }
         let Ok(payload) =
@@ -678,8 +701,28 @@ pub(crate) fn palw_false_valid_scan_v1(
     let Ok(walk) = walk else {
         return PalwFalseValidScanOutcomeV1 { claim_id, receipts, filings: Vec::new(), walked: false, walk: scan.walk };
     };
+    // A completed producer proof may exceed the direct carrier envelope. Its objectively
+    // rooted CourtFraud outcome supplies the existing small full-Valid continuation; the gate
+    // rechecks it at the actual tip. Reorgs remove the void and restore the original scoped proof.
+    let rooted = consensus.palw_legacy_dispute_v1(claim_id).and_then(|view| match view.phase {
+        kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Voided {
+            voided_daa,
+            reason: kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2::CourtFraud,
+        } => Some(PalwFalseValidProofV1 {
+            claim_id,
+            contradiction: kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::CourtFraud { voided_daa },
+            prompt_ids_opening: None,
+        }),
+        _ => None,
+    });
+    let original_bytes = palw_false_valid_proof_bytes_v2(scan.proof.as_ref());
+    let proof = if original_bytes > kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
+        rooted.as_ref().unwrap_or(scan.proof.as_ref())
+    } else {
+        scan.proof.as_ref()
+    };
     let filings = palw_false_valid_filings_v1(
-        &scan.proof,
+        proof,
         &receipts,
         &own,
         |seat| scan.skip.contains(seat),

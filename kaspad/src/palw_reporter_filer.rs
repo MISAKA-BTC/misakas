@@ -308,6 +308,47 @@ pub(crate) struct PalwConvictionFilingV1 {
 }
 
 impl PalwConvictionFilingV1 {
+    /// A small already-rooted CourtFraud continuation. It has the same seat/claim conviction
+    /// key but intentionally buys no reporter commitment or separate reward (ADR-0152 R-3).
+    pub(crate) fn of_rooted_court_void_v2(
+        object: PalwConsensusObjectV2,
+        claim_id: Hash64,
+        origin: PalwFilingOriginV1,
+    ) -> Option<Self> {
+        let PalwConsensusObjectV2::ObjectiveOffence {
+            kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2,
+            accused,
+            evidence_id,
+            evidence,
+        } = &object
+        else {
+            return None;
+        };
+        if evidence.len() as u64 > kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES
+            || kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != *evidence_id
+        {
+            return None;
+        }
+        let p: kaspa_consensus_core::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2 = borsh::from_slice(evidence).ok()?;
+        if p.claim_id != claim_id
+            || !matches!(p.contradiction, kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::CourtFraud { .. })
+            || p.prompt_ids_opening.is_some()
+            || !p.reporter_reveal.is_empty()
+        {
+            return None;
+        }
+        Some(Self {
+            offence_key: kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&accused.0, &claim_id),
+            evidence_id: *evidence_id,
+            accused: *accused,
+            claim_id,
+            object,
+            file_by_daa: None,
+            origin,
+            fallback: None,
+        })
+    }
+
     /// A filing of `object` — `None` unless it is an `ObjectiveOffence` whose conviction takes a
     /// commitment (`palw_filed_offence_commit_key_v1`; the named rewards never come here).
     pub(crate) fn of_offence(
@@ -749,7 +790,13 @@ impl PalwReporterFilerV1 {
         {
             return PalwFileOutcomeV1::Full;
         }
-        let built = (read.rcore_plus && read.reporter_may_commit)
+        let committable = match &filing.object {
+            PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence_id, evidence } => {
+                palw_filed_offence_commit_key_v1(*kind, &accused.0, evidence_id, evidence).is_some()
+            }
+            _ => false,
+        };
+        let built = (read.rcore_plus && read.reporter_may_commit && committable)
             .then(|| {
                 kaspa_consensus_core::palw_state_v2::palw_reporter_commit_object_v1(
                     network_domain,
@@ -924,7 +971,7 @@ impl PalwReporterFilerV1 {
                 let live = self.entries.get_mut(&key).expect("live");
                 live.gate_refused_at = None;
                 live.evidence_sends = live.evidence_sends.saturating_add(1);
-                self.queued_due.insert((key, round, false), entry.file_by.unwrap_or(u64::MAX));
+                self.queued_due.insert((key, round, false), entry.file_by_daa.unwrap_or(u64::MAX));
                 court_pending.push((key, round, false, object));
                 self.dirty = true;
                 continue;
@@ -1491,7 +1538,7 @@ fn palw_filer_terminal_next_v1(
     let PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence_id, evidence } = &entry.object else {
         return Err("terminal entry has no original offence".into());
     };
-    let deadline = entry.file_by.unwrap_or(progress.hard_deadline_daa).min(progress.hard_deadline_daa);
+    let deadline = entry.file_by_daa.unwrap_or(progress.hard_deadline_daa).min(progress.hard_deadline_daa);
     let base = t::PalwTerminalDeclarationV1 {
         version: 1,
         claim: entry.claim_id,
