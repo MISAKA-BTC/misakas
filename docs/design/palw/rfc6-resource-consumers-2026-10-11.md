@@ -10,6 +10,19 @@ A full-holder seat reserved host scratch and, when available, device memory. The
 
 The common scratch envelope is the existing cell-seat node policy: three times the capture size plus 16 MiB. A decoded shard-only capture is counted without allocating another serialized copy. This is an admission mechanism and a bounded arithmetic expression; it is **not a verified worst-case RAM, work, elapsed-time or court-fee bound for every model**. Persistent fetched rows, material pools, model caches and exact prover workspace still need their own complete accounting and measurements.
 
+The shared `TirCaptureV1::decode` now parses the same canonical Borsh wire frame with
+each network/program/layout/prompt/logits/generated/leaf Vec length checked against
+remaining bytes before allocation. It charges the native element storage, including
+the outer logits Vec headers, before `try_reserve_exact`; requested decoded storage
+must fit `2 × encoded capture + 16 MiB`, leaving one encoded capture for the fetched
+bytes within the existing three-times envelope. This prevents a valid nested-empty-row
+frame from requesting six-times encoded bytes of native headers. Semantic false values
+remain decodable within that bound and are still adjudicated by metadata/court rules.
+New `capture_codec` fixtures use actual producer output for dense/fold wire equivalence,
+all ten hostile Vec-length locations, a 1.5-million empty-row frame, and strict EOF.
+These fixtures are candidates pending the central node-feature run; requested element
+storage accounting does not certify allocator overhead or subsequent plan/prover RSS.
+
 A second defect defeated the intended shard memory scope. `TirExecutor::new_cell` initialized all `Fixed` state instances in the class, including every other layer. Restoring a segment repeated that full allocation. The executor now derives exactly the state instances touched by its immutable occurrence range, including read-only state. Other instances retain their indices with empty buffers. Checkpoint import/export respects that scope. An attempted wider cell, a whole-schedule step through a cell executor, or a checkpoint predicate naming another shard is refused before execution. Whole-schedule execution keeps its existing full state.
 
 These changes are node execution/resource behavior. They allocate no consensus tag, delta, rooted field or new fence, and do not change live shard v1 pricing, draws, receipt rules, or public preset parameters.

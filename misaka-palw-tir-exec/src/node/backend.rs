@@ -137,7 +137,7 @@ impl TirCaptureV1 {
 
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
         let body = bytes.strip_prefix(&TIR_CAPTURE_MAGIC_V1[..]).ok_or("not an IR capture")?;
-        borsh::from_slice(body).map_err(|e| format!("the IR capture does not decode: {e}"))
+        super::capture_codec::decode(body, bytes.len())
     }
 
     pub fn is_dense(&self) -> bool {
