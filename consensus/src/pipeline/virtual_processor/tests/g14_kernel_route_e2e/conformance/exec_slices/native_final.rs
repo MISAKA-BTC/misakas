@@ -385,6 +385,10 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     use kaspa_consensus_core::palw_vesting_v1::palw_vesting_payout_key_v1;
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     const W: u64 = 436;
+    // Predeclared signed lifetimes isolate the first root's exact payout window.
+    // R admits both funded roots together; it does not serialize their payment.
+    const FIRST_LIFETIME: u64 = 1_024;
+    const SECOND_LIFETIME: u64 = FIRST_LIFETIME + W;
     let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let (sender, receiver) = async_channel::unbounded();
     let mut cw = active_world_over_with_params(
@@ -416,7 +420,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
         },
     ).await;
     cw.net._keep.push(Box::new(receiver));
-    let mut first = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), 1_024).await;
+    let mut first = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), FIRST_LIFETIME).await;
     assert!(cw.net.chain.tip_state().1.claim_economics_of(&first.real.claim).is_none(),
         "whole-escrow pricing was fixed before acceptance; no snapshot may override it");
     for (index, slice) in first.slices.iter().enumerate() {
@@ -437,7 +441,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert!(native.expiry_daa > receipt.liability_until && native.final_daa == final_daa);
     // Supply the private depth1 with another genuine signed/assembled native
     // Final. No clock/Final setter supplies the maturity condition.
-    let mut second = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), 1_024).await;
+    let mut second = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), SECOND_LIFETIME).await;
     for (index, slice) in second.slices.iter().enumerate() {
         second.lane.push(carry_slice(&mut cw, second.real.claim, index as u32, &slice.claim).await);
     }
@@ -446,7 +450,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert_eq!(state.settled_attempt_finals(), native.settled_at_final + 1);
     assert!(cw.net.daa() < native.expiry_daa);
     let second_native = state.vesting_row(&second.real.claim).unwrap().clone();
-    assert!(second_native.expiry_daa > native.expiry_daa + W, "the second root cannot pay during the first root's window");
+    assert!(second_native.expiry_daa > native.expiry_daa + W, "the predeclared second signed lifetime isolates the first root's physical-payment W window");
     let mut queues = std::collections::BTreeMap::new();
     let mut add = |key: Hash64, bond: PalwBondKeyV2, amount: u64| {
         if amount > 0 {
