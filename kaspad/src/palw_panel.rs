@@ -2298,7 +2298,14 @@ pub(crate) fn palw_da_material_v1(
             let mut jobs: Vec<PalwFpMaterialV1> = Vec::new();
             for bytes in kept {
                 let material = match palw_fp_capture_decode_v1(&bytes, facts.form) {
-                    Some(payload) if reproduces(&payload.capture, facts.roots_v1(Some(&payload.material.job))) => {
+                    Some(payload)
+                        if fp_verify_capture_under_job_v1(
+                            backend,
+                            &payload.material.job,
+                            &payload.capture,
+                            facts.roots_v1(Some(&payload.material.job)),
+                        ) == PalwMaterialVerdictV1::Matches =>
+                    {
                         return Ok((PalwDaCaptureV1::FreePrompt(payload), false));
                     }
                     // Decodes, and its capture is not the claim's: its job may still be.
@@ -2352,7 +2359,11 @@ pub(crate) fn palw_da_material_v1(
                         continue;
                     }
                 };
-                if !reproduces(&capture, facts.roots_v1(Some(&material.job))) {
+                // Verification must own the same authenticated job scope as execution: bare
+                // verification would compare a constrained/pipeline capture with default argmax.
+                if fp_verify_capture_under_job_v1(backend, &material.job, &capture, facts.roots_v1(Some(&material.job)))
+                    != PalwMaterialVerdictV1::Matches
+                {
                     refused = "the kept job's replay does not reproduce the claim's committed roots".to_string();
                     continue;
                 }
