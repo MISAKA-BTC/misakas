@@ -17,6 +17,10 @@ pub(super) struct TiledFixture {
 
 impl TiledFixture {
     pub fn new(chain: &Chain) -> Self {
+        Self::new_with_tokenizer_padding(chain, 0)
+    }
+
+    pub(super) fn new_with_tokenizer_padding(chain: &Chain, padding: usize) -> Self {
         use kaspa_consensus_core::palw_qwen25_profile::*;
         use kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES;
         let read = chain.tc.palw_model_registry_v1().unwrap();
@@ -81,7 +85,11 @@ impl TiledFixture {
                 )
             })
             .collect();
-        let tokenizer_bytes = serde_json::to_vec(&serde_json::json!({"model":{"type":"BPE","vocab":vocab,"merges":[]}})).unwrap();
+        let mut tokenizer_json = serde_json::json!({"model":{"type":"BPE","vocab":vocab,"merges":[]}});
+        if padding != 0 {
+            tokenizer_json.as_object_mut().unwrap().insert("padding".into(), serde_json::Value::String("x".repeat(padding)));
+        }
+        let tokenizer_bytes = serde_json::to_vec(&tokenizer_json).unwrap();
         let tokenizer = misaka_palw_base0::tokenizer::QwenTokenizer::from_json(&tokenizer_bytes).unwrap();
         let tokenizer_id = Base0ArtifactV1::tokenizer_commitment_of(&tokenizer_bytes);
         let artifact = Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
@@ -243,7 +251,7 @@ impl TiledFixture {
         self.produce_for_card(chain, 0, Some(fault))
     }
 
-    fn produce_for_card(
+    pub(super) fn produce_for_card(
         &self,
         chain: &Chain,
         card: usize,
@@ -349,6 +357,13 @@ impl TiledFixture {
         commitment.trace_root = binding.full_logits_trace_root;
         commitment.output_root =
             kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, &generated);
+        if fault.is_none() {
+            assert_eq!(
+                (commitment.execution_root, commitment.trace_root, commitment.output_root),
+                (run.outcome.execution_root, run.outcome.trace_root, run.outcome.output_root),
+                "metadata-only faults retain the actual producer computation and all three roots"
+            );
+        }
         let initial = logits_event_disclosure_v1(&binding, rows, &generated, 0, 0).unwrap();
         let mut events = std::collections::BTreeMap::new();
         // The native DA session also draws a unit beside the named binding. Answer this

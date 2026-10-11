@@ -37,6 +37,8 @@ use kaspa_muhash::MuHash;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
 use std::{collections::BTreeSet, sync::Arc, thread::JoinHandle, time::Duration};
 
+#[path = "palw_service_tokenizer_e2e.rs"]
+mod staged_tokenizer;
 #[path = "palw_service_terminal_e2e.rs"]
 mod terminal;
 #[path = "palw_service_tiled_e2e.rs"]
@@ -704,6 +706,8 @@ enum PublicCase {
     TiledConstraintWithheld,
     TiledPrefixInitial,
     TiledPrefixInherited,
+    TiledTokenizerLength,
+    TiledTokenizerKeyBound,
 }
 
 impl PublicCase {
@@ -714,6 +718,9 @@ impl PublicCase {
         matches!(self, Self::PrunedForeignFpV3Job | Self::PrunedHonestFpV3Job | Self::PrunedWithheldFpV3Input) || self.unretained_fp()
     }
     fn unretained_fp(self) -> bool {
+        if self.staged_tokenizer() {
+            return false;
+        }
         if self.tiled() {
             return true;
         }
@@ -773,14 +780,20 @@ impl PublicCase {
             _ => None,
         }
     }
+    fn staged_tokenizer(self) -> bool {
+        matches!(self, Self::TiledTokenizerLength | Self::TiledTokenizerKeyBound)
+    }
     fn constraint(self) -> bool {
-        self.large_constraint() || self.constraint_fault().is_some()
+        self.staged_tokenizer() || self.large_constraint() || self.constraint_fault().is_some()
     }
     fn exact_fault(self) -> bool {
-        self.identity_fault() || self.prefix_fault().is_some() || (self.constraint_fault().is_some() && !self.da_default())
+        self.staged_tokenizer()
+            || self.identity_fault()
+            || self.prefix_fault().is_some()
+            || (self.constraint_fault().is_some() && !self.da_default())
     }
     fn answers_input(self) -> bool {
-        self.reacquire_honest() || self.constraint_fault().is_some() || self.prefix_fault().is_some()
+        self.staged_tokenizer() || self.reacquire_honest() || self.constraint_fault().is_some() || self.prefix_fault().is_some()
     }
     fn large_constraint(self) -> bool {
         matches!(self, Self::UnretainedLargeConstraintJob | Self::UnretainedWithheldLargeConstraintJob | Self::TiledConstraintLargeJob)
@@ -795,6 +808,8 @@ impl PublicCase {
                 | Self::TiledConstraintLargeJob
                 | Self::TiledPrefixInitial
                 | Self::TiledPrefixInherited
+                | Self::TiledTokenizerLength
+                | Self::TiledTokenizerKeyBound
         )
     }
 }
@@ -1200,6 +1215,10 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         // descriptor contract; public-filer activation remains at its normal test DAA.
         config.params.palw_class_semantics_v1 = Some(ForkActivation::new(0));
     }
+    if case.staged_tokenizer() {
+        config.params.palw_staged_public_court_v1 = Some(ForkActivation::new(0));
+        config.params.validate_palw_staged_public_court_v1().unwrap();
+    }
     if case.prefix_fault().is_some() {
         config.params.palw_fp_prefix_state = Some(ForkActivation::new(0));
         config.params.palw_fp_prefix_inherit = Some(ForkActivation::new(0));
@@ -1213,7 +1232,9 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     }
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
-    let tiled = case.tiled().then(|| tiled::TiledFixture::new(&chain));
+    let tiled = case
+        .tiled()
+        .then(|| if case.staged_tokenizer() { staged_tokenizer::fixture(&chain) } else { tiled::TiledFixture::new(&chain) });
     if let Some(fixture) = &tiled {
         fixture.register(&mut chain, &mut floats).await;
     }
@@ -1233,7 +1254,11 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         }
         certify_fp_lane(&mut chain, &mut floats, profile, case.tiled()).await;
         if let Some(fixture) = &tiled {
-            fixture.declare_semantics(&mut chain, &mut floats).await;
+            if case.staged_tokenizer() {
+                staged_tokenizer::declare_semantics(fixture, case, &mut chain, &mut floats).await;
+            } else {
+                fixture.declare_semantics(&mut chain, &mut floats).await;
+            }
         }
     }
     let signed_bond = PalwBondKeyV2(TransactionOutpoint::new(Default::default(), 0));
@@ -1280,7 +1305,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     let mut prefix_answers = std::collections::BTreeMap::new();
     let foreign = (case != PublicCase::Withholding).then(|| {
         if let Some(fixture) = &tiled {
-            let (outcome, event, job, events) = fixture.produce(&chain, case.prefix_fault().or(case.constraint_fault()).unwrap());
+            let (outcome, event, job, events) = fixture.produce_for_card(&chain, 0, case.prefix_fault().or(case.constraint_fault()));
             if case.prefix_fault().is_some() {
                 let (commitment, ids) = job.as_ref().unwrap();
                 prefix_answers = fixture.prefix_kernel_answers(&chain, commitment, ids);
@@ -1499,7 +1524,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         palw_token_tables_v1().register(palw_token_table_file_decode_v1(&public_file).unwrap());
     }
     let mut verifier_config = panel_config(&chain, dir.path(), bond, &floats[OUTSIDER]);
-    if recovery_mode.is_some() {
+    if recovery_mode.is_some() || case.staged_tokenizer() {
         verifier_config.public_claims = vec![claim];
     }
     if let Some(fixture) = &tiled {
@@ -1538,6 +1563,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     if let Some(recovery) = recovery.as_mut() {
         recovery.activate_network_verifier(&mut service, &mut running).await;
     }
+    let mut tokenizer_monitor = case.staged_tokenizer().then(|| staged_tokenizer::Monitor::new(case, tiled.as_ref().unwrap()));
     let deadline = std::time::Instant::now() + Duration::from_secs(360);
     let service_start = chain.history.len();
     let mut next_da_progress = chain.daa() + 100;
@@ -1599,6 +1625,9 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                 .await;
         }
         let view = chain.view(claim);
+        if let Some(monitor) = tokenizer_monitor.as_mut() {
+            monitor.observe_and_restart(&chain, claim, bond, &manager, &retained_flow, &mut service, &mut running).await;
+        }
         if chain.daa() >= next_da_progress {
             eprintln!(
                 "[service-public] DA advance {}, deadlines {:?}",
@@ -2220,7 +2249,10 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                         .or_else(|| terminal::included_executor_evidence_v1(&carriers, claim, view.producer))
                         .expect("the verifier's exact proof is included in an actual block");
                     assert_eq!(evidence.claim_id, claim);
-                    if let Some(fault) = case.prefix_fault() {
+                    if let Some(monitor) = tokenizer_monitor.as_ref() {
+                        assert!(consumed.amount > 0 && consumed.collected > 0, "the staged court collects the producer leg");
+                        monitor.assert_conviction(&chain, claim, bond, &evidence, &carriers);
+                    } else if let Some(fault) = case.prefix_fault() {
                         let kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::PrefixStateMismatch {
                             binding,
                             job,
