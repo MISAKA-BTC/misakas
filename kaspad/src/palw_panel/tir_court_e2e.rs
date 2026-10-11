@@ -2011,7 +2011,7 @@ fn own_run(tir: &TirBackendV1, claim: &Claim) -> std::sync::Arc<misaka_palw_sdk:
 /// seat's own rows tree, the served annexes' door token cleared (on chain the rows root comes first).
 fn trace_pursuit_c(
     tir: &TirBackendV1,
-    own: &std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1>,
+    own: &std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1>,
 ) -> super::tir_court::PalwTirAnnexPursuitV1 {
     let ctx = &own.binding.job_context;
     let rows = misaka_palw_sdk::lineages::tir::tir_rows_tree_v1(ctx, &own.logits_rows).expect("the seat's rows tree");

@@ -403,7 +403,7 @@ pub(crate) const PALW_TIR_ANNEX_ASKS_V1: u32 = 5;
 /// the descent stands.
 #[derive(Clone)]
 pub(crate) struct PalwTirAnnexPursuitV1 {
-    pub own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1>,
+    pub own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1>,
     pub own_tree: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirStepTreeV1>,
     /// The leaf whose annex is asked, and the level the search is bounded below — the first leaf of
     /// the subtree the descent stands at, and that subtree's level (`None`: the whole tree).
@@ -454,7 +454,7 @@ pub(crate) struct PalwTirAnnexPursuitV1 {
 }
 
 impl PalwTirAnnexPursuitV1 {
-    pub fn new(own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1>, current_daa: u64) -> Self {
+    pub fn new(own: std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1>, current_daa: u64) -> Self {
         let own_tree = std::sync::Arc::new(misaka_palw_sdk::lineages::tir::TirStepTreeV1::full(&own.leaf_hashes));
         Self {
             own,
