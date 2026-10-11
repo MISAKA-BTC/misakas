@@ -223,7 +223,32 @@ fn funded_kernel_reporter_settlements_defer_full_r_and_redeem_exact_native_tranc
         let settlement = |bond, amount, kind| LedgerEventV1::Settlement(SettlementInstructionV1 {
             bond: palw_kernel_bond_id_v1(&bond), amount, kind, claim: Some(h64(0xD00).as_bytes()),
         });
-        let events = [settlement(bond_key(2), 300, SettlementKindV1::SlashFraud),
+        let terminal = |claim| match kind {
+            SettlementKindV1::AccuserReward => LedgerEventV1::Convicted {
+                claim, accuser: palw_kernel_bond_id_v1(&bond_key(1)), slashed: 300, accuser_reward: 125, post_final: true,
+            },
+            SettlementKindV1::DemanderShare => LedgerEventV1::PostFinalDefault {
+                claim, stage: 0, position: 0, last: None, forfeited: 300,
+            },
+            _ => unreachable!(),
+        };
+        let debit_kind = if kind == SettlementKindV1::AccuserReward { SettlementKindV1::SlashFraud } else { SettlementKindV1::SlashDefault };
+        // Private emitted-batch seams: a collected debit alone, or a receipt
+        // naming another court subject, cannot authorize a reporter entitlement.
+        // Production drops the refused object builder; restore that checkpoint
+        // here before testing the exact authenticated terminal batch.
+        let checkpoint = b.checkpoint();
+        let nonterminal = [settlement(bond_key(2), 300, debit_kind), settlement(bond_key(1), 125, kind)];
+        assert!(apply_settlements(&mut b, &nonterminal, true, 100).is_err());
+        assert!(b.state.bond_budget().unwrap().reporter_income.is_empty());
+        assert!(b.state.pending_payouts.is_empty());
+        b.restore(checkpoint.clone());
+        let forged = [terminal(h64(0xBAD).as_bytes()), settlement(bond_key(2), 300, debit_kind), settlement(bond_key(1), 125, kind)];
+        assert!(apply_settlements(&mut b, &forged, true, 100).is_err());
+        assert!(b.state.bond_budget().unwrap().reporter_income.is_empty());
+        assert!(b.state.pending_payouts.is_empty());
+        b.restore(checkpoint);
+        let events = [terminal(h64(0xD00).as_bytes()), settlement(bond_key(2), 300, debit_kind),
             settlement(bond_key(1), 125, kind), settlement(bond_key(2), 175, SettlementKindV1::Burn)];
         apply_settlements(&mut b, &events, true, 100).unwrap();
         assert_eq!(b.state.bond(&bond_key(2)).unwrap().collateral, 700, "the immutable award is funded by a real collateral debit");
@@ -999,5 +1024,56 @@ fn material_v3_future_fence_leaves_existing_v2_fold_bytes_and_roots_identical() 
         assert_eq!(carriage_bytes(a), carriage_bytes(b));
         assert_eq!(a.bond_budget().unwrap().header.version, PALW_BOND_BUDGET_STATE_VERSION_V2);
         assert!(a.bond_budget().unwrap().material_income.is_empty());
+    }
+}
+
+/// The material retirement composes both finite release candidates, but the
+/// operational abandonment/obligation entry still releases its exact held
+/// commitment first. The toy trace and late-fence uncertainty are explicit
+/// mechanics seams, with real admission, void, sweep, carriage and reorg APIs.
+#[test]
+fn material_v3_preserves_abandonment_and_obligation_release_before_retirement() {
+    for free_prompt in [true, false] {
+        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 50).unwrap()
+            .with_fp_quanta(8, 64).unwrap().with_claim_retirement_daa(200).unwrap()
+            .with_capacity_escrow_from_daa((!free_prompt).then_some(100))
+            .with_bond_budget(Some(PalwBondBudgetMirrorV1 {
+                from_daa: 100, policy: PalwBondBudgetPolicyV1 { window_daa: 280, ..test_policy(1) }, allocation: None,
+            }))
+            .with_reporter_income_from(Some(100)).with_material_income_from(Some(150));
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let (id, accepted) = if free_prompt {
+            (h64(0xFC), apply(&base, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None).0)
+        } else {
+            (attempt_id_v2(&env.attempt), apply(&base, &p, &ctx(2, 101, 2), &[], Some(&env)).0)
+        };
+        let exposure = accepted.reserved_exposure(&bond_key(1));
+        assert!(exposure > 0);
+        let (voided, delta) = apply(&accepted, &p, &ctx(3, 200, 3), &[], None);
+        assert_replayable(&p, &accepted, &voided, &delta);
+        let claim = voided.claim(&id).unwrap();
+        assert!(matches!(claim.phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, voided_daa: 200 }));
+        let release = if free_prompt { 250 } else { 210 };
+        assert_eq!(voided.material_income_hold_until_v1(&p, id), Some(480));
+        assert_eq!(palw_exec_v2_rewards_v1::retirement(&voided, &p, &id, Some(release), claim).unwrap(), Some(479));
+        assert!(voided.deadlines.contains(&(release, id)), "the operational release is independently indexed");
+        assert_eq!(voided.reserved_exposure(&bond_key(1)), exposure);
+        let (boundary, delta) = apply(&voided, &p, &ctx(4, release, 4), &[], None);
+        assert_replayable(&p, &voided, &boundary, &delta);
+        assert_eq!(boundary.reserved_exposure(&bond_key(1)), exposure);
+        let (released, delta) = apply(&boundary, &p, &ctx(5, release + 1, 5), &[], None);
+        assert_replayable(&p, &boundary, &released, &delta);
+        assert_eq!(released.reserved_exposure(&bond_key(1)), 0, "commitment releases once at the original clock");
+        assert!(released.claim(&id).is_some());
+        assert!(released.deadlines.contains(&(479, id)), "material then extends only retirement");
+        assert_eq!(revert_delta_v2(&released, &delta, &p).unwrap(), boundary);
+        let (held, delta) = apply(&released, &p, &ctx(6, 479, 6), &[], None);
+        assert_replayable(&p, &released, &held, &delta);
+        assert!(held.claim(&id).is_some());
+        let (retired, delta) = apply(&held, &p, &ctx(7, 480, 7), &[], None);
+        assert_replayable(&p, &held, &retired, &delta);
+        assert!(retired.claim(&id).is_none());
+        assert_eq!(retired.reserved_exposure(&bond_key(1)), 0, "retirement never repeats the collateral release");
     }
 }

@@ -362,6 +362,11 @@ impl ConsensusSessionOwned {
         self.consensus.palw_bond_payout_payload_v2(bond)
     }
 
+    /// Root-exact owed material, including kernel-only source/reporter rights.
+    pub fn palw_material_income_hold_until_v1(&self, claim: Hash64) -> Option<u64> {
+        self.consensus.palw_material_income_hold_until_v1(claim)
+    }
+
     pub fn palw_v2_registration_terms(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {
         self.consensus.palw_v2_registration_terms()
     }

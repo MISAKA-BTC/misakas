@@ -311,6 +311,14 @@ impl TransitionBuilder<'_> {
         );
         for root in roots {
             if let Some(claim) = self.state.claims.get(&root).filter(|claim| claim.phase.is_terminal()).cloned() {
+                // The existing exact operational entry must fire first, even
+                // when a material change occurs in the block crossing it. The
+                // sweep releases the commitment and then arms material-safe
+                // retirement; no accepted collateral clock is extended.
+                if terminal_operational_release_at_v1(&claim, self.params, None)?
+                    .is_some_and(|release| self.state.deadlines.contains(&(release, root))) {
+                    continue;
+                }
                 self.disarm_deadline(root);
                 self.arm_retirement(root, &claim)?;
             }

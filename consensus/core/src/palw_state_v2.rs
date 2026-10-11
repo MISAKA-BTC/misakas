@@ -5492,7 +5492,7 @@ pub fn palw_rcore_deadline_v1(
                 .ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?,
         ),
         PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
-            let at = palw_exec_v2_rewards_v1::retirement(state, params, claim_id, terminal_deadline_at_v1(claim, params, last_daa)?, claim)?;
+            let at = terminal_deadline_with_material_v1(state, claim_id, claim, params, last_daa)?;
             palw_da_terminal_deadline_v1(at, da)
         }
     })
@@ -16104,7 +16104,34 @@ fn terminal_deadline_of(
     params: &PalwStateParamsV2,
     last_point: Option<&PalwBlockContextV2>,
 ) -> Result<Option<u64>, PalwStateV2Error> {
-    palw_exec_v2_rewards_v1::retirement(state, params, id, terminal_deadline_at_v1(claim, params, last_point.map(|point| point.daa_score))?, claim)
+    terminal_deadline_with_material_v1(state, id, claim, params, last_point.map(|point| point.daa_score))
+}
+
+/// A held commitment has an operational release clock before its material-safe
+/// retirement. Moving that release to an unpaid queue's MAX would skip the
+/// exact collateral release and corrupt the held-commitment counter.
+fn terminal_deadline_with_material_v1(
+    state: &PalwChainStateV2, id: &Hash64, claim: &PalwClaimStateV2,
+    params: &PalwStateParamsV2, last_daa: Option<u64>,
+) -> Result<Option<u64>, PalwStateV2Error> {
+    if let Some(release) = terminal_operational_release_at_v1(claim, params, last_daa)? {
+        return Ok(Some(release));
+    }
+    palw_exec_v2_rewards_v1::retirement(state, params, id, terminal_deadline_at_v1(claim, params, last_daa)?, claim)
+}
+
+/// Only the still-pending first terminal deadline; after its sweep, retirement
+/// composes every root-exact physical payment window.
+fn terminal_operational_release_at_v1(
+    claim: &PalwClaimStateV2, params: &PalwStateParamsV2, last_daa: Option<u64>,
+) -> Result<Option<u64>, PalwStateV2Error> {
+    let Some(terminal_daa) = terminal_daa_of(claim) else { return Ok(None) };
+    if params.fp_abandon_hold_daa > 0 && abandon_hold_may_hold_a_deadline(claim) {
+        let release = terminal_daa.checked_add(params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
+        if last_daa.is_none_or(|daa| daa <= release) { return Ok(Some(release)); }
+    }
+    Ok(crate::palw_escrow_funding_v2::palw_claim_obligation_release_at_v1(claim, params)
+        .filter(|release| last_daa.is_none_or(|daa| daa <= *release)))
 }
 
 /// [`terminal_deadline_of`] on the last point's DAA alone — the form DL-1
@@ -16117,18 +16144,8 @@ fn terminal_deadline_at_v1(
     let Some(terminal_daa) = terminal_daa_of(claim) else {
         return Ok(None);
     };
-    if params.fp_abandon_hold_daa > 0 && abandon_hold_may_hold_a_deadline(claim) {
-        let release_at = terminal_daa.checked_add(params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
-        if last_daa.is_none_or(|daa| daa <= release_at) {
-            return Ok(Some(release_at));
-        }
-    }
-    // ADR-0160 E-4: an attempt claim voided past `palw_capacity_escrow_at_licence` owns its obligation
-    // hold's release first, then its retirement (`validate_palw_v2` keeps the retirement past the hold).
-    if let Some(release_at) = crate::palw_escrow_funding_v2::palw_claim_obligation_release_at_v1(claim, params)
-        && last_daa.is_none_or(|daa| daa <= release_at)
-    {
-        return Ok(Some(release_at));
+    if let Some(release) = terminal_operational_release_at_v1(claim, params, last_daa)? {
+        return Ok(Some(release));
     }
     if params.claim_retirement_daa == 0 {
         return Ok(None);

@@ -517,7 +517,9 @@ pub(super) fn invalidate_final(
     Ok(())
 }
 
-/// Retirement is strictly after the dependency proof window; release/obligation deadlines are unchanged.
+/// Every finite retirement composes the physical-income material window.
+/// The legacy EXEC horizon still extends only the ordinary retirement; operational
+/// collateral-release entries are separately preserved by the terminal deadline caller.
 pub(super) fn retirement(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -529,11 +531,12 @@ pub(super) fn retirement(
         return Ok(at);
     }
     let ordinary = terminal_daa_of(claim).and_then(|daa| daa.checked_add(params.claim_retirement_daa));
-    if at != ordinary {
-        return Ok(at);
-    }
     let monetary = state.material_income_hold_until_v1(params, *id);
-    let at = at.map(|at| monetary.map_or(at, |until| at.max(if until == u64::MAX { u64::MAX } else { until.saturating_sub(1) })));
+    let held = at.map(|at| monetary.map_or(at, |until| at.max(if until == u64::MAX { u64::MAX } else { until.saturating_sub(1) })));
+    if at != ordinary {
+        return Ok(held);
+    }
+    let at = held;
     match horizon(state, params, id)? {
         Some(until) => {
             let after = until.checked_add(1).ok_or(PalwStateV2Error::Overflow("EXEC retirement horizon"))?;
