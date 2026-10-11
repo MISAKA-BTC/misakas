@@ -121,6 +121,15 @@ successful P2P run. Native useful-work, public market/bridge, forced-kill/pruned
 join and release-scale acceptance remain pending until the actual logs and
 commitments exist.
 
+The construction profile preserves the shipped canonical-work schedule as well.
+Non-floor attempt evidence requires an active canonical-work fence at the claim's
+accepted DAA; floor claims are excluded regardless of their count. Supplying an
+artifact or advancing heartbeat DAA alone therefore cannot turn this profile into
+the full driver's mature-work fixture. A compatible validated private work profile,
+real non-floor execution/Final/material evidence and its pinned fixture commands
+remain necessary. Existing native harness admission/trace seams cannot supply that
+public-process evidence.
+
 
 ## Finite construction/transport smoke
 
@@ -164,6 +173,6 @@ After the central feature build, a small construction check is:
 python3 scripts/misaka-rfc12-private-smoke.py --binary /absolute/path/misaka-rfc12-private-node --salt <64-hex-nonzero> --profile population-v1 --bonds 17 --out /tmp/rfc12-private-population.json
 ```
 
-A dedicated resource runner may select 100000 and longer explicit setup/probe deadlines, for example `--timeout 3600 --manifest-timeout 3600`. The driver fixes this count before launch, checks the real bounded public capacity read's total registry count, indexed coin supply, genesis money and roots across three owned processes, handshake/cut/heal and a cold SIGKILL/reopen. It preserves process RSS in KiB, owned DB logical bytes, factory timing logs and RPC latency observations. This result remains `CONSTRUCTION_TRANSPORT_PASS`; `release100kMeasured`, `prunedIbdMeasured`, `matureUsefulWorkMeasured`, `marketFillsMeasured` and full security approval stay false. No actual population process run is recorded yet.
+A dedicated resource runner may select 100000 and longer explicit setup/probe deadlines, for example `--timeout 3600 --manifest-timeout 3600`. The driver fixes this count before launch, checks the public capacity read's total registry count, indexed coin supply, genesis money and roots across three owned processes, handshake/cut/heal and a cold SIGKILL/reopen. Capacity `limit=1` bounds returned rows; the underlying full-network calculation remains part of the measured cost. It preserves an owned-process RSS snapshot in KiB, owned DB logical bytes, factory timing logs and RPC latency observations. That snapshot is not peak-RSS evidence or a predeclared resource acceptance threshold. This result remains `CONSTRUCTION_TRANSPORT_PASS`; `release100kMeasured`, `prunedIbdMeasured`, `matureUsefulWorkMeasured`, `marketFillsMeasured` and full security approval stay false. No actual population process run is recorded yet.
 
 The native carriage retains one bond public key and an operator identity hash; registration objects' second public key is not a second full key in the state carriage. RFC06's central native fixture observed 72 bonds / 71 candidates at 251,751 full-carriage bytes. A 100k registry with no seals may fit the retained 384 MiB snapshot ceiling, while multiple complete populations add a separate retained-state cost. The new profile permits the registry cost to be measured; it does not raise the bound or label a refusal as successful pruned transport. Complete populations, usable native beacon input, post-Final history compaction, genuine pruned joins and the approved resource/latency criteria retain their separate acceptance requirements.
