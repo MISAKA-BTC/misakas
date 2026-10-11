@@ -70,14 +70,21 @@ impl PalwStagedCertificateRefV1 {
         Ok(fault)
     }
 }
-pub fn palw_is_staged_evidence_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8]) -> bool {
+pub fn palw_staged_reference_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8]) -> Option<PalwStagedCertificateRefV1> {
     use crate::palw_offence_attribution_v1::*;
     use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPanelContradictionV1 as C};
-    match kind {
-        K::ExecutorRefuted => borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence)
-            .is_ok_and(|p| matches!(p.contradiction, C::StagedCourt { .. })),
-        K::PanelFalseValidV2 => borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence)
-            .is_ok_and(|p| matches!(p.contradiction, C::StagedCourt { .. })),
-        _ => false,
-    }
+    let contradiction = match kind {
+        K::ExecutorRefuted => borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok()?.contradiction,
+        K::PanelFalseValidV2 => borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok()?.contradiction,
+        _ => return None,
+    };
+    match contradiction { C::StagedCourt { reference } => Some(reference), _ => None }
+}
+pub fn palw_is_staged_evidence_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8]) -> bool {
+    palw_staged_reference_v1(kind, evidence).is_some()
+}
+/// The accepting block's exact clock, never the parent tip or a caller's declared timestamp.
+pub fn palw_staged_collection_open_v1(state: &crate::palw_state_v2::PalwChainStateV2, reference: &PalwStagedCertificateRefV1, accepting_daa: u64) -> bool {
+    state.staged_claim_contract_v1(&reference.claim).is_some_and(|c|
+        accepting_daa >= c.terms.accepted_daa && accepting_daa < c.terms.collect_until_daa)
 }

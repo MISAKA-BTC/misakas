@@ -23749,6 +23749,15 @@ impl<'a> TransitionBuilder<'a> {
                 crate::palw_offence_v1::PalwOffenceVerifyError::KindNotFileable(kind.not_fileable_reason_v1()).to_string(),
             ));
         }
+        if let Some(reference) = crate::palw_staged_court_state_v1::palw_staged_reference_v1(kind, evidence) {
+            if self.extras.staged_public_court.is_none() {
+                return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+            }
+            if !crate::palw_staged_court_state_v1::palw_staged_collection_open_v1(&self.state, &reference, ctx.daa_score) {
+                return Err(PalwStateV2Error::ObjectiveOffenceRefused(evidence_id,
+                    "staged certificate collection is outside its claim-stamped accepting clock".into()));
+            }
+        }
         // **ADR-0152 v2 F2: past `palw_offence_attribution` a false `Valid` has ONE route.** The V1
         // kind is refused by name — its evidence convicts on `job_id == claim_id`, a fixed point no
         // real claim reaches, while a hand-signed V2 receipt still clears it for the state-bound
@@ -79051,6 +79060,10 @@ mod staged_court_state_tests_v1 {
                 new: Some(PalwStagedCourtRowV1::Constraint(Box::new(row))) };
             apply_delta_entry(&mut state, &owner_entry, false).unwrap();
             assert_eq!(reference.resolve(&state, root).is_ok(), guilty);
+            let terms = state.staged_claim_contract_v1(&reference.claim).unwrap().terms;
+            assert!(palw_staged_collection_open_v1(&state, &reference, terms.collect_until_daa - 1));
+            assert!(!palw_staged_collection_open_v1(&state, &reference, terms.collect_until_daa));
+            assert!(!palw_staged_collection_open_v1(&state, &reference, terms.accepted_daa - 1));
             assert!(reference.resolve(&state, Hash64::from_u64_word(999)).is_err());
             for foreign in [
                 PalwStagedCertificateRefV1 { claim: Hash64::from_u64_word(99), ..reference },
