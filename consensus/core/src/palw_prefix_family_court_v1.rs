@@ -44,6 +44,17 @@ pub enum PalwPrefixCourtActionV1 {
     },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwPrefixFamilyCursorV1 {
+    TileOpening { ordinal: u64 },
+    TileBytes { ordinal: u64, length: u32, offset: u32 },
+    TileFinish { ordinal: u64 },
+    PublicRow { unit: PalwPrefixCacheUnitV1, length: u64, offset: u64 },
+    HeadParameters { layer: u16, head: u32 },
+    HeadInputs { layer: u16, head: u32, position: u32 },
+    HeadDigest { layer: u16, head: u32, length: u64, offset: u64 },
+    Complete,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 struct Base0PendingTileV1 {
     coordinate: PalwStepCoordinateV1,
     length: u32,
@@ -167,6 +178,48 @@ impl PalwPrefixFamilyCourtV1 {
             && self.maximum_leaves == other.maximum_leaves
             && self.maximum_working_set_bytes == other.maximum_working_set_bytes
     }
+    pub fn cursor_v1(&self) -> Result<PalwPrefixFamilyCursorV1, String> {
+        self.check()?;
+        let tile = |ordinal, length, offset| {
+            if length == offset {
+                PalwPrefixFamilyCursorV1::TileFinish { ordinal }
+            } else {
+                PalwPrefixFamilyCursorV1::TileBytes { ordinal, length, offset }
+            }
+        };
+        match &self.family {
+            FamilyV1::Dense(c) => Ok(if c.next_tile() == c.total_tiles() {
+                PalwPrefixFamilyCursorV1::Complete
+            } else if let Some((length, offset)) = c.pending_tile_v1() {
+                tile(c.next_tile(), length, offset)
+            } else {
+                PalwPrefixFamilyCursorV1::TileOpening { ordinal: c.next_tile() }
+            }),
+            FamilyV1::Base0 { digest, pending } => {
+                if let Some(p) = pending {
+                    // Converter may already advance after the final bytes, while old leaf
+                    // authentication still awaits its finish move.
+                    let ordinal = digest.next_tile_ordinal_v1() - u64::from(p.offset == p.length);
+                    Ok(tile(ordinal, p.length, p.offset))
+                } else if digest.next_coordinate(&self.binding.shape_profile)?.is_some() {
+                    Ok(PalwPrefixFamilyCursorV1::TileOpening { ordinal: digest.next_tile_ordinal_v1() })
+                } else {
+                    Ok(PalwPrefixFamilyCursorV1::Complete)
+                }
+            }
+            FamilyV1::Q36 { digest, head } => match digest.next_unit() {
+                None => Ok(PalwPrefixFamilyCursorV1::Complete),
+                Some((PalwPrefixCacheUnitV1::GdnHead { layer, head: h }, length, offset)) => Ok(match head {
+                    None => PalwPrefixFamilyCursorV1::HeadParameters { layer, head: h },
+                    Some(r) if r.next_position() < self.prefix_tokens => {
+                        PalwPrefixFamilyCursorV1::HeadInputs { layer, head: h, position: r.next_position() }
+                    }
+                    Some(_) => PalwPrefixFamilyCursorV1::HeadDigest { layer, head: h, length, offset },
+                }),
+                Some((unit, length, offset)) => Ok(PalwPrefixFamilyCursorV1::PublicRow { unit, length, offset }),
+            },
+        }
+    }
     pub fn execution_root(&self) -> Hash64 {
         self.binding.committed_execution_root
     }
@@ -176,7 +229,8 @@ impl PalwPrefixFamilyCourtV1 {
             FamilyV1::Base0 { digest, pending } => {
                 let next = digest.next_coordinate(&self.binding.shape_profile)?;
                 if let Some(p) = pending {
-                    if p.offset > p.length
+                    if p.length == 0
+                        || p.offset > p.length
                         || p.length as usize > crate::palw_step_leg::PALW_STEP_LEG_MAX_TILE_BYTES
                         || p.hash.byte_count() != Some(282 + u128::from(p.offset))
                         || p.offset % 4 != 0
@@ -366,5 +420,122 @@ impl PalwPrefixFamilyCourtV1 {
             _ => return Err("prefix still has unauthenticated old bytes or incomplete recurrence".into()),
         };
         Ok(root != self.named_root)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    /// Complete public grammar fixture for rooted staged-court tests. The registered graph
+    /// is the canonical BASE0 i8 family, not an A16 alias; native family goldens are separate.
+    pub(crate) fn qualified_prefix_case_for_tests_v1(
+        fault: bool,
+        inherited: bool,
+    ) -> (PalwOffenceTargetV1, PalwStepBindingV2, PalwFreePromptJobV3, Vec<PalwPrefixKvTileV1>) {
+        use crate::palw_step_leg::{PalwStepMerkleTreeV1, binding_commitment_root_v1, step_tile_leaf_hash_ctx_v1};
+        let (mut binding, mut tiles, _) = crate::palw_prefix_state_court_v1::tests::fixture(false);
+        let (_, accusation) = crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1(false);
+        let mut job = accusation.job;
+        job.version = if inherited { 12 } else { 11 };
+        job.class_id = binding.shape_profile.shape_profile_id();
+        job.prompt_tokens = 4;
+        job.decode_token_limit = 2;
+        job.max_context_tokens = binding.shape_profile.n_ctx;
+        job.decode = Some(crate::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+        job.prompt_token_ids_hash = binding.job_context.prompt_token_ids_hash;
+        let mut digest = PalwBase0PrefixDigestV1::new(&binding.shape_profile, 2).unwrap();
+        for (ordinal, tile) in tiles.iter_mut().enumerate() {
+            tile.preimage.values_le =
+                (0..tile.preimage.value_count).flat_map(|i| (((i + ordinal as u32) % 127) as i32 - 63).to_le_bytes()).collect();
+            digest.push_values(&binding.shape_profile, tile.preimage.coord, 0, &tile.preimage.values_le).unwrap();
+        }
+        let state_root = digest.finish(&binding.shape_profile).unwrap();
+        job.tail = Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::Prefix(crate::palw_freeprompt_v3::PalwFpPrefixStateV1 {
+            state_root: if fault { Hash64::from_u64_word(0xbad19) } else { state_root },
+            prefix_tokens: 2,
+            class_id: job.class_id,
+        }));
+        let class = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
+            model_profile_id: binding.job_context.model_profile_id,
+            runtime_manifest_hash: binding.job_context.runtime_manifest_hash,
+            runtime_class_id: binding.job_context.runtime_class_id,
+            shape_profile_id: job.class_id,
+            cu_ruleset_id: binding.job_context.cu_ruleset_id,
+        };
+        binding.job_context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(
+            &job,
+            &class,
+            &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, 2),
+            &binding.job_context.network_id,
+        )
+        .unwrap();
+        binding.activation_leg_root = crate::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&binding.job_context);
+        let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
+        for tile in &mut tiles {
+            tile.opening.leaf_hash = step_tile_leaf_hash_ctx_v1(&binding.job_context, &job.class_id, &tile.preimage);
+            hashes[tile.opening.leaf_index as usize] = tile.opening.leaf_hash;
+        }
+        let tree = PalwStepMerkleTreeV1::build_capped_v1(&hashes, 1 << 32).unwrap();
+        binding.step_merkle_root = tree.root();
+        for tile in &mut tiles {
+            tile.opening.siblings = tree.path_v1(tile.opening.leaf_index as usize).unwrap();
+        }
+        binding.committed_execution_root = binding_commitment_root_v1(&binding);
+        crate::palw_step_leg::verify_binding_v1(&binding).unwrap();
+        let artifact_root = Hash64::from_u64_word(0xa19);
+        let mut semantic = PalwClassSemanticsV1::of_registration(job.class_id, artifact_root, &binding.job_context, 0);
+        semantic.prefix_state_relation = Some(PalwPrefixStateRelationV1::Base0Int8KvV1);
+        let target = PalwOffenceTargetV1 {
+            claim_id: Hash64::from_u64_word(0xc19),
+            class_id: job.class_id,
+            artifact_root,
+            executor_bond: crate::palw_state_v2::PalwBondKeyV2(job.executor_bond),
+            execution_root: binding.committed_execution_root,
+            lane: Some(PalwClaimSourceKindV1::FreePrompt),
+            segment_count: None,
+            phase: None,
+            job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
+            trace_root: binding.full_logits_trace_root,
+            output_root: Hash64::default(),
+            registered_semantics: Some(semantic),
+        };
+        palw_constrained_job_target_v1(&target, &binding, &job).unwrap();
+        (target, binding, job, tiles)
+    }
+    #[test]
+    fn immutable_i8_job_fixture_authenticates_the_full_prefix_and_refuses_foreign_seed() {
+        for inherited in [false, true] {
+            for fault in [false, true] {
+                let (target, binding, job, tiles) = qualified_prefix_case_for_tests_v1(fault, inherited);
+                let context = Hash64::from_u64_word(0xc17019);
+                let mut c = PalwPrefixFamilyCourtV1::new(context, &target, &binding, &job, 1 << 32, 1 << 20).unwrap();
+                let mut previous = c.checkpoint_v1();
+                for (ordinal, tile) in tiles.iter().enumerate() {
+                    assert_eq!(c.cursor_v1().unwrap(), PalwPrefixFamilyCursorV1::TileOpening { ordinal: ordinal as u64 });
+                    c.movement(context, &PalwPrefixCourtActionV1::BeginTile { opening: tile.opening.clone() }).unwrap();
+                    let before = borsh::to_vec(&c).unwrap();
+                    assert!(
+                        c.movement(
+                            Hash64::default(),
+                            &PalwPrefixCourtActionV1::TilePart { offset: 0, bytes: tile.preimage.values_le.clone() }
+                        )
+                        .is_err()
+                    );
+                    assert_eq!(borsh::to_vec(&c).unwrap(), before);
+                    c.movement(context, &PalwPrefixCourtActionV1::TilePart { offset: 0, bytes: tile.preimage.values_le.clone() })
+                        .unwrap();
+                    assert_eq!(c.cursor_v1().unwrap(), PalwPrefixFamilyCursorV1::TileFinish { ordinal: ordinal as u64 });
+                    assert!(c.finish().is_err());
+                    c.movement(context, &PalwPrefixCourtActionV1::FinishTile).unwrap();
+                    let cp = c.checkpoint_v1();
+                    assert!(borsh::to_vec(&cp).unwrap().len() < 2048);
+                    c.restore_checkpoint_v1(&previous).unwrap();
+                    c.restore_checkpoint_v1(&cp).unwrap();
+                    previous = cp;
+                }
+                assert_eq!(c.cursor_v1().unwrap(), PalwPrefixFamilyCursorV1::Complete);
+                assert_eq!(c.finish(), Ok(fault));
+            }
+        }
     }
 }

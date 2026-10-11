@@ -38,6 +38,9 @@ impl PalwBase0PrefixDigestV1 {
         }
         Ok(plan)
     }
+    pub fn next_tile_ordinal_v1(&self) -> u64 {
+        self.ordinal
+    }
     pub fn next_coordinate(&self, profile: &PalwShapeProfileV3) -> Result<Option<(PalwStepCoordinateV1, u32, u32)>, String> {
         let plan = self.plan(profile)?;
         Ok(plan.coordinate(profile, self.ordinal).map(|(coord, count)| (coord, count, self.offset_values)))

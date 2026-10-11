@@ -130,6 +130,10 @@ impl PalwOwnedPrefixCourtV1 {
     pub fn seed_id(&self) -> Hash64 {
         self.seed_id
     }
+    pub fn cursor_v1(&self) -> Result<crate::palw_prefix_family_court_v1::PalwPrefixFamilyCursorV1, String> {
+        self.check()?;
+        self.court.cursor_v1()
+    }
     pub fn check(&self) -> Result<(), String> {
         if self.moves_used == 0
             || self.moves_used > self.terms.plan.maximum_moves
