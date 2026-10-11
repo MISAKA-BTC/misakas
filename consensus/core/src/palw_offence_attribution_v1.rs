@@ -2031,7 +2031,11 @@ fn adjudicate_against_claim_v1(
                     if reference.claim != target.claim_id || sessions != PalwSessionRuleV1::DirectProofFirst {
                         return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
                     }
-                    reference.resolve(state,target.execution_root).map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+                    if matches!(reference.resolve_fault_v1(state,target.execution_root)
+                        .map_err(|_|PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?,
+                        crate::palw_staged_court_state_v1::PalwStagedFaultV1::Tokenizer(_)) {
+                        return Ok((PalwForfeitScopeV1::ByClaim,None));
+                    }
                 }
                 PalwPanelContradictionV1::ConstrainedDecode { binding, accusation } => {
                     palw_constrained_job_target_v1(target, binding, &accusation.job)?;
@@ -2264,7 +2268,15 @@ pub fn palw_check_panel_false_valid_at_v2_with_budget_v1(
         sessions,
     )?;
     let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
-    let (site, step_leaf_count) = match palw_claim_proving_site_v1(&payload.contradiction, identity_fault) {
+    let staged_site=match &payload.contradiction {
+        PalwPanelContradictionV1::StagedCourt {reference} => match reference.resolve_fault_v1(state,target.execution_root)
+            .map_err(|_|PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)? {
+                crate::palw_staged_court_state_v1::PalwStagedFaultV1::Tokenizer(_)=>Some(PalwFaultSiteV1::AnyValid),
+                _=>None,
+            },
+        _=>None,
+    };
+    let (site, step_leaf_count) = match staged_site.or_else(||palw_claim_proving_site_v1(&payload.contradiction, identity_fault)) {
         Some(site) => (site, 0),
         None => palw_false_valid_fault_site_v1(&payload.contradiction, ladder)?,
     };

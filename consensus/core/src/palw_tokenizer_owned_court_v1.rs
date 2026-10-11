@@ -54,7 +54,7 @@ impl PalwOwnedTokenizerCourtV1 {
         panel_exit_after: &[u64],
     ) -> Result<Self, String> {
         seed.check(carrier_maximum)?;
-        if seed.job.as_deref().is_some_and(|j|j!=actual_job) {
+        if seed.job.as_deref().is_some_and(|j| j != actual_job) {
             return Err("tokenizer seed changes literal retained public job".into());
         }
         if seed.claim != target.claim_id
@@ -200,7 +200,11 @@ impl PalwOwnedTokenizerCourtV1 {
     }
     pub(crate) fn restore_checkpoint_v1(&mut self, cp: &PalwOwnedTokenizerCheckpointV1) -> Result<(), String> {
         // The journal owns cp and pairs it with this immutable row; no caller-chosen CP enters.
-        if cp.moves_used == 0 || cp.moves_used > self.terms.plan.maximum_moves || cp.carrier_bytes_used > self.maximum_carrier_bytes {
+        if !self.court.same_contract_v1(&cp.court)
+            || cp.moves_used == 0
+            || cp.moves_used > self.terms.plan.maximum_moves
+            || cp.carrier_bytes_used > self.maximum_carrier_bytes
+        {
             return Err("tokenizer checkpoint exceeds immutable owner budget".into());
         }
         cp.court.check()?;
@@ -208,5 +212,166 @@ impl PalwOwnedTokenizerCourtV1 {
         self.moves_used = cp.moves_used;
         self.carrier_bytes_used = cp.carrier_bytes_used;
         self.check()
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::palw_json_key_set_v1::PalwJsonKeyCompactProofV1;
+    use crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1;
+    use crate::palw_tokenizer_json_stream_v1::tests::Book;
+    use crate::palw_tokenizer_table_stream_v1::PalwTokenizerStreamPacketV1;
+    use crate::tx::{TransactionId, TransactionOutpoint};
+    pub(crate) fn admitted_case(fault: bool, bound: u64) -> (PalwOwnedTokenizerCourtV1, Vec<u8>, Vec<u8>) {
+        let raw = br#"{"model":{"vocab":{"a":0,"b":1},"merges":[]}}"#;
+        let (target, binding, job, raw, opening) =
+            crate::palw_offence_attribution_v1::tests::qualified_rendering_case_for_tests_v1(raw, fault, bound);
+        // The selection pin is irrelevant to a typed tokenizer court; use the actual existing
+        // public fixture's pin rather than manufacturing another semantic binding.
+        let (_, selection) = crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1(false);
+        let bytes = opening.rendering.clone().unwrap();
+        let seed = PalwConstraintStreamSeedV1 {
+            version: 1,
+            claim: target.claim_id,
+            reserver: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(818), index: 0 }),
+            reserved_daa: 100,
+            binding,
+            job: None,
+            pin: selection.pin,
+            witness: None,
+            eog_count: 0,
+            eog_opening: selection.eog.opening,
+            auxiliary: Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
+                id: 0,
+                present: true,
+                length: bytes.len() as u32,
+                opening: opening.opening,
+                raw_tokenizer_bytes: raw.len() as u64,
+                tokenizer_key_events: bound,
+            }),
+            signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        let config = PalwStagedPublicCourtConfigV1::network_v1();
+        let plan = PalwTokenizerResourcePlanV1::derive_with_key_bound(raw.len() as u64, bound, config.prices)
+            .unwrap()
+            .court_envelope(seed.binding.shape_profile.vocab_size, config.prices)
+            .unwrap();
+        let terms = PalwRenderingClaimTermsV1::derive(100, plan, 100, 100, 10).unwrap();
+        let funding = plan.rent_sompi + plan.deposit_sompi;
+        let admit = |seed: &PalwConstraintStreamSeedV1, capital, material, panels: &[u64]| {
+            PalwOwnedTokenizerCourtV1::admit(
+                seed,
+                &job,
+                &target,
+                terms,
+                config.prices,
+                100,
+                capital,
+                100000,
+                material,
+                terms.bond_exit_after_daa,
+                panels,
+            )
+        };
+        assert!(admit(&seed, funding - 1, terms.material_until_daa, &[terms.bond_exit_after_daa; 5]).is_err());
+        assert!(admit(&seed, funding, terms.material_until_daa - 1, &[terms.bond_exit_after_daa; 5]).is_err());
+        assert!(admit(&seed, funding, terms.material_until_daa, &[]).is_err());
+        let mut false_job = seed.clone();
+        false_job.job = Some(Box::new(job.clone()));
+        false_job.job.as_mut().unwrap().job_nonce[0] ^= 1;
+        assert!(admit(&false_job, funding, terms.material_until_daa, &[terms.bond_exit_after_daa; 5]).is_err());
+        let mut false_bound = seed.clone();
+        let Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer { tokenizer_key_events, .. }) = &mut false_bound.auxiliary else {
+            unreachable!()
+        };
+        *tokenizer_key_events += 1;
+        assert!(admit(&false_bound, funding, terms.material_until_daa, &[terms.bond_exit_after_daa; 5]).is_err());
+        let row = admit(&seed, funding, terms.material_until_daa, &[terms.bond_exit_after_daa; 5]).unwrap();
+        assert!(row.certificate().is_err());
+        (row, raw, bytes)
+    }
+    pub(crate) fn movement(row: &PalwOwnedTokenizerCourtV1, action: PalwConstraintStreamActionV1) -> PalwConstraintStreamMoveV1 {
+        PalwConstraintStreamMoveV1 {
+            version: 1,
+            claim: row.claim,
+            reserver: row.reserver,
+            reserved_daa: row.reserved_daa,
+            seed_id: row.seed_id(),
+            phase: PalwConstraintStreamPhaseV1::Tokenizer,
+            action,
+            signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        }
+    }
+    pub(crate) fn complete(row: &mut PalwOwnedTokenizerCourtV1, raw: &[u8], table: &[u8]) -> Vec<PalwConstraintStreamMoveV1> {
+        let mut moves = vec![];
+        let mut book = Book::new();
+        while row.court().tokenizer_offset() < raw.len() as u64 || row.court().pending_key().is_some() {
+            let action = if let Some((namespace, key)) = row.court().pending_key() {
+                let proof = PalwJsonKeyCompactProofV1::compress(&book.proof(namespace, key)).unwrap();
+                book.insert(namespace, key);
+                PalwConstraintStreamActionV1::TokenizerPacket(PalwTokenizerStreamPacketV1 {
+                    offset: row.court().tokenizer_offset(),
+                    bytes: vec![],
+                    proofs: vec![proof],
+                })
+            } else {
+                let offset = row.court().tokenizer_offset();
+                PalwConstraintStreamActionV1::TokenizerPacket(PalwTokenizerStreamPacketV1 {
+                    offset,
+                    bytes: raw[offset as usize..offset as usize + 1].to_vec(),
+                    proofs: vec![],
+                })
+            };
+            let m = movement(row, action);
+            row.movement(100, &m).unwrap();
+            moves.push(m);
+            assert!(row.certificate().is_err());
+            let bytes = borsh::to_vec(row).unwrap();
+            assert!(bytes.len() < 70000);
+            *row = borsh::from_slice(&bytes).unwrap();
+        }
+        let m = movement(row, PalwConstraintStreamActionV1::TokenizerSeal);
+        row.movement(100, &m).unwrap();
+        moves.push(m);
+        let m = movement(row, PalwConstraintStreamActionV1::TokenizerRenderingPart { offset: 0, bytes: table.to_vec() });
+        row.movement(100, &m).unwrap();
+        moves.push(m);
+        moves
+    }
+    #[test]
+    fn owned_public_tokenizer_contract_refuses_false_identity_and_completes_only_after_both_original_hashes() {
+        for (fault, bound, expected) in [(false, 64, false), (true, 64, true), (false, 0, true)] {
+            let (mut row, raw, table) = admitted_case(fault, bound);
+            let before = row.clone();
+            let (foreign, _, _) = admitted_case(!fault, bound);
+            assert!(row.restore_checkpoint_v1(&foreign.checkpoint_v1()).is_err());
+            assert_eq!(row, before);
+            let mut m = movement(
+                &row,
+                PalwConstraintStreamActionV1::TokenizerPacket(PalwTokenizerStreamPacketV1 {
+                    offset: 0,
+                    bytes: vec![raw[0]],
+                    proofs: vec![],
+                }),
+            );
+            m.seed_id = Hash64::default();
+            assert!(row.movement(100, &m).is_err());
+            assert_eq!(row, before);
+            m.seed_id = row.seed_id();
+            assert!(row.movement(row.terms.stream_until_daa, &m).is_err());
+            assert_eq!(row, before);
+            let old = row.checkpoint_v1();
+            row.movement(100, &m).unwrap();
+            let new = row.checkpoint_v1();
+            row.restore_checkpoint_v1(&old).unwrap();
+            assert_eq!(row, before);
+            row.restore_checkpoint_v1(&new).unwrap();
+            assert_eq!(row.court().tokenizer_offset(), 1);
+            row.restore_checkpoint_v1(&old).unwrap();
+            complete(&mut row, &raw, &table);
+            assert_eq!(row.certificate().unwrap().is_some(), expected);
+            assert!(borsh::to_vec(&row.checkpoint_v1()).unwrap().len() < 70000);
+        }
     }
 }

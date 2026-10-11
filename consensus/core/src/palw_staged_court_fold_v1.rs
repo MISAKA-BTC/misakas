@@ -15,6 +15,9 @@ impl PalwChainStateV2 {
             _ => None,
         }
     }
+    pub fn staged_owned_row_v1(&self, claim: Hash64, owner: PalwBondKeyV2) -> Option<&PalwStagedCourtRowV1> {
+        self.staged_courts.get(&PalwStagedCourtKeyV1::Owner(claim, owner))
+    }
     pub fn staged_owned_constraint_v1(
         &self,
         claim: Hash64,
@@ -46,7 +49,23 @@ impl TransitionBuilder<'_> {
         let vocab = self.state.fp_work_profiles.get(&claim.class_id).map(|p| p.vocab_size).unwrap_or((1 << 22) - 1);
         // The authenticated class profile narrows vocabulary. The existing generated-position
         // format caps every other claim independently of a producer's asserted prompt/rendering size.
-        let terms = config.claim_terms(claim.accepted_daa, 4095, vocab).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let mut terms = config.claim_terms(claim.accepted_daa, 4095, vocab).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        if let Some(registered) = self.state.class_semantics.get(&claim.class_id) {
+            if let (Some(raw), Some(bound)) = (registered.raw_tokenizer_bytes, registered.tokenizer_key_events) {
+                let tokenizer =
+                    crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(raw, bound, config.prices)
+                        .and_then(|p| p.court_envelope(vocab, config.prices))
+                        .map_err(PalwStateV2Error::CarriageInconsistent)?;
+                terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(
+                    claim.accepted_daa,
+                    terms.plan.cover(tokenizer),
+                    config.acquisition_daa,
+                    config.collection_daa,
+                    config.reorg_retention_daa,
+                )
+                .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
         claim.trace_retention_daa = claim.trace_retention_daa.max(terms.material_until_daa);
         Ok(Some(PalwStagedClaimContractV1 { terms, producer: claim.bond, panel: BTreeSet::new() }))
     }
@@ -105,11 +124,16 @@ pub(super) fn open(
     if b.state.staged_courts.contains_key(&key) {
         return Err(stage_refused(seed.claim, "owned staged seed is immutable"));
     }
-    let allowance = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?
-        .maximum_owned_rows_per_reserver;
+    let allowance = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?.maximum_owned_rows_per_reserver;
     // Only this reserver's paid rows consume its allowance. No claim-wide first-writer cap.
-    if b.state.staged_by_owner.range((seed.reserver, ZERO_HASH64)..)
-        .take_while(|(owner, _)| *owner == seed.reserver).take(allowance as usize).count() >= allowance as usize {
+    if b.state
+        .staged_by_owner
+        .range((seed.reserver, ZERO_HASH64)..)
+        .take_while(|(owner, _)| *owner == seed.reserver)
+        .take(allowance as usize)
+        .count()
+        >= allowance as usize
+    {
         return Err(stage_refused(seed.claim, "reserver's own staged work allowance is occupied"));
     }
     let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state, &seed.claim)
@@ -132,11 +156,43 @@ pub(super) fn open(
         .ok_or_else(|| stage_refused(seed.claim, "staged selection seed requires accepted original public FP job"))?;
     let original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 =
         borsh::from_slice(original).map_err(|_| stage_refused(seed.claim, "accepted public FP job encoding invalid"))?;
-    if seed.job.as_deref().is_some_and(|j| *j!=original.job) {
+    if seed.job.as_deref().is_some_and(|j| *j != original.job) {
         return Err(stage_refused(seed.claim, "staged seed changes accepted original FP job"));
     }
     if contract.panel.is_empty() {
         return Err(stage_refused(seed.claim, "staged contract has no actual bound Panel"));
+    }
+    if seed.auxiliary.is_some() {
+        let config = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
+        let semantics = target
+            .registered_semantics
+            .as_ref()
+            .ok_or_else(|| stage_refused(seed.claim, "tokenizer court has no immutable claim semantics"))?;
+        let (Some(raw), Some(bound)) = (semantics.raw_tokenizer_bytes, semantics.tokenizer_key_events) else {
+            return Err(stage_refused(seed.claim, "historical tokenizer has no prospective raw/work obligation"));
+        };
+        let plan = crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(raw, bound, config.prices)
+            .and_then(|p| p.court_envelope(seed.binding.shape_profile.vocab_size, config.prices))
+            .map_err(|e| stage_refused(seed.claim, e))?;
+        b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged tokenizer court", ctx.daa_score)?;
+        let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged tokenizer funding"))?;
+        let exits = vec![contract.terms.bond_exit_after_daa; contract.panel.len()];
+        let row = crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1::admit(
+            seed,
+            &original.job,
+            &target,
+            contract.terms,
+            config.prices,
+            ctx.daa_score,
+            funded,
+            b.extras.terminal_evidence_max_bytes.unwrap_or(100000),
+            b.state.claim(&seed.claim).ok_or(PalwStateV2Error::MissingClaim(seed.claim))?.trace_retention_daa,
+            contract.terms.bond_exit_after_daa,
+            &exits,
+        )
+        .map_err(|e| stage_refused(seed.claim, e))?;
+        b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::Tokenizer(Box::new(row))));
+        return Ok(());
     }
     // A root-authenticated profile may narrow a global fallback plan after seed admission.
     // Claim-wide clocks/holds remain the immutable conservative envelope stamped at acceptance.
@@ -199,7 +255,11 @@ pub(super) fn leaf(
         return Err(stage_refused(key.0, error));
     }
     let new = row.checkpoint_v1();
-    b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key, old, new });
+    b.entries.push(PalwDeltaEntryV2::StagedCourtMove {
+        key,
+        old: PalwStagedCheckpointV1::Constraint(old),
+        new: PalwStagedCheckpointV1::Constraint(new),
+    });
     Ok(())
 }
 pub(super) fn movement(
@@ -209,17 +269,22 @@ pub(super) fn movement(
 ) -> Result<(), PalwStateV2Error> {
     gate(b, &movement.claim, movement.reserver, movement.reserved_daa, ctx.daa_score)?;
     let key = (movement.claim, movement.reserver);
-    let row = b.state.staged_owned_constraint_v1(key.0, key.1).ok_or_else(|| stage_refused(key.0, "staged move lacks owned seed"))?;
-    let old = row.checkpoint_v1();
-    let row = match b.state.staged_courts.get_mut(&PalwStagedCourtKeyV1::Owner(key.0, key.1)) {
-        Some(PalwStagedCourtRowV1::Constraint(row)) => row,
-        _ => return Err(stage_refused(key.0, "owned staged seed disappeared")),
+    let row = b
+        .state
+        .staged_courts
+        .get_mut(&PalwStagedCourtKeyV1::Owner(key.0, key.1))
+        .ok_or_else(|| stage_refused(key.0, "staged move lacks immutable owned seed"))?;
+    let old = row.checkpoint_v1().map_err(|e| stage_refused(key.0, e))?;
+    let result = match row {
+        PalwStagedCourtRowV1::Constraint(c) => c.movement(ctx.daa_score, movement),
+        PalwStagedCourtRowV1::Tokenizer(c) => c.movement(ctx.daa_score, movement),
+        _ => Err("claim contract alone cannot accept an owned move".into()),
     };
-    if let Err(error) = row.movement(ctx.daa_score, movement) {
+    if let Err(error) = result {
         row.restore_checkpoint_v1(&old).map_err(|e| stage_refused(key.0, e))?;
         return Err(stage_refused(key.0, error));
     }
-    let new = row.checkpoint_v1();
+    let new = row.checkpoint_v1().map_err(|e| stage_refused(key.0, e))?;
     b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key, old, new });
     Ok(())
 }
@@ -238,6 +303,7 @@ fn index_rows(key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1) -> (u64, Ve
             (c.terms.bond_exit_after_daa, rows)
         }
         PalwStagedCourtRowV1::Constraint(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
+        PalwStagedCourtRowV1::Tokenizer(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
     }
 }
 pub(super) fn update_indices(
@@ -249,7 +315,9 @@ pub(super) fn update_indices(
     if let Some(row) = old {
         let (due, holds) = index_rows(key, row);
         state.staged_due.remove(&(due, key));
-        if let PalwStagedCourtRowV1::Constraint(c) = row { state.staged_by_owner.remove(&(c.reserver, c.claim)); }
+        if let Some((claim, owner, _, _)) = row.owner_accounting_v1() {
+            state.staged_by_owner.remove(&(owner, claim));
+        }
         for hold in holds {
             state.staged_holds.remove(&hold);
         }
@@ -257,7 +325,9 @@ pub(super) fn update_indices(
     if let Some(row) = new {
         let (due, holds) = index_rows(key, row);
         state.staged_due.insert((due, key));
-        if let PalwStagedCourtRowV1::Constraint(c) = row { state.staged_by_owner.insert((c.reserver, c.claim)); }
+        if let Some((claim, owner, _, _)) = row.owner_accounting_v1() {
+            state.staged_by_owner.insert((owner, claim));
+        }
         state.staged_holds.extend(holds);
     }
 }
@@ -268,7 +338,9 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
     for (key, row) in &state.staged_courts {
         let (due, holds) = index_rows(*key, row);
         state.staged_due.insert((due, *key));
-        if let PalwStagedCourtRowV1::Constraint(c) = row { state.staged_by_owner.insert((c.reserver, c.claim)); }
+        if let Some((claim, owner, _, _)) = row.owner_accounting_v1() {
+            state.staged_by_owner.insert((owner, claim));
+        }
         state.staged_holds.extend(holds);
     }
 }
