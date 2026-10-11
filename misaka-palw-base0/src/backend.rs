@@ -1477,7 +1477,18 @@ mod tests {
             job.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xbad19), ..named }));
             assert!(backend.verify_prefix_state_v1(&job, &ids).is_err());
             let bad = backend.execute_free_prompt(&job, &ids.map(|id| id as usize)).unwrap();
-            assert_eq!(bad.outcome.output_root, good.outcome.output_root);
+            let bad_retained = crate::produce::base0_material_decode_any_v1(&bad.outcome.material).unwrap();
+            assert_eq!(retained.generated_token_ids(), bad_retained.generated_token_ids());
+            assert_eq!(retained.logits_rows(), bad_retained.logits_rows());
+            // The output commitment includes the job context, including its named prefix.
+            // Equal arithmetic answers for two different jobs therefore have different roots.
+            for (run, material) in [(&good, &retained), (&bad, &bad_retained)] {
+                assert_eq!(run.outcome.output_root, kaspa_consensus_core::palw_v2::output_commitment_v2(
+                    &material.binding().job_context.context_hash(), material.generated_token_ids(),
+                    &kaspa_consensus_core::palw_v2::rendered_output_hash_v2(&[])));
+            }
+            assert_ne!(retained.binding().job_context.context_hash(), bad_retained.binding().job_context.context_hash());
+            assert_ne!(good.outcome.output_root, bad.outcome.output_root);
         }
     }
 

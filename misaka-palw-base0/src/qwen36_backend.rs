@@ -3353,7 +3353,18 @@ mod tests {
             }));
             assert!(backend.verify_prefix_state_v1(&job, &prompt).is_err());
             let bad = backend.execute_free_prompt(&job, &prompt.map(|id| id as usize)).unwrap();
-            assert_eq!(good.outcome.output_root, bad.outcome.output_root, "a named lie does not manufacture a different model answer");
+            let bad_retained = crate::produce::base0_material_decode_any_v1(&bad.outcome.material).unwrap();
+            assert_eq!(retained.generated_token_ids(), bad_retained.generated_token_ids(), "same exact model answer IDs");
+            assert_eq!(retained.logits_rows(), bad_retained.logits_rows(), "same exact model logits");
+            for (run, material) in [(&good, &retained), (&bad, &bad_retained)] {
+                assert_eq!(run.outcome.output_root, output_commitment_v2(
+                    &material.binding().job_context.context_hash(), material.generated_token_ids(),
+                    &rendered_output_hash_v1(material.generated_token_ids())));
+            }
+            // Changing the signed prefix statement changes the job-bound output root even
+            // though it does not change the independently replayed arithmetic answer.
+            assert_ne!(retained.binding().job_context.context_hash(), bad_retained.binding().job_context.context_hash());
+            assert_ne!(good.outcome.output_root, bad.outcome.output_root);
         }
         assert!(backend.prefix_state_v1(Hash64::from_u64_word(0xbad), Hash64::default(), &ids).is_err());
         assert!(backend.prefix_state_v1(class, Hash64::default(), &[]).is_err());
