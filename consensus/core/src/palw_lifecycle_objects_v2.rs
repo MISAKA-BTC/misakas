@@ -1896,12 +1896,6 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     ),
     // SMALL (RFC-0009 RDA4, RFC-0001 P1): the signer protocol and the worker frame — node-local wire forms, never a block's.
     (
-        "consensus/core/src/dns_finality.rs::TakeoverToken",
-        PalwInt12WireChangeV1::NotCarried(
-            "the removed HA takeover's node-local signer credential; no lifecycle object carries it (retired paths, 27252fa18)",
-        ),
-    ),
-    (
         "consensus/core/src/dns_finality.rs::SigningPurpose",
         PalwInt12WireChangeV1::NotCarried(
             "the node ↔ signer protocol's purpose tag; a block carries signatures, never a purpose (RDA4 = 8 is offered only under \
@@ -3735,7 +3729,7 @@ pub(crate) mod tests {
         }
 
         #[test]
-        fn registered_and_staged_contradictions_preserve_opaque_isolation_before_interpretation() {
+        fn registered_opaque_contradictions_and_staged_fenced_forms_keep_their_isolation_rules() {
             use crate::palw_offence_v1::PalwPanelContradictionV1 as C;
             let cases = [
                 (16, C::RegisteredTableMismatch { binding: zeros(), job: Box::new(zeros()) }),
@@ -3747,16 +3741,28 @@ pub(crate) mod tests {
                 assert_eq!(borsh::to_vec(&contradiction).unwrap()[0], tag);
                 assert!(contradiction.is_attribution_only_v1());
                 for object in attributed_contradiction_objects(contradiction) {
-                    assert_eq!(palw_lifecycle_kind_owner_v1(&object), PalwLifecycleKindOwnerV1::Int12);
+                    // Legacy V1 evidence remains opaque even for19. V2/Executor staged19
+                    // is an explicitly guarded new form, undecodable below its F8 fence.
+                    use crate::palw_offence_v1::PalwOffenceKindV1 as K;
+                    let staged = tag == 19 && !matches!(&object, PalwConsensusObjectV2::ObjectiveOffence { kind: K::PanelFalseValid, .. });
+                    let expected_owner = if staged { PalwLifecycleKindOwnerV1::Fence(PalwLifecycleKindFenceV1::StagedPublicCourtV1) }
+                        else { PalwLifecycleKindOwnerV1::Int12 };
+                    assert_eq!(palw_lifecycle_kind_owner_v1(&object), expected_owner);
                     let payload = payload_of(&object);
+                    let mut undecodable = borsh::to_vec(&PALW_LIFECYCLE_TX_VERSION_V2).unwrap();
+                    undecodable.extend_from_slice(&[254, 1, 2, 3]);
                     for tolerate in [false, true] {
-                        assert_eq!(validate_palw_lifecycle_tx(&payload, tolerate), Ok(()));
+                        let expected = if staged { validate_palw_lifecycle_tx(&undecodable, tolerate) } else { Ok(()) };
+                        assert_eq!(validate_palw_lifecycle_tx(&payload, tolerate), expected);
                     }
                     let unarmed = PalwLifecycleKindFencesV1::default();
                     let armed = unarmed.with(PalwLifecycleKindFenceV1::LegacyPublicFilerV1, Some(ForkActivation::new(1_000)))
                         .with(PalwLifecycleKindFenceV1::StagedPublicCourtV1, Some(ForkActivation::new(1_000)));
                     for at in [999, 1_000] {
-                        assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, at), Ok(()));
+                        let below = if staged { validate_palw_lifecycle_tx(&undecodable, false) } else { Ok(()) };
+                        assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &unarmed, at), below);
+                        let expected = if at < 1_000 { below } else { Ok(()) };
+                        assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, at), expected);
                     }
                 }
             }

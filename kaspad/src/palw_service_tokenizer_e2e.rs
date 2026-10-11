@@ -3,8 +3,8 @@
 use super::*;
 use kaspa_consensus_core::{
     palw_class_semantics_v1::*,
-    palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1,
-    palw_constraint_stream_court_v1::{PalwConstraintStreamActionV1, PalwConstraintStreamPhaseV1},
+    palw_constraint_stream_carriage_v1::{PalwAuxiliaryPublicCourtSeedV1, PalwConstraintStreamActionV1},
+    palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
     palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1,
     palw_offence_v1::PalwPanelContradictionV1,
     palw_staged_court_state_v1::PalwStagedOwnedCursorV1,
